@@ -4,7 +4,5 @@
 // structural contract of the join: parts parse with their OWN path and the
 // merge concatenates already-located items — a text-level include (C
 // preprocessor style) would flatten every location onto the primary file.
-//
-// ASPIRATIONAL: `part` is not implemented yet; this test fails until it is.
 
 part a

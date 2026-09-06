@@ -4,8 +4,6 @@
 // into the Zig output the backend compile would fail. Green means hostlines
 // route by their own file's host, exactly as stem facets route them
 // (140_010) — the part join must not flatten that.
-//
-// ASPIRATIONAL: `part` is not implemented yet; this test fails until it is.
 
 part ping
 

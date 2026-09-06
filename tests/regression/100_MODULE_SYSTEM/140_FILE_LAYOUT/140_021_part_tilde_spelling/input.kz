@@ -4,8 +4,6 @@
 // may hold events AND their host procs in one `.kz` (the 140_008 shape),
 // and may carry the host imports it needs — `const std` lives here, in the
 // part, not the primary.
-//
-// ASPIRATIONAL: `part` is not implemented yet; this test fails until it is.
 
 ~part math
 
