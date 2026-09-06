@@ -141,6 +141,10 @@ pub const ErrorCode = enum(u16) {
 
     // Module structure errors
     KORU200, // Ambiguous module structure (both foo.kz and foo/ exist)
+    KORU201, // part 'X' has no file — the declaration named a sibling group that does not exist (fail loud, never a silent miss)
+    KORU202, // Duplicate top-level declaration across the part boundary — parts are same-kind files, so a redeclaration is an accident (140_024)
+    KORU203, // Invalid part tag ('.' / '/' / whitespace — tags are single kebab names) or the tag names a directory (module namespace collision, 140_026)
+    KORU204, // part declared inside a part file — parts are flat; promote to a directory module when a part outgrows its file (140_028)
 };
 
 pub const SourceLocation = struct {

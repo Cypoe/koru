@@ -1,0 +1,12 @@
+// The part file for `~part math`: events + |zig procs in one host-embedded
+// file. Its `const std` import is host bytes that must reach the emitted
+// Zig module like any other part hostline.
+
+const std = @import("std");
+
+~pub tor compute { x: u32 } -> u32
+
+~pub tor show { v: u32 }
+
+~proc compute|zig { return x + 2; }
+~proc show|zig { std.debug.print("{d}\n", .{v}); }

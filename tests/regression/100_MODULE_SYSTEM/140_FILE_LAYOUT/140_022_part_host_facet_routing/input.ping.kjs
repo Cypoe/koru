@@ -1,0 +1,6 @@
+// JS host facet of the `ping` part. `ping_seen` is deliberately not valid
+// Zig — its presence in the Zig output is the leak this test pins.
+
+let ping_seen = "js-only";
+
+~proc ping|js { console.log("pong"); }

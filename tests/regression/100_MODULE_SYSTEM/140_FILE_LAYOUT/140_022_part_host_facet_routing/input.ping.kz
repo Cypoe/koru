@@ -1,0 +1,3 @@
+const std = @import("std");
+
+~proc ping|zig { std.debug.print("pong\n", .{}); }

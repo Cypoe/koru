@@ -1,0 +1,1 @@
+error\[KORU204\]:.*part 'deep'.*part file

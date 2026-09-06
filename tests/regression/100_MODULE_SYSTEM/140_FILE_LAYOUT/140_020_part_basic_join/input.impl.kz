@@ -1,0 +1,4 @@
+const std = @import("std");
+
+~proc compute|zig { return x + 100; }
+~proc show|zig { std.debug.print("{d}\n", .{v}); }

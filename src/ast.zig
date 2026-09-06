@@ -168,10 +168,23 @@ pub const SuperShape = struct {
     };
 };
 
+/// A `part <tag>` declaration in a module file: names the sibling file group
+/// `stem.tag.<ext>` (all Koru host views) that joins this module. Parts live
+/// in this slice — NOT in `items` — so no downstream pass ever sees one: the
+/// loader consumes the slice, merges the part files' items, and the merged
+/// program carries an empty `parts`. The declaration's only job is to make
+/// sibling discovery LOUD (a tag with no file is KORU201, never a silent
+/// miss). Flat by ruling: only a module's own file may declare parts.
+pub const PartDecl = struct {
+    tag: []const u8, // kebab identifier; joins `stem.tag.<ext>` siblings
+    location: errors.SourceLocation,
+};
+
 pub const Program = struct {
     items: []const Item,
     module_annotations: []const []const u8 = &.{},  // Module-level annotations (e.g., ~[compiler])
     main_module_name: []const u8 = "",  // Canonical name of the main module (e.g., "input" from input.kz)
+    parts: []PartDecl = &.{},  // Part declarations; consumed by the loader at merge
     allocator: std.mem.Allocator,
 
     /// TypeRegistry for this program (opaque to avoid circular import with type_registry.zig)
@@ -189,6 +202,11 @@ pub const Program = struct {
             self.allocator.free(annotation);
         }
         self.allocator.free(@constCast(self.module_annotations));
+        // Free part declarations (tags are the only owned member)
+        for (self.parts) |part| {
+            self.allocator.free(@constCast(part.tag));
+        }
+        self.allocator.free(@constCast(self.parts));
         // Free main module name
         if (self.main_module_name.len > 0) {
             self.allocator.free(@constCast(self.main_module_name));

@@ -90,6 +90,41 @@ pub fn findCompanionFiles(allocator: std.mem.Allocator, primary_path: []const u8
     return try companions.toOwnedSlice(allocator);
 }
 
+/// Probe the sibling files of a part declaration: `stem.tag.<ext>` for every
+/// Koru extension. This is the part-side twin of `findCompanionFiles` — the
+/// same fixed-extension probe, with the tag as an extra stem segment — so a
+/// part's own host facets (`foo.a.k` + `foo.a.kz` + `foo.a.kjs`) join through
+/// one declaration.
+///
+/// Returns an owned slice of owned, resolved paths for the files that exist
+/// (empty, not null, when none do). The loader decides what empty means — a
+/// missing part (KORU201) vs a tag that names a directory (KORU203) — so it
+/// can point the diagnostic at the declaration.
+pub fn probePartFiles(
+    allocator: std.mem.Allocator,
+    dir: []const u8,
+    stem: []const u8,
+    tag: []const u8,
+) ![][]u8 {
+    var found = std.ArrayList([]u8){ .items = &.{}, .capacity = 0 };
+    errdefer {
+        for (found.items) |f| allocator.free(f);
+        found.deinit(allocator);
+    }
+
+    for (file_types.koru_extensions) |ext| {
+        const name_with_ext = try std.fmt.allocPrint(allocator, "{s}.{s}{s}", .{ stem, tag, ext });
+        defer allocator.free(name_with_ext);
+        const candidate = try std.fs.path.join(allocator, &[_][]const u8{ dir, name_with_ext });
+        defer allocator.free(candidate);
+        std.fs.cwd().access(candidate, .{}) catch continue;
+        const resolved = try std.fs.path.resolve(allocator, &[_][]const u8{candidate});
+        try found.append(allocator, resolved);
+    }
+
+    return try found.toOwnedSlice(allocator);
+}
+
 
 /// ModuleResolver handles finding and loading Koru modules from various locations
 /// Search order:

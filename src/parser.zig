@@ -728,6 +728,13 @@ pub const Parser = struct {
     // the decl constructor takes it. Owned; replaced or freed, never leaked.
     pending_prose: []const u8 = "",
 
+    // Part declarations (`part <tag>` / `~part <tag>`). Collected here,
+    // outside `items`, so no downstream pass ever sees one — the loader
+    // consumes the slice and merges the part files' items instead. Owned;
+    // transferred to ast.Program.parts on success (field reset to empty),
+    // freed by deinit on error paths.
+    parts: std.ArrayList(ast.PartDecl) = .{ .items = &.{}, .capacity = 0 },
+
     // Parse mode: false = lenient (continue past errors), true = fail-fast (stop at first error)
     fail_fast: bool,
 
@@ -1074,6 +1081,16 @@ pub const Parser = struct {
                 self.allocator.free(annotation);
             }
             module_annotations.deinit(self.allocator);
+        }
+
+        // Part declarations ride the parser field (parsePartDecl appends).
+        // On error, free what was collected and reset so deinit no-ops.
+        errdefer {
+            for (self.parts.items) |part| {
+                self.allocator.free(part.tag);
+            }
+            self.parts.deinit(self.allocator);
+            self.parts = .{ .items = &.{}, .capacity = 0 };
         }
 
         // Parse each line
@@ -1450,6 +1467,17 @@ pub const Parser = struct {
                     }
                 }
 
+                // Part declarations (`~part <tag>` — or the `.k`-synthesized
+                // `part <tag>`): the declaration exists to make sibling-file
+                // discovery LOUD. A part is not an Item — the loader consumes
+                // it and merges the part files' items — so it is parsed here,
+                // outside the construct dispatch, like module annotations.
+                if (std.mem.startsWith(u8, after_tilde, "part ")) {
+                    try self.parsePartDecl(lexer.trim(after_tilde[5..]));
+                    self.current += 1;
+                    continue;
+                }
+
                 // Otherwise, it's an item-level construct
                 const start_line = self.current;
                 const item = self.parseKoruConstruct() catch |err| {
@@ -1542,12 +1570,15 @@ pub const Parser = struct {
         // friends). Quoted branch names (`…`/[…]) are just source encoding for
         // names — a name is a name; the pipeline never rewrites one.
 
+        const parts_slice = try self.parts.toOwnedSlice(self.allocator);
+        self.parts = .{ .items = &.{}, .capacity = 0 };
         self.registry_transferred = true;
         return ParseResult{
             .source_file = ast.Program{
                 .items = try items.toOwnedSlice(self.allocator),
                 .module_annotations = try module_annotations.toOwnedSlice(self.allocator),
                 .main_module_name = try self.allocator.dupe(u8, self.module_name),
+                .parts = parts_slice,
                 .allocator = self.allocator,
             },
             .registry = self.registry,
@@ -1789,6 +1820,7 @@ pub const Parser = struct {
             "tor ",
             "proc ",
             "pub proc ",
+            "part ",
         };
         for (prefixes) |prefix| {
             if (std.mem.startsWith(u8, trimmed, prefix)) return true;
@@ -10958,6 +10990,41 @@ pub const Parser = struct {
             .name = try self.allocator.dupe(u8, name),
             .continuations = continuations,
         };
+    }
+
+    /// Parse a `part <tag>` declaration (after the `part ` prefix has been
+    /// stripped). The tag is a single kebab name: `_` is refused (KORU034,
+    /// rule G4 — 010_053), and `.` / `/` / whitespace are refused (KORU203) —
+    /// a tag is one stem segment, and any richer spelling would break the
+    /// flat `stem.<tag>.<ext>` join or blur into the module system parts
+    /// deliberately are not.
+    fn parsePartDecl(self: *Parser, tag: []const u8) !void {
+        const trimmed = lexer.trim(tag);
+        if (trimmed.len == 0) {
+            return self.fail(
+                .KORU203,
+                self.current + 1,
+                1,
+                "part tag is empty — `part <tag>` names the sibling files `stem.<tag>.k*` that join this module",
+                .{},
+            );
+        }
+        // `_` is not a legal Koru name char (rule G4).
+        try self.rejectSnakeName(trimmed, self.current, "part tag");
+        // `.` / `/` / whitespace would escape the single-segment stem join.
+        if (std.mem.indexOfAny(u8, trimmed, "./ \t") != null) {
+            return self.fail(
+                .KORU203,
+                self.current + 1,
+                1,
+                "part tag '{s}' must be a single kebab name — no '.', '/', or whitespace (the tag joins 'stem.<tag>.k*')",
+                .{trimmed},
+            );
+        }
+        try self.parts.append(self.allocator, .{
+            .tag = try self.allocator.dupe(u8, trimmed),
+            .location = self.getCurrentLocation(),
+        });
     }
 
     fn parseImportDecl(self: *Parser) !ast.ImportDecl {

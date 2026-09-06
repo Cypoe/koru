@@ -459,62 +459,271 @@ const LoadedFile = struct {
     source_file: ast.Program,
 };
 
+/// Parse a single Koru file into a `LoadedFile`, on the parse arena. Shared by
+/// the stem-facet merge, the part merge, and the entry merge — every file in a
+/// module is parsed with ITS OWN path, so `is_k` and every item's
+/// `location.file` come from the file that actually holds the bytes. The join
+/// is item-level, never text-level: locations survive it (140_027 pins this).
+fn loadKoruFile(
+    allocator: std.mem.Allocator,
+    parse_allocator: std.mem.Allocator,
+    file_path: []const u8,
+    compiler_flags: []const []const u8,
+) !LoadedFile {
+    const file = try std.fs.cwd().openFile(file_path, .{});
+    defer file.close();
+
+    // Dupe the path into the arena: the parser stores it on reporter.file_name
+    // (and thus on every EventDecl/SourceLocation it produces), so it must
+    // survive for the lifetime of the AST — caller may free the original
+    // immediately after loadKoruFile returns.
+    const file_path_owned = try parse_allocator.dupe(u8, file_path);
+
+    const source = try file.readToEndAlloc(parse_allocator, 1024 * 1024);
+    var parser = try Parser.init(parse_allocator, source, file_path_owned, compiler_flags, null);
+    parser.fail_fast = false;
+    defer parser.deinit();
+
+    const parse_result = try parser.parse();
+
+    if (parser.reporter.hasErrors() or parse_result.source_file.hasParseErrors()) {
+        const stderr_writer = FileWriter{ .file = std.fs.File.stderr() };
+        try parser.reporter.printErrors(stderr_writer);
+        if (!parser.reporter.hasErrors()) {
+            try printAstParseErrors(&parse_result.source_file, stderr_writer);
+        }
+        std.process.exit(1);
+    }
+
+    var public_events = std.ArrayListAligned(ast.EventDecl, null){ .items = &.{}, .capacity = 0 };
+    for (parse_result.source_file.items) |item| {
+        if (item == .event_decl and item.event_decl.is_public) {
+            try public_events.append(allocator, item.event_decl);
+        }
+    }
+
+    return .{
+        .public_events = try public_events.toOwnedSlice(allocator),
+        .source_file = parse_result.source_file,
+    };
+}
+
+/// Report a loader-level diagnostic and exit. Part errors fire here — after
+/// the per-file parsers are consumed, no parser reporter is alive — so the
+/// minimal reporter renders the message, the located `-->` line, and the hint
+/// without a source preview (the loader no longer holds the file's text).
+fn emitLoadError(
+    allocator: std.mem.Allocator,
+    file_name: []const u8,
+    code: errors.ErrorCode,
+    line: usize,
+    column: usize,
+    comptime fmt: []const u8,
+    args: anytype,
+    comptime hint_fmt: []const u8,
+    hint_args: anytype,
+) noreturn {
+    var reporter = errors.ErrorReporter{
+        .allocator = allocator,
+        .errors = std.ArrayList(errors.ParseError){ .items = &.{}, .capacity = 0 },
+        .source_lines = &.{},
+        .file_name = file_name,
+    };
+    reporter.addErrorWithHint(code, line, column, fmt, args, hint_fmt, hint_args) catch {};
+    const stderr_writer = FileWriter{ .file = std.fs.File.stderr() };
+    reporter.printErrors(stderr_writer) catch {};
+    std.process.exit(1);
+}
+
+/// Join event path segments with '.' — the canonical event name the type
+/// registry keys on; the part duplicate check compares against it.
+fn joinEventPath(allocator: std.mem.Allocator, segments: []const []const u8) ![]const u8 {
+    var total: usize = 0;
+    for (segments) |seg| total += seg.len;
+    if (segments.len > 1) total += segments.len - 1;
+    const buf = try allocator.alloc(u8, total);
+    var pos: usize = 0;
+    for (segments, 0..) |seg, i| {
+        if (i > 0) {
+            buf[pos] = '.';
+            pos += 1;
+        }
+        @memcpy(buf[pos .. pos + seg.len], seg);
+        pos += seg.len;
+    }
+    return buf;
+}
+
+/// Part files parse with a module name derived from their OWN stem
+/// (`input.a`), but they join the primary's module (`input`). Every `.module`
+/// stamp must be re-pointed at the primary: the visibility check
+/// (enforceInvocationVisibility) compares the invocation's source module
+/// against `event_decl.module`, and `flow.module` feeds that comparison, so a
+/// part event left stamped `input.a` would fail private-access checks against
+/// primary callers. Stem facets never needed this — they share the stem.
+fn restampModule(item: *ast.Item, module_name: []const u8) void {
+    switch (item.*) {
+        .event_decl => |*e| e.module = module_name,
+        .proc_decl => |*p| p.module = module_name,
+        .flow => |*f| f.module = module_name,
+        .host_line => |*h| h.module = module_name,
+        .import_decl => |*i| i.module = module_name,
+        .host_type_decl => |*h| h.module = module_name,
+        .event_tap => |*t| t.module = module_name,
+        else => {},
+    }
+}
+
+/// Merge the files a module's `part` declarations name into the primary's
+/// program. Parts are flat (a part file may not declare parts — KORU204),
+/// discovery is loud (a tag with no file is KORU201; a tag naming a directory
+/// is KORU203), and a top-level declaration repeated across the boundary is an
+/// accident, not a silent dedup (KORU202 — the type registry early-returns on
+/// duplicates, which same-kind part files must not inherit). Part items are
+/// appended in declaration order after the stem facets.
+fn mergeParts(
+    allocator: std.mem.Allocator,
+    parse_allocator: std.mem.Allocator,
+    primary_path: []const u8,
+    primary: *const ast.Program,
+    merged_items: *std.ArrayList(ast.Item),
+    merged_annotations: *std.ArrayList([]const u8),
+    merged_events: ?*std.ArrayList(ast.EventDecl),
+    compiler_flags: []const []const u8,
+) !bool {
+    if (primary.parts.len == 0) return false;
+
+    const primary_basename = std.fs.path.basename(primary_path);
+    const primary_ext = file_types.koruExtensionOf(primary_basename) orelse return false;
+    const stem = primary_basename[0 .. primary_basename.len - primary_ext.len];
+    const dir = std.fs.path.dirname(primary_path) orelse ".";
+    const module_name = primary.main_module_name;
+
+    // Top-level event names already in the module (primary + earlier parts).
+    var seen_events = std.StringHashMap(void).init(allocator);
+    defer {
+        var it = seen_events.keyIterator();
+        while (it.next()) |k| allocator.free(k.*);
+        seen_events.deinit();
+    }
+    for (primary.items) |item| {
+        if (item == .event_decl) {
+            const name = try joinEventPath(allocator, item.event_decl.path.segments);
+            try seen_events.put(name, {});
+        }
+    }
+
+    for (primary.parts) |part_decl| {
+        const tag = part_decl.tag;
+        const files = try module_resolver_mod.probePartFiles(allocator, dir, stem, tag);
+        defer {
+            for (files) |f| allocator.free(f);
+            allocator.free(files);
+        }
+
+        if (files.len == 0) {
+            // The tag is one dotted stem segment (`input.nav`), not a path —
+            // path.join would slash it into `input/nav` and never collide.
+            const tag_dir = try std.fmt.allocPrint(allocator, "{s}/{s}.{s}", .{ dir, stem, tag });
+            defer allocator.free(tag_dir);
+            if (std.fs.cwd().openDir(tag_dir, .{})) |opened| {
+                var d = opened;
+                d.close();
+                emitLoadError(
+                    allocator,
+                    part_decl.location.file,
+                    .KORU203,
+                    part_decl.location.line,
+                    part_decl.location.column,
+                    "part '{s}' names a directory — a module namespace collision (the join is 'stem.<tag>.k*', not 'stem.<tag>/')",
+                    .{tag},
+                    "rename the part, or make the directory a module explicitly",
+                    .{},
+                );
+            } else |_| {
+                emitLoadError(
+                    allocator,
+                    part_decl.location.file,
+                    .KORU201,
+                    part_decl.location.line,
+                    part_decl.location.column,
+                    "part '{s}' has no file — expected '{s}.{s}.k' (or .kz/.kjs/.kc/.kgpu) next to the primary",
+                    .{ tag, stem, tag },
+                    "create the file, or drop the declaration",
+                    .{},
+                );
+            }
+        }
+
+        for (files) |part_path| {
+            log.debug("    Part: {s}\n", .{part_path});
+            const part = try loadKoruFile(allocator, parse_allocator, part_path, compiler_flags);
+
+            // Flat by ruling: only a module's own file declares parts.
+            if (part.source_file.parts.len > 0) {
+                const nested = part.source_file.parts[0];
+                emitLoadError(
+                    allocator,
+                    part_path,
+                    .KORU204,
+                    nested.location.line,
+                    nested.location.column,
+                    "part '{s}' declared inside a part file — parts are flat: split one file, and promote to a directory module when a part outgrows its file",
+                    .{nested.tag},
+                    "move the declaration to the module's own file, or convert the module to a directory (index.kz + submodules)",
+                    .{},
+                );
+            }
+
+            for (part.source_file.items) |pitem| {
+                if (pitem == .event_decl) {
+                    const name = try joinEventPath(allocator, pitem.event_decl.path.segments);
+                    if (seen_events.contains(name)) {
+                        emitLoadError(
+                            allocator,
+                            part_path,
+                            .KORU202,
+                            pitem.event_decl.location.line,
+                            pitem.event_decl.location.column,
+                            "event '{s}' already declared — redeclared by part '{s}'",
+                            .{ name, tag },
+                            "parts are same-kind files: keep each declaration in one place",
+                            .{},
+                        );
+                    }
+                    try seen_events.put(name, {});
+                }
+                restampModule(@constCast(&pitem), module_name);
+                try merged_items.append(parse_allocator, pitem);
+            }
+            try merged_annotations.appendSlice(parse_allocator, part.source_file.module_annotations);
+            if (merged_events) |me| {
+                try me.appendSlice(allocator, part.public_events);
+            }
+            // loadKoruFile builds public_events for every file; the entry
+            // merge does not collect them, so free them unconditionally.
+            allocator.free(part.public_events);
+        }
+    }
+
+    return true;
+}
+
 fn loadFileWithCompanions(
     allocator: std.mem.Allocator,
     parse_allocator: std.mem.Allocator,
     primary_path: []const u8,
     compiler_flags: []const []const u8,
 ) !LoadedFile {
-    const loadFile = struct {
-        fn load(alloc: std.mem.Allocator, parse_alloc: std.mem.Allocator, file_path: []const u8, flags: []const []const u8) !LoadedFile {
-            const file = try std.fs.cwd().openFile(file_path, .{});
-            defer file.close();
-
-            // Dupe the path into the arena: the parser stores it on reporter.file_name
-            // (and thus on every EventDecl/SourceLocation it produces), so it must
-            // survive for the lifetime of the AST — caller may free the original
-            // immediately after loadFile returns.
-            const file_path_owned = try parse_alloc.dupe(u8, file_path);
-
-            const source = try file.readToEndAlloc(parse_alloc, 1024 * 1024);
-            var parser = try Parser.init(parse_alloc, source, file_path_owned, flags, null);
-            parser.fail_fast = false;
-            defer parser.deinit();
-
-            const parse_result = try parser.parse();
-
-            if (parser.reporter.hasErrors() or parse_result.source_file.hasParseErrors()) {
-                const stderr_writer = FileWriter{ .file = std.fs.File.stderr() };
-                try parser.reporter.printErrors(stderr_writer);
-                if (!parser.reporter.hasErrors()) {
-                    try printAstParseErrors(&parse_result.source_file, stderr_writer);
-                }
-                std.process.exit(1);
-            }
-
-            var public_events = std.ArrayListAligned(ast.EventDecl, null){ .items = &.{}, .capacity = 0 };
-            for (parse_result.source_file.items) |item| {
-                if (item == .event_decl and item.event_decl.is_public) {
-                    try public_events.append(alloc, item.event_decl);
-                }
-            }
-
-            return .{
-                .public_events = try public_events.toOwnedSlice(alloc),
-                .source_file = parse_result.source_file,
-            };
-        }
-    }.load;
-
     const companions = try module_resolver_mod.findCompanionFiles(allocator, primary_path);
     defer {
         for (companions) |c| allocator.free(c);
         allocator.free(companions);
     }
 
-    const primary = try loadFile(allocator, parse_allocator, primary_path, compiler_flags);
+    const primary = try loadKoruFile(allocator, parse_allocator, primary_path, compiler_flags);
 
-    if (companions.len == 0) {
+    if (companions.len == 0 and primary.source_file.parts.len == 0) {
         return primary;
     }
 
@@ -532,12 +741,23 @@ fn loadFileWithCompanions(
 
     for (companions) |companion_path| {
         log.debug("    Companion: {s}\n", .{companion_path});
-        const companion = try loadFile(allocator, parse_allocator, companion_path, compiler_flags);
+        const companion = try loadKoruFile(allocator, parse_allocator, companion_path, compiler_flags);
         try merged_items.appendSlice(parse_allocator, companion.source_file.items);
         try merged_annotations.appendSlice(parse_allocator, companion.source_file.module_annotations);
         try merged_events.appendSlice(allocator, companion.public_events);
         allocator.free(companion.public_events);
     }
+
+    _ = try mergeParts(
+        allocator,
+        parse_allocator,
+        primary_path,
+        &primary.source_file,
+        &merged_items,
+        &merged_annotations,
+        &merged_events,
+        compiler_flags,
+    );
 
     return .{
         .public_events = try merged_events.toOwnedSlice(allocator),
@@ -573,7 +793,7 @@ pub fn mergeEntryCompanions(
         for (companions) |c| allocator.free(c);
         allocator.free(companions);
     }
-    if (companions.len == 0) return primary;
+    if (companions.len == 0 and primary.parts.len == 0) return primary;
 
     log.debug("  Entry companion merge: {} sibling(s) for {s}\n", .{ companions.len, primary_path });
 
@@ -584,23 +804,22 @@ pub fn mergeEntryCompanions(
 
     for (companions) |companion_path| {
         log.debug("    Companion: {s}\n", .{companion_path});
-        const file = try std.fs.cwd().openFile(companion_path, .{});
-        defer file.close();
-        const path_owned = try parse_allocator.dupe(u8, companion_path);
-        const source = try file.readToEndAlloc(parse_allocator, 1024 * 1024);
-        var parser = try Parser.init(parse_allocator, source, path_owned, &[_][]const u8{}, null);
-        parser.fail_fast = false;
-        defer parser.deinit();
-        const parsed = try parser.parse();
-        if (parser.reporter.hasErrors() or parsed.source_file.hasParseErrors()) {
-            const stderr_writer = FileWriter{ .file = std.fs.File.stderr() };
-            try parser.reporter.printErrors(stderr_writer);
-            if (!parser.reporter.hasErrors()) try printAstParseErrors(&parsed.source_file, stderr_writer);
-            std.process.exit(1);
-        }
-        try merged_items.appendSlice(parse_allocator, parsed.source_file.items);
-        try merged_annotations.appendSlice(parse_allocator, parsed.source_file.module_annotations);
+        const companion = try loadKoruFile(allocator, parse_allocator, companion_path, &[_][]const u8{});
+        try merged_items.appendSlice(parse_allocator, companion.source_file.items);
+        try merged_annotations.appendSlice(parse_allocator, companion.source_file.module_annotations);
+        allocator.free(companion.public_events);
     }
+
+    _ = try mergeParts(
+        allocator,
+        parse_allocator,
+        primary_path,
+        &primary,
+        &merged_items,
+        &merged_annotations,
+        null,
+        &[_][]const u8{},
+    );
 
     return ast.Program{
         .items = try merged_items.toOwnedSlice(parse_allocator),
