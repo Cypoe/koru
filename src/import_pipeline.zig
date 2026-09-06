@@ -581,39 +581,46 @@ fn restampModule(item: *ast.Item, module_name: []const u8) void {
 /// accident, not a silent dedup (KORU202 — the type registry early-returns on
 /// duplicates, which same-kind part files must not inherit). Part items are
 /// appended in declaration order after the stem facets.
+///
+/// `parts` is the module's FULL declaration list — collected from the primary
+/// AND every facet companion. A module with a `.kjs` facet enters through the
+/// `.kjs` file (the extension probe order puts `.kjs` before `.kz`), so a
+/// `~part` declared in the `.kz` sibling must still join; scanning only the
+/// entry facet silently dropped them (660_001, found by the list.kz split).
 fn mergeParts(
     allocator: std.mem.Allocator,
     parse_allocator: std.mem.Allocator,
     primary_path: []const u8,
-    primary: *const ast.Program,
+    parts: []const ast.PartDecl,
+    module_name: []const u8,
     merged_items: *std.ArrayList(ast.Item),
     merged_annotations: *std.ArrayList([]const u8),
     merged_events: ?*std.ArrayList(ast.EventDecl),
     compiler_flags: []const []const u8,
 ) !bool {
-    if (primary.parts.len == 0) return false;
+    if (parts.len == 0) return false;
 
     const primary_basename = std.fs.path.basename(primary_path);
     const primary_ext = file_types.koruExtensionOf(primary_basename) orelse return false;
     const stem = primary_basename[0 .. primary_basename.len - primary_ext.len];
     const dir = std.fs.path.dirname(primary_path) orelse ".";
-    const module_name = primary.main_module_name;
 
-    // Top-level event names already in the module (primary + earlier parts).
+    // Top-level event names already in the module (primary + facet
+    // companions + earlier parts).
     var seen_events = std.StringHashMap(void).init(allocator);
     defer {
         var it = seen_events.keyIterator();
         while (it.next()) |k| allocator.free(k.*);
         seen_events.deinit();
     }
-    for (primary.items) |item| {
+    for (merged_items.items) |item| {
         if (item == .event_decl) {
             const name = try joinEventPath(allocator, item.event_decl.path.segments);
             try seen_events.put(name, {});
         }
     }
 
-    for (primary.parts) |part_decl| {
+    for (parts) |part_decl| {
         const tag = part_decl.tag;
         const files = try module_resolver_mod.probePartFiles(allocator, dir, stem, tag);
         defer {
@@ -739,6 +746,12 @@ fn loadFileWithCompanions(
     try merged_events.appendSlice(allocator, primary.public_events);
     allocator.free(primary.public_events);
 
+    // The module's full part list: the entry facet's declarations plus every
+    // facet companion's. A part declared in a sibling facet must join however
+    // the module is entered (660_001 — the list.kz split's finding).
+    var all_parts = std.ArrayList(ast.PartDecl){ .items = &.{}, .capacity = 0 };
+    try all_parts.appendSlice(parse_allocator, primary.source_file.parts);
+
     for (companions) |companion_path| {
         log.debug("    Companion: {s}\n", .{companion_path});
         const companion = try loadKoruFile(allocator, parse_allocator, companion_path, compiler_flags);
@@ -746,13 +759,15 @@ fn loadFileWithCompanions(
         try merged_annotations.appendSlice(parse_allocator, companion.source_file.module_annotations);
         try merged_events.appendSlice(allocator, companion.public_events);
         allocator.free(companion.public_events);
+        try all_parts.appendSlice(parse_allocator, companion.source_file.parts);
     }
 
     _ = try mergeParts(
         allocator,
         parse_allocator,
         primary_path,
-        &primary.source_file,
+        all_parts.items,
+        primary.source_file.main_module_name,
         &merged_items,
         &merged_annotations,
         &merged_events,
@@ -802,19 +817,26 @@ pub fn mergeEntryCompanions(
     var merged_annotations = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
     try merged_annotations.appendSlice(parse_allocator, primary.module_annotations);
 
+    // The module's full part list: the entry facet's declarations plus every
+    // facet companion's (660_001 — the list.kz split's finding).
+    var all_parts = std.ArrayList(ast.PartDecl){ .items = &.{}, .capacity = 0 };
+    try all_parts.appendSlice(parse_allocator, primary.parts);
+
     for (companions) |companion_path| {
         log.debug("    Companion: {s}\n", .{companion_path});
         const companion = try loadKoruFile(allocator, parse_allocator, companion_path, &[_][]const u8{});
         try merged_items.appendSlice(parse_allocator, companion.source_file.items);
         try merged_annotations.appendSlice(parse_allocator, companion.source_file.module_annotations);
         allocator.free(companion.public_events);
+        try all_parts.appendSlice(parse_allocator, companion.source_file.parts);
     }
 
     _ = try mergeParts(
         allocator,
         parse_allocator,
         primary_path,
-        &primary,
+        all_parts.items,
+        primary.main_module_name,
         &merged_items,
         &merged_annotations,
         null,

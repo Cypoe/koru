@@ -40,7 +40,10 @@ koru_std/foreign.kz	125
 koru_std/fs.kjs	76
 koru_std/fs.kz	113
 koru_std/gpu.kz	228
-koru_std/grid.kz	1437
+koru_std/grid.kz	471
+koru_std/grid.new.kz	434
+koru_std/grid.stored.kz	240
+koru_std/grid.sweep.kz	307
 koru_std/http.kz	215
 koru_std/index.kz	7
 koru_std/inter.kz	176
@@ -52,8 +55,14 @@ koru_std/json.kz	268
 koru_std/kernel.kz	2742
 koru_std/koru.kz	211
 koru_std/liquid_template.kz	146
+koru_std/list.free.kz	1083
+koru_std/list.get.kz	29
 koru_std/list.kjs	85
-koru_std/list.kz	1377
+koru_std/list.kz	73
+koru_std/list.len.kz	23
+koru_std/list.new.kz	138
+koru_std/list.pop.kz	28
+koru_std/list.push.kz	30
 koru_std/map.kz	114
 koru_std/net.kz	63
 koru_std/optimizations/kernels.kz	62
