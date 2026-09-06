@@ -10,8 +10,8 @@
 
 ~[comptime|transform]pub tor log.* {
     event_name: string,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
 }
 | transformed *const Program
 | compile-error string

@@ -126,7 +126,7 @@ pub fn matchesFlags(annotations: []const []const u8) bool {
 // The Source block contains JSON-like mappings: event_name → variant_name
 // The program AST is used to validate that referenced events exist
 
-~[comptime]pub tor variants { meta: InvocationMeta, source: Source, program: Program }
+~[comptime]pub tor variants { meta: InvocationMeta, source: Source, program: std/compiler:Program }
 | configured usize
 | skipped string
 | invalid-event string

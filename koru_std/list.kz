@@ -66,8 +66,8 @@ pub const List_i64 = struct {
 ~[comptime|transform]pub tor new {
     expr: Expression,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult
@@ -203,8 +203,8 @@ fn protoNameDbg(prog: *const astz.Program, elem: []const u8) bool {
 // (660_026 red pin), not this rung's surface.
 ~[comptime|transform]pub tor push {
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 
@@ -229,8 +229,8 @@ fn protoNameDbg(prog: *const astz.Program, elem: []const u8) bool {
 // bridge; this event is the plain call form.)
 ~[comptime|transform]pub tor len {
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 
@@ -249,8 +249,8 @@ fn protoNameDbg(prog: *const astz.Program, elem: []const u8) bool {
 // when i is past the end.
 ~[comptime|transform]pub tor get {
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 
@@ -275,8 +275,8 @@ fn protoNameDbg(prog: *const astz.Program, elem: []const u8) bool {
 // is nothing to pop. For scalar elements the popped value carries no obligation.
 ~[comptime|transform]pub tor pop {
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 
@@ -298,8 +298,8 @@ fn protoNameDbg(prog: *const astz.Program, elem: []const u8) bool {
 
 ~[comptime|transform]pub tor free {
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 

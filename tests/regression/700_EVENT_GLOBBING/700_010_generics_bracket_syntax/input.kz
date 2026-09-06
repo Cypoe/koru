@@ -18,8 +18,8 @@
 
 ~[comptime|transform]pub tor ring.* {
     event_name: string,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
 } -> SiteResult
 
 ~proc ring.*|zig {

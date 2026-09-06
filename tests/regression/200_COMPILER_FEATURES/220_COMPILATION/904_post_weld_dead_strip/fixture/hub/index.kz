@@ -8,7 +8,7 @@ var runtime_imported: bool = false;
 
 ~[comptime|transform]pub tor boot {
     invocation: *const Invocation,
-    item: *const Item,
+    item: *const std/compiler:Item,
     allocator: std.mem.Allocator,
 } -> SiteResult
 

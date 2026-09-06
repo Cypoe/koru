@@ -131,7 +131,7 @@
 }
 
 ~[comptime|command]pub tor todo {
-    program: *const Program,
+    program: *const std/compiler:Program,
     allocator: __koru_std.mem.Allocator,
     argv: []string,
 }

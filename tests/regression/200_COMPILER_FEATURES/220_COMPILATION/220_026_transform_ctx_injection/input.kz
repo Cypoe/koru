@@ -20,8 +20,8 @@
 ~[comptime|transform]pub tor probe.* {
     expr: Expression,
     ctx: *std/compiler:CompilerContext,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
 } -> SiteResult
 
 ~proc probe.*|zig {

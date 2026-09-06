@@ -779,7 +779,7 @@ pub const VendorLock = struct {
 }
 
 ~[comptime|command]pub tor vendor {
-    program: *const Program,
+    program: *const std/compiler:Program,
     allocator: __koru_std.mem.Allocator,
     argv: []string,
 }

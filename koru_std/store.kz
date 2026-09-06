@@ -1692,8 +1692,8 @@ fn storeLowerText(
     expr: Expression,
     source: Source,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult
@@ -8207,8 +8207,8 @@ fn storeLowerText(
     expr: Expression,
     source: Source,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult
@@ -8280,8 +8280,8 @@ fn storeLowerText(
 ~[keyword|comptime|transform]pub tor stored {
     source: Source,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult
@@ -9153,8 +9153,8 @@ fn storeLowerText(
 ~[keyword|comptime|transform|pre]pub tor default {
     expr: Expression,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult
@@ -9224,8 +9224,8 @@ fn storeLowerText(
 ~[keyword|comptime|transform]pub tor watch {
     expr: Expression,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult
@@ -9520,8 +9520,8 @@ fn storeLowerText(
     expr: Expression,
     source: Source,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult
@@ -9996,8 +9996,8 @@ fn storeLowerText(
 ~[keyword|comptime|transform|claims_descendants]pub tor rule {
     expr: Expression,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult
@@ -10137,8 +10137,8 @@ fn storeLowerText(
 ~[keyword|comptime|transform|claims_descendants]pub tor query {
     expr: Expression,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult
@@ -11549,8 +11549,8 @@ fn storeLowerText(
 ~[keyword|comptime|transform|claims_descendants]pub tor preorder {
     expr: Expression,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult
@@ -11652,8 +11652,8 @@ fn storeLowerText(
 ~[keyword|comptime|transform]pub tor take {
     expr: Expression,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult
@@ -11822,8 +11822,8 @@ fn storeLowerText(
 ~[keyword|comptime|transform]pub tor clear {
     expr: Expression,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult
@@ -11910,8 +11910,8 @@ fn storeLowerText(
 ~[keyword|comptime|transform]pub tor stripe {
     expr: Expression,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult

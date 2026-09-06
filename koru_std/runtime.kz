@@ -21,8 +21,8 @@ const ast = @import("ast");
 ~[comptime|transform]pub tor register {
     source: Source,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 

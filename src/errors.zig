@@ -98,6 +98,7 @@ pub const ErrorCode = enum(u16) {
     KORU110, // Event call site has only bare ~proc declarations (no variant tag)
     KORU111, // Contract/implementation file split violated (public events live in .k only)
     KORU112, // Effect-branch proc body reaches its own module by a bare name — the body splices into the CONSUMER's frame, where module scope is gone; use `$mod.` (400_155 holds the contract, 400_157 the wall)
+    KORU115, // Bare host (Zig) type reference across a module boundary — a host type is bare only inside its declaring module; spell it qualified (`*mod:Type`) (220_031, ruled 2026-09-06)
 
     // Abstract / implementation errors
     KORU113, // Two implementations claim the same abstract tor — the pairing is one-to-one, so the second is never reachable

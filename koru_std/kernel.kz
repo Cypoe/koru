@@ -109,8 +109,8 @@ fn kernelLowerOpBody(alloc: std.mem.Allocator, text: []const u8, is_js: bool) []
     expr: Expression,
     source: Source,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult
@@ -2116,8 +2116,8 @@ fn kernelLowerOpBody(alloc: std.mem.Allocator, text: []const u8, is_js: bool) []
     expr: ?Expression,
     source: Source,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 
@@ -2441,8 +2441,8 @@ fn kernelLowerOpBody(alloc: std.mem.Allocator, text: []const u8, is_js: bool) []
     expr: Expression,
     source: Source,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 
@@ -2683,8 +2683,8 @@ fn kernelLowerOpBody(alloc: std.mem.Allocator, text: []const u8, is_js: bool) []
 ~[comptime|transform]pub tor step {
     expr: ?Expression,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator,
 } -> SiteResult
 

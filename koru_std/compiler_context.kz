@@ -52,7 +52,7 @@ pub const CompilerContext = struct {
 
 // Create a new compiler context
 ~pub tor init {
-    ast: Program,
+    ast: std/compiler:Program,
     allocator: std.mem.Allocator,
     error_policy: ErrorPolicy
 } -> CompilerContext
@@ -244,7 +244,7 @@ pub const CompilerContext = struct {
 }
 
 // Update AST in context (used by transformation passes)
-~pub tor update-ast { ctx: CompilerContext, ast: Program } -> CompilerContext
+~pub tor update-ast { ctx: CompilerContext, ast: std/compiler:Program } -> CompilerContext
 
 ~proc update-ast|zig {
     var ctx = ctx;

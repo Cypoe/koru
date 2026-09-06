@@ -7,8 +7,8 @@
 
 ~[comptime|transform]tor capture.source {
     source: Source,
-    item: *const Item
-} -> Item
+    item: *const std/compiler:Item
+} -> std/compiler:Item
 
 ~proc capture.source|zig {
     // For MVP: Just return the item unchanged to prove transform machinery works

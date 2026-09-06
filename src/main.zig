@@ -7328,6 +7328,19 @@ pub fn main() !void {
     const canonicalize_names = @import("canonicalize_names");
     try canonicalize_names.canonicalize(&source_file, parse_allocator);
 
+    // Host-type scope: a bare host (Zig) type is legal only inside the module
+    // that declares it; across a module boundary the signature spells it fully
+    // qualified — `*mod:Type` (220_031, ruled 2026-09-06). Runs right after
+    // canonicalization, before any transform, so a refused program dies at the
+    // frontend with the teaching diagnostic and never reaches emission.
+    const host_type_scope_checker = @import("host_type_scope_checker");
+    try host_type_scope_checker.check(parse_allocator, source_file.items, &parser.reporter);
+    if (parser.reporter.hasErrors()) {
+        const stderr_writer = FileWriter{ .file = std.fs.File.stderr() };
+        try parser.reporter.printErrors(stderr_writer);
+        std.process.exit(1);
+    }
+
     // Build keyword registry and resolve [keyword] events
     // This enables unqualified invocation of events marked with [keyword]
     // Must happen AFTER canonicalization so we have canonical paths for registration

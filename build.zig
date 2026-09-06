@@ -435,6 +435,17 @@ pub fn build(b: *std.Build) void {
     canonicalize_names_module.addImport("ast", ast_module);
     canonicalize_names_module.addImport("log", log_module);
 
+    // Host-type scope checker - refuse bare cross-module host-type references
+    // (220_031, ruled 2026-09-06): bare is module-local; cross-module is `*mod:Type`.
+    const host_type_scope_checker_module = b.createModule(.{
+        .root_source_file = b.path("src/host_type_scope_checker.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    host_type_scope_checker_module.addImport("ast", ast_module);
+    host_type_scope_checker_module.addImport("errors", errors_module);
+    host_type_scope_checker_module.addImport("type_registry", type_registry_module);
+
     // Meta Events module - Inject koru:start and koru:end lifecycle events into AST
     const meta_events_module = b.createModule(.{
         .root_source_file = b.path("src/meta_events.zig"),
@@ -543,6 +554,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("runtime_registry", runtime_registry_module);
     exe.root_module.addImport("tap_transformer", tap_transformer_module);
     exe.root_module.addImport("canonicalize_names", canonicalize_names_module);
+    exe.root_module.addImport("host_type_scope_checker", host_type_scope_checker_module);
     exe.root_module.addImport("meta_events", meta_events_module);
     exe.root_module.addImport("validate_abstract_impl", validate_abstract_impl_module);
     exe.root_module.addImport("validate_contract_impl", validate_contract_impl_module);

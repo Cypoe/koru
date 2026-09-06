@@ -37,8 +37,8 @@ const std = @import("std");
 
 ~[comptime|transform]tor my-if {
     expr: Expression,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 

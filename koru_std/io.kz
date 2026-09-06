@@ -42,8 +42,8 @@ fn ioLowerJsExpr(alloc: std.mem.Allocator, text: []const u8) []const u8 {
 ~[keyword|comptime|transform]pub tor print {
     expr: Expression,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult
@@ -281,8 +281,8 @@ var readln_buf: [8192]u8 = undefined;
 ~[keyword|comptime|transform]pub tor print.ln {
     expr: Expression,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult
@@ -297,8 +297,8 @@ var readln_buf: [8192]u8 = undefined;
 ~[keyword|comptime|transform]pub tor eprint.ln {
     expr: Expression,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult
@@ -306,8 +306,8 @@ var readln_buf: [8192]u8 = undefined;
 ~[keyword|comptime|transform]pub tor eprint {
     expr: Expression,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult
@@ -1029,8 +1029,8 @@ fn __printInterpolateJs(
 ~[comptime|transform]pub tor print.blk {
     source: Source,
     invocation: *const Invocation,  // The specific invocation being transformed
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult

@@ -47,6 +47,33 @@ Sites pairing a bare host type with a qualified phantom
 designer's open call. pump.k's `*Exchange` is NOT a refusal site: contract
 `.k` + companion `.kz` merge as one module.
 
+## Ruling landed 2026-09-06: no carve — stdlib migrates, refusal wires in
+
+Lars ruled the open call the same day: NO scoped carve. Stdlib migrates to the
+qualified spellings, and the frontend refuses bare cross-module references
+(KORU115, src/host_type_scope_checker.zig) — enforcement before any transform,
+so a refused program dies with the teaching diagnostic naming the fix
+(`*app/holder:Token`). The four named pins migrated spellings-only; their
+pinned observables held. What enforcement then DISCOVERED beyond the named
+list, all migrated under the same ruling:
+
+- koru_std's comptime transform plumbing wrote `item: *const Item` /
+  `program: *const Program` bare in ~26 modules (io, fmt, store, list, types,
+  …) — every program importing std/io refused until those 108 signature sites
+  migrated to `*std/compiler:Item` / `*std/compiler:Program`.
+- ~27 test-tree transform signatures carried the same retired spelling
+  (220_013, 700_002/003/010/011, 210_03x, 310_052/124, 320_001/094, …) and
+  migrated the same way.
+
+The refusal is SET-based, not first-wins: a bare name is legal iff the WRITING
+module itself declares it (HostTypeDeclSites, the set of declaring modules) —
+on a two-provider collision (eval.Value / interpreter.Value) the writer's own
+declaration still licenses its bare form, which the first-wins homes map could
+not answer. The homes map keeps its emission role (module-local bare still
+needs the Zig path qualification); it lost its cross-module customer.
+orisha migrates later in its own repo (ruled out of this slice); pump.k's
+`*Exchange` stays legal via the contract/companion merge.
+
 ## What would correct this
 
 A uniqueness-checked resolution that is provably order-insensitive (not
