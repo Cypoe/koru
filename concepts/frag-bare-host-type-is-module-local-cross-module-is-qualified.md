@@ -1,0 +1,57 @@
+---
+type: belief
+id: frag-bare-host-type-is-module-local-cross-module-is-qualified
+provenance: Lars-ruled 2026-09-06 on the arbiter walk; trigger = yyjson import-order shadowing repro (kopium .claude/worktrees/repro-yyjson/headless/repro.k)
+ts: 2026-09-06
+---
+
+# A bare host type is module-local; cross-module is fully qualified (belief)
+
+A host (Zig) type name is bare inside the module that declares it. Across a
+module boundary the signature spells it fully qualified — `*app/holder:Token` —
+the same discipline invocations already follow (`koru/yyjson:parse`,
+`std/bridge:run`). Qualified is not decoration on the bare form; it is the only
+cross-module spelling.
+
+## What this retires, and why the aspiration died
+
+The prior rule blessed bare cross-module references resolved program-wide,
+first declaration wins (the old 220_031; the homes map's documented collision
+rule). The aspiration was "allow it when a single definition exists." The
+implementation never checked uniqueness — and "only one definition" is a
+whole-program property that silently stops holding when any import lands. The
+repro: a program importing `std/interpreter` before `koru/yyjson` made yyjson's
+OWN `*Value` signatures emit against interpreter's struct — a consumer's import
+order rewriting a bystander module's internals. No per-module scoping guarded
+the map. The spelling is retired not because it never worked, but because its
+correctness depended on facts (provider count, import order) outside the
+spelling's control.
+
+## Consequences
+
+- Module-local bare is unchanged and correct — holder's own `*Token` stays bare.
+- The homes map's first-wins rule loses its only legal customer once the
+  refusal lands; expect it to become a diagnostic aid or be deleted.
+- The phantom-state doctrine
+  ([[frag-bare-phantom-resolves-to-base-type-module]]) already assumed
+  qualified base types ("the type carries its state's home"); this ruling
+  closes the base-type half to match.
+
+## Open — the migration scope is UNRULED
+
+Sites pairing a bare host type with a qualified phantom
+(`*String<std/string:view>`, `*List_i64<std/list:!list>`,
+`*Map_string_i64<std/string-map:map>` — pinned at 660_027, 2112, 810_052,
+610_007) refuse under this rule as stated. Whether stdlib signatures migrate to
+`*std/string:String<...>` spellings, or the rule gets a scoped carve, is the
+designer's open call. pump.k's `*Exchange` is NOT a refusal site: contract
+`.k` + companion `.kz` merge as one module.
+
+## What would correct this
+
+A uniqueness-checked resolution that is provably order-insensitive (not
+first-wins renamed), or a real cross-module shape that module-local bare cannot
+express (the contract/companion merge already covers the known candidate).
+
+Pins (referenced, not restated): 220_031 (refusal expected, red until
+enforcement lands), 220_034 (qualified spelling green today).

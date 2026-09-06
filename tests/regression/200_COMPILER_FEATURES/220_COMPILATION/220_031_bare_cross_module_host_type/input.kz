@@ -1,13 +1,29 @@
-// TEST: bare cross-module host type in a tor signature.
+// TEST: bare cross-module host type in a tor signature is REFUSED.
 //
-// `holder` owns the `Token` host (Zig) type. Naming it BARE here — `*Token`,
-// resolved through `~import app/holder` — must emit the holder module's
-// struct at the Zig backend. The qualified spelling (`*app/holder:Token`)
-// is the explicit form of the same path.
+// `holder` owns the `Token` host (Zig) type. This module only imports it, so
+// naming the type BARE in a signature — `*Token` — must be refused at compile
+// time, and the refusal must name the fix: qualify it, `*app/holder:Token`.
+// A host type is bare inside the module that declares it; across a module
+// boundary it spells fully qualified, same as invocations.
 //
-// Found 2026-09-06: `orisha:answer` could not take `*Exchange` (a pump
-// host type) from the index module because the bare name never reached
-// the declaring module in emitted Zig.
+// Ruled 2026-09-06: bare cross-module host-type references are RETIRED. They
+// were resolved program-wide, first declaration wins (the HostTypeHomes
+// registry), and the aspiration died on three counts:
+//   - import-order shadowing — a consumer's import order rewrote a third
+//     module's OWN signatures (`import std/interpreter` before
+//     `import koru/yyjson` flipped yyjson's own `*Value` to interpreter's;
+//     repro: koru-libs repro-yyjson headless/repro.k, which never mentions
+//     `Value` at all);
+//   - two providers — modules declaring the same host name collided, with no
+//     spelling that says which one a signature means;
+//   - bystander modules — a program that never names the type still rewrote
+//     the declaring module's emitted Zig.
+// Qualifying at the boundary names the provider at every use; bare stays
+// legal exactly where the declaration lives.
+//
+// Found 2026-09-06: `orisha:answer` could not take `*Exchange` (a pump host
+// type) from the index module because the bare name never reached the
+// declaring module in emitted Zig.
 
 ~import app/holder
 ~import std/io
