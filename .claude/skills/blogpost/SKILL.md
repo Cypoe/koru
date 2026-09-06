@@ -20,6 +20,14 @@ Repo: `/Users/larsde/src/korulang_org` (adjacent to koru). Posts live at
 `/blog/drafts` route. When he's happy he flips `draft: false` himself and the
 next ceremony publishes it. You do not push, and you do not flip that flag.
 
+**The flip is not the publish.** `draft: false` + `bun run blog:index` moves
+the post into the published list in the site's SOURCE only. Nothing reaches
+korulang.org until the reactor deploy runs (`pnpm deploy:prod` — the
+ceremony's step 4.5, or standalone for a post-only publish). `git push` does
+NOT deploy (the site's Git integration is disconnected; see
+`korulang_org/DEPLOYMENT.md`). A flipped-and-committed post that was never
+deployed is invisible on the live site — never report it as published.
+
 ## The title — say what the post is about, not a riddle
 
 The title is the one line most readers ever see (the `/blog` index, social cards,
@@ -129,8 +137,18 @@ alone.** Lead with the concrete subject — the feature or concept, by name.
 
 6. **Stop and hand it to Lars.** Tell him it's at `/blog/drafts` (gated by the
    same login as present/share — `bun run dev` locally to read). Do not push, do
-   not build:local, do not ceremony. He reads, then flips `draft: false` and
-   regenerates to publish when he's satisfied.
+   not build:local, do not ceremony. He reads; the flip is his call.
+
+7. **After the flip: say what IS and ISN'T live.** If Lars directed the flip,
+   the handoff must name the post's state exactly — "committed, **not
+   deployed**; live after `deploy:prod`" — never "published." Deployment is a
+   separate act:
+   - If Lars asked to get it live now: `cd ~/src/korulang_org && pnpm
+     deploy:prod /blog/<slug>` (the slug doubles as a freshness probe; the
+     script self-verifies the `x-orisha: reactor` header and the path's 200).
+   - Otherwise: the next ceremony's step 4.5 publishes it. The test badges on
+     the post's RegressionTestLinks stay blank until that same ceremony
+     refreshes `status.json` with the new test rows.
 
 ## Voice
 
@@ -150,8 +168,12 @@ alone.** Lead with the concrete subject — the feature or concept, by name.
 ## Never
 
 - Never `git push`, `bun run build:local`, or run the status ceremony from this
-  skill. Publishing is Lars's call after he reads it.
-- Never write `draft: false`. That flag is Lars's to flip.
+  skill while the post is a draft. The flip is Lars's call, and the deploy is a
+  separate act after it: `pnpm deploy:prod` is the only thing that puts the post
+  on the live site, and a flipped-but-undeployed post is not published.
+- Never write `draft: false` on your own authority. That flag is Lars's to
+  flip — when he directs the flip, the husky gate's `LARS_HAS_READ_IT=1` is his
+  explicit say-so, not a workaround.
 - Never cite a test you haven't read/run this session, and never invent a
   `directory`/`categorySlug` — a wrong one renders a dead link on the live site.
   Verify each pair resolves in `src/lib/data/status.json` under the key
