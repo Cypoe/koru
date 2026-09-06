@@ -1,0 +1,29 @@
+// TEST: a bare host type emits against the WRITING module's own declaration,
+// even when another module declares the same name.
+//
+// BOTH `app/alpha` and `app/beta` declare a host (Zig) type named `Token` and
+// both write it BARE in their own signatures (`-> *Token`, `{ t: *Token }`) —
+// the module-local spelling the ruling keeps legal (KORU115: bare is legal
+// iff the writing module itself declares the name). The program imports both.
+//
+// The wound this pins: emission used to resolve every legal bare spelling
+// through the program-wide first-wins homes map, so the module collected
+// SECOND had its own `*Token` signatures emitted against the FIRST module's
+// struct — the same import-order shadowing the 220_031 refusal retired for
+// cross-module spellings, still alive on the module-local half. The repro was
+// `import std/interpreter` before `import koru/yyjson` (yyjson's own `*Value`
+// emitted as `*koru_std.koru_interpreter.Value`; zig codegen error).
+//
+// Observable: each module mints a Token whose `tag` names its module, reads it
+// back through its own bare signature, and prints it. Alpha's read answers
+// "alpha", beta's "beta" — each module's own struct answered. Under the
+// first-wins emission the second module's signatures point at the first
+// module's struct and the program does not compile (Zig types are nominal).
+
+~import app/alpha
+~import app/beta
+~import std/io
+
+~app/alpha:mint(id: 1): t |> app/alpha:read(t): a |> std/io:print.ln(a)
+
+~app/beta:mint(id: 2): t |> app/beta:read(t): b |> std/io:print.ln(b)

@@ -87,6 +87,22 @@ works), while RETURN positions carrying the compiler's own ABI keywords
 the bare spelling — they are protocol vocabulary, not module-owned host
 types. A bare foreign NON-ABI return (`-> *Token`) still refuses.
 
+## Emission half landed 2026-09-06: module-local bare emits writer-first
+
+The enforcement half landed set-valued, but emission still resolved every
+legal bare spelling through the program-wide first-wins homes map — the same
+shadowing the refusal retired, still alive on the module-local half (the
+yyjson repro compiled green through the checker and died in zig codegen,
+yyjson's own `*Value` emitted as interpreter's). Emission now answers the
+ruled question: the writing module's own declaration (the same
+HostTypeDeclSites set the checker asks) names the emitted home. The homes
+map's first-wins lookup lost not just its cross-module customer but its
+module-local one too; what the Consequences section predicted ("diagnostic
+aid or be deleted") landed as the diagnostic-aid half — a fallback for
+positions the scope checker does not see (proc payloads) and for registries
+armed without decl sites. ABI return keywords stay bare-matched (the carve
+above is untouched).
+
 ## What would correct this
 
 A uniqueness-checked resolution that is provably order-insensitive (not

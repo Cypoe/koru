@@ -693,10 +693,21 @@ pub const VisitorEmitter = struct {
         const homes_ptr = try self.allocator.create(type_registry_module.HostTypeHomes);
         homes_ptr.* = try type_registry_module.buildHostTypeHomes(self.allocator, self.all_items);
         emitter.host_type_homes = homes_ptr;
+        // The set-valued counterpart: module-local-first emission (a KORU115-
+        // legal bare type emits against the WRITING module's own declaration)
+        // asks the SET of declaring modules, which the first-wins map above
+        // cannot answer on a collision. Same lifetime as the homes map.
+        const sites_ptr = try self.allocator.create(type_registry_module.HostTypeDeclSites);
+        sites_ptr.* = try type_registry_module.buildHostTypeDeclSites(self.allocator, self.all_items);
+        emitter.host_type_decl_sites = sites_ptr;
         defer {
             emitter.host_type_homes = null;
+            emitter.host_type_decl_sites = null;
+            emitter.current_writer_module = null;
             homes_ptr.deinit();
             self.allocator.destroy(homes_ptr);
+            type_registry_module.deinitHostTypeDeclSites(self.allocator, sites_ptr);
+            self.allocator.destroy(sites_ptr);
         }
 
         // PRE-SCAN: Determine if we're emitting ANY items from main module
@@ -4579,6 +4590,11 @@ pub const VisitorEmitter = struct {
             const prev_module_name = self.current_module_name;
             const prev_module_prefix = self.current_module_prefix;
             self.current_module_name = module.logical_name;
+            // Module-local-first emission: while this module's items emit, its
+            // own host-type declarations license and name its bare spellings
+            // (emitter_helpers.current_writer_module).
+            const prev_writer_module = emitter.current_writer_module;
+            emitter.current_writer_module = module.logical_name;
             // Build Zig path prefix: "orisha" → "koru_orisha", "std.build" → "koru_std.build"
             // Centralized via codegen_utils so Phase 2 (prefix-every-segment) flips here too.
             const prefix: ?[]const u8 = codegen_utils.buildKoruModulePath(self.allocator, module.logical_name) catch null;
@@ -4586,6 +4602,7 @@ pub const VisitorEmitter = struct {
             defer {
                 self.current_module_name = prev_module_name;
                 self.current_module_prefix = prev_module_prefix;
+                emitter.current_writer_module = prev_writer_module;
                 if (prefix) |p| self.allocator.free(p);
             }
 

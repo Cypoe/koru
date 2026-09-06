@@ -479,3 +479,60 @@ test "writeFieldType: a top-level host type stays bare" {
     try emitter_helpers.writeFieldType(&ce, field, null);
     try testing.expectEqualStrings("*Token", ce.getOutput());
 }
+
+test "writeFieldType: module-local bare resolves to the WRITING module, not the first-wins home" {
+    // The yyjson repro as a unit: two providers of `Value`; the homes map's
+    // first-wins winner is the module collected first (interpreter). The
+    // writer (yyjson) declares the name itself, so its bare `*Value` must emit
+    // against ITS OWN declaration — import order must not rewrite a bystander
+    // module's signatures.
+    var homes = type_registry_module.HostTypeHomes.init(testing.allocator);
+    defer homes.deinit();
+    try homes.put("Value", "std.interpreter");
+    emitter_helpers.host_type_homes = &homes;
+    defer emitter_helpers.host_type_homes = null;
+
+    var sites = type_registry_module.HostTypeDeclSites.init(testing.allocator);
+    defer type_registry_module.deinitHostTypeDeclSites(testing.allocator, &sites);
+    for ([_][]const u8{ "std.interpreter", "koru.yyjson" }) |mod| {
+        const gop = try sites.getOrPut("Value");
+        if (!gop.found_existing) gop.value_ptr.* = try std.ArrayList([]const u8).initCapacity(testing.allocator, 0);
+        try gop.value_ptr.append(testing.allocator, mod);
+    }
+    emitter_helpers.host_type_decl_sites = &sites;
+    defer emitter_helpers.host_type_decl_sites = null;
+    emitter_helpers.current_writer_module = "koru.yyjson";
+    defer emitter_helpers.current_writer_module = null;
+
+    var buffer: [256]u8 = undefined;
+    var ce = emitter_helpers.CodeEmitter.init(&buffer);
+    const field = ast.Field{ .name = "doc", .type = "*Value" };
+    try emitter_helpers.writeFieldType(&ce, field, null);
+    try testing.expectEqualStrings("*koru_koru.koru_yyjson.Value", ce.getOutput());
+}
+
+test "writeFieldType: a top-level writer's own declaration keeps the bare spelling" {
+    // Top level declares `Token` AND a module does: the top-level spelling
+    // wins a collision, and the top-level writer emits bare (file scope).
+    var homes = type_registry_module.HostTypeHomes.init(testing.allocator);
+    defer homes.deinit();
+    try homes.put("Token", "");
+    emitter_helpers.host_type_homes = &homes;
+    defer emitter_helpers.host_type_homes = null;
+
+    var sites = type_registry_module.HostTypeDeclSites.init(testing.allocator);
+    defer type_registry_module.deinitHostTypeDeclSites(testing.allocator, &sites);
+    for ([_][]const u8{ "", "app.holder" }) |mod| {
+        const gop = try sites.getOrPut("Token");
+        if (!gop.found_existing) gop.value_ptr.* = try std.ArrayList([]const u8).initCapacity(testing.allocator, 0);
+        try gop.value_ptr.append(testing.allocator, mod);
+    }
+    emitter_helpers.host_type_decl_sites = &sites;
+    defer emitter_helpers.host_type_decl_sites = null;
+
+    var buffer: [256]u8 = undefined;
+    var ce = emitter_helpers.CodeEmitter.init(&buffer);
+    const field = ast.Field{ .name = "t", .type = "*Token" };
+    try emitter_helpers.writeFieldType(&ce, field, null);
+    try testing.expectEqualStrings("*Token", ce.getOutput());
+}

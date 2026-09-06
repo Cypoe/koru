@@ -103,6 +103,36 @@ pub var build_config_count: usize = 0;
 /// compiler process.
 pub var host_type_homes: ?*const type_registry_module.HostTypeHomes = null;
 
+/// The set-valued counterpart (type_registry.buildHostTypeDeclSites) —
+/// attached by VisitorEmitter.emit next to host_type_homes. Module-local-first
+/// resolution must ask "does the WRITING module declare this name itself?",
+/// which the first-wins map cannot answer on a two-provider collision.
+pub var host_type_decl_sites: ?*const type_registry_module.HostTypeDeclSites = null;
+
+/// The module whose code is being emitted right now (a module_decl's
+/// logical_name, dotted canon; null = the program's top level). Set around
+/// module emission by VisitorEmitter. A KORU115-legal bare host type — the
+/// writer declares the name — emits against THIS module's own declaration,
+/// never through the first-wins homes map (a consumer's import order must not
+/// rewrite a bystander module's own signatures; ruled 2026-09-06,
+/// frag-bare-host-type-is-module-local-cross-module-is-qualified).
+pub var current_writer_module: ?[]const u8 = null;
+
+/// Module-local bare: does the module being emitted right now declare `base`
+/// itself? Set-valued (HostTypeDeclSites), so on a two-provider collision the
+/// writer's own declaration still answers yes. Unattached registry → false,
+/// which keeps the first-wins homes fallback in charge (unit tests, paths the
+/// visitor never armed).
+fn writerDeclaresType(base: []const u8) bool {
+    const sites = host_type_decl_sites orelse return false;
+    const writer = current_writer_module orelse "";
+    const decls = sites.get(base) orelse return false;
+    for (decls.items) |home| {
+        if (type_registry_module.moduleNamesMatch(home, writer)) return true;
+    }
+    return false;
+}
+
 /// Register a build config value (called by build:config)
 pub fn registerBuildConfig(key: []const u8, value: []const u8) bool {
     if (build_config_count >= build_configs.len) {
@@ -1039,10 +1069,15 @@ pub fn writeFieldType(emitter: *CodeEmitter, field: ast.Field, main_module_name:
         // to that home — `*Token` (declared in app/holder) →
         // `*koru_app.koru_holder.Token`. Unknown stays unknown (the backend
         // owns it). A top-level ("") home resolves bare and falls through
-        // too. Between modules, host_type_homes' first-declaration-wins
-        // rule picks; coexisting same-name hosts stay an open question.
-        // A `std/foreign` claim is not required: that door is Koru-side
-        // presence, not Zig path qualification. 220_031 is the pin.
+        // too.
+        // MODULE-LOCAL FIRST (ruled 2026-09-06): a bare spelling is legal only
+        // inside the module that declares it (KORU115), so when the WRITING
+        // module declares the name its own declaration names the emitted home —
+        // resolved against the SET of declaring modules, never the first-wins
+        // winner. The homes map's first-declaration-wins rule lost its legal
+        // customer for bare types with the 220_031 refusal; it stays here as a
+        // best-effort aid for positions the scope checker does not see (e.g.
+        // proc payloads) and for registries a test armed without decl sites.
         {
             var i: usize = 0;
             const prefixes = [_][]const u8{ "[]const ", "?*const ", "*const ", "[]", "?*", "?", "*" };
@@ -1064,7 +1099,19 @@ pub fn writeFieldType(emitter: *CodeEmitter, field: ast.Field, main_module_name:
                 }
             }
             if (base_ok) {
-                if (host_type_homes) |homes| {
+                if (writerDeclaresType(base)) {
+                    if (current_writer_module) |writer| {
+                        if (writer.len > 0) {
+                            try emitter.write(type_name[0..i]);
+                            try writeModulePath(emitter, writer, main_module_name);
+                            try emitter.write(".");
+                            try emitter.write(base);
+                            return;
+                        }
+                    }
+                    // Top-level writer: its declarations live in file scope —
+                    // stay bare, exactly as a first-wins "" home did.
+                } else if (host_type_homes) |homes| {
                     if (homes.get(base)) |home| {
                         if (home.len > 0) {
                             try emitter.write(type_name[0..i]);
@@ -12100,11 +12147,25 @@ pub fn writeBareReturnType(
             return;
         }
     }
-    // Same host-home routing writeFieldType uses for payload fields: a bare
-    // `*Token` whose declaration lives in another module must emit that
-    // module's path, or Output is an undeclared identifier (220_031).
+    // Same host-home routing writeFieldType uses for payload fields — with the
+    // same MODULE-LOCAL FIRST order: when the module being emitted declares the
+    // bare base itself (KORU115-legal), its own declaration names the emitted
+    // home; the first-wins homes map stays only as the fallback for positions
+    // the scope checker does not see.
     if (isModuleLocalBareTypeBase(remaining)) {
-        if (host_type_homes) |homes| {
+        if (writerDeclaresType(remaining)) {
+            if (current_writer_module) |writer| {
+                if (writer.len > 0) {
+                    try emitter.write(prefix);
+                    try writeModulePath(emitter, writer, main_module_name);
+                    try emitter.write(".");
+                    try emitter.write(remaining);
+                    return;
+                }
+            }
+            // Top-level writer: file-scope declarations stay bare, as a
+            // first-wins "" home did.
+        } else if (host_type_homes) |homes| {
             if (homes.get(remaining)) |home| {
                 if (home.len > 0) {
                     try emitter.write(prefix);
