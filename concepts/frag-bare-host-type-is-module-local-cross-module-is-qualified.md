@@ -74,6 +74,19 @@ needs the Zig path qualification); it lost its cross-module customer.
 orisha migrates later in its own repo (ruled out of this slice); pump.k's
 `*Exchange` stays legal via the contract/companion merge.
 
+## Refinement — ABI return keywords are protocol spellings, not host types
+
+The board caught the migration over-reaching: a transform declaring
+`-> *const std/compiler:Program` mis-emitted, because the transform machinery
+string-matches its return BARE — `returns_program` (main.zig) and the
+emitter's `ast_return_types` lowering to `__koru_ast.X`. So the carve the
+refusal respects has TWO halves: PARAM positions are ruled-strict (a bare
+foreign base refuses; `*std/compiler:Program` is the migrated spelling and
+works), while RETURN positions carrying the compiler's own ABI keywords
+(`Program`, `SiteResult`, `Item`, `ExplainReport`, the AST node names) keep
+the bare spelling — they are protocol vocabulary, not module-owned host
+types. A bare foreign NON-ABI return (`-> *Token`) still refuses.
+
 ## What would correct this
 
 A uniqueness-checked resolution that is provably order-insensitive (not

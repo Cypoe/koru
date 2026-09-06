@@ -30,6 +30,21 @@ const TypePrefixes = [_][]const u8{ "[]const ", "?*const ", "*const ", "[]", "?*
 
 const Intrinsics = [_][]const u8{ "Source", "File", "EmbedFile", "Expression", "InvocationMeta" };
 
+/// Compiler-owned transform-ABI names that behave as keywords in RETURN
+/// positions: the machinery string-matches them BARE (main.zig's
+/// returns_program detects `-> Program` / `-> SiteResult` by substring;
+/// emitter_helpers' ast_return_types lowers the bare form to `__koru_ast.X`).
+/// They are protocol spellings of the compiler's own contract, not
+/// module-owned host types — refusing them would break the transform ABI the
+/// pins depend on (210_054's `-> *const Program` is load-bearing). PARAM
+/// positions stay ruled-strict: `program: *std/compiler:Program` is the
+/// migrated spelling and works (proven across the 2026-09-06 board).
+const AbiReturnTypes = [_][]const u8{
+    "ExplainReport", "SiteResult", "Program", "Item", "Source",
+    "Invocation",    "EventDecl",  "ProcDecl", "Flow", "Branch",
+    "Continuation",  "ASTNode",
+};
+
 pub fn check(allocator: std.mem.Allocator, items: []const ast.Item, reporter: *errors.ErrorReporter) CheckError!void {
     var sites = try type_registry.buildHostTypeDeclSites(allocator, items);
     defer type_registry.deinitHostTypeDeclSites(allocator, &sites);
@@ -128,6 +143,9 @@ fn checkTypeString(
             base = base[prefix.len..];
             break;
         }
+    }
+    for (AbiReturnTypes) |abi| {
+        if (std.mem.eql(u8, base, abi)) return;
     }
     try refuseIfForeign(base, writer_module, sites, reporter, location);
 }
@@ -259,6 +277,23 @@ test "module-local bare stays legal: the writer declaring the name licenses its 
 
     try refuseIfForeign("Value", "std.eval", &sites, &reporter, .{ .file = "eval.kz", .line = 1, .column = 1 });
     try testing.expect(!reporter.hasErrors());
+}
+
+test "transform-ABI return keywords keep their bare spelling (behavior-bearing)" {
+    const a = testing.allocator;
+    var sites = try siteMap(a, &.{ .{ "Program", "std.compiler" } });
+    defer type_registry.deinitHostTypeDeclSites(a, &sites);
+    var reporter = try errors.ErrorReporter.init(a, "input.kz", "");
+    defer reporter.deinit();
+
+    // `-> *const Program` / `-> SiteResult` are the transform protocol's own
+    // spellings: main.zig's returns_program and the emitter's ast_return_types
+    // string-match them bare. A bare foreign `*Token` return still refuses.
+    try checkTypeString("*const Program", "", &sites, &reporter, .{ .file = "input.kz", .line = 1, .column = 1 });
+    try checkTypeString("SiteResult", "", &sites, &reporter, .{ .file = "input.kz", .line = 1, .column = 1 });
+    try refuseIfForeign("Token", "", &sites, &reporter, .{ .file = "input.kz", .line = 1, .column = 1 });
+    try testing.expect(reporter.hasErrors());
+    try testing.expectEqual(@as(usize, 1), reporter.errors.items.len);
 }
 
 test "qualified spellings and undeclared names are not refusal sites" {

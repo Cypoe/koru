@@ -9,7 +9,7 @@ const std = @import("std");
     invocation: *const Invocation,
     program: *const std/compiler:Program,
     allocator: std.mem.Allocator
-} -> *const std/compiler:Program
+} -> *const Program
 
 ~proc inline.source|zig {
     return program;
