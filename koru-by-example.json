@@ -1,10 +1,10 @@
 {
-  "_comment": "Curation config for the by-example artifacts. Corpus = union(passing tests under `categories`) ∪ `includedTests` − `excludedTests`. NO PROSE: per-test prose, category prose, intro, and rules have all been removed — the tests are the only source of truth (they cannot lie; prose drifts and contaminates). Generators emit verbatim passing tests + routing frontmatter only.",
-  "_topics_comment": "`topics` drives generate-skills.js. Each topic emits TWO artifacts: (1) docs/by-example/<name>.md — the verbatim reference shard (every passing test under `clusters` ∪ `includedTests` − `excludedTests`); (2) skills/<name>/SKILL.md — a routing stub: frontmatter `description` (when the skill fires) + a pointer at the shard. No authored prose — the shard (verbatim tests) is the authority.",
+  "_comment": "Curation config for the by-example artifacts. Corpus = union(passing tests under `categories`) \u222a `includedTests` \u2212 `excludedTests`. NO PROSE: per-test prose, category prose, intro, and rules have all been removed \u2014 the tests are the only source of truth (they cannot lie; prose drifts and contaminates). Generators emit verbatim passing tests + routing frontmatter only.",
+  "_topics_comment": "`topics` drives generate-skills.js. Each topic emits TWO artifacts: (1) docs/by-example/<name>.md \u2014 the verbatim reference shard (every passing test under `clusters` \u222a `includedTests` \u2212 `excludedTests`); (2) skills/<name>/SKILL.md \u2014 a routing stub: frontmatter `description` (when the skill fires) + a pointer at the shard. No authored prose \u2014 the shard (verbatim tests) is the authority.",
   "topics": [
     {
       "name": "koru",
-      "title": "Koru — core language",
+      "title": "Koru \u2014 core language",
       "description": "The core Koru language: events with named outcome branches, flows that dispatch (`|`) and chain (`|>`), subflows vs host procs, the `~` parser-mode rule, plus loops (label + jump) and literals/punning. Use when writing or reading any `.kz`/`.k` file and you need the foundational shapes. Start here before the narrower topic skills.",
       "clusters": [
         "000_CORE_LANGUAGE",
@@ -16,7 +16,7 @@
     },
     {
       "name": "koru-templates",
-      "title": "Koru — control-flow templates (`for` / `if`)",
+      "title": "Koru \u2014 control-flow templates (`for` / `if`)",
       "description": "Control flow in Koru: `~if` and `~for` as templates over continuation-return, not host keywords. Use when emitting conditionals or iteration in Koru, or when working on the template/lowering layer (`koru_std/control.kz`). Covers how `for`/`if` select continuations and lower per target.",
       "clusters": [
         "320_CONTROL_FLOW"
@@ -26,8 +26,8 @@
     },
     {
       "name": "koru-metaprogramming",
-      "title": "Koru — metaprogramming (event globbing)",
-      "description": "Compile-time metaprogramming in Koru: event globbing and compile-time event matching — the \"you are the compiler\" surface where userland code sits inside the pipeline. Use when writing compile-time event selection or pattern-matching over events. SEED TOPIC — currently scoped to event globbing; widen `clusters` in koru-by-example.json as the metaprogramming surface grows.",
+      "title": "Koru \u2014 metaprogramming (event globbing)",
+      "description": "Compile-time metaprogramming in Koru: event globbing and compile-time event matching \u2014 the \"you are the compiler\" surface where userland code sits inside the pipeline. Use when writing compile-time event selection or pattern-matching over events. SEED TOPIC \u2014 currently scoped to event globbing; widen `clusters` in koru-by-example.json as the metaprogramming surface grows.",
       "clusters": [
         "700_EVENT_GLOBBING"
       ],
@@ -58,17 +58,21 @@
     "400_060_fmt_blk_autodispose",
     "400_070_effect_branch_minimal",
     "610_001_string_basic",
-    "620_001_fmt_ln_basic"
+    "620_001_fmt_ln_basic",
+    "140_020_part_basic_join",
+    "140_021_part_tilde_spelling",
+    "140_022_part_host_facet_routing"
   ],
   "excludedTests": [],
   "tutorial": {
     "title": "Koru in a Page",
-    "disclaimer": "This tutorial is prose synthesis on top of the test suite. It may contain errors or drift. The compiler's actual behavior — verified by tests in `tests/regression/` and source in `src/` — is the source of truth. When you find this document saying one thing and the compiler doing another, the conflict itself is the finding: flag it, don't paper over it.\n\n**Koru is greenfield.** There are no legacy users, no deprecated forms to support, no migration windows that constitute a contract. When the language changes, the change lands and tests/docs get rewritten in the same motion. If the parser temporarily accepts an older form while migration is in progress, that's internal scaffolding — not a feature. Write code in the current canonical form. Don't hedge for legacy.",
+    "disclaimer": "This tutorial is prose synthesis on top of the test suite. It may contain errors or drift. The compiler's actual behavior \u2014 verified by tests in `tests/regression/` and source in `src/` \u2014 is the source of truth. When you find this document saying one thing and the compiler doing another, the conflict itself is the finding: flag it, don't paper over it.\n\n**Koru is greenfield.** There are no legacy users, no deprecated forms to support, no migration windows that constitute a contract. When the language changes, the change lands and tests/docs get rewritten in the same motion. If the parser temporarily accepts an older form while migration is in progress, that's internal scaffolding \u2014 not a feature. Write code in the current canonical form. Don't hedge for legacy.",
     "tests": [
       "010_000_hello_world_koru",
       "020_014_pure_subflow_impl",
       "240_subflow_defines_semantics",
-      "330_038_cleanup_obligation_satisfied"
+      "330_038_cleanup_obligation_satisfied",
+      "140_020_part_basic_join"
     ]
   }
 }

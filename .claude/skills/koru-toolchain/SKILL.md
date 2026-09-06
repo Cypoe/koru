@@ -101,6 +101,17 @@ These cost hours if you don't know them. Each is expanded in `CLAUDE.md` /
 - **`.kz`** — Koru-Zig: a valid Zig file where `~` switches the parser into Koru.
   Use it when you need host-level declarations or a `|zig` proc body.
 - **`.kjs`** — the JS-host counterpart to `.kz`.
+- **`part` — split a big module into sibling files.** A module's own file
+  declares its parts: `part query` (or `~part query` in a `.kz`) joins every
+  `store.query.k*` file — all host views — into the same module. The join is
+  item-level, so locations and hostline routing stay per-file. Discovery is
+  loud: a tag with no file is KORU201, never a silent miss. Parts are **flat**
+  (a part file may not declare parts — promote to a directory module when a
+  part outgrows its file) and the growth wall pins each file's line count and
+  teaches the split when a file grows. **When a module file is getting big,
+  split it with `part` before appending — the wall will ask at commit anyway.**
+  Pins: `140_020`..`140_028`. `koru_std/store.kz` is the working example
+  (a 1,690-line primary + 12 `~part` event files).
 
 ## Running tests
 
