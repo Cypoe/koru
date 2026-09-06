@@ -115,6 +115,54 @@ check_orphan_locks() {
     done
 }
 
+# --- line-growth wall ---------------------------------------------------------
+# The adoption lever for `part`: a staged Koru file may not grow past the
+# size pinned in scripts/koru_line_baselines.txt. The refusal teaches the
+# split ("store.kz pinned at 11,985; grew to N — add `~part <name>` and move
+# the code to store.<name>.k"). A staged baseline regeneration may only
+# shrink rows or add new files — the wall does not widen, same doctrine as
+# the .gitignore allowlist.
+check_line_growth() {
+    local baseline="scripts/koru_line_baselines.txt"
+    [ -f "$baseline" ] || return 0
+
+    # The baseline itself, when staged, must not widen any pinned row.
+    if git diff --cached --name-only | grep -qxF "$baseline"; then
+        local old_baseline old_pinned
+        old_baseline="$(git show HEAD:"$baseline" 2>/dev/null || true)"
+        while IFS=$'\t' read -r rel_path pinned; do
+            [ -n "$rel_path" ] || continue
+            old_pinned="$(printf '%s\n' "$old_baseline" | awk -F'\t' -v p="$rel_path" '$1 == p {print $2; exit}')"
+            [ -n "$old_pinned" ] || continue
+            if [ "$pinned" -gt "$old_pinned" ]; then
+                echo -e "  ${RED}✗${NC} $baseline widened '$rel_path' $old_pinned -> $pinned lines"
+                echo "      The wall does not widen: split the file into \`~part\` siblings"
+                echo "      (then rerun: bash scripts/koru_line_baselines.sh > $baseline)"
+                fail=1
+            fi
+        done < "$baseline"
+    fi
+
+    # Staged Koru files: compare the staged blob's size against its pin.
+    local staged_path staged_size stem
+    while IFS=$'\t' read -r pinned_path pinned; do
+        [ -n "$pinned_path" ] || continue
+        if git diff --cached --name-only --diff-filter=ACMR | grep -qxF "$pinned_path"; then
+            staged_size="$(git show :"$pinned_path" 2>/dev/null | wc -l | tr -d ' ')"
+            [ -n "$staged_size" ] || continue
+            if [ "$staged_size" -gt "$pinned" ]; then
+                stem="${pinned_path%.kz}"; stem="${stem%.kjs}"
+                stem="${stem%.kc}"; stem="${stem%.kgpu}"; stem="${stem%.k}"
+                echo -e "  ${RED}✗${NC} $pinned_path grew past its pinned $pinned lines (staged: $staged_size)"
+                echo "      Split it: add \`~part <name>\` to $pinned_path and move the new"
+                echo "      code to ${stem}.<name>.k (or .kz/.kjs) — then regenerate:"
+                echo "      bash scripts/koru_line_baselines.sh > $baseline && git add $baseline"
+                fail=1
+            fi
+        fi
+    done < "$baseline"
+}
+
 # --- modes -------------------------------------------------------------------
 CAND=$(mktemp "${TMPDIR:-/tmp}/koru-gitwall-cand.XXXXXX")
 VIOL=$(mktemp "${TMPDIR:-/tmp}/koru-gitwall-viol.XXXXXX")
@@ -133,6 +181,7 @@ case "$MODE" in
         fi
         git diff --cached --name-only --diff-filter=ACMR > "$CAND"
         check_orphan_locks
+        check_line_growth
         ;;
     --committed)
         echo "git-wall — tracked tree vs .gitignore (committed-tree oracle)"
