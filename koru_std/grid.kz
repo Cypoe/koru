@@ -160,7 +160,7 @@ const grid_read = struct {
                 // On JS the declaration rides an `.inline_code` item (a
                 // synthesized host_line pointing at a `.k` is dropped by the
                 // JS emitter's facet filter — same routing as the store cell,
-                // store.kz:3048), so the re-collection must read it there too.
+                // store.new.kz:1374), so the re-collection must read it there too.
                 .inline_code => |ic| scanLowered(alloc, prog, ic.code, home, out),
                 .module_decl => |m| collectIn(alloc, prog, m.items, m.logical_name, out),
                 else => {},
@@ -856,7 +856,7 @@ const grid_read = struct {
         grid_read.lowerItems(allocator, @constCast(program.items), seen.items);
     }
 
-    // Same routing problem as the store cell (store.kz:3048): a synthesized
+    // Same routing problem as the store cell (store.new.kz:1374): a synthesized
     // host_line points at the user's `.k`, and the JS emitter only takes host
     // lines from a JS host facet — so on JS the declaration that RUNS rides
     // `.inline_code`, emitted unconditionally at the file's top level.

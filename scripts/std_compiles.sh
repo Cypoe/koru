@@ -35,11 +35,30 @@ fi
 # std/liquid_template -> liquid_template.kz). .kjs is the JS-target facet and
 # is not probed here (different backend). Host-side .zig files are not
 # importable modules.
+#
+# Part files (`~part` siblings, store.new.kz) are not importable modules —
+# they join their primary at load. A dotted stem whose base is itself a
+# module is a part and is excluded (store.new -> base store exists).
 modules() {
-    for f in koru_std/*.kz koru_std/*.k; do
+    local stems
+    stems="$(for f in koru_std/*.kz koru_std/*.k; do
         [ -e "$f" ] || continue
         basename "$f" | sed 's/\.kz$//; s/\.k$//'
-    done | sort -u
+    done | sort -u)"
+    while IFS= read -r stem; do
+        [ -n "$stem" ] || continue
+        case "$stem" in
+            *.*)
+                base="${stem%%.*}"
+                if printf '%s\n' "$stems" | grep -qxF "$base"; then
+                    continue  # a part of module $base, not a module itself
+                fi
+                ;;
+        esac
+        printf '%s\n' "$stem"
+    done <<EOF
+$stems
+EOF
 }
 
 # --- classified skips ------------------------------------------------------
@@ -70,7 +89,7 @@ probe_one() {
 const std = @import("std");
 ~import std/$mod
 
-~event probe {}
+~tor probe {}
 
 ~proc probe|zig {
     std.debug.print("ok\n", .{});

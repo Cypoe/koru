@@ -49,3 +49,18 @@ still append to store.kz (the wall is noise, not teaching) — or a future
 surface is adopted with no wall at all, which would falsify the claim that
 the wall is load-bearing. The counter-observation is the wall's own
 baseline shrinking as files split.
+
+## First confirmation (same day the wall landed)
+
+The wall caught its first violation within an hour of shipping: a
+comment-reflow on grid.kz grew the file 1437→1438 lines and the pre-commit
+gate refused it with the split message — the reflow was rewritten net-zero
+and the commit passed. The same commit split store.kz itself: 11,985 lines
+→ a 1,690-line primary declaring 12 `~part` events, each in its own
+`store.<event>.kz`. The baseline row for store.kz shrank from 11,985 to
+1,690 and 12 new rows appeared — the wall accepted the shrink shape exactly
+as designed. The 690-family store suite (236 tests) showed zero regressions;
+the split was verified byte-faithful against the pre-split file before it
+was committed. The doctrine's falsifiable edge has not fired; the mechanism
+performed its first arrest and its first sanctioned split in the same
+session.
