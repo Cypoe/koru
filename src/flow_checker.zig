@@ -437,18 +437,26 @@ pub const FlowChecker = struct {
     }
 
     /// KORU095 (610_007, ruled 2026-09-05): borrows flow down, never up. A
-    /// `-> string` bare return whose expression projects a parameter's memory
-    /// (`s.data`) hands back a borrow the owner can invalidate by discharge
-    /// OR mutation — every String mutator reallocs with the owner alive — and
-    /// nothing tracks it. Refuse at the declaration.
+    /// `-> string` bare return whose expression projects a Koru String
+    /// parameter's memory (`s.data`) hands back a borrow the owner can
+    /// invalidate by discharge OR mutation — every String mutator reallocs
+    /// with the owner alive — and nothing tracks it. Refuse at the declaration.
     ///
     /// Gate is deliberately narrow: the declared return must be bare `string`
-    /// (`len`'s `-> s.data.len` is a usize scalar and lives), and the
-    /// projection must root DIRECTLY at an input parameter. Literals, calls
-    /// (checked at the callee's own declaration), and bare bindings (moves,
-    /// policed by KORU030) pass through. A projection laundered through a
-    /// local is the same aliasing wall lifetimes would need — knowingly out
-    /// of scope; the ban removes the manufacture, not every laundering.
+    /// (`len`'s `-> s.data.len` is a usize scalar and lives), the projection
+    /// must root DIRECTLY at an input parameter, and that parameter must be a
+    /// Koru string type (`string` / `String`, with `*`/`?`/`!` and phantoms
+    /// stripped). Literals, calls (checked at the callee's own declaration),
+    /// and bare bindings (moves, policed by KORU030) pass through. A
+    /// projection laundered through a local is the same aliasing wall
+    /// lifetimes would need — knowingly out of scope; the ban removes the
+    /// manufacture, not every laundering.
+    ///
+    /// Foreign presence claims (`f: *File`, `f.path`) are host substance —
+    /// Koru does not discharge or realloc them. The syntactic `param.field`
+    /// over-approximation was stealing the backend foreign-deref check
+    /// (667_004/006 name the missing field; 667_005 waves a present one
+    /// through to host linkage). Those stay the shape checker's.
     fn checkBareReturnOwnsPayload(self: *FlowChecker, ii: *const ast.ImmediateImpl, decl: *const ast.EventDecl, name: []const u8) anyerror!void {
         const want = decl.return_type orelse return;
         if (!std.mem.eql(u8, want, "string")) return;
@@ -458,14 +466,15 @@ pub const FlowChecker = struct {
         while (i < expr.len and (std.ascii.isAlphanumeric(expr[i]) or expr[i] == '_' or expr[i] == '-')) : (i += 1) {}
         if (i == 0 or i >= expr.len or expr[i] != '.') return;
         const root = expr[0..i];
-        var is_param = false;
+        var param_type: ?[]const u8 = null;
         for (decl.input.fields) |f| {
             if (std.mem.eql(u8, f.name, root)) {
-                is_param = true;
+                param_type = f.type;
                 break;
             }
         }
-        if (!is_param) return;
+        const ptype = param_type orelse return;
+        if (!paramTypeIsKoruString(ptype)) return;
         try self.reporter.addErrorAtLocationWithHint(
             .KORU095,
             ii.location,
@@ -1886,6 +1895,27 @@ fn isIdentifierChar(c: u8) bool {
         (c >= 'A' and c <= 'Z') or
         (c >= '0' and c <= '9') or
         c == '_';
+}
+
+/// Bare `string` or `String` after stripping pointer/optional/consume
+/// prefixes, a trailing phantom, and a module qualifier. The KORU095
+/// owner — not a foreign presence claim, not a host slice.
+fn paramTypeIsKoruString(type_str: []const u8) bool {
+    var t = std.mem.trim(u8, type_str, " \t");
+    while (t.len > 0 and (t[0] == '*' or t[0] == '?' or t[0] == '!')) {
+        t = std.mem.trim(u8, t[1..], " \t");
+    }
+    if (std.mem.indexOfScalar(u8, t, '<')) |lt| t = std.mem.trim(u8, t[0..lt], " \t");
+    if (std.mem.lastIndexOfScalar(u8, t, ':')) |ci| t = std.mem.trim(u8, t[ci + 1 ..], " \t");
+    return std.mem.eql(u8, t, "string") or std.mem.eql(u8, t, "String");
+}
+
+test "KORU095 owner is a Koru string type, not a foreign entry" {
+    try std.testing.expect(paramTypeIsKoruString("string"));
+    try std.testing.expect(paramTypeIsKoruString("*std/string:String<view>"));
+    try std.testing.expect(paramTypeIsKoruString("!String"));
+    try std.testing.expect(!paramTypeIsKoruString("*File"));
+    try std.testing.expect(!paramTypeIsKoruString("i64"));
 }
 
 fn pathSegmentsEqual(a: []const []const u8, b: []const []const u8) bool {
