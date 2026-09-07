@@ -72,6 +72,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    keyword_registry_module.addImport("ast", ast_module);
+    keyword_registry_module.addImport("log", log_module);
 
     // Parser module with dependencies
     // Parse-time name normalizer (kebab -> snake). Shares ast_module so its
@@ -384,6 +386,7 @@ pub fn build(b: *std.Build) void {
     flow_checker_module.addImport("log", log_module);
     // emitter_helpers (defined earlier) detects `~[transform]proc` implementations
     emitter_helpers_module.addImport("annotation_parser", annotation_parser_module);
+    keyword_registry_module.addImport("annotation_parser", annotation_parser_module);
 
     // Visitor Emitter module - visitor-based orchestration
     const visitor_emitter_module = b.createModule(.{

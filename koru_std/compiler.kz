@@ -166,6 +166,16 @@ pub const CompilerContext = struct {
     type_registry_module.addImport("ast", ast_module);
     type_registry_module.addImport("log", log_module);
 
+    // Keyword registry — [keyword] resolution, callable from the test transform
+    const keyword_registry_module = b.createModule(.{
+        .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/keyword_registry.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    keyword_registry_module.addImport("ast", ast_module);
+    keyword_registry_module.addImport("log", log_module);
+    keyword_registry_module.addImport("annotation_parser", annotation_parser_module);
+
     // Expression parser
     const expression_parser_module = b.createModule(.{
         .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/expression_parser.zig" },
@@ -654,6 +664,7 @@ pub const CompilerContext = struct {
     backend_output_module.addImport("template_utils", template_utils_module);
     backend_output_module.addImport("liquid", liquid_module);
     backend_output_module.addImport("struct_literal", struct_literal_module);
+    backend_output_module.addImport("keyword_registry", keyword_registry_module);
 
     // backend_output_emitted as a MODULE of the exe (single compilation unit =
     // single std). Previously a separate `b.addObject` + `exe.addObject`, which
@@ -3155,58 +3166,4 @@ const joinPathAlloc = struct {
     return mutable_ctx;
 }
 
-// CCP Observability Injection Pass
-// Injects universal observability taps into the user's AST
-// This makes every compiled program self-observing by adding emit_json and * -> * tap
-~proc inject-ccp|zig {
-    // Inject CCP observability helpers as self-contained Zig code
-    // Uses __ccp_std local import to avoid namespace pollution
-
-    // CCP is a self-governing feature that requires BOTH:
-    // 1. User imports std/ccp (declares intent to use CCP)
-    // 2. Compiler flag --ccp is set (enables CCP infrastructure)
-    // This pattern allows features to exist in AST but remain dormant without flags
-
-    // TODO: CCP feature is disabled until CompilerEnv is implemented
-    // This would inject observability helpers when --ccp flag is set
-    var updated_ctx = ctx;
-    updated_ctx.passes_completed += 1;
-    return updated_ctx;
-}
-
-// CCP Command Processing Pass
-// Reads and processes incoming AI commands from stdin when --ccp is enabled
-~pub tor process-ccp-commands { ctx: CompilerContext } -> CompilerContext
-
-~proc process-ccp-commands|zig {
-    // TODO: Check if --ccp flag is enabled via CompilerEnv
-    // TODO: Attempt non-blocking stdin read for JSONL commands
-    // TODO: Parse and dispatch commands to appropriate handlers
-    // For now, just pass through the context unchanged
-    var updated_ctx = ctx;
-    updated_ctx.passes_completed += 1;
-    return updated_ctx;
-}
-
-// ============================================================================
-// NOTE: The default compiler coordinator is NOT defined as a Koru flow.
-//       It's hardcoded in src/main.zig as a Zig function.
-//
-// Why: The coordinator runs at Zig compile-time during backend.zig compilation,
-//      before the Koru runtime exists. Flows can't execute at that stage.
-//
-// To modify the compilation pipeline, edit compiler_coordinate_default
-// in src/main.zig directly.
-//
-// The pipeline executes these passes in order:
-//   1. compiler.passes.process-ccp-commands  (reads AI commands from stdin)
-//   2. compiler.passes.evaluate-comptime     (executes comptime events)
-//   3. compiler.check.structure              (validates event/branch shapes)
-//   4. compiler.check.phantom.semantic       (validates phantom types)
-//   5. compiler.passes.inject-ccp            (adds observability taps)
-//   6. compiler.passes.dead_strip            (removes unreachable events/flows)
-//   7. compiler.emit.zig                     (generates final Zig code)
-//
-// [expand] events are handled automatically by transform_pass_runner.zig
-// during the transform phase inside evaluate-comptime.
-// ============================================================================
+~part ccp

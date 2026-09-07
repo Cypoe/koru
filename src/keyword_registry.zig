@@ -1,4 +1,7 @@
 const std = @import("std");
+const ast = @import("ast");
+const log = @import("log");
+const annotation_parser = @import("annotation_parser");
 
 /// Registry for keyword annotations that allow unqualified event invocation.
 ///
@@ -118,6 +121,282 @@ pub const KeywordRegistry = struct {
         return self.keywords.count();
     }
 };
+
+/// Build the registry by scanning all events with `[keyword]`. Must run AFTER
+/// canonicalization so declaration paths have module qualifiers.
+pub fn buildFromItems(
+    items: []const ast.Item,
+    registry: *KeywordRegistry,
+    allocator: std.mem.Allocator,
+) !void {
+    for (items) |item| {
+        switch (item) {
+            .event_decl => |event| {
+                if (event.is_public and annotation_parser.isKeyword(event.annotations)) {
+                    const keyword_name = event.path.segments[event.path.segments.len - 1];
+
+                    var canonical_parts: std.ArrayList(u8) = .{};
+                    defer canonical_parts.deinit(allocator);
+
+                    if (event.path.module_qualifier) |qualifier| {
+                        try canonical_parts.appendSlice(allocator, qualifier);
+                        try canonical_parts.append(allocator, ':');
+                    }
+                    for (event.path.segments, 0..) |seg, i| {
+                        if (i > 0) try canonical_parts.append(allocator, '.');
+                        try canonical_parts.appendSlice(allocator, seg);
+                    }
+
+                    const canonical_path = try allocator.dupe(u8, canonical_parts.items);
+                    const module_path = event.path.module_qualifier orelse "main";
+
+                    try registry.registerKeyword(keyword_name, canonical_path, module_path);
+                    log.debug("  Registered keyword '{s}' -> '{s}'\n", .{ keyword_name, canonical_path });
+                }
+            },
+            .module_decl => |module| {
+                try buildFromItems(module.items, registry, allocator);
+            },
+            else => {},
+        }
+    }
+}
+
+/// Resolve keywords in `items`, using those same items as home and as the
+/// whole-program lookup. The compiler's outer pass is this shape.
+pub fn resolveInAST(
+    items: []ast.Item,
+    registry: *const KeywordRegistry,
+    allocator: std.mem.Allocator,
+    home_module: []const u8,
+) !void {
+    try resolveInASTWithLookup(items, registry, allocator, home_module, items, items);
+}
+
+/// Resolve keywords in `items` while looking up declarations in `all_items`.
+/// The `test` transform re-parses a body that has no imported `module_decl`s;
+/// its registry and `findEventDecl` walk must use the parent program.
+pub fn resolveInASTWithLookup(
+    items: []ast.Item,
+    registry: *const KeywordRegistry,
+    allocator: std.mem.Allocator,
+    home_module: []const u8,
+    home_items: []const ast.Item,
+    all_items: []const ast.Item,
+) !void {
+    for (items) |*item| {
+        try resolveInItem(item, registry, allocator, home_module, home_items, all_items);
+    }
+}
+
+fn resolveInItem(
+    item: *ast.Item,
+    registry: *const KeywordRegistry,
+    allocator: std.mem.Allocator,
+    home_module: []const u8,
+    home_items: []const ast.Item,
+    all_items: []const ast.Item,
+) !void {
+    switch (item.*) {
+        .flow => |*flow| {
+            try resolveInPath(&flow.invMut().path, registry, allocator, home_module, home_items);
+            try bindImplicitExpressionArg(flow.invMut(), allocator, all_items);
+            for (flow.body.continuations) |*cont| {
+                try resolveInContinuation(@constCast(cont), registry, allocator, home_module, home_items, all_items);
+            }
+        },
+        .module_decl => |*module| {
+            for (module.items) |*mod_item| {
+                try resolveInItem(@constCast(mod_item), registry, allocator, module.logical_name, module.items, all_items);
+            }
+        },
+        else => {},
+    }
+}
+
+fn bindImplicitExpressionArg(
+    invocation: *ast.Invocation,
+    allocator: std.mem.Allocator,
+    all_items: []const ast.Item,
+) !void {
+    const event_name = if (invocation.path.segments.len > 0) invocation.path.segments[0] else return;
+    const module_qualifier = invocation.path.module_qualifier orelse return;
+
+    const event_decl = findEventDecl(all_items, module_qualifier, event_name) orelse return;
+
+    var has_implicit_expr = false;
+    for (event_decl.input.fields) |field| {
+        if (std.mem.eql(u8, field.name, "expr") and field.is_expression) {
+            has_implicit_expr = true;
+            break;
+        }
+    }
+
+    if (has_implicit_expr) {
+        const mutable_args = @constCast(invocation.args);
+        for (mutable_args) |*arg| {
+            if (arg.had_explicit_label) continue;
+
+            var is_source_slot = false;
+            for (event_decl.input.fields) |field| {
+                if (field.is_source and std.mem.eql(u8, field.name, arg.name)) {
+                    is_source_slot = true;
+                    break;
+                }
+            }
+            if (is_source_slot) continue;
+
+            const expr_text = if (arg.value.len > 0) arg.value else arg.name;
+
+            if (arg.expression_value == null) {
+                const expression_value = try allocator.create(ast.CapturedExpression);
+                expression_value.* = ast.CapturedExpression{
+                    .text = try allocator.dupe(u8, expr_text),
+                    .location = .{ .line = 0, .column = 0, .file = "" },
+                    .scope = .{ .bindings = &.{} },
+                };
+                arg.expression_value = expression_value;
+            }
+
+            arg.value = try allocator.dupe(u8, expr_text);
+            arg.name = try allocator.dupe(u8, "expr");
+            break;
+        }
+    }
+
+    const mutable_args2 = @constCast(invocation.args);
+    for (mutable_args2) |*arg| {
+        if (arg.expression_value != null) continue;
+
+        for (event_decl.input.fields) |field| {
+            if (std.mem.eql(u8, field.name, arg.name) and field.is_expression) {
+                const expression_value = try allocator.create(ast.CapturedExpression);
+                expression_value.* = ast.CapturedExpression{
+                    .text = try allocator.dupe(u8, arg.value),
+                    .location = .{ .line = 0, .column = 0, .file = "" },
+                    .scope = .{ .bindings = &.{} },
+                };
+                arg.expression_value = expression_value;
+                break;
+            }
+        }
+    }
+}
+
+fn findEventDecl(
+    items: []const ast.Item,
+    target_module: []const u8,
+    target_event: []const u8,
+) ?*const ast.EventDecl {
+    for (items) |item| {
+        switch (item) {
+            .module_decl => |module| {
+                if (std.mem.eql(u8, module.logical_name, target_module)) {
+                    for (0..module.items.len) |idx| {
+                        if (module.items[idx] == .event_decl) {
+                            const event_decl = &module.items[idx].event_decl;
+                            if (event_decl.path.segments.len == 1 and
+                                std.mem.eql(u8, event_decl.path.segments[0], target_event))
+                            {
+                                return event_decl;
+                            }
+                        }
+                    }
+                }
+                if (findEventDecl(module.items, target_module, target_event)) |found| {
+                    return found;
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn resolveInStep(
+    step: *ast.Step,
+    registry: *const KeywordRegistry,
+    allocator: std.mem.Allocator,
+    home_module: []const u8,
+    home_items: []const ast.Item,
+    all_items: []const ast.Item,
+) !void {
+    switch (step.*) {
+        .invocation => |*inv| {
+            try resolveInPath(&inv.path, registry, allocator, home_module, home_items);
+            try bindImplicitExpressionArg(@constCast(inv), allocator, all_items);
+        },
+        .label_with_invocation => |*lwi| {
+            try resolveInPath(&lwi.invocation.path, registry, allocator, home_module, home_items);
+            try bindImplicitExpressionArg(@constCast(&lwi.invocation), allocator, all_items);
+        },
+        else => {},
+    }
+}
+
+fn resolveInContinuation(
+    cont: *ast.Continuation,
+    registry: *const KeywordRegistry,
+    allocator: std.mem.Allocator,
+    home_module: []const u8,
+    home_items: []const ast.Item,
+    all_items: []const ast.Item,
+) !void {
+    if (cont.node) |*step| {
+        try resolveInStep(@constCast(step), registry, allocator, home_module, home_items, all_items);
+    }
+    for (cont.continuations) |*nested| {
+        try resolveInContinuation(@constCast(nested), registry, allocator, home_module, home_items, all_items);
+    }
+}
+
+fn localEventShadowsKeyword(home_items: []const ast.Item, name: []const u8) bool {
+    for (home_items) |item| {
+        if (item != .event_decl) continue;
+        const decl = item.event_decl;
+        if (decl.path.segments.len == 1 and std.mem.eql(u8, decl.path.segments[0], name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn resolveInPath(
+    path: *ast.DottedPath,
+    registry: *const KeywordRegistry,
+    allocator: std.mem.Allocator,
+    home_module: []const u8,
+    home_items: []const ast.Item,
+) !void {
+    if (path.segments.len != 1) return;
+
+    if (path.module_qualifier) |qualifier| {
+        if (!std.mem.eql(u8, qualifier, home_module)) {
+            return;
+        }
+    }
+
+    const potential_keyword = path.segments[0];
+    if (localEventShadowsKeyword(home_items, potential_keyword)) return;
+
+    const resolve_result = registry.resolveKeyword(potential_keyword) catch |err| switch (err) {
+        error.KeywordCollision => {
+            const collision_info = registry.getCollisionInfo(potential_keyword).?;
+            log.err("ERROR: Ambiguous keyword '{s}' - defined in:\n", .{potential_keyword});
+            for (collision_info) |info| {
+                log.err("  - {s} (from {s})\n", .{ info.canonical_path, info.module_path });
+            }
+            return error.AmbiguousKeyword;
+        },
+    };
+
+    if (resolve_result) |canonical| {
+        if (std.mem.indexOf(u8, canonical, ":")) |colon_pos| {
+            path.module_qualifier = try allocator.dupe(u8, canonical[0..colon_pos]);
+            log.debug("  Resolved keyword '{s}' -> module '{s}'\n", .{ potential_keyword, path.module_qualifier.? });
+        }
+    }
+}
 
 // Unit tests
 test "register and resolve single keyword" {

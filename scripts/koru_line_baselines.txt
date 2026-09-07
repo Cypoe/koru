@@ -24,7 +24,8 @@ koru_std/ccp.kz	109
 koru_std/compiler_context.kz	253
 koru_std/compiler_types.kz	53
 koru_std/compiler_visitor.kz	505
-koru_std/compiler.kz	3212
+koru_std/compiler.ccp.kz	58
+koru_std/compiler.kz	3169
 koru_std/constructor.kz	305
 koru_std/control.kz	551
 koru_std/crypto.kz	37
@@ -98,7 +99,8 @@ koru_std/switch.kz	151
 koru_std/table.kz	62
 koru_std/taps.kz	1442
 koru_std/template.kz	71
-koru_std/testing.kz	993
+koru_std/testing.assert.kz	106
+koru_std/testing.kz	919
 koru_std/threading.kz	141
 koru_std/time.kz	102
 koru_std/todo.kz	356

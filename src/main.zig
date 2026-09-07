@@ -2065,14 +2065,14 @@ const TransformEvent = struct {
     has_compile_error: bool, // Event has compile_error{ message: []const u8 } branch
     /// Qualified-only dispatch: the user-spelled module qualifier (dotted,
     /// e.g. "std.regex") an invocation MUST carry to fire this transform.
-    /// Set for `[transform]proc` events and for imported-module non-glob,
-    /// non-keyword transform tors. Transform tors without a qualifier captured
-    /// sibling modules' same-named events (`std/list:free` rewriting
-    /// `std/map:free`, 810_142 / 660_033).
-    /// Globs stay null (taps). Keyword *tors* stay null: the user spelling
-    /// IS the bare name, and the test transform's inner pass never
-    /// keyword-resolves (`assert` inside `test` — 395_001). A keyword that
-    /// is also a `[transform]proc` stays qualified: `std/store:take` must
+    /// Set for `[transform]proc` events and for imported-module non-glob
+    /// transform tors — including keyword tors. Transform tors without a
+    /// qualifier captured sibling modules' same-named events (`std/list:free`
+    /// rewriting `std/map:free`, 810_142 / 660_033).
+    /// Globs stay null (taps). Keyword tors used to stay null so `assert`
+    /// inside `test` still fired; the inner pass now keyword-resolves the
+    /// cloned body (395_001), so that carve-out is gone. A keyword that is
+    /// also a `[transform]proc` was already qualified: `std/store:take` must
     /// not capture `std/string:take` (690_053).
     qualifier: ?[]const u8 = null,
     /// Variant target names (e.g. "raw_posix") for ~proc <event>|<variant> declarations.
@@ -2533,10 +2533,12 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                     // the machine interface is the proc-return convention:
                     // (invocation, item, program, allocator) → transformed SiteResult.
                     // Imported-module transforms dispatch QUALIFIED-ONLY,
-                    // except globs and keyword *tors*. A keyword that is also
-                    // a [transform]proc stays qualified (store:take vs
-                    // string:take). Never capture a sibling module's
-                    // same-named event (the wrong-module-capture soundness fix).
+                    // except globs. Keyword tors are qualified too: the inner
+                    // `test` pass keyword-resolves the cloned body so `assert`
+                    // arrives as `std.testing:assert` (395_001). A keyword
+                    // that is also a [transform]proc was already qualified
+                    // (store:take vs string:take). Never capture a sibling
+                    // module's same-named event.
                     const has_transform_proc = emitter_helpers.findTransformProc(module.items, event_decl.path.segments) != null;
                     if (has_transform_proc) {
                         has_invocation_param = true;
@@ -2678,8 +2680,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                         // Input literals missing the required `.source` field. See the
                         // x86 Linux drag-race build failure.
                         const is_glob = std.mem.indexOfScalar(u8, match_name, '*') != null;
-                        const is_keyword = annotation_parser.hasPart(event_decl.annotations, "keyword");
-                        const qualifier_val: ?[]const u8 = if (has_transform_proc or (!is_glob and !is_keyword))
+                        const qualifier_val: ?[]const u8 = if (has_transform_proc or !is_glob)
                             try allocator.dupe(u8, module.logical_name)
                         else
                             null;
@@ -5350,370 +5351,6 @@ fn executeBuildSteps(allocator: std.mem.Allocator, steps: []const BuildStep, out
     log.debug("\n✅ All build steps completed successfully!\n\n", .{});
 }
 
-// ============================================================================
-// KEYWORD REGISTRY - [keyword] annotation support for unqualified event invocation
-// ============================================================================
-
-/// Build keyword registry by scanning all events with [keyword] annotation.
-/// Must be called AFTER canonicalization so we have canonical paths.
-fn buildKeywordRegistry(
-    items: []const ast.Item,
-    registry: *keyword_registry.KeywordRegistry,
-    allocator: std.mem.Allocator,
-) !void {
-    for (items) |item| {
-        switch (item) {
-            .event_decl => |event| {
-                // Must be public AND have [keyword] annotation
-                if (event.is_public and annotation_parser.isKeyword(event.annotations)) {
-                    // Keyword name is the last segment of the event path
-                    const keyword_name = event.path.segments[event.path.segments.len - 1];
-
-                    // Build canonical path from module_qualifier + segments
-                    var canonical_parts: std.ArrayList(u8) = .{};
-                    defer canonical_parts.deinit(allocator);
-
-                    if (event.path.module_qualifier) |qualifier| {
-                        try canonical_parts.appendSlice(allocator, qualifier);
-                        try canonical_parts.append(allocator, ':');
-                    }
-                    for (event.path.segments, 0..) |seg, i| {
-                        if (i > 0) try canonical_parts.append(allocator, '.');
-                        try canonical_parts.appendSlice(allocator, seg);
-                    }
-
-                    const canonical_path = try allocator.dupe(u8, canonical_parts.items);
-                    const module_path = event.path.module_qualifier orelse "main";
-
-                    try registry.registerKeyword(keyword_name, canonical_path, module_path);
-                    log.debug("  Registered keyword '{s}' -> '{s}'\n", .{ keyword_name, canonical_path });
-                }
-            },
-            .module_decl => |module| {
-                // Recursively process imported modules
-                try buildKeywordRegistry(module.items, registry, allocator);
-            },
-            else => {},
-        }
-    }
-}
-
-/// Resolve keywords in AST - replace unqualified event paths with canonical paths.
-/// Must be called AFTER buildKeywordRegistry and canonicalization.
-fn resolveKeywordsInAST(
-    items: []ast.Item,
-    registry: *const keyword_registry.KeywordRegistry,
-    allocator: std.mem.Allocator,
-    main_module: []const u8,
-) !void {
-    for (items) |*item| {
-        try resolveKeywordsInItem(item, registry, allocator, main_module, items, items);
-    }
-}
-
-/// `home_module` / `home_items`: the module a bare name belongs to at this point
-/// in the walk, and that module's own declarations. At the entry file both are
-/// the main module's; inside an imported `module_decl` they are that module's.
-/// Keyword resolution is scoped by HOME, not by entry-file-ness — a `[keyword]`
-/// tor is a keyword everywhere it is imported, and the shadowing rule that lets
-/// a local declaration win has to be read against the same scope (110_021).
-/// `all_items` stays whole-program: `bindImplicitExpressionArg` resolves the
-/// callee's declaration, which routinely lives in another module.
-fn resolveKeywordsInItem(
-    item: *ast.Item,
-    registry: *const keyword_registry.KeywordRegistry,
-    allocator: std.mem.Allocator,
-    home_module: []const u8,
-    home_items: []const ast.Item,
-    all_items: []const ast.Item,
-) !void {
-    switch (item.*) {
-        .flow => |*flow| {
-            // Save the old qualifier to detect if keyword resolution happened
-            const old_qualifier = flow.inv().path.module_qualifier;
-
-            // Resolve the main invocation path
-            try resolveKeywordInPath(&flow.invMut().path, registry, allocator, home_module, home_items);
-
-            _ = old_qualifier;
-
-            // Bind the implicit expression slot. This runs for EVERY flow, not
-            // only ones whose qualifier just changed: an invocation inside an
-            // imported module is parsed before the callee's declaration is
-            // registered, so the parser's own remap never fires there and this
-            // is the only pass that sees both sides.
-            try bindImplicitExpressionArg(flow.invMut(), allocator, all_items);
-
-            // Resolve paths in continuations
-            for (flow.body.continuations) |*cont| {
-                try resolveKeywordsInContinuation(@constCast(cont), registry, allocator, home_module, home_items, all_items);
-            }
-        },
-        .module_decl => |*module| {
-            // Process items in imported modules — the module's own name and
-            // declarations become HOME for everything inside it.
-            for (module.items) |*mod_item| {
-                // `logical_name` is what canonicalization stamps as the qualifier
-                // of every bare path inside the module, so it is what a home-module
-                // comparison has to be made against.
-                try resolveKeywordsInItem(@constCast(mod_item), registry, allocator, module.logical_name, module.items, all_items);
-            }
-        },
-        // impl flows are now .flow items with impl_of set — handled by the .flow case above
-        else => {},
-    }
-}
-
-/// Bind the implicit expression slot on an invocation.
-///
-/// The rule: a parameter of type `Expression` named `expr` takes the FIRST
-/// POSITIONAL argument at the call site. Where that parameter sits in the
-/// declaration is irrelevant — the slot is selected by the parameter's type and
-/// name, and the argument by its own position in the invocation.
-///
-/// Two things follow, and both are load-bearing:
-///   * A callee that declares no `expr: Expression` never has an argument
-///     rewritten. Bare arguments there are puns and stay puns (110_026).
-///   * An explicitly labelled argument names its own parameter and is never the
-///     slot, so a write target like `stored { s.v: 42 }` is untouchable.
-///
-/// Resolving by ELIMINATION instead — "the first argument whose name matches no
-/// field" — is what this replaces. It had to consult every field name to decide,
-/// which is why it could only run where the declaration was already registered,
-/// and it reached into callees with no expression slot at all.
-fn bindImplicitExpressionArg(
-    invocation: *ast.Invocation,
-    allocator: std.mem.Allocator,
-    all_items: []const ast.Item,
-) !void {
-    // Build canonical event name from path
-    const event_name = if (invocation.path.segments.len > 0) invocation.path.segments[0] else return;
-    const module_qualifier = invocation.path.module_qualifier orelse return;
-
-    // Find the event definition in the AST
-    const event_decl = findEventDecl(all_items, module_qualifier, event_name) orelse return;
-
-    // Does the callee declare the slot? Selected by name AND type, at any
-    // position in the declaration.
-    var has_implicit_expr = false;
-    for (event_decl.input.fields) |field| {
-        if (std.mem.eql(u8, field.name, "expr") and field.is_expression) {
-            has_implicit_expr = true;
-            break;
-        }
-    }
-
-    if (has_implicit_expr) {
-        const mutable_args = @constCast(invocation.args);
-        for (mutable_args) |*arg| {
-            // An explicit `name: value` names its own parameter.
-            if (arg.had_explicit_label) continue;
-
-            // The implicit SOURCE block is a slot fill, not a positional
-            // argument the author wrote. It has its own type-directed rule.
-            var is_source_slot = false;
-            for (event_decl.input.fields) |field| {
-                if (field.is_source and std.mem.eql(u8, field.name, arg.name)) {
-                    is_source_slot = true;
-                    break;
-                }
-            }
-            if (is_source_slot) continue;
-
-            // First positional argument — this is the slot. A bare argument
-            // carries its text in `value`; the lexer leaves a speculative pun
-            // name in `name`, which is garbage for anything but a path.
-            const expr_text = if (arg.value.len > 0) arg.value else arg.name;
-
-            if (arg.expression_value == null) {
-                const expression_value = try allocator.create(ast.CapturedExpression);
-                expression_value.* = ast.CapturedExpression{
-                    .text = try allocator.dupe(u8, expr_text),
-                    .location = .{ .line = 0, .column = 0, .file = "" },
-                    .scope = .{ .bindings = &.{} },
-                };
-                arg.expression_value = expression_value;
-            }
-
-            arg.value = try allocator.dupe(u8, expr_text);
-            arg.name = try allocator.dupe(u8, "expr");
-            break; // Only one implicit expr
-        }
-    }
-
-    // Also set expression_value for explicitly named Expression args
-    const mutable_args2 = @constCast(invocation.args);
-    for (mutable_args2) |*arg| {
-        if (arg.expression_value != null) continue; // Already set
-
-        for (event_decl.input.fields) |field| {
-            if (std.mem.eql(u8, field.name, arg.name) and field.is_expression) {
-                const expression_value = try allocator.create(ast.CapturedExpression);
-                expression_value.* = ast.CapturedExpression{
-                    .text = try allocator.dupe(u8, arg.value),
-                    .location = .{ .line = 0, .column = 0, .file = "" },
-                    .scope = .{ .bindings = &.{} },
-                };
-                arg.expression_value = expression_value;
-                break;
-            }
-        }
-    }
-}
-
-/// Find an event declaration in the AST by module qualifier and event name
-fn findEventDecl(
-    items: []const ast.Item,
-    target_module: []const u8,
-    target_event: []const u8,
-) ?*const ast.EventDecl {
-    for (items) |item| {
-        switch (item) {
-            .module_decl => |module| {
-                // Check if this is the target module
-                if (std.mem.eql(u8, module.logical_name, target_module)) {
-                    // Search for the event in this module
-                    // IMPORTANT: Use indexing to get a stable pointer, not a loop-local copy
-                    for (0..module.items.len) |idx| {
-                        if (module.items[idx] == .event_decl) {
-                            const event_decl = &module.items[idx].event_decl;
-                            // Match EXACT path - for single segment, must be just that segment
-                            // This avoids matching "if.impl" when looking for "if"
-                            if (event_decl.path.segments.len == 1 and
-                                std.mem.eql(u8, event_decl.path.segments[0], target_event))
-                            {
-                                return event_decl;
-                            }
-                        }
-                    }
-                }
-                // Recursively search nested modules
-                if (findEventDecl(module.items, target_module, target_event)) |found| {
-                    return found;
-                }
-            },
-            else => {},
-        }
-    }
-    return null;
-}
-
-/// `all_items` is threaded down so a mid-chain step can bind its implicit
-/// expression slot too. The flow HEAD has always done this here; a step relied
-/// on the parser's own remap, which needs the callee's declaration to be
-/// REGISTERED at parse time. Inside an imported module it is not — the module
-/// is parsed before its imports are folded in — so `|> std/store:insert(todos)
-/// { label }` kept the lexer's speculative pun name `todos` where the transform
-/// reads `expr`, and refused its own call site as "requires a store name"
-/// (115_018). Head and step now answer the slot question the same way.
-fn resolveKeywordsInStep(
-    step: *ast.Step,
-    registry: *const keyword_registry.KeywordRegistry,
-    allocator: std.mem.Allocator,
-    home_module: []const u8,
-    home_items: []const ast.Item,
-    all_items: []const ast.Item,
-) !void {
-    switch (step.*) {
-        .invocation => |*inv| {
-            try resolveKeywordInPath(&inv.path, registry, allocator, home_module, home_items);
-            try bindImplicitExpressionArg(@constCast(inv), allocator, all_items);
-        },
-        .label_with_invocation => |*lwi| {
-            try resolveKeywordInPath(&lwi.invocation.path, registry, allocator, home_module, home_items);
-            try bindImplicitExpressionArg(@constCast(&lwi.invocation), allocator, all_items);
-        },
-        else => {},
-    }
-}
-
-fn resolveKeywordsInContinuation(
-    cont: *ast.Continuation,
-    registry: *const keyword_registry.KeywordRegistry,
-    allocator: std.mem.Allocator,
-    home_module: []const u8,
-    home_items: []const ast.Item,
-    all_items: []const ast.Item,
-) !void {
-    // Resolve paths in step
-    if (cont.node) |*step| {
-        try resolveKeywordsInStep(@constCast(step), registry, allocator, home_module, home_items, all_items);
-    }
-
-    // Recursively process nested continuations
-    for (cont.continuations) |*nested| {
-        try resolveKeywordsInContinuation(@constCast(nested), registry, allocator, home_module, home_items, all_items);
-    }
-}
-
-/// True if the HOME module's own items declare an event with this
-/// single-segment name. A local declaration SHADOWS any [keyword] event of
-/// the same name (the 120_002 name-priority rule): keyword resolution must
-/// not rewrite a name the user declared locally. Home is the enclosing module,
-/// so a module that declares its own `cond` keeps it (110_021).
-fn localEventShadowsKeyword(home_items: []const ast.Item, name: []const u8) bool {
-    for (home_items) |item| {
-        if (item != .event_decl) continue;
-        const decl = item.event_decl;
-        if (decl.path.segments.len == 1 and std.mem.eql(u8, decl.path.segments[0], name)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-fn resolveKeywordInPath(
-    path: *ast.DottedPath,
-    registry: *const keyword_registry.KeywordRegistry,
-    allocator: std.mem.Allocator,
-    home_module: []const u8,
-    home_items: []const ast.Item,
-) !void {
-    // Only resolve single-segment paths
-    if (path.segments.len != 1) return;
-
-    // Separate a qualifier the USER wrote from one canonicalization assigned.
-    // Canonicalization stamps every bare path with its enclosing module's name,
-    // so "qualifier == home" is exactly the bare case and anything else is an
-    // explicit `~lib_a:process` the user chose — which must not be rewritten,
-    // and must not raise a keyword collision either.
-    //
-    // Home is the ENCLOSING module, not the entry file. Comparing against the
-    // entry module made every keyword tor (`cond`, `if`, `for`) unresolvable
-    // from inside an imported module, which is most of what an app is: the
-    // flow vocabulary could not be split out of the entry file at all (110_021).
-    if (path.module_qualifier) |qualifier| {
-        if (!std.mem.eql(u8, qualifier, home_module)) {
-            return;
-        }
-    }
-
-    const potential_keyword = path.segments[0];
-
-    // Local-first: a name the main module declares as an event is LOCAL —
-    // it must not be rewritten to an imported [keyword] event's module.
-    if (localEventShadowsKeyword(home_items, potential_keyword)) return;
-
-    const resolve_result = registry.resolveKeyword(potential_keyword) catch |err| switch (err) {
-        error.KeywordCollision => {
-            const collision_info = registry.getCollisionInfo(potential_keyword).?;
-            log.err("ERROR: Ambiguous keyword '{s}' - defined in:\n", .{potential_keyword});
-            for (collision_info) |info| {
-                log.err("  - {s} (from {s})\n", .{ info.canonical_path, info.module_path });
-            }
-            return error.AmbiguousKeyword;
-        },
-    };
-
-    if (resolve_result) |canonical| {
-        // Parse canonical path "module:event" to extract module_qualifier
-        if (std.mem.indexOf(u8, canonical, ":")) |colon_pos| {
-            path.module_qualifier = try allocator.dupe(u8, canonical[0..colon_pos]);
-            log.debug("  Resolved keyword '{s}' -> module '{s}'\n", .{ potential_keyword, path.module_qualifier.? });
-        }
-    }
-}
-
 fn populateInvocationSourceModules(
     items: []ast.Item,
     allocator: std.mem.Allocator,
@@ -7393,10 +7030,10 @@ pub fn main() !void {
     log.debug("Building keyword registry...\n", .{});
     var kw_registry = keyword_registry.KeywordRegistry.init(parse_allocator);
     defer kw_registry.deinit();
-    try buildKeywordRegistry(source_file.items, &kw_registry, parse_allocator);
+    try keyword_registry.buildFromItems(source_file.items, &kw_registry, parse_allocator);
     if (kw_registry.count() > 0) {
         log.debug("Registered {} keywords, resolving in AST...\n", .{kw_registry.count()});
-        try resolveKeywordsInAST(@constCast(source_file.items), &kw_registry, parse_allocator, source_file.main_module_name);
+        try keyword_registry.resolveInAST(@constCast(source_file.items), &kw_registry, parse_allocator, source_file.main_module_name);
     }
 
     // Inject meta-events (koru:start, koru:end) into AST
