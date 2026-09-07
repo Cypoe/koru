@@ -1,23 +1,23 @@
 // Test 660_027: obligation-carrying params cross module boundaries via
 // QUALIFIED phantoms — the deferred half of the 2112 borrow ruling.
 //
-// RULED (Lars, 2026-07-02): a user event talks about a foreign module's
-// phantom states in the slash-canon qualified spelling established for
-// borrows (2111/2112: `*Field<std/field:field>`), extended to obligation
-// markers — `<std/list:!list>` consumes, `<std/list:list!>` issues. And
-// LINEAR TRANSFER governs pure impls: the decl is the contract a host proc
-// is TRUSTED to honor (the escape hatch); a pure impl is CHECKED — the
-// consumed obligation enters the body live and must be discharged exactly
-// once. Here: the minimal linear passthrough, consume in → issue the same
-// handle out via the branch-constructor impl (020_014's idiom); the caller
-// receives the reissued obligation and frees.
+// RULED (Lars, 2026-07-02 / refined 330_112): a user event talks about a
+// foreign type's own typestate with the type qualified and the phantom bare
+// — `*std/list:List_i64<!list>` consumes, `*std/list:List_i64<list!>` issues.
+// The type's module colors the phantom (330_112 refuses restating it as
+// `<std/list:!list>`). LINEAR TRANSFER governs pure impls: the decl is the
+// contract a host proc is TRUSTED to honor (the escape hatch); a pure impl
+// is CHECKED — the consumed obligation enters the body live and must be
+// discharged exactly once. Here: the minimal linear passthrough, consume in
+// → issue the same handle out via the branch-constructor impl (020_014's
+// idiom); the caller receives the reissued obligation and frees.
 //
 // This is THE wall behind AoC days 7, 10, 22 (see those ledgers): without
 // it, no owned collection handle can pass through any user event.
 ~import std/io
 ~import std/list
 
-~pub tor roundtrip { cur: *std/list:List_i64<std/list:!list> } -> *std/list:List_i64<std/list:list!>
+~pub tor roundtrip { cur: *std/list:List_i64<!list> } -> *std/list:List_i64<list!>
 
 ~roundtrip -> cur
 

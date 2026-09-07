@@ -7,5 +7,5 @@
 ~import std/string
 ~import std/io
 
-~pub tor peek { s: *std/string:String<std/string:view> } -> string
+~pub tor peek { s: *std/string:String<view> } -> string
 ~peek -> s.data

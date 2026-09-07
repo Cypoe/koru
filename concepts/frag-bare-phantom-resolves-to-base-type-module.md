@@ -57,14 +57,17 @@ Pinned by tests (referenced, not restated): `330_087` (qualify a foreign state o
 a primitive — required), `330_088` (bare foreign state = distinct-state
 mismatch), `330_089` (taint vocabulary qualified cross-module).
 
-## Open — the redundant-qual rejection is UNBUILT
+## One-canonical-spelling — the redundant-qual rejection landed (330_112)
 
-The one-canonical-spelling corollary — a state qualified with the SAME module its
-base type already names (`*app/lib/db:Transaction<app/lib/db:active!>`) is
-redundant and should be REJECTED with a teaching diagnostic ("drop the
-qualifier") — is ratified but not built. `330_112` pins it red. Building it is a
-COORDINATED change, not a clean add: the store's B-narrow codegen emits exactly
-the redundant form (`*std/string:String<std/string:instance!>`, base and state
-both `std/string`), so the store emitter must switch to bare first, AND the
-auto-discharge finder must become base-type-aware (it compares canonical strings
-verbatim — see [[frag-std-store-design]]), or the rejection breaks B-narrow.
+A state qualified with the SAME module its base type already names
+(`*app/lib/db:Transaction<app/lib/db:!active>`) is redundant and is refused
+(KORU116): bare `<!active>` already scopes to the type's module. Qualify a
+phantom only when its home *differs* from the type's — `string<app/lib/store:!secret>`
+(330_087), `Store<std/store:!taken>` (690_037).
+
+The frontend refuses the restatement on event signatures (same walk as KORU115).
+Store `new` column strings (`*std/string:String<std/string:instance!>`) are
+transform payload text, not event signatures, so they stay a later migration:
+the store parser already accepts the bare-phantom form. Auto-discharge now
+resolves a bare phantom to the base type's module (not the writing module), so
+user tors can write `*std/list:List_i64<!list>` and still find `std/list:free`.

@@ -1593,7 +1593,7 @@ pub const AutoDischargeInserter = struct {
         // spellings are the same program; they must type the same.
         if (flow.inv().return_binding) |rb| {
             if (event_info.decl.return_phantom) |rp| {
-                const canonical = try self.canonicalizePhantom(rp, module_name);
+                const canonical = try self.canonicalizePhantom(rp, module_name, typeModuleOf(event_info.decl.return_type orelse ""));
                 defer self.allocator.free(canonical);
                 try context.addBinding(rb, canonical, "__type_ref", event_info.decl.return_type orelse "", self.nextAcqSeq());
             } else if (event_info.decl.return_type) |rt| {
@@ -1638,7 +1638,7 @@ pub const AutoDischargeInserter = struct {
                     if (concrete.requires_cleanup or !concrete.consumes_obligation) continue;
                     if (!std.mem.startsWith(u8, std.mem.trimLeft(u8, field.type, " "), "*")) continue;
                     if (bodyReferencesBinding(flow, field.name)) continue;
-                    const canonical = try self.canonicalizePhantom(phantom_str, impl_info.decl.module);
+                    const canonical = try self.canonicalizePhantom(phantom_str, impl_info.decl.module, fieldTypeModule(field));
                     defer self.allocator.free(canonical);
                     const held = try std.fmt.allocPrint(self.allocator, "{s}!", .{canonical});
                     defer self.allocator.free(held);
@@ -2099,7 +2099,7 @@ pub const AutoDischargeInserter = struct {
                 cont.branch.len > 0 and !std.mem.eql(u8, binding_name, "_"))
             {
                 if (event_decl.return_phantom) |rp| {
-                    const canonical = try self.canonicalizePhantom(rp, module_name);
+                    const canonical = try self.canonicalizePhantom(rp, module_name, typeModuleOf(event_decl.return_type orelse ""));
                     defer self.allocator.free(canonical);
                     try context.addBinding(binding_name, canonical, "__type_ref", event_decl.return_type orelse "", self.nextAcqSeq());
                 }
@@ -2125,7 +2125,7 @@ pub const AutoDischargeInserter = struct {
                             defer self.allocator.free(field_path);
 
                             // Canonicalize phantom state with module
-                            const canonical = try self.canonicalizePhantom(phantom_str, module_name);
+                            const canonical = try self.canonicalizePhantom(phantom_str, module_name, fieldTypeModule(field));
                             defer self.allocator.free(canonical);
 
                             try context.addBinding(field_path, canonical, field.name, field.type, self.nextAcqSeq());
@@ -2275,7 +2275,7 @@ pub const AutoDischargeInserter = struct {
                             // Canonicalize with the call-site module qualifier (rb_module),
                             // matching the branch-payload path's use of the resolved call
                             // module — not the bare decl module.
-                            const canonical = try self.canonicalizePhantom(rp, rb_module);
+                            const canonical = try self.canonicalizePhantom(rp, rb_module, typeModuleOf(info.decl.return_type orelse ""));
                             defer self.allocator.free(canonical);
                             try context.addBinding(rb, canonical, "__type_ref", info.decl.return_type orelse "", self.nextAcqSeq());
                         } else if (info.decl.return_type) |rt| {
@@ -2313,7 +2313,7 @@ pub const AutoDischargeInserter = struct {
                     if (self.event_map.get(rb_qualified)) |info| {
                         if (info.decl.return_phantom) |rp| {
                             if (std.mem.endsWith(u8, std.mem.trim(u8, rp, " \t"), "!")) {
-                                const canonical = try self.canonicalizePhantom(rp, rb_module);
+                                const canonical = try self.canonicalizePhantom(rp, rb_module, typeModuleOf(info.decl.return_type orelse ""));
                                 defer self.allocator.free(canonical);
                                 const key = try std.fmt.allocPrint(self.allocator, "__unbound_return.{s}", .{rb_event_name});
                                 defer self.allocator.free(key);
@@ -2774,7 +2774,7 @@ pub const AutoDischargeInserter = struct {
                                                 );
                                             defer self.allocator.free(field_path);
 
-                                            const canonical = try self.canonicalizePhantom(phantom_str, info.module_name);
+                                            const canonical = try self.canonicalizePhantom(phantom_str, info.module_name, fieldTypeModule(field));
                                             defer self.allocator.free(canonical);
 
                                             try context.addBinding(field_path, canonical, field.name, field.type, self.nextAcqSeq());
@@ -4351,8 +4351,17 @@ pub const AutoDischargeInserter = struct {
     }
 
 
-    /// Canonicalize a phantom state with module prefix
-    fn canonicalizePhantom(self: *AutoDischargeInserter, phantom_str: []const u8, module: []const u8) ![]const u8 {
+    /// Canonicalize a phantom state with module prefix.
+    /// A BARE phantom self-resolves to `base_type_module` when the base type
+    /// has a home (`*std/list:List_i64<!list>` → `std/list:list`); a primitive
+    /// (or a local bare type) falls back to `module`, the writing module.
+    /// An explicitly-qualified phantom always keeps its own module.
+    fn canonicalizePhantom(
+        self: *AutoDischargeInserter,
+        phantom_str: []const u8,
+        module: []const u8,
+        base_type_module: ?[]const u8,
+    ) ![]const u8 {
         var parsed = phantom_parser.PhantomState.parse(self.allocator, phantom_str) catch {
             // If parsing fails, return unchanged
             return try self.allocator.dupe(u8, phantom_str);
@@ -4361,7 +4370,7 @@ pub const AutoDischargeInserter = struct {
 
         switch (parsed) {
             .concrete => |concrete| {
-                const mod = concrete.module_path orelse module;
+                const mod = concrete.module_path orelse (base_type_module orelse module);
                 const cleanup_suffix = if (concrete.requires_cleanup) "!" else "";
                 return try std.fmt.allocPrint(self.allocator, "{s}:{s}{s}", .{ mod, concrete.name, cleanup_suffix });
             },
@@ -4373,6 +4382,29 @@ pub const AutoDischargeInserter = struct {
                 return try self.allocator.dupe(u8, phantom_str);
             },
         }
+    }
+
+    /// Module half of a qualified type string (`*std/list:List_i64` → `std/list`).
+    fn typeModuleOf(type_str: []const u8) ?[]const u8 {
+        var base = std.mem.trim(u8, type_str, " \t");
+        if (std.mem.indexOfScalar(u8, base, '<')) |lt| base = base[0..lt];
+        const prefixes = [_][]const u8{ "[]const ", "?*const ", "*const ", "[]", "?*", "?", "*" };
+        for (prefixes) |prefix| {
+            if (std.mem.startsWith(u8, base, prefix)) {
+                base = base[prefix.len..];
+                break;
+            }
+        }
+        const colon = std.mem.lastIndexOfScalar(u8, base, ':') orelse return null;
+        if (colon == 0) return null;
+        return base[0..colon];
+    }
+
+    fn fieldTypeModule(field: ast.Field) ?[]const u8 {
+        if (field.module_path) |mp| {
+            if (mp.len > 0) return mp;
+        }
+        return typeModuleOf(field.type);
     }
 
     /// Seed cleanup obligations from a RECORD return type's fields. A scalar
@@ -4444,7 +4476,7 @@ pub const AutoDischargeInserter = struct {
                 f_value[gt + 1 ..],
             });
             defer self.allocator.free(base_type);
-            const canonical = try self.canonicalizePhantom(phantom_content, module_name);
+            const canonical = try self.canonicalizePhantom(phantom_content, module_name, typeModuleOf(base_type));
             defer self.allocator.free(canonical);
             // A destructured obligation field is discharged by its scalar binding
             // name (`dispose(x: h)`), so it must be keyed by that name; an

@@ -889,6 +889,24 @@ pub const PhantomSemanticChecker = struct {
         return (try self.lookupModule(mod_path)) orelse mod_path;
     }
 
+    /// Module half of a qualified type string (`*std/list:List_i64` → looked-up
+    /// `std.list`). Used when a return type carries the qualifier in the string
+    /// rather than on a Field.module_path.
+    fn typeStringModule(self: *PhantomSemanticChecker, type_str: []const u8) !?[]const u8 {
+        var base = std.mem.trim(u8, type_str, " \t");
+        if (std.mem.indexOfScalar(u8, base, '<')) |lt| base = base[0..lt];
+        const prefixes = [_][]const u8{ "[]const ", "?*const ", "*const ", "[]", "?*", "?", "*" };
+        for (prefixes) |prefix| {
+            if (std.mem.startsWith(u8, base, prefix)) {
+                base = base[prefix.len..];
+                break;
+            }
+        }
+        const colon = std.mem.lastIndexOfScalar(u8, base, ':') orelse return null;
+        if (colon == 0) return null;
+        return (try self.lookupModule(base[0..colon])) orelse base[0..colon];
+    }
+
     /// Canonicalize a phantom state, resolving a BARE state to `base_type_module`
     /// when the base type has a home module, else to `defining_module`. This is
     /// the ratified rule: a bare phantom self-resolves to the base type's module
@@ -1496,9 +1514,9 @@ pub const PhantomSemanticChecker = struct {
         // `use1 { f: *Field<std/field:field> }`; without seeding `f`, the moment the
         // body passes `f` to another phantom event it reads as untracked (KORU030).
         // Borrow params (`<field>`, no `!`) carry no obligation, so no leak is
-        // synthesized. Per the explicit-qualification rule, such params are written
-        // module-qualified (`std/field:field`), so canonicalization resolves them to
-        // the type's home module rather than this flow's module.
+        // synthesized. A bare phantom on a qualified type (`*std/field:Field<field>`)
+        // self-resolves to the type's module (330_112); the old spelling restated
+        // that module on the phantom and is refused.
         if (implementing_event) |impl_ev| {
             for (impl_ev.input.fields) |field| {
                 if (field.phantom) |phantom_str| {
@@ -1517,7 +1535,11 @@ pub const PhantomSemanticChecker = struct {
                     //
                     // An ISSUE marker on an input (`<state!>`) stays unseeded —
                     // rejected by directionality (validatePhantom is_input).
-                    const canonical_phantom = try self.canonicalizePhantomState(phantom_str, impl_ev.module);
+                    const canonical_phantom = try self.canonicalizePhantomStateWithBase(
+                        phantom_str,
+                        impl_ev.module,
+                        try self.baseTypeModule(field.module_path),
+                    );
                     defer self.allocator.free(canonical_phantom);
                     // Markers must be read off the RAW spelling: the concrete arm of
                     // canonicalizePhantomStateWithBase re-renders `module:state` and
@@ -1569,7 +1591,8 @@ pub const PhantomSemanticChecker = struct {
         // tracked obligation. (The nested case never fires for a top-level head.)
         if (flow.inv().return_binding) |rb| {
             if (event_info.decl.return_phantom) |rp| {
-                const canonical_phantom = try self.canonicalizePhantomState(rp, module_name);
+                const ret_home = if (event_info.decl.return_type) |rt| try self.typeStringModule(rt) else null;
+                const canonical_phantom = try self.canonicalizePhantomStateWithBase(rp, module_name, ret_home);
                 defer self.allocator.free(canonical_phantom);
                 if (event_info.decl.return_type) |rt| {
                     const canonical_base_type = try self.canonicalizeBaseType(rt, null, module_name);
@@ -1663,7 +1686,8 @@ pub const PhantomSemanticChecker = struct {
         context: *BindingContext,
     ) anyerror!void {
         if (step_decl.return_phantom) |rp| {
-            const canonical_phantom = try self.canonicalizePhantomState(rp, step_module);
+            const ret_home = if (step_decl.return_type) |rt| try self.typeStringModule(rt) else null;
+            const canonical_phantom = try self.canonicalizePhantomStateWithBase(rp, step_module, ret_home);
             defer self.allocator.free(canonical_phantom);
             if (step_decl.return_type) |rt| {
                 const canonical_base_type = try self.canonicalizeBaseType(rt, null, step_module);
@@ -1758,7 +1782,11 @@ pub const PhantomSemanticChecker = struct {
                 f_value[gt + 1 ..],
             });
             defer self.allocator.free(base_type);
-            const canonical = try self.canonicalizePhantomState(phantom_content, module_name);
+            const canonical = try self.canonicalizePhantomStateWithBase(
+                phantom_content,
+                module_name,
+                try self.typeStringModule(base_type),
+            );
             defer self.allocator.free(canonical);
             const canonical_base_type = try self.canonicalizeBaseType(base_type, null, module_name);
             defer self.allocator.free(canonical_base_type);
@@ -2226,7 +2254,11 @@ pub const PhantomSemanticChecker = struct {
 
                     // Canonicalize phantom state using event's qualified module name
                     const module_for_canon = event_module orelse event_decl.module;
-                    const canonical_phantom = try self.canonicalizePhantomState(phantom_str, module_for_canon);
+                    const canonical_phantom = try self.canonicalizePhantomStateWithBase(
+                        phantom_str,
+                        module_for_canon,
+                        try self.baseTypeModule(field.module_path),
+                    );
                     defer self.allocator.free(canonical_phantom);
 
                     // Canonicalize base type using field's module_path or defining module
@@ -2721,7 +2753,8 @@ pub const PhantomSemanticChecker = struct {
                         // NOT the bare decl module — otherwise `string:instance!` won't
                         // match the consumer's `std.string:instance`.
                         const ret_module = module_name;
-                        const canonical_phantom = try self.canonicalizePhantomState(rp, ret_module);
+                        const ret_home = if (nested_event_info.decl.return_type) |rt| try self.typeStringModule(rt) else null;
+                        const canonical_phantom = try self.canonicalizePhantomStateWithBase(rp, ret_module, ret_home);
                         defer self.allocator.free(canonical_phantom);
                         if (nested_event_info.decl.return_type) |rt| {
                             const canonical_base_type = try self.canonicalizeBaseType(rt, null, ret_module);

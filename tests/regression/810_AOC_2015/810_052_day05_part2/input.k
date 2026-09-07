@@ -29,14 +29,14 @@ import std/string-map
 import std/fmt
 
 // Map lookup defaulting to 0.
-pub tor get0 { m: *std/string-map:Map_string_i64<std/string-map:map>, k: string } -> i64
+pub tor get0 { m: *std/string-map:Map_string_i64<map>, k: string } -> i64
 
 get0 = std/string-map:get(m, k)
 | value v -> v
 | missing -> 0
 
 // Test position i against both rules; record it; advance or report nice.
-pub tor walk { h: *std/string:String<std/string:instance>, cm: *std/string-map:Map_string_i64<std/string-map:map>, wm: *std/string-map:Map_string_i64<std/string-map:map>, i: usize, sand: i64, pair: i64 } -> i64
+pub tor walk { h: *std/string:String<instance>, cm: *std/string-map:Map_string_i64<map>, wm: *std/string-map:Map_string_i64<map>, i: usize, sand: i64, pair: i64 } -> i64
 
 walk = std/string:substring(s: h, start: i, end: i + 1)
 | ok c |> std/fmt:ln("{{ c:S }}"): key
@@ -54,19 +54,19 @@ walk = std/string:substring(s: h, start: i, end: i + 1)
 
 // The fork: sandwich bit parked at i? any non-overlapping earlier window?
 // Otherwise advance to the next start.
-pub tor decide { h: *std/string:String<std/string:instance>, cm: *std/string-map:Map_string_i64<std/string-map:map>, wm: *std/string-map:Map_string_i64<std/string-map:map>, i: usize, oc: i64, ow: i64, sand: i64, pair: i64 } -> i64
+pub tor decide { h: *std/string:String<instance>, cm: *std/string-map:Map_string_i64<map>, wm: *std/string-map:Map_string_i64<map>, i: usize, oc: i64, ow: i64, sand: i64, pair: i64 } -> i64
 
 decide = if((oc >> @as(u6, @intCast(i))) & 1 == 1)
 | then |> decide-pair(h, cm, wm, i, ow, sand: 1, pair): d -> d
 | else |> decide-pair(h, cm, wm, i, ow, sand, pair): d -> d
 
-pub tor decide-pair { h: *std/string:String<std/string:instance>, cm: *std/string-map:Map_string_i64<std/string-map:map>, wm: *std/string-map:Map_string_i64<std/string-map:map>, i: usize, ow: i64, sand: i64, pair: i64 } -> i64
+pub tor decide-pair { h: *std/string:String<instance>, cm: *std/string-map:Map_string_i64<map>, wm: *std/string-map:Map_string_i64<map>, i: usize, ow: i64, sand: i64, pair: i64 } -> i64
 
 decide-pair = if((ow & ((@as(i64, 1) << @as(u6, @intCast(i + 1))) - 1)) > 0)
 | then |> decide-done(h, cm, wm, i, sand, pair: 1): d -> d
 | else |> decide-done(h, cm, wm, i, sand, pair): d -> d
 
-pub tor decide-done { h: *std/string:String<std/string:instance>, cm: *std/string-map:Map_string_i64<std/string-map:map>, wm: *std/string-map:Map_string_i64<std/string-map:map>, i: usize, sand: i64, pair: i64 } -> i64
+pub tor decide-done { h: *std/string:String<instance>, cm: *std/string-map:Map_string_i64<map>, wm: *std/string-map:Map_string_i64<map>, i: usize, sand: i64, pair: i64 } -> i64
 
 decide-done = if(sand > 0 and pair > 0)
 | then -> 1

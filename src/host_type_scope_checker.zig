@@ -82,6 +82,7 @@ fn checkEvent(
         }
     }
     try checkTypeString(event.return_type, writer_module, sites, reporter, event.location);
+    try refuseRedundantPhantom(event.return_type, event.return_phantom, reporter, event.location);
 }
 
 fn checkShape(
@@ -94,6 +95,7 @@ fn checkShape(
     for (fields) |field| {
         if (field.is_source or field.is_file or field.is_embed_file or
             field.is_expression or field.is_invocation_meta) continue;
+        try refuseRedundantPhantomOnField(field, reporter, location);
         // The qualified spelling carries its module in the AST — that IS the
         // fix, never the fault.
         if (field.module_path != null) continue;
@@ -134,6 +136,11 @@ fn checkTypeString(
         }
         try checkRecordField(inner[start..], writer_module, sites, reporter, location);
         return;
+    }
+    if (std.mem.indexOfScalar(u8, rt, '<')) |lt| {
+        if (std.mem.lastIndexOfScalar(u8, rt, '>')) |gt| {
+            if (gt > lt) try refuseRedundantPhantom(rt[0..lt], rt[lt + 1 .. gt], reporter, location);
+        }
     }
     if (std.mem.indexOfScalar(u8, rt, ':') != null) return; // qualified spelling
     var base = rt;
@@ -228,6 +235,85 @@ fn refuseIfForeign(
     }
 }
 
+/// A phantom qualifier that restates the base type's module is redundant:
+/// `*app/lib/db:Transaction<app/lib/db:!active>` — the type already names
+/// `app/lib/db`, so the state is `<!active>`. Deviation
+/// (`string<app/lib/store:!secret>`, `Store<std/store:!taken>`) stays legal:
+/// those phantoms name a different home than the type carries.
+fn refuseRedundantPhantomOnField(
+    field: ast.Field,
+    reporter: *errors.ErrorReporter,
+    location: errors.SourceLocation,
+) CheckError!void {
+    const type_mod = field.module_path orelse typeModule(field.type) orelse return;
+    try refuseRedundantPhantomAgainst(type_mod, field.phantom, reporter, location);
+}
+
+fn refuseRedundantPhantom(
+    type_str: ?[]const u8,
+    phantom: ?[]const u8,
+    reporter: *errors.ErrorReporter,
+    location: errors.SourceLocation,
+) CheckError!void {
+    const ts = type_str orelse return;
+    const type_mod = typeModule(ts) orelse return;
+    try refuseRedundantPhantomAgainst(type_mod, phantom, reporter, location);
+}
+
+fn refuseRedundantPhantomAgainst(
+    type_mod: []const u8,
+    phantom: ?[]const u8,
+    reporter: *errors.ErrorReporter,
+    location: errors.SourceLocation,
+) CheckError!void {
+    const ph = phantom orelse return;
+    const ph_mod = phantomModule(ph) orelse return;
+    if (!type_registry.moduleNamesMatch(type_mod, ph_mod)) return;
+    const state = phantomBareState(ph);
+    const type_slash = try dottedToSlash(reporter.allocator, type_mod);
+    defer reporter.allocator.free(type_slash);
+    try reporter.addErrorAtLocationWithHint(
+        .KORU116,
+        location,
+        "redundant phantom qualifier: bare '<{s}>' already scopes to the base type's module '{s}' — drop the qualifier",
+        .{ state, type_slash },
+        "write <{s}>; qualify a phantom only when its home differs from the type's",
+        .{state},
+    );
+}
+
+/// Module half of a qualified type (`*std/list:List_i64` → `std/list`).
+/// Pointer prefixes and a trailing phantom are stripped first; no `:` means
+/// the type carries no module (a primitive, or a module-local bare name).
+fn typeModule(type_str: []const u8) ?[]const u8 {
+    var base = std.mem.trim(u8, type_str, " \t");
+    if (std.mem.indexOfScalar(u8, base, '<')) |lt| base = base[0..lt];
+    for (TypePrefixes) |prefix| {
+        if (std.mem.startsWith(u8, base, prefix)) {
+            base = base[prefix.len..];
+            break;
+        }
+    }
+    const colon = std.mem.lastIndexOfScalar(u8, base, ':') orelse return null;
+    if (colon == 0) return null;
+    return base[0..colon];
+}
+
+/// Module half of a qualified phantom (`std/list:!list` → `std/list`).
+/// No `:` means the phantom is already the bare form.
+fn phantomModule(phantom: []const u8) ?[]const u8 {
+    const p = std.mem.trim(u8, phantom, " \t");
+    const colon = std.mem.lastIndexOfScalar(u8, p, ':') orelse return null;
+    if (colon == 0) return null;
+    return p[0..colon];
+}
+
+fn phantomBareState(phantom: []const u8) []const u8 {
+    const p = std.mem.trim(u8, phantom, " \t");
+    if (std.mem.lastIndexOfScalar(u8, p, ':')) |c| return p[c + 1 ..];
+    return p;
+}
+
 /// Diagnostic spellings use the surface (slash) form the writer would type;
 /// the registry's logical names are dotted canon (`app.holder` → `app/holder`).
 fn dottedToSlash(allocator: std.mem.Allocator, dotted: []const u8) ![]u8 {
@@ -309,5 +395,36 @@ test "qualified spellings and undeclared names are not refusal sites" {
     try refuseIfForeign("u32", "", &sites, &reporter, .{ .file = "input.kz", .line = 1, .column = 1 });
     // Parser-intrinsic metatypes are keywords, not host-type references.
     try refuseIfForeign("Source", "", &sites, &reporter, .{ .file = "input.kz", .line = 1, .column = 1 });
+    try testing.expect(!reporter.hasErrors());
+}
+
+test "redundant same-module phantom qualifier is refused, naming the bare fix" {
+    const a = testing.allocator;
+    var reporter = try errors.ErrorReporter.init(a, "input.kz", "");
+    defer reporter.deinit();
+    const loc = errors.SourceLocation{ .file = "input.kz", .line = 1, .column = 1 };
+
+    try refuseRedundantPhantom("*app/lib/db:Transaction", "app/lib/db:!active", &reporter, loc);
+    try testing.expect(reporter.hasErrors());
+    try testing.expectEqual(errors.ErrorCode.KORU116, reporter.errors.items[0].code);
+    try testing.expect(std.mem.indexOf(u8, reporter.errors.items[0].message, "redundant") != null);
+    try testing.expect(std.mem.indexOf(u8, reporter.errors.items[0].message, "<!active>") != null);
+    try testing.expect(std.mem.indexOf(u8, reporter.errors.items[0].message, "app/lib/db") != null);
+}
+
+test "a phantom whose home differs from the type's is not redundant" {
+    const a = testing.allocator;
+    var reporter = try errors.ErrorReporter.init(a, "input.kz", "");
+    defer reporter.deinit();
+    const loc = errors.SourceLocation{ .file = "input.kz", .line = 1, .column = 1 };
+
+    // Primitive: no type module — qualifier is load-bearing (330_087).
+    try refuseRedundantPhantom("string", "app/lib/store:!secret", &reporter, loc);
+    // Local entity alias + store's taken (690_037).
+    try refuseRedundantPhantom("Store", "std/store:!taken", &reporter, loc);
+    // Typed base, foreign vocabulary — deviation.
+    try refuseRedundantPhantom("*app/lib/db:Transaction", "app/lib/taint:tainted", &reporter, loc);
+    // Already-bare phantom on a qualified type — the legal form.
+    try refuseRedundantPhantom("*std/list:List_i64", "!list", &reporter, loc);
     try testing.expect(!reporter.hasErrors());
 }

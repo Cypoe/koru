@@ -99,6 +99,7 @@ pub const ErrorCode = enum(u16) {
     KORU111, // Contract/implementation file split violated (public events live in .k only)
     KORU112, // Effect-branch proc body reaches its own module by a bare name — the body splices into the CONSUMER's frame, where module scope is gone; use `$mod.` (400_155 holds the contract, 400_157 the wall)
     KORU115, // Bare host (Zig) type reference across a module boundary — a host type is bare only inside its declaring module; spell it qualified (`*mod:Type`) (220_031, ruled 2026-09-06)
+    KORU116, // Phantom qualifier restates the base type's module — bare `<state>` already scopes there; drop the qualifier (330_112)
 
     // Abstract / implementation errors
     KORU113, // Two implementations claim the same abstract tor — the pairing is one-to-one, so the second is never reachable
