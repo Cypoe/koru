@@ -16,7 +16,8 @@ koru_std/args.kz	52
 koru_std/array.kz	23
 koru_std/ast_dump.kz	29
 koru_std/benchmarking.kz	24
-koru_std/bridge.kz	393
+koru_std/bridge.kz	298
+koru_std/bridge.run.kz	295
 koru_std/build_image.kz	357
 koru_std/build.kz	586
 koru_std/ccp_aspirational.kz	108
