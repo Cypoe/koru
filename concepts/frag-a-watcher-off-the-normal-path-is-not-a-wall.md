@@ -123,10 +123,33 @@ filename's semantics either.
   act on. Choosing a label that suppresses execution to keep the board tidy trades
   the one property the test was created to have for the appearance of not having a
   problem.
-- **The falsifier, stated plainly:** if something does re-run TODO-marked tests
-  and reports the ones that have started passing, this rung is wrong and should be
-  `correct`ed rather than evolved. Nothing found does, which is why it is written
-  as a claim about reach and not about intent.
+- **The falsifier fired.** `scripts/todo_sweep.sh` re-runs every TODO-marked
+  test and reports PROMOTABLE (passed *and* pins something). The "nothing
+  found does" sentence is no longer true. The marker still does not flip on
+  the board — that half stands — but parked work is now *drivable*, which is
+  the property `std/todo` named: a residual is real when something can run
+  and decide it.
+
+## The fifth rung: a failed column nobody can act on is also a skip
+
+The fourth rung's other sentence — "an aspirational test's whole value is that
+it is RED" — assumed `failed` was a short list a reader could treat as fire.
+A published board of 98 never-green failures trained everyone to ignore the
+column. Compiling them every ceremony run re-asserted the failure and nothing
+about the explanation (`frag-a-red-pin-is-unfalsifiable-documentation`).
+
+So the unignorable-red strategy for *never-shipped* pins is itself a watcher
+off the path that matters: the next action. Those pins park as `TODO` and
+the sweep is the driver. `failed` is reserved for:
+
+- **regressions** — green in the snapshot window, then not
+- **living diagnostic lies** — a wall fires, the pinned message is false
+  (`330_124`, `370_020`)
+
+Inverted `must-error-passed` holes are owed, not regressions: the wall never
+existed on the boards we have, so they park too. Existing TODO crud (the
+pre-2026-09-07 pile) is a separate pass — parking is not a licence to
+stop reading those files.
 
 ## Open
 
@@ -134,3 +157,7 @@ Whether the other end-of-run steps that parallel mode skips matter as much. The
 snapshot write and test-index generation are already gated on a full run in both
 paths; nothing else was audited when this was found, and a second pass over what
 diverges between the two paths has not been done.
+
+Whether the ceremony consumes the sweep (PROMOTABLE on the snapshot) or
+`--todo-sweep` stays a side path. Parking without a consumer repeats rung
+four under a tidier name.

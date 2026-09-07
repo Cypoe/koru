@@ -1,0 +1,5 @@
+OWED: directory import with dotted event names (package/module:category.event).
+
+Never green on the 2026-08-26..09-07 boards. Parked so the failed
+column means regression again. Driven by --todo-sweep; drop this
+marker when the pin is promotable.

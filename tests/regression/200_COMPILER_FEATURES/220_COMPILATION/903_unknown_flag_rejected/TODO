@@ -1,0 +1,5 @@
+OWED: an unrecognised koruc flag is refused, not absorbed into compiler_config.
+
+Never green on the 2026-08-26..09-07 boards. Parked so the failed
+column means regression again. Driven by --todo-sweep; drop this
+marker when the pin is promotable.

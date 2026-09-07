@@ -1,0 +1,5 @@
+OWED: label loops (#/@) compile and run the 10M-count performance shape.
+
+Never green on the 2026-08-26..09-07 boards. Parked so the failed
+column means regression again. Driven by --todo-sweep; drop this
+marker when the pin is promotable.

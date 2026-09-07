@@ -1,0 +1,5 @@
+OWED: a head label inside a subflow body binds the callee's result (same sugar as 210_195).
+
+Never green on the 2026-08-26..09-07 boards. Parked so the failed
+column means regression again. Driven by --todo-sweep; drop this
+marker when the pin is promotable.
