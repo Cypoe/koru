@@ -25,8 +25,12 @@ import std/io
 import app/session
 
 [with]std/bridge:create(id: "session-1", scope: "files"): br |> run(br, source: "open(path: \"a.txt\")")
+| partial _ |> std/io:print.ln("FAIL: turn 1 partial (not expected)")
+| unhandled-branch _ |> std/io:print.ln("  UNHANDLED (unexpected)")
 | result r1 |> run(br, source: "close-file(handle: \"file_1\")")
     | result r2 |> std/io:print.ln("turn 1: {{ r1.handles:d }} held, turn 2: {{ r2.handles:d }} held")
+    | partial _ |> std/io:print.ln("FAIL: turn 2 partial (not expected)")
+    | unhandled-branch _ |> std/io:print.ln("FAIL: turn 2 unhandled-branch fired")
     | defined d2 |> std/io:print.ln("FAIL: turn 2 defined {{ d2:s }}")
     | exhausted _ |> std/io:print.ln("FAIL: turn 2 exhausted")
     | parse-error _ |> std/io:print.ln("FAIL: turn 2 parse error")
@@ -43,3 +47,4 @@ import app/session
 | event-denied _ |> std/io:print.ln("FAIL: turn 1 event denied")
 | dispatch-error e1 |> std/io:print.ln("FAIL: turn 1 {{ e1.message:s }}")
 | scope-not-found _ |> std/io:print.ln("FAIL: turn 1 scope not found")
+

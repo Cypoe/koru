@@ -16,7 +16,8 @@ koru_std/args.kz	52
 koru_std/array.kz	23
 koru_std/ast_dump.kz	29
 koru_std/benchmarking.kz	24
-koru_std/bridge.kz	393
+koru_std/bridge.kz	298
+koru_std/bridge.run.kz	294
 koru_std/build_image.kz	357
 koru_std/build.kz	586
 koru_std/ccp_aspirational.kz	108
@@ -48,7 +49,10 @@ koru_std/grid.sweep.kz	307
 koru_std/http.kz	215
 koru_std/index.kz	7
 koru_std/inter.kz	176
-koru_std/interpreter.kz	2936
+koru_std/interpreter.define.kz	152
+koru_std/interpreter.kz	1202
+koru_std/interpreter.parse.kz	52
+koru_std/interpreter.run.kz	1681
 koru_std/invariants.kz	181
 koru_std/io_registry.kz	30
 koru_std/io.kz	2084
@@ -76,7 +80,9 @@ koru_std/proto.kz	632
 koru_std/regex.kz	875
 koru_std/rings.kz	225
 koru_std/rules.kz	691
-koru_std/runtime.kz	2827
+koru_std/runtime.kz	2332
+koru_std/runtime.parsewire.kz	173
+koru_std/runtime.run.kz	205
 koru_std/set.kz	96
 koru_std/simple.kz	7
 koru_std/store.clear.kz	105

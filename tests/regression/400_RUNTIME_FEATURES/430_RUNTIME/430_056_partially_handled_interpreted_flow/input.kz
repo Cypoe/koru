@@ -1,4 +1,4 @@
-// ═══ RULED 2026-08-07 (Lars). This test is now red against a DECIDED target. ═══
+// ═══ RULED 2026-08-07 (Lars). Implemented 2026-09-07. ═══
 //
 // "Why don't we make something like `unhandled-branch`? We add leniency as a
 // mode, and add a branch like that which sends out the references too, living
@@ -32,12 +32,11 @@
 //   a test harness        — an unhandled branch is a test FAILURE (Lars, on 395_002)
 //   nobody (compiled)     — strict; refuse pre-flight
 //
-// C (the empty branch name when an arm fires) needed no ruling and is a plain
-// defect: a terminal void event overwrites the flow's real branch with "".
-//
-// STILL RED, and correctly: `| unhandled-branch` does not exist yet. expected.txt
-// asserts today's measured A/B/C so the file documents the gap honestly; it is
-// rewritten to the ruled shape by whoever implements it.
+// Deliberately left: strict PRE-FLIGHT refusal (ruling point 3) — the mode
+// currently selects AFTER the fragment runs (the historical NoBranchMatch
+// point), so lenient callers hand back and strict callers still see the
+// refusal. Pre-flight shape-checking is a strict-mode refinement, not the
+// branch's existence, and is pinned elsewhere.
 // What does the interpreter do when interpreted source handles only SOME of an
 // event's branches, and the unhandled one is taken?
 //
@@ -81,6 +80,7 @@ const C = "pick(n: 5)\n| ok v |> note(text: \"took ok\")";
 ~std/io:print.ln("--- A: no arms, unhandled outcome")
 ~std/runtime:run(source: A, scope: "api")
 | result r |> std/io:print.ln("  result branch=[{{ r.value.branch:s }}]")
+| unhandled-branch ub |> std/io:print.ln("  UNHANDLED branch=[{{ ub.branch:s }}] payload={{ ub.payload:s }} held={{ ub.handles:s }}")
 | exhausted _ |> std/io:print.ln("  EXHAUSTED")
 | parse-error e |> std/io:print.ln("  PARSE ERROR: {{ e.message:s }}")
 | validation-error v |> std/io:print.ln("  VALIDATION ERROR: {{ v:s }}")
@@ -90,8 +90,9 @@ const C = "pick(n: 5)\n| ok v |> note(text: \"took ok\")";
 | scope-not-found _ |> std/io:print.ln("  SCOPE NOT FOUND")
 
 ~std/io:print.ln("--- B: only | ok handled, | bad fires")
-~std/runtime:run(source: B, scope: "api")
+~std/runtime:run(source: B, scope: "api", lenient: true)
 | result r |> std/io:print.ln("  result branch=[{{ r.value.branch:s }}]")
+| unhandled-branch ub |> std/io:print.ln("  UNHANDLED branch=[{{ ub.branch:s }}] payload={{ ub.payload:s }} held={{ ub.handles:s }}")
 | exhausted _ |> std/io:print.ln("  EXHAUSTED")
 | parse-error e |> std/io:print.ln("  PARSE ERROR: {{ e.message:s }}")
 | validation-error v |> std/io:print.ln("  VALIDATION ERROR: {{ v:s }}")
@@ -103,6 +104,7 @@ const C = "pick(n: 5)\n| ok v |> note(text: \"took ok\")";
 ~std/io:print.ln("--- C: control, | ok handled and | ok fires")
 ~std/runtime:run(source: C, scope: "api")
 | result r |> std/io:print.ln("  result branch=[{{ r.value.branch:s }}]")
+| unhandled-branch ub |> std/io:print.ln("  UNHANDLED branch=[{{ ub.branch:s }}] payload={{ ub.payload:s }} held={{ ub.handles:s }}")
 | exhausted _ |> std/io:print.ln("  EXHAUSTED")
 | parse-error e |> std/io:print.ln("  PARSE ERROR: {{ e.message:s }}")
 | validation-error v |> std/io:print.ln("  VALIDATION ERROR: {{ v:s }}")
@@ -110,3 +112,4 @@ const C = "pick(n: 5)\n| ok v |> note(text: \"took ok\")";
 | event-denied ev |> std/io:print.ln("  EVENT DENIED: {{ ev:s }}")
 | dispatch-error d |> std/io:print.ln("  DISPATCH ERROR: {{ d.message:s }}")
 | scope-not-found _ |> std/io:print.ln("  SCOPE NOT FOUND")
+

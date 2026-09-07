@@ -39,9 +39,15 @@ constantly — it does not know the full branch set of a verb it was told about 
 one line of prose. So whichever way this is ruled is not an edge case in the
 interpreter; it is the common path for every fragment an LLM will ever send.
 
-Open, and Lars's: whether an unhandled outcome leaks with its payload or the run
-is refused before it starts. Both readings are written up at `430_056`, which is
-red and carries the question rather than an answer.
+RESOLVED 2026-09-07 (430_056 green on wip-armed-define): both readings now
+have a home. `run` gains `| unhandled-branch { branch, payload, handles }`
+— the outcome leaks WITH its payload (and its named handles), not a count;
+leniency is a MODE (`lenient:` on run/run-cached/eval), so strict callers get
+the historical refusal and lenient hosts get the hand-back. The host MUST
+handle the branch (KORU022); a model over a bridge gets it fed back — the
+fragment may be partial, the program receiving partiality may not be. The
+bridge is the long-running owner: auto-discharge is skipped on the hand-back
+so retention across turns is the host's call, never a silent release.
 
 Related: [[frag-a-handle-count-is-not-a-capability-check]] — the same subsystem,
 the same lesson one layer down: the resource story is decided at the seams, not

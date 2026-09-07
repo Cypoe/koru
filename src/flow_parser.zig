@@ -101,9 +101,16 @@ fn parseFlowInternal(allocator: std.mem.Allocator, source: []const u8) ParseErro
 
     // Collect invocation line(s) — handle multi-line args (unbalanced parens)
     const invocation_text = try collectMultiLineConstruct(allocator, lines, invocation_line_idx, '(', ')');
+    // The invocation line may carry inline continuations on the same line
+    // (`pick(text) | ok v |> ...`), a shape the full parser accepts and the
+    // wire define path stores. Split trailing top-level `|` arms off before
+    // parsing the invocation; anything inside parens/strings is not an arm.
+    const split_idx = findBranchPipe(invocation_text.text);
+    const invocation_part = if (split_idx) |idx| lexer.trim(invocation_text.text[0..idx]) else invocation_text.text;
+    const inline_part = if (split_idx) |idx| invocation_text.text[idx..] else null;
 
     // Parse the invocation
-    const invocation = parseInvocationLine(allocator, invocation_text.text, invocation_text.start_line) catch {
+    const invocation = parseInvocationLine(allocator, invocation_part, invocation_text.start_line) catch {
         return .{ .err = .{
             .message = "Invalid invocation syntax",
             .line = lines[invocation_line_idx].line_num,
@@ -111,12 +118,34 @@ fn parseFlowInternal(allocator: std.mem.Allocator, source: []const u8) ParseErro
         } };
     };
 
+    // Parse inline arms (each `| branch |> node` segment on the head line),
+    // then the arms on following lines. Both are siblings in order.
+    var inline_conts = try std.ArrayList(ast.Continuation).initCapacity(allocator, 2);
+    if (inline_part) |part| {
+        var rest = part;
+        while (rest.len > 0) {
+            // rest opens with its branch pipe by construction; the next
+            // top-level branch pipe starts the following sibling segment.
+            const next = findBranchPipeFrom(rest, 1);
+            const seg = if (next) |n| rest[0..n] else rest;
+            const cont = try parseSingleContinuation(allocator, seg, 0, lines[invocation_line_idx].line_num);
+            try inline_conts.append(allocator, cont);
+            rest = if (next) |n| rest[n..] else "";
+        }
+    }
+
+
     // Parse continuations starting after the invocation line(s)
     const cont_start = invocation_text.end_idx + 1;
-    const continuations = if (cont_start < lines.len)
+    const tail_conts = if (cont_start < lines.len)
         try parseContinuations(allocator, lines, cont_start, 0)
     else
         try allocator.alloc(ast.Continuation, 0);
+
+    var all_conts = try std.ArrayList(ast.Continuation).initCapacity(allocator, inline_conts.items.len + tail_conts.len);
+    try all_conts.appendSlice(allocator, inline_conts.items);
+    try all_conts.appendSlice(allocator, tail_conts);
+    const continuations = try all_conts.toOwnedSlice(allocator);
 
     return .{ .flow = .{
         .body = ast.rootSite(invocation, continuations, .{ .file = "generated", .line = 0, .column = 0 }),
@@ -627,6 +656,70 @@ fn findPipeGt(text: []const u8) ?usize {
     return null;
 }
 
+/// Find a branch `|` (pipe NOT followed by `>`) at depth 0 outside
+/// strings and backticks. `|>` pipeline markers are not branches; `|?`
+/// catch-alls are. Same tracking discipline as findPipeGt.
+fn findBranchPipe(text: []const u8) ?usize {
+    return findBranchPipeFrom(text, 0);
+}
+
+fn findBranchPipeFrom(text: []const u8, start: usize) ?usize {
+    var brace_depth: usize = 0;
+    var paren_depth: usize = 0;
+    var bracket_depth: usize = 0;
+    var in_string = false;
+    var in_backtick = false;
+    var string_char: ?u8 = null;
+
+    var i: usize = start;
+    while (i < text.len) {
+        const c = text[i];
+
+        if (!in_string and c == '`') {
+            in_backtick = !in_backtick;
+            i += 1;
+            continue;
+        }
+        if (in_backtick) {
+            i += 1;
+            continue;
+        }
+
+        if (!in_string and (c == '"' or c == '\'')) {
+            in_string = true;
+            string_char = c;
+        } else if (in_string) {
+            if (c == '\\' and i + 1 < text.len) {
+                i += 2;
+                continue;
+            }
+            if (c == string_char) {
+                in_string = false;
+                string_char = null;
+            }
+            i += 1;
+            continue;
+        }
+
+        switch (c) {
+            '{' => brace_depth += 1,
+            '}' => brace_depth -|= 1,
+            '(' => paren_depth += 1,
+            ')' => paren_depth -|= 1,
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth -|= 1,
+            '|' => {
+                if (brace_depth == 0 and paren_depth == 0 and bracket_depth == 0 and (i + 1 >= text.len or text[i + 1] != '>')) {
+                    return i;
+                }
+            },
+            else => {},
+        }
+        i += 1;
+    }
+    return null;
+}
+
 const BranchInfo = struct {
     branch: []const u8,
     binding: ?[]const u8,
@@ -1027,6 +1120,68 @@ test "parseFlow: multiple continuations" {
             try std.testing.expectEqualStrings("result", f.body.continuations[0].binding.?);
             try std.testing.expectEqualStrings("error", f.body.continuations[1].branch);
             try std.testing.expectEqualStrings("e", f.body.continuations[1].binding.?);
+        },
+        .err => return error.UnexpectedError,
+    }
+}
+
+test "parseFlow: inline arms on the invocation line" {
+    // Parser parity: the full parser accepts `pick(text) | ok ... | bad ...`
+    // on one line (wire define stores it verbatim), so the lightweight
+    // re-parse at dispatch must accept it too.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const source = "pick(text) | ok v |> note(text: \"took ok\") | bad m |> note(text: m)";
+
+    const result = parseFlow(alloc, source);
+    switch (result) {
+        .flow => |f| {
+            try std.testing.expectEqualStrings("pick", f.inv().path.segments[0]);
+            try std.testing.expectEqual(@as(usize, 2), f.body.continuations.len);
+            try std.testing.expectEqualStrings("ok", f.body.continuations[0].branch);
+            try std.testing.expectEqualStrings("v", f.body.continuations[0].binding.?);
+            try std.testing.expectEqualStrings("bad", f.body.continuations[1].branch);
+            try std.testing.expectEqualStrings("m", f.body.continuations[1].binding.?);
+        },
+        .err => return error.UnexpectedError,
+    }
+}
+
+test "parseFlow: pipe inside string args is not an arm" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const source = "note(text: \"a|b\") | ok v |> note(text: v)";
+
+    const result = parseFlow(alloc, source);
+    switch (result) {
+        .flow => |f| {
+            try std.testing.expectEqual(@as(usize, 1), f.body.continuations.len);
+            try std.testing.expectEqualStrings("ok", f.body.continuations[0].branch);
+        },
+        .err => return error.UnexpectedError,
+    }
+}
+
+test "parseFlow: inline arms then line arms are siblings in order" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const source =
+        \\pick(text) | ok v |> note(text: "took ok")
+        \\| bad m |> note(text: m)
+    ;
+
+    const result = parseFlow(alloc, source);
+    switch (result) {
+        .flow => |f| {
+            try std.testing.expectEqual(@as(usize, 2), f.body.continuations.len);
+            try std.testing.expectEqualStrings("ok", f.body.continuations[0].branch);
+            try std.testing.expectEqualStrings("bad", f.body.continuations[1].branch);
         },
         .err => return error.UnexpectedError,
     }

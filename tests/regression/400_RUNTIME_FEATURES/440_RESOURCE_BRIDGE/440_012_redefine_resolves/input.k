@@ -39,6 +39,7 @@ do-define = std/bridge:define(br, source)
 
 tor run-shout { br: *std/bridge:Bridge }
 run-shout = std/bridge:run(br, source: "shout(text: \"hi\")")
+| unhandled-branch _ |> std/io:print.ln("  UNHANDLED (unexpected)")
 | result r |> std/interpreter:value.stringify(r.value): j |> std/io:print.ln("  shout -> {{ j:s }}")
 | defined d |> std/io:print.ln("  shout DEFINED {{ d:s }} (unexpected)")
 | event-denied ev |> std/io:print.ln("  shout DENIED {{ ev:s }}")
@@ -57,3 +58,4 @@ run-shout = std/bridge:run(br, source: "shout(text: \"hi\")")
 |> std/io:print.ln("--- redefined")
 |> run-shout(br)
 |> std/io:print.ln("--- done")
+

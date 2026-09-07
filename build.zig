@@ -1399,6 +1399,8 @@ pub fn build(b: *std.Build) void {
         .root_module = flow_parser_module,
     });
     const run_flow_parser_tests = b.addRunArtifact(flow_parser_tests);
+    const flow_parser_test_step = b.step("test-flow-parser", "Run flow parser tests");
+    flow_parser_test_step.dependOn(&run_flow_parser_tests.step);
 
     const regex_engine_tests = b.addTest(.{
         .name = "regex_engine_tests",
