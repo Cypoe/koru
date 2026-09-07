@@ -1,5 +1,5 @@
 A wire line is exactly one invocation: verb(field: "value", field: "value")
-- One invocation per turn. Nothing after the closing ')': no chains (|>), no second line, no trailing text.
+- The run loop executes the first invocation in a reply: no chains (|>), no second invocation, no trailing text after the closing ')'. Anything after it is dropped — lead with what matters.
 - The verb is a bare name from your vocabulary — letters, digits, '-', '_' — immediately followed by '('.
 - Every value is a double-quoted string; escape quotes and backslashes inside (\", \\). No bare values.
 - A field whose type carries <!name> is a handle: issued by an earlier call, still held. Never invent one.
