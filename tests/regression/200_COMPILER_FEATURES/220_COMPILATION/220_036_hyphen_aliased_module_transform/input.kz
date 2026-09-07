@@ -1,0 +1,13 @@
+// PIN: a transform event living in a hyphenated module imported through an
+// aliased path. The generated transform dispatch must reference the module
+// struct by the EMITTER's spelling — `koru_` + raw name, escaped when the
+// name needs it (`koru_lib.@"koru_my-module"`) — not by a kebab→underscore
+// mangle (`koru_my_module`) the emitter never produces. The mismatch was a
+// backend compile error naming a struct member that does not exist
+// (found 2026-09-06 via the korulang.org sitevoice module).
+const std = @import("std");
+
+~import lib/my-module
+~import std/io
+
+~lib/my-module:transform-it()

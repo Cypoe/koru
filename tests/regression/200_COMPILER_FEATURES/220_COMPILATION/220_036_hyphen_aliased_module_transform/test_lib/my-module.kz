@@ -1,0 +1,46 @@
+// The hyphenated module: `my-module`, imported as lib/my-module. A transform
+// event here exercises the dispatch's module-reference spelling.
+
+const std = @import("std");
+
+~[comptime|transform|pre]pub tor transform-it {
+    invocation: *const Invocation,
+    item: *const Item,
+} -> SiteResult
+
+~[transform]proc transform-it|zig {
+    const ast_mod = @import("ast");
+
+    const flow = if (item.* == .flow)
+        &item.flow
+    else
+        return .{ .transformed = .{} };
+
+    for (flow.inv().annotations) |ann| {
+        if (std.mem.startsWith(u8, ann, "@pass_ran")) {
+            return .{ .transformed = .{} };
+        }
+    }
+
+    const inline_body_str =
+        \\//@koru:inline_stmt
+        \\    std.debug.print("hi\n", .{});
+        ;
+
+    const new_inv_annotations = allocator.alloc([]const u8, flow.inv().annotations.len + 1) catch unreachable;
+    for (flow.inv().annotations, 0..) |ann, j| new_inv_annotations[j] = ann;
+    new_inv_annotations[flow.inv().annotations.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
+
+    const new_invocation = ast_mod.Invocation{
+        .path = flow.inv().path,
+        .args = flow.inv().args,
+        .annotations = new_inv_annotations,
+    };
+    const empty_conts = allocator.alloc(ast_mod.Continuation, 0) catch unreachable;
+
+    var transformed_flow = flow.*;
+    transformed_flow.body = ast_mod.rootSite(new_invocation, empty_conts, flow.location);
+    transformed_flow.inline_body = inline_body_str;
+
+    return .{ .transformed = .{ .replacement = ast_mod.Item{ .flow = transformed_flow } } };
+}

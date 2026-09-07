@@ -2836,8 +2836,39 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
         var event_ident_buf: [256]u8 = undefined;
         const event_ident = lowerKebabIdent(&event_ident_buf, event.event_name);
         if (event.module_path) |mp| {
-            var mp_ident_buf: [256]u8 = undefined;
-            const mp_ident = lowerKebabIdent(&mp_ident_buf, mp);
+            // `module_path` is already koru_-prefixed per segment (the
+            // codegen_utils.buildKoruModulePath spelling, e.g.
+            // "koru_lib.koru_my-module"). What remains is the emitter's
+            // escaping: hyphenated/keyword segments emit as @"..." (the
+            // writeModulePath rule) — NOT lowerKebabIdent, which underscores
+            // hyphenated segments the emitter keeps escaped. The mismatch
+            // was a backend error naming a struct member that does not exist
+            // (220_036: a transform event in a hyphenated module imported
+            // through an aliased path).
+            var mp_ident_buf: [512]u8 = undefined;
+            var mp_len: usize = 0;
+            var mp_first = true;
+            var mp_segs = std.mem.splitScalar(u8, mp, '.');
+            while (mp_segs.next()) |seg| {
+                if (!mp_first) {
+                    mp_ident_buf[mp_len] = '.';
+                    mp_len += 1;
+                }
+                if (codegen_utils.needsEscaping(seg)) {
+                    mp_ident_buf[mp_len] = '@';
+                    mp_ident_buf[mp_len + 1] = '"';
+                    mp_len += 2;
+                    @memcpy(mp_ident_buf[mp_len .. mp_len + seg.len], seg);
+                    mp_len += seg.len;
+                    mp_ident_buf[mp_len] = '"';
+                    mp_len += 1;
+                } else {
+                    @memcpy(mp_ident_buf[mp_len .. mp_len + seg.len], seg);
+                    mp_len += seg.len;
+                }
+                mp_first = false;
+            }
+            const mp_ident = mp_ident_buf[0..mp_len];
             const handler_line = try std.fmt.bufPrint(&buf, "    const handler = {s}.{s}_event;\n", .{ mp_ident, event_ident });
             try code_emitter.write(handler_line);
         } else {
