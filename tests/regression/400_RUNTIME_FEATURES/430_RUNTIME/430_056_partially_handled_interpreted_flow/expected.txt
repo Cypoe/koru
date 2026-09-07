@@ -1,7 +1,7 @@
 --- A: no arms, unhandled outcome
-  result branch=[bad]
+  DISPATCH ERROR: NoBranchMatch
 --- B: only | ok handled, | bad fires
-  result branch=[bad]
+  UNHANDLED branch=[bad] payload={"branch":"bad","value":"n was not positive"} held=[]
 --- C: control, | ok handled and | ok fires
       note: took ok
-  result branch=[ok]
+  result branch=[]

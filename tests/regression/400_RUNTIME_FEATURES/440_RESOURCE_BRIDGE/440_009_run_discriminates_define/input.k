@@ -27,6 +27,7 @@ std/runtime:register(scope: "api") {
 // Turn A: an invocation of a verb that does not exist yet — denied.
 tor turn-a { br: *std/bridge:Bridge }
 turn-a = std/bridge:run(br, source: "greet(text: \"hi\")")
+| unhandled-branch _ |> std/io:print.ln("  UNHANDLED (unexpected)")
 | result r |> std/io:print.ln("  A: DISPATCHED (unexpected): {{ r.value.branch:s }}")
 | defined d |> std/io:print.ln("  A: DEFINED (unexpected): {{ d:s }}")
 | event-denied ev |> std/io:print.ln("  A: DENIED {{ ev:s }} (expected)")
@@ -40,6 +41,7 @@ turn-a = std/bridge:run(br, source: "greet(text: \"hi\")")
 // Turn B: the same `run`, with a DECLARATION — installs.
 tor turn-b { br: *std/bridge:Bridge }
 turn-b = std/bridge:run(br, source: "tor greet { text: string }\ngreet = echo(text)")
+| unhandled-branch _ |> std/io:print.ln("  UNHANDLED (unexpected)")
 | defined d |> std/io:print.ln("  B: defined {{ d:s }} (expected)")
 | result r |> std/io:print.ln("  B: DISPATCHED (unexpected): {{ r.value.branch:s }}")
 | event-denied ev |> std/io:print.ln("  B: DENIED {{ ev:s }}")
@@ -53,6 +55,7 @@ turn-b = std/bridge:run(br, source: "tor greet { text: string }\ngreet = echo(te
 // Turn C: the invention dispatched through the same run — params bound.
 tor turn-c { br: *std/bridge:Bridge }
 turn-c = std/bridge:run(br, source: "greet(text: \"hi\")")
+| unhandled-branch _ |> std/io:print.ln("  UNHANDLED (unexpected)")
 | result r |> std/interpreter:value.stringify(r.value): j |> std/io:print.ln("  C: greet -> {{ j:s }} (expected)")
 | defined d |> std/io:print.ln("  C: DEFINED (unexpected): {{ d:s }}")
 | event-denied ev |> std/io:print.ln("  C: DENIED {{ ev:s }}")

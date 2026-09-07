@@ -34,6 +34,7 @@ std/runtime:register(scope: "files") {
 
 tor run-turn { br: *std/bridge:Bridge, source: string, label: string }
 run-turn = std/bridge:run(br, source)
+| unhandled-branch _ |> std/io:print.ln("  UNHANDLED (unexpected)")
 | result r |> std/io:print.ln("  {{ label:s }}: held={{ r.handles:d }}")
 | defined d |> std/io:print.ln("  {{ label:s }}: DEFINED {{ d:s }}")
 | event-denied ev |> std/io:print.ln("  {{ label:s }}: DENIED {{ ev:s }}")
@@ -52,3 +53,4 @@ run-turn = std/bridge:run(br, source)
 |> std/io:print.ln("--- hang up; only b.txt may be released")
 |> std/bridge:close(br)
 |> std/io:print.ln("--- done")
+
