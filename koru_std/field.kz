@@ -72,7 +72,7 @@ var __field_noop_alloc = std.mem.Allocator{
 // over to `new-heap` unchanged).
 ~[comptime|transform]pub tor new {
     invocation: *const Invocation,
-    item: *const Item,
+    item: *const std/compiler:Item,
     allocator: std.mem.Allocator
 } -> SiteResult
 

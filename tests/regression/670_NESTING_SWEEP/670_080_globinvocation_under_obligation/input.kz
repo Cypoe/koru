@@ -27,8 +27,8 @@
 
 ~[comptime|transform]tor t1.* {
     expr: Expression,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
 } -> SiteResult
 
 ~proc t1.*|zig {

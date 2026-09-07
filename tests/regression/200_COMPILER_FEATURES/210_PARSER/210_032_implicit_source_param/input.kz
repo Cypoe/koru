@@ -7,7 +7,7 @@
 
 ~[comptime|transform]tor capture.source {
     source: Source,
-    item: *const Item
+    item: *const std/compiler:Item
 } -> Item
 
 ~proc capture.source|zig {

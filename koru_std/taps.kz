@@ -36,8 +36,8 @@ var metatype_global_counter: usize = 0;
 ~[keyword|comptime|transform]pub tor tap {
     expr: Expression,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 

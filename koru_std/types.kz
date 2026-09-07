@@ -74,7 +74,7 @@ const std = @import("std");
 ~[keyword|comptime|transform]pub tor proto {
     expr: Expression,
     source: Source,
-    item: *const Item,
+    item: *const std/compiler:Item,
     allocator: std.mem.Allocator,
     reporter: *std/compiler:ErrorReporter
 } -> SiteResult
@@ -180,8 +180,8 @@ const std = @import("std");
 
 ~[keyword|comptime|transform]pub tor string {
     expr: Expression,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 
@@ -231,8 +231,8 @@ const std = @import("std");
 // Declare a nominal integer type (wraps i64)
 ~[keyword|comptime|transform]pub tor int {
     expr: Expression,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 
@@ -280,8 +280,8 @@ const std = @import("std");
 // Declare a nominal float type (wraps f64)
 ~[keyword|comptime|transform]pub tor float {
     expr: Expression,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 
@@ -329,8 +329,8 @@ const std = @import("std");
 // Declare a nominal bool type (wraps bool)
 ~[keyword|comptime|transform]pub tor bool {
     expr: Expression,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 

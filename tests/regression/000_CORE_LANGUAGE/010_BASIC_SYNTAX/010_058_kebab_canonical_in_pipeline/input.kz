@@ -27,8 +27,8 @@ const std = @import("std");
 
 ~[comptime|transform]pub tor report-status {
     event_name: string,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
 } -> SiteResult
 
 ~proc report-status|zig {

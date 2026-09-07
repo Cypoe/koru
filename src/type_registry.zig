@@ -691,7 +691,7 @@ pub fn buildHostTypeHomes(allocator: std.mem.Allocator, items: []const ast.Item)
 fn collectHostTypeHomes(homes: *HostTypeHomes, items: []const ast.Item, enclosing_module: []const u8) !void {
     for (items) |item| {
         switch (item) {
-            .host_line => |hl| try scanHostDecls(homes, hl.content, enclosing_module),
+            .host_line => |hl| try scanHostDecls(HomesSink{ .homes = homes }, hl.content, enclosing_module),
             .host_type_decl => |ht| try registerHome(homes, ht.name, enclosing_module),
             .module_decl => |m| try collectHostTypeHomes(homes, m.items, m.logical_name),
             else => {},
@@ -704,11 +704,60 @@ fn registerHome(homes: *HostTypeHomes, name: []const u8, module: []const u8) !vo
     if (!gop.found_existing or module.len == 0) gop.value_ptr.* = module;
 }
 
+/// Every module that declares a given host type name — the SET of declaring
+/// modules, not the first-declaration-wins winner HostTypeHomes keeps. The
+/// bare-cross-module refusal (220_031, ruled 2026-09-06) must ask "does the
+/// WRITING module declare this name itself?", and first-wins cannot answer
+/// that: on a collision it names whichever module happened to be walked first,
+/// which would refuse a module's own legal bare spelling. Keys are slices into
+/// the item ASTs; values own their module-slice lists (freed with
+/// deinitHostTypeDeclSites). The map must not outlive the program's allocation.
+pub const HostTypeDeclSites = std.StringHashMap(std.ArrayList([]const u8));
+
+pub fn buildHostTypeDeclSites(allocator: std.mem.Allocator, items: []const ast.Item) !HostTypeDeclSites {
+    var sites = HostTypeDeclSites.init(allocator);
+    errdefer deinitHostTypeDeclSites(allocator, &sites);
+    try collectHostTypeDeclSites(&sites, allocator, items, "");
+    return sites;
+}
+
+/// Free the per-name module lists the map owns, then the map itself.
+pub fn deinitHostTypeDeclSites(allocator: std.mem.Allocator, sites: *HostTypeDeclSites) void {
+    var it = sites.iterator();
+    while (it.next()) |entry| entry.value_ptr.deinit(allocator);
+    sites.deinit();
+}
+
+fn collectHostTypeDeclSites(
+    sites: *HostTypeDeclSites,
+    allocator: std.mem.Allocator,
+    items: []const ast.Item,
+    enclosing_module: []const u8,
+) !void {
+    for (items) |item| {
+        switch (item) {
+            .host_line => |hl| try scanHostDecls(SitesSink{ .sites = sites, .allocator = allocator }, hl.content, enclosing_module),
+            .host_type_decl => |ht| try registerDeclSite(sites, allocator, ht.name, enclosing_module),
+            .module_decl => |m| try collectHostTypeDeclSites(sites, allocator, m.items, m.logical_name),
+            else => {},
+        }
+    }
+}
+
+fn registerDeclSite(sites: *HostTypeDeclSites, allocator: std.mem.Allocator, name: []const u8, module: []const u8) !void {
+    const gop = try sites.getOrPut(name);
+    if (!gop.found_existing) gop.value_ptr.* = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+    for (gop.value_ptr.items) |existing| {
+        if (moduleNamesMatch(existing, module)) return;
+    }
+    try gop.value_ptr.append(allocator, module);
+}
+
 /// Register every top-level `const NAME` / `pub const NAME` in a host-code blob.
 /// Top-level means column 0 — nested decls (struct fields, fn locals) are
 /// indented and deliberately excluded: only module-scope names are addressable
 /// as field types.
-fn scanHostDecls(homes: *HostTypeHomes, content: []const u8, module: []const u8) !void {
+fn scanHostDecls(sink: anytype, content: []const u8, module: []const u8) !void {
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line| {
         var rest = line;
@@ -718,9 +767,26 @@ fn scanHostDecls(homes: *HostTypeHomes, content: []const u8, module: []const u8)
         var end: usize = 0;
         while (end < rest.len and (std.ascii.isAlphanumeric(rest[end]) or rest[end] == '_')) end += 1;
         if (end == 0) continue;
-        try registerHome(homes, rest[0..end], module);
+        try sink.put(rest[0..end], module);
     }
 }
+
+/// First-wins sink for buildHostTypeHomes.
+const HomesSink = struct {
+    homes: *HostTypeHomes,
+    fn put(s: HomesSink, name: []const u8, module: []const u8) !void {
+        try registerHome(s.homes, name, module);
+    }
+};
+
+/// Set-valued sink for buildHostTypeDeclSites.
+const SitesSink = struct {
+    sites: *HostTypeDeclSites,
+    allocator: std.mem.Allocator,
+    fn put(s: SitesSink, name: []const u8, module: []const u8) !void {
+        try registerDeclSite(s.sites, s.allocator, name, module);
+    }
+};
 
 /// Module-name equality across spelling conventions: the phantom qualifier
 /// spells `std/field` (slash canon), a module_decl's logical name spells

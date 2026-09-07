@@ -6,8 +6,8 @@
 // (660_026 red pin), not this rung's surface.
 ~[comptime|transform]pub tor push {
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 

@@ -37,7 +37,7 @@
 }
 
 ~[comptime|command]pub tor install {
-    program: *const Program,
+    program: *const std/compiler:Program,
     allocator: __koru_std.mem.Allocator,
     argv: []string,
 }

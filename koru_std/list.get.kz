@@ -5,8 +5,8 @@
 // when i is past the end.
 ~[comptime|transform]pub tor get {
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 

@@ -13,7 +13,7 @@ const std = @import("std");
 ~[comptime|transform]pub tor echo {
     expr: Expression,
     invocation: *const Invocation,
-    item: *const Item,
+    item: *const std/compiler:Item,
     allocator: std.mem.Allocator
 } -> SiteResult
 

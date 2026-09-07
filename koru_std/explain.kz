@@ -54,7 +54,7 @@ fn printJsonString(v: []const u8) void {
 }
 
 ~[comptime|command]pub tor explain {
-    program: *const Program,
+    program: *const std/compiler:Program,
     allocator: __koru_std.mem.Allocator,
     argv: []string,
 }

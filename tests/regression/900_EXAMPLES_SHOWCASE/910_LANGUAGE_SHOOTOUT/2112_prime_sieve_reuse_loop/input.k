@@ -3,13 +3,13 @@
 // user-defined looping flow as a BORROW parameter.
 //
 // The field is allocated ONCE (`std/field:new`), passed into the label-fold loop
-// `run` as a borrow param (`f: *Field<std/field:field>`), and `clear`ed + re-marked
+// `run` as a borrow param (`f: *std/field:Field<std/field:field>`), and `clear`ed + re-marked
 // each pass instead of re-allocated. That is the drag-race `faithful=no` shape
 // (reuse the buffer; contrast 2111 which re-allocates per pass = `faithful=yes`).
 //
 // THE CAPABILITY THIS PINS (phantom_semantic_checker.zig): a user event can take a
 // foreign type's resource as a borrow param, written with the EXPLICIT module-
-// qualified phantom `*Field<std/field:field>` (the slash canon, KORU035). Three
+// qualified phantom `*std/field:Field<std/field:field>` (the slash canon, KORU035). Three
 // pieces had to land together:
 //   1. the qualified phantom resolves cross-module (separator-tolerant module
 //      lookup — slash `std/field` and dot `std.field` both resolve);
@@ -32,7 +32,7 @@ pub tor tick { limit: i64, passes: i64 }
 | live { limit: i64, passes: i64 }
 | expired i64
 
-pub tor run { limit: i64, f: *Field<std/field:field> } -> i64
+pub tor run { limit: i64, f: *std/field:Field<std/field:field> } -> i64
 
 tick = if(passes < limit)
 | then => live { limit, passes }

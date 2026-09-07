@@ -22,8 +22,8 @@ const std = @import("std");
 // First positional arg is the template string, named args are context
 ~[keyword|comptime|transform]pub tor emit {
     expr: Expression,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 

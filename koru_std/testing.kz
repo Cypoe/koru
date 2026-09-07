@@ -257,14 +257,14 @@ const validateMocks = struct {
     expr: Expression,
     source: Source,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 
 ~[comptime|retain] pub tor validate-mocks {
-    program: *const Program,
-    mocks: []const Item,
+    program: *const std/compiler:Program,
+    mocks: []const std/compiler:Item,
     source: *const Source,
     allocator: std.mem.Allocator
 }
@@ -865,8 +865,8 @@ const emitFlowWithMocks = struct {
 ~[keyword|comptime|transform|pure] pub tor assert {
     expr: Expression,
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 

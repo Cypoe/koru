@@ -30,8 +30,8 @@ const std = @import("std");
 ~[comptime|transform]pub tor default {
     expr: Expression,
     source: Source,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator,
     reporter: *std/compiler:ErrorReporter
 } -> SiteResult
@@ -434,7 +434,7 @@ const std = @import("std");
 // identity is module-spaced (`std/proto:float`), not a bare global.
 ~[comptime|transform]pub tor float {
     expr: Expression,
-    item: *const Item,
+    item: *const std/compiler:Item,
     allocator: std.mem.Allocator
 } -> SiteResult
 
@@ -485,7 +485,7 @@ const std = @import("std");
 // identity is module-spaced (`std/proto:string`), not a bare global.
 ~[comptime|transform]pub tor string {
     expr: Expression,
-    item: *const Item,
+    item: *const std/compiler:Item,
     allocator: std.mem.Allocator
 } -> SiteResult
 
@@ -536,7 +536,7 @@ const std = @import("std");
 // is module-spaced (`std/proto:int`), not a bare global.
 ~[comptime|transform]pub tor int {
     expr: Expression,
-    item: *const Item,
+    item: *const std/compiler:Item,
     allocator: std.mem.Allocator
 } -> SiteResult
 
@@ -587,7 +587,7 @@ const std = @import("std");
 // is module-spaced (`std/proto:bool`), not a bare global.
 ~[comptime|transform]pub tor bool {
     expr: Expression,
-    item: *const Item,
+    item: *const std/compiler:Item,
     allocator: std.mem.Allocator
 } -> SiteResult
 

@@ -23,8 +23,8 @@ const std = @import("std");
 // The transform: swaps the whole flow's head for raw statements.
 ~[comptime|transform]pub tor bake {
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 

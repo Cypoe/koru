@@ -76,7 +76,7 @@ pub const ImageManifest = struct {
 }
 
 ~[comptime|command]pub tor image {
-    program: *const Program,
+    program: *const std/compiler:Program,
     allocator: __koru_std.mem.Allocator,
     argv: []const []const u8,
 }

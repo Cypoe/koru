@@ -9,8 +9,8 @@
 // Glob pattern transform event - matches any log.* invocation
 ~[comptime|transform]pub tor log.* {
     expr: Expression,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
 } -> SiteResult
 
 // Transform proc - replaces invocation with inline comment

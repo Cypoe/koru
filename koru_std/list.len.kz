@@ -5,8 +5,8 @@
 // bridge; this event is the plain call form.)
 ~[comptime|transform]pub tor len {
     invocation: *const Invocation,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> SiteResult
 

@@ -7,7 +7,7 @@ const std = @import("std");
     expr: Expression,
     source: Source,
     invocation: *const Invocation,
-    program: *const Program,
+    program: *const std/compiler:Program,
     allocator: std.mem.Allocator
 } -> *const Program
 

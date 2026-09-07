@@ -1,0 +1,23 @@
+// TEST: qualified cross-module host type in a tor signature.
+//
+// `holder` owns the `Token` host (Zig) type. This module is NOT the declaring
+// module, so the signature spells it fully qualified — `*app/holder:Token` —
+// the one legal cross-module spelling (ruled 2026-09-06; the bare form is
+// refused by 220_031). Inside `holder` itself the bare `*Token` remains
+// correct, as holder.kz shows.
+//
+// The program must emit the holder module's struct at the Zig backend and run:
+// `mint` hands back a `*Token`, `describe` takes it qualified, and the printed
+// payload is the observable.
+
+~import app/holder
+~import std/io
+
+~tor describe { t: *app/holder:Token } -> string
+
+~proc describe|zig {
+    _ = t;
+    return "token";
+}
+
+~app/holder:mint(id: 7): t |> describe(t): d |> std/io:print.ln(d)
