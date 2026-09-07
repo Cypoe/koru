@@ -2065,11 +2065,14 @@ const TransformEvent = struct {
     has_compile_error: bool, // Event has compile_error{ message: []const u8 } branch
     /// Qualified-only dispatch: the user-spelled module qualifier (dotted,
     /// e.g. "std.regex") an invocation MUST carry to fire this transform.
-    /// Set for every imported-module non-glob transform — tors and procs.
-    /// Transform procs already did this; transform tors were left as legacy
-    /// bare-segment match and captured sibling modules' same-named events
-    /// (`std/list:free` rewriting `std/map:free` to `std.map:free-i64`,
-    /// 810_142 / 660_033). Globs stay null (taps capture user events).
+    /// Set for imported-module non-glob, non-keyword transforms — tors and
+    /// procs. Transform tors were left as legacy bare-segment match and
+    /// captured sibling modules' same-named events (`std/list:free` rewriting
+    /// `std/map:free` to `std.map:free-i64`, 810_142 / 660_033).
+    /// Globs stay null (taps capture user events). Keywords stay null: the
+    /// user spelling IS the bare name, and the test transform's inner pass
+    /// never keyword-resolves (`assert` inside `test` emitted as a missing
+    /// `assert_event` when this was qualified — 395_001).
     qualifier: ?[]const u8 = null,
     /// Variant target names (e.g. "raw_posix") for ~proc <event>|<variant> declarations.
     /// The call_handler wrapper dispatches to handler.handler__<variant> based on
@@ -2529,8 +2532,9 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                     // the machine interface is the proc-return convention:
                     // (invocation, item, program, allocator) → transformed SiteResult.
                     // Imported-module transforms (tors and procs) dispatch
-                    // QUALIFIED-ONLY — they never capture a sibling module's
-                    // same-named event (the wrong-module-capture soundness fix).
+                    // QUALIFIED-ONLY, except globs and [keyword] events —
+                    // they never capture a sibling module's same-named event
+                    // (the wrong-module-capture soundness fix).
                     const has_transform_proc = emitter_helpers.findTransformProc(module.items, event_decl.path.segments) != null;
                     if (has_transform_proc) {
                         has_invocation_param = true;
@@ -2672,7 +2676,8 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                         // Input literals missing the required `.source` field. See the
                         // x86 Linux drag-race build failure.
                         const is_glob = std.mem.indexOfScalar(u8, match_name, '*') != null;
-                        const qualifier_val: ?[]const u8 = if (!is_glob)
+                        const is_keyword = annotation_parser.hasPart(event_decl.annotations, "keyword");
+                        const qualifier_val: ?[]const u8 = if (!is_glob and !is_keyword)
                             try allocator.dupe(u8, module.logical_name)
                         else
                             null;
