@@ -65,8 +65,8 @@ These are the receipts for the `koru-metaprogramming` skill — passing tests sh
 
 [comptime|transform]pub tor ring.* {
     event_name: string,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
 } -> SiteResult
 
 proc ring.*|zig {
@@ -135,8 +135,8 @@ ring.new[T:u32;N:1024](name: "my_ring")
 
 [comptime|transform]pub tor ring.* {
     event_name: string,
-    item: *const Item,
-    program: *const Program,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
 } -> SiteResult
 
 proc ring.*|zig {

@@ -669,8 +669,6 @@ listen(port: 8080)
 // instead of derived from the directory. Events declared in a part are in
 // scope for the primary's flows, referenced unqualified — the merge puts
 // primary and parts in one module (the 140_009 facet contract, through part).
-//
-// ASPIRATIONAL: `part` is not implemented yet; this test fails until it is.
 
 part impl
 
@@ -692,8 +690,6 @@ compute(x: 42): r |> show(v: r)
 // may hold events AND their host procs in one `.kz` (the 140_008 shape),
 // and may carry the host imports it needs — `const std` lives here, in the
 // part, not the primary.
-//
-// ASPIRATIONAL: `part` is not implemented yet; this test fails until it is.
 
 part math
 
@@ -715,8 +711,6 @@ compute(x: 40): r |> show(v: r)
 // into the Zig output the backend compile would fail. Green means hostlines
 // route by their own file's host, exactly as stem facets route them
 // (140_010) — the part join must not flatten that.
-//
-// ASPIRATIONAL: `part` is not implemented yet; this test fails until it is.
 
 part ping
 
