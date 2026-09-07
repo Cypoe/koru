@@ -11,15 +11,21 @@ tags: [koru, transforms, dispatch, module-qualifier]
 A transform that lives in an imported module matches an invocation only when
 that invocation spells the transform's module. Same bare event name in a
 sibling module is a different event. Two exceptions stay bare-segment:
-globs (taps capture user events by design) and `[keyword]` transforms
-(the user spelling IS the bare name — `assert`, not `std.testing:assert`).
+globs (taps capture user events by design) and `[keyword]` *tors* (the user
+spelling IS the bare name — `assert`, not `std.testing:assert`).
 
-The keyword exception is not a courtesy. The `test` transform re-runs the
-body through `run_pass` without keyword-resolution, so an `assert` inside
-`test` still carries the test module's qualifier. Qualifying `std.testing:assert`
-made that inner pass miss, and the body emitted a call to a missing
-`assert_event` (395_001 / the 395 cluster that went red on the first board
-of this ruling).
+A keyword that is also a `[transform]proc` is not that exception.
+`std/store:take` is a keyword *and* a proc; `std/string:take` is a different
+event. Leaving the proc on the keyword-tor bare gate recaptured string:take
+and refused it as a store row (690_053, KORU161, empty addressing head).
+The proc path was already qualified-only before this ruling; the keyword
+carve-out must not undo it.
+
+The keyword-tor exception is not a courtesy. The `test` transform re-runs
+the body through `run_pass` without keyword-resolution, so an `assert`
+inside `test` still carries the test module's qualifier. Qualifying
+`std.testing:assert` made that inner pass miss, and the body emitted a call
+to a missing `assert_event` (395_001).
 
 This is the same soundness the `[transform]proc` path already had (qualified-only,
 never a bare capture). Transform *tors* were left on the legacy gate: match
@@ -37,4 +43,5 @@ every module's same-named event on purpose — a global `free` / `get` / `new`
 as one compiler pass. Until that ruling, a cross-module fire is a defect.
 
 Pins: `660_033` (the small shape), `810_142` (the board regression that
-named it), `395_001` (keyword `assert` inside `test` stays a transform).
+named it), `395_001` (keyword-tor `assert` inside `test` stays a transform),
+`690_053` (keyword-proc `take` stays on its own home).
