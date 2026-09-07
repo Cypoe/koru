@@ -9327,6 +9327,39 @@ fn emitContinuationList(
         }
     }
 
+    // Omitted OPTIONAL branches get a silent no-op arm on every bare,
+    // exhaustive switch (flow heads AND pipeline steps both emit one). The
+    // optional contract is "may be handled" — the union still contains the
+    // optional variants, so a switch with no `else` must complete them
+    // (`?partial` on bridge:run was the defeat that surfaced this: every
+    // consumer without a `| partial` arm failed exhaustiveness). A catch-all
+    // already covers the same ground below; a partial switch adds its own
+    // `else => unreachable` and needs neither.
+    if (catchall_cont == null and !is_partial_switch) {
+        if (ctx.current_source_event) |source_event| {
+            if (ctx.ast_items) |items| {
+                const event_decl = findEventByName(items, source_event, ctx.allocator, ctx.main_module_name);
+                if (event_decl) |event| {
+                    var handled_branches = std.StringHashMap(void).init(ctx.allocator);
+                    defer handled_branches.deinit();
+                    for (continuation_branch_groups) |group| {
+                        if (std.mem.eql(u8, group.branch_name, "?")) continue;
+                        try handled_branches.put(group.branch_name, {});
+                    }
+                    for (event.branches) |branch| {
+                        if (!branch.is_optional) continue;
+                        if (branch.kind != .terminal) continue; // effects are handler calls, not union tags
+                        if (handled_branches.contains(branch.name)) continue;
+                        try emitter.writeIndent();
+                        try emitter.write(".");
+                        try writeBranchName(emitter, branch.name);
+                        try emitter.write(" => {},\n");
+                    }
+                }
+            }
+        }
+    }
+
     // If there's a catch-all, emit cases for unhandled optional branches
     if (catchall_cont) |catchall| {
         // Find which branches are explicitly handled
