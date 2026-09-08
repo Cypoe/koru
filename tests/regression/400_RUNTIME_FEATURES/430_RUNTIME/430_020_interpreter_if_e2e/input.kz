@@ -29,6 +29,7 @@ const TEST_SOURCE = "if(true)\n| then |> yes(result: \"passed\")\n| else |> no(r
 
 ~std/runtime:run(source: TEST_SOURCE, scope: "t")
 | result _ |> std/io:print.ln("OK")
+| unhandled-branch _ |> std/io:print.ln("FAIL: unhandled_branch")
 | exhausted _ |> std/io:print.ln("EXHAUSTED")
 | parse-error _ |> std/io:print.ln("PARSE ERROR")
 | validation-error _ |> std/io:print.ln("VALIDATION ERROR")
@@ -41,6 +42,7 @@ const TEST_SOURCE_ELSE = "if(false)\n| then |> yes(result: \"failed\")\n| else |
 
 ~std/runtime:run(source: TEST_SOURCE_ELSE, scope: "t")
 | result _ |> std/io:print.ln("OK ELSE")
+| unhandled-branch _ |> std/io:print.ln("FAIL: unhandled_branch")
 | exhausted _ |> std/io:print.ln("EXHAUSTED")
 | parse-error _ |> std/io:print.ln("PARSE ERROR")
 | validation-error _ |> std/io:print.ln("VALIDATION ERROR")

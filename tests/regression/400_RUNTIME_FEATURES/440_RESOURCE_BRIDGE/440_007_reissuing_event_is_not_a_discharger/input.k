@@ -16,14 +16,42 @@
 //
 // The bridge holds one resource; nothing in this flow discharges it, so the
 // compiler inserts the hang-up. `shut` must be what runs.
+//
+// Both turns are flat tors reading the bridge from a store (probe_bridge_store's
+// shape): a run chained inside an arm body is refused by KORU022's pipeline
+// check, and its arms would attach to the wrong switch.
 
 import std/bridge
 import std/io
+import std/store
 import app/session
 
-[with]std/bridge:create(id: "s1", scope: "res"): br |> run(br, source: "open(path: \"x\")")
-| result r |> run(br, source: "use(handle: \"res_1\")")
-    | result r2 |> std/io:print.ln("held {{ r.handles:d }} then {{ r2.handles:d }}")
+std/store:new(session, capacity: 2) { *std/bridge:Bridge<session!> }
+
+[with]std/bridge:create(id: "s1", scope: "res"): br
+|> std/store:insert(session) { br }
+| row _ |> _
+| full _ |> _
+
+tor open-turn {}
+open-turn = std/store:query(session)
+! query br |> std/bridge:run(br, source: "open(path: \"x\")")
+    | result _ |> _
+    | unhandled-branch _ |> std/io:print.ln("FAIL: unhandled_branch")
+    | defined d1 |> std/io:print.ln("FAIL turn1 defined {{ d1:s }}")
+    | exhausted _ |> std/io:print.ln("FAIL exhausted")
+    | parse-error _ |> std/io:print.ln("FAIL parse")
+    | validation-error _ |> std/io:print.ln("FAIL validation")
+    | shape-error _ |> std/io:print.ln("FAIL shape")
+    | event-denied _ |> std/io:print.ln("FAIL denied")
+    | dispatch-error e2 |> std/io:print.ln("FAIL {{ e2.message:s }}")
+    | scope-not-found _ |> std/io:print.ln("FAIL scope")
+
+tor use-turn {}
+use-turn = std/store:query(session)
+! query br |> std/bridge:run(br, source: "use(handle: \"res_1\")")
+    | result r2 |> std/io:print.ln("after use, bridge holds {{ r2.handles:d }} handle(s) — the re-issue released nothing")
+    | unhandled-branch _ |> std/io:print.ln("FAIL: unhandled_branch")
     | defined d2 |> std/io:print.ln("FAIL turn2 defined {{ d2:s }}")
     | exhausted _ |> std/io:print.ln("FAIL exhausted")
     | parse-error _ |> std/io:print.ln("FAIL parse")
@@ -32,11 +60,6 @@ import app/session
     | event-denied _ |> std/io:print.ln("FAIL denied")
     | dispatch-error e |> std/io:print.ln("FAIL {{ e.message:s }}")
     | scope-not-found _ |> std/io:print.ln("FAIL scope")
-| defined d1 |> std/io:print.ln("FAIL turn1 defined {{ d1:s }}")
-| exhausted _ |> std/io:print.ln("FAIL exhausted")
-| parse-error _ |> std/io:print.ln("FAIL parse")
-| validation-error _ |> std/io:print.ln("FAIL validation")
-| shape-error _ |> std/io:print.ln("FAIL shape")
-| event-denied _ |> std/io:print.ln("FAIL denied")
-| dispatch-error e2 |> std/io:print.ln("FAIL {{ e2.message:s }}")
-| scope-not-found _ |> std/io:print.ln("FAIL scope")
+
+open-turn()
+use-turn()

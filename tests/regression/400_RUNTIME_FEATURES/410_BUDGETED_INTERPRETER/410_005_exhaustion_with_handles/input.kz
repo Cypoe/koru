@@ -43,6 +43,7 @@ const TEST_SOURCE = "open(path: \"x.txt\")\n| opened f |> expensive-read(handle:
 // Should exhaust, but still auto-discharge the open file
 ~std/runtime:run(source: TEST_SOURCE, scope: "test", budget: 50, auto_discharge: true)
 | result _ |> std/io:print.ln("FAIL: should have exhausted")
+| unhandled-branch _ |> std/io:print.ln("FAIL: unhandled_branch")
 | exhausted e |> std/io:print.ln("PASS: exhausted with {{ e.used:d }} used, last event: {{ e.last_event:s }}")
 | parse-error _ |> std/io:print.ln("PARSE ERROR")
 | validation-error _ |> std/io:print.ln("VALIDATION ERROR")

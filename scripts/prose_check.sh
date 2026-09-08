@@ -160,7 +160,7 @@ for line in manifest.read_text().splitlines():
     # otherwise indistinguishable from data.
     if ':' not in key:
         continue
-    if val in REASONS or val.startswith(('115_', '690_')):
+    if val in REASONS or val.startswith(('115_', '690_', '660_', '665_', '667_')):
         rows[key] = val
     else:
         print(f"MALFORMED-ROW\t{key}\t{val}")
@@ -181,7 +181,11 @@ SRC = sorted(
 declared = set()
 keyworded = set()
 for f in SRC:
-    lib = f.stem
+    # The part-split convention: `store.query.kz` joins the `store` module via
+    # `~part query`, so a transform declared there is logically `store:query`.
+    # The file stem carries the part suffix; the module name is the stem before
+    # the first dot — otherwise the mirror keys diverge from the rows.
+    lib = f.stem.split('.')[0]
     for line in f.read_text(errors='replace').splitlines():
         m = decl.match(line.strip())
         if m:
@@ -194,7 +198,7 @@ for t in sorted(declared - rows.keys()):
 
 # A row naming a koru_std lib that no longer declares it is a stale row. Rows for
 # other libs (vaxis, sqlite3) are out of scope and skipped.
-std_libs = {f.stem for f in SRC}
+std_libs = {f.stem.split('.')[0] for f in SRC}
 for t in sorted(rows.keys() - declared):
     if t.split(':', 1)[0] in std_libs:
         print(f"STALE\t{t}")

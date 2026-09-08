@@ -20,6 +20,7 @@ const PROSE = "I cannot delete files. My vocabulary only includes open(), append
 
 ~std/runtime:run(source: PROSE, scope: "api")
 | result _ |> std/io:print.ln("RESULT")
+| unhandled-branch _ |> std/io:print.ln("FAIL: unhandled_branch")
 | exhausted _ |> std/io:print.ln("EXHAUSTED")
 | parse-error _ |> std/io:print.ln("PARSE ERROR")
 | validation-error _ |> std/io:print.ln("VALIDATION ERROR")

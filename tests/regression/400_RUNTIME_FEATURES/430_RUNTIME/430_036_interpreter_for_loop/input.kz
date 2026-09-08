@@ -30,6 +30,7 @@ const TEST_FLOW =
 
 ~std/interpreter:run(source: TEST_FLOW, dispatcher: dispatch_test)
 | result r |> std/io:print.ln("Result: {{ r.value.branch:s }}")
+| unhandled-branch _ |> std/io:print.ln("FAIL: unhandled_branch")
 | exhausted e |> std/io:print.ln("Exhausted: {{ e.last_event:s }}")
 | parse-error e |> std/io:print.ln("Parse error: {{ e.message:s }}")
 | validation-error e |> std/io:print.ln("Validation error: {{ e:s }}")

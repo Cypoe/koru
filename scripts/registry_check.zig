@@ -423,9 +423,15 @@ pub fn main() !void {
     const errors_src = try std.fs.cwd().readFileAlloc(a, "src/errors.zig", 16 * 1024 * 1024);
     try collectDeclared(a, &declared, &descs, errors_src);
 
-    // EMITTED — all of src/ (incl. errors.zig helper fns) + koru_std.
+    // EMITTED — all of src/ (incl. errors.zig helper fns) + koru_std. The
+    // std library refuses via `ast.refusal(..., .KORUxxx, ...)` in its Koru
+    // sources, so the koru-file extensions must be scanned too — without
+    // them, every std-side diagnostic code reads as DEAD.
     try collectTree(a, &emitted, "src", ".zig", .emit);
     try collectTree(a, &emitted, "koru_std", ".zig", .emit);
+    try collectTree(a, &emitted, "koru_std", ".kz", .emit);
+    try collectTree(a, &emitted, "koru_std", ".k", .emit);
+    try collectTree(a, &emitted, "koru_std", ".kjs", .emit);
 
     // Subcommand: `confirm <CODE>` runs the verification battery for one code.
     if (args.len >= 3 and std.mem.eql(u8, args[1], "confirm")) {

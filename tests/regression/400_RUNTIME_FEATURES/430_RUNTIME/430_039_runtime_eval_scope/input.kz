@@ -21,6 +21,7 @@ const TEST_SOURCE = "greet(name: \"World\")";
 ~std/runtime:parse.source(source: TEST_SOURCE, allocator: std.heap.page_allocator)
 | parsed p |> std/runtime:eval(flow: p, scope: "api")
     | result _ |> std/io:print.ln("OK")
+    | unhandled-branch _ |> std/io:print.ln("FAIL: unhandled_branch")
     | event-denied _ |> std/io:print.ln("EVENT DENIED")
     | exhausted _ |> std/io:print.ln("EXHAUSTED")
     | validation-error _ |> std/io:print.ln("VALIDATION ERROR")

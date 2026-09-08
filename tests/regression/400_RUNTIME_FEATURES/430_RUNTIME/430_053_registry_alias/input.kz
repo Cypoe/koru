@@ -27,6 +27,7 @@ const TEST1 = "hello(name: \"World\")";
 
 ~std/runtime:run(source: TEST1, scope: "api")
 | result _ |> std/io:print.ln("HELLO OK")
+| unhandled-branch _ |> std/io:print.ln("FAIL: unhandled_branch")
 | exhausted _ |> std/io:print.ln("HELLO EXHAUSTED")
 | parse-error _ |> std/io:print.ln("HELLO PARSE ERROR")
 | validation-error _ |> std/io:print.ln("HELLO VALIDATION ERROR")
@@ -40,6 +41,7 @@ const TEST2 = "hi(name: \"World\")";
 
 ~std/runtime:run(source: TEST2, scope: "api")
 | result _ |> std/io:print.ln("HI OK")
+| unhandled-branch _ |> std/io:print.ln("FAIL: unhandled_branch")
 | exhausted _ |> std/io:print.ln("HI EXHAUSTED")
 | parse-error _ |> std/io:print.ln("HI PARSE ERROR")
 | validation-error _ |> std/io:print.ln("HI VALIDATION ERROR")
@@ -53,6 +55,7 @@ const TEST3 = "greet(name: \"World\")";
 
 ~std/runtime:run(source: TEST3, scope: "api")
 | result _ |> std/io:print.ln("GREET SHOULD NOT WORK")
+| unhandled-branch _ |> std/io:print.ln("FAIL: unhandled_branch")
 | exhausted _ |> std/io:print.ln("GREET EXHAUSTED")
 | parse-error _ |> std/io:print.ln("GREET PARSE ERROR")
 | validation-error _ |> std/io:print.ln("GREET VALIDATION ERROR")

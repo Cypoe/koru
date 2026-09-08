@@ -27,6 +27,7 @@ const TEST_SOURCE = "expensive(data: \"a\")\n| processed |> expensive(data: \"b\
 // Run with budget of 75 - second call should exhaust
 ~std/runtime:run(source: TEST_SOURCE, scope: "test", budget: 75)
 | result _ |> std/io:print.ln("FAIL: should have exhausted")
+| unhandled-branch _ |> std/io:print.ln("FAIL: unhandled_branch")
 | exhausted e |> std/io:print.ln("PASS: exhausted after {{ e.used:d }} tokens, last event: {{ e.last_event:s }}")
 | parse-error _ |> std/io:print.ln("PARSE ERROR")
 | validation-error _ |> std/io:print.ln("VALIDATION ERROR")

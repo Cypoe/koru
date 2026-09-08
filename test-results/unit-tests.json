@@ -1,12 +1,12 @@
 {
-  "timestamp": "2026-09-07T07:06:27.290Z",
+  "timestamp": "2026-09-08T06:44:52.525Z",
   "summary": {
-    "passed": 357,
+    "passed": 360,
     "failed": 0,
     "skipped": 12,
     "leaked": 0,
     "compileErrors": 0,
-    "total": 369,
+    "total": 372,
     "suiteCount": 42,
     "status": "success"
   },
@@ -149,10 +149,10 @@
     },
     {
       "name": "flow_parser_tests",
-      "passed": 21,
+      "passed": 24,
       "failed": 0,
       "skipped": 0,
-      "total": 21,
+      "total": 24,
       "status": "success"
     },
     {

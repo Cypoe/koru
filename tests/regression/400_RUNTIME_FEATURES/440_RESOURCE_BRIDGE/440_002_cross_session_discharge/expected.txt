@@ -1,4 +1,3 @@
-Session 1 left 1 handle(s) on bridge
+PASS: session 1 opened — bridge holds 1 handle(s)
 close() called for handle
-Session 2 complete, 0 handle(s) remaining
-PASS: open=1, close=0
+PASS: session 2 closed — bridge holds 0 handle(s)

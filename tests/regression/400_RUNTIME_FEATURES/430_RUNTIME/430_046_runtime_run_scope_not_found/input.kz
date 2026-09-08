@@ -16,6 +16,7 @@ const TEST_SOURCE = "greet()";
 
 ~std/runtime:run(source: TEST_SOURCE, scope: "missing")
 | result _ |> std/io:print.ln("OK")
+| unhandled-branch _ |> std/io:print.ln("FAIL: unhandled_branch")
 | exhausted _ |> std/io:print.ln("EXHAUSTED")
 | parse-error _ |> std/io:print.ln("PARSE ERROR")
 | validation-error _ |> std/io:print.ln("VALIDATION ERROR")

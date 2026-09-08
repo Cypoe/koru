@@ -41,14 +41,13 @@ var bridge_pool = HandlePool.init(std.heap.page_allocator);
     close(1)
 }
 
-const SESSION_1 = "open(path: \"test.txt\")";
+const SESSION_1 = "open(path: \"test.txt\") | opened _ |> _";
 const FORGED = "close(handle: \"file_99\")";
 const HONEST = "close(handle: \"file_1\")";
 
 ~std/runtime:run(source: SESSION_1, scope: "files", budget: 100, handle_pool: &bridge_pool, auto_discharge: false)
 | result r |> probe(after_open: r.handles)
-    | done d |> std/io:print.ln("held after open: {{ d.after_open:d }}, after honest close: {{ d.after_honest:d }}")
-    | fail f |> std/io:print.ln("FAIL: {{ f:s }}")
+| unhandled-branch _ |> std/io:print.ln("FAIL: unhandled_branch")
 | exhausted _ |> std/io:print.ln("FAIL: session 1 exhausted")
 | parse-error _ |> std/io:print.ln("FAIL: session 1 parse error")
 | validation-error _ |> std/io:print.ln("FAIL: session 1 validation error")
@@ -57,9 +56,10 @@ const HONEST = "close(handle: \"file_1\")";
 | dispatch-error _ |> std/io:print.ln("FAIL: session 1 dispatch error")
 | scope-not-found _ |> std/io:print.ln("FAIL: session 1 scope not found")
 
+// Void, not done/fail: a tor called as an arm body's last step is refused by
+// KORU022's pipeline check, so the probe reports internally (it already
+// printed both verdicts) and the caller chains it without a switch.
 ~tor probe { after_open: u32 }
-| done { after_open: u32, after_honest: u32 }
-| fail string
 
 ~proc probe|zig {
     const rt = @import("root").koru_std.koru_runtime;
@@ -94,5 +94,5 @@ const HONEST = "close(handle: \"file_1\")";
         },
     };
 
-    return .{ .done = .{ .after_open = after_open, .after_honest = after_honest } };
+    std.debug.print("held after open: {d}, after honest close: {d}\n", .{ after_open, after_honest });
 }

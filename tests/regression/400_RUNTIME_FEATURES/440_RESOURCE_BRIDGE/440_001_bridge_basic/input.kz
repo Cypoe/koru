@@ -33,6 +33,7 @@ const TEST_SOURCE = "open(path: \"test.txt\")";
 
 ~std/runtime:run(source: TEST_SOURCE, scope: "test", budget: 100, handle_pool: &test_pool, auto_discharge: false)
 | result r |> std/io:print.ln("PASS: external pool has {{ r.handles:d }} handle(s)")
+| unhandled-branch _ |> std/io:print.ln("FAIL: unhandled_branch")
 | exhausted _ |> std/io:print.ln("FAIL: exhausted")
 | parse-error _ |> std/io:print.ln("FAIL: parse_error")
 | validation-error _ |> std/io:print.ln("FAIL: validation_error")
