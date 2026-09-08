@@ -10,7 +10,8 @@
 // nothing in the suite previously pinned the runtime leak check at all —
 // enforcement was indirect (MUST_RUN exit codes) and no test requested
 // release mode. Benchmark binaries ran ReleaseFast with the counter in
-// the hot path.
+// the hot path. A json-parse before/after on a quiet machine is
+// aspirational — this pin is the gate, not a throughput number.
 //
 // The alloc is through `koru_allocator()` on purpose: that is the spine
 // the counter watches. A discarded raw allocation is the smallest program
