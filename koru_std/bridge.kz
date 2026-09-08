@@ -1,5 +1,4 @@
-// Resource Bridge Standard Library
-// Persistent handle storage for long-running interactive sessions (Hollywood OS mode)
+// Resource Bridge Standard Library — persistent handle storage for long-running interactive sessions (Hollywood OS mode)
 //
 // A Bridge owns a HandlePool that outlives any single interpreter run, so a
 // resource opened on one turn is still held on the next — the human or the agent
@@ -296,3 +295,4 @@ pub const Bridge = struct {
 }
 
 ~part run
+~part affordances

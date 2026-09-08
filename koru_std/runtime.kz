@@ -2325,8 +2325,8 @@ fn lookupEventBranches(scope_name: []const u8, event_name: []const u8) []const B
 // ============================================================================
 
 // shape: Optional event name to validate response shape against
-// @retain: run_event is referenced from generated Zig code in user pipelines
-// (std/runtime:run invocations in continuations compile to run_event.handler(...))
+// @retain: run_event is referenced from generated Zig code in user pipelines (std/runtime:run invocations in continuations compile to run_event.handler(...))
 
 ~part parsewire
 ~part run
+~part affordances
