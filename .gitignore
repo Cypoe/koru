@@ -151,6 +151,13 @@ tests/benchmarks/**/haskell_*
 !tests/benchmarks/**/*.hs
 tests/benchmarks/**/zig_baseline
 
+# Legacy feature-test compiled outputs — 0-byte executables rode in at the
+# Initial commit and nothing reads them; the harness discovers tests/regression
+# only, never tests/features. The handwritten sources beside them stay tracked.
+tests/features/subflow_basic
+tests/features/subflow_basic_test
+tests/features/subflow_constructors_test
+
 # ============================================================================
 # Generated Code (Anywhere in Project)
 # ============================================================================
