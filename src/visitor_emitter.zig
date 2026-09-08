@@ -408,7 +408,18 @@ pub const VisitorEmitter = struct {
                 const module_should_emit = !shouldFilter(&[_][]const u8{}, module.annotations, module.canonical_path, self.emit_mode);
                 const has_emittable_items = moduleHasEmittableItems(module, self.emit_mode);
 
-                if (module_should_emit or has_emittable_items) {
+                // runtime_only: a [comptime|runtime] module whose only remaining
+                // surface is consumed transforms (print.blk and friends) is not
+                // a runtime module. Collecting it would weld the comptime
+                // engines — `@import("ast")`, `__printInterpolate` — into the
+                // program unit after they already ran. comptime_only / all keep
+                // the old `module_should_emit or has_emittable_items` so the
+                // backend still sees those engines.
+                const collect = if (self.emit_mode == .runtime_only)
+                    has_emittable_items
+                else
+                    module_should_emit or has_emittable_items;
+                if (collect) {
                     try modules.append(self.allocator, module);
                 }
 
@@ -418,6 +429,15 @@ pub const VisitorEmitter = struct {
         }
     }
 
+    /// A `[transform]` / `[norun]` event already ran (or never will at
+    /// runtime). Counting it as runtime surface is what welded print's
+    /// comptime engines into Hello World's program unit.
+    fn annotationsAreConsumedCompilerSurface(annotations: []const []const u8, mode: EmitMode) bool {
+        if (mode != .runtime_only) return false;
+        return annotation_parser.hasPart(annotations, "transform") or
+            annotation_parser.hasPart(annotations, "norun");
+    }
+
     /// Check if a module contains ANY items that should be emitted in the current mode.
     /// This allows modules to be emitted even if they have [comptime] annotation,
     /// as long as they contain [runtime] events/procs.
@@ -425,18 +445,30 @@ pub const VisitorEmitter = struct {
         for (module.items) |item| {
             switch (item) {
                 .event_decl => |event| {
+                    if (annotationsAreConsumedCompilerSurface(event.annotations, mode)) continue;
                     // Check if this event should be emitted
                     if (!emitter.shouldFilter(event.annotations, module.annotations, module.canonical_path, mode)) {
                         return true;
                     }
                 },
                 .proc_decl => |proc| {
+                    // Procs emit inside their event, never as a module-level
+                    // reason to keep the module. Counting them here is what
+                    // kept io.kz in Hello World after print.blk was consumed.
+                    if (mode == .runtime_only) continue;
+                    if (annotationsAreConsumedCompilerSurface(proc.annotations, mode)) continue;
                     // Check if this proc should be emitted
                     if (!emitter.shouldFilter(proc.annotations, module.annotations, module.canonical_path, mode)) {
                         return true;
                     }
                 },
                 .flow => |flow| {
+                    // User runtime flows live in the entry file. A stdlib
+                    // module-level flow is compile-time (build:variants,
+                    // transform sites). Counting them kept io.kz in Hello
+                    // World after every runtime event was stripped.
+                    if (mode == .runtime_only) continue;
+                    if (annotationsAreConsumedCompilerSurface(flow.annotations, mode)) continue;
                     // Check if this flow should be emitted
                     if (!emitter.shouldFilter(flow.annotations, module.annotations, module.canonical_path, mode)) {
                         return true;
@@ -1120,6 +1152,9 @@ pub const VisitorEmitter = struct {
                 // Compiler infrastructure and phase annotations apply to all events,
                 // including those with comptime parameters (ProgramAST, Source, etc.)
                 if (shouldFilter(event.annotations, module_annotations, event.module, self.emit_mode)) {
+                    return;
+                }
+                if (annotationsAreConsumedCompilerSurface(event.annotations, self.emit_mode)) {
                     return;
                 }
 
