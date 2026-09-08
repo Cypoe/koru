@@ -50,8 +50,11 @@ tests plus controls:
 
     ./run_regression.sh <full_test_name> <full_test_name> ...
 
-Filtered runs write no snapshot, so they can't clobber `latest.json`. The full
-board is for publishing.
+Filtered runs write no board snapshot, so they can't clobber `latest.json` —
+but the unit-test sub-run rewrites `test-results/unit-tests.json` even in
+filtered mode (`scripts/parse-unit-tests.js`), so a filtered run can dirty that
+file; restore it (`git checkout -- test-results/unit-tests.json`) before
+committing. The full board is for publishing.
 
 **Never `zig build`, or edit `koru_std/` *or* `src/`, while a suite is live.**
 Each test's backend build compiles its emitted Zig against the **live** `src/`
