@@ -1565,11 +1565,16 @@ EOF
         # leaked (traces land in actual.txt via 2>&1). A leak is its own
         # failure category — it outranks the output diff.
         if grep -q "KORU LEAK CHECK FAILED" "$test_dir/actual.txt" 2>/dev/null; then
-            echo -e "${RED}❌ Produced program leaked memory (see actual.txt for GPA trace)${NC}"
-            echo "leak-output" > "$test_dir/FAILURE"
-            FAILED_TESTS="$FAILED_TESTS $TEST_NAME(leak-output)"
-            LEAKED_TESTS=$((LEAKED_TESTS + 1))
-            return 0
+            # An EXPECT_TRAP test that pins this message is declaring the leak
+            # check itself as the behaviour under test (310_125). The wall
+            # yields; the trap pin and its output expectation own the death.
+            if [ ! -f "$test_dir/EXPECT_TRAP" ]; then
+                echo -e "${RED}❌ Produced program leaked memory (see actual.txt for GPA trace)${NC}"
+                echo "leak-output" > "$test_dir/FAILURE"
+                FAILED_TESTS="$FAILED_TESTS $TEST_NAME(leak-output)"
+                LEAKED_TESTS=$((LEAKED_TESTS + 1))
+                return 0
+            fi
         fi
 
         # TRAP-vs-CRASH GATE: the exit code is part of the verdict, not only the

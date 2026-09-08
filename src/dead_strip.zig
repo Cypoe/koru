@@ -333,7 +333,18 @@ pub const DeadStripPass = struct {
                     new_mod.items = filtered_items;
                     try result.append(self.allocator, .{ .module_decl = new_mod });
                 },
-                // Everything else stays: flows, host_lines, taps, labels, etc.
+                // Comment-only host lines are cargo: rulings, essays, pin
+                // citations frozen into every produced artifact. `//@koru:`
+                // markers are not cargo — the inline emitter reads them.
+                // Blank lines stay; they are not comments.
+                .host_line => |line| {
+                    if (hostLineIsCommentCargo(line.content)) {
+                        self.stripped_count += 1;
+                    } else {
+                        try result.append(self.allocator, item);
+                    }
+                },
+                // Everything else stays: flows, taps, labels, etc.
                 else => {
                     try result.append(self.allocator, item);
                 },
@@ -370,6 +381,16 @@ pub const DeadStripPass = struct {
         return false;
     }
 };
+
+/// A host line that is only a comment, except `//@koru:` markers the inline
+/// emitter reads. Blank lines are not comments.
+fn hostLineIsCommentCargo(content: []const u8) bool {
+    const t = std.mem.trim(u8, content, " \t\r");
+    if (t.len == 0) return false;
+    if (!std.mem.startsWith(u8, t, "//")) return false;
+    if (std.mem.startsWith(u8, t, "//@koru:")) return false;
+    return true;
+}
 
 const testProcBody = struct {
     fn call(text: []const u8) ast.Source {
@@ -646,4 +667,13 @@ test "keeps welded-module events when decl carries stale basename qualifier" {
             try std.testing.expectEqual(@as(usize, 1), item.module_decl.items.len);
         }
     }
+}
+
+test "comment-only host lines are cargo except @koru markers" {
+    try std.testing.expect(hostLineIsCommentCargo("// Ruled 2026-07-31"));
+    try std.testing.expect(hostLineIsCommentCargo("    /// doc comment"));
+    try std.testing.expect(!hostLineIsCommentCargo("//@koru:inline_stmt"));
+    try std.testing.expect(!hostLineIsCommentCargo("const ast = @import(\"ast\");"));
+    try std.testing.expect(!hostLineIsCommentCargo(""));
+    try std.testing.expect(!hostLineIsCommentCargo("   "));
 }

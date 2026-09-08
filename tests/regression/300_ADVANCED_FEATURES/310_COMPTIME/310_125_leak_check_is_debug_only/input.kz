@@ -1,0 +1,25 @@
+// Pins that the produced-program leak check is a Debug-mode audit.
+//
+// The same leaking program must:
+//   - Debug: exit 1 with `KORU LEAK CHECK FAILED` (EXPECT_TRAP + patterns)
+//   - ReleaseFast: exit 0, no leak message (post.sh rebuilds the emitted unit)
+//
+// The gate lives in the emitted source (`builtin.mode == .Debug`), not a
+// koruc flag, so a `zig build-exe -O ReleaseFast` of output_emitted.zig
+// is caught the same way `koruc build --release=fast` is. Blindness:
+// nothing in the suite previously pinned the runtime leak check at all —
+// enforcement was indirect (MUST_RUN exit codes) and no test requested
+// release mode. Benchmark binaries ran ReleaseFast with the counter in
+// the hot path.
+//
+// The alloc is through `koru_allocator()` on purpose: that is the spine
+// the counter watches. A discarded raw allocation is the smallest program
+// that fires the check.
+
+~tor leak {}
+
+~proc leak|zig {
+    _ = koru_allocator().alloc(u8, 16) catch unreachable;
+}
+
+~leak()

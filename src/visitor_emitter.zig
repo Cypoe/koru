@@ -1089,10 +1089,12 @@ pub const VisitorEmitter = struct {
 
             // META-EVENT: koru:end taps now in AST via tap_transformer
 
-            // LEAK CHECK: __koru_leak_count (the allocator spine's outstanding-
-            // allocation counter — see emitMainModuleStart) must be zero at
-            // exit; a leaking produced program exits 1 so the harness fails
-            // the test. Zero leaks is an absolute invariant — no exemptions.
+            // LEAK CHECK: Debug-mode audit. Release folds the call and the
+            // counter increments at comptime (`builtin.mode == .Debug`), so
+            // shipping and `--release=fast` benchmarks do not pay a global RMW
+            // per alloc. Debug remains the suite's judge: a leak exits 1.
+            // Pin: 310_125. Unikernel wrappers that call `koru_leak_check`
+            // from their own entry keep a comptime no-op in Release.
             //
             // HOW it reports is a fact about the target, not about the check,
             // and WHERE it lives is a fact about the entry point. Both now sit
@@ -1102,7 +1104,7 @@ pub const VisitorEmitter = struct {
             // caller of it, not its home. The limitation it can and cannot
             // report is documented at that definition; read it there before
             // trusting a green run on a target with no debugger.
-            try self.code_emitter.write("    koru_leak_check();\n");
+            try self.code_emitter.write("    if (comptime @import(\"builtin\").mode == .Debug) koru_leak_check();\n");
 
             // Close regular main()
             try emitter.emitMainFunctionEnd(self.code_emitter);

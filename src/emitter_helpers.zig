@@ -1336,7 +1336,9 @@ pub fn emitMainModuleStart(emitter: *CodeEmitter, pub_compiler_env: bool) !void 
     try emitter.write("fn __koru_alloc(ctx: *anyopaque, len: usize, alignment: @import(\"std\").mem.Alignment, ret_addr: usize) ?[*]u8 {\n");
     try emitter.write("    _ = ctx;\n");
     try emitter.write("    const r = __koru_backing.rawAlloc(len, alignment, ret_addr);\n");
-    try emitter.write("    if (r != null) __koru_leak_count += 1;\n");
+    try emitter.write("    if (comptime @import(\"builtin\").mode == .Debug) {\n");
+    try emitter.write("        if (r != null) __koru_leak_count += 1;\n");
+    try emitter.write("    }\n");
     try emitter.write("    return r;\n");
     try emitter.write("}\n");
     try emitter.write("fn __koru_resize(ctx: *anyopaque, memory: []u8, alignment: @import(\"std\").mem.Alignment, new_len: usize, ret_addr: usize) bool {\n");
@@ -1350,7 +1352,9 @@ pub fn emitMainModuleStart(emitter: *CodeEmitter, pub_compiler_env: bool) !void 
     try emitter.write("fn __koru_free(ctx: *anyopaque, memory: []u8, alignment: @import(\"std\").mem.Alignment, ret_addr: usize) void {\n");
     try emitter.write("    _ = ctx;\n");
     try emitter.write("    __koru_backing.rawFree(memory, alignment, ret_addr);\n");
-    try emitter.write("    __koru_leak_count -= 1;\n");
+    try emitter.write("    if (comptime @import(\"builtin\").mode == .Debug) {\n");
+    try emitter.write("        __koru_leak_count -= 1;\n");
+    try emitter.write("    }\n");
     try emitter.write("}\n");
     try emitter.write("const __koru_vtable = @import(\"std\").mem.Allocator.VTable{ .alloc = __koru_alloc, .resize = __koru_resize, .remap = __koru_remap, .free = __koru_free };\n");
     try emitter.write("pub fn koru_allocator() @import(\"std\").mem.Allocator {\n");
@@ -1404,6 +1408,7 @@ pub fn emitMainModuleStart(emitter: *CodeEmitter, pub_compiler_env: bool) !void 
     // `fputs` to bind to, and a wasm host surfaces a trap to the embedder rather
     // than to a console, so the message has somewhere else to arrive.
     try emitter.write("pub fn koru_leak_check() void {\n");
+    try emitter.write("    if (comptime @import(\"builtin\").mode != .Debug) return;\n");
     try emitter.write("    if (__koru_leak_count == 0) return;\n");
     try emitter.write("    if (comptime @import(\"builtin\").target.os.tag == .freestanding) {\n");
     try emitter.write("        if (comptime @import(\"builtin\").cpu.arch == .wasm32 or @import(\"builtin\").cpu.arch == .wasm64) {\n");

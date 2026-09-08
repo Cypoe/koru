@@ -61,7 +61,7 @@ stopping on any unexplained flip.
 | verdict:js-noemit | regression_lib.sh | a JS compile must emit a program, exit code alone is not trusted | |
 | verdict:js-runtime | regression_lib.sh | the JS program must run clean under node | |
 | verdict:leak-* | regression_lib.sh | a memory leak in any phase fails the test | |
-| verdict:leak-output | regression_lib.sh | the produced program's own GPA check fails the test on leak | |
+| verdict:leak-output | regression_lib.sh | the produced program's own GPA check fails the test on leak | an EXPECT_TRAP test that pins the leak-check message is the declared death; leak-output yields to it |
 | verdict:must-error-passed | regression_lib.sh | a MUST_ERROR test that runs clean is a failure | |
 | verdict:no-error-pin | regression_lib.sh | a Koru diagnostic (`error[KORU…]`) must be pinned; a bare stage marker is not enough | by policy the bare marker stays sufficient for raw host/Zig errors we do not own |
 | verdict:no-exe | regression_lib.sh | MUST_RUN with no executable generated is a failure | |
