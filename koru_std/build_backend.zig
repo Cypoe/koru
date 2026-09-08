@@ -58,10 +58,10 @@ const ast_json_module = b.createModule(.{
 });
 ast_json_module.addImport("ast", ast_module);
 
-// Compiler env module - per-user CompilerEnv struct (flags + env vars).
-// Also split out for the same byte-identical-backend.zig reason.
+// Compiler env module - static toolchain module (src/compiler_env.zig).
+// Per-invocation state is runtime JSON it loads at backend startup.
 const compiler_env_module = b.createModule(.{
-    .root_source_file = b.path("compiler_env.zig"),
+    .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/compiler_env.zig" },
     .target = target,
     .optimize = optimize,
 });

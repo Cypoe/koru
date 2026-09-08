@@ -27,6 +27,7 @@ koru_std/compiler_context.kz	253
 koru_std/compiler_types.kz	53
 koru_std/compiler_visitor.kz	505
 koru_std/compiler.ccp.kz	58
+koru_std/compiler.flags.kz	6
 koru_std/compiler.kz	3169
 koru_std/constructor.kz	305
 koru_std/control.kz	551
@@ -82,6 +83,7 @@ koru_std/regex.kz	875
 koru_std/rings.kz	225
 koru_std/rules.kz	691
 koru_std/runtime.affordances.kz	83
+koru_std/runtime.eval.kz	74
 koru_std/runtime.kz	2266
 koru_std/runtime.parsewire.kz	173
 koru_std/runtime.run.kz	205

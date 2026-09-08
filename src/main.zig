@@ -221,16 +221,23 @@ fn describeTerm(buf: []u8, term: std.process.Child.Term) []const u8 {
 /// optimization — any doubt (IO error, missing dir, zero files) disables it
 /// and the normal build runs.
 ///
-/// The key covers every file that can change the backend, INCLUDING the
-/// generated compiler_env.zig that the backend compilation unit embeds
-/// (CompilerEnv.lang, .library, flags): that file is written per invocation
-/// into the OUTPUT directory (not under koru_home), and the backend's build
-/// imports it via `b.path("compiler_env.zig")`. Before 2026-08-16 the key
-/// hashed only src/ + koru_std/, so a backend built with `--lang=js` was
-/// served to a later zig build under the same key — the cached binary carried
-/// the old lang baked into CompilerEnv and silently emitted JS for zig
-/// programs. Proof: `koruc input.k --lang=js` then `koruc input.k` with a
-/// shared cache produced output_emitted.js from the zig invocation.
+/// The key covers every file that can change the backend: src/ + koru_std/
+/// plus the generated backend_output_emitted.zig in the output directory
+/// (the compiled comptime modules + user-library transforms).
+///
+/// Deliberately NOT covered: compiler_env.json. The per-invocation
+/// environment (lang, library, flags, paths) is runtime data the backend
+/// loads at startup — before the unbake it was baked into compiler_env.zig
+/// and hashed here, so every flag flip (even the bare `koruc prog` vs
+/// `koruc prog run` verb change via the injected `command=` atom) forced a
+/// full backend rebuild. Runtime data cannot poison a build cache, which is
+/// also what makes the old --lang cross-serve bug unrepresentable now.
+/// (History: before 2026-08-16 the key hashed only src/ + koru_std/, so a
+/// backend built with `--lang=js` was served to a later zig build under the
+/// same key — the cached binary carried the old lang baked into CompilerEnv
+/// and silently emitted JS for zig programs. Proof: `koruc input.k --lang=js`
+/// then `koruc input.k` with a shared cache produced output_emitted.js from
+/// the zig invocation.)
 fn backendCacheKey(allocator: std.mem.Allocator, koru_home: []const u8, output_dir: []const u8) ?[]const u8 {
     var h = std.hash.Fnv1a_64.init();
     var count: usize = 0;
@@ -258,20 +265,7 @@ fn backendCacheKey(allocator: std.mem.Allocator, koru_home: []const u8, output_d
             count += 1;
         }
     }
-    // The per-invocation CompilerEnv (lang, library, flags) is generated into
-    // output_dir and EMBEDDED into the backend by its build. It is the one
-    // compiler-side input the roots above cannot see — leaving it out of the
-    // key lets one --lang's backend serve another's run. FAIL LOUD: if the
-    // file is unreadable, disable the cache (return null) rather than risk a
-    // cross-invocation serve.
-    const env_path = std.fs.path.join(allocator, &[_][]const u8{ output_dir, "compiler_env.zig" }) catch return null;
-    defer allocator.free(env_path);
-    const env_contents = std.fs.cwd().readFileAlloc(allocator, env_path, 64 * 1024 * 1024) catch return null;
-    defer allocator.free(env_contents);
-    h.update("compiler_env.zig");
-    h.update(env_contents);
-    count += 1;
-    // backend_output_emitted.zig is the OTHER generated embed: it carries the
+    // backend_output_emitted.zig is the generated embed: it carries the
     // COMPILED comptime modules the backend binary bakes in — koru_std's own
     // flows AND user-library transforms (orisha's router, std/store, std/regex).
     // The roots cannot see it (generated into output_dir, not koru_home), and
@@ -400,11 +394,42 @@ fn hasFileLineColPrefix(line: []const u8) bool {
     return false;
 }
 
-/// Generate compiler_env.zig — the per-user CompilerEnv struct, split out of
-/// backend.zig so backend.zig stays byte-identical across user programs.
-/// CompilerEnv carries the user's CLI flags + env vars and is the only
-/// per-user-flag-driven content that the backend compilation unit needs.
-fn generateCompilerEnvCode(
+/// Escape a string for JSON output (quotes, backslashes, control chars).
+fn jsonEscape(allocator: std.mem.Allocator, s: []const u8) ![]const u8 {
+    var out = try std.ArrayList(u8).initCapacity(allocator, s.len + 2);
+    for (s) |c| {
+        if (c == '"') {
+            try out.appendSlice(allocator, "\\\"");
+        } else if (c == '\\') {
+            try out.appendSlice(allocator, "\\\\");
+        } else if (c == '\n') {
+            try out.appendSlice(allocator, "\\n");
+        } else if (c == '\r') {
+            try out.appendSlice(allocator, "\\r");
+        } else if (c == '\t') {
+            try out.appendSlice(allocator, "\\t");
+        } else if (c < 0x20) {
+            const hex = "0123456789abcdef";
+            try out.appendSlice(allocator, "\\u00");
+            try out.append(allocator, hex[c >> 4]);
+            try out.append(allocator, hex[c & 0xF]);
+        } else {
+            try out.append(allocator, c);
+        }
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+/// Generate compiler_env.json — the per-invocation compiler environment
+/// (lang, library, flags, env vars, paths) the backend loads at startup.
+///
+/// Previously this was compiler_env.zig with comptime-baked consts embedded
+/// in the backend build (and hashed into the backend cache key), so every
+/// flag flip — including the bare `koruc prog` vs `koruc prog run` verb
+/// change via the injected `command=` atom — forced a full backend rebuild.
+/// As runtime JSON on the same channel as program.ast.json, one backend
+/// binary serves every flag combination.
+fn generateCompilerEnvJson(
     allocator: std.mem.Allocator,
     config: *const CompilerConfig,
     entry_file: []const u8,
@@ -412,80 +437,46 @@ fn generateCompilerEnvCode(
     project_root: []const u8,
     koru_home: []const u8,
 ) ![]const u8 {
-    var buffer = try std.ArrayList(u8).initCapacity(allocator, 4 * 1024);
+    var buffer = try std.ArrayList(u8).initCapacity(allocator, 1024);
     const writer = buffer.writer(allocator);
 
-    try writer.writeAll("// Per-user compiler environment — generated by koruc.\n");
-    try writer.writeAll("// Flags + env vars baked from the CLI invocation that produced this directory.\n\n");
-    try writer.writeAll("const std = @import(\"std\");\n\n");
+    const esc_lang = try jsonEscape(allocator, config.lang);
+    defer allocator.free(esc_lang);
+    const esc_entry_file = try jsonEscape(allocator, entry_file);
+    defer allocator.free(esc_entry_file);
+    const esc_entry_dir = try jsonEscape(allocator, entry_dir);
+    defer allocator.free(esc_entry_dir);
+    const esc_project_root = try jsonEscape(allocator, project_root);
+    defer allocator.free(esc_project_root);
+    const esc_koru_home = try jsonEscape(allocator, koru_home);
+    defer allocator.free(esc_koru_home);
 
-    try writer.writeAll("pub const CompilerEnv = struct {\n");
-
-    // Emission target language (--lang). Read by the Stage-C emitter (emit_zig)
-    // to choose Zig vs JS structural output. Threaded here because emit_zig runs
-    // across the metacircular boundary and only sees per-user state via this module.
-    try writer.print("    /// Default emission target language (--lang=<name>)\n", .{});
-    try writer.print("    pub const lang: []const u8 = \"{s}\";\n\n", .{config.lang});
-
-    // Whether this compilation is a LIBRARY (`koruc lib`) rather than a
-    // program. It rides here for the same reason `lang` does: the passes that
-    // need it run across the metacircular boundary and see per-user state only
-    // through this module. What it changes is what counts as a ROOT — a
-    // library's are its exports, a program's are its flows.
-    try writer.print("    /// True when built with `koruc lib` — exports are roots\n", .{});
-    try writer.print("    pub const library: bool = {s};\n\n", .{if (config.library) "true" else "false"});
-
-    try writer.print("    /// Absolute entry file path (for post-transform import weld)\n", .{});
-    try writer.print("    pub const entry_file: []const u8 = \"{s}\";\n\n", .{entry_file});
-    try writer.print("    /// Entry directory (for module resolver {{ ENTRY }})\n", .{});
-    try writer.print("    pub const entry_dir: []const u8 = \"{s}\";\n\n", .{entry_dir});
-    try writer.print("    /// Project root (directory containing koru.json)\n", .{});
-    try writer.print("    pub const project_root: []const u8 = \"{s}\";\n\n", .{project_root});
-    try writer.print("    /// Koru toolchain home (${{REL_TO_ROOT}} substitution root)\n", .{});
-    try writer.print("    pub const koru_home: []const u8 = \"{s}\";\n\n", .{koru_home});
-
-    try writer.writeAll("    /// All compiler flags (for runtime checking)\n");
-    try writer.writeAll("    pub const flags = &[_][]const u8{\n");
-    for (config.flags.items) |flag| {
-        try writer.print("        \"{s}\",\n", .{flag});
+    try writer.print("{{\"lang\":\"{s}\",\"library\":{s},\"flags\":[", .{
+        esc_lang,
+        if (config.library) "true" else "false",
+    });
+    for (config.flags.items, 0..) |flag, i| {
+        if (i > 0) try writer.writeAll(",");
+        const esc_flag = try jsonEscape(allocator, flag);
+        defer allocator.free(esc_flag);
+        try writer.print("\"{s}\"", .{esc_flag});
     }
-    try writer.writeAll("    };\n\n");
-
-    try writer.writeAll("    /// Check if a compiler flag is set (comptime)\n");
-    try writer.writeAll("    pub fn hasFlag(comptime name: []const u8) bool {\n");
-    if (config.flags.items.len == 0) {
-        try writer.writeAll("        _ = name;\n");
-        try writer.writeAll("        return false;\n");
-    } else {
-        try writer.writeAll("        inline for (flags) |flag| {\n");
-        try writer.writeAll("            if (std.mem.eql(u8, name, flag)) return true;\n");
-        try writer.writeAll("        }\n");
-        try writer.writeAll("        return false;\n");
+    try writer.writeAll("],");
+    try writer.print("\"entry_file\":\"{s}\",\"entry_dir\":\"{s}\",\"project_root\":\"{s}\",\"koru_home\":\"{s}\",\"env\":{{", .{
+        esc_entry_file, esc_entry_dir, esc_project_root, esc_koru_home,
+    });
+    var first_env = true;
+    var env_it = config.env_vars.iterator();
+    while (env_it.next()) |entry| {
+        if (!first_env) try writer.writeAll(",");
+        first_env = false;
+        const esc_k = try jsonEscape(allocator, entry.key_ptr.*);
+        defer allocator.free(esc_k);
+        const esc_v = try jsonEscape(allocator, entry.value_ptr.*);
+        defer allocator.free(esc_v);
+        try writer.print("\"{s}\":\"{s}\"", .{ esc_k, esc_v });
     }
-    try writer.writeAll("    }\n\n");
-
-    try writer.writeAll("    /// Check if a compiler flag is set (runtime)\n");
-    try writer.writeAll("    pub fn hasFlagRuntime(name: []const u8) bool {\n");
-    try writer.writeAll("        for (flags) |flag| {\n");
-    try writer.writeAll("            if (std.mem.eql(u8, name, flag)) return true;\n");
-    try writer.writeAll("        }\n");
-    try writer.writeAll("        return false;\n");
-    try writer.writeAll("    }\n\n");
-
-    try writer.writeAll("    /// Get environment variable value\n");
-    try writer.writeAll("    pub fn getEnv(comptime key: []const u8) ?[]const u8 {\n");
-    if (config.env_vars.count() == 0) {
-        try writer.writeAll("        _ = key;\n");
-        try writer.writeAll("        return null;\n");
-    } else {
-        var env_it = config.env_vars.iterator();
-        while (env_it.next()) |entry| {
-            try writer.print("        if (std.mem.eql(u8, key, \"{s}\")) return \"{s}\";\n", .{ entry.key_ptr.*, entry.value_ptr.* });
-        }
-        try writer.writeAll("        return null;\n");
-    }
-    try writer.writeAll("    }\n");
-    try writer.writeAll("};\n");
+    try writer.writeAll("}}");
 
     return buffer.toOwnedSlice(allocator);
 }
@@ -526,14 +517,15 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
     // Log module for conditional debug output
     try writer.writeAll("const log = @import(\"log\");\n\n");
 
-    // CompilerEnv lives in compiler_env.zig (per-user file generated alongside backend.zig).
+    // CompilerEnv lives in the static src/compiler_env.zig module (runtime
+    // state loaded from compiler_env.json at backend startup).
     // Re-exported as pub so @import("root").CompilerEnv keeps working for code in src/
     // and in backend_output_emitted.zig that still reaches it through root.
-    try writer.writeAll("// Compiler environment lives in compiler_env.zig — re-exported here so\n");
+    try writer.writeAll("// Compiler environment lives in the static compiler_env module — re-exported here so\n");
     try writer.writeAll("// `@import(\"root\").CompilerEnv` keeps working for existing consumers.\n");
     try writer.writeAll("pub const CompilerEnv = @import(\"compiler_env\").CompilerEnv;\n\n");
     // `config` is now used below to pass the default lang to the visitor backend.
-    // (Most of CompilerConfig still lives in compiler_env.zig — only .lang is read here.)
+    // (Most of CompilerConfig still lives in the compiler_env module — only .lang is read here.)
 
     // NOTE: Transform handlers are now generated into backend_output_emitted.zig
     // See generateComptimeBackendEmitted() for the call to generateTransformHandlersToEmitter()
@@ -1290,8 +1282,17 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
         // Backend entry point - compiles the generated code
         try writer.writeAll(
             \\pub fn main() !void {
+            \\    // Compiler environment: per-invocation flags/lang/paths from
+            \\    // `compiler_env.json` (written beside this backend by the frontend).
+            \\    // Same channel as program.ast.json — nothing per-invocation is baked
+            \\    // into this binary, so one backend serves every flag combination.
+            \\    // Must load before ANY CompilerEnv read below (budget block first).
+            \\    CompilerEnv.load() catch |err| {
+            \\        __koru_std.debug.print("❌ Backend: cannot load compiler_env.json: {s}\n", .{@errorName(err)});
+            \\        return err;
+            \\    };
             \\    // Budget: --compile-mem-mb=<mb> flag wins, then KORU_COMPILE_MEM_MB,
-            \\    // else 4096 MB. The flag is baked per-program in CompilerEnv.flags,
+            \\    // else 4096 MB. The flag is read per-invocation from CompilerEnv.flags,
             \\    // so a regression test can pin a tiny budget without touching env.
             \\    koru_budget_mb = blk: {
             \\        // koruc bakes flags WITHOUT the leading dashes (`compile-mem-mb=8`);
@@ -1342,7 +1343,7 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\
             \\    // Default output names.
             \\    // JS-target spike: --lang=js writes output_emitted.js instead of .zig.
-            \\    // CompilerEnv.lang is baked per-invocation in compiler_env.zig and
+            \\    // CompilerEnv.lang is read per-invocation from compiler_env.json and
             \\    // re-exported as `pub const CompilerEnv` at the top of this backend.
             \\    const emitted_file = if (__koru_std.mem.eql(u8, CompilerEnv.lang, "js"))
             \\        "output_emitted.js"
@@ -7255,15 +7256,16 @@ pub fn main() !void {
     defer program_ast_file.close();
     try program_ast_file.writeAll(serialized_ast);
 
-    // Write compiler_env.zig: per-user CompilerEnv struct (flags + env vars).
-    // Split out of backend.zig for the same byte-identical reason. backend.zig
-    // re-exports via `pub const CompilerEnv = @import("compiler_env").CompilerEnv`.
-    const compiler_env_path = try std.fs.path.join(allocator, &[_][]const u8{ output_dir, "compiler_env.zig" });
+    // Write compiler_env.json: per-invocation compiler environment (lang,
+    // library, flags, env vars, paths). Runtime data the backend loads at
+    // startup — never baked into the binary, so flag flips reuse the cached
+    // backend instead of rebuilding it.
+    const compiler_env_path = try std.fs.path.join(allocator, &[_][]const u8{ output_dir, "compiler_env.json" });
     defer allocator.free(compiler_env_path);
-    const compiler_env_code = try generateCompilerEnvCode(compile_allocator, &compiler_config, entry_file_absolute, input_dir_absolute, project_root, resolver.koru_home);
+    const compiler_env_json = try generateCompilerEnvJson(compile_allocator, &compiler_config, entry_file_absolute, input_dir_absolute, project_root, resolver.koru_home);
     const compiler_env_file = try std.fs.cwd().createFile(compiler_env_path, .{});
     defer compiler_env_file.close();
-    try compiler_env_file.writeAll(compiler_env_code);
+    try compiler_env_file.writeAll(compiler_env_json);
 
     // Write backend_output_emitted.zig for comptime handlers to same directory as backend.zig
     const backend_output_path = try std.fs.path.join(allocator, &[_][]const u8{ output_dir, "backend_output_emitted.zig" });

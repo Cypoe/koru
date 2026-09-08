@@ -2,50 +2,26 @@
 type: belief
 id: frag-compiler-flags-baked-into-backend
 provenance: floated 2026-07-14 while adding the --release gate (feat(prototype)); Lars parked it as low-priority, pin the observation in prose
-ts: 2026-07-14
+ts: 2026-09-08
 ---
 
-# Compiler flags/env are BAKED into the backend; the AST is runtime data (belief)
+# Compiler env is runtime data; the bake is gone (belief, evolved)
 
-An asymmetry in the metacircular pipeline, worth knowing before anyone "optimizes"
-flag handling or debugs a surprise backend rebuild:
+2026-07-14 belief (superseded, was valid): flags/env baked into the backend as
+comptime consts, buying dead-strip elimination of flag-gated paths at the price
+of a backend rebuild per flag-set. Parked because the recompile cost looked
+tolerable and the tradeoff was honestly described.
 
-- **The AST is runtime data.** koruc writes it to `program.ast.json` and the Stage-C
-  backend deserializes it at runtime (`src/main.zig:274`; the backend-cache comment
-  at `scripts/regression_lib.sh:23` says the program AST "is now a runtime input
-  (program.ast.json) and is deliberately excluded" from the cache key). So the same
-  backend binary serves any program.
-- **Flags + env are baked in as code.** `generateCompilerEnvCode` (`src/main.zig:196`)
-  emits a per-invocation `compiler_env.zig` with the flags as compile-time constants,
-  and `hasFlag` is `comptime` with an `inline for` (`src/main.zig:220-229`). Header it
-  writes: *"Flags + env vars baked from the CLI invocation"* (`src/main.zig:201`). The
-  flags are compiled into the backend at Stage B.
+2026-09-08 ruling: the price was mismeasured and the benefit had no customers.
+Rebuilds were forced not only by real flag flips but by the injected `command=`
+atom — the everyday compile-then-run verb change rebuilt the backend, ~7s
+against a ~1s cache hit, measured both directions. And no caller ever fed a
+flag into a type-level position, so the comptime dead-strip never fired for
+anyone; the caller audit sits in the unbake commit. The env now rides the
+program-AST JSON channel, one backend serves every flag combination, and the
+old cross-serve poisoning is unrepresentable rather than keyed-against.
 
-## The consequence, and what is NOT wrong
-
-Every distinct flag-set forces a **Stage-B backend recompile** — a new
-`compiler_env.zig` is a new source input. So `--release` vs a dev build of the same
-program compile two different backends; `--panic-branches=strict` likewise.
-
-This is **not** a cache-correctness bug — the tempting worry ("a flag change reuses a
-stale backend") does not hold. The backend-binary cache key hashes `compiler_env.zig`
-itself (`scripts/regression_lib.sh:30-34`), so a flag change yields a different key and
-a different binary; Zig's own Stage-B cache recompiles when the file changes. Both
-layers are gated. The real cost is only the recompile, never a wrong result.
-
-## The open tradeoff (why it is the way it is, and why it's parked)
-
-Baking flags as `comptime` lets the backend **dead-strip** flag-gated code paths at
-compile time — zero runtime cost for a disabled flag. Moving flags to a runtime data
-file (symmetric with `program.ast.json`, so a flag flip would NOT rebuild the backend)
-would turn `hasFlag` into a runtime check and lose that elimination. The AST cannot be
-comptime (it is inherently per-program data); flags plausibly were made comptime on
-purpose for the dead-strip.
-
-So this is a comptime-elimination-vs-recompile-avoidance tradeoff, not an oversight —
-and Lars parked it as low-priority (2026-07-14): the recompile cost is tolerable today,
-and the correctness is sound. Revisit only if backend-rebuild churn from flag changes
-becomes a real drag; if so, the move is a data-file for flags, weighed against losing
-comptime flag dead-stripping. The `--release` gate ([[frag-prototype-mode-panic-holes]])
-reads `hasFlag("release")` at Stage C under this baked-in scheme and is unaffected
-either way.
+What would reopen this: a caller that needs a flag at type level — an
+elimination that actually fires, or a comptime-only position. Then the tradeoff
+returns for real, and the answer is a comptime accessor alongside the runtime
+default, not instead of it.
