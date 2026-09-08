@@ -219,6 +219,12 @@ tests/scratchpad/
 koru_std/backend.zig
 # Vestigial AST-in-Zig serializer dump (compiler_bootstrap.kz era) — not imported.
 koru_std/compiler.zig
+# koru_std build outputs — the stdlib's default `build` step writes backend_tmp
+# (koru_std/build.kz) and `run` executes it; release.sh strips both from dist as
+# "build artifacts and non-shipping files". The tracked 0-byte copies were
+# Initial-commit ride-alongs; only root /backend_tmp was denied before.
+koru_std/backend_tmp
+koru_std/test_flowast_final
 
 # Regression test generated files (ignored at any depth)
 tests/regression/**/backend
