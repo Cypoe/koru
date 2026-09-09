@@ -27,8 +27,9 @@ koru_std/compiler_context.kz	253
 koru_std/compiler_types.kz	53
 koru_std/compiler_visitor.kz	505
 koru_std/compiler.ccp.kz	58
+koru_std/compiler.control.kz	31
 koru_std/compiler.flags.kz	6
-koru_std/compiler.kz	3169
+koru_std/compiler.kz	3158
 koru_std/constructor.kz	305
 koru_std/control.kz	551
 koru_std/crypto.kz	37

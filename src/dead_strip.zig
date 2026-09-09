@@ -385,11 +385,20 @@ pub const DeadStripPass = struct {
 /// A host line that is only a comment, except `//@koru:` markers the inline
 /// emitter reads. Blank lines are not comments.
 fn hostLineIsCommentCargo(content: []const u8) bool {
-    const t = std.mem.trim(u8, content, " \t\r");
-    if (t.len == 0) return false;
-    if (!std.mem.startsWith(u8, t, "//")) return false;
-    if (std.mem.startsWith(u8, t, "//@koru:")) return false;
-    return true;
+    // Cargo iff EVERY non-blank line is a plain `//` comment. A code block
+    // with a leading comment (e.g. the register-generated dispatcher, which
+    // opens with its `// __KORU_...` sentinel) is not cargo — the old
+    // first-line-only check stripped the whole block with it (440 reds).
+    var saw_comment = false;
+    var it = std.mem.splitScalar(u8, content, '\n');
+    while (it.next()) |line| {
+        const t = std.mem.trim(u8, line, " \t\r");
+        if (t.len == 0) continue;
+        if (std.mem.startsWith(u8, t, "//@koru:")) return false;
+        if (!std.mem.startsWith(u8, t, "//")) return false;
+        saw_comment = true;
+    }
+    return saw_comment;
 }
 
 const testProcBody = struct {
@@ -672,8 +681,13 @@ test "keeps welded-module events when decl carries stale basename qualifier" {
 test "comment-only host lines are cargo except @koru markers" {
     try std.testing.expect(hostLineIsCommentCargo("// Ruled 2026-07-31"));
     try std.testing.expect(hostLineIsCommentCargo("    /// doc comment"));
+    try std.testing.expect(hostLineIsCommentCargo("// line one\n// line two\n"));
     try std.testing.expect(!hostLineIsCommentCargo("//@koru:inline_stmt"));
     try std.testing.expect(!hostLineIsCommentCargo("const ast = @import(\"ast\");"));
     try std.testing.expect(!hostLineIsCommentCargo(""));
     try std.testing.expect(!hostLineIsCommentCargo("   "));
+    // A code block with a leading comment is NOT cargo: the register
+    // transform opens its dispatcher with a `//` sentinel line, and the
+    // first-line-only check stripped the whole block (440 SCOPE NOT FOUND).
+    try std.testing.expect(!hostLineIsCommentCargo("// __KORU_RUNTIME_REGISTRY_HELPERS__\nconst x = 1;"));
 }

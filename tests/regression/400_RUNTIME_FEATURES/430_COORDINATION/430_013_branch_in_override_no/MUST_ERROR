@@ -1,0 +1,3 @@
+Expected: Backend fails with "Compiler coordination error: BRANCH-NO"
+This test proves value-level branching works inside a coordinate override:
+has-flag reports the absent flag and std/compiler:branch takes the no-arm.

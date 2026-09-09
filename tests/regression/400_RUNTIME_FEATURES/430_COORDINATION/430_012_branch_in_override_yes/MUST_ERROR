@@ -1,0 +1,4 @@
+Expected: Backend fails with "Compiler coordination error: BRANCH-YES"
+This test proves value-level branching works inside a coordinate override:
+the local comptime bool feeds std/compiler:branch, which takes the yes-arm.
+The template-`if` spelling of the same program cannot compile there.

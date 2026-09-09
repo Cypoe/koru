@@ -7,6 +7,7 @@
 ~import std/rules
 
 ~part flags
+~part control
 // Compiler system dependencies
 ~std/deps:requires.system {
     "name": "zig",
@@ -897,18 +898,6 @@ pub const CompilerContext = struct {
         .reporter = reporter,
     };
     return ctx;
-}
-
-// Helper: Format metrics string
-~pub tor metrics-format { passes_completed: u32, allocator: std.mem.Allocator } -> string
-
-~proc metrics-format|zig {
-    const metrics = std.fmt.allocPrint(
-        allocator,
-        "Passes: {d} (flow-based: elaborate, analysis, emission)",
-        .{passes_completed}
-    ) catch "Passes: <unknown> (flow-based: elaborate, analysis, emission)";
-    return metrics;
 }
 
 // Helper: Dump AST as JSON for introspection

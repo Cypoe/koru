@@ -1,0 +1,12 @@
+// Test 430_013: Value-level branching (no-arm) inside a coordinate override.
+//
+// Mirror of 430_012 through std/compiler:has-flag with a flag that is never
+// set, pinning the no-arm — and incidentally that has-flag is callable from
+// an override (its string param is a runtime value, not comptime).
+~import std/compiler
+~import std/control
+
+~std/compiler:coordinate = std/compiler:has-flag(flag: "zz-never-a-flag"): h
+|> std/compiler:branch(cond: h)
+| yes => error "BRANCH-YES"
+| no => error "BRANCH-NO"

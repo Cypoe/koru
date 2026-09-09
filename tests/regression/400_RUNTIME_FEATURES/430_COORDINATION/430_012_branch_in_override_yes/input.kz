@@ -1,0 +1,19 @@
+// Test 430_012: Value-level branching (yes-arm) inside a coordinate override.
+//
+// [template] constructs (std/control:if, cond, for) splice host source text
+// and never expand inside impl-of-comptime flows, so a coordinate override
+// cannot use `if`. std/compiler:branch takes a bool VALUE through a plain
+// proc instead and lowers in every position. This pins the yes-arm.
+~import std/compiler
+~import std/control
+
+~[comptime] tor always-true {} -> bool
+
+~proc always-true|zig {
+    return true;
+}
+
+~std/compiler:coordinate = always-true(): t
+|> std/compiler:branch(cond: t)
+| yes => error "BRANCH-YES"
+| no => error "BRANCH-NO"
