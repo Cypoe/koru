@@ -30,6 +30,10 @@ Every example below is verbatim source from a passing POSITIVE regression test (
 ```koru
 // Hello World in pure Koru.
 // This is the frontpage example from korulang.org.
+//
+// Also pins consumed-transform exclusion: after print.blk runs, the
+// program unit must not ship `__printInterpolate` or `@import("ast")`.
+// post.sh greps output_emitted.zig.
 
 import std/io
 
