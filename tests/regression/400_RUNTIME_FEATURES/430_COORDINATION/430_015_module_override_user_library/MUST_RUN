@@ -1,0 +1,4 @@
+Expected: Program prints "overridden" — the module-resident override
+(discount.k) beats the library's own default (lib/greet.k). If "default"
+prints, the override lost the pairing; if nothing runs, the abstract never
+got a handler.

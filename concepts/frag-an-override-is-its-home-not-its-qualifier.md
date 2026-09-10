@@ -21,7 +21,7 @@ for years, and why widening them without the home check would have
 claimed every module-internal default as its own event's override and
 emitted the default pipeline as the handler.
 
-This is the pairing-side twin of [[frag-an-imported-transform-fires-only-on-its-own-home]] (dispatch), and the custody dual of the identity-exclusion doctrine in [[frag-a-pass-that-can-remove-the-last-implementation-must-answer-to-the-check-that-required-one]] (pointer identity, not a better predicate — here the same instinct applied to WHERE an impl lives). The pin is 430_014; 430_001 is the entry-top-level control that must not regress.
+This is the pairing-side twin of [[frag-an-imported-transform-fires-only-on-its-own-home]] (dispatch), and the custody dual of the identity-exclusion doctrine in [[frag-a-pass-that-can-remove-the-last-implementation-must-answer-to-the-check-that-required-one]] (pointer identity, not a better predicate — here the same instinct applied to WHERE an impl lives). The pins: 430_014 (the coordinator) and 430_015 (a user-library runtime abstract overridden from a second module); 430_001 is the entry-top-level control that must not regress.
 
 What would correct this: a canonicalization that stops stamping the
 enclosing module onto unqualified impls (the qualifier would
