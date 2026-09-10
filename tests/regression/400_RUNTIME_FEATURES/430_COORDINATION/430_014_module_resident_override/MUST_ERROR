@@ -1,0 +1,4 @@
+Expected: Backend fails with "Compiler coordination error: FAILURE" — the
+module-resident override replaces the default coordinator. The default
+pipeline (20 passes) must NOT run; if the compile succeeds, the override was
+silently ignored.

@@ -191,14 +191,17 @@ fn findOverrideImpl(
 ) ?*ast.Item {
     const target_module = current_module orelse event.path.module_qualifier orelse return null;
     const event_name = if (event.path.segments.len > 0) event.path.segments[0] else return null;
+    return findOverrideImplIn(@constCast(all_items), target_module, event_name, "");
+}
 
-    for (@constCast(all_items)) |*item| {
+fn findOverrideImplIn(items: []ast.Item, target_module: []const u8, event_name: []const u8, home: []const u8) ?*ast.Item {
+    for (items) |*item| {
         switch (item.*) {
-            .flow => |flow| {
-                // Override: impl flow with module_qualifier pointing to the abstract's module
+            .flow => |*flow| {
                 if (flow.impl_of) |impl_path| {
                     if (impl_path.module_qualifier) |mq| {
-                        if (std.mem.eql(u8, mq, target_module) and
+                        if (isOverrideHome(home, target_module) and
+                            std.mem.eql(u8, mq, target_module) and
                             impl_path.segments.len > 0 and
                             std.mem.eql(u8, impl_path.segments[0], event_name))
                         {
@@ -207,10 +210,10 @@ fn findOverrideImpl(
                     }
                 }
             },
-            .immediate_impl => |ii| {
-                // Override: immediate impl with module_qualifier pointing to the abstract's module
+            .immediate_impl => |*ii| {
                 if (ii.event_path.module_qualifier) |mq| {
-                    if (std.mem.eql(u8, mq, target_module) and
+                    if (isOverrideHome(home, target_module) and
+                        std.mem.eql(u8, mq, target_module) and
                         ii.event_path.segments.len > 0 and
                         std.mem.eql(u8, ii.event_path.segments[0], event_name))
                     {
@@ -218,10 +221,23 @@ fn findOverrideImpl(
                     }
                 }
             },
+            .module_decl => |*module| {
+                if (findOverrideImplIn(@constCast(module.items), target_module, event_name, module.logical_name)) |found| return found;
+            },
             else => {},
         }
     }
     return null;
+}
+
+/// An impl living INSIDE the abstract's own module is that module's own
+/// implementation — the default's home — never an override. Canonicalization
+/// stamps the enclosing module onto an unqualified impl, so the qualifier
+/// alone cannot tell a module's default from a foreign override; the home
+/// does. Entry top level (home "") is not a module: the `~main:event`
+/// self-qualified override spelling lives there and is always eligible.
+fn isOverrideHome(home: []const u8, target_module: []const u8) bool {
+    return home.len == 0 or !std.mem.eql(u8, home, target_module);
 }
 
 /// Rename an implementation to `.default`

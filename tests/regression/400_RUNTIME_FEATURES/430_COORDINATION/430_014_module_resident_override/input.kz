@@ -1,0 +1,24 @@
+// Test 430_014: Module-Resident Coordinator Override
+//
+// The override lives in an IMPORTED module (override.k, module app.override),
+// not at the entry file's top level. Importing pairs it with the abstract
+// std/compiler:coordinate: coordination must run the OVERRIDE, not the
+// default pipeline.
+//
+// This is the shape resolve_abstract_impl's own header describes ("override
+// implementation (different module)") and the demo shape that exposed the
+// hole: all three cross-module scans (resolve_abstract_impl.findOverrideImpl,
+// the visitor emitter's has_impl_override detection, and the override handler
+// emission walk) iterated program.items flat, so an override inside a
+// module_decl was silently ignored and the default pipeline ran.
+//
+// The home discipline is load-bearing, not decoration: canonicalization
+// stamps the enclosing module onto an unqualified impl, so std/compiler's own
+// default flow carries the SAME module qualifier as a foreign override. The
+// scan pairs the item's HOME module against the abstract's module; the entry
+// file's top level (home "") is never excluded — the ~main:event
+// self-qualified override spelling lives there (430_001).
+
+~import std/compiler
+
+~import app/override

@@ -2294,6 +2294,34 @@ pub const ASTNode = union(enum) {
     }
 };
 
+/// One impl-bearing item (a `.flow` or an `.immediate_impl`) paired with the
+/// logical name of the module it was found in. `""` marks the ENTRY file's top
+/// level: not a module, and never home-excluded — the resolver's `~main:event`
+/// self-qualified override spelling lives there. Cross-module override scans
+/// need the home to tell a module's own implementation of an event apart from
+/// another module's override of it: after canonicalization stamps the
+/// enclosing module onto an unqualified impl, BOTH carry the abstract's module
+/// qualifier and only the home distinguishes them.
+pub const ImplSite = struct {
+    item: *const Item,
+    home: []const u8,
+};
+
+/// Collect every `.flow` and `.immediate_impl` reachable from `items`,
+/// descending through `module_decl` boundaries in declaration order. Callers
+/// walking a program's top level pass `home = ""`; walking a module's items,
+/// that module's logical name. A flat top-level scan — what the cross-module
+/// override walks did before — is this walk with the `module_decl` arm removed.
+pub fn collectImplSites(allocator: std.mem.Allocator, items: []const Item, home: []const u8, out: *std.ArrayList(ImplSite)) !void {
+    for (items) |*item| {
+        switch (item.*) {
+            .flow, .immediate_impl => try out.append(allocator, .{ .item = item, .home = home }),
+            .module_decl => |*m| try collectImplSites(allocator, m.items, m.logical_name, out),
+            else => {},
+        }
+    }
+}
+
 /// Strip a trailing phantom annotation from a type string: `*R<active!>` → `*R`.
 ///
 /// Single home for what were byte-identical twins in `shape_checker` and

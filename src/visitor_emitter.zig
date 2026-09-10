@@ -2129,11 +2129,19 @@ pub const VisitorEmitter = struct {
                     else => {},
                 }
             }
-            // ALSO check top-level items for cross-module impls
+            // ALSO check top-level items AND IMPORTED MODULES for cross-module impls
             // Cross-module: flow.module != flow.impl_of.module_qualifier (or ii.module != ii.event_path.module_qualifier)
             if (!has_impl_override) {
                 if (event.path.module_qualifier) |event_module| {
-                    for (self.all_items) |top_item| {
+                    var override_sites = std.ArrayList(ast.ImplSite){};
+                    defer override_sites.deinit(self.allocator);
+                    try ast.collectImplSites(self.allocator, self.all_items, "", &override_sites);
+                    for (override_sites.items) |site| {
+                        // A module's own implementation of its own event is not a
+                        // cross-module override, whatever the short-vs-dotted name
+                        // check below reads. Entry top level (home "") is eligible.
+                        if (site.home.len > 0 and eql(u8, site.home, event_module)) continue;
+                        const top_item = site.item.*;
                         switch (top_item) {
                             .flow => |flow| {
                                 if (flow.impl_of) |impl_path| {
@@ -2588,7 +2596,15 @@ pub const VisitorEmitter = struct {
         // Immediate impls: .immediate_impl
         if (has_impl_override) {
             if (event.path.module_qualifier) |event_module| {
-                for (self.all_items) |top_item| {
+                var override_sites = std.ArrayList(ast.ImplSite){};
+                defer override_sites.deinit(self.allocator);
+                try ast.collectImplSites(self.allocator, self.all_items, "", &override_sites);
+                for (override_sites.items) |site| {
+                    // The abstract's own module's implementation is emitted by the
+                    // module-local search below — never as a cross-module override.
+                    // Entry top level (home "") is always eligible.
+                    if (site.home.len > 0 and eql(u8, site.home, event_module)) continue;
+                    const top_item = site.item.*;
                     switch (top_item) {
                         .immediate_impl => |ii| {
                             // Cross-module check for immediate impls
