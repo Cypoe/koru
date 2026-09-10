@@ -1,0 +1,12 @@
+~import app/holder
+~import std/io
+
+// A qualified host ref must name the module that declares the type. `Token`
+// belongs to `app/holder`; `app/wrong` declares nothing, so the ref must be
+// refused here rather than leaking to codegen as a raw Zig "no member named".
+~tor describe { t: *app/wrong:Token } -> string
+~proc describe|zig {
+    _ = t;
+    return "token";
+}
+~app/holder:mint(id: 7): t |> describe(t): d |> std/io:print.ln(d)

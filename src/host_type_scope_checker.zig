@@ -96,9 +96,13 @@ fn checkShape(
         if (field.is_source or field.is_file or field.is_embed_file or
             field.is_expression or field.is_invocation_meta) continue;
         try refuseRedundantPhantomOnField(field, reporter, location);
-        // The qualified spelling carries its module in the AST — that IS the
-        // fix, never the fault.
-        if (field.module_path != null) continue;
+        // The qualified spelling carries its module in the AST — legal, but a
+        // POINTERED qualified ref is a host handle and must still resolve to a
+        // type its module declares (220_032).
+        if (field.module_path) |mod| {
+            try refuseIfQualifiedHostUnknown(mod, field.type, sites, reporter, location);
+            continue;
+        }
         try checkTypeString(field.type, writer_module, sites, reporter, location);
     }
 }
@@ -142,7 +146,10 @@ fn checkTypeString(
             if (gt > lt) try refuseRedundantPhantom(rt[0..lt], rt[lt + 1 .. gt], reporter, location);
         }
     }
-    if (std.mem.indexOfScalar(u8, rt, ':') != null) return; // qualified spelling
+    if (std.mem.indexOfScalar(u8, rt, ':') != null) { // qualified spelling
+        try refuseIfQualifiedHostUnknown(null, rt, sites, reporter, location);
+        return;
+    }
     var base = rt;
     if (std.mem.indexOfScalar(u8, base, '<')) |lt| base = base[0..lt];
     for (TypePrefixes) |prefix| {
@@ -183,6 +190,84 @@ fn checkRecordField(
     }
 }
 
+/// A qualified host handle is POINTERED (`*Mod:Type`, `?*const Mod:Type`); a
+/// proto/Koru terminal is value-typed (`app/alpha:Health`). Only pointered
+/// qualified refs are host refs, so only those are validated here (665_012's
+/// `app/alpha:Health` is a terminal, not a host type).
+fn isPointerHostType(type_str: []const u8) bool {
+    const t = std.mem.trim(u8, type_str, " \t");
+    return std.mem.startsWith(u8, t, "*") or
+        std.mem.startsWith(u8, t, "?*") or
+        std.mem.startsWith(u8, t, "*const") or
+        std.mem.startsWith(u8, t, "?*const");
+}
+
+/// The bare type name at the end of a qualified type: prefixes and any trailing
+/// phantom stripped, then everything after the last `:`. `*libs/gzip:Deflater`
+/// → `Deflater`; a field's `*Token` (module held separately) → `Token`.
+fn qualifiedBaseName(type_str: []const u8) ?[]const u8 {
+    var base = std.mem.trim(u8, type_str, " \t");
+    if (std.mem.indexOfScalar(u8, base, '<')) |lt| base = base[0..lt];
+    for (TypePrefixes) |prefix| {
+        if (std.mem.startsWith(u8, base, prefix)) {
+            base = base[prefix.len..];
+            break;
+        }
+    }
+    if (std.mem.lastIndexOfScalar(u8, base, ':')) |c| base = base[c + 1 ..];
+    return if (base.len == 0) null else base;
+}
+
+/// A POINTERED qualified host ref must name a host type that its module
+/// declares. Otherwise a typo'd type or a wrong module reaches codegen and
+/// surfaces as a raw Zig `has no member named` on an emitted artifact name
+/// (`output_emitted.koru_app.koru_holder.Tokn`) — no source line, no Koru
+/// diagnostic (220_032). Value-typed qualified refs (proto/Koru terminals) are
+/// not host refs and are left to their own resolver.
+fn refuseIfQualifiedHostUnknown(
+    fallback_module: ?[]const u8,
+    type_str: []const u8,
+    sites: *const type_registry.HostTypeDeclSites,
+    reporter: *errors.ErrorReporter,
+    location: errors.SourceLocation,
+) CheckError!void {
+    if (!isPointerHostType(type_str)) return;
+    const module = typeModule(type_str) orelse fallback_module orelse return;
+    const name = qualifiedBaseName(type_str) orelse return;
+    const homes = sites.get(name) orelse {
+        try reporter.addErrorAtLocationWithHint(
+            .KORU117,
+            location,
+            "unknown host type '{s}' — no module declares it",
+            .{name},
+            "check the spelling; a qualified host reference must name a type its module declares",
+            .{},
+        );
+        return;
+    };
+    for (homes.items) |home| {
+        if (type_registry.moduleNamesMatch(home, module)) return;
+    }
+    var homes_buf = try std.ArrayList(u8).initCapacity(reporter.allocator, 0);
+    defer homes_buf.deinit(reporter.allocator);
+    for (homes.items, 0..) |home, i| {
+        const home_slash = try dottedToSlash(reporter.allocator, home);
+        defer reporter.allocator.free(home_slash);
+        if (i > 0) try homes_buf.appendSlice(reporter.allocator, ", ");
+        try homes_buf.appendSlice(reporter.allocator, home_slash);
+    }
+    const mod_slash = try dottedToSlash(reporter.allocator, module);
+    defer reporter.allocator.free(mod_slash);
+    try reporter.addErrorAtLocationWithHint(
+        .KORU117,
+        location,
+        "host type '{s}' is declared by {s}, not '{s}'",
+        .{ name, homes_buf.items, mod_slash },
+        "write the declaring module: *<module>:{s}",
+        .{name},
+    );
+}
+
 fn refuseIfForeign(
     base: []const u8,
     writer_module: []const u8,
@@ -210,10 +295,10 @@ fn refuseIfForeign(
         try reporter.addErrorAtLocationWithHint(
             .KORU115,
             location,
-            "bare host type '{s}' is declared in module '{s}' — host types are bare only inside the module that declares them",
-            .{ base, home_slash },
-            "spell it fully qualified across a module boundary: *{s}:{s} (declaring module + ':' + type name, same as invocations)",
-            .{ home_slash, base },
+            "host type '{s}' crosses a module boundary bare — write it qualified: *{s}:{s}",
+            .{ base, home_slash, base },
+            "the bare spelling is legal only inside the module that declares it ('{s}', same rule as invocations)",
+            .{home_slash},
         );
     } else {
         var homes_buf = try std.ArrayList(u8).initCapacity(reporter.allocator, 0);
@@ -347,10 +432,52 @@ test "refusal: a bare host type written outside its declaring module is refused,
     try testing.expect(reporter.hasErrors());
     const err = reporter.errors.items[0];
     try testing.expectEqual(errors.ErrorCode.KORU115, err.code);
-    const rendered = try std.fmt.allocPrint(a, "{s}\nhint: {s}", .{ err.message, err.hint.? });
-    defer a.free(rendered);
-    // The diagnostic must name the fix, spelled as the ruled qualified form.
-    try testing.expect(std.mem.indexOf(u8, rendered, "*app/holder:Token") != null);
+    // The fix must be in the MESSAGE, not only the hint: an agent scanning
+    // errors reads the headline first, and reading only the hint's rationale
+    // is what produced a false "host types are unnameable" rule.
+    try testing.expect(std.mem.indexOf(u8, err.message, "*app/holder:Token") != null);
+    try testing.expect(err.hint != null);
+}
+
+test "refusal: a pointered qualified host ref must name the declaring module" {
+    const a = testing.allocator;
+    var sites = try siteMap(a, &.{ .{ "Token", "app.holder" } });
+    defer type_registry.deinitHostTypeDeclSites(a, &sites);
+    var reporter = try errors.ErrorReporter.init(a, "input.kz", "");
+    defer reporter.deinit();
+
+    // Wrong module: Token IS a host type, but app.wrong does not declare it.
+    try refuseIfQualifiedHostUnknown("app.wrong", "*Token", &sites, &reporter, .{ .file = "input.kz", .line = 1, .column = 1 });
+    try testing.expect(reporter.hasErrors());
+    try testing.expectEqual(errors.ErrorCode.KORU117, reporter.errors.items[0].code);
+    try testing.expect(std.mem.indexOf(u8, reporter.errors.items[0].message, "app/holder") != null);
+}
+
+test "refusal: a pointered qualified host ref to an undeclared type is refused" {
+    const a = testing.allocator;
+    var sites = try siteMap(a, &.{ .{ "Token", "app.holder" } });
+    defer type_registry.deinitHostTypeDeclSites(a, &sites);
+    var reporter = try errors.ErrorReporter.init(a, "input.kz", "");
+    defer reporter.deinit();
+
+    // Typo: `Tokn` is declared by no module.
+    try refuseIfQualifiedHostUnknown(null, "*app/holder:Tokn", &sites, &reporter, .{ .file = "input.kz", .line = 1, .column = 1 });
+    try testing.expect(reporter.hasErrors());
+    try testing.expectEqual(errors.ErrorCode.KORU117, reporter.errors.items[0].code);
+}
+
+test "legal: a correct pointered host ref, and a value-typed terminal ref, both pass" {
+    const a = testing.allocator;
+    var sites = try siteMap(a, &.{ .{ "Token", "app.holder" } });
+    defer type_registry.deinitHostTypeDeclSites(a, &sites);
+    var reporter = try errors.ErrorReporter.init(a, "input.kz", "");
+    defer reporter.deinit();
+
+    // Pointered, correct module -> legal.
+    try refuseIfQualifiedHostUnknown(null, "*app/holder:Token", &sites, &reporter, .{ .file = "input.kz", .line = 1, .column = 1 });
+    // Value-typed qualified ref (a proto terminal) -> not this check's business.
+    try refuseIfQualifiedHostUnknown("app.alpha", "Health", &sites, &reporter, .{ .file = "input.kz", .line = 1, .column = 1 });
+    try testing.expect(!reporter.hasErrors());
 }
 
 test "module-local bare stays legal: the writer declaring the name licenses its bare spelling" {

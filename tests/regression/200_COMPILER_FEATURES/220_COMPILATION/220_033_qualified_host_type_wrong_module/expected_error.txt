@@ -1,0 +1,1 @@
+host type 'Token' is declared by app/holder, not 'app/wrong'

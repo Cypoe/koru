@@ -1,0 +1,12 @@
+~import app/holder
+~import std/io
+
+// A qualified host ref must resolve. `Tokn` is a typo for holder's `Token`;
+// without KORU117 this reaches codegen as a raw Zig "has no member named" on
+// the emitted artifact name (output_emitted.koru_app.koru_holder.Tokn).
+~tor describe { t: *app/holder:Tokn } -> string
+~proc describe|zig {
+    _ = t;
+    return "token";
+}
+~app/holder:mint(id: 7): t |> describe(t): d |> std/io:print.ln(d)

@@ -103,11 +103,36 @@ positions the scope checker does not see (proc payloads) and for registries
 armed without decl sites. ABI return keywords stay bare-matched (the carve
 above is untouched).
 
+## Refinement 2026-09-10: the qualified spelling must RESOLVE (KORU117)
+
+The refusal required the qualified spelling and then stopped — `checkTypeString`
+bailed on any `:` (`host_type_scope_checker.zig`), treating a qualified ref as
+"the fix, never the fault." But the spelling is half: a qualified host ref names
+a module, and that module must actually declare the type. Unresolved,
+`*app/holder:Tokn` (typo) and `*app/wrong:Token` (wrong module) reached codegen
+and surfaced as a raw Zig `has no member named` on an EMITTED ARTIFACT name
+(`output_emitted.koru_app.koru_holder.Tokn`) — no source line, no Koru
+diagnostic. That is the class shape_checker.zig names and avoids for KORU040.
+
+KORU117 closes it: a POINTERED qualified ref (`*Mod:Type`, `?*const Mod:Type`)
+must name a host type that its module declares, checked against the same
+HostTypeDeclSites set. The pointer gate is the discriminator — host handles are
+pointered, while proto/Koru terminals are value-typed (`app/alpha:Health`,
+665_012/665_013), so value-typed qualified refs are untouched.
+
+The headline also moved first: the KORU115 message now LEADS with the fix
+(`write it qualified: *app/holder:Token`) instead of a rationale
+("host types are bare only inside the module that declares them") whose subject
+reads as a property of host types — the reading that produced the false rule
+"host types are unnameable outside their module" where the compiler was only
+asking for a spelling. The fix belongs in the message, not only the hint.
+
 ## What would correct this
 
 A uniqueness-checked resolution that is provably order-insensitive (not
 first-wins renamed), or a real cross-module shape that module-local bare cannot
 express (the contract/companion merge already covers the known candidate).
 
-Pins (referenced, not restated): 220_031 (refusal expected, red until
-enforcement lands), 220_034 (qualified spelling green today).
+Pins (referenced, not restated): 220_031 (bare refusal), 220_034 (qualified
+spelling green), 220_032 (qualified ref to an undeclared type refused — KORU117),
+220_033 (qualified ref to the wrong module refused — KORU117).
