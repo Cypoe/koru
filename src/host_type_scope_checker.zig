@@ -98,7 +98,7 @@ fn checkShape(
         try refuseRedundantPhantomOnField(field, reporter, location);
         // The qualified spelling carries its module in the AST — legal, but a
         // POINTERED qualified ref is a host handle and must still resolve to a
-        // type its module declares (220_032).
+        // type its module declares (220_037).
         if (field.module_path) |mod| {
             try refuseIfQualifiedHostUnknown(mod, field.type, sites, reporter, location);
             continue;
@@ -222,7 +222,7 @@ fn qualifiedBaseName(type_str: []const u8) ?[]const u8 {
 /// declares. Otherwise a typo'd type or a wrong module reaches codegen and
 /// surfaces as a raw Zig `has no member named` on an emitted artifact name
 /// (`output_emitted.koru_app.koru_holder.Tokn`) — no source line, no Koru
-/// diagnostic (220_032). Value-typed qualified refs (proto/Koru terminals) are
+/// diagnostic (220_037). Value-typed qualified refs (proto/Koru terminals) are
 /// not host refs and are left to their own resolver.
 fn refuseIfQualifiedHostUnknown(
     fallback_module: ?[]const u8,

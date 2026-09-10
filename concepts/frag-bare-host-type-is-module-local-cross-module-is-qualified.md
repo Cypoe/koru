@@ -134,5 +134,5 @@ first-wins renamed), or a real cross-module shape that module-local bare cannot
 express (the contract/companion merge already covers the known candidate).
 
 Pins (referenced, not restated): 220_031 (bare refusal), 220_034 (qualified
-spelling green), 220_032 (qualified ref to an undeclared type refused — KORU117),
-220_033 (qualified ref to the wrong module refused — KORU117).
+spelling green), 220_037 (qualified ref to an undeclared type refused — KORU117),
+220_038 (qualified ref to the wrong module refused — KORU117).
