@@ -1335,7 +1335,7 @@ pub const Parser = struct {
 
                         // Restore the original line
                         self.lines[next_line_idx] = saved_line;
-                        try items.append(self.allocator, item);
+                        try self.appendKeptItem(&items, item, next_line_idx);
                         continue;
                     }
 
@@ -1424,7 +1424,7 @@ pub const Parser = struct {
                         // Restore the original line, but DON'T restore self.current!
                         // parseKoruConstruct advanced past the event and its branches, and we want to keep that
                         self.lines[line_with_bracket] = saved_line;
-                        try items.append(self.allocator, item);
+                        try self.appendKeptItem(&items, item, line_with_bracket);
                         continue;
                     } else {
                         // Inline: the construct is on the same line, so fall through to normal
@@ -1496,7 +1496,7 @@ pub const Parser = struct {
                     try items.append(self.allocator, .{ .parse_error = error_node });
                     continue;
                 };
-                try items.append(self.allocator, item);
+                try self.appendKeptItem(&items, item, start_line);
             } else if (lexer.startsWith(line, "|")) {
                 try self.reporter.addError(
                     .KORU010,
@@ -1867,7 +1867,7 @@ pub const Parser = struct {
                     .KORU150,
                     report_line + 1,
                     1,
-                    "conditional import: the gate cannot evaluate entry `{s}` ({s}). Entries deciding AST membership must evaluate — the vocabulary is bare flag atoms, comparisons, and/or/not, and cflag()/env()/command()",
+                    "conditional import: the gate cannot evaluate entry `{s}` ({s}). Entries deciding AST membership must evaluate — the vocabulary is bare flag atoms, comparisons, and/or/not, and flag()/cflag()/env()/command()",
                     .{ entry, diag },
                 );
             };
@@ -1880,6 +1880,168 @@ pub const Parser = struct {
             std.debug.print("[import gate] {s}:{d}: `{s}` excluded — no entry true\n{s}", .{ self.module_name, report_line + 1, import_text, report.items });
         }
         return any_true;
+    }
+
+    /// True when an annotation entry is gate-SHAPED: it names a provider
+    /// explicitly with a flag()/cflag()/env()/command() call. Everything
+    /// else — bare atoms, comparisons (`version>=2.0`), discharge markers
+    /// (`[!]`), other calls (`depends_on(x)`) — is an opaque marker entry
+    /// and never decides AST membership (310_010: annotations are opaque
+    /// strings; the parser does not parse inside them). Imports keep the
+    /// wider rule (every entry gates) because imports carry no other
+    /// annotation vocabulary; items do, so items demand the explicit head.
+    /// `"..."` literals are skipped so a doc("use flag(x)") prose string
+    /// does not read as a gate.
+    pub fn isGateEntry(entry: []const u8) bool {
+        const heads = [_][]const u8{ "flag", "cflag", "env", "command" };
+        var in_string = false;
+        var i: usize = 0;
+        while (i < entry.len) {
+            const c = entry[i];
+            if (in_string) {
+                if (c == '\\' and i + 1 < entry.len) {
+                    i += 2;
+                    continue;
+                }
+                if (c == '"') in_string = false;
+                i += 1;
+                continue;
+            }
+            if (c == '"') {
+                in_string = true;
+                i += 1;
+                continue;
+            }
+            if (c == '(') {
+                // Head is the identifier immediately before '(': it gates
+                // only when it IS a gate head, whole and undotted — so
+                // `myflag(` (head "myflag") and `x.flag(` (dotted) stay
+                // inert markers. Compositions (`not flag(x)`,
+                // `flag(a) && flag(b)`) gate through their head.
+                var j = i;
+                while (j > 0 and isGateWordChar(entry[j - 1])) : (j -= 1) {}
+                const before_ok = j == 0 or (!isGateWordChar(entry[j - 1]) and entry[j - 1] != '.');
+                if (before_ok) {
+                    const head = entry[j..i];
+                    for (heads) |h| {
+                        if (std.mem.eql(u8, head, h)) return true;
+                    }
+                }
+            }
+            i += 1;
+        }
+        return false;
+    }
+
+    /// Word chars for the gate-entry head scan: letters, digits, `_`, `-`.
+    /// `-` rides along so `my-flag(` scans as ONE head (never `flag`).
+    pub fn isGateWordChar(c: u8) bool {
+        return std.ascii.isAlphanumeric(c) or c == '_' or c == '-';
+    }
+
+    /// The item gate — the import gate's evaluator applied to non-import
+    /// items (flows including cross-module overrides, event/proc decls,
+    /// immediate impls, taps). Only explicit provider heads gate
+    /// (isGateEntry); every other entry rides along untouched, however
+    /// comparison-shaped. No gate entries → keep. ANY truthy gate entry →
+    /// keep. An excluded item gets the same loud verdict report as an
+    /// excluded import, and an unevaluable gate entry is KORU150.
+    fn gateItemEntries(self: *Parser, entries: []const []const u8, item_text: []const u8, report_line: usize) !bool {
+        var gate_count: usize = 0;
+        for (entries) |entry| {
+            if (isGateEntry(entry)) gate_count += 1;
+        }
+        if (gate_count == 0) return true;
+        // Expression parsing allocates a tree it never frees (deinit is a
+        // deliberate no-op — see expression_parser.zig:129): gate
+        // evaluations ride a scratch arena, in production and under test.
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        const provider = comptime_eval.Provider{
+            .flags = self.compiler_flags,
+            .env_map = self.gateEnvMap(),
+            .command = self.activeCommand(),
+        };
+        var any_true = false;
+        var report = try std.ArrayList(u8).initCapacity(self.allocator, 128);
+        defer report.deinit(self.allocator);
+        const w = report.writer(self.allocator);
+        for (entries) |entry| {
+            if (!isGateEntry(entry)) continue;
+            var diag: []const u8 = "";
+            const res = comptime_eval.evalAnnotationEntryDiag(arena, &provider, entry, &diag) catch {
+                return self.fail(
+                    .KORU150,
+                    report_line + 1,
+                    1,
+                    "conditional gate: the gate cannot evaluate entry `{s}` ({s}). Gate entries deciding AST membership must evaluate — name a provider explicitly: flag()/cflag()/env()/command()",
+                    .{ entry, diag },
+                );
+            };
+            if (res.truthy) any_true = true;
+            w.print("  `{s}` -> {s}", .{ entry, if (res.truthy) "true" else "false" }) catch return error.OutOfMemory;
+            for (res.trace) |t| w.print("  [{s}]", .{t}) catch return error.OutOfMemory;
+            w.print("\n", .{}) catch return error.OutOfMemory;
+        }
+        if (!any_true) {
+            std.debug.print("[item gate] {s}:{d}: `{s}` excluded — no gate entry true\n{s}", .{ self.module_name, report_line + 1, item_text, report.items });
+        }
+        return any_true;
+    }
+    /// Item-gate hook for the parse() append points. flag.declare flows
+    /// are never gated: the declaration is how --help discovers the flag,
+    /// and gating it reintroduces the hole item gates exist to close (the
+    /// module always imports; only the gated item drops).
+    fn keepItem(self: *Parser, item: *const ast.Item, report_line: usize) !bool {
+        const annotations: []const []const u8 = switch (item.*) {
+            .flow => |*f| blk: {
+                if (f.inv().path.segments.len == 2 and
+                    std.mem.eql(u8, f.inv().path.segments[0], "flag") and
+                    std.mem.eql(u8, f.inv().path.segments[1], "declare"))
+                {
+                    return true;
+                }
+                break :blk f.annotations;
+            },
+            .event_decl => |*e| e.annotations,
+            .proc_decl => |*p| p.annotations,
+            .immediate_impl => |*ii| ii.annotations,
+            .event_tap => |*t| t.annotations,
+            else => return true,
+        };
+        var gate_count: usize = 0;
+        for (annotations) |entry| {
+            if (isGateEntry(entry)) gate_count += 1;
+        }
+        if (gate_count == 0) return true;
+        return try self.gateItemEntries(annotations, itemLabel(item), report_line);
+    }
+
+    /// Parse-loop append through the item gate. A dropped item is deinit'd —
+    /// it arrived fully owned from parseKoruConstruct, and leaving it
+    /// behind leaks (the leak the unit suite's allocator catches).
+    fn appendKeptItem(self: *Parser, items: *std.ArrayList(ast.Item), item: ast.Item, report_line: usize) !void {
+        if (try self.keepItem(&item, report_line)) {
+            try items.append(self.allocator, item);
+        } else {
+            var dropped = item;
+            dropped.deinit(self.allocator);
+        }
+    }
+
+    /// One-line label for the item-gate report: the invoked/declared name.
+    fn itemLabel(item: *const ast.Item) []const u8 {
+        const segs: []const []const u8 = switch (item.*) {
+            .flow => |*f| f.inv().path.segments,
+            .event_decl => |*e| e.path.segments,
+            .proc_decl => |*p| p.path.segments,
+            .immediate_impl => |*ii| ii.event_path.segments,
+            .event_tap => return "tap",
+            else => return "item",
+        };
+        if (segs.len == 0) return "item";
+        return segs[segs.len - 1];
     }
 
     fn parseKoruConstruct(self: *Parser) !ast.Item {
@@ -5805,6 +5967,7 @@ pub const Parser = struct {
                         return ast.Item{ .immediate_impl = .{
                             .event_path = event_path,
                             .value = branch_constructor,
+                            .annotations = try self.dupeAnnotations(annotations),
                             .location = self.getCurrentLocation(),
                             .module = try self.allocator.dupe(u8, self.module_name),
                             .is_impl = event_path.module_qualifier != null,
@@ -5843,6 +6006,7 @@ pub const Parser = struct {
                         return ast.Item{ .immediate_impl = .{
                             .event_path = event_path,
                             .value = branch_constructor,
+                            .annotations = try self.dupeAnnotations(annotations),
                             .location = self.getCurrentLocation(),
                             .module = try self.allocator.dupe(u8, self.module_name),
                             .is_impl = event_path.module_qualifier != null,
@@ -5874,6 +6038,7 @@ pub const Parser = struct {
                                 .plain_value = try self.allocator.dupe(u8, expr_part),
                                 .has_expressions = true,
                             },
+                            .annotations = try self.dupeAnnotations(annotations),
                             .location = self.getCurrentLocation(),
                             .module = try self.allocator.dupe(u8, self.module_name),
                             .is_impl = event_path.module_qualifier != null,
@@ -5888,6 +6053,7 @@ pub const Parser = struct {
                                 .plain_value = null,
                                 .has_expressions = false,
                             },
+                            .annotations = try self.dupeAnnotations(annotations),
                             .location = self.getCurrentLocation(),
                             .module = try self.allocator.dupe(u8, self.module_name),
                             .is_impl = event_path.module_qualifier != null,
@@ -6231,6 +6397,7 @@ pub const Parser = struct {
                     return ast.Item{ .immediate_impl = .{
                         .event_path = event_path,
                         .value = branch_constructor,
+                        .annotations = try self.dupeAnnotations(annotations),
                         .location = self.getCurrentLocation(),
                         .module = try self.allocator.dupe(u8, self.module_name),
                         .is_impl = event_path.module_qualifier != null,
@@ -6270,6 +6437,7 @@ pub const Parser = struct {
                     return ast.Item{ .immediate_impl = .{
                         .event_path = event_path,
                         .value = branch_constructor,
+                        .annotations = try self.dupeAnnotations(annotations),
                         .location = self.getCurrentLocation(),
                         .module = try self.allocator.dupe(u8, self.module_name),
                         .is_impl = event_path.module_qualifier != null,
@@ -11933,4 +12101,43 @@ test "parser allows two empty branches" {
     try std.testing.expect(parse_result.source_file.items[0] == .event_decl);
     const event = parse_result.source_file.items[0].event_decl;
     try std.testing.expect(event.branches.len == 2);
+}
+
+test "item gate classifies explicit provider heads only" {
+    // Only a flag()/cflag()/env()/command() head gates an item. Bare
+    // atoms, comparisons, negations, and other calls stay inert markers —
+    // annotations are opaque strings (310_010) and items (unlike imports)
+    // carry a phase vocabulary that must never evaluate.
+    try std.testing.expect(Parser.isGateEntry("flag(my-flag)"));
+    try std.testing.expect(Parser.isGateEntry("cflag(x)"));
+    try std.testing.expect(Parser.isGateEntry("env(HOME)"));
+    try std.testing.expect(Parser.isGateEntry("command(explain)"));
+    try std.testing.expect(Parser.isGateEntry("not flag(x)"));
+    try std.testing.expect(Parser.isGateEntry("flag(a) && flag(b)"));
+    try std.testing.expect(!Parser.isGateEntry("comptime"));
+    try std.testing.expect(!Parser.isGateEntry("default"));
+    try std.testing.expect(!Parser.isGateEntry("depends_on(a, b)"));
+    try std.testing.expect(!Parser.isGateEntry("!"));
+    try std.testing.expect(!Parser.isGateEntry("!debug"));
+    try std.testing.expect(!Parser.isGateEntry("my-flag"));
+    try std.testing.expect(!Parser.isGateEntry("build == \"release\""));
+    try std.testing.expect(!Parser.isGateEntry("version>=2.0"));
+    try std.testing.expect(!Parser.isGateEntry("a && b"));
+    try std.testing.expect(!Parser.isGateEntry("myflag(x)"));
+    try std.testing.expect(!Parser.isGateEntry("x.flag(y)"));
+    try std.testing.expect(!Parser.isGateEntry("doc(\"use flag(x)\")"));
+}
+test "item gate filters event decls at parse time" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\~[flag(missing)]tor gated {}
+        \\~tor kept {}
+    ;
+    var parser = try Parser.init(allocator, source, "test.kz", &[_][]const u8{}, null);
+    defer parser.deinit();
+    var parse_result = try parser.parse();
+    defer parse_result.deinit();
+    try std.testing.expect(!parser.reporter.hasErrors());
+    try std.testing.expect(parse_result.source_file.items.len == 1);
+    try std.testing.expect(parse_result.source_file.items[0] == .event_decl);
 }

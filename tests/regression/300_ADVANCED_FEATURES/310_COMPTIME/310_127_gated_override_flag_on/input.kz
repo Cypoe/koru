@@ -1,0 +1,12 @@
+// Pins the item gate, flag-present half: with --my-flag the same gated
+// override survives and answers 210 instead of the default 42.
+~import std/io
+~import app/test_lib/override
+
+~[abstract] tor calc { n: i64 } -> i64
+
+~proc calc|zig {
+    return n * 2;
+}
+
+~calc(n: 21): r |> std/io:print.ln("{{ r:d }}")

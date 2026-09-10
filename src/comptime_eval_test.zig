@@ -433,6 +433,8 @@ test "entry: narrowing heads pin one provider" {
 
     try std.testing.expect((try entry(arena, &p, "cflag(profile)")).truthy);
     try std.testing.expect(!(try entry(arena, &p, "cflag(missing)")).truthy);
+    try std.testing.expect((try entry(arena, &p, "flag(profile)")).truthy);
+    try std.testing.expect(!(try entry(arena, &p, "flag(missing)")).truthy);
     try std.testing.expect((try entry(arena, &p, "command(explain)")).truthy);
     try std.testing.expect(!(try entry(arena, &p, "command(deps)")).truthy);
 }

@@ -1,0 +1,16 @@
+// Pins the item gate on a `=>` branch-constructor override, flag-absent
+// half. `=>` immediate impls dropped their annotations at construction
+// (the hole this test guards); with the gate seeing them, the override
+// drops and the same-file default answers 42.
+~import std/io
+~import app/test_lib/override
+
+~[abstract] tor calc { n: i64 }
+| ok i64
+| error string
+
+~calc => ok 42
+
+~calc(n: 21)
+| ok v |> std/io:print.ln("{{ v:d }}")
+| error e |> std/io:print.ln("BOOM {{ e:s }}")

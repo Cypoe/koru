@@ -996,8 +996,8 @@ fn lastSegment(path: *const ast.DottedPath) []const u8 {
 //     'release'", and chain-resolving the RHS under absent-is-false would
 //     make it always-false, which nobody means).
 //   - Comparison LHS resolves (it names the thing being asked about).
-//   - Narrowing calls cflag(x) / env(x) / command(x) pin one provider
-//     instead of walking the chain.
+//   - Narrowing calls flag(x) / cflag(x) / env(x) / command(x) pin one
+//     provider instead of walking the chain.
 //
 // Provider chain: compiler flags → process env → absent-is-false. The
 // build:config provider slots between flags and env when Stage-C consumers
@@ -1304,12 +1304,14 @@ const EntryEvaluator = struct {
         };
     }
 
-    /// cflag(x) / env(x) / command(x): pin one provider instead of walking
-    /// the chain. The argument is a symbol (identifier) or string literal.
+    /// flag(x) is the author-facing spelling of cflag(x); both pin the
+    /// compiler-flag provider instead of walking the chain. env(x) /
+    /// command(x) pin their own providers. The argument is a symbol
+    /// (identifier) or string literal.
     fn evalNarrowing(self: *EntryEvaluator, fc: ast.FunctionCall) EvalError!Value {
         const head = switch (fc.callee.node) {
             .identifier => |n| n,
-            else => return self.fail(error.UnsupportedConstruct, "a narrowing call needs a plain head (cflag/env/command)", .{}),
+            else => return self.fail(error.UnsupportedConstruct, "a narrowing call needs a plain head (flag/cflag/env/command)", .{}),
         };
         if (fc.args.len != 1) {
             return self.fail(error.UnsupportedConstruct, "{s}(...) takes exactly one atom", .{head});
@@ -1323,7 +1325,7 @@ const EntryEvaluator = struct {
             else => return self.fail(error.UnsupportedConstruct, "{s}(...) takes a plain atom", .{head}),
         };
 
-        if (std.mem.eql(u8, head, "cflag")) {
+        if (std.mem.eql(u8, head, "cflag") or std.mem.eql(u8, head, "flag")) {
             const r: Resolution = if (self.provider.resolveFlag(atom)) |v|
                 .{ .value = v, .source = .cflag }
             else
@@ -1349,6 +1351,6 @@ const EntryEvaluator = struct {
             try self.note(atom, r);
             return r.value;
         }
-        return self.fail(error.UnsupportedConstruct, "unknown narrowing head `{s}` — known: cflag, env, command", .{head});
+        return self.fail(error.UnsupportedConstruct, "unknown narrowing head `{s}` — known: flag, cflag, env, command", .{head});
     }
 };

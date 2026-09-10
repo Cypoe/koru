@@ -1,0 +1,10 @@
+// Same override module as 310_126: unconditional import, gated item.
+~import std/compiler
+
+~std/compiler:flag.declare {
+    "name": "my-flag",
+    "description": "Enable the gated calc override (item-gate pin)",
+    "type": "boolean"
+}
+
+~[flag(my-flag)]input:calc -> n * 10

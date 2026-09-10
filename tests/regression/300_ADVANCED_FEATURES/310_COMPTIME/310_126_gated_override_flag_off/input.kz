@@ -1,0 +1,14 @@
+// Pins the item gate, flag-absent half: a gate-shaped annotation on a
+// cross-module override drops the OVERRIDE, not the module. The module is
+// imported unconditionally, so its flag.declare stays in the AST (see
+// post.sh); only `input:calc` is gone and the default answers 42.
+~import std/io
+~import app/test_lib/override
+
+~[abstract] tor calc { n: i64 } -> i64
+
+~proc calc|zig {
+    return n * 2;
+}
+
+~calc(n: 21): r |> std/io:print.ln("{{ r:d }}")

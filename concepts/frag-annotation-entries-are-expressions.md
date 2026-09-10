@@ -95,3 +95,15 @@ Pairs with [[frag-expression-source-are-strings-not-comptime]] (annotation
 entries are another captured-representation surface whose meaning belongs to
 the consumer) and the mlir selection-language thread (same expression
 organs, different vocabulary on top).
+
+**Second evaluating consumer, 2026-09-10.** The import gate is no longer
+alone: gate-shaped annotations on items (flows including `=>`
+immediate-impl overrides, event/proc decls, taps) evaluate through the
+same vocabulary and decide AST membership under the same loud contract.
+The resulting asymmetry between the two gates is deliberate, not drift —
+imports carry no other annotation vocabulary, so every entry gates, while
+items carry a phase vocabulary that must never evaluate (310_010's
+opacity still holds), so items demand an explicit provider head and
+everything else stays inert. `flag()` is the author-facing alias of
+`cflag()`. Pins carry the behavior, by constructor shape: 310_126/127
+for `->`, 310_128/129 for `=>`.
