@@ -19,18 +19,28 @@ _backend_sha256() {
 }
 
 # Cache key for a test's backend binary. The binary is fully determined by its
-# build inputs (backend.zig + the handler set + flags + module graph) and the
-# compiler-source salt — NOT by the program AST, which is now a runtime input
-# (program.ast.json) and is deliberately excluded. Tests with the same handler
-# set therefore collide to one key and share one built binary.
+# build inputs (backend.zig + build_backend.zig + the emitted handler code) and
+# the compiler-source salt — NOT by the program AST or compiler env, which are
+# runtime inputs (program.ast.json, compiler_env.json) the backend loads at
+# startup (see src/main.zig), and are deliberately excluded.
+#
+# Comment-only lines are dropped from the emitted handlers before hashing:
+# comments are not build inputs, and the emitter stamps `// >>> PROC: name
+# [file:line]` markers (visitor_emitter.zig) carrying absolute checkout paths
+# that would otherwise make identical sources hash differently across worktrees.
+# Only comment-only lines are dropped — trailing comments on code lines are
+# kept, so `//` inside string literals can never collide. Measured 2026-09-10:
+# across the current corpus this merges 216 keys to 210, so it is a small
+# correctness-of-keying gain, not a cache-hit rescue — the keys already collided
+# heavily on shared handler sets. Tests with the same handler set share one key
+# and one built binary.
 backend_cache_key() {
     local td="$1"
     {
         printf 'salt:%s\n' "$BACKEND_CACHE_SALT"
         cat "$td/backend.zig" \
-            "$td/backend_output_emitted.zig" \
-            "$td/compiler_env.zig" \
             "$td/build_backend.zig" 2>/dev/null
+        grep -v '^[[:space:]]*//' "$td/backend_output_emitted.zig" 2>/dev/null || true
     } | _backend_sha256
 }
 
