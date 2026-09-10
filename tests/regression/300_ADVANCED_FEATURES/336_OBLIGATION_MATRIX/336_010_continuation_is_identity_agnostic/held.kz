@@ -1,0 +1,33 @@
+// The identity-agnostic fixture: same transition as 336_007, but `advance`
+// MINTS A NEW HANDLE and destroys the old one. The caller cannot tell, and the
+// rule says they must not have to — the continuation is keyed on the base type,
+// not the pointer.
+
+const std = @import("std");
+
+pub const Handle = struct { _token: u8 };
+
+~pub tor open { }
+| opened *Handle<open!>
+| err string
+
+~proc open|zig {
+    const h = std.heap.page_allocator.create(Handle) catch unreachable;
+    h.* = Handle{ ._token = 0 };
+    return .{ .opened = h };
+}
+
+~pub tor advance { h: *Handle<!open|!active> } -> *Handle<active!>
+
+~proc advance|zig {
+    const n = std.heap.page_allocator.create(Handle) catch unreachable;
+    n.* = Handle{ ._token = h._token };
+    std.heap.page_allocator.destroy(h);
+    return n;
+}
+
+~pub tor close { h: *Handle<!active> }
+
+~proc close|zig {
+    std.heap.page_allocator.destroy(h);
+}

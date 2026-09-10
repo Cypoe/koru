@@ -1,0 +1,30 @@
+// The AMBIGUITY boundary: two same-typed handles consumed, ONE minted. There is
+// no SOLE same-typed survivor, so the continuation rule must not fire — neither
+// `a` nor `b` may quietly continue; the caller binds the result explicitly.
+
+const std = @import("std");
+
+pub const Handle = struct { _token: u8 };
+
+~pub tor open { }
+| opened *Handle<open!>
+| err string
+
+~proc open|zig {
+    const h = std.heap.page_allocator.create(Handle) catch unreachable;
+    h.* = Handle{ ._token = 0 };
+    return .{ .opened = h };
+}
+
+~pub tor merge { a: *Handle<!open>, b: *Handle<!open> } -> *Handle<open!>
+
+~proc merge|zig {
+    std.heap.page_allocator.destroy(b);
+    return a;
+}
+
+~pub tor close { h: *Handle<!open|!active> }
+
+~proc close|zig {
+    std.heap.page_allocator.destroy(h);
+}

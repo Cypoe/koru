@@ -71,14 +71,49 @@ fix.
   an obligation-carrying payload — `frag-phantom-bind-chain-threading`).
 - The anonymous-payload spelling for "this payload is an alias, not a new name."
 
-## Pins (aspirational red)
+## Identity is invisible to the caller — the rule is base-type, not pointer
 
-- `336_007_same_type_handle_advances_in_place` — arrow/bare-return form
-  (`advance -> h`), `| opened h |> advance(h) |> close(h)`. Red today:
-  `KORU030 Use-after-discharge: binding 'h' was already discharged`.
-- `336_008_branch_transition_continues_its_binding` — branch-payload identity
-  form, same red.
-- `336_009_named_payload_field_continues_its_binding` — multi-field named
-  payload (`{ h: *Handle<active!>, n: i32 }`), same red; this is the pin for the
-  NAME half of the rule.
-- Flip all three green when a consumed handle continues its binding.
+The signature cannot say whether the implementation re-tags the same pointer
+(`take -> s`) or mints a new one (an allocating rebuild), and it should not have
+to. The caller observes only two things from a transition: **(1) the base type**
+— does my handle still exist, and as what — and **(2) the phantom state** — what
+may I do next. Both are already in the signature. Whether a new value appeared is
+implementation noise.
+
+So the rule keys on the **base type**: a consumed binding whose sole
+same-based-typed output is unnamed continues under its own name — allocation or
+not. A **type** change gets a new name, because there the old name would lie
+about what it holds (`begin`: `Connection → Transaction`).
+
+No `tor`-syntax overload, and no mangling. The old binding is consumed *before*
+the new value exists, so a second live value never shares the name — the emitter
+reassigns one slot (`w = step(w)`). Mangling is owed only when two values are
+live at once, which a consuming call rules out. (An SSA-shaped emitter may
+freshen the symbol internally; that is invisible and semantically free.)
+
+## Pins
+
+Aspirational red (flip green when a consumed same-based-typed binding continues):
+
+- `336_007_same_type_handle_advances_in_place` — arrow/bare-return (`advance -> h`).
+- `336_008_branch_transition_continues_its_binding` — branch identity payload.
+- `336_009_named_payload_field_continues_its_binding` — named multi-field payload
+  (`{ h: …, n: i32 }`): the NAME half.
+- `336_010_continuation_is_identity_agnostic` — the implementation **allocates a
+  new handle**; the binding still continues. The pin for "the caller cannot and
+  need not tell."
+
+Green guard (must STAY green — the negative space that keeps the rule from
+over-applying):
+
+- `336_011_ambiguous_survivor_forces_explicit_binding` — two same-typed handles
+  consumed, one minted: no sole survivor, so neither input continues; the old
+  binding is spent.
+
+### Boundaries not yet pinned
+- A **borrow** (no `!`) is not a transition and must not advance or consume.
+- A consume with **no returned handle** spends the binding (safety guard).
+- The **thread/pun reaching further** (the hypothesis that name-continuity lets
+  the sole-survivor thread carry obligations across more stages).
+- The eventual **refusal** of the unambiguous rebind (the KORU115-style lever,
+  sequenced with the advance).
