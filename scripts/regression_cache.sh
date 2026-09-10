@@ -7,7 +7,7 @@
 #
 # Fingerprint inputs:
 #   - Compiler snapshot mtime (env KORU_COMPILER_MTIME, set once per suite run).
-#   - This test's input.kz mtime.
+#   - This test's entry-file mtime (input.kz, else input.k — see test_entry).
 #   - This test's expected.txt mtime (if present).
 #   - This test's EXPECT marker mtime (if present).
 #   - Walk-up koru.json mtimes (test dir and regression root).
@@ -58,7 +58,7 @@ cache_emit_fingerprint() {
 
     {
         echo "compiler:$compiler_mtime"
-        echo "input:$(cache_mtime "$test_dir/input.kz")"
+        echo "input:$(cache_mtime "$(test_entry "$test_dir")")"
         # Fixed-name markers: emit unconditionally with mtime=0 when absent so
         # additions of these files invalidate the cache (stored=0 vs current!=0).
         # If we only emitted when present, adding MUST_ERROR to a previously-cached
@@ -86,7 +86,7 @@ cache_emit_fingerprint() {
 
         # Transitive imports via --list-imports. The output is a JSON array of paths.
         local imports_json
-        if ! imports_json=$("$koruc_bin" --list-imports "$test_dir/input.kz" 2>/dev/null); then
+        if ! imports_json=$("$koruc_bin" --list-imports "$(test_entry "$test_dir")" 2>/dev/null); then
             # If --list-imports fails (e.g. parse error), the cache cannot be
             # written reliably. Emit a marker and bail.
             echo "ERROR:list-imports-failed"
@@ -112,7 +112,7 @@ cache_emit_fingerprint() {
 # Caller decides how to render a cached pass vs. cached fail.
 #
 # Does NOT call --list-imports — uses only the stored fingerprint's paths and
-# stats them. The premise: if input.kz mtime is unchanged, the import set
+# stats them. The premise: if the entry's mtime is unchanged, the import set
 # cannot have changed.
 cache_check() {
     local test_dir="$1"
@@ -135,7 +135,7 @@ cache_check() {
                 ;;
             input)
                 a="${line#input:}"
-                [ "$a" = "$(cache_mtime "$test_dir/input.kz")" ] || return 1
+                [ "$a" = "$(cache_mtime "$(test_entry "$test_dir")")" ] || return 1
                 ;;
             expected)
                 a="${line#expected:}"
