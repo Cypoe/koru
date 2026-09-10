@@ -43,3 +43,26 @@ Related, from the same day and the other direction:
 work was blamed too little, and a consumer's own bug was filed as a compiler
 defect. Both are the same failure to ask *whose* bug this is before writing it
 down.
+
+## 2026-09-10 — the biggest diffstat is the same trap, one door over
+
+Eight `part` tests went green→red between two boards. I proved they were not my
+change (reverted my `src/`, rebuilt, re-ran one — still red) and then named a
+culprit anyway: `ab7b907fb`, because `git show --stat` showed `src/parser.zig
++215` and it was a parse-time gating change. A satisfying story.
+
+Wrong commit. The bisect: `ab7b907fb` **passes** the failing test; `f359af2bb`,
+the next commit, **fails** it — by deleting two lines while adding a
+`report_gates` parameter (`try all_parts.appendSlice(parse_allocator,
+primary.parts);` in `mergeEntryCompanions`, and `defer parser.deinit();` in
+`main.zig`), so the entry's own `part` declarations never entered the merge list.
+I wrote the wrong hash into a **pushed** commit message before running the
+control, and only bisected after being asked.
+
+So the prior is wider than "newest". **The most plausible-looking change is not
+the cause either — a big, on-topic diff is exactly as free a story as the newest
+commit.** Both are cheap to say and neither is evidence. The rule generalizes
+cleanly: **no name without a bisect.** A diffstat is a lead; the compiler built
+at that commit, run on the failing test, is the proof. And a wrong hash in a
+pushed message is worse than no hash, because the next reader follows it to a
+commit that is innocent.

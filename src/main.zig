@@ -6455,6 +6455,7 @@ pub fn main() !void {
     var parser = try Parser.init(parse_allocator, final_source, input, compiler_config.flags.items, &resolver);
     parser.fail_fast = fail_fast;
     parser.report_gates = !show_help;
+    defer parser.deinit();
 
     // If we prepended a bootstrap import line above, the parser sees line numbers
     // in INJECTED coordinates (line 1 = injected import). Tell the reporter to

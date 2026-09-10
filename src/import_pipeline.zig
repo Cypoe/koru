@@ -826,6 +826,7 @@ pub fn mergeEntryCompanions(
     // The module's full part list: the entry facet's declarations plus every
     // facet companion's (660_001 — the list.kz split's finding).
     var all_parts = std.ArrayList(ast.PartDecl){ .items = &.{}, .capacity = 0 };
+    try all_parts.appendSlice(parse_allocator, primary.parts);
 
     for (companions) |companion_path| {
         log.debug("    Companion: {s}\n", .{companion_path});
