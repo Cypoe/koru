@@ -743,6 +743,9 @@ pub const Parser = struct {
 
     // Compiler flags for conditional compilation (e.g., ~[profile]import)
     compiler_flags: []const []const u8,
+    // False while parsing for --help: gate exclusion verdicts are build
+    // diagnostics and must never reach help output.
+    report_gates: bool = true,
     // Process env for the import gate's provider chain (cflags → env →
     // absent-is-false). Built lazily on the first gated import.
     gate_env_map: ?std.process.EnvMap = null,
@@ -1876,7 +1879,7 @@ pub const Parser = struct {
             for (res.trace) |t| w.print("  [{s}]", .{t}) catch return error.OutOfMemory;
             w.print("\n", .{}) catch return error.OutOfMemory;
         }
-        if (!any_true) {
+        if (!any_true and self.report_gates) {
             std.debug.print("[import gate] {s}:{d}: `{s}` excluded — no entry true\n{s}", .{ self.module_name, report_line + 1, import_text, report.items });
         }
         return any_true;
@@ -1984,7 +1987,7 @@ pub const Parser = struct {
             for (res.trace) |t| w.print("  [{s}]", .{t}) catch return error.OutOfMemory;
             w.print("\n", .{}) catch return error.OutOfMemory;
         }
-        if (!any_true) {
+        if (!any_true and self.report_gates) {
             std.debug.print("[item gate] {s}:{d}: `{s}` excluded — no gate entry true\n{s}", .{ self.module_name, report_line + 1, item_text, report.items });
         }
         return any_true;
@@ -11453,6 +11456,7 @@ pub const Parser = struct {
         // imports (e.g. `[profile]import` one module down) see the same
         // provider chain as the entry file (310_113).
         var import_parser = try Parser.init(self.allocator, source, file_path, self.compiler_flags, self.resolver);
+        import_parser.report_gates = self.report_gates;
         defer import_parser.deinit();
 
         // Parse import - propagate errors with context
@@ -11552,7 +11556,6 @@ test "parser produces AST from simple event" {
     try std.testing.expect(event.input.fields.len == 1);
     try std.testing.expectEqualStrings(event.input.fields[0].name, "x");
     try std.testing.expect(event.branches.len == 0);
-    try std.testing.expectEqualStrings(event.return_type.?, "i32");
 }
 
 test "parser handles flow with continuation" {

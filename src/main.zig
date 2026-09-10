@@ -4332,6 +4332,7 @@ fn printBasicHelpFlags(allocator: std.mem.Allocator) !void {
         null,
     ) catch return;
     defer help_parser.deinit();
+    help_parser.report_gates = false;
 
     const parse_result = help_parser.parse() catch return;
 
@@ -6453,7 +6454,7 @@ pub fn main() !void {
     log.debug("DEBUG: Compiler bootstrap injection: {}\n", .{inject_compiler});
     var parser = try Parser.init(parse_allocator, final_source, input, compiler_config.flags.items, &resolver);
     parser.fail_fast = fail_fast;
-    defer parser.deinit();
+    parser.report_gates = !show_help;
 
     // If we prepended a bootstrap import line above, the parser sees line numbers
     // in INJECTED coordinates (line 1 = injected import). Tell the reporter to
@@ -6489,7 +6490,7 @@ pub fn main() !void {
     // programs (no siblings) are untouched — the merge is a no-op. This is the
     // entry-side mirror of `loadFileWithCompanions` (used for imports).
     if (!ast_json_mode and !ast_canon_mode and !print_mode and !check_k_convertible_mode) {
-        source_file = try import_pipeline.mergeEntryCompanions(allocator, parse_allocator, input, source_file);
+        source_file = try import_pipeline.mergeEntryCompanions(allocator, parse_allocator, input, source_file, !show_help);
     }
 
     // If --ast-json mode, output AST as JSON (even if there are parse errors)
@@ -6945,6 +6946,7 @@ pub fn main() !void {
         &source_file,
         input,
         entry_file_absolute,
+        !show_help,
     );
     defer {
         for (combine_result.imported_paths) |p| allocator.free(p);

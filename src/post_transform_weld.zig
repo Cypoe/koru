@@ -23,7 +23,7 @@ pub fn weldAfterTransform(program: *ast.Program, allocator: std.mem.Allocator) !
     var resolver = try module_resolver.ModuleResolver.init(allocator, &project_config, env.project_root, env.entry_dir, env.flags, env.koru_home);
     defer resolver.deinit();
 
-    const merged = try import_pipeline.mergeOutstandingImports(allocator, allocator, &resolver, program, env.entry_file);
+    const merged = try import_pipeline.mergeOutstandingImports(allocator, allocator, &resolver, program, env.entry_file, true);
     if (!merged) return;
 
     // Welded modules parse with basename module names and unqualified tor paths.

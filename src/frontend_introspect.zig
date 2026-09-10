@@ -159,7 +159,7 @@ pub fn introspectSource(
     const user_registry = parse_result.registry;
 
     if (opts.merge_companions) {
-        source_file = try import_pipeline.mergeEntryCompanions(gpa, parse_allocator, file_path, source_file);
+        source_file = try import_pipeline.mergeEntryCompanions(gpa, parse_allocator, file_path, source_file, true);
     }
 
     const combine = try import_pipeline.combineImports(
@@ -169,6 +169,7 @@ pub fn introspectSource(
         &source_file,
         file_path,
         entry_file_absolute,
+        true,
     );
 
     return .{

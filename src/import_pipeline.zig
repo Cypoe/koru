@@ -266,7 +266,7 @@ fn moduleIdentity(allocator: std.mem.Allocator, module: *const ImportedModule) !
     return allocator.dupe(u8, module.canonical_path);
 }
 
-fn processImport(allocator: std.mem.Allocator, parse_allocator: std.mem.Allocator, resolver: *ModuleResolver, import_decl: ast.ImportDecl, base_file: []const u8, entry_file: []const u8) !ImportedModule {
+fn processImport(allocator: std.mem.Allocator, parse_allocator: std.mem.Allocator, resolver: *ModuleResolver, import_decl: ast.ImportDecl, base_file: []const u8, entry_file: []const u8, report_gates: bool) !ImportedModule {
     // Use ModuleResolver to find BOTH file and directory (if they exist)
     var resolved = try resolver.resolveBoth(import_decl.path, base_file);
     defer resolved.deinit(allocator);
@@ -279,7 +279,7 @@ fn processImport(allocator: std.mem.Allocator, parse_allocator: std.mem.Allocato
 
     // Helper to load submodules from directory
     const loadSubmodules = struct {
-        fn load(alloc: std.mem.Allocator, parse_alloc: std.mem.Allocator, res: *ModuleResolver, dir_path: []const u8, entry_file_to_exclude: []const u8) ![]ImportedModule {
+        fn load(alloc: std.mem.Allocator, parse_alloc: std.mem.Allocator, res: *ModuleResolver, dir_path: []const u8, entry_file_to_exclude: []const u8, quiet_gates: bool) ![]ImportedModule {
             const files = try res.enumerateDirectory(dir_path);
             defer {
                 for (files) |file| alloc.free(file);
@@ -348,7 +348,7 @@ fn processImport(allocator: std.mem.Allocator, parse_allocator: std.mem.Allocato
                 // call the file-import path makes. It also owns the arena dupe of
                 // the path the parser hangs every SourceLocation.file off, which
                 // matters because the `files` slice is freed when this returns.
-                const loaded = try loadFileWithCompanions(alloc, parse_alloc, file_path, res.compiler_flags);
+                const loaded = try loadFileWithCompanions(alloc, parse_alloc, file_path, res.compiler_flags, quiet_gates);
 
                 try submodules.append(alloc, ImportedModule{
                     .logical_name = try alloc.dupe(u8, submod_name),
@@ -391,7 +391,7 @@ fn processImport(allocator: std.mem.Allocator, parse_allocator: std.mem.Allocato
         // ONLY directory
         log.debug("  Importing directory only: {s}\n", .{import_decl.path});
 
-        const submodules = try loadSubmodules(allocator, parse_allocator, resolver, resolved.dir_path.?, entry_file);
+        const submodules = try loadSubmodules(allocator, parse_allocator, resolver, resolved.dir_path.?, entry_file, report_gates);
 
         // FIX: Load index.<ext> content for the directory's source_file.
         // Previously this was empty, causing flow arguments (like Source blocks) to be lost.
@@ -415,7 +415,7 @@ fn processImport(allocator: std.mem.Allocator, parse_allocator: std.mem.Allocato
 
         // index file exists - parse it and use its content
         log.debug("  Loading index file from directory: {s}\n", .{index_path});
-        const index_data = try loadFileWithCompanions(allocator, parse_allocator, index_path, resolver.compiler_flags);
+        const index_data = try loadFileWithCompanions(allocator, parse_allocator, index_path, resolver.compiler_flags, report_gates);
 
         return ImportedModule{
             .logical_name = module_name,
@@ -429,7 +429,7 @@ fn processImport(allocator: std.mem.Allocator, parse_allocator: std.mem.Allocato
         // ONLY file
         log.debug("  Importing file only: {s}\n", .{import_decl.path});
 
-        const merged = try loadFileWithCompanions(allocator, parse_allocator, resolved.file_path.?, resolver.compiler_flags);
+        const merged = try loadFileWithCompanions(allocator, parse_allocator, resolved.file_path.?, resolver.compiler_flags, report_gates);
 
         return ImportedModule{
             .logical_name = module_name,
@@ -469,6 +469,7 @@ fn loadKoruFile(
     parse_allocator: std.mem.Allocator,
     file_path: []const u8,
     compiler_flags: []const []const u8,
+    report_gates: bool,
 ) !LoadedFile {
     const file = try std.fs.cwd().openFile(file_path, .{});
     defer file.close();
@@ -482,6 +483,7 @@ fn loadKoruFile(
     const source = try file.readToEndAlloc(parse_allocator, 1024 * 1024);
     var parser = try Parser.init(parse_allocator, source, file_path_owned, compiler_flags, null);
     parser.fail_fast = false;
+    parser.report_gates = report_gates;
     defer parser.deinit();
 
     const parse_result = try parser.parse();
@@ -597,6 +599,7 @@ fn mergeParts(
     merged_annotations: *std.ArrayList([]const u8),
     merged_events: ?*std.ArrayList(ast.EventDecl),
     compiler_flags: []const []const u8,
+    report_gates: bool,
 ) !bool {
     if (parts.len == 0) return false;
 
@@ -664,7 +667,7 @@ fn mergeParts(
 
         for (files) |part_path| {
             log.debug("    Part: {s}\n", .{part_path});
-            const part = try loadKoruFile(allocator, parse_allocator, part_path, compiler_flags);
+            const part = try loadKoruFile(allocator, parse_allocator, part_path, compiler_flags, report_gates);
 
             // Flat by ruling: only a module's own file declares parts.
             if (part.source_file.parts.len > 0) {
@@ -721,6 +724,7 @@ fn loadFileWithCompanions(
     parse_allocator: std.mem.Allocator,
     primary_path: []const u8,
     compiler_flags: []const []const u8,
+    report_gates: bool,
 ) !LoadedFile {
     const companions = try module_resolver_mod.findCompanionFiles(allocator, primary_path);
     defer {
@@ -728,7 +732,7 @@ fn loadFileWithCompanions(
         allocator.free(companions);
     }
 
-    const primary = try loadKoruFile(allocator, parse_allocator, primary_path, compiler_flags);
+    const primary = try loadKoruFile(allocator, parse_allocator, primary_path, compiler_flags, report_gates);
 
     if (companions.len == 0 and primary.source_file.parts.len == 0) {
         return primary;
@@ -754,7 +758,7 @@ fn loadFileWithCompanions(
 
     for (companions) |companion_path| {
         log.debug("    Companion: {s}\n", .{companion_path});
-        const companion = try loadKoruFile(allocator, parse_allocator, companion_path, compiler_flags);
+        const companion = try loadKoruFile(allocator, parse_allocator, companion_path, compiler_flags, report_gates);
         try merged_items.appendSlice(parse_allocator, companion.source_file.items);
         try merged_annotations.appendSlice(parse_allocator, companion.source_file.module_annotations);
         try merged_events.appendSlice(allocator, companion.public_events);
@@ -772,6 +776,7 @@ fn loadFileWithCompanions(
         &merged_annotations,
         &merged_events,
         compiler_flags,
+        report_gates,
     );
 
     return .{
@@ -802,6 +807,7 @@ pub fn mergeEntryCompanions(
     parse_allocator: std.mem.Allocator,
     primary_path: []const u8,
     primary: ast.Program,
+    report_gates: bool,
 ) !ast.Program {
     const companions = try module_resolver_mod.findCompanionFiles(allocator, primary_path);
     defer {
@@ -820,11 +826,10 @@ pub fn mergeEntryCompanions(
     // The module's full part list: the entry facet's declarations plus every
     // facet companion's (660_001 — the list.kz split's finding).
     var all_parts = std.ArrayList(ast.PartDecl){ .items = &.{}, .capacity = 0 };
-    try all_parts.appendSlice(parse_allocator, primary.parts);
 
     for (companions) |companion_path| {
         log.debug("    Companion: {s}\n", .{companion_path});
-        const companion = try loadKoruFile(allocator, parse_allocator, companion_path, &[_][]const u8{});
+        const companion = try loadKoruFile(allocator, parse_allocator, companion_path, &[_][]const u8{}, report_gates);
         try merged_items.appendSlice(parse_allocator, companion.source_file.items);
         try merged_annotations.appendSlice(parse_allocator, companion.source_file.module_annotations);
         allocator.free(companion.public_events);
@@ -841,8 +846,8 @@ pub fn mergeEntryCompanions(
         &merged_annotations,
         null,
         &[_][]const u8{},
+        report_gates,
     );
-
     return ast.Program{
         .items = try merged_items.toOwnedSlice(parse_allocator),
         .module_annotations = try merged_annotations.toOwnedSlice(parse_allocator),
@@ -918,6 +923,7 @@ pub fn combineImports(
     source_file: *ast.Program,
     input: []const u8,
     entry_file_absolute: []const u8,
+    report_gates: bool,
 ) !CombineResult {
     var imported_modules = std.ArrayListAligned(ImportedModule, null){
         .items = &.{},
@@ -974,7 +980,7 @@ pub fn combineImports(
             }
         }
 
-        const module = try processImport(gpa, parse_allocator, resolver, work_item.import_decl, work_item.base_file, entry_file_absolute);
+        const module = try processImport(gpa, parse_allocator, resolver, work_item.import_decl, work_item.base_file, entry_file_absolute, report_gates);
 
         const identity = try moduleIdentity(gpa, &module);
         var identity_owned = true;
@@ -1163,6 +1169,7 @@ pub fn mergeOutstandingImports(
     resolver: *ModuleResolver,
     program: *ast.Program,
     entry_file_absolute: []const u8,
+    report_gates: bool,
 ) !bool {
     var has_import_decl = false;
     for (program.items) |item| {
@@ -1268,7 +1275,7 @@ pub fn mergeOutstandingImports(
             }
         }
 
-        const module = try processImport(gpa, parse_allocator, resolver, work_item.import_decl, work_item.base_file, entry_file_absolute);
+        const module = try processImport(gpa, parse_allocator, resolver, work_item.import_decl, work_item.base_file, entry_file_absolute, report_gates);
 
         const identity = try moduleIdentity(gpa, &module);
         var identity_owned = true;

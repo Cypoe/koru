@@ -10,3 +10,11 @@ echo "$HELP_OUTPUT" | grep -q "my-flag" || {
     exit 1
 }
 echo "PASS: gated module's flag.declare visible in --help"
+# Gate exclusion verdicts are build diagnostics: they must never reach
+# --help output, even though the help parse evaluates (and drops) the
+# same gated items.
+if echo "$HELP_OUTPUT" | grep -q "no gate entry true"; then
+    echo "FAIL: gate exclusion verdict leaked into --help output"
+    exit 1
+fi
+echo "PASS: --help carries no gate verdicts"
