@@ -93,7 +93,11 @@ freshen the symbol internally; that is invisible and semantically free.)
 
 ## Pins
 
-Aspirational red (flip green when a consumed same-based-typed binding continues):
+Aspirational — published as `MUST_ERROR` (green today: each pins the current
+refusal, `KORU030 … already discharged`, so the board keeps showing real
+failures rather than intentions — the `330_071` convention). Flip to `MUST_RUN`
+when a consumed same-based-typed binding continues; green then means the advance
+landed.
 
 - `336_007_same_type_handle_advances_in_place` — arrow/bare-return (`advance -> h`).
 - `336_008_branch_transition_continues_its_binding` — branch identity payload.
@@ -103,7 +107,7 @@ Aspirational red (flip green when a consumed same-based-typed binding continues)
   new handle**; the binding still continues. The pin for "the caller cannot and
   need not tell."
 
-Green guard (must STAY green — the negative space that keeps the rule from
+Guard (must STAY green — the negative space that keeps the rule from
 over-applying):
 
 - `336_011_ambiguous_survivor_forces_explicit_binding` — two same-typed handles
