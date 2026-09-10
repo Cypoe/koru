@@ -33,15 +33,25 @@ already walks: `frag-pointfree-threads-the-branch-left` — *"name a branch only
 when more than one is left; the sole survivor names itself."* The rebind is
 that same hand-unrolling one level down, at the binding.
 
-## Discovery: the correspondence is TYPE-based, not field-name-based
+## Which output continues which — the written/unwritten line again
 
-The tempting spelling — `window.paint { win: *W<!open|!active> } | painted { win: *W<active!> }`
-— does not survive the parser: a single-field payload may not be a record
-(`KORU003`: *"single field in braces — use identity syntax"*). So there is no
-output field NAME to match on; the sole same-typed survivor is identified by
-its **base type**, which is exactly where `frag-the-thread-binds-by-type` already
-lands ("the name was carrying no weight"). The rule is type-based because the
-language makes it so, not by preference.
+The correspondence is not one mechanism but the same bright line the thread
+already draws (`frag-the-thread-binds-by-type`: *"what you write binds by name,
+what you do not write binds by type"*):
+
+- A **named** payload field — `| advanced { h: *Handle<active!>, n: i32 }` —
+  continues the same-named input `h`; the name does the matching, and the other
+  fields (`n`) are ordinary new bindings. (Contrived but real: the multi-field
+  record is the shape where a name is writable at all.)
+- An **identity** payload — `| advanced *Handle<active!>` — has no field name to
+  write, so the sole same-typed input continues by type. This is the only legal
+  spelling when there is a single output: a one-field record is refused
+  (`KORU003`: *"single field in braces — use identity syntax"*).
+
+So the rule reuses the chain's existing matching machinery at the binding, rather
+than inventing a third mechanism. My first reading ("type-based, not name-based")
+was half the story: the name matches where a name can be written, and the type
+matches exactly where the language removes the ability to write one.
 
 ## The eventual refusal (the lever, not the whole)
 
@@ -66,5 +76,9 @@ fix.
 - `336_007_same_type_handle_advances_in_place` — arrow/bare-return form
   (`advance -> h`), `| opened h |> advance(h) |> close(h)`. Red today:
   `KORU030 Use-after-discharge: binding 'h' was already discharged`.
-- `336_008_branch_transition_continues_its_binding` — branch-payload form,
-  same red. Flip both green when a consumed handle continues its binding.
+- `336_008_branch_transition_continues_its_binding` — branch-payload identity
+  form, same red.
+- `336_009_named_payload_field_continues_its_binding` — multi-field named
+  payload (`{ h: *Handle<active!>, n: i32 }`), same red; this is the pin for the
+  NAME half of the rule.
+- Flip all three green when a consumed handle continues its binding.
