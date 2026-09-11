@@ -49,3 +49,19 @@ diagram was itself wrong in the same place (it read the union's bare atom as a
 hold, and duly reported `@korulang/openssl`'s `close` as leaking); the green
 330_051 corrected it. The suite arbitrated both the compiler's claim and the
 visualiser's.
+
+## Resolved 2026-09-11 — the candidate index now follows the discharge rule
+
+Fixed in `auto_discharge_inserter.zig` / `phantom_semantic_checker.zig`: the
+suggestion candidate search treats a union input with ANY consuming member as
+a discharger for every member state — the same rule the checker applies to the
+call itself. `330_124` is green; `finalize` is named under `Call one of:`
+exactly as this frag proposed. The sibling phrasing problem died with it:
+candidate-bearing refusals now spell `Call one of:` uniformly rather than
+forking `Call:` for the single-candidate case, so the vocabulary can no longer
+suggest the candidate set is a different kind when it happens to hold one name.
+
+The open question above was deliberately NOT taken: auto-INSERTION still
+requires the per-member `!` marker. Routing a debt through a borrow-spelled
+union member on the author's behalf is a separate semantic ruling, still
+Lars's, and `330_124` asserts only that the suggestion names the discharger.

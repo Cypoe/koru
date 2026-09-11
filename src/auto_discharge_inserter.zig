@@ -1698,23 +1698,16 @@ pub const AutoDischargeInserter = struct {
                                             if (i > 0) fbs.writer().writeAll(", ") catch {};
                                             fbs.writer().writeAll(displayDischargerName(d.qualified_name)) catch {};
                                         }
-                                        if (all_disposals.len == 1) {
-                                            try self.reporter.addError(
-                                                .KORU030,
-                                                flow.location.line,
-                                                flow.location.column,
-                                                "Resource '{s}' obligation <{s}> was not discharged. Call: {s}",
-                                                .{ display_name, display_state, fbs.getWritten() },
-                                            );
-                                        } else {
-                                            try self.reporter.addError(
-                                                .KORU030,
-                                                flow.location.line,
-                                                flow.location.column,
-                                                "Resource '{s}' obligation <{s}> was not discharged. Call one of: {s}",
-                                                .{ display_name, display_state, fbs.getWritten() },
-                                            );
-                                        }
+                                        // One vocabulary for "candidates are
+                                        // known" — `Call one of:` reads fine
+                                        // with a single entry (330_124).
+                                        try self.reporter.addError(
+                                            .KORU030,
+                                            flow.location.line,
+                                            flow.location.column,
+                                            "Resource '{s}' obligation <{s}> was not discharged. Call one of: {s}",
+                                            .{ display_name, display_state, fbs.getWritten() },
+                                        );
                                     } else {
                                         try self.reporter.addError(
                                             .KORU030,
@@ -1890,15 +1883,7 @@ pub const AutoDischargeInserter = struct {
                     fbs.writer().writeAll(displayDischargerName(d.qualified_name)) catch {};
                     n_options += 1;
                 }
-                if (n_options == 1) {
-                    try self.reporter.addError(
-                        .KORU030,
-                        flow.location.line,
-                        flow.location.column,
-                        "Resource '{s}' obligation <{s}> was not discharged. Call: {s}",
-                        .{ display_name, display_state, fbs.getWritten() },
-                    );
-                } else if (n_options > 1) {
+                if (n_options > 0) {
                     try self.reporter.addError(
                         .KORU030,
                         flow.location.line,
@@ -2549,23 +2534,16 @@ pub const AutoDischargeInserter = struct {
                                             if (i > 0) fbs.writer().writeAll(", ") catch {};
                                             fbs.writer().writeAll(displayDischargerName(d.qualified_name)) catch {};
                                         }
-                                        if (all_disposals.len == 1) {
-                                            try self.reporter.addError(
-                                                .KORU030,
-                                                flow.location.line,
-                                                flow.location.column,
-                                                "Resource '{s}' obligation <{s}> was not discharged. Call: {s}",
-                                                .{ display_name, display_state, fbs.getWritten() },
-                                            );
-                                        } else {
-                                            try self.reporter.addError(
-                                                .KORU030,
-                                                flow.location.line,
-                                                flow.location.column,
-                                                "Resource '{s}' obligation <{s}> was not discharged. Call one of: {s}",
-                                                .{ display_name, display_state, fbs.getWritten() },
-                                            );
-                                        }
+                                        // One vocabulary for "candidates are
+                                        // known" — `Call one of:` reads fine
+                                        // with a single entry (330_124).
+                                        try self.reporter.addError(
+                                            .KORU030,
+                                            flow.location.line,
+                                            flow.location.column,
+                                            "Resource '{s}' obligation <{s}> was not discharged. Call one of: {s}",
+                                            .{ display_name, display_state, fbs.getWritten() },
+                                        );
                                     } else {
                                         try self.reporter.addError(
                                             .KORU030,
@@ -2908,23 +2886,16 @@ pub const AutoDischargeInserter = struct {
                                 const disp_name = displayDischargerName(d.qualified_name);
                                 fbs.writer().writeAll(disp_name) catch {};
                             }
-                            if (all_disposals.len == 1) {
-                                try self.reporter.addError(
-                                    .KORU030,
-                                    flow.location.line,
-                                    flow.location.column,
-                                    "Resource '{s}' obligation <{s}> was not discharged. Call: {s}",
-                                    .{ display_name, display_state, fbs.getWritten() },
-                                );
-                            } else {
-                                try self.reporter.addError(
-                                    .KORU030,
-                                    flow.location.line,
-                                    flow.location.column,
-                                    "Resource '{s}' obligation <{s}> was not discharged. Call one of: {s}",
-                                    .{ display_name, display_state, fbs.getWritten() },
-                                );
-                            }
+                            // One vocabulary for "candidates are known" —
+                            // `Call one of:` reads fine with a single entry
+                            // (330_124).
+                            try self.reporter.addError(
+                                .KORU030,
+                                flow.location.line,
+                                flow.location.column,
+                                "Resource '{s}' obligation <{s}> was not discharged. Call one of: {s}",
+                                .{ display_name, display_state, fbs.getWritten() },
+                            );
                         } else {
                             try self.reporter.addError(
                                 .KORU030,
@@ -3182,23 +3153,16 @@ pub const AutoDischargeInserter = struct {
                             const disp_name = displayDischargerName(d.qualified_name);
                             fbs.writer().writeAll(disp_name) catch {};
                         }
-                        if (all_disposals.len == 1) {
-                            try self.reporter.addError(
-                                .KORU030,
-                                flow.location.line,
-                                flow.location.column,
-                                "Resource '{s}' obligation <{s}> was not discharged. Call: {s}",
-                                .{ display_name, display_state, fbs.getWritten() },
-                            );
-                        } else {
-                            try self.reporter.addError(
-                                .KORU030,
-                                flow.location.line,
-                                flow.location.column,
-                                "Resource '{s}' obligation <{s}> was not discharged. Call one of: {s}",
-                                .{ display_name, display_state, fbs.getWritten() },
-                            );
-                        }
+                        // One vocabulary for "candidates are known" —
+                        // `Call one of:` reads fine with a single entry
+                        // (330_124).
+                        try self.reporter.addError(
+                            .KORU030,
+                            flow.location.line,
+                            flow.location.column,
+                            "Resource '{s}' obligation <{s}> was not discharged. Call one of: {s}",
+                            .{ display_name, display_state, fbs.getWritten() },
+                        );
                     } else {
                         // Strip trailing `!` from the state literal for the consumer-form suggestion:
                         // the obligation is on `<unsanitized!>`; the discharger accepts `<!unsanitized>`.
@@ -3422,9 +3386,25 @@ pub const AutoDischargeInserter = struct {
                         },
                         .variable => {},
                         .state_union => |u| {
-                            // Only members with ! can discharge an obligation
+                            // Only members with ! can discharge an obligation.
+                            // Suggestion path only (include_multi_branch): the
+                            // checker's discharge rule keys on the UNION — any
+                            // consuming member settles the obligation even when
+                            // the matched member merely borrows
+                            // (`<!opened|closing>` discharges <closing!>,
+                            // 330_124), so a union discharger must be named.
+                            // Auto-insertion keeps the strict per-member `!`:
+                            // silently routing a debt through a borrow-spelled
+                            // member is a ruling, not a default.
+                            var any_consumes = false;
+                            for (u.members) |m| {
+                                if (m.consumes_obligation) {
+                                    any_consumes = true;
+                                    break;
+                                }
+                            }
                             for (u.members) |member| {
-                                if (!member.consumes_obligation) continue;
+                                if (!member.consumes_obligation and !(include_multi_branch and any_consumes)) continue;
                                 const consumer_state = if (member.module_path) |mod|
                                     try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ mod, member.name })
                                 else

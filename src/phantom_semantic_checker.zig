@@ -608,8 +608,21 @@ pub const PhantomSemanticChecker = struct {
                         },
                         .variable => {},
                         .state_union => |u| {
+                            // Discharge keys on the UNION, not the member:
+                            // validateArgument settles the obligation when ANY
+                            // member consumes, even if the matched member only
+                            // borrows (`<!opened|closing>` discharges
+                            // <closing!> — 330_124). This list is suggestion-
+                            // only, so it must name every union discharger.
+                            var any_consumes = false;
+                            for (u.members) |m| {
+                                if (m.consumes_obligation) {
+                                    any_consumes = true;
+                                    break;
+                                }
+                            }
                             for (u.members) |member| {
-                                if (!member.consumes_obligation) continue;
+                                if (!member.consumes_obligation and !any_consumes) continue;
                                 const consumer_state = if (member.module_path) |mod|
                                     try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ mod, member.name })
                                 else
@@ -1871,15 +1884,9 @@ pub const PhantomSemanticChecker = struct {
                     "Resource '{s}' carries obligation <{s}> was not discharged. No tor accepts <!{s}>.",
                     .{ display_name, display_state, state_without_bang },
                 );
-            } else if (disposal_events.items.len == 1) {
-                try self.reporter.addError(
-                    .KORU030,
-                    location.line,
-                    location.column,
-                    "Resource '{s}' carries obligation <{s}> was not discharged. Call: {s}",
-                    .{ display_name, display_state, disposal_events.items[0] },
-                );
             } else {
+                // One vocabulary for "candidates are known" — `Call one of:`
+                // reads fine with a single entry (330_124).
                 var options_buf: [512]u8 = undefined;
                 var fbs = std.io.fixedBufferStream(&options_buf);
                 for (disposal_events.items, 0..) |event_name, i| {
@@ -2671,16 +2678,11 @@ pub const PhantomSemanticChecker = struct {
                                 "Resource '{s}' carries obligation <{s}> was not discharged. No tor accepts <!{s}>.",
                                 .{ display_name, display_state, state_without_bang },
                             );
-                        } else if (disposal_events.items.len == 1) {
-                            try self.reporter.addError(
-                                .KORU030,
-                                location.line,
-                                location.column,
-                                "Resource '{s}' carries obligation <{s}> was not discharged. Call: {s}",
-                                .{ display_name, display_state, disposal_events.items[0] },
-                            );
                         } else {
-                            // Build comma-separated list of disposal options
+                            // One vocabulary for "candidates are known" —
+                            // `Call one of:` reads fine with a single entry
+                            // (330_124). Build comma-separated list of disposal
+                            // options.
                             var options_buf: [512]u8 = undefined;
                             var fbs = std.io.fixedBufferStream(&options_buf);
                             for (disposal_events.items, 0..) |event_name, i| {
