@@ -1,0 +1,6 @@
+name: defect-fix
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a pinned defect was fixed in the mechanism it named — the test flips green because the code changed, not the pin. Synonym-adjacent to `regression-fixed`; kept because it marks the compiler fix, not the test's colour. Fold when the vocabulary is next gardened.

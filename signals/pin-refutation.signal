@@ -1,0 +1,6 @@
+name: pin-refutation
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a red pin's STATED CAUSE was measured and found wrong — the failure was real, its explanation was not, and fixing it required finding where the program actually died. Sharper cousin of `refutation` (any claim inverted); this one is specifically "the pin lied about its own defect". Fold into `refutation` when the vocabulary is next gardened.

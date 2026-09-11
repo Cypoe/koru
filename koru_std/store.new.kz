@@ -1790,14 +1790,14 @@
         //
         // Now: an actual `std/store:take` invocation whose addressing head
         // names THIS store, in either spelling (raw, or already lowered to
-        // `__store_take_<s>` if this scan runs after that rewrite). Still
-        // WHOLE-PROGRAM rather than per-pass: a take reached through a called
-        // flow is invisible to a scan of one arm, and every callee is itself a
-        // flow in `program.items`, so scanning them all is the cheap way to
-        // stay correct. Per-pass reachability is the next refinement, not this
-        // one. Anything unparseable answers YES and stays conservative.
+        // `__store_take_<s>` if this scan runs after that rewrite). Per-ARM
+        // since 690_301: the reachability machinery — the arm's own
+        // continuation tree plus every subflow impl it invokes — is
+        // ast_functional.armReachesInvocation; what lives here is the
+        // predicate that knows what a take on THIS store spells like.
+        // Anything unparseable answers YES and stays conservative.
         const TakeScan = struct {
-            fn isTakeOn(inv: ast.Invocation, store: []const u8) bool {
+            fn isTakeOn(store: []const u8, inv: *const ast.Invocation) bool {
                 if (inv.path.segments.len != 1) return false;
                 const seg = inv.path.segments[0];
                 if (std.mem.startsWith(u8, seg, "__store_take_")) {
@@ -1814,27 +1814,8 @@
                 }
                 return true;
             }
-            fn cont(c: *const ast.Continuation, store: []const u8) bool {
-                if (c.node) |n| {
-                    if (n == .invocation) {
-                        if (isTakeOn(n.invocation, store)) return true;
-                    }
-                }
-                for (c.continuations) |*k| {
-                    if (cont(k, store)) return true;
-                }
-                return false;
-            }
         };
-        const program_may_remove = blk_pmr: {
-            for (flatItems(allocator, program.items)) |pi2| {
-                if (pi2.* != .flow) continue;
-                // A take can be the flow's HEAD as well as a continuation.
-                if (TakeScan.isTakeOn(pi2.flow.inv().*, store_name)) break :blk_pmr true;
-                if (TakeScan.cont(&pi2.flow.body, store_name)) break :blk_pmr true;
-            }
-            break :blk_pmr false;
-        };
+        const program_items = flatItems(allocator, program.items);
         const TapPeel = struct {
             fn voidBranch(conts: []const ast.Continuation) ?*const ast.Continuation {
                 for (conts) |*k| {
@@ -1981,9 +1962,11 @@
             if (ann_parser.getCall(allocator, qf.annotations, "depends_on") catch null) |dc| {
                 for (dc.args) |da| q_deps.append(allocator, allocator.dupe(u8, da) catch unreachable) catch unreachable;
             }
-            // Whole-program answer, computed once above: a take reached through
-            // a called flow is invisible to a scan of this arm.
-            const q_may_remove = program_may_remove;
+            // Per-arm answer (690_301): a take reachable from THIS arm's body —
+            // spelled inline, or inside a subflow impl it invokes. An
+            // unreachable take in a sibling flow no longer forces the
+            // removal-tolerant `while`. Conservative on failure.
+            const q_may_remove = ast_functional.armReachesInvocation(allocator, program_items, &body_clone, store_name, TakeScan.isTakeOn) catch true;
             qsites.append(allocator, .{
                 .line = qf.location.line,
                 // Filled by the body walk below.

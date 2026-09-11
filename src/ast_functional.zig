@@ -3179,3 +3179,71 @@ pub fn resolveBindingType(
 
     return error.EventNotFound;
 }
+
+/// Collect every invocation reachable inside a continuation tree — plain
+/// `.invocation` steps and `#label step(...)` declarations
+/// (`label_with_invocation`) alike — into `out`.
+pub fn collectContinuedInvocations(
+    allocator: std.mem.Allocator,
+    cont: *const ast.Continuation,
+    out: *std.ArrayList(*const ast.Invocation),
+) !void {
+    if (cont.node) |*n| {
+        switch (n.*) {
+            .invocation => |*i| try out.append(allocator, i),
+            .label_with_invocation => |*lwi| try out.append(allocator, &lwi.invocation),
+            else => {},
+        }
+    }
+    for (cont.continuations) |*k| try collectContinuedInvocations(allocator, k, out);
+}
+
+/// True when `arm` reaches an invocation satisfying `match` — spelled in
+/// its own continuation tree, or inside a subflow impl it invokes. Impl
+/// reachability follows program-level flows whose `impl_of`'s last path
+/// segment names the called event, transitively with a visited set.
+///
+/// The impl match is last-segment only: over-match across modules is the
+/// safe direction for a "might this happen" question (a false positive
+/// costs the caller its conservative path; a false negative misses a real
+/// reachability).
+pub fn armReachesInvocation(
+    allocator: std.mem.Allocator,
+    program_items: []const *const ast.Item,
+    arm: *const ast.Continuation,
+    context: anytype,
+    match: *const fn (context: @TypeOf(context), inv: *const ast.Invocation) bool,
+) !bool {
+    var visited = std.AutoHashMap(usize, void).init(allocator);
+    defer visited.deinit();
+    return armReachesInvocationImpl(allocator, program_items, arm, context, match, &visited);
+}
+
+fn armReachesInvocationImpl(
+    allocator: std.mem.Allocator,
+    program_items: []const *const ast.Item,
+    arm: *const ast.Continuation,
+    context: anytype,
+    match: *const fn (context: @TypeOf(context), inv: *const ast.Invocation) bool,
+    visited: *std.AutoHashMap(usize, void),
+) !bool {
+    var invs: std.ArrayList(*const ast.Invocation) = .empty;
+    defer invs.deinit(allocator);
+    try collectContinuedInvocations(allocator, arm, &invs);
+    for (invs.items) |inv| {
+        if (match(context, inv)) return true;
+        if (inv.path.segments.len == 0) continue;
+        const called = inv.path.segments[inv.path.segments.len - 1];
+        for (program_items) |pi| {
+            if (pi.* != .flow) continue;
+            const f = &pi.flow;
+            const impl = f.impl_of orelse continue;
+            if (impl.segments.len == 0) continue;
+            if (!std.mem.eql(u8, impl.segments[impl.segments.len - 1], called)) continue;
+            if (visited.contains(@intFromPtr(f))) continue;
+            try visited.put(@intFromPtr(f), {});
+            if (try armReachesInvocationImpl(allocator, program_items, &f.body, context, match, visited)) return true;
+        }
+    }
+    return false;
+}
