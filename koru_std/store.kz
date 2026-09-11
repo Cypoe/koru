@@ -1620,7 +1620,7 @@ fn storeRefsText(alloc: std.mem.Allocator, text: []const u8, name: []const u8, p
         const at_boundary = ast_find.identBoundaryBefore(text, i);
         const starts = at_boundary and (i == 0 or text[i - 1] != '.') and std.mem.startsWith(u8, text[i..], name);
         const after = i + name.len;
-        if (starts and after < text.len and text[after] == '.') {
+        if (expr_ctx[i] and starts and after < text.len and text[after] == '.') {
             out.appendSlice(alloc, prefix) catch unreachable;
             out.appendSlice(alloc, "__koru_store_") catch unreachable;
             out.appendSlice(alloc, name) catch unreachable;

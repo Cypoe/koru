@@ -3406,21 +3406,14 @@ pub const PhantomSemanticChecker = struct {
         var expected_phantom: ?[]const u8 = null;
         var expected_base_type_raw: ?[]const u8 = null;
         var expected_module_path: ?[]const u8 = null;
-        const is_positional = std.mem.eql(u8, arg.name, arg.value);
-        if (is_positional) {
-            if (arg_idx < event_decl.input.fields.len) {
-                const field = event_decl.input.fields[arg_idx];
-                expected_phantom = field.phantom;
-                expected_base_type_raw = field.type;
-                expected_module_path = field.module_path;
-            }
-        } else for (event_decl.input.fields) |field| {
-            if (std.mem.eql(u8, field.name, arg.name)) {
-                expected_phantom = field.phantom;
-                expected_base_type_raw = field.type;
-                expected_module_path = field.module_path;
-                break;
-            }
+        // resolveArgFieldIndex: a bare pun names its field even when a desugar
+        // appended it late — index is the fallback only for a name that is no
+        // field (the `free(s1)` positional case 610_012 needs).
+        if (ast.resolveArgFieldIndex(arg, arg_idx, event_decl.input.fields)) |fi| {
+            const field = event_decl.input.fields[fi];
+            expected_phantom = field.phantom;
+            expected_base_type_raw = field.type;
+            expected_module_path = field.module_path;
         }
 
         if (expected_phantom == null) {

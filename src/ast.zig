@@ -6,7 +6,7 @@ const errors = @import("errors");
 // Expression types for when clauses and proc arguments
 pub const Expression = struct {
     node: ExprNode,
-    
+
     pub fn deinit(self: *Expression, allocator: std.mem.Allocator) void {
         self.node.deinit(allocator);
         allocator.destroy(self);
@@ -47,7 +47,7 @@ pub const Literal = union(enum) {
     number: []const u8,
     string: []const u8,
     boolean: bool,
-    
+
     pub fn deinit(self: *Literal, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .number => |n| allocator.free(n),
@@ -61,7 +61,7 @@ pub const BinaryOp = struct {
     op: BinaryOperator,
     left: *Expression,
     right: *Expression,
-    
+
     pub fn deinit(self: *BinaryOp, allocator: std.mem.Allocator) void {
         self.left.deinit(allocator);
         self.right.deinit(allocator);
@@ -69,23 +69,34 @@ pub const BinaryOp = struct {
 };
 
 pub const BinaryOperator = enum {
-    add, subtract, multiply, divide, modulo,
-    equal, not_equal, less, less_equal, greater, greater_equal,
-    and_op, or_op,
+    add,
+    subtract,
+    multiply,
+    divide,
+    modulo,
+    equal,
+    not_equal,
+    less,
+    less_equal,
+    greater,
+    greater_equal,
+    and_op,
+    or_op,
     string_concat,
 };
 
 pub const UnaryOp = struct {
     op: UnaryOperator,
     operand: *Expression,
-    
+
     pub fn deinit(self: *UnaryOp, allocator: std.mem.Allocator) void {
         self.operand.deinit(allocator);
     }
 };
 
 pub const UnaryOperator = enum {
-    not, negate,
+    not,
+    negate,
 };
 
 pub const FieldAccess = struct {
@@ -159,7 +170,7 @@ pub const EventRef = struct {
 // SuperShape represents the union of multiple event output shapes
 pub const SuperShape = struct {
     branches: []const BranchVariant,
-    
+
     pub const BranchVariant = struct {
         name: []const u8,
         payload: Shape,
@@ -182,9 +193,9 @@ pub const PartDecl = struct {
 
 pub const Program = struct {
     items: []const Item,
-    module_annotations: []const []const u8 = &.{},  // Module-level annotations (e.g., ~[compiler])
-    main_module_name: []const u8 = "",  // Canonical name of the main module (e.g., "input" from input.kz)
-    parts: []PartDecl = &.{},  // Part declarations; consumed by the loader at merge
+    module_annotations: []const []const u8 = &.{}, // Module-level annotations (e.g., ~[compiler])
+    main_module_name: []const u8 = "", // Canonical name of the main module (e.g., "input" from input.kz)
+    parts: []PartDecl = &.{}, // Part declarations; consumed by the loader at merge
     allocator: std.mem.Allocator,
 
     /// TypeRegistry for this program (opaque to avoid circular import with type_registry.zig)
@@ -239,11 +250,11 @@ pub const HostLine = struct {
 };
 
 pub const ModuleDecl = struct {
-    logical_name: []const u8,      // The name used in code (e.g., "io", "math")
-    canonical_path: []const u8,    // Full resolved path to the module file
-    items: []const Item,                 // All items in this module
-    is_system: bool,                // True for compiler/stdlib modules (skip in user code generation)
-    annotations: []const []const u8 = &[_][]const u8{},  // Module annotations (e.g., [comptime|runtime])
+    logical_name: []const u8, // The name used in code (e.g., "io", "math")
+    canonical_path: []const u8, // Full resolved path to the module file
+    items: []const Item, // All items in this module
+    is_system: bool, // True for compiler/stdlib modules (skip in user code generation)
+    annotations: []const []const u8 = &[_][]const u8{}, // Module annotations (e.g., [comptime|runtime])
 
     // FOUNDATIONAL: Every item knows where it came from
     location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },
@@ -272,7 +283,7 @@ pub const ParseErrorNode = struct {
     error_code: errors.ErrorCode,
     message: []const u8,
     location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },
-    raw_text: []const u8,  // The source text that failed to parse
+    raw_text: []const u8, // The source text that failed to parse
     hint: ?[]const u8,
 
     pub fn deinit(self: *ParseErrorNode, allocator: std.mem.Allocator) void {
@@ -391,10 +402,10 @@ pub const Item = union(enum) {
     parse_error: ParseErrorNode,
 
     // === IR NODES (created by optimizer/transforms - backend agnostic!) ===
-    native_loop: NativeLoop,        // Recursive events → native for/while loops
-    fused_event: FusedEvent,        // Pure event chains → single fused handler
-    inlined_event: InlinedEvent,    // Small events → inlined at callsite
-    inline_code: InlineCode,        // Template-generated code → emit verbatim at call site
+    native_loop: NativeLoop, // Recursive events → native for/while loops
+    fused_event: FusedEvent, // Pure event chains → single fused handler
+    inlined_event: InlinedEvent, // Small events → inlined at callsite
+    inline_code: InlineCode, // Template-generated code → emit verbatim at call site
 
     pub fn deinit(self: *Item, allocator: std.mem.Allocator) void {
         switch (self.*) {
@@ -429,10 +440,10 @@ pub const EventDecl = struct {
     // Symmetric with `Branch.resume_type` (an effect's single output). An event
     // has EITHER `return_type` OR named `branches`, never both.
     return_type: ?[]const u8 = null,
-    return_phantom: ?[]const u8 = null,  // Obligation/phantom on the return type, e.g. `-> *R<active!>` → "active!"
-    is_public: bool = false,  // Whether this event is public (can be imported)
-    is_implicit_flow: bool = false,  // Whether this event uses implicit flow parameter
-    annotations: []const []const u8 = &[_][]const u8{},  // Event annotations like [pure|fusible|abstract]
+    return_phantom: ?[]const u8 = null, // Obligation/phantom on the return type, e.g. `-> *R<active!>` → "active!"
+    is_public: bool = false, // Whether this event is public (can be imported)
+    is_implicit_flow: bool = false, // Whether this event uses implicit flow parameter
+    annotations: []const []const u8 = &[_][]const u8{}, // Event annotations like [pure|fusible|abstract]
     /// Rationale prose from a vertical annotation block — the non-bullet lines,
     /// trimmed and newline-joined. Addressed to the reader, never evaluated by
     /// the frontend; a consumer that reads it owns what it means. Empty when the
@@ -440,12 +451,12 @@ pub const EventDecl = struct {
     prose: []const u8 = "",
 
     // Purity tracking (computed from proc implementations)
-    is_pure: bool = false,  // True if ALL proc implementations are pure
-    is_transitively_pure: bool = false,  // True if ALL proc implementations are transitively pure
+    is_pure: bool = false, // True if ALL proc implementations are pure
+    is_transitively_pure: bool = false, // True if ALL proc implementations are transitively pure
 
     // FOUNDATIONAL: Every item knows where it came from
     location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },
-    module: []const u8 = "",  // Canonical module path (e.g., "input", "lib/fs")
+    module: []const u8 = "", // Canonical module path (e.g., "input", "lib/fs")
 
     /// Returns true if this event is comptime-only (should not be emitted to backend)
     /// Comptime-only events have Program, Source, or Expression parameters
@@ -459,7 +470,8 @@ pub const EventDecl = struct {
             }
             // Check for Program type (which is an alias for Program)
             if (std.mem.eql(u8, field.type, "Program") or
-                std.mem.eql(u8, field.type, "Program")) {
+                std.mem.eql(u8, field.type, "Program"))
+            {
                 return true;
             }
         }
@@ -495,8 +507,8 @@ pub const EventDecl = struct {
 };
 
 pub const HostTypeDecl = struct {
-    name: []const u8,              // e.g., "Transition", "CustomMetrics"
-    shape: Shape,                  // Fields of the type
+    name: []const u8, // e.g., "Transition", "CustomMetrics"
+    shape: Shape, // Fields of the type
 
     /// The module this type declares itself INTO, as the import-derived
     /// `logical_name` (`app.lib`). Empty means the program's own top level.
@@ -521,8 +533,8 @@ pub const HostTypeDecl = struct {
 pub const ProcDecl = struct {
     path: DottedPath,
     body: Source, // Opaque code as a typed Source (text + location + scope + phantom_type).
-                  // Carrying location/phantom_type lets filter-based parsing of the body
-                  // (e.g. parse_fields) report diagnostics at real .kz line:col and stay target-aware.
+    // Carrying location/phantom_type lets filter-based parsing of the body
+    // (e.g. parse_fields) report diagnostics at real .kz line:col and stay target-aware.
     inline_flows: []const Flow = &.{}, // Flows extracted from host-language proc bodies
     annotations: []const []const u8 = &[_][]const u8{}, // Proc annotations like [pure|async]
     /// Rationale prose from a vertical annotation block. Same contract as
@@ -530,12 +542,12 @@ pub const ProcDecl = struct {
     /// a claim on the event is about the contract.
     prose: []const u8 = "",
     target: ?[]const u8 = null, // Language target: "gpu", "js", "python", null = Zig
-    is_impl: bool = false,  // True if event_path has module qualifier (cross-module implementation)
+    is_impl: bool = false, // True if event_path has module qualifier (cross-module implementation)
     is_public: bool = false, // True if declared with ~pub proc
 
     // Purity tracking
-    is_pure: bool = false,  // True if marked ~[pure] or inline-only pattern
-    is_transitively_pure: bool = false,  // True if pure AND all called events are transitively pure
+    is_pure: bool = false, // True if marked ~[pure] or inline-only pattern
+    is_transitively_pure: bool = false, // True if pure AND all called events are transitively pure
 
     // FOUNDATIONAL: Every item knows where it came from
     location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },
@@ -565,9 +577,9 @@ pub const ProcDecl = struct {
 /// This is the foundation for universal metaprogramming in Koru
 /// Used for tests, macros, templates, embedded DSLs, etc.
 pub const Source = struct {
-    text: []const u8,                // Raw source text
-    location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },  // Where this Source started in original file
-    scope: CapturedScope,             // Available bindings at invocation site
+    text: []const u8, // Raw source text
+    location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 }, // Where this Source started in original file
+    scope: CapturedScope, // Available bindings at invocation site
     phantom_type: ?[]const u8 = null, // Phantom type annotation from call site (e.g., "HTML", "SQL")
 
     pub fn deinit(self: *Source, allocator: std.mem.Allocator) void {
@@ -583,11 +595,11 @@ pub const Source = struct {
 /// This allows comptime procs to inspect their call site (annotations, location, etc.)
 /// Used for conditional compilation, build configurations, and meta-programming
 pub const InvocationMeta = struct {
-    path: []const u8,                    // Full path like "std.build:variants"
-    module: ?[]const u8,                 // Module qualifier "std.build" or null
-    event_name: []const u8,              // Just the event name "variants"
-    annotations: []const []const u8,     // Flow annotations like ["release"], ["debug"]
-    location: errors.SourceLocation,     // Where it was invoked
+    path: []const u8, // Full path like "std.build:variants"
+    module: ?[]const u8, // Module qualifier "std.build" or null
+    event_name: []const u8, // Just the event name "variants"
+    annotations: []const []const u8, // Flow annotations like ["release"], ["debug"]
+    location: errors.SourceLocation, // Where it was invoked
 
     pub fn deinit(self: *InvocationMeta, allocator: std.mem.Allocator) void {
         allocator.free(self.path);
@@ -603,9 +615,9 @@ pub const InvocationMeta = struct {
 /// CapturedExpression represents a captured Zig expression with its scope
 /// Used for Expression parameters that need access to bindings at the call site
 pub const CapturedExpression = struct {
-    text: []const u8,                 // The expression text (e.g., "data.value > 10")
-    location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },  // Where this expression appeared in source
-    scope: CapturedScope,             // Available bindings at invocation site
+    text: []const u8, // The expression text (e.g., "data.value > 10")
+    location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 }, // Where this expression appeared in source
+    scope: CapturedScope, // Available bindings at invocation site
 
     pub fn deinit(self: *CapturedExpression, allocator: std.mem.Allocator) void {
         allocator.free(self.text);
@@ -647,9 +659,9 @@ pub const CapturedScope = struct {
 ///   - branch_name: "data"
 ///   - fields: [{ name: "name", type: "[]const u8" }, { name: "age", type: "i32" }]
 pub const ScopeBinding = struct {
-    name: []const u8,        // Variable name (e.g., "userName", "u")
-    type: []const u8,        // Type string - set to "unknown" by parser, resolve via ast_functional.resolveBindingType()
-    value_ref: []const u8,   // How to reference it (e.g., "userName", "u")
+    name: []const u8, // Variable name (e.g., "userName", "u")
+    type: []const u8, // Type string - set to "unknown" by parser, resolve via ast_functional.resolveBindingType()
+    value_ref: []const u8, // How to reference it (e.g., "userName", "u")
 
     pub fn deinit(self: *ScopeBinding, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
@@ -831,6 +843,37 @@ pub fn identBoundaryBefore(text: []const u8, i: usize) bool {
     return i < 2 or !isKebabIdentChar(text[i - 2]);
 }
 
+/// Which parameter INDEX does this call-site argument bind?
+///
+/// A bare pun (`x` — name==value, no written label) binds the field it NAMES,
+/// never the slot its index happens to land on: `desugarBindingPuns` appends
+/// pun fills at the END of the arg list, so index resolution rebinds `x` to
+/// whatever field sits at that position (style_reuse.k's `write-styled` —
+/// `style` appended at index 3 bound `style` only by luck; `write-at`'s `x`
+/// appended at index 2 rebound to `text` and died KORU080). Index is the
+/// fallback for a bare arg whose name is no field — transform-emitted
+/// positionals like the dock child's prepended `win`. An explicit
+/// `name: value` binds `name` regardless.
+pub fn resolveArgFieldIndex(arg: Arg, index: usize, fields: []const Field) ?usize {
+    if (!arg.had_explicit_label and std.mem.eql(u8, arg.name, arg.value)) {
+        for (fields, 0..) |f, fi| {
+            if (std.mem.eql(u8, f.name, arg.name)) return fi;
+        }
+        return if (index < fields.len) index else null;
+    }
+    for (fields, 0..) |f, fi| {
+        if (std.mem.eql(u8, f.name, arg.name)) return fi;
+    }
+    return null;
+}
+
+/// The parameter NAME this arg binds — `resolveArgFieldIndex` lifted to names,
+/// with `arg.name` (possibly not a field at all) as the unresolved answer.
+pub fn resolveArgParamName(arg: Arg, index: usize, fields: []const Field) []const u8 {
+    const fi = resolveArgFieldIndex(arg, index, fields) orelse return arg.name;
+    return fields[fi].name;
+}
+
 /// An identifier byte in Koru's kebab-case surface. `-` is included: `set-x`
 /// is ONE name. See `identBoundaryBefore` for why that makes the left-hand
 /// boundary test subtler than a single predicate can express.
@@ -951,8 +994,8 @@ pub const Flow = struct {
     /// filtering), labels, purity, impl_of/impl_variant/is_impl, module
     /// membership, source location.
     body: Continuation,
-    annotations: []const []const u8 = &[_][]const u8{},  // Flow annotations like [depends_on("a", "b")]
-    pre_label: ?[]const u8 = null,   // Label before invocation (#label event)
+    annotations: []const []const u8 = &[_][]const u8{}, // Flow annotations like [depends_on("a", "b")]
+    pre_label: ?[]const u8 = null, // Label before invocation (#label event)
     super_shape: ?SuperShape = null, // For inline flows with branch constructors
 
     // Zero-overhead control flow support:
@@ -967,8 +1010,8 @@ pub const Flow = struct {
     preamble_code: ?[]const u8 = null,
 
     // Purity tracking
-    is_pure: bool = true,  // Flows are always locally pure (just composition)
-    is_transitively_pure: bool = false,  // Default false until purity checker walks and verifies
+    is_pure: bool = true, // Flows are always locally pure (just composition)
+    is_transitively_pure: bool = false, // Default false until purity checker walks and verifies
 
     // Subflow implementation context (null for top-level flows)
     // When set, this flow implements the named event.
@@ -1040,11 +1083,11 @@ pub const Flow = struct {
 };
 
 pub const EventTap = struct {
-    source: ?DottedPath,      // null = wildcard (*)
-    destination: ?DottedPath,  // null = wildcard (*)
+    source: ?DottedPath, // null = wildcard (*)
+    destination: ?DottedPath, // null = wildcard (*)
     continuations: []const Continuation,
-    is_input_tap: bool,       // true = before event (input tap), false = after event (output tap)
-    annotations: []const []const u8 = &.{},  // Annotations like [debug], [trace], etc.
+    is_input_tap: bool, // true = before event (input tap), false = after event (output tap)
+    annotations: []const []const u8 = &.{}, // Annotations like [debug], [trace], etc.
 
     // FOUNDATIONAL: Every item knows where it came from
     location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },
@@ -1090,8 +1133,8 @@ pub const LabelDecl = struct {
 // Used for constants, stubs, defaults — e.g. ~player:load = loaded { id: id, gold: 100 }
 // The flow-based case is now handled by Flow with impl_of set.
 pub const ImmediateImpl = struct {
-    event_path: DottedPath,          // Which event this implements
-    value: BranchConstructor,        // The immediate branch return value
+    event_path: DottedPath, // Which event this implements
+    value: BranchConstructor, // The immediate branch return value
     annotations: []const []const u8 = &[_][]const u8{},
 
     // FOUNDATIONAL: Every item knows where it came from
@@ -1118,8 +1161,8 @@ pub const ImmediateImpl = struct {
 };
 
 pub const ImportDecl = struct {
-    path: []const u8,  // The path to import (e.g., "koru_std/io" or "lib/events")
-    local_name: ?[]const u8,  // Optional local name/alias (e.g., "calc" in ~import calc = "math")
+    path: []const u8, // The path to import (e.g., "koru_std/io" or "lib/events")
+    local_name: ?[]const u8, // Optional local name/alias (e.g., "calc" in ~import calc = "math")
 
     // FOUNDATIONAL: Every item knows where it came from
     location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },
@@ -1133,7 +1176,7 @@ pub const ImportDecl = struct {
 };
 
 pub const DottedPath = struct {
-    module_qualifier: ?[]const u8 = null,  // "http" if http:foo, null if local
+    module_qualifier: ?[]const u8 = null, // "http" if http:foo, null if local
     segments: []const []const u8,
 
     pub fn deinit(self: *DottedPath, allocator: std.mem.Allocator) void {
@@ -1248,13 +1291,13 @@ pub const ResumeArm = struct {
 pub const Branch = struct {
     name: []const u8,
     payload: Shape,
-    is_optional: bool = false,  // Marks ?-branches that don't need to be handled
-    is_panic: bool = false,  // Marks ?!-branches: unhandled => synthesized @panic(...) (UNSAFE to ignore)
-    kind: BranchKind = .terminal,  // `|` = terminal (fires once, returns); `!` = effect (fires 0..N during proc run)
-    resume_type: ?[]const u8 = null,  // Type after `->` on effect branches; null = -> void
-    resume_phantom: ?[]const u8 = null,  // Phantom/obligation on the resume type, e.g. `-> *R<!state>` → "!state". Read from the effect-branch scope: `<!state>` discharges, `<state!>` would illegally escape.
-    resume_arms: ?[]const ResumeArm = null,  // Multi-arm resume sum on effect branches; null = not multi-arm. Mutually exclusive with resume_type.
-    annotations: []const []const u8 = &[_][]const u8{},  // Branch annotations like [mutable]
+    is_optional: bool = false, // Marks ?-branches that don't need to be handled
+    is_panic: bool = false, // Marks ?!-branches: unhandled => synthesized @panic(...) (UNSAFE to ignore)
+    kind: BranchKind = .terminal, // `|` = terminal (fires once, returns); `!` = effect (fires 0..N during proc run)
+    resume_type: ?[]const u8 = null, // Type after `->` on effect branches; null = -> void
+    resume_phantom: ?[]const u8 = null, // Phantom/obligation on the resume type, e.g. `-> *R<!state>` → "!state". Read from the effect-branch scope: `<!state>` discharges, `<state!>` would illegally escape.
+    resume_arms: ?[]const ResumeArm = null, // Multi-arm resume sum on effect branches; null = not multi-arm. Mutually exclusive with resume_type.
+    annotations: []const []const u8 = &[_][]const u8{}, // Branch annotations like [mutable]
 
     pub fn deinit(self: *Branch, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
@@ -1287,10 +1330,10 @@ pub const Branch = struct {
 ///   - Foreach: branches = [{ name: "each", body: [...] }, { name: "done", body: [...] }]
 ///   - Capture: branches = [{ name: "as", body: [...] }, { name: "captured", body: [...] }]
 pub const NamedBranch = struct {
-    name: []const u8,              // Branch name: "then", "else", "each", "done", "as", etc.
-    body: []const Continuation,    // The continuations in this branch
-    binding: ?[]const u8 = null,   // Optional binding for the branch (e.g., "item" in | each item |>)
-    is_optional: bool = false,     // Marks branches that don't need to be handled (like `for`'s `done`)
+    name: []const u8, // Branch name: "then", "else", "each", "done", "as", etc.
+    body: []const Continuation, // The continuations in this branch
+    binding: ?[]const u8 = null, // Optional binding for the branch (e.g., "item" in | each item |>)
+    is_optional: bool = false, // Marks branches that don't need to be handled (like `for`'s `done`)
     annotations: []const []const u8 = &.{}, // Branch annotations (e.g., [@scope] for loop bodies)
 
     pub fn deinit(self: *NamedBranch, allocator: std.mem.Allocator) void {
@@ -1343,14 +1386,14 @@ pub const NamedBranch = struct {
 pub const Invocation = struct {
     path: DottedPath,
     args: []const Arg,
-    annotations: []const []const u8 = &[_][]const u8{},  // Compiler pass tracking (e.g., @pass_ran("transform"))
-    inserted_by_tap: bool = false,  // Marks invocations inserted by tap transformation
-    from_opaque_tap: bool = false,  // Marks steps from opaque taps (to skip nested tap observations)
+    annotations: []const []const u8 = &[_][]const u8{}, // Compiler pass tracking (e.g., @pass_ran("transform"))
+    inserted_by_tap: bool = false, // Marks invocations inserted by tap transformation
+    from_opaque_tap: bool = false, // Marks steps from opaque taps (to skip nested tap observations)
     source_module: []const u8 = "", // Module where this invocation appears
-    variant: ?[]const u8 = null,  // Variant selector: "gpu", "naive", etc. for ~event|variant() calls
-    return_binding: ?[]const u8 = null,  // `~double(a:21) -> d |> ...`: binds the event's single unnamed `-> T` return value to `d` for the following pipeline. Call-site twin of EventDecl.return_type.
-    return_binding_annotations: []const []const u8 = &[_][]const u8{},  // `~get-data(): r[mutable] |> ...`: annotations on the bare-return bind. Call-site twin of Branch.annotations; `[mutable]` makes the emitter bind `var` not `const`.
-    return_destructure: []const DestructureField = &.{},  // `~locate(): { pos: { x }, label } |> ...`: shape-destructure at the bind position. Bind-site twin of the branch-payload `Continuation.destructure`; the emitter binds the return to a temp and emits per-field consts (emitDestructureConsts). Mutually exclusive with a plain return_binding name.
+    variant: ?[]const u8 = null, // Variant selector: "gpu", "naive", etc. for ~event|variant() calls
+    return_binding: ?[]const u8 = null, // `~double(a:21) -> d |> ...`: binds the event's single unnamed `-> T` return value to `d` for the following pipeline. Call-site twin of EventDecl.return_type.
+    return_binding_annotations: []const []const u8 = &[_][]const u8{}, // `~get-data(): r[mutable] |> ...`: annotations on the bare-return bind. Call-site twin of Branch.annotations; `[mutable]` makes the emitter bind `var` not `const`.
+    return_destructure: []const DestructureField = &.{}, // `~locate(): { pos: { x }, label } |> ...`: shape-destructure at the bind position. Bind-site twin of the branch-payload `Continuation.destructure`; the emitter binds the return to a temp and emits per-field consts (emitDestructureConsts). Mutually exclusive with a plain return_binding name.
 
     // Transform replacement: if set, emitter outputs this code instead of calling the handler.
     // The path is kept for shape validation (the shape checker uses it to verify branch coverage).
@@ -1398,8 +1441,8 @@ pub const Invocation = struct {
 };
 
 pub const BindingType = enum {
-    branch_payload,  // Normal: | ok o |> (o is branch payload)
-    transition,      // Meta: | transition t |> (t is Transition struct)
+    branch_payload, // Normal: | ok o |> (o is branch payload)
+    transition, // Meta: | transition t |> (t is Transition struct)
 };
 
 /// One field of a shape-destructure at the binding position:
@@ -1466,12 +1509,12 @@ pub const Continuation = struct {
     /// one name OR destructures it by field name.
     destructure: []const DestructureField = &.{},
     binding_type: BindingType = .branch_payload,
-    kind: BranchKind = .terminal,  // `|` = terminal handler, `!` = effect handler
-    is_catchall: bool = false,  // True for |? or !? catch-all continuations
-    catchall_metatype: ?[]const u8 = null,  // "Transition", "Profile", or "Audit" for |? Transition t
+    kind: BranchKind = .terminal, // `|` = terminal handler, `!` = effect handler
+    is_catchall: bool = false, // True for |? or !? catch-all continuations
+    catchall_metatype: ?[]const u8 = null, // "Transition", "Profile", or "Audit" for |? Transition t
     condition: ?[]const u8, // When clause condition (e.g., "o.status == 200")
     condition_expr: ?*Expression = null, // Parsed expression tree for when clause
-    node: ?Node,  // The single node in this continuation (null for empty branches like | done |> _)
+    node: ?Node, // The single node in this continuation (null for empty branches like | done |> _)
     indent: usize, // Track indentation level
     continuations: []const Continuation, // This node's branch continuations (e.g., | then |>, | else |>)
 
@@ -1529,35 +1572,35 @@ pub const Continuation = struct {
 // =============================================================================
 pub const Node = union(enum) {
     invocation: Invocation,
-    label_apply: []const u8,  // Simple label without args (rare - mostly for compatibility)
-    label_with_invocation: struct {  // Pattern: #label event(args) - DECLARATION ONLY
+    label_apply: []const u8, // Simple label without args (rare - mostly for compatibility)
+    label_with_invocation: struct { // Pattern: #label event(args) - DECLARATION ONLY
         label: []const u8,
         invocation: Invocation,
-        is_declaration: bool = false,  // true for #label (anchor), false for @label (jump)
+        is_declaration: bool = false, // true for #label (anchor), false for @label (jump)
     },
-    label_jump: struct {  // Pattern: @label(args) - JUMP with args
+    label_jump: struct { // Pattern: @label(args) - JUMP with args
         label: []const u8,
         args: []const Arg,
     },
-    terminal,  // The _ marker - flow terminates here
-    branch_constructor: BranchConstructor,  // Inline branch construction
-    conditional_block: struct {  // Conditional execution (for tap when clauses) - LEGACY
-        condition: ?[]const u8,  // Condition string (e.g., "d.result > 50")
-        condition_expr: ?*Expression,  // Parsed expression tree
-        nodes: []const Node,  // Nodes to execute if condition is true
-        inserted_by_tap: bool = false,  // Marks nodes inserted by tap transformation
-        from_opaque_tap: bool = false,  // Marks nodes from opaque taps (to skip nested tap observations)
+    terminal, // The _ marker - flow terminates here
+    branch_constructor: BranchConstructor, // Inline branch construction
+    conditional_block: struct { // Conditional execution (for tap when clauses) - LEGACY
+        condition: ?[]const u8, // Condition string (e.g., "d.result > 50")
+        condition_expr: ?*Expression, // Parsed expression tree
+        nodes: []const Node, // Nodes to execute if condition is true
+        inserted_by_tap: bool = false, // Marks nodes inserted by tap transformation
+        from_opaque_tap: bool = false, // Marks nodes from opaque taps (to skip nested tap observations)
     },
-    metatype_binding: struct {  // Binds a metatype (Profile/Transition/Audit) with transition metadata
-        metatype: []const u8,   // "Profile", "Transition", or "Audit"
-        binding: []const u8,    // Variable name to bind to (e.g., "p" in "| Profile p |>")
-        source_event: []const u8,       // Canonical source event (e.g., "main:http.request")
-        dest_event: ?[]const u8,        // Canonical dest event (null for terminal)
-        branch: []const u8,             // Branch name (e.g., "done")
-        inserted_by_tap: bool = false,  // Marks nodes inserted by tap transformation
-        from_opaque_tap: bool = false,  // Marks nodes from opaque taps (to skip nested tap observations)
+    metatype_binding: struct { // Binds a metatype (Profile/Transition/Audit) with transition metadata
+        metatype: []const u8, // "Profile", "Transition", or "Audit"
+        binding: []const u8, // Variable name to bind to (e.g., "p" in "| Profile p |>")
+        source_event: []const u8, // Canonical source event (e.g., "main:http.request")
+        dest_event: ?[]const u8, // Canonical dest event (null for terminal)
+        branch: []const u8, // Branch name (e.g., "done")
+        inserted_by_tap: bool = false, // Marks nodes inserted by tap transformation
+        from_opaque_tap: bool = false, // Marks nodes from opaque taps (to skip nested tap observations)
     },
-    inline_code: []const u8,  // Verbatim Zig code to emit (from transforms like ~if, ~for) - LEGACY
+    inline_code: []const u8, // Verbatim Zig code to emit (from transforms like ~if, ~for) - LEGACY
 
     /// Zig expression as a body-position node.
     /// Produced by the parser when content at body position is an expression
@@ -1577,34 +1620,33 @@ pub const Node = union(enum) {
     /// Used by std.seq:each and similar iteration constructs
     /// Uses uniform branches structure: [{ name: "each", body: [...], binding: "item" }, { name: "done", body: [...] }]
     foreach: struct {
-        iterable: []const u8,           // Expression being iterated (e.g., "lines")
-        element_type: ?[]const u8,      // Inferred element type (e.g., "[]const u8"), null if unknown
-        branches: []const NamedBranch,  // Uniform branch structure ("each" with binding, optionally "done")
+        iterable: []const u8, // Expression being iterated (e.g., "lines")
+        element_type: ?[]const u8, // Inferred element type (e.g., "[]const u8"), null if unknown
+        branches: []const NamedBranch, // Uniform branch structure ("each" with binding, optionally "done")
     },
 
     /// Conditional execution with proper AST bodies
     /// Replaces inline_code for ~if construct
     /// Uses uniform branches structure: [{ name: "then", body: [...] }, { name: "else", body: [...] }]
     conditional: struct {
-        condition: []const u8,          // Condition expression string
-        condition_expr: ?*Expression,   // Parsed expression tree (optional)
-        branches: []const NamedBranch,  // Uniform branch structure (typically "then" and optionally "else")
+        condition: []const u8, // Condition expression string
+        condition_expr: ?*Expression, // Parsed expression tree (optional)
+        branches: []const NamedBranch, // Uniform branch structure (typically "then" and optionally "else")
     },
-
 
     /// Union/result switch with proper AST bodies
     /// Used by transforms like query for switching on union result types
     /// Uses uniform branches structure: [{ name: "row", body: [...], binding: "r" }, { name: "empty", body: [...] }, ...]
     switch_result: struct {
-        expression: []const u8,           // Inline code block that produces the union value
-        branches: []const NamedBranch,    // Uniform branch structure (one per union variant)
+        expression: []const u8, // Inline code block that produces the union value
+        branches: []const NamedBranch, // Uniform branch structure (one per union variant)
     },
 
     /// Assignment node - generated by capture transform from `captured { }` blocks
     /// Represents "target = .{ .field1 = expr1, .field2 = expr2 }"
     assignment: struct {
-        target: []const u8,       // The capture binding being assigned to
-        fields: []const Field,    // Fields and their expression values
+        target: []const u8, // The capture binding being assigned to
+        fields: []const Field, // Fields and their expression values
     },
 
     // Backwards compatibility alias - will be removed after full migration
@@ -1626,7 +1668,7 @@ pub const Node = union(enum) {
                 }
                 allocator.free(@constCast(lj.args));
             },
-            .terminal => {},  // Nothing to free
+            .terminal => {}, // Nothing to free
             .branch_constructor => |*bc| bc.deinit(allocator),
             .conditional_block => |*cb| {
                 if (cb.condition) |c| allocator.free(c);
@@ -1690,9 +1732,9 @@ pub const Step = Node;
 pub const Arg = struct {
     name: []const u8,
     value: []const u8,
-    source_value: ?*const Source = null,  // For Source arguments - holds text + location + scope (const in PROGRAM_AST)
-    expression_value: ?*const CapturedExpression = null,  // For Expression arguments - holds text + location + scope
-    parsed_expression: ?*const Expression = null,  // Value parsed through expression parser (when parseable)
+    source_value: ?*const Source = null, // For Source arguments - holds text + location + scope (const in PROGRAM_AST)
+    expression_value: ?*const CapturedExpression = null, // For Expression arguments - holds text + location + scope
+    parsed_expression: ?*const Expression = null, // Value parsed through expression parser (when parseable)
     /// Author-asserted phantom label on a literal or parenthesized expression
     /// (e.g. `22.5<celsius>`, `"alice"<username>`, `(box.v)<celsius>`).
     /// The suffix is stripped from `value`; the label name lives here. The
@@ -1727,7 +1769,7 @@ pub const Arg = struct {
 
 pub const BranchConstructor = struct {
     branch_name: []const u8,
-    fields: []const Field,  // Reuse Field type from Shape
+    fields: []const Field, // Reuse Field type from Shape
     plain_value: ?[]const u8 = null, // For branches with a single plain value (not a struct)
     has_expressions: bool = false, // True if any field contains an expression (for procs)
     is_bare_return: bool = false, // `~event -> expr`: the `->` bare-return impl (twin of `=>` branch ctor). branch_name is empty; plain_value is the expression; the emitter returns it directly (no tag). Pairs with EventDecl.return_type.
@@ -1764,16 +1806,16 @@ pub const BranchConstructor = struct {
 /// Represents a counted loop that can emit to any backend's loop syntax.
 /// Created by detecting recursive event patterns (checker + label jumps).
 pub const NativeLoop = struct {
-    event_path: DottedPath,        // Which event does this implement?
+    event_path: DottedPath, // Which event does this implement?
 
     // Loop structure (semantic, not syntax-specific)
-    variable: []const u8,          // Loop variable name (e.g., "i")
-    start_expr: []const u8,        // Start value (e.g., "0")
-    end_expr: []const u8,          // End condition (e.g., "bodies.len")
+    variable: []const u8, // Loop variable name (e.g., "i")
+    start_expr: []const u8, // Start value (e.g., "0")
+    end_expr: []const u8, // End condition (e.g., "bodies.len")
     step_expr: ?[]const u8 = null, // Step (e.g., "1", null = default increment)
 
     // Loop body
-    body_code: []const u8,         // Inlined body code (backend-specific for now)
+    body_code: []const u8, // Inlined body code (backend-specific for now)
     body_source: ?DottedPath = null, // Original event/proc this was inlined from
 
     // Done/exit branch information (for continuation emission)
@@ -1787,8 +1829,8 @@ pub const NativeLoop = struct {
     style: LoopStyle,
 
     // Provenance tracking
-    optimized_from: ?DottedPath = null,  // Original subflow that was transformed (event name)
-    optimized_from_flow: ?*Flow = null,  // THE ACTUAL FLOW that was optimized (full context!)
+    optimized_from: ?DottedPath = null, // Original subflow that was transformed (event name)
+    optimized_from_flow: ?*Flow = null, // THE ACTUAL FLOW that was optimized (full context!)
 
     // FOUNDATIONAL: Every item knows where it came from
     location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },
@@ -1838,28 +1880,28 @@ pub const NativeLoop = struct {
 
 /// Loop style hints for code generation
 pub const LoopStyle = enum {
-    counted_up,      // for (start..end) |var|  (Zig) / for (int i = start; i < end; i++) (C)
-    counted_down,    // Reverse iteration
-    triangular,      // Nested loops with dependent bounds: for (i) for (i+1..n)
-    while_style,     // Complex condition - emit as while loop
+    counted_up, // for (start..end) |var|  (Zig) / for (int i = start; i < end; i++) (C)
+    counted_down, // Reverse iteration
+    triangular, // Nested loops with dependent bounds: for (i) for (i+1..n)
+    while_style, // Complex condition - emit as while loop
 };
 
 /// FusedEvent - IR node for event chain fusion
 /// Represents multiple pure events fused into a single handler.
 /// Created by detecting chains of pure event invocations.
 pub const FusedEvent = struct {
-    event_path: DottedPath,         // The fused event name
+    event_path: DottedPath, // The fused event name
 
     // Fusion info
-    source_events: []DottedPath,    // Original events that were fused [foo, bar, baz]
-    fused_body: []const u8,         // The combined handler body
+    source_events: []DottedPath, // Original events that were fused [foo, bar, baz]
+    fused_body: []const u8, // The combined handler body
 
     // Input/output shapes (same as original event)
     input: Shape,
     branches: []const Branch,
 
     // Provenance
-    provenance: []const u8,         // Human-readable: "fused from foo → bar → baz"
+    provenance: []const u8, // Human-readable: "fused from foo → bar → baz"
 
     // FOUNDATIONAL: Every item knows where it came from
     location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },
@@ -1888,14 +1930,14 @@ pub const FusedEvent = struct {
 /// Represents a small event that should be inlined at callsites.
 /// Created by detecting small, pure events called from hot paths.
 pub const InlinedEvent = struct {
-    event_path: DottedPath,         // The event being inlined
+    event_path: DottedPath, // The event being inlined
 
     // Inline info
-    inline_body: []const u8,        // The inlined code
-    original_proc: ?*const ProcDecl = null,  // Pointer to original proc (if available)
+    inline_body: []const u8, // The inlined code
+    original_proc: ?*const ProcDecl = null, // Pointer to original proc (if available)
 
     // Provenance
-    inlined_from: DottedPath,       // Original event that was inlined
+    inlined_from: DottedPath, // Original event that was inlined
 
     // FOUNDATIONAL: Every item knows where it came from
     location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },
@@ -1914,7 +1956,7 @@ pub const InlinedEvent = struct {
 /// Created by transforms using template interpolation (e.g., ~if, ~for).
 /// This is the foundation for zero-overhead control flow and aggressive inlining.
 pub const InlineCode = struct {
-    code: []const u8,               // The generated code to emit verbatim
+    code: []const u8, // The generated code to emit verbatim
 
     // FOUNDATIONAL: Every item knows where it came from
     location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },
@@ -2089,9 +2131,7 @@ pub const ASTNode = union(enum) {
                         break :blk result;
                     },
                     // Leaf nodes (no children to traverse for transforms)
-                    .event_decl, .proc_decl, .event_tap, .label_decl, .immediate_impl, .import_decl,
-                    .host_line, .host_type_decl, .parse_error,
-                    .native_loop, .fused_event, .inlined_event, .inline_code => {
+                    .event_decl, .proc_decl, .event_tap, .label_decl, .immediate_impl, .import_decl, .host_line, .host_type_decl, .parse_error, .native_loop, .fused_event, .inlined_event, .inline_code => {
                         break :blk try allocator.alloc(ASTNode, 0);
                     },
                 }
@@ -2140,9 +2180,7 @@ pub const ASTNode = union(enum) {
                         break :blk result;
                     },
                     // Leaf step types
-                    .label_apply, .label_with_invocation, .label_jump,
-                    .terminal, .branch_constructor, .metatype_binding, .inline_code,
-                    .expression => {
+                    .label_apply, .label_with_invocation, .label_jump, .terminal, .branch_constructor, .metatype_binding, .inline_code, .expression => {
                         break :blk try allocator.alloc(ASTNode, 0);
                     },
                     // Foreach, conditional, switch_result have bodies handled via continuation traversal

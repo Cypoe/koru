@@ -231,19 +231,24 @@ pub fn emitBuildZigZon(
 
     try writer.writeAll(".{\n");
 
-    // Zig 0.15+ requires .name as an enum literal, not a string
-    // Use @"..." syntax if name contains non-identifier characters (hyphens, etc.)
-    const needs_at_quote = blk: {
-        for (project_name) |c| {
-            if (!std.ascii.isAlphanumeric(c) and c != '_') break :blk true;
+    // Zig 0.15+ requires .name as a BARE identifier — the `@"..."` escape
+    // parses as a token but the zon package-name rule refuses it outright
+    // ("name must be a valid bare zig identifier"), so every hyphenated
+    // directory emitted a zon zig could not load (measured: kopium-demo,
+    // chal-tui-gitgazer). Sanitize instead: non-[A-Za-z0-9_] becomes `_`,
+    // a leading digit gains a `_` prefix, empty becomes `koru_app`.
+    var sanitized = try std.ArrayList(u8).initCapacity(allocator, project_name.len + 1);
+    defer sanitized.deinit(allocator);
+    for (project_name, 0..) |c, ci| {
+        if (std.ascii.isAlphanumeric(c) or c == '_') {
+            if (ci == 0 and std.ascii.isDigit(c)) try sanitized.append(allocator, '_');
+            try sanitized.append(allocator, c);
+        } else {
+            try sanitized.append(allocator, '_');
         }
-        break :blk false;
-    };
-    if (needs_at_quote) {
-        try writer.print("    .name = .@\"{s}\",\n", .{project_name});
-    } else {
-        try writer.print("    .name = .{s},\n", .{project_name});
     }
+    if (sanitized.items.len == 0) try sanitized.appendSlice(allocator, "koru_app");
+    try writer.print("    .name = .{s},\n", .{sanitized.items});
 
     try writer.writeAll("    .version = \"0.0.0\",\n");
 
@@ -442,7 +447,7 @@ test "emit build.zig.zon with single dependency" {
     try std.testing.expect(std.mem.indexOf(u8, content, ".vaxis = .{") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "git+https://github.com/rockorager/libvaxis.git#abc123") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "vaxis-0.5.1-HASH") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, ".paths = .{\"\"}")  != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, ".paths = .{\"\"}") != null);
 }
 
 test "emit build.zig.zon with multiple dependencies" {
@@ -470,6 +475,31 @@ test "emit build.zig.zon with multiple dependencies" {
     try std.testing.expect(std.mem.indexOf(u8, content, ".zap = .{") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, ".name = .myproject,") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, ".fingerprint = 0x1234abcd,") != null);
+}
+
+test "emit build.zig.zon sanitizes non-identifier project names" {
+    const allocator = std.testing.allocator;
+
+    const requirements = [_][]const u8{
+        \\{ "name": "vaxis", "url": "git+https://example.com/vaxis#abc", "hash": "hash1" }
+    };
+
+    const output_path = "test_build_sanitized.zig.zon";
+    defer std.fs.cwd().deleteFile(output_path) catch {};
+
+    // Hyphenated directory basename (kopium-demo, chal-tui-gitgazer): the
+    // `@"..."` escape parses but the zon package-name rule refuses it, so the
+    // only honest emission is a sanitized bare identifier.
+    _ = try emitBuildZigZon(allocator, &requirements, output_path, "kopium-demo", null);
+
+    const file = try std.fs.cwd().openFile(output_path, .{});
+    defer file.close();
+
+    const content = try file.readToEndAlloc(allocator, 4096);
+    defer allocator.free(content);
+
+    try std.testing.expect(std.mem.indexOf(u8, content, ".name = .kopium_demo,") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, ".name = .@\"") == null);
 }
 
 test "resolveProjectName is stable per directory, not per entry file" {

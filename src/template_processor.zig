@@ -504,7 +504,6 @@ pub fn processTemplateProcs(
     try processPerCallInvocations(items, items, build_lang, allocator);
 }
 
-
 /// Walk all flows, rendering per-call templates at the invocation site.
 /// `all_items` is the full program root (for cross-module proc lookup);
 /// `items` is the scope currently being walked.
@@ -784,10 +783,12 @@ fn renderTemplateInvocation(
         else
             presence_text;
         if (i == 0) scrutinee_text = text;
-        const is_positional = std.mem.eql(u8, arg.name, arg.value);
-        const key = if (!is_positional)
-            arg.name
-        else if (event_decl) |ed| (if (i < ed.input.fields.len) ed.input.fields[i].name else arg.name) else arg.name;
+        // resolveArgParamName: a bare pun names its field even when a desugar
+        // appended it late; index is the fallback only for a name that is no field.
+        const key = if (event_decl) |ed|
+            ast.resolveArgParamName(arg, i, ed.input.fields)
+        else
+            arg.name;
         if (key.len > 0) {
             try ctx.put(key, .{ .string = text });
         }
@@ -1251,8 +1252,7 @@ fn firstTagEnd(target: []const u8) usize {
     var paren_depth: usize = 0;
     while (i < target.len) : (i += 1) {
         const c = target[i];
-        if (c == '(') paren_depth += 1
-        else if (c == ')') {
+        if (c == '(') paren_depth += 1 else if (c == ')') {
             if (paren_depth > 0) paren_depth -= 1;
         } else if (c == '|' and paren_depth == 0) {
             return i;
@@ -1277,7 +1277,6 @@ fn parseTag(tag: []const u8) TagParts {
     }
     return .{ .name = tag, .args = "" };
 }
-
 
 test "parse_fields: splits brace-optional, comma/newline-separated field lists" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);

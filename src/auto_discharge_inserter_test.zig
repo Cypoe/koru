@@ -265,3 +265,67 @@ test "findDisposalEvents excludes events with user-required extra inputs" {
 
     try std.testing.expectEqual(@as(usize, 0), disposals.len);
 }
+
+test "checkArityInInvocation: labelled pun arg (had_explicit_label) binds by name, not index" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+    const test_alloc = std.testing.allocator;
+
+    // `page: page` as a comptime transform emits it (the vaxis component synth
+    // produces exactly this inside `<paginator …/>`): name==value but the label
+    // flag is set, so the arg must resolve as the NAMED input `page`. The
+    // name==value pun heuristic is for BARE positionals (`paginator(x)`) —
+    // applying it to a labelled pun resolved `page` at arg index 2 to field[2]
+    // (`total`), `page` was reported missing, and the call was refused on a
+    // phantom omission (KORU080 — found via examples/component_paginator).
+    const source =
+        \\~tor paginator { win: i32, page: i32, total: i32, kind: i32 }
+        \\~paginator -> 0
+    ;
+
+    const empty_flags: []const []const u8 = &.{};
+    var parser = try Parser.init(arena_alloc, source, "test.kz", empty_flags, null);
+    defer parser.deinit();
+
+    var parse_result = try parser.parse();
+    defer parse_result.deinit();
+
+    var reporter = try errors.ErrorReporter.init(test_alloc, "test.kz", source);
+    defer reporter.deinit();
+
+    var inserter = try AutoDischargeInserter.init(test_alloc, &reporter, false, false, false);
+    defer inserter.deinit();
+
+    try inserter.buildEventMap(&parse_result.source_file);
+
+    const loc: errors.SourceLocation = .{ .line = 0, .column = 0, .file = "test.kz" };
+    const segs = [_][]const u8{"paginator"};
+
+    // The transform's emitted shape — labelled pun args out of declaration
+    // order. Every required input IS supplied; no error is the pass.
+    const labeled_args = [_]ast.Arg{
+        .{ .name = "win", .value = "w", .had_explicit_label = true },
+        .{ .name = "kind", .value = "\"dots\"", .had_explicit_label = true },
+        .{ .name = "page", .value = "page", .had_explicit_label = true },
+        .{ .name = "total", .value = "total", .had_explicit_label = true },
+    };
+    const labeled_inv: ast.Invocation = .{
+        .path = .{ .module_qualifier = null, .segments = &segs },
+        .args = &labeled_args,
+    };
+    try inserter.checkArityInInvocation(&labeled_inv, loc, "test");
+    try std.testing.expect(!reporter.hasErrors());
+
+    // Control: the same tuple WITHOUT the label flag is positional — arg 0
+    // binds `win`, and `page`/`total`/`kind` are genuinely missing.
+    const positional_args = [_]ast.Arg{
+        .{ .name = "w", .value = "w" },
+    };
+    const positional_inv: ast.Invocation = .{
+        .path = .{ .module_qualifier = null, .segments = &segs },
+        .args = &positional_args,
+    };
+    try inserter.checkArityInInvocation(&positional_inv, loc, "test");
+    try std.testing.expect(reporter.hasErrors());
+}

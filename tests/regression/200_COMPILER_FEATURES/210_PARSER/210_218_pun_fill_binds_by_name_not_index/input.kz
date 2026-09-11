@@ -1,0 +1,21 @@
+// PIN — a scalar-bind pun fill binds the field it NAMES, never the slot its
+// append index lands on.
+//
+// desugarBindingPuns appends the synthesized pun arg at the END of the arg
+// list. Here `x` fills `render-at`'s FIRST parameter but arrives at arg index
+// 1 — index resolution bound it to `text`, emitting `.text = x` (a host type
+// error downstream; KORU080 upstream). Name-first resolution (ast.
+// resolveArgParamName) binds `x` to `x` regardless of position.
+//
+// Found via examples/style_reuse.k — `write-styled`'s `style` fill survived
+// only because it appended at index 3 where field 3 happens to be `style`.
+const std = @import("std");
+~import std/io
+
+~tor mkx {} -> i32
+~proc mkx|zig { return 7; }
+
+~tor render-at { x: i32, text: string }
+~proc render-at|zig { std.debug.print("{d}:{s}\n", .{ x, text }); }
+
+~mkx(): x |> render-at(text: "pun")

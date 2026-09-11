@@ -2028,14 +2028,7 @@ fn emitStructLiteral(emitter: *CodeEmitter, ctx: *EmissionContext, value: []cons
                 while (entry_end < inner.len) {
                     const c = inner[entry_end];
                     if (!in_str) {
-                        if (c == '"') in_str = true
-                        else if (c == '(') depth_p += 1
-                        else if (c == ')' and depth_p > 0) depth_p -= 1
-                        else if (c == '{') depth_b += 1
-                        else if (c == '}' and depth_b > 0) depth_b -= 1
-                        else if (c == '[') depth_br += 1
-                        else if (c == ']' and depth_br > 0) depth_br -= 1
-                        else if (c == ',' and depth_p == 0 and depth_b == 0 and depth_br == 0) break;
+                        if (c == '"') in_str = true else if (c == '(') depth_p += 1 else if (c == ')' and depth_p > 0) depth_p -= 1 else if (c == '{') depth_b += 1 else if (c == '}' and depth_b > 0) depth_b -= 1 else if (c == '[') depth_br += 1 else if (c == ']' and depth_br > 0) depth_br -= 1 else if (c == ',' and depth_p == 0 and depth_b == 0 and depth_br == 0) break;
                     } else {
                         if (c == '"' and (entry_end == 0 or inner[entry_end - 1] != '\\')) in_str = false;
                     }
@@ -2826,7 +2819,7 @@ fn emitSubflowContinuationsWithDepth(
                 .main_module_name = main_module_name,
                 .current_source_event = source_event_name,
                 .bare_return_active = enclosing_bare_return,
-                    .produce_event = enclosing_event,
+                .produce_event = enclosing_event,
             };
             var label_contexts = std.StringHashMap(LabelContext).init(ctx.allocator);
             ctx.label_contexts = &label_contexts;
@@ -3130,7 +3123,7 @@ fn emitSubflowContinuationsWithDepth(
             .main_module_name = main_module_name, // Pass through for canonical event naming
             .current_source_event = source_event_name, // Set source event for inline tap emission!
             .bare_return_active = enclosing_bare_return,
-                    .produce_event = enclosing_event,
+            .produce_event = enclosing_event,
         };
         // A label-fold emitted through this subflow path (visitor emitter) still
         // runs `emitContinuationBody`'s `label_with_invocation` arm, which
@@ -3476,7 +3469,7 @@ fn emitSubflowContinuationsWithDepth(
             .main_module_name = main_module_name,
             .current_source_event = source_event_name,
             .bare_return_active = enclosing_bare_return,
-                    .produce_event = enclosing_event,
+            .produce_event = enclosing_event,
         };
         var result_counter_sole: usize = depth;
         try emitContinuationBody(emitter, &ctx_sole, &remaining_conts[0], &result_counter_sole);
@@ -3670,20 +3663,18 @@ fn emitSubflowContinuationsWithDepth(
                                 if (idx > 0) try emitter.write(", ");
                                 try emitter.write(" .");
 
-                                // Check if this is a positional arg (name == value indicates synthesized name)
-                                // If so, use the parameter name from the event signature
-                                const param_name = if (std.mem.eql(u8, arg.name, arg.value)) blk: {
-                                    // Positional arg - get name from event signature
+                                // Resolve the parameter this arg binds: a bare pun names
+                                // its field even when appended late; index is the fallback
+                                // for a name that is no field (ast.resolveArgParamName).
+                                const param_name = blk: {
                                     if (event_type) |et| {
                                         if (et.input_shape) |shape| {
-                                            if (idx < shape.fields.len) {
-                                                break :blk shape.fields[idx].name;
-                                            }
+                                            break :blk ast.resolveArgParamName(arg, idx, shape.fields);
                                         }
                                     }
                                     // Fallback: use arg.name (might produce invalid Zig)
                                     break :blk arg.name;
-                                } else arg.name;
+                                };
 
                                 try writeBranchName(emitter, param_name);
                                 try emitter.write(" = ");
@@ -4104,7 +4095,7 @@ fn emitSubflowContinuationsWithDepth(
             .main_module_name = main_module_name,
             .current_source_event = source_event_name,
             .bare_return_active = enclosing_bare_return,
-                    .produce_event = enclosing_event,
+            .produce_event = enclosing_event,
         };
         var result_counter_ca: usize = depth;
         try emitSubflowCatchallOptionalArms(
@@ -7755,302 +7746,301 @@ fn emitInvocation(
                 // and the per-event __koru_handler_impl).
             } else {
                 const event_decl = findEventDeclByPath(items, &invocation.path);
-            const immediate_bc = &immediate_impl.value;
-            // Emit: const result: EventType.Output = blk: {
-            //     const n = 5;  // bind input args
-            //     break :blk .{ .branch = value };
-            // };
-            // Use a labeled block to scope the input bindings and avoid redeclaration.
-            // `-> T` bare return: bind to the call-site `-> name` (return_binding),
-            // type is the bare return_type (not `.Output`), and the block yields the
-            // value directly (no tagged union) — see the `break :blk` below.
-            const bare_return = immediate_bc.is_bare_return;
-            const named_bind = if (bare_return)
-                (invocation.return_binding orelse result_var)
-            else
-                result_var;
-            // A `: _` discard still needs the typed labeled block (the break's
-            // anonymous literal has no result type without it), but Zig has no
-            // `_: T = …` form — bind a scoped const and discard it after.
-            const bind_discarded = std.mem.eql(u8, named_bind, "_");
-            var imm_disc_buf: [48]u8 = undefined;
-            const bind_name = if (bind_discarded) blk: {
-                const n = std.fmt.bufPrint(&imm_disc_buf, "__koru_imm_disc_{d}", .{ctx.proc_label_counter}) catch "__koru_imm_disc";
-                ctx.proc_label_counter += 1;
-                break :blk n;
-            } else named_bind;
-            try emitter.writeIndent();
-            try emitter.write("const ");
-            try emitter.write(bind_name);
-            try emitter.write(": ");
-            if (bare_return and event_decl != null and event_decl.?.return_type != null) {
-                const decl_mod: ?[]const u8 = blk: {
-                    if (invocation.path.module_qualifier) |mq| break :blk mq;
-                    if (event_decl.?.module.len > 0) break :blk event_decl.?.module;
-                    break :blk null;
-                };
-                // Re-attach the parser-lifted return phantom so a module-
-                // qualified one (`-> *List_i64<std/list:list!>`) qualifies the
-                // base to its home module here too — same resolution as the
-                // handler Output (660_027). Without it the annotation emits
-                // via declaring_module and names a type this scope never
-                // declared (`*main_module.List_i64`).
-                var rt_out = event_decl.?.return_type.?;
-                var rejoined: ?[]const u8 = null;
-                if (event_decl.?.return_phantom) |rp| {
-                    if (emitter.allocator) |a| {
-                        rejoined = std.fmt.allocPrint(a, "{s}<{s}>", .{ event_decl.?.return_type.?, rp }) catch null;
-                        if (rejoined) |b| rt_out = b;
-                    }
-                }
-                try writeBareReturnType(emitter, rt_out, ctx.main_module_name, decl_mod);
-            } else {
-                try emitInvocationTarget(emitter, ctx, &invocation.path);
-                try emitter.write(".Output");
-            }
-            try emitter.write(" = blk: {\n");
-
-            emitter.indent_level += 1;
-
-            const max_param_aliases = 8;
-            var alias_params: [max_param_aliases][]const u8 = undefined;
-            var alias_values: [max_param_aliases][]const u8 = undefined;
-            var alias_count: usize = 0;
-
-            // Bind input arguments so they're available in the expression
-            // e.g., for ~double(n: 5) with ~double = result { n * 2 }
-            // we need: const n = 5;
-            // Skip if:
-            //   - pass-through: param name equals a simple identifier value already in scope
-            //     (echo(v: v), echo(v)) — rebinding inside the blk shadows continuation bindings
-            //   - bare-return alias: param maps to the call-site argument — substitute
-            //     in the plain value instead of rebinding (read(s: i.name) → i.name.data)
-            //   - arg.name is not referenced in the immediate expression (avoid shadowing outer scope)
-            for (invocation.args, 0..) |arg, arg_idx| {
-                // Resolve actual parameter name for positional args
-                // e.g., ~greet("World") where arg.name == arg.value == "\"World\""
-                // but event signature has { name: []const u8 } -> use "name"
-                const param_name = if (std.mem.eql(u8, arg.name, arg.value)) blk_name: {
-                    // Positional arg - look up name from event signature
-                    if (event_decl) |ev| {
-                        if (arg_idx < ev.input.fields.len) {
-                            break :blk_name ev.input.fields[arg_idx].name;
-                        }
-                    }
-                    // No event decl or out of bounds - skip this arg (can't resolve)
-                    continue;
-                } else arg.name;
-
-                // Pass-through from an outer binding — use the in-scope name directly.
-                const trimmed_value = std.mem.trim(u8, arg.value, " \t");
-                if (isSimpleIdentifier(trimmed_value) and std.mem.eql(u8, param_name, trimmed_value)) {
-                    continue;
-                }
-
-                if (bare_return) {
-                    if (immediate_bc.plain_value) |pv| {
-                        if (containsIdentifier(pv, param_name)) {
-                            if (alias_count < max_param_aliases) {
-                                alias_params[alias_count] = param_name;
-                                alias_values[alias_count] = trimmed_value;
-                                alias_count += 1;
-                            }
-                            continue;
-                        }
-                    }
-                }
-
-                // Check if this parameter is actually used in the immediate expression
-                // If not, skip it to avoid shadowing outer scope variables
-                const expr_to_check = if (immediate_bc.plain_value) |pv| pv else blk2: {
-                    // Check all field expressions
-                    var is_used = false;
-                    for (immediate_bc.fields) |field| {
-                        const field_val = if (field.expression_str) |e| e else field.type;
-                        if (containsIdentifier(field_val, param_name)) {
-                            is_used = true;
-                            break;
-                        }
-                    }
-                    if (!is_used) continue;
-                    break :blk2 "";
-                };
-                if (expr_to_check.len > 0 and !containsIdentifier(expr_to_check, param_name)) {
-                    continue;
-                }
+                const immediate_bc = &immediate_impl.value;
+                // Emit: const result: EventType.Output = blk: {
+                //     const n = 5;  // bind input args
+                //     break :blk .{ .branch = value };
+                // };
+                // Use a labeled block to scope the input bindings and avoid redeclaration.
+                // `-> T` bare return: bind to the call-site `-> name` (return_binding),
+                // type is the bare return_type (not `.Output`), and the block yields the
+                // value directly (no tagged union) — see the `break :blk` below.
+                const bare_return = immediate_bc.is_bare_return;
+                const named_bind = if (bare_return)
+                    (invocation.return_binding orelse result_var)
+                else
+                    result_var;
+                // A `: _` discard still needs the typed labeled block (the break's
+                // anonymous literal has no result type without it), but Zig has no
+                // `_: T = …` form — bind a scoped const and discard it after.
+                const bind_discarded = std.mem.eql(u8, named_bind, "_");
+                var imm_disc_buf: [48]u8 = undefined;
+                const bind_name = if (bind_discarded) blk: {
+                    const n = std.fmt.bufPrint(&imm_disc_buf, "__koru_imm_disc_{d}", .{ctx.proc_label_counter}) catch "__koru_imm_disc";
+                    ctx.proc_label_counter += 1;
+                    break :blk n;
+                } else named_bind;
                 try emitter.writeIndent();
                 try emitter.write("const ");
-                try writeBranchName(emitter, param_name);
-                try emitter.write(" = ");
-                try emitValue(emitter, ctx, arg.value);
-                try emitter.write(";\n");
-                // Suppress unused variable warning (for mocks that return constants)
-                try emitter.writeIndent();
-                try emitter.write("_ = &");
-                try writeBranchName(emitter, param_name);
-                try emitter.write(";\n");
-            }
-
-            // DEFAULT INJECTION. The struct-literal paths get defaults for free
-            // — the generated `Input` struct carries `= <default>` and Zig
-            // applies it. An INLINED call has no Input struct: it binds each
-            // parameter from the call site's own args, so a parameter the
-            // author omitted simply never comes into scope and the default
-            // vanishes (400_185, green twin 400_186 on the proc path).
-            //
-            // Presence is read off `invocation.args`, not off what the loop
-            // above emitted: a pass-through or aliased argument is supplied and
-            // deliberately NOT rebound.
-            if (event_decl) |ev| {
-                for (ev.input.fields) |field| {
-                    const dflt = field.default orelse continue;
-                    var supplied = false;
-                    for (invocation.args, 0..) |arg, i| {
-                        const resolved = if (std.mem.eql(u8, arg.name, arg.value) and i < ev.input.fields.len)
-                            ev.input.fields[i].name
-                        else
-                            arg.name;
-                        if (std.mem.eql(u8, resolved, field.name)) {
-                            supplied = true;
-                            break;
+                try emitter.write(bind_name);
+                try emitter.write(": ");
+                if (bare_return and event_decl != null and event_decl.?.return_type != null) {
+                    const decl_mod: ?[]const u8 = blk: {
+                        if (invocation.path.module_qualifier) |mq| break :blk mq;
+                        if (event_decl.?.module.len > 0) break :blk event_decl.?.module;
+                        break :blk null;
+                    };
+                    // Re-attach the parser-lifted return phantom so a module-
+                    // qualified one (`-> *List_i64<std/list:list!>`) qualifies the
+                    // base to its home module here too — same resolution as the
+                    // handler Output (660_027). Without it the annotation emits
+                    // via declaring_module and names a type this scope never
+                    // declared (`*main_module.List_i64`).
+                    var rt_out = event_decl.?.return_type.?;
+                    var rejoined: ?[]const u8 = null;
+                    if (event_decl.?.return_phantom) |rp| {
+                        if (emitter.allocator) |a| {
+                            rejoined = std.fmt.allocPrint(a, "{s}<{s}>", .{ event_decl.?.return_type.?, rp }) catch null;
+                            if (rejoined) |b| rt_out = b;
                         }
                     }
-                    if (supplied) continue;
-                    try emitter.writeIndent();
-                    try emitter.write("const ");
-                    try writeBranchName(emitter, field.name);
-                    try emitter.write(" = ");
-                    try emitter.write(dflt);
-                    try emitter.write(";\n");
-                    try emitter.writeIndent();
-                    try emitter.write("_ = &");
-                    try writeBranchName(emitter, field.name);
-                    try emitter.write(";\n");
-                }
-            }
-
-            // Emit the break with the branch constructor (or the bare value).
-            try emitter.writeIndent();
-            try emitter.write("break :blk ");
-            if (bare_return) {
-                // `-> T`: yield the expression directly, no `.{ .name = ... }` wrap.
-                if (immediate_bc.plain_value) |pv| {
-                    if (alias_count > 0) {
-                        const a = emitter.allocator orelse std.heap.page_allocator;
-                        const substituted = try substituteParamNamesInPlainValue(
-                            a,
-                            pv,
-                            alias_params[0..alias_count],
-                            alias_values[0..alias_count],
-                        );
-                        defer a.free(substituted);
-                        try emitValue(emitter, ctx, substituted);
-                    } else {
-                        try emitValue(emitter, ctx, pv);
-                    }
+                    try writeBareReturnType(emitter, rt_out, ctx.main_module_name, decl_mod);
                 } else {
-                    try emitter.write("undefined");
+                    try emitInvocationTarget(emitter, ctx, &invocation.path);
+                    try emitter.write(".Output");
                 }
-            } else if (event_decl) |event| {
-                try emitBranchConstructorWithEvent(emitter, ctx, &immediate_impl.value, event);
-            } else if (ctx.type_registry) |type_registry| {
-                var resolved_event_type: ?type_registry_module.EventType = null;
+                try emitter.write(" = blk: {\n");
 
-                const canonical = try buildCanonicalEventName(&immediate_impl.event_path, ctx.allocator, ctx.main_module_name);
-                defer ctx.allocator.free(canonical);
-                if (type_registry.getEventType(canonical)) |event_type| {
-                    resolved_event_type = event_type;
-                }
+                emitter.indent_level += 1;
 
-                if (resolved_event_type == null) {
-                    const fallback_canonical = try buildCanonicalEventName(&invocation.path, ctx.allocator, ctx.main_module_name);
-                    defer ctx.allocator.free(fallback_canonical);
-                    if (type_registry.getEventType(fallback_canonical)) |event_type| {
-                        resolved_event_type = event_type;
+                const max_param_aliases = 8;
+                var alias_params: [max_param_aliases][]const u8 = undefined;
+                var alias_values: [max_param_aliases][]const u8 = undefined;
+                var alias_count: usize = 0;
+
+                // Bind input arguments so they're available in the expression
+                // e.g., for ~double(n: 5) with ~double = result { n * 2 }
+                // we need: const n = 5;
+                // Skip if:
+                //   - pass-through: param name equals a simple identifier value already in scope
+                //     (echo(v: v), echo(v)) — rebinding inside the blk shadows continuation bindings
+                //   - bare-return alias: param maps to the call-site argument — substitute
+                //     in the plain value instead of rebinding (read(s: i.name) → i.name.data)
+                //   - arg.name is not referenced in the immediate expression (avoid shadowing outer scope)
+                for (invocation.args, 0..) |arg, arg_idx| {
+                    // Resolve actual parameter name for positional args
+                    // e.g., ~greet("World") where arg.name == arg.value == "\"World\""
+                    // but event signature has { name: []const u8 } -> use "name"
+                    const param_name = if (!arg.had_explicit_label and std.mem.eql(u8, arg.name, arg.value)) blk_name: {
+                        // Bare pun: name-bind when it names a field (desugars append
+                        // pun fills late, so index resolution would misbind); index
+                        // is the fallback for a name that is no field.
+                        if (event_decl) |ev| {
+                            if (ast.resolveArgFieldIndex(arg, arg_idx, ev.input.fields)) |fi| {
+                                break :blk_name ev.input.fields[fi].name;
+                            }
+                        }
+                        // No event decl or out of bounds - skip this arg (can't resolve)
+                        continue;
+                    } else arg.name;
+
+                    // Pass-through from an outer binding — use the in-scope name directly.
+                    const trimmed_value = std.mem.trim(u8, arg.value, " \t");
+                    if (isSimpleIdentifier(trimmed_value) and std.mem.eql(u8, param_name, trimmed_value)) {
+                        continue;
                     }
-                }
 
-                if (resolved_event_type == null) {
-                    if (invocation.path.module_qualifier) |mq| {
-                        if (resolveModuleAlias(mq, items)) |resolved| {
-                            var temp_path = ast.DottedPath{
-                                .module_qualifier = resolved,
-                                .segments = invocation.path.segments,
-                            };
-                            const alt_canonical = try buildCanonicalEventName(&temp_path, ctx.allocator, ctx.main_module_name);
-                            defer ctx.allocator.free(alt_canonical);
-                            if (type_registry.getEventType(alt_canonical)) |event_type| {
-                                resolved_event_type = event_type;
+                    if (bare_return) {
+                        if (immediate_bc.plain_value) |pv| {
+                            if (containsIdentifier(pv, param_name)) {
+                                if (alias_count < max_param_aliases) {
+                                    alias_params[alias_count] = param_name;
+                                    alias_values[alias_count] = trimmed_value;
+                                    alias_count += 1;
+                                }
+                                continue;
                             }
                         }
                     }
+
+                    // Check if this parameter is actually used in the immediate expression
+                    // If not, skip it to avoid shadowing outer scope variables
+                    const expr_to_check = if (immediate_bc.plain_value) |pv| pv else blk2: {
+                        // Check all field expressions
+                        var is_used = false;
+                        for (immediate_bc.fields) |field| {
+                            const field_val = if (field.expression_str) |e| e else field.type;
+                            if (containsIdentifier(field_val, param_name)) {
+                                is_used = true;
+                                break;
+                            }
+                        }
+                        if (!is_used) continue;
+                        break :blk2 "";
+                    };
+                    if (expr_to_check.len > 0 and !containsIdentifier(expr_to_check, param_name)) {
+                        continue;
+                    }
+                    try emitter.writeIndent();
+                    try emitter.write("const ");
+                    try writeBranchName(emitter, param_name);
+                    try emitter.write(" = ");
+                    try emitValue(emitter, ctx, arg.value);
+                    try emitter.write(";\n");
+                    // Suppress unused variable warning (for mocks that return constants)
+                    try emitter.writeIndent();
+                    try emitter.write("_ = &");
+                    try writeBranchName(emitter, param_name);
+                    try emitter.write(";\n");
                 }
 
-                if (resolved_event_type == null) {
-                    var match_count: usize = 0;
-                    var import_iter = type_registry.imports.iterator();
-                    while (import_iter.next()) |entry| {
-                        const module_path = entry.value_ptr.*;
-                        var temp_path = ast.DottedPath{
-                            .module_qualifier = module_path,
-                            .segments = invocation.path.segments,
-                        };
-                        const import_canonical = try buildCanonicalEventName(&temp_path, ctx.allocator, ctx.main_module_name);
-                        defer ctx.allocator.free(import_canonical);
-                        if (type_registry.getEventType(import_canonical)) |event_type| {
-                            match_count += 1;
+                // DEFAULT INJECTION. The struct-literal paths get defaults for free
+                // — the generated `Input` struct carries `= <default>` and Zig
+                // applies it. An INLINED call has no Input struct: it binds each
+                // parameter from the call site's own args, so a parameter the
+                // author omitted simply never comes into scope and the default
+                // vanishes (400_185, green twin 400_186 on the proc path).
+                //
+                // Presence is read off `invocation.args`, not off what the loop
+                // above emitted: a pass-through or aliased argument is supplied and
+                // deliberately NOT rebound.
+                if (event_decl) |ev| {
+                    for (ev.input.fields) |field| {
+                        const dflt = field.default orelse continue;
+                        var supplied = false;
+                        for (invocation.args, 0..) |arg, i| {
+                            const resolved = ast.resolveArgParamName(arg, i, ev.input.fields);
+                            if (std.mem.eql(u8, resolved, field.name)) {
+                                supplied = true;
+                                break;
+                            }
+                        }
+                        if (supplied) continue;
+                        try emitter.writeIndent();
+                        try emitter.write("const ");
+                        try writeBranchName(emitter, field.name);
+                        try emitter.write(" = ");
+                        try emitter.write(dflt);
+                        try emitter.write(";\n");
+                        try emitter.writeIndent();
+                        try emitter.write("_ = &");
+                        try writeBranchName(emitter, field.name);
+                        try emitter.write(";\n");
+                    }
+                }
+
+                // Emit the break with the branch constructor (or the bare value).
+                try emitter.writeIndent();
+                try emitter.write("break :blk ");
+                if (bare_return) {
+                    // `-> T`: yield the expression directly, no `.{ .name = ... }` wrap.
+                    if (immediate_bc.plain_value) |pv| {
+                        if (alias_count > 0) {
+                            const a = emitter.allocator orelse std.heap.page_allocator;
+                            const substituted = try substituteParamNamesInPlainValue(
+                                a,
+                                pv,
+                                alias_params[0..alias_count],
+                                alias_values[0..alias_count],
+                            );
+                            defer a.free(substituted);
+                            try emitValue(emitter, ctx, substituted);
+                        } else {
+                            try emitValue(emitter, ctx, pv);
+                        }
+                    } else {
+                        try emitter.write("undefined");
+                    }
+                } else if (event_decl) |event| {
+                    try emitBranchConstructorWithEvent(emitter, ctx, &immediate_impl.value, event);
+                } else if (ctx.type_registry) |type_registry| {
+                    var resolved_event_type: ?type_registry_module.EventType = null;
+
+                    const canonical = try buildCanonicalEventName(&immediate_impl.event_path, ctx.allocator, ctx.main_module_name);
+                    defer ctx.allocator.free(canonical);
+                    if (type_registry.getEventType(canonical)) |event_type| {
+                        resolved_event_type = event_type;
+                    }
+
+                    if (resolved_event_type == null) {
+                        const fallback_canonical = try buildCanonicalEventName(&invocation.path, ctx.allocator, ctx.main_module_name);
+                        defer ctx.allocator.free(fallback_canonical);
+                        if (type_registry.getEventType(fallback_canonical)) |event_type| {
                             resolved_event_type = event_type;
+                        }
+                    }
+
+                    if (resolved_event_type == null) {
+                        if (invocation.path.module_qualifier) |mq| {
+                            if (resolveModuleAlias(mq, items)) |resolved| {
+                                var temp_path = ast.DottedPath{
+                                    .module_qualifier = resolved,
+                                    .segments = invocation.path.segments,
+                                };
+                                const alt_canonical = try buildCanonicalEventName(&temp_path, ctx.allocator, ctx.main_module_name);
+                                defer ctx.allocator.free(alt_canonical);
+                                if (type_registry.getEventType(alt_canonical)) |event_type| {
+                                    resolved_event_type = event_type;
+                                }
+                            }
+                        }
+                    }
+
+                    if (resolved_event_type == null) {
+                        var match_count: usize = 0;
+                        var import_iter = type_registry.imports.iterator();
+                        while (import_iter.next()) |entry| {
+                            const module_path = entry.value_ptr.*;
+                            var temp_path = ast.DottedPath{
+                                .module_qualifier = module_path,
+                                .segments = invocation.path.segments,
+                            };
+                            const import_canonical = try buildCanonicalEventName(&temp_path, ctx.allocator, ctx.main_module_name);
+                            defer ctx.allocator.free(import_canonical);
+                            if (type_registry.getEventType(import_canonical)) |event_type| {
+                                match_count += 1;
+                                resolved_event_type = event_type;
+                                if (match_count > 1) {
+                                    resolved_event_type = null;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if (resolved_event_type == null) {
+                        var match_count: usize = 0;
+                        var event_iter = type_registry.events.iterator();
+                        while (event_iter.next()) |entry| {
+                            const event_name = entry.key_ptr.*;
+                            const colon_idx = std.mem.indexOfScalar(u8, event_name, ':') orelse continue;
+                            const path_part = event_name[colon_idx + 1 ..];
+
+                            var seg_iter = std.mem.splitScalar(u8, path_part, '.');
+                            var seg_index: usize = 0;
+                            var matches = true;
+                            while (seg_iter.next()) |seg| {
+                                if (seg_index >= invocation.path.segments.len or !std.mem.eql(u8, seg, invocation.path.segments[seg_index])) {
+                                    matches = false;
+                                    break;
+                                }
+                                seg_index += 1;
+                            }
+                            if (!matches or seg_index != invocation.path.segments.len) continue;
+
+                            match_count += 1;
+                            resolved_event_type = entry.value_ptr.*;
                             if (match_count > 1) {
                                 resolved_event_type = null;
                                 break;
                             }
                         }
                     }
-                }
 
-                if (resolved_event_type == null) {
-                    var match_count: usize = 0;
-                    var event_iter = type_registry.events.iterator();
-                    while (event_iter.next()) |entry| {
-                        const event_name = entry.key_ptr.*;
-                        const colon_idx = std.mem.indexOfScalar(u8, event_name, ':') orelse continue;
-                        const path_part = event_name[colon_idx + 1 ..];
-
-                        var seg_iter = std.mem.splitScalar(u8, path_part, '.');
-                        var seg_index: usize = 0;
-                        var matches = true;
-                        while (seg_iter.next()) |seg| {
-                            if (seg_index >= invocation.path.segments.len or !std.mem.eql(u8, seg, invocation.path.segments[seg_index])) {
-                                matches = false;
-                                break;
-                            }
-                            seg_index += 1;
-                        }
-                        if (!matches or seg_index != invocation.path.segments.len) continue;
-
-                        match_count += 1;
-                        resolved_event_type = entry.value_ptr.*;
-                        if (match_count > 1) {
-                            resolved_event_type = null;
-                            break;
-                        }
+                    if (resolved_event_type) |event_type| {
+                        try emitBranchConstructorWithEventType(emitter, ctx, &immediate_impl.value, event_type);
+                    } else {
+                        try emitBranchConstructor(emitter, ctx, &immediate_impl.value, true);
                     }
-                }
-
-                if (resolved_event_type) |event_type| {
-                    try emitBranchConstructorWithEventType(emitter, ctx, &immediate_impl.value, event_type);
                 } else {
                     try emitBranchConstructor(emitter, ctx, &immediate_impl.value, true);
                 }
-            } else {
-                try emitBranchConstructor(emitter, ctx, &immediate_impl.value, true);
-            }
-            try emitter.write(";\n");
+                try emitter.write(";\n");
 
-            emitter.indent_level -= 1;
-            try emitter.writeIndent();
-            try emitter.write("};\n");
-            if (bind_discarded) {
+                emitter.indent_level -= 1;
+                try emitter.writeIndent();
+                try emitter.write("};\n");
+                if (bind_discarded) {
                     try emitter.writeIndent();
                     try emitter.write("_ = ");
                     try emitter.write(bind_name);
@@ -8288,18 +8278,15 @@ fn emitArgs(emitter: *CodeEmitter, ctx: *EmissionContext, args: []const ast.Arg,
         }
         try emitter.write(".");
 
-        // Check if this is a positional arg (name == value indicates synthesized name)
-        // If so, use the parameter name from the event signature
-        const param_name = if (std.mem.eql(u8, arg.name, arg.value)) blk: {
-            // Positional arg - get name from event signature
+        // Resolve the parameter this arg binds: a bare pun names its field even
+        // when appended late; index is the fallback for a name that is no field.
+        const param_name = blk: {
             if (event_decl) |event| {
-                if (idx < event.input.fields.len) {
-                    break :blk event.input.fields[idx].name;
-                }
+                break :blk ast.resolveArgParamName(arg, idx, event.input.fields);
             }
             // Fallback: use arg.name (might produce invalid Zig)
             break :blk arg.name;
-        } else arg.name;
+        };
 
         try writeBranchName(emitter, param_name);
         try emitter.write(" = ");
@@ -11974,8 +11961,8 @@ pub fn emitBareReturnOutput(emitter: *CodeEmitter, event: *const ast.EventDecl, 
 fn isModuleLocalBareTypeBase(name: []const u8) bool {
     if (name.len == 0) return false;
     const scalars = [_][]const u8{
-        "anytype", "bool",   "f16",    "f32",    "f64",    "f128", "i8",  "i16", "i32",
-        "i64",     "i128",  "isize",  "noreturn", "string", "u8",  "u16", "u32", "u64",
+        "anytype", "bool",  "f16",   "f32",      "f64",    "f128", "i8",  "i16", "i32",
+        "i64",     "i128",  "isize", "noreturn", "string", "u8",   "u16", "u32", "u64",
         "u128",    "usize", "void",
     };
     for (scalars) |scalar| {
@@ -12104,8 +12091,8 @@ pub fn writeBareReturnType(
     // needs the same courtesy, or the reference is undeclared. Exact-match (not
     // substring) so a user type merely CONTAINING one of these names is untouched.
     const ast_return_types = [_][]const u8{
-        "ExplainReport", "SiteResult",  "Program",     "Item",  "Source",
-        "Invocation",    "EventDecl",   "ProcDecl",    "Flow",  "Branch",
+        "ExplainReport", "SiteResult", "Program",  "Item", "Source",
+        "Invocation",    "EventDecl",  "ProcDecl", "Flow", "Branch",
         "Continuation",  "ASTNode",
     };
     for (ast_return_types) |t| {

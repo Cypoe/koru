@@ -932,7 +932,7 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
                                     if (i > 0) try writer.writeAll(", ");
                                     try writer.writeAll(" .");
                                     // Check if this is a positional argument (name starts with quote or is the value)
-                                    if (arg.name.len > 0 and (arg.name[0] == '"' or std.mem.eql(u8, arg.name, arg.value))) {
+                                    if (arg.name.len > 0 and (arg.name[0] == '"' or (!arg.had_explicit_label and std.mem.eql(u8, arg.name, arg.value)))) {
                                         // Positional argument - use "text" as field name for now
                                         try writer.writeAll("text");
                                     } else {
@@ -1023,7 +1023,7 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
                                         if (i > 0) try writer.writeAll(", ");
                                         try writer.writeAll(" .");
                                         // Check if this is a positional argument (name starts with quote or is the value)
-                                        if (arg.name.len > 0 and (arg.name[0] == '"' or std.mem.eql(u8, arg.name, arg.value))) {
+                                        if (arg.name.len > 0 and (arg.name[0] == '"' or (!arg.had_explicit_label and std.mem.eql(u8, arg.name, arg.value)))) {
                                             // Positional argument - use "text" as field name for now
                                             try writer.writeAll("text");
                                         } else {
@@ -2305,7 +2305,6 @@ fn collectExplainers(allocator: std.mem.Allocator, source_file: *ast.Program) ![
     return list.toOwnedSlice(allocator);
 }
 
-
 /// Generate transform handlers to CodeEmitter (for backend_output_emitted.zig).
 /// Emits a `call_handler_<stub>` wrapper per [comptime|transform] event (each
 /// returns ast.SiteResult — the site-local write-back ABI) plus the dispatch
@@ -2428,7 +2427,8 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                             // Check for old-style struct field or identity syntax (__type_ref)
                             if (std.mem.eql(u8, field.name, "program") or
                                 (std.mem.eql(u8, field.name, "__type_ref") and
-                                 (std.mem.indexOf(u8, field.type, "Program") != null or std.mem.indexOf(u8, field.type, "SiteResult") != null))) {
+                                    (std.mem.indexOf(u8, field.type, "Program") != null or std.mem.indexOf(u8, field.type, "SiteResult") != null)))
+                            {
                                 returns_program = true;
                                 break;
                             }
@@ -2437,7 +2437,8 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                         has_failed = true;
                         // Check if it's an identity branch (single __type_ref field)
                         if (branch.payload.fields.len == 1 and
-                            std.mem.eql(u8, branch.payload.fields[0].name, "__type_ref")) {
+                            std.mem.eql(u8, branch.payload.fields[0].name, "__type_ref"))
+                        {
                             failed_is_identity = true;
                         }
                     } else if (std.mem.eql(u8, branch.name, "compile_error")) {
@@ -2632,7 +2633,8 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                                     // Check for old-style struct field or identity syntax (__type_ref)
                                     if (std.mem.eql(u8, field.name, "program") or
                                         (std.mem.eql(u8, field.name, "__type_ref") and
-                                         (std.mem.indexOf(u8, field.type, "Program") != null or std.mem.indexOf(u8, field.type, "SiteResult") != null))) {
+                                            (std.mem.indexOf(u8, field.type, "Program") != null or std.mem.indexOf(u8, field.type, "SiteResult") != null)))
+                                    {
                                         returns_program = true;
                                         break;
                                     }
@@ -2641,7 +2643,8 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                                 has_failed = true;
                                 // Check if it's an identity branch (single __type_ref field)
                                 if (branch.payload.fields.len == 1 and
-                                    std.mem.eql(u8, branch.payload.fields[0].name, "__type_ref")) {
+                                    std.mem.eql(u8, branch.payload.fields[0].name, "__type_ref"))
+                                {
                                     failed_is_identity = true;
                                 }
                             } else if (std.mem.eql(u8, branch.name, "compile_error")) {
@@ -3036,12 +3039,12 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                     var canonical_len: usize = 0;
                     if (event.module_path) |mp| {
                         const stripped = if (std.mem.startsWith(u8, mp, "koru_")) mp[5..] else mp;
-                        @memcpy(canonical_buf[canonical_len..canonical_len + stripped.len], stripped);
+                        @memcpy(canonical_buf[canonical_len .. canonical_len + stripped.len], stripped);
                         canonical_len += stripped.len;
                         canonical_buf[canonical_len] = ':';
                         canonical_len += 1;
                     }
-                    @memcpy(canonical_buf[canonical_len..canonical_len + event.match_name.len], event.match_name);
+                    @memcpy(canonical_buf[canonical_len .. canonical_len + event.match_name.len], event.match_name);
                     canonical_len += event.match_name.len;
                     const canonical_name = canonical_buf[0..canonical_len];
 
@@ -3876,14 +3879,12 @@ fn installZigDirect(allocator: std.mem.Allocator) !void {
     std.debug.print("\n  Add to PATH: export PATH=\"{s}:$PATH\"\n", .{zig_path});
 }
 
-
 // The diagnostic sink. It lives in `errors` beside `printErrors`, which is the
 // only thing that consumes it — four copies of this struct existed and three
 // were wrong, because `printErrors(writer: anytype)` shipped no implementation
 // for anyone to reach for. The name stays local so the 16 call sites below read
 // unchanged; the behaviour and its test live in one place.
 const FileWriter = errors.FileSink;
-
 
 // Split usage into header and footer for dynamic command insertion
 const usage_header =
@@ -6285,19 +6286,15 @@ pub fn main() !void {
                 if (std.mem.endsWith(u8, arg, "koruc")) continue;
 
                 if (koruModuleExists(allocator, arg)) {
-                    try printStderr(allocator,
-                        "error: `koruc deps {s}` has the arguments the wrong way round\n\n" ++
+                    try printStderr(allocator, "error: `koruc deps {s}` has the arguments the wrong way round\n\n" ++
                         "  `deps` is a command ON a module, so the module comes first:\n" ++
                         "      koruc {s} deps\n\n" ++
-                        "  Bare `koruc deps` checks the toolchain itself and takes no module.\n",
-                        .{ arg, arg });
+                        "  Bare `koruc deps` checks the toolchain itself and takes no module.\n", .{ arg, arg });
                 } else {
-                    try printStderr(allocator,
-                        "error: `koruc deps` does not take an argument `{s}`\n\n" ++
+                    try printStderr(allocator, "error: `koruc deps` does not take an argument `{s}`\n\n" ++
                         "  Bare `koruc deps` checks the toolchain; `koruc deps install` upgrades it.\n" ++
                         "  To inspect a project's dependencies, name the module first:\n" ++
-                        "      koruc <module> deps\n",
-                        .{arg});
+                        "      koruc <module> deps\n", .{arg});
                 }
                 std.process.exit(1);
             }
@@ -7885,7 +7882,7 @@ pub fn main() !void {
         child.cwd = output_dir_for_build;
         child.stdin_behavior = .Inherit; // Allow interactive stdin for the --inter TUI
         child.stdout_behavior = .Inherit; // Stream output directly
-        child.stderr_behavior = .Pipe;    // Capture for filtering on failure
+        child.stderr_behavior = .Pipe; // Capture for filtering on failure
 
         try child.spawn();
 

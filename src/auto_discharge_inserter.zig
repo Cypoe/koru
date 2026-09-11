@@ -1086,7 +1086,7 @@ pub const AutoDischargeInserter = struct {
         for (cont.continuations) |*c| try self.checkArityInContinuation(c, loc, home);
     }
 
-    fn checkArityInInvocation(self: *AutoDischargeInserter, inv: *const ast.Invocation, loc: errors.SourceLocation, home: []const u8) !void {
+    pub fn checkArityInInvocation(self: *AutoDischargeInserter, inv: *const ast.Invocation, loc: errors.SourceLocation, home: []const u8) !void {
         if (inv.path.segments.len == 0) return;
         // A site carrying `inline_body` is NOT a call. Its transform already
         // lowered the whole thing into the enclosing scope and left the
@@ -1116,10 +1116,10 @@ pub const AutoDischargeInserter = struct {
             if (!callSiteMustSupply(field)) continue;
             var supplied = false;
             for (inv.args, 0..) |arg, i| {
-                const resolved = if (std.mem.eql(u8, arg.name, arg.value) and i < info.decl.input.fields.len)
-                    info.decl.input.fields[i].name
-                else
-                    arg.name;
+                // Pun args bind by NAME even when a desugar appended them late —
+                // index is only the fallback for a name that is no field
+                // (resolveArgParamName; style_reuse's write-at/x misresolution).
+                const resolved = ast.resolveArgParamName(arg, i, info.decl.input.fields);
                 if (std.mem.eql(u8, resolved, field.name)) {
                     supplied = true;
                     break;
@@ -1148,9 +1148,9 @@ pub const AutoDischargeInserter = struct {
         // Comptime-transform machinery, recognised by type. These are the
         // parameters `~[comptime|transform]` shapes declare and the walker fills.
         const injected = [_][]const u8{
-            "*const Invocation", "*const Item",       "*const Program",
-            "Invocation",        "Item",              "Program",
-            "ErrorReporter",     "*ErrorReporter",    "Allocator",
+            "*const Invocation", "*const Item",    "*const Program",
+            "Invocation",        "Item",           "Program",
+            "ErrorReporter",     "*ErrorReporter", "Allocator",
         };
         for (injected) |t| {
             if (std.mem.eql(u8, field.type, t)) return false;
@@ -1679,9 +1679,9 @@ pub const AutoDischargeInserter = struct {
                             const info = entry.info;
 
                             const disposals = if (info.not_auto_dischargeable)
-                try self.allocator.alloc(DisposalEvent, 0)
-            else
-                try self.findDisposalEvents(info.phantom_state, info.base_type);
+                                try self.allocator.alloc(DisposalEvent, 0)
+                            else
+                                try self.findDisposalEvents(info.phantom_state, info.base_type);
                             defer self.allocator.free(disposals);
 
                             const disposal = selectDisposal(disposals) orelse {
@@ -2515,9 +2515,9 @@ pub const AutoDischargeInserter = struct {
 
                             // Find disposal event for this obligation
                             const disposals = if (info.not_auto_dischargeable)
-                try self.allocator.alloc(DisposalEvent, 0)
-            else
-                try self.findDisposalEvents(info.phantom_state, info.base_type);
+                                try self.allocator.alloc(DisposalEvent, 0)
+                            else
+                                try self.findDisposalEvents(info.phantom_state, info.base_type);
                             defer self.allocator.free(disposals);
 
                             const disposal = selectDisposal(disposals) orelse {
@@ -2864,9 +2864,9 @@ pub const AutoDischargeInserter = struct {
                 const info = entry.info;
 
                 const disposals = if (info.not_auto_dischargeable)
-                try self.allocator.alloc(DisposalEvent, 0)
-            else
-                try self.findDisposalEvents(info.phantom_state, info.base_type);
+                    try self.allocator.alloc(DisposalEvent, 0)
+                else
+                    try self.findDisposalEvents(info.phantom_state, info.base_type);
                 defer self.allocator.free(disposals);
 
                 // Use selectDisposal to handle [!] default annotation
@@ -3021,16 +3021,10 @@ pub const AutoDischargeInserter = struct {
         // also `s`); any other binding silently failed to discharge, producing a
         // false KORU030 on every multi-resource flow (610_011/610_012).
         for (args, 0..) |arg, arg_idx| {
-            const is_positional = std.mem.eql(u8, arg.name, arg.value);
-            const field_idx: ?usize = blk: {
-                if (is_positional) {
-                    break :blk if (arg_idx < event_decl.input.fields.len) arg_idx else null;
-                }
-                for (event_decl.input.fields, 0..) |f, fi| {
-                    if (std.mem.eql(u8, f.name, arg.name)) break :blk fi;
-                }
-                break :blk null;
-            };
+            // resolveArgFieldIndex: a bare pun names its field even when a
+            // desugar appended it late; index is the fallback only when the
+            // name is no field.
+            const field_idx = ast.resolveArgFieldIndex(arg, arg_idx, event_decl.input.fields);
             const field = event_decl.input.fields[field_idx orelse continue];
             const phantom_str = field.phantom orelse continue;
 
@@ -4330,7 +4324,6 @@ pub const AutoDischargeInserter = struct {
         return cloned;
     }
 
-
     /// Canonicalize a phantom state with module prefix.
     /// A BARE phantom self-resolves to `base_type_module` when the base type
     /// has a home (`*std/list:List_i64<!list>` → `std/list:list`); a primitive
@@ -4876,8 +4869,7 @@ pub const AutoDischargeInserter = struct {
         // branch): in strict mode a panic branch IS required to be handled.
         if (self.strict_panic_branches and missing_panic.items.len > 0) {
             for (missing_panic.items) |branch_name| {
-                try self.reporter.addErrorAtLocation(.KORU022, flow.location,
-                    "panic branch '{s}' is unhandled — in strict mode (--panic-branches=strict) panic branches must be handled or explicitly muted (| {s} _ |> ...). Without strict mode this synthesizes @panic at runtime.", .{ branch_name, branch_name });
+                try self.reporter.addErrorAtLocation(.KORU022, flow.location, "panic branch '{s}' is unhandled — in strict mode (--panic-branches=strict) panic branches must be handled or explicitly muted (| {s} _ |> ...). Without strict mode this synthesizes @panic at runtime.", .{ branch_name, branch_name });
             }
             return error.ValidationFailed;
         }

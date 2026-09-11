@@ -1425,7 +1425,22 @@ pub fn build(b: *std.Build) void {
     const errors_test_step = b.step("test-errors", "Run diagnostic-sink tests");
     errors_test_step.dependOn(&run_errors_tests.step);
 
+    // Package file emitter tests — emitted zon/build text shape (incl. the
+    // .name sanitizer for non-identifier directory basenames)
+    const emit_package_files_tests = b.addTest(.{
+        .name = "emit_package_files_tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/emit_package_files.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_emit_package_files_tests = b.addRunArtifact(emit_package_files_tests);
+    const emit_package_files_test_step = b.step("test-emit-package-files", "Run package file emitter tests");
+    emit_package_files_test_step.dependOn(&run_emit_package_files_tests.step);
+
     const test_step = b.step("test", "Run all tests");
+    test_step.dependOn(&run_emit_package_files_tests.step);
     test_step.dependOn(&run_annotation_parser_tests.step);
     test_step.dependOn(&run_regex_engine_tests.step);
     test_step.dependOn(&run_flow_parser_tests.step);

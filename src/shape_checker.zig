@@ -12,7 +12,6 @@ const type_registry = @import("type_registry");
 /// 2. Shapes match at each pipeline step
 /// 3. Labels are applied with matching shapes
 /// 4. Proc returns match their event declaration
-
 pub const ShapeChecker = struct {
     allocator: std.mem.Allocator,
     reporter: *errors.ErrorReporter,
@@ -88,7 +87,7 @@ pub const ShapeChecker = struct {
             .type_engine = try type_inference.TypeInference.init(allocator, reporter),
         };
     }
-    
+
     pub fn deinit(self: *ShapeChecker) void {
         // Note: EventInfo/ProcInfo/ImplFlowInfo store POINTERS to AST data,
         // not copies. The AST is owned by the parser and freed there.
@@ -99,13 +98,13 @@ pub const ShapeChecker = struct {
             self.allocator.free(entry.key_ptr.*);
         }
         self.events.deinit();
-        
+
         var procs_iter = self.procs.iterator();
         while (procs_iter.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
         }
         self.procs.deinit();
-        
+
         var labels_iter = self.labels.iterator();
         while (labels_iter.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -122,7 +121,7 @@ pub const ShapeChecker = struct {
         self.presence_arms.deinit(self.allocator);
         self.type_engine.deinit();
     }
-    
+
     /// Check if two shapes are structurally equal (ignoring phantom states)
     /// Phantom state compatibility is checked separately by phantom_semantic_checker
     pub fn shapesEqual(self: *ShapeChecker, a: ast.Shape, b: ast.Shape) bool {
@@ -213,7 +212,7 @@ pub const ShapeChecker = struct {
                 return false;
             }
         }
-        
+
         // Check for extra branches (continuations for non-existent branches)
         for (continuations) |cont| {
             var found = false;
@@ -228,10 +227,10 @@ pub const ShapeChecker = struct {
                 return false;
             }
         }
-        
+
         return true;
     }
-    
+
     /// A lowered `~test(...)` block. std/testing's `test` keyword is a
     /// TRANSFORM: by the time check-structure runs, each test body has already
     /// become an `inline_code` item spelling
@@ -257,7 +256,7 @@ pub const ShapeChecker = struct {
                 break;
             }
         }
-        for (source_file.items) |*item| {  // Changed to pointer iteration!
+        for (source_file.items) |*item| { // Changed to pointer iteration!
             switch (item.*) {
                 .event_decl => |*event| {
                     // Main module events need module qualification too!
@@ -328,7 +327,6 @@ pub const ShapeChecker = struct {
                         .flow = null, // immediate impl, not a flow
                         .line = 0,
                     });
-
                 },
                 .module_decl => |*module| {
                     // Process items from imported modules
@@ -379,7 +377,7 @@ pub const ShapeChecker = struct {
                 else => {},
             }
         }
-        
+
         // Pass 1.5: link implementations to events. Impl items may precede
         // their event declarations, and module decls carry impl flows and
         // immediate impls the first pass doesn't register — so linking runs
@@ -409,7 +407,7 @@ pub const ShapeChecker = struct {
         }
 
         // Second pass: validate flows, taps, proc implementations, and subflows
-        for (source_file.items) |*item| {  // Changed to pointer iteration!
+        for (source_file.items) |*item| { // Changed to pointer iteration!
             switch (item.*) {
                 .flow => |*flow| {
                     try self.validateFlow(flow, flow.location, source_file);
@@ -452,7 +450,7 @@ pub const ShapeChecker = struct {
             return error.ValidationFailed;
         }
     }
-    
+
     fn pathToString(self: *ShapeChecker, path: ast.DottedPath) ![]const u8 {
         var buf = try std.ArrayList(u8).initCapacity(self.allocator, 64);
         errdefer buf.deinit(self.allocator);
@@ -580,14 +578,14 @@ pub const ShapeChecker = struct {
         errdefer buf.deinit(self.allocator);
 
         // All segments except the last one (which should be "*")
-        for (path.segments[0..path.segments.len - 1], 0..) |segment, i| {
+        for (path.segments[0 .. path.segments.len - 1], 0..) |segment, i| {
             if (i > 0) try buf.append(self.allocator, '.');
             try buf.appendSlice(self.allocator, segment);
         }
 
         return try buf.toOwnedSlice(self.allocator);
     }
-    
+
     fn validateFlow(self: *ShapeChecker, flow: *const ast.Flow, location: errors.SourceLocation, _: *const ast.Program) !void {
         // @shape_valid is an EXPLICIT, rare exemption from shape checking.
         // A transform must consciously stamp it on output the checker cannot
@@ -626,7 +624,7 @@ pub const ShapeChecker = struct {
                 .jump_sites = try std.ArrayList(LabelInfo.JumpSite).initCapacity(self.allocator, 0),
             });
         }
-        
+
         // Subflow-implemented effects: resolve the implemented event (if any)
         // so arm-calls anywhere in this flow's body validate as arm-fires.
         const saved_impl_event = self.current_impl_event;
@@ -639,7 +637,7 @@ pub const ShapeChecker = struct {
 
         // Get the event being invoked
         const event_name = try self.pathToString(flow.inv().path);
-        defer self.allocator.free(event_name);  // Free temp string after lookup
+        defer self.allocator.free(event_name); // Free temp string after lookup
 
         const final_event_info = try self.lookupEventInfo(flow.inv().path) orelse {
             log.debug("ERROR: Unknown event '{s}'\n", .{event_name});
@@ -847,7 +845,8 @@ pub const ShapeChecker = struct {
                 while (event_it.next()) |entry| {
                     const event_name = entry.key_ptr.*;
                     if (std.mem.startsWith(u8, event_name, prefix) and
-                        (event_name.len == prefix.len or event_name[prefix.len] == '.')) {
+                        (event_name.len == prefix.len or event_name[prefix.len] == '.'))
+                    {
                         found_match = true;
                         break;
                     }
@@ -867,10 +866,10 @@ pub const ShapeChecker = struct {
                 // Check if this is a meta-event (koru:start, koru:end)
                 // Meta-events have module_qualifier="koru" and segments=["start"|"end"]
                 const is_meta_event = (source.module_qualifier != null and
-                                      std.mem.eql(u8, source.module_qualifier.?, "koru") and
-                                      source.segments.len == 1 and
-                                      (std.mem.eql(u8, source.segments[0], "start") or
-                                       std.mem.eql(u8, source.segments[0], "end")));
+                    std.mem.eql(u8, source.module_qualifier.?, "koru") and
+                    source.segments.len == 1 and
+                    (std.mem.eql(u8, source.segments[0], "start") or
+                        std.mem.eql(u8, source.segments[0], "end")));
 
                 if (!is_meta_event and (try self.lookupEventInfo(source)) == null) {
                     log.debug("ERROR: Unknown source event '{s}' in tap\n", .{source_path});
@@ -893,7 +892,8 @@ pub const ShapeChecker = struct {
                 while (event_it.next()) |entry| {
                     const event_name = entry.key_ptr.*;
                     if (std.mem.startsWith(u8, event_name, prefix) and
-                        (event_name.len == prefix.len or event_name[prefix.len] == '.')) {
+                        (event_name.len == prefix.len or event_name[prefix.len] == '.'))
+                    {
                         found_match = true;
                         break;
                     }
@@ -917,15 +917,15 @@ pub const ShapeChecker = struct {
                 }
             }
         }
-        
+
         // Find the event we're tapping (for shape validation)
         // For output taps: use source event
         // For input taps: use destination event
-        const event_to_validate = if (tap.is_input_tap) 
-            tap.destination 
-        else 
+        const event_to_validate = if (tap.is_input_tap)
+            tap.destination
+        else
             tap.source;
-            
+
         if (event_to_validate) |event_path| {
             const path_str = try self.pathToString(event_path);
             defer self.allocator.free(path_str);
@@ -946,7 +946,7 @@ pub const ShapeChecker = struct {
             }
         }
     }
-    
+
     fn validateTapContinuations(
         self: *ShapeChecker,
         event_decl: *const ast.EventDecl,
@@ -982,10 +982,8 @@ pub const ShapeChecker = struct {
             }
 
             if (!found) {
-                log.debug("ERROR: Event '{s}.{s}' has no branch '{s}'\n",
-                    .{event_decl.path.segments[0], event_decl.path.segments[event_decl.path.segments.len - 1], cont.branch});
-                try self.reporter.addErrorAtLocation(.KORU021, location, "event '{s}.{s}' has no branch '{s}'",
-                    .{event_decl.path.segments[0], event_decl.path.segments[event_decl.path.segments.len - 1], cont.branch});
+                log.debug("ERROR: Event '{s}.{s}' has no branch '{s}'\n", .{ event_decl.path.segments[0], event_decl.path.segments[event_decl.path.segments.len - 1], cont.branch });
+                try self.reporter.addErrorAtLocation(.KORU021, location, "event '{s}.{s}' has no branch '{s}'", .{ event_decl.path.segments[0], event_decl.path.segments[event_decl.path.segments.len - 1], cont.branch });
                 // Continue checking for more errors
             }
         }
@@ -993,7 +991,7 @@ pub const ShapeChecker = struct {
         // Note: We do NOT check exhaustiveness for taps
         // Taps can observe only the branches they care about
     }
-    
+
     /// If `path` names an effect arm of the event currently being implemented
     /// (single segment, module qualifier absent or matching the event's own),
     /// return that arm. Non-impl flows have no current_impl_event, so arm
@@ -1097,9 +1095,7 @@ pub const ShapeChecker = struct {
         if (arm.is_optional and (arm.resume_type != null or arm.resume_arms != null) and
             !self.presenceEstablished(arm.name))
         {
-            try self.reporter.addErrorAtLocation(.KORU130, location,
-                "effect '{s}' is optional and resumes a value — a consumer may omit the handler, so the fire must sit under a presence test: if({s}) | then |> {s}(...): ... | else |> <your fallback>",
-                .{ arm.name, arm.name, arm.name });
+            try self.reporter.addErrorAtLocation(.KORU130, location, "effect '{s}' is optional and resumes a value — a consumer may omit the handler, so the fire must sit under a presence test: if({s}) | then |> {s}(...): ... | else |> <your fallback>", .{ arm.name, arm.name, arm.name });
             return error.ValidationFailed;
         }
 
@@ -1116,16 +1112,12 @@ pub const ShapeChecker = struct {
             std.mem.eql(u8, arm.payload.fields[0].name, "__type_ref");
         if (arm.payload.fields.len == 0 and !arm.payload.is_wildcard) {
             if (inv.args.len != 0) {
-                try self.reporter.addErrorAtLocation(.KORU030, location,
-                    "effect '{s}' carries no payload — fire it bare: {s}()",
-                    .{ arm.name, arm.name });
+                try self.reporter.addErrorAtLocation(.KORU030, location, "effect '{s}' carries no payload — fire it bare: {s}()", .{ arm.name, arm.name });
                 return error.ValidationFailed;
             }
         } else if (is_identity_payload or arm.payload.is_wildcard) {
             if (inv.args.len != 1) {
-                try self.reporter.addErrorAtLocation(.KORU030, location,
-                    "effect '{s}' carries a single anonymous payload — fire it with exactly one value: {s}(value)",
-                    .{ arm.name, arm.name });
+                try self.reporter.addErrorAtLocation(.KORU030, location, "effect '{s}' carries a single anonymous payload — fire it with exactly one value: {s}(value)", .{ arm.name, arm.name });
                 return error.ValidationFailed;
             }
         } else {
@@ -1142,14 +1134,10 @@ pub const ShapeChecker = struct {
                     if (std.mem.eql(u8, f.name, arg.name)) break true;
                 } else false;
                 if (known) continue;
-                if (std.mem.eql(u8, arg.name, arg.value)) {
-                    try self.reporter.addErrorAtLocation(.KORU030, location,
-                        "effect '{s}' carries a record payload — fire it with named fields: {s}({s})",
-                        .{ arm.name, arm.name, field_names.items });
+                if (!arg.had_explicit_label and std.mem.eql(u8, arg.name, arg.value)) {
+                    try self.reporter.addErrorAtLocation(.KORU030, location, "effect '{s}' carries a record payload — fire it with named fields: {s}({s})", .{ arm.name, arm.name, field_names.items });
                 } else {
-                    try self.reporter.addErrorAtLocation(.KORU021, location,
-                        "effect '{s}' has no payload field '{s}' (fields: {s})",
-                        .{ arm.name, arg.name, field_names.items });
+                    try self.reporter.addErrorAtLocation(.KORU021, location, "effect '{s}' has no payload field '{s}' (fields: {s})", .{ arm.name, arg.name, field_names.items });
                 }
                 shape_errors = true;
             }
@@ -1158,9 +1146,7 @@ pub const ShapeChecker = struct {
                     if (std.mem.eql(u8, arg.name, f.name)) break true;
                 } else false;
                 if (!provided) {
-                    try self.reporter.addErrorAtLocation(.KORU022, location,
-                        "effect '{s}' payload field '{s}' missing at the firing site ({s}({s}))",
-                        .{ arm.name, f.name, arm.name, field_names.items });
+                    try self.reporter.addErrorAtLocation(.KORU022, location, "effect '{s}' payload field '{s}' missing at the firing site ({s}({s}))", .{ arm.name, f.name, arm.name, field_names.items });
                     shape_errors = true;
                 }
             }
@@ -1169,9 +1155,7 @@ pub const ShapeChecker = struct {
 
         if (arm.resume_arms) |arms| {
             if (inv.return_binding != null) {
-                try self.reporter.addErrorAtLocation(.KORU102, location,
-                    "effect '{s}' resumes with named arms — handle them as `|` branches at the firing site, not a `:` bind",
-                    .{arm.name});
+                try self.reporter.addErrorAtLocation(.KORU102, location, "effect '{s}' resumes with named arms — handle them as `|` branches at the firing site, not a `:` bind", .{arm.name});
                 return error.ValidationFailed;
             }
             var has_errors = false;
@@ -1187,9 +1171,7 @@ pub const ShapeChecker = struct {
                         if (ai > 0) try arm_names.appendSlice(self.allocator, ", ");
                         try arm_names.appendSlice(self.allocator, ra.name);
                     }
-                    try self.reporter.addErrorAtLocation(.KORU021, cont.location,
-                        "effect '{s}' has no resume arm '{s}' (arms: {s})",
-                        .{ arm.name, cont.branch, arm_names.items });
+                    try self.reporter.addErrorAtLocation(.KORU021, cont.location, "effect '{s}' has no resume arm '{s}' (arms: {s})", .{ arm.name, cont.branch, arm_names.items });
                     has_errors = true;
                 }
             }
@@ -1198,9 +1180,7 @@ pub const ShapeChecker = struct {
                     if (std.mem.eql(u8, cont.branch, ra.name)) break true;
                 } else false;
                 if (!handled) {
-                    try self.reporter.addErrorAtLocation(.KORU022, location,
-                        "resume arm '{s}' of effect '{s}' must be handled at the firing site",
-                        .{ ra.name, arm.name });
+                    try self.reporter.addErrorAtLocation(.KORU022, location, "resume arm '{s}' of effect '{s}' must be handled at the firing site", .{ ra.name, arm.name });
                     has_errors = true;
                 }
             }
@@ -1211,9 +1191,7 @@ pub const ShapeChecker = struct {
         if (arm.resume_type) |rt| {
             for (continuations) |*cont| {
                 if (cont.branch.len != 0) {
-                    try self.reporter.addErrorAtLocation(.KORU102, cont.location,
-                        "effect '{s}' is declared `-> {s}` (single payload, no arms) — bind it at the call site (`{s}(...): name`)",
-                        .{ arm.name, rt, arm.name });
+                    try self.reporter.addErrorAtLocation(.KORU102, cont.location, "effect '{s}' is declared `-> {s}` (single payload, no arms) — bind it at the call site (`{s}(...): name`)", .{ arm.name, rt, arm.name });
                     return error.ValidationFailed;
                 }
             }
@@ -1222,15 +1200,12 @@ pub const ShapeChecker = struct {
         }
         // Void arm: fire-and-continue, nothing comes back.
         if (inv.return_binding != null) {
-            try self.reporter.addErrorAtLocation(.KORU102, location,
-                "effect '{s}' carries no resume value — remove the `:` bind", .{arm.name});
+            try self.reporter.addErrorAtLocation(.KORU102, location, "effect '{s}' carries no resume value — remove the `:` bind", .{arm.name});
             return error.ValidationFailed;
         }
         for (continuations) |*cont| {
             if (cont.branch.len != 0) {
-                try self.reporter.addErrorAtLocation(.KORU021, cont.location,
-                    "effect '{s}' carries no resume value — there are no branches to handle at the firing site",
-                    .{arm.name});
+                try self.reporter.addErrorAtLocation(.KORU021, cont.location, "effect '{s}' carries no resume value — there are no branches to handle at the firing site", .{arm.name});
                 return error.ValidationFailed;
             }
         }
@@ -1322,9 +1297,7 @@ pub const ShapeChecker = struct {
         if (parent_inv) |pinv| {
             if (self.presenceTestedArm(pinv)) |arm| {
                 if (!arm.is_optional) {
-                    try self.reporter.addErrorAtLocation(.KORU131, location,
-                        "presence test on '{s}' — a required arm is always installed (exhaustiveness guarantees a handler), so `if({s})` is always true; presence tests are for `?` optional arms",
-                        .{ arm.name, arm.name });
+                    try self.reporter.addErrorAtLocation(.KORU131, location, "presence test on '{s}' — a required arm is always installed (exhaustiveness guarantees a handler), so `if({s})` is always true; presence tests are for `?` optional arms", .{ arm.name, arm.name });
                     has_errors = true;
                 }
             }
@@ -1378,9 +1351,7 @@ pub const ShapeChecker = struct {
             const presence_guard: ?*const ast.Branch = if (cont.condition) |c| self.presenceArmByName(c) else null;
             if (presence_guard) |arm| {
                 if (!arm.is_optional) {
-                    try self.reporter.addErrorAtLocation(.KORU131, cont.location,
-                        "presence test on '{s}' — a required arm is always installed (exhaustiveness guarantees a handler), so `when {s}` is always true; presence tests are for `?` optional arms",
-                        .{ arm.name, arm.name });
+                    try self.reporter.addErrorAtLocation(.KORU131, cont.location, "presence test on '{s}' — a required arm is always installed (exhaustiveness guarantees a handler), so `when {s}` is always true; presence tests are for `?` optional arms", .{ arm.name, arm.name });
                     has_errors = true;
                 }
             }
@@ -1468,14 +1439,12 @@ pub const ShapeChecker = struct {
                 }
             }
             if (guarded_only) {
-                try self.reporter.addErrorAtLocation(.KORU050, location,
-                    "branch '{s}' has when-guarded handlers but no else case - a fire where every guard is false silently does nothing; add one continuation without 'when'", .{branch_name});
+                try self.reporter.addErrorAtLocation(.KORU050, location, "branch '{s}' has when-guarded handlers but no else case - a fire where every guard is false silently does nothing; add one continuation without 'when'", .{branch_name});
                 has_errors = true;
                 continue;
             }
             log.debug("ERROR: Branch '{s}' must be handled but no continuation found\n", .{branch_name});
-            try self.reporter.addErrorAtLocation(.KORU022, location,
-                "branch '{s}' must be handled but no continuation found", .{branch_name});
+            try self.reporter.addErrorAtLocation(.KORU022, location, "branch '{s}' must be handled but no continuation found", .{branch_name});
             has_errors = true;
         }
 
@@ -1492,8 +1461,7 @@ pub const ShapeChecker = struct {
                 available_branches.items
             else
                 "(none)";
-            try self.reporter.addErrorAtLocation(.KORU021, location,
-                "event '{s}' has no branch '{s}' (available: {s})", .{ event_name, branch_name, available_str });
+            try self.reporter.addErrorAtLocation(.KORU021, location, "event '{s}' has no branch '{s}' (available: {s})", .{ event_name, branch_name, available_str });
             has_errors = true;
         }
 
@@ -1502,8 +1470,7 @@ pub const ShapeChecker = struct {
         // handlers for the same terminal branch are ambiguous. (Effect `!`
         // branches are exempt — they may be linked any number of times.)
         for (result.duplicate_terminal_branches) |branch_name| {
-            try self.reporter.addErrorAtLocation(.KORU028, location,
-                "terminal branch '{s}' has more than one unguarded handler — a `|` continuation runs at most once; distinguish them with `when` guards or remove the duplicate", .{branch_name});
+            try self.reporter.addErrorAtLocation(.KORU028, location, "terminal branch '{s}' has more than one unguarded handler — a `|` continuation runs at most once; distinguish them with `when` guards or remove the duplicate", .{branch_name});
             has_errors = true;
         }
 
@@ -1519,17 +1486,14 @@ pub const ShapeChecker = struct {
                 const has_payload = branch.payload.is_wildcard or branch.payload.fields.len > 0;
                 const has_binding = cont.binding != null or cont.destructure.len > 0;
                 if (has_payload and !has_binding) {
-                    try self.reporter.addErrorAtLocation(.KORU030, location,
-                        "branch '{s}' has payload but no binding", .{cont.branch});
+                    try self.reporter.addErrorAtLocation(.KORU030, location, "branch '{s}' has payload but no binding", .{cont.branch});
                     has_errors = true;
                 }
                 // The void half of the linear rule: a branch that carries
                 // nothing has nothing to bind OR discard — `_` included.
                 // A destructure on a void branch is the same error.
                 if (!has_payload and has_binding) {
-                    try self.reporter.addErrorAtLocation(.KORU101, location,
-                        "branch '{s}' carries no payload — remove the binding '{s}'",
-                        .{ cont.branch, cont.binding orelse "{...}" });
+                    try self.reporter.addErrorAtLocation(.KORU101, location, "branch '{s}' carries no payload — remove the binding '{s}'", .{ cont.branch, cont.binding orelse "{...}" });
                     has_errors = true;
                 }
                 // A binding-position destructure (`| ok { a, b }`) unpacks the
@@ -1559,9 +1523,7 @@ pub const ShapeChecker = struct {
                                     if (fi > 0) try fnames.appendSlice(self.allocator, ", ");
                                     try fnames.appendSlice(self.allocator, pf.name);
                                 }
-                                try self.reporter.addErrorAtLocation(.KORU036, cont.location,
-                                    "destructure field '{s}' is not a field of branch '{s}' (payload fields: {s})",
-                                    .{ df.name, branch.name, fnames.items });
+                                try self.reporter.addErrorAtLocation(.KORU036, cont.location, "destructure field '{s}' is not a field of branch '{s}' (payload fields: {s})", .{ df.name, branch.name, fnames.items });
                                 has_errors = true;
                             }
                         }
@@ -1672,17 +1634,13 @@ pub const ShapeChecker = struct {
                                 .decl = null,
                                 .expected_shape = null,
                                 .line = 0,
-                                .is_pre_invocation = true,  // Continuation labels are pre-invocation style
+                                .is_pre_invocation = true, // Continuation labels are pre-invocation style
                                 .jump_sites = try std.ArrayList(LabelInfo.JumpSite).initCapacity(self.allocator, 0),
                             });
                         }
                     } else {
                         // This is a label jump (@label event(...)) - OLD STYLE, should not be generated anymore
-                        try self.validateLabelJump(
-                            step.label_with_invocation.label,
-                            &step.label_with_invocation.invocation,
-                            &cont
-                        );
+                        try self.validateLabelJump(step.label_with_invocation.label, &step.label_with_invocation.invocation, &cont);
                     }
                     continue;
                 }
@@ -1707,9 +1665,7 @@ pub const ShapeChecker = struct {
                 if (step == .expression) {
                     if (resolveDeclaredBranch(event_branches, cont.branch)) |b| {
                         if (b.kind == .effect and b.resume_arms != null) {
-                            try self.reporter.addErrorAtLocation(.KORU102, cont.location,
-                                "`->` produces a single resume value, but '{s}' declares named resume arms — construct one with `=>` (e.g. `=> {s} ...`)",
-                                .{ cont.branch, b.resume_arms.?[0].name });
+                            try self.reporter.addErrorAtLocation(.KORU102, cont.location, "`->` produces a single resume value, but '{s}' declares named resume arms — construct one with `=>` (e.g. `=> {s} ...`)", .{ cont.branch, b.resume_arms.?[0].name });
                             continue;
                         }
                     }
@@ -1730,9 +1686,7 @@ pub const ShapeChecker = struct {
                     if (step.branch_constructor.is_bare_return) {
                         if (resolveDeclaredBranch(event_branches, cont.branch)) |b| {
                             if (b.kind == .effect and b.resume_arms != null) {
-                                try self.reporter.addErrorAtLocation(.KORU102, cont.location,
-                                    "`->` produces a single resume value, but '{s}' declares named resume arms — construct one with `=>` (e.g. `=> {s} ...`)",
-                                    .{ cont.branch, b.resume_arms.?[0].name });
+                                try self.reporter.addErrorAtLocation(.KORU102, cont.location, "`->` produces a single resume value, but '{s}' declares named resume arms — construct one with `=>` (e.g. `=> {s} ...`)", .{ cont.branch, b.resume_arms.?[0].name });
                             }
                         }
                         continue;
@@ -1743,9 +1697,7 @@ pub const ShapeChecker = struct {
                     // `->`. (See project_resume_glyph_rules_and_phase2.)
                     if (resolveDeclaredBranch(event_branches, cont.branch)) |b| {
                         if (b.resume_type) |rt| {
-                            try self.reporter.addErrorAtLocation(.KORU102, cont.location,
-                                "`=>` constructs a branch, but '{s}' is declared `-> {s}` (single payload, no branches) — use `->` to produce it",
-                                .{ cont.branch, rt });
+                            try self.reporter.addErrorAtLocation(.KORU102, cont.location, "`=>` constructs a branch, but '{s}' is declared `-> {s}` (single payload, no branches) — use `->` to produce it", .{ cont.branch, rt });
                             continue;
                         }
                         // Multi-arm resume: the constructed name must be one of
@@ -1765,9 +1717,7 @@ pub const ShapeChecker = struct {
                                         if (ai > 0) try arm_names.appendSlice(self.allocator, ", ");
                                         try arm_names.appendSlice(self.allocator, arm.name);
                                     }
-                                    try self.reporter.addErrorAtLocation(.KORU021, cont.location,
-                                        "effect '{s}' has no resume arm '{s}' (arms: {s})",
-                                        .{ cont.branch, bc_name, arm_names.items });
+                                    try self.reporter.addErrorAtLocation(.KORU021, cont.location, "effect '{s}' has no resume arm '{s}' (arms: {s})", .{ cont.branch, bc_name, arm_names.items });
                                     has_errors = true;
                                 }
                                 // Arm constructs resolve against the effect's
@@ -1813,9 +1763,7 @@ pub const ShapeChecker = struct {
                                 else
                                     "?";
                                 var names_buf: [512]u8 = undefined;
-                                try self.reporter.addErrorAtLocation(.KORU021, cont.location,
-                                    "tor '{s}' has no branch '{s}' (declared branches are: {s})",
-                                    .{ impl_name, bc_name, declaredBranchNames(&names_buf, impl_ev.branches) });
+                                try self.reporter.addErrorAtLocation(.KORU021, cont.location, "tor '{s}' has no branch '{s}' (declared branches are: {s})", .{ impl_name, bc_name, declaredBranchNames(&names_buf, impl_ev.branches) });
                                 has_errors = true;
                             }
                         }
@@ -1848,13 +1796,10 @@ pub const ShapeChecker = struct {
                         if (self.findEventOwningEffectArm(step.invocation.path)) |owner| {
                             const owner_name = try self.pathToString(owner.path);
                             defer self.allocator.free(owner_name);
-                            try self.reporter.addErrorAtLocation(.KORU040, location,
-                                "'{s}' is an effect arm of tor '{s}' — only that tor's own implementation may fire it",
-                                .{ step.invocation.path.segments[step.invocation.path.segments.len - 1], owner_name });
+                            try self.reporter.addErrorAtLocation(.KORU040, location, "'{s}' is an effect arm of tor '{s}' — only that tor's own implementation may fire it", .{ step.invocation.path.segments[step.invocation.path.segments.len - 1], owner_name });
                             return error.UnknownEvent;
                         }
-                        try self.reporter.addErrorAtLocation(.KORU040, location,
-                            "unknown tor '{s}' in pipeline", .{nested_event_name});
+                        try self.reporter.addErrorAtLocation(.KORU040, location, "unknown tor '{s}' in pipeline", .{nested_event_name});
                         return error.UnknownEvent;
                     };
 
@@ -1867,9 +1812,7 @@ pub const ShapeChecker = struct {
                     // This is the only step, check nested continuations
                     if (cont.continuations.len == 0 and nested_event_info.decl.branches.len > 0) {
                         // Missing nested continuations for branching step
-                        try self.reporter.addErrorAtLocation(.KORU022, location,
-                            "event '{s}' invoked in pipeline but its branches are not handled",
-                            .{nested_event_name});
+                        try self.reporter.addErrorAtLocation(.KORU022, location, "event '{s}' invoked in pipeline but its branches are not handled", .{nested_event_name});
                         has_errors = true;
                         // Continue checking for more errors
                     }
@@ -1937,7 +1880,6 @@ pub const ShapeChecker = struct {
                     }
                     continue;
                 }
-
             }
         }
 
@@ -1967,9 +1909,7 @@ pub const ShapeChecker = struct {
                     if (self.events.get(nested_event_name)) |nested_event_info| {
                         // Check nested continuation coverage
                         if (cont.continuations.len == 0 and nested_event_info.decl.branches.len > 0) {
-                            try self.reporter.addErrorAtLocation(.KORU022, location,
-                                "event '{s}' invoked but its branches are not handled",
-                                .{nested_event_name});
+                            try self.reporter.addErrorAtLocation(.KORU022, location, "event '{s}' invoked but its branches are not handled", .{nested_event_name});
                             all_valid = false;
                         } else {
                             const covered = try self.checkBranchCoverageWithTerminals(
@@ -2011,7 +1951,7 @@ pub const ShapeChecker = struct {
 
         return all_valid;
     }
-    
+
     fn validateProc(self: *ShapeChecker, proc: *const ast.ProcDecl, module_qualifier: ?[]const u8) !void {
         // Build the full path for lookup
         // If module_qualifier is provided, prepend it (e.g., "std.io:println")
@@ -2029,7 +1969,7 @@ pub const ShapeChecker = struct {
         } else blk: {
             break :blk try self.pathToString(proc.path);
         };
-        defer self.allocator.free(path);  // Free temp string after lookup
+        defer self.allocator.free(path); // Free temp string after lookup
 
         if (self.events.get(path) != null) return;
 
@@ -2247,14 +2187,14 @@ pub const ShapeChecker = struct {
                 return error.LabelDoesNotAcceptParameters;
             }
         }
-        
+
         // Record this jump site for later validation
         try label_info.jump_sites.append(self.allocator, .{
             .line = 0, // TODO: Track actual line numbers
             .provided_shape = null, // TODO: Extract actual shape from context
             .is_parameterized = is_parameterized,
         });
-        
+
         // Validate shape compatibility
         // For post-invocation labels, the current continuation's branch output must match
         // For pre-invocation labels, the invocation parameters must match
@@ -2496,19 +2436,19 @@ pub const ShapeChecker = struct {
                 .name = try self.type_engine.allocator.dupe(u8, continuation.branch),
                 .fields = try self.type_engine.allocator.alloc(type_inference.FieldType, 0),
             };
-            
+
             try self.type_engine.bindings.put(
                 try self.type_engine.allocator.dupe(u8, binding),
                 type_inference.TypeInfo{ .branch = branch_type },
             );
         }
-        
+
         // Infer and validate the branch constructor type
         const inferred = try self.type_engine.inferBranchConstructor(
             @constCast(constructor), // Safe because we don't modify in inference
             null, // TODO: Provide expected type from context
         );
-        
+
         // Validate that the constructed branch is valid
         switch (inferred) {
             .branch => |branch| {
@@ -2545,7 +2485,7 @@ const LabelInfo = struct {
     line: usize,
     is_pre_invocation: bool, // True for ~#label pattern, false for #label pattern
     jump_sites: std.ArrayList(JumpSite), // Track all jumps to this label for validation
-    
+
     const JumpSite = struct {
         line: usize,
         provided_shape: ?ShapeUnion,
@@ -2561,7 +2501,7 @@ const ImplFlowInfo = struct {
 // Shape union represents the branches an event can produce
 const ShapeUnion = struct {
     branches: []BranchShape,
-    
+
     const BranchShape = struct {
         name: []const u8,
         shape: ast.Shape,
@@ -2573,13 +2513,13 @@ test "shapes equal - empty shapes" {
     const allocator = std.testing.allocator;
     var reporter = try errors.ErrorReporter.init(allocator, "test.kz", "");
     defer reporter.deinit();
-    
+
     var checker = try ShapeChecker.init(allocator, &reporter);
     defer checker.deinit();
-    
+
     const empty_a = ast.Shape{ .fields = &[_]ast.Field{} };
     const empty_b = ast.Shape{ .fields = &[_]ast.Field{} };
-    
+
     try std.testing.expect(checker.shapesEqual(empty_a, empty_b));
 }
 
@@ -2587,10 +2527,10 @@ test "shapes equal - same fields" {
     const allocator = std.testing.allocator;
     var reporter = try errors.ErrorReporter.init(allocator, "test.kz", "");
     defer reporter.deinit();
-    
+
     var checker = try ShapeChecker.init(allocator, &reporter);
     defer checker.deinit();
-    
+
     var fields_a = [_]ast.Field{
         .{ .name = "path", .type = "[]const u8" },
         .{ .name = "errno", .type = "u8" },
@@ -2599,10 +2539,10 @@ test "shapes equal - same fields" {
         .{ .name = "errno", .type = "u8" },
         .{ .name = "path", .type = "[]const u8" },
     };
-    
+
     const shape_a = ast.Shape{ .fields = &fields_a };
     const shape_b = ast.Shape{ .fields = &fields_b };
-    
+
     // Order shouldn't matter
     try std.testing.expect(checker.shapesEqual(shape_a, shape_b));
 }
@@ -2611,20 +2551,20 @@ test "shapes equal - different types" {
     const allocator = std.testing.allocator;
     var reporter = try errors.ErrorReporter.init(allocator, "test.kz", "");
     defer reporter.deinit();
-    
+
     var checker = try ShapeChecker.init(allocator, &reporter);
     defer checker.deinit();
-    
+
     var fields_a = [_]ast.Field{
         .{ .name = "errno", .type = "u8" },
     };
     var fields_b = [_]ast.Field{
         .{ .name = "errno", .type = "u16" },
     };
-    
+
     const shape_a = ast.Shape{ .fields = &fields_a };
     const shape_b = ast.Shape{ .fields = &fields_b };
-    
+
     try std.testing.expect(!checker.shapesEqual(shape_a, shape_b));
 }
 
@@ -2632,10 +2572,10 @@ test "shapes equal - missing field" {
     const allocator = std.testing.allocator;
     var reporter = try errors.ErrorReporter.init(allocator, "test.kz", "");
     defer reporter.deinit();
-    
+
     var checker = try ShapeChecker.init(allocator, &reporter);
     defer checker.deinit();
-    
+
     var fields_a = [_]ast.Field{
         .{ .name = "path", .type = "[]const u8" },
         .{ .name = "errno", .type = "u8" },
@@ -2643,10 +2583,10 @@ test "shapes equal - missing field" {
     var fields_b = [_]ast.Field{
         .{ .name = "path", .type = "[]const u8" },
     };
-    
+
     const shape_a = ast.Shape{ .fields = &fields_a };
     const shape_b = ast.Shape{ .fields = &fields_b };
-    
+
     try std.testing.expect(!checker.shapesEqual(shape_a, shape_b));
 }
 
@@ -2654,20 +2594,20 @@ test "branch coverage - complete" {
     const allocator = std.testing.allocator;
     var reporter = try errors.ErrorReporter.init(allocator, "test.kz", "");
     defer reporter.deinit();
-    
+
     var checker = try ShapeChecker.init(allocator, &reporter);
     defer checker.deinit();
-    
+
     const branches = [_]ast.Branch{
         .{ .name = "success", .payload = ast.Shape{ .fields = &[_]ast.Field{} } },
         .{ .name = "failure", .payload = ast.Shape{ .fields = &[_]ast.Field{} } },
     };
-    
+
     const continuations = [_]ast.Continuation{
         .{ .branch = "success", .binding = null, .condition = null, .node = null, .indent = 0, .continuations = &[_]ast.Continuation{} },
         .{ .branch = "failure", .binding = null, .condition = null, .node = null, .indent = 0, .continuations = &[_]ast.Continuation{} },
     };
-    
+
     try std.testing.expect(try checker.checkBranchCoverage(&branches, &continuations));
 }
 
@@ -2675,15 +2615,15 @@ test "branch coverage - missing branch" {
     const allocator = std.testing.allocator;
     var reporter = try errors.ErrorReporter.init(allocator, "test.kz", "");
     defer reporter.deinit();
-    
+
     var checker = try ShapeChecker.init(allocator, &reporter);
     defer checker.deinit();
-    
+
     const branches = [_]ast.Branch{
         .{ .name = "success", .payload = ast.Shape{ .fields = &[_]ast.Field{} } },
         .{ .name = "failure", .payload = ast.Shape{ .fields = &[_]ast.Field{} } },
     };
-    
+
     const continuations = [_]ast.Continuation{
         .{
             .branch = "success",
@@ -2695,7 +2635,7 @@ test "branch coverage - missing branch" {
             .location = errors.SourceLocation{ .file = "internal", .line = 0, .column = 0 },
         },
     };
-    
+
     try std.testing.expect(!try checker.checkBranchCoverage(&branches, &continuations));
 }
 
@@ -2703,14 +2643,14 @@ test "branch coverage - unknown branch" {
     const allocator = std.testing.allocator;
     var reporter = try errors.ErrorReporter.init(allocator, "test.kz", "");
     defer reporter.deinit();
-    
+
     var checker = try ShapeChecker.init(allocator, &reporter);
     defer checker.deinit();
-    
+
     const branches = [_]ast.Branch{
         .{ .name = "success", .payload = ast.Shape{ .fields = &[_]ast.Field{} } },
     };
-    
+
     const continuations = [_]ast.Continuation{
         .{
             .branch = "success",

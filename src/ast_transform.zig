@@ -4,7 +4,6 @@ const errors_mod = @import("errors");
 
 /// AST Transformation Infrastructure
 /// Provides mutation primitives and context for safely transforming AST nodes
-
 /// Core transformation context for tracking state during AST mutations
 pub const TransformContext = struct {
     allocator: std.mem.Allocator,
@@ -13,7 +12,7 @@ pub const TransformContext = struct {
     parent_stack: std.ArrayList(*ast.Item),
     transforms_applied: std.StringHashMap(void),
     symbol_table: SymbolTable,
-    
+
     pub fn init(allocator: std.mem.Allocator, source_file: *ast.Program) !TransformContext {
         var ctx = TransformContext{
             .allocator = allocator,
@@ -23,56 +22,56 @@ pub const TransformContext = struct {
             .transforms_applied = std.StringHashMap(void).init(allocator),
             .symbol_table = try SymbolTable.init(allocator),
         };
-        
+
         // Build symbol table from AST
         try ctx.symbol_table.buildFrom(source_file);
-        
+
         return ctx;
     }
-    
+
     pub fn deinit(self: *TransformContext) void {
         self.parent_stack.deinit(self.allocator);
         self.transforms_applied.deinit();
         self.symbol_table.deinit();
     }
-    
+
     /// Track that we're entering a node during traversal
     pub fn pushParent(self: *TransformContext, item: *ast.Item) !void {
         try self.parent_stack.append(self.allocator, item);
     }
-    
+
     /// Track that we're leaving a node during traversal
     pub fn popParent(self: *TransformContext) void {
         _ = self.parent_stack.pop();
     }
-    
+
     /// Get the current parent node
     pub fn currentParent(self: *TransformContext) ?*ast.Item {
         if (self.parent_stack.items.len == 0) return null;
         return self.parent_stack.items[self.parent_stack.items.len - 1];
     }
-    
+
     /// Check if a transformation has already been applied
     pub fn hasTransformed(self: *TransformContext, key: []const u8) bool {
         return self.transforms_applied.contains(key);
     }
-    
+
     /// Mark a transformation as applied
     pub fn markTransformed(self: *TransformContext, key: []const u8) !void {
         try self.transforms_applied.put(key, {});
     }
-    
+
     /// Check if an event can be safely inlined
     pub fn canInline(self: *TransformContext, event_path: ast.DottedPath) bool {
         const info = self.symbol_table.getEventInfo(event_path) orelse return false;
-        
+
         // Can inline if:
         // - Has a proc implementation (not subflow)
         // - Is not recursive
         // - Is small (heuristic: less than 10 lines)
-        return info.has_proc and 
-               !info.is_recursive and 
-               info.size_estimate < 10;
+        return info.has_proc and
+            !info.is_recursive and
+            info.size_estimate < 10;
     }
 };
 
@@ -81,7 +80,7 @@ pub const SymbolTable = struct {
     allocator: std.mem.Allocator,
     events: std.StringHashMap(EventInfo),
     procs: std.StringHashMap(ProcInfo),
-    
+
     pub fn init(allocator: std.mem.Allocator) !SymbolTable {
         return .{
             .allocator = allocator,
@@ -89,7 +88,7 @@ pub const SymbolTable = struct {
             .procs = std.StringHashMap(ProcInfo).init(allocator),
         };
     }
-    
+
     pub fn deinit(self: *SymbolTable) void {
         var event_iter = self.events.iterator();
         while (event_iter.next()) |entry| {
@@ -102,7 +101,7 @@ pub const SymbolTable = struct {
         self.events.deinit();
         self.procs.deinit();
     }
-    
+
     pub fn buildFrom(self: *SymbolTable, source_file: *const ast.Program) !void {
         try self.buildFromItems(source_file.items);
     }
@@ -171,7 +170,7 @@ pub const SymbolTable = struct {
         defer self.allocator.free(path_str);
         return self.events.get(path_str);
     }
-    
+
     fn estimateProcSize(body: []const u8) usize {
         // Simple heuristic: count lines
         var lines: usize = 0;
@@ -276,7 +275,7 @@ fn cloneEvent(allocator: std.mem.Allocator, event: ast.EventDecl) !ast.EventDecl
     for (event.branches, 0..) |branch, i| {
         branches[i] = try cloneBranch(allocator, branch);
     }
-    
+
     return .{
         .path = try clonePath(allocator, event.path),
         .input = try cloneShape(allocator, event.input),
@@ -376,7 +375,7 @@ fn cloneInvocation(allocator: std.mem.Allocator, invocation: ast.Invocation) !as
             .value = try allocator.dupe(u8, arg.value),
         };
     }
-    
+
     return .{
         .path = try clonePath(allocator, invocation.path),
         .args = args,
@@ -441,21 +440,23 @@ fn cloneStep(allocator: std.mem.Allocator, step: ast.Step) !ast.Step {
             .label = try allocator.dupe(u8, lwi.label),
             .invocation = try cloneInvocation(allocator, lwi.invocation),
             .is_declaration = lwi.is_declaration,
-        }},
+        } },
         .label_jump => |lj| return .{ .label_jump = .{
             .label = try allocator.dupe(u8, lj.label),
             .args = try cloneArgs(allocator, lj.args),
-        }},
+        } },
         .terminal => return .terminal,
-        .branch_constructor => |bc| return .{ .branch_constructor = .{
-            .branch_name = try allocator.dupe(u8, bc.branch_name),
-            .fields = try cloneFields(allocator, bc.fields),
-            // Preserve the single-plain-value form and its flags — a clone that
-            // drops `plain_value` turns `=> failed f` into an empty record.
-            .plain_value = if (bc.plain_value) |pv| try allocator.dupe(u8, pv) else null,
-            .has_expressions = bc.has_expressions,
-            .is_bare_return = bc.is_bare_return,
-        }},
+        .branch_constructor => |bc| return .{
+            .branch_constructor = .{
+                .branch_name = try allocator.dupe(u8, bc.branch_name),
+                .fields = try cloneFields(allocator, bc.fields),
+                // Preserve the single-plain-value form and its flags — a clone that
+                // drops `plain_value` turns `=> failed f` into an empty record.
+                .plain_value = if (bc.plain_value) |pv| try allocator.dupe(u8, pv) else null,
+                .has_expressions = bc.has_expressions,
+                .is_bare_return = bc.is_bare_return,
+            },
+        },
         else => return step,
     }
 }
@@ -499,10 +500,10 @@ fn cloneContinuations(allocator: std.mem.Allocator, continuations: []const ast.C
 /// Replace a node in the AST
 pub fn replaceNode(ctx: *TransformContext, index: usize, new_node: ast.Item) !void {
     if (index >= ctx.current_ast.items.len) return error.IndexOutOfBounds;
-    
+
     // Free the old node
     @constCast(&ctx.current_ast.items[index]).deinit(ctx.allocator);
-    
+
     // Replace with new node
     @constCast(ctx.current_ast.items)[index] = new_node;
 }
@@ -510,23 +511,23 @@ pub fn replaceNode(ctx: *TransformContext, index: usize, new_node: ast.Item) !vo
 /// Insert a node after the specified index
 pub fn insertAfter(ctx: *TransformContext, index: usize, new_node: ast.Item) !void {
     if (index >= ctx.current_ast.items.len) return error.IndexOutOfBounds;
-    
+
     // Allocate new array with space for one more item
     var new_items = try ctx.allocator.alloc(ast.Item, ctx.current_ast.items.len + 1);
-    
+
     // Copy items before insertion point
-    for (ctx.current_ast.items[0..index + 1], 0..) |item, i| {
+    for (ctx.current_ast.items[0 .. index + 1], 0..) |item, i| {
         new_items[i] = item;
     }
-    
+
     // Insert new node
     new_items[index + 1] = new_node;
-    
+
     // Copy items after insertion point
-    for (ctx.current_ast.items[index + 1..], 0..) |item, i| {
+    for (ctx.current_ast.items[index + 1 ..], 0..) |item, i| {
         new_items[index + 2 + i] = item;
     }
-    
+
     // Free old array and update
     ctx.allocator.free(ctx.current_ast.items);
     ctx.current_ast.items = new_items;
@@ -535,23 +536,23 @@ pub fn insertAfter(ctx: *TransformContext, index: usize, new_node: ast.Item) !vo
 /// Remove a node from the AST
 pub fn removeNode(ctx: *TransformContext, index: usize) !void {
     if (index >= ctx.current_ast.items.len) return error.IndexOutOfBounds;
-    
+
     // Free the node being removed
     ctx.current_ast.items[index].deinit(ctx.allocator);
-    
+
     // Allocate new array with one less item
     var new_items = try ctx.allocator.alloc(ast.Item, ctx.current_ast.items.len - 1);
-    
+
     // Copy items before removal point
     for (ctx.current_ast.items[0..index], 0..) |item, i| {
         new_items[i] = item;
     }
-    
+
     // Copy items after removal point
-    for (ctx.current_ast.items[index + 1..], 0..) |item, i| {
+    for (ctx.current_ast.items[index + 1 ..], 0..) |item, i| {
         new_items[index + i] = item;
     }
-    
+
     // Free old array and update
     ctx.allocator.free(ctx.current_ast.items);
     ctx.current_ast.items = new_items;
@@ -1225,6 +1226,26 @@ fn phantomCompatible(param_phantom: []const u8, binding_phantom: []const u8) boo
 /// whether the SHAPE fits, exactly as areCompatible does. A fill that the
 /// checker then rejects on liveness errors loudly at the checker — never
 /// silently — which is the guarantee the phantom system needs from a desugar.
+/// The unqualified body of a base type: `koru/vaxis:Style` and `Style` name
+/// the same decl. Fields normalize the qualifier off (`style: Style`), while
+/// producer return types keep it (`-> koru/vaxis:Style`), so the qualifier is
+/// dropped for comparison — the same convention phantomStateName applies to
+/// phantoms (style_reuse.k: `style` bound `koru/vaxis:Style` never filled
+/// write-styled's `style: Style`).
+fn unqualifiedBase(t: []const u8) []const u8 {
+    if (std.mem.lastIndexOfScalar(u8, t, ':')) |c| return t[c + 1 ..];
+    return t;
+}
+
+/// Base-type equality modulo module qualifier; a leading `*` is significant
+/// (`*Pending` vs `Pending` are different types and must not meet).
+fn typeBasesEql(a: []const u8, b: []const u8) bool {
+    const ap = a.len > 0 and a[0] == '*';
+    const bp = b.len > 0 and b[0] == '*';
+    if (ap != bp) return false;
+    return std.mem.eql(u8, unqualifiedBase(if (ap) a[1..] else a), unqualifiedBase(if (bp) b[1..] else b));
+}
+
 fn typeCanFill(binding: []const u8, param: []const u8) bool {
     const b = splitType(binding);
     const p = splitType(param);
@@ -1232,7 +1253,7 @@ fn typeCanFill(binding: []const u8, param: []const u8) bool {
     // owned columns to `*Type` (no module), and the phantom's module is
     // stripped in name comparison, so `*Pending<app/lib/pend:open!>` and
     // `*Pending<!open>` meet here.
-    if (!std.mem.eql(u8, b.base, p.base)) return false;
+    if (!typeBasesEql(b.base, p.base)) return false;
     // No param phantom = any state accepted (areCompatible(null, x) == true).
     const p_ph = p.phantom orelse return true;
     const b_ph = b.phantom orelse return false;
@@ -1978,8 +1999,10 @@ fn punContinuationBinding(
     // Phase A: branch payload — in scope BEFORE this node's fill (upstream value).
     // Its TYPE is `payload_type`, which the parent resolved via armPayloadType;
     // recording it is what lets a payload bind be selected by type at all.
+    // `_` is a discard, not a binding — left out so a typed payload sink never
+    // pun-fills a param (`| ok _ |> use()` emitted `.n = _`).
     if (cont.binding) |b| {
-        if (!scopeHas(scope.items, b)) {
+        if (!std.mem.eql(u8, b, "_") and !scopeHas(scope.items, b)) {
             try scope.append(allocator, .{ .name = b, .type = payload_type, .producer_ret = null });
         }
     }
@@ -2119,7 +2142,7 @@ fn punContinuationBinding(
         if (node == .invocation) {
             const producer_ret: ?[]const u8 = if (table.getEventInfo(node.invocation.path)) |info| info.return_type else null;
             if (node.invocation.return_binding) |rb| {
-                if (!scopeHas(scope.items, rb)) {
+                if (!std.mem.eql(u8, rb, "_") and !scopeHas(scope.items, rb)) {
                     try scope.append(allocator, .{ .name = rb, .type = producer_ret, .producer_ret = producer_ret });
                 }
             }
@@ -2782,11 +2805,11 @@ pub fn inlineEvent(ctx: *TransformContext, invocation: *ast.Invocation, proc: *a
     // 2. Replace parameter references (e.field) with invocation arguments
     // 3. Convert return statements to appropriate continuations
     // 4. Insert the transformed code at the invocation site
-    
+
     // For now, this is a placeholder for the actual implementation
     _ = ctx;
     _ = invocation;
     _ = proc;
-    
+
     // TODO: Implement actual inlining logic
 }
