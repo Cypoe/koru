@@ -53,15 +53,33 @@ than inventing a third mechanism. My first reading ("type-based, not name-based"
 was half the story: the name matches where a name can be written, and the type
 matches exactly where the language removes the ability to write one.
 
-## The eventual refusal (the lever, not the whole)
+## Ruling 2026-09-11: no refusal — both spellings stay legal
 
-A legal-but-inferior spelling never migrates; it accumulates beside the good
-one. So the advance should land *with* a refusal of the unambiguous rebind —
-the KORU115 move (retire the spelling, teach the fix), not a discouragement.
-**Sequencing is load-bearing:** refuse first and the only legal spelling is
-gone, so the transition cannot be expressed at all. Advance and refusal are one
-ruling; the corpus that taught the wart (raylib) is the corpus that proves the
-fix.
+Earlier drafts held that the advance should land *with* a refusal of the
+unambiguous rebind (`advance(h): h2`), the KORU115 lever. **Lars ruled against
+it.** The refusal was dropped; the explicit rebind stays legal, and the advance
+merely removes the *compulsion* to use it.
+
+The why, so a future reader does not re-derive the wrong bar:
+
+- **KORU115 retired an UNSAFE spelling** — one whose correctness depended on
+  facts outside its control (provider count, import order), so it could silently
+  mean the wrong thing. A hard refusal is justified by that. The unambiguous
+  rebind is merely *redundant*: it names a state that is arithmetically the sole
+  survivor. Redundancy is not a safety defect.
+- **The explicit bind is the off-switch**, and the two spellings do not compete:
+  the desugar fires only when the output is unnamed, so writing `: h2` makes the
+  old name spent. There is no ambiguity to remove.
+- **`advance(h) |> close(h)` is the carve-out to no-shadowing; `: h2` is the
+  spelling that respects it.** Forcing the carve-out everywhere removes the
+  conservative form.
+- Identity-agnosticism makes naming honest: `336_010`'s implementation really
+  does mint a distinct value, so `h2` is not a lie about it.
+
+**Revisit only on long-run evidence** that the un-forced correct form is a
+problem in practice — drift, or the redundant form causing real defects. Not
+before. Pinned by `336_012` (the explicit rebind stays legal, `MUST_RUN`), so a
+later accidental narrowing cannot quietly take the ruling back.
 
 ## Open — and "hairy" by Lars's own flag
 
@@ -113,7 +131,8 @@ declines and lets KORU030 fire.
 
 Pins, all green: `336_007` (arrow) / `336_008` (branch identity payload) /
 `336_009` (named payload field — the NAME half) / `336_010` (identity-agnostic)
-are `MUST_RUN`; `336_011` stays `MUST_ERROR` as the ambiguity guard.
+are `MUST_RUN`; `336_011` stays `MUST_ERROR` as the ambiguity guard. `336_012`
+(the explicit rebind stays legal) guards the 2026-09-11 no-refusal ruling.
 
 ### Boundaries not yet pinned
 - A **borrow** (no `!`) does not advance — guarded by construction (only
@@ -122,5 +141,3 @@ are `MUST_RUN`; `336_011` stays `MUST_ERROR` as the ambiguity guard.
   not pinned.
 - The **thread/pun reaching further** (the hypothesis that name-continuity lets
   the sole-survivor thread carry obligations across more stages).
-- The eventual **refusal** of the unambiguous rebind (the KORU115-style lever,
-  sequenced with the advance) — still a ruling owed.

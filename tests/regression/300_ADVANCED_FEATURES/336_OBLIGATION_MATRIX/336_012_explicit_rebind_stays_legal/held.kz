@@ -1,0 +1,27 @@
+// A held resource whose state ADVANCES on the same handle — the shape raylib's
+// window uses (opened -> active), reduced to its minimum. `advance` consumes
+// <!open|!active> and re-mints <active!> on the SAME pointer (`-> h` is the
+// transition written out); nothing here needs a second symbol.
+
+const std = @import("std");
+
+pub const Handle = struct { _token: u8 };
+
+~pub tor open { }
+| opened *Handle<open!>
+| err string
+
+~proc open|zig {
+    const h = std.heap.page_allocator.create(Handle) catch unreachable;
+    h.* = Handle{ ._token = 0 };
+    return .{ .opened = h };
+}
+
+~pub tor advance { h: *Handle<!open|!active> } -> *Handle<active!>
+~advance -> h
+
+~pub tor close { h: *Handle<!active> }
+
+~proc close|zig {
+    std.heap.page_allocator.destroy(h);
+}
