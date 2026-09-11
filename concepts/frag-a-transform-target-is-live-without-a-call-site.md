@@ -30,6 +30,16 @@ sockets survived because nothing called them — but it is silent about
 *measurement*. This is the missing half: an un-called tor is a suspect,
 not a corpse, until the rewrite layer has been searched.
 
+Evolved 2026-09-11 (the debris-field census): even after the rewrite check,
+"zero use" splits three ways the classification must distinguish —
+**designed absence** (net.kz's tors refuse at compile time and teach the
+real surface; zero calls is the *success* state), **unadopted youth**
+(table.kz's comprehensions landed recently and await a first caller), and
+**true debris** (eval.kz's 454-line evaluator, testing.kz's 919-line
+framework — wired to nothing, wanted by nobody). And a fourth edge:
+`env:get.or` gained its first caller *during* the census that had just
+measured it dead — the snapshot is a tree-pin away from stale, always.
+
 Open question: the emitted-name routing table is implicit (scattered
 `"{verb}-{s}"` format calls inside transform zig bodies). A declared
 routing surface — one place that says which tors a transform can emit —
