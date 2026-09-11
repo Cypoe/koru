@@ -79,3 +79,19 @@ tempting mechanical half-measure — flag a pin that has been red across many
 snapshots as due for re-derivation — but staleness is not the fault. `330_074`
 was mis-framed from the day it was written, and a fresh mis-framing is exactly
 as harmful as an aged one.
+
+## Two more instances, both 2026-09-11
+
+`370_020` blamed a live check. Its header named the cause "phantom obligations
+from the current scope are not being checked" at `@loop` — but the back-edge
+conservation check existed, was exercised, and was pinned green by `330_075`.
+The real defect sat one stage earlier: `parseLabelAnchor` captured the
+`~#label` head and dropped the entire inline `|>` tail, so `use`, `close`, and
+the jump itself never reached any checker. The pin pointed at the checker the
+way `330_074` pointed at obligation machinery, for the same reason — it was
+red, and its title was the frame.
+
+`330_002` is the milder shape: the pin's assertion held (keyword collisions
+still refuse), but the stack frames it spelled had drifted — the resolver
+moved to `keyword_registry.zig` — so a correct refusal failed on names that
+no longer exist. Even the falsifiable half of a pin rots where nothing re-derives it.

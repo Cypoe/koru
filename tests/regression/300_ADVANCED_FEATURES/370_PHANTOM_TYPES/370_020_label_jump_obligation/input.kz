@@ -9,6 +9,9 @@
 //
 // This test documents the gap discovered while building Orisha HTTP server.
 // The `| failed |> @accept_loop(server: s)` branch leaks the connection.
+// It also pins the `~#label` anchor itself: the label-declaring line's
+// inline `|>` chain must reach the checkers (the tail was once dropped at
+// parse, so this program compiled to mangled Zig instead of being refused).
 
 const std = @import("std");
 
@@ -41,8 +44,13 @@ const Resource = struct { id: i32 };
 }
 
 // THE BUG: This flow should NOT compile!
-// The `| failed |> @loop` branch has an open obligation that is never discharged.
-~#loop create(): c |> use(c.res): o |> close(o.res): _f |> @loop()  // BUG! c.res has <open!> obligation, not discharged!
+// `use` only borrows `c` — `o` in the ok arm carries `<open>` with no
+// obligation, so `close(res: o)` tries to settle a debt the value never
+// incurred (a phantom-state refusal), and `c`'s own <open!> obligation is
+// still live at every @loop back-edge regardless.
+~#loop create(): c |> use(res: c)
+    | ok o |> close(res: o) |> @loop()
+    | failed _ |> @loop()
 
 pub fn main() void {
     std.debug.print("Test compiled - BUG: should have been rejected!\n", .{});

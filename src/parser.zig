@@ -258,6 +258,29 @@ fn hasTopLevelArrow(s: []const u8) bool {
     return indexOfTopLevelArrow(s) != null;
 }
 
+/// True when `s` carries a chain pipe `|>` at paren/brace depth 0 outside
+/// string literals — the definition every `has_inline_chain` call site uses.
+fn hasTopLevelChainPipe(s: []const u8) bool {
+    var paren_depth: i32 = 0;
+    var brace_depth: i32 = 0;
+    var in_string = false;
+    var i: usize = 0;
+    while (i + 1 < s.len) : (i += 1) {
+        const c = s[i];
+        if (c == '"' and (i == 0 or s[i - 1] != '\\')) {
+            in_string = !in_string;
+            continue;
+        }
+        if (in_string) continue;
+        if (c == '(') paren_depth += 1;
+        if (c == ')') paren_depth -= 1;
+        if (c == '{') brace_depth += 1;
+        if (c == '}') brace_depth -= 1;
+        if (paren_depth == 0 and brace_depth == 0 and c == '|' and s[i + 1] == '>') return true;
+    }
+    return false;
+}
+
 /// First BIND colon at paren/brace depth 0 — a `:` whose previous non-blank
 /// character is `)`, i.e. the `event(args): name` form. That is the head scan's
 /// own definition of a bind colon (arg colons live inside the parens; a module
@@ -11116,9 +11139,18 @@ pub const Parser = struct {
             // Parse the event invocation
             const invocation = try self.parseEventInvocation(event_part);
 
-            // Move to next line and parse continuations
+            // `~#loop head(): v |> next() ...` — an inline `|>` tail on the
+            // label-declaring line is the chain, not part of the head.
+            // parseEventInvocation captures the head only; route the tail
+            // through parseInlineContinuation like the plain flow path does,
+            // or every step after the head is silently dropped (370_020: the
+            // `use`/`close`/`@loop` chain vanished before any checker saw it).
+            const head_line_idx = self.current;
             self.current += 1;
-            const continuations = try self.parseContinuations(lexer.getIndent(line));
+            const continuations = if (hasTopLevelChainPipe(event_part))
+                try self.parseInlineContinuation(event_part, lexer.getIndent(line), head_line_idx)
+            else
+                try self.parseContinuations(lexer.getIndent(line));
 
             return .{ .flow = ast.Flow{
                 .body = ast.rootSite(invocation, continuations, self.getCurrentLocation()),
