@@ -50,9 +50,20 @@ ownership story no caller can satisfy.
 
 Append one `NNN_<namespace>.md` to `challenges/std-census/` with the table,
 the seam list, and the one-line verdict: is this organ designed or evolved.
+Pin the tree you measured (`against: koru main <sha>` in the frontmatter) —
+a census without a tree pin is a claim that cannot be checked for staleness.
+
+**Every seam declares its route.** A finding that just sits in the list is
+work queued invisibly. Each seam ends with where it goes: `→009` (a
+duplicated mechanism to promote), `→010` (a missing or faked refusal),
+`→019` (deletion candidate), `→008` (a transform the surface lacks), or
+`task` (convergent work that wants a commission, not a replay). A seam with
+no route is the contestant saying "not my problem" — name the route.
 
 Do not ask which namespace. Count, pick one, ship it. A namespace with one
-censused file is done; do not re-measure it. `io`, `store`, `string`, `fs`,
+censused file is done; do not re-measure it. Prefer organs with consumer
+mass or a known live seam over shells — `fs` yielded four seams in two
+tors; `simple` would have yielded one line. `io`, `store`, `string`, `fs`,
 `list`, `grid`, `fmt`, `time`, `env`, `net`, `http`, `json`, `map`, `set`,
 `field`, `table`, `eval`, `testing`, `trellis`, `template`, `todo`, `regex`,
 `proto`, `koru`, `types`, `control`, `void`, `foreign`, `invariants`,
@@ -61,20 +72,35 @@ censused file is done; do not re-measure it. `io`, `store`, `string`, `fs`,
 set (`compiler*`, `parser`, `emitter`, `eval` pipeline files) is in scope too,
 classified `internal` where that is what they are.
 
-## ⚖️ VARIANCE IS THE METRIC
+## ⚖️ COVERAGE IS THE METRIC — variance is not
 
-Different namespace each replay. The catalog IS the map — a namespace already
-censused is a replay spent re-measuring, which is this challenge failing at
-its own subject.
+This frame borrows the challenge machinery but breaks one of its axioms, on
+purpose: two contestants measuring the same namespace should arrive at the
+**same table** — a census converges on truth, and disagreement between
+entries means someone measured wrong, not that the fleet flourished.
+What varies is *which organ* — and there coverage, not novelty, is the goal:
+the frame is finished when every namespace has a row, and the catalog's value
+is completeness, not range. A replay that re-measures a censused namespace is
+wasted unless it can state, in the diff, what moved since the tree pin.
 
 ## Done-gates
 
 - The census entry exists on disk, one file, the table is complete (every
   `~pub tor` in the namespace classified — a row per tor, not a summary).
 - Every `transform-target` row names the emitting transform.
-- Every `dead` row was checked for emitted-name reachability, not just call
-  sites (`grep` the transform bodies for the tor's routed name before
-  writing `dead` — the list `-i64` family is the cautionary tale).
+- Every `dead` row survived the reachability check, run concretely — not
+  "grep the transform bodies" but these greps, in the namespace's own
+  `koru_std` files:
+
+  ```
+  grep -n 'routeOpCall\|"{verb}\|"-{s}"\|synthesize\|segments' <pkg>*.kz
+  grep -rn '"<torname>"' ../koru_std/*.kz ../src/*.zig
+  ```
+
+  A tor whose name appears as an emitted segment string is a
+  transform-target, not dead — the list `-i64` family is the cautionary
+  tale (`new-i64` is emitted by `list.new.kz:45` and has zero call sites
+  by construction).
 - Every claimed seam is verified in source this session — quoted, not
   remembered.
 - The verdict line is one sentence, honest.
