@@ -1,0 +1,24 @@
+// The branched `: bind`-head fixture: a bare-return producer, a consume-and-
+// reissue step, and a branching consume. Exercises the seam between the
+// continuation pass and the chain-pun thread.
+const std = @import("std");
+
+pub const Handle = struct { _token: u8 };
+
+~pub tor make {} -> *Handle<open!>
+~proc make|zig {
+    const h = std.heap.page_allocator.create(Handle) catch unreachable;
+    h.* = Handle{ ._token = 0 };
+    return h;
+}
+
+~pub tor t1 { h: *Handle<!open|!active> } -> *Handle<active!>
+~proc t1|zig { return h; }
+
+~pub tor split { h: *Handle<!active> }
+| yes *Handle<active!>
+| no *Handle<active!>
+~proc split|zig { return .{ .yes = h }; }
+
+~pub tor close { h: *Handle<!active> }
+~proc close|zig { std.heap.page_allocator.destroy(h); }

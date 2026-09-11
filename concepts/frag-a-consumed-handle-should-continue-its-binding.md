@@ -129,10 +129,30 @@ binding is referenced again *after* the call — which is exactly the KORU030
 space — so no currently-green program can be touched. The ambiguity guard
 declines and lets KORU030 fire.
 
+### The seam with the chain-pun thread — order is load-bearing
+
+The language already had a mechanism for "a name keeps working": the chain-pun
+thread (`desugarChainPunThreading`), which threads the *running value* of a
+`: bind` head through a linear chain. A consumed same-typed handle on a `: bind`
+head is legitimate input to BOTH, so their domains overlap. They are kept apart
+by ORDER, not by disjoint predicates: the continuation pass runs **first** and
+owns every consume-continuation; the pun thread then finds those already
+rewritten and keeps only its real job — non-consume running values
+(`seed(): n |> bump(n) |> bump(n)`, 210_172).
+
+The order is load-bearing because the pun thread's walk is **linear** — it stops
+at the first branch. Run second (the first cut), it claimed the pre-branch
+consume of a branched `: bind` chain (`make(): h |> t1(h) |> split(h) | yes _ |>
+close(h)`) and left the in-arm references to the head name stale, so the arm that
+was supposed to continue died on KORU030. Running the recursive continuation
+pass first rewrites the arms before the pun thread can strand them. Pin:
+`336_013`.
+
 Pins, all green: `336_007` (arrow) / `336_008` (branch identity payload) /
 `336_009` (named payload field — the NAME half) / `336_010` (identity-agnostic)
 are `MUST_RUN`; `336_011` stays `MUST_ERROR` as the ambiguity guard. `336_012`
-(the explicit rebind stays legal) guards the 2026-09-11 no-refusal ruling.
+(the explicit rebind stays legal) guards the no-refusal ruling; `336_013` guards
+the pun-thread seam (a branched `: bind` chain continues in every arm).
 
 ### Boundaries not yet pinned
 - A **borrow** (no `!`) does not advance — guarded by construction (only

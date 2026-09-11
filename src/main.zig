@@ -7157,22 +7157,26 @@ pub fn main() !void {
     // and the last step is final.
     try ast_transform.desugarFlowReturnTerminus(parse_allocator, &source_file, &parser.reporter);
 
+    // Same-base-type continuation: a tor that consumes `*T<!s>` and re-mints
+    // `*T<s'!>` advances the consumed binding in place, so a later reference to
+    // the old name means the re-minted value. Rewrites into the explicit-bind
+    // form the emitter already lowers. Runs BEFORE the chain-pun thread so this
+    // pass — the recursive, consume-keyed one — owns every consume-continuation,
+    // including the ones that escape into branches (which the pun thread's
+    // linear walk cannot reach). Fires only where a spent binding is referenced
+    // again (today always KORU030), so green programs are untouched.
+    try ast_transform.desugarHandleContinuation(parse_allocator, &source_file, &parser.reporter);
+
     // Chain threading by pun (210_172): a chain step that puns the head's own
     // `: bind` name reads the RUNNING value, not the head's literal — the
     // batch as it moves down the chain. Desugars to the explicit mid-chain
     // binds the emitter already lowers (minted `__thread_pun{N}` holders, args
-    // and interpolations pointed at the previous holder). Runs after the pun
-    // (args are materialized) and after the terminus (so a `-> T` flow's last
-    // step is already final), before any checker sees the rewritten chain.
+    // and interpolations pointed at the previous holder). Runs after the
+    // continuation pass, so a consumed binding has already continued and only
+    // genuine non-consume running values (210_172's `seed(): n |> bump(n)`) are
+    // left to thread. Also after the pun (args materialized) and the terminus
+    // (a `-> T` flow's last step is final).
     try ast_transform.desugarChainPunThreading(parse_allocator, &source_file, &parser.reporter);
-
-    // Same-base-type continuation: a tor that consumes `*T<!s>` and re-mints
-    // `*T<s'!>` advances the consumed binding in place, so a later reference to
-    // the old name means the re-minted value. Rewrites into the explicit-bind
-    // form the emitter already lowers; runs last so every earlier desugar's
-    // args are materialized. Fires only where a spent binding is referenced
-    // again (today always KORU030), so green programs are untouched.
-    try ast_transform.desugarHandleContinuation(parse_allocator, &source_file, &parser.reporter);
 
     // RULING 3: a bare pun of a formatted-result struct into a scalar param
     // (KORU038) is reported here, at the koru level, before it can reach the
