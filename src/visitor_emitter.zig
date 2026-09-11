@@ -441,6 +441,150 @@ pub const VisitorEmitter = struct {
     /// Check if a module contains ANY items that should be emitted in the current mode.
     /// This allows modules to be emitted even if they have [comptime] annotation,
     /// as long as they contain [runtime] events/procs.
+    /// Index every module in the tree by logical name, emittable or not.
+    fn indexModulesByName(
+        map: *std.StringHashMap(*const ast.ModuleDecl),
+        items: []const ast.Item,
+    ) !void {
+        for (0..items.len) |idx| {
+            if (items[idx] == .module_decl) {
+                const module = &items[idx].module_decl;
+                try map.put(module.logical_name, module);
+                try indexModulesByName(map, module.items);
+            }
+        }
+    }
+
+    /// The base type name a signature type string names, or null when the
+    /// spelling is not a plain identifier (compound expressions name no
+    /// single home). Strips pointer/slice/optional prefixes, a trailing
+    /// phantom `<...>`, and any module qualification.
+    fn signatureBaseName(type_name: []const u8) ?[]const u8 {
+        var t = std.mem.trim(u8, type_name, " \t");
+        if (std.mem.indexOfScalar(u8, t, '<')) |lt| t = std.mem.trim(u8, t[0..lt], " \t");
+        const prefixes = [_][]const u8{ "[]const ", "?*const ", "*const ", "[]", "?*", "?", "*" };
+        strip: while (true) {
+            for (prefixes) |prefix| {
+                if (std.mem.startsWith(u8, t, prefix)) {
+                    t = t[prefix.len..];
+                    continue :strip;
+                }
+            }
+            break;
+        }
+        var start: usize = 0;
+        for (t, 0..) |c, i| {
+            if (c == '.' or c == ':') start = i + 1;
+        }
+        t = t[start..];
+        if (t.len == 0) return null;
+        for (t) |c| {
+            if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') return null;
+        }
+        return t;
+    }
+
+    /// Would this event emit in the current mode? Mirrors visitItem's early
+    /// returns so the type scan only counts signatures that actually reach the
+    /// emitted file.
+    fn eventSignatureEmits(self: *VisitorEmitter, event: *const ast.EventDecl, module_annotations: []const []const u8) bool {
+        if (shouldFilter(event.annotations, module_annotations, event.module, self.emit_mode)) return false;
+        if (annotationsAreConsumedCompilerSurface(event.annotations, self.emit_mode)) return false;
+        for (event.input.fields) |field| {
+            if (field.is_source or field.is_expression or
+                std.mem.indexOf(u8, field.type, "Program") != null)
+            {
+                return self.emit_mode != .runtime_only;
+            }
+        }
+        return true;
+    }
+
+    /// Collect the base type names named by the emitted signatures in `items`
+    /// (event inputs, bare returns, branch payloads, host type fields).
+    /// module_decl items are skipped — their surface is scanned when (and if)
+    /// the module is collected.
+    fn collectSignatureBaseTypes(
+        self: *VisitorEmitter,
+        set: *std.StringHashMap(void),
+        items: []const ast.Item,
+        module_annotations: []const []const u8,
+    ) !void {
+        for (items) |*item| {
+            switch (item.*) {
+                .event_decl => |*event| {
+                    if (!self.eventSignatureEmits(event, module_annotations)) continue;
+                    for (event.input.fields) |f| {
+                        if (signatureBaseName(f.type)) |b| try set.put(b, {});
+                    }
+                    if (event.return_type) |rt| {
+                        if (signatureBaseName(rt)) |b| try set.put(b, {});
+                    }
+                    for (event.branches) |branch| {
+                        for (branch.payload.fields) |f| {
+                            if (signatureBaseName(f.type)) |b| try set.put(b, {});
+                        }
+                        if (branch.resume_type) |rt| {
+                            if (signatureBaseName(rt)) |b| try set.put(b, {});
+                        }
+                    }
+                },
+                .host_type_decl => |*ht| {
+                    for (ht.shape.fields) |f| {
+                        if (signatureBaseName(f.type)) |b| try set.put(b, {});
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
+    /// Backfill module collection for type homes. `moduleHasEmittableItems`
+    /// counts runtime surface only, so a module whose whole contribution is a
+    /// host type — declared by a host line, named by an emitted signature via
+    /// host_type_homes — is dropped while references to it still emit as
+    /// `koru_<mod>.<T>`, which dangles. Collect any module that is the home of
+    /// a referenced type, iterating to a fixpoint because an added module's own
+    /// signatures can name further homes.
+    fn collectTypeHomeModules(
+        self: *VisitorEmitter,
+        items: []const ast.Item,
+        module_annotations: []const []const u8,
+        modules: *std.ArrayList(*const ast.ModuleDecl),
+    ) !void {
+        const homes = emitter.host_type_homes orelse return;
+
+        var by_name = std.StringHashMap(*const ast.ModuleDecl).init(self.allocator);
+        defer by_name.deinit();
+        try indexModulesByName(&by_name, items);
+
+        var collected = std.StringHashMap(void).init(self.allocator);
+        defer collected.deinit();
+        for (modules.items) |m| try collected.put(m.logical_name, {});
+
+        var referenced = std.StringHashMap(void).init(self.allocator);
+        defer referenced.deinit();
+
+        var added = true;
+        while (added) {
+            added = false;
+            referenced.clearRetainingCapacity();
+            try self.collectSignatureBaseTypes(&referenced, items, module_annotations);
+            for (modules.items) |m| {
+                try self.collectSignatureBaseTypes(&referenced, m.items, m.annotations);
+            }
+            var it = referenced.keyIterator();
+            while (it.next()) |base| {
+                const home = homes.get(base.*) orelse continue;
+                if (home.len == 0 or collected.contains(home)) continue;
+                const module = by_name.get(home) orelse continue;
+                try modules.append(self.allocator, module);
+                try collected.put(home, {});
+                added = true;
+            }
+        }
+    }
+
     fn moduleHasEmittableItems(module: *const ast.ModuleDecl, mode: EmitMode) bool {
         for (module.items) |item| {
             switch (item) {
@@ -753,6 +897,14 @@ pub const VisitorEmitter = struct {
         // Collect ALL modules recursively (including nested ones from imports)
         // This is important because nested modules like std.control need to be checked too
         try self.collectModulesRecursively(source_file.items, &modules);
+
+        // A module that contributes ONLY a host type an emitted signature names
+        // (a foreign-registered struct in a .kz with no runtime items — 667_005)
+        // still owns that type's emitted spelling (`*File` ->
+        // `*koru_app.koru_lib.File`); collect it or the qualified reference
+        // dangles. Fixpoint: a backfilled module's own signatures can reach
+        // further homes.
+        try self.collectTypeHomeModules(source_file.items, source_file.module_annotations, &modules);
 
         // Emit main_module struct start. CompilerEnv is pub only for the
         // comptime_only emission (backend_output_emitted.zig) so phantom_semantic_checker
