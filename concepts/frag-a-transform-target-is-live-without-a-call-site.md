@@ -40,6 +40,14 @@ framework — wired to nothing, wanted by nobody). And a fourth edge:
 `env:get.or` gained its first caller *during* the census that had just
 measured it dead — the snapshot is a tree-pin away from stale, always.
 
+Evolved again, same day (the fmt census): the reachability question is
+**three**-layered, not two. Call sites, transform emission — and the
+**discharge machinery**: a tor taking a `<!phantom>` param
+(`fmt.dealloc` on `*FormattedText<!allocated>`) is inserted by
+auto-discharge, never spelled. Obligation-target is a liveness class of
+its own: zero call sites is its healthy state, and any census that
+counts only the first two layers will bury it.
+
 Open question: the emitted-name routing table is implicit (scattered
 `"{verb}-{s}"` format calls inside transform zig bodies). A declared
 routing surface — one place that says which tors a transform can emit —
