@@ -1,11 +1,11 @@
 ---
 type: belief
 id: frag-a-consumed-handle-should-continue-its-binding
-provenance: Lars design discussion 2026-09-10 (raylib `frames`/`activate`, db `tx.exec`); aspirational, unruled — pinned red at 336_007/336_008
-ts: 2026-09-10
+provenance: Lars design discussion 2026-09-10 (raylib `frames`/`activate`, db `tx.exec`); aspirational, unruled — pinned red at 336_007/336_008; implemented 2026-09-11 as a Stage-A desugar
+ts: 2026-09-11
 ---
 
-# A consumed same-typed handle is ONE entity advancing, not a value spent and a new one minted (aspirational belief)
+# A consumed same-typed handle is ONE entity advancing, not a value spent and a new one minted (belief)
 
 A tor that consumes `*T<!s>` and re-mints `*T<s'!>` is describing the *same
 entity* with a new state. Today the caller must model it as death-and-birth:
@@ -91,33 +91,36 @@ reassigns one slot (`w = step(w)`). Mangling is owed only when two values are
 live at once, which a consuming call rules out. (An SSA-shaped emitter may
 freshen the symbol internally; that is invisible and semantically free.)
 
-## Pins
+## Implemented — a Stage-A desugar, not a checker/emitter change (2026-09-11)
 
-Aspirational — published as `MUST_ERROR` (green today: each pins the current
-refusal, `KORU030 … already discharged`, so the board keeps showing real
-failures rather than intentions — the `330_071` convention). Flip to `MUST_RUN`
-when a consumed same-based-typed binding continues; green then means the advance
-landed.
+The advance landed as a desugar (`ast_transform.desugarHandleContinuation`): the
+consuming call is rewritten into the **explicit fresh-bind form the emitter
+already lowers** — `advance(h) |> close(h)` becomes `advance(h): __cont0 |>
+close(__cont0)`, and the named-payload case becomes `close(p.h)`. The checker,
+auto-discharge and emitter are untouched, because downstream is exactly the
+hand-written spelling that already compiled and ran.
 
-- `336_007_same_type_handle_advances_in_place` — arrow/bare-return (`advance -> h`).
-- `336_008_branch_transition_continues_its_binding` — branch identity payload.
-- `336_009_named_payload_field_continues_its_binding` — named multi-field payload
-  (`{ h: …, n: i32 }`): the NAME half.
-- `336_010_continuation_is_identity_agnostic` — the implementation **allocates a
-  new handle**; the binding still continues. The pin for "the caller cannot and
-  need not tell."
+This is this concept's own "an SSA-shaped emitter may freshen the symbol
+internally; that is invisible and semantically free" reading made literal. The
+single-slot `w = step(w)` is an optimization, not a correctness requirement: a
+consuming call never leaves two values live at once, so a fresh symbol is
+observationally identical.
 
-Guard (must STAY green — the negative space that keeps the rule from
-over-applying):
+It is **regression-safe by construction**: the pass fires only when the consumed
+binding is referenced again *after* the call — which is exactly the KORU030
+space — so no currently-green program can be touched. The ambiguity guard
+declines and lets KORU030 fire.
 
-- `336_011_ambiguous_survivor_forces_explicit_binding` — two same-typed handles
-  consumed, one minted: no sole survivor, so neither input continues; the old
-  binding is spent.
+Pins, all green: `336_007` (arrow) / `336_008` (branch identity payload) /
+`336_009` (named payload field — the NAME half) / `336_010` (identity-agnostic)
+are `MUST_RUN`; `336_011` stays `MUST_ERROR` as the ambiguity guard.
 
 ### Boundaries not yet pinned
-- A **borrow** (no `!`) is not a transition and must not advance or consume.
-- A consume with **no returned handle** spends the binding (safety guard).
+- A **borrow** (no `!`) does not advance — guarded by construction (only
+  `!`-prefixed inputs are candidates), but not yet pinned by a test.
+- A consume with **no returned handle** spends the binding — likewise guarded,
+  not pinned.
 - The **thread/pun reaching further** (the hypothesis that name-continuity lets
   the sole-survivor thread carry obligations across more stages).
 - The eventual **refusal** of the unambiguous rebind (the KORU115-style lever,
-  sequenced with the advance).
+  sequenced with the advance) — still a ruling owed.

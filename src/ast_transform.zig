@@ -117,6 +117,7 @@ pub const SymbolTable = struct {
                         .input = event.input,
                         .branches = event.branches,
                         .return_type = event.return_type,
+                        .return_phantom = event.return_phantom,
                         .input_is_compiler_supplied = event.isComptimeOnly() or event.hasAnnotation("transform"),
                         .has_proc = false,
                         .has_subflow = false,
@@ -192,6 +193,10 @@ pub const EventInfo = struct {
     /// RUNTIME value is a result struct the caller must field-access (e.g.
     /// std/fmt:ln's `{ text }`), never punned whole into a scalar param.
     return_type: ?[]const u8 = null,
+    /// The `-> T<phantom>` obligation on the bare return, when declared. Read by
+    /// the continuation desugar to tell an ISSUED output (`active!`) from an
+    /// unowned one.
+    return_phantom: ?[]const u8 = null,
     /// This event's INPUT is assembled by the compiler at the call site, not
     /// written by the author — a `[transform]` receives the site itself
     /// (`invocation` / `item` / `program` / `allocator`), and a Source or
@@ -2424,6 +2429,349 @@ fn threadFlowChain(
         running = try std.fmt.allocPrint(allocator, "__thread_pun{d}", .{counter.*});
         counter.* += 1;
         inv.return_binding = running;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Same-base-type continuation: a consumed handle advances its binding in place
+// ----------------------------------------------------------------------------
+//
+// A tor that consumes `*T<!s>` and re-mints `*T<s'!>` selects the SAME entity
+// with a new state — raylib's `window.activate`, a db `exec` that re-tags in
+// place. Today the caller must spend the old binding and re-bind the result
+// under a new name, a rebind that carries no information. The rule: when a
+// consuming call's SOLE same-based-typed output is unnamed, the consumed input
+// binding continues — later references to the old name mean the new value.
+//
+// This pass realizes the rule by rewriting the call into the explicit-bind form
+// the emitter already lowers (`advance(h): __cont0 |> close(__cont0)`), so no
+// checker or emitter change is needed: downstream is exactly the hand-written
+// spelling, which already compiles and runs (probe in 336_007).
+//
+// Regression-safe by construction: it fires ONLY when a consumed binding is
+// referenced again after the call, which today is always KORU030 (a spent
+// binding). A currently-green program never references a spent binding, so it
+// is never touched. The ambiguity guard (two same-typed handles consumed, one
+// minted) declines, leaving KORU030 to fire — 336_011.
+//
+// Boundaries: a BORROW (no `!`) is not consumed, so it is never a candidate; a
+// consume with no matching output spends the binding (nothing to continue).
+
+/// One consumed input found at a call site: the name the caller bound it to and
+/// the phantom-stripped base type it carries.
+const ConsumedInput = struct {
+    field_name: []const u8,
+    binding: []const u8,
+    base_type: []const u8,
+};
+
+/// A binding we can follow by name. A compound argument (`.get()`, `a.b`) names
+/// no slot to continue, so it is not a candidate.
+fn isPlainIdentifier(text: []const u8) bool {
+    if (text.len == 0) return false;
+    if (!(std.ascii.isAlphabetic(text[0]) or text[0] == '_')) return false;
+    for (text[1..]) |c| {
+        if (!(std.ascii.isAlphanumeric(c) or c == '_')) return false;
+    }
+    return true;
+}
+
+/// An ISSUED obligation: trailing `!` (`active!`). A consume prefix (`!open`) is
+/// the input side; only an issue is a value the caller can continue.
+fn outputIssues(phantom: []const u8) bool {
+    return phantom.len > 0 and phantom[phantom.len - 1] == '!';
+}
+
+fn findArgByParam(args: []const ast.Arg, param: []const u8) ?ast.Arg {
+    for (args) |a| {
+        if (std.mem.eql(u8, a.name, param)) return a;
+    }
+    return null;
+}
+
+/// Entry point: continue a consumed same-based-typed binding in place. Runs last
+/// among the Stage-A desugars so it sees the most-resolved tree.
+pub fn desugarHandleContinuation(
+    allocator: std.mem.Allocator,
+    program: *ast.Program,
+    reporter: *errors_mod.ErrorReporter,
+) !void {
+    var table = try SymbolTable.init(allocator);
+    defer table.deinit();
+    try table.buildFrom(program);
+    var counter: usize = 0;
+    try handleContinuationItems(allocator, &table, program.items, &counter, reporter);
+}
+
+fn handleContinuationItems(
+    allocator: std.mem.Allocator,
+    table: *SymbolTable,
+    items: []const ast.Item,
+    counter: *usize,
+    reporter: *errors_mod.ErrorReporter,
+) std.mem.Allocator.Error!void {
+    for (@constCast(items)) |*item| {
+        switch (item.*) {
+            .flow => |*flow| try handleContinuationChain(allocator, table, &flow.body, counter, reporter),
+            .proc_decl => |*proc| {
+                for (@constCast(proc.inline_flows)) |*flow| {
+                    try handleContinuationChain(allocator, table, &flow.body, counter, reporter);
+                }
+            },
+            .module_decl => |*module| try handleContinuationItems(allocator, table, module.items, counter, reporter),
+            else => {},
+        }
+    }
+}
+
+fn handleContinuationChain(
+    allocator: std.mem.Allocator,
+    table: *SymbolTable,
+    cont: *ast.Continuation,
+    counter: *usize,
+    reporter: *errors_mod.ErrorReporter,
+) std.mem.Allocator.Error!void {
+    if (cont.node) |*node| {
+        if (node.* == .invocation) {
+            try tryContinuationAt(allocator, table, cont, &node.invocation, counter);
+        }
+    }
+    for (@constCast(cont.continuations)) |*child| {
+        try handleContinuationChain(allocator, table, child, counter, reporter);
+    }
+}
+
+fn tryContinuationAt(
+    allocator: std.mem.Allocator,
+    table: *SymbolTable,
+    cont: *ast.Continuation,
+    inv: *ast.Invocation,
+    counter: *usize,
+) std.mem.Allocator.Error!void {
+    const info = table.getEventInfo(inv.path) orelse return;
+
+    var consumed = try std.ArrayList(ConsumedInput).initCapacity(allocator, 2);
+    defer consumed.deinit(allocator);
+    for (info.input.fields) |f| {
+        const ph = f.phantom orelse continue;
+        if (ph.len == 0 or ph[0] != '!') continue;
+        const a = findArgByParam(inv.args, f.name) orelse continue;
+        const b = std.mem.trim(u8, a.value, " \t\n\r");
+        if (!isPlainIdentifier(b)) continue;
+        try consumed.append(allocator, .{ .field_name = f.name, .binding = b, .base_type = f.type });
+    }
+    if (consumed.items.len == 0) return;
+
+    // Arrow form: the continued value is the invocation's bare return.
+    if (info.return_type) |rt| {
+        const rp = info.return_phantom orelse "";
+        if (outputIssues(rp) and inv.return_binding == null) {
+            const out_base = std.mem.trim(u8, rt, " \t");
+            var match: ?ConsumedInput = null;
+            var count: usize = 0;
+            for (consumed.items) |c| {
+                if (std.mem.eql(u8, c.base_type, out_base)) {
+                    match = c;
+                    count += 1;
+                }
+            }
+            if (count == 1) {
+                const c = match.?;
+                if (contListReferencesName(cont.continuations, c.binding)) {
+                    const fresh = try std.fmt.allocPrint(allocator, "__cont{d}", .{counter.*});
+                    counter.* += 1;
+                    inv.return_binding = fresh;
+                    try rewriteContListName(allocator, cont.continuations, c.binding, fresh);
+                    return;
+                }
+            }
+        }
+    }
+
+    // Branch form: each named arm re-mints on its own payload.
+    for (@constCast(cont.continuations)) |*arm| {
+        if (arm.branch.len == 0) continue;
+        const br = branchNamed(info, arm.branch) orelse continue;
+        if (br.payload.is_wildcard or br.payload.fields.len == 0) continue;
+        try tryArmContinuation(allocator, arm, br, consumed.items, counter);
+    }
+}
+
+fn tryArmContinuation(
+    allocator: std.mem.Allocator,
+    arm: *ast.Continuation,
+    br: ast.Branch,
+    consumed: []const ConsumedInput,
+    counter: *usize,
+) std.mem.Allocator.Error!void {
+    const fields = br.payload.fields;
+    const identity = fields.len == 1 and std.mem.eql(u8, fields[0].name, "__type_ref");
+
+    if (identity) {
+        const fld = fields[0];
+        if (!outputIssues(fld.phantom orelse "")) return;
+        if (arm.binding != null and !std.mem.eql(u8, arm.binding.?, "_")) return;
+        var match: ?ConsumedInput = null;
+        var count: usize = 0;
+        for (consumed) |c| {
+            if (std.mem.eql(u8, c.base_type, fld.type)) {
+                match = c;
+                count += 1;
+            }
+        }
+        if (count != 1) return;
+        const c = match.?;
+        if (!contReferencesName(arm, c.binding)) return;
+        const fresh = try std.fmt.allocPrint(allocator, "__cont{d}", .{counter.*});
+        counter.* += 1;
+        arm.binding = fresh;
+        try rewriteContName(allocator, arm, c.binding, fresh);
+        return;
+    }
+
+    // Named payload: the field whose NAME matches the consumed input's field
+    // name continues that input — reached through the record binding (`p.h`).
+    for (fields) |fld| {
+        if (!outputIssues(fld.phantom orelse "")) continue;
+        for (consumed) |c| {
+            if (!std.mem.eql(u8, fld.name, c.field_name)) continue;
+            if (!std.mem.eql(u8, fld.type, c.base_type)) continue;
+            if (!contReferencesName(arm, c.binding)) continue;
+            const recv = arm.binding orelse continue;
+            if (std.mem.eql(u8, recv, "_")) continue;
+            const target = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ recv, fld.name });
+            try rewriteContName(allocator, arm, c.binding, target);
+            return;
+        }
+    }
+}
+
+fn contListReferencesName(conts: []const ast.Continuation, name: []const u8) bool {
+    for (conts) |c| {
+        if (contReferencesName(&c, name)) return true;
+    }
+    return false;
+}
+
+fn contReferencesName(cont: *const ast.Continuation, name: []const u8) bool {
+    if (cont.node) |node| {
+        if (nodeReferencesName(&node, name)) return true;
+    }
+    return contListReferencesName(cont.continuations, name);
+}
+
+fn nodeReferencesName(node: *const ast.Node, name: []const u8) bool {
+    switch (node.*) {
+        .invocation => |inv| return argsReferenceName(inv.args, name),
+        .label_with_invocation => |lwi| return argsReferenceName(lwi.invocation.args, name),
+        .label_jump => |lj| return argsReferenceName(lj.args, name),
+        .branch_constructor => |bc| {
+            if (bc.plain_value) |pv| {
+                if (textReferencesName(pv, name)) return true;
+            }
+            for (bc.fields) |fld| {
+                if (fld.expression_str) |es| {
+                    if (textReferencesName(es, name)) return true;
+                }
+            }
+            return false;
+        },
+        .expression => |code| return textReferencesName(code, name),
+        else => return false,
+    }
+}
+
+fn argsReferenceName(args: []const ast.Arg, name: []const u8) bool {
+    for (args) |a| {
+        if (textReferencesName(a.value, name)) return true;
+    }
+    return false;
+}
+
+fn textReferencesName(text: []const u8, name: []const u8) bool {
+    if (std.mem.eql(u8, std.mem.trim(u8, text, " \t\n\r"), name)) return true;
+    return interpolationReferences(text, name);
+}
+
+fn rewriteContListName(
+    allocator: std.mem.Allocator,
+    conts: []const ast.Continuation,
+    name: []const u8,
+    target: []const u8,
+) std.mem.Allocator.Error!void {
+    for (@constCast(conts)) |*c| {
+        try rewriteContName(allocator, c, name, target);
+    }
+}
+
+fn rewriteContName(
+    allocator: std.mem.Allocator,
+    cont: *ast.Continuation,
+    name: []const u8,
+    target: []const u8,
+) std.mem.Allocator.Error!void {
+    if (cont.node) |*node| {
+        try rewriteNodeName(allocator, node, name, target);
+    }
+    for (@constCast(cont.continuations)) |*child| {
+        try rewriteContName(allocator, child, name, target);
+    }
+}
+
+fn rewriteNodeName(
+    allocator: std.mem.Allocator,
+    node: *ast.Node,
+    name: []const u8,
+    target: []const u8,
+) std.mem.Allocator.Error!void {
+    switch (node.*) {
+        .invocation => |*inv| try rewriteArgsName(allocator, inv.args, name, target),
+        .label_with_invocation => |*lwi| try rewriteArgsName(allocator, lwi.invocation.args, name, target),
+        .label_jump => |*lj| try rewriteArgsName(allocator, lj.args, name, target),
+        .branch_constructor => |*bc| {
+            if (bc.plain_value) |pv| {
+                if (std.mem.eql(u8, std.mem.trim(u8, pv, " \t\n\r"), name)) {
+                    bc.plain_value = try allocator.dupe(u8, target);
+                }
+            }
+            for (@constCast(bc.fields)) |*fld| {
+                if (fld.expression_str) |es| {
+                    if (std.mem.eql(u8, std.mem.trim(u8, es, " \t\n\r"), name)) {
+                        fld.expression_str = try allocator.dupe(u8, target);
+                    }
+                }
+            }
+        },
+        .expression => |code| {
+            if (std.mem.eql(u8, std.mem.trim(u8, code, " \t\n\r"), name)) {
+                node.* = .{ .expression = try allocator.dupe(u8, target) };
+            }
+        },
+        else => {},
+    }
+}
+
+fn rewriteArgsName(
+    allocator: std.mem.Allocator,
+    args: []const ast.Arg,
+    name: []const u8,
+    target: []const u8,
+) std.mem.Allocator.Error!void {
+    for (@constCast(args)) |*a| {
+        const v = std.mem.trim(u8, a.value, " \t\n\r");
+        if (std.mem.eql(u8, v, name)) {
+            a.value = try allocator.dupe(u8, target);
+        } else if (std.mem.indexOf(u8, a.value, "{{") != null) {
+            const rw = try rewriteInterpolations(allocator, a.value, name, target);
+            if (rw.ptr != a.value.ptr) a.value = rw;
+            // A comptime transform's Expression parameter interpolates
+            // `expression_value.text`, not `arg.value` (see rewriteStepReferences).
+            if (a.expression_value) |ev| {
+                const ev_mut = @constCast(ev);
+                const rw2 = try rewriteInterpolations(allocator, ev_mut.text, name, target);
+                if (rw2.ptr != ev_mut.text.ptr) ev_mut.text = rw2;
+            }
+        }
     }
 }
 

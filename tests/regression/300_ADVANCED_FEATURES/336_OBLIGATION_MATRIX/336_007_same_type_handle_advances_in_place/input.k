@@ -1,4 +1,4 @@
-// ASPIRATIONAL — a same-typed transition should CONTINUE its binding.
+// IMPLEMENTED — a same-typed transition CONTINUES its binding.
 //
 // `advance` consumes `h` (<!open|!active>) and re-mints <active!> on the same
 // handle: `-> h` IS the transition written out. The entity is `h` throughout.
@@ -7,8 +7,8 @@
 // the new symbol is the old pointer with a new state. The intended rule: the
 // sole same-typed survivor advances `h` in place, so `close` just uses `h`.
 //
-// Red today (KORU030: `h` is spent at the `advance` call); green when a
-// consumed handle continues its binding.
+// Green: the `desugarHandleContinuation` pass rewrites `advance(h)` into the
+// explicit `: __cont0` bind and points `close` at it (see output_emitted.zig).
 import app/held
 import std/io
 

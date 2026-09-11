@@ -7166,6 +7166,14 @@ pub fn main() !void {
     // step is already final), before any checker sees the rewritten chain.
     try ast_transform.desugarChainPunThreading(parse_allocator, &source_file, &parser.reporter);
 
+    // Same-base-type continuation: a tor that consumes `*T<!s>` and re-mints
+    // `*T<s'!>` advances the consumed binding in place, so a later reference to
+    // the old name means the re-minted value. Rewrites into the explicit-bind
+    // form the emitter already lowers; runs last so every earlier desugar's
+    // args are materialized. Fires only where a spent binding is referenced
+    // again (today always KORU030), so green programs are untouched.
+    try ast_transform.desugarHandleContinuation(parse_allocator, &source_file, &parser.reporter);
+
     // RULING 3: a bare pun of a formatted-result struct into a scalar param
     // (KORU038) is reported here, at the koru level, before it can reach the
     // emitter and leak a raw Zig type error. KORU092/093 (the thread) and

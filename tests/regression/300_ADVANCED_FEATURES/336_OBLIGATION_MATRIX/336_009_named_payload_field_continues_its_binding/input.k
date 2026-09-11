@@ -1,12 +1,12 @@
-// ASPIRATIONAL — a NAMED payload field continues its same-named input binding.
+// IMPLEMENTED — a NAMED payload field continues its same-named input binding.
 //
 // The output is a multi-field record; its `h` field names the same entity as
 // the input `h`, so `h` should advance in place and `close` should use `h`.
 // The other payload field (`n`) is an ordinary new binding. Today the caller
 // must spend `h` and reach the handle back through the payload record `p.h`.
 //
-// Red today (KORU030: `h` is spent at the `advance` call); green when a
-// name-matched payload field scores the re-mint onto the input binding.
+// Green: the payload field `h` continues the input `h`; `close` is rewritten
+// to `close(p.h)` (output_emitted.zig).
 import app/held
 import std/io
 
