@@ -30,13 +30,28 @@ pub fn hasPreferredDischarge(event_decl: *const ast.EventDecl) bool {
     return false;
 }
 
+/// A bare `-> T` return keeps an event auto-insertable ONLY when T is the
+/// released borrow itself (`<x>`, phantom without `!`) — the token a disposer
+/// hands back so an explicit caller can keep using the released resource. A
+/// borrow token drops silently on a bare inserted call, the same as an unbound
+/// call in a chain. A plain-value return is information somebody must take —
+/// a transform like `validate-response -> string` is not a disposer — and a
+/// live obligation (`<x!>`, a transfer like `take`) must never be dropped.
+fn returnIsReleasedBorrow(event_decl: *const ast.EventDecl) bool {
+    const ph = event_decl.return_phantom orelse return false;
+    return !std.mem.endsWith(u8, ph, "!");
+}
+
 /// Can this event be called UNATTENDED — appended at a scope exit with no
-/// caller to take a return and no arm to answer a branch? Only a void tor can:
-/// non-void comes in two spellings (named branches, and the single-return
-/// `-> T`), and neither can be spliced as a bare call because the inserter
-/// cannot synthesize the bind either output form requires.
+/// caller to take a return and no arm to answer a branch? A void tor always
+/// can; a named-branch tor never can (the inserter cannot synthesize the arm
+/// it needs). A bare-return `-> T` tor can only when the return is the
+/// released borrow — which is what lets a disposal be a pure-Koru impl
+/// (`~release.row -> row` returns the released borrow) instead of a `|zig`
+/// no-op marker.
 pub fn isUnattendedDischarge(event_decl: *const ast.EventDecl) bool {
-    return event_decl.branches.len == 0 and event_decl.return_type == null;
+    if (event_decl.branches.len != 0) return false;
+    return event_decl.return_type == null or returnIsReleasedBorrow(event_decl);
 }
 
 /// THE auto-discharge policy, over anything that can name its candidates.
@@ -3303,6 +3318,13 @@ pub const AutoDischargeInserter = struct {
             // (include_multi_branch) still lists branched dischargers so the user can
             // call one explicitly.
             //
+            // A bare `-> T` return admits the event only when T is the
+            // released borrow (`<x>`, phantom without `!`) — the token a
+            // pure-Koru disposer like `~release.row -> row` hands back. A
+            // plain value is output somebody must take; a live obligation
+            // (`<x!>`, a transfer like `take` -> `*String<instance!>`) is a new
+            // debt — both still disqualify, exactly as before.
+            //
             // ⚠️ MEASURED AND GATED OFF, 2026-08-06 — do not delete, read this.
             // A PANIC branch (`| ?!name`) arguably should NOT disqualify: its
             // unhandled form is a synthesized @panic (210_127), so there is no
@@ -3322,7 +3344,7 @@ pub const AutoDischargeInserter = struct {
             // report "I did not release" into nothing.
             const admit_panic_only_branches = false;
             if (!include_multi_branch) {
-                if (event_decl.return_type != null) continue;
+                if (event_decl.return_type != null and !returnIsReleasedBorrow(event_decl)) continue;
                 var has_bindable_output = false;
                 for (event_decl.branches) |b| {
                     if (!b.is_panic or !admit_panic_only_branches) {

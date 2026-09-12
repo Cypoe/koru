@@ -1,0 +1,27 @@
+// A disposer whose bare `-> T` return is the RELEASED BORROW (`<open>`, no
+// `!`) qualifies as an unattended discharge: the inserted bare call drops the
+// borrow token exactly like an unbound chain step. This is what lets a
+// disposer be a pure-Koru impl (`~release -> h`) instead of a |zig marker —
+// the shape sqlite3's `release.row` uses. The |zig proc here makes the
+// inserted call observable: "released" in stdout proves it fired.
+//
+// Contrast: 330_036 — the same shape with a plain-value return (`-> string`)
+// is output somebody must take and still disqualifies; a live-obligation
+// return (`<x!>`, a transfer) disqualifies too (330_118).
+pub const Handle = struct {
+    id: i32,
+};
+~tor open {} -> *Handle<open!>
+~proc open|zig {
+    std.debug.print("opened\n", .{});
+    const h = std.heap.page_allocator.create(Handle) catch unreachable;
+    h.* = .{ .id = 42 };
+    return h;
+}
+~tor release { h: *Handle<!open> } -> *Handle<open>
+~proc release|zig {
+    std.debug.print("released\n", .{});
+    return h;
+}
+const std = @import("std");
+~open()
