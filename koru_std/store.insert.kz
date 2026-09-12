@@ -458,13 +458,13 @@
         .args = call_args,
     };
 
-    const conts: []ast.Continuation = if (has_row_cont or has_full_cont) blk: {
+    const conts: []ast.Continuation = blk: {
         const cloned = allocator.alloc(ast.Continuation, flow.body.continuations.len) catch unreachable;
         for (flow.body.continuations, 0..) |*c, i| {
             cloned[i] = ast_functional.cloneContinuation(allocator, c) catch unreachable;
         }
         break :blk cloned;
-    } else &[_]ast.Continuation{};
+    };
 
     return .{ .transformed = .{ .replacement = ast.Item{ .flow = ast.Flow{
         .body = ast.rootSite(call_inv, conts, flow.location),

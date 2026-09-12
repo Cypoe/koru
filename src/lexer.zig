@@ -336,6 +336,32 @@ pub fn commentStart(text: []const u8) ?usize {
 /// carrying a multi-line source block loses its closing `}` and reports
 /// PARSE001 against balanced source (390_119).
 pub fn stripLineComments(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    // No `//` outside a string → nothing to strip; hand the caller the
+    // original slice instead of an owned copy nobody frees.
+    var scan_string = false;
+    var scan_char: ?u8 = null;
+    var si: usize = 0;
+    var needs_strip = false;
+    while (si < text.len) : (si += 1) {
+        const c = text[si];
+        if (!scan_string and c == '/' and si + 1 < text.len and text[si + 1] == '/') {
+            needs_strip = true;
+            break;
+        }
+        if (!scan_string and (c == '"' or c == '\'')) {
+            scan_string = true;
+            scan_char = c;
+        } else if (scan_string) {
+            if (c == '\\') {
+                si += 1;
+            } else if (c == scan_char.?) {
+                scan_string = false;
+                scan_char = null;
+            }
+        }
+    }
+    if (!needs_strip) return text;
+
     var out = try std.ArrayList(u8).initCapacity(allocator, text.len);
     var in_string = false;
     var string_char: ?u8 = null;

@@ -269,9 +269,16 @@ fn appendedItemHome(program: *const Program, item: ast.Item) ?[]const u8 {
     }
     const file = appendedItemFile(item) orelse return null;
     if (file.len == 0) return null;
+    const file_dir = std.fs.path.dirname(file);
     for (program.items) |pit| {
         if (pit != .module_decl) continue;
         if (std.mem.eql(u8, pit.module_decl.canonical_path, file)) return pit.module_decl.logical_name;
+        // A directory module's canonical_path is the DIRECTORY (`mymod/`),
+        // while an item synthesized in `mymod/index.k` names the file — the
+        // file belongs to the module whose directory is its parent.
+        if (file_dir) |dir| {
+            if (std.mem.eql(u8, pit.module_decl.canonical_path, dir)) return pit.module_decl.logical_name;
+        }
     }
     return null;
 }
