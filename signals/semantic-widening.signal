@@ -1,0 +1,6 @@
+name: semantic-widening
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a rule that used to refuse a shape now admits a narrower form of it — e.g. unattended discharge moved from void-only to void-or-released-borrow. Distinct from belief-change (a prior belief inverted) — this is a gate relaxing within its own rule.
