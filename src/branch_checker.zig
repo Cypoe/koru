@@ -89,7 +89,7 @@ pub const BranchChecker = struct {
     ///   `when`-only terminal leaves the false-guard case uncovered
     ///   (KORU050). For `!` EFFECTS a guard FILTERS instead: a guarded
     ///   handler covers the branch, and an unmatched fire is a no-op by
-    ///   nature — no unguarded arm is required (220_034 ruling).
+    ///   nature — no unguarded arm is required (220_039 ruling).
     pub fn validate(
         allocator: std.mem.Allocator,
         declared: []const DeclaredBranch,
@@ -145,7 +145,7 @@ pub const BranchChecker = struct {
                 if (resolveDeclared(declared, h.name) != di) continue;
                 // Guards narrow a `|` outcome — they don't cover. For `!`
                 // effects they FILTER: a guarded handler is handling, an
-                // unmatched fire is a no-op already (220_034 ruling).
+                // unmatched fire is a no-op already (220_039 ruling).
                 if (h.has_when_guard and decl.kind != .effect) continue;
                 found_unguarded = true;
                 break;

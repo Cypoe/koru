@@ -1516,7 +1516,7 @@ pub const FlowChecker = struct {
                 // RULING 2+: an EFFECT branch needs no else — guards are
                 // per-fire filters, and an unmatched fire is a no-op by
                 // nature. True for optional effects since 220_019; extended
-                // to required effects by the 220_034 ruling (a guarded
+                // to required effects by the 220_039 ruling (a guarded
                 // handler IS handling — `|` outcomes still require an else:
                 // the result must route somewhere).
                 if (isEffectBranchGroup(declared, branch_name, branch_continuations)) continue;
