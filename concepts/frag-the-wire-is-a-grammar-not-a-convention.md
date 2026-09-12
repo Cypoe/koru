@@ -21,6 +21,15 @@ invocation per turn; `verb(field: "value")`; nothing after the closing
 paren. Prose, chains, truncated strings refuse at *parse* time, with
 diagnostics written to be read by the model that emitted them.
 
+**The unit of enforcement is the item, not the turn.** When turn
+sequencing landed (a turn may carry several invocations under `?partial`),
+the gate stayed on the single-item path — items 2..N skipped the grammar
+entirely, and a bare value or a `when` clause mid-turn dispatched
+silently. A grammar that only holds on the first line of a turn is the
+convention this ruling retired. `std/bridge:run` now runs
+`parse.wire` on every item before dispatch; a refused item is a
+`step N/M parse-error` line and the turn runs on, pinned by 440_021.
+
 The load-bearing split, the one that keeps the meanings honest:
 
 - **parse-error** answers "that was not Koru" — the grammar's verdict.

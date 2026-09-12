@@ -1,0 +1,45 @@
+// Koru Standard Library: the `select` part of interpreter.kz — picking the
+// arm a dispatched outcome runs. Joined via `~part select` in
+// interpreter.kz; merged into the interpreter module at load.
+//
+// A `|?` catch-all is the fallback, not an override: it fires only when no
+// named arm matched. flow_parser stores the bare form `|? b` with the name
+// in `branch`; the metatype form `|? M b` puts `M` in `branch` and `b` in
+// `binding`. An interpreter outcome carries no metatype, so `|? M b`
+// cannot be filtered — `metatype_only` tells eval the only fallback left
+// is one it cannot honor, and it refuses rather than catching outcomes the
+// compiled surface would not. (440_020; kopium bridge-mirror
+// 2026-09-12-branch-arms)
+
+const ArmChoice = struct {
+    // The continuation to run, or null when nothing applies.
+    idx: ?usize,
+    // True when no named arm and no bare catch-all matched but a metatype
+    // catch-all is present — unjudgeable, never silently fired.
+    metatype_only: bool,
+};
+
+fn selectArm(continuations: []const ast.Continuation, branch: []const u8) ArmChoice {
+    var matched_idx: ?usize = null;
+    var catchall_idx: ?usize = null;
+    var metatype_catchall = false;
+    for (continuations, 0..) |*c, ci| {
+        if (c.is_catchall) {
+            if (c.binding != null and c.branch.len > 0) {
+                metatype_catchall = true;
+            } else if (catchall_idx == null) {
+                catchall_idx = ci;
+            }
+            continue;
+        }
+        const plain_ok = branch.len == 0 and std.mem.eql(u8, c.branch, "ok");
+        if (plain_ok or std.mem.eql(u8, c.branch, branch)) {
+            matched_idx = ci;
+            break;
+        }
+    }
+    return .{
+        .idx = matched_idx orelse catchall_idx,
+        .metatype_only = matched_idx == null and catchall_idx == null and metatype_catchall,
+    };
+}

@@ -293,6 +293,6 @@ pub const Bridge = struct {
     br.deinit();
     koru_allocator().destroy(br);
 }
-
 ~part run
 ~part affordances
+~part turn

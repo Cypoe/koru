@@ -1,0 +1,144 @@
+// Koru Standard Library: the `turn` part of bridge.kz — the wire gate and
+// the multi-item turn machinery. Joined via `~part turn` in bridge.kz;
+// merged into the bridge module at load.
+//
+// `wireGate` is the wire grammar check, shared by the single-item gate and
+// the per-item gate a sequenced turn runs on every slice: one predicate,
+// two surfaces — a one-item turn returns the refusal as the turn's
+// verdict; a multi-item turn reports it as a `step N/M parse-error` line
+// and runs on. A grammar that only held on the first item of a turn is the
+// convention the wire ruling retired — the unit of enforcement is the
+// item. (440_021; kopium bridge-mirror 2026-09-12-wire-gate-scope)
+
+fn wireGate(source: []const u8) ?struct { message: []const u8, line: u32, column: u32 } {
+    const rt = @import("root").koru_std.koru_runtime;
+    return switch (rt.parse_wire_event.handler(.{ .source = source })) {
+        .parsed => null,
+        .parse_error => |e| .{ .message = e.message, .line = e.line, .column = e.column },
+    };
+}
+
+/// A turn slice: byte offsets into the turn source.
+const TurnItem = struct { start: usize, end: usize };
+
+/// `tor ...` items route to define_event, everything else dispatches.
+fn isDefineItem(item: []const u8) bool {
+    const trimmed = std.mem.trim(u8, item, " \t\r\n");
+    return std.mem.startsWith(u8, trimmed, "tor ");
+}
+
+/// Split a turn into items. A new item opens at a non-blank line that is
+/// not a `|` arm, not inside an open string or unbalanced delimiter, and
+/// not the impl head/arms of a `tor ` define (matched by declared name).
+/// This is a ROUTER, not a validator: every slice still passes the wire
+/// gate's full validation, so mis-segmentation fails loud as today's
+/// parse-errors, never silent wrongness.
+fn segmentTurn(allocator: std.mem.Allocator, source: []const u8) ![]TurnItem {
+    var items = std.ArrayList(TurnItem){};
+    errdefer items.deinit(allocator);
+    var i: usize = 0;
+    var line_start: usize = 0;
+    var cur_start: ?usize = null;
+    var paren: i32 = 0;
+    var brace: i32 = 0;
+    var bracket: i32 = 0;
+    var in_string: ?u8 = null;
+    var in_define: bool = false;
+    var define_name: []const u8 = "";
+    while (i <= source.len) : (i += 1) {
+        if (i != source.len and source[i] != '\n') continue;
+        const raw = source[line_start..i];
+        const line = std.mem.trim(u8, raw, " \t\r");
+        const depth_open = paren + brace + bracket;
+        const in_str = in_string != null;
+        scanLineChars(raw, &paren, &brace, &bracket, &in_string);
+        if (line.len == 0) {
+            line_start = i + 1;
+            continue;
+        }
+        if (cur_start == null) {
+            cur_start = line_start;
+            if (std.mem.startsWith(u8, line, "tor ")) {
+                in_define = true;
+                define_name = defineName(line);
+            }
+        } else if (!in_str and depth_open == 0 and !std.mem.startsWith(u8, line, "|")) {
+            if (in_define and isImplHead(line, define_name)) {
+                in_define = false;
+            } else {
+                try items.append(allocator, .{ .start = cur_start.?, .end = line_start });
+                cur_start = line_start;
+                if (std.mem.startsWith(u8, line, "tor ")) {
+                    in_define = true;
+                    define_name = defineName(line);
+                } else {
+                    in_define = false;
+                }
+            }
+        }
+        line_start = i + 1;
+    }
+    if (cur_start) |s| {
+        try items.append(allocator, .{ .start = s, .end = source.len });
+    }
+    return items.toOwnedSlice(allocator);
+}
+
+/// Update delimiter/string state across one raw line. Strings (with `\`
+/// escapes) and backtick spans are opaque: delimiters inside them are data.
+fn scanLineChars(raw: []const u8, paren: *i32, brace: *i32, bracket: *i32, in_string: *?u8) void {
+    var in_backtick = false;
+    var k: usize = 0;
+    while (k < raw.len) {
+        const c = raw[k];
+        if (in_string.* == null and c == '`') {
+            in_backtick = !in_backtick;
+            k += 1;
+            continue;
+        }
+        if (in_backtick) {
+            k += 1;
+            continue;
+        }
+        if (in_string.*) |q| {
+            if (c == '\\' and k + 1 < raw.len) {
+                k += 2;
+                continue;
+            }
+            if (c == q) in_string.* = null;
+            k += 1;
+            continue;
+        }
+        if (c == '"' or c == '\'') {
+            in_string.* = c;
+        } else if (c == '(') {
+            paren.* += 1;
+        } else if (c == ')') {
+            paren.* -= 1;
+        } else if (c == '{') {
+            brace.* += 1;
+        } else if (c == '}') {
+            brace.* -= 1;
+        } else if (c == '[') {
+            bracket.* += 1;
+        } else if (c == ']') {
+            bracket.* -= 1;
+        }
+        k += 1;
+    }
+}
+
+/// The declared name of a `tor NAME ...` line (token after `tor`).
+fn defineName(decl_line: []const u8) []const u8 {
+    var toks = std.mem.tokenizeAny(u8, decl_line, " \t");
+    _ = toks.next();
+    return toks.next() orelse "";
+}
+
+/// An impl head opens `<name> = ...` (name then space/tab/`=`).
+fn isImplHead(line: []const u8, name: []const u8) bool {
+    if (name.len == 0 or line.len <= name.len) return false;
+    if (!std.mem.startsWith(u8, line, name)) return false;
+    const after = line[name.len..];
+    return after[0] == ' ' or after[0] == '\t' or after[0] == '=';
+}

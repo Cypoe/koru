@@ -1392,38 +1392,36 @@ fn executeFlow(
     // branchless; compiled code matches it as `ok` by declaration knowledge,
     // so the interpreter meets it there — otherwise armed chains over
     // plain-return verbs (open's handle included) can never match.
-    for (flow.body.continuations) |cont| {
-        const plain_ok = dispatch_result.branch.len == 0 and std.mem.eql(u8, cont.branch, "ok");
-        if (plain_ok or std.mem.eql(u8, cont.branch, dispatch_result.branch)) {
+    // `|?` selection lives in the `select` part of interpreter.kz: the catch-all is the
+    // fallback arm, and a metatype catch-all refuses — an interpreter
+    // outcome carries no metatype to filter on.
+    const choice = selectArm(flow.body.continuations, dispatch_result.branch);
+    if (choice.metatype_only) return error.CatchallMetatypeUnsupported;
+    if (choice.idx) |ci| {
+        const cont = flow.body.continuations[ci];
+        const arm_binding = cont.binding orelse (if (cont.is_catchall and cont.branch.len > 0) cont.branch else null);
+        {
             // Bind the result if there's a binding name
-            if (cont.binding) |binding_name| {
+            if (arm_binding) |binding_name| {
                 const bound_value = Value.fromDispatch(
                     dispatch_result.branch,
                     dispatch_result.fields,
                 );
                 try ctx.env.bind(binding_name, bound_value);
 
-                // Also populate expr_bindings for if conditions
-                if (bound_value.fields.len == 1 and std.mem.eql(u8, bound_value.fields[0].name, "__type_ref")) {
-                    // Scalar payload: bind the value directly
-                    try ctx.expr_bindings.set(binding_name, fieldValueToExprValue(bound_value.fields[0].value));
-                    // Preserve branch name as a metatype-style accessor
-                    var branch_key_buf: [256]u8 = undefined;
-                    const branch_key = std.fmt.bufPrint(&branch_key_buf, "{s}.Branch", .{binding_name}) catch "";
-                    if (branch_key.len > 0) {
-                        const branch_key_owned = try ctx.allocator.dupe(u8, branch_key);
-                        try ctx.expr_bindings.set(branch_key_owned, .{ .string_val = dispatch_result.branch });
-                    }
-                } else {
-                    // Structured payload: binding resolves to branch name
-                    try ctx.expr_bindings.set(binding_name, .{ .string_val = dispatch_result.branch });
-                    // Also expose branch name via metatype-style accessor
-                    var branch_key_buf: [256]u8 = undefined;
-                    const branch_key = std.fmt.bufPrint(&branch_key_buf, "{s}.Branch", .{binding_name}) catch "";
-                    if (branch_key.len > 0) {
-                        const branch_key_owned = try ctx.allocator.dupe(u8, branch_key);
-                        try ctx.expr_bindings.set(branch_key_owned, .{ .string_val = dispatch_result.branch });
-                    }
+                // Also populate expr_bindings for if conditions: a scalar
+                // payload binds its value, a structured payload binds the
+                // branch name — and either way `b.Branch` names the branch.
+                const scalar = bound_value.fields.len == 1 and std.mem.eql(u8, bound_value.fields[0].name, "__type_ref");
+                try ctx.expr_bindings.set(binding_name, if (scalar)
+                    fieldValueToExprValue(bound_value.fields[0].value)
+                else
+                    .{ .string_val = dispatch_result.branch });
+                var branch_key_buf: [256]u8 = undefined;
+                const branch_key = std.fmt.bufPrint(&branch_key_buf, "{s}.Branch", .{binding_name}) catch "";
+                if (branch_key.len > 0) {
+                    const branch_key_owned = try ctx.allocator.dupe(u8, branch_key);
+                    try ctx.expr_bindings.set(branch_key_owned, .{ .string_val = dispatch_result.branch });
                 }
 
                 // If we have fields, add them as binding.field entries
@@ -1678,4 +1676,3 @@ fn executeFlow(
         .handles = @intCast(active_pool.countUndischarged()),
     }};
 }
-
