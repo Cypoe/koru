@@ -1192,6 +1192,16 @@ pub const VisitorEmitter = struct {
                     try self.code_emitter.write("    main_module.koru_start_flow();\n");
                 }
 
+                // Call runtime flows from library modules FIRST: a module's
+                // top-level flows are its initialization, and the importer's
+                // flows must see a world that already exists (seeding a store
+                // at module top level is the shape — 690_305).
+                for (self.module_runtime_flows.items) |call| {
+                    try self.code_emitter.write("    ");
+                    try self.code_emitter.write(call);
+                    try self.code_emitter.write("();\n");
+                }
+
                 // Emit user flow calls
                 // CRITICAL: Only emit calls to flows that were ACTUALLY emitted (respect filtering!)
                 var i: usize = 0;
@@ -1255,13 +1265,6 @@ pub const VisitorEmitter = struct {
                         },
                         else => {},
                     }
-                }
-
-                // Call runtime flows from library modules
-                for (self.module_runtime_flows.items) |call| {
-                    try self.code_emitter.write("    ");
-                    try self.code_emitter.write(call);
-                    try self.code_emitter.write("();\n");
                 }
 
                 // Call koru:end meta-event flow if it exists (fires profiler footer, etc.)
