@@ -613,6 +613,12 @@ pub const ShapeChecker = struct {
             // Check if label was already declared
             if (self.labels.get(label_name)) |_| {
                 log.debug("ERROR: Duplicate label '{s}' defined\n", .{label_name});
+                try self.reporter.addErrorAtLocation(
+                    .KORU042,
+                    flow.location,
+                    "duplicate label '#{s}' — labels are flow-scoped and this flow already declares it",
+                    .{label_name},
+                );
                 return error.DuplicateLabel;
             }
             // Register pre-invocation label
@@ -1651,6 +1657,12 @@ pub const ShapeChecker = struct {
                     const label_info = self.labels.get(step.label_jump.label);
                     if (label_info == null) {
                         log.debug("ERROR: Unknown label '{s}'\n", .{step.label_jump.label});
+                        try self.reporter.addErrorAtLocation(
+                            .KORU041,
+                            cont.location,
+                            "unknown label '@{s}'",
+                            .{step.label_jump.label},
+                        );
                         return error.UnknownLabel;
                     }
                     // For now, just validate that the label exists
@@ -1988,6 +2000,12 @@ pub const ShapeChecker = struct {
         }
 
         // Proc without matching event
+        try self.reporter.addErrorAtLocation(
+            .KORU050,
+            proc.location,
+            "proc '{s}' has no matching event declaration — a proc implements the tor/event of the same path; declare it or remove the proc",
+            .{path},
+        );
         return error.ProcWithoutEvent;
     }
 

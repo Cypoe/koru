@@ -176,6 +176,10 @@ pub const FlowChecker = struct {
         // ast_items during both passes.
         if (!is_transform_flow) {
             if (try self.checkOptionalEffectNoop(flow)) return;
+            // KORU039 (RULING 3): a no-op `_` effect handler whose branch is
+            // already handled by a sibling. Same structural shape, both modes;
+            // recurses the whole continuation tree so nested sites are covered.
+            if (try self.checkEffectDiscardSibling(flow.body.continuations)) return;
         }
 
         // The declared branches of the event this flow invokes — threaded into
@@ -1344,6 +1348,62 @@ pub const FlowChecker = struct {
         return false;
     }
 
+    /// RULING 3 — a no-op `_` body on an effect branch is illegal when the
+    /// branch is ALSO handled by a sibling continuation (KORU039).
+    /// `! row r when g |> work` already covers the fires it matches; an
+    /// unmatched fire is a no-op by nature — effects are per-fire filters, not
+    /// terminal routing. The discard sibling handles nothing and borrows
+    /// `|`-branch exhaustiveness intuition where none applies. `|` outcome
+    /// discards stay legal (a result must land somewhere — and KORU050 may
+    /// require the unguarded arm); a LONE `! row _ |> _` on a required effect
+    /// also stays legal (explicit handle-and-ignore — RULING 1's carve-out).
+    /// Runs in both modes and recurses the continuation tree: the shape is
+    /// decidable without decls (kind + terminal body are parse-level), so
+    /// `--check` catches it at the frontend boundary.
+    fn checkEffectDiscardSibling(self: *FlowChecker, continuations: []const ast.Continuation) !bool {
+        // Group effect branches by name — a discard is only noise when the
+        // branch has a real sibling handler.
+        var group_sizes = std.StringHashMap(usize).init(self.allocator);
+        defer group_sizes.deinit();
+        for (continuations) |*cont| {
+            if (cont.kind != .effect) continue;
+            const gop = try group_sizes.getOrPut(cont.branch);
+            if (!gop.found_existing) gop.value_ptr.* = 0;
+            gop.value_ptr.* += 1;
+        }
+        var found = false;
+        for (continuations) |*cont| {
+            if (cont.kind != .effect) continue;
+            const node = cont.node orelse continue;
+            if (node != .terminal) continue; // body must be a bare `_` no-op
+            if ((group_sizes.get(cont.branch) orelse 0) < 2) continue;
+            try self.reporter.addErrorAtLocationWithHint(
+                .KORU039,
+                cont.location,
+                "no-op `_` body on effect branch '{s}' — the branch is already handled by a sibling; an effect is a per-fire filter, so an unmatched fire needs no discard",
+                .{cont.branch},
+                "omit the discard — `! {s}` handlers cover the fires they match; the rest are no-ops already. `|` outcome discards stay legal — a result must route somewhere.",
+                .{cont.branch},
+            );
+            found = true;
+        }
+        // Recurse into branch sets hanging off each continuation's node —
+        // a nested invocation's branches are the same shape one level down.
+        // Transform nodes' branches are transform DATA, not handlers.
+        for (continuations) |*cont| {
+            if (cont.is_transformed_subtree) continue;
+            const node_is_transform = blk: {
+                const node = cont.node orelse break :blk false;
+                if (node != .invocation) break :blk false;
+                const d = self.findEventDecl(&node.invocation.path) orelse break :blk false;
+                break :blk annotation_parser.hasPart(d.annotations, "transform");
+            };
+            if (node_is_transform) continue;
+            if (try self.checkEffectDiscardSibling(cont.continuations)) found = true;
+        }
+        return found;
+    }
+
     fn validateContinuationWhenClauses(self: *FlowChecker, cont: *const ast.Continuation, location: errors.SourceLocation) !void {
         // A transformed subtree (capture's grafted `''` void-chain) carries the
         // transform exemption — its synthesized `''` children are sequential
@@ -1444,12 +1504,13 @@ pub const FlowChecker = struct {
             }
 
             if (else_count == 0) {
-                // RULING 2: an OPTIONAL EFFECT branch needs no else. Unmatched
-                // guards falling through to nothing is exactly what "optional"
-                // means — the effect simply isn't handled that fire, which the
-                // optional contract permits. (KORU050 still applies to required
-                // and terminal branches, where exhaustiveness matters.)
-                if (isOptionalEffectBranchGroup(declared, branch_name, branch_continuations)) continue;
+                // RULING 2+: an EFFECT branch needs no else — guards are
+                // per-fire filters, and an unmatched fire is a no-op by
+                // nature. True for optional effects since 220_019; extended
+                // to required effects by the 220_034 ruling (a guarded
+                // handler IS handling — `|` outcomes still require an else:
+                // the result must route somewhere).
+                if (isEffectBranchGroup(declared, branch_name, branch_continuations)) continue;
 
                 // ERROR: Not exhaustive - missing else case
                 log.debug("ERROR: Branch '{s}' has {d} when-clauses but no else case (non-exhaustive)\n", .{ branch_name, branch_continuations.len });
@@ -1506,7 +1567,7 @@ pub const FlowChecker = struct {
     /// declared branch of that name is both `.effect` and `.is_optional`. Such
     /// a branch requires no unguarded else — guards that all miss simply leave
     /// the optional effect unhandled, which its contract allows.
-    fn isOptionalEffectBranchGroup(
+    fn isEffectBranchGroup(
         declared: []const ast.Branch,
         branch_name: []const u8,
         group: []const *const ast.Continuation,
@@ -1517,7 +1578,7 @@ pub const FlowChecker = struct {
         }
         for (declared) |b| {
             if (!std.mem.eql(u8, b.name, branch_name)) continue;
-            return b.kind == .effect and b.is_optional;
+            return b.kind == .effect;
         }
         return false;
     }
@@ -1616,6 +1677,10 @@ pub const FlowChecker = struct {
                 .name = branch.name,
                 .is_optional = branch.is_optional,
                 .is_panic = branch.is_panic,
+                // kind matters: guards FILTER `!` effects (a guarded handler
+                // covers; unmatched fires are no-ops) but only NARROW `|`
+                // outcomes — branch_checker's coverage ruling needs it.
+                .kind = if (branch.kind == .effect) .effect else .terminal,
             });
         }
 

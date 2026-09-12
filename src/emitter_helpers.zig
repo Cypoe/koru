@@ -4257,6 +4257,256 @@ fn findEventDeclByPathInModule(items: []const ast.Item, segments: []const []cons
     return null;
 }
 
+/// The bindings visible at a nested transform site. `site` is a pointer into
+/// the REAL program — a transform reaches it via `item.flow.site_of` (the
+/// runner's siteView sets it for nested sites; it is null at flow roots,
+/// where there is no enclosing scope).
+///
+/// Walks the containing flow's continuation tree down to `site`, collecting
+/// every binding the path introduces — `| branch name` payload binds,
+/// `! name` effect binds, `: name` return binds on invocation nodes, and
+/// destructures — each resolved against the declaring event's branch payload
+/// or return type. An impl flow's event input fields are in scope for the
+/// whole body. `.type` carries the phantom in source spelling
+/// (`*Connection<opened!>`), `.value_ref` the name as code sees it.
+/// This is the nested-correct twin of `resolveBindingType` (which searches
+/// the real program for a view-copied invocation and only scans flow-top
+/// continuations — both blind at a nested site).
+pub fn scopeAtSite(
+    allocator: std.mem.Allocator,
+    items: []const ast.Item,
+    site: *const ast.Continuation,
+) ![]ast.ScopeBinding {
+    const flow = findFlowHoldingCont(items, site) orelse return &.{};
+    var out = std.ArrayList(ast.ScopeBinding){};
+
+    // An impl flow's event input fields are in scope for the whole body.
+    if (flow.impl_of) |impl_path| {
+        var p = impl_path;
+        if (findEventDeclByPath(items, &p)) |decl| {
+            for (decl.input.fields) |f| {
+                try out.append(allocator, .{
+                    .name = f.name,
+                    .type = try scopedTypeText(allocator, f.type, f.phantom),
+                    .value_ref = f.name,
+                });
+            }
+        }
+    }
+
+    _ = try scopeWalkCont(allocator, items, &flow.body, null, site, &out);
+    return try out.toOwnedSlice(allocator);
+}
+
+/// Join a phantom-stripped type with its state: "opened!" → "*Connection<opened!>".
+fn scopedTypeText(allocator: std.mem.Allocator, base: []const u8, phantom: ?[]const u8) ![]const u8 {
+    const ph = phantom orelse return base;
+    return std.fmt.allocPrint(allocator, "{s}<{s}>", .{ base, ph });
+}
+
+fn findFlowHoldingCont(items: []const ast.Item, site: *const ast.Continuation) ?*const ast.Flow {
+    for (items) |*item| {
+        switch (item.*) {
+            .flow => |*f| {
+                if (&f.body == site or contTreeHolds(f.body.continuations, site)) return f;
+            },
+            .module_decl => |*m| {
+                if (findFlowHoldingCont(m.items, site)) |found| return found;
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn contTreeHolds(conts: []const ast.Continuation, site: *const ast.Continuation) bool {
+    for (conts) |*cont| {
+        if (cont == site) return true;
+        if (contTreeHolds(cont.continuations, site)) return true;
+        if (cont.node) |*node| {
+            switch (node.*) {
+                .conditional => |n| {
+                    for (n.branches) |*b| {
+                        if (contTreeHolds(b.body, site)) return true;
+                    }
+                },
+                .foreach => |n| {
+                    for (n.branches) |*b| {
+                        if (contTreeHolds(b.body, site)) return true;
+                    }
+                },
+                .switch_result => |n| {
+                    for (n.branches) |*b| {
+                        if (contTreeHolds(b.body, site)) return true;
+                    }
+                },
+                .conditional_block => |cb| {
+                    for (cb.nodes) |*n| {
+                        if (n.* == .conditional) {
+                            for (n.conditional.branches) |*b| {
+                                if (contTreeHolds(b.body, site)) return true;
+                            }
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+    return false;
+}
+
+/// One continuation's scope contribution, then descent toward `site`.
+/// `parent_inv` is the invocation whose branch set contains `cont` — a
+/// `| branch name`/`! branch name` binding resolves against that event's
+/// declaration. The site's OWN binding is in scope at the site (the `| db d`
+/// of `| db d |> libs/sqlite3 { }` binds `d` before the node runs); a
+/// SIBLING's binding is not — only path conts contribute.
+fn scopeWalkCont(
+    allocator: std.mem.Allocator,
+    items: []const ast.Item,
+    cont: *const ast.Continuation,
+    parent_inv: ?*const ast.Invocation,
+    site: *const ast.Continuation,
+    out: *std.ArrayList(ast.ScopeBinding),
+) anyerror!bool {
+    const is_site = cont == site;
+    if (!is_site and !contHoldsTarget(cont, site)) return false;
+
+    // On the path (or the site itself): this cont's bindings are in scope.
+    if (cont.binding) |name| {
+        const t = try branchPayloadType(allocator, items, parent_inv, cont.branch);
+        try out.append(allocator, .{ .name = name, .type = t, .value_ref = name });
+    }
+    for (cont.destructure) |*df| {
+        try out.append(allocator, .{ .name = df.name, .type = df.type_text orelse "", .value_ref = df.name });
+    }
+    if (is_site) return true;
+
+    var child_inv: ?*const ast.Invocation = parent_inv;
+    if (cont.node) |*node| {
+        switch (node.*) {
+            .invocation => |*inv| {
+                // `: name` binds the return for everything after the call.
+                if (inv.return_binding) |name| {
+                    const t = try returnTypeOf(allocator, items, inv);
+                    try out.append(allocator, .{ .name = name, .type = t, .value_ref = name });
+                }
+                for (inv.return_destructure) |*df| {
+                    try out.append(allocator, .{ .name = df.name, .type = df.type_text orelse "", .value_ref = df.name });
+                }
+                child_inv = inv;
+            },
+            .label_with_invocation => |*lwi| child_inv = &lwi.invocation,
+            else => {},
+        }
+    }
+
+    if (try scopeWalkConts(allocator, items, cont.continuations, child_inv, site, out)) return true;
+
+    if (cont.node) |*node| {
+        switch (node.*) {
+            .conditional => |n| {
+                for (n.branches) |*b| {
+                    if (try scopeWalkConts(allocator, items, b.body, parent_inv, site, out)) return true;
+                }
+            },
+            .foreach => |n| {
+                for (n.branches) |*b| {
+                    if (try scopeWalkConts(allocator, items, b.body, parent_inv, site, out)) return true;
+                }
+            },
+            .switch_result => |n| {
+                for (n.branches) |*b| {
+                    if (try scopeWalkConts(allocator, items, b.body, parent_inv, site, out)) return true;
+                }
+            },
+            .conditional_block => |cb| {
+                for (cb.nodes) |*n| {
+                    if (n.* == .conditional) {
+                        for (n.conditional.branches) |*b| {
+                            if (try scopeWalkConts(allocator, items, b.body, parent_inv, site, out)) return true;
+                        }
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+fn contHoldsTarget(cont: *const ast.Continuation, site: *const ast.Continuation) bool {
+    if (cont == site) return true;
+    if (contTreeHolds(cont.continuations, site)) return true;
+    if (cont.node) |*node| {
+        switch (node.*) {
+            .conditional => |n| {
+                for (n.branches) |*b| {
+                    if (contTreeHolds(b.body, site)) return true;
+                }
+            },
+            .foreach => |n| {
+                for (n.branches) |*b| {
+                    if (contTreeHolds(b.body, site)) return true;
+                }
+            },
+            .switch_result => |n| {
+                for (n.branches) |*b| {
+                    if (contTreeHolds(b.body, site)) return true;
+                }
+            },
+            .conditional_block => |cb| {
+                for (cb.nodes) |*n| {
+                    if (n.* == .conditional) {
+                        for (n.conditional.branches) |*b| {
+                            if (contTreeHolds(b.body, site)) return true;
+                        }
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+fn scopeWalkConts(
+    allocator: std.mem.Allocator,
+    items: []const ast.Item,
+    conts: []const ast.Continuation,
+    parent_inv: ?*const ast.Invocation,
+    site: *const ast.Continuation,
+    out: *std.ArrayList(ast.ScopeBinding),
+) anyerror!bool {
+    for (conts) |*cont| {
+        if (try scopeWalkCont(allocator, items, cont, parent_inv, site, out)) return true;
+    }
+    return false;
+}
+
+/// A `| branch name`/`! branch name` bind takes the named branch's payload
+/// type in the parent invocation's event decl. Single-field shapes report
+/// the scalar type with its phantom (`*Connection<opened!>`); record
+/// payloads report "" (no scalar type to give).
+fn branchPayloadType(allocator: std.mem.Allocator, items: []const ast.Item, parent_inv: ?*const ast.Invocation, branch_name: []const u8) ![]const u8 {
+    const inv = parent_inv orelse return "";
+    const decl = findEventDeclByPath(items, &inv.path) orelse return "";
+    for (decl.branches) |*b| {
+        if (!std.mem.eql(u8, b.name, branch_name)) continue;
+        if (b.payload.fields.len == 1) {
+            return scopedTypeText(allocator, b.payload.fields[0].type, b.payload.fields[0].phantom);
+        }
+        return "";
+    }
+    return "";
+}
+
+fn returnTypeOf(allocator: std.mem.Allocator, items: []const ast.Item, inv: *const ast.Invocation) ![]const u8 {
+    const decl = findEventDeclByPath(items, &inv.path) orelse return "";
+    return scopedTypeText(allocator, decl.return_type orelse "", decl.return_phantom);
+}
+
 /// Find a proc declaration by its path
 /// Used for checking purity of event implementations
 pub fn findProcDeclByPath(items: []const ast.Item, path: *const ast.DottedPath) ?*const ast.ProcDecl {
@@ -5134,30 +5384,51 @@ pub fn emitInlineBodyNode(
 
             // (1) Synthesize the Handlers struct from effect continuations.
             //     Skip entirely when nothing will reference it: no live effect
-            //     conts (all transform-consumed data) and no aliasable decl
-            //     branches (wildcard-only decl) — else it lands as an unused
-            //     local in the neutralized flow.
-            var has_aliasable = false;
+            //     conts (all transform-consumed data) AND no bare `name(` call
+            //     in the body. An empty struct with a `const row = H.row` alias
+            //     is a dangling member access, and an unused local — e.g. an
+            //     unhandled optional `! ?row` at a marker-driven site.
+            var body_calls_effect = false;
             for (ed.branches) |b| {
-                if (b.kind == .effect and !std.mem.eql(u8, b.name, "*")) has_aliasable = true;
+                if (b.kind != .effect or std.mem.eql(u8, b.name, "*")) continue;
+                if (callsBranchByName(inline_code, b.name)) {
+                    body_calls_effect = true;
+                    break;
+                }
             }
-            if (inline_effect_conts.items.len == 0 and !has_aliasable) {
+            if (inline_effect_conts.items.len == 0 and !body_calls_effect) {
                 try emitter.writeIndent();
-                try emitter.write(inline_code);
+                try emitInlineCodeResolvingSplices(emitter, ctx, inline_code, continuations);
+                if (!inline_is_statement) {
+                    try emitter.write(";");
+                }
                 try emitter.write("\n");
                 return;
             }
-            const hname = "Handlers_0";
+            // Site-unique name: nested or sibling inline-effect sites each
+            // synthesize a struct in the same Zig scope — a fixed `Handlers_0`
+            // shadows the outer one and Zig rejects the redeclaration.
+            const hname = try std.fmt.allocPrint(ctx.allocator, "Handlers_{d}", .{result_counter.*});
+            defer ctx.allocator.free(hname);
+            result_counter.* += 1;
             try emitHandlersStruct(emitter, ctx, hname, inline_effect_conts.items, ed);
 
-            // (2) Alias every declared effect branch into local scope so the
+            // (2) Alias every PROVIDED effect branch into local scope so the
             //     template body's bare `NAME(...)` calls resolve. Mirrors the
-            //     handler-side aliasing (`const NAME = __H.NAME;`).
+            //     handler-side aliasing (`const NAME = __H.NAME;`). Only
+            //     branches with a handler member get an alias — the struct has
+            //     no member for an unhandled optional effect, so the alias
+            //     would dangle. (A `name(` call into an unhandled optional
+            //     branch still has no member — a no-op stub is a separate seam.)
             //     A wildcard decl branch (`! \`*\` *` — regex scan, std/parser
             //     grammar) is a PATTERN, not a name: nothing can alias it.
             for (ed.branches) |b| {
                 if (b.kind != .effect) continue;
                 if (std.mem.eql(u8, b.name, "*")) continue;
+                const has_member = for (inline_effect_conts.items) |c| {
+                    if (std.mem.eql(u8, c.branch, b.name)) break true;
+                } else false;
+                if (!has_member) continue;
                 try emitter.writeIndent();
                 try emitter.write("const ");
                 try writeBranchName(emitter, b.name);
@@ -6068,6 +6339,41 @@ fn containsToken(body: []const u8, token: []const u8) bool {
             const after = i + token.len;
             const after_ok = after >= body.len or !(std.ascii.isAlphanumeric(body[after]) or body[after] == '_');
             if (before_ok and after_ok) return true;
+        }
+    }
+    return false;
+}
+
+/// True when `body` calls `name(` — the identifier on identifier boundary
+/// (so `__row(` doesn't match `row(`; dotted `x.row(` doesn't match `row(` —
+/// a field call is not the branch alias), optional whitespace, then `(`.
+/// Skips string/char literals and line comments like containsToken does.
+fn callsBranchByName(body: []const u8, name: []const u8) bool {
+    var i: usize = 0;
+    var q: u8 = 0;
+    while (i < body.len) : (i += 1) {
+        const c = body[i];
+        if (q != 0) {
+            if (c == '\\') {
+                i += 1;
+            } else if (c == q) {
+                q = 0;
+            }
+            continue;
+        }
+        if (c == '"' or c == '\'') {
+            q = c;
+            continue;
+        }
+        if (c == '/' and i + 1 < body.len and body[i + 1] == '/') {
+            while (i < body.len and body[i] != '\n') i += 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, body[i..], name)) {
+            const before_ok = i == 0 or !(std.ascii.isAlphanumeric(body[i - 1]) or body[i - 1] == '_' or body[i - 1] == '.');
+            var j = i + name.len;
+            while (j < body.len and (body[j] == ' ' or body[j] == '\t' or body[j] == '\n')) j += 1;
+            if (before_ok and j < body.len and body[j] == '(') return true;
         }
     }
     return false;

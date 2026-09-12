@@ -875,24 +875,73 @@ fn rewriteDefaultEventScope(allocator: std.mem.Allocator, scope_items: []const a
         }
         if (item_const.* != .flow) continue;
         const item = @constCast(item_const);
-        const node_ptr = if (item.flow.body.node) |*n| n else continue;
-        if (node_ptr.* != .invocation) continue;
-        const path = &node_ptr.invocation.path;
-        if (path.module_qualifier != null or path.segments.len != 1) continue;
-        const seg = path.segments[0];
-        if (std.mem.indexOfScalar(u8, seg, '/') == null) continue;
-        var local_name: ?[]const u8 = null;
-        for (scope_items) |*it2| {
-            if (it2.* == .import_decl and std.mem.eql(u8, it2.import_decl.path, seg)) {
-                local_name = it2.import_decl.local_name;
-                break;
-            }
+        if (item.flow.body.node) |*n| {
+            rewriteDefaultEventNode(allocator, scope_items, n);
         }
-        const lname = local_name orelse continue;
-        path.module_qualifier = lname;
-        const new_segs = allocator.alloc([]const u8, 1) catch continue;
-        new_segs[0] = "default";
-        path.segments = new_segs;
+        // The bare-module call can sit at any depth — `| db d |> libs/M { }`
+        // in a continuation is the same default-door convention as a flow-root
+        // `~libs/M { }` (sqlite3's `default` source-block door lives there).
+        rewriteDefaultEventContinuations(allocator, scope_items, item.flow.body.continuations);
+    }
+}
+
+/// Rewrite a bare `mod/path` invocation path to `mod.path:default` when the
+/// scope imports that path. Shared by the flow-root and continuation walkers.
+fn rewriteDefaultEventInvocationPath(allocator: std.mem.Allocator, scope_items: []const ast.Item, path: *ast.DottedPath) void {
+    if (path.module_qualifier != null or path.segments.len != 1) return;
+    const seg = path.segments[0];
+    if (std.mem.indexOfScalar(u8, seg, '/') == null) return;
+    var local_name: ?[]const u8 = null;
+    for (scope_items) |*it2| {
+        if (it2.* == .import_decl and std.mem.eql(u8, it2.import_decl.path, seg)) {
+            local_name = it2.import_decl.local_name;
+            break;
+        }
+    }
+    const lname = local_name orelse return;
+    path.module_qualifier = lname;
+    const new_segs = allocator.alloc([]const u8, 1) catch return;
+    new_segs[0] = "default";
+    path.segments = new_segs;
+}
+
+fn rewriteDefaultEventNode(allocator: std.mem.Allocator, scope_items: []const ast.Item, node: *ast.Node) void {
+    switch (node.*) {
+        .invocation => |*inv| rewriteDefaultEventInvocationPath(allocator, scope_items, &inv.path),
+        .label_with_invocation => |*lwi| rewriteDefaultEventInvocationPath(allocator, scope_items, &lwi.invocation.path),
+        .conditional_block => |*cb| {
+            for (cb.nodes) |*n_const| {
+                rewriteDefaultEventNode(allocator, scope_items, @constCast(n_const));
+            }
+        },
+        .conditional => |n| {
+            for (n.branches) |*branch| {
+                rewriteDefaultEventContinuations(allocator, scope_items, branch.body);
+            }
+        },
+        .foreach => |n| {
+            for (n.branches) |*branch| {
+                rewriteDefaultEventContinuations(allocator, scope_items, branch.body);
+            }
+        },
+        .switch_result => |n| {
+            for (n.branches) |*branch| {
+                rewriteDefaultEventContinuations(allocator, scope_items, branch.body);
+            }
+        },
+        // terminal, label_apply, label_jump, branch_constructor, assignment —
+        // no invocation paths inside.
+        else => {},
+    }
+}
+
+fn rewriteDefaultEventContinuations(allocator: std.mem.Allocator, scope_items: []const ast.Item, continuations: []const ast.Continuation) void {
+    for (continuations) |*cont_const| {
+        const cont = @constCast(cont_const);
+        if (cont.node) |*node| {
+            rewriteDefaultEventNode(allocator, scope_items, node);
+        }
+        rewriteDefaultEventContinuations(allocator, scope_items, cont.continuations);
     }
 }
 

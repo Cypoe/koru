@@ -3281,6 +3281,9 @@ pub const Parser = struct {
         }
 
         const line = self.lines[self.current];
+        // Capture the decl's start BEFORE the cursor consumes the body —
+        // getCurrentLocation() at build time names the line AFTER the decl.
+        const decl_line_index = self.current;
         self.current += 1;
 
         // Parse: ~[annotations]proc <path> { ... }
@@ -3432,7 +3435,7 @@ pub const Parser = struct {
             .target = target,
             .is_pure = is_pure,
             // is_transitively_pure defaults to false, will be set by purity checker
-            .location = self.getCurrentLocation(),
+            .location = self.getLineLocation(decl_line_index, lexer.getIndent(line)),
             .module = try self.allocator.dupe(u8, self.module_name),
         };
     }
@@ -3450,6 +3453,9 @@ pub const Parser = struct {
         }
 
         const line = self.lines[self.current];
+        // Capture the decl's start BEFORE the cursor consumes the body —
+        // getCurrentLocation() at build time names the line AFTER the decl.
+        const decl_line_index = self.current;
         self.current += 1;
 
         // Parse: ~proc[annotations] <path> { ... }
@@ -3566,7 +3572,7 @@ pub const Parser = struct {
             .annotations = try annotations.toOwnedSlice(self.allocator),
             .prose = self.takePendingProse(),
             .target = target,
-            .location = self.getCurrentLocation(),
+            .location = self.getLineLocation(decl_line_index, lexer.getIndent(line)),
             .module = try self.allocator.dupe(u8, self.module_name),
         };
 

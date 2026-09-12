@@ -13,6 +13,10 @@
 //      case of the guard.
 //
 // Expected output: only the 'q' key fires the handler.
+//
+// (220_034 ruling: the former `! key _ |> _` sibling was removed — a
+// discard on an already-handled effect is KORU039; unmatched fires need
+// no discard.)
 
 ~import std/io
 
@@ -31,4 +35,3 @@
 ! key k when k.ch == 'q' |> std/io:print.blk {
     quit pressed
 }
-! key _ |> _

@@ -1,0 +1,35 @@
+// Test 210_085: POSITIVE — a `when`-guarded handler covers a REQUIRED
+//                         effect branch; no unguarded arm needed.
+//
+// Was: `reject_when_only_required_effect_branch` — the old doctrine read a
+// guarded-only `!` arm as a coverage hole ("fires where the guard is false
+// silently produce no work"). The 220_034 ruling reverses that for EFFECTS:
+// `!` branches are per-fire filters — `! tick i when i > 1 |> work` means
+// "for each fire where the guard holds, work"; unmatched fires are no-ops
+// by nature, not dropped coverage. `|` terminals keep the exhaustiveness
+// rule (a result must route somewhere — see 210_084).
+//
+// Companion rulings: `! tick _ |> _` as a SIBLING to a real handler is
+// illegal (KORU039 — it discards nothing); a lone discard stays legal as
+// explicit handle-and-ignore.
+//
+// Pins: compiles cleanly AND only guarded fires produce output.
+// Expected output: tick 2, done 3.
+
+~pub tor ticker { n: usize }
+! tick usize
+| done usize
+
+~proc ticker|zig {
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        tick(i);
+    }
+    return .{ .done = i };
+}
+
+~import std/io
+
+~ticker(n: 3)
+! tick i when i > 1 |> std/io:print.ln("tick {{ i:d }}")
+| done n |> std/io:print.ln("done {{ n:d }}")

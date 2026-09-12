@@ -29,7 +29,8 @@ koru_std/compiler_visitor.kz	505
 koru_std/compiler.ccp.kz	58
 koru_std/compiler.control.kz	31
 koru_std/compiler.flags.kz	6
-koru_std/compiler.kz	3158
+koru_std/compiler.kz	3136
+koru_std/compiler.paths.kz	33
 koru_std/constructor.kz	305
 koru_std/control.kz	551
 koru_std/crypto.kz	37
@@ -94,7 +95,7 @@ koru_std/store.clear.kz	105
 koru_std/store.default.kz	79
 koru_std/store.insert.kz	482
 koru_std/store.kz	1690
-koru_std/store.new.kz	6521
+koru_std/store.new.kz	6504
 koru_std/store.preorder.kz	110
 koru_std/store.query.kz	1406
 koru_std/store.rule.kz	148

@@ -1,0 +1,6 @@
+// A module whose `default` tor is the door a bare `lib/door(...)` call opens.
+~pub tor default { name: string } -> string
+
+~proc default|zig {
+    return name;
+}

@@ -1,0 +1,6 @@
+// A ~proc implements the tor/event of the same path; with no declaration to
+// pair with, the shape checker must name the orphan and locate it (KORU050),
+// not die as a bare "Compiler coordination error: Proc without matching event".
+~proc orphan|zig {
+    _ = 1;
+}

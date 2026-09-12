@@ -1032,6 +1032,12 @@ pub const Flow = struct {
     location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },
     module: []const u8 = "",
 
+    /// Set only on a SYNTHETIC site-view flow (transform_pass_runner.siteView):
+    /// the real holding continuation this flow's body was copied from. Lets a
+    /// transform recover its nested site's enclosing scope — see
+    /// emitter_helpers.scopeAtSite. Null on every real flow.
+    site_of: ?*const Continuation = null,
+
     /// Returns true if this flow is a cross-module implementation override.
     /// Uses the stored is_impl flag set at parse time (pre-canonicalization).
     pub fn isImpl(self: *const Flow) bool {

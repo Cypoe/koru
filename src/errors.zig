@@ -6,7 +6,7 @@ pub const ErrorCode = enum(u16) {
     KORU002, // Module not found (import resolution failed)
     KORU003, // Inline flow in proc body (feature disabled)
     KORU010, // Stray continuation (| without context)
-    
+
     // Branch errors
     KORU020, // Duplicate branch in event
     KORU021, // Unknown branch in continuation
@@ -29,9 +29,10 @@ pub const ErrorCode = enum(u16) {
     KORU036, // Binding-position destructure names a field the branch payload does not have
     KORU037, // No-op `_` body on an OPTIONAL effect branch (pure noise; a promote-to-required silent-swallow hazard)
     KORU038, // Whole result-struct punned into a scalar field (e.g. an fmt result `text` into a `text: string` param) — reach the field (`text.text`)
+    KORU039, // No-op `_` body on an effect branch that has a real sibling handler — a discard on a per-fire filter discards nothing
     SHAPE001, // Inconsistent branch shapes in subflow
     SHAPE002, // Duplicate branch handler at same level (indentation error)
-    
+
     // Name resolution errors
     KORU040, // Unknown event/proc/subflow
     KORU041, // Unknown label
@@ -41,7 +42,7 @@ pub const ErrorCode = enum(u16) {
     KORU045, // Label requires parameters (pre-invocation label)
     KORU046, // Label does not accept parameters (post-invocation label)
     KORU047, // Event invoked but has no implementation (emitter would silently stub zero-defaults/undefined)
-    
+
     // Proc errors
     KORU050, // Proc without matching event
     KORU051, // Proc returns unknown branch
@@ -51,10 +52,10 @@ pub const ErrorCode = enum(u16) {
     // Subflow errors
     KORU060, // Subflow arity mismatch
     KORU061, // Subflow recursion detected
-    
+
     // First-class event errors
     KORU070, // Cannot determine shape at compile time
-    
+
     // Argument errors
     KORU080, // Missing required field
     KORU081, // Unknown field
@@ -211,6 +212,15 @@ pub const ErrorReporter = struct {
     /// (subtract this count) when storing errors so user output is correct.
     /// 0 means no injection — translation is a no-op.
     injection_line_count: usize = 0,
+    /// Render watermark. `printErrors` emits only errors at or past this index,
+    /// then advances it to `errors.items.len` — each diagnostic prints exactly
+    /// once. The compilation's reporter is shared across passes, and a pass
+    /// gate that prints for itself (auto_discharge_inserter's hasErrors
+    /// bail-outs) is re-rendered by the pipeline's failure catch
+    /// (compiler.kz) — without the watermark every diagnostic on those paths
+    /// landed twice (KORU080 doubled on a `window.open` missing its inputs,
+    /// 2026-09-12).
+    printed_count: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator, file_name: []const u8, source: []const u8) !ErrorReporter {
         var lines = try std.ArrayList([]const u8).initCapacity(allocator, 8);
@@ -311,7 +321,8 @@ pub const ErrorReporter = struct {
                 existing.location.column == column and
                 existing.is_bootstrap == cls.is_bootstrap and
                 existing.bootstrap_line == cls.bootstrap_line and
-                std.mem.eql(u8, existing.message, message)) {
+                std.mem.eql(u8, existing.message, message))
+            {
                 self.allocator.free(message);
                 return;
             }
@@ -432,8 +443,11 @@ pub const ErrorReporter = struct {
         });
     }
 
+    /// Renders only the errors not already emitted by an earlier call — see
+    /// `printed_count`. Errors that arrive after a render still surface on the
+    /// next one.
     pub fn printErrors(self: *ErrorReporter, writer: anytype) !void {
-        for (self.errors.items) |err| {
+        for (self.errors.items[self.printed_count..]) |err| {
             try writer.print("error[{s}]: {s}\n", .{ @tagName(err.code), err.message });
             try writer.print("  --> {s}:{}:{}\n", .{ err.location.file, err.location.line, err.location.column });
 
@@ -457,9 +471,9 @@ pub const ErrorReporter = struct {
             };
 
             if (preview) |p| {
-                try writer.print("    |\n", .{});  // Match line number width
+                try writer.print("    |\n", .{}); // Match line number width
                 try writer.print("{d: >3} | {s}\n", .{ p.line_no, p.line });
-                try writer.print("    | ", .{});  // 4 spaces + " | " = 6 chars to match line prefix
+                try writer.print("    | ", .{}); // 4 spaces + " | " = 6 chars to match line prefix
 
                 // Print caret pointing to error location
                 // Column is 1-based, so we need column-1 spaces to point at column N
@@ -482,6 +496,7 @@ pub const ErrorReporter = struct {
 
             try writer.writeAll("\n");
         }
+        self.printed_count = self.errors.items.len;
     }
 
     pub fn hasErrors(self: *ErrorReporter) bool {
@@ -562,12 +577,8 @@ pub fn branchKindMismatch(
     const cont_glyph: []const u8 = if (cont_kind == .effect) "!" else "|";
     const decl_label: []const u8 = if (decl_kind == .effect) "effect" else "terminal";
     const cont_label: []const u8 = if (cont_kind == .effect) "effect" else "terminal";
-    const message = try std.fmt.allocPrint(reporter.allocator,
-        "branch '{s}' is declared as {s} `{s}` but the handler uses {s} `{s}`",
-        .{ branch_name, decl_label, decl_glyph, cont_label, cont_glyph });
-    const hint = try std.fmt.allocPrint(reporter.allocator,
-        "match the handler glyph to the declaration: write `{s} {s} ... |> ...` to handle this branch",
-        .{ decl_glyph, branch_name });
+    const message = try std.fmt.allocPrint(reporter.allocator, "branch '{s}' is declared as {s} `{s}` but the handler uses {s} `{s}`", .{ branch_name, decl_label, decl_glyph, cont_label, cont_glyph });
+    const hint = try std.fmt.allocPrint(reporter.allocator, "match the handler glyph to the declaration: write `{s} {s} ... |> ...` to handle this branch", .{ decl_glyph, branch_name });
     try reporter.errors.append(reporter.allocator, .{
         .code = .KORU025,
         .message = message,
@@ -632,7 +643,7 @@ pub fn unknownBranch(reporter: *ErrorReporter, line: usize, column: usize, branc
         if (i > 0) try stream.writer().writeAll(", ");
         try stream.writer().writeAll(valid);
     }
-    
+
     try reporter.addErrorWithHint(
         .KORU021,
         line,
@@ -716,4 +727,52 @@ test "FileSink survives a diagnostic longer than its buffer, written to a FILE" 
     const c = std.mem.indexOf(u8, content, "BBBB").?;
     const d = std.mem.indexOf(u8, content, "CCCC").?;
     try std.testing.expect(a < b and b < c and c < d);
+}
+
+/// Test sink: `printErrors` takes `anytype`, so the pin needs a writer with
+/// `print`/`writeAll` that lands in a countable buffer rather than a FILE.
+const ListSink = struct {
+    list: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+
+    pub fn print(self: ListSink, comptime fmt: []const u8, args: anytype) !void {
+        const s = try std.fmt.allocPrint(self.allocator, fmt, args);
+        defer self.allocator.free(s);
+        try self.list.appendSlice(self.allocator, s);
+    }
+
+    pub fn writeAll(self: ListSink, bytes: []const u8) !void {
+        try self.list.appendSlice(self.allocator, bytes);
+    }
+};
+
+test "printErrors renders each diagnostic once across repeated calls" {
+    // The compilation's reporter is shared across passes: a pass gate that
+    // self-prints on failure (auto_discharge_inserter's hasErrors bail-outs)
+    // is re-rendered by the pipeline's failure catch in compiler.kz. Without
+    // the watermark every diagnostic on those paths landed twice — KORU080
+    // doubled on `window.open` missing its inputs (2026-09-12).
+    var reporter = try ErrorReporter.init(std.testing.allocator, "input.k", "a\nb\n");
+    defer reporter.deinit();
+
+    var buf = try std.ArrayList(u8).initCapacity(std.testing.allocator, 0);
+    defer buf.deinit(std.testing.allocator);
+    const sink = ListSink{ .list = &buf, .allocator = std.testing.allocator };
+
+    try reporter.addError(.KORU080, 1, 1, "first message", .{});
+    try reporter.addError(.KORU080, 2, 1, "second message", .{});
+    try reporter.printErrors(sink);
+    const after_first = buf.items.len;
+    try std.testing.expect(after_first > 0);
+
+    // The driver's catch re-render must emit nothing new.
+    try reporter.printErrors(sink);
+    try std.testing.expectEqual(after_first, buf.items.len);
+
+    // Errors arriving after a render still surface on the next one.
+    try reporter.addError(.KORU080, 2, 5, "third message", .{});
+    try reporter.printErrors(sink);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, buf.items, "first message"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, buf.items, "second message"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, buf.items, "third message"));
 }

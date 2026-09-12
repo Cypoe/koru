@@ -1,0 +1,35 @@
+// The KORU039 carve-outs: discards that stay legal.
+//
+// (1) A LONE `! row _ |> _` on a REQUIRED effect — explicit handle-and-ignore
+//     carries meaning (RULING 1's carve-out, also see 220_018).
+// (2) `|` outcome discards — a result must ROUTE somewhere; `| err _ |> _`
+//     is the honest landing, and a guarded `| ok` arm's unguarded sibling is
+//     exactly what KORU050 requires.
+//
+// The refusal (220_020) is only for a discard SIBLING on an effect branch
+// already handled — a no-op on a per-fire filter.
+
+~import std/io
+
+~pub tor poll { x: i64 }
+! row i64
+| done
+| err i64
+
+~proc poll|zig { return .{ .done = .{} }; }
+
+~pub tor risky { x: i64 }
+| ok i64
+| err i64
+
+~proc risky|zig { return .{ .ok = x }; }
+
+~poll(x: 1)
+! row _ |> _
+| done |> _
+| err _ |> _
+
+~risky(x: 2)
+| ok v when v > 10 |> std/io:print.ln("big")
+| ok _ |> _
+| err _ |> _

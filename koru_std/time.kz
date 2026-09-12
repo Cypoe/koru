@@ -91,12 +91,12 @@ fn __mono_ns() i128 {
 ~[runtime] pub tor sleep-ms { ms: u64 }
 
 ~[runtime] proc sleep-ms|zig {
-    std.time.sleep(ms * 1_000_000);
+    std.Thread.sleep(ms * 1_000_000);
 }
 
 // Sleep for specified seconds
 ~[runtime] pub tor sleep-s { s: u64 }
 
 ~[runtime] proc sleep-s|zig {
-    std.time.sleep(s * 1_000_000_000);
+    std.Thread.sleep(s * 1_000_000_000);
 }

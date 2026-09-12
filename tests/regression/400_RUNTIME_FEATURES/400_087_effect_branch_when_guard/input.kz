@@ -10,6 +10,10 @@
 //      handler with a condition, no special exhaustiveness rules apply.
 //
 // Expected output: even values only (0, 2, 4).
+//
+// (220_034 ruling: the former `! tick _ |> _` sibling was removed — a
+// discard on an already-handled effect is KORU039; unmatched fires need
+// no discard.)
 
 ~import std/io
 
@@ -27,4 +31,3 @@
 ! tick i when i % 2 == 0 |> std/io:print.blk {
     tick {{ i:d }}
 }
-! tick _ |> _

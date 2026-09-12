@@ -1,0 +1,23 @@
+// RULING 3: a no-op `_` body on an effect branch is ILLEGAL when the branch
+// is already handled by a sibling — `! row _ |> _` discards nothing. Effects
+// are per-fire filters: an unmatched fire is a no-op by nature, so the
+// discard borrows `|`-branch exhaustiveness intuition where none applies —
+// and reads like it catches "the other rows", which it does not.
+//
+// Stays legal: `|` outcome discards (a result must route somewhere — and
+// KORU050 can require the unguarded arm), a LONE `! row _ |> _` on a
+// REQUIRED effect (explicit handle-and-ignore — RULING 1's carve-out), and
+// `! row _ |> <action>` (discards the payload but actually acts).
+
+~import std/io
+
+~pub tor poll { x: i64 }
+! row i64
+| done
+
+~proc poll|zig { return .{ .done = .{} }; }
+
+~poll(x: 1)
+! row r when r > 10 |> std/io:print.ln("big")
+! row _ |> _
+| done |> _

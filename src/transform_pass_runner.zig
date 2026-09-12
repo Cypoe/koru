@@ -183,6 +183,11 @@ fn siteView(allocator: std.mem.Allocator, program: *const Program, holding: *ast
         .module = containing.module,
         .is_pure = containing.is_pure,
         .is_transitively_pure = containing.is_transitively_pure,
+        // The REAL holding continuation — a back-pointer so a transform can
+        // recover the enclosing scope the view detaches (emitter_helpers.
+        // scopeAtSite walks the real program from the containing flow down
+        // to this continuation).
+        .site_of = holding,
     };
     const site_items = try allocator.alloc(ast.Item, program.items.len + 1);
     @memcpy(site_items[0..program.items.len], program.items);
@@ -438,7 +443,6 @@ fn spliceSiteResult(
 
     return current;
 }
-
 
 /// Count how many invocations in the program match the transform.
 /// Includes both top-level flows AND nested invocations in continuations.

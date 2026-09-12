@@ -11,7 +11,6 @@ const std = @import("std");
 /// - No AST awareness: works on branch names, not node types
 /// - No allocations in hot path: caller provides storage
 /// - Easily unit-testable
-
 pub const BranchChecker = struct {
     /// Branch kind: an effect (`!`) branch may be linked any number of times
     /// (each link fires during the event); a terminal (`|`) branch is a
@@ -23,7 +22,7 @@ pub const BranchChecker = struct {
     pub const DeclaredBranch = struct {
         name: []const u8,
         is_optional: bool = false,
-        is_panic: bool = false,  // ?!-branch: unhandled => synthesized @panic (ignorable but UNSAFE to ignore)
+        is_panic: bool = false, // ?!-branch: unhandled => synthesized @panic (ignorable but UNSAFE to ignore)
         kind: Kind = .terminal,
     };
 
@@ -85,11 +84,12 @@ pub const BranchChecker = struct {
     ///   under the optional contract.
     /// - Unknown branches are ERRORS
     /// - Catchall (|?) covers all unhandled REQUIRED branches.
-    /// - `when` guards NARROW a handler — they pick out a subset of fires.
-    ///   They do NOT satisfy required-coverage on their own: a `when`-only
-    ///   handler for a required branch leaves the false-guard case silently
-    ///   uncovered, which is a coverage hole that looks like coverage in
-    ///   source. See `docs/EFFECT_BRANCHES.md` "Exhaustiveness rules".
+    /// - `when` guards NARROW a `|` outcome — they pick out a subset of
+    ///   results, and the result must still route somewhere, so a
+    ///   `when`-only terminal leaves the false-guard case uncovered
+    ///   (KORU050). For `!` EFFECTS a guard FILTERS instead: a guarded
+    ///   handler covers the branch, and an unmatched fire is a no-op by
+    ///   nature — no unguarded arm is required (220_034 ruling).
     pub fn validate(
         allocator: std.mem.Allocator,
         declared: []const DeclaredBranch,
@@ -143,7 +143,10 @@ pub const BranchChecker = struct {
             for (handled) |h| {
                 if (h.is_catchall) continue; // Catchall doesn't count as specific handler
                 if (resolveDeclared(declared, h.name) != di) continue;
-                if (h.has_when_guard) continue; // Guards narrow; they don't cover
+                // Guards narrow a `|` outcome — they don't cover. For `!`
+                // effects they FILTER: a guarded handler is handling, an
+                // unmatched fire is a no-op already (220_034 ruling).
+                if (h.has_when_guard and decl.kind != .effect) continue;
                 found_unguarded = true;
                 break;
             }

@@ -1,0 +1,12 @@
+// PIN: a bare `lib/door(...)` module call is the default-door — it must
+// rewrite to `lib.door:default(...)` at ANY position in a flow, including
+// inside a continuation. The import-pipeline rewrite once inspected only each
+// flow's ROOT invocation, so a bare module call nested under a bare-return
+// chain stayed a literal `lib/door` path and failed KORU040 "unknown tor".
+
+~import lib/door
+~import std/io
+
+~lib/door(name: "root"): v1
+|> lib/door(name: "nested"): v2
+|> std/io:print.ln("{{ v1:s }} then {{ v2:s }}")

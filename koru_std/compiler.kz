@@ -8,6 +8,7 @@
 
 ~part flags
 ~part control
+~part paths
 // Compiler system dependencies
 ~std/deps:requires.system {
     "name": "zig",
@@ -859,8 +860,13 @@ pub const CompilerContext = struct {
     // previews the main one only.
     const reporter_path = blk: {
         for (program_ast.items) |item| {
-            if (item != .flow) continue;
-            if (item.flow.location.file.len > 0) break :blk item.flow.location.file;
+            const file = switch (item) {
+                .flow => |f| f.location.file,
+                .proc_decl => |p| p.location.file,
+                .event_decl => |e| e.location.file,
+                else => "",
+            };
+            if (file.len > 0) break :blk file;
         }
         break :blk "";
     };
@@ -2028,36 +2034,6 @@ const emitFlowWithMocks = struct {
     return .{ .ctx = updated_ctx, .code = final_code };
 }
 
-// Helper: Join path segments with dots
-// IMPORTANT: Takes an allocator to return heap-allocated memory (stack memory was causing corruption!)
-const joinPathAlloc = struct {
-    fn call(allocator: std.mem.Allocator, path: []const []const u8) []const u8 {
-        if (path.len == 0) return "";
-        if (path.len == 1) return path[0];
-
-        // Calculate total length needed
-        var total_len: usize = path[0].len;
-        for (1..path.len) |i| {
-            total_len += 1 + path[i].len; // dot + segment
-        }
-
-        // Allocate result buffer
-        const result = allocator.alloc(u8, total_len) catch return path[0]; // Fallback to first segment if alloc fails
-        var pos: usize = 0;
-        @memcpy(result[pos..pos + path[0].len], path[0]);
-        pos += path[0].len;
-
-        for (1..path.len) |i| {
-            result[pos] = '.';
-            pos += 1;
-            @memcpy(result[pos..pos + path[i].len], path[i]);
-            pos += path[i].len;
-        }
-
-        return result[0..pos];
-    }
-}.call;
-
 // Parser service implementation - wraps the Koru parser for comptime use
 ~proc parse|zig {
     const Parser = @import("parser").Parser;
@@ -3009,9 +2985,11 @@ const joinPathAlloc = struct {
         // Render through the reporter itself — it owns the code frame, the hint
         // and the source preview. This is the ONLY render for most of the
         // inserter's failure paths (auto_discharge_inserter.zig:1178, :1764,
-        // :2123, :2267, :2397, :3852 all return without printing); the two that
-        // do print for themselves (:787, :834) double up, exactly as they
-        // already did against the hand-formatted print this replaces.
+        // :2123, :2267, :2397, :3852 all return without printing). The gates
+        // that DO print for themselves (the hasErrors bail-outs in run() and
+        // runNormalizeOnly()) do NOT double up: printErrors carries a
+        // printed-count watermark, so this call emits only diagnostics no
+        // earlier render has shown.
         reporter.printErrors(@import("errors").FileSink.stderr()) catch {};
         for (reporter.errors.items[err_base..]) |reporter_err| {
             mutable_ctx.errors.append(mutable_ctx.allocator, .{
