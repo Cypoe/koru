@@ -1675,7 +1675,6 @@ fn storeLowerText(
     return storeIndexedRefsIn(alloc, prog, t, .{ .names = live_n.items, .prefixes = live_p.items });
 }
 
-
 ~part new
 ~part view
 ~part stored
@@ -1688,3 +1687,4 @@ fn storeLowerText(
 ~part take
 ~part clear
 ~part stripe
+~part qrewrite

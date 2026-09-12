@@ -63,6 +63,7 @@ koru_std/invariants.kz	181
 koru_std/io_registry.kz	30
 koru_std/io.kz	2084
 koru_std/json.kz	268
+koru_std/kernel.body.kz	69
 koru_std/kernel.kz	2711
 koru_std/koru.kz	211
 koru_std/liquid_template.kz	146
@@ -99,7 +100,8 @@ koru_std/store.insert.kz	482
 koru_std/store.kz	1690
 koru_std/store.new.kz	6504
 koru_std/store.preorder.kz	110
-koru_std/store.query.kz	1406
+koru_std/store.qrewrite.kz	233
+koru_std/store.query.kz	1248
 koru_std/store.rule.kz	148
 koru_std/store.stored.kz	871
 koru_std/store.stripe.kz	81
