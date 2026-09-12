@@ -1,0 +1,31 @@
+const std = @import("std");
+const File = struct { handle: i32 };
+
+~pub tor open { path: string } -> *File<opened!>
+
+~proc open|zig {
+    const f = std.heap.page_allocator.create(File) catch unreachable;
+    f.* = File{ .handle = 42 };
+    return f;
+}
+
+~pub tor close { file: *File<!opened> }
+
+~proc close|zig {
+    std.heap.page_allocator.destroy(file);
+}
+
+~pub tor use-file { file: *File<opened> }
+
+~proc use-file|zig {
+    std.debug.print("Using file {d}\n", .{file.handle});
+}
+
+~pub tor write { file: *File<opened>, data: string }
+| written
+| err string
+
+~proc write|zig {
+    std.debug.print("Writing: {s}\n", .{data});
+    return .{ .written = .{} };
+}

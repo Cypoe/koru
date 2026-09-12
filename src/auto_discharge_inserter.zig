@@ -1687,6 +1687,9 @@ pub const AutoDischargeInserter = struct {
                 if (mode == .scope_exit_only) {
                     // SCOPE EXIT: Check for remaining obligations in this scoped continuation
                     if (scoped_context.hasObligations()) {
+                        // The scoped continuation owns these diagnostics, not the
+                        // flow head — name the arm's own line.
+                        const site_loc = if (cont.location.line != 0) cont.location else flow.location;
                         const ordered = try self.obligationsInLifoOrder(&scoped_context);
                         defer self.allocator.free(ordered);
                         for (ordered) |entry| {
@@ -1718,16 +1721,16 @@ pub const AutoDischargeInserter = struct {
                                         // with a single entry (330_124).
                                         try self.reporter.addError(
                                             .KORU030,
-                                            flow.location.line,
-                                            flow.location.column,
+                                            site_loc.line,
+                                            site_loc.column,
                                             "Resource '{s}' obligation <{s}> was not discharged. Call one of: {s}",
                                             .{ display_name, display_state, fbs.getWritten() },
                                         );
                                     } else {
                                         try self.reporter.addError(
                                             .KORU030,
-                                            flow.location.line,
-                                            flow.location.column,
+                                            site_loc.line,
+                                            site_loc.column,
                                             "Resource '{s}' obligation <{s}> was not discharged at scope exit.",
                                             .{ display_name, display_state },
                                         );
@@ -1744,8 +1747,8 @@ pub const AutoDischargeInserter = struct {
                                     }
                                     try self.reporter.addError(
                                         .KORU030,
-                                        flow.location.line,
-                                        flow.location.column,
+                                        site_loc.line,
+                                        site_loc.column,
                                         "Resource '{s}' <{s}> has multiple discharge options: {s}. Discharge explicitly.",
                                         .{ display_name, display_state, fbs.getWritten() },
                                     );
@@ -1944,6 +1947,10 @@ pub const AutoDischargeInserter = struct {
         // Clone context for this branch
         var context = try parent_context.clone(self.allocator);
         defer context.deinit();
+
+        // Diagnostics raised for this continuation's own step (invocation
+        // args, label jump) name the arm's line, not the flow head.
+        const site_loc = if (cont.location.line != 0) cont.location else flow.location;
 
         // Handle discard binding (_) - synthesize a real binding name
         // This must happen BEFORE we process the continuation so the binding can be used
@@ -2201,7 +2208,7 @@ pub const AutoDischargeInserter = struct {
             // Check invocations for obligation satisfaction
             // (when binding is passed to <!state> parameter)
             if (node == .invocation) {
-                try self.checkInvocationSatisfiesObligations(&context, &node.invocation, module_name, flow);
+                try self.checkInvocationSatisfiesObligations(&context, &node.invocation, module_name, site_loc);
             }
             // A label-fold declaration `#label event(args)` seeds the loop by
             // invoking `event` once before the first iteration. Its consuming
@@ -2219,7 +2226,7 @@ pub const AutoDischargeInserter = struct {
             if (node == .label_with_invocation) {
                 const lwi = node.label_with_invocation;
                 if (lwi.is_declaration) {
-                    try self.checkInvocationSatisfiesObligations(&context, &lwi.invocation, module_name, flow);
+                    try self.checkInvocationSatisfiesObligations(&context, &lwi.invocation, module_name, site_loc);
                     try self.label_seed_map.put(lwi.label, &lwi.invocation);
                 }
             }
@@ -2231,7 +2238,7 @@ pub const AutoDischargeInserter = struct {
             if (node == .label_jump) {
                 const lj = node.label_jump;
                 if (self.label_seed_map.get(lj.label)) |seed_inv| {
-                    try self.creditConsumingArgs(&context, seed_inv, lj.args, module_name, flow);
+                    try self.creditConsumingArgs(&context, seed_inv, lj.args, module_name, site_loc);
                 }
             }
 
@@ -2522,6 +2529,10 @@ pub const AutoDischargeInserter = struct {
                     // SCOPE EXIT: Check for remaining obligations that need disposal
                     // These are obligations created in this scope that weren't discharged by an explicit terminal
                     if (branch_context.hasObligations()) {
+                        // NamedBranch carries no location of its own — the
+                        // scoped arm's first body continuation is the nearest
+                        // honest caret for "leaked at this scope's exit".
+                        const site_loc = if (branch.body.len > 0 and branch.body[0].location.line != 0) branch.body[0].location else flow.location;
                         const ordered = try self.obligationsInLifoOrder(&branch_context);
                         defer self.allocator.free(ordered);
                         for (ordered) |entry| {
@@ -2554,16 +2565,16 @@ pub const AutoDischargeInserter = struct {
                                         // with a single entry (330_124).
                                         try self.reporter.addError(
                                             .KORU030,
-                                            flow.location.line,
-                                            flow.location.column,
+                                            site_loc.line,
+                                            site_loc.column,
                                             "Resource '{s}' obligation <{s}> was not discharged. Call one of: {s}",
                                             .{ display_name, display_state, fbs.getWritten() },
                                         );
                                     } else {
                                         try self.reporter.addError(
                                             .KORU030,
-                                            flow.location.line,
-                                            flow.location.column,
+                                            site_loc.line,
+                                            site_loc.column,
                                             "Resource '{s}' obligation <{s}> was not discharged at scope exit.",
                                             .{ display_name, display_state },
                                         );
@@ -2578,8 +2589,8 @@ pub const AutoDischargeInserter = struct {
                                     }
                                     try self.reporter.addError(
                                         .KORU030,
-                                        flow.location.line,
-                                        flow.location.column,
+                                        site_loc.line,
+                                        site_loc.column,
                                         "Resource '{s}' <{s}> has multiple discharge options: {s}. Discharge explicitly.",
                                         .{ display_name, display_state, fbs.getWritten() },
                                     );
@@ -2733,7 +2744,8 @@ pub const AutoDischargeInserter = struct {
             // Handle invocations - look up event and check for obligation satisfaction + binding creation
             if (node == .invocation) {
                 const invocation = &node.invocation;
-                try self.checkInvocationSatisfiesObligations(context, invocation, module_name, flow);
+                const site_loc = if (cont.location.line != 0) cont.location else flow.location;
+                try self.checkInvocationSatisfiesObligations(context, invocation, module_name, site_loc);
 
                 // Also add any bindings from this invocation's continuations
                 const inv_event_name = try self.pathToString(invocation.path);
@@ -2863,6 +2875,10 @@ pub const AutoDischargeInserter = struct {
         flow: *const ast.Flow,
     ) RecursiveError!TransformResult {
 
+        // The continuation whose exit leaks the obligation owns the caret, not
+        // the flow head.
+        const site_loc = if (cont.location.line != 0) cont.location else flow.location;
+
         // Find obligations to dispose based on scope rules, last-acquired first (LIFO).
         const ordered = try self.obligationsInLifoOrder(context);
         defer self.allocator.free(ordered);
@@ -2906,16 +2922,16 @@ pub const AutoDischargeInserter = struct {
                             // (330_124).
                             try self.reporter.addError(
                                 .KORU030,
-                                flow.location.line,
-                                flow.location.column,
+                                site_loc.line,
+                                site_loc.column,
                                 "Resource '{s}' obligation <{s}> was not discharged. Call one of: {s}",
                                 .{ display_name, display_state, fbs.getWritten() },
                             );
                         } else {
                             try self.reporter.addError(
                                 .KORU030,
-                                flow.location.line,
-                                flow.location.column,
+                                site_loc.line,
+                                site_loc.column,
                                 "Resource '{s}' obligation <{s}> was not discharged.",
                                 .{ display_name, display_state },
                             );
@@ -2930,8 +2946,8 @@ pub const AutoDischargeInserter = struct {
                         }
                         try self.reporter.addError(
                             .KORU030,
-                            flow.location.line,
-                            flow.location.column,
+                            site_loc.line,
+                            site_loc.column,
                             "Resource '{s}' <{s}> has multiple discharge options: {s}. Discharge explicitly.",
                             .{ display_name, display_state, fbs.getWritten() },
                         );
@@ -2981,7 +2997,7 @@ pub const AutoDischargeInserter = struct {
         context: *BindingContext,
         invocation: *const ast.Invocation,
         module_name: []const u8,
-        flow: *const ast.Flow,
+        site_location: errors.SourceLocation,
     ) !void {
         // Look up the event being invoked
         const event_name = try self.pathToString(invocation.path);
@@ -2992,7 +3008,7 @@ pub const AutoDischargeInserter = struct {
         defer self.allocator.free(qualified_name);
 
         const event_info = self.event_map.get(qualified_name) orelse return;
-        try self.creditConsumingArgsForDecl(context, invocation.args, event_info.decl, flow, invocation.annotations);
+        try self.creditConsumingArgsForDecl(context, invocation.args, event_info.decl, site_location, invocation.annotations);
     }
 
     /// Credit a back-edge `@label(args)` jump: resolve the fold's round event
@@ -3004,7 +3020,7 @@ pub const AutoDischargeInserter = struct {
         seed_inv: *const ast.Invocation,
         jump_args: []const ast.Arg,
         module_name: []const u8,
-        flow: *const ast.Flow,
+        site_location: errors.SourceLocation,
     ) !void {
         const event_name = try self.pathToString(seed_inv.path);
         defer self.allocator.free(event_name);
@@ -3012,7 +3028,7 @@ pub const AutoDischargeInserter = struct {
         const qualified_name = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ inv_module, event_name });
         defer self.allocator.free(qualified_name);
         const event_info = self.event_map.get(qualified_name) orelse return;
-        try self.creditConsumingArgsForDecl(context, jump_args, event_info.decl, flow, seed_inv.annotations);
+        try self.creditConsumingArgsForDecl(context, jump_args, event_info.decl, site_location, seed_inv.annotations);
     }
 
     /// The shared crediting walk: which args bind consuming (`<!state>`)
@@ -3022,7 +3038,7 @@ pub const AutoDischargeInserter = struct {
         context: *BindingContext,
         args: []const ast.Arg,
         event_decl: *const ast.EventDecl,
-        flow: *const ast.Flow,
+        site_location: errors.SourceLocation,
         invocation_annotations: []const []const u8,
     ) !void {
         // Check each argument to see if it satisfies (discharges) an obligation.
@@ -3075,8 +3091,8 @@ pub const AutoDischargeInserter = struct {
                         if (obl_info.scope_depth < scope_entry) {
                             try self.reporter.addError(
                                 .KORU032,
-                                flow.location.line,
-                                flow.location.column,
+                                site_location.line,
+                                site_location.column,
                                 "Cannot discharge outer-scope resource '{s}' inside @scope boundary. Handle outside the scope or escape via branch constructor.",
                                 .{arg.value},
                             );
@@ -3097,8 +3113,8 @@ pub const AutoDischargeInserter = struct {
             if (is_field_path and context.disposed_fields.contains(arg.value)) {
                 try self.reporter.addError(
                     .KORU030,
-                    flow.location.line,
-                    flow.location.column,
+                    site_location.line,
+                    site_location.column,
                     "Use-after-discharge: field '{s}' was already discharged and cannot be discharged again",
                     .{arg.value},
                 );
@@ -3124,6 +3140,10 @@ pub const AutoDischargeInserter = struct {
     ) !TransformResult {
         _ = event_decl;
         _ = module_name;
+
+        // The continuation whose exit leaks the obligation owns the caret, not
+        // the flow head.
+        const site_loc = if (cont.location.line != 0) cont.location else flow.location;
 
         // For each obligation (last-acquired first — LIFO / reverse-acquisition),
         // find disposal events. In repeating context, only dispose current-scope
@@ -3167,8 +3187,8 @@ pub const AutoDischargeInserter = struct {
                         // (330_124).
                         try self.reporter.addError(
                             .KORU030,
-                            flow.location.line,
-                            flow.location.column,
+                            site_loc.line,
+                            site_loc.column,
                             "Resource '{s}' obligation <{s}> was not discharged. Call one of: {s}",
                             .{ display_name, display_state, fbs.getWritten() },
                         );
@@ -3181,8 +3201,8 @@ pub const AutoDischargeInserter = struct {
                             display_state;
                         try self.reporter.addError(
                             .KORU030,
-                            flow.location.line,
-                            flow.location.column,
+                            site_loc.line,
+                            site_loc.column,
                             "Resource '{s}' obligation <{s}> was not discharged. No tor accepts <!{s}>.",
                             .{ display_name, display_state, state_without_bang },
                         );
@@ -3197,8 +3217,8 @@ pub const AutoDischargeInserter = struct {
                     }
                     try self.reporter.addError(
                         .KORU030,
-                        flow.location.line,
-                        flow.location.column,
+                        site_loc.line,
+                        site_loc.column,
                         "Resource '{s}' <{s}> has multiple discharge options: {s}. Discharge explicitly.",
                         .{ display_name, display_state, fbs.getWritten() },
                     );
@@ -3265,9 +3285,18 @@ pub const AutoDischargeInserter = struct {
         if (eventHasDefaultAnnotation(event_decl) and
             (event_decl.branches.len > 0 or event_decl.return_type != null))
         {
+            // event_decl.location is stored in USER coordinates
+            // (parser.getUserDeclStartLocation); addError expects parser
+            // coordinates and translates at render — convert back or the
+            // caret lands one line above the `~tor` (same defect class as
+            // the KORU033/KORU040 sites in phantom_semantic_checker).
+            const report_line = if (std.mem.eql(u8, event_decl.location.file, self.reporter.file_name))
+                event_decl.location.line + self.reporter.injection_line_count
+            else
+                event_decl.location.line;
             try self.reporter.addError(
                 .KORU083,
-                event_decl.location.line,
+                report_line,
                 event_decl.location.column,
                 "[!] annotation requires a void tor (no branches, no `-> T` return) - a tor with output cannot be auto-inserted",
                 .{},

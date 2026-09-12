@@ -56,11 +56,22 @@ The axis is also wider than the diagnostics. Spending `ERROR_AT` surfaced that
 the compiler carries *two* location coordinate systems: `-->` diagnostics count
 from the user's line 1, while AST node locations count from a buffer that
 includes the injected prologue, and the two offsets do not even agree with each
-other across node kinds. `ERROR_AT` cannot see that face at all — it reads
-rendered diagnostics, and every consumer of `--ast-json` is downstream of a
-different number. Pinned by `210_164`, which asserts only the user
+other across node kinds. Pinned by `210_164`, which asserts only the user
 declaration's line; what an *injected* node should report is a real fork and is
 deliberately not ruled there.
+
+The 023 obligation-family audit (2026-09-12) showed that face is not only an
+`--ast-json` hazard — it bites *inside the diagnostic path itself*. A site that
+hands a decl location (`getUserDeclStartLocation`, stored in user coordinates
+precisely because `--ast-json` reads it raw) to `addError` gets classified as a
+parser coordinate and subtracted again: the caret lands one line early, on the
+blank line above `~tor`, or `:0` for a decl on line 1. `ERROR_AT` sees this
+face fine once a pin exists — five obligation-family sites carried it (KORU033,
+KORU040 ×2 shapes, KORU083) and every one rendered wrong until the site
+translated back. The lesson sharpens: a `SourceLocation` carries no marking of
+which space it is in, so *every* diagnostic site must know which coordinate its
+location was minted in — and any site fed by a decl field is a suspect until
+proven otherwise. New pins spending the axis: `330_127`–`330_132`.
 
 Open: location is assertable for diagnostics, defended in a handful of places,
 and still not *required* anywhere. Nothing forces a new diagnostic pin to

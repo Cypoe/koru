@@ -253,7 +253,10 @@ pub const PhantomSemanticChecker = struct {
                         site.location.line,
                         site.location.column,
                         "duplicate foreign entry '{s}' — a foreign entry is registered once; the declaration at {s}:{d} collides with the prior registration at {s}:{d}",
-                        .{ name, site.location.file, site.location.line, prior_loc.file, prior_loc.line },
+                        // Line numbers embedded in the prose must read in user
+                        // coordinates — the caret's line goes through
+                        // classifyLine, the prose numbers do not (userLineIn).
+                        .{ name, site.location.file, self.reporter.userLineIn(site.location), prior_loc.file, self.reporter.userLineIn(prior_loc) },
                     );
                 } else {
                     try self.reporter.addError(
@@ -261,7 +264,7 @@ pub const PhantomSemanticChecker = struct {
                         site.location.line,
                         site.location.column,
                         "duplicate proto declaration '{s}' — a proto entry is registered once; the declaration at {s}:{d} collides with the prior registration at {s}:{d}",
-                        .{ name, site.location.file, site.location.line, prior_loc.file, prior_loc.line },
+                        .{ name, site.location.file, self.reporter.userLineIn(site.location), prior_loc.file, self.reporter.userLineIn(prior_loc) },
                     );
                 }
                 return error.ValidationFailed;
@@ -731,6 +734,18 @@ pub const PhantomSemanticChecker = struct {
         var phantom = try phantom_parser.PhantomState.parse(self.allocator, phantom_str);
         defer phantom.deinit(self.allocator);
 
+        // `event_decl.location` is stored in USER coordinates
+        // (parser.getUserDeclStartLocation — `--ast-json` reads it raw, pinned
+        // by 210_164) while `addError` expects parser coordinates and
+        // `classifyLine` subtracts the injected prelude at render. Handing the
+        // decl location through untranslated double-subtracts: the caret lands
+        // one line early — on the blank line above `~tor`, or `:0` for a decl
+        // on line 1. Convert back to parser coordinates here.
+        const report_line = if (std.mem.eql(u8, location.file, self.reporter.file_name))
+            location.line + self.reporter.injection_line_count
+        else
+            location.line;
+
         switch (phantom) {
             .concrete => |concrete| {
                 // Check for obligation issuance (! suffix) on input - this is invalid
@@ -738,7 +753,7 @@ pub const PhantomSemanticChecker = struct {
                 if (is_input and concrete.requires_cleanup) {
                     try self.reporter.addError(
                         .KORU033,
-                        location.line,
+                        report_line,
                         location.column,
                         "Cannot issue obligation '<{s}>' on input parameter (event: {s}). Use '<!{s}>' to consume an existing obligation, or remove the '!' suffix.",
                         .{ phantom_str, event_name, concrete.name },
@@ -751,7 +766,7 @@ pub const PhantomSemanticChecker = struct {
                 if (!is_input and concrete.consumes_obligation) {
                     try self.reporter.addError(
                         .KORU033,
-                        location.line,
+                        report_line,
                         location.column,
                         "Cannot consume obligation '<{s}>' on output parameter (event: {s}). Use '<{s}!>' to issue a new obligation, or remove the '!' prefix.",
                         .{ phantom_str, event_name, concrete.name },
@@ -763,7 +778,7 @@ pub const PhantomSemanticChecker = struct {
                     if ((try self.lookupModule(mod_path)) == null) {
                         try self.reporter.addError(
                             .KORU040, // Unknown event/proc/subflow - using for unknown module
-                            location.line,
+                            report_line,
                             location.column,
                             "Unknown module '{s}' in phantom type annotation '{s}' (event: {s}). Module not imported.",
                             .{ mod_path, phantom_str, event_name },
@@ -785,7 +800,7 @@ pub const PhantomSemanticChecker = struct {
                         if ((try self.lookupModule(mod_path)) == null) {
                             try self.reporter.addError(
                                 .KORU040,
-                                location.line,
+                                report_line,
                                 location.column,
                                 "Unknown module '{s}' in phantom type annotation '{s}' (event: {s}). Module not imported.",
                                 .{ mod_path, phantom_str, event_name },
@@ -1913,7 +1928,7 @@ pub const PhantomSemanticChecker = struct {
         event_module: ?[]const u8, // Module where the event is defined (for phantom qualification)
         flow_module: []const u8, // Module where the flow is defined (for name resolution)
         event_map: *std.StringHashMap(EventInfo),
-        location: errors.SourceLocation,
+        caller_location: errors.SourceLocation,
         parent_context: ?*const BindingContext, // Optional parent context to inherit from
         implementing_event: ?*const ast.EventDecl, // Event this flow implements (for branch_constructor escape)
     ) anyerror!bool {
@@ -1925,6 +1940,12 @@ pub const PhantomSemanticChecker = struct {
         // Same short-circuit flow_checker and shape_checker apply; mistakes
         // inside the graft are caught downstream by the Zig backend.
         if (cont.is_transformed_subtree) return true;
+
+        // The arm owns the error: every diagnostic raised for this continuation —
+        // branch, step, argument, or exit-balance — names ITS line, not the flow
+        // head the caller threaded down (fa026be34's convention: the arm's own
+        // location, falling back to the caller's when the parser left line 0).
+        const location = if (cont.location.line != 0) cont.location else caller_location;
 
         log.debug("[PHANTOM-FLOW]   Continuation branch: '{s}'\n", .{cont.branch});
 
@@ -2823,11 +2844,14 @@ pub const PhantomSemanticChecker = struct {
         cont: *const ast.Continuation,
         flow_module: ?[]const u8,
         event_map: *std.StringHashMap(EventInfo),
-        location: errors.SourceLocation,
+        caller_location: errors.SourceLocation,
         parent_context: ?*const BindingContext,
         implementing_event: ?*const ast.EventDecl,
     ) anyerror!bool {
         var has_errors = false;
+
+        // The arm owns the error (same convention as validateContinuation).
+        const location = if (cont.location.line != 0) cont.location else caller_location;
 
         log.debug("[PHANTOM-FLOW]   Void chain continuation, branch: '{s}'\n", .{cont.branch});
 
@@ -2999,7 +3023,19 @@ pub const PhantomSemanticChecker = struct {
                             }
                         }
                         if (!passed) {
-                            try self.reporter.addError(.KORU030, location.line, location.column, "Label jump '@{s}' drops cleanup obligation for '{s}' - pass it as an argument or discharge it before jumping", .{ lj.label, resource });
+                            // Report the binding under its source-level name —
+                            // the same display rules as reportLeaksAtHardTerminal:
+                            // `s.handle` reads "handle", and the `_auto_N`
+                            // renames the inserter mints for `_` captures are
+                            // internal, so fall back to the base type.
+                            const binding_info = context.getInfo(resource);
+                            const display_name = if (std.mem.indexOf(u8, resource, ".")) |dot_idx|
+                                resource[dot_idx + 1 ..]
+                            else if (std.mem.startsWith(u8, resource, "_auto_") and binding_info != null and binding_info.?.base_type.len > 0)
+                                binding_info.?.base_type
+                            else
+                                resource;
+                            try self.reporter.addError(.KORU030, location.line, location.column, "Label jump '@{s}' drops cleanup obligation for '{s}' - pass it as an argument or discharge it before jumping", .{ lj.label, display_name });
                             has_errors = true;
                         }
                     }
@@ -3057,7 +3093,7 @@ pub const PhantomSemanticChecker = struct {
     /// Validate a NamedBranch (from foreach or conditional)
     /// Handles @scope annotations to track outer-scope obligations
     /// This function does NOT call validateStep to avoid mutual recursion
-    fn validateNamedBranchRecursive(self: *PhantomSemanticChecker, branch: *const ast.NamedBranch, parent_context: *BindingContext, event_map: *std.StringHashMap(EventInfo), current_module: ?[]const u8, location: errors.SourceLocation) !bool {
+    fn validateNamedBranchRecursive(self: *PhantomSemanticChecker, branch: *const ast.NamedBranch, parent_context: *BindingContext, event_map: *std.StringHashMap(EventInfo), current_module: ?[]const u8, caller_location: errors.SourceLocation) !bool {
         var has_errors = false;
 
         // Check if this branch has @scope annotation
@@ -3082,6 +3118,10 @@ pub const PhantomSemanticChecker = struct {
 
         // Validate each continuation in the branch body
         for (branch.body) |*cont| {
+            // The arm owns the error (same convention as validateContinuation):
+            // a NamedBranch carries no location of its own, so each body
+            // continuation names its own line, falling back to the caller's.
+            const location = if (cont.location.line != 0) cont.location else caller_location;
             // NOTE: We do NOT check outer-scope obligations at terminators inside @scope.
             // Outer obligations are "suspended" - they'll be checked when the OUTER scope
             // terminates (e.g., in the `done` branch after a for-loop).
@@ -3145,6 +3185,10 @@ pub const PhantomSemanticChecker = struct {
                 // Outer obligations are "suspended" - they'll be checked when the outer scope
                 // terminates. The auto_discharge_inserter handles disposal, respecting @scope.
 
+                // The nested arm owns its errors: fall back to the enclosing
+                // continuation's location only when the arm carries none.
+                const nested_location = if (nested.location.line != 0) nested.location else location;
+
                 // If we know the parent invocation's event, route through validateContinuation
                 // so the binding (e.g. identity capture from `| opened f |>`) gets registered
                 // before the inner step is validated. Without this, synthesized disposal calls
@@ -3156,7 +3200,7 @@ pub const PhantomSemanticChecker = struct {
                         nested_event_module,
                         current_module orelse "",
                         event_map,
-                        location,
+                        nested_location,
                         &branch_context,
                         null,
                     );
@@ -3170,24 +3214,24 @@ pub const PhantomSemanticChecker = struct {
                     switch (step) {
                         .foreach => |fe| {
                             for (fe.branches) |*inner_branch| {
-                                const valid = try self.validateNamedBranchRecursive(inner_branch, &branch_context, event_map, current_module, location);
+                                const valid = try self.validateNamedBranchRecursive(inner_branch, &branch_context, event_map, current_module, nested_location);
                                 if (!valid) has_errors = true;
                             }
                         },
                         .conditional => |cond| {
                             for (cond.branches) |*inner_branch| {
-                                const valid = try self.validateNamedBranchRecursive(inner_branch, &branch_context, event_map, current_module, location);
+                                const valid = try self.validateNamedBranchRecursive(inner_branch, &branch_context, event_map, current_module, nested_location);
                                 if (!valid) has_errors = true;
                             }
                         },
                         .switch_result => |sr| {
                             for (sr.branches) |*inner_branch| {
-                                const valid = try self.validateNamedBranchRecursive(inner_branch, &branch_context, event_map, current_module, location);
+                                const valid = try self.validateNamedBranchRecursive(inner_branch, &branch_context, event_map, current_module, nested_location);
                                 if (!valid) has_errors = true;
                             }
                         },
                         .invocation => |inv| {
-                            const valid = try self.validateSingleInvocation(&inv, &branch_context, event_map, current_module, location);
+                            const valid = try self.validateSingleInvocation(&inv, &branch_context, event_map, current_module, nested_location);
                             if (!valid) has_errors = true;
                         },
                         else => {},

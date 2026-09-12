@@ -1,0 +1,14 @@
+// Issuing an obligation on an INPUT (`<owned!>` — only outputs may issue) is
+// refused at the `~tor` line of the event whose field carries the illegal
+// phantom — the declaration owns the error. Decl locations are stored in user
+// coordinates (`getUserDeclStartLocation`; 210_164 pins that for --ast-json)
+// while diagnostics store parser coordinates, so the site must translate —
+// untranslated, this caret lands on the blank line above the decl, or `:0`
+// when the decl is on line 1.
+~tor mk { bad: *Handle<owned!> }
+~proc mk|zig { _ = bad; }
+
+~tor done { r: *Handle<!owned> }
+~proc done|zig { _ = r; }
+
+~mk(bad: undefined): r |> done(r)

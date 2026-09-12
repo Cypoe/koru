@@ -1,0 +1,4 @@
+CONTAINS KORU032
+CONTAINS Cannot discharge outer-scope resource 'f' inside @scope boundary
+ERROR_AT 7
+NOT_CONTAINS :6:

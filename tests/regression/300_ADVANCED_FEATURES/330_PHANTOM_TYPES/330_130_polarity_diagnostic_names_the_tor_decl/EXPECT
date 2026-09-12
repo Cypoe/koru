@@ -1,0 +1,4 @@
+CONTAINS KORU033
+CONTAINS Cannot issue obligation '<owned!>' on input parameter (event: mk)
+ERROR_AT 8
+NOT_CONTAINS :7:

@@ -1,0 +1,6 @@
+name: adoption-gap
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a fix landed in one file of a family (fa026be34 arm-locations in shape/flow checkers) was assumed adopted by its twins; the obligation checker and inserter never picked it up — same-file audits still needed

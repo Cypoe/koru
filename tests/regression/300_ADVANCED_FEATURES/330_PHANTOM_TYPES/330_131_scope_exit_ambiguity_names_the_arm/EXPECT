@@ -1,0 +1,4 @@
+CONTAINS has multiple discharge options: force-close, unlock
+CONTAINS Discharge explicitly
+ERROR_AT 7
+NOT_CONTAINS :6:

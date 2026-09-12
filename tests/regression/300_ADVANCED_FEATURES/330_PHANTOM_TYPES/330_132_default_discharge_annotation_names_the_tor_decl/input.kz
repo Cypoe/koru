@@ -1,0 +1,9 @@
+// A `[!]` default-discharge annotation on a tor with OUTPUT is refused at the
+// `~tor` decl line — the declaration owns the error. Decl locations are user
+// coordinates while addError stores parser coordinates; untranslated, this
+// caret lands one line early (same class 330_130 pins for KORU033/040).
+const std = @import("std");
+const Handle = struct { n: i32 };
+
+~[!] tor cleanup { h: *Handle<!owned> } -> i32
+~proc cleanup|zig { _ = h; return 0; }

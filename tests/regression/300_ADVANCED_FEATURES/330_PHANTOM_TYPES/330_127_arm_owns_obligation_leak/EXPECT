@@ -1,0 +1,4 @@
+CONTAINS carries obligation <owned!> was not discharged
+CONTAINS Call one of:
+ERROR_AT 37
+NOT_CONTAINS :36:

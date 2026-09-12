@@ -1,0 +1,6 @@
+name: instrument-axis
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: decl locations are stored in user coords while addError stores parser coords — a site that hands one to the other double-subtracts (023 obligation audit); the blind axis was not ast-json but the diagnostic path itself

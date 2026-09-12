@@ -1,0 +1,38 @@
+// An obligation left live at a nested branch arm's terminal is refused with the
+// caret on the ARM that leaks it — not on the flow head. The arm owns the
+// error (fa026be34's convention, extended to the obligation checker).
+//
+// `| good g |> peek(h: g)` ends holding g's <owned!> (peek only requires the
+// state, it does not consume it) and h0's <owned!> is still live there too —
+// both are reported at the arm's line. Auto-discharge is disabled so the leak
+// reaches the checker's hard-terminal wall rather than being repaired first
+// (330_122 documents the same staging).
+const std = @import("std");
+const Handle = struct { n: i32 };
+
+~tor mk { } -> *Handle<owned!>
+~proc mk|zig {
+    const h = std.heap.page_allocator.create(Handle) catch unreachable;
+    h.* = .{ .n = 0 };
+    return h;
+}
+
+~tor route { h: *Handle<owned> }
+| good *Handle<owned!>
+| bad *Handle<owned!>
+~proc route|zig {
+    _ = h;
+    return .{ .good = h };
+}
+
+~tor drop { h: *Handle<!owned> }
+~proc drop|zig {
+    std.heap.page_allocator.destroy(h);
+}
+
+~tor peek { h: *Handle<owned> }
+~proc peek|zig { _ = h; }
+
+~mk(): h0 |> route(h: h0)
+    | good g |> peek(h: g)
+    | bad b |> drop(h: b)

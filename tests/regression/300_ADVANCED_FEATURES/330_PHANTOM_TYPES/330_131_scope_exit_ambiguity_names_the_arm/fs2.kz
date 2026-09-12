@@ -1,0 +1,48 @@
+// Library module: fs
+// State transitions with multiple disposal options (mimics string library)
+
+const std = @import("std");
+
+const File = struct { handle: i32 };
+
+// Open a file - returns opened! state
+~pub tor open { path: string } -> *File<opened!>
+
+~proc open|zig {
+    const f = std.heap.page_allocator.create(File) catch unreachable;
+    f.* = File{ .handle = 42 };
+    return f;
+}
+
+// Lock - transition opened! -> locked!
+~pub tor lock { file: *File<!opened> } -> *File<locked!>
+
+~proc lock|zig {
+    return file;
+}
+
+// Write - requires locked state (doesn't consume)
+~pub tor write { file: *File<locked>, data: string }
+| written
+| err string
+
+~proc write|zig {
+    std.debug.print("Writing: {s}\n", .{data});
+    return .{ .written = .{} };
+}
+
+// Unlock - consumes locked! (Option 1 for disposing locked!)
+~pub tor unlock { file: *File<!locked> }
+
+~proc unlock|zig {
+    std.debug.print("Unlocking\n", .{});
+    std.heap.page_allocator.destroy(file);
+}
+
+// Force close - also consumes locked! (Option 2 for disposing locked!)
+~pub tor force-close { file: *File<!locked> }
+
+~proc force-close|zig {
+    std.debug.print("Force closing\n", .{});
+    std.heap.page_allocator.destroy(file);
+}

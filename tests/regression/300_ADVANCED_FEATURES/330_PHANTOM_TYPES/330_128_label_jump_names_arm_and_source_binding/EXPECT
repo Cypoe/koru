@@ -1,0 +1,5 @@
+CONTAINS drops cleanup obligation
+CONTAINS *Handle
+NOT_CONTAINS _auto_
+ERROR_AT 36
+NOT_CONTAINS :35:

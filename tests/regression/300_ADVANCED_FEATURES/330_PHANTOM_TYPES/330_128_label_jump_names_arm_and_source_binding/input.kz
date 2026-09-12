@@ -1,0 +1,39 @@
+// A back-edge `@loop()` that drops the re-issued obligation is refused at the
+// ARM holding the jump (`| again _ |> @loop()`), not at the flow head or a
+// blank line — and the diagnostic names the SOURCE-level thing that leaks.
+// `| again _` discards the payload, so the inserter mints `_auto_0` for it;
+// that synthetic name must not leak into the message — the diagnostic reads
+// the binding's declared type instead (the same display rule
+// reportLeaksAtHardTerminal already applies).
+const std = @import("std");
+const Handle = struct { n: i32 };
+
+~tor make {} -> *Handle<owned!>
+~proc make|zig {
+    const h = std.heap.page_allocator.create(Handle) catch unreachable;
+    h.* = .{ .n = 0 };
+    return h;
+}
+
+~tor step { h: *Handle<!owned> }
+| again *Handle<owned!>
+| stop *Handle<owned!>
+~proc step|zig {
+    h.n += 1;
+    if (h.n < 3) return .{ .again = h };
+    return .{ .stop = h };
+}
+
+~tor done { h: *Handle<!owned> }
+~proc done|zig {
+    std.debug.print("n={}\n", .{h.n});
+    std.heap.page_allocator.destroy(h);
+}
+
+~tor spin {} -> *Handle<owned!>
+
+~spin = make(): h0 |> #loop step(h: h0)
+    | again _ |> @loop()
+    | stop r -> r
+
+~spin(): hf |> done(h: hf)
