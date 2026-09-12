@@ -164,6 +164,17 @@ busy. A `cont.location` slapped on a flow-level verdict is its own defect.
   Prose-embedded line numbers must go through `userLine`/`userLineIn`.
 - KORU050/021 two-wordings drift: logged, wants a shared `errors.zig`
   helper or a ruling.
+- `src/parser.zig` diagnostic emission sites: audited 2026-09-12, ledger
+  below. The parser's off-by-one convention trap (`self.current` is a
+  0-based index that means "the line" once incremented, and "the previous
+  line" before) produced two mirrored defect classes — carets one line
+  early (`current - 1` where `current` was already the 1-based line) and
+  one line late (`current + 1` in the same position). 40 emission sites
+  re-coordinated plus five `+1`-helper caller args and one entry-captured
+  anchor; one empty-name refusal added (`@` alone used to compile). 19
+  new pins (210_219–210_237), five stale expected-files re-pinned.
+  `lexer.zig`/`flow_parser.zig` have no direct emissions — declared out
+  of family (ledger below for the boundary ruling).
 
 ## What "done" looks like
 
@@ -362,3 +373,189 @@ the prelude height (1).
   pinned assertions are all frontend diagnostics emitted by the worktree
   `koruc` snapshot the suite builds (`zig-out-run-*/bin/koruc`), so the
   verdicts stand. No backend-behavior claim is made.
+
+## Ledger — 2026-09-12 — parse-diagnostic emission family (worktree `diag-023-parser`, base `00e2c6f3c`)
+
+**Family boundaries.** Every diagnostic emission call in `src/parser.zig`:
+`self.fail`, `self.failWithHint`, and direct `self.reporter.addError*`.
+Counted by literal call-site scan at `00e2c6f3c`: **182 sites** (141
+`fail`, 9 `failWithHint`, 25 `addError`, 4 `addErrorWithHint`, 3
+`addErrorWithHintAndSpan`). The two remaining textual `fail(` matches are
+the helper definitions at 791/799 — excluded. `src/lexer.zig`: **0**
+emission sites — it returns typed errors (`UnbalancedArgs` et al.) that
+the parser surfaces at its own sites (e.g. `parseArgsReported` 10789);
+propagated errors are not emission sites. `src/flow_parser.zig`: **0**
+emission sites — it returns `ParseErrorInfo{message,line,column}` records
+surfaced by `koru_std/interpreter.*.kz`; error-return constructors are
+declared OUT of this family (a separate family if wanted — its 0/0
+"Empty input"/"No invocation found" coordinates are noted, unaudited).
+
+**The coordinate system, measured.** `self.current` is a 0-based buffer
+index; `addError*` take a 1-based parser line and `classifyLine` subtracts
+the injected prelude. Two spellings are each correct in their own context:
+while `current` still points AT the faulting line, the site passes
+`self.current + 1`; after the line is consumed (`current += 1` already
+ran) the site passes `self.current`, which then IS the 1-based line. The
+defects are the sites that grabbed the wrong adjustment for their
+context. Every verdict below was measured by compiling a minimal `.k`
+repro against the worktree `koruc` and reading the rendered `-->` line —
+no site was judged from the source expression alone.
+
+### Findings (ladder-ordered: wrong location; never-false folded in where it rides)
+
+**P1 — `self.current - 1` (or bare index) where `self.current` is already
+the 1-based line: caret one line EARLY.** Fixed sites: `2935`
+(`event_line_index` → `+1`, `[keyword]`-without-pub), `3312/3325/3342/3353`
+(parseProcDeclWithAnnotations — `pub proc`, malformed, `=` syntax, missing
+body), `10235/10260` (unterminated raw ` ` `/`[` names), `10322` (`->` in a
+branch decl), `10373` (single-field record resume), `10386` (`-> T` +
+same-line resume arms), `10444/10637` (invalid branch name, bare and
+braced paths), `10713` (branch annotation missing `]`). Latent twins in
+dead/defensive paths fixed by the same convention: `2502`
+(parseEventDeclWithAnnotations "malformed tor" — unreachable, dispatch
+pre-guards the prefix).
+Repro class: `| chosen i32 -> i64` on line 5 reported `:4` (caret on the
+`tor` header); `[keyword]tor …` on line 4 reported `:3` on a blank line.
+Board blindness: the location-pinning `expected.txt` files had
+*fossilized* the defect — `330_004` pinned `:3:1` with a blank preview
+line, `510_023` pinned `:4:1` pointing at the `~tor` header. Both updated
+to the fault line; the fix also makes them green against their own text.
+
+**P2 — `self.current + 1` where `self.current` is already the 1-based
+line: caret one line LATE.** Fixed sites: `7564/7590/7606/7749/7909/7979`
+(parseBranchContinuationBase — quoted names, missing/invalid branch name,
+`when` condition), `9229/9240` (parseConstructionStep), `9364/9375`
+(parseConstructString), `9395/9406/9423/9438/9466/9475/9484/9496/9593/9637`
+(parseBranchConstructorWithContext incl. `.{}` shorthand and the
+field-purity wall), `10903/10919/11060/11089` (parseShape field loop —
+missing type, digit name, `[]const u8`, multi-colon type ref). Caller-arg
+twins where the callee adds `+1` internally: `5128`
+`rejectDotNamespace(clean, self.current)`, `3377/3524`
+`rejectSnakeName(…, self.current, "proc")`, `7746`
+`rejectSnakeName(…, self.current, "branch")`, `10183`
+`rejectDuplicateResumeArms(…, self.current)` — each now passes
+`self.current - 1` (the line's index), matching the convention the other
+callers use (`10440/10633` already passed `-1`; `rejectSnakeName` callers
+in same-line contexts pass a true index).
+Repro class: `| 9bad v |> show()` on line 9 reported `:10` (the line after
+the continuation); `tor t { f }` reported the line after the decl;
+`std.io:` reported the line after the invocation; a multi-line
+duplicate-resume-arm block reported the line *past the last arm* (past EOF
+on a file ending there). Worst measured: `=> ok { a: 1` unclosed at line 9
+reported `:11` on a 9-line file.
+Board blindness: same fossilization — `510_030`/`510_032` pinned `:5:1`
+with a blank preview for a fault on line 4; `430_006` pinned the caret on
+`| error e => error { e.message }` — an *innocent sibling arm* two lines
+below the offending field. All three updated.
+
+**P3 — implicit flow block guard: early caret + misclassification of the
+close line (6628).** The `~`-required check inside `{ }` flow blocks fired
+with `self.current` while `current` still pointed AT the offending line —
+one line early. Fixed to `self.current + 1`. Residual wart, recorded not
+fixed: the block close accepts only a bare `}`; a `}:` close lands in the
+`~`-check, so a `}: name` attempt is reported as "Flows inside block must
+start with ~" — true of the line, wrong about what it is. Whether `}:`
+should be legal there is a language-shape ruling, not a diagnostic fix.
+Pin: `210_234`.
+
+**P4 — `-> T` + indented resume arms anchored at the last arm (10161).**
+After `collectIndentedResumeArms` consumed the arm lines, `self.current`
+named the line after the `!` decl — the caret landed on the first arm
+while the complaint is about the `-> T` on the `!` line. Fixed by
+capturing `effect_line = self.current` at function entry (documented why
+in-source). Pin: `210_230`.
+
+**P5 — dead guard + silent accept: `~@`/`@` with an empty name.**
+`parseLabelDecl`'s "malformed label declaration" (11186) was unreachable —
+dispatch guarantees the `~@` prefix — and the empty name it should cover
+was silently accepted: `@` alone **compiled cleanly** (measured). Added
+the `name.len == 0` refusal through the existing site. Pin: `210_237`.
+
+### Verified clean (measured or convention-pinned by direct repro)
+
+- Dispatch-loop sites (`current` AT the line, `+1`): `1145, 1172, 1527,
+  1541, 1572, 1795, 2129, 2142, 5860, 7107, 11213, 11225` — `pub proc`
+  `:4` (r01), stray `|` `:4` (u29), chain-splitting comment `:9` (u28),
+  `part a.b` `:4` (u07).
+- Decl-parameterized sites (`event_line_index + 1`, `error_line`,
+  `tail_line`, `decl_line`, `start_line`, `line_index + 1`,
+  `line_idx + 1`, `opening_line_idx + 1`, `report_line + 1`,
+  `directive_line`): `1697, 1748, 1837, 1892, 2000, 2299, 2323, 2337,
+  2346, 2374, 2403, 2449, 2529, 2566, 2635, 2666, 2717, 2751, 2800, 2846,
+  2955, 3008, 3028, 3042, 3064, 3132, 3175, 4032–4192` — includes the
+  same-line `tor {} | a | b` branch loop where `event_line_index` IS the
+  branch's line (u02 verified `:5`).
+- Continuation/step `self.current` sites (already the 1-based line):
+  `7640, 7650, 7665, 7705, 7792, 7845, 7858, 8815, 9150, 9194, 9618,
+  10128, 10138, 10202, 10429, 10464, 10557, 10659, 10823, 10836, 10881,
+  10789` — the `+1`/`current`/`−1` asymmetry inside one function was the
+  fingerprint: `9618` punning fired correct at `:9` while its `+1`
+  siblings landed on `:10`; `t20`/`t21`/`t23`–`t26`, `u08`–`u10`, `u12`.
+- Invocation `self.current` sites (`current = head_index + 1` → head
+  line): `925, 941, 4314, 4673, 4743, 4906, 5132, 5223, 5248, 5263, 5321,
+  5399, 5526, 5660, 5681, 5908, 5937, 5975, 6404, 8568, 8580, 10789` —
+  `pick(x: 1 |` `:8:10` (u26), unclosed `@"` `:8` (u33), missing file `:8`
+  (u34), `>"path"` missing scope `:8` (u35).
+- `location.line`/`location.line - 1` sites: `7271, 7320, 8257, 8568,
+  8580, 8971, 8984` — `location` captured as `getCurrentLocation()` while
+  `current = index + 1`, so `line - 1` is the head line (u08, s14, s17,
+  u33, u34 verified).
+- `line`-parameterized helpers where callers pass `self.current` raw:
+  `1079` checkRedundantPunning → `t19` verified `:8`; `9118` same.
+- Source-search relocators `9833, 9865` (KORU033/KORU035): deliberately
+  scan `self.lines` for the offending text — the convention this family
+  needed elsewhere.
+- EOF/`self.current`-at-end sites (`2075, 2461, 3112, 3273, 3445, 4568,
+  4612, 5873, 6370, 6389`): render the last line — honest for
+  "unexpected EOF".
+- Claimed-family sites not re-judged: `9899, 9918, 9938` (KORU027
+  obligation discharges — audited in the obligation/phantom ledger).
+
+### Dead / unreachable sites (recorded, not charged)
+
+- `parseEventDecl` (3112/3132/3175) and `parseProcDecl` (3445/3463/3500):
+  no callers — dead functions; their `self.current` args are
+  coincidentally correct.
+- `2502, 3312, 3325`: defensive `else` branches behind dispatch prefixes
+  the caller already proved — unreachable; convention-fixed anyway.
+- `9395` "expected '{' in branch constructor": callers only route `{`
+  -bearing content — latent.
+- `6748` (`}:` close with no bind name, `self.current` → `+1` by
+  convention): probes `}:`/`}: |>` both routed to the earlier bind-name
+  site `5248` instead; fixed latently, unreached in measurement.
+
+### needs-ruling / unsettled
+
+- **Stitch-drift residual.** Where the fault is inside a multi-line
+  stitched construct, `self.current` now names the last line of the
+  construct (e.g. `430_006` re-pinned `:19` for a field on `:18`; `u16`
+  unclosed `{` still lands past EOF at `:10`). Per-field/per-link
+  provenance through `stitchPipeChainLines` is already claimed territory —
+  not re-litigated.
+- **`|` payload-first message choice.** `| { f: i32 }` fires
+  `invalid branch name ''` (10637) rather than `branch missing name`
+  (10429) — the empty-name wording is degenerate but the caret is now
+  right. Cosmetic; a wording ruling can fold it later.
+- **`}:` close in implicit flow blocks** — see P3.
+- **flow_parser `0/0` coordinates** — declared out of family, recorded
+  for whoever claims returned-error diagnostics next.
+
+### Verified vs unverified
+
+- `zig build` clean in the worktree; all repros run against
+  `zig-out/bin/koruc` built from THIS tree with
+  `KORU_STDLIB=<worktree>/koru_std`. Every reported `-->` line in the
+  findings was read from rendered output, twice (before and after fix).
+- `./run_regression.sh` targeted: **23/23** new+re-pinned tests pass
+  (`Running 23 tests` matched the request), then **40 pass / 4 TODO /
+  0 fail** on the control set — all existing `ERROR_AT` and message pins
+  in the parser cluster, plus `210_201` (already green from `df8533b3c`;
+  its aspirational header is stale, untouched here).
+- Worktree backend caveat observed live: a foreign `zig build`
+  (`/Users/larsde/src/kopium` backend) was running during one rebuild,
+  resolving `-Mkoru_parser=/usr/local/lib/koru/src/parser.zig` — the main
+  checkout. It read main's tree, not this one; my edits could not reach
+  it. All pinned assertions are frontend diagnostics from the worktree
+  `koruc` — no backend-behavior claim is made.
+- Full board NOT run (per challenge rules — targeted subsets only).
+  `test-results/unit-tests.json` restored after filtered runs.

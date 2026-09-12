@@ -1,0 +1,3 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS Flows inside block must start with ~
+ERROR_AT 15

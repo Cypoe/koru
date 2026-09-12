@@ -1,0 +1,3 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS invalid branch constructor name 'bad name'
+ERROR_AT 15

@@ -1,0 +1,3 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS proc declarations must use braces
+ERROR_AT 10

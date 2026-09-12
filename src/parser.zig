@@ -2501,7 +2501,7 @@ pub const Parser = struct {
         else {
             return self.fail(
                 .PARSE003,
-                self.current - 1,
+                self.current,
                 1,
                 "malformed tor declaration",
                 .{},
@@ -2934,7 +2934,7 @@ pub const Parser = struct {
                 if (!is_public) {
                     return self.fail(
                         .PARSE003,
-                        event_line_index,
+                        event_line_index + 1,
                         1,
                         "[keyword] annotation requires 'pub' - only public events can be keywords",
                         .{},
@@ -3311,7 +3311,7 @@ pub const Parser = struct {
         if (lexer.afterPrefix(remaining, "pub proc")) |_| {
             return self.fail(
                 .PARSE003,
-                self.current - 1,
+                self.current,
                 1,
                 "'pub' is not valid on proc declarations - only events can be public",
                 .{},
@@ -3324,7 +3324,7 @@ pub const Parser = struct {
         else {
             return self.fail(
                 .PARSE003,
-                self.current - 1,
+                self.current,
                 1,
                 "malformed proc declaration",
                 .{},
@@ -3341,7 +3341,7 @@ pub const Parser = struct {
             if (brace_idx_opt == null or equals_idx < brace_idx_opt.?) {
                 return self.fail(
                     .PARSE003,
-                    self.current - 1,
+                    self.current,
                     1,
                     "proc declarations must use braces for host language code. The '=' syntax is only valid on flows.",
                     .{},
@@ -3352,7 +3352,7 @@ pub const Parser = struct {
         const delimiter_idx = brace_idx_opt orelse {
             return self.fail(
                 .PARSE003,
-                self.current - 1,
+                self.current,
                 1,
                 "proc declaration missing body",
                 .{},
@@ -3374,7 +3374,7 @@ pub const Parser = struct {
             }
         }
 
-        try self.rejectSnakeName(path_for_parsing, self.current, "proc");
+        try self.rejectSnakeName(path_for_parsing, self.current - 1, "proc");
         var path = try lexer.parseQualifiedPath(self.allocator, path_for_parsing, ast);
         errdefer path.deinit(self.allocator);
 
@@ -3521,7 +3521,7 @@ pub const Parser = struct {
             }
         }
 
-        try self.rejectSnakeName(path_for_parsing, self.current, "proc");
+        try self.rejectSnakeName(path_for_parsing, self.current - 1, "proc");
         var path = try lexer.parseQualifiedPath(self.allocator, path_for_parsing, ast);
         errdefer path.deinit(self.allocator);
 
@@ -5125,7 +5125,7 @@ pub const Parser = struct {
         log_debug("[DEBUG] parseEventInvocation: input='{s}'\n", .{clean});
 
         // `/` is the sole namespace separator; reject the old `.`-namespace form.
-        try self.rejectDotNamespace(clean, self.current);
+        try self.rejectDotNamespace(clean, self.current - 1);
 
         // Detect Zig code patterns and report error
         if (self.looksLikeZigCode(clean)) {
@@ -6627,7 +6627,7 @@ pub const Parser = struct {
             if (!lexer.startsWith(trimmed, "~")) {
                 try self.reporter.addError(
                     .PARSE001,
-                    self.current,
+                    self.current + 1,
                     0,
                     "Flows inside block must start with ~",
                     .{},
@@ -6745,7 +6745,7 @@ pub const Parser = struct {
                             bind_rest[name_end] == '_' or bind_rest[name_end] == '-')) : (name_end += 1)
                     {}
                     if (name_end == 0) {
-                        return self.fail(.PARSE001, self.current, 0, "expected a binding name after the colon on the source-block close line (close-brace colon name then a chain or produce operator)", .{});
+                        return self.fail(.PARSE001, self.current + 1, 0, "expected a binding name after the colon on the source-block close line (close-brace colon name then a chain or produce operator)", .{});
                     }
                     bind_name_slice = bind_rest[0..name_end];
                     rest = lexer.trim(bind_rest[name_end..]);
@@ -7563,7 +7563,7 @@ pub const Parser = struct {
             if (end_pos >= trimmed_content.len) {
                 return self.fail(
                     .PARSE003,
-                    self.current + 1,
+                    self.current,
                     indent + 2,
                     "unmatched '`' in quoted branch name",
                     .{},
@@ -7589,7 +7589,7 @@ pub const Parser = struct {
             if (depth != 0) {
                 return self.fail(
                     .PARSE003,
-                    self.current + 1,
+                    self.current,
                     indent + 2,
                     "unmatched '[' in quoted branch name",
                     .{},
@@ -7605,7 +7605,7 @@ pub const Parser = struct {
             branch_name = parts.next() orelse {
                 return self.fail(
                     .PARSE003,
-                    self.current + 1,
+                    self.current,
                     indent + 2,
                     "missing branch name in continuation",
                     .{},
@@ -7743,12 +7743,12 @@ pub const Parser = struct {
         // Pattern branches ([...]) and raw pattern branches (`...`) skip this
         // check - the pattern is opaque data for transforms, not an identifier.
         if (!is_pattern_branch and !is_raw_branch and !std.mem.eql(u8, branch_name, "?")) {
-            try self.rejectSnakeName(branch_name, self.current, "branch");
+            try self.rejectSnakeName(branch_name, self.current - 1, "branch");
         }
         if (!is_pattern_branch and !is_raw_branch and !isValidIdentifier(branch_name)) {
             return self.fail(
                 .PARSE003,
-                self.current + 1,
+                self.current,
                 indent + 2,
                 "invalid branch name '{s}' - must be a valid identifier",
                 .{branch_name},
@@ -7908,7 +7908,7 @@ pub const Parser = struct {
                     if (binding) |b| self.allocator.free(b);
                     return self.fail(
                         .PARSE003,
-                        self.current + 1,
+                        self.current,
                         indent + 2,
                         "missing condition after 'when'",
                         .{},
@@ -7978,7 +7978,7 @@ pub const Parser = struct {
                 if (binding) |b| self.allocator.free(b);
                 const e = self.fail(
                     .PARSE003,
-                    self.current + 1,
+                    self.current,
                     indent + 2,
                     "invalid when condition '{s}': {s}",
                     .{ cond_str, @errorName(err) },
@@ -9228,7 +9228,7 @@ pub const Parser = struct {
         if (std.mem.indexOfAny(u8, candidate_name, &[_]u8{ '(', ')' }) != null) {
             return self.fail(
                 .PARSE003,
-                self.current + 1,
+                self.current,
                 1,
                 "invalid branch constructor name '{s}' — must be a single identifier",
                 .{candidate_name},
@@ -9239,7 +9239,7 @@ pub const Parser = struct {
         if (std.mem.eql(u8, expr_part, "_")) {
             return self.fail(
                 .PARSE003,
-                self.current + 1,
+                self.current,
                 1,
                 "cannot construct a branch from a discard — '_' is not a value",
                 .{},
@@ -9363,7 +9363,7 @@ pub const Parser = struct {
         if (std.mem.indexOfAny(u8, branch_name, &[_]u8{ '(', ')' }) != null) {
             return self.fail(
                 .PARSE003,
-                self.current + 1,
+                self.current,
                 1,
                 "invalid branch constructor name '{s}' — must be a single identifier",
                 .{branch_name},
@@ -9374,7 +9374,7 @@ pub const Parser = struct {
         if (std.mem.eql(u8, plain, "_")) {
             return self.fail(
                 .PARSE003,
-                self.current + 1,
+                self.current,
                 1,
                 "cannot construct a branch from a discard — '_' is not a value",
                 .{},
@@ -9394,7 +9394,7 @@ pub const Parser = struct {
         const brace_idx = std.mem.indexOf(u8, content, "{") orelse {
             return self.fail(
                 .PARSE003,
-                self.current + 1,
+                self.current,
                 1,
                 "expected '{{' in branch constructor",
                 .{},
@@ -9405,7 +9405,7 @@ pub const Parser = struct {
         const closing_idx = std.mem.lastIndexOf(u8, content, "}") orelse {
             return self.fail(
                 .PARSE004,
-                self.current + 1,
+                self.current,
                 @intCast(brace_idx + 1),
                 "unmatched '{{' in branch constructor",
                 .{},
@@ -9422,7 +9422,7 @@ pub const Parser = struct {
         if (!std.mem.eql(u8, branch_name, ".") and lexer.trim(fields_content).len == 0) {
             return self.failWithHint(
                 .PARSE003,
-                self.current + 1,
+                self.current,
                 @intCast(brace_idx + 1),
                 "empty constructor braces on '{s}' — a payloadless branch constructs with its name alone",
                 .{branch_name},
@@ -9437,7 +9437,7 @@ pub const Parser = struct {
         if (!std.mem.eql(u8, branch_name, ".") and !isValidIdentifier(branch_name)) {
             return self.fail(
                 .PARSE003,
-                self.current + 1,
+                self.current,
                 1,
                 "invalid branch constructor name '{s}' — must be a single identifier",
                 .{branch_name},
@@ -9465,7 +9465,7 @@ pub const Parser = struct {
                     } else {
                         return self.fail(
                             .PARSE003,
-                            self.current + 1,
+                            self.current,
                             0,
                             "invalid .{{ shorthand syntax - expected .{{ .branch_name = .{{ fields }} }}",
                             .{},
@@ -9474,7 +9474,7 @@ pub const Parser = struct {
                 } else {
                     return self.fail(
                         .PARSE003,
-                        self.current + 1,
+                        self.current,
                         0,
                         "invalid .{{ shorthand syntax - expected .{{ .branch_name = ... }}",
                         .{},
@@ -9483,7 +9483,7 @@ pub const Parser = struct {
             } else {
                 return self.fail(
                     .PARSE003,
-                    self.current + 1,
+                    self.current,
                     0,
                     "invalid .{{ shorthand syntax - expected .{{ .branch_name = ... }}",
                     .{},
@@ -9495,7 +9495,7 @@ pub const Parser = struct {
         if (!isValidIdentifier(branch_name)) {
             return self.fail(
                 .PARSE003,
-                self.current + 1,
+                self.current,
                 0,
                 "invalid branch name '{s}' in constructor - must be a valid identifier",
                 .{branch_name},
@@ -9592,7 +9592,7 @@ pub const Parser = struct {
                 if (lexer.startsWith(field_name, ".")) {
                     return self.fail(
                         .PARSE003,
-                        self.current + 1,
+                        self.current,
                         1,
                         "Zig-style struct syntax '.{s}' is not valid Koru — use 'field_name: value' instead of '.field_name = value'",
                         .{field_name},
@@ -9636,7 +9636,7 @@ pub const Parser = struct {
                 if (expression_parser.textContainsCall(self.allocator, field_value)) {
                     return self.fail(
                         .PARSE003,
-                        self.current + 1,
+                        self.current,
                         1,
                         "branch constructor field '{s}' contains a function call — branch constructors must be pure. Use tor chaining instead.",
                         .{field_name},
@@ -10110,6 +10110,11 @@ pub const Parser = struct {
     /// Called from the decl-branch collection loops right after parseBranch
     /// returns an effect branch; consumes the arm lines.
     fn collectIndentedResumeArms(self: *Parser, branch: *ast.Branch, effect_indent: usize) !void {
+        // Called immediately after parseBranch consumed the `!` decl line, so
+        // self.current is that line's 1-based parser coordinate — the value a
+        // diagnostic about the `!` signature itself must name before the arm
+        // scan below advances the cursor.
+        const effect_line = self.current;
         var arms = try std.ArrayList(ast.ResumeArm).initCapacity(self.allocator, 2);
         errdefer {
             for (arms.items) |*arm| arm.deinit(self.allocator);
@@ -10160,7 +10165,7 @@ pub const Parser = struct {
         if (branch.resume_type != null) {
             return self.fail(
                 .PARSE003,
-                self.current,
+                effect_line,
                 1,
                 "effect branch cannot declare both a '-> T' resume and named resume arms - the arms are the resume",
                 .{},
@@ -10180,7 +10185,7 @@ pub const Parser = struct {
         } else {
             branch.resume_arms = try arms.toOwnedSlice(self.allocator);
         }
-        try self.rejectDuplicateResumeArms(branch.resume_arms.?, self.current);
+        try self.rejectDuplicateResumeArms(branch.resume_arms.?, self.current - 1);
     }
 
     fn parseBranch(self: *Parser) !ast.Branch {
@@ -10234,7 +10239,7 @@ pub const Parser = struct {
             const close = std.mem.indexOfScalarPos(u8, branch_start, 1, '`') orelse {
                 return self.fail(
                     .PARSE003,
-                    self.current - 1,
+                    self.current,
                     1,
                     "unterminated raw branch name - missing closing '`'",
                     .{},
@@ -10259,7 +10264,7 @@ pub const Parser = struct {
             const end = close orelse {
                 return self.fail(
                     .PARSE003,
-                    self.current - 1,
+                    self.current,
                     1,
                     "unterminated raw branch name - missing closing ']'",
                     .{},
@@ -10321,7 +10326,7 @@ pub const Parser = struct {
                     if (branch_kind == .terminal) {
                         return self.fail(
                             .PARSE003,
-                            self.current - 1,
+                            self.current,
                             1,
                             "'->' is not allowed in a continuation branch declaration - the bare-return arrow belongs on the tor signature (`tor x {{}} -> T`), not a `|` branch",
                             .{},
@@ -10372,7 +10377,7 @@ pub const Parser = struct {
             if (isSingleFieldRecordType(rt)) {
                 return self.fail(
                     .PARSE003,
-                    self.current - 1,
+                    self.current,
                     1,
                     "single field in record resume `{s}` — collapse to the scalar `-> <type>`; a record resume is for two or more fields",
                     .{rt},
@@ -10385,7 +10390,7 @@ pub const Parser = struct {
         if (resume_type != null and resume_arms != null) {
             return self.fail(
                 .PARSE003,
-                self.current - 1,
+                self.current,
                 1,
                 "effect branch cannot declare both a '-> T' resume and named resume arms - the arms are the resume",
                 .{},
@@ -10443,7 +10448,7 @@ pub const Parser = struct {
                 if (!isValidIdentifier(branch_name)) {
                     return self.fail(
                         .PARSE003,
-                        self.current - 1,
+                        self.current,
                         1,
                         "invalid branch name '{s}' - must be a valid identifier",
                         .{branch_name},
@@ -10636,7 +10641,7 @@ pub const Parser = struct {
             if (!isValidIdentifier(scanned)) {
                 return self.fail(
                     .PARSE003,
-                    self.current - 1,
+                    self.current,
                     1,
                     "invalid branch name '{s}' - must be a valid identifier",
                     .{scanned},
@@ -10712,7 +10717,7 @@ pub const Parser = struct {
                 } orelse {
                     return self.fail(
                         .PARSE003,
-                        self.current - 1,
+                        self.current,
                         @intCast(close_idx + 1),
                         "branch annotation missing closing ']'",
                         .{},
@@ -10902,7 +10907,7 @@ pub const Parser = struct {
             const colon_idx = std.mem.indexOf(u8, trimmed_field, ":") orelse {
                 try self.reporter.addError(
                     .PARSE003,
-                    self.current + 1,
+                    self.current,
                     1,
                     "field missing type annotation",
                     .{},
@@ -10918,7 +10923,7 @@ pub const Parser = struct {
                 if (first_char >= '0' and first_char <= '9') {
                     try self.reporter.addError(
                         .PARSE003,
-                        self.current + 1,
+                        self.current,
                         1,
                         "field name cannot start with a digit",
                         .{},
@@ -11059,7 +11064,7 @@ pub const Parser = struct {
             if (surfaceTypeContainsRawByteSlice(field_type)) {
                 return self.fail(
                     .PARSE003,
-                    self.current + 1,
+                    self.current,
                     1,
                     "'[]const u8' is not a Koru tor-payload type. Use 'string' for text — it lowers to []const u8 for Zig",
                     .{},
@@ -11086,7 +11091,7 @@ pub const Parser = struct {
             const colon_count = std.mem.count(u8, field_type, ":");
             if (colon_count > 1) {
                 // Multiple colons are ambiguous - which is the module boundary?
-                return self.fail(.PARSE003, self.current + 1, 1, "Multiple colons in type reference '{s}' - expected format 'module.path:Type' or just 'Type'", .{field_type});
+                return self.fail(.PARSE003, self.current, 1, "Multiple colons in type reference '{s}' - expected format 'module.path:Type' or just 'Type'", .{field_type});
             }
 
             // Parse cross-module type reference and build owned type string
@@ -11193,6 +11198,15 @@ pub const Parser = struct {
         };
 
         const name = lexer.trim(after_at);
+        if (name.len == 0) {
+            return self.fail(
+                .PARSE003,
+                self.current,
+                1,
+                "malformed label declaration",
+                .{},
+            );
+        }
         const continuations = try self.parseContinuations(lexer.getIndent(line));
 
         return ast.LabelDecl{

@@ -1,0 +1,3 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS is not allowed in a Koru proc name
+ERROR_AT 10

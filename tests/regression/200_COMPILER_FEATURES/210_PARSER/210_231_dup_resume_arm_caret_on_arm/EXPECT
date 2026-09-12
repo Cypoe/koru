@@ -1,0 +1,3 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS duplicate resume arm name 'again'
+ERROR_AT 13

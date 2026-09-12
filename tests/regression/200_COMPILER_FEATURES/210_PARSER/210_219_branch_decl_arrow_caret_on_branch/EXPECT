@@ -1,0 +1,3 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS not allowed in a continuation branch declaration
+ERROR_AT 11

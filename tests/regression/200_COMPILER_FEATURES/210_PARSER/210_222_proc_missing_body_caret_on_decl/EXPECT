@@ -1,0 +1,3 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS proc declaration missing body
+ERROR_AT 10

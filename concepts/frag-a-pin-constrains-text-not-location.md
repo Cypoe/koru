@@ -73,6 +73,20 @@ which space it is in, so *every* diagnostic site must know which coordinate its
 location was minted in — and any site fed by a decl field is a suspect until
 proven otherwise. New pins spending the axis: `330_127`–`330_132`.
 
+The 023 parser-family audit (2026-09-12) found the next face of the same
+instrument blindness: even a pin that *does* carry a location can fossilize
+the defect it was meant to catch. Five `expected.txt` snapshots
+(`330_004`, `510_023`, `510_030`, `510_032`, `430_006`) pinned `-->`
+locations that were one line early or one line late — including carets on
+blank lines and on an innocent sibling arm — and stayed green, because a
+snapshot verifies only that output is *stable*, not that it is *right*.
+Inside the parser the root cause was a convention trap: `self.current` is a
+0-based buffer index that becomes the 1-based fault line once incremented,
+so `current - 1`, `current`, and `current + 1` are each correct in exactly
+one context — and 40 sites had grabbed the wrong one. `ERROR_AT` is the
+assertion that cannot fossilize this way, because it states intent rather
+than echoing output.
+
 Open: location is assertable for diagnostics, defended in a handful of places,
 and still not *required* anywhere. Nothing forces a new diagnostic pin to
 constrain where its caret lands, and nothing at all constrains AST coordinates.

@@ -1,0 +1,3 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS cannot declare both a '-> T' resume and named resume arms
+ERROR_AT 11
