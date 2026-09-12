@@ -487,7 +487,10 @@ fn collectMultiLineBraces(
         };
     }
 
-    // Join lines
+    // Join lines NEWLINE-separated, not space-separated: the block's content
+    // is emitted text, and an interior `//` comment must terminate at ITS line
+    // end — space-joining put the closing `}` inside the comment tail and the
+    // block reported PARSE001 on balanced source (390_119).
     var total_len: usize = 0;
     for (lines[start_idx .. end_idx + 1]) |line| {
         if (total_len > 0) total_len += 1;
@@ -498,7 +501,7 @@ fn collectMultiLineBraces(
     var pos: usize = 0;
     for (lines[start_idx .. end_idx + 1]) |line| {
         if (pos > 0) {
-            buf[pos] = ' ';
+            buf[pos] = '\n';
             pos += 1;
         }
         const trimmed_line = lexer.trim(line.content);

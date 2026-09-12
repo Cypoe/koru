@@ -327,6 +327,43 @@ pub fn commentStart(text: []const u8) ?usize {
     return null;
 }
 
+/// Remove every `//`-to-end-of-line comment from possibly multi-line text,
+/// keeping the newlines and everything after them. String-aware like
+/// `commentStart` — a `//` inside a string literal is content.
+///
+/// The single-line callers cut `text[0..commentStart]`; on multi-line text
+/// that amputates everything after the first interior comment — a step
+/// carrying a multi-line source block loses its closing `}` and reports
+/// PARSE001 against balanced source (390_119).
+pub fn stripLineComments(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    var out = try std.ArrayList(u8).initCapacity(allocator, text.len);
+    var in_string = false;
+    var string_char: ?u8 = null;
+    var i: usize = 0;
+    while (i < text.len) {
+        const c = text[i];
+        if (!in_string and c == '/' and i + 1 < text.len and text[i + 1] == '/') {
+            while (i < text.len and text[i] != '\n') i += 1;
+            continue;
+        }
+        try out.append(allocator, c);
+        if (!in_string and (c == '"' or c == '\'')) {
+            in_string = true;
+            string_char = c;
+        } else if (in_string) {
+            if (c == '\\' and i + 1 < text.len) {
+                i += 1;
+                try out.append(allocator, text[i]);
+            } else if (c == string_char.?) {
+                in_string = false;
+                string_char = null;
+            }
+        }
+        i += 1;
+    }
+    return out.toOwnedSlice(allocator);
+}
+
 /// Count the net brace depth change in a string, skipping braces inside strings and comments.
 /// Returns positive for net opens, negative for net closes.
 /// Use this instead of naive `for (line) |c| if (c == '{') depth += 1` patterns.

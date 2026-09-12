@@ -8906,7 +8906,7 @@ pub const Parser = struct {
             var seg_is_ctor = false; // first segment is never `=>`-introduced
             var depth: i32 = 0;
             var in_str = false;
-            var scan_end: usize = working_content.len;
+            const scan_end: usize = working_content.len;
             var k: usize = 0;
             while (k < working_content.len) {
                 const c = working_content[k];
@@ -8921,8 +8921,13 @@ pub const Parser = struct {
                     continue;
                 }
                 if (c == '/' and k + 1 < working_content.len and working_content[k + 1] == '/') {
-                    scan_end = k; // line comment — stop here, emit final segment up to it
-                    break;
+                    // Line comment: skip to ITS line end, not end of text. A
+                    // comment interior to a multi-line source block would
+                    // otherwise amputate the block's closing `}` (390_119).
+                    // Bypassing the comment text also keeps `{`/`}` inside it
+                    // out of the depth counter.
+                    while (k < working_content.len and working_content[k] != '\n') k += 1;
+                    continue;
                 }
                 if (c == '{' or c == '(' or c == '[') {
                     depth += 1;
@@ -9008,13 +9013,13 @@ pub const Parser = struct {
     /// invocation is decided by the DELIMITER, never guessed from content —
     /// that is the whole point of the `=>` design.
     fn parseStepKind(self: *Parser, content: []const u8, force_ctor: bool) anyerror!ast.Step {
-        // Strip a trailing line comment. String-aware: a step carries invocation
+        // Strip line comments. String-aware: a step carries invocation
         // arguments, and an argument carries string literals — a URL truncated
         // at its scheme separator reports as unbalanced parentheses (210_171).
-        var clean_content = content;
-        if (lexer.commentStart(content)) |comment_idx| {
-            clean_content = content[0..comment_idx];
-        }
+        // Per-line, not to-end-of-text: a step carrying a multi-line source
+        // block keeps its interior `//` comments as block content, and cutting
+        // at the first one drops the closing `}` (390_119).
+        const clean_content = try lexer.stripLineComments(self.allocator, content);
 
         // In-flow compiler annotations: a chain step may carry a leading `[...]`
         // annotation (e.g. `[with]std/parser:grammar(...)`), exactly as a flow
