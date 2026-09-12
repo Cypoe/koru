@@ -1,13 +1,13 @@
 {
-  "timestamp": "2026-09-11T05:53:15.599Z",
+  "timestamp": "2026-09-12T05:29:24.813Z",
   "summary": {
-    "passed": 363,
+    "passed": 377,
     "failed": 0,
     "skipped": 12,
     "leaked": 0,
     "compileErrors": 0,
-    "total": 375,
-    "suiteCount": 42,
+    "total": 389,
+    "suiteCount": 43,
     "status": "success"
   },
   "suites": [
@@ -53,10 +53,10 @@
     },
     {
       "name": "auto_discharge_inserter_tests",
-      "passed": 4,
+      "passed": 5,
       "failed": 0,
       "skipped": 0,
-      "total": 4,
+      "total": 5,
       "status": "success"
     },
     {
@@ -92,11 +92,19 @@
       "status": "success"
     },
     {
-      "name": "errors_tests",
-      "passed": 1,
+      "name": "emit_package_files_tests",
+      "passed": 12,
       "failed": 0,
       "skipped": 0,
-      "total": 1,
+      "total": 12,
+      "status": "success"
+    },
+    {
+      "name": "errors_tests",
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "total": 2,
       "status": "success"
     },
     {
