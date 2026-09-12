@@ -63,7 +63,7 @@ koru_std/invariants.kz	181
 koru_std/io_registry.kz	30
 koru_std/io.kz	2084
 koru_std/json.kz	268
-koru_std/kernel.kz	2742
+koru_std/kernel.kz	2711
 koru_std/koru.kz	211
 koru_std/liquid_template.kz	146
 koru_std/list.free.kz	1083
