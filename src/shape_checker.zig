@@ -1449,8 +1449,20 @@ pub const ShapeChecker = struct {
                 has_errors = true;
                 continue;
             }
+            // Kind-aware text (KORU025 vocabulary): a missing `!` arm means
+            // no effect HANDLER was found — the kind belongs on the missing
+            // object, not the branch; "continuation" is `|` spelling.
+            // `|` keeps the bare wording pinned by 510_109.
+            const missing_is_effect = if (resolveDeclaredBranch(event_branches, branch_name)) |d|
+                d.kind == .effect
+            else
+                false;
             log.debug("ERROR: Branch '{s}' must be handled but no continuation found\n", .{branch_name});
-            try self.reporter.addErrorAtLocation(.KORU022, location, "branch '{s}' must be handled but no continuation found", .{branch_name});
+            if (missing_is_effect) {
+                try self.reporter.addErrorAtLocation(.KORU022, location, "branch '{s}' must be handled but no effect handler found", .{branch_name});
+            } else {
+                try self.reporter.addErrorAtLocation(.KORU022, location, "branch '{s}' must be handled but no continuation found", .{branch_name});
+            }
             has_errors = true;
         }
 
@@ -1467,7 +1479,12 @@ pub const ShapeChecker = struct {
                 available_branches.items
             else
                 "(none)";
-            try self.reporter.addErrorAtLocation(.KORU021, location, "event '{s}' has no branch '{s}' (available: {s})", .{ event_name, branch_name, available_str });
+            // The offender is the arm that names the unknown branch — report
+            // at the arm, not the call site.
+            const unknown_loc = for (continuations) |cont| {
+                if (std.mem.eql(u8, cont.branch, branch_name)) break cont.location;
+            } else location;
+            try self.reporter.addErrorAtLocation(.KORU021, if (unknown_loc.line != 0) unknown_loc else location, "event '{s}' has no branch '{s}' (available: {s})", .{ event_name, branch_name, available_str });
             has_errors = true;
         }
 
@@ -1476,7 +1493,19 @@ pub const ShapeChecker = struct {
         // handlers for the same terminal branch are ambiguous. (Effect `!`
         // branches are exempt — they may be linked any number of times.)
         for (result.duplicate_terminal_branches) |branch_name| {
-            try self.reporter.addErrorAtLocation(.KORU028, location, "terminal branch '{s}' has more than one unguarded handler — a `|` continuation runs at most once; distinguish them with `when` guards or remove the duplicate", .{branch_name});
+            // The surplus arm is the offender — point at the second unguarded
+            // handler, not the call site.
+            var unguarded_seen: usize = 0;
+            var dup_loc = location;
+            for (continuations) |cont| {
+                if (!std.mem.eql(u8, cont.branch, branch_name) or cont.condition != null) continue;
+                unguarded_seen += 1;
+                if (unguarded_seen == 2) {
+                    if (cont.location.line != 0) dup_loc = cont.location;
+                    break;
+                }
+            }
+            try self.reporter.addErrorAtLocation(.KORU028, dup_loc, "terminal branch '{s}' has more than one unguarded handler — a `|` continuation runs at most once; distinguish them with `when` guards or remove the duplicate", .{branch_name});
             has_errors = true;
         }
 
@@ -1491,15 +1520,18 @@ pub const ShapeChecker = struct {
             if (resolveDeclaredBranch(event_branches, cont.branch)) |branch| {
                 const has_payload = branch.payload.is_wildcard or branch.payload.fields.len > 0;
                 const has_binding = cont.binding != null or cont.destructure.len > 0;
+                // Arm-level verdicts report at the arm (cont.location), the
+                // convention this loop already uses for KORU036 below.
+                const arm_loc = if (cont.location.line != 0) cont.location else location;
                 if (has_payload and !has_binding) {
-                    try self.reporter.addErrorAtLocation(.KORU030, location, "branch '{s}' has payload but no binding", .{cont.branch});
+                    try self.reporter.addErrorAtLocation(.KORU030, arm_loc, "branch '{s}' has payload but no binding", .{cont.branch});
                     has_errors = true;
                 }
                 // The void half of the linear rule: a branch that carries
                 // nothing has nothing to bind OR discard — `_` included.
                 // A destructure on a void branch is the same error.
                 if (!has_payload and has_binding) {
-                    try self.reporter.addErrorAtLocation(.KORU101, location, "branch '{s}' carries no payload — remove the binding '{s}'", .{ cont.branch, cont.binding orelse "{...}" });
+                    try self.reporter.addErrorAtLocation(.KORU101, arm_loc, "branch '{s}' carries no payload — remove the binding '{s}'", .{ cont.branch, cont.binding orelse "{...}" });
                     has_errors = true;
                 }
                 // A binding-position destructure (`| ok { a, b }`) unpacks the
@@ -1787,6 +1819,11 @@ pub const ShapeChecker = struct {
 
                 // Validate ALL invocations in the pipeline, not just the last one
                 if (step == .invocation) {
+                    // Diagnostics about THIS call site belong at the chain
+                    // link (`|> name(...)`), not the flow head — cont.location
+                    // is stamped per link; fall back to the inherited
+                    // location only when it wasn't.
+                    const step_loc = if (cont.location.line != 0) cont.location else location;
                     const nested_event_name = try self.pathToString(step.invocation.path);
                     defer self.allocator.free(nested_event_name);
 
@@ -1797,7 +1834,7 @@ pub const ShapeChecker = struct {
                         // Arm-fire as a chain step: `! each i |> each(i)` inside
                         // the declaring event's impl calls the event's own arm.
                         if (self.armOfImplEvent(step.invocation.path)) |arm| {
-                            try self.validateArmFire(arm, &step.invocation, cont.continuations, location);
+                            try self.validateArmFire(arm, &step.invocation, cont.continuations, step_loc);
                             continue;
                         }
                         // Unknown event in pipeline - must fail! Report with the
@@ -1808,10 +1845,10 @@ pub const ShapeChecker = struct {
                         if (self.findEventOwningEffectArm(step.invocation.path)) |owner| {
                             const owner_name = try self.pathToString(owner.path);
                             defer self.allocator.free(owner_name);
-                            try self.reporter.addErrorAtLocation(.KORU040, location, "'{s}' is an effect arm of tor '{s}' — only that tor's own implementation may fire it", .{ step.invocation.path.segments[step.invocation.path.segments.len - 1], owner_name });
+                            try self.reporter.addErrorAtLocation(.KORU040, step_loc, "'{s}' is an effect arm of tor '{s}' — only that tor's own implementation may fire it", .{ step.invocation.path.segments[step.invocation.path.segments.len - 1], owner_name });
                             return error.UnknownEvent;
                         }
-                        try self.reporter.addErrorAtLocation(.KORU040, location, "unknown tor '{s}' in pipeline", .{nested_event_name});
+                        try self.reporter.addErrorAtLocation(.KORU040, step_loc, "unknown tor '{s}' in pipeline", .{nested_event_name});
                         return error.UnknownEvent;
                     };
 
@@ -1819,22 +1856,18 @@ pub const ShapeChecker = struct {
                     // The emitter stubs an unimplemented event wherever it is
                     // called, so the wall has to reach wherever a call can sit
                     // (510_116, and 510_117 for what the stub produces).
-                    try self.checkInvokedEventImplemented(nested_event_info, &step.invocation, false, location);
+                    try self.checkInvokedEventImplemented(nested_event_info, &step.invocation, false, step_loc);
 
-                    // This is the only step, check nested continuations
-                    if (cont.continuations.len == 0 and nested_event_info.decl.branches.len > 0) {
-                        // Missing nested continuations for branching step
-                        try self.reporter.addErrorAtLocation(.KORU022, location, "event '{s}' invoked in pipeline but its branches are not handled", .{nested_event_name});
-                        has_errors = true;
-                        // Continue checking for more errors
-                    }
-
-                    // Recursively check nested continuation coverage
+                    // Recursively check nested continuation coverage — the
+                    // per-branch KORU022s subsume the old aggregate ("invoked
+                    // in pipeline but its branches are not handled"), which
+                    // double-reported beside them and false-fired on events
+                    // whose branches are all optional.
                     const nested_covered = try self.checkBranchCoverageWithTerminals(
                         nested_event_name,
                         nested_event_info.decl.branches,
                         cont.continuations,
-                        location,
+                        step_loc,
                         &step.invocation,
                         nested_event_info.decl.return_type != null,
                     );
@@ -1844,12 +1877,13 @@ pub const ShapeChecker = struct {
                 }
 
                 // Handle foreach nodes - recurse into their branches
+                const cont_loc = if (cont.location.line != 0) cont.location else location;
                 if (step == .foreach) {
                     for (step.foreach.branches) |*branch| {
                         // Recursively validate the continuations inside each branch
                         const branch_valid = try self.validateNestedContinuations(
                             branch.body,
-                            location,
+                            cont_loc,
                         );
                         if (!branch_valid) {
                             has_errors = true;
@@ -1859,7 +1893,7 @@ pub const ShapeChecker = struct {
                     if (cont.continuations.len > 0) {
                         const nested_valid = try self.validateNestedContinuations(
                             cont.continuations,
-                            location,
+                            cont_loc,
                         );
                         if (!nested_valid) {
                             has_errors = true;
@@ -1874,7 +1908,7 @@ pub const ShapeChecker = struct {
                         // Recursively validate the continuations inside each branch
                         const branch_valid = try self.validateNestedContinuations(
                             branch.body,
-                            location,
+                            cont_loc,
                         );
                         if (!branch_valid) {
                             has_errors = true;
@@ -1884,7 +1918,7 @@ pub const ShapeChecker = struct {
                     if (cont.continuations.len > 0) {
                         const nested_valid = try self.validateNestedContinuations(
                             cont.continuations,
-                            location,
+                            cont_loc,
                         );
                         if (!nested_valid) {
                             has_errors = true;
@@ -1915,40 +1949,43 @@ pub const ShapeChecker = struct {
             if (cont.node) |step| {
                 // Handle invocations - check branch coverage
                 if (step == .invocation) {
+                    // Same rule as validatePipelineSteps: this call site's
+                    // diagnostics land at its own link, not the flow head.
+                    const step_loc = if (cont.location.line != 0) cont.location else location;
                     const nested_event_name = try self.pathToString(step.invocation.path);
                     defer self.allocator.free(nested_event_name);
 
                     if (self.events.get(nested_event_name)) |nested_event_info| {
-                        // Check nested continuation coverage
-                        if (cont.continuations.len == 0 and nested_event_info.decl.branches.len > 0) {
-                            try self.reporter.addErrorAtLocation(.KORU022, location, "event '{s}' invoked but its branches are not handled", .{nested_event_name});
+                        // Coverage reports each missing arm — the aggregate
+                        // "branches are not handled" ran only in the zero-
+                        // continuation case and could false-fire when every
+                        // declared branch was optional.
+                        const covered = try self.checkBranchCoverageWithTerminals(
+                            nested_event_name,
+                            nested_event_info.decl.branches,
+                            cont.continuations,
+                            step_loc,
+                            &step.invocation,
+                            nested_event_info.decl.return_type != null,
+                        );
+                        if (!covered) {
                             all_valid = false;
-                        } else {
-                            const covered = try self.checkBranchCoverageWithTerminals(
-                                nested_event_name,
-                                nested_event_info.decl.branches,
-                                cont.continuations,
-                                location,
-                                &step.invocation,
-                                nested_event_info.decl.return_type != null,
-                            );
-                            if (!covered) {
-                                all_valid = false;
-                            }
                         }
                     }
                 }
 
-                // Recurse into nested control flow nodes
+                // Recurse into nested control flow nodes — a child without
+                // its own stamp reports near this step, not the flow head.
+                const cont_loc = if (cont.location.line != 0) cont.location else location;
                 if (step == .foreach) {
                     for (step.foreach.branches) |*branch| {
-                        const valid = try self.validateNestedContinuations(branch.body, location);
+                        const valid = try self.validateNestedContinuations(branch.body, cont_loc);
                         if (!valid) all_valid = false;
                     }
                 }
                 if (step == .conditional) {
                     for (step.conditional.branches) |*branch| {
-                        const valid = try self.validateNestedContinuations(branch.body, location);
+                        const valid = try self.validateNestedContinuations(branch.body, cont_loc);
                         if (!valid) all_valid = false;
                     }
                 }
@@ -1956,7 +1993,10 @@ pub const ShapeChecker = struct {
 
             // Always recurse into nested continuations
             if (cont.continuations.len > 0) {
-                const valid = try self.validateNestedContinuations(cont.continuations, location);
+                const valid = try self.validateNestedContinuations(
+                    cont.continuations,
+                    if (cont.location.line != 0) cont.location else location,
+                );
                 if (!valid) all_valid = false;
             }
         }

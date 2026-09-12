@@ -1,0 +1,18 @@
+// ============================================================================
+// Test 510_124: MUST_ERROR — a `!` decl branch left unhandled reports a
+// missing EFFECT HANDLER, not a missing "continuation".
+//
+// `each` is declared `!` (effect — fires 0..N during the proc run) and `done`
+// is `|` (terminal). The consumer handles `| done` but omits `each`. The
+// kind belongs on the missing object: "continuation" is `|` spelling and
+// sends the reader to the wrong remedy — a `| each` arm lands on KORU025
+// (pinned by 510_100). `|` keeps the bare wording pinned by 510_109:
+// "branch 'again' must be handled but no continuation found".
+// ============================================================================
+
+~pub tor tokenize { source: string }
+! each string
+| done usize
+
+~tokenize(source: "x")
+| done _ |> _

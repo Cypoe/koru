@@ -234,7 +234,10 @@ pub const FlowChecker = struct {
             // Nested when-clause ambiguity: post-transform only, same ruling
             // as the top-level check above.
             if (self.mode == .all and !is_transformed) {
-                try self.validateContinuationWhenClauses(cont, location);
+                try self.validateContinuationWhenClauses(
+                    cont,
+                    if (cont.location.line != 0) cont.location else location,
+                );
             }
             if (!is_transformed) {
                 try self.validateBranchesHangOffPickers(cont);
@@ -1421,11 +1424,17 @@ pub const FlowChecker = struct {
                 const d = self.findEventDecl(&node.invocation.path) orelse break :blk &.{};
                 break :blk d.branches;
             };
-            try self.validateWhenClauseExhaustiveness(cont.continuations, location, nested_branches);
+            // The group hangs off THIS step — a group-level verdict points at
+            // the step, never the flow head the caller's location may name.
+            const group_loc = if (cont.location.line != 0) cont.location else location;
+            try self.validateWhenClauseExhaustiveness(cont.continuations, group_loc, nested_branches);
 
             // Recursively validate deeper nesting
             for (cont.continuations) |*nested| {
-                try self.validateContinuationWhenClauses(nested, location);
+                try self.validateContinuationWhenClauses(
+                    nested,
+                    if (nested.location.line != 0) nested.location else group_loc,
+                );
             }
         }
     }
@@ -1556,7 +1565,10 @@ pub const FlowChecker = struct {
                     }
                     const shadowed = branch_continuations.len - unguarded_idx - 1;
                     log.debug("ERROR: Branch '{s}' unguarded arm at {d} shadows {d} later arm(s)\n", .{ branch_name, unguarded_idx, shadowed });
-                    try self.reporter.addError(.KORU053, location.line, location.column, "branch '{s}': the unguarded handler is #{d} of {d}, so the {d} when-guarded handler(s) after it are unreachable - an unguarded arm is the else of an exclusive group and must come last", .{ branch_name, unguarded_idx + 1, branch_continuations.len, shadowed });
+                    // The unguarded arm is the offender — point at it.
+                    const arm_loc = branch_continuations[unguarded_idx].location;
+                    const report_loc = if (arm_loc.line != 0) arm_loc else location;
+                    try self.reporter.addError(.KORU053, report_loc.line, report_loc.column, "branch '{s}': the unguarded handler is #{d} of {d}, so the {d} when-guarded handler(s) after it are unreachable - an unguarded arm is the else of an exclusive group and must come last", .{ branch_name, unguarded_idx + 1, branch_continuations.len, shadowed });
                 }
             }
         }
@@ -1723,13 +1735,33 @@ pub const FlowChecker = struct {
 
             for (result.missing_branches) |branch_name| {
                 log.debug("ERROR: Required branch '{s}' not handled in flow invoking '{s}'\n", .{ branch_name, event_name });
-                try self.reporter.addError(
-                    .KORU022,
-                    location.line,
-                    location.column,
-                    "required branch '{s}' not handled - event '{s}' requires this branch",
-                    .{ branch_name, event_name },
-                );
+                // Same kind split as shape_checker's missing-branches loop:
+                // a missing `!` arm needs an effect handler, `|` keeps the
+                // bare wording.
+                var missing_is_effect = false;
+                for (declared.items) |d| {
+                    if (std.mem.eql(u8, d.name, branch_name)) {
+                        missing_is_effect = d.kind == .effect;
+                        break;
+                    }
+                }
+                if (missing_is_effect) {
+                    try self.reporter.addError(
+                        .KORU022,
+                        location.line,
+                        location.column,
+                        "required branch '{s}' not handled - event '{s}' requires an effect handler",
+                        .{ branch_name, event_name },
+                    );
+                } else {
+                    try self.reporter.addError(
+                        .KORU022,
+                        location.line,
+                        location.column,
+                        "required branch '{s}' not handled - event '{s}' requires this branch",
+                        .{ branch_name, event_name },
+                    );
+                }
             }
         }
 
