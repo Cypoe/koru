@@ -47,7 +47,7 @@ These are marked **[inf]** (source/tests) vs the interpreter verdicts which are 
 | 11 | multi-branch arms | `div(a: "4", b: "2")\n| ok v |> hello(name: v)\n| err e |> hello(name: "FAIL")` | Y | RESULT branch=done — both arms parsed, `ok` fired | `parseContinuations:359` |
 | 12 | `!` effect arm | `basic()\n! done v |> hello(name: "eff")` | Y | PARSE-ERROR msg=No flow found in source | `parseSingleContinuation:485 — only `|`/`|>`/`|?` handled; `!` returns MalformedContinuation` |
 | 13 | `!?` effect catch-all | `basic()\n!? v |> hello(name: "eff")` | Y | PARSE-ERROR msg=No flow found in source | `same as #12` |
-| 14 | `|?` branch catch-all | `basic()\n|? v |> hello(name: "c")` | Y | DISPATCH-ERROR NoBranchMatch — `|? v` parses (is_catchall set) but `v` is stored as the branch name and never matches, | `parseSingleContinuation:489; parseBranchInfo:626` |
+| 14 | `|?` branch catch-all | `basic()\n|? v |> hello(name: "c")` | Y | FIXED (b1952ac18) — `|? v` is the fallback arm: it fires when no named arm matched and binds the outcome; `|? M v` refuses `CatchallMetatypeUnsupported` (outcomes carry no metatype to filter). Was: parsed but never matched → NoBranchMatch. Pinned by `440_020` | `selectArm in interpreter.select.kz` |
 | 15 | `=>` branch constructor (fields) | `basic()\n| done v |> result { status: "ok" }` | Y | RESULT branch=result | `parseBranchConstructor:793` |
 | 16 | `=>` branch constructor (plain value) | `basic()\n| done v |> result { 5 }` | Y | RESULT branch=result | `parseBranchConstructor:793` |
 | 17 | braceless branch constructor | `basic()\n| done v |> ok` | Y | RESULT branch=ok | `isPlainBranchName:779` |
@@ -115,7 +115,7 @@ the semantic gap are separable, as the ruling notes.
 2. **`!` effect arms** (`e()\n! done x |> ...`, `!?`) — hard `PARSE-ERROR`. LLMs emit effects often.
 3. **`@label` / back-edge loops** — the `@loop` line stops continuation collection; loop runs with zero arms. Dropped silently.
 4. **Multiple statements in one source string** — only the first runs; the rest ignored silently.
-5. **`|?` catch-all** — parses but dispatches `NoBranchMatch`; the catch-all never fires.
+5. ~~**`|?` catch-all** — parses but dispatches `NoBranchMatch`~~ FIXED b1952ac18: the catch-all fires as the fallback arm (`440_020`); the metatype form refuses rather than widening.
 6. **Top-level `|>`** (a bare pipeline as the only continuation) — `NoBranchMatch`, not a parse error, but does not compose.
 
 ## Constructs the interpreter parses but whose SEMANTICS are hollow (value table)
