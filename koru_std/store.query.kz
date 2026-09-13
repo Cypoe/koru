@@ -881,7 +881,7 @@
     // in one flow minted identical symbols. Two sweeps of DIFFERENT stores were
     // disambiguated by store_name, which is why 690_087 never caught it.
     // Pinned: 690_110.
-    const sbody_name = std.fmt.allocPrint(allocator, "__store_sweepbody_{s}_L{d}", .{ store_name, sc.location.line }) catch unreachable;
+    const sbody_name = std.fmt.allocPrint(allocator, "__store_sweepbody_{s}_L{d}_{s}", .{ store_name, sc.location.line, storeSiteTag(allocator, sc.location.file) }) catch unreachable;
     // +1 for the arm-keyed row cursor. The projections hand the body
     // COPIES of the row's values; writing back needs the row itself. Query's
     // qbody takes `__koru_qrow` for exactly this reason (store.kz:1481).
@@ -1202,7 +1202,7 @@
     }
 
     // Same arm-line key as sbody_name above — the two must agree.
-    const srun_name = std.fmt.allocPrint(allocator, "__store_sweeprun_{s}_L{d}", .{ store_name, sc.location.line }) catch unreachable;
+    const srun_name = std.fmt.allocPrint(allocator, "__store_sweeprun_{s}_L{d}_{s}", .{ store_name, sc.location.line, storeSiteTag(allocator, sc.location.file) }) catch unreachable;
     appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
         .path = H.mkPathH(allocator, home_ns, srun_name),
         .input = ast.Shape{ .fields = &[_]ast.Field{} },

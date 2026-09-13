@@ -1715,7 +1715,7 @@
 
         // ---- collect this store's query sites (keyed by source line) ----
         const QuerySite = struct {
-            line: usize,
+            line: usize, file: []const u8, // site file — units mint into the STORE's scope, so store+line alone is not unique across modules (690_306)
             // projection: parallel arrays — bound name / store field index
             proj_names: [][]const u8,
             proj_fields: []usize,
@@ -1968,7 +1968,7 @@
             // removal-tolerant `while`. Conservative on failure.
             const q_may_remove = ast_functional.armReachesInvocation(allocator, program_items, &body_clone, store_name, TakeScan.isTakeOn) catch true;
             qsites.append(allocator, .{
-                .line = qf.location.line,
+                .line = qf.location.line, .file = allocator.dupe(u8, qf.location.file) catch unreachable,
                 // Filled by the body walk below.
                 .proj_names = &[_][]const u8{},
                 .proj_fields = &[_]usize{},
@@ -3039,10 +3039,10 @@
                 if (qs.is_preorder) continue;
                 const call = std.fmt.allocPrint(allocator,
                     \\if (__site_line > {d}) {{
-                    \\  {s}__store_qrow_{s}_L{d}_event.handler({{ row: __koru_new_row }});
+                    \\  {s}__store_qrow_{s}_L{d}_{s}_event.handler({{ row: __koru_new_row }});
                     \\}}
                     \\
-                , .{ qs.line, emit_ns, store_name, qs.line }) catch unreachable;
+                , .{ qs.line, emit_ns, store_name, qs.line, storeSiteTag(allocator, qs.file) }) catch unreachable;
                 ap.appendSlice(allocator, call) catch unreachable;
             }
         } else {
@@ -3145,10 +3145,10 @@
                 if (qs.is_preorder) continue;
                 const call = std.fmt.allocPrint(allocator,
                     \\if (__site_line > {d}) {{
-                    \\    {s}__store_qrow_{s}_L{d}_event.handler(.{{ .row = @as(i64, @intCast(__koru_new_row)) }});
+                    \\    {s}__store_qrow_{s}_L{d}_{s}_event.handler(.{{ .row = @as(i64, @intCast(__koru_new_row)) }});
                     \\}}
                     \\
-                , .{ qs.line, emit_ns, store_name, qs.line }) catch unreachable;
+                , .{ qs.line, emit_ns, store_name, qs.line, storeSiteTag(allocator, qs.file) }) catch unreachable;
                 ap.appendSlice(allocator, call) catch unreachable;
             }
         }
@@ -4196,9 +4196,9 @@
 
         // ---- unit 3: per-query units (qrow / qbody / qsweep) ----
         for (qsites.items) |*qs| {
-            const qrow_name = std.fmt.allocPrint(allocator, "__store_qrow_{s}_L{d}", .{ store_name, qs.line }) catch unreachable;
-            const qbody_name = std.fmt.allocPrint(allocator, "__store_qbody_{s}_L{d}", .{ store_name, qs.line }) catch unreachable;
-            const qsweep_name = std.fmt.allocPrint(allocator, "__store_qsweep_{s}_L{d}", .{ store_name, qs.line }) catch unreachable;
+            const qrow_name = std.fmt.allocPrint(allocator, "__store_qrow_{s}_L{d}_{s}", .{ store_name, qs.line, storeSiteTag(allocator, qs.file) }) catch unreachable;
+            const qbody_name = std.fmt.allocPrint(allocator, "__store_qbody_{s}_L{d}_{s}", .{ store_name, qs.line, storeSiteTag(allocator, qs.file) }) catch unreachable;
+            const qsweep_name = std.fmt.allocPrint(allocator, "__store_qsweep_{s}_L{d}_{s}", .{ store_name, qs.line, storeSiteTag(allocator, qs.file) }) catch unreachable;
 
             // qrow: guard + projection over one row; fires the body event.
             const qrow_in = allocator.alloc(ast.Field, 1) catch unreachable;
@@ -5074,7 +5074,7 @@
                 var k = stripe_order.items.len;
                 while (k > 1) : (k -= 1) {
                     const qidx = stripe_order.items[k - 1];
-                    const qn = std.fmt.allocPrint(allocator, "__store_qsweep_{s}_L{d}", .{ store_name, qsites.items[qidx].line }) catch unreachable;
+                    const qn = std.fmt.allocPrint(allocator, "__store_qsweep_{s}_L{d}_{s}", .{ store_name, qsites.items[qidx].line, storeSiteTag(allocator, qsites.items[qidx].file) }) catch unreachable;
                     var step = ast.Continuation{
                         .branch = allocator.dupe(u8, "") catch unreachable,
                         .binding = null,
@@ -5096,7 +5096,7 @@
                     }
                     chain = step;
                 }
-                const head_name = std.fmt.allocPrint(allocator, "__store_qsweep_{s}_L{d}", .{ store_name, qsites.items[stripe_order.items[0]].line }) catch unreachable;
+                const head_name = std.fmt.allocPrint(allocator, "__store_qsweep_{s}_L{d}_{s}", .{ store_name, qsites.items[stripe_order.items[0]].line, storeSiteTag(allocator, qsites.items[stripe_order.items[0]].file) }) catch unreachable;
                 const head_inv = ast.Invocation{
                     .path = H.mkPathH(allocator, home_ns, head_name),
                     .args = &[_]ast.Arg{},

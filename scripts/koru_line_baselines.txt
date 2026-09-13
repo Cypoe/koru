@@ -103,6 +103,7 @@ koru_std/store.preorder.kz	110
 koru_std/store.qrewrite.kz	233
 koru_std/store.query.kz	1248
 koru_std/store.rule.kz	148
+koru_std/store.sitetag.kz	27
 koru_std/store.stored.kz	871
 koru_std/store.stripe.kz	81
 koru_std/store.take.kz	169
