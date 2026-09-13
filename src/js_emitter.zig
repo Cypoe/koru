@@ -95,6 +95,22 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         \\
     );
 
+    // Prelude: the stdout/stderr surface. `std/io`'s |js print family writes
+    // through `__koru_stdout_write`/`__koru_stderr_write` (io.kz) so the same
+    // emitted file runs under node AND a browser — `process` is a node global
+    // and a bare `process.stdout.write` is a ReferenceError in a page, not a
+    // wrong answer. The browser arms strip one trailing newline because
+    // console.log supplies its own; `console.error` is the stderr twin.
+    try em.write(
+        \\const __koru_stdout_write = (typeof process !== "undefined" && process.stdout)
+        \\    ? (s) => process.stdout.write(s)
+        \\    : (s) => console.log(s.endsWith("\n") ? s.slice(0, -1) : s);
+        \\const __koru_stderr_write = (typeof process !== "undefined" && process.stderr)
+        \\    ? (s) => process.stderr.write(s)
+        \\    : (s) => console.error(s.endsWith("\n") ? s.slice(0, -1) : s);
+        \\
+    );
+
     // Phase 0: emit host lines whose host language is JS, verbatim, at the TOP
     // of the output (before main_module). This carries module-level JS state
     // (`const`/`let` declarations) that the flows and proc bodies reference.
@@ -1036,6 +1052,12 @@ const Emitter = struct {
                     },
                     // `_` and an inline branch constructor call nothing.
                     .terminal, .branch_constructor => {},
+                    // Transform-rendered host text — the synthesized `| ?!`
+                    // panic arm auto_discharge_inserter grafts, or a capture's
+                    // after-read. A leaf with no callees; implementable exactly
+                    // when the text lowers, which is the same question
+                    // emitPreamble answers line-by-line at emit time.
+                    .inline_code => |text| if (!self.jsHostTextLowers(text)) return false,
                     // Any other node kind: refuse to vouch. Emitting a body the
                     // walk cannot account for is how a DEAD handler panics a live
                     // compile, and the cost of being wrong in this direction is
@@ -1045,6 +1067,22 @@ const Emitter = struct {
                 }
             }
             if (!self.continuationsAreJsImplementable(event, cont.continuations, depth)) return false;
+        }
+        return true;
+    }
+
+    /// Trial-lower `.inline_code` text the way `emitPreamble` will — split per
+    /// line, each through `.host_text`. A lowering failure is not a verdict on
+    /// the program; it means this leaf cannot emit, so the event carrying it
+    /// stays absent the same way an unresolvable callee leaves it absent.
+    fn jsHostTextLowers(self: *Emitter, text: []const u8) bool {
+        var it = std.mem.splitScalar(u8, text, '\n');
+        while (it.next()) |line| {
+            const trimmed = std.mem.trim(u8, line, " \t\r");
+            if (trimmed.len == 0) continue;
+            var diag = codegen_utils.LowerDiag{};
+            const lowered = codegen_utils.lowerKoruExpr(self.allocator, trimmed, .js, .host_text, &diag) catch return false;
+            self.allocator.free(lowered);
         }
         return true;
     }
@@ -2392,7 +2430,12 @@ const Emitter = struct {
         continuations: []const ast.Continuation,
         indent: []const u8,
     ) JsEmitError!void {
-        const trimmed = std.mem.trim(u8, body, " \t\r\n");
+        // `$mod.` → bare before slicing: a `.kjs` host line is file-scope JS,
+        // and rewriting the WHOLE body up front keeps the effect-call scan
+        // from ever seeing (or splitting) the sanctioned spelling.
+        const stripped = try codegen_utils.jsModBare(self.allocator, body);
+        defer self.allocator.free(stripped);
+        const trimmed = std.mem.trim(u8, stripped, " \t\r\n");
 
         var pos: usize = 0;
         while (pos < trimmed.len) {
@@ -3004,7 +3047,12 @@ const Emitter = struct {
     /// lines and trailing whitespace. Mirrors CodeEmitter.emitReindentedText's
     /// intent without depending on the Zig emitter's indent-level machinery.
     fn emitReindented(self: *Emitter, body: []const u8, indent: []const u8) JsEmitError!void {
-        const trimmed = std.mem.trim(u8, body, " \t\r\n");
+        // `$mod.` → bare: KORU112's sanctioned spelling for module scope. In JS
+        // a `.kjs` host line is file-scope, so bare is the resolution under
+        // every lowering — the decl-site path here and the inline splices.
+        const stripped = try codegen_utils.jsModBare(self.allocator, body);
+        defer self.allocator.free(stripped);
+        const trimmed = std.mem.trim(u8, stripped, " \t\r\n");
         var it = std.mem.splitScalar(u8, trimmed, '\n');
         var first = true;
         while (it.next()) |line| {

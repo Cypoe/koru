@@ -1105,6 +1105,33 @@ fn lowerJsInto(
                 continue;
             }
         }
+        // Inline conditional EXPRESSION — `if (c) a else b`. Koru spells the
+        // ternary exactly as Zig does; JavaScript needs `c ? a : b`, and
+        // without this the `if`/`else` fall through to the reserved-word
+        // rename below and surface as `if$`/`else$` — a syntax error in the
+        // emitted file (390_120).
+        //
+        // Koru modes only: in `.host_text` a bare `if` is a real JavaScript
+        // statement (`if (x) return y;`) and must pass through. A `(`-conditioned
+        // `if` whose next token is `{` is a STATEMENT in the Koru modes too —
+        // `if (c) {…} else {…}` inside a kernel op body — and is left alone.
+        if (mode != .host_text and c == 'i') {
+            if (try jsInlineIf(out, allocator, text, i, mode, diag)) |after| {
+                i = after;
+                continue;
+            }
+        }
+        // Typed DECLARATION — `var nx: f64 = 0.0`, `const p: *Frame<frame> = …`.
+        // Koru statement text (kernel op bodies) is Zig-shaped; the `: type`
+        // annotation has no JS spelling and arrived verbatim as a syntax error
+        // (390_120). The keyword + ident + `:` shape is required — a bare `x: 1`
+        // arg label or object literal cannot reach this arm.
+        if (mode != .host_text and (c == 'v' or c == 'c' or c == 'l')) {
+            if (try jsTypedDecl(out, allocator, text, i)) |after| {
+                i = after;
+                continue;
+            }
+        }
         // A BINDING REFERENCE that JavaScript cannot spell. `! updated { old,
         // new }` binds `new`, and the arm's own expression reads it back:
         // `board.pool + new - old`. Renaming the declaration and not this would
@@ -1180,6 +1207,268 @@ fn lowerJsInto(
         try out.append(allocator, c);
         i += 1;
     }
+}
+
+/// Skip a quoted literal opening at `text[i]` (`"`, `'`, or backtick).
+/// Returns the index just past the closer, or `text.len` if unterminated.
+fn jsSkipQuoted(text: []const u8, i: usize) usize {
+    const q = text[i];
+    var j = i + 1;
+    while (j < text.len) {
+        if (text[j] == '\\') {
+            j += 2;
+            continue;
+        }
+        if (text[j] == q) return j + 1;
+        j += 1;
+    }
+    return text.len;
+}
+
+/// Word at `text[at]` — boundary-checked on both sides, so `ifdef` and
+/// `x.if` never match. `wlen` is the word's length.
+fn jsWordAt(text: []const u8, at: usize, comptime word: []const u8) bool {
+    if (!std.mem.startsWith(u8, text[at..], word)) return false;
+    if (at + word.len < text.len and exprIdentChar(text[at + word.len])) return false;
+    if (at > 0 and (exprIdentChar(text[at - 1]) or text[at - 1] == '.')) return false;
+    return true;
+}
+
+/// Lower the inline conditional expression `if (c) a else b` starting at
+/// `text[at] == 'i'` to `(c ? a : b)`, returning the index just past it —
+/// or null when the `if` is not that shape (a statement `if (c) {…}`, an
+/// unparenthesised condition, a missing `else`, an identifier tail). All
+/// three spans re-enter `lowerJsInto`, so nested forms (`else if` chains,
+/// an if-expression inside a branch) lower recursively.
+///
+/// The matching `else` is found by counting nested if-expressions at
+/// paren-depth 0: each needs its own `else`, so a depth-0 `else` with
+/// pending ifs belongs to the innermost one. The else-branch ends at the
+/// first depth-0 `,` `)` `]` `}` `;` — the delimiters an expression text is
+/// embedded in — or at end of input.
+fn jsInlineIf(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    at: usize,
+    mode: ExprMode,
+    diag: ?*LowerDiag,
+) LowerError!?usize {
+    if (!jsWordAt(text, at, "if")) return null;
+    var j = at + 2;
+    while (j < text.len and std.ascii.isWhitespace(text[j])) j += 1;
+    if (j >= text.len or text[j] != '(') return null;
+    const cond_open = j;
+
+    var depth: usize = 0;
+    var k = j;
+    while (k < text.len) {
+        const ch = text[k];
+        if (ch == '"' or ch == '\'' or ch == '`') {
+            k = jsSkipQuoted(text, k);
+            continue;
+        }
+        if (ch == '(') depth += 1;
+        if (ch == ')') {
+            depth -= 1;
+            if (depth == 0) break;
+        }
+        k += 1;
+    }
+    if (k >= text.len or depth != 0) return null;
+    const cond_close = k;
+
+    var m = cond_close + 1;
+    while (m < text.len and std.ascii.isWhitespace(text[m])) m += 1;
+    if (m >= text.len or text[m] == '{') return null;
+
+    var pending: usize = 0;
+    var else_at: ?usize = null;
+    k = m;
+    depth = 0;
+    scan: while (k < text.len) {
+        const ch = text[k];
+        if (ch == '"' or ch == '\'' or ch == '`') {
+            k = jsSkipQuoted(text, k);
+            continue;
+        }
+        switch (ch) {
+            '(', '[', '{' => depth += 1,
+            ')', ']', '}', ',', ';' => {
+                if (depth == 0) return null; // the expression ended before any else
+                if (ch != ',' and ch != ';') depth -= 1;
+            },
+            else => {
+                if (depth == 0 and jsWordAt(text, k, "if")) {
+                    var n = k + 2;
+                    while (n < text.len and std.ascii.isWhitespace(text[n])) n += 1;
+                    if (n < text.len and text[n] == '(') {
+                        pending += 1;
+                        k += 2;
+                        continue :scan;
+                    }
+                }
+                if (depth == 0 and jsWordAt(text, k, "else")) {
+                    if (pending == 0) {
+                        else_at = k;
+                        break :scan;
+                    }
+                    pending -= 1;
+                    k += 4;
+                    continue :scan;
+                }
+            },
+        }
+        k += 1;
+    }
+    const else_pos = else_at orelse return null;
+
+    k = else_pos + 4;
+    depth = 0;
+    while (k < text.len) {
+        const ch = text[k];
+        if (ch == '"' or ch == '\'' or ch == '`') {
+            k = jsSkipQuoted(text, k);
+            continue;
+        }
+        switch (ch) {
+            '(', '[', '{' => depth += 1,
+            ')', ']', '}' => {
+                if (depth == 0) break;
+                depth -= 1;
+            },
+            ',', ';' => if (depth == 0) break,
+            else => {},
+        }
+        k += 1;
+    }
+
+    try out.append(allocator, '(');
+    try lowerJsInto(out, allocator, text[cond_open + 1 .. cond_close], mode, diag);
+    try out.appendSlice(allocator, " ? ");
+    try lowerJsInto(out, allocator, text[m..else_pos], mode, diag);
+    try out.appendSlice(allocator, " : ");
+    try lowerJsInto(out, allocator, text[else_pos + 4 .. k], mode, diag);
+    try out.append(allocator, ')');
+    return k;
+}
+
+/// Lower a typed declaration `var|const|let name: T = …` starting at
+/// `text[at]` by emitting `kw name` and resuming at the initializer's `=`
+/// (or the `;`/newline ending a bare decl). Returns null when the word is
+/// not followed by `ident :` — arg labels, object keys, destructuring, and
+/// `for (const x of …)` all fail the shape and pass through.
+///
+/// The annotation scan tracks bracket depth so `*Frame<frame>` and slice
+/// types don't confuse the `=`/`;` search, and refuses `=` characters that
+/// are really `==`, `=>`, `<=`, `>=`, `!=` (never legal in a type anyway —
+/// the refusal just keeps a weird annotation verbatim instead of
+/// half-eaten).
+fn jsTypedDecl(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    at: usize,
+) LowerError!?usize {
+    inline for (.{ "var", "const", "let" }) |kw| {
+        if (jsWordAt(text, at, kw)) {
+            var j = at + kw.len;
+            while (j < text.len and (text[j] == ' ' or text[j] == '\t')) j += 1;
+            if (j >= text.len or !exprIdentChar(text[j]) or (text[j] >= '0' and text[j] <= '9')) return null;
+            while (j < text.len and exprIdentChar(text[j])) j += 1;
+            while (j < text.len and (text[j] == ' ' or text[j] == '\t')) j += 1;
+            if (j >= text.len or text[j] != ':') return null;
+            if (j + 1 < text.len and (text[j + 1] == ':' or text[j + 1] == '=')) return null;
+
+            try out.appendSlice(allocator, text[at..j]);
+            var depth: usize = 0;
+            var k = j + 1;
+            while (k < text.len) {
+                const ch = text[k];
+                if (ch == '"' or ch == '\'' or ch == '`') {
+                    k = jsSkipQuoted(text, k);
+                    continue;
+                }
+                switch (ch) {
+                    '(', '[', '{', '<' => depth += 1,
+                    ')', ']', '}', '>' => {
+                        if (depth == 0) return null;
+                        depth -= 1;
+                    },
+                    '=' => {
+                        const next_eq = k + 1 < text.len and (text[k + 1] == '=' or text[k + 1] == '>');
+                        const prev_cmp = k > 0 and (text[k - 1] == '<' or text[k - 1] == '>' or text[k - 1] == '!' or text[k - 1] == '=');
+                        if (depth == 0 and !next_eq and !prev_cmp) return k;
+                    },
+                    ';', '\n' => if (depth == 0) return k,
+                    else => {},
+                }
+                k += 1;
+            }
+            return null;
+        }
+    }
+    return null;
+}
+
+/// `$mod.` → bare, for `|js` proc bodies. A `.kjs` facet's module-level host
+/// lines emit as file-scope JS, so the sanctioned `$mod.X` spelling resolves
+/// to plain `X` under every lowering — the decl-site `handler` and the
+/// inline-splice paths alike. The JS twin of `rewriteModToBare`
+/// (emitter_helpers.zig), kept here rather than imported: emitter_helpers is
+/// the Zig CodeEmitter's module, and this file is where the JS vocabulary
+/// lives. Quote- and comment-aware (JS has block comments, which the Zig twin
+/// never meets).
+pub fn jsModBare(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
+    var out = try std.ArrayList(u8).initCapacity(allocator, body.len);
+    errdefer out.deinit(allocator);
+    var i: usize = 0;
+    var q: u8 = 0;
+    while (i < body.len) {
+        const c = body[i];
+        if (q != 0) {
+            try out.append(allocator, c);
+            if (c == '\\') {
+                if (i + 1 < body.len) try out.append(allocator, body[i + 1]);
+                i += 2;
+                continue;
+            }
+            if (c == q) q = 0;
+            i += 1;
+            continue;
+        }
+        if (c == '"' or c == '\'' or c == '`') {
+            q = c;
+            try out.append(allocator, c);
+            i += 1;
+            continue;
+        }
+        if (c == '/' and i + 1 < body.len and body[i + 1] == '/') {
+            while (i < body.len and body[i] != '\n') : (i += 1) try out.append(allocator, body[i]);
+            continue;
+        }
+        if (c == '/' and i + 1 < body.len and body[i + 1] == '*') {
+            try out.appendSlice(allocator, "/*");
+            i += 2;
+            while (i < body.len and !(body[i] == '*' and i + 1 < body.len and body[i + 1] == '/')) : (i += 1) {
+                try out.append(allocator, body[i]);
+            }
+            if (i < body.len) {
+                try out.appendSlice(allocator, "*/");
+                i += 2;
+            }
+            continue;
+        }
+        if (std.mem.startsWith(u8, body[i..], "$mod.") and
+            (i == 0 or !exprIdentChar(body[i - 1])))
+        {
+            i += "$mod.".len;
+            continue;
+        }
+        try out.append(allocator, c);
+        i += 1;
+    }
+    return try out.toOwnedSlice(allocator);
 }
 
 /// THE VOCABULARY. Lower one `@`-operation starting at `text[at] == '@'`,

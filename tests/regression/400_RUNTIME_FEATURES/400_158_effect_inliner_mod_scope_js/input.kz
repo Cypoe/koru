@@ -1,0 +1,16 @@
+// TEST: `$mod.` in a |js proc body lowers to the bare file-scope name — the
+// JS twin of 400_155's Zig-side contract. Two emission paths are covered:
+// `spin` (payload effect — decl-site handler) and `pulse` (void effect —
+// inline splice into the caller). If `$mod.` passed through verbatim, node
+// would refuse the file on `$` — an illegal identifier.
+
+~import std/io
+~import app/lib/gadget
+
+~app/lib/gadget:spin(count: 3)
+! tick n |> std/io:print.ln("tick {{ n:d }}")
+| done total |> std/io:print.ln("total {{ total:d }}")
+
+~app/lib/gadget:pulse(count: 2)
+! beat |> std/io:print.ln("beat")
+| done n2 |> std/io:print.ln("pulses {{ n2:d }}")

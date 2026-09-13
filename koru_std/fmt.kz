@@ -9,6 +9,7 @@
 // - Auto-discharge handles cleanup via phantom obligations
 
 ~[comptime|runtime]
+~part jsprec
 
 const std = @import("std");
 
@@ -707,18 +708,10 @@ pub const FormattedText = struct {
                 while (ws_end > ws_start and (content[ws_end - 1] == ' ' or content[ws_end - 1] == '\t')) : (ws_end -= 1) {}
 
                 const placeholder = content[ws_start..ws_end];
-                var var_name: []const u8 = placeholder;
-                if (std.mem.indexOf(u8, placeholder, ":")) |colon_pos| {
-                    var_name = placeholder[0..colon_pos];
-                }
-
-                // A dotted path (`req.text`) is a JS member read verbatim, and a
-                // segment that collides with a JS keyword is still a legal
-                // property name — so unlike |zig there is nothing to escape.
                 closeLit(&buf, allocator, &in_literal);
                 if (!first) buf.appendSlice(allocator, " + ") catch unreachable;
                 first = false;
-                buf.appendSlice(allocator, var_name) catch unreachable;
+                jsPlaceholder(&buf, allocator, placeholder);
 
                 i = j + 2;
             } else {

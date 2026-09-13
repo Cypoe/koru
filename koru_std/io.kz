@@ -943,7 +943,7 @@ fn __printInterpolateJs(
         buf.appendSlice(allocator, "\"\\n\"") catch unreachable;
     }
 
-    const write_fn: []const u8 = if (to_fd == 2) "process.stderr.write" else "process.stdout.write";
+    const write_fn: []const u8 = if (to_fd == 2) "__koru_stderr_write" else "__koru_stdout_write";
     const inline_code = std.fmt.allocPrint(
         allocator,
         "{s}({s});",

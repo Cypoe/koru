@@ -1,0 +1,43 @@
+// Module fixture for 400_158: the JS-target twin of 400_155. An effect-branch
+// proc body may splice into the CALLER (KORU112), so module-scope names must
+// be spelled `$mod.` — on the Zig lane that rewrites to the emitted module
+// namespace; on the JS lane the `.kjs` facet's host lines are file-scope, so
+// the sanctioned spelling lowers to the bare name. One spelling, three
+// lowerings — this file is the |zig half.
+const std = @import("std");
+
+pub const BASE: i32 = 10;
+
+pub fn twice(v: i32) i32 {
+    return v * 2;
+}
+
+// Payload effect — the handler path.
+~pub tor spin { count: i32 }
+! tick i32
+| done i32
+
+~proc spin|zig {
+    var acc: i32 = 0;
+    var i: i32 = 0;
+    while (i < count) : (i += 1) {
+        const n = $mod.twice(i) + $mod.BASE;
+        acc += n;
+        tick(n);
+    }
+    return .{ .done = acc };
+}
+
+// Void effect — the inline-splice path.
+~pub tor pulse { count: i32 }
+! beat
+| done i32
+
+~proc pulse|zig {
+    var i: i32 = 0;
+    while (i < count) : (i += 1) {
+        _ = $mod.twice(i);
+        beat();
+    }
+    return .{ .done = count };
+}

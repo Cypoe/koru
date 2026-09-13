@@ -1,0 +1,27 @@
+// JavaScript facet of gadget for 400_158 — the |js half of the $mod. pin.
+// These host lines emit at file scope, so `$mod.BASE_JS` below must lower to
+// the bare `BASE_JS` — the same sanctioned spelling the |zig twin writes.
+
+const BASE_JS = 10;
+
+function twice_js(v) {
+    return v * 2;
+}
+
+~proc spin|js {
+    let acc = 0;
+    for (let i = 0; i < count; i++) {
+        const n = $mod.twice_js(i) + $mod.BASE_JS;
+        acc += n;
+        tick(n);
+    }
+    return { tag: "done", done: acc };
+}
+
+~proc pulse|js {
+    for (let i = 0; i < count; i++) {
+        $mod.twice_js(i);
+        beat();
+    }
+    return { tag: "done", done: count };
+}
