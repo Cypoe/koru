@@ -3506,7 +3506,20 @@ pub const VisitorEmitter = struct {
                                         for (flow.body.continuations) |*cont| {
                                             try emitter.emitContinuationBody(self.code_emitter, &emitter_ctx, cont, &result_counter);
                                         }
-                                    } else if (flow.inline_body) |inline_code| {
+                                    } else if (flow.inline_body orelse flow.inv().inline_body) |inline_code| {
+                                        // `orelse flow.inv().inline_body`: a nested template
+                                        // invocation (`~for` under a `! query` arm) is rendered onto
+                                        // `node.invocation.inline_body` by renderNestedTemplates;
+                                        // when a transform (std/store:query) then moves that node
+                                        // into a synthesized sweepbody flow's HEAD, the body rides
+                                        // on the invocation — `flow.inline_body` stays null. The
+                                        // raw-handler path below would emit `for_event.handler(
+                                        // .{ .expr = 0..9 })` — a dropped loop plus a verbatim
+                                        // range literal, which is invalid Zig. JS reaches this
+                                        // through emitInvocationWithContinuations' `inv.inline_body`
+                                        // check (js_emitter.zig); the subflow dispatch needs the
+                                        // same reading. `head_was_replaced` below already knew the
+                                        // shape could exist — it just arrived too late to help.
                                         // Check if continuations have named branches (need switch)
                                         const has_named_branches = blk: {
                                             for (flow.body.continuations) |cont| {

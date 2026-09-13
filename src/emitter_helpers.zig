@@ -5626,7 +5626,18 @@ pub fn emitFlow(
     // Zero-overhead control flow: if a template transform set inline_body, emit
     // it (and any continuations) via the shared node emitter — the same path a
     // nested inline node takes, so this works at every depth, not just top-level.
-    if (flow.inline_body) |inline_code_raw| {
+    //
+    // The rendered body can live on the head INVOCATION, not the flow: a nested
+    // `~for` under a `! query` arm is rendered by renderNestedTemplates onto
+    // `node.invocation.inline_body`, and the store transform then moves that
+    // node into the synthesized sweepbody flow's head — `flow.inline_body`
+    // stays null while `flow.inv().inline_body` carries the render. Emitting the
+    // head as a raw `_event.handler(...)` drops the loop AND writes the range
+    // literal verbatim into the struct init (`.{ .expr = 0..9 }` — invalid Zig).
+    // The JS lane honors this through emitInvocationWithContinuations
+    // (js_emitter.zig `inv.inline_body` check); this is the Zig twin.
+    const head_inline_body = flow.inline_body orelse flow.inv().inline_body;
+    if (head_inline_body) |inline_code_raw| {
         var inline_result_counter: usize = 0;
         try emitInlineBodyNode(emitter, ctx, inline_code_raw, flow.body.continuations, &flow.inv().path, &inline_result_counter, flow.inv().return_binding);
         return;
