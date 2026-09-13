@@ -315,6 +315,7 @@ pub const VisitorEmitter = struct {
     current_module_prefix: ?[]const u8, // Current Zig module path prefix (e.g., "koru_orisha")
     module_comptime_flows: std.ArrayList(ComptimeFlowCall), // Collected comptime flow calls from modules
     module_runtime_flows: std.ArrayList([]const u8), // Collected runtime flow calls from library modules
+    module_teardown_flows: std.ArrayList([]const u8), // [teardown]-marked module flows — run AFTER the entry's flows (store disposal, 115_018)
     koru_start_flow_name: ?[]const u8, // Name of koru:start meta-event flow (if present)
     koru_end_flow_name: ?[]const u8, // Name of koru:end meta-event flow (if present)
     /// Default variant for proc-body emission. When no explicit build:variants
@@ -379,6 +380,7 @@ pub const VisitorEmitter = struct {
             .current_module_prefix = null,
             .module_comptime_flows = .empty,
             .module_runtime_flows = .empty,
+            .module_teardown_flows = .empty,
             .koru_start_flow_name = null, // Will be set if koru:start flow is emitted
             .koru_end_flow_name = null, // Will be set if koru:end flow is emitted
             // `.lang` intentionally omitted — uses the struct default `"zig"`.
@@ -1267,6 +1269,15 @@ pub const VisitorEmitter = struct {
                     }
                 }
 
+                // Module [teardown] flows run LAST among user code: disposal
+                // after the entry's flows, still before koru:end and the
+                // leak check (115_018).
+                for (self.module_teardown_flows.items) |call| {
+                    try self.code_emitter.write("    ");
+                    try self.code_emitter.write(call);
+                    try self.code_emitter.write("();\n");
+                }
+
                 // Call koru:end meta-event flow if it exists (fires profiler footer, etc.)
                 if (self.koru_end_flow_name) |_| {
                     try self.code_emitter.write("    main_module.koru_end_flow();\n");
@@ -1606,7 +1617,16 @@ pub const VisitorEmitter = struct {
                                 const flow_num_str = try std.fmt.bufPrint(&flow_num_buf, "{}", .{self.flow_counter});
                                 try call_buf.appendSlice(self.allocator, flow_num_str);
                                 const call_str = try call_buf.toOwnedSlice(self.allocator);
-                                try self.module_runtime_flows.append(self.allocator, call_str);
+                                // [teardown] flows are the module's END, not its
+                                // init — appended last so they run after every
+                                // user flow (store.new.kz); scheduling them
+                                // ahead of the entry's flows runs disposal on
+                                // an empty store and leaks (115_018).
+                                if (annotation_parser.hasPart(flow.annotations, "teardown")) {
+                                    try self.module_teardown_flows.append(self.allocator, call_str);
+                                } else {
+                                    try self.module_runtime_flows.append(self.allocator, call_str);
+                                }
                             }
                         }
                     }
