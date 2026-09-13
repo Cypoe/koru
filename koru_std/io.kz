@@ -7,6 +7,7 @@
 ~[comptime|runtime]
 
 ~import std/build
+~part jsprec
 
 const std = @import("std");
 const codegen_utils_io = @import("codegen_utils");
@@ -772,8 +773,8 @@ fn __printInterpolate(
 // `{{ var:fmt }}` placeholders, `{% if v %}…{% endif %}` blocks — but it emits
 // a JS string-concat and a `process.{stdout,stderr}.write(…)` call instead of
 // the Zig posix.write inline. Format specs (:d/:s/:f/:any) are accepted and
-// dropped — JS's `+` promotes Numbers to strings on concat, so no per-spec
-// mapping is needed (mirrors print.blk|js). `to_fd` selects the stream (1 =
+// dropped except a `:.N` precision tail, which emits `Number(x).toFixed(N)`
+// — the same honoring `fmt`'s jsPlaceholder gives `ln|js`. `to_fd` selects the stream (1 =
 // stdout, 2 = stderr); the trailing newline for the `.ln` variants is appended
 // as a `+ "\n"` operand, matching |zig's fd + `\n` semantics (neither stream
 // adds an implicit newline).
@@ -889,11 +890,6 @@ fn __printInterpolateJs(
                     var ws_end = j;
                     while (ws_end > ws_start and (content[ws_end - 1] == ' ' or content[ws_end - 1] == '\t')) : (ws_end -= 1) {}
 
-                    var var_name = content[ws_start..ws_end];
-                    if (std.mem.indexOf(u8, var_name, ":")) |colon_pos| {
-                        var_name = var_name[0..colon_pos];
-                    }
-
                     closeLit(&buf, allocator, &in_literal);
                     if (first) {
                         // Seed string-concat context so a lone/leading numeric
@@ -904,12 +900,10 @@ fn __printInterpolateJs(
                     } else {
                         buf.appendSlice(allocator, " + ") catch unreachable;
                     }
-                    // Parenthesize the value: a multi-term expr (`{{ c + 1 }}`)
-                    // must be ONE operand, else `"n=" + c + 1` folds left-to-right
-                    // to `"n=<c>" + 1` = "n=<c>1" instead of the sum.
-                    buf.append(allocator, '(') catch unreachable;
-                    buf.appendSlice(allocator, ioLowerJsExpr(allocator, var_name)) catch unreachable;
-                    buf.append(allocator, ')') catch unreachable;
+                    // Spec split + `:.N` precision + operand emission live in
+                    // io.jsprec (line-baseline wall) — same honoring fmt's
+                    // jsPlaceholder gives ln|js.
+                    ioJsPlaceholderOperand(&buf, allocator, content[ws_start..ws_end]);
 
                     i = j + 2;
                 } else {

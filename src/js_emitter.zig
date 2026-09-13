@@ -141,18 +141,12 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     // struct (visitor_emitter.zig:1170). The flow is NOT emitted as a flowN()
     // method and NOT invoked (it declares, it doesn't execute) — Phase 2 skips it
     // via the same isDeclarationFlow check, so flow numbering stays in sync.
-    for (program.items) |*item| {
-        if (item.* != .flow) continue;
-        if (!em.isDeclarationFlow(&item.flow)) continue;
-        const body = stripInlineStmtMarker(item.flow.inline_body.?);
-        // Through the host-text lowering, like every other spliced fragment. This
-        // was the one splice site that wrote raw, so a value the `const` template
-        // rendered as a Zig cast (`const threshold = @as(i32, 5);`) reached the JS
-        // file with the `@` intact — a syntax error at `node`, three passes away
-        // from the site that wrote it.
-        try em.writeHostText(std.mem.trim(u8, body, " \t\r\n"));
-        try em.write("\n");
-    }
+    // Descends into `.module_decl` the way emitJsHostLines and
+    // emitTopLevelInlineCode do — a `const {}` in an IMPORTED module
+    // (asteroids' sim/index.k declares SHIP_DRAG this way) declares into the
+    // same shared module scope, or every handler that reads it gets a
+    // ReferenceError at run time.
+    try emitJsDeclarations(&em, program.items);
 
     // Phase 0.6: TOP-LEVEL `.inline_code` — host declarations a comptime
     // transform appended beside the site it rewrote (`std/regex:match` appends
@@ -413,6 +407,27 @@ fn emitJsHostLines(em: *Emitter, items: []const ast.Item) JsEmitError!void {
                 try em.write("\n");
             },
             .module_decl => |*m| try emitJsHostLines(em, m.items),
+            else => {},
+        }
+    }
+}
+
+fn emitJsDeclarations(em: *Emitter, items: []const ast.Item) JsEmitError!void {
+    for (items) |*item| {
+        switch (item.*) {
+            .flow => |*f| {
+                if (!em.isDeclarationFlow(f)) continue;
+                const body = stripInlineStmtMarker(f.inline_body.?);
+                // Through the host-text lowering, like every other spliced
+                // fragment. This was the one splice site that wrote raw, so a
+                // value the `const` template rendered as a Zig cast
+                // (`const threshold = @as(i32, 5);`) reached the JS file with
+                // the `@` intact — a syntax error at `node`, three passes away
+                // from the site that wrote it.
+                try em.writeHostText(std.mem.trim(u8, body, " \t\r\n"));
+                try em.write("\n");
+            },
+            .module_decl => |*m| try emitJsDeclarations(em, m.items),
             else => {},
         }
     }
@@ -1689,25 +1704,45 @@ const Emitter = struct {
     /// marker to arrive through. Splicing the statement and stopping there DROPPED
     /// those silently, which is a wrong answer rather than an error.
     ///
-    /// So: drain only when the body consumed nothing. A body that resolved even one
-    /// marker is a dispatcher and is trusted with the rest — draining its leftovers
-    /// too would run arms it deliberately skipped (measured: a nested `~for` inside
-    /// a subflow impl, 115_009/115_011).
+    /// So: drain, but classify by ownership. A continuation a marker consumed
+    /// was emitted at its marker — skip it. Of the rest, what drains depends on
+    /// which kind of body spliced:
     ///
-    /// The drained arms run AFTER the spliced statement, in source order. A rendered
-    /// statement produces no tagged value, so they are unguarded and bind nothing.
+    /// - DISPATCHER (`consumed != 0` — a `~if`/`~for` template resolved at least
+    ///   one marker): a NAMED leftover belongs to the template's own dispatch
+    ///   vocabulary (`then`/`else`/`done`); not marking it meant not running it
+    ///   — it is a synthesized no-op or hole, and emitting it unconditionally
+    ///   either binds a result that does not exist or fires a `@panic` the
+    ///   template skipped (the per-index drain regressed a nested `~for` inside
+    ///   a subflow impl to a compile failure, 115_009/115_011). An UNNAMED
+    ///   leftover is not the template's arm at all — it is the caller's chain
+    ///   step written after the template (`|> if(c) | then |> … |> stripe |>
+    ///   draw` consumes only `then`; `stripe`/`draw` are the sequel). Those
+    ///   drain body-only — a template dispatch produces no tagged value for
+    ///   them to bind or dispatch on, the same reason emitPreambleContinuations
+    ///   uses this emitter for a dissolved transform's chain. An early return
+    ///   on `consumed != 0` dropped every such step, losing asteroids' draw
+    ///   section.
+    /// - RENDERED STATEMENT (`consumed == 0` — `print.ln` lowered to a bare
+    ///   `process.stdout.write(…)`): nothing was dispatchable; every arm hung
+    ///   off the call drains as before, through the result-less terminal path.
     fn emitUnconsumedContinuations(
         self: *Emitter,
         continuations: []const ast.Continuation,
         consumed: u64,
         indent: []const u8,
     ) JsEmitError!void {
-        if (consumed != 0) return;
-        for (continuations) |*cont| {
+        for (continuations, 0..) |*cont, ci| {
             // An EFFECT arm with no marker was never installed by the body; there
             // is nothing to fire it, so running it here would invent a firing.
             if (cont.kind != .terminal) continue;
-            try self.emitTerminalContinuation(cont, null, indent, false, false, null);
+            if (ci < 64 and (consumed & (@as(u64, 1) << @intCast(ci))) != 0) continue;
+            if (consumed != 0) {
+                if (cont.branch.len != 0) continue;
+                try self.emitInlineContinuationBody(cont, indent);
+            } else {
+                try self.emitTerminalContinuation(cont, null, indent, false, false, null);
+            }
         }
     }
 
@@ -2908,7 +2943,7 @@ const Emitter = struct {
         if (cont.binding) |binding| {
             if (!std.mem.eql(u8, binding, "_")) {
                 const rn = result_name orelse {
-                    log.err("[js_emitter] terminal continuation binds a result but no result binding was emitted\n", .{});
+                    log.err("[js_emitter] terminal continuation binds '{s}' (branch '{s}') but no result binding was emitted\n", .{ binding, cont.branch });
                     return JsEmitError.UnsupportedConstruct;
                 };
                 // A BARE-RETURN event (`-> T`) has no tag and no branch, so the

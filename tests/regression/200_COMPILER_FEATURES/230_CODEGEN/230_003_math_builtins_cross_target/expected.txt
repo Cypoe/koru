@@ -1,0 +1,4 @@
+sin 0.4794 cos 0.8776 tan 0.5463
+exp 2.7183 exp2 8.0000 log 2.3026 log2 3.0000 log10 3.0000
+floor 1.0000 ceil 2.0000 trunc -1.0000 sqrt 1.4142 abs 3.5000
+min 1.0000 max 2.5000

@@ -42,7 +42,8 @@ koru_std/env.kz	52
 koru_std/eval.kz	454
 koru_std/explain.kz	181
 koru_std/field.kz	759
-koru_std/fmt.kz	823
+koru_std/fmt.jsprec.kz	39
+koru_std/fmt.kz	816
 koru_std/foreign.kz	125
 koru_std/fs.kjs	76
 koru_std/fs.kz	113
@@ -61,7 +62,8 @@ koru_std/interpreter.run.kz	1678
 koru_std/interpreter.select.kz	45
 koru_std/invariants.kz	181
 koru_std/io_registry.kz	30
-koru_std/io.kz	2084
+koru_std/io.jsprec.kz	48
+koru_std/io.kz	2078
 koru_std/json.kz	268
 koru_std/kernel.body.kz	69
 koru_std/kernel.kz	2711

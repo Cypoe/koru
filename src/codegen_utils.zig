@@ -1584,7 +1584,20 @@ fn lowerBuiltin(
         try out.appendSlice(allocator, "))");
         return j;
     }
-    if (eql(u8, name, "min") or eql(u8, name, "max") or eql(u8, name, "abs") or eql(u8, name, "sqrt")) {
+    if (eql(u8, name, "exp2")) {
+        try out.appendSlice(allocator, "Math.pow(2, ");
+        try lowerJsInto(out, allocator, first, .koru_expr, diag);
+        try out.append(allocator, ')');
+        return j;
+    }
+    if (eql(u8, name, "min") or eql(u8, name, "max") or
+        eql(u8, name, "abs") or eql(u8, name, "sqrt") or
+        eql(u8, name, "sin") or eql(u8, name, "cos") or
+        eql(u8, name, "tan") or eql(u8, name, "exp") or
+        eql(u8, name, "log") or eql(u8, name, "log2") or
+        eql(u8, name, "log10") or eql(u8, name, "floor") or
+        eql(u8, name, "ceil") or eql(u8, name, "trunc"))
+    {
         try out.appendSlice(allocator, "Math.");
         try out.appendSlice(allocator, name);
         try out.append(allocator, '(');
