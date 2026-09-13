@@ -1,0 +1,6 @@
+name: widened
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a gate, walk, or vocabulary covered only the cases that produced it and silently dropped a case the rest of the pipeline already handles — e.g. the JS implementability walk refused grafted .inline_code leaves that emitPreamble could emit. Distinct from semantic-widening (a RULE relaxing): this is coverage catching up to a surface that already existed.
