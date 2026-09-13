@@ -74,6 +74,17 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
 
     var em = Emitter{ .allocator = allocator, .buf = &buf, .items = program.items, .main_module_name = program.main_module_name };
 
+    // A program emit is a SCRIPT, and a script may be evaluated more than
+    // once in the same global scope — a route mounts the tag, unmounts it,
+    // mounts it again. Top-level `const` in a classic script lands in the
+    // SHARED global lexical environment, so a second eval dies at parse with
+    // `Identifier 'x' has already been declared` before a byte of it runs.
+    // An IIFE gives every eval a fresh scope; a facet that must publish state
+    // does it through `window` explicitly, so nothing internal needs to be
+    // global. Libraries emit `export` — module syntax, and the loader dedupes
+    // imports — so the wrap is program-only.
+    if (!library) try em.write("(() => {\n");
+
     // Prelude: Koru's slice-length surface, `.len`.
     //
     // A declarative Koru body is host-agnostic and is emitted VERBATIM — so
@@ -234,6 +245,8 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     for (0..flow_num) |i| {
         try em.writeFmt("main_module.flow{d}();\n", .{i});
     }
+
+    if (!library) try em.write("})();\n");
 
     // The export surface. Without it the module is a closed object and a kept
     // symbol is still unreachable — dead-strip keeping an export and nobody
