@@ -54,6 +54,35 @@ comment, another pass parses it. Everything below is the second kind.
 `// \`<x>\` is not exported …` (visitor_emitter.zig:4559).
 These are debug/tracing output — legal under the ruling.
 
+## Lineage — who started it
+
+**`ac09f6d5c` (2026-03-29), "feat: add type system regression tests and
+kernel scope PDRs"** — the generics/type-mint work in `koru_std/types.kz`.
+A transform emitted `// __GENERIC__:Option<T>:{ some: T, none }` into
+`inline_code` and a later pass scanned `ic.code` for the prefix to
+recover "already transformed" declarations. Same motivation as every
+later use: ordering across dissolution.
+
+Propagation:
+
+- **Aug 23** — `9a6dca3f3` dissolved `__GENERIC__` (the type-mint
+  cutover) and *the same day* `54b465b0d`/`3389c4f4b`/`cba51de03`
+  introduced `// proto` for proto→list synthesis. The idiom was copied
+  into proto at the moment its original carrier was being removed.
+- **Sep 3** — `18ca2ce69` added `// proto-terminal` + the
+  `markerDeclares*` scanners; `7333249fe` added `// foreign` — including
+  the `src/type_registry.zig` reader, the only edge where compiler core
+  parses a stdlib comment.
+- **Sep 5–6** — `e0b3c735f`/`1505b3179`/`642966768` added
+  `// store-kinds`, `// store-member-types`, `// store-view`.
+- **Sep 14–15** — `// refine` (this session; copied proto's convention).
+
+All commits author "Lars Thomas Denstad" — the repo's agent sessions
+commit under that name and trailers were sporadic pre-September
+(`384fd31d3` carries a Claude co-author tag). So "who" is: the March
+type-mint session invented the pattern; every later use is imitation of
+a nearby file, mine included.
+
 ## Why it exists
 
 There is no shared comptime registry object transforms can write into —
