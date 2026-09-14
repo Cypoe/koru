@@ -6406,6 +6406,7 @@ fn rewriteEffectfulProcBody(
     conts: []const ast.Continuation,
     break_label: []const u8,
     mod_prefix: []const u8,
+    site_suffix: []const u8,
 ) !RewrittenProcBody {
     var out = try std.ArrayList(u8).initCapacity(allocator, body.len + 256);
     errdefer out.deinit(allocator);
@@ -6521,6 +6522,28 @@ fn rewriteEffectfulProcBody(
             if (std.mem.startsWith(u8, clean_body[i..], "$mod.")) {
                 try out.appendSlice(allocator, mod_prefix);
                 i += "$mod.".len;
+                continue;
+            }
+            // `__x` → `__x_<site>`: proc-body internals get a per-splice
+            // suffix. The body lands in the caller's frame, where locals
+            // from other inlined bodies (and emitter helpers like print's
+            // `__kw`/`__f`) collide by natural name — nested `packets`
+            // inside `ticks` hit "shadows local" on `__i` (koru-libs
+            // asteroids-net). `__` is the author's internal namespace:
+            // Koru bindings can't spell it and `.`-access is boundary-
+            // excluded, so a uniform token rename is safe. `__koru_*` is
+            // the emitter's own namespace (markers, scaffolding) — leave it.
+            if (std.mem.startsWith(u8, clean_body[i..], "__") and
+                i + 2 < clean_body.len and
+                (std.ascii.isAlphabetic(clean_body[i + 2]) or clean_body[i + 2] == '_') and
+                !std.mem.startsWith(u8, clean_body[i..], "__koru"))
+            {
+                var j = i + 2;
+                while (j < clean_body.len and
+                    (std.ascii.isAlphanumeric(clean_body[j]) or clean_body[j] == '_')) j += 1;
+                try out.appendSlice(allocator, clean_body[i..j]);
+                try out.appendSlice(allocator, site_suffix);
+                i = j;
                 continue;
             }
             // Effect calls → splice markers / evaluate-and-discard.
@@ -6891,6 +6914,10 @@ fn emitInlineEffectfulCall(
     ctx.proc_label_counter += 1;
     var label_buf: [64]u8 = undefined;
     const label = std.fmt.bufPrint(&label_buf, "__koru_proc_{d}", .{proc_uniq}) catch "__koru_proc";
+    // Per-splice suffix for the body's `__`-locals (hygiene — see the
+    // `__x` → `__x_<site>` rule in rewriteEffectfulProcBody).
+    var suffix_buf: [24]u8 = undefined;
+    const site_suffix = std.fmt.bufPrint(&suffix_buf, "_s{d}", .{proc_uniq}) catch "_s";
 
     // The `$mod.` rewrite target: the declaring module's emitted namespace,
     // resolved from the invocation path exactly as the call target would be.
@@ -6906,7 +6933,7 @@ fn emitInlineEffectfulCall(
         // (400_177/178 × 400_154 × 833).
         const presence_resolved = try rewriteInlineHasDeclPresence(ctx.allocator, p.body.text, conts);
         defer ctx.allocator.free(presence_resolved);
-        break :blk try rewriteEffectfulProcBody(ctx.allocator, presence_resolved, elig.event_decl, conts, label, mod_prefix);
+        break :blk try rewriteEffectfulProcBody(ctx.allocator, presence_resolved, elig.event_decl, conts, label, mod_prefix, site_suffix);
     } else try renderEffectfulFlowBody(ctx, elig.event_decl, elig.flow.?, conts, label, mod_prefix);
     defer ctx.allocator.free(rewritten.text);
 

@@ -1,0 +1,21 @@
+// 400_192: proc-body `__`-locals are splice-hygienic. Two effectful procs
+// (outer/inner, different modules) both declare `var __i`/`var __cap` —
+// identically named internals neither author can see across the boundary.
+// Nested, both bodies inline into the caller's ONE Zig frame; without the
+// per-site rename the inner `__i` shadows the outer's and the backend
+// refuses ("local variable '__i' shadows local variable from outer scope").
+// Surfaced by koru-libs asteroids-net: udp:packets' `__i` vs clock:ticks'
+// `__i`, and std/io's print-helper `__f` param vs raylib:frames' `__f`.
+// Pin shape: the run must complete — `0.100 0.101 1.100 1.101 done` proves
+// both bodies kept their own `__i` (the outer values stay 0/1, the inner's
+// are offset by `base`), not a shared or shadowed one.
+
+~import lib/outer
+~import lib/inner
+~import std/io
+
+~lib/outer:each-outer()
+! step t |> lib/inner:each-inner(base: 100)
+    ! step u |> std/io:print.ln("{{ t:d }}.{{ u:d }}")
+    | done |> _
+| done |> std/io:print.ln("done")

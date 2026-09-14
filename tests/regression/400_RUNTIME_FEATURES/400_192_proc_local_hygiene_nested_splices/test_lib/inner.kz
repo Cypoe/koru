@@ -1,0 +1,13 @@
+// The inner module: identical `__` local names, different payload offset.
+~pub tor each-inner { base: i64 }
+! step i64
+| done
+
+~proc each-inner|zig {
+    var __i: i64 = 0;
+    const __cap: i64 = 2;
+    while (__i < __cap) : (__i += 1) {
+        step(__i + base);
+    }
+    return .{ .done = .{} };
+}

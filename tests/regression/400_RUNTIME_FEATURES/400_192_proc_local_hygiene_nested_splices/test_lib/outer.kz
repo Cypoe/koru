@@ -1,0 +1,16 @@
+// 400_192 lib half: an effectful proc whose raw-|zig body declares `__`
+// locals — the same natural names inner.kz declares. Inlined nested, both
+// bodies share the caller's Zig frame; without per-site renaming `__i`
+// shadows `__i` and Zig refuses the emit.
+~pub tor each-outer {}
+! step i64
+| done
+
+~proc each-outer|zig {
+    var __i: i64 = 0;
+    const __cap: i64 = 2;
+    while (__i < __cap) : (__i += 1) {
+        step(__i);
+    }
+    return .{ .done = .{} };
+}
