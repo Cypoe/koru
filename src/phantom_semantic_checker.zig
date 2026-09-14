@@ -1019,6 +1019,7 @@ pub const PhantomSemanticChecker = struct {
         cleanup_obligations: std.StringHashMap(void), // track bindings with ! states that need cleanup
         disposed_bindings: std.StringHashMap([]const u8), // binding name -> the SITE that disposed it (event#arg=value), so re-validation of the same consuming site passes while a second consume from a DIFFERENT site is use-after-discharge
         outer_scope_obligations: std.StringHashMap(void), // track obligations from outside @scope boundary
+        join_live_obligations: std.StringHashMap(void), // obligations inherited by a named arm that a join continuation follows — live-through the arm, settle at the join (twin of auto_discharge_inserter's join_watermark)
         /// Declared-type-only bindings (registry rung 1): a phantom-less
         /// payload's base type, recorded so the nominal-distinctness check
         /// (validateArgument's no-phantom gate) can compare it against the
@@ -1037,6 +1038,7 @@ pub const PhantomSemanticChecker = struct {
                 .cleanup_obligations = std.StringHashMap(void).init(allocator),
                 .disposed_bindings = std.StringHashMap([]const u8).init(allocator),
                 .outer_scope_obligations = std.StringHashMap(void).init(allocator),
+                .join_live_obligations = std.StringHashMap(void).init(allocator),
                 .base_types = std.StringHashMap([]const u8).init(allocator),
                 .allocator = allocator,
             };
@@ -1080,6 +1082,13 @@ pub const PhantomSemanticChecker = struct {
                 self.allocator.free(key.*);
             }
             self.outer_scope_obligations.deinit();
+
+            // Free join-live obligation keys
+            var join_iter = self.join_live_obligations.keyIterator();
+            while (join_iter.next()) |key| {
+                self.allocator.free(key.*);
+            }
+            self.join_live_obligations.deinit();
         }
 
         /// Record a phantom-less binding's declared type. See base_types doc.
@@ -1212,6 +1221,14 @@ pub const PhantomSemanticChecker = struct {
                 try child.outer_scope_obligations.put(key_copy, {});
             }
 
+            // Inherit join-live markings — an obligation live-through an
+            // enclosing arm's join stays live-through deeper in that arm.
+            var join_iter = parent.join_live_obligations.keyIterator();
+            while (join_iter.next()) |key| {
+                const key_copy = try allocator.dupe(u8, key.*);
+                try child.join_live_obligations.put(key_copy, {});
+            }
+
             return child;
         }
 
@@ -1265,6 +1282,13 @@ pub const PhantomSemanticChecker = struct {
                     const key_copy = try allocator.dupe(u8, key.*);
                     try child.outer_scope_obligations.put(key_copy, {});
                 }
+            }
+
+            // Inherit join-live markings (as in `inherit`)
+            var join_iter = parent.join_live_obligations.keyIterator();
+            while (join_iter.next()) |key| {
+                const key_copy = try allocator.dupe(u8, key.*);
+                try child.join_live_obligations.put(key_copy, {});
             }
 
             return child;
@@ -1368,6 +1392,25 @@ pub const PhantomSemanticChecker = struct {
         /// Check if a specific obligation is from outer scope
         fn isOuterScope(self: *BindingContext, name: []const u8) bool {
             return self.outer_scope_obligations.contains(name);
+        }
+
+        /// Check if a specific obligation is live-through a downstream join
+        /// continuation (the arm's leaf is not an exit for it).
+        fn isJoinLive(self: *BindingContext, name: []const u8) bool {
+            return self.join_live_obligations.contains(name);
+        }
+
+        /// Mark every obligation inherited so far as live-through a join that
+        /// follows this named arm. Call right after the context is built —
+        /// obligations bound later (inside the arm) stay the arm's own.
+        fn markInheritedJoinLive(self: *BindingContext) !void {
+            var iter = self.cleanup_obligations.keyIterator();
+            while (iter.next()) |key| {
+                if (!self.join_live_obligations.contains(key.*)) {
+                    const key_copy = try self.allocator.dupe(u8, key.*);
+                    try self.join_live_obligations.put(key_copy, {});
+                }
+            }
         }
     };
 
@@ -1664,8 +1707,8 @@ pub const PhantomSemanticChecker = struct {
         // Pass both: current_module (where flow is defined, for name resolution)
         // and module_name (where event is defined, for phantom qualification).
         // Pass root_context so the flow-head bare-return bind propagates.
-        for (flow.body.continuations) |*cont_ptr| {
-            const cont_valid = try self.validateContinuation(cont_ptr, event_info.decl, module_name, current_module, event_map, flow.location, &root_context, implementing_event);
+        for (flow.body.continuations, 0..) |*cont_ptr, cont_idx| {
+            const cont_valid = try self.validateContinuation(cont_ptr, event_info.decl, module_name, current_module, event_map, flow.location, &root_context, implementing_event, cont_ptr.branch.len != 0 and joinFollows(flow.body.continuations, cont_idx));
             if (!cont_valid) {
                 has_errors = true;
                 // Continue checking for more errors
@@ -1862,6 +1905,9 @@ pub const PhantomSemanticChecker = struct {
         var has_errors = false;
         for (uncleaned) |resource| {
             if (context.isOuterScope(resource)) continue;
+            // Join-live obligations settle at the join continuation after the
+            // enclosing named arm — the arm's leaf is not an exit for them.
+            if (context.isJoinLive(resource)) continue;
             const binding_info = context.getInfo(resource) orelse continue;
             const phantom_state = binding_info.phantom_state;
 
@@ -1921,6 +1967,18 @@ pub const PhantomSemanticChecker = struct {
         return has_errors;
     }
 
+    /// Does an unnamed continuation follow index `i` in this sibling list?
+    /// Named siblings (`| then`, `| else`) are alternative arms; a later
+    /// UNNAMED sibling (`|> ...`) is the join continuation emitted once after
+    /// whichever arm ran. Twin of auto_discharge_inserter's joinFollows.
+    fn joinFollows(conts: []const ast.Continuation, i: usize) bool {
+        var j = i + 1;
+        while (j < conts.len) : (j += 1) {
+            if (conts[j].branch.len == 0) return true;
+        }
+        return false;
+    }
+
     fn validateContinuation(
         self: *PhantomSemanticChecker,
         cont: *const ast.Continuation,
@@ -1931,6 +1989,7 @@ pub const PhantomSemanticChecker = struct {
         caller_location: errors.SourceLocation,
         parent_context: ?*const BindingContext, // Optional parent context to inherit from
         implementing_event: ?*const ast.EventDecl, // Event this flow implements (for branch_constructor escape)
+        is_join_arm: bool, // This continuation is a named arm followed by a join — obligations inherited at entry are live-through
     ) anyerror!bool {
         var has_errors = false;
 
@@ -1967,6 +2026,10 @@ pub const PhantomSemanticChecker = struct {
             else
                 BindingContext.init(self.allocator);
             defer void_context.deinit();
+
+            // A named arm followed by a join continuation keeps its inherited
+            // obligations live past the arm's leaf — they settle at the join.
+            if (is_join_arm) try void_context.markInheritedJoinLive();
 
             // A NAMED LABEL with a binding on a bare-return callee
             // (`create(...) | made c |> ...`) is binding sugar for `: c` — the
@@ -2024,8 +2087,8 @@ pub const PhantomSemanticChecker = struct {
                         // obligation — the intermediate-step twin of the flow-head bind.
                         try self.recordBareReturnBind(inv, step_event_info.decl, step_module, step_qualified, &void_context);
                         // Validate nested continuations against the step's event
-                        for (cont.continuations) |*nested| {
-                            const nested_valid = try self.validateContinuation(nested, step_event_info.decl, step_module, flow_module, event_map, location, &void_context, implementing_event);
+                        for (cont.continuations, 0..) |*nested, nested_idx| {
+                            const nested_valid = try self.validateContinuation(nested, step_event_info.decl, step_module, flow_module, event_map, location, &void_context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
                             if (!nested_valid) {
                                 return false;
                             }
@@ -2070,8 +2133,8 @@ pub const PhantomSemanticChecker = struct {
             }
 
             // Validate nested continuations recursively (fallback: against void event)
-            for (cont.continuations) |*nested| {
-                const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, &void_context, implementing_event);
+            for (cont.continuations, 0..) |*nested, nested_idx| {
+                const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, &void_context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
                 if (!nested_valid) {
                     return false;
                 }
@@ -2084,8 +2147,8 @@ pub const PhantomSemanticChecker = struct {
         if (cont.is_catchall) {
             log.debug("[PHANTOM-FLOW]   (catch-all continuation - skipping branch validation)\n", .{});
             // Still validate nested continuations if present
-            for (cont.continuations) |*nested| {
-                const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, null, implementing_event);
+            for (cont.continuations, 0..) |*nested, nested_idx| {
+                const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, null, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
                 if (!nested_valid) {
                     return false;
                 }
@@ -2127,8 +2190,8 @@ pub const PhantomSemanticChecker = struct {
                             // of the flow-head bind).
                             try self.recordBareReturnBind(inv, step_event_info.decl, step_module, step_qualified, &void_chain_context);
                             // Validate nested continuations against the step's event
-                            for (cont.continuations) |*nested| {
-                                const nested_valid = try self.validateContinuation(nested, step_event_info.decl, step_module, flow_module, event_map, location, &void_chain_context, implementing_event);
+                            for (cont.continuations, 0..) |*nested, nested_idx| {
+                                const nested_valid = try self.validateContinuation(nested, step_event_info.decl, step_module, flow_module, event_map, location, &void_chain_context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
                                 if (!nested_valid) {
                                     return false;
                                 }
@@ -2142,8 +2205,8 @@ pub const PhantomSemanticChecker = struct {
                         // (not as a void chain) because they might be branch handlers for a previous invocation
                         // For example: |> work() |> print.ln("...") | done |> ...
                         // The | done |> is a branch of work(), not a void chain
-                        for (cont.continuations) |*nested| {
-                            const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, &void_chain_context, implementing_event);
+                        for (cont.continuations, 0..) |*nested, nested_idx| {
+                            const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, &void_chain_context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
                             if (!nested_valid) {
                                 return false;
                             }
@@ -2155,8 +2218,8 @@ pub const PhantomSemanticChecker = struct {
             }
 
             // Fallback: validate nested continuations (no step or unrecognized step)
-            for (cont.continuations) |*nested| {
-                const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, &void_chain_context, implementing_event);
+            for (cont.continuations, 0..) |*nested, nested_idx| {
+                const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, &void_chain_context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
                 if (!nested_valid) {
                     return false;
                 }
@@ -2264,6 +2327,11 @@ pub const PhantomSemanticChecker = struct {
         else
             BindingContext.init(self.allocator);
         defer context.deinit();
+
+        // A named arm followed by a join continuation keeps its inherited
+        // obligations live past the arm's leaf — they settle at the join.
+        // (Checker-side twin of the inserter's join_watermark.)
+        if (is_join_arm) try context.markInheritedJoinLive();
 
         // Add binding with phantom states from branch payload
         // If there's no explicit binding, synthesize "_" to track the obligation
@@ -2453,6 +2521,12 @@ pub const PhantomSemanticChecker = struct {
                     // skip them regardless of whether THIS continuation is the @scope
                     // boundary itself or a deeper nested cont inside the boundary.
                     if (context.isOuterScope(resource)) {
+                        continue;
+                    }
+                    // Join-live obligations settle at the join continuation
+                    // after the enclosing named arm — the arm's leaf is not
+                    // an exit for them.
+                    if (context.isJoinLive(resource)) {
                         continue;
                     }
                     // For hard terminals (_), all uncleaned resources are errors
@@ -2791,8 +2865,8 @@ pub const PhantomSemanticChecker = struct {
 
                 // Validate nested continuations against the invoked event (not parent event)
                 // Pass the current context down so disposed bindings propagate
-                for (cont.continuations) |*nested| {
-                    const nested_valid = try self.validateContinuation(nested, nested_event_info.decl, module_name, flow_module, event_map, location, &context, implementing_event);
+                for (cont.continuations, 0..) |*nested, nested_idx| {
+                    const nested_valid = try self.validateContinuation(nested, nested_event_info.decl, module_name, flow_module, event_map, location, &context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
                     if (!nested_valid) {
                         has_errors = true;
                         // Continue checking for more errors
@@ -2823,8 +2897,8 @@ pub const PhantomSemanticChecker = struct {
                 } else {
                     // No invocations in pipeline - nested continuations still belong to parent event
                     log.debug("[PHANTOM-FLOW]   No invocations in pipeline, nested continuations belong to parent event\n", .{});
-                    for (cont.continuations) |*nested| {
-                        const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, &context, implementing_event);
+                    for (cont.continuations, 0..) |*nested, nested_idx| {
+                        const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, &context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
                         if (!nested_valid) {
                             has_errors = true;
                             // Continue checking for more errors
@@ -2883,8 +2957,8 @@ pub const PhantomSemanticChecker = struct {
 
                         if (event_map.get(qualified_name)) |event_info| {
                             // Validate nested continuations against this event
-                            for (cont.continuations) |*nested| {
-                                const nested_valid = try self.validateContinuation(nested, event_info.decl, resolved_module, flow_module orelse "unknown", event_map, location, &context, implementing_event);
+                            for (cont.continuations, 0..) |*nested, nested_idx| {
+                                const nested_valid = try self.validateContinuation(nested, event_info.decl, resolved_module, flow_module orelse "unknown", event_map, location, &context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
                                 if (!nested_valid) {
                                     has_errors = true;
                                 }
@@ -3180,7 +3254,7 @@ pub const PhantomSemanticChecker = struct {
             };
 
             // Recursively validate nested continuations
-            for (cont.continuations) |*nested| {
+            for (cont.continuations, 0..) |*nested, nested_idx| {
                 // NOTE: We do NOT check outer-scope obligations at terminators inside @scope.
                 // Outer obligations are "suspended" - they'll be checked when the outer scope
                 // terminates. The auto_discharge_inserter handles disposal, respecting @scope.
@@ -3203,6 +3277,7 @@ pub const PhantomSemanticChecker = struct {
                         nested_location,
                         &branch_context,
                         null,
+                        nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx),
                     );
                     if (!valid) has_errors = true;
                     continue;

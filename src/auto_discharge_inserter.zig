@@ -382,6 +382,20 @@ pub const AutoDischargeInserter = struct {
         return false;
     }
 
+    /// Does an unnamed (`branch=''`) sibling follow `conts[i]`? For a NAMED arm
+    /// (`| then`, `| ok`) the first unnamed sibling after it is the JOIN of the
+    /// construct — `|> if | then |> A | else |> B |> drop(r)` parses `drop` as
+    /// an unnamed sibling of `then`/`else`, emitted once after the if-block, so
+    /// it runs after whichever arm executed. `isSequentialPrefix` asks the same
+    /// question for the unnamed case; this is the named-arm twin.
+    fn joinFollows(conts: []const ast.Continuation, i: usize) bool {
+        var j = i + 1;
+        while (j < conts.len) : (j += 1) {
+            if (conts[j].branch.len == 0) return true;
+        }
+        return false;
+    }
+
     fn isIdentChar(c: u8) bool {
         return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c == '-';
     }
@@ -559,6 +573,16 @@ pub const AutoDischargeInserter = struct {
         // sibling (processed with this flag clear). Cleared on entering a real
         // nested scope (effect/loop), where normal scope rules take over.
         in_sequential_prefix: bool,
+        // Obligations acquired before this watermark are live-through a JOIN
+        // continuation downstream: a named arm (`| then`, `| ok`) followed by
+        // an unnamed sibling (`|> drop(r)`) rejoins the chain there — the
+        // emitter renders the unnamed sibling once after the construct — so
+        // the arm's leaf is not a flow exit for them. `in_sequential_prefix`
+        // is the unnamed-step twin of this rule; the watermark is the
+        // named-arm one. Stamped from `acq_seq_counter` at arm entry, so an
+        // obligation created INSIDE the arm (acq_seq >= watermark) still
+        // settles at its leaf — the join cannot see arm-scoped bindings.
+        join_watermark: u32,
 
         const BindingInfo = struct {
             phantom_state: []const u8,
@@ -593,6 +617,7 @@ pub const AutoDischargeInserter = struct {
                 .is_repeating = false,
                 .loop_entry_scope = null,
                 .in_sequential_prefix = false,
+                .join_watermark = 0,
             };
         }
 
@@ -669,6 +694,7 @@ pub const AutoDischargeInserter = struct {
             new_ctx.is_repeating = self.is_repeating;
             new_ctx.loop_entry_scope = self.loop_entry_scope;
             new_ctx.in_sequential_prefix = self.in_sequential_prefix;
+            new_ctx.join_watermark = self.join_watermark;
 
             var bind_iter = self.bindings.iterator();
             while (bind_iter.next()) |entry| {
@@ -804,6 +830,26 @@ pub const AutoDischargeInserter = struct {
             }
         }.lessThan);
         return try list.toOwnedSlice(self.allocator);
+    }
+
+    /// Leaf view of `context` inside a named arm a join continuation follows
+    /// (see `join_watermark`): obligations acquired before the arm rejoin at
+    /// the join and are NOT exiting at this leaf. Returns a clone with them
+    /// stripped; the real context keeps them so the join still settles them.
+    /// Explicit-terminator paths must NOT use this — an escape never reaches
+    /// the join, so every live obligation must discharge there.
+    fn contextExcludingJoinLive(self: *AutoDischargeInserter, context: *const BindingContext) !BindingContext {
+        var filtered = try context.clone(self.allocator);
+        var suppress = try std.ArrayList([]const u8).initCapacity(self.allocator, 4);
+        defer suppress.deinit(self.allocator);
+        var iter = filtered.cleanup_obligations.iterator();
+        while (iter.next()) |entry| {
+            if (entry.value_ptr.acq_seq < context.join_watermark) {
+                try suppress.append(self.allocator, entry.key_ptr.*);
+            }
+        }
+        for (suppress.items) |key| filtered.clearObligation(key);
+        return filtered;
     }
 
     pub fn deinit(self: *AutoDischargeInserter) void {
@@ -2244,6 +2290,12 @@ pub const AutoDischargeInserter = struct {
 
             // Handle foreach nodes - recurse into branches with scope tracking
             if (node == .foreach) {
+                // A continuation after the foreach is its JOIN — it runs after
+                // the loop, so obligations bound before it are live-through
+                // the branch bodies' leaves (see join_watermark).
+                const saved_join_watermark = context.join_watermark;
+                defer context.join_watermark = saved_join_watermark;
+                if (cont.continuations.len > 0) context.join_watermark = self.acq_seq_counter;
                 const result = try self.checkForeachNode(node.foreach.branches, &context, program, flow, module_name, mode);
                 if (result.transformed) return result;
             }
@@ -2254,6 +2306,12 @@ pub const AutoDischargeInserter = struct {
             // which doesn't clone, unlike checkContinuation which does)
             if (node == .conditional) {
                 const cond = &node.conditional;
+                // Same join rule as foreach: `cont.continuations` runs after
+                // whichever arm executed — not an exit for pre-existing
+                // obligations.
+                const saved_join_watermark = context.join_watermark;
+                defer context.join_watermark = saved_join_watermark;
+                if (cont.continuations.len > 0) context.join_watermark = self.acq_seq_counter;
                 for (cond.branches) |*branch| {
                     for (branch.body) |*body_cont| {
                         const result = try self.checkForeachBranchContinuation(body_cont, &context, program, flow, module_name, mode);
@@ -2351,6 +2409,14 @@ pub const AutoDischargeInserter = struct {
             // the last are sequential prefixes whose tails are not flow exits.
             const seq_prefix = isSequentialPrefix(cont.continuations, nested_idx);
 
+            // A NAMED arm followed by an unnamed sibling rejoins the chain there —
+            // the unnamed sibling is the join (emitted once after the construct),
+            // so the arm's leaves are not exits for obligations bound before the
+            // arm. Stamp the watermark at arm entry: obligations created inside
+            // (acq_seq >= watermark) still settle at the arm's leaf, since the
+            // join cannot see arm-scoped bindings.
+            const join_after = nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx);
+
             if (cont.node) |node| {
                 if (node == .invocation) {
                     const inv_event_name = try self.pathToString(node.invocation.path);
@@ -2384,6 +2450,7 @@ pub const AutoDischargeInserter = struct {
                 var scoped_context = try context.clone(self.allocator);
                 defer scoped_context.deinit();
                 scoped_context.enterScope(true); // @scope or effect branch = repeating scope boundary
+                if (join_after) scoped_context.join_watermark = self.acq_seq_counter;
 
                 const result = try self.checkContinuation(nested, nested_event, nested_module, &scoped_context, program, flow, mode, nested_event_resolved);
                 if (result.transformed) return result;
@@ -2391,6 +2458,7 @@ pub const AutoDischargeInserter = struct {
                 var seq_context = try context.clone(self.allocator);
                 defer seq_context.deinit();
                 if (seq_prefix) seq_context.in_sequential_prefix = true;
+                if (join_after) seq_context.join_watermark = self.acq_seq_counter;
 
                 const result = try self.checkContinuation(nested, nested_event, nested_module, &seq_context, program, flow, mode, nested_event_resolved);
                 if (result.transformed) return result;
@@ -2456,11 +2524,27 @@ pub const AutoDischargeInserter = struct {
                 // in_sequential_prefix. This is the spot that previously injected a
                 // spurious free at the end of a `capture` body, before the
                 // `| captured` after-read used the binding.)
+                //
+                // JOIN LIVE-THROUGH: inside a named arm a join continuation
+                // follows (join_watermark stamped at arm entry), obligations
+                // acquired before the arm rejoin at the join — this leaf is not
+                // their exit. Settle only what actually dies here; the real
+                // context keeps the live-through set for the join to handle.
+                var filtered_ctx: ?BindingContext = null;
+                defer if (filtered_ctx) |*f| f.deinit();
+                var eff: *BindingContext = &context;
+                if (context.join_watermark != 0) {
+                    filtered_ctx = try self.contextExcludingJoinLive(&context);
+                    if (filtered_ctx) |*f| eff = f;
+                }
+                if (!eff.hasObligations()) {
+                    return .{ .transformed = false, .program = program };
+                }
                 // Count how many obligations are from current scope
                 var current_scope_count: u32 = 0;
-                var obl_iter = context.obligations();
+                var obl_iter = eff.obligations();
                 while (obl_iter.next()) |entry| {
-                    if (entry.value_ptr.scope_depth == context.scope_depth) {
+                    if (entry.value_ptr.scope_depth == eff.scope_depth) {
                         current_scope_count += 1;
                     }
                 }
@@ -2468,11 +2552,11 @@ pub const AutoDischargeInserter = struct {
                 if (mode == .full) {
                     if (current_scope_count > 0) {
                         // We have current-scope obligations at end of pipeline - need to dispose
-                        return try self.insertDisposals(cont, &context, program, flow, event_decl, module_name);
+                        return try self.insertDisposals(cont, eff, program, flow, event_decl, module_name);
                     }
                     // Outer-scope obligations in repeating context will flow to `done`
-                    if (!context.is_repeating) {
-                        return try self.insertDisposals(cont, &context, program, flow, event_decl, module_name);
+                    if (!eff.is_repeating) {
+                        return try self.insertDisposals(cont, eff, program, flow, event_decl, module_name);
                     }
                 }
             }
@@ -2758,7 +2842,18 @@ pub const AutoDischargeInserter = struct {
                     const event_decl = info.decl;
 
                     // Process nested continuations with the event's binding info
-                    for (cont.continuations) |*nested| {
+                    for (cont.continuations, 0..) |*nested, nested_idx| {
+                        // A named arm followed by an unnamed sibling rejoins at
+                        // that join — stamp the watermark BEFORE the arm's own
+                        // branch-payload bindings register so they stay
+                        // arm-local (acq_seq >= watermark) and still settle at
+                        // the arm's leaf.
+                        const saved_join_watermark = context.join_watermark;
+                        if (nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx)) {
+                            context.join_watermark = self.acq_seq_counter;
+                        }
+                        defer context.join_watermark = saved_join_watermark;
+
                         // Add binding from nested continuation if it matches event branch
                         if (nested.binding) |binding_name| {
                             for (event_decl.branches) |ev_branch| {
@@ -2796,7 +2891,13 @@ pub const AutoDischargeInserter = struct {
                 }
                 // If event not found, still recurse into continuations
                 else {
-                    for (cont.continuations) |*nested| {
+                    for (cont.continuations, 0..) |*nested, nested_idx| {
+                        const saved_join_watermark = context.join_watermark;
+                        if (nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx)) {
+                            context.join_watermark = self.acq_seq_counter;
+                        }
+                        defer context.join_watermark = saved_join_watermark;
+
                         const result = try self.checkForeachBranchContinuation(nested, context, program, flow, module_name, mode);
                         if (result.transformed) return result;
                     }
@@ -2807,6 +2908,9 @@ pub const AutoDischargeInserter = struct {
 
             // Handle nested foreach
             if (node == .foreach) {
+                const saved_join_watermark = context.join_watermark;
+                defer context.join_watermark = saved_join_watermark;
+                if (cont.continuations.len > 0) context.join_watermark = self.acq_seq_counter;
                 const result = try self.checkForeachNode(node.foreach.branches, context, program, flow, module_name, mode);
                 if (result.transformed) return result;
             }
@@ -2814,6 +2918,9 @@ pub const AutoDischargeInserter = struct {
             // Handle conditional
             if (node == .conditional) {
                 const cond = &node.conditional;
+                const saved_join_watermark = context.join_watermark;
+                defer context.join_watermark = saved_join_watermark;
+                if (cont.continuations.len > 0) context.join_watermark = self.acq_seq_counter;
                 for (cond.branches) |*branch| {
                     for (branch.body) |*body_cont| {
                         const result = try self.checkForeachBranchContinuation(body_cont, context, program, flow, module_name, mode);
@@ -2826,7 +2933,13 @@ pub const AutoDischargeInserter = struct {
         // Check nested continuations (skip if already handled by invocation processing above)
         const already_processed_continuations = if (cont.node) |n| n == .invocation else false;
         if (!already_processed_continuations) {
-            for (cont.continuations) |*nested| {
+            for (cont.continuations, 0..) |*nested, nested_idx| {
+                const saved_join_watermark = context.join_watermark;
+                if (nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx)) {
+                    context.join_watermark = self.acq_seq_counter;
+                }
+                defer context.join_watermark = saved_join_watermark;
+
                 const result = try self.checkForeachBranchContinuation(nested, context, program, flow, module_name, mode);
                 if (result.transformed) return result;
             }
@@ -2841,11 +2954,26 @@ pub const AutoDischargeInserter = struct {
                 false;
 
             if (!has_explicit_terminator and context.hasObligations()) {
+                // JOIN LIVE-THROUGH: inside a named arm a join continuation
+                // follows (join_watermark stamped at arm entry), obligations
+                // acquired before the arm rejoin at the join — this leaf is not
+                // their exit. Settle only what actually dies here; the real
+                // context keeps the live-through set for the join to handle.
+                var filtered_ctx: ?BindingContext = null;
+                defer if (filtered_ctx) |*f| f.deinit();
+                var eff: *BindingContext = context;
+                if (context.join_watermark != 0) {
+                    filtered_ctx = try self.contextExcludingJoinLive(context);
+                    if (filtered_ctx) |*f| eff = f;
+                }
+                if (!eff.hasObligations()) {
+                    return .{ .transformed = false, .program = program };
+                }
                 // Count how many obligations are from current scope
                 var current_scope_count: u32 = 0;
-                var obl_iter = context.obligations();
+                var obl_iter = eff.obligations();
                 while (obl_iter.next()) |entry| {
-                    if (entry.value_ptr.scope_depth == context.scope_depth) {
+                    if (entry.value_ptr.scope_depth == eff.scope_depth) {
                         current_scope_count += 1;
                     }
                 }
@@ -2853,11 +2981,11 @@ pub const AutoDischargeInserter = struct {
                 if (mode == .full) {
                     if (current_scope_count > 0) {
                         // We have current-scope obligations at end of pipeline - need to dispose
-                        return try self.insertDisposalsInForeach(cont, context, program, flow);
+                        return try self.insertDisposalsInForeach(cont, eff, program, flow);
                     }
                     // Outer-scope obligations in repeating context will flow to `done`
-                    if (!context.is_repeating) {
-                        return try self.insertDisposalsInForeach(cont, context, program, flow);
+                    if (!eff.is_repeating) {
+                        return try self.insertDisposalsInForeach(cont, eff, program, flow);
                     }
                 }
             }

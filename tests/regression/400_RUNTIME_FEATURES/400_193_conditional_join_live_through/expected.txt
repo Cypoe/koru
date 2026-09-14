@@ -1,0 +1,6 @@
+mid
+q 9
+drop 9
+v 7
+drop 7
+dropped

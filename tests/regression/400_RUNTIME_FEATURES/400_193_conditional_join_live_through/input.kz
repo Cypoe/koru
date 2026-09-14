@@ -1,0 +1,55 @@
+// 400_193: an obligation live past a conditional is discharged once — at the
+// join — not inside each named arm. `|> if`'s named arms (`then`/`else`) are
+// siblings of a later unnamed continuation (`|> readv(r) |> drop(r)`): that
+// unnamed sibling is the join, emitted once after the if-block, so `r` is
+// live-through both arms. An arm-local obligation (`q`, grabbed inside
+// `then`) still discharges at that arm's leaf — the join cannot see it.
+// Pin shape: `drop 9` fires inside the `then` arm (q's leaf), `drop 7` fires
+// once at the join (r) — and `readv(r)` at the join reads a live binding.
+// Surfaced by koru-libs asteroids-net watcher.k: `|> udp:close(s)` after an
+// `|> if` inside a `| done` arm emitted close inside both arms AND at the
+// join — a double-free on every path.
+
+~import std/io
+~import std/control
+const std = @import("std");
+
+const Res = struct { v: i32 };
+
+~tor grab { v: i64 } -> *Res<held!>
+~proc grab|zig {
+    const r = std.heap.page_allocator.create(Res) catch unreachable;
+    r.* = .{ .v = @intCast(v) };
+    return r;
+}
+
+~tor drop { r: *Res<!held> }
+~proc drop|zig {
+    std.debug.print("drop {d}\n", .{r.v});
+    std.heap.page_allocator.destroy(r);
+}
+
+~tor readv { r: *Res<held> } -> i64
+~proc readv|zig {
+    return r.v;
+}
+
+~tor doit {}
+| ok
+| fail
+~proc doit|zig {
+    return .{ .ok = .{} };
+}
+
+~grab(v: 7): r |> doit()
+| ok |> std/io:print.ln("mid")
+    |> if(true)
+        | then |> grab(v: 9): q
+            |> readv(r: q): qv
+            |> std/io:print.ln("q {{ qv:d }}")
+        | else |> std/io:print.ln("else")
+    |> readv(r): v
+    |> std/io:print.ln("v {{ v:d }}")
+    |> drop(r)
+    |> std/io:print.ln("dropped")
+| fail |> _
