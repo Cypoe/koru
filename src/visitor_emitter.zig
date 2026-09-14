@@ -1370,7 +1370,12 @@ pub const VisitorEmitter = struct {
                     }
                 }
 
-                try emitter.emitHostLine(self.code_emitter, line.content);
+                // `$mod.` strips to bare: host lines emit inside their own
+                // module's container, where module decls are in lexical
+                // scope — the same rule proc bodies get (400_189).
+                const host_body = try emitter.rewriteModToBare(self.allocator, line.content);
+                try emitter.emitHostLine(self.code_emitter, host_body);
+                self.allocator.free(host_body);
             },
             .host_type_decl => |*host_type| {
                 // HostTypeDecl doesn't have module info, and they're typically user-defined
@@ -4818,7 +4823,12 @@ pub const VisitorEmitter = struct {
                     }
                     // Emit ALL remaining host lines from the module without filtering
                     // If the module shouldn't be emitted, it wouldn't be in the tree at all
-                    try emitter.emitHostLine(self.code_emitter, line.content);
+                    // `$mod.` strips to bare, as at the main-module site
+                    // above — a host line lands inside its own module's
+                    // container either way (400_189).
+                    const host_body = try emitter.rewriteModToBare(self.allocator, line.content);
+                    try emitter.emitHostLine(self.code_emitter, host_body);
+                    self.allocator.free(host_body);
                 }
             }
         }

@@ -1,11 +1,11 @@
 ---
 type: belief
 id: frag-proc-body-module-scope-spelling
-provenance: surfaced building @korulang/raylib (koru-libs) 2026-07-17 — the frames `! frame` proc hit the inline-scope hole on day one, and the sqlite3/pcre2 root-path workarounds were found stale/fragile; fixed by the $mod. emitter contract (400_155)
-ts: 2026-07-17
+provenance: surfaced building @korulang/raylib (koru-libs) 2026-07-17 — the frames `! frame` proc hit the inline-scope hole on day one, and the sqlite3/pcre2 root-path workarounds were found stale/fragile; fixed by the $mod. emitter contract (400_155). Extended 2026-09-14 to plain host-line `fn`s (400_189, ruled by Lars 2026-08-07).
+ts: 2026-09-14
 ---
 
-# `$mod.` is the one spelling for a |zig proc body's own module scope — bare words collide, root-paths rot (belief)
+# `$mod.` is the one spelling for a host body's own module scope — bare words collide, root-paths rot (belief)
 
 Cut-1 effect inlining (Lars-ratified 2026-06-12) splices an effect tor's
 proc body into the CONSUMER's frame: one frame, no Handlers struct, no
@@ -34,6 +34,12 @@ free to change, and when it changed, nothing errored at the koru level.
   logic shared with call-target emission via emitInvocationModulePrefix),
   and the Handlers-fn path strips it to bare names (the body already sits
   in module scope lexically). Pin: 400_155 exercises both paths.
+- `$mod.` in a plain host-line `fn` strips to bare for the same reason:
+  the line lands inside its own module's emitted container, where module
+  decls are lexically visible. Both host-line emit sites apply
+  `rewriteModToBare`; pin 400_189. Before this, the token survived
+  verbatim and the build died `invalid token` on generated code — a
+  refusal that named nothing the author wrote.
 - The spelling MUST be sigiled. Bare words died empirically the same day
   they were tried: `self.` mangled real Zig method receivers
   (koru_std/deps.kz semver compare), `mod.` collides with capture locals
