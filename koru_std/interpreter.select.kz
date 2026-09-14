@@ -32,8 +32,8 @@ fn selectArm(continuations: []const ast.Continuation, branch: []const u8) ArmCho
             }
             continue;
         }
-        const plain_ok = branch.len == 0 and std.mem.eql(u8, c.branch, "ok");
-        if (plain_ok or std.mem.eql(u8, c.branch, branch)) {
+        const plain_ok = branch.len == 0 and namesEql(c.branch, "ok");
+        if (plain_ok or namesEql(c.branch, branch)) {
             matched_idx = ci;
             break;
         }

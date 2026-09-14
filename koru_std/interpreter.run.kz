@@ -1260,14 +1260,14 @@ fn executeFlow(
                 try dispatcher(&evaluated_inv, &dispatch_result);
             }
 
-            // Track obligations for handle pool using full specs (with field/arg names)
+            // Track obligations for the handle pool — prefer the spec API.
             if (ctx.handle_pool) |pool| {
-                // Check if this event creates obligations - prefer new spec API
                 if (ctx.creates_spec_fn) |spec_fn| {
                     const specs = spec_fn(event_name);
                     for (specs) |spec| {
-                        // Find the discharge event for this obligation (use obligation_name, not fq)
-                        // discharge_event_fn expects just the name since it's scope-local
+                        // A branch-scoped spec acquires only on the outcome that carried it.
+                        if (spec.branch) |sb| { if (!namesEql(sb, dispatch_result.branch)) continue; }
+                        // Find the discharge event — scope-local obligation name.
                         const discharge_event = if (ctx.discharge_event_fn) |discharge_fn|
                             discharge_fn(spec.obligation_name) orelse "unknown"
                         else

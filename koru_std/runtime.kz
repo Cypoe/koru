@@ -186,7 +186,7 @@ const ast_reg = @import("ast");
         obligation_module: []const u8,
         obligation_name: []const u8,
         field_name: []const u8,
-        resource_type: []const u8,
+        resource_type: []const u8, branch: ?[]const u8 = null, // branch carrying this create; null = bare return
     };
 
     const LocalDischargeSpec = struct {
@@ -676,7 +676,7 @@ const ast_reg = @import("ast");
                                     .obligation_module = obl_module,
                                     .obligation_name = name,
                                     .field_name = alloc.dupe(u8, field.name) catch field.name,
-                                    .resource_type = alloc.dupe(u8, res_type) catch res_type,
+                                    .resource_type = alloc.dupe(u8, res_type) catch res_type, .branch = alloc.dupe(u8, branch.name) catch branch.name,
                                 }) catch continue;
                             }
                         }
@@ -1109,7 +1109,7 @@ const ast_reg = @import("ast");
             code.appendSlice(allocator, spec.field_name) catch unreachable;
             code.appendSlice(allocator, "\", .resource_type = \"") catch unreachable;
             code.appendSlice(allocator, spec.resource_type) catch unreachable;
-            code.appendSlice(allocator, "\" }") catch unreachable;
+            code.appendSlice(allocator, if (spec.branch) |br| std.fmt.allocPrint(allocator, "\", .branch = \"{s}\" }}", .{br}) catch "\" }" else "\" }") catch unreachable;
         }
         code.appendSlice(allocator, "}") catch unreachable;
 
@@ -1387,7 +1387,7 @@ const ast_reg = @import("ast");
             code.appendSlice(allocator, create_spec.field) catch unreachable;
             code.appendSlice(allocator, "\", .resource_type = \"") catch unreachable;
             code.appendSlice(allocator, create_spec.resource_type) catch unreachable;
-            code.appendSlice(allocator, "\" }") catch unreachable;
+            code.appendSlice(allocator, if (create_spec.branch) |br| std.fmt.allocPrint(allocator, "\", .branch = \"{s}\" }}", .{br}) catch "\" }" else "\" }") catch unreachable;
         }
         code.appendSlice(allocator, "}") catch unreachable;
 
@@ -1598,7 +1598,7 @@ pub const ManifestCreate = struct {
     obligation: []const u8,
     module: []const u8,
     field: []const u8,
-    resource_type: []const u8,
+    resource_type: []const u8, branch: ?[]const u8 = null, // branch carrying the create; null = bare return
 };
 
 /// An obligation an event CONSUMES — discharged by a named input arg.
@@ -2131,7 +2131,7 @@ pub fn scopeManifestForScope(
         }) catch continue;
         var creates = std.ArrayList(ManifestCreate){ .items = &.{}, .capacity = 0 };
         for (obligations.creates_specs) |spec| creates.append(alloc, .{
-            .obligation = spec.obligation_name, .module = spec.obligation_module, .field = spec.field_name, .resource_type = spec.resource_type,
+            .obligation = spec.obligation_name, .module = spec.obligation_module, .field = spec.field_name, .resource_type = spec.resource_type, .branch = spec.branch,
         }) catch continue;
         var discharges = std.ArrayList(ManifestDischarge){ .items = &.{}, .capacity = 0 };
         for (obligations.discharges_specs) |spec| discharges.append(alloc, .{

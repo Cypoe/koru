@@ -1,0 +1,7 @@
+after open, holds 1
+posted
+after post-ok, holds 1
+bad
+after post-bad, holds 1
+close() ran — released 'res_1'
+[BRIDGE] Invoked 'close' for handle 'res_1' [main:open]

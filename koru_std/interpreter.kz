@@ -822,7 +822,6 @@ pub const InterpreterFlowCache = struct {
     }
 };
 
-// ============================================================================
 // DISPATCHER TYPE - Function signature for scope dispatchers
 // ============================================================================
 
@@ -838,6 +837,9 @@ pub const CreateSpec = struct {
     obligation_name: []const u8,    // e.g., "opened"
     field_name: []const u8,         // which output field holds the handle ID
     resource_type: []const u8,      // e.g., "Connection"
+    // Outcome branch carrying this create, in source spelling — null = bare
+    // return. A branched event books only the spec whose branch FIRED.
+    branch: ?[]const u8 = null,
 };
 
 // DischargeSpec describes an obligation discharged by an event's input arg
@@ -851,9 +853,7 @@ pub const DischargeSpec = struct {
 pub const CreatesSpecFn = *const fn([]const u8) []const CreateSpec;    // event -> []CreateSpec
 pub const DischargesSpecFn = *const fn([]const u8) []const DischargeSpec;  // event -> []DischargeSpec
 
-// ============================================================================
 // HOST-TILDE WALL - interpreter source is pure Koru
-// ============================================================================
 
 /// Location of a `` found in code position, or null if the source is clean.
 pub const HostTilde = struct {
@@ -1195,8 +1195,8 @@ fn exprFloatOp(l: f64, r: f64, op: ExprArithOp) ExprEvalError!ExprValue {
     } };
 }
 
-// ============================================================================
 ~part define
+~part names
 ~part parse
 ~part run
 ~part select
