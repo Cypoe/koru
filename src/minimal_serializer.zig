@@ -80,7 +80,7 @@ pub const MinimalSerializer = struct {
                 },
                 .proc_decl => |proc| {
                     // Generate handler function
-                    try self.buffer.appendSlice(self.allocator, "    pub fn handler(__koru_event_input: Input) Output {\n");
+                    try self.buffer.appendSlice(self.allocator, "    pub fn handler(__koru_event_input: @This().Input) @This().Output {\n");
                     try self.buffer.appendSlice(self.allocator, "        ");
                     try self.buffer.appendSlice(self.allocator, proc.body.text);
                     try self.buffer.append(self.allocator, '\n');

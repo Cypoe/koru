@@ -13013,7 +13013,7 @@ fn emitEventDeclForModuleFromType(
 
     // Handler function
     try code_emitter.writeIndent();
-    try code_emitter.write("pub fn handler(__koru_event_input: Input) Output {\n");
+    try code_emitter.write("pub fn handler(__koru_event_input: @This().Input) @This().Output {\n");
     code_emitter.indent_level += 1;
 
     if (event_type.input_shape) |shape| {
@@ -13539,9 +13539,9 @@ fn emitEventDeclForModule(
     const use_scalar_shim = !has_effect and isScalarValueFields(event.input.fields);
     try code_emitter.writeIndent();
     if (has_effect) {
-        try code_emitter.write("pub fn handler(__koru_event_input: Input, comptime __H: type) Output {\n");
+        try code_emitter.write("pub fn handler(__koru_event_input: @This().Input, comptime __H: type) @This().Output {\n");
     } else if (use_scalar_shim) {
-        try code_emitter.write("pub inline fn handler(__koru_event_input: Input) Output {\n");
+        try code_emitter.write("pub inline fn handler(__koru_event_input: @This().Input) @This().Output {\n");
         code_emitter.indent_level += 1;
         try code_emitter.writeIndent();
         try code_emitter.write("return __koru_handler_impl(");
@@ -13562,9 +13562,9 @@ fn emitEventDeclForModule(
             try code_emitter.write(try std.fmt.bufPrint(&pbuf, "__koru_p_{d}: ", .{i}));
             try code_emitter.write(field.type);
         }
-        try code_emitter.write(") Output {\n");
+        try code_emitter.write(") @This().Output {\n");
     } else {
-        try code_emitter.write("pub fn handler(__koru_event_input: Input) Output {\n");
+        try code_emitter.write("pub fn handler(__koru_event_input: @This().Input) @This().Output {\n");
     }
     code_emitter.indent_level += 1;
 
@@ -13594,7 +13594,7 @@ fn emitEventDeclForModule(
     // identically; SROA elides the local aggregate.
     if (use_scalar_shim) {
         try code_emitter.writeIndent();
-        try code_emitter.write("const __koru_event_input: Input = .{ ");
+        try code_emitter.write("const __koru_event_input: @This().Input = .{ ");
         for (event.input.fields, 0..) |field, i| {
             if (i > 0) try code_emitter.write(", ");
             try code_emitter.write(".");
@@ -13828,9 +13828,9 @@ fn emitEventDeclForModule(
         // from. Without `comptime __H: type` the arm is an undeclared identifier
         // in every variant body. (370_010)
         if (has_effect) {
-            try code_emitter.write("(__koru_event_input: Input, comptime __H: type) Output {\n");
+            try code_emitter.write("(__koru_event_input: @This().Input, comptime __H: type) @This().Output {\n");
         } else {
-            try code_emitter.write("(__koru_event_input: Input) Output {\n");
+            try code_emitter.write("(__koru_event_input: @This().Input) @This().Output {\n");
         }
         code_emitter.indent_level += 1;
 

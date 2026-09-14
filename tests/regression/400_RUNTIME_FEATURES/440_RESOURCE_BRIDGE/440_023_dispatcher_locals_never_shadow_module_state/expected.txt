@@ -1,0 +1,2 @@
+ping wrote name_len=2
+after ping, holds 0

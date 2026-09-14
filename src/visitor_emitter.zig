@@ -1952,7 +1952,7 @@ pub const VisitorEmitter = struct {
         try self.code_emitter.writeIndent();
         try self.code_emitter.write("pub fn ");
         try self.code_emitter.write(handler_name);
-        try self.code_emitter.write("(__koru_event_input: Input) Output {\n");
+        try self.code_emitter.write("(__koru_event_input: @This().Input) @This().Output {\n");
         self.code_emitter.indent_level += 1;
         const machine_params = [_][]const u8{ "invocation", "item", "program", "allocator" };
         for (machine_params) |param| {
@@ -2415,7 +2415,7 @@ pub const VisitorEmitter = struct {
                             }
                             // Emit the proc as _default_handler (before handler function)
                             try self.code_emitter.writeIndent();
-                            try self.code_emitter.write("fn _default_handler(__koru_event_input: Input) Output {\n");
+                            try self.code_emitter.write("fn _default_handler(__koru_event_input: @This().Input) @This().Output {\n");
                             self.code_emitter.indent_level += 1;
 
                             // Generate implicit input bindings
@@ -2496,7 +2496,7 @@ pub const VisitorEmitter = struct {
                                 if (path_matches) {
                                     // Emit the flow as _default_handler
                                     try self.code_emitter.writeIndent();
-                                    try self.code_emitter.write("fn _default_handler(__koru_event_input: Input) Output {\n");
+                                    try self.code_emitter.write("fn _default_handler(__koru_event_input: @This().Input) @This().Output {\n");
                                     self.code_emitter.indent_level += 1;
 
                                     // Generate implicit input bindings
@@ -2673,9 +2673,9 @@ pub const VisitorEmitter = struct {
         const use_scalar_shim = !has_effect and emitter.isScalarValueFields(event.input.fields);
         try self.code_emitter.writeIndent();
         if (has_effect) {
-            try self.code_emitter.write("pub fn handler(__koru_event_input: Input, comptime __H: type) Output {\n");
+            try self.code_emitter.write("pub fn handler(__koru_event_input: @This().Input, comptime __H: type) @This().Output {\n");
         } else if (use_scalar_shim) {
-            try self.code_emitter.write("pub inline fn handler(__koru_event_input: Input) Output {\n");
+            try self.code_emitter.write("pub inline fn handler(__koru_event_input: @This().Input) @This().Output {\n");
             self.code_emitter.indent_level += 1;
             try self.code_emitter.writeIndent();
             try self.code_emitter.write("return __koru_handler_impl(");
@@ -2696,9 +2696,9 @@ pub const VisitorEmitter = struct {
                 try self.code_emitter.write(try std.fmt.bufPrint(&pbuf, "__koru_p_{d}: ", .{i}));
                 try self.code_emitter.write(field.type);
             }
-            try self.code_emitter.write(") Output {\n");
+            try self.code_emitter.write(") @This().Output {\n");
         } else {
-            try self.code_emitter.write("pub fn handler(__koru_event_input: Input) Output {\n");
+            try self.code_emitter.write("pub fn handler(__koru_event_input: @This().Input) @This().Output {\n");
         }
         self.code_emitter.indent_level += 1;
 
@@ -2706,7 +2706,7 @@ pub const VisitorEmitter = struct {
         // below reads identically (SROA elides the local aggregate).
         if (use_scalar_shim) {
             try self.code_emitter.writeIndent();
-            try self.code_emitter.write("const __koru_event_input: Input = .{ ");
+            try self.code_emitter.write("const __koru_event_input: @This().Input = .{ ");
             for (event.input.fields, 0..) |field, i| {
                 if (i > 0) try self.code_emitter.write(", ");
                 try self.code_emitter.write(".");
@@ -4274,9 +4274,9 @@ pub const VisitorEmitter = struct {
                         try self.code_emitter.write("pub fn ");
                         try emitter.writeHandlerName(self.code_emitter, self.allocator, target);
                         if (has_effect) {
-                            try self.code_emitter.write("(__koru_event_input: Input, comptime __H: type) Output {");
+                            try self.code_emitter.write("(__koru_event_input: @This().Input, comptime __H: type) @This().Output {");
                         } else {
-                            try self.code_emitter.write("(__koru_event_input: Input) Output {");
+                            try self.code_emitter.write("(__koru_event_input: @This().Input) @This().Output {");
                         }
                         try emitter.writeVariantComment(self.code_emitter, target);
                         try self.code_emitter.write("\n");
@@ -4408,7 +4408,7 @@ pub const VisitorEmitter = struct {
                             try self.code_emitter.writeIndent();
                             try self.code_emitter.write("pub fn ");
                             try emitter.writeHandlerName(self.code_emitter, self.allocator, variant);
-                            try self.code_emitter.write("(__koru_event_input: Input) Output {\n");
+                            try self.code_emitter.write("(__koru_event_input: @This().Input) @This().Output {\n");
                             self.code_emitter.indent_level += 1;
 
                             if (flow.location.line > 0) {

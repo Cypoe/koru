@@ -1,0 +1,85 @@
+// A vocabulary module whose decls are named after every identifier the
+// register codegen once emitted bare: dispatcher locals, helper params,
+// and the private aliases getArg/buildInput/dispatcher_std/... Each one
+// used to shadow-collide with the generated code spliced into this module.
+
+~import std/runtime
+
+const std = @import("std");
+
+// Generated dispatcher + lookup-fn locals, params, and captures.
+var name_buf: usize = 0;
+var name_len: usize = 0;
+var event_name: usize = 0;
+var input: usize = 0;
+var raw: usize = 0;
+var r: usize = 0;
+var v: usize = 0;
+var n: usize = 0;
+var i: usize = 0;
+var p: usize = 0;
+var count: usize = 0;
+var field: usize = 0;
+var branch: usize = 0;
+var field_count: usize = 0;
+var payload_fields: usize = 0;
+var ptr_info: usize = 0;
+var arr: usize = 0;
+var ev: usize = 0;
+var dis: usize = 0;
+var cre: usize = 0;
+var discharges_it: usize = 0;
+var reissues: usize = 0;
+var obligation: usize = 0;
+var args: usize = 0;
+var arg: usize = 0;
+var inv: usize = 0;
+var out: usize = 0;
+var mq: usize = 0;
+var seg: usize = 0;
+
+// Generated type-ish consts inside the dispatch fns and the event's own
+// container — references to these were emitted unqualified and resolved
+// ambiguously against the module's own decls.
+const Input = usize;
+const Output = usize;
+const Handler = usize;
+const ReturnType = usize;
+const V = usize;
+const S = usize;
+const SR = usize;
+const P = usize;
+const T = usize;
+const F = usize;
+
+// Private module-level decls the generator emits when emit_helpers fires.
+const dispatcher_std = @import("std");
+const dispatcher_ast = usize;
+const ScopeEvent = usize;
+const ScopeDescriptor = usize;
+const ScopeManifest = usize;
+const ManifestEvent = usize;
+const ManifestArg = usize;
+const ManifestCreate = usize;
+const ManifestDischarge = usize;
+const ManifestBranch = usize;
+const ManifestBranchField = usize;
+const FieldValue = usize;
+const NamedField = usize;
+fn getArg(a: usize) usize {
+    return a;
+}
+fn buildInput(a: usize) usize {
+    return a;
+}
+
+~pub tor ping { text: string }
+
+~proc ping|zig {
+    $mod.name_len = text.len;
+    std.debug.print("ping wrote name_len={d}\n", .{text.len});
+}
+
+~std/runtime:register(scope: "collide") {
+    ping(1)
+}
