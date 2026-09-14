@@ -1,1 +1,1 @@
-refine Server: port: int & >1024 & <=65535, retries: int & >=0 & <10, host: string
+refine input:Server: port: i64 & >1024 & <=65535, retries: i64 & >=0 & <10, host: string
