@@ -206,7 +206,7 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     }
 
     // Phase 1b: emit event decls living in IMPORTED MODULES (e.g. `std.io`, a
-    // `$app/contract` companion). Gated on transitive JS-implementability, with
+    // `app/contract` companion). Gated on transitive JS-implementability, with
     // a self-naming refusal for anything reached but unlowerable.
     for (program.items) |*item| {
         if (item.* != .module_decl) continue;

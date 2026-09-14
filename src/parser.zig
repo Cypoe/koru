@@ -11413,8 +11413,8 @@ pub const Parser = struct {
             return;
         };
 
-        // NOTE: Auto-import of parent modules (e.g., importing $std/io.kz when importing $std/io/file)
-        // is handled in main.zig's queueParentImports() during import resolution phase.
+        // NOTE: Auto-import of parent modules (e.g., importing std/io.kz when importing
+        // std/io/file) is handled by queueParentImports() in import_pipeline.zig.
 
         // Use ModuleResolver to resolve the import path
         var result = resolver.resolveBoth(import_path, self.reporter.file_name) catch |err| {

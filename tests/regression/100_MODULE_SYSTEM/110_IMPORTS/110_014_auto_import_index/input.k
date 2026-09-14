@@ -1,6 +1,6 @@
-// Test: Auto-import index.kz when importing any $alias/* module
+// Test: Auto-import index.kz when importing any alias/* module
 //
-// When we import $testlib/sub, we should automatically also get $testlib/index.kz
+// When we import testlib/sub, we should automatically also get testlib/index.kz
 // This allows stdlib root utilities to be available without explicit import.
 //
 // Structure:

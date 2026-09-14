@@ -10,7 +10,7 @@
 //     audio.kz     -> test_lib.audio: (pub events)
 //
 // Expected behavior: SUCCESS
-//   import "test_lib"
+//   import test_lib
 //   app/test_lib/graphics:init()
 //   app/test_lib/audio:play(sound: "beep")
 //

@@ -1,6 +1,6 @@
 // Test: Auto-import parent module
 //
-// When importing "$testlib/mymod/sub", the parent "mymod.kz" should
+// When importing "testlib/mymod/sub", the parent "mymod.kz" should
 // be automatically imported alongside it.
 //
 // Structure:

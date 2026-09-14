@@ -8,7 +8,7 @@
 //   commit()   -> *Connection<active!>        (consumes <!active>)
 //   close()    -> void                        (consumes <!active>)
 //
-// Mirrors $app/db usage in 2104_03_valid_commit, but with declarations
+// Mirrors app/db usage in 2104_03_valid_commit, but with declarations
 // co-located rather than imported — exercises the inline-decl path
 // through the phantom checker's recursive validateContinuation.
 

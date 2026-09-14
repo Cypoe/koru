@@ -135,7 +135,7 @@ pub fn probePartFiles(
 /// 5. Absolute paths
 ///
 /// Import semantics:
-/// - If both foo.kz and foo/ exist, ~import "foo" imports BOTH
+/// - If both foo.kz and foo/ exist, ~import foo imports BOTH
 /// - foo.kz becomes the main module
 /// - foo/*.kz files become submodules
 pub const ResolveResult = struct {
@@ -530,9 +530,6 @@ pub const ModuleResolver = struct {
             .dir_path = null,
         };
 
-        // Handle $alias path prefixes
-        const resolved_import_path = import_path;
-
         const alias = self.longestAliasMatch(import_path) orelse blk: {
             const slash_pos = std.mem.indexOf(u8, import_path, "/");
             break :blk import_path[0 .. slash_pos orelse import_path.len];
@@ -648,8 +645,8 @@ pub const ModuleResolver = struct {
         }.check;
 
         // 1. Absolute path
-        if (std.fs.path.isAbsolute(resolved_import_path)) {
-            if (try checkBoth(self.allocator, "", resolved_import_path, &result)) {
+        if (std.fs.path.isAbsolute(import_path)) {
+            if (try checkBoth(self.allocator, "", import_path, &result)) {
                 return result;
             }
         }
@@ -658,7 +655,7 @@ pub const ModuleResolver = struct {
         log.debug("  [2] Trying relative to importing file...\n", .{});
         if (base_file) |base| {
             const base_dir = std.fs.path.dirname(base) orelse ".";
-            if (try checkBoth(self.allocator, base_dir, resolved_import_path, &result)) {
+            if (try checkBoth(self.allocator, base_dir, import_path, &result)) {
                 return result;
             }
         }
@@ -666,7 +663,7 @@ pub const ModuleResolver = struct {
         // 3. KORU_PATH search paths
         log.debug("  [3] Trying KORU_PATH search paths...\n", .{});
         for (self.search_paths.items) |search_path| {
-            if (try checkBoth(self.allocator, search_path, resolved_import_path, &result)) {
+            if (try checkBoth(self.allocator, search_path, import_path, &result)) {
                 return result;
             }
         }
@@ -674,7 +671,7 @@ pub const ModuleResolver = struct {
         // 4. Standard library
         log.debug("  [4] Trying standard library...\n", .{});
         if (self.stdlib_path) |stdlib| {
-            if (try checkBoth(self.allocator, stdlib, resolved_import_path, &result)) {
+            if (try checkBoth(self.allocator, stdlib, import_path, &result)) {
                 return result;
             }
         }
@@ -699,9 +696,6 @@ pub const ModuleResolver = struct {
         } else {
             log.debug("  Base file: (none)\n", .{});
         }
-
-        // Handle $alias path prefixes
-        const resolved_import_path = import_path;
 
         // LONGEST MATCH over full module paths, on segment boundaries.
         //
@@ -789,15 +783,15 @@ pub const ModuleResolver = struct {
         }
 
         // 1. If it's an absolute path, use it directly
-        if (std.fs.path.isAbsolute(resolved_import_path)) {
+        if (std.fs.path.isAbsolute(import_path)) {
             // Check if it's a directory first
-            if (isDirectory(resolved_import_path)) {
-                return try self.allocator.dupe(u8, resolved_import_path);
+            if (isDirectory(import_path)) {
+                return try self.allocator.dupe(u8, import_path);
             }
             // Probe for an existing Koru file (any extension). Phase 2 adds
             // one stat() per absolute-path import that previously had none —
             // the old code blindly appended .kz without checking.
-            if (try resolveKoruFile(self.allocator, resolved_import_path)) |resolved| {
+            if (try resolveKoruFile(self.allocator, import_path)) |resolved| {
                 return resolved;
             }
             return error.ModuleNotFound;
@@ -811,7 +805,7 @@ pub const ModuleResolver = struct {
             // Try as directory first
             const dir_candidate = try std.fs.path.join(
                 self.allocator,
-                &[_][]const u8{ base_dir, resolved_import_path }
+                &[_][]const u8{ base_dir, import_path }
             );
             defer self.allocator.free(dir_candidate);
 
@@ -829,7 +823,7 @@ pub const ModuleResolver = struct {
 
             // Try as file (probe all Koru extensions if import doesn't carry one)
             log.debug("    Checking file in: {s}\n", .{base_dir});
-            if (try resolveKoruFileIn(self.allocator, base_dir, resolved_import_path)) |resolved| {
+            if (try resolveKoruFileIn(self.allocator, base_dir, import_path)) |resolved| {
                 log.debug("    ✓ FOUND file: {s}\n", .{resolved});
                 return resolved;
             } else {
@@ -847,7 +841,7 @@ pub const ModuleResolver = struct {
             // Try directory
             const dir_candidate = try std.fs.path.join(
                 self.allocator,
-                &[_][]const u8{ search_path, resolved_import_path }
+                &[_][]const u8{ search_path, import_path }
             );
             defer self.allocator.free(dir_candidate);
 
@@ -865,7 +859,7 @@ pub const ModuleResolver = struct {
 
             // Try file (probe all Koru extensions if import doesn't carry one)
             log.debug("      Checking file in: {s}\n", .{search_path});
-            if (try resolveKoruFileIn(self.allocator, search_path, resolved_import_path)) |resolved| {
+            if (try resolveKoruFileIn(self.allocator, search_path, import_path)) |resolved| {
                 log.debug("      ✓ FOUND file: {s}\n", .{resolved});
                 return resolved;
             } else {
@@ -881,7 +875,7 @@ pub const ModuleResolver = struct {
             // Try directory
             const dir_candidate = try std.fs.path.join(
                 self.allocator,
-                &[_][]const u8{ stdlib, resolved_import_path }
+                &[_][]const u8{ stdlib, import_path }
             );
             defer self.allocator.free(dir_candidate);
 
@@ -899,7 +893,7 @@ pub const ModuleResolver = struct {
 
             // Try file (probe all Koru extensions if import doesn't carry one)
             log.debug("    Checking file in stdlib: {s}\n", .{stdlib});
-            if (try resolveKoruFileIn(self.allocator, stdlib, resolved_import_path)) |resolved| {
+            if (try resolveKoruFileIn(self.allocator, stdlib, import_path)) |resolved| {
                 log.debug("    ✓ FOUND file: {s}\n", .{resolved});
                 return resolved;
             } else {

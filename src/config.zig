@@ -200,7 +200,7 @@ pub const Config = struct {
             }
         }.make;
 
-        // Default: $std points to koru_std relative to koruc installation
+        // Default: std points to koru_std relative to koruc installation
         // {{ KORU_HOME }} is interpolated by ModuleResolver at resolution time
         try paths.put(try allocator.dupe(u8, "std"), try makePath(allocator, "{{ KORU_HOME }}/koru_std"));
         try paths.put(try allocator.dupe(u8, "lib"), try makePath(allocator, "./lib"));

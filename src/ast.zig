@@ -1167,8 +1167,8 @@ pub const ImmediateImpl = struct {
 };
 
 pub const ImportDecl = struct {
-    path: []const u8, // The path to import (e.g., "koru_std/io" or "lib/events")
-    local_name: ?[]const u8, // Optional local name/alias (e.g., "calc" in ~import calc = "math")
+    path: []const u8, // The path to import (e.g., "std/io" or "lib/events")
+    local_name: ?[]const u8, // Dotted namespace derived from the path ("std/io" -> "std.io"); synthetic imports (auto-parent, auto-index) set it directly
 
     // FOUNDATIONAL: Every item knows where it came from
     location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },

@@ -53,14 +53,10 @@ const ImportedModule = struct {
     }
 };
 
-/// Derives canonical module name from import path
-/// - $alias/path imports: "alias.path" (preserve alias + path as dotted name)
-/// - Regular path imports: Last component only (directory name as package)
-///
-/// Examples:
-/// - "$std/io" → "std.io" (alias import: keep both parts)
-/// - "lib/io" → "io" (directory import: last component only)
-/// - "helper" → "helper" (single file)
+/// Derives the canonical module name from an import path: strips any Koru
+/// extension, then maps '/' to '.' ("std/io" -> "std.io", "helper" -> "helper").
+/// Fallback for ImportDecls carrying no local_name — the parser derives the
+/// namespace for every user-written import.
 fn deriveCanonicalName(allocator: std.mem.Allocator, import_path: []const u8) ![]const u8 {
     // Remove Koru extension if present
     const without_ext = if (file_types.koruExtensionOf(import_path)) |ext|
@@ -78,8 +74,8 @@ fn deriveCanonicalName(allocator: std.mem.Allocator, import_path: []const u8) ![
     return result;
 }
 
-/// Probe each Koru extension on `stem` (an alias-prefixed module path stem
-/// like "$std/io" or "$std/index"). Returns the first stem+extension that
+/// Probe each Koru extension on `stem` (a module path stem
+/// like "std/io" or "std/index"). Returns the first stem+extension that
 /// resolves to an existing file through the resolver, or null. Caller owns
 /// the returned path string.
 fn probeImportExtensions(
@@ -104,8 +100,8 @@ fn probeImportExtensions(
     return null;
 }
 
-/// Queue parent imports for aliased paths.
-/// For "$std/io/file" this queues "$std/io" as an additional import.
+/// Queue parent imports for multi-segment paths.
+/// For "std/io/file" this queues "std/io" as an additional import.
 /// This enables parent module utilities to be available when importing submodules.
 /// Only queues the parent if the parent file actually exists.
 fn queueParentImports(
@@ -175,8 +171,8 @@ fn queueParentImports(
     });
 }
 
-/// Queue index.kz import for aliased paths.
-/// For ANY "$alias/*" import, this queues "$alias/index.kz" as an additional import.
+/// Queue index import for aliased paths.
+/// For ANY "alias/*" import, this queues "alias/index.*" as an additional import.
 /// This enables root-level utilities (like keywords) to be available when importing any submodule.
 /// Only queues the index if index.kz actually exists AND is not the entry file itself.
 fn queueIndexImport(
@@ -213,7 +209,7 @@ fn queueIndexImport(
 
     // CRITICAL: Don't queue if the resolved file is the entry file itself!
     // This prevents the main file from being imported as a module when it
-    // imports something from its own namespace (e.g., $orisha/router from src/index.kz)
+    // imports something from its own namespace (e.g., orisha/router from src/index.kz)
     if (resolved.file_path) |fp| {
         if (std.mem.eql(u8, fp, entry_file)) {
             log.debug("AUTO-IMPORT: Skipping index '{s}' (same as entry file)\n", .{fp});

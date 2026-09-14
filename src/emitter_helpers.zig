@@ -732,7 +732,7 @@ fn resolveModuleAlias(alias: []const u8, items: []const ast.Item) ?[]const u8 {
                 const import_alias = if (import.local_name) |name|
                     name
                 else blk: {
-                    // Infer alias from path (e.g., "$std/build" -> "build")
+                    // Infer alias from path (e.g., "std/build" -> "build")
                     if (std.mem.lastIndexOfScalar(u8, import.path, '/')) |last_slash| {
                         break :blk import.path[last_slash + 1 ..];
                     } else {
@@ -754,7 +754,7 @@ fn resolveModuleAlias(alias: []const u8, items: []const ast.Item) ?[]const u8 {
 
 /// Write a module path with koru_ prefix for sibling module references
 /// Converts "std.io" -> "koru_std.io" (only first segment gets prefix)
-/// Also handles "$std/build" format by converting / to .
+/// Also handles "std/build" format by converting / to .
 /// Entry module (tracked via main_module_name) becomes "main_module"
 pub fn writeModulePath(emitter: *CodeEmitter, module_path: []const u8, main_module_name: ?[]const u8) !void {
     // Special case: entry module qualifier becomes "main_module"
@@ -772,7 +772,7 @@ pub fn writeModulePath(emitter: *CodeEmitter, module_path: []const u8, main_modu
         return;
     }
 
-    // Handle paths with / separator (from imports like "$std/build")
+    // Handle paths with / separator (from imports like "std/build")
     if (std.mem.indexOfScalar(u8, module_path, '/')) |_| {
         // Convert std/build -> std.build, then process
         var first = true;

@@ -1,8 +1,8 @@
 ---
 type: belief
 id: frag-a-header-citing-a-pin-is-a-measurement-at-write-time
-provenance: created 2026-08-23 for package/test header comments citing red pins as live walls; widened 2026-08-31 to any cross-session claim, after a read-only architecture review (2026-08-30) measured a tree the purge commit (becc6a7f, 2026-08-31) moved within hours
-ts: 2026-08-31
+provenance: created 2026-08-23 for package/test header comments citing red pins as live walls; widened 2026-08-31 to any cross-session claim, after a read-only architecture review (2026-08-30) measured a tree the purge commit (becc6a7f, 2026-08-31) moved within hours; widened 2026-09-14 to grammar-narrating comments, after an agent generated two dead import spellings from them mid-session
+ts: 2026-09-14
 ---
 
 # A claim about this repo — header, review, report — records a measurement at write time; the tree moves
@@ -27,6 +27,19 @@ top-level build cannot see them.
 The suite is the only authority. A file header that cites a pin is a comment,
 not the suite; `SUCCESS` on the cited test does not refresh the comment. A
 review is the same comment, longer.
+
+Measured 2026-09-14: **grammar narration in code comments is the same class,
+and its cost is generation, not just reading.** The import surface had three
+layers of dead spelling living in comments alone — a rejected prefix, a
+never-parsed alias form, quoted paths — plus a vestigial variable name that
+asserted a resolution step which no longer happens. An agent asked about import
+syntax produced both dead spellings mid-session, citing them as live, because
+the comments were the only artifact consulted. A comment describing *syntax* is
+worse than one describing *state*: a stale state claim misleads a reader, a
+stale grammar claim is compilable-looking input the next agent emits verbatim.
+The detector generalizes: any comment that names a user-facing spelling is a
+claim the parser either enforces or doesn't — grep the spelling against the
+suite, never the comment.
 
 ## The rule installed
 

@@ -62,7 +62,7 @@ Tests for "almost correct" Koru code - ensuring helpful error messages.
 |----|-------------|---------|--------|
 | 510_050 | Empty path: `~import ""` | FRONTEND | DONE |
 | 510_051 | No quotes: `~import foo` | FRONTEND | DONE |
-| 510_052 | Nonexistent: `~import "$src/x"` | STACK TRACE | TODO |
+| 510_052 | Nonexistent: `~import src/x` | STACK TRACE | TODO |
 
 ---
 
