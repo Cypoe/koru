@@ -20,9 +20,11 @@ documentation, not a hole.
 Mechanics, all library-level over existing machinery:
 
 - `std/refine(Name)` resolves `Name` against the refining scope's home;
-  `std/refine("home/path:Name")` addresses a declaration in another home.
-  Bare names are never a program-wide search — same rule proto uses for
-  field references.
+  `std/refine(home/path:Name)` addresses a declaration in another home —
+  the qualified spelling rides the named-arg channel (`name=home/path`,
+  `value=Name`, `had_explicit_label`), proto's own `app/alpha:Health`
+  convention with no strings. Bare names are never a program-wide
+  search — same rule proto uses for field references.
 - The anchor is found in a live `std/proto` invocation OR its erased
   `// proto Name: …` marker, so dissolution order doesn't matter.
 - Every refined field must exist on the anchor and its base must agree —

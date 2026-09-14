@@ -20,7 +20,9 @@
 // LAYERING — the point of a separate module: a bound can arrive apart from
 //   the declaration. A library declares `std/proto(Server)` plainly; a
 //   downstream module imports it and writes
-//     std/refine("lib/home:Server") { port: int & >1024 }
+//     std/refine(lib/home:Server) { port: int & >1024 }
+//   — the `home:Name` spelling rides the named-arg channel (proto's own
+//   `app/alpha:Health` convention), no strings needed.
 //   — the qualified name addresses the type by home, the facet meets the
 //   library's declaration program-wide. Definition is import-scoped (the
 //   block resolves only where `std/refine` is imported); the constraint
@@ -110,27 +112,6 @@ proc default|zig {
             return std.mem.trim(u8, text, " \t");
         }
 
-        // `Name` or `home/path:Name` → (dotted home, name). Bare names
-        // answer to the refining scope's own home — never a program-wide
-        // search.
-        fn splitWant(alloc: std.mem.Allocator, raw: []const u8, scope_home: []const u8) Want {
-            var home: []const u8 = scope_home;
-            var nm = raw;
-            if (std.mem.lastIndexOfScalar(u8, raw, ':')) |ci| {
-                const qual = std.mem.trim(u8, raw[0..ci], " \t");
-                const after = std.mem.trim(u8, raw[ci + 1 ..], " \t");
-                if (qual.len > 0 and after.len > 0) {
-                    const dotted = alloc.dupe(u8, qual) catch unreachable;
-                    for (dotted) |*c| {
-                        if (c.* == '/') c.* = '.';
-                    }
-                    home = dotted;
-                    nm = after;
-                }
-            }
-            return .{ .home = home, .name = nm };
-        }
-
         fn isProtoDoor(inv: *const ast.Invocation) bool {
             if (inv.path.segments.len != 1) return false;
             const verb = inv.path.segments[0];
@@ -153,6 +134,27 @@ proc default|zig {
         fn invName(inv: *const ast.Invocation) []const u8 {
             if (inv.args.len == 0) return "";
             return bareName(inv.args[0].value);
+        }
+
+        // The qualified entry name `home/path:Name` arrives through the
+        // named-arg channel — the parser binds `name=home/path`,
+        // `value=Name`, `had_explicit_label`. A bare `Name` (or an explicit
+        // `expr: Name`) answers to the invocation's own home.
+        fn invWant(alloc: std.mem.Allocator, inv: *const ast.Invocation, scope_home: []const u8) Want {
+            var w = Want{ .home = scope_home, .name = invName(inv) };
+            if (inv.args.len > 0) {
+                const a = inv.args[0];
+                if (a.had_explicit_label and a.name.len > 0 and
+                    !std.mem.eql(u8, a.name, "expr"))
+                {
+                    const dotted = alloc.dupe(u8, a.name) catch unreachable;
+                    for (dotted) |*c| {
+                        if (c.* == '/') c.* = '.';
+                    }
+                    w.home = dotted;
+                }
+            }
+            return w;
         }
 
         fn invSource(inv: *const ast.Invocation) []const u8 {
@@ -365,7 +367,7 @@ proc default|zig {
         // Live `std/refine` invocations and `// refine home:Name: …`
         // markers targeting the same (home, name) — all contributors fold
         // onto one meet, so the facet is visitation-order-independent.
-        fn walkRefine(alloc: std.mem.Allocator, rep: *koru_std.koru_compiler.ErrorReporter, fl: *const ast.Flow, items: []const ast.Item, w: Want, fields: *std.ArrayList(Field), skip: *const ast.Invocation) void {
+        fn walkRefine(alloc: std.mem.Allocator, rep: *koru_std.koru_compiler.ErrorReporter, fl: *const ast.Flow, items: []const ast.Item, scope_home: []const u8, w: Want, fields: *std.ArrayList(Field), skip: *const ast.Invocation) void {
             for (items) |entry| {
                 switch (entry) {
                     .flow => |candidate| {
@@ -373,7 +375,7 @@ proc default|zig {
                             if (node.* == .invocation and isRefineDoor(&node.invocation) and
                                 &node.invocation != skip)
                             {
-                                const cw = splitWant(alloc, invName(&node.invocation), candidate.module);
+                                const cw = invWant(alloc, &node.invocation, scope_home);
                                 if (std.mem.eql(u8, cw.home, w.home) and std.mem.eql(u8, cw.name, w.name)) {
                                     _ = parseInto(alloc, rep, fl, w.name, invSource(&node.invocation), fields, false);
                                 }
@@ -398,7 +400,7 @@ proc default|zig {
                         }
                     },
                     .module_decl => |module| {
-                        walkRefine(alloc, rep, fl, module.items, w, fields, skip);
+                        walkRefine(alloc, rep, fl, module.items, module.logical_name, w, fields, skip);
                     },
                     else => {},
                 }
@@ -430,7 +432,14 @@ proc default|zig {
     if (type_name.len == 0) {
         return .{ .replacement = ast.refusal(allocator, reporter, .KORU205, flow.location, flow.module, "std/refine: the entry name '{s}' is not usable — a refine name must be a non-empty identifier or a qualified `home:Name`", .{type_name}) };
     }
-    const want = R.splitWant(allocator, type_name, R.scopeOfFlow(program, flow));
+    const want = blk: {
+        if (flow.body.node) |*node| {
+            if (node.* == .invocation) {
+                break :blk R.invWant(allocator, &node.invocation, R.scopeOfFlow(program, flow));
+            }
+        }
+        break :blk R.Want{ .home = R.scopeOfFlow(program, flow), .name = type_name };
+    };
 
     // -- pass 1: strict-parse this block ----------------------------------
 
@@ -474,7 +483,7 @@ proc default|zig {
         }
         break :blk undefined;
     };
-    R.walkRefine(allocator, reporter, flow, program.items, want, &meet, my_inv);
+    R.walkRefine(allocator, reporter, flow, program.items, program.main_module_name, want, &meet, my_inv);
 
     // -- pass 5: the total meet must be non-empty per field ----------------
 
