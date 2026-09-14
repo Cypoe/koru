@@ -288,44 +288,38 @@
 
     // --- the body: transplanted into a sweepbody impl flow (like query's qbody) ---
     const peel_src = TapPeel.peel(sc) orelse sc;
-    const body_clone = ast_functional.cloneContinuation(allocator, peel_src) catch unreachable;
+    // `var`: walkCont mutates this — `@constCast` on a const drops it (690_312).
+    var body_clone = ast_functional.cloneContinuation(allocator, peel_src) catch unreachable;
     const body_node = body_clone.node orelse {
         return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): the sweep branch needs a body (`|> ...`)", .{store_name}) } };
     };
     if (body_node != .invocation and body_node != .label_with_invocation) {
         return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): the sweep body must start with an invocation this rung", .{store_name}) } };
     }
-    const sweep_inv = switch (body_node) {
-        .invocation => body_node.invocation,
-        .label_with_invocation => body_node.label_with_invocation.invocation,
-        else => unreachable,
-    };
 
-    // A sweep arm READS and WRITES the row it is standing on (690_083), and both
-    // are spelled `<row>.<field>`. Three lowered forms, chosen by position:
-    //
-    //   .target — a `stored` LHS   → `<store>[<cursor>].<f>`, the indexed
-    //             lvalue the `stored` transform expects to be handed.
-    //   .live   — a `stored` RHS   → a direct column read at the cursor, so a
-    //             block that writes one field and reads another sees the row as
-    //             it is NOW, not as it was when the loop iteration began.
-    //   .input  — everywhere else  → `<srf_prefix><f>`, the per-row value
-    //             handed to the transplanted body as an event input.
-    //
-    // The `.input` name is MANGLED rather than the bare field name, and that is
-    // what makes rule 5 (shadowing is allowed) free: `<row>.v` and an enclosing
-    // `v` cannot collide, because the row's `v` never occupies the name `v` in
-    // any emitted scope. The projection block could not offer that — it bound
-    // the field's own name into the body's scope.
-    //
-    // Which columns get threaded is DERIVED here: `used[i]` is set by the
-    // `.input` rewrite, so a site pays for exactly the fields it names, which is
-    // what keeps the ordinal-free lowering KORU100-safe.
+    // A sweep arm READS and WRITES the row it stands on (690_083), both
+    // spelled `<row>.<field>`. Three lowered forms, by position:
+    //   .target — `stored` LHS → `<store>[<cursor>].<f>`, the indexed lvalue.
+    //   .live   — `stored` RHS → direct column read at the cursor (the row as
+    //             it is NOW, not at iteration start).
+    //   .input  — everywhere else → `<srf_prefix><f>`, per-row event input.
+    // `.input` names are MANGLED, which makes rule 5 (shadowing) free: the
+    // row's `v` never occupies `v` in an emitted scope. `used[i]` is set by
+    // the `.input` rewrite — a site threads only the fields it names, which
+    // keeps the ordinal-free lowering KORU100-safe.
     const used_cols = allocator.alloc(bool, col_names.len) catch unreachable;
     for (used_cols) |*u| u.* = false;
     var unknown_field: ?[]const u8 = null;
 
-    SRewrite.walkCont(allocator, @constCast(&body_clone), row_bind, store_name, col_names, srf_prefix, srow_name, used_cols, &unknown_field, is_view);
+    SRewrite.walkCont(allocator, &body_clone, row_bind, store_name, col_names, srf_prefix, srow_name, used_cols, &unknown_field, is_view);
+
+    // Read AFTER the walk: a replaced `inline_body` is a new slice a by-value
+    // copy taken pre-walk would never see (690_312).
+    const sweep_inv = switch (body_clone.node.?) {
+        .invocation => |i| i,
+        .label_with_invocation => |l| l.invocation,
+        else => unreachable,
+    };
 
     // The arm's own `when` guard is emitted in the LOOP, not the body event —
     // but it reads the same `<srf_prefix><f>` consts, which the loop binds just

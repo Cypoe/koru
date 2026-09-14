@@ -38,16 +38,10 @@ const SRewrite = struct {
                     const esc_fname = codegen_utils_store.escapeZigIdentifier(alloc, fname) catch fname;
                     const t = switch (form) {
                         .target => std.fmt.allocPrint(alloc, "{s}[{s}].{s}", .{ store, cursor, esc_fname }) catch unreachable,
-                        // The cursor is dense — a direct column read, no
-                        // resolve chain in the loop body (O10.iv elision).
-                        // EXCEPT through a view, whose body is ONE flow
-                        // shared by the member loops: `store` is the view
-                        // name and no `__koru_store_<view>` exists, so a
-                        // live read has nothing to address. Thread the
-                        // value like `.input` — each member loop binds its
-                        // own column (690_297). A write body cannot write
-                        // the swept row through a view, so row-start and
-                        // live coincide there; nothing is lost.
+                        // Dense cursor — a direct column read (O10.iv).
+                        // EXCEPT through a view: one body shared by member
+                        // loops, no `__koru_store_<view>` to address, so
+                        // thread the value like `.input` (690_297).
                         .live => if (view_mode) blk3: {
                             used[ci] = true;
                             const mangled = std.mem.replaceOwned(u8, alloc, fname, ".", "_") catch unreachable;
@@ -201,6 +195,10 @@ const SRewrite = struct {
                             @constCast(a).source_value = fresh;
                         }
                     }
+                    // Frozen template text (690_074 freeze; rule-arm twin in
+                    // store.new.kz) — same `.input` rewrite, else `e.` ships
+                    // raw to a scope holding only `__koru_srf_` (690_312).
+                    if (inv.inline_body) |*ib| ib.* = refs(alloc, ib.*, bind, store, fields, srf, cursor, .input, used, unknown, view_mode);
                 },
                 else => {},
             }
