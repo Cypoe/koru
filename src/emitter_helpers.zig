@@ -1245,6 +1245,17 @@ pub fn emitMainModuleStart(emitter: *CodeEmitter, pub_compiler_env: bool) !void 
         try emitter.write("pub const CompilerEnv = @import(\"compiler_env\").CompilerEnv;\n\n");
     } else {
         try emitter.write("const CompilerEnv = @import(\"compiler_env\").CompilerEnv;\n\n");
+        // User binaries keep the full traced panic in Debug; every optimized
+        // build gets the minimal handler. Zig's default panic pulls the
+        // self-hosted DWARF unwinder (std.debug.SelfInfo + std.debug.Dwarf)
+        // into the binary — measured 2026-09-14 on games/asteroids: 137KB of
+        // __text, 235KB binary → 74KB with simple_panic. The panic message
+        // still prints to stderr; only the stack trace is gone, and optimized
+        // builds have no debug info for it to print anyway.
+        try emitter.write("pub const panic = if (@import(\"builtin\").mode == .Debug)\n");
+        try emitter.write("    @import(\"std\").debug.FullPanic(@import(\"std\").debug.defaultPanic)\n");
+        try emitter.write("else\n");
+        try emitter.write("    @import(\"std\").debug.simple_panic;\n\n");
     }
     // KORU ALLOCATOR SPINE — the one allocator stdlib runtime procs use.
     // Emitted into BOTH outputs so proc bodies (pasted into both) always
