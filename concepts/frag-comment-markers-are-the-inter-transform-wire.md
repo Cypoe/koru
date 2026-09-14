@@ -19,40 +19,55 @@ Zig output* is fine — cheap pdb-equivalent debug info. The problem is
 `//` as a *signal carrier between compiler stages*: one pass writes a
 comment, another pass parses it. Everything below is the second kind.
 
-## Writers — a transform emits `// <ns> …` into `inline_code`
+## Family A — data payloads: a comment carries a record another pass parses
 
-| Marker | Writer | Carries |
-|---|---|---|
-| `// proto Name: f1: t1, …` | `koru_std/proto.kz:416`, `koru_std/types.kz:166` | compound decl: name + flat field list |
-| `// proto-terminal Name: T` | `koru_std/proto.kz:467,518,569,620` | scalar terminal name + host type |
-| `// foreign Name: f1, f2, …` | `koru_std/foreign.kz:112` | foreign decl: name + field names |
-| `// store-kinds …` | `koru_std/store.new.kz:3133` | store kind arms |
-| `// store-member-types …` | `koru_std/store.new.kz:3146` | store member types |
-| `// store-view …` | `koru_std/store.view.kz:62` | store view decl |
-| `// refine home:Name: f: t & bounds` | `koru_std/refine.k` | refine facet (canonical meet) |
+| Marker | Writer(s) | Reader(s) | Carries |
+|---|---|---|---|
+| `// proto Name: f: t, …` | `proto.kz:416`, `types.kz:166` | `proto.kz:145,292` (self), `list.free.kz:184,279`, `store.kz:538,644`, `store.new.kz:525`, `refine.k:350` | compound decl: name + flat fields |
+| `// proto-terminal Name: T` | `proto.kz:467,518,569,620` | `proto.kz:128`, `store.new.kz:418` | scalar terminal name + host type |
+| `// foreign Name: f1, …` | `foreign.kz:112` | **`src/type_registry.zig:871`** — compiler core parses a stdlib comment | foreign decl fields |
+| `// store-kinds …` | `store.new.kz:3133` | `store.kz:563` | store kind arms |
+| `// store-member-types …` | `store.new.kz:3146` | `store.kz:721` | store member types |
+| `// store-view …` | `store.view.kz:62` | `store.kz:1183,1316,1341` | store view decl |
+| `// refine home:Name: …` | `refine.k` | `refine.k:389` | refine facet — **killed, module dropped** |
 
-## Readers — a pass parses the comment back
+## Family B — sentinel flags: a comment marks a generated block
 
-- `koru_std/proto.kz:128,145,292` — `// proto-terminal`, `// proto`
-  (its own resolution across dissolution order)
-- `koru_std/list.free.kz:184,279` — `// proto` (container synthesis
-  finds the element's fields)
-- `koru_std/store.kz:538,644` — `// proto`; `:563` `// store-kinds`;
-  `:721` `// store-member-types`; `:1183,1316,1341` `// store-view`
-- `koru_std/store.new.kz:418` — `// proto-terminal`; `:525` `// proto`
-- `koru_std/refine.k:350,389` — `// proto`, `// refine`
-- **`src/type_registry.zig:871` — `// foreign`. The compiler core
-  parses a comment a stdlib transform emitted. This is the worst edge
-  in the inventory: the wire crosses the stdlib→`src/` boundary.**
+| Marker | Writer(s) | Reader(s) | Means |
+|---|---|---|---|
+| `//@koru:inline_stmt` | 24 sites: `parser.kz:153,737`, `regex.kz:92,426,622,824`, `testing.assert.kz:41`, `trellis.kz:402`, `field.kz:678`, `switch.kz:69`, … | `emitter_helpers.zig:13314` (mutual-group lowering gate), `dead_strip.zig:397` (cargo exemption) | "this inline_body is a lowerable inline statement — don't strip, lower differently" |
+| `// __KORU_RUNTIME_REGISTRY_HELPERS__` | `runtime.kz:890` | `runtime.kz:91` (scans `host_line` content — dedup: "helpers already emitted?") | presence flag on a generated block |
 
-## Tombstones, not carriers (write-only, nobody scans)
+## Tombstones — write-only, nobody scans (legal under the ruling)
 
 `// std/store: '<name>' created …` (store.new.kz:5882,7048),
 `// std/store: watch(...) spliced …` (store.watch.kz:264),
 `// std/pump: pump '<n>' created …` (pump.kz:436),
 `// branch constructor: …` (main.zig:4528),
 `// \`<x>\` is not exported …` (visitor_emitter.zig:4559).
-These are debug/tracing output — legal under the ruling.
+
+## Benign comment handling — stripping/skipping, not signal (NOT the wire)
+
+`parser.zig:1249,1766,2317,4042,4147,10910,11289`, `main.zig:6574`,
+`ast_printer.zig:74`, `emitter_helpers.zig:5310,6467`,
+`runtime_registry.zig:94`, `vendor.kz:93`, `runtime.kz:380`,
+`dead_strip.zig:398` — ordinary comment-stripping in lexers/emitters.
+
+## What each edge holds up
+
+- `// proto` → `list.free` container synthesis (fields for `List_<Name>`),
+  store decl typing, proto's own cross-module resolution. Removing it
+  breaks ~all of 665_* and every proto-list/store test.
+- `// proto-terminal` → terminal identity resolution (665_*),
+  `store.new` member typing.
+- `// foreign` → `type_registry` field lookup for foreign types —
+  the only edge where `src/` consumes a comment.
+- `// store-kinds`/`member-types`/`view` → store.kz's kinded-leaf and
+  view machinery (690_*).
+- `//@koru:inline_stmt` → mutual-group lowering in the emitter +
+  dead_strip's don't-strip rule. Removing it silently changes codegen.
+- `__KORU_RUNTIME_REGISTRY_HELPERS__` → runtime.kz emitting its helper
+  block exactly once.
 
 ## Lineage — who started it
 
