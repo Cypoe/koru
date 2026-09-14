@@ -1,0 +1,7 @@
+name: context-poison
+kind: measured
+shape: categorical
+face: in
+membrane: false
+note: prose (comments, docs, headers) was found narrating a dead or never-true state of the system — dead grammar spellings, phantom steps — and the cost surfaced as generation, not just stale reading
+route: surface
