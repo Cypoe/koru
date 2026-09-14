@@ -416,7 +416,7 @@ pub const TypeRegistry = struct {
                     try self.populateFromItem(module_item);
                 }
             },
-            .import_decl, .host_line, .host_type_decl, .parse_error, .event_tap, .label_decl, .native_loop, .fused_event, .inlined_event, .inline_code => {
+            .import_decl, .host_line, .host_type_decl, .parse_error, .event_tap, .label_decl, .native_loop, .fused_event, .inlined_event, .inline_code, .facet_decl => {
                 // These don't need registration in TypeRegistry
             },
         }

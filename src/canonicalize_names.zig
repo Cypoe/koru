@@ -117,8 +117,9 @@ fn canonicalizeItem(ctx: *Context, item: *ast.Item) !void {
             try canonicalizePath(ctx, @constCast(&inlined.event_path));
             try canonicalizePath(ctx, @constCast(&inlined.inlined_from));
         },
-        .inline_code => {
-            // No paths to canonicalize - just raw code string
+        .inline_code, .facet_decl => {
+            // No paths to canonicalize - raw code string / transform-produced
+            // declaration whose name+module are already canonical
         },
     }
 }

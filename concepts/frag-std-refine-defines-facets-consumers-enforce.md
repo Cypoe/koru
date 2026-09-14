@@ -30,10 +30,14 @@ Mechanics, all library-level over existing machinery:
 - Every refined field must exist on the anchor and its base must agree —
   a meet needs one base, not two.
 - Multiple `std/refine` blocks — in the same module or layered across
-  modules — fold onto one facet; whichever transform fires first emits the
-  canonical `// refine home:Name: name: base & bounds` marker, later sites
-  see the identical marker and dissolve. The meet is confluent by
-  construction.
+  modules — fold onto one facet; whichever transform fires first leaves the
+  canonical facet in the program tree as a typed `Item.facet_decl` node
+  (name + logical home + fields carrying structured `lo`/`hi`/`eq` bounds —
+  integers, not text). Later sites see the node and dissolve to a
+  tombstone comment. The meet is confluent by construction.
+- Inter-transform state is a typed AST node, never a comment: the emitter
+  *renders* `// refine home:Name: …` into generated Zig for debugging, but
+  nothing parses that text back.
 - Empty meets (`>20000 & <=1000`), unknown fields, base mismatches, and
   missing anchors all refuse at KORU205, naming the disagreement.
 
@@ -43,9 +47,9 @@ downstream module tightens `port` without editing the library. Inline `&`
 inside proto remains reachable later — proto could call refine's parser —
 but the two spellings must meet the same facet.
 
-Open rungs: consumer-side reads (the marker is the serialization; no
-shared helper API is exported yet — the first enforcing consumer will
-decide whether helpers ship as `pub` tors or an emitted namespace);
+Open rungs: consumer-side reads (consumers match `.facet_decl` on
+`program.items` — the typed node IS the API; whether a shared scanner
+helper ships is the first enforcing consumer's call);
 disjunction-with-default atoms; non-integer bases.
 
 Pins: 671_001 (meet), 671_002 (empty meet refused), 671_003 (cross-home

@@ -134,7 +134,32 @@ const Printer = struct {
             .fused_event => return self.unprintable("fused_event (IR)"),
             .inlined_event => return self.unprintable("inlined_event (IR)"),
             .inline_code => return self.unprintable("inline_code (IR)"),
+            .facet_decl => |fd| try self.printFacetDecl(&fd),
         }
+    }
+
+    /// Transform-produced facet renders as its canonical comment form —
+    /// `// refine home:Name: f: t & bound, …`. Write-only debug output;
+    /// nothing parses this text back.
+    fn printFacetDecl(self: *Printer, fd: *const ast.FacetDecl) PrintError!void {
+        try self.write("// refine ");
+        try self.write(fd.module);
+        try self.write(":");
+        try self.write(fd.name);
+        try self.write(": ");
+        for (fd.fields, 0..) |field, i| {
+            if (i > 0) try self.write(", ");
+            try self.write(field.name);
+            try self.write(": ");
+            try self.write(field.type);
+            if (field.eq) |b| {
+                try self.print(" & =={d}", .{b.value});
+            } else {
+                if (field.lo) |b| try self.print(" & {s}{d}", .{ if (b.exclusive) ">" else ">=", b.value });
+                if (field.hi) |b| try self.print(" & {s}{d}", .{ if (b.exclusive) "<" else "<=", b.value });
+            }
+        }
+        try self.write("\n");
     }
 
     fn printImport(self: *Printer, imp: *const ast.ImportDecl) PrintError!void {

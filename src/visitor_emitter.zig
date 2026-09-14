@@ -1847,6 +1847,40 @@ pub const VisitorEmitter = struct {
                 try self.code_emitter.write(ic.code);
                 try self.code_emitter.write("\n");
             },
+            .facet_decl => |*fd| {
+                // FacetDecl emits no code — it renders its canonical comment
+                // form into the output for debuggability. Write-only: the
+                // node is the wire; nothing parses this text back.
+                try self.code_emitter.writeIndent();
+                try self.code_emitter.write("// refine ");
+                try self.code_emitter.write(fd.module);
+                try self.code_emitter.write(":");
+                try self.code_emitter.write(fd.name);
+                try self.code_emitter.write(": ");
+                for (fd.fields, 0..) |field, i| {
+                    if (i > 0) try self.code_emitter.write(", ");
+                    try self.code_emitter.write(field.name);
+                    try self.code_emitter.write(": ");
+                    try self.code_emitter.write(field.type);
+                    if (field.eq) |b| {
+                        const s = try std.fmt.allocPrint(self.allocator, " & =={d}", .{b.value});
+                        defer self.allocator.free(s);
+                        try self.code_emitter.write(s);
+                    } else {
+                        if (field.lo) |b| {
+                            const s = try std.fmt.allocPrint(self.allocator, " & {s}{d}", .{ if (b.exclusive) ">" else ">=", b.value });
+                            defer self.allocator.free(s);
+                            try self.code_emitter.write(s);
+                        }
+                        if (field.hi) |b| {
+                            const s = try std.fmt.allocPrint(self.allocator, " & {s}{d}", .{ if (b.exclusive) "<" else "<=", b.value });
+                            defer self.allocator.free(s);
+                            try self.code_emitter.write(s);
+                        }
+                    }
+                }
+                try self.code_emitter.write("\n");
+            },
         }
     }
 

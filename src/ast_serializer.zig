@@ -354,7 +354,45 @@ pub const AstSerializer = struct {
                 // InlineCode IR nodes should be handled by visitor_emitter, not serialized to backend.zig
                 try self.write(".{ .inline_code = /* IR node - handled by emitter */ }");
             },
+            .facet_decl => |facet| {
+                try self.write(".{ .facet_decl = ");
+                try self.serializeFacetDecl(&facet);
+                try self.write(" }");
+            },
         }
+    }
+
+    fn serializeFacetDecl(self: *AstSerializer, facet: *const ast.FacetDecl) !void {
+        try self.write(".{ .name = ");
+        try self.writeString(facet.name);
+        try self.write(", .module = ");
+        try self.writeString(facet.module);
+        try self.write(", .fields = &[_]ast.FacetField{");
+        for (facet.fields) |field| {
+            try self.write(".{ .name = ");
+            try self.writeString(field.name);
+            try self.write(", .type = ");
+            try self.writeString(field.type);
+            if (field.lo) |b| {
+                const s = try std.fmt.allocPrint(self.allocator, ", .lo = .{{ .value = {d}, .exclusive = {} }}", .{ b.value, b.exclusive });
+                defer self.allocator.free(s);
+                try self.write(s);
+            }
+            if (field.hi) |b| {
+                const s = try std.fmt.allocPrint(self.allocator, ", .hi = .{{ .value = {d}, .exclusive = {} }}", .{ b.value, b.exclusive });
+                defer self.allocator.free(s);
+                try self.write(s);
+            }
+            if (field.eq) |b| {
+                const s = try std.fmt.allocPrint(self.allocator, ", .eq = .{{ .value = {d}, .exclusive = {} }}", .{ b.value, b.exclusive });
+                defer self.allocator.free(s);
+                try self.write(s);
+            }
+            try self.write(" }, ");
+        }
+        try self.write("}, .location = ");
+        try self.serializeSourceLocation(&facet.location);
+        try self.write(" }");
     }
 
     fn serializeModuleDecl(self: *AstSerializer, module: *const ast.ModuleDecl) SerializeError!void {
@@ -1896,12 +1934,60 @@ pub const AstSerializer = struct {
                 try self.writeIndent();
                 try self.write("\"note\": \"IR node - template-generated inline code\"");
             },
+            .facet_decl => {
+                try self.writeString("facet_decl");
+                try self.write(",\n");
+                try self.serializeFacetDeclJson(&item.facet_decl);
+            },
         }
 
         self.dedent();
         try self.write("\n");
         try self.writeIndent();
         try self.write("}");
+    }
+
+    fn serializeFacetDeclJson(self: *AstSerializer, facet: *const ast.FacetDecl) !void {
+        try self.writeIndent();
+        try self.write("\"name\": ");
+        try self.writeString(facet.name);
+        try self.write(",\n");
+        try self.writeIndent();
+        try self.write("\"module\": ");
+        try self.writeString(facet.module);
+        try self.write(",\n");
+        try self.writeIndent();
+        try self.write("\"fields\": [\n");
+        self.indent();
+        for (facet.fields, 0..) |field, i| {
+            if (i > 0) try self.write(",\n");
+            try self.writeIndent();
+            try self.write("{ \"name\": ");
+            try self.writeString(field.name);
+            try self.write(", \"type\": ");
+            try self.writeString(field.type);
+            if (field.eq) |b| {
+                const s = try std.fmt.allocPrint(self.allocator, ", \"eq\": {d}", .{b.value});
+                defer self.allocator.free(s);
+                try self.write(s);
+            } else {
+                if (field.lo) |b| {
+                    const s = try std.fmt.allocPrint(self.allocator, ", \"lo\": {{ \"value\": {d}, \"exclusive\": {} }}", .{ b.value, b.exclusive });
+                    defer self.allocator.free(s);
+                    try self.write(s);
+                }
+                if (field.hi) |b| {
+                    const s = try std.fmt.allocPrint(self.allocator, ", \"hi\": {{ \"value\": {d}, \"exclusive\": {} }}", .{ b.value, b.exclusive });
+                    defer self.allocator.free(s);
+                    try self.write(s);
+                }
+            }
+            try self.write(" }");
+        }
+        try self.write("\n");
+        self.dedent();
+        try self.writeIndent();
+        try self.write("]");
     }
 
     fn serializeEventDeclJson(self: *AstSerializer, event: *const ast.EventDecl) !void {

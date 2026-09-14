@@ -406,6 +406,7 @@ pub const Item = union(enum) {
     fused_event: FusedEvent, // Pure event chains → single fused handler
     inlined_event: InlinedEvent, // Small events → inlined at callsite
     inline_code: InlineCode, // Template-generated code → emit verbatim at call site
+    facet_decl: FacetDecl, // std/refine facet → typed declaration left for later transforms
 
     pub fn deinit(self: *Item, allocator: std.mem.Allocator) void {
         switch (self.*) {
@@ -426,6 +427,7 @@ pub const Item = union(enum) {
             .fused_event => |*fe| fe.deinit(allocator),
             .inlined_event => |*ie| ie.deinit(allocator),
             .inline_code => |*ic| ic.deinit(allocator),
+            .facet_decl => |*fd| fd.deinit(allocator),
         }
     }
 };
@@ -527,6 +529,57 @@ pub const HostTypeDecl = struct {
         allocator.free(self.name);
         self.shape.deinit(allocator);
         if (self.module.len > 0) allocator.free(self.module);
+    }
+};
+
+/// A refinement declaration left in the program tree by `std/refine`.
+///
+/// Typed inter-transform state: a transform writes the node, later
+/// transforms match the union variant and read `fields` — no comment text
+/// is ever parsed as data. The emitter may *render* the node as a
+/// `// refine …` comment in generated output for debugging; that direction
+/// is write-only.
+///
+/// Bounds are structured, not text: a refined `port: i64 & >1024 &
+/// <=65535` lands as `FacetField{ .name = "port", .type = "i64",
+/// .lo = .{ .value = 1024, .exclusive = true },
+/// .hi = .{ .value = 65535, .exclusive = false } }`.
+pub const FacetBound = struct {
+    value: i64,
+    exclusive: bool, // `>` vs `>=`, `<` vs `<=`
+};
+
+pub const FacetField = struct {
+    name: []const u8,
+    type: []const u8, // base type, e.g. "i64"
+    lo: ?FacetBound = null,
+    hi: ?FacetBound = null,
+    eq: ?FacetBound = null,
+
+    pub fn deinit(self: *FacetField, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.type);
+    }
+};
+
+pub const FacetDecl = struct {
+    name: []const u8, // e.g., "Server"
+    /// The logical home the facet refines (`app.test_lib.defs`), matching
+    /// the home semantics of `HostTypeDecl.module`. Empty = own top level.
+    module: []const u8 = "",
+    fields: []const FacetField,
+
+    // FOUNDATIONAL: Every item knows where it came from
+    location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },
+
+    pub fn deinit(self: *FacetDecl, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        if (self.module.len > 0) allocator.free(self.module);
+        for (self.fields) |*field| {
+            var mutable_field = field.*;
+            mutable_field.deinit(allocator);
+        }
+        allocator.free(@constCast(self.fields));
     }
 };
 
@@ -2137,7 +2190,7 @@ pub const ASTNode = union(enum) {
                         break :blk result;
                     },
                     // Leaf nodes (no children to traverse for transforms)
-                    .event_decl, .proc_decl, .event_tap, .label_decl, .immediate_impl, .import_decl, .host_line, .host_type_decl, .parse_error, .native_loop, .fused_event, .inlined_event, .inline_code => {
+                    .event_decl, .proc_decl, .event_tap, .label_decl, .immediate_impl, .import_decl, .host_line, .host_type_decl, .parse_error, .native_loop, .fused_event, .inlined_event, .inline_code, .facet_decl => {
                         break :blk try allocator.alloc(ASTNode, 0);
                     },
                 }

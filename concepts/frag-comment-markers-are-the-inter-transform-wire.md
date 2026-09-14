@@ -29,7 +29,7 @@ comment, another pass parses it. Everything below is the second kind.
 | `// store-kinds …` | `store.new.kz:3133` | `store.kz:563` | store kind arms |
 | `// store-member-types …` | `store.new.kz:3146` | `store.kz:721` | store member types |
 | `// store-view …` | `store.view.kz:62` | `store.kz:1183,1316,1341` | store view decl |
-| `// refine home:Name: …` | `refine.k` | `refine.k:389` | refine facet — **killed, module dropped** |
+| ~~`// refine home:Name: …`~~ | ~~`refine.k`~~ | ~~`refine.k`~~ | **MIGRATED** — first namespace off the wire: now `Item.facet_decl` (typed node: `name`/`module`/`fields` with structured `lo`/`hi`/`eq` bounds). The emitter still *renders* `// refine …` into generated Zig — write-only debug output, never parsed back. |
 
 ## Family B — sentinel flags: a comment marks a generated block
 
@@ -119,9 +119,11 @@ context field + ABI reachability is already proven by `reporter`).
 
 ## Open questions
 
-- Do we migrate the existing marker namespaces onto a context registry,
-  or is the stdlib-internal wire grandfathered and only *new* carriers
-  (refine) required to use the typed channel?
+- RESOLVED for the channel shape: the program tree is the channel —
+  no context registry. Markers migrate to typed `Item` variants, one per
+  concept (the `host_type_decl` precedent: `kernel.kz` already scans
+  `program.items` for typed nodes). `refine` is done (`facet_decl`);
+  proto/foreign/store-* remain on the wire.
 - `src/type_registry.zig`'s `// foreign` read needs its own fix either
   way — the compiler parsing stdlib comments is an inversion regardless
   of what convention the stdlib uses internally.

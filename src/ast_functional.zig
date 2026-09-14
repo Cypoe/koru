@@ -1202,6 +1202,24 @@ pub fn cloneItem(allocator: std.mem.Allocator, item: *const ast.Item) CloneError
                 .module = try allocator.dupe(u8, ic.module),
             } };
         },
+        .facet_decl => |fd| {
+            var fields = try allocator.alloc(ast.FacetField, fd.fields.len);
+            for (fd.fields, 0..) |field, i| {
+                fields[i] = .{
+                    .name = try allocator.dupe(u8, field.name),
+                    .type = try allocator.dupe(u8, field.type),
+                    .lo = field.lo,
+                    .hi = field.hi,
+                    .eq = field.eq,
+                };
+            }
+            return .{ .facet_decl = ast.FacetDecl{
+                .name = try allocator.dupe(u8, fd.name),
+                .module = try allocator.dupe(u8, fd.module),
+                .fields = fields,
+                .location = fd.location,
+            } };
+        },
     }
 }
 

@@ -14,8 +14,9 @@
 //   meets the `std/proto(Server)` declaration — every refined field must
 //   exist there and the base type must agree. The meet is name-keyed,
 //   total, and confluent: several `std/refine` blocks (in any module, in
-//   any order) fold onto the same facet, and a `// refine home:Name: …`
-//   marker carries the canonical constraint set for consumers to read.
+//   any order) fold onto the same facet, and the canonical meet lands in
+//   the program tree as a typed `Item.facet_decl` node — consumers match
+//   the node, never comment text.
 //
 // LAYERING — the point of a separate module: a bound can arrive apart from
 //   the declaration. A library declares `std/proto(Server)` plainly; a
@@ -364,9 +365,9 @@ proc default|zig {
             }
         }
 
-        // Live `std/refine` invocations and `// refine home:Name: …`
-        // markers targeting the same (home, name) — all contributors fold
-        // onto one meet, so the facet is visitation-order-independent.
+        // Live `std/refine` invocations and `facet_decl` nodes targeting
+        // the same (home, name) — all contributors fold onto one meet, so
+        // the facet is visitation-order-independent.
         fn walkRefine(alloc: std.mem.Allocator, rep: *koru_std.koru_compiler.ErrorReporter, fl: *const ast.Flow, items: []const ast.Item, scope_home: []const u8, w: Want, fields: *std.ArrayList(Field), skip: *const ast.Invocation) void {
             for (items) |entry| {
                 switch (entry) {
@@ -382,20 +383,44 @@ proc default|zig {
                             }
                         }
                     },
-                    .inline_code => |ic| {
-                        var lines = std.mem.splitScalar(u8, ic.code, '\n');
-                        while (lines.next()) |raw| {
-                            const line = std.mem.trimLeft(u8, raw, " \t");
-                            const prefix = "// refine ";
-                            if (!std.mem.startsWith(u8, line, prefix)) continue;
-                            const rest = line[prefix.len..];
-                            const c1 = std.mem.indexOfScalar(u8, rest, ':') orelse continue;
-                            const after1 = rest[c1 + 1 ..];
-                            const c2 = std.mem.indexOfScalar(u8, after1, ':') orelse continue;
-                            const mh = std.mem.trim(u8, rest[0..c1], " \t");
-                            const mn = std.mem.trim(u8, after1[0..c2], " \t");
-                            if (std.mem.eql(u8, mh, w.home) and std.mem.eql(u8, mn, w.name)) {
-                                _ = parseInto(alloc, rep, fl, w.name, after1[c2 + 1 ..], fields, false);
+                    .facet_decl => |*fd| {
+                        // A canonical facet left by an earlier std/refine
+                        // transform — typed fields, folded straight onto the
+                        // meet. No text is parsed.
+                        if (!std.mem.eql(u8, fd.module, w.home) or !std.mem.eql(u8, fd.name, w.name)) continue;
+                        for (fd.fields) |ff| {
+                            var idx_opt: ?usize = null;
+                            for (fields.items, 0..) |f, i| {
+                                if (std.mem.eql(u8, f.name, ff.name)) {
+                                    idx_opt = i;
+                                    break;
+                                }
+                            }
+                            const idx = idx_opt orelse blk: {
+                                fields.append(alloc, .{ .name = ff.name, .base = ff.type }) catch unreachable;
+                                break :blk fields.items.len - 1;
+                            };
+                            const f = &fields.items[idx];
+                            if (!std.mem.eql(u8, f.base, ff.type)) continue;
+                            if (ff.eq) |b| {
+                                if (f.eq == null) {
+                                    f.eq = .{ .value = b.value, .exclusive = false, .src = std.fmt.allocPrint(alloc, "=={d}", .{b.value}) catch unreachable };
+                                }
+                            } else {
+                                if (ff.lo) |b| {
+                                    if (f.lo == null or b.value > f.lo.?.value or
+                                        (b.value == f.lo.?.value and b.exclusive and !f.lo.?.exclusive))
+                                    {
+                                        f.lo = .{ .value = b.value, .exclusive = b.exclusive, .src = std.fmt.allocPrint(alloc, "{s}{d}", .{ if (b.exclusive) ">" else ">=", b.value }) catch unreachable };
+                                    }
+                                }
+                                if (ff.hi) |b| {
+                                    if (f.hi == null or b.value < f.hi.?.value or
+                                        (b.value == f.hi.?.value and b.exclusive and !f.hi.?.exclusive))
+                                    {
+                                        f.hi = .{ .value = b.value, .exclusive = b.exclusive, .src = std.fmt.allocPrint(alloc, "{s}{d}", .{ if (b.exclusive) "<" else "<=", b.value }) catch unreachable };
+                                    }
+                                }
                             }
                         }
                     },
@@ -407,17 +432,16 @@ proc default|zig {
             }
         }
 
-        fn markerExists(items: []const ast.Item, text: []const u8) bool {
+        // One canonical facet per (home, name): true when a sibling block
+        // already left its facet_decl in the tree.
+        fn facetExists(items: []const ast.Item, home: []const u8, name: []const u8) bool {
             for (items) |entry| {
                 switch (entry) {
-                    .inline_code => |ic| {
-                        var lines = std.mem.splitScalar(u8, ic.code, '\n');
-                        while (lines.next()) |raw| {
-                            if (std.mem.eql(u8, std.mem.trimLeft(u8, raw, " \t"), text)) return true;
-                        }
+                    .facet_decl => |*fd| {
+                        if (std.mem.eql(u8, fd.module, home) and std.mem.eql(u8, fd.name, name)) return true;
                     },
                     .module_decl => |module| {
-                        if (markerExists(module.items, text)) return true;
+                        if (facetExists(module.items, home, name)) return true;
                     },
                     else => {},
                 }
@@ -521,19 +545,35 @@ proc default|zig {
         }
     }
     const body = out.toOwnedSlice(allocator) catch unreachable;
-    const marker_text = std.fmt.allocPrint(allocator, "// {s}", .{body}) catch unreachable;
-
-    // If a sibling block already emitted this exact facet, this site
-    // dissolves to a plain comment — one canonical marker per (home, name).
-    const code = if (R.markerExists(program.items, marker_text))
-        std.fmt.allocPrint(allocator, "// refine {s}:{s}: met", .{ want.home, want.name }) catch unreachable
-    else
-        marker_text;
     std.debug.print("{s}\n", .{body});
 
-    return .{ .replacement = ast.Item{ .inline_code = ast.InlineCode{
-        .code = code,
+    // If a sibling block already left this facet in the tree, this site
+    // dissolves to a tombstone comment — one canonical facet_decl per
+    // (home, name). The comment is write-only debug text; nothing parses it.
+    if (R.facetExists(program.items, want.home, want.name)) {
+        return .{ .replacement = ast.Item{ .inline_code = ast.InlineCode{
+            .code = std.fmt.allocPrint(allocator, "// refine {s}:{s}: met", .{ want.home, want.name }) catch unreachable,
+            .location = flow.location,
+            .module = flow.module,
+        } } };
+    }
+
+    // The canonical facet goes into the program tree as a typed
+    // FacetDecl — the declaration later transforms read.
+    const ffields = allocator.alloc(ast.FacetField, meet.items.len) catch unreachable;
+    for (meet.items, 0..) |f, i| {
+        ffields[i] = .{
+            .name = allocator.dupe(u8, f.name) catch unreachable,
+            .type = allocator.dupe(u8, f.base) catch unreachable,
+            .lo = if (f.lo) |b| .{ .value = b.value, .exclusive = b.exclusive } else null,
+            .hi = if (f.hi) |b| .{ .value = b.value, .exclusive = b.exclusive } else null,
+            .eq = if (f.eq) |b| .{ .value = b.value, .exclusive = b.exclusive } else null,
+        };
+    }
+    return .{ .replacement = ast.Item{ .facet_decl = ast.FacetDecl{
+        .name = allocator.dupe(u8, want.name) catch unreachable,
+        .module = allocator.dupe(u8, want.home) catch unreachable,
+        .fields = ffields,
         .location = flow.location,
-        .module = flow.module,
     } } };
 }
