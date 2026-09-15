@@ -935,13 +935,13 @@ fn synthesizeContainer(
         units.append(allocator, pair[1]) catch unreachable;
     }
 
-    // 3. push-<Name>: (xs borrow, v element) -> void.
+    // 3. push-<Name>: (xs borrow, v element) -> void; a refine facet on the pushed field adds a bounds guard.
     {
         const op_name = std.fmt.allocPrint(allocator, "push-{s}", .{proto_name}) catch unreachable;
         const in = allocator.alloc(astz.Field, 2) catch unreachable;
         in[0] = field_s(allocator, "xs", list_name, "list");
         in[1] = field_plain(allocator, "v", pf.types[0]);
-        const body = "xs.items.append(xs.allocator, v) catch {\n    @panic(\"std/list:push — out of memory\");\n};";
+        const body = refineGuardedPushBody(allocator, program, elem_expr, pf.names[0], "xs.items.append(xs.allocator, v) catch {\n    @panic(\"std/list:push — out of memory\");\n};");
         const pair = synthOp(allocator, flow, op_name, in, &.{}, null, body);
         units.append(allocator, pair[0]) catch unreachable;
         units.append(allocator, pair[1]) catch unreachable;

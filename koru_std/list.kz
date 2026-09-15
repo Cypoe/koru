@@ -70,4 +70,4 @@ pub const List_i64 = struct {
 ~part get
 ~part pop
 ~part free
-
+~part refine

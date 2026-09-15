@@ -44,7 +44,7 @@
 // `koru_allocator()` — the canonical accessor emitted into every module
 // (emitter_helpers.zig), which rides the Debug leak counter like all
 // Koru-managed allocations.
-[comptime|transform]pub tor default {
+[comptime|transform|pre]pub tor default {
     expr: Expression,
     source: Source,
     item: *const std/compiler:Item,

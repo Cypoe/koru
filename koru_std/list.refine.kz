@@ -1,0 +1,151 @@
+// Koru Standard Library: the `refine` part of list.kz.
+// Joined via `~part refine` in list.kz; merged into the list module at load.
+//
+// The std/list half of the facet wire: `std/refine` leaves an Item.facet_decl
+// in the program tree (|pre stage); these helpers resolve the element's proto
+// to a facet and build the bounds guard push-<Name> emits at its boundary.
+
+/// The logical home of `elem`'s proto declaration — the enclosing
+/// module_decl's logical_name, or the entry module for a top-level decl.
+/// A qualified `home:Name` elem answers directly; a bare elem resolves by
+/// scoped walk (flow.module is the file stem, not the logical home — the
+/// same reason refine's scopeOfFlow walks module_decls).
+fn protoDeclHome(prog: *const astz.Program, elem: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, elem, " \t");
+    if (std.mem.lastIndexOfScalar(u8, trimmed, ':')) |ci| {
+        const qual = std.mem.trim(u8, trimmed[0..ci], " \t");
+        if (qual.len > 0) {
+            return std.mem.replaceOwned(u8, std.heap.page_allocator, qual, "/", ".") catch unreachable;
+        }
+    }
+    const want_name = trimmed;
+    const S = struct {
+        fn isProtoDoor(f: *const astz.Flow, name: []const u8) bool {
+            const inv = f.inv();
+            if (inv.path.segments.len != 1) return false;
+            const verb = inv.path.segments[0];
+            const mq = inv.path.module_qualifier orelse return false;
+            const types_door = std.mem.eql(u8, verb, "proto") and
+                (std.mem.eql(u8, mq, "std.types") or std.mem.eql(u8, mq, "std/types"));
+            const default_door = std.mem.eql(u8, verb, "default") and
+                (std.mem.eql(u8, mq, "std.proto") or std.mem.eql(u8, mq, "std/proto"));
+            if (!(types_door or default_door)) return false;
+            if (inv.args.len == 0) return false;
+            var nm = inv.args[0].value;
+            if (nm.len >= 2 and nm[0] == '"' and nm[nm.len - 1] == '"') nm = nm[1 .. nm.len - 1];
+            return std.mem.eql(u8, nm, name);
+        }
+        fn find(items: []const astz.Item, name: []const u8, scope: []const u8, out: *[]const u8) bool {
+            for (items) |*pi| {
+                switch (pi.*) {
+                    .flow => |*f| {
+                        if (isProtoDoor(f, name)) {
+                            out.* = scope;
+                            return true;
+                        }
+                    },
+                    .module_decl => |*m| {
+                        if (find(m.items, name, m.logical_name, out)) return true;
+                    },
+                    else => {},
+                }
+            }
+            return false;
+        }
+    };
+    var home: []const u8 = "";
+    if (S.find(prog.items, want_name, prog.main_module_name, &home)) return home;
+    return null;
+}
+
+/// The facet_decl a `std/refine` transform left for `name` in `home` —
+/// the typed inter-transform declaration (Item variant, never text).
+/// `home == null` matches any home — the bare-elem post-erase fallback:
+/// when the proto decl flow is already gone, its `// proto` marker
+/// carries no home to resolve against, so the facet's own `fd.module`
+/// (the declaration's logical home, always present) is the identity.
+fn findFacetDecl(prog: *const astz.Program, name: []const u8, home: ?[]const u8) ?*const astz.FacetDecl {
+    const S = struct {
+        fn find(items: []const astz.Item, n: []const u8, h: ?[]const u8) ?*const astz.FacetDecl {
+            for (items) |*pi| {
+                switch (pi.*) {
+                    .facet_decl => |*fd| {
+                        if (std.mem.eql(u8, fd.name, n) and (h == null or std.mem.eql(u8, fd.module, h.?))) return fd;
+                    },
+                    .module_decl => |*m| {
+                        if (find(m.items, n, h)) |hit| return hit;
+                    },
+                    else => {},
+                }
+            }
+            return null;
+        }
+    };
+    return S.find(prog.items, name, home);
+}
+
+/// The bounds guard for `push-<Name>`'s `v` — or null when the element's
+/// proto carries no facet on its first field (the newtype value `v`
+/// binds). `elem` is the element spelling (possibly `home:Name`),
+/// `field_name` the proto's first field. Emitted text shape:
+///   if (!(v > 1024 and v <= 65535)) { @panic("std/list:push — …"); };
+fn refineGuardForPush(
+    alloc: std.mem.Allocator,
+    prog: *const astz.Program,
+    elem: []const u8,
+    field_name: []const u8,
+) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, elem, " \t");
+    const want_name = if (std.mem.lastIndexOfScalar(u8, trimmed, ':')) |ci|
+        std.mem.trim(u8, trimmed[ci + 1 ..], " \t")
+    else
+        trimmed;
+    // Home is advisory: qualified elems and live decls pin it; an erased
+    // decl leaves only the marker, so a bare elem falls back to name-only
+    // (the proto marker read's own rule).
+    const home = protoDeclHome(prog, elem);
+    const fd = findFacetDecl(prog, want_name, home) orelse return null;
+    var target: ?*const astz.FacetField = null;
+    for (fd.fields) |*ff| {
+        if (std.mem.eql(u8, ff.name, field_name)) {
+            target = ff;
+            break;
+        }
+    }
+    const ff = target orelse return null;
+    if (ff.lo == null and ff.hi == null and ff.eq == null) return null;
+
+    var cond = std.ArrayList(u8).initCapacity(alloc, 64) catch unreachable;
+    if (ff.eq) |b| {
+        const s = std.fmt.allocPrint(alloc, "v == {d}", .{b.value}) catch unreachable;
+        cond.appendSlice(alloc, s) catch unreachable;
+    } else {
+        if (ff.lo) |b| {
+            const s = std.fmt.allocPrint(alloc, "v {s} {d}", .{ if (b.exclusive) ">" else ">=", b.value }) catch unreachable;
+            cond.appendSlice(alloc, s) catch unreachable;
+        }
+        if (ff.hi) |b| {
+            if (cond.items.len > 0) cond.appendSlice(alloc, " and ") catch unreachable;
+            const s = std.fmt.allocPrint(alloc, "v {s} {d}", .{ if (b.exclusive) "<" else "<=", b.value }) catch unreachable;
+            cond.appendSlice(alloc, s) catch unreachable;
+        }
+    }
+    return std.fmt.allocPrint(
+        alloc,
+        "if (!({s})) {{\n    @panic(\"std/list:push — v violates refine({s}).{s}\");\n}}\n",
+        .{ cond.items, want_name, field_name },
+    ) catch unreachable;
+}
+
+/// push-<Name>'s full body: the facet guard (when the element's proto
+/// carries one on the pushed field) prepended to the caller's `body`.
+fn refineGuardedPushBody(
+    alloc: std.mem.Allocator,
+    prog: *const astz.Program,
+    elem: []const u8,
+    field_name: []const u8,
+    body: []const u8,
+) []const u8 {
+    const guard = refineGuardForPush(alloc, prog, elem, field_name) orelse return body;
+    return std.fmt.allocPrint(alloc, "{s}{s}", .{ guard, body }) catch unreachable;
+}

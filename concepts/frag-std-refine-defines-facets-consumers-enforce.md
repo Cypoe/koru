@@ -47,11 +47,25 @@ downstream module tightens `port` without editing the library. Inline `&`
 inside proto remains reachable later — proto could call refine's parser —
 but the two spellings must meet the same facet.
 
-Open rungs: consumer-side reads (consumers match `.facet_decl` on
-`program.items` — the typed node IS the API; whether a shared scanner
-helper ships is the first enforcing consumer's call);
-disjunction-with-default atoms; non-integer bases.
+The first enforcing consumer landed: `std/list` reads `.facet_decl` off
+`program.items` and emits a bounds guard into `push-<Name>`'s body —
+a violating value `@panic`s at the push boundary, an unrefined proto
+emits byte-identical code to before. Two mechanics the landing pinned:
+refine runs at the `|pre` transform stage so `facet_decl` nodes exist
+before any `.main` consumer walks the tree (ordering by stage, not by
+dissolution luck); and the consumer keeps its own scanner — the helpers
+(`findFacetDecl`, `refineGuardForPush`) live in `list.refine.kz`, not a
+shared stdlib surface, because the matching rule (which field binds
+`v`, what a violation costs) is the consumer's policy. One honest seam
+the landing exposed: a bare proto element whose decl already erased to
+a `// proto` marker has no home left to match — the facet falls back to
+name-only identity, the proto marker reader's own rule. A typed
+`proto_decl` (the next namespace off the wire) restores home scoping.
+
+Open rungs: disjunction-with-default atoms; non-integer bases;
+enforcement at other boundaries (std/store insert, std/json decode).
 
 Pins: 671_001 (meet), 671_002 (empty meet refused), 671_003 (cross-home
 layering), 671_004 (unknown field), 671_005 (base mismatch), 671_006
-(confluent blocks).
+(confluent blocks), 671_007 (push traps on violation), 671_008 (push
+admits through the guard).
