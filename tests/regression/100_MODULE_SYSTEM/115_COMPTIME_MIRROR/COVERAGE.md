@@ -81,8 +81,8 @@ because "no mirror" is exactly the state this file exists to make expensive.
 | `list:push` | `660_005_list_push_len` |
 | `proto:bool` | `690_295_bool_column_round_trip` |
 | `proto:default` | `660_030_proto_default_door_container_ops` |
-| `proto:float` | `665_001_proto_float_terminal_identity` |
-| `proto:int` | `690_285_lone_store_packs_two_placements` |
+| `proto:f64` | `665_001_proto_float_terminal_identity` |
+| `proto:i64` | `690_285_lone_store_packs_two_placements` |
 | `proto:string` | `665_009_proto_terminal_vocabulary` |
 | `store:view` | `690_287_store_view_projects_shared_leaf` |
 | `types:proto` | `665_007_identity_crosses_doors` |
