@@ -60,9 +60,8 @@ pub const List_i64 = struct {
 // flow's body source (the `source:` argument), and the container the entry
 // promises to derive is appended into this flow's module exactly once per
 // element name. The dedupe marker is the REWRITTEN FIRST SITE: a later site
-// counting a `new-<Name>` invocation already present in the program skips
-// synthesis and rewrites to the same event the first site's units announced.
-// No heap state.
+// counting a `new-<Name>` invocation already present skips synthesis and
+// rewrites to the first site's announced event — no heap state.
 
 ~part new
 ~part push
@@ -70,4 +69,5 @@ pub const List_i64 = struct {
 ~part get
 ~part pop
 ~part free
+~part branches
 ~part refine

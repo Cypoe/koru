@@ -607,6 +607,7 @@ pub fn build(b: *std.Build) void {
     auto_discharge_inserter_module.addImport("errors", errors_module);
     auto_discharge_inserter_module.addImport("phantom_parser", phantom_parser_module);
     auto_discharge_inserter_module.addImport("log", log_module);
+    auto_discharge_inserter_module.addImport("annotation_parser", annotation_parser_module);
     exe.root_module.addImport("auto_discharge_inserter", auto_discharge_inserter_module);
 
     // Dead Strip pass module

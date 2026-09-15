@@ -1,10 +1,10 @@
-// Test: the first enforcing consumer — std/list:push reads the element's
-// facet_decl and synthesizes a bounds check into push-<Name>'s body.
-// `port: 80` violates `port: i64 & >1024` — the synthesized guard panics
-// before the append.
+// Test: refine enforcement rides a panic branch — std/list:push declares
+// `| ?!violated string`; the guard produces into it (`port: 80` violates
+// `port: i64 & >1024`) instead of trapping inline.
 //
-// Expected: the process traps (EXPECT_TRAP); stderr carries the panic line
-//           naming the type and field (expected_patterns).
+// Expected: the call site handles no panic branches, so `?!violated` gets the
+//           synthesized arm — stderr echoes the payload (the field name) and
+//           the process traps (EXPECT_TRAP, expected_patterns).
 import std/proto
 import std/refine
 import std/list

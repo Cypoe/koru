@@ -20,6 +20,7 @@ const ast = @import("ast");
 const ast_functional = @import("ast_functional");
 const errors = @import("errors");
 const phantom_parser = @import("phantom_parser");
+const annotation_parser = @import("annotation_parser");
 
 /// Does this event carry `[!]`, the preferred-discharge annotation? The way an
 /// author breaks a tie between several legal disposers.
@@ -81,6 +82,43 @@ pub fn pickUnattendedDischarge(
     }
     if (default_count == 1) return chosen;
     return null;
+}
+
+/// Whether an unhandled-`?!` synthesized arm should bind the payload (`v`)
+/// and echo it before trapping, versus binding `_` for a payload-less branch.
+fn panicHasPayload(branch: *const ast.Branch) bool {
+    return branch.payload.fields.len > 0 or branch.payload.is_wildcard;
+}
+
+/// The synthesized body for an unhandled `?!` panic-branch arm: a loud
+/// `@panic` naming the event and branch, preceded — where the branch carries
+/// a payload — by a stderr echo of that payload, so `?!violated`'s field name
+/// reaches the crash log instead of being bound to `_` and dropped. The
+/// comptime freestanding guard keeps the echo legal on targets without
+/// stderr; the trap itself is portable.
+fn synthPanicBody(
+    allocator: std.mem.Allocator,
+    event_name: []const u8,
+    branch: *const ast.Branch,
+) ![]const u8 {
+    if (!panicHasPayload(branch)) {
+        return std.fmt.allocPrint(
+            allocator,
+            "@panic(\"{s}: unhandled panic branch '{s}' fired at runtime\");",
+            .{ event_name, branch.name },
+        );
+    }
+    // A lone string payload formats as `{s}` ("port"), not the byte array
+    // `{any}` prints; every other shape takes `{any}`.
+    const is_str = branch.payload.fields.len == 1 and
+        (std.mem.eql(u8, branch.payload.fields[0].type, "string") or
+            std.mem.eql(u8, branch.payload.fields[0].type, "[]const u8") or
+            std.mem.eql(u8, branch.payload.fields[0].type, "[]u8"));
+    return std.fmt.allocPrint(
+        allocator,
+        "if (comptime @import(\"builtin\").os.tag != .freestanding) @import(\"std\").debug.print(\"{s}: panic branch '{s}' fired — payload: {{{s}}}\\n\", .{{v}});\n@panic(\"{s}: unhandled panic branch '{s}' fired at runtime\");",
+        .{ event_name, branch.name, if (is_str) "s" else "any", event_name, branch.name },
+    );
 }
 
 pub const AutoDischargeInserter = struct {
@@ -1532,6 +1570,25 @@ pub const AutoDischargeInserter = struct {
         // Synthesize continuations for unhandled optional branches
         // This ensures all optional branches get switch cases and auto-discharge can handle them
         if (mode == .full) {
+            // Anonymous `|>` continuations on a branch-typed callee resolve to
+            // its sole non-panic terminal branch — before any handling count,
+            // so the renamed arm IS that branch's handler.
+            if (try self.resolveAnonymousArms(flow.body.continuations, event_info.decl, flow.location)) |new_conts| {
+                const resolved_flow = try self.allocator.create(ast.Flow);
+                resolved_flow.* = flow.*;
+                resolved_flow.body.continuations = new_conts;
+                const new_program = try ast_functional.replaceFlowRecursive(
+                    self.allocator,
+                    program,
+                    flow,
+                    .{ .flow = resolved_flow.* },
+                ) orelse {
+                    return .{ .transformed = false, .program = program };
+                };
+                const result_ptr = try self.allocator.create(ast.Program);
+                result_ptr.* = new_program;
+                return .{ .transformed = true, .program = result_ptr };
+            }
             // NESTED CALLS FIRST. synthesizeOptionalBranches below reads THIS
             // FLOW'S OWN continuations and never descends into them, so a call
             // written inside an arm — which is where consumers write calls —
@@ -2470,10 +2527,17 @@ pub const AutoDischargeInserter = struct {
         // This handles void event chains like: ~acquire() | ok r |> print.ln("...")
         // where the flow ends without explicit `|> _`
         if (cont.continuations.len == 0) {
-            const has_explicit_terminator = if (cont.node) |node|
-                (node == .terminal or node == .branch_constructor)
-            else
-                false;
+            const has_explicit_terminator = if (cont.node) |node| switch (node) {
+                .terminal, .branch_constructor => true,
+                // A diverging inline arm is a terminus too: the process dies
+                // at the @panic, so a disposal appended after it is
+                // unreachable code Zig rejects — and a dead path owes no
+                // discharge. (Synthesized `?!` panic-branch arms are exactly
+                // this shape.)
+                .inline_code => |code| std.mem.indexOf(u8, code, "@panic(") != null or
+                    std.mem.indexOf(u8, code, "unreachable") != null,
+                else => false,
+            } else false;
 
             if (!has_explicit_terminator and context.hasObligations() and !context.in_sequential_prefix) {
                 // A bare-return PRODUCE (`-> expr` under a subflow impl whose
@@ -2948,10 +3012,17 @@ pub const AutoDischargeInserter = struct {
         // CRITICAL: If we reach end of a pipeline (no nested continuations) and this isn't
         // already a terminator, treat as implicit terminator and check obligations
         if (cont.continuations.len == 0) {
-            const has_explicit_terminator = if (cont.node) |node|
-                (node == .terminal or node == .branch_constructor)
-            else
-                false;
+            const has_explicit_terminator = if (cont.node) |node| switch (node) {
+                .terminal, .branch_constructor => true,
+                // A diverging inline arm is a terminus too: the process dies
+                // at the @panic, so a disposal appended after it is
+                // unreachable code Zig rejects — and a dead path owes no
+                // discharge. (Synthesized `?!` panic-branch arms are exactly
+                // this shape.)
+                .inline_code => |code| std.mem.indexOf(u8, code, "@panic(") != null or
+                    std.mem.indexOf(u8, code, "unreachable") != null,
+                else => false,
+            } else false;
 
             if (!has_explicit_terminator and context.hasObligations()) {
                 // JOIN LIVE-THROUGH: inside a named arm a join continuation
@@ -4840,6 +4911,21 @@ pub const AutoDischargeInserter = struct {
             // are whatever the recursion above left.
             if (cont.node) |node| switch (node) {
                 .invocation => |inv| {
+                    // An anonymous `|>` continuation on a branch-typed callee
+                    // resolves to the success branch BEFORE loudArmsFor counts
+                    // handled branches — otherwise `ok` reads unhandled and a
+                    // no-op arm lands beside the real one.
+                    const inv_name = try self.pathToString(inv.path);
+                    defer self.allocator.free(inv_name);
+                    const inv_module = inv.path.module_qualifier orelse module;
+                    const inv_qualified = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ inv_module, inv_name });
+                    defer self.allocator.free(inv_qualified);
+                    if (self.event_map.get(inv_qualified)) |info| {
+                        if (try self.resolveAnonymousArms(out[i].continuations, info.decl, cont.location)) |resolved| {
+                            out[i].continuations = resolved;
+                            changed = true;
+                        }
+                    }
                     if (try self.loudArmsFor(&inv, module, out[i].continuations, cont.location)) |extended| {
                         out[i].continuations = extended;
                         changed = true;
@@ -4881,29 +4967,35 @@ pub const AutoDischargeInserter = struct {
             try handled.put(c.branch, {});
         }
 
-        var missing = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
+        var missing = try std.ArrayList(*const ast.Branch).initCapacity(self.allocator, 0);
         defer missing.deinit(self.allocator);
-        for (info.decl.branches) |branch| {
+        var missing_opt = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
+        defer missing_opt.deinit(self.allocator);
+        for (info.decl.branches) |*branch| {
             // Effect branches lower to handler fns, not switch arms — the same
             // reason the head-level pass skips them.
             if (branch.kind == .effect) continue;
-            if (!branch.is_panic) continue;
             if (handled.contains(branch.name)) continue;
-            try missing.append(self.allocator, branch.name);
+            // Panic arms are loud (@panic); optional arms are silent no-ops —
+            // both must exist or the emitted switch is not exhaustive over the
+            // callee's Output union (a nested `push(x)` with no continuations
+            // still has `.ok` to answer).
+            if (branch.is_panic) {
+                try missing.append(self.allocator, branch);
+            } else if (branch.is_optional) {
+                try missing_opt.append(self.allocator, branch.name);
+            }
         }
-        if (missing.items.len == 0) return null;
+        if (missing.items.len == 0 and missing_opt.items.len == 0) return null;
 
-        const out = try self.allocator.alloc(ast.Continuation, existing.len + missing.items.len);
+        const out = try self.allocator.alloc(ast.Continuation, existing.len + missing.items.len + missing_opt.items.len);
         @memcpy(out[0..existing.len], existing);
-        for (missing.items, 0..) |branch_name, i| {
-            const panic_msg = try std.fmt.allocPrint(
-                self.allocator,
-                "@panic(\"unhandled panic branch '{s}' fired at runtime\");",
-                .{branch_name},
-            );
+        for (missing.items, 0..) |branch, i| {
+            const has_payload = panicHasPayload(branch);
+            const panic_msg = try synthPanicBody(self.allocator, qualified, branch);
             out[existing.len + i] = ast.Continuation{
-                .branch = try self.allocator.dupe(u8, branch_name),
-                .binding = try self.allocator.dupe(u8, "_"),
+                .branch = try self.allocator.dupe(u8, branch.name),
+                .binding = try self.allocator.dupe(u8, if (has_payload) "v" else "_"),
                 .binding_annotations = &[_][]const u8{},
                 .binding_type = .branch_payload,
                 .is_catchall = false,
@@ -4915,6 +5007,83 @@ pub const AutoDischargeInserter = struct {
                 .continuations = &[_]ast.Continuation{},
                 .location = location,
             };
+        }
+        for (missing_opt.items, 0..) |branch_name, i| {
+            out[existing.len + missing.items.len + i] = ast.Continuation{
+                .branch = try self.allocator.dupe(u8, branch_name),
+                .binding = try self.allocator.dupe(u8, "_"),
+                .binding_annotations = &[_][]const u8{},
+                .binding_type = .branch_payload,
+                .is_catchall = false,
+                .catchall_metatype = null,
+                .condition = null,
+                .condition_expr = null,
+                .node = .{ .terminal = {} },
+                .indent = 0,
+                .continuations = &[_]ast.Continuation{},
+                .location = location,
+            };
+        }
+        return out;
+    }
+
+    /// `|> next` after a branch-typed event is an anonymous continuation
+    /// (`branch == ""`) meaning "continue on the success path". On a union
+    /// output that must become an arm on the event's single non-panic
+    /// terminal branch — emitted nameless it is a `.` arm Zig rejects.
+    /// Zero candidates (a panic-only event: there is no success to continue
+    /// from) or 2+ (which branch does `|>` mean?) both refuse — name the
+    /// branch. Returns a new continuations slice with anonymous arms
+    /// resolved, or null when there is nothing to resolve.
+    fn resolveAnonymousArms(
+        self: *AutoDischargeInserter,
+        conts: []const ast.Continuation,
+        decl: *const ast.EventDecl,
+        location: errors.SourceLocation,
+    ) !?[]ast.Continuation {
+        if (decl.branches.len == 0) return null; // void/bare-return: anon is linear
+        // A `-> T` event continues linearly even when it also declares effect
+        // arms (`! warn`) — branches and return type are mutually exclusive,
+        // but effect arms are a separate kind that coexists with `-> T`.
+        if (decl.return_type != null) return null;
+        // Keyword events (`if`, `for`, …) rejoin: the anonymous `|>` after
+        // their arms is the JOIN continuation — "after the conditional" — not
+        // an arm waiting for a branch name. Only real event calls resolve.
+        if (annotation_parser.isKeyword(decl.annotations)) return null;
+        var has_anon = false;
+        for (conts) |*c| {
+            if (!c.is_catchall and c.branch.len == 0) {
+                has_anon = true;
+                break;
+            }
+        }
+        if (!has_anon) return null;
+
+        var success: []const u8 = "";
+        var success_count: usize = 0;
+        for (decl.branches) |*b| {
+            if (b.kind != .terminal or b.is_panic) continue;
+            success = b.name;
+            success_count += 1;
+        }
+        const event_name = try self.pathToString(decl.path);
+        defer self.allocator.free(event_name);
+        if (success_count == 0) {
+            try self.reporter.addErrorAtLocation(.KORU022, location, "anonymous `|>` after '{s}' has nothing to continue on — the event declares only panic branches, so the continuation can never run", .{event_name});
+            return error.ValidationFailed;
+        }
+        if (success_count > 1) {
+            try self.reporter.addErrorAtLocation(.KORU022, location, "anonymous `|>` after '{s}' is ambiguous — the event has {d} non-panic branches; name the one to continue on (`| <branch> |>`)", .{ event_name, success_count });
+            return error.ValidationFailed;
+        }
+
+        const out = try self.allocator.alloc(ast.Continuation, conts.len);
+        errdefer self.allocator.free(out);
+        for (conts, 0..) |*c, i| {
+            out[i] = c.*;
+            if (!c.is_catchall and c.branch.len == 0) {
+                out[i].branch = try self.allocator.dupe(u8, success);
+            }
         }
         return out;
     }
@@ -4949,17 +5118,18 @@ pub const AutoDischargeInserter = struct {
         // differs (panic vs empty terminal).
         var missing_optional = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
         defer missing_optional.deinit(self.allocator);
-        var missing_panic = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
+        var missing_panic = try std.ArrayList(*const ast.Branch).initCapacity(self.allocator, 0);
         defer missing_panic.deinit(self.allocator);
         // ~[prototype] holes: required terminal branches left unhandled. Same
         // @panic body as missing_panic, but a distinct list so the crash-surface
         // strict gate (--panic-branches=strict) below only governs real `| ?!`
         // panic branches, never prototype holes (different feature, different
-        // opt-in).
+        // opt-in). Panic entries carry the branch decl — synthPanicBody echoes
+        // the payload to stderr before dying where one exists.
         var missing_prototype = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
         defer missing_prototype.deinit(self.allocator);
 
-        for (event_decl.branches) |branch| {
+        for (event_decl.branches) |*branch| {
             // Effect (`!`) branches are NOT switch arms — they lower to fns in
             // the consumer's Handlers struct. The emitter synthesizes no-op
             // fns for unhandled optional effect branches; switch padding here
@@ -4967,7 +5137,7 @@ pub const AutoDischargeInserter = struct {
             if (branch.kind == .effect) continue;
             if (handled.contains(branch.name)) continue;
             if (branch.is_panic) {
-                try missing_panic.append(self.allocator, branch.name);
+                try missing_panic.append(self.allocator, branch);
             } else if (branch.is_optional) {
                 try missing_optional.append(self.allocator, branch.name);
             } else if (self.prototype_mode) {
@@ -5047,8 +5217,8 @@ pub const AutoDischargeInserter = struct {
         // "also report + fail", not a new pass. Reuses KORU022 (missing required
         // branch): in strict mode a panic branch IS required to be handled.
         if (self.strict_panic_branches and missing_panic.items.len > 0) {
-            for (missing_panic.items) |branch_name| {
-                try self.reporter.addErrorAtLocation(.KORU022, flow.location, "panic branch '{s}' is unhandled — in strict mode (--panic-branches=strict) panic branches must be handled or explicitly muted (| {s} _ |> ...). Without strict mode this synthesizes @panic at runtime.", .{ branch_name, branch_name });
+            for (missing_panic.items) |branch| {
+                try self.reporter.addErrorAtLocation(.KORU022, flow.location, "panic branch '{s}' is unhandled — in strict mode (--panic-branches=strict) panic branches must be handled or explicitly muted (| {s} _ |> ...). Without strict mode this synthesizes @panic at runtime.", .{ branch.name, branch.name });
             }
             return error.ValidationFailed;
         }
@@ -5097,16 +5267,15 @@ pub const AutoDischargeInserter = struct {
         // verbatim as the handler body and is NOT a terminal, so auto-discharge
         // leaves it alone (no no-op discharge). The switch arm is exhaustive
         // (so Zig accepts it) AND loud (panics if the branch ever fires).
-        for (missing_panic.items, 0..) |branch_name, i| {
+        const owner_name = try self.pathToString(event_decl.path);
+        defer self.allocator.free(owner_name);
+        for (missing_panic.items, 0..) |branch, i| {
             const idx = kept_count + missing_optional.items.len + i;
-            const panic_msg = try std.fmt.allocPrint(
-                self.allocator,
-                "@panic(\"unhandled panic branch '{s}' fired at runtime\");",
-                .{branch_name},
-            );
+            const has_payload = panicHasPayload(branch);
+            const panic_msg = try synthPanicBody(self.allocator, owner_name, branch);
             new_continuations[idx] = ast.Continuation{
-                .branch = try self.allocator.dupe(u8, branch_name),
-                .binding = try self.allocator.dupe(u8, "_"), // Discard payload; auto-discharge renames to _auto_N
+                .branch = try self.allocator.dupe(u8, branch.name),
+                .binding = try self.allocator.dupe(u8, if (has_payload) "v" else "_"),
                 .binding_annotations = &[_][]const u8{},
                 .binding_type = .branch_payload,
                 .is_catchall = false,

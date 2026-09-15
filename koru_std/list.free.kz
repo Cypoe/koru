@@ -929,7 +929,7 @@ fn synthesizeContainer(
         units.append(allocator, pair[1]) catch unreachable;
     }
 
-    // 3. push-<Name>: (xs borrow, every proto field by name) -> void; refine facets add bounds guards.
+    // 3. push-<Name>: (xs borrow, every proto field by name) -> ?ok | ?!violated | ?!oom.
     {
         const op_name = std.fmt.allocPrint(allocator, "push-{s}", .{proto_name}) catch unreachable;
         const in = allocator.alloc(astz.Field, 1 + pf.names.len) catch unreachable;
@@ -940,9 +940,9 @@ fn synthesizeContainer(
             in[1 + i] = field_plain(allocator, flat, pf.types[i]);
             init.appendSlice(allocator, std.fmt.allocPrint(allocator, ".{s} = {s}, ", .{ flat, flat }) catch unreachable) catch unreachable;
         }
-        const append_body = std.fmt.allocPrint(allocator, "xs.items.append(xs.allocator, .{{ {s} }}) catch {{\n    @panic(\"std/list:push — out of memory\");\n}};", .{init.items}) catch unreachable;
+        const append_body = std.fmt.allocPrint(allocator, "xs.items.append(xs.allocator, .{{ {s} }}) catch {{\n    return .{{ .oom = .{{}} }};\n}};\nreturn .{{ .ok = .{{}} }};", .{init.items}) catch unreachable;
         const body = refineGuardedPushBody(allocator, program, elem_expr, append_body);
-        const pair = synthOp(allocator, flow, op_name, in, &.{}, null, body);
+        const pair = synthOp(allocator, flow, op_name, in, pushBranches(allocator), null, body);
         units.append(allocator, pair[0]) catch unreachable;
         units.append(allocator, pair[1]) catch unreachable;
     }

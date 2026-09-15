@@ -5,11 +5,6 @@
 // in the program tree (|pre stage); these helpers resolve the element's proto
 // to a facet and build the bounds guard push-<Name> emits at its boundary.
 
-/// Dotted proto leaf name (`pos.x`) → flat record/push-param name (`pos_x`).
-fn flatName(alloc: std.mem.Allocator, fname: []const u8) []const u8 {
-    return std.mem.replaceOwned(u8, alloc, fname, ".", "_") catch unreachable;
-}
-
 /// The logical home of `elem`'s proto declaration — the enclosing
 /// module_decl's logical_name, or the entry module for a top-level decl.
 /// A qualified `home:Name` elem answers directly; a bare elem resolves by
@@ -93,8 +88,10 @@ fn findFacetDecl(prog: *const astz.Program, name: []const u8, home: ?[]const u8)
 /// to the caller's `body`. push takes every proto field by name (the
 /// record IS the element), so every bound the facet carries is checkable
 /// here — `port > 1024` guards the `port` arg, `retries >= 0` guards
-/// `retries`. Emitted shape per bounded field:
-///   if (!(port > 1024 and port <= 65535)) { @panic("…refine(Server).port"); };
+/// `retries`. A violation produces into the `?!violated` panic branch —
+/// unhandled it is the same synthesized @panic, handled it supervises.
+/// Emitted shape per bounded field:
+///   if (!(port > 1024 and port <= 65535)) { return .{ .violated = "port" }; }
 fn refineGuardedPushBody(
     alloc: std.mem.Allocator,
     prog: *const astz.Program,
@@ -133,8 +130,8 @@ fn refineGuardedPushBody(
         }
         const guard = std.fmt.allocPrint(
             alloc,
-            "if (!({s})) {{\n    @panic(\"std/list:push — {s} violates refine({s})\");\n}}\n",
-            .{ cond.items, ff.name, want_name },
+            "if (!({s})) {{\n    return .{{ .violated = \"{s}\" }};\n}}\n",
+            .{ cond.items, pname },
         ) catch unreachable;
         out.appendSlice(alloc, guard) catch unreachable;
     }

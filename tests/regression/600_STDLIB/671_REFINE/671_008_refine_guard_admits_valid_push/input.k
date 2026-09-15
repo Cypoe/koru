@@ -1,5 +1,5 @@
 // Test: the synthesized bounds guard admits in-bounds pushes — the check
-// fires only on violation. `v: 8080` meets `port: i64 & >1024 & <=65535`,
+// fires only on violation. `port: 8080` meets `port: i64 & >1024 & <=65535`,
 // the append runs, and len reports the element landed.
 //
 // Expected: runs clean — prints `len=1` (expected.txt).

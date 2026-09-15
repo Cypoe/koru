@@ -276,6 +276,7 @@ auto_discharge_inserter_module.addImport("ast_functional", ast_functional_module
 auto_discharge_inserter_module.addImport("errors", errors_module);
 auto_discharge_inserter_module.addImport("log", log_module);
 auto_discharge_inserter_module.addImport("phantom_parser", phantom_parser_module);
+auto_discharge_inserter_module.addImport("annotation_parser", annotation_parser_module);
 
 // Dead strip pass - removes unreachable events/procs from AST
 const dead_strip_module = b.createModule(.{

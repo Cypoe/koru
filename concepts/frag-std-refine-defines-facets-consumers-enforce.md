@@ -48,12 +48,21 @@ inside proto remains reachable later — proto could call refine's parser —
 but the two spellings must meet the same facet.
 
 The first enforcing consumer landed: `std/list` reads `.facet_decl` off
-`program.items` and emits a bounds guard into `push-<Name>`'s body —
-a violating value `@panic`s at the push boundary, an unrefined proto
-emits byte-identical code to before. Two mechanics the landing pinned:
-refine runs at the `|pre` transform stage so `facet_decl` nodes exist
-before any `.main` consumer walks the tree (ordering by stage, not by
-dissolution luck); and the consumer keeps its own scanner — the helpers
+`program.items` and emits bounds guards into `push-<Name>`'s body. The
+violation is a **panic branch**, not an inline trap: `push` declares
+`| ?ok`, `| ?!violated string` (the offending field's flat name), and
+`| ?!oom` — the guard produces `.violated` into the union, the append
+returns `.oom`, success returns `.ok`. Unhandled, the call site gets
+the synthesized `@panic` — same loudness as before, and the arm echoes
+the payload to stderr first (`payload: port`) so the field name reaches
+the crash log. Handled (`| violated f |>`), the caller supervises and
+survives — a JSON decoder's recoverable parse error is exactly this
+arm, and `| violated f |> => violated f` re-raises into an enclosing
+event's own `?!` decl. The cost of refusal is now *in push's type*,
+not buried in its body. Two mechanics the landing pinned: refine runs
+at the `|pre` transform stage so `facet_decl` nodes exist before any
+`.main` consumer walks the tree (ordering by stage, not by dissolution
+luck); and the consumer keeps its own scanner — the helpers
 (`flatName`, `findFacetDecl`, `refineGuardedPushBody`) live in
 `list.refine.kz`, not a shared stdlib surface, because the matching
 rule (which fields the boundary sees, what a violation costs) is the
@@ -77,5 +86,6 @@ enforcement at other boundaries (std/store insert, std/json decode).
 
 Pins: 671_001 (meet), 671_002 (empty meet refused), 671_003 (cross-home
 layering), 671_004 (unknown field), 671_005 (base mismatch), 671_006
-(confluent blocks), 671_007 (push traps on violation), 671_008 (push
-admits through the guard).
+(confluent blocks), 671_007 (unhandled `?!violated` traps, payload
+echoed), 671_008 (push admits through the guard), 671_009 (handled
+`| violated f |>` survives the bad push).
