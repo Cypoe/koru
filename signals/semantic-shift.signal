@@ -1,0 +1,7 @@
+name: semantic-shift
+kind: declared
+shape: categorical
+face: in
+membrane: false
+note: a feature's semantics moved kind — not behavior drift but a re-typing of what the thing IS; refine violations went from an inline @panic inside push's body to a typed, supervisable ?!violated branch on push's decl (8b1253ec9)
+route: surface
