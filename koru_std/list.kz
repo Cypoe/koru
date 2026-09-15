@@ -31,6 +31,8 @@
 
 const std = @import("std");
 const ast_find = @import("ast");
+// The shared std/refine enforcement surface (src/ast_functional.zig).
+const facets = @import("ast_functional").facets;
 
 pub const List_i64 = struct {
     items: std.ArrayList(i64),
@@ -69,5 +71,3 @@ pub const List_i64 = struct {
 ~part get
 ~part pop
 ~part free
-~part branches
-~part refine

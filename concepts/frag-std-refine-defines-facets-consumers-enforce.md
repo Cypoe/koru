@@ -62,11 +62,16 @@ event's own `?!` decl. The cost of refusal is now *in push's type*,
 not buried in its body. Two mechanics the landing pinned: refine runs
 at the `|pre` transform stage so `facet_decl` nodes exist before any
 `.main` consumer walks the tree (ordering by stage, not by dissolution
-luck); and the consumer keeps its own scanner — the helpers
-(`flatName`, `findFacetDecl`, `refineGuardedPushBody`) live in
-`list.refine.kz`, not a shared stdlib surface, because the matching
-rule (which fields the boundary sees, what a violation costs) is the
-consumer's policy.
+luck); and the enforcement protocol is a **shared comptime surface** —
+`ast_functional.facets` carries facet resolution (`find`, `protoHome`,
+`flat`), the boundary guard (`guardBody`), and the canonical branch
+contract (`enforceBranches`: `?ok` + `?!violated` + caller-named panic
+extras). A consumer's transform calls facts, never re-derives
+`facet_decl` layout — consumer-owned means the *policy* is the
+consumer's (where the boundary sits, that list's extras include `oom`),
+not the protocol. The earlier "each consumer keeps its own scanner"
+belief held exactly one consumer; with the machinery factored, a second
+enforcer costs its judgment, not a re-implementation.
 
 The landing also corrected `std/list`'s element semantics — the
 enforcement story only works if the boundary sees what it constrains:
@@ -88,4 +93,5 @@ Pins: 671_001 (meet), 671_002 (empty meet refused), 671_003 (cross-home
 layering), 671_004 (unknown field), 671_005 (base mismatch), 671_006
 (confluent blocks), 671_007 (unhandled `?!violated` traps, payload
 echoed), 671_008 (push admits through the guard), 671_009 (handled
-`| violated f |>` survives the bad push).
+`| violated f |>` survives the bad push), 671_010 (`=> violated f`
+re-raises across an event boundary — the outer caller supervises).

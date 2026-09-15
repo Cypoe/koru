@@ -3265,3 +3265,206 @@ fn armReachesInvocationImpl(
     }
     return false;
 }
+
+/// Facet enforcement surface — the shared std/refine machinery a consumer's
+/// transform calls at comptime. `std/refine` leaves typed `Item.facet_decl`
+/// nodes in the program tree (|pre stage); these helpers resolve which facet
+/// governs a proto element, emit the boundary guard, and construct the
+/// canonical enforcement branch set. The consumer supplies policy — where
+/// its write boundary sits, which extra panic branches it declares — and
+/// the protocol lives here: a second consumer enforces by calling, never
+/// by re-deriving facet_decl layout or home scoping.
+pub const facets = struct {
+    /// Canonical branch names — the enforcement contract every consumer
+    /// shares. `ok` is the sole non-panic terminal a bare `|>` rides;
+    /// `violated` is the `?!` a refine guard produces into.
+    pub const ok = "ok";
+    pub const violated = "violated";
+
+    /// Dotted proto leaf name (`pos.x`) → flat record/param name (`pos_x`).
+    pub fn flat(alloc: std.mem.Allocator, fname: []const u8) []const u8 {
+        return std.mem.replaceOwned(u8, alloc, fname, ".", "_") catch unreachable;
+    }
+
+    /// The logical home of `elem`'s proto declaration — the enclosing
+    /// module_decl's logical_name, or the entry module for a top-level
+    /// decl. A qualified `home:Name` elem answers directly; a bare elem
+    /// resolves by scoped walk (flow.module is the file stem, not the
+    /// logical home — the same reason refine's scopeOfFlow walks
+    /// module_decls).
+    pub fn protoHome(prog: *const ast.Program, elem: []const u8) ?[]const u8 {
+        const trimmed = std.mem.trim(u8, elem, " \t");
+        if (std.mem.lastIndexOfScalar(u8, trimmed, ':')) |ci| {
+            const qual = std.mem.trim(u8, trimmed[0..ci], " \t");
+            if (qual.len > 0) {
+                return std.mem.replaceOwned(u8, std.heap.page_allocator, qual, "/", ".") catch unreachable;
+            }
+        }
+        const want_name = trimmed;
+        const S = struct {
+            fn isProtoDoor(f: *const ast.Flow, name: []const u8) bool {
+                const inv = f.inv();
+                if (inv.path.segments.len != 1) return false;
+                const verb = inv.path.segments[0];
+                const mq = inv.path.module_qualifier orelse return false;
+                const types_door = std.mem.eql(u8, verb, "proto") and
+                    (std.mem.eql(u8, mq, "std.types") or std.mem.eql(u8, mq, "std/types"));
+                const default_door = std.mem.eql(u8, verb, "default") and
+                    (std.mem.eql(u8, mq, "std.proto") or std.mem.eql(u8, mq, "std/proto"));
+                if (!(types_door or default_door)) return false;
+                if (inv.args.len == 0) return false;
+                var nm = inv.args[0].value;
+                if (nm.len >= 2 and nm[0] == '"' and nm[nm.len - 1] == '"') nm = nm[1 .. nm.len - 1];
+                return std.mem.eql(u8, nm, name);
+            }
+
+            fn findIn(items: []const ast.Item, name: []const u8, scope: []const u8, out: *[]const u8) bool {
+                for (items) |*pi| {
+                    switch (pi.*) {
+                        .flow => |*f| {
+                            if (isProtoDoor(f, name)) {
+                                out.* = scope;
+                                return true;
+                            }
+                        },
+                        .module_decl => |*m| {
+                            if (findIn(m.items, name, m.logical_name, out)) return true;
+                        },
+                        else => {},
+                    }
+                }
+                return false;
+            }
+        };
+        var home: []const u8 = "";
+        if (S.findIn(prog.items, want_name, prog.main_module_name, &home)) return home;
+        return null;
+    }
+
+    /// The facet_decl a `std/refine` transform left for `name` in `home` —
+    /// the typed inter-transform declaration (Item variant, never text).
+    /// `home == null` matches any home — the bare-elem post-erase
+    /// fallback: when the proto decl flow is already gone, its `// proto`
+    /// marker carries no home to resolve against, so the facet's own
+    /// `fd.module` (the declaration's logical home, always present) is
+    /// the identity.
+    pub fn find(prog: *const ast.Program, name: []const u8, home: ?[]const u8) ?*const ast.FacetDecl {
+        const S = struct {
+            fn findIn(items: []const ast.Item, n: []const u8, h: ?[]const u8) ?*const ast.FacetDecl {
+                for (items) |*pi| {
+                    switch (pi.*) {
+                        .facet_decl => |*fd| {
+                            if (std.mem.eql(u8, fd.name, n) and (h == null or std.mem.eql(u8, fd.module, h.?))) return fd;
+                        },
+                        .module_decl => |*m| {
+                            if (findIn(m.items, n, h)) |hit| return hit;
+                        },
+                        else => {},
+                    }
+                }
+                return null;
+            }
+        };
+        return S.findIn(prog.items, name, home);
+    }
+
+    fn emptyBranch(alloc: std.mem.Allocator, name: []const u8) ast.Branch {
+        return ast.Branch{
+            .name = alloc.dupe(u8, name) catch unreachable,
+            .payload = ast.Shape{ .fields = &.{} },
+            .kind = .terminal,
+            .annotations = &.{},
+        };
+    }
+
+    /// `?name` — ignorable terminal; a missing handler synthesizes a no-op.
+    pub fn optBranch(alloc: std.mem.Allocator, name: []const u8) ast.Branch {
+        var b = emptyBranch(alloc, name);
+        b.is_optional = true;
+        return b;
+    }
+
+    /// `?!name` — panic terminal; a missing handler synthesizes @panic,
+    /// a handled one supervises (the store:take precedent).
+    pub fn panicBranch(alloc: std.mem.Allocator, name: []const u8) ast.Branch {
+        var b = emptyBranch(alloc, name);
+        b.is_panic = true;
+        return b;
+    }
+
+    /// `?!name` carrying a string payload (e.g. `violated` — the offending
+    /// field's flat name).
+    pub fn panicStrBranch(alloc: std.mem.Allocator, name: []const u8) ast.Branch {
+        var b = panicBranch(alloc, name);
+        const fields = alloc.alloc(ast.Field, 1) catch unreachable;
+        fields[0] = ast.Field{
+            .name = alloc.dupe(u8, "__type_ref") catch unreachable,
+            .type = alloc.dupe(u8, "string") catch unreachable,
+        };
+        b.payload = ast.Shape{ .fields = fields };
+        return b;
+    }
+
+    /// The canonical enforcement branch set: `?ok` + `?!violated string`
+    /// + caller-named extra panic branches (e.g. list's `?!oom` — the
+    /// extras are consumer policy, not refine's).
+    pub fn enforceBranches(alloc: std.mem.Allocator, panic_extras: []const []const u8) []ast.Branch {
+        const br = alloc.alloc(ast.Branch, 2 + panic_extras.len) catch unreachable;
+        br[0] = optBranch(alloc, ok);
+        br[1] = panicStrBranch(alloc, violated);
+        for (panic_extras, 0..) |name, i| br[2 + i] = panicBranch(alloc, name);
+        return br;
+    }
+
+    /// Prepend per-field bounds guards to `body`: for every refined field,
+    /// `if (!(cond)) { return .{ .violated = "<field>" }; }`. A violation
+    /// produces into the `?!violated` panic branch — unhandled it is the
+    /// same synthesized @panic, handled it supervises. Returns `body`
+    /// unchanged when the element type carries no facet.
+    pub fn guardBody(
+        alloc: std.mem.Allocator,
+        prog: *const ast.Program,
+        elem: []const u8,
+        body: []const u8,
+    ) []const u8 {
+        const trimmed = std.mem.trim(u8, elem, " \t");
+        const want_name = if (std.mem.lastIndexOfScalar(u8, trimmed, ':')) |ci|
+            std.mem.trim(u8, trimmed[ci + 1 ..], " \t")
+        else
+            trimmed;
+        // Home is advisory: qualified elems and live decls pin it; an erased
+        // decl leaves only the marker, so a bare elem falls back to
+        // name-only (the proto marker read's own rule).
+        const home = protoHome(prog, elem);
+        const fd = find(prog, want_name, home) orelse return body;
+
+        var out = std.ArrayList(u8).initCapacity(alloc, 128) catch unreachable;
+        for (fd.fields) |*ff| {
+            if (ff.lo == null and ff.hi == null and ff.eq == null) continue;
+            const pname = flat(alloc, ff.name);
+            var cond = std.ArrayList(u8).initCapacity(alloc, 64) catch unreachable;
+            if (ff.eq) |b| {
+                const s = std.fmt.allocPrint(alloc, "{s} == {d}", .{ pname, b.value }) catch unreachable;
+                cond.appendSlice(alloc, s) catch unreachable;
+            } else {
+                if (ff.lo) |b| {
+                    const s = std.fmt.allocPrint(alloc, "{s} {s} {d}", .{ pname, if (b.exclusive) ">" else ">=", b.value }) catch unreachable;
+                    cond.appendSlice(alloc, s) catch unreachable;
+                }
+                if (ff.hi) |b| {
+                    if (cond.items.len > 0) cond.appendSlice(alloc, " and ") catch unreachable;
+                    const s = std.fmt.allocPrint(alloc, "{s} {s} {d}", .{ pname, if (b.exclusive) "<" else "<=", b.value }) catch unreachable;
+                    cond.appendSlice(alloc, s) catch unreachable;
+                }
+            }
+            const guard = std.fmt.allocPrint(
+                alloc,
+                "if (!({s})) {{\n    return .{{ .{s} = \"{s}\" }};\n}}\n",
+                .{ cond.items, violated, pname },
+            ) catch unreachable;
+            out.appendSlice(alloc, guard) catch unreachable;
+        }
+        out.appendSlice(alloc, body) catch unreachable;
+        return out.items;
+    }
+};
