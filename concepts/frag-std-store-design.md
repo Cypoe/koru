@@ -716,3 +716,38 @@ Arity (ruled): one claim per store; claims take layer-1 declarations only
 design test: every refused composition has a one-word alternative
 (store-in-two-sets → view; set-in-set → view over sets; singleton → the
 store or the query). A refusal with no alternative is the only design hole.
+
+**`! first` + `| none` (2026-10-13): the sweep arm vocabulary gained
+early-exit find.** `std/store:query(s)` accepts `! first <row> when <cond>`
+as `! query`'s alternative — same binding, same guard, same derived
+projection — stopping the sweep after the first matching visit, with
+`| none` (the established absent-case spelling: 320_090, 220_012) firing
+when no row matched. The pair is the find-or-join a plain sweep cannot
+express: the asteroids-net input path had been hand-rolling it as a
+full-store scan writing a sentinel into a scratch grid, with a `pid == 0`
+check downstream to mean "not found."
+
+The arm exists BECAUSE position is never identity — it is the consequence
+of that ruling made operational. A "find one row" site cannot cache the
+answer positionally (`take` swap-removes the last row into the freed
+slot), and the interceptor route to an index fails the same way: the
+lifecycle vocabulary (`inserted`/`removed`/`updated`/`cleared`) fires for
+the taken row but not for the row MOVED into its slot, so a key→slot map
+maintained by contract would silently point at the wrong row after every
+non-last take. Two holes close it if the map road is ever taken: slot
+visibility in arm payloads, and a `moved` arm — but a store-owned index
+declaration would absorb swap-remove inside `take`'s own emit instead,
+which is the structural answer if scans ever actually bind.
+
+Measured honest: at 128 sessions the `first` conversion was
+performance-neutral (≈41 Hz both ways) — the input path's cost is
+per-packet fixed overhead (~40µs/pkt: recv, decode, dispatch), not row
+visits. `first` earns its place as the semantic spelling, not as the
+perf fix; an `indexed` column remains the tool for the day the scan is
+the measured cost.
+
+Open gap found along the way, unfixed: a `! each`-style ancestor arm
+binding is invisible to a nested sweep's capture threading — `lookupBranch`
+resolves arm payload types only against `event_decl`s, and `for` is a tor
+whose `! each *` declares none. Tor inputs and mid-pipe binds thread fine;
+arm bindings of transform-declared events do not.

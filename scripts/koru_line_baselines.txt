@@ -108,8 +108,9 @@ koru_std/store.insert.kz	482
 koru_std/store.kz	1690
 koru_std/store.new.kz	6504
 koru_std/store.preorder.kz	110
+koru_std/store.qcaps.kz	372
 koru_std/store.qrewrite.kz	231
-koru_std/store.query.kz	1242
+koru_std/store.query.kz	1019
 koru_std/store.rule.kz	148
 koru_std/store.sitetag.kz	27
 koru_std/store.stored.kz	871

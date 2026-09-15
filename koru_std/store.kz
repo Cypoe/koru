@@ -1641,7 +1641,6 @@ fn storeRefsText(alloc: std.mem.Allocator, text: []const u8, name: []const u8, p
     }
     return out.toOwnedSlice(alloc) catch unreachable;
 }
-
 /// A text slot, FULLY lowered: cell paths first, then indexed reads — the order
 /// `stored`'s value pass has always used, so a cross-store index inside an
 /// indexed read is already a cell path by the time the indexed pass reads it.
@@ -1687,4 +1686,5 @@ fn storeLowerText(
 ~part clear
 ~part stripe
 ~part qrewrite
+~part qcaps
 ~part sitetag
