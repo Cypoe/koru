@@ -549,12 +549,23 @@ pub const FacetBound = struct {
     exclusive: bool, // `>` vs `>=`, `<` vs `<=`
 };
 
+/// A normalizer term — `& clamp(lo, hi)`. Unlike a bound (a claim a
+/// consumer TESTS, producing `.violated`), a clamp is a claim about the
+/// representation: the boundary REWRITES the value into `[lo, hi]` —
+/// saturating, silently, because the declaration spells the policy.
+/// Bounds on the same field judge the post-clamp value.
+pub const FacetClamp = struct {
+    lo: i64,
+    hi: i64,
+};
+
 pub const FacetField = struct {
     name: []const u8,
     type: []const u8, // base type, e.g. "i64"
     lo: ?FacetBound = null,
     hi: ?FacetBound = null,
     eq: ?FacetBound = null,
+    clamp: ?FacetClamp = null,
 
     pub fn deinit(self: *FacetField, allocator: std.mem.Allocator) void {
         allocator.free(self.name);

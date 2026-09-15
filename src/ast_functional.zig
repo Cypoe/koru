@@ -1211,6 +1211,7 @@ pub fn cloneItem(allocator: std.mem.Allocator, item: *const ast.Item) CloneError
                     .lo = field.lo,
                     .hi = field.hi,
                     .eq = field.eq,
+                    .clamp = field.clamp,
                 };
             }
             return .{ .facet_decl = ast.FacetDecl{
@@ -3286,6 +3287,15 @@ pub const facets = struct {
         return std.mem.replaceOwned(u8, alloc, fname, ".", "_") catch unreachable;
     }
 
+    /// The type name an `elem` spelling addresses — `home:Name` → `Name`.
+    fn elemName(elem: []const u8) []const u8 {
+        const trimmed = std.mem.trim(u8, elem, " \t");
+        return if (std.mem.lastIndexOfScalar(u8, trimmed, ':')) |ci|
+            std.mem.trim(u8, trimmed[ci + 1 ..], " \t")
+        else
+            trimmed;
+    }
+
     /// The logical home of `elem`'s proto declaration — the enclosing
     /// module_decl's logical_name, or the entry module for a top-level
     /// decl. A qualified `home:Name` elem answers directly; a bare elem
@@ -3416,8 +3426,38 @@ pub const facets = struct {
         return br;
     }
 
+    /// The expression a boundary should test or store for a facet field —
+    /// the flat param name, or the saturation expression when the field
+    /// carries `& clamp(lo, hi)`. Bounds judge the POST-clamp value
+    /// (normalize first, then check), so guards and record writes share
+    /// this one spelling.
+    pub fn normExpr(alloc: std.mem.Allocator, ff: *const ast.FacetField, pname: []const u8) []const u8 {
+        const c = ff.clamp orelse return pname;
+        return std.fmt.allocPrint(alloc, "@min(@max({s}, {d}), {d})", .{ pname, c.lo, c.hi }) catch unreachable;
+    }
+
+    /// The write-side expression for a proto field of `elem` — the flat
+    /// name, or the clamped expression when the facet normalizes it. A
+    /// consumer embeds this where the value lands (list's record init);
+    /// unclamped fields get the flat name back, so the call is free.
+    pub fn valueExpr(
+        alloc: std.mem.Allocator,
+        prog: *const ast.Program,
+        elem: []const u8,
+        field_name: []const u8,
+    ) []const u8 {
+        const base = flat(alloc, field_name);
+        const fd = find(prog, elemName(elem), protoHome(prog, elem)) orelse return base;
+        for (fd.fields) |*ff| {
+            if (std.mem.eql(u8, flat(alloc, ff.name), base)) return normExpr(alloc, ff, base);
+        }
+        return base;
+    }
+
     /// Prepend per-field bounds guards to `body`: for every refined field,
-    /// `if (!(cond)) { return .{ .violated = "<field>" }; }`. A violation
+    /// `if (!(cond)) { return .{ .violated = "<field>" }; }` — the
+    /// condition tests the normalized expression, so a clamped field's
+    /// bounds judge the value that will actually be stored. A violation
     /// produces into the `?!violated` panic branch — unhandled it is the
     /// same synthesized @panic, handled it supervises. Returns `body`
     /// unchanged when the element type carries no facet.
@@ -3427,33 +3467,29 @@ pub const facets = struct {
         elem: []const u8,
         body: []const u8,
     ) []const u8 {
-        const trimmed = std.mem.trim(u8, elem, " \t");
-        const want_name = if (std.mem.lastIndexOfScalar(u8, trimmed, ':')) |ci|
-            std.mem.trim(u8, trimmed[ci + 1 ..], " \t")
-        else
-            trimmed;
         // Home is advisory: qualified elems and live decls pin it; an erased
         // decl leaves only the marker, so a bare elem falls back to
         // name-only (the proto marker read's own rule).
         const home = protoHome(prog, elem);
-        const fd = find(prog, want_name, home) orelse return body;
+        const fd = find(prog, elemName(elem), home) orelse return body;
 
         var out = std.ArrayList(u8).initCapacity(alloc, 128) catch unreachable;
         for (fd.fields) |*ff| {
             if (ff.lo == null and ff.hi == null and ff.eq == null) continue;
             const pname = flat(alloc, ff.name);
+            const vname = normExpr(alloc, ff, pname);
             var cond = std.ArrayList(u8).initCapacity(alloc, 64) catch unreachable;
             if (ff.eq) |b| {
-                const s = std.fmt.allocPrint(alloc, "{s} == {d}", .{ pname, b.value }) catch unreachable;
+                const s = std.fmt.allocPrint(alloc, "{s} == {d}", .{ vname, b.value }) catch unreachable;
                 cond.appendSlice(alloc, s) catch unreachable;
             } else {
                 if (ff.lo) |b| {
-                    const s = std.fmt.allocPrint(alloc, "{s} {s} {d}", .{ pname, if (b.exclusive) ">" else ">=", b.value }) catch unreachable;
+                    const s = std.fmt.allocPrint(alloc, "{s} {s} {d}", .{ vname, if (b.exclusive) ">" else ">=", b.value }) catch unreachable;
                     cond.appendSlice(alloc, s) catch unreachable;
                 }
                 if (ff.hi) |b| {
                     if (cond.items.len > 0) cond.appendSlice(alloc, " and ") catch unreachable;
-                    const s = std.fmt.allocPrint(alloc, "{s} {s} {d}", .{ pname, if (b.exclusive) "<" else "<=", b.value }) catch unreachable;
+                    const s = std.fmt.allocPrint(alloc, "{s} {s} {d}", .{ vname, if (b.exclusive) "<" else "<=", b.value }) catch unreachable;
                     cond.appendSlice(alloc, s) catch unreachable;
                 }
             }

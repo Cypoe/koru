@@ -388,6 +388,11 @@ pub const AstSerializer = struct {
                 defer self.allocator.free(s);
                 try self.write(s);
             }
+            if (field.clamp) |c| {
+                const s = try std.fmt.allocPrint(self.allocator, ", .clamp = .{{ .lo = {d}, .hi = {d} }}", .{ c.lo, c.hi });
+                defer self.allocator.free(s);
+                try self.write(s);
+            }
             try self.write(" }, ");
         }
         try self.write("}, .location = ");
@@ -1981,6 +1986,11 @@ pub const AstSerializer = struct {
                     defer self.allocator.free(s);
                     try self.write(s);
                 }
+            }
+            if (field.clamp) |c| {
+                const s = try std.fmt.allocPrint(self.allocator, ", \"clamp\": {{ \"lo\": {d}, \"hi\": {d} }}", .{ c.lo, c.hi });
+                defer self.allocator.free(s);
+                try self.write(s);
             }
             try self.write(" }");
         }

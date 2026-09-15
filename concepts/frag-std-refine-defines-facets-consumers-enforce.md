@@ -10,12 +10,23 @@ tags: [koru, stdlib, refine, proto, constraints, comptime, transforms]
 
 `std/refine` is a **definition layer**, not an enforcer. Both `std/proto`
 and `std/refine` live on abstract declarations — proto owns nominal
-structure (`name: type` fields), refine owns predicate facets
-(`name: type & bound…`) — and neither ever sees a concrete value. A value
-becomes bound by a constraint exactly when it crosses a *consumer's*
-boundary (`std/list:push`, `std/store` insert, `std/json` decode), so the
-boundary is where enforcement lives. An unconsumed facet is enumerable
+structure (`name: type` fields), refine owns facets (`name: type &
+bound…`) — and neither ever sees a concrete value. A value becomes bound
+by a constraint exactly when it crosses a *consumer's* boundary
+(`std/list:push`, `std/store` insert, `std/json` decode), so the boundary
+is where enforcement lives. An unconsumed facet is enumerable
 documentation, not a hole.
+
+Facets come in two term kinds. **Predicates** (`>1024`, `<=65535`,
+`==x`) *test* the incoming value and refuse through `?!violated`.
+**Normalizers** (`clamp(lo, hi)`) *rewrite* it — the boundary stores
+the saturated value, declared on the field so the policy is visible in
+the declaration, not hidden in a fixup. When a field carries both, the
+order is forced: normalize first, then predicates judge the post-clamp
+result (`clamp(0,65535) & >1024` on `80` still refuses). Two clamps on
+one field meet by interval intersection; a clamp intersected to empty
+or against bounds gone empty refuses at KORU205 like any empty meet.
+Clamps bind integer scalars only.
 
 Mechanics, all library-level over existing machinery:
 
@@ -94,4 +105,7 @@ layering), 671_004 (unknown field), 671_005 (base mismatch), 671_006
 (confluent blocks), 671_007 (unhandled `?!violated` traps, payload
 echoed), 671_008 (push admits through the guard), 671_009 (handled
 `| violated f |>` survives the bad push), 671_010 (`=> violated f`
-re-raises across an event boundary — the outer caller supervises).
+re-raises across an event boundary — the outer caller supervises),
+671_011 (clamp saturates the stored value), 671_012 (bounds judge the
+post-clamp value), 671_013 (clamp met to empty refuses), 671_014
+(clamp∩clamp meets by intersection).

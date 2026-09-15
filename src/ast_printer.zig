@@ -158,6 +158,7 @@ const Printer = struct {
                 if (field.lo) |b| try self.print(" & {s}{d}", .{ if (b.exclusive) ">" else ">=", b.value });
                 if (field.hi) |b| try self.print(" & {s}{d}", .{ if (b.exclusive) "<" else "<=", b.value });
             }
+            if (field.clamp) |c| try self.print(" & clamp({d},{d})", .{ c.lo, c.hi });
         }
         try self.write("\n");
     }

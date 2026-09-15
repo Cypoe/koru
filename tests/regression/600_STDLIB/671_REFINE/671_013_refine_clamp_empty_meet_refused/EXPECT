@@ -1,0 +1,2 @@
+CONTAINS refines to nothing
+CONTAINS 'clamp(0,100)' and '>200' cannot both hold

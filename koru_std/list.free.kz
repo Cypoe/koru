@@ -938,7 +938,7 @@ fn synthesizeContainer(
         for (pf.names, 0..) |fname, i| {
             const flat = facets.flat(allocator, fname);
             in[1 + i] = field_plain(allocator, flat, pf.types[i]);
-            init.appendSlice(allocator, std.fmt.allocPrint(allocator, ".{s} = {s}, ", .{ flat, flat }) catch unreachable) catch unreachable;
+            init.appendSlice(allocator, std.fmt.allocPrint(allocator, ".{s} = {s}, ", .{ flat, facets.valueExpr(allocator, program, elem_expr, fname) }) catch unreachable) catch unreachable;
         }
         const append_body = std.fmt.allocPrint(allocator, "xs.items.append(xs.allocator, .{{ {s} }}) catch {{\n    return .{{ .oom = .{{}} }};\n}};\nreturn .{{ .ok = .{{}} }};", .{init.items}) catch unreachable;
         const body = facets.guardBody(allocator, program, elem_expr, append_body);

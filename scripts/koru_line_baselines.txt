@@ -87,7 +87,8 @@ koru_std/package.kz	163
 koru_std/parser.kz	2060
 koru_std/profiler.kz	283
 koru_std/proto.kz	632
-koru_std/refine.k	579
+koru_std/refine.k	196
+koru_std/refine.kz	486
 koru_std/regex.kz	875
 koru_std/rings.kz	225
 koru_std/rules.kz	691
