@@ -9,41 +9,41 @@
 //
 // SURFACE:
 //   std/refine(Server) {
-//     port: int & >1024 & <=65535
+//     port: i64 & >1024 & <=65535
 //   }
-//   meets the `std/proto(Server)` declaration — every refined field must
-//   exist there and the base type must agree. The meet is name-keyed,
-//   total, and confluent: several `std/refine` blocks (in any module, in
-//   any order) fold onto the same facet, and the canonical meet lands in
-//   the program tree as a typed `Item.facet_decl` node — consumers match
-//   the node, never comment text.
+//   meets the `std/proto(Server)` declaration — refined fields must exist
+//   there on one agreed base. The meet is name-keyed, total, confluent:
+//   `std/refine` blocks in any module fold onto one facet that lands as a
+//   typed `Item.facet_decl` — consumers match the node, never comment text.
 //
-// LAYERING — the point of a separate module: a bound can arrive apart from
-//   the declaration. A library declares `std/proto(Server)` plainly; a
-//   downstream module imports it and writes
-//     std/refine(lib/home:Server) { port: int & >1024 }
-//   — the `home:Name` spelling rides the named-arg channel (proto's own
-//   `app/alpha:Health` convention), no strings needed.
-//   — the qualified name addresses the type by home, the facet meets the
-//   library's declaration program-wide. Definition is import-scoped (the
-//   block resolves only where `std/refine` is imported); the constraint
-//   rides the type, so enforcement is type-global.
+// LAYERING — the point of a separate module: a bound can arrive apart
+//   from the declaration. A library declares `std/proto(Server)` plainly;
+//   a downstream module writes `std/refine(lib/home:Server) { port: i64 &
+//   >1024 }` — `home:Name` rides the named-arg channel (proto's own
+//   `app/alpha:Health` convention), addressing the type by home while the
+//   facet meets the declaration program-wide. Definition is import-scoped;
+//   the constraint rides the type, so enforcement is type-global.
 //
 // ENFORCEMENT IS THE CONSUMER'S: refine emits data, never a check.
 //   `std/store` insert, `std/json` decode, `std/list:push` — each reads the
 //   facet at its own boundary and decides. An unconsumed facet is
 //   enumerable documentation, not a hole.
 //
-// v0 ATOMS: `>N` `>=N` `<N` `<=N` `==N` over integer literals, on an `int`
-// base only. Disjunction-with-default (`*a | b`) is the designed next rung.
+// v0 ATOMS: `>N` `>=N` `<N` `<=N` `==N` over integer literals, plus the
+// `clamp(lo, hi)` normalizer — on integer scalar bases, raw (`i64`) or
+// named through a terminal (`Port`). Disjunction (`*a | b`) is next.
 //
-// NOTE on the signature: no `allocator` param. `.k` files carry no host
-// lines, so `std.mem.Allocator` cannot be spelled here — the transform ABI
-// binds params by name into the emitted Input struct, and host types are
-// emitted verbatim. The proc takes `std` inside its body instead, and uses
+// NOTE: `.k` files carry no host lines, so host types are spelled through
+// `std/compiler:` aliases (Program, Item, Source, Allocator); the
+// transform's own proc takes `std` inside its body and uses
 // `koru_allocator()` — the canonical accessor emitted into every module
-// (emitter_helpers.zig), which rides the Debug leak counter like all
-// Koru-managed allocations.
+// (emitter_helpers.zig), riding the Debug leak counter.
+// The explainer (`koruc <file> explain`) reports the met facet; the impl
+// is refine.explain.kz. @retain: the generated gather invokes it.
+[comptime|explainer]pub tor explain-refine {
+    program: *const std/compiler:Program,
+    allocator: std/compiler:Allocator
+} -> ExplainReport
 [comptime|transform|pre]pub tor default {
     expr: Expression,
     source: Source,

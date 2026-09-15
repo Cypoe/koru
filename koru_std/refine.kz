@@ -14,6 +14,7 @@ const ast = @import("ast");
 const af = @import("ast_functional");
 
 ~part terminal
+~part explain
 
 const Bound = struct {
     value: i64,
@@ -32,8 +33,7 @@ const Field = struct {
     hi: ?Bound = null,
     eq: ?Bound = null,
     clamp: ?Clamp = null,
-    // Two `clamp` terms that intersect to nothing — the pair that
-    // disagreed, for the empty-meet refusal.
+    // Two clamps intersecting to nothing — the disagreeing pair.
     clamp_conflict: ?[2][]const u8 = null,
 };
 const ProtoField = struct { name: []const u8, base: []const u8 };
@@ -129,8 +129,8 @@ fn invSource(inv: *const ast.Invocation) []const u8 {
 // transform when it runs.
 fn parseInto(
     alloc: std.mem.Allocator,
-    rep: *koru_std.koru_compiler.ErrorReporter,
-    fl: *const ast.Flow,
+    rep: ?*koru_std.koru_compiler.ErrorReporter,
+    fl: ?*const ast.Flow,
     entry_name: []const u8,
     text: []const u8,
     fields: *std.ArrayList(Field),
@@ -158,7 +158,7 @@ fn parseInto(
 
         const colon = std.mem.indexOfScalar(u8, line, ':') orelse {
             if (!strict) continue;
-            return .{ .replacement = ast.refusal(alloc, rep, .KORU205, fl.location, fl.module, "std/refine({s}): field line '{s}' has no ':' — each field must be `name: type [& constraint…]`", .{ entry_name, line }) };
+            return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): field line '{s}' has no ':' — each field must be `name: type [& constraint…]`", .{ entry_name, line }) };
         };
         const fname = std.mem.trim(u8, line[0..colon], " \t");
         const rest = line[colon + 1 ..];
@@ -167,7 +167,7 @@ fn parseInto(
         const base = std.mem.trim(u8, segs.next().?, " \t");
         if (fname.len == 0 or base.len == 0) {
             if (!strict) continue;
-            return .{ .replacement = ast.refusal(alloc, rep, .KORU205, fl.location, fl.module, "std/refine({s}): field line '{s}' is missing a name or a type", .{ entry_name, line }) };
+            return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): field line '{s}' is missing a name or a type", .{ entry_name, line }) };
         }
 
         var idx_opt: ?usize = null;
@@ -184,7 +184,7 @@ fn parseInto(
         const f = &fields.items[idx];
         if (!std.mem.eql(u8, f.base, base)) {
             if (!strict) continue;
-            return .{ .replacement = ast.refusal(alloc, rep, .KORU205, fl.location, fl.module, "std/refine({s}): field '{s}' declared with base '{s}' but already met as '{s}' — a meet needs one base, not two", .{ entry_name, fname, base, f.base }) };
+            return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): field '{s}' declared with base '{s}' but already met as '{s}' — a meet needs one base, not two", .{ entry_name, fname, base, f.base }) };
         }
 
         while (segs.next()) |seg| {
@@ -203,19 +203,19 @@ fn parseInto(
                 const inner = std.mem.trim(u8, atom[6 .. atom.len - 1], " \t");
                 const comma = std.mem.indexOfScalar(u8, inner, ',') orelse {
                     if (!strict) continue;
-                    return .{ .replacement = ast.refusal(alloc, rep, .KORU205, fl.location, fl.module, "std/refine({s}): '{s}' needs two bounds — the spelling is `clamp(lo, hi)`", .{ entry_name, atom }) };
+                    return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): '{s}' needs two bounds — the spelling is `clamp(lo, hi)`", .{ entry_name, atom }) };
                 };
                 const lo_n = std.fmt.parseInt(i64, std.mem.trim(u8, inner[0..comma], " \t"), 10) catch {
                     if (!strict) continue;
-                    return .{ .replacement = ast.refusal(alloc, rep, .KORU205, fl.location, fl.module, "std/refine({s}): clamp bound '{s}' needs an integer literal", .{ entry_name, inner[0..comma] }) };
+                    return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): clamp bound '{s}' needs an integer literal", .{ entry_name, inner[0..comma] }) };
                 };
                 const hi_n = std.fmt.parseInt(i64, std.mem.trim(u8, inner[comma + 1 ..], " \t"), 10) catch {
                     if (!strict) continue;
-                    return .{ .replacement = ast.refusal(alloc, rep, .KORU205, fl.location, fl.module, "std/refine({s}): clamp bound '{s}' needs an integer literal", .{ entry_name, inner[comma + 1 ..] }) };
+                    return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): clamp bound '{s}' needs an integer literal", .{ entry_name, inner[comma + 1 ..] }) };
                 };
                 if (lo_n > hi_n) {
                     if (!strict) continue;
-                    return .{ .replacement = ast.refusal(alloc, rep, .KORU205, fl.location, fl.module, "std/refine({s}): clamp({d}, {d}) is empty — lo exceeds hi", .{ entry_name, lo_n, hi_n }) };
+                    return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): clamp({d}, {d}) is empty — lo exceeds hi", .{ entry_name, lo_n, hi_n }) };
                 }
                 const ccanon = std.fmt.allocPrint(alloc, "clamp({d},{d})", .{ lo_n, hi_n }) catch unreachable;
                 if (f.clamp) |c| {
@@ -241,12 +241,12 @@ fn parseInto(
                 op = .lt; digits = atom[1..]; op_str = "<";
             } else {
                 if (!strict) continue;
-                return .{ .replacement = ast.refusal(alloc, rep, .KORU205, fl.location, fl.module, "std/refine({s}): constraint atom '{s}' is not a bound — refine understands >N >=N <N <=N ==N over integer literals", .{ entry_name, atom }) };
+                return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): constraint atom '{s}' is not a bound — refine understands >N >=N <N <=N ==N over integer literals", .{ entry_name, atom }) };
             }
 
             const n = std.fmt.parseInt(i64, std.mem.trim(u8, digits, " \t"), 10) catch {
                 if (!strict) continue;
-                return .{ .replacement = ast.refusal(alloc, rep, .KORU205, fl.location, fl.module, "std/refine({s}): bound '{s}' needs an integer literal — '{s}' does not parse", .{ entry_name, atom, digits }) };
+                return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): bound '{s}' needs an integer literal — '{s}' does not parse", .{ entry_name, atom, digits }) };
             };
             const canon = std.fmt.allocPrint(alloc, "{s}{d}", .{ op_str, n }) catch unreachable;
 
@@ -271,7 +271,7 @@ fn parseInto(
                     if (f.eq) |e| {
                         if (e.value != n) {
                             if (!strict) continue;
-                            return .{ .replacement = ast.refusal(alloc, rep, .KORU205, fl.location, fl.module, "std/refine({s}): field '{s}' refines to nothing — '{s}' contradicts '{s}'", .{ entry_name, fname, canon, e.src }) };
+                            return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): field '{s}' refines to nothing — '{s}' contradicts '{s}'", .{ entry_name, fname, canon, e.src }) };
                         }
                     } else {
                         f.eq = .{ .value = n, .exclusive = false, .src = canon };
@@ -379,13 +379,13 @@ fn walkProto(alloc: std.mem.Allocator, items: []const ast.Item, scope_home: []co
 // Live `std/refine` invocations and `facet_decl` nodes targeting
 // the same (home, name) — all contributors fold onto one meet, so
 // the facet is visitation-order-independent.
-fn walkRefine(alloc: std.mem.Allocator, rep: *koru_std.koru_compiler.ErrorReporter, fl: *const ast.Flow, items: []const ast.Item, scope_home: []const u8, w: Want, fields: *std.ArrayList(Field), skip: *const ast.Invocation) void {
+fn walkRefine(alloc: std.mem.Allocator, rep: ?*koru_std.koru_compiler.ErrorReporter, fl: ?*const ast.Flow, items: []const ast.Item, scope_home: []const u8, w: Want, fields: *std.ArrayList(Field), skip: ?*const ast.Invocation) void {
     for (items) |entry| {
         switch (entry) {
             .flow => |candidate| {
                 if (candidate.body.node) |*node| {
                     if (node.* == .invocation and isRefineDoor(&node.invocation) and
-                        &node.invocation != skip)
+                        @as(?*const ast.Invocation, &node.invocation) != skip)
                     {
                         const cw = invWant(alloc, &node.invocation, scope_home);
                         if (std.mem.eql(u8, cw.home, w.home) and std.mem.eql(u8, cw.name, w.name)) {

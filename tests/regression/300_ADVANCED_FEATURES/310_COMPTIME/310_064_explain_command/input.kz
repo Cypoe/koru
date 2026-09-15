@@ -6,7 +6,7 @@
 
 ~import std/explain
 
-~[comptime|explainer]pub event explain-demo {
+~[comptime|explainer]pub tor explain-demo {
     program: *const Program,
     allocator: __koru_std.mem.Allocator,
 } -> ExplainReport
@@ -29,7 +29,3 @@
         },
     };
 }
-
-~event main {}
-~proc main|zig {}
-~main()

@@ -25,6 +25,7 @@ const ast = @import("ast");
 const Program = ast.Program;
 const Item = ast.Item;
 const Source = ast.Source;
+const Allocator = std.mem.Allocator;
 
 // The diagnostic channel, re-exported under this module's name so a pass or a
 // `[comptime|transform]` event can spell it `std/compiler:ErrorReporter`.
@@ -808,8 +809,7 @@ pub const CompilerContext = struct {
 // Invoke: koruc main.kz install [args...]
 // Or:     koruc main.kz i [args...]
 //
-// Commands appear in --help under "Commands:" section.
-// [norun] prevents auto-execution - collected from AST like flags.
+// Commands appear in --help under "Commands:"; [norun] prevents auto-execution.
 
 ~[comptime|norun]pub tor command.declare { source: Source }
 

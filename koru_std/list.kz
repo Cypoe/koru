@@ -56,7 +56,6 @@ pub const List_i64 = struct {
 // must be a [transform] — a plain event taking the type as an Expression would make
 // the whole flow comptime. The branches (`| list` / `| err`) carry over to
 // the concrete constructor unchanged.
-//
 // A PROTO element routes to SYNTHESIS, not a hand-written constructor: the
 // element's fields are read from the `std/types.proto(<Name>)` declaration
 // flow's body source (the `source:` argument), and the container the entry
@@ -71,3 +70,4 @@ pub const List_i64 = struct {
 ~part get
 ~part pop
 ~part free
+~part explain
