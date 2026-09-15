@@ -54,13 +54,23 @@ emits byte-identical code to before. Two mechanics the landing pinned:
 refine runs at the `|pre` transform stage so `facet_decl` nodes exist
 before any `.main` consumer walks the tree (ordering by stage, not by
 dissolution luck); and the consumer keeps its own scanner — the helpers
-(`findFacetDecl`, `refineGuardForPush`) live in `list.refine.kz`, not a
-shared stdlib surface, because the matching rule (which field binds
-`v`, what a violation costs) is the consumer's policy. One honest seam
-the landing exposed: a bare proto element whose decl already erased to
-a `// proto` marker has no home left to match — the facet falls back to
-name-only identity, the proto marker reader's own rule. A typed
-`proto_decl` (the next namespace off the wire) restores home scoping.
+(`flatName`, `findFacetDecl`, `refineGuardedPushBody`) live in
+`list.refine.kz`, not a shared stdlib surface, because the matching
+rule (which fields the boundary sees, what a violation costs) is the
+consumer's policy.
+
+The landing also corrected `std/list`'s element semantics — the
+enforcement story only works if the boundary sees what it constrains:
+a proto element was a newtype over its FIRST field (`pub const Server =
+i64`), silently dropping `retries`/`host` — fields the facet bounded.
+The element is now the record: `Server = struct { port: i64, host:
+[]const u8 }`, `push` spells every field by name (the `store:insert`
+convention — `push(xs, port: 8080, host: "x")`), and nested protos
+flatten to leaf columns (`pos.x` → `pos_x`). One honest seam remains:
+a bare proto element whose decl already erased to a `// proto` marker
+has no home left to match — the facet falls back to name-only identity,
+the proto marker reader's own rule. A typed `proto_decl` (the next
+namespace off the wire) restores home scoping.
 
 Open rungs: disjunction-with-default atoms; non-integer bases;
 enforcement at other boundaries (std/store insert, std/json decode).

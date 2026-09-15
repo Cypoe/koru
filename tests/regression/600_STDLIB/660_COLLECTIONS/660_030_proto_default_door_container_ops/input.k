@@ -19,7 +19,7 @@ std/proto(Engine) {
 }
 
 std/list:new(Engine)
-| list xs |> std/list:push(xs, v: 10) |> std/list:push(xs, v: 20) |> std/list:len(xs): n |> std/io:print.ln("len={{ n:d }}") |> std/list:pop(xs)
-    | item v |> std/io:print.ln("popped {{ v:d }}") |> std/list:free(xs)
+| list xs |> std/list:push(xs, rpm: 10, serial: "a") |> std/list:push(xs, rpm: 20, serial: "b") |> std/list:len(xs): n |> std/io:print.ln("len={{ n:d }}") |> std/list:pop(xs)
+    | item v |> std/io:print.ln("popped {{ v.rpm:d }}") |> std/list:free(xs)
     | empty  |> std/io:print.ln("EMPTY") |> std/list:free(xs)
 | err e |> std/io:print.ln("ERR {{ e:s }}")

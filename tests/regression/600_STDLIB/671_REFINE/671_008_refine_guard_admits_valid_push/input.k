@@ -19,5 +19,5 @@ std/refine(Server) {
 }
 
 std/list:new(Server)
-| list xs |> std/list:push(xs, v: 8080) |> std/list:len(xs): n |> std/io:print.ln("len={{ n:d }}") |> std/list:free(xs)
+| list xs |> std/list:push(xs, port: 8080, host: "web-01") |> std/list:len(xs): n |> std/io:print.ln("len={{ n:d }}") |> std/list:free(xs)
 | err e |> std/io:print.ln("ERR {{ e:s }}")

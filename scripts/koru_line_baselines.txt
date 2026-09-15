@@ -78,7 +78,7 @@ koru_std/list.len.kz	23
 koru_std/list.new.kz	138
 koru_std/list.pop.kz	28
 koru_std/list.push.kz	30
-koru_std/list.refine.kz	151
+koru_std/list.refine.kz	143
 koru_std/map.kz	114
 koru_std/net.kz	63
 koru_std/optimizations/kernels.kz	62

@@ -17,13 +17,13 @@ std/proto(Enemy) {
 }
 
 std/list:new(Player)
-| list players |> std/list:push(xs: players, v: 1.5) |> std/list:pop(xs: players)
-    | item player |> std/io:print.ln("player {{ player:d }}") |> std/list:free(xs: players)
+| list players |> std/list:push(xs: players, health: 1.5) |> std/list:pop(xs: players)
+    | item player |> std/io:print.ln("player {{ player.health:d }}") |> std/list:free(xs: players)
     | empty |> std/io:print.ln("player EMPTY") |> std/list:free(xs: players)
 | err e |> std/io:print.ln("ERR {{ e:s }}")
 
 std/list:new(Enemy)
-| list enemies |> std/list:push(xs: enemies, v: 2.5) |> std/list:pop(xs: enemies)
-    | item enemy |> std/io:print.ln("enemy {{ enemy:d }}") |> std/list:free(xs: enemies)
+| list enemies |> std/list:push(xs: enemies, health: 2.5) |> std/list:pop(xs: enemies)
+    | item enemy |> std/io:print.ln("enemy {{ enemy.health:d }}") |> std/list:free(xs: enemies)
     | empty |> std/io:print.ln("enemy EMPTY") |> std/list:free(xs: enemies)
 | err e |> std/io:print.ln("ERR {{ e:s }}")

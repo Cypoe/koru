@@ -1,6 +1,6 @@
 // Test: the first enforcing consumer — std/list:push reads the element's
 // facet_decl and synthesizes a bounds check into push-<Name>'s body.
-// `v: 80` violates `port: i64 & >1024` — the synthesized guard panics
+// `port: 80` violates `port: i64 & >1024` — the synthesized guard panics
 // before the append.
 //
 // Expected: the process traps (EXPECT_TRAP); stderr carries the panic line
@@ -21,5 +21,5 @@ std/refine(Server) {
 }
 
 std/list:new(Server)
-| list xs |> std/list:push(xs, v: 80) |> std/io:print.ln("never")
+| list xs |> std/list:push(xs, port: 80, host: "web-01") |> std/io:print.ln("never")
 | err e |> std/io:print.ln("ERR {{ e:s }}")

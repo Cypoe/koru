@@ -14,5 +14,5 @@ std/proto(Player) {
 }
 
 std/list:new(Player)
-| list xs |> std/list:push(xs, v: 98.6) |> std/list:len(xs): n |> std/io:print.ln("len={{ n:d }}") |> std/list:free(xs)
+| list xs |> std/list:push(xs, health: 98.6) |> std/list:len(xs): n |> std/io:print.ln("len={{ n:d }}") |> std/list:free(xs)
 | err e |> std/io:print.ln("ERR {{ e:s }}")

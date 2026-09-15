@@ -25,7 +25,7 @@ std/proto(Player) {
 }
 
 std/list:new(Player)
-| list players |> std/list:push(xs: players, v: 98.5) |> std/list:pop(xs: players)
-    | item player |> report-health(health: player): player_out |> std/io:print.ln("player {{ player_out:d }}") |> std/list:free(xs: players)
+| list players |> std/list:push(xs: players, pos_x: 0.0, pos_y: 0.0, health: 98.5) |> std/list:pop(xs: players)
+    | item player |> report-health(player.health): player_out |> std/io:print.ln("player {{ player_out:d }}") |> std/list:free(xs: players)
     | empty |> std/io:print.ln("player EMPTY") |> std/list:free(xs: players)
 | err e |> std/io:print.ln("ERR {{ e:s }}")

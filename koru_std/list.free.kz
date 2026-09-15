@@ -867,36 +867,30 @@ fn synthesizeContainer(
     const pf = protoFieldsOfProgram(allocator, program, elem_expr);
     if (pf.names.len == 0) @panic("proto-fields-empty");
 
-    // NEWTYPE reading this rung: the container stores the entry's FIRST
-    // field's type. The entry's job is the IDENTITY (frag-type-system-design:
-    // two protos over the same shape never interchange — refused at the KORU
-    // layer by name), and every probe surface pushes the field value
-    // (`std/list:push(xs, v: 10)` over `proto(Engine) { rpm: i32 }`); a record
-    // has no construction surface yet. The full record struct is still emitted
-    // below as the registry's readable content.
-    const elem_zig = elementZigType(allocator, pf.types[0]);
-
+    // RECORD element: the container stores the whole proto value and push
+    // takes every field by name (the std/store insert convention) — a
+    // boundary that sees the whole record is where a facet gets enforced.
 
     var units = std.ArrayList(astz.Item).initCapacity(allocator, 13) catch unreachable;
 
-    // 1. Element alias + List_<Name> handle struct (inline_code into the
-    //    caller's module). The entry is a NEWTYPE this rung: `pub const
-    //    Engine = i32;` — the same lowering std/types:string uses — so the
-    //    synthesized ops can declare their element slots under the PROTO NAME
-    //    (`v: Engine`) while Zig sees the underlying scalar. The name is what
-    //    carries the identity: two protos over one shape never interchange
-    //    (the KORU030 nominal gate), even though both lower to i32 here.
+    // 1. Element record + List_<Name> handle struct (inline_code into the
+    //    caller's module). The proto name lowers to a struct with every
+    //    declared field; the name still carries the identity — two protos
+    //    over one shape never interchange (the KORU030 nominal gate).
     {
         var sb = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
         sb.appendSlice(allocator, "pub const ") catch unreachable;
         sb.appendSlice(allocator, proto_name) catch unreachable;
-        sb.appendSlice(allocator, " = ") catch unreachable;
-        sb.appendSlice(allocator, elem_zig) catch unreachable;
-        sb.appendSlice(allocator, ";\n") catch unreachable;
+        sb.appendSlice(allocator, " = struct {\n") catch unreachable;
+        for (pf.names, pf.types) |fname, ftype| {
+            const s = std.fmt.allocPrint(allocator, "    {s}: {s},\n", .{ flatName(allocator, fname), elementZigType(allocator, ftype) }) catch unreachable;
+            sb.appendSlice(allocator, s) catch unreachable;
+        }
+        sb.appendSlice(allocator, "};\n") catch unreachable;
         sb.appendSlice(allocator, "pub const ") catch unreachable;
         sb.appendSlice(allocator, list_name) catch unreachable;
         sb.appendSlice(allocator, " = struct {\n    items: @import(\"std\").ArrayList(") catch unreachable;
-        sb.appendSlice(allocator, elem_zig) catch unreachable;
+        sb.appendSlice(allocator, proto_name) catch unreachable;
         sb.appendSlice(allocator, "),\n    allocator: @import(\"std\").mem.Allocator,\n    fn deinit(self: *") catch unreachable;
         sb.appendSlice(allocator, list_name) catch unreachable;
         sb.appendSlice(allocator, ") void {\n        self.items.deinit(self.allocator);\n        self.allocator.destroy(self);\n    }\n};\n") catch unreachable;
@@ -928,20 +922,26 @@ fn synthesizeContainer(
         const body = std.fmt.allocPrint(
             allocator,
             "const allocator = koru_allocator();\nconst self = allocator.create({s}) catch {{\n    return .{{ .err = \"allocation failed\" }};\n}};\nself.* = .{{\n    .items = @import(\"std\").ArrayList({s}).initCapacity(allocator, 0) catch {{\n        allocator.destroy(self);\n        return .{{ .err = \"allocation failed\" }};\n    }},\n    .allocator = allocator,\n}};\nreturn .{{ .list = self }};",
-            .{ list_name, elem_zig },
+            .{ list_name, proto_name },
         ) catch unreachable;
         const pair = synthOp(allocator, flow, new_name, &.{}, br, null, body);
         units.append(allocator, pair[0]) catch unreachable;
         units.append(allocator, pair[1]) catch unreachable;
     }
 
-    // 3. push-<Name>: (xs borrow, v element) -> void; a refine facet on the pushed field adds a bounds guard.
+    // 3. push-<Name>: (xs borrow, every proto field by name) -> void; refine facets add bounds guards.
     {
         const op_name = std.fmt.allocPrint(allocator, "push-{s}", .{proto_name}) catch unreachable;
-        const in = allocator.alloc(astz.Field, 2) catch unreachable;
+        const in = allocator.alloc(astz.Field, 1 + pf.names.len) catch unreachable;
         in[0] = field_s(allocator, "xs", list_name, "list");
-        in[1] = field_plain(allocator, "v", pf.types[0]);
-        const body = refineGuardedPushBody(allocator, program, elem_expr, pf.names[0], "xs.items.append(xs.allocator, v) catch {\n    @panic(\"std/list:push — out of memory\");\n};");
+        var init = std.ArrayList(u8).initCapacity(allocator, 64) catch unreachable;
+        for (pf.names, 0..) |fname, i| {
+            const flat = flatName(allocator, fname);
+            in[1 + i] = field_plain(allocator, flat, pf.types[i]);
+            init.appendSlice(allocator, std.fmt.allocPrint(allocator, ".{s} = {s}, ", .{ flat, flat }) catch unreachable) catch unreachable;
+        }
+        const append_body = std.fmt.allocPrint(allocator, "xs.items.append(xs.allocator, .{{ {s} }}) catch {{\n    @panic(\"std/list:push — out of memory\");\n}};", .{init.items}) catch unreachable;
+        const body = refineGuardedPushBody(allocator, program, elem_expr, append_body);
         const pair = synthOp(allocator, flow, op_name, in, &.{}, null, body);
         units.append(allocator, pair[0]) catch unreachable;
         units.append(allocator, pair[1]) catch unreachable;
@@ -966,7 +966,7 @@ fn synthesizeContainer(
         const br = allocator.alloc(astz.Branch, 2) catch unreachable;
         br[0] = astz.Branch{
             .name = allocator.dupe(u8, "item") catch unreachable,
-            .payload = astz.Shape{ .fields = fields1(allocator, field_plain(allocator, "__type_ref", pf.types[0])) },
+            .payload = astz.Shape{ .fields = fields1(allocator, field_plain(allocator, "__type_ref", proto_name)) },
             .kind = .terminal,
             .annotations = &.{},
         };
@@ -992,7 +992,7 @@ fn synthesizeContainer(
         const br = allocator.alloc(astz.Branch, 2) catch unreachable;
         br[0] = astz.Branch{
             .name = allocator.dupe(u8, "item") catch unreachable,
-            .payload = astz.Shape{ .fields = fields1(allocator, field_plain(allocator, "__type_ref", pf.types[0])) },
+            .payload = astz.Shape{ .fields = fields1(allocator, field_plain(allocator, "__type_ref", proto_name)) },
             .kind = .terminal,
             .annotations = &.{},
         };
