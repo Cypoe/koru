@@ -3,6 +3,7 @@ const log = @import("log");
 const std = @import("std");
 
 const ast = @import("ast");
+const ast_functional = @import("ast_functional");
 const errors = @import("errors");
 const phantom_parser = @import("phantom_parser");
 
@@ -160,11 +161,11 @@ pub const PhantomSemanticChecker = struct {
                         false;
                     if ((types_tor or proto_door or foreign_door) and inv.path.segments.len > 0) {
                         const last_seg = inv.path.segments[inv.path.segments.len - 1];
+                        // The decl-tor verbs are `struct` plus the scalar
+                        // vocabulary — `std/proto:i64(Port)` spells the host
+                        // scalar as the verb (ast_functional.scalars).
                         const is_decl_tor = std.mem.eql(u8, last_seg, "struct") or
-                            std.mem.eql(u8, last_seg, "string") or
-                            std.mem.eql(u8, last_seg, "int") or
-                            std.mem.eql(u8, last_seg, "float") or
-                            std.mem.eql(u8, last_seg, "bool");
+                            ast_functional.isScalar(last_seg);
                         // PROTO rung (2026-08-23): `std/types:proto(Name)` is
                         // the declared-type front door. The proto NAME is one
                         // declared identity, and the container it promises to
@@ -179,10 +180,7 @@ pub const PhantomSemanticChecker = struct {
                         // identity, so its name collides loudly. It does not
                         // derive a container: terminals terminate, they are not
                         // compounds.
-                        const is_terminal = proto_door and (std.mem.eql(u8, last_seg, "string") or
-                            std.mem.eql(u8, last_seg, "int") or
-                            std.mem.eql(u8, last_seg, "float") or
-                            std.mem.eql(u8, last_seg, "bool"));
+                        const is_terminal = proto_door and ast_functional.isScalar(last_seg);
                         // A foreign entry is an identity from the host side of
                         // the airlock: collides loudly, derives nothing.
                         const is_foreign = foreign_door and std.mem.eql(u8, last_seg, "struct");

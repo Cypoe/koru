@@ -353,6 +353,7 @@ pub const CompilerContext = struct {
         .optimize = optimize,
     });
     ast_functional_module.addImport("ast", ast_module);
+    phantom_semantic_checker_module.addImport("ast_functional", ast_functional_module);
 
     // Auto-discharge inserter - inserts disposal calls before terminators
     const auto_discharge_inserter_module = b.createModule(.{
@@ -732,7 +733,6 @@ pub const CompilerContext = struct {
 //
 // [norun] annotation prevents auto-execution - --help reads from AST instead.
 // This makes help metacircular - discovered by parsing, not hardcoded!
-
 
 ~[comptime|norun]pub tor flag.declare { source: Source }
 

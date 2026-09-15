@@ -369,10 +369,9 @@
     // own home and need address resolution — a later rung.
     const TermRef = struct {
         fn isTerminalVerb(verb: []const u8) bool {
-            return std.mem.eql(u8, verb, "string") or
-                std.mem.eql(u8, verb, "int") or
-                std.mem.eql(u8, verb, "float") or
-                std.mem.eql(u8, verb, "bool");
+            // The terminal verbs ARE the scalar vocabulary —
+            // `std/proto:i64(Port)` mints `const Port = i64`.
+            return ast_functional.isScalar(verb);
         }
         fn bareName(value: []const u8) []const u8 {
             var text = std.mem.trim(u8, value, " \t");

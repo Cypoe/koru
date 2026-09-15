@@ -35,9 +35,9 @@ import std/time
 // 60 000 players + 40 000 enemies. A player has str + mana; an enemy has
 // str + armor. str is the shared leaf — the leaf the view meets on.
 
-std/proto:int(Strength)
-std/proto:int(Mana)
-std/proto:int(Armor)
+std/proto:i64(Strength)
+std/proto:i64(Mana)
+std/proto:i64(Armor)
 
 std/proto(Player) {
     str: Strength

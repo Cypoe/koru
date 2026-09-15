@@ -264,6 +264,7 @@ const ast_functional_module = b.createModule(.{
     .optimize = optimize,
 });
 ast_functional_module.addImport("ast", ast_module);
+phantom_semantic_checker_module.addImport("ast_functional", ast_functional_module);
 
 // Auto-discharge inserter - inserts disposal calls before terminators
 const auto_discharge_inserter_module = b.createModule(.{

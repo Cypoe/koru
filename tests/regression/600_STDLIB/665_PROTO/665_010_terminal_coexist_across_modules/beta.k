@@ -2,4 +2,4 @@
 // concept; unqualified refs stay unambiguous while one home declares the name.
 import std/proto
 
-std/proto:float(Health)
+std/proto:f64(Health)

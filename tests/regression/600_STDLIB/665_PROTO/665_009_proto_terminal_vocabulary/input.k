@@ -6,8 +6,8 @@ import std/io
 import std/proto
 
 std/proto:string(Email)
-std/proto:int(UserId)
-std/proto:float(Health)
+std/proto:i64(UserId)
+std/proto:f64(Health)
 std/proto:bool(IsActive)
 
 std/proto(Contact) {

@@ -7,7 +7,7 @@ import std/io
 import std/proto
 import std/store
 
-std/proto:int(Health)
+std/proto:i64(Health)
 
 std/proto(Limb) {
     health: Health

@@ -302,10 +302,16 @@ landing made it real. The row rule, the thing every earlier rung circled:
   predating this session.
 
 Ruled and landed the same day (terminal half): `std/proto:string|int|float|bool(Name)`
-are the named-primitive home — same host lowerings as the legacy wrappers
-(`float` → `f64`, kept deliberately), each writing a `// proto-terminal Name:
+are the named-primitive home — same host lowerings as the legacy wrappers,
+each writing a `// proto-terminal Name:
 kind` identity marker ahead of its alias so compounds resolve references
-regardless of transform visitation order. The default tor accepts a scalar
+regardless of transform visitation order. **Re-ruled 2026-09-15**: the verb
+IS the scalar — `std/proto:i64(Port)`, `std/proto:f64(Health)`, the full
+field-vocabulary set (i8..u64, f32, f64, bool, string). The kind-level
+spelling (`int`, `float`) silently pinned the host width; the field grammar
+already exposed every width, so `u16` was a second-class scalar. All twelve
+tors share one `mintTerminal` helper; `ast_functional.scalars` is the single
+vocabulary list every door and the KORU030 duplicate wall read. The default tor accepts a scalar
 material or a declared terminal and refuses unregistered words loudly
 (KORU173, `names unknown terminal`). Terminal names collide loudly
 (`DeclaredTypeSite.is_terminal`, no `List_` container derived) while legacy

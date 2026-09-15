@@ -40,6 +40,13 @@ Mechanics, all library-level over existing machinery:
   `// proto Name: …` marker, so dissolution order doesn't matter.
 - Every refined field must exist on the anchor and its base must agree —
   a meet needs one base, not two.
+- The spelled base may name a terminal: `port: Port & >1024` where `Port`
+  minted by `std/proto:i64(Port)`. Legality resolves the base to its host
+  scalar (live terminal door or erased marker, home-scoped, qualified
+  `home/path:Name` supported), judged on the met field post-merge so a
+  contributor's bound on a non-integer terminal refuses too. The facet
+  keeps the declared base — the guard emits `port > 1024` and `Port = i64`
+  carries it.
 - Multiple `std/refine` blocks — in the same module or layered across
   modules — fold onto one facet; whichever transform fires first leaves the
   canonical facet in the program tree as a typed `Item.facet_decl` node
@@ -108,4 +115,6 @@ echoed), 671_008 (push admits through the guard), 671_009 (handled
 re-raises across an event boundary — the outer caller supervises),
 671_011 (clamp saturates the stored value), 671_012 (bounds judge the
 post-clamp value), 671_013 (clamp met to empty refuses), 671_014
-(clamp∩clamp meets by intersection).
+(clamp∩clamp meets by intersection), 671_015 (bounds meet on a
+terminal-typed field), 671_016 (clamp on a terminal-typed field),
+671_017 (bound on a non-integer terminal refuses).

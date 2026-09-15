@@ -60,7 +60,6 @@ proc default|zig {
     else
         return .{};
 
-
     // -- the entry name ---------------------------------------------------
 
     const type_name = bareName(expr);
@@ -120,9 +119,10 @@ proc default|zig {
     };
     walkRefine(allocator, reporter, flow, program.items, program.main_module_name, want, &meet, my_inv);
 
-    // -- pass 5: the total meet must be non-empty per field ----------------
+    // -- pass 5: the total meet must be legal and non-empty per field -----
 
     for (meet.items) |*f| {
+        if (legalBase(allocator, reporter, flow, type_name, program, want.home, f)) |r| return r;
         if (emptyField(f)) |pair| {
             return .{ .replacement = ast.refusal(allocator, reporter, .KORU205, flow.location, flow.module, "std/refine({s}): field '{s}' refines to nothing — '{s}' and '{s}' cannot both hold", .{ type_name, f.name, pair[0], pair[1] }) };
         }

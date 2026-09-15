@@ -8,7 +8,7 @@ import std/io
 import std/proto
 import std/list
 
-std/proto:float(Health)
+std/proto:f64(Health)
 
 pub tor report-health { health: Health } -> Health
 

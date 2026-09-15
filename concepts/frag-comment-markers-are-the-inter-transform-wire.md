@@ -24,7 +24,7 @@ comment, another pass parses it. Everything below is the second kind.
 | Marker | Writer(s) | Reader(s) | Carries |
 |---|---|---|---|
 | `// proto Name: f: t, …` | `proto.kz:416`, `types.kz:166` | `proto.kz:145,292` (self), `list.free.kz:184,279`, `store.kz:538,644`, `store.new.kz:525`, `refine.k:350` | compound decl: name + flat fields |
-| `// proto-terminal Name: T` | `proto.kz:467,518,569,620` | `proto.kz:128`, `store.new.kz:418` | scalar terminal name + host type |
+| `// proto-terminal Name: T` | `proto.kz` mintTerminal | `proto.kz` TerminalRef, `store.new.kz` TermRef, `refine.kz` terminalScalar | scalar terminal name + scalar kind |
 | `// foreign Name: f1, …` | `foreign.kz:112` | **`src/type_registry.zig:871`** — compiler core parses a stdlib comment | foreign decl fields |
 | `// store-kinds …` | `store.new.kz:3133` | `store.kz:563` | store kind arms |
 | `// store-member-types …` | `store.new.kz:3146` | `store.kz:721` | store member types |

@@ -2,8 +2,8 @@ import std/io
 import std/proto
 import std/store
 
-std/proto:int(Strength)
-std/proto:float(Wobble)
+std/proto:i64(Strength)
+std/proto:f64(Wobble)
 
 std/proto(Player) {
     str: Strength

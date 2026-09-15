@@ -3,7 +3,7 @@
 import std/proto
 import std/store
 
-std/proto:float(Health)
+std/proto:f64(Health)
 
 std/proto(Player) {
     health: Health

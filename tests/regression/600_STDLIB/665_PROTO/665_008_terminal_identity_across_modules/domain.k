@@ -4,4 +4,4 @@
 // whether it is still live or already erased to its marker.
 import std/proto
 
-std/proto:float(Health)
+std/proto:f64(Health)

@@ -3275,6 +3275,35 @@ fn armReachesInvocationImpl(
 /// its write boundary sits, which extra panic branches it declares — and
 /// the protocol lives here: a second consumer enforces by calling, never
 /// by re-deriving facet_decl layout or home scoping.
+/// The scalar vocabulary — the bases `std/proto` fields accept and the
+/// terminal verbs `std/proto:<scalar>(Name)` mints, one list shared by
+/// every door and consumer. A terminal verb IS its host scalar:
+/// `std/proto:i64(Port)` emits `const Port = i64` and a
+/// `// proto-terminal Port: i64` marker.
+pub const scalars = [_][]const u8{
+    "i8",  "i16",  "i32",  "i64",
+    "u8",  "u16",  "u32",  "u64",
+    "f32", "f64",  "bool", "string",
+};
+
+pub const int_scalars = [_][]const u8{
+    "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
+};
+
+pub fn isScalar(name: []const u8) bool {
+    for (scalars) |s| {
+        if (std.mem.eql(u8, name, s)) return true;
+    }
+    return false;
+}
+
+pub fn isIntScalar(name: []const u8) bool {
+    for (int_scalars) |s| {
+        if (std.mem.eql(u8, name, s)) return true;
+    }
+    return false;
+}
+
 pub const facets = struct {
     /// Canonical branch names — the enforcement contract every consumer
     /// shares. `ok` is the sole non-panic terminal a bare `|>` rides;

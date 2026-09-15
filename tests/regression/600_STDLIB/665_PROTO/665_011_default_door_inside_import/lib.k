@@ -3,7 +3,7 @@
 // rewrites it regardless of which module spells it.
 import std/proto
 
-std/proto:float(Health)
+std/proto:f64(Health)
 
 std/proto(Scout) {
     health: Health

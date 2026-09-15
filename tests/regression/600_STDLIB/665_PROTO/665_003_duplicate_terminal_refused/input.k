@@ -3,5 +3,5 @@
 // a duplicate identity and must be refused loudly, with both sites named.
 import std/proto
 
-std/proto:float(Health)
-std/proto:float(Health)
+std/proto:f64(Health)
+std/proto:f64(Health)

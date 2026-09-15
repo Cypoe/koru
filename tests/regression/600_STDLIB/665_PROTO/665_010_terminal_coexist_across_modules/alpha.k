@@ -2,4 +2,4 @@
 // shared bare name. Sameness by (module, name), never by spelling.
 import std/proto
 
-std/proto:float(Health)
+std/proto:f64(Health)

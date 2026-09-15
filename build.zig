@@ -581,6 +581,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     transform_functional_module.addImport("ast", ast_module);
+    phantom_semantic_checker_module.addImport("ast_functional", ast_functional_module);
     transform_functional_module.addImport("ast_functional", ast_functional_module);
 
     const inline_functional_module = b.createModule(.{
@@ -1340,6 +1341,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     phantom_semantic_checker_tests.root_module.addImport("ast", ast_module);
+    phantom_semantic_checker_tests.root_module.addImport("ast_functional", ast_functional_module);
     phantom_semantic_checker_tests.root_module.addImport("errors", errors_module);
     phantom_semantic_checker_tests.root_module.addImport("phantom_parser", phantom_parser_module);
     phantom_semantic_checker_tests.root_module.addImport("log", log_module);

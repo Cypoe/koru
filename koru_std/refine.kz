@@ -11,6 +11,9 @@
 // at module scope.
 const std = @import("std");
 const ast = @import("ast");
+const af = @import("ast_functional");
+
+~part terminal
 
 const Bound = struct {
     value: i64,
@@ -194,16 +197,9 @@ fn parseInto(
             if (std.mem.startsWith(u8, atom, "clamp(") and std.mem.endsWith(u8, atom, ")")) {
                 // A normalizer term, not a bound: the boundary
                 // saturates the value into [lo, hi] — bounds on the
-                // same field judge the post-clamp result.
-                const int_scalars_c = [_][]const u8{ "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64" };
-                var int_base_c = false;
-                for (int_scalars_c) |s| {
-                    if (std.mem.eql(u8, f.base, s)) int_base_c = true;
-                }
-                if (!int_base_c) {
-                    if (!strict) continue;
-                    return .{ .replacement = ast.refusal(alloc, rep, .KORU205, fl.location, fl.module, "std/refine({s}): field '{s}' puts a clamp on base '{s}' — clamps refine integer scalars only", .{ entry_name, fname, f.base }) };
-                }
+                // same field judge the post-clamp result. Scalar
+                // legality is judged on the met field, not per-atom —
+                // the driver's legality pass resolves terminal bases.
                 const inner = std.mem.trim(u8, atom[6 .. atom.len - 1], " \t");
                 const comma = std.mem.indexOfScalar(u8, inner, ',') orelse {
                     if (!strict) continue;
@@ -246,16 +242,6 @@ fn parseInto(
             } else {
                 if (!strict) continue;
                 return .{ .replacement = ast.refusal(alloc, rep, .KORU205, fl.location, fl.module, "std/refine({s}): constraint atom '{s}' is not a bound — refine understands >N >=N <N <=N ==N over integer literals", .{ entry_name, atom }) };
-            }
-
-            const int_scalars = [_][]const u8{ "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64" };
-            var int_base = false;
-            for (int_scalars) |s| {
-                if (std.mem.eql(u8, f.base, s)) int_base = true;
-            }
-            if (!int_base) {
-                if (!strict) continue;
-                return .{ .replacement = ast.refusal(alloc, rep, .KORU205, fl.location, fl.module, "std/refine({s}): field '{s}' puts a bound on base '{s}' — bounds refine integer scalars only", .{ entry_name, fname, f.base }) };
             }
 
             const n = std.fmt.parseInt(i64, std.mem.trim(u8, digits, " \t"), 10) catch {

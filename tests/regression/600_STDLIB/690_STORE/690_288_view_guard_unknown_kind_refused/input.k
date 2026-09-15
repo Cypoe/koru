@@ -2,9 +2,9 @@ import std/io
 import std/proto
 import std/store
 
-std/proto:int(Strength)
-std/proto:int(Mana)
-std/proto:int(Armor)
+std/proto:i64(Strength)
+std/proto:i64(Mana)
+std/proto:i64(Armor)
 
 std/proto(Player) {
     str: Strength
