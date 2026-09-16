@@ -1,0 +1,5 @@
+echo: guarded-hit
+t1 result
+echo: unguarded-t2
+t2 result
+t3 unhandled found

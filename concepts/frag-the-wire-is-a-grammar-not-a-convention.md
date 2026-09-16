@@ -41,6 +41,18 @@ The load-bearing split, the one that keeps the meanings honest:
 Collapsing any two of these teaches the agent the wrong lesson about its own
 mistake, and the agent's next turn is built from the lesson we hand it.
 
+The same honesty runs the other direction: **what the grammar admits, eval
+must judge.** `| ok t when false |>` parsed full-fidelity into
+`cont.condition` and `selectArm` never read it — the arm fired ungated,
+and the wire was wider than the semantics it feeds (measured by kopium's
+bridge-mirror, 2026-09-13). Admission is a promise: an admitted construct
+that eval silently drops is a refusal that went off in nobody's direction.
+`selectArm` now judges guards in source order — the arm's binding
+provisionally in scope, first truthy guard wins, unguarded is the else —
+pinned by 440_024. The remaining asymmetry is deliberately loud: a guard
+that cannot be judged is `GuardUnjudgable`, a dispatch-error, never a
+silent skip.
+
 ## Open questions
 
 - Per-field checking at parse time (naming the verb's real fields in the

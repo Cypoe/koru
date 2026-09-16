@@ -56,11 +56,12 @@ koru_std/http.kz	215
 koru_std/index.kz	7
 koru_std/inter.kz	176
 koru_std/interpreter.define.kz	152
+koru_std/interpreter.guards.kz	63
 koru_std/interpreter.kz	1202
 koru_std/interpreter.names.kz	18
 koru_std/interpreter.parse.kz	52
-koru_std/interpreter.run.kz	1678
-koru_std/interpreter.select.kz	45
+koru_std/interpreter.run.kz	1659
+koru_std/interpreter.select.kz	42
 koru_std/invariants.kz	181
 koru_std/io_registry.kz	30
 koru_std/io.jsprec.kz	48
@@ -89,9 +90,9 @@ koru_std/parser.kz	2060
 koru_std/profiler.kz	283
 koru_std/proto.kz	593
 koru_std/pump.explain.kz	303
+koru_std/pump.kz	833
 koru_std/pump.messages.kz	37
 koru_std/pump.synth.kz	59
-koru_std/pump.kz	833
 koru_std/refine.explain.kz	188
 koru_std/refine.k	196
 koru_std/refine.kz	472
@@ -108,9 +109,9 @@ koru_std/set.kz	96
 koru_std/simple.kz	7
 koru_std/store.clear.kz	105
 koru_std/store.default.kz	79
+koru_std/store.explain.kz	241
 koru_std/store.insert.kz	482
 koru_std/store.kz	1690
-koru_std/store.explain.kz	241
 koru_std/store.new.kz	6436
 koru_std/store.preorder.kz	110
 koru_std/store.pverbs.kz	781

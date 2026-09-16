@@ -1395,7 +1395,7 @@ fn executeFlow(
     // `|?` selection lives in the `select` part of interpreter.kz: the catch-all is the
     // fallback arm, and a metatype catch-all refuses — an interpreter
     // outcome carries no metatype to filter on.
-    const choice = selectArm(flow.body.continuations, dispatch_result.branch);
+    const choice = try selectArm(flow.body.continuations, dispatch_result.branch, dispatch_result.fields, ctx.expr_bindings, ctx.allocator);
     if (choice.metatype_only) return error.CatchallMetatypeUnsupported;
     if (choice.idx) |ci| {
         const cont = flow.body.continuations[ci];
@@ -1409,28 +1409,9 @@ fn executeFlow(
                 );
                 try ctx.env.bind(binding_name, bound_value);
 
-                // Also populate expr_bindings for if conditions: a scalar
-                // payload binds its value, a structured payload binds the
-                // branch name — and either way `b.Branch` names the branch.
-                const scalar = bound_value.fields.len == 1 and std.mem.eql(u8, bound_value.fields[0].name, "__type_ref");
-                try ctx.expr_bindings.set(binding_name, if (scalar)
-                    fieldValueToExprValue(bound_value.fields[0].value)
-                else
-                    .{ .string_val = dispatch_result.branch });
-                var branch_key_buf: [256]u8 = undefined;
-                const branch_key = std.fmt.bufPrint(&branch_key_buf, "{s}.Branch", .{binding_name}) catch "";
-                if (branch_key.len > 0) {
-                    const branch_key_owned = try ctx.allocator.dupe(u8, branch_key);
-                    try ctx.expr_bindings.set(branch_key_owned, .{ .string_val = dispatch_result.branch });
-                }
-
-                // If we have fields, add them as binding.field entries
-                for (bound_value.fields) |fv| {
-                    var field_key_buf: [256]u8 = undefined;
-                    const field_key = std.fmt.bufPrint(&field_key_buf, "{s}.{s}", .{binding_name, fv.name}) catch continue;
-                    const field_key_owned = try ctx.allocator.dupe(u8, field_key);
-                    try ctx.expr_bindings.set(field_key_owned, fieldValueToExprValue(fv.value));
-                }
+                // expr_bindings for `if`/`when` conditions — same scope the
+                // guard judged in (interpreter.guards).
+                try populateArmExprBindings(ctx.expr_bindings, binding_name, bound_value, dispatch_result.branch, ctx.allocator);
             }
 
             // If there's a next node, execute it

@@ -35,7 +35,6 @@ const flow_parser = @import("flow_parser");
 
 // ============================================================================
 // BUILD REQUIREMENTS - Parser and checkers for runtime use
-// ============================================================================
 
 ~std/build:requires {
     const REL_TO_ROOT = "/usr/local/lib/koru";
@@ -1196,6 +1195,7 @@ fn exprFloatOp(l: f64, r: f64, op: ExprArithOp) ExprEvalError!ExprValue {
 }
 
 ~part define
+~part guards
 ~part names
 ~part parse
 ~part run
