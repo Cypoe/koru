@@ -169,3 +169,17 @@ enforcement names its scope at a later rung — and the explainer's
 report and the guard share one fold, so what is reported is what is
 enforced. The clamp-then-judge ordering held without a special case:
 the boundary normalizes first, predicates see the post-clamp value.
+
+EVOLVED the same day (first scope-aware consumer; 390_121–390_123):
+`std/kernel:self|fpga` reads `metFields(…, "fpga")` — the target-aware
+read the previous evolve specified, now realized. A new consumer *kind*
+landed with it: the facet does not only judge values at a boundary, it
+SHAPES the artifact — `i64 & >=0 & <=255` on the fpga scope emits
+`input logic [7:0]` on the generated SystemVerilog stage, and the build
+runs iverilog + vvp so a wrong circuit is a red compile. Enforcement
+still rides the same fold: an init element the met port width cannot
+carry refuses KORU123 — the facet enforced at the artifact's boundary.
+One question the consumer now owns and cannot dodge: bounded arithmetic
+on the port truncates (`*= 2` mod 256), while a `clamp`-claimed facet
+reads like saturation — which the atoms should force is the unruled
+width-semantics question, deferred at the emitter.

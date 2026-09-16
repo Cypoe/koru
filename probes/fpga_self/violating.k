@@ -13,6 +13,13 @@ std/trellis:define("fpga-legal")
 | `std/kernel:init/kernel/std/kernel:self` _ => ok
 | `.*std/kernel:self` _ => error "std/kernel:self outside a kernel scope"
 
+// The check must sit ABOVE the kernel flow in source order: transforms run
+// in order, and kernel:init's own transform dissolves the chain paths the
+// trellis walks — a check placed after it categorizes an empty tree.
+std/trellis:check("fpga-legal")
+| ok |> std/io:print.ln("fpga-legal: ok")
+| error msg |> std/io:print.ln(msg)
+
 std/kernel:shape(Sample) {
     value: i64,
     mode: i64,
@@ -26,7 +33,3 @@ std/kernel:init(Sample) {
 | computed c |> std/io:print.blk {
         v={{ c[0].value:d }}
     }
-
-std/trellis:check("fpga-legal")
-| ok |> std/io:print.ln("fpga-legal: ok")
-| error msg |> std/io:print.ln(msg)

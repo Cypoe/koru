@@ -7538,6 +7538,75 @@ pub fn main() !void {
         }
     }
 
+    // Synthesized build requirements for |fpga variants. Stage C writes
+    // <sym>.fpga.sv + <sym>.fpga_tb.sv while the backend runs; Stage D's
+    // build_output.zig globs `*.fpga.sv`, compiles module + testbench with
+    // iverilog, and RUNS the sim under vvp — a circuit that computes the
+    // wrong answer fails the build, the way spirv-val gates .spv blobs.
+    // (iverilog/vvp resolve through PATH; a machine without them fails
+    // loudly rather than shipping an unsimulated circuit.)
+    {
+        const fpga_glob_req =
+            \\            var __fpga_dir = b.build_root.handle.openDir(".", .{ .iterate = true }) catch @panic("fpga: cannot open build root");
+            \\            defer __fpga_dir.close();
+            \\            var __fpga_it = __fpga_dir.iterate();
+            \\            while (__fpga_it.next() catch @panic("fpga: build-root iteration failed")) |__fpga_entry| {
+            \\                if (__fpga_entry.kind != .file) continue;
+            \\                if (!std.mem.endsWith(u8, __fpga_entry.name, ".fpga.sv")) continue;
+            \\                const __fpga_base = __fpga_entry.name[0 .. __fpga_entry.name.len - ".fpga.sv".len];
+            \\                const __fpga_tb = b.fmt("{s}.fpga_tb.sv", .{__fpga_base});
+            \\                const __fpga_cc = b.addSystemCommand(&.{ "iverilog", "-g2012", "-o" });
+            \\                const __fpga_sim = __fpga_cc.addOutputFileArg(b.fmt("{s}.fpga_sim", .{__fpga_base}));
+            \\                __fpga_cc.addFileArg(b.path(__fpga_entry.name));
+            \\                __fpga_cc.addFileArg(b.path(__fpga_tb));
+            \\                const __fpga_run = b.addSystemCommand(&.{ "vvp" });
+            \\                __fpga_run.addFileArg(__fpga_sim);
+            \\                exe.step.dependOn(&__fpga_run.step);
+            \\            }
+            \\
+        ;
+        const Fpga = struct {
+            // Stage A decides "this program will emit .fpga.sv" from the raw
+            // AST: any invocation carrying the `fpga` variant tag — the same
+            // seam `mlir` rides, no symbol coordination across stages.
+            fn contHasFpgaVariant(cont: *const ast.Continuation) bool {
+                if (cont.node) |*nd| {
+                    if (nd.* == .invocation) {
+                        if (nd.invocation.variant) |v| {
+                            const v_base = if (std.mem.indexOfScalar(u8, v, '[')) |bi| v[0..bi] else v;
+                            if (std.mem.eql(u8, v_base, "fpga")) return true;
+                        }
+                    }
+                }
+                for (cont.continuations) |*child| {
+                    if (contHasFpgaVariant(child)) return true;
+                }
+                return false;
+            }
+            fn run(alloc: std.mem.Allocator, items: []const ast.Item, out_dir: []const u8) !bool {
+                var needs_sim = false;
+                for (items) |*item| {
+                    switch (item.*) {
+                        .flow => |*f| {
+                            if (contHasFpgaVariant(&f.body)) needs_sim = true;
+                        },
+                        .module_decl => |*mod| {
+                            if (try run(alloc, mod.items, out_dir)) needs_sim = true;
+                        },
+                        else => {},
+                    }
+                }
+                return needs_sim;
+            }
+        };
+        if (try Fpga.run(allocator, source_file.items, output_dir)) {
+            try mlir_build_reqs.append(allocator, .{
+                .module_name = "fpga",
+                .source_code = try allocator.dupe(u8, fpga_glob_req),
+            });
+        }
+    }
+
     // Generate build_output.zig for OUTPUT binary (user build:requires + synthesized MLIR links)
     if (build_requirements_raw.len > 0 or mlir_build_reqs.items.len > 0) {
         var output_build_reqs = try std.ArrayList(emit_build_zig.BuildRequirement).initCapacity(allocator, build_requirements_raw.len + mlir_build_reqs.items.len);

@@ -1,0 +1,378 @@
+// Koru Standard Library: the `fpga` part of kernel.kz — `self|fpga` emission.
+// Joined via `~part fpga` in kernel.kz; merged into the kernel module.
+//
+// `std/kernel:self|fpga { k.<f> <op>= <lit> }` writes TWO artifacts beside
+// the ordinary Zig lowering (which stays the host executor — nothing leaves
+// the CPU): `<sym>.fpga.sv`, a one-stage SystemVerilog pipeline, and
+// `<sym>.fpga_tb.sv`, a generated testbench driving the init dataset. Stage
+// D's emitted build globs `*.fpga.sv`, runs `iverilog` + `vvp`, and a
+// circuit that computes the wrong answer fails the build — the sim is the
+// gate, the way spirv-val gates the [gpu] blob. Generated hardware that
+// computes, not a validator-clean artifact.
+//
+// PORT WIDTHS are the |fpga refine facet's meet, read through refine's own
+// fold (`metFields` — the same fold std/store's insert guards read): a
+// field met to `>=0 & <=255` emits `[7:0]`; an unmet i64 emits `[63:0]`.
+// An init element the port cannot carry refuses at compile — KORU123, the
+// facet enforced at the artifact's boundary.
+//
+// RUNG 1 SCOPE: `k.<field> <op>= <int-literal>` (ops * + - /), i64 shape
+// fields only, static init datasets only — no store kernels, no `step`
+// (beat semantics unruled), no `pairwise`/`reduce` (the fpga-legal trellis
+// names those verdicts). Fields the body never mentions pass through the
+// stage untouched — probes/fpga_self's `mode` is the pin. The SEMANTIC PIN
+// the probe's hand sketch carries still stands: `*= 2` on [7:0] truncates
+// mod 256; a clamp-claimed facet wants saturation instead — which the atoms
+// should force is the width-semantics question, unruled here.
+
+// `std`/`koru_std`/`kast` ride the module's shared namespace — `kast` is
+// kernel.scan.kz's `ast` import (a module-scope `const ast` would collide
+// with the proc bodies' locals under Zig's no-shadowing rule).
+
+// A `std/proto`-door invocation naming `name`? Local copy of refine's own
+// test — kept here so this part never reaches into koru_refine's internals
+// except through the one guarded `metFields` fold call below.
+fn fpgaIsProtoDoor(inv: *const kast.Invocation) bool {
+    if (inv.path.segments.len != 1) return false;
+    const verb = inv.path.segments[0];
+    const mq = inv.path.module_qualifier orelse return false;
+    const proto_mh = std.mem.eql(u8, mq, "std.proto") or std.mem.eql(u8, mq, "std/proto");
+    if (std.mem.eql(u8, verb, "default") and proto_mh) return true;
+    return std.mem.eql(u8, verb, "proto") and
+        (proto_mh or std.mem.eql(u8, mq, "std.types") or std.mem.eql(u8, mq, "std/types"));
+}
+
+fn fpgaInvName(inv: *const kast.Invocation) []const u8 {
+    if (inv.args.len == 0) return "";
+    var text = std.mem.trim(u8, inv.args[0].value, " \t");
+    if (text.len >= 2 and text[0] == '"' and text[text.len - 1] == '"') {
+        text = text[1 .. text.len - 1];
+    }
+    return std.mem.trim(u8, text, " \t");
+}
+
+// The home a `|fpga` facet on `name` is minted under: the enclosing module
+// of the proto it refines (a refine block's scope IS its proto's home —
+// bare `std/refine(S)` never addresses across homes). The canonical
+// facet_decl is the strongest evidence — it already carries the minted
+// home; a live proto door is the fallback.
+fn fpgaProtoHome(items: []const kast.Item, scope_home: []const u8, name: []const u8) ?[]const u8 {
+    for (items) |entry| {
+        switch (entry) {
+            .facet_decl => |*fd| {
+                if (std.mem.eql(u8, fd.name, name) and
+                    fd.target != null and std.mem.eql(u8, fd.target.?, "fpga")) return fd.module;
+            },
+            .flow => |fl| {
+                if (fl.body.node) |*node| {
+                    if (node.* == .invocation and fpgaIsProtoDoor(&node.invocation) and
+                        std.mem.eql(u8, fpgaInvName(&node.invocation), name)) return scope_home;
+                }
+            },
+            .module_decl => |m| {
+                if (fpgaProtoHome(m.items, m.logical_name, name)) |h| return h;
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+// Smallest unsigned width carrying values 0..hi (hi=255 -> 8, hi=3 -> 2).
+fn fpgaBitsNeeded(hi: u64) u8 {
+    if (hi <= 1) return 1;
+    return @as(u8, 64) - @as(u8, @intCast(@clz(hi)));
+}
+
+// A field's port width from its scoped-facet meet: unsigned iff the
+// effective lower bound reaches 0+ (lo and clamp intersected); the width
+// covers the effective upper bound. No usable meet -> the base's full
+// 64 bits. `==N` sizes the port to the constant it must carry.
+fn fpgaFieldWidth(mf_lo: ?i64, mf_lo_ex: bool, mf_hi: ?i64, mf_hi_ex: bool, mf_eq: ?i64, mf_clamp: ?[2]i64) u8 {
+    if (mf_eq) |v| return if (v >= 0) fpgaBitsNeeded(@intCast(v)) else 64;
+    var lo_eff = mf_lo;
+    var hi_eff = mf_hi;
+    if (lo_eff) |l| lo_eff = l + @as(i64, if (mf_lo_ex) 1 else 0);
+    if (hi_eff) |h| hi_eff = h - @as(i64, if (mf_hi_ex) 1 else 0);
+    if (mf_clamp) |c| {
+        lo_eff = if (lo_eff) |l| @max(l, c[0]) else c[0];
+        hi_eff = if (hi_eff) |h| @min(h, c[1]) else c[1];
+    }
+    if (lo_eff) |l| {
+        if (l >= 0) {
+            if (hi_eff) |h| {
+                if (h >= l) return fpgaBitsNeeded(@intCast(h));
+            }
+        }
+    }
+    return 64;
+}
+
+// `name: <int>` field values per init element, aligned to shape_fields —
+// the testbench's stimulus. A non-literal or absent field value is a loud
+// KORU123: the bench drives exactly what init declares, nothing guessed.
+fn fpgaParseDataset(alloc: std.mem.Allocator, dataset: []const u8, shape_fields: []const kast.Field, type_name: []const u8) [][]i64 {
+    var elems = std.ArrayList([]i64).initCapacity(alloc, 8) catch unreachable;
+    var block_iter = std.mem.splitSequence(u8, dataset, "}");
+    var any_block = false;
+    while (block_iter.next()) |block_raw| {
+        const content = if (std.mem.indexOf(u8, block_raw, "{")) |bi| blk: {
+            any_block = true;
+            break :blk block_raw[bi + 1 ..];
+        } else if (!any_block and elems.items.len == 0 and block_iter.peek() == null)
+            block_raw // single-element init: the whole dataset is the block
+        else
+            continue;
+        const vals = alloc.alloc(i64, shape_fields.len) catch unreachable;
+        var seen = alloc.alloc(bool, shape_fields.len) catch unreachable;
+        @memset(seen, false);
+        var fit = std.mem.splitSequence(u8, content, ",");
+        while (fit.next()) |fr| {
+            const f = std.mem.trim(u8, fr, " \t\n\r");
+            if (f.len == 0) continue;
+            const colon = std.mem.indexOfScalar(u8, f, ':') orelse {
+                std.debug.print("error[KORU123]: `self|fpga` init element for {s} must spell `name: <int>` per field — got `{s}`\n", .{ type_name, f });
+                std.process.exit(1);
+            };
+            const fname = std.mem.trim(u8, f[0..colon], " \t");
+            const fval = std.mem.trim(u8, f[colon + 1 ..], " \t");
+            var matched = false;
+            for (shape_fields, 0..) |sf, sfi| {
+                if (std.mem.eql(u8, sf.name, fname)) {
+                    vals[sfi] = std.fmt.parseInt(i64, fval, 10) catch {
+                        std.debug.print("error[KORU123]: `self|fpga` needs integer init literals — `{s}: {s}` on {s} is not a plain int (the testbench drives the dataset; expressions are a later rung)\n", .{ fname, fval, type_name });
+                        std.process.exit(1);
+                    };
+                    seen[sfi] = true;
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) {
+                std.debug.print("error[KORU123]: `self|fpga` init element names `{s}` — not a field of {s}\n", .{ fname, type_name });
+                std.process.exit(1);
+            }
+        }
+        for (shape_fields, 0..) |sf, sfi| {
+            if (!seen[sfi]) {
+                std.debug.print("error[KORU123]: `self|fpga` init element has no `{s}` literal — the bench drives every port\n", .{sf.name});
+                std.process.exit(1);
+            }
+        }
+        elems.append(alloc, vals) catch unreachable;
+    }
+    return elems.toOwnedSlice(alloc) catch unreachable;
+}
+
+// Emit `<sym>.fpga.sv` + `<sym>.fpga_tb.sv` into the build root (Stage C
+// runs there; Stage D's emitted build globs `*.fpga.sv` and sims it).
+// The body is already parsed by the caller into (field, op, lit); every
+// other shape field passes the stage through untouched.
+fn emitFpgaSelf(
+    alloc: std.mem.Allocator,
+    prog: *const kast.Program,
+    home: []const u8,
+    type_name: []const u8,
+    binding: []const u8,
+    body_text: []const u8,
+    shape_fields: []const kast.Field,
+    dataset: []const u8,
+    sym: []const u8,
+) void {
+    // ---- body: `k.<field> <op>= <int>` — same narrow contract as |mlir ----
+    const bt = std.mem.trim(u8, body_text, " \t\n\r;");
+    if (!std.mem.startsWith(u8, bt, binding) or bt.len <= binding.len or bt[binding.len] != '.') {
+        std.debug.print("error[KORU123]: `self|fpga` currently generates SystemVerilog only for `{s}.<field> <op>= <int>` (op: * + - /) — got `{s}`\n", .{ binding, bt });
+        std.process.exit(1);
+    }
+    var rest = bt[binding.len + 1 ..];
+    var fld_end: usize = 0;
+    while (fld_end < rest.len and (std.ascii.isAlphanumeric(rest[fld_end]) or rest[fld_end] == '_')) fld_end += 1;
+    const map_field = rest[0..fld_end];
+    rest = std.mem.trimLeft(u8, rest[fld_end..], " \t");
+    if (rest.len < 3 or rest[1] != '=') {
+        std.debug.print("error[KORU123]: `self|fpga` currently generates SystemVerilog only for `{s}.<field> <op>= <int>` (op: * + - /) — got `{s}`\n", .{ binding, bt });
+        std.process.exit(1);
+    }
+    const sv_op: u8 = switch (rest[0]) {
+        '*', '+', '-', '/' => rest[0],
+        else => {
+            std.debug.print("error[KORU123]: `self|fpga` supports ops * + - / — got `{c}=` in `{s}`\n", .{ rest[0], bt });
+            std.process.exit(1);
+        },
+    };
+    const lit_raw = std.mem.trim(u8, rest[2..], " \t");
+    const lit = std.fmt.parseInt(i64, lit_raw, 10) catch {
+        std.debug.print("error[KORU123]: `self|fpga` needs an integer literal operand — got `{s}`\n", .{bt});
+        std.process.exit(1);
+    };
+
+    var map_idx: ?usize = null;
+    for (shape_fields, 0..) |sf, sfi| {
+        if (std.mem.eql(u8, sf.name, map_field)) map_idx = sfi;
+        if (!std.mem.eql(u8, sf.type, "i64")) {
+            std.debug.print("error[KORU123]: `self|fpga` emits i64 shape fields only this rung — `{s}` is {s} (a fabric port needs a bit width; float semantics are a later rung)\n", .{ sf.name, sf.type });
+            std.process.exit(1);
+        }
+    }
+    const mapped = map_idx orelse {
+        std.debug.print("error[KORU123]: `self|fpga` body names `{s}` — not a field of {s} (shape declares {d} field(s))\n", .{ map_field, type_name, shape_fields.len });
+        std.process.exit(1);
+    };
+
+    // ---- widths: the |fpga facet's meet, refine's own fold ----
+    const proto_home = fpgaProtoHome(prog.items, prog.main_module_name, type_name) orelse home;
+    var widths = alloc.alloc(u8, shape_fields.len) catch unreachable;
+    for (shape_fields, 0..) |_, wi| widths[wi] = 64;
+    if (@hasDecl(koru_std, "koru_refine")) {
+        const met = koru_std.koru_refine.metFields(alloc, prog, proto_home, type_name, "fpga");
+        for (met) |*mf| {
+            for (shape_fields, 0..) |sf, sfi| {
+                if (!std.mem.eql(u8, mf.name, sf.name)) continue;
+                const lo_v: ?i64 = if (mf.lo) |b| b.value else null;
+                const hi_v: ?i64 = if (mf.hi) |b| b.value else null;
+                const eq_v: ?i64 = if (mf.eq) |b| b.value else null;
+                const cl: ?[2]i64 = if (mf.clamp) |c| .{ c.lo, c.hi } else null;
+                widths[sfi] = fpgaFieldWidth(lo_v, if (mf.lo) |b| b.exclusive else false, hi_v, if (mf.hi) |b| b.exclusive else false, eq_v, cl);
+            }
+        }
+    }
+
+    // ---- dataset: the testbench's stimulus ----
+    const elems = fpgaParseDataset(alloc, dataset, shape_fields, type_name);
+    for (elems, 0..) |ev, ei| {
+        for (shape_fields, 0..) |sf, sfi| {
+            const w = widths[sfi];
+            if (w < 64 and (ev[sfi] < 0 or ev[sfi] > (@as(i64, 1) << @intCast(w)) - 1)) {
+                std.debug.print("error[KORU123]: `self|fpga` init element {d} has `{s}` = {d} — the |fpga facet met that port to {d} bits, which cannot carry it (the facet is enforced at the artifact's boundary too)\n", .{ ei, sf.name, ev[sfi], w });
+                std.process.exit(1);
+            }
+        }
+    }
+
+    // ---- the module ----
+    var sv = std.ArrayList(u8).initCapacity(alloc, 2048) catch unreachable;
+    const w = struct {
+        fn p(buf: *std.ArrayList(u8), a: std.mem.Allocator, comptime fmt: []const u8, args: anytype) void {
+            buf.appendSlice(a, std.fmt.allocPrint(a, fmt, args) catch unreachable) catch unreachable;
+        }
+    }.p;
+
+    w(&sv, alloc, "// Generated by std/kernel:self|fpga — one kernel self op, one pipeline\n", .{});
+    w(&sv, alloc, "// stage. Host lowering is the ordinary Zig loop; this artifact is gated\n", .{});
+    w(&sv, alloc, "// by iverilog + the generated testbench, which the build runs.\n", .{});
+    w(&sv, alloc, "module {s} (\n    input  logic        clk,\n    input  logic        rst_n,\n    input  logic        in_valid,\n", .{sym});
+    for (shape_fields, 0..) |sf, sfi| {
+        w(&sv, alloc, "    input  logic [{d}:0] in_{s},\n", .{ widths[sfi] - 1, sf.name });
+    }
+    w(&sv, alloc, "    output logic        out_valid,\n", .{});
+    for (shape_fields, 0..) |sf, sfi| {
+        w(&sv, alloc, "    output logic [{d}:0] out_{s}{s}\n", .{ widths[sfi] - 1, sf.name, if (sfi + 1 < shape_fields.len) "," else "" });
+    }
+    w(&sv, alloc, ");\n", .{});
+    // The mapped field is combinational; the stage register is the beat.
+    {
+        const sf = shape_fields[mapped];
+        w(&sv, alloc, "    logic [{d}:0] mapped_{s};\n", .{ widths[mapped] - 1, sf.name });
+        w(&sv, alloc, "    assign mapped_{s} = in_{s} {c} {s}{d}'d{d};\n", .{ sf.name, sf.name, sv_op, if (lit < 0) "-" else "", widths[mapped], @abs(lit) });
+    }
+    w(&sv, alloc, "\n    always_ff @(posedge clk or negedge rst_n) begin\n        if (!rst_n) begin\n            out_valid <= 1'b0;\n", .{});
+    for (shape_fields, 0..) |sf, sfi| {
+        w(&sv, alloc, "            out_{s} <= {d}'d0;\n", .{ sf.name, widths[sfi] });
+    }
+    w(&sv, alloc, "        end else begin\n            out_valid <= in_valid;\n", .{});
+    for (shape_fields, 0..) |sf, sfi| {
+        if (sfi == mapped) {
+            w(&sv, alloc, "            out_{s} <= mapped_{s};\n", .{ sf.name, sf.name });
+        } else {
+            w(&sv, alloc, "            out_{s} <= in_{s};\n", .{ sf.name, sf.name });
+        }
+    }
+    w(&sv, alloc, "        end\n    end\nendmodule\n", .{});
+
+    // ---- the testbench: drive the dataset, check the map one beat later ----
+    var tb = std.ArrayList(u8).initCapacity(alloc, 2048) catch unreachable;
+    w(&tb, alloc, "// Generated testbench for {s} — drives the init dataset on\n", .{sym});
+    w(&tb, alloc, "// consecutive beats, checks the stage's output one beat later.\n", .{});
+    w(&tb, alloc, "// errors exit nonzero via $fatal so the BUILD fails on a wrong circuit.\n", .{});
+    w(&tb, alloc, "module tb;\n    logic clk = 0;\n    logic rst_n = 0;\n    logic in_valid = 0;\n", .{});
+    for (shape_fields, 0..) |sf, sfi| {
+        w(&tb, alloc, "    logic [{d}:0] in_{s} = 0;\n", .{ widths[sfi] - 1, sf.name });
+    }
+    w(&tb, alloc, "    logic out_valid;\n", .{});
+    for (shape_fields, 0..) |sf, sfi| {
+        w(&tb, alloc, "    logic [{d}:0] out_{s};\n", .{ widths[sfi] - 1, sf.name });
+        w(&tb, alloc, "    logic [{d}:0] exp_{s};\n", .{ widths[sfi] - 1, sf.name });
+    }
+    w(&tb, alloc, "\n    {s} dut (.*);\n\n    always #5 clk = ~clk;\n\n    int errors = 0;\n\n", .{sym});
+    // check(): every port against its expected reg — the transformed field
+    // against the map applied to the last-driven input, the rest against the
+    // passthrough.
+    w(&tb, alloc, "    task check;\n        if (!out_valid", .{});
+    for (shape_fields) |sf| {
+        w(&tb, alloc, " || out_{s} !== exp_{s}", .{ sf.name, sf.name });
+    }
+    w(&tb, alloc, ") begin\n            $display(\"FAIL: got valid=%b", .{});
+    for (shape_fields) |sf| {
+        w(&tb, alloc, " {s}=%0d", .{sf.name});
+    }
+    w(&tb, alloc, ", want", .{});
+    for (shape_fields) |sf| {
+        w(&tb, alloc, " {s}=%0d", .{sf.name});
+    }
+    w(&tb, alloc, "\"", .{});
+    w(&tb, alloc, ", out_valid", .{});
+    for (shape_fields) |sf| {
+        w(&tb, alloc, ", out_{s}", .{sf.name});
+    }
+    for (shape_fields) |sf| {
+        w(&tb, alloc, ", exp_{s}", .{sf.name});
+    }
+    w(&tb, alloc, ");\n            errors = errors + 1;\n        end else begin\n            $display(\"ok:", .{});
+    for (shape_fields) |sf| {
+        w(&tb, alloc, " {s}=%0d", .{sf.name});
+    }
+    w(&tb, alloc, "\"", .{});
+    for (shape_fields) |sf| {
+        w(&tb, alloc, ", out_{s}", .{sf.name});
+    }
+    w(&tb, alloc, ");\n        end\n    endtask\n\n    initial begin\n        @(negedge clk); rst_n = 1;\n", .{});
+
+    for (elems, 0..) |ev, ei| {
+        w(&tb, alloc, "        // beat {d}: drive element {d}\n        @(negedge clk);", .{ ei + 1, ei });
+        if (ei > 0) w(&tb, alloc, " check();", .{});
+        w(&tb, alloc, " in_valid = 1;", .{});
+        for (shape_fields, 0..) |sf, sfi| {
+            w(&tb, alloc, " in_{s} = {s}{d}'d{d};", .{ sf.name, if (ev[sfi] < 0) "-" else "", widths[sfi], @abs(ev[sfi]) });
+        }
+        w(&tb, alloc, "\n        ", .{});
+        for (shape_fields, 0..) |sf, sfi| {
+            if (sfi == mapped) {
+                w(&tb, alloc, "exp_{s} = in_{s} {c} {s}{d}'d{d};", .{ sf.name, sf.name, sv_op, if (lit < 0) "-" else "", widths[sfi], @abs(lit) });
+            } else {
+                w(&tb, alloc, "exp_{s} = in_{s};", .{ sf.name, sf.name });
+            }
+        }
+        w(&tb, alloc, "\n", .{});
+    }
+    w(&tb, alloc, "        // drain: last check, then drop valid\n        @(negedge clk); check(); in_valid = 0;\n\n        if (errors == 0) $display(\"PASS: {s} pipeline\");\n        else             $fatal(1, \"FAIL: %0d errors\", errors);\n        $finish;\n    end\nendmodule\n", .{sym});
+
+    {
+        const fname = std.fmt.allocPrint(alloc, "{s}.fpga.sv", .{sym}) catch unreachable;
+        const mf = std.fs.cwd().createFile(fname, .{}) catch |e| {
+            std.debug.print("error: `self|fpga` cannot write {s}: {s}\n", .{ fname, @errorName(e) });
+            std.process.exit(1);
+        };
+        defer mf.close();
+        mf.writeAll(sv.items) catch unreachable;
+    }
+    {
+        const fname = std.fmt.allocPrint(alloc, "{s}.fpga_tb.sv", .{sym}) catch unreachable;
+        const mf = std.fs.cwd().createFile(fname, .{}) catch |e| {
+            std.debug.print("error: `self|fpga` cannot write {s}: {s}\n", .{ fname, @errorName(e) });
+            std.process.exit(1);
+        };
+        defer mf.close();
+        mf.writeAll(tb.items) catch unreachable;
+    }
+}

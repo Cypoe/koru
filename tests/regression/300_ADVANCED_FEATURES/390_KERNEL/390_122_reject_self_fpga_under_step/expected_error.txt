@@ -1,0 +1,1 @@
+`self|fpga` under `std/kernel:step` is not fpga-legal
