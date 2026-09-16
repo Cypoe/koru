@@ -7543,7 +7543,10 @@ pub fn main() !void {
     // build_output.zig globs `*.fpga.sv`, compiles module + testbench with
     // iverilog, and RUNS the sim under vvp — a circuit that computes the
     // wrong answer fails the build, the way spirv-val gates .spv blobs.
-    // (iverilog/vvp resolve through PATH; a machine without them fails
+    // The same glob feeds yosys: `read_verilog -sv; hierarchy -check; proc;
+    // check` must report 0 problems or the build fails — the artifact is
+    // gated structurally (synthesizable RTL) and behaviorally (the sim).
+    // (iverilog/vvp/yosys resolve through PATH; a machine without them fails
     // loudly rather than shipping an unsimulated circuit.)
     {
         const fpga_glob_req =
@@ -7562,6 +7565,9 @@ pub fn main() !void {
             \\                const __fpga_run = b.addSystemCommand(&.{ "vvp" });
             \\                __fpga_run.addFileArg(__fpga_sim);
             \\                exe.step.dependOn(&__fpga_run.step);
+            \\                const __fpga_ys = b.addSystemCommand(&.{ "sh", "-c" });
+            \\                __fpga_ys.addArg(b.fmt("yosys -Q -T -p \"read_verilog -sv {s}; hierarchy -check -top {s}; proc; check\" 2>&1 | tee /dev/stderr | grep -q \"reported 0 problems\"", .{ __fpga_entry.name, __fpga_base }));
+            \\                exe.step.dependOn(&__fpga_ys.step);
             \\            }
             \\
         ;
