@@ -1,0 +1,2 @@
+refine input:Sample: value: i64 & >=0, mode: i64
+refine input:Sample|fpga: value: i64 & >=0 & <=255, mode: i64

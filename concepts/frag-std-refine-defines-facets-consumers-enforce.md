@@ -118,3 +118,38 @@ post-clamp value), 671_013 (clamp met to empty refuses), 671_014
 (clamp∩clamp meets by intersection), 671_015 (bounds meet on a
 terminal-typed field), 671_016 (clamp on a terminal-typed field),
 671_017 (bound on a non-integer terminal refuses).
+
+---
+
+EVOLVED 2026-09-16 (target-scoped facets; 671_020, 671_021): facets
+gained a **scope**, and the dimension landed without a new spelling.
+`std/refine(S)|fpga { … }` selects a declared impl variant — `|variant`
+keeps its one meaning, implementation selection — and the selected impl
+stamps `target` on the `facet_decl` it lands. The fold rule is the
+load-bearing part: a block contributes to scope S iff its own tag is
+`null` (universal — it governs every target) or equals S, so a `|fpga`
+facet carries the meet of universal + fpga blocks while the universal
+facet stays unscoped-only. One declaration program can therefore hold
+several facets for one proto — the per-(home, name) uniqueness the
+confluent fold assumed is now per-(home, name, target).
+
+The consumer contract widened one notch, not one kind: `facets.find` /
+`metFields(…, null)` still return the universal facet — every existing
+enforcer reads exactly what it read before — and a target-aware
+consumer asks for its scope (`facets.findFor`, `metFields(…, scope)`).
+"Enforcement is the consumer's" now includes *which* facet to enforce;
+a consumer that never names a scope enforces the universal one and is
+not wrong for it.
+
+The target vocabulary is **closed by declaration**: a tag with no
+declared impl refuses KORU122 naming the declared variants, never
+mints a facet under a name nobody reads — the same closed-vocabulary
+stance as [[frag-panic-declinability-is-a-checker-stance]] (variance
+that belongs to a declaration does not get a silent fallthrough). A
+misspelled scope (`|fpg`) is a spelling error caught at declaration
+time, not a divergent constraint set discovered at the boundary.
+
+What would correct this: a scope tag with no declared impl silently
+producing a facet (vocabulary re-opens), or a scoped facet leaking
+into the universal read (a consumer that never asked for `|fpga`
+suddenly judged by fpga bounds).

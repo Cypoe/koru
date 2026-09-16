@@ -89,7 +89,7 @@ fn collectElems(alloc: std.mem.Allocator, items: []const ast_find.Item, scope_ho
         if (!has_refine) {
             entries.append(allocator, .{ .note = "std/refine not imported — push stores unchecked" }) catch unreachable;
         } else {
-            const fields = koru_std.koru_refine.metFields(allocator, program, e.home, e.name);
+            const fields = koru_std.koru_refine.metFields(allocator, program, e.home, e.name, null);
             if (fields.len == 0) {
                 entries.append(allocator, .{ .note = "no refine facets on the element — push stores unchecked" }) catch unreachable;
             }

@@ -1,0 +1,2 @@
+CONTAINS refines to nothing
+CONTAINS '>=1000' and '<=255' cannot both hold

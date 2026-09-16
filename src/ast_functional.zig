@@ -1217,6 +1217,7 @@ pub fn cloneItem(allocator: std.mem.Allocator, item: *const ast.Item) CloneError
             return .{ .facet_decl = ast.FacetDecl{
                 .name = try allocator.dupe(u8, fd.name),
                 .module = try allocator.dupe(u8, fd.module),
+                .target = if (fd.target) |t| try allocator.dupe(u8, t) else null,
                 .fields = fields,
                 .location = fd.location,
             } };
@@ -3387,16 +3388,33 @@ pub const facets = struct {
     /// marker carries no home to resolve against, so the facet's own
     /// `fd.module` (the declaration's logical home, always present) is
     /// the identity.
+    /// The UNIVERSAL facet only (`fd.target == null`) — the read every
+    /// existing consumer makes; target-scoped facets are invisible here.
     pub fn find(prog: *const ast.Program, name: []const u8, home: ?[]const u8) ?*const ast.FacetDecl {
+        return findInScope(prog, name, home, null);
+    }
+
+    /// The facet a `target`-scoped consumer reads: the scope's own
+    /// materialized meet when a `|target` refine ran, else the universal
+    /// facet (unscoped blocks still govern every target).
+    pub fn findFor(prog: *const ast.Program, name: []const u8, home: ?[]const u8, target: []const u8) ?*const ast.FacetDecl {
+        return findInScope(prog, name, home, target) orelse find(prog, name, home);
+    }
+
+    fn findInScope(prog: *const ast.Program, name: []const u8, home: ?[]const u8, target: ?[]const u8) ?*const ast.FacetDecl {
         const S = struct {
-            fn findIn(items: []const ast.Item, n: []const u8, h: ?[]const u8) ?*const ast.FacetDecl {
+            fn findIn(items: []const ast.Item, n: []const u8, h: ?[]const u8, t: ?[]const u8) ?*const ast.FacetDecl {
                 for (items) |*pi| {
                     switch (pi.*) {
                         .facet_decl => |*fd| {
-                            if (std.mem.eql(u8, fd.name, n) and (h == null or std.mem.eql(u8, fd.module, h.?))) return fd;
+                            const scope_match = if (t) |tt|
+                                fd.target != null and std.mem.eql(u8, fd.target.?, tt)
+                            else
+                                fd.target == null;
+                            if (scope_match and std.mem.eql(u8, fd.name, n) and (h == null or std.mem.eql(u8, fd.module, h.?))) return fd;
                         },
                         .module_decl => |*m| {
-                            if (findIn(m.items, n, h)) |hit| return hit;
+                            if (findIn(m.items, n, h, t)) |hit| return hit;
                         },
                         else => {},
                     }
@@ -3404,7 +3422,7 @@ pub const facets = struct {
                 return null;
             }
         };
-        return S.findIn(prog.items, name, home);
+        return S.findIn(prog.items, name, home, target);
     }
 
     fn emptyBranch(alloc: std.mem.Allocator, name: []const u8) ast.Branch {

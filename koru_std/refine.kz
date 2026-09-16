@@ -14,6 +14,8 @@ const ast = @import("ast");
 const af = @import("ast_functional");
 
 ~part terminal
+~part body
+~part fold
 ~part explain
 
 const Bound = struct {
@@ -376,97 +378,3 @@ fn walkProto(alloc: std.mem.Allocator, items: []const ast.Item, scope_home: []co
     }
 }
 
-// Live `std/refine` invocations and `facet_decl` nodes targeting
-// the same (home, name) — all contributors fold onto one meet, so
-// the facet is visitation-order-independent.
-fn walkRefine(alloc: std.mem.Allocator, rep: ?*koru_std.koru_compiler.ErrorReporter, fl: ?*const ast.Flow, items: []const ast.Item, scope_home: []const u8, w: Want, fields: *std.ArrayList(Field), skip: ?*const ast.Invocation) void {
-    for (items) |entry| {
-        switch (entry) {
-            .flow => |candidate| {
-                if (candidate.body.node) |*node| {
-                    if (node.* == .invocation and isRefineDoor(&node.invocation) and
-                        @as(?*const ast.Invocation, &node.invocation) != skip)
-                    {
-                        const cw = invWant(alloc, &node.invocation, scope_home);
-                        if (std.mem.eql(u8, cw.home, w.home) and std.mem.eql(u8, cw.name, w.name)) {
-                            _ = parseInto(alloc, rep, fl, w.name, invSource(&node.invocation), fields, false);
-                        }
-                    }
-                }
-            },
-            .facet_decl => |*fd| {
-                // A canonical facet left by an earlier std/refine
-                // transform — typed fields, folded straight onto the
-                // meet. No text is parsed.
-                if (!std.mem.eql(u8, fd.module, w.home) or !std.mem.eql(u8, fd.name, w.name)) continue;
-                for (fd.fields) |ff| {
-                    var idx_opt: ?usize = null;
-                    for (fields.items, 0..) |f, i| {
-                        if (std.mem.eql(u8, f.name, ff.name)) {
-                            idx_opt = i;
-                            break;
-                        }
-                    }
-                    const idx = idx_opt orelse blk: {
-                        fields.append(alloc, .{ .name = ff.name, .base = ff.type }) catch unreachable;
-                        break :blk fields.items.len - 1;
-                    };
-                    const f = &fields.items[idx];
-                    if (!std.mem.eql(u8, f.base, ff.type)) continue;
-                    if (ff.eq) |b| {
-                        if (f.eq == null) {
-                            f.eq = .{ .value = b.value, .exclusive = false, .src = std.fmt.allocPrint(alloc, "=={d}", .{b.value}) catch unreachable };
-                        }
-                    } else {
-                        if (ff.lo) |b| {
-                            if (f.lo == null or b.value > f.lo.?.value or
-                                (b.value == f.lo.?.value and b.exclusive and !f.lo.?.exclusive))
-                            {
-                                f.lo = .{ .value = b.value, .exclusive = b.exclusive, .src = std.fmt.allocPrint(alloc, "{s}{d}", .{ if (b.exclusive) ">" else ">=", b.value }) catch unreachable };
-                            }
-                        }
-                        if (ff.hi) |b| {
-                            if (f.hi == null or b.value < f.hi.?.value or
-                                (b.value == f.hi.?.value and b.exclusive and !f.hi.?.exclusive))
-                            {
-                                f.hi = .{ .value = b.value, .exclusive = b.exclusive, .src = std.fmt.allocPrint(alloc, "{s}{d}", .{ if (b.exclusive) "<" else "<=", b.value }) catch unreachable };
-                            }
-                        }
-                    }
-                    if (ff.clamp) |c| {
-                        const csrc = std.fmt.allocPrint(alloc, "clamp({d},{d})", .{ c.lo, c.hi }) catch unreachable;
-                        if (f.clamp) |fc| {
-                            const mlo = @max(fc.lo, c.lo);
-                            const mhi = @min(fc.hi, c.hi);
-                            if (mlo > mhi) f.clamp_conflict = .{ csrc, fc.src };
-                            f.clamp = .{ .lo = mlo, .hi = mhi, .src = csrc };
-                        } else {
-                            f.clamp = .{ .lo = c.lo, .hi = c.hi, .src = csrc };
-                        }
-                    }
-                }
-            },
-            .module_decl => |module| {
-                walkRefine(alloc, rep, fl, module.items, module.logical_name, w, fields, skip);
-            },
-            else => {},
-        }
-    }
-}
-
-// One canonical facet per (home, name): true when a sibling block
-// already left its facet_decl in the tree.
-fn facetExists(items: []const ast.Item, home: []const u8, name: []const u8) bool {
-    for (items) |entry| {
-        switch (entry) {
-            .facet_decl => |*fd| {
-                if (std.mem.eql(u8, fd.module, home) and std.mem.eql(u8, fd.name, name)) return true;
-            },
-            .module_decl => |module| {
-                if (facetExists(module.items, home, name)) return true;
-            },
-            else => {},
-        }
-    }
-    return false;
-}

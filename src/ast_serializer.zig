@@ -367,6 +367,10 @@ pub const AstSerializer = struct {
         try self.writeString(facet.name);
         try self.write(", .module = ");
         try self.writeString(facet.module);
+        if (facet.target) |t| {
+            try self.write(", .target = ");
+            try self.writeString(t);
+        }
         try self.write(", .fields = &[_]ast.FacetField{");
         for (facet.fields) |field| {
             try self.write(".{ .name = ");
@@ -1960,6 +1964,12 @@ pub const AstSerializer = struct {
         try self.writeIndent();
         try self.write("\"module\": ");
         try self.writeString(facet.module);
+        if (facet.target) |t| {
+            try self.write(",\n");
+            try self.writeIndent();
+            try self.write("\"target\": ");
+            try self.writeString(t);
+        }
         try self.write(",\n");
         try self.writeIndent();
         try self.write("\"fields\": [\n");

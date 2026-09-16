@@ -146,6 +146,10 @@ const Printer = struct {
         try self.write(fd.module);
         try self.write(":");
         try self.write(fd.name);
+        if (fd.target) |t| {
+            try self.write("|");
+            try self.write(t);
+        }
         try self.write(": ");
         for (fd.fields, 0..) |field, i| {
             if (i > 0) try self.write(", ");

@@ -16,35 +16,6 @@
 // bound, an empty meet all surface as `status = "refused: …"` instead
 // of a KORU205 the user then has to decode.
 
-// One addressed (home, name) target and the number of `std/refine`
-// blocks contributing to it — the meet is confluent, so the count is
-// informational, not load-bearing.
-const Target = struct { want: Want, contributors: usize };
-
-fn collectTargets(alloc: std.mem.Allocator, items: []const ast.Item, scope_home: []const u8, out: *std.ArrayList(Target)) void {
-    for (items) |entry| {
-        switch (entry) {
-            .flow => |fl| {
-                if (fl.body.node) |*node| {
-                    if (node.* == .invocation and isRefineDoor(&node.invocation)) {
-                        const w = invWant(alloc, &node.invocation, scope_home);
-                        var seen = false;
-                        for (out.items) |*t| {
-                            if (std.mem.eql(u8, t.want.home, w.home) and std.mem.eql(u8, t.want.name, w.name)) {
-                                t.contributors += 1;
-                                seen = true;
-                                break;
-                            }
-                        }
-                        if (!seen) out.append(alloc, .{ .want = w, .contributors = 1 }) catch unreachable;
-                    }
-                }
-            },
-            .module_decl => |m| collectTargets(alloc, m.items, m.logical_name, out),
-            else => {},
-        }
-    }
-}
 
 // The canonical facet spelling — same shape the driver's marker and
 // facet_decl carry: `name: base & >N & <=N & clamp(lo,hi)`; `spellTerms`
@@ -116,15 +87,6 @@ fn fieldStatus(alloc: std.mem.Allocator, prog: *const ast.Program, home: []const
     return null;
 }
 
-// The fold as refine's comptime API: a consumer's explainer (std/list,
-// std/store, a JSON decoder) asks "what does this type's facet meet to"
-// and gets the SAME []Field the transform would emit — one producer,
-// several sinks, no drift. Not pub: same-emitted-file access only.
-fn metFields(alloc: std.mem.Allocator, prog: *const ast.Program, home: []const u8, name: []const u8) []const Field {
-    var meet = std.ArrayList(Field).initCapacity(alloc, 8) catch unreachable;
-    walkRefine(alloc, null, null, prog.items, prog.main_module_name, .{ .home = home, .name = name }, &meet, null);
-    return meet.items;
-}
 
 // The tor is declared pub in the contract (refine.k) — KORU111. The
 // proc is the implementation, living with the fold it reports on.
@@ -148,13 +110,16 @@ fn metFields(alloc: std.mem.Allocator, prog: *const ast.Program, home: []const u
         // The fold — live contributor blocks through the same walkRefine
         // the transform runs; nothing is skipped, so every block meets.
         var meet = std.ArrayList(Field).initCapacity(allocator, 8) catch unreachable;
-        walkRefine(allocator, null, null, program.items, program.main_module_name, t.want, &meet, null);
+        walkRefine(allocator, null, null, program.items, program.main_module_name, t.want, t.scope, &meet, null);
 
         var pfields = std.ArrayList(ProtoField).initCapacity(allocator, 8) catch unreachable;
         var anchor_found = false;
         walkProto(allocator, program.items, program.main_module_name, t.want, &pfields, &anchor_found);
 
-        const heading = std.fmt.allocPrint(allocator, "{s}:{s}", .{ t.want.home, t.want.name }) catch unreachable;
+        const heading = if (t.scope) |s|
+            std.fmt.allocPrint(allocator, "{s}:{s}|{s}", .{ t.want.home, t.want.name, s }) catch unreachable
+        else
+            std.fmt.allocPrint(allocator, "{s}:{s}", .{ t.want.home, t.want.name }) catch unreachable;
         var entries = std.ArrayList(Entry).initCapacity(allocator, meet.items.len * 4) catch unreachable;
         entries.append(allocator, .{ .property = .{ .key = "contributors", .value = .{ .integer = @intCast(t.contributors) } } }) catch unreachable;
         if (!anchor_found) {

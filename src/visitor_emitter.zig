@@ -1901,6 +1901,10 @@ pub const VisitorEmitter = struct {
                 try self.code_emitter.write(fd.module);
                 try self.code_emitter.write(":");
                 try self.code_emitter.write(fd.name);
+                if (fd.target) |t| {
+                    try self.code_emitter.write("|");
+                    try self.code_emitter.write(t);
+                }
                 try self.code_emitter.write(": ");
                 for (fd.fields, 0..) |field, i| {
                     if (i > 0) try self.code_emitter.write(", ");

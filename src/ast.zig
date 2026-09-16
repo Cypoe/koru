@@ -585,6 +585,10 @@ pub const FacetDecl = struct {
     /// The logical home the facet refines (`app.test_lib.defs`), matching
     /// the home semantics of `HostTypeDecl.module`. Empty = own top level.
     module: []const u8 = "",
+    /// Target scope from the call-site `|variant` (`std/refine(S)|fpga`) —
+    /// null is the universal facet; a named scope's facet carries the
+    /// materialized meet of universal + scoped blocks.
+    target: ?[]const u8 = null,
     fields: []const FacetField,
 
     // FOUNDATIONAL: Every item knows where it came from
@@ -593,6 +597,7 @@ pub const FacetDecl = struct {
     pub fn deinit(self: *FacetDecl, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         if (self.module.len > 0) allocator.free(self.module);
+        if (self.target) |t| allocator.free(t);
         for (self.fields) |*field| {
             var mutable_field = field.*;
             mutable_field.deinit(allocator);

@@ -84,7 +84,7 @@
             var met_total: usize = 0;
             for (s.members.items) |m| {
                 const tn = SX.memberTypeName(allocator, m.spelled) orelse continue;
-                const fields = koru_std.koru_refine.metFields(allocator, program, s.home, tn);
+                const fields = koru_std.koru_refine.metFields(allocator, program, s.home, tn, null);
                 for (fields) |*f| {
                     if (f.lo != null or f.hi != null or f.eq != null or f.clamp != null) met_total += 1;
                 }
