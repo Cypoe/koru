@@ -105,7 +105,8 @@ the proto marker reader's own rule. A typed `proto_decl` (the next
 namespace off the wire) restores home scoping.
 
 Open rungs: disjunction-with-default atoms; non-integer bases;
-enforcement at other boundaries (std/store insert, std/json decode).
+enforcement at remaining boundaries (std/json decode — std/store
+insert landed 2026-09-16).
 
 Pins: 671_001 (meet), 671_002 (empty meet refused), 671_003 (cross-home
 layering), 671_004 (unknown field), 671_005 (base mismatch), 671_006
@@ -153,3 +154,18 @@ What would correct this: a scope tag with no declared impl silently
 producing a facet (vocabulary re-opens), or a scoped facet leaking
 into the universal read (a consumer that never asked for `|fpga`
 suddenly judged by fpga bounds).
+
+EVOLVED the same day (second enforcer; 690_321–690_326, 690_319
+flipped): `std/store` insert is now an enforcing consumer — the `new`
+transform reads the same `metFields` fold and declares `?!violated
+<column>` on every generated insert event, so an out-of-bounds write
+produces the panic branch, an unhandled one traps, and `| violated f
+|>` supervises — the exact protocol std/list's push pioneered. The
+explainer's honesty row flipped with it: "declared but NOT enforced"
+was true while no consumer read the fold at insert; now it reports
+what is enforced. Two honest scopings: insert reads the *universal*
+facet today (`metFields(…, null)`) — a store that wants `|fpga`
+enforcement names its scope at a later rung — and the explainer's
+report and the guard share one fold, so what is reported is what is
+enforced. The clamp-then-judge ordering held without a special case:
+the boundary normalizes first, predicates see the post-clamp value.

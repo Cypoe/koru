@@ -2,7 +2,7 @@
 // the sites (new's capacity and member block, insert/query/watch counts)
 // and reports the composition alongside the facet-honesty row: `Limb`
 // carries a refine facet on `health`, both members declare it, and
-// `std/store:insert` does NOT enforce it — the catalog says so plainly.
+// `std/store:insert` enforces it — the catalog says so plainly.
 // post.sh drives the text rows and the typed json catalog.
 import std/io
 import std/proto

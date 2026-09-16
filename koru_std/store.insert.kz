@@ -293,14 +293,10 @@
 
     const braced = std.fmt.allocPrint(allocator, "{{{s}}}", .{block_text.?}) catch unreachable;
     // A ONE-column store names no column, so its row block IS the value
-    // expression — `insert(nums) { 7 }`.
-    //
-    // It is NEVER a field list here, and that settles the punning question
-    // rather than leaving it ambiguous: `insert(batch) { p }` today puns to
-    // `{ p: p }` because the column happens to be called `p`. With no column
-    // name there is nothing to pun against, so the block can only mean "insert
-    // this value". One reading, decided by the store's arity, not by whether the
-    // author's binding happens to match a column name.
+    // expression — `insert(nums) { 7 }`, never a field list. That settles
+    // punning: `insert(batch) { p }` puns to `{ p: p }` only because the
+    // column happens to be called `p`; with no column name there is
+    // nothing to pun against, so arity decides — not the author's binding.
     const insert_identity = order.len == 1 and std.mem.eql(u8, order[0], ast.STORE_IDENTITY_COLUMN);
     const row_fields: []const struct_literal.StructField = if (insert_identity) blk: {
         const one = allocator.alloc(struct_literal.StructField, 1) catch unreachable;
@@ -424,8 +420,9 @@
         .value = std.fmt.allocPrint(allocator, "{d}", .{flow.location.line}) catch unreachable,
     };
 
-    // Handle form iff the site handles `| row …`; anything else on an
-    // insert site is a loud wall this rung.
+    // Handle form iff the site handles `| row …`; `| violated <field>` and
+    // `| ok` are the supervised answers to `?!violated`/`?ok` on the
+    // generated events; anything else on an insert site is a loud wall.
     const site_is_head = invocation == flow.inv();
     var has_row_cont = false;
     var has_full_cont = false;
@@ -437,8 +434,11 @@
                 has_row_cont = true;
             } else if (std.mem.eql(u8, bname, "full")) {
                 has_full_cont = true;
+            } else if (std.mem.eql(u8, bname, "violated") or std.mem.eql(u8, bname, "ok")) {
+                // Supervised branches ride the site's continuations into
+                // the generated call unchanged.
             } else {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): branch '{s}' - insert answers `| row <binding>` and `| full` only (inserted/removed lifecycle is pinned at 690_016)", .{ store_name, c.branch }) } };
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): branch '{s}' - insert answers `| row <binding>`, `| full`, `| ok`, and `| violated <field>` (inserted/removed lifecycle is pinned at 690_016)", .{ store_name, c.branch }) } };
             }
         }
     }

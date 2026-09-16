@@ -2958,13 +2958,9 @@ const emitFlowWithMocks = struct {
     // so a later pass must not re-report an earlier one's errors.
     const err_base = reporter.errors.items.len;
 
-    // Create inserter with warn_mode flag
     var inserter = auto_discharge_inserter.AutoDischargeInserter.init(
-        ctx.allocator,
-        reporter,
-        warn_mode,
-        strict_panic_branches,
-        prototype_mode,
+        ctx.allocator, reporter, warn_mode, strict_panic_branches, prototype_mode,
+        CompilerEnv.lang,
     ) catch {
         mutable_ctx.errors.append(mutable_ctx.allocator, .{
             .message = "Failed to initialize auto-discharge inserter",

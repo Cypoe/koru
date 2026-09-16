@@ -158,8 +158,13 @@ they are different features with different opt-ins.
   invocation should also become all-holes under `~[prototype]` is unruled.
 - Nested / mid-pipeline invocations: synthesis is flow-head scoped. A hole on a
   nested branching step is not yet covered.
-- JS target: the panic-hole lowering is designed against the Zig target; the JS
-  equivalent (a `throw`) is unverified.
+- JS target: RESOLVED 2026-09-16 — the synthesized arm is born in the
+  target's language. `synthPanicBody` takes `lang` (plumbed from
+  `CompilerEnv.lang` through `AutoDischargeInserter.init`): Zig keeps
+  `@panic` behind the freestanding guard; JS gets `throw new Error(…)`
+  preceded by `__koru_stderr_write` so the payload echo survives too.
+  The same synthesis covers `| ?!` panic branches and prototype holes —
+  the JS store-insert tests (690_325) exercise it end to end.
 - SCOPE IS PROGRAM-WIDE, not per-file (known defect, pinned red 400_167). The
   annotation is authored per-file, but it lives on the single program-level
   `ast.Program.module_annotations`, and every checker reads that one flag — so a

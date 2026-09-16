@@ -77,7 +77,6 @@ const codegen_utils_store = @import("codegen_utils");
 /// `main_module.` — as this file did in fifteen places — addresses a
 /// module-declared store's units into the entry file's namespace, where they do
 /// not exist.
-///
 /// `home` is the LOGICAL name (`storeHomeModule`), and it is compared against
 /// `main_module_name`: for an entry-file store the two coincide, which is why
 /// the hardcoded form worked for every store that lived in the entry file.
@@ -1688,3 +1687,4 @@ fn storeLowerText(
 ~part sitetag
 ~part explain
 ~part sites
+~part leaf

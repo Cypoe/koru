@@ -344,8 +344,8 @@ const af = @import("ast_functional");
         /// The compound graph reachable from (root_home, root_name): every
         /// compound-typed edge walked, terminals and scalars skipped. Returns
         /// the cycle chain ("A -> B -> A") when the root reaches itself, null
-        /// otherwise. Unresolvable hops are skipped — the owning entry's own
-        /// gate refuses those, never this walk.
+        /// otherwise. Unresolvable hops are skipped — the owning entry's gate
+        /// refuses those, never this walk.
         fn findCycle(alloc: std.mem.Allocator, prog: *const ast.Program, root_name: []const u8, root_home: []const u8) ?[]const u8 {
             var nodes = std.ArrayList(CompoundNode).initCapacity(alloc, 8) catch unreachable;
             GraphWalk.walk(alloc, prog.items, prog.main_module_name, &nodes);
@@ -396,11 +396,10 @@ const af = @import("ast_functional");
     // Layout-silent self-erase: a ONE-LINE comment carries the registry's
     // content for anyone reading the emitted module; nothing else is emitted
     // for the entry itself (the consumer's derived struct is what the program
-    // runs on). The collapse is load-bearing: a multi-line body left its
-    // second and later lines as RAW TEXT in the emitted Zig module (they are
-    // not comments — only the first line carries `//`), and the backend died
-    // on `serial: string` as a bare statement. Fields join with ", " — the
-    // same separator std/list's marker parser splits on.
+    // runs on). The collapse is load-bearing: later lines of a multi-line
+    // body land as RAW TEXT in the emitted Zig (only the first carries `//`),
+    // and the backend died on `serial: string` as a bare statement. Fields
+    // join with ", " — the separator std/list's marker parser splits on.
     const flat = blk: {
         var buf = std.ArrayList(u8).initCapacity(allocator, source.text.len + 1) catch unreachable;
         var it = std.mem.splitScalar(u8, source.text, '\n');
@@ -432,8 +431,8 @@ const af = @import("ast_functional");
 // host scalar — `std/proto:i64(Port)` mints `const Port = i64` — one tor
 // per scalar in the field vocabulary (af.scalars). The marker ahead of the
 // alias records the identity so compounds and consumers resolve `Port`
-// without repeating the declaration. Keyword is deliberately absent:
-// terminal identity is module-spaced (`std/proto:i64`), not a bare global.
+// without repeating the declaration. Keyword absent: terminal identity is
+// module-spaced (`std/proto:i64`), not a bare global.
 fn mintTerminal(allocator: std.mem.Allocator, item: *const astz.Item, expr: []const u8, scalar: []const u8) SiteResult {
     const flow = if (item.* == .flow)
         &item.flow
@@ -456,12 +455,12 @@ fn mintTerminal(allocator: std.mem.Allocator, item: *const astz.Item, expr: []co
 
     // The marker records the vocabulary scalar the user spelled; the const
     // lowers to the host type — `string` is a scalar name, not a Zig type.
+    // On JS the alias has no runtime content, so the marker alone lands.
     const host = if (std.mem.eql(u8, scalar, "string")) "[]const u8" else scalar;
-    const code = std.fmt.allocPrint(
-        allocator,
-        "// proto-terminal {s}: {s}\n{s}const {s} = {s};",
-        .{ type_name, scalar, pub_prefix, type_name, host },
-    ) catch unreachable;
+    const code = if (std.mem.eql(u8, CompilerEnv.lang, "js"))
+        std.fmt.allocPrint(allocator, "// proto-terminal {s}: {s}", .{ type_name, scalar }) catch unreachable
+    else
+        std.fmt.allocPrint(allocator, "// proto-terminal {s}: {s}\n{s}const {s} = {s};", .{ type_name, scalar, pub_prefix, type_name, host }) catch unreachable;
 
     return .{ .replacement = astz.Item{
         .inline_code = .{

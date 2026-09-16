@@ -91,29 +91,47 @@ fn panicHasPayload(branch: *const ast.Branch) bool {
 }
 
 /// The synthesized body for an unhandled `?!` panic-branch arm: a loud
-/// `@panic` naming the event and branch, preceded — where the branch carries
-/// a payload — by a stderr echo of that payload, so `?!violated`'s field name
-/// reaches the crash log instead of being bound to `_` and dropped. The
-/// comptime freestanding guard keeps the echo legal on targets without
-/// stderr; the trap itself is portable.
+/// trap naming the event and branch, preceded — where the branch carries
+/// a payload — by a stderr echo of that payload, so `?!violated`'s field
+/// name reaches the crash log instead of being bound to `_` and dropped.
+/// The body is born in the target's own language: Zig gets `@panic` behind
+/// a comptime freestanding guard, JS gets `throw` behind the emitted
+/// runtime's own `__koru_stderr_write` helper.
 fn synthPanicBody(
     allocator: std.mem.Allocator,
     event_name: []const u8,
     branch: *const ast.Branch,
+    lang: []const u8,
 ) ![]const u8 {
+    const is_js = std.mem.eql(u8, lang, "js");
     if (!panicHasPayload(branch)) {
-        return std.fmt.allocPrint(
-            allocator,
-            "@panic(\"{s}: unhandled panic branch '{s}' fired at runtime\");",
-            .{ event_name, branch.name },
-        );
+        return if (is_js)
+            std.fmt.allocPrint(
+                allocator,
+                "throw new Error(\"{s}: unhandled panic branch '{s}' fired at runtime\");",
+                .{ event_name, branch.name },
+            )
+        else
+            std.fmt.allocPrint(
+                allocator,
+                "@panic(\"{s}: unhandled panic branch '{s}' fired at runtime\");",
+                .{ event_name, branch.name },
+            );
     }
-    // A lone string payload formats as `{s}` ("port"), not the byte array
-    // `{any}` prints; every other shape takes `{any}`.
+    // A lone string payload prints bare ("port"), matching Zig's `{s}`;
+    // every other shape goes through the structured printer (`{any}` /
+    // `JSON.stringify`).
     const is_str = branch.payload.fields.len == 1 and
         (std.mem.eql(u8, branch.payload.fields[0].type, "string") or
             std.mem.eql(u8, branch.payload.fields[0].type, "[]const u8") or
             std.mem.eql(u8, branch.payload.fields[0].type, "[]u8"));
+    if (is_js) {
+        return std.fmt.allocPrint(
+            allocator,
+            "__koru_stderr_write(\"{s}: panic branch '{s}' fired — payload: \" + {s} + \"\\n\");\nthrow new Error(\"{s}: unhandled panic branch '{s}' fired at runtime\");",
+            .{ event_name, branch.name, if (is_str) "v" else "JSON.stringify(v)", event_name, branch.name },
+        );
+    }
     return std.fmt.allocPrint(
         allocator,
         "if (comptime @import(\"builtin\").os.tag != .freestanding) @import(\"std\").debug.print(\"{s}: panic branch '{s}' fired — payload: {{{s}}}\\n\", .{{v}});\n@panic(\"{s}: unhandled panic branch '{s}' fired at runtime\");",
@@ -138,6 +156,9 @@ pub const AutoDischargeInserter = struct {
     acq_seq_counter: u32,
     warn_mode: bool, // When true, emit warnings about auto-inserted disposals
     strict_panic_branches: bool, // When true (--panic-branches=strict), unhandled panic branches are compile errors (the crash-surface map, loud)
+    /// The emission target's language — synthesized host text (the unhandled
+    /// `?!` arm) is born in it. `CompilerEnv.lang`, plumbing through init.
+    lang: []const u8 = "zig",
     prototype_mode: bool = false, // When true (~[prototype]), an unhandled required TERMINAL branch is synthesized as a @panic hole instead of a KORU022 error — same body as an unhandled | ?! panic branch (400_160)
 
     /// Error set for recursive functions that need explicit error types
@@ -825,7 +846,7 @@ pub const AutoDischargeInserter = struct {
         }
     };
 
-    pub fn init(allocator: std.mem.Allocator, reporter: *errors.ErrorReporter, warn_mode: bool, strict_panic_branches: bool, prototype_mode: bool) !AutoDischargeInserter {
+    pub fn init(allocator: std.mem.Allocator, reporter: *errors.ErrorReporter, warn_mode: bool, strict_panic_branches: bool, prototype_mode: bool, lang: []const u8) !AutoDischargeInserter {
         return .{
             .allocator = allocator,
             .reporter = reporter,
@@ -836,6 +857,7 @@ pub const AutoDischargeInserter = struct {
             .warn_mode = warn_mode,
             .strict_panic_branches = strict_panic_branches,
             .prototype_mode = prototype_mode,
+            .lang = lang,
         };
     }
 
@@ -4992,7 +5014,7 @@ pub const AutoDischargeInserter = struct {
         @memcpy(out[0..existing.len], existing);
         for (missing.items, 0..) |branch, i| {
             const has_payload = panicHasPayload(branch);
-            const panic_msg = try synthPanicBody(self.allocator, qualified, branch);
+            const panic_msg = try synthPanicBody(self.allocator, qualified, branch, self.lang);
             out[existing.len + i] = ast.Continuation{
                 .branch = try self.allocator.dupe(u8, branch.name),
                 .binding = try self.allocator.dupe(u8, if (has_payload) "v" else "_"),
@@ -5272,7 +5294,7 @@ pub const AutoDischargeInserter = struct {
         for (missing_panic.items, 0..) |branch, i| {
             const idx = kept_count + missing_optional.items.len + i;
             const has_payload = panicHasPayload(branch);
-            const panic_msg = try synthPanicBody(self.allocator, owner_name, branch);
+            const panic_msg = try synthPanicBody(self.allocator, owner_name, branch, self.lang);
             new_continuations[idx] = ast.Continuation{
                 .branch = try self.allocator.dupe(u8, branch.name),
                 .binding = try self.allocator.dupe(u8, if (has_payload) "v" else "_"),
