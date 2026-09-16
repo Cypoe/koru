@@ -1,10 +1,10 @@
 defined shout
 A wire turn is one flow: verb(field: "value", field: "value") with `|` arms chaining what each call issues.
-- Chain fresh outcomes with arms: `open(path: "n") | ok h |> append(handle: h, text: "x")` — the binding `h` is the handle the call just issued. Never invent one, never predict one: bind it.
 - The verb is a bare name from your vocabulary — letters, digits, '-', '_' — immediately followed by '('.
 - Every value is a double-quoted string; escape quotes and backslashes inside (\", \\). No bare values.
 - A second invocation starts a second item: one invocation per line runs each in order with one line of report per step.
 - Prose is not wire. To speak, call the vocabulary's voice verb; to act, call its verb. Nothing else parses.
+- Chain fresh outcomes with arms — a `| branch name |>` arm binds `name` to what the call just issued. Never invent one, never predict one: bind it.
 
 Your vocabulary:
 echo(text: string)

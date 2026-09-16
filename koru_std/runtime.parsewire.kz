@@ -27,10 +27,10 @@
 // The wire's shape rules, as prompt bytes. These are the sentences
 // `wireValidate` below enforces — the two must move together or the prompt
 // starts lying about the parser (the drift this rung exists to kill).
-// `scope-grammar` renders this text above the scope's own verb lines.
+// `scope-grammar` renders this text above the scope's own verb lines; the
+// chain rule's worked example is derived per-scope in `runtime.example.kz`.
 const WIRE_GRAMMAR_TEXT =
     \\A wire turn is one flow: verb(field: "value", field: "value") with `|` arms chaining what each call issues.
-    \\- Chain fresh outcomes with arms: `open(path: "n") | ok h |> append(handle: h, text: "x")` — the binding `h` is the handle the call just issued. Never invent one, never predict one: bind it.
     \\- The verb is a bare name from your vocabulary — letters, digits, '-', '_' — immediately followed by '('.
     \\- Every value is a double-quoted string; escape quotes and backslashes inside (\", \\). No bare values.
     \\- A second invocation starts a second item: one invocation per line runs each in order with one line of report per step.

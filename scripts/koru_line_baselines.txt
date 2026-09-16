@@ -106,6 +106,7 @@ koru_std/rings.kz	225
 koru_std/rules.kz	691
 koru_std/runtime.affordances.kz	83
 koru_std/runtime.eval.kz	74
+koru_std/runtime.example.kz	157
 koru_std/runtime.kz	2266
 koru_std/runtime.parsewire.kz	173
 koru_std/runtime.run.kz	205

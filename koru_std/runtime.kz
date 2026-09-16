@@ -1914,7 +1914,7 @@ fn buildScopeTable() []const ScopeRuntime {
             var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             const allocator = arena_state.allocator();
             var out = std.ArrayList(u8).initCapacity(allocator, 512) catch unreachable;
-            out.appendSlice(allocator, WIRE_GRAMMAR_TEXT) catch unreachable;
+            out.appendSlice(allocator, wireGrammarRules(allocator, scope_info.manifest)) catch unreachable;
             out.appendSlice(allocator, "\n\nYour vocabulary:\n") catch unreachable;
             switch (scope_vocabulary_event.handler(.{ .name = name })) {
                 .ok => |v| out.appendSlice(allocator, v) catch unreachable,
@@ -2259,8 +2259,8 @@ fn lookupEventBranches(scope_name: []const u8, event_name: []const u8) []const B
 
 // shape: Optional event name to validate response shape against
 // @retain: run_event is referenced from generated Zig code in user pipelines (std/runtime:run invocations in continuations compile to run_event.handler(...))
-
 ~part eval
 ~part parsewire
+~part example
 ~part run
 ~part affordances

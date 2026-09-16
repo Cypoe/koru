@@ -101,3 +101,22 @@ verb lines, and `std/bridge:grammar` extends it with the session's defined
 flows — the prompt an agent lives under is now the register block plus its
 own growth, pinned by 430_063 and 440_017. Prompt and enforcement are the
 same bytes, completed.
+
+2026-09-16 — the "completed" was measured false, then made true. kopium's
+third vocabulary (`calc`, a handle-free domain) caught the last
+hand-written bytes in the derived surface: the chain rule's worked example
+was a fixed notes cast — `open | ok h |> append`, "the handle the call
+just issued" — taught verbatim on a scope where both verbs are
+`event-denied` and nothing mints a handle. The vocabulary list was
+derived; the example above it was secretly the first domain's. The fix is
+derivation, not deletion: `scope-grammar` now synthesizes the example from
+the scope's own manifest — the head is the first verb that provably hands
+a value to an arm (a payload-carrying branch, or a bare return minting on
+`__type_ref`, which the wire meets as `ok`), the chain target is the
+possession edge when one exists, else the lightest sink that can carry the
+binding. On `notes` the derivation reproduces the old cast from data; on
+`calc` it renders `add(a: "1", b: "2") | sum v |> say(text: v)`; a scope
+with nothing provably chainable gets the rule with no fabricated example.
+The limit that remains: a bare `-> string` with no phantom leaves no
+manifest trace, so a scope of nothing-but-plain-returns renders the
+no-example bullet — honest, and visible if it ever matters.
