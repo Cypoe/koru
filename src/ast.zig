@@ -373,6 +373,13 @@ pub const ExplainReport = struct {
             /// JSON. The library keeps its i64 all the way to here as `.integer`.
             value: Value,
 
+            /// Witness site hashes — canonical site_hash coordinates of the
+            /// sites this row was decided at or counted from. `inserts = 1
+            /// [deadb]` is a number AND its witnesses. Rendered as ` [h]`
+            /// suffixes in text (shortest-unique prefix), a `"<key>$at"` list
+            /// in json, links in html. Empty for derived or prose values.
+            at: []const []const u8 = &.{},
+
             /// A machinable scalar that knows its JSON type — the same tag set as
             /// Zig's own `std.json.Value`, minus the composite/null cases we don't
             /// need yet. json honors the type (`7` / `7.5` / `true` / `"SoA"`);

@@ -16,6 +16,15 @@ echo "$TEXT" | grep -q "queries = 1"                            || { echo "FAIL:
 echo "$TEXT" | grep -q "facets_declared = 2"                    || { echo "FAIL: facet count missing";      exit 1; }
 echo "$TEXT" | grep -q "does NOT enforce"                       || { echo "FAIL: facet honesty missing";    exit 1; }
 
+echo "=== witness hashes + at resolution ==="
+echo "$TEXT" | grep -qE "inserts = 1 \[[0-9a-z]+\]"             || { echo "FAIL: insert witness missing";   exit 1; }
+HASH=$(echo "$TEXT" | grep -oE "inserts = 1 \[[0-9a-z]+\]" | grep -oE "\[[0-9a-z]+\]" | tr -d '[]')
+AT=$(koruc "$KORU_INPUT" at "$HASH" 2>&1)
+echo "$AT"
+echo "$AT" | grep -q "std.store:insert"                        || { echo "FAIL: at missed the insert site"; exit 1; }
+echo "$AT" | grep -q "input.k"                                 || { echo "FAIL: at lost the file";         exit 1; }
+koruc "$KORU_INPUT" at "${HASH}zz" 2>&1 | grep -q "tail drifted" || { echo "FAIL: drifted tail not absorbed"; exit 1; }
+
 echo "=== koruc explain json (typed) ==="
 JSON=$(koruc "$KORU_INPUT" explain json 2>&1)
 echo "$JSON"

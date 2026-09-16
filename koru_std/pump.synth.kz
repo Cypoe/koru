@@ -3,17 +3,17 @@
 //
 // A join arm's callee isn't always a declared tor: a store's `! step` /
 // `! wait` arms SYNTHESIZE `<s>-step` / `<s>-live` / `<s>-wait` units at
-// transform time, so nothing named `tasks-step` exists in the source
-// tree — or in the pre-transform tree the explainer folds. `synthesized`
-// recognizes the pattern: `<store>-<verb>` where a `std/store:new`
-// site carries the arm that generates it, so a synthesized callee is
-// reported as generated rather than refused as undeclared.
+// transform time, so nothing named `tasks-step` exists in the pre-transform
+// tree the explainer folds. `synthesized` recognizes `<store>-<verb>` against
+// a `std/store:new` site carrying the arm that generates it — reported as
+// generated (with the generator site as `gen` witness), never refused.
 
 const PS = struct {
-    fn synthesized(prog: *const ast.Program, li: ?*const ast.Invocation) ?[]const u8 {
+    const Synthesized = struct { store: []const u8, gen: *const ast.Invocation };
+
+    fn synthesized(prog: *const ast.Program, li: ?*const ast.Invocation) ?Synthesized {
         const inv = li orelse return null;
-        if (inv.path.segments.len != 1) return null;
-        const callee = inv.path.segments[0];
+        const callee = if (inv.path.segments.len == 1) inv.path.segments[0] else return null;
         const dash = std.mem.lastIndexOfScalar(u8, callee, '-') orelse return null;
         const store_name = callee[0..dash];
         const arm = if (std.mem.eql(u8, callee[dash + 1 ..], "step") or std.mem.eql(u8, callee[dash + 1 ..], "live"))
@@ -23,7 +23,7 @@ const PS = struct {
         else
             return null;
         const W = struct {
-            fn scan(its: []const ast.Item, want: []const u8, want_arm: []const u8) bool {
+            fn scan(its: []const ast.Item, want: []const u8, want_arm: []const u8) ?*const ast.Invocation {
                 for (its) |*pi| {
                     switch (pi.*) {
                         .flow => |*fl| {
@@ -36,7 +36,7 @@ const PS = struct {
                                         for (n.invocation.args) |a| {
                                             if (a.source_value == null and std.mem.eql(u8, a.value, want)) {
                                                 for (fl.body.continuations) |*c| {
-                                                    if (c.kind == .effect and std.mem.eql(u8, std.mem.trim(u8, c.branch, " "), want_arm)) return true;
+                                                    if (c.kind == .effect and std.mem.eql(u8, std.mem.trim(u8, c.branch, " "), want_arm)) return &n.invocation;
                                                 }
                                             }
                                         }
@@ -45,15 +45,15 @@ const PS = struct {
                             }
                         },
                         .module_decl => |*md| {
-                            if (scan(md.items, want, want_arm)) return true;
+                            if (scan(md.items, want, want_arm)) |hit| return hit;
                         },
                         else => {},
                     }
                 }
-                return false;
+                return null;
             }
         };
-        if (W.scan(prog.items, store_name, arm)) return store_name;
+        if (W.scan(prog.items, store_name, arm)) |gen| return .{ .store = store_name, .gen = gen };
         return null;
     }
 };

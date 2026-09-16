@@ -419,6 +419,15 @@ pub const CompilerContext = struct {
     });
     struct_literal_module.addImport("liquid", liquid_module);
 
+    // Site hash — fuzzy hierarchical program addresses (module→item→site→detail)
+    const site_hash_module = b.createModule(.{
+        .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/site_hash.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    site_hash_module.addImport("ast", ast_module);
+    site_hash_module.addImport("errors", errors_module);
+
     // Compiler config
     const compiler_config_module = b.createModule(.{
         .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/compiler_config.zig" },
@@ -668,6 +677,7 @@ pub const CompilerContext = struct {
     backend_output_module.addImport("template_utils", template_utils_module);
     backend_output_module.addImport("liquid", liquid_module);
     backend_output_module.addImport("struct_literal", struct_literal_module);
+    backend_output_module.addImport("site_hash", site_hash_module);
     backend_output_module.addImport("keyword_registry", keyword_registry_module);
 
     // backend_output_emitted as a MODULE of the exe (single compilation unit =
@@ -713,12 +723,9 @@ pub const CompilerContext = struct {
     exe.root_module.addImport("template_utils", template_utils_module);
     exe.root_module.addImport("liquid", liquid_module);
     exe.root_module.addImport("struct_literal", struct_literal_module);
+    exe.root_module.addImport("site_hash", site_hash_module);
 }
 
-// ============================================================
-// STANDARD COMPILER FLAGS
-// ============================================================
-//
 // ============================================================
 // COMPILER FLAGS - Self-documenting feature flags
 // ============================================================
@@ -796,18 +803,10 @@ pub const CompilerContext = struct {
 //     "description": "Install npm packages from requires.npm declarations"
 //   }
 //
-//   [comptime|command]pub event install {
-//       program: *const Program,
-//       allocator: std.mem.Allocator,
-//       argv: []string,
-//   }
+//   [comptime|command]pub event install { program, allocator, argv: []string }
+//   proc install { /* full AST access - walk program for requires.npm, etc. */ }
 //
-//   proc install {
-//       // Full AST access - walk program for requires.npm, etc.
-//   }
-//
-// Invoke: koruc main.kz install [args...]
-// Or:     koruc main.kz i [args...]
+// Invoke: koruc main.kz install [args...]  (or the alias: koruc main.kz i)
 //
 // Commands appear in --help under "Commands:"; [norun] prevents auto-execution.
 

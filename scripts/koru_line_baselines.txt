@@ -41,6 +41,7 @@ koru_std/emitter.kz	56
 koru_std/env.kz	52
 koru_std/eval.kz	454
 koru_std/explain.kz	181
+koru_std/explain.wit.kz	34
 koru_std/field.kz	759
 koru_std/fmt.jsprec.kz	39
 koru_std/fmt.kz	816
@@ -93,6 +94,7 @@ koru_std/pump.explain.kz	303
 koru_std/pump.kz	833
 koru_std/pump.messages.kz	37
 koru_std/pump.synth.kz	59
+koru_std/pump.wit.kz	25
 koru_std/refine.explain.kz	188
 koru_std/refine.k	196
 koru_std/refine.kz	472
@@ -119,6 +121,7 @@ koru_std/store.qcaps.kz	372
 koru_std/store.qrewrite.kz	231
 koru_std/store.query.kz	1019
 koru_std/store.rule.kz	148
+koru_std/store.sites.kz	169
 koru_std/store.sitetag.kz	27
 koru_std/store.stored.kz	871
 koru_std/store.stripe.kz	81

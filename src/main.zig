@@ -31,6 +31,7 @@ const flow_checker = @import("flow_checker");
 const FlowChecker = flow_checker.FlowChecker;
 const codegen_utils = @import("codegen_utils");
 const emitter_helpers = @import("emitter_helpers");
+const site_hash = @import("site_hash");
 
 /// Native-only link steps (OpenSSL, etc.) must not run on wasm reactor builds.
 fn buildRequireSkippedOnWasm(req: []const u8) bool {
@@ -2121,7 +2122,7 @@ fn collectVariantTargetsForEventPath(
 /// events with full signatures, annotations, and file:line) from the fully
 /// resolved post-import AST, then return. Same category as `--help`/`--ast-json`:
 /// an AST-introspection mode, no backend, no codegen. `app_only` drops std/koru.
-fn glancePrintEvent(ed: *const ast.EventDecl) void {
+fn glancePrintEvent(ed: *const ast.EventDecl, sites: []const site_hash.Site) void {
     std.debug.print("  ", .{});
     if (ed.annotations.len > 0) {
         std.debug.print("[", .{});
@@ -2146,6 +2147,9 @@ fn glancePrintEvent(ed: *const ast.EventDecl) void {
     }
     std.debug.print(")", .{});
     if (ed.return_type) |rt| std.debug.print(" -> {s}", .{rt});
+    if (site_hash.hashOf(sites, @intFromPtr(ed))) |h| {
+        std.debug.print("  [{s}]", .{h[0..site_hash.displayLen(sites, h)]});
+    }
     const file = ed.location.file;
     const base = if (std.mem.lastIndexOfScalar(u8, file, '/')) |ix| file[ix + 1 ..] else file;
     std.debug.print("  {s}:{d}\n", .{ base, ed.location.line });
@@ -2154,19 +2158,23 @@ fn glancePrintEvent(ed: *const ast.EventDecl) void {
 fn runGlance(source_file: *const ast.Program, app_only: bool) void {
     std.debug.print("📄 glance\n", .{});
 
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const sites = site_hash.collectSites(arena.allocator(), source_file) catch &.{};
+
     var main_count: usize = 0;
     for (source_file.items) |item| {
         if (item == .event_decl) main_count += 1;
     }
     if (main_count > 0) {
         std.debug.print("(main) — {d} event(s)\n", .{main_count});
-        for (source_file.items) |item| {
-            if (item == .event_decl) glancePrintEvent(&item.event_decl);
+        for (source_file.items) |*item| {
+            if (item.* == .event_decl) glancePrintEvent(&item.event_decl, sites);
         }
     }
 
-    for (source_file.items) |item| {
-        if (item != .module_decl) continue;
+    for (source_file.items) |*item| {
+        if (item.* != .module_decl) continue;
         const mod = item.module_decl;
         if (app_only and (std.mem.startsWith(u8, mod.logical_name, "std") or
             std.mem.startsWith(u8, mod.logical_name, "koru"))) continue;
@@ -2176,8 +2184,46 @@ fn runGlance(source_file: *const ast.Program, app_only: bool) void {
         }
         if (n == 0) continue;
         std.debug.print("{s} — {d} event(s)\n", .{ mod.logical_name, n });
-        for (mod.items) |mi| {
-            if (mi == .event_decl) glancePrintEvent(&mi.event_decl);
+        for (mod.items) |*mi| {
+            if (mi.* == .event_decl) glancePrintEvent(&mi.event_decl, sites);
+        }
+    }
+}
+
+/// Frontend `at` — resolve a site hash back to its neighborhood. Descends the
+/// longest live prefix of the query (chomping right = zooming out), prints the
+/// cell it lands on, and lists each matched site's immediate children — the
+/// matryoshka drill — so a hash is always "a way back," never hit-or-miss.
+fn runAt(source_file: *const ast.Program, query: []const u8) void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const sites = site_hash.collectSites(alloc, source_file) catch {
+        std.debug.print("📍 at {s} — could not index sites\n", .{query});
+        return;
+    };
+    const res = site_hash.resolve(alloc, sites, query) catch return;
+    if (res.matched.len == 0) {
+        std.debug.print("📍 at {s} — nothing lives here; no module matches the first segment\n", .{query});
+        return;
+    }
+    if (res.drifted) {
+        std.debug.print("📍 at {s} — tail drifted; nearest cell is depth {d} ({d} site(s))\n", .{ query, res.depth_chars, res.matched.len });
+    } else {
+        std.debug.print("📍 at {s} — {d} site(s)\n", .{ query, res.matched.len });
+    }
+    for (res.matched) |s| {
+        const file = s.location.file;
+        const base = if (std.mem.lastIndexOfScalar(u8, file, '/')) |ix| file[ix + 1 ..] else file;
+        const kind: []const u8 = switch (s.kind) {
+            .decl => "decl",
+            .flow => "flow",
+            .site => "site",
+        };
+        std.debug.print("  {s}  {s}  [{s}]  {s}:{d}\n", .{ kind, s.spelling, s.hash, base, s.location.line });
+        const kids = site_hash.children(alloc, sites, s) catch &.{};
+        for (kids) |k| {
+            std.debug.print("    ↳ [{s}] {s}\n", .{ k.hash[0..site_hash.displayLen(sites, k.hash)], k.spelling });
         }
     }
 }
@@ -6982,6 +7028,27 @@ pub fn main() !void {
                 if (std.mem.eql(u8, a, "--app")) glance_app_only = true;
             }
             runGlance(&source_file, glance_app_only);
+            return;
+        }
+        if (std.mem.eql(u8, cmd, "at")) {
+            // The hash is the non-flag arg that follows `at` on the command line.
+            var query: ?[]const u8 = null;
+            var seen_cmd = false;
+            for (args) |a| {
+                if (std.mem.eql(u8, a, cmd)) {
+                    seen_cmd = true;
+                    continue;
+                }
+                if (seen_cmd and !std.mem.startsWith(u8, a, "-")) {
+                    query = a;
+                    break;
+                }
+            }
+            if (query) |q| {
+                runAt(&source_file, q);
+            } else {
+                std.debug.print("usage: koruc <file> at <site-hash>\n", .{});
+            }
             return;
         }
     }

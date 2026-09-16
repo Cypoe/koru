@@ -13,154 +13,9 @@
 // facets (asked of refine's own `metFields` fold — which `std/store`
 // does not enforce at insert; the report says so plainly).
 
-const SX = struct {
-    const struct_literal = @import("struct_literal");
 
-    const Member = struct { spelled: []const u8, owned: bool };
-    const Arm = struct { name: []const u8, bind: []const u8 };
+// The site fold lives in the `sites` part (SX).
 
-    const Store = struct {
-        name: []const u8,
-        home: []const u8,
-        declared: bool = false,
-        capacity: ?i64 = null,
-        members: std.ArrayList(Member),
-        arms: std.ArrayList(Arm),
-        inserts: usize = 0,
-        queries: usize = 0,
-        watches: usize = 0,
-        takes: usize = 0,
-        clears: usize = 0,
-        has_step: bool = false,
-        has_wait: bool = false,
-    };
-
-    fn isStoreDoor(inv: *const ast_find.Invocation) ?[]const u8 {
-        const mq = inv.path.module_qualifier orelse return null;
-        if (!std.mem.eql(u8, mq, "std.store") and !std.mem.eql(u8, mq, "std/store")) return null;
-        if (inv.path.segments.len != 1) return null;
-        return inv.path.segments[0];
-    }
-
-    fn siteName(inv: *const ast_find.Invocation) []const u8 {
-        for (inv.args) |a| {
-            if (a.source_value != null) continue;
-            if (a.value.len > 0) return a.value;
-        }
-        return "";
-    }
-
-    // The labeled `capacity: N` arg, or null (store without a cap is not
-    // a shape this rung builds — absence is reported, not guessed).
-    fn siteCapacity(inv: *const ast_find.Invocation) ?i64 {
-        for (inv.args) |a| {
-            if (!a.had_explicit_label or !std.mem.eql(u8, a.name, "capacity")) continue;
-            return std.fmt.parseInt(i64, std.mem.trim(u8, a.value, " \t"), 10) catch null;
-        }
-        return null;
-    }
-
-    // The `{ members }` block — same parseFields the new transform runs
-    // for `name: Type` members; the owned-column spelling (`*Task<live!>`)
-    // isn't that grammar, so a bare comma split covers it.
-    fn siteMembers(alloc: std.mem.Allocator, inv: *const ast_find.Invocation, out: *std.ArrayList(Member)) void {
-        for (inv.args) |a| {
-            const sv = a.source_value orelse continue;
-            const braced = std.fmt.allocPrint(alloc, "{{ {s} }}", .{sv.text}) catch unreachable;
-            if (struct_literal.parseFields(alloc, braced)) |fields| {
-                for (fields) |f| {
-                    const spelled = if (f.name.len == 0)
-                        alloc.dupe(u8, std.mem.trim(u8, f.value, " ")) catch unreachable
-                    else
-                        std.fmt.allocPrint(alloc, "{s}: {s}", .{ f.name, std.mem.trim(u8, f.value, " ") }) catch unreachable;
-                    // The `*` of an owned column lands on the name side of
-                    // the parse (`*mod:Task<live!>` → name `*mod`, value
-                    // `Task<live!>`), so the mark reads the spelled text.
-                    out.append(alloc, .{ .spelled = spelled, .owned = std.mem.startsWith(u8, spelled, "*") }) catch unreachable;
-                }
-            } else |_| {
-                var it = std.mem.splitScalar(u8, sv.text, ',');
-                while (it.next()) |piece| {
-                    const p = std.mem.trim(u8, piece, " \t\n");
-                    if (p.len == 0) continue;
-                    out.append(alloc, .{ .spelled = alloc.dupe(u8, p) catch unreachable, .owned = std.mem.startsWith(u8, p, "*") }) catch unreachable;
-                }
-            }
-        }
-    }
-
-    // A member's bare type name for the facet probe — `*T<state>` owned
-    // columns and `name: Qual:Type` spellings both reduce to the proto
-    // name refine anchors to. Empty when the member isn't proto-shaped.
-    fn memberTypeName(alloc: std.mem.Allocator, spelled: []const u8) ?[]const u8 {
-        var t = spelled;
-        if (std.mem.indexOfScalar(u8, t, ':')) |ci| t = std.mem.trim(u8, t[ci + 1 ..], " ");
-        if (std.mem.startsWith(u8, t, "*")) t = std.mem.trim(u8, t[1..], " ");
-        if (std.mem.indexOfScalar(u8, t, '<')) |lt| t = t[0..lt];
-        if (std.mem.indexOfScalar(u8, t, ':')) |ci| t = t[ci + 1 ..];
-        if (t.len == 0) return null;
-        for (t) |c| {
-            if (!std.ascii.isAlphanumeric(c) and c != '_') return null;
-        }
-        return alloc.dupe(u8, t) catch unreachable;
-    }
-
-    fn find(stores: *std.ArrayList(Store), name: []const u8) ?*Store {
-        for (stores.items) |*s| {
-            if (std.mem.eql(u8, s.name, name)) return s;
-        }
-        return null;
-    }
-
-    // A site that names a store without creating one — counted on the
-    // store when it exists, noted as a stray reference when it doesn't.
-    fn touch(alloc: std.mem.Allocator, stores: *std.ArrayList(Store), name: []const u8, home: []const u8) *Store {
-        if (find(stores, name)) |s| return s;
-        stores.append(alloc, .{ .name = name, .home = home, .members = std.ArrayList(Member).initCapacity(alloc, 4) catch unreachable, .arms = std.ArrayList(Arm).initCapacity(alloc, 4) catch unreachable }) catch unreachable;
-        return &stores.items[stores.items.len - 1];
-    }
-
-    fn foldSites(alloc: std.mem.Allocator, items: []const ast_find.Item, stores: *std.ArrayList(Store)) void {
-        for (items) |entry| {
-            switch (entry) {
-                .flow => |*fl| {
-                    if (fl.body.node) |*node| {
-                        if (node.* != .invocation) continue;
-                        const inv = &node.invocation;
-                        const door = isStoreDoor(inv) orelse continue;
-                        const name = siteName(inv);
-                        if (std.mem.eql(u8, door, "new")) {
-                            var s = Store{ .name = name, .home = fl.module, .declared = true, .members = std.ArrayList(Member).initCapacity(alloc, 4) catch unreachable, .arms = std.ArrayList(Arm).initCapacity(alloc, 4) catch unreachable };
-                            s.capacity = siteCapacity(inv);
-                            siteMembers(alloc, inv, &s.members);
-                            for (fl.body.continuations) |*c| {
-                                if (c.kind != .effect) continue;
-                                const bname = std.mem.trim(u8, c.branch, " ");
-                                if (bname.len == 0) continue;
-                                s.arms.append(alloc, .{ .name = bname, .bind = c.binding orelse "" }) catch unreachable;
-                                if (std.mem.eql(u8, bname, "step")) s.has_step = true;
-                                if (std.mem.eql(u8, bname, "wait")) s.has_wait = true;
-                            }
-                            stores.append(alloc, s) catch unreachable;
-                        } else if (std.mem.eql(u8, door, "insert")) {
-                            touch(alloc, stores, name, fl.module).inserts += 1;
-                        } else if (std.mem.eql(u8, door, "query") or std.mem.eql(u8, door, "stripe")) {
-                            touch(alloc, stores, name, fl.module).queries += 1;
-                        } else if (std.mem.eql(u8, door, "take")) {
-                            touch(alloc, stores, name, fl.module).takes += 1;
-                        } else if (std.mem.eql(u8, door, "clear")) {
-                            touch(alloc, stores, name, fl.module).clears += 1;
-                        } else if (std.mem.eql(u8, door, "default")) {
-                            touch(alloc, stores, name, fl.module).watches += 1;
-                        }
-                    }
-                },
-                .module_decl => |*m| foldSites(alloc, m.items, stores),
-                else => {},
-            }
-        }
-    }
-};
 
 // @retain: explain_store_event is referenced from generated code
 // (koruc's koru_explain_gather invokes every discovered [explainer]).
@@ -172,10 +27,12 @@ const SX = struct {
 ~proc explain-store|zig {
     const Entry = ast_find.ExplainReport.Entry;
     const Section = ast_find.ExplainReport.Section;
+    const SH = @import("site_hash");
     const has_refine = @hasDecl(koru_std, "koru_refine");
 
     var stores = std.ArrayList(SX.Store).initCapacity(allocator, 4) catch unreachable;
     SX.foldSites(allocator, program.items, &stores);
+    const sites = SH.collectSites(allocator, program) catch &.{};
 
     if (stores.items.len == 0) {
         return .{ .title = "std/store", .sections = &.{ .{ .heading = "stores", .entries = &.{
@@ -189,10 +46,14 @@ const SX = struct {
         if (!s.declared) {
             entries.append(allocator, .{ .property = .{ .key = "status", .value = .{ .string = "refused: referenced by sites but never created — `std/store:new` declares a store" } } }) catch unreachable;
         }
+        const new_at: []const []const u8 = if (s.new_inv) |ni|
+            SH.hashesFor(allocator, sites, &.{@intFromPtr(ni)}) catch &.{}
+        else
+            &.{};
         if (s.capacity) |cap| {
-            entries.append(allocator, .{ .property = .{ .key = "capacity", .value = .{ .integer = cap } } }) catch unreachable;
+            entries.append(allocator, .{ .property = .{ .key = "capacity", .value = .{ .integer = cap }, .at = new_at } }) catch unreachable;
         }
-        entries.append(allocator, .{ .property = .{ .key = "columns", .value = .{ .integer = @intCast(s.members.items.len) } } }) catch unreachable;
+        entries.append(allocator, .{ .property = .{ .key = "columns", .value = .{ .integer = @intCast(s.members.items.len) }, .at = new_at } }) catch unreachable;
         for (s.members.items) |m| {
             entries.append(allocator, .{ .note = std.fmt.allocPrint(allocator, "{s}{s}", .{ m.spelled, if (m.owned) " — owned" else "" }) catch unreachable }) catch unreachable;
         }
@@ -205,14 +66,16 @@ const SX = struct {
             entries.append(allocator, .{ .property = .{ .key = "interceptors", .value = .{ .string = names.items } } }) catch unreachable;
         }
         if (s.has_step) {
-            entries.append(allocator, .{ .note = std.fmt.allocPrint(allocator, "pump participant — exposes {s}-step / {s}-live{s}", .{ s.name, s.name, if (s.has_wait) std.fmt.allocPrint(allocator, " / {s}-wait", .{s.name}) catch unreachable else "" }) catch unreachable }) catch unreachable;
+            // The participant row carries the `new` site's hash — the door a
+            // pump row's `← synthesized` witness resolves back through.
+            entries.append(allocator, .{ .property = .{ .key = "participant", .value = .{ .string = std.fmt.allocPrint(allocator, "pump participant — exposes {s}-step / {s}-live{s}", .{ s.name, s.name, if (s.has_wait) std.fmt.allocPrint(allocator, " / {s}-wait", .{s.name}) catch unreachable else "" }) catch unreachable }, .at = new_at } }) catch unreachable;
         }
-        entries.append(allocator, .{ .property = .{ .key = "inserts", .value = .{ .integer = @intCast(s.inserts) } } }) catch unreachable;
-        entries.append(allocator, .{ .property = .{ .key = "queries", .value = .{ .integer = @intCast(s.queries) } } }) catch unreachable;
-        entries.append(allocator, .{ .property = .{ .key = "watches", .value = .{ .integer = @intCast(s.watches) } } }) catch unreachable;
-        if (s.takes + s.clears > 0) {
-            entries.append(allocator, .{ .property = .{ .key = "takes", .value = .{ .integer = @intCast(s.takes) } } }) catch unreachable;
-            entries.append(allocator, .{ .property = .{ .key = "clears", .value = .{ .integer = @intCast(s.clears) } } }) catch unreachable;
+        entries.append(allocator, .{ .property = .{ .key = "inserts", .value = .{ .integer = @intCast(s.inserts.items.len) }, .at = SH.hashesFor(allocator, sites, s.inserts.items) catch &.{} } }) catch unreachable;
+        entries.append(allocator, .{ .property = .{ .key = "queries", .value = .{ .integer = @intCast(s.queries.items.len) }, .at = SH.hashesFor(allocator, sites, s.queries.items) catch &.{} } }) catch unreachable;
+        entries.append(allocator, .{ .property = .{ .key = "watches", .value = .{ .integer = @intCast(s.watches.items.len) }, .at = SH.hashesFor(allocator, sites, s.watches.items) catch &.{} } }) catch unreachable;
+        if (s.takes.items.len + s.clears.items.len > 0) {
+            entries.append(allocator, .{ .property = .{ .key = "takes", .value = .{ .integer = @intCast(s.takes.items.len) }, .at = SH.hashesFor(allocator, sites, s.takes.items) catch &.{} } }) catch unreachable;
+            entries.append(allocator, .{ .property = .{ .key = "clears", .value = .{ .integer = @intCast(s.clears.items.len) }, .at = SH.hashesFor(allocator, sites, s.clears.items) catch &.{} } }) catch unreachable;
         }
 
         // Facet honesty: a member type may carry refine facets; insert

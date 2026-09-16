@@ -35,12 +35,12 @@
 // program's event loop. On an all-idle pass `run` fires `! idle` in the
 // loop; unarmed it composes the wait itself — one `poll()` over every
 // joined `wait` interest capped by the nearest `wait_ns`, else 1ms.
-
 const std = @import("std");
 const ast = @import("ast");
 ~part explain
 ~part messages
 ~part synth
+~part wit
 
 const PH = struct {
     const codegen_utils = @import("codegen_utils");

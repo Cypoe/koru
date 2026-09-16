@@ -4,25 +4,19 @@
 // comptime *explainer* that reads the program AST and explains how the library
 // interpreted YOUR program's use of ITS OWN facilities — not generic docs, but
 // "given this config and these call sites, here is what I decided about THIS
-// code." std/store, for instance, would report per-store: which layout the
-// current config elected, where it's watched, where it's updated.
+// code." Report rows carry `at` witness hashes — `koruc <file> at <hash>`
+// resolves them (see site_hash.zig; rendering lives in the `wit` part).
 //
 //   koruc main.k explain            # human-readable (text)
 //   koruc main.k explain json       # machine-readable
 //   koruc main.k explain html       # rich page
 //
-// The `explain` command is the ONLY caller of explainers. Libraries *provide*
-// explainers; they never invoke them. Like `deps` and `parser:generate`, this
-// command runs INSTEAD of compilation with full AST access — the backend
-// dispatches it before koru_coordinate, so no pipeline pass fires. It sees the
-// freshly-parsed, pre-analysis AST (closest to original source).
-//
-// STATUS: the command registers and dispatches; koruc generates
-// `koru_explain_gather` (calls every discovered `[explainer]` once), and
-// `std/runtime` ships the first explainer — the scope registry's manifest,
-// reported per registered scope as the served contract bytes.
+// The `explain` command is the ONLY caller of explainers — runs INSTEAD of
+// compilation on the freshly-parsed, pre-analysis AST (closest to source).
 
 ~import std/compiler
+
+~part wit
 
 ~[comptime]
 
@@ -91,6 +85,10 @@ fn printJsonString(v: []const u8) void {
 
     const reports = koru_explain_gather(program, &report_alloc);
 
+    // Site index for witness rendering (`Property.at` → `[deadb]` suffixes).
+    const site_hash = @import("site_hash");
+    const sites = site_hash.collectSites(report_alloc, program) catch &.{};
+
     if (reports.len == 0) {
         std.debug.print("📖 explain — no explainers registered. Libraries opt in by shipping a ~[explainer] event.\n", .{});
         return;
@@ -133,6 +131,7 @@ fn printJsonString(v: []const u8) void {
                                 printJsonString(s);
                             },
                         }
+                        EW.emitAtJson(p.key, p.at);
                     },
                 };
                 std.debug.print("}}", .{});
@@ -170,6 +169,7 @@ fn printJsonString(v: []const u8) void {
                         .bool => |b| std.debug.print("{}", .{b}),
                         .string => |s| std.debug.print("{s}", .{s}),
                     }
+                    EW.emitAt(sites, p.at, html);
                     if (html) std.debug.print("</dd>\n", .{}) else std.debug.print("\n", .{});
                 },
             };

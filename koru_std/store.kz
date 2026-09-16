@@ -71,7 +71,6 @@ const ast_find = @import("ast");
 const codegen_utils_store = @import("codegen_utils");
 
 /// The emitted-Zig namespace a store's units live in, dot-terminated.
-///
 /// The entry module emits as `main_module.`; every other module emits under the
 /// `koru_`-prefixed mangling of its LOGICAL name (`app.lib` → `koru_app.koru_lib.`),
 /// which is the same rule `emitter_helpers.writeModulePath` applies. Hardcoding
@@ -1688,3 +1687,4 @@ fn storeLowerText(
 ~part pverbs
 ~part sitetag
 ~part explain
+~part sites

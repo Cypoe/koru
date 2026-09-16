@@ -13,8 +13,12 @@
 // store transform will generate.
 
 const PX = struct {
+    const site_hash = @import("site_hash");
+
     // One answered verb: the callee the arm ends in, or its refusal row.
-    const Verb = struct { callee: []const u8, status: ?[]const u8 = null };
+    // `site` is the arm's call invocation; `gen` is the `std/store:new` site
+    // that synthesized the callee — both land as `at` witnesses on the row.
+    const Verb = struct { callee: []const u8, status: ?[]const u8 = null, site: ?*const ast.Invocation = null, gen: ?*const ast.Invocation = null };
 
     const Join = struct {
         step: ?Verb = null,
@@ -65,29 +69,21 @@ const PX = struct {
     // shape — or synthesized by a store's armed verb (PS.synthesized).
     fn checkVerb(alloc: std.mem.Allocator, prog: *const ast.Program, cont: *const ast.Continuation, home: []const u8, verb: []const u8, want: []const u8, name: []const u8) Verb {
         const callee = spellCallee(alloc, cont);
+        const site = PH.lastInvocation(cont);
         const cd = PH.calleeDecl(prog, cont, home) orelse {
-            if (PS.synthesized(prog, PH.lastInvocation(cont))) |sname|
-                return .{ .callee = std.fmt.allocPrint(alloc, "{s} ← synthesized by std/store:new({s})", .{ callee, sname }) catch unreachable };
-            return .{ .callee = callee, .status = refused(alloc, PM.join_verb_needs_tor, .{ name, verb }) };
+            if (PS.synthesized(prog, site)) |s|
+                return .{ .callee = std.fmt.allocPrint(alloc, "{s} ← synthesized by std/store:new({s})", .{ callee, s.store }) catch unreachable, .site = site, .gen = s.gen };
+            return .{ .callee = callee, .status = refused(alloc, PM.join_verb_needs_tor, .{ name, verb }), .site = site };
         };
         const rt = cd.return_type orelse
-            return .{ .callee = callee, .status = refused(alloc, PM.join_verb_no_return, .{ name, verb, want }) };
+            return .{ .callee = callee, .status = refused(alloc, PM.join_verb_no_return, .{ name, verb, want }), .site = site };
         if (std.mem.indexOf(u8, rt, want) == null or
             (std.mem.eql(u8, verb, "wait") and std.mem.indexOf(u8, rt, "wait_ns") == null))
-            return .{ .callee = callee, .status = refused(alloc, PM.join_verb_wrong_return, .{ name, verb, rt, want }) };
-        return .{ .callee = callee };
+            return .{ .callee = callee, .status = refused(alloc, PM.join_verb_wrong_return, .{ name, verb, rt, want }), .site = site };
+        return .{ .callee = callee, .site = site };
     }
 
-    // One verb's report rows: the callee property, or refusal note +
-    // `<join>.<verb>.status` when the contract check failed.
-    fn emitVerb(alloc: std.mem.Allocator, entries: *std.ArrayList(ast.ExplainReport.Entry), k: []const u8, ji: usize, vname: []const u8, v: Verb) void {
-        if (v.status) |s| {
-            entries.append(alloc, .{ .note = std.fmt.allocPrint(alloc, "join #{d} {s} → {s} — {s}", .{ ji, vname, v.callee, s }) catch unreachable }) catch unreachable;
-            entries.append(alloc, .{ .property = .{ .key = std.fmt.allocPrint(alloc, "{s}.{s}.status", .{ k, vname }) catch unreachable, .value = .{ .string = s } } }) catch unreachable;
-        } else {
-            entries.append(alloc, .{ .property = .{ .key = std.fmt.allocPrint(alloc, "{s}.{s}", .{ k, vname }) catch unreachable, .value = .{ .string = v.callee } } }) catch unreachable;
-        }
-    }
+    // emitVerb lives in the `wit` part (PW.emitVerb).
 
     fn find(pumps: *std.ArrayList(Pump), name: []const u8) ?*Pump {
         for (pumps.items) |*p| {
@@ -219,9 +215,11 @@ const PX = struct {
 ~proc explain-pump|zig {
     const Entry = ast.ExplainReport.Entry;
     const Section = ast.ExplainReport.Section;
+    const site_hash = @import("site_hash");
 
     var pumps = std.ArrayList(PX.Pump).initCapacity(allocator, 4) catch unreachable;
     PX.foldSites(allocator, program, program.items, &pumps);
+    const sites = site_hash.collectSites(allocator, program) catch &.{};
 
     if (pumps.items.len == 0) {
         return .{ .title = "std/pump", .sections = &.{ .{ .heading = "pumps", .entries = &.{
@@ -280,15 +278,15 @@ const PX = struct {
             var verbs = std.ArrayList(u8).initCapacity(allocator, 48) catch unreachable;
             if (j.step) |v| {
                 verbs.appendSlice(allocator, "step") catch unreachable;
-                PX.emitVerb(allocator, &entries, k, ji, "step", v);
+                PW.emitVerb(allocator, &entries, sites, k, ji, "step", v);
             }
             if (j.live) |v| {
                 verbs.appendSlice(allocator, " + live") catch unreachable;
-                PX.emitVerb(allocator, &entries, k, ji, "live", v);
+                PW.emitVerb(allocator, &entries, sites, k, ji, "live", v);
             }
             if (j.wait) |v| {
                 verbs.appendSlice(allocator, std.fmt.allocPrint(allocator, " + wait({s})", .{j.wait_bind}) catch unreachable) catch unreachable;
-                PX.emitVerb(allocator, &entries, k, ji, "wait", v);
+                PW.emitVerb(allocator, &entries, sites, k, ji, "wait", v);
             }
             const mortal_note = if (j.live == null) " — immortal" else "";
             entries.append(allocator, .{ .note = std.fmt.allocPrint(allocator, "join #{d}: {s}{s}", .{ ji, verbs.items, mortal_note }) catch unreachable }) catch unreachable;

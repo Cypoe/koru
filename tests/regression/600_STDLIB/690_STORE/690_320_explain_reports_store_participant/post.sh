@@ -19,6 +19,16 @@ echo "$TEXT" | grep -q "📖 std/pump"                                    || { e
 echo "$TEXT" | grep -q "tasks-step ← synthesized by std/store:new(tasks)" || { echo "FAIL: synthesized callee missing"; exit 1; }
 echo "$TEXT" | grep -q "drains = true"                                 || { echo "FAIL: drain policy missing";    exit 1; }
 
+echo "=== witness hashes: the generated-name channel is a link ==="
+# The j0.step row carries two witnesses: the arm's call site and the
+# `std/store:new(tasks)` site that synthesized the callee — resolve the
+# generator and land on the store decl, from a pump row.
+GEN=$(echo "$TEXT" | grep -oE "j0.step = [^ ]+ ← synthesized by std/store:new\(tasks\)( \[[0-9a-z]+\])+" | grep -oE "\[[0-9a-z]+\]" | tail -1 | tr -d '[]')
+[ -n "$GEN" ]                                                            || { echo "FAIL: no witness on j0.step";    exit 1; }
+AT=$(koruc "$KORU_INPUT" at "$GEN" 2>&1)
+echo "$AT"
+echo "$AT" | grep -q "std.store:new"                                     || { echo "FAIL: generator did not resolve"; exit 1; }
+
 echo "=== koruc explain json (typed) ==="
 JSON=$(koruc "$KORU_INPUT" explain json 2>&1)
 echo "$JSON"

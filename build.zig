@@ -127,6 +127,15 @@ pub fn build(b: *std.Build) void {
     });
     expression_codegen_module.addImport("ast", ast_module);
 
+    // Site hash — fuzzy hierarchical program addresses (module→item→site→detail)
+    const site_hash_module = b.createModule(.{
+        .root_source_file = b.path("src/site_hash.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    site_hash_module.addImport("ast", ast_module);
+    site_hash_module.addImport("errors", errors_module);
+
     // Union collector module for inline flows
     const union_collector_module = b.createModule(.{
         .root_source_file = b.path("src/union_collector.zig"),
@@ -541,6 +550,7 @@ pub fn build(b: *std.Build) void {
     // emitter module removed - using visitor_emitter
     exe.root_module.addImport("ast", ast_module);
     exe.root_module.addImport("errors", errors_module);
+    exe.root_module.addImport("site_hash", site_hash_module);
     exe.root_module.addImport("type_registry", type_registry_module);
     exe.root_module.addImport("keyword_registry", keyword_registry_module);
     exe.root_module.addImport("ast_serializer", ast_serializer_module);
