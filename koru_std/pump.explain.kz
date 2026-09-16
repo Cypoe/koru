@@ -6,11 +6,11 @@
 // enumerates them by generated-decl name. Nothing in any single file
 // answers "who joined, which verbs each answers, does this pump ever
 // drain" — the explainer folds the source sites in document order with
-// the SAME checks the create/join/run transforms apply, so the report
-// is what the driver will emit, re-derived live. A program that refuses
-// still explains itself: each refusal appears verbatim — the `PM`
-// messages are shared between transform and explainer. Callee spellings
-// come from PH.lastInvocation — the same read the join transform uses.
+// the SAME checks the create/join/run transforms apply; a program that
+// refuses still explains itself, each refusal verbatim via the shared
+// `PM` messages. Callee spellings come from PH.lastInvocation — the same
+// read the join transform uses — and `PS.synthesized` names callees the
+// store transform will generate.
 
 const PX = struct {
     // One answered verb: the callee the arm ends in, or its refusal row.
@@ -61,11 +61,15 @@ const PX = struct {
         return std.fmt.allocPrint(alloc, "refused: " ++ msg, args) catch unreachable;
     }
 
-    // The join transform's per-verb contract: callee declared, return shape.
+    // The join transform's per-verb contract: callee declared, return
+    // shape — or synthesized by a store's armed verb (PS.synthesized).
     fn checkVerb(alloc: std.mem.Allocator, prog: *const ast.Program, cont: *const ast.Continuation, home: []const u8, verb: []const u8, want: []const u8, name: []const u8) Verb {
         const callee = spellCallee(alloc, cont);
-        const cd = PH.calleeDecl(prog, cont, home) orelse
+        const cd = PH.calleeDecl(prog, cont, home) orelse {
+            if (PS.synthesized(prog, PH.lastInvocation(cont))) |sname|
+                return .{ .callee = std.fmt.allocPrint(alloc, "{s} ← synthesized by std/store:new({s})", .{ callee, sname }) catch unreachable };
             return .{ .callee = callee, .status = refused(alloc, PM.join_verb_needs_tor, .{ name, verb }) };
+        };
         const rt = cd.return_type orelse
             return .{ .callee = callee, .status = refused(alloc, PM.join_verb_no_return, .{ name, verb, want }) };
         if (std.mem.indexOf(u8, rt, want) == null or
@@ -74,8 +78,8 @@ const PX = struct {
         return .{ .callee = callee };
     }
 
-    // One verb's report rows: the callee property, or the refusal note
-    // + `<join>.<verb>.status` when the contract check failed.
+    // One verb's report rows: the callee property, or refusal note +
+    // `<join>.<verb>.status` when the contract check failed.
     fn emitVerb(alloc: std.mem.Allocator, entries: *std.ArrayList(ast.ExplainReport.Entry), k: []const u8, ji: usize, vname: []const u8, v: Verb) void {
         if (v.status) |s| {
             entries.append(alloc, .{ .note = std.fmt.allocPrint(alloc, "join #{d} {s} → {s} — {s}", .{ ji, vname, v.callee, s }) catch unreachable }) catch unreachable;
@@ -158,12 +162,8 @@ const PX = struct {
                 j.status = refused(alloc, PM.join_unknown_verb, .{ name, cb });
             }
         }
-        if (j.step == null and j.status == null) {
-            j.status = refused(alloc, PM.join_needs_step, .{name});
-        }
-        if (j.wait != null and j.live == null and j.status == null) {
-            j.status = refused(alloc, PM.join_wait_needs_live, .{name});
-        }
+        if (j.step == null and j.status == null) j.status = refused(alloc, PM.join_needs_step, .{name});
+        if (j.wait != null and j.live == null and j.status == null) j.status = refused(alloc, PM.join_wait_needs_live, .{name});
         p.joins.append(alloc, j) catch unreachable;
     }
 
@@ -243,8 +243,7 @@ const PX = struct {
         }
 
         // Drain policy — run breaks when Σ live() is 0; a participant
-        // without `live` contributes 1 forever. Same rule the emitted
-        // loop implements.
+        // without `live` contributes 1 forever.
         var immortals: usize = 0;
         var waits: usize = 0;
         for (p.joins.items) |*j| {
@@ -259,8 +258,8 @@ const PX = struct {
             entries.append(allocator, .{ .note = std.fmt.allocPrint(allocator, "immortal — {d} participant(s) answer no `live`; this pump IS the program's event loop", .{immortals}) catch unreachable }) catch unreachable;
         }
 
-        // Idle policy — armed `! idle` runs the arm in the loop; unarmed,
-        // run composes the union wait; no waits at all breathes 1ms.
+        // Idle policy — armed `! idle` runs the arm; unarmed, the union
+        // wait; no waits at all breathes 1ms.
         if (p.ran) {
             if (p.idle_armed) {
                 entries.append(allocator, .{ .property = .{ .key = "idle", .value = .{ .string = "armed ! idle" } } }) catch unreachable;

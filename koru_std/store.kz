@@ -1648,11 +1648,10 @@ fn storeRefsText(alloc: std.mem.Allocator, text: []const u8, name: []const u8, p
 /// `<store>.<field>` mean THE ROW); they are skipped by BOTH passes, which is
 /// why the indexed pass takes a filtered scope rather than the whole program.
 ///
-/// This is the one function a walk should call per text slot. Every position an
-/// expression may stand in — a guard, an arg, a captured expression, a frozen
-/// template body, an inline_code node, a produce arm, a branch payload — is the
-/// same lowering, and the store's reach gaps have all been a position that
-/// called some of it.
+/// The one function a walk calls per text slot. Every position an expression
+/// may stand in — guard, arg, captured expression, frozen template body,
+/// inline_code node, produce arm, branch payload — is the same lowering, and
+/// the store's reach gaps have all been a position that called some of it.
 fn storeLowerText(
     alloc: std.mem.Allocator,
     prog: *const ast_find.Program,
@@ -1688,3 +1687,4 @@ fn storeLowerText(
 ~part qcaps
 ~part pverbs
 ~part sitetag
+~part explain

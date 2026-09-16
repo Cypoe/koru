@@ -59,3 +59,21 @@ Two corollaries observed while landing it:
   same consts for `status` rows. The report for a refusing program is
   the diagnostic verbatim — one string, two sinks, and no way for the
   explanation to drift from the error it explains.
+- **A synthesized callee is named by its generator, never refused as
+  undeclared.** Pre-transform, `tasks-step` is nowhere — the store's
+  `! step` arm mints it. `std/pump`'s explainer keeps a `PS.synthesized`
+  probe (`pump.synth.kz`) that recognizes `<store>-<verb>` against the
+  `std/store:new` sites carrying the arm, and reports the callee as
+  `← synthesized by std/store:new(tasks)`. Demand a decl for a
+  generated name and explain disagrees with the compiler on a program
+  that compiles — the one failure mode the whole design exists to
+  prevent. Which means the *generated-name channel is a contract two
+  explainers corroborate*: store reports "exposes tasks-step", pump
+  reports "tasks-step ← synthesized by std/store:new(tasks)" — the
+  catalog traces a name that exists in neither source tree.
+- **"Declared but not enforced" is a reportable fact, not an absence.**
+  `std/store`'s explainer asks `koru_refine.metFields` what a member
+  proto carries and then says plainly that `insert` stores unchecked —
+  `facets_declared = 2` next to "insert does NOT enforce". The gap
+  between declaration and enforcement is exactly what a reader needs;
+  silence would pass for "no facets exist."

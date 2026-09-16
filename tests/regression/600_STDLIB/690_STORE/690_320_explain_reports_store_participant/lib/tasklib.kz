@@ -1,0 +1,29 @@
+const std = @import("std");
+
+pub const Task = struct { work: i32, state: u8 };
+
+~pub tor work { s: *Task<live> }
+| running
+| complete
+
+~proc work|zig {
+    if (s.work <= 0) return .{ .complete = .{} };
+    s.work -= 1;
+    if (s.work == 0) return .{ .complete = .{} };
+    return .{ .running = .{} };
+}
+
+~pub tor done { s: *Task<!live> } -> i64
+
+~proc done|zig {
+    const w = s.work;
+    std.heap.page_allocator.destroy(s);
+    return w;
+}
+
+~pub tor poll { t: *Task<live> } -> { fd: i32, wait_ns: i128 }
+
+~proc poll|zig {
+    _ = t;
+    return .{ .fd = -1, .wait_ns = 1_000_000 };
+}
