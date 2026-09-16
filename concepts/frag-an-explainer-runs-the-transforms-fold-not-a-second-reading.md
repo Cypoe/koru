@@ -53,3 +53,9 @@ Two corollaries observed while landing it:
   `PH.calleeDecl`). Same membership, same order, same refusals — a
   different enumeration surface because the wire it reads is the
   program, not the product.
+- **Refusal wording is shared, not mirrored.** `std/pump` keeps every
+  KORU161 text in a `PM` const block (`pump.messages.kz`); the
+  transforms pass them to `ast.refusal` and the explainer formats the
+  same consts for `status` rows. The report for a refusing program is
+  the diagnostic verbatim — one string, two sinks, and no way for the
+  explanation to drift from the error it explains.

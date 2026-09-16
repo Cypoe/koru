@@ -40,6 +40,7 @@
 const std = @import("std");
 const ast = @import("ast");
 ~part explain
+~part messages
 
 const PH = struct {
     const codegen_utils = @import("codegen_utils");
@@ -398,7 +399,6 @@ fn siteName(invocation: *const ast.Invocation) []const u8 {
 //
 // Emits the `__pump_decl_<name>` marker and the drained unit. Declarations
 // precede joins, joins precede run — transforms run in source order.
-// ----------------------------------------------------------------------------
 
 ~[keyword|comptime|transform]pub tor create {
     expr: Expression,
@@ -417,10 +417,10 @@ fn siteName(invocation: *const ast.Invocation) []const u8 {
 
     const pump_name = siteName(invocation);
     if (pump_name.len == 0) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump:create needs a name - `std/pump:create(main)`", .{}) } };
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.create_needs_name, .{}) } };
     }
     if (PH.markerExists(program, PH.markerDecl(allocator, "decl", pump_name))) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump:create({s}): a pump named '{s}' already exists - one declaration, then joins", .{ pump_name, pump_name }) } };
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.create_dup, .{ pump_name, pump_name }) } };
     }
 
     // `| drained` — the pump's lifecycle arm, fired by run when every
@@ -430,16 +430,16 @@ fn siteName(invocation: *const ast.Invocation) []const u8 {
         const cb = std.mem.trim(u8, c.branch, " ");
         if (cb.len == 0) continue;
         if (c.kind == .effect) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump:create({s}): `! {s}` doesn't parse on a declaration - verbs join via `std/pump({s}) ! step |> ...`, and `! idle` arms `std/pump:run`", .{ pump_name, cb, pump_name }) } };
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.create_effect_arm, .{ pump_name, cb, pump_name }) } };
         }
         if (!std.mem.eql(u8, cb, "drained")) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump:create({s}): unknown arm `| {s}` - the pump declaration's lifecycle is `| drained`, fired when every participant has retired", .{ pump_name, cb }) } };
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.create_unknown_arm, .{ pump_name, cb }) } };
         }
         if (drained_arm != null) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump:create({s}): one `| drained` per pump - run fires it once", .{pump_name}) } };
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.create_drained_once, .{pump_name}) } };
         }
         if (c.node == null) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump:create({s}): `| drained` needs a body (`| drained |> ...`)", .{pump_name}) } };
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.create_drained_needs_body, .{pump_name}) } };
         }
         drained_arm = c;
     }
@@ -527,13 +527,13 @@ fn siteName(invocation: *const ast.Invocation) []const u8 {
 
     const pump_name = siteName(invocation);
     if (pump_name.len == 0) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump(name) is the join form - it needs the pump's name: `std/pump(main) ! step |> ...`", .{}) } };
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.join_needs_name, .{}) } };
     }
     if (!PH.markerExists(program, PH.markerDecl(allocator, "decl", pump_name))) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump({s}): no pump named '{s}' - `std/pump:create({s})` declares it, and the declaration precedes its joins", .{ pump_name, pump_name, pump_name }) } };
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.join_no_pump, .{ pump_name, pump_name, pump_name }) } };
     }
     if (PH.markerExists(program, PH.markerDecl(allocator, "ran", pump_name))) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump({s}): this join follows `std/pump:run({s})` - a join after the drive is never stepped; joins precede run in document order", .{ pump_name, pump_name }) } };
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.join_after_run, .{ pump_name, pump_name }) } };
     }
 
     // Collect the verb arms. Only `!` continuations parse on a join; each of
@@ -545,33 +545,33 @@ fn siteName(invocation: *const ast.Invocation) []const u8 {
         const cb = std.mem.trim(u8, c.branch, " ");
         if (cb.len == 0) continue;
         if (c.kind != .effect) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump({s}): `| {s}` doesn't parse on a join - a participant carries `! step`/`! live`/`! wait` verbs; the pump's own lifecycle (`| drained`) lives on `std/pump:create`", .{ pump_name, cb }) } };
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.join_terminal_arm, .{ pump_name, cb }) } };
         }
         if (std.mem.eql(u8, cb, "step")) {
-            if (step_arm != null) return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump({s}): one `! step` per join - a participant advances once per pass", .{pump_name}) } };
+            if (step_arm != null) return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.join_one_step, .{pump_name}) } };
             step_arm = c;
         } else if (std.mem.eql(u8, cb, "live")) {
-            if (live_arm != null) return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump({s}): one `! live` per join", .{pump_name}) } };
+            if (live_arm != null) return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.join_one_live, .{pump_name}) } };
             live_arm = c;
         } else if (std.mem.eql(u8, cb, "wait")) {
-            if (wait_arm != null) return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump({s}): one `! wait` per join", .{pump_name}) } };
+            if (wait_arm != null) return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.join_one_wait, .{pump_name}) } };
             wait_arm = c;
         } else {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump({s}): unknown verb `! {s}` - a join carries `! step`, `! live`, `! wait` and nothing else", .{ pump_name, cb }) } };
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.join_unknown_verb, .{ pump_name, cb }) } };
         }
     }
     if (step_arm == null) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump({s}): a join needs `! step |> <call>` - the verb that advances this participant once per pass (it answers `-> i32`: how many instances progressed)", .{pump_name}) } };
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.join_needs_step, .{pump_name}) } };
     }
     if (wait_arm != null and live_arm == null) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump({s}): `! wait` needs `! live` beside it - interests are indexed `0..live()`, and without a live count the pump cannot enumerate them (an immortal participant's single interest is a later slice)", .{pump_name}) } };
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.join_wait_needs_live, .{pump_name}) } };
     }
 
     // Contract checks — the verb bodies must be calls returning the right
     // shape, and the callee must already be declared (joins follow the
     // participant's own declaration in document order).
     if (step_arm.?.binding != null) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump({s}): `! step` binds nothing - it advances the WHOLE participant; per-instance state is the callee's business (a store's `! step s` binds its row inside)", .{pump_name}) } };
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.join_step_binds_nothing, .{pump_name}) } };
     }
     const Verbs = struct { arm: ?*const ast.Continuation, want: []const u8, verb: []const u8 };
     const checks = [_]Verbs{
@@ -582,13 +582,13 @@ fn siteName(invocation: *const ast.Invocation) []const u8 {
     for (checks) |ck| {
         const arm = ck.arm orelse continue;
         const cd = PH.calleeDecl(program, arm, flow.module) orelse {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump({s}): `! {s}`'s body must end in a call to a declared tor - the pump composes compile-time-known verbs", .{ pump_name, ck.verb }) } };
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.join_verb_needs_tor, .{ pump_name, ck.verb }) } };
         };
         const rt = cd.return_type orelse {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump({s}): `! {s}`'s callee returns nothing - the contract is `-> {s}` (`wait` returns `{{ fd: i32, wait_ns: i128 }}`)", .{ pump_name, ck.verb, ck.want }) } };
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.join_verb_no_return, .{ pump_name, ck.verb, ck.want }) } };
         };
         if (std.mem.indexOf(u8, rt, ck.want) == null or (std.mem.eql(u8, ck.verb, "wait") and std.mem.indexOf(u8, rt, "wait_ns") == null)) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump({s}): `! {s}`'s callee returns `{s}` - the contract is `-> {s}` (`wait` returns `{{ fd: i32, wait_ns: i128 }}`)", .{ pump_name, ck.verb, rt, ck.want }) } };
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.join_verb_wrong_return, .{ pump_name, ck.verb, rt, ck.want }) } };
         }
     }
 
@@ -605,7 +605,7 @@ fn siteName(invocation: *const ast.Invocation) []const u8 {
     }
     if (wait_arm) |wa| {
         const wbind = wa.binding orelse {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump({s}): `! wait` binds the interest index - spell it `! wait i |> <call>(i)`; instance i's record is `{{ fd: i32, wait_ns: i128 }}`", .{pump_name}) } };
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.join_wait_binds_index, .{pump_name}) } };
         };
         const wf = allocator.alloc(ast.Field, 1) catch unreachable;
         wf[0] = ast.Field{
@@ -655,13 +655,13 @@ fn siteName(invocation: *const ast.Invocation) []const u8 {
 
     const pump_name = siteName(invocation);
     if (pump_name.len == 0) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump:run needs the pump's name - `std/pump:run(main)`", .{}) } };
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.run_needs_name, .{}) } };
     }
     if (!PH.markerExists(program, PH.markerDecl(allocator, "decl", pump_name))) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump:run({s}): no pump named '{s}' - `std/pump:create({s})` declares it, joins attach via `std/pump({s})`, and the drive follows both", .{ pump_name, pump_name, pump_name, pump_name }) } };
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.run_no_pump, .{ pump_name, pump_name, pump_name, pump_name }) } };
     }
     if (PH.markerExists(program, PH.markerDecl(allocator, "ran", pump_name))) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/pump:run({s}): '{s}' already ran - a pump drives once", .{ pump_name, pump_name }) } };
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.run_already_ran, .{ pump_name, pump_name }) } };
     }
 
     // Enumerate joins by convention: step_0, step_1, ... until a gap.
