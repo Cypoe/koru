@@ -1,0 +1,46 @@
+First-class std/index — PARKED 2026-09-16, red-verified: KORU040 unknown
+tor 'std.index:store'. The unclaimed-site wall works; the declaration needs
+a `store` tor inside the std/index module (index.kz — the std ROOT, already
+ambient in every std program) to claim it.
+
+DESIGN (ruled with Lars, 2026-09-16):
+
+  std/index:store(players, key)   — pure AST-data declaration.
+  - `~[norun] pub tor store` claims the site and NEVER executes — the
+    kernel:shape pattern (koru_std/kernel.kz:57). The node stays in
+    program.items through every transform stage; the AST is the registry.
+  - std/store's transforms discover it on the program walk (they already
+    receive `program: *const std/compiler:Program`): match
+    module_qualifier=="std.index", segments[0]=="store", args = (store
+    name, column name).
+  - Suffix names an ORGAN — a closed set (store, later grid, kernel), so
+    EXACT tors, not a glob. `std/index:grod` fails unclaimed for free.
+  - Index stores HANDLES, not dense positions — generational-handle
+    staleness (690_115/116) comes free, and swap-remove needs NO moved-row
+    fixup: the moved row's handle is unchanged. take's only index duty is
+    `map.remove(taken.key)` — else a taken key resolves to a stale handle
+    and traps instead of answering `| none` (oracle 3 pins this).
+
+SPLICES, all store-owned emit:
+  - map decl: backing key→handle map. Home candidates: (a) store.new.kz
+    emits it beside the arena — contested file, parallel leaf refactor
+    in flight; (b) `std/index:store` as a `.pre` TRANSFORM (not norun)
+    that emits the map decl + a norun `_registered` marker node the store
+    walk discovers — avoids store.new entirely.
+  - insert: map.put(row.key, handle) — store.insert.kz (contested, small).
+  - take:   map.remove(taken.key) — store.take.kz (clean).
+  - stored: write to indexed column → remove(old)+put(new) — store.stored.kz.
+  - query `! first p when p.<col> == <v>`: when <col> is the declared index
+    column and the predicate is a bare equality, emit map.get+deref instead
+    of the sweep. Compound predicates still scan. store.query / qrewrite.
+
+HONESTY GAP IN THIS PIN: once the site is merely claimed, every oracle here
+passes via plain sweep — the index is semantically invisible. Routing needs
+an emitted-code assertion (post.sh on output_emitted.zig for the map lookup
+vs `for (0..__koru_store_arena.len)` sweep, convention: 690_301) OR a
+duplicate-key divergence ruling (unique index: last-wins? first-wins?
+trap? — Lars to rule; session semantics suggest replace-or-refuse).
+Write post.sh against the REAL emitted names, not invented ones.
+
+UNPINNED ADJACENT: `stored` re-key, two indexes one store, index on
+non-scalar column, `! first` compound-predicate fallback scan.

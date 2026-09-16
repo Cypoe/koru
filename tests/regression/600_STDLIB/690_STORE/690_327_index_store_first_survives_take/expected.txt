@@ -1,0 +1,4 @@
+took
+moved 300
+taken none
+scan 100
