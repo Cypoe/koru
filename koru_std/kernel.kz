@@ -2625,7 +2625,6 @@ const codegen_utils_kernel = @import("codegen_utils");
     const empty_node = ast.Node{ .inline_code = "" };
     return .{ .replacement_node = .{ .node = empty_node, .children = new_conts } };
 }
-
 // ============================================================================
 // FUTURE: kernel.reduce, kernel.cross
 // ============================================================================
@@ -2636,3 +2635,4 @@ const codegen_utils_kernel = @import("codegen_utils");
 ~part body
 ~part scan
 ~part fpga
+~part fpgatb

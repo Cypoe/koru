@@ -20,9 +20,13 @@
 // fields only, static init datasets only — no store kernels, no `step`
 // (beat semantics unruled), no `pairwise`/`reduce` (the fpga-legal trellis
 // names those verdicts). Fields the body never mentions pass through the
-// stage untouched — probes/fpga_self's `mode` is the pin. Truncate-vs-
-// saturate is the unruled width question; the testbench computes the map
-// wide and prints a `note:` on divergence rather than guess a ruling.
+// stage untouched — probes/fpga_self's `mode` is the pin.
+//
+// WIDTH SEMANTICS, ruled refine's own way — bounds judge, clamp normalizes:
+// bare bounds size the port and overflow wraps (the bench notes
+// "truncated"); a `clamp(lo,hi)` term in the meet claims the boundary
+// saturates, so the emitter generates saturating logic and the bench
+// notes "saturated". Either way host-vs-fabric divergence is printed.
 
 // `kast` is kernel.scan.kz's `ast` import — module-scope, shared.
 
@@ -103,6 +107,13 @@ fn fpgaFieldWidth(mf_lo: ?i64, mf_lo_ex: bool, mf_hi: ?i64, mf_hi_ex: bool, mf_e
         }
     }
     return 64;
+}
+
+// A saturation bound as the unsigned port literal the two's-complement
+// port actually carries (lo=-3 on 8 bits -> 8'd253).
+fn fpgaSatLit(v: i64, bits: u8) u64 {
+    if (bits >= 64) return @bitCast(v);
+    return @intCast(@mod(v, @as(i64, 1) << @intCast(bits)));
 }
 
 // `name: <int>` field values per init element, aligned to shape_fields —
@@ -221,6 +232,7 @@ fn emitFpgaSelf(
     const proto_home = fpgaProtoHome(prog.items, prog.main_module_name, type_name) orelse home;
     var widths = alloc.alloc(u8, shape_fields.len) catch unreachable;
     for (shape_fields, 0..) |_, wi| widths[wi] = 64;
+    var sat: ?[2]i64 = null; // the mapped field's clamp claim, if the meet carries one
     if (@hasDecl(koru_std, "koru_refine")) {
         const met = koru_std.koru_refine.metFields(alloc, prog, proto_home, type_name, "fpga");
         for (met) |*mf| {
@@ -231,6 +243,7 @@ fn emitFpgaSelf(
                 const eq_v: ?i64 = if (mf.eq) |b| b.value else null;
                 const cl: ?[2]i64 = if (mf.clamp) |c| .{ c.lo, c.hi } else null;
                 widths[sfi] = fpgaFieldWidth(lo_v, if (mf.lo) |b| b.exclusive else false, hi_v, if (mf.hi) |b| b.exclusive else false, eq_v, cl);
+                if (sfi == mapped) sat = cl;
             }
         }
     }
@@ -268,10 +281,21 @@ fn emitFpgaSelf(
     }
     w(&sv, alloc, ");\n", .{});
     // The mapped field is combinational; the stage register is the beat.
+    // A clamp claim saturates: the map is computed signed-wide, then held
+    // inside [clamp.lo, clamp.hi] before it reaches the port.
     {
         const sf = shape_fields[mapped];
         w(&sv, alloc, "    logic [{d}:0] mapped_{s};\n", .{ widths[mapped] - 1, sf.name });
-        w(&sv, alloc, "    assign mapped_{s} = in_{s} {c} {s}{d}'d{d};\n", .{ sf.name, sf.name, sv_op, if (lit < 0) "-" else "", widths[mapped], @abs(lit) });
+        if (sat) |sc| {
+            w(&sv, alloc, "    logic signed [63:0] wide_{s};\n", .{sf.name});
+            w(&sv, alloc, "    assign wide_{s} = $signed({{1'b0, in_{s}}}) {c} {s}64'sd{d};\n", .{ sf.name, sf.name, sv_op, if (lit < 0) "-" else "", @abs(lit) });
+            w(&sv, alloc, "    assign mapped_{s} = (wide_{s} > {s}64'sd{d}) ? {d}'d{d} : (wide_{s} < {s}64'sd{d}) ? {d}'d{d} : wide_{s}[{d}:0];\n", .{
+                sf.name, sf.name, if (sc[1] < 0) "-" else "", @abs(sc[1]), widths[mapped], fpgaSatLit(sc[1], widths[mapped]),
+                sf.name, if (sc[0] < 0) "-" else "", @abs(sc[0]), widths[mapped], fpgaSatLit(sc[0], widths[mapped]), sf.name, widths[mapped] - 1,
+            });
+        } else {
+            w(&sv, alloc, "    assign mapped_{s} = in_{s} {c} {s}{d}'d{d};\n", .{ sf.name, sf.name, sv_op, if (lit < 0) "-" else "", widths[mapped], @abs(lit) });
+        }
     }
     w(&sv, alloc, "\n    always_ff @(posedge clk or negedge rst_n) begin\n        if (!rst_n) begin\n            out_valid <= 1'b0;\n", .{});
     for (shape_fields, 0..) |sf, sfi| {
@@ -287,76 +311,6 @@ fn emitFpgaSelf(
     }
     w(&sv, alloc, "        end\n    end\nendmodule\n", .{});
 
-    // ---- the testbench: drive the dataset, check the map one beat later ----
-    var tb = std.ArrayList(u8).initCapacity(alloc, 2048) catch unreachable;
-    w(&tb, alloc, "// Generated testbench for {s} — drives the init dataset on\n", .{sym});
-    w(&tb, alloc, "// consecutive beats, checks the stage's output one beat later.\n", .{});
-    w(&tb, alloc, "// errors exit nonzero via $fatal so the BUILD fails on a wrong circuit.\n", .{});
-    w(&tb, alloc, "module tb;\n    logic clk = 0;\n    logic rst_n = 0;\n    logic in_valid = 0;\n", .{});
-    for (shape_fields, 0..) |sf, sfi| {
-        w(&tb, alloc, "    logic [{d}:0] in_{s} = 0;\n", .{ widths[sfi] - 1, sf.name });
-    }
-    w(&tb, alloc, "    logic out_valid;\n", .{});
-    for (shape_fields, 0..) |sf, sfi| {
-        w(&tb, alloc, "    logic [{d}:0] out_{s};\n", .{ widths[sfi] - 1, sf.name });
-        w(&tb, alloc, "    logic [{d}:0] exp_{s};\n", .{ widths[sfi] - 1, sf.name });
-    }
-    // The gate slices expw_* (host-width map) to the port; wide-vs-port divergence prints `note:`, never a fail.
-    w(&tb, alloc, "    logic [63:0] expw_{s};\n", .{shape_fields[mapped].name});
-    w(&tb, alloc, "\n    {s} dut (.*);\n\n    always #5 clk = ~clk;\n\n    int errors = 0;\n\n", .{sym});
-    // check(): every port against its expected reg — the transformed field
-    // against the map applied to the last-driven input, the rest against the
-    // passthrough.
-    w(&tb, alloc, "    task check;\n        if (!out_valid", .{});
-    for (shape_fields) |sf| {
-        w(&tb, alloc, " || out_{s} !== exp_{s}", .{ sf.name, sf.name });
-    }
-    w(&tb, alloc, ") begin\n            $display(\"FAIL: got valid=%b", .{});
-    for (shape_fields) |sf| {
-        w(&tb, alloc, " {s}=%0d", .{sf.name});
-    }
-    w(&tb, alloc, ", want", .{});
-    for (shape_fields) |sf| {
-        w(&tb, alloc, " {s}=%0d", .{sf.name});
-    }
-    w(&tb, alloc, "\"", .{});
-    w(&tb, alloc, ", out_valid", .{});
-    for (shape_fields) |sf| {
-        w(&tb, alloc, ", out_{s}", .{sf.name});
-    }
-    for (shape_fields) |sf| {
-        w(&tb, alloc, ", exp_{s}", .{sf.name});
-    }
-    w(&tb, alloc, ");\n            errors = errors + 1;\n        end else begin\n            $display(\"ok:", .{});
-    for (shape_fields) |sf| {
-        w(&tb, alloc, " {s}=%0d", .{sf.name});
-    }
-    w(&tb, alloc, "\"", .{});
-    for (shape_fields) |sf| {
-        w(&tb, alloc, ", out_{s}", .{sf.name});
-    }
-    w(&tb, alloc, ");\n            if (expw_{s} != out_{s}) $display(\"note: {s} truncated %0d -> %0d ({d}-bit port)\", expw_{s}, out_{s});\n", .{ shape_fields[mapped].name, shape_fields[mapped].name, shape_fields[mapped].name, widths[mapped], shape_fields[mapped].name, shape_fields[mapped].name });
-    w(&tb, alloc, "        end\n    endtask\n\n    initial begin\n        @(negedge clk); rst_n = 1;\n", .{});
-
-    for (elems, 0..) |ev, ei| {
-        w(&tb, alloc, "        // beat {d}: drive element {d}\n        @(negedge clk);", .{ ei + 1, ei });
-        if (ei > 0) w(&tb, alloc, " check();", .{});
-        w(&tb, alloc, " in_valid = 1;", .{});
-        for (shape_fields, 0..) |sf, sfi| {
-            w(&tb, alloc, " in_{s} = {s}{d}'d{d};", .{ sf.name, if (ev[sfi] < 0) "-" else "", widths[sfi], @abs(ev[sfi]) });
-        }
-        w(&tb, alloc, "\n        ", .{});
-        for (shape_fields, 0..) |sf, sfi| {
-            if (sfi == mapped) {
-                w(&tb, alloc, "expw_{s} = in_{s} {c} {s}64'd{d}; exp_{s} = expw_{s}[{d}:0];", .{ sf.name, sf.name, sv_op, if (lit < 0) "-" else "", @abs(lit), sf.name, sf.name, widths[sfi] - 1 });
-            } else {
-                w(&tb, alloc, "exp_{s} = in_{s};", .{ sf.name, sf.name });
-            }
-        }
-        w(&tb, alloc, "\n", .{});
-    }
-    w(&tb, alloc, "        // drain: last check, then drop valid\n        @(negedge clk); check(); in_valid = 0;\n\n        if (errors == 0) $display(\"PASS: {s} pipeline\");\n        else             $fatal(1, \"FAIL: %0d errors\", errors);\n        $finish;\n    end\nendmodule\n", .{sym});
-
     {
         const fname = std.fmt.allocPrint(alloc, "{s}.fpga.sv", .{sym}) catch unreachable;
         const mf = std.fs.cwd().createFile(fname, .{}) catch |e| {
@@ -366,13 +320,7 @@ fn emitFpgaSelf(
         defer mf.close();
         mf.writeAll(sv.items) catch unreachable;
     }
-    {
-        const fname = std.fmt.allocPrint(alloc, "{s}.fpga_tb.sv", .{sym}) catch unreachable;
-        const mf = std.fs.cwd().createFile(fname, .{}) catch |e| {
-            std.debug.print("error: `self|fpga` cannot write {s}: {s}\n", .{ fname, @errorName(e) });
-            std.process.exit(1);
-        };
-        defer mf.close();
-        mf.writeAll(tb.items) catch unreachable;
-    }
+    // ---- the testbench lives in the fpgatb part — it must mirror the
+    // module's width semantics (truncate vs saturate) exactly ----
+    emitFpgaTb(alloc, sym, shape_fields, widths, elems, mapped, sv_op, lit, sat);
 }

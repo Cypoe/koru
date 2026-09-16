@@ -179,7 +179,17 @@ SHAPES the artifact — `i64 & >=0 & <=255` on the fpga scope emits
 runs iverilog + vvp so a wrong circuit is a red compile. Enforcement
 still rides the same fold: an init element the met port width cannot
 carry refuses KORU123 — the facet enforced at the artifact's boundary.
-One question the consumer now owns and cannot dodge: bounded arithmetic
-on the port truncates (`*= 2` mod 256), while a `clamp`-claimed facet
-reads like saturation — which the atoms should force is the unruled
-width-semantics question, deferred at the emitter.
+
+EVOLVED the same day (width semantics ruled; 390_124, 390_125): the
+truncate-vs-saturate question the previous paragraph left open is
+answered by refine's own vocabulary — **bounds judge, clamp
+normalizes**. Bare bounds size the port and arithmetic wraps (the
+generated bench computes the map signed-wide and prints `note: …
+truncated` where host and fabric diverge); a `clamp(lo,hi)` term in
+the meet claims the boundary saturates, so the emitter generates
+saturating logic and the bench notes "saturated" instead. Either way
+the host-vs-fabric gap is printed, never silent and never a fail —
+the facet governs the artifact's arithmetic, not the host's i64. The
+same build also runs `yosys … check` on every `*.fpga.sv` — the
+artifact is gated structurally (0 problems) and behaviorally (the
+sim), the way spirv-val gates the [gpu] blob.

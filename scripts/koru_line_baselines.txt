@@ -72,7 +72,8 @@ koru_std/io.jsprec.kz	48
 koru_std/io.kz	2078
 koru_std/json.kz	268
 koru_std/kernel.body.kz	69
-koru_std/kernel.fpga.kz	378
+koru_std/kernel.fpga.kz	326
+koru_std/kernel.fpgatb.kz	120
 koru_std/kernel.scan.kz	109
 koru_std/kernel.kz	2638
 koru_std/koru.kz	211
