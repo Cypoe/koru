@@ -83,18 +83,25 @@ named atoms, consume-and-reissue netting, compiler-synthesized discharge.
 Every cell above is consistent with that characterization; `15` is the row
 where the difference stops being vocabulary and becomes a feature gap.
 
-The still-unmeasured axes, for the next batch:
+The axes above the scoreboard are measured too — see `probes/PROBES.md`
+(twelve compiled probes, verbatim output):
 
-- **Re-issuer vs discharger (`440_007`'s shape).** Koru's `22` diagnostic
-  names `tx.commit`/`tx.rollback` and pointedly *not* `tx.exec` — derived
-  from net obligation accounting. Mojo names the same verbs only because the
-  author wrote them into `@explicit_destroy`. A probe where a re-issuing
-  method is offered as a "discharger" is where this stops being about
-  diagnostic provenance and becomes a real expressibility gap — the checker
-  cannot tell consume-and-remint from consume-and-release.
-- **Obligations on foreign types** (`string<open!>`) — Koru mints atoms on
-  stdlib types; Mojo must wrap. Expected verdict: cannot be expressed.
-- **Ordered discharge** ("must call A *then* B") — expressible in principle
-  via the same parameter trick (a second phantom), uncompiled.
-- **Trait-object laundering** — boxing a linear type into an existential;
-  the most likely soft spot in the whole design, uncompiled.
+- **The wall is load-bearing.** Function returns, branch edges, raise
+  edges, `List`/`Optional`/struct-field containment, trait-object boxing,
+  and `.copy()` all propagate the obligation — the last two harder than
+  expected: a struct can't even *declare* a linear field without going
+  linear itself, and an existential carrying a linear payload must be
+  explicitly killed.
+- **Raw memory is outside the law.** `unsafe_write` + `dealloc` evaporates
+  a linear payload — compiles, runs, exit 0. Honestly fenced behind
+  `unsafe_` names, but a real leak path.
+- **Re-issuer vs discharger (`440_007`'s shape) is genuinely blind.** A
+  `deinit` that releases nothing compiles and runs; the checker trusts
+  every named destructor as a death and has no count to consult.
+- **Foreign-type obligations cannot be expressed.** `string<open!>` has no
+  spelling; the wrapper is a one-directional membrane — the payload can
+  move out obligation-free.
+- **Ordered discharge is expressible** — one phantom parameter per step.
+
+Remaining unmeasured: the rest of the corpus (`03`–`07`, `10`–`13`,
+`16`–`19`), plus disjoint field-level borrows into one aggregate.
