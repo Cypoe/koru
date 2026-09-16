@@ -33,13 +33,13 @@
 //
 // `run` drives passes until every participant's `live` answers 0 — a pump of
 // only immortals runs forever, which is honest: that pump IS the program's
-// event loop. When a pass progresses nothing, `run` fires `! idle` (an
-// effect, inside the loop); unarmed, it composes the wait itself — one
-// `poll()` over every joined `wait` interest, capped by the nearest
-// `wait_ns`, or a 1ms breath when nothing was declared.
+// event loop. On an all-idle pass `run` fires `! idle` (an effect, inside
+// the loop); unarmed it composes the wait itself — one `poll()` over every
+// joined `wait` interest capped by the nearest `wait_ns`, else a 1ms breath.
 
 const std = @import("std");
 const ast = @import("ast");
+~part explain
 
 const PH = struct {
     const codegen_utils = @import("codegen_utils");

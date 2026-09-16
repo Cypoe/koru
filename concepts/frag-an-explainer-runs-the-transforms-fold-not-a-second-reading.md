@@ -44,3 +44,12 @@ Two corollaries observed while landing it:
   `port: Port & >1024` reports `Port` and resolves `Port → i64` for the
   scalar property — the user reads what they wrote, the tool reports
   what it resolves to.
+- **A name-composing transform's fold is its sites, not its output
+  decls.** `std/pump`'s `run` enumerates joins by scanning generated
+  `__pump_<name>_step_<i>` decls — which don't exist at explain time.
+  The explainer's equivalent fold is the *document order of the
+  `std/pump(...)` sites themselves*, checked with the same legality
+  rules (step required, `! wait` needs `! live`, callee contract via
+  `PH.calleeDecl`). Same membership, same order, same refusals — a
+  different enumeration surface because the wire it reads is the
+  program, not the product.

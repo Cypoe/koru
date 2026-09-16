@@ -1,0 +1,21 @@
+var ticked: i64 = 0;
+
+~pub tor step {} -> i32
+
+~proc step|zig {
+    ticked += 1;
+    return if (ticked < 3) 1 else 0;
+}
+
+~pub tor live {} -> i64
+
+~proc live|zig {
+    return @intFromBool(ticked < 3);
+}
+
+~pub tor wait { i: i64 } -> { fd: i32, wait_ns: i128 }
+
+~proc wait|zig {
+    _ = i;
+    return .{ .fd = -1, .wait_ns = 1_000_000 };
+}
