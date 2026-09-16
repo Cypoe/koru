@@ -67,6 +67,23 @@ declaration lives. Pinned by 440_025 — foreign field refused by name on
 the head call, a mid-turn step, and a nested arm-body call; a name
 outside the vocabulary is still `event-denied`, never a field complaint.
 
+The fourth instance is the identifier itself. **A bare identifier in arg
+position is a reference, never a literal** — and the two surfaces meet
+that law at different walls. A top-level item head admits only quoted
+values, so `echo(text: h)` dies at the wire parser ("no bare values") —
+the grammar's verdict. An arm body is a Koru fragment, so `| ok t |>
+echo(text: h)` parses, and the flow's validation judges it: `h` bound on
+that arm path resolves, unbound it is `validation-error` naming the
+name. Before this, an identifier that missed the environment fell
+through to "return as-is" — `append(handle: h)` dispatched the literal
+string `"h"` and failed `HandleNotHeld`, a refusal that blamed the
+handle for the missing binding (bridge-mirror
+2026-09-12-arm-composition). The walk scopes bindings per item along
+the arm path: `| ok h |>` puts `h` inside that arm's subtree — a second
+item and a sibling arm both see it unbound. Pinned by 440_026 — bound
+reference resolves, cross-item and sibling-path references refuse by
+name, `h.field` names `h`, and `-1` is still a number.
+
 ## Open questions
 
 - Field-membership landed at pre-execution validation, not in the wire

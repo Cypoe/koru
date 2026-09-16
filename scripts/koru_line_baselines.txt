@@ -56,6 +56,7 @@ koru_std/grid.sweep.kz	307
 koru_std/http.kz	215
 koru_std/index.kz	7
 koru_std/inter.kz	176
+koru_std/interpreter.args.kz	144
 koru_std/interpreter.define.kz	152
 koru_std/interpreter.guards.kz	63
 koru_std/interpreter.kz	1164
@@ -63,7 +64,7 @@ koru_std/interpreter.names.kz	18
 koru_std/interpreter.parse.kz	52
 koru_std/interpreter.run.kz	1659
 koru_std/interpreter.select.kz	42
-koru_std/interpreter.validate.kz	113
+koru_std/interpreter.validate.kz	59
 koru_std/invariants.kz	181
 koru_std/io_registry.kz	30
 koru_std/io.jsprec.kz	48

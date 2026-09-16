@@ -4,8 +4,7 @@
 // DESIGN:
 // - Parses Koru source at runtime using the same parser as the compiler
 // - Walks the AST and executes events via registered dispatchers
-// - Tracks bindings in an environment as flow progresses
-// - Uses the shape_checker for optional validation before execution
+// - Tracks bindings in an environment; validates flows before execution
 //
 // Usage:
 //   import std/interpreter
@@ -1155,6 +1154,7 @@ fn exprFloatOp(l: f64, r: f64, op: ExprArithOp) ExprEvalError!ExprValue {
     } };
 }
 
+~part args
 ~part define
 ~part guards
 ~part names

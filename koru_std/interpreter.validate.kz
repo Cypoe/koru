@@ -1,10 +1,10 @@
 // Koru Standard Library: the `validate` part of interpreter.kz —
-// pre-execution flow validation (shadowing, field membership).
-// Joined via `~part validate` in interpreter.kz; merged into the
-// interpreter module at load.
+// pre-execution flow validation (shadowing; the arg judgment lives in
+// the `args` part). Joined via `~part validate` in interpreter.kz;
+// merged into the interpreter module at load.
 
 // ============================================================================
-// AST VALIDATION - Pre-execution validation (shadowing, field membership)
+// AST VALIDATION - Pre-execution validation
 // ============================================================================
 
 pub const ValidationError = struct {
@@ -13,9 +13,10 @@ pub const ValidationError = struct {
 };
 
 /// Validates a flow AST before execution.
-/// Checks for shadowing (duplicate bindings) and field membership (a named
-/// field the verb's signature does not declare). Returns null if valid, or
-/// ValidationError if invalid.
+/// Checks for shadowing (duplicate bindings), field membership (a named
+/// field the verb's signature does not declare), and bound references (a
+/// bare identifier in arg position no arm on this path binds).
+/// Returns null if valid, or ValidationError if invalid.
 pub fn validateFlow(
     flow: *const ast.Flow,
     allocator: std.mem.Allocator,
@@ -26,8 +27,8 @@ pub fn validateFlow(
     defer seen_bindings.deinit();
 
     if (validateFlowRecursive(flow, &seen_bindings)) |e| return e;
-    if (input_fn) |f| return checkInvocationFields(&flow.body, f, defined, allocator);
-    return null;
+
+    return checkFlowArgs(flow, input_fn, defined, allocator);
 }
 
 fn validateFlowRecursive(flow: *const ast.Flow, seen: *std.StringHashMap(void)) ?ValidationError {
@@ -55,59 +56,4 @@ fn validateFlowRecursive(flow: *const ast.Flow, seen: *std.StringHashMap(void)) 
     }
 
     return null; // Valid!
-}
-
-// ============================================================================
-// FIELD MEMBERSHIP - named args judged against the declared input vocabulary
-// ============================================================================
-//
-// A named field the verb's signature does not declare is refused before the
-// flow runs, never ignored at dispatch. The declared vocabulary comes from
-// the scope's own `get_event_input` table — the check is derived from the
-// same registry data the prompt and dispatcher are emitted from, so it
-// cannot drift from what dispatch enforces.
-//
-// `input_fn` answers null for a name outside the scope: vocabulary
-// membership is a different question (event-denied at dispatch), and an
-// empty list is a real answer — a zero-field verb refused any named field.
-// A session-defined flow's params are its own surface and are not judged
-// against the scope manifest; calls nested in its arms still are.
-fn checkInvocationFields(
-    cont: *const ast.Continuation,
-    input_fn: InputLookupFn,
-    defined: ?*DefinedFlows,
-    allocator: std.mem.Allocator,
-) ?ValidationError {
-    if (cont.node) |*n| {
-        switch (n.*) {
-            .invocation => |*inv| {
-                const event_name = if (inv.path.segments.len > 0) inv.path.segments[0] else "";
-                const is_defined = if (defined) |d| findDefinedFlow(d, event_name) != null else false;
-                if (!is_defined) {
-                    if (input_fn(event_name)) |spec| {
-                        for (inv.args) |arg| {
-                            var declared = false;
-                            for (spec) |field| {
-                                if (std.mem.eql(u8, field.name, arg.name)) {
-                                    declared = true;
-                                    break;
-                                }
-                            }
-                            if (!declared) {
-                                return .{
-                                    .message = std.fmt.allocPrint(allocator, "unknown field '{s}' on '{s}'", .{ arg.name, event_name }) catch "unknown field",
-                                    .binding_name = arg.name,
-                                };
-                            }
-                        }
-                    }
-                }
-            },
-            else => {},
-        }
-    }
-    for (cont.continuations) |*arm| {
-        if (checkInvocationFields(arm, input_fn, defined, allocator)) |e| return e;
-    }
-    return null;
 }

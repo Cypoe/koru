@@ -1,0 +1,144 @@
+// Koru Standard Library: the `args` part of interpreter.kz — the arg
+// judgment: field membership and bound references, one walk over the
+// flow before it runs. Joined via `~part args` in interpreter.kz;
+// merged into the interpreter module at load.
+
+// ============================================================================
+// ARG JUDGMENT - two refusals, one traversal, judged before the flow runs
+// ============================================================================
+//
+// FIELD MEMBERSHIP — a named field the verb's signature does not declare
+// is refused, never ignored at dispatch. The declared vocabulary comes
+// from the scope's own `get_event_input` table — the check is derived
+// from the same registry data the prompt and dispatcher are emitted
+// from, so it cannot drift from what dispatch enforces. `input_fn`
+// answers null for a name outside the scope: vocabulary membership is a
+// different question (event-denied at dispatch), and an empty list is a
+// real answer — a zero-field verb refuses any named field. A
+// session-defined flow's params are its own surface and are not judged
+// against the scope manifest; calls nested in its arms still are.
+//
+// BOUND REFERENCES — a bare identifier in arg position is a reference,
+// never a literal. Unbound, it must not degrade to its own text
+// (`append(handle: h)` dispatching `handle="h"` fails `HandleNotHeld`,
+// which blames the handle instead of the missing binding). Bindings are
+// per item along an arm path: `| ok h |>` scopes `h` to that arm's
+// subtree — a second item and a sibling arm both see it unbound.
+pub fn checkFlowArgs(
+    flow: *const ast.Flow,
+    input_fn: ?InputLookupFn,
+    defined: ?*DefinedFlows,
+    allocator: std.mem.Allocator,
+) ?ValidationError {
+    var bound = std.StringHashMap(void).init(allocator);
+    defer bound.deinit();
+    return checkInvocationArgs(&flow.body, input_fn, defined, &bound, allocator);
+}
+
+fn checkInvocationArgs(
+    cont: *const ast.Continuation,
+    input_fn: ?InputLookupFn,
+    defined: ?*DefinedFlows,
+    bound: *std.StringHashMap(void),
+    allocator: std.mem.Allocator,
+) ?ValidationError {
+    if (cont.node) |*n| {
+        switch (n.*) {
+            .invocation => |*inv| {
+                const event_name = if (inv.path.segments.len > 0) inv.path.segments[0] else "";
+                const is_defined = if (defined) |d| findDefinedFlow(d, event_name) != null else false;
+                if (!is_defined) {
+                    if (input_fn) |f| {
+                        if (f(event_name)) |spec| {
+                            for (inv.args) |arg| {
+                                var declared = false;
+                                for (spec) |field| {
+                                    if (std.mem.eql(u8, field.name, arg.name)) {
+                                        declared = true;
+                                        break;
+                                    }
+                                }
+                                if (!declared) {
+                                    return .{
+                                        .message = std.fmt.allocPrint(allocator, "unknown field '{s}' on '{s}'", .{ arg.name, event_name }) catch "unknown field",
+                                        .binding_name = arg.name,
+                                    };
+                                }
+                            }
+                        }
+                    }
+                }
+                for (inv.args) |arg| {
+                    if (unboundRefName(arg.value, bound)) |name| {
+                        return .{
+                            .message = std.fmt.allocPrint(allocator, "unbound '{s}' on '{s}' — bind it with an arm (`| <branch> {s} |>`) or quote it for a literal", .{ name, event_name, name }) catch "unbound identifier",
+                            .binding_name = name,
+                        };
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+    // Each arm's own bindings scope to that arm's subtree — seed before
+    // descending, lift after. An arm that re-binds an outer name is the
+    // shadowing check's refusal, already answered above; names we did not
+    // add are left alone.
+    for (cont.continuations) |*arm| {
+        var added = std.ArrayList([]const u8){};
+        defer added.deinit(allocator);
+        if (arm.binding) |b| seedBound(bound, &added, b, allocator);
+        seedDestructure(bound, &added, arm.destructure, allocator);
+        if (arm.is_catchall and arm.binding == null and arm.branch.len > 0) {
+            seedBound(bound, &added, arm.branch, allocator);
+        }
+        const r = checkInvocationArgs(arm, input_fn, defined, bound, allocator);
+        for (added.items) |name| _ = bound.remove(name);
+        if (r) |e| return e;
+    }
+    return null;
+}
+
+// `name` enters the bound set unless an outer scope already bound it —
+// then it stays bound (and the duplicate is the shadowing check's call).
+fn seedBound(bound: *std.StringHashMap(void), added: *std.ArrayList([]const u8), name: []const u8, allocator: std.mem.Allocator) void {
+    if (bound.contains(name)) return;
+    bound.put(name, {}) catch return;
+    added.append(allocator, name) catch {};
+}
+
+fn seedDestructure(bound: *std.StringHashMap(void), added: *std.ArrayList([]const u8), fields: []const ast.DestructureField, allocator: std.mem.Allocator) void {
+    for (fields) |f| {
+        if (f.sub.len > 0) {
+            seedDestructure(bound, added, f.sub, allocator);
+        } else {
+            seedBound(bound, added, f.name, allocator);
+        }
+    }
+}
+
+/// The name a bare arg value references, or null when the value is a
+/// literal or an expression. A quoted value is a string literal; a
+/// `base.field` shape references `base`; bare `true`/`false`/`null` are
+/// literals, not references. Anything that does not lex as an identifier
+/// (numbers, operators, prose) is outside this question.
+fn unboundRefName(raw: []const u8, bound: *const std.StringHashMap(void)) ?[]const u8 {
+    const t = std.mem.trim(u8, raw, " \t");
+    if (t.len == 0 or t[0] == '"') return null;
+    const base = if (std.mem.indexOfScalar(u8, t, '.')) |dot| t[0..dot] else t;
+    if (!isWireIdent(base)) return null;
+    if (std.mem.eql(u8, base, "true") or std.mem.eql(u8, base, "false") or std.mem.eql(u8, base, "null")) return null;
+    if (bound.contains(base)) return null;
+    return base;
+}
+
+fn isWireIdent(t: []const u8) bool {
+    if (t.len == 0) return false;
+    // First char is a letter or `_` only — a leading `-` or digit is a
+    // number literal (`-1`, `42`), not a reference.
+    if (!std.ascii.isAlphabetic(t[0]) and t[0] != '_') return false;
+    for (t[1..]) |c| {
+        if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') return false;
+    }
+    return true;
+}
