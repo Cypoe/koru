@@ -21,6 +21,7 @@
 // 25 lines of scheduler → 0.
 import std/io
 import std/store
+import std/pump
 import lib/srclib
 
 std/store:new(fast, capacity: 2) { *lib/srclib:Src<live!> }
@@ -41,15 +42,20 @@ lib/srclib:open(id: 2, work: 3): b |> std/store:insert(slow) { b }
 | row _ |> _
 | full f |> lib/srclib:close(s: f): id |> std/io:print.ln("dropped {{ id:d }}")
 
-// SHAPE B — the schedule. Ordering is DECLARED, not implied by line order, and
-// it is the one place a clock could live. Without this, Shape A still leaves
-// "fast before slow" as an accident of which sweep was written first.
-// The block-of-bare-names form has precedent: koru_std/io_registry.kz:23-30
-// spells `std/runtime:register(scope: "std.io") { std/io:print … }` the same way.
-std/pump:new(main) {
-    fast
-    slow
-}
+// SHAPE B — the schedule. `std/pump:create` declares it; `std/pump(main)`
+// is the join — the participant's verbs arrive as `!` arms on the reference,
+// join order is document order. `fast-step`/`fast-live` are the ordinary
+// generated units the store's `! step` arm exposes — the pump composes
+// names, never knowing a store answered.
+std/pump:create(main)
 | drained |> std/io:print.ln("all participants retired")
+
+std/pump(main)
+! step |> fast-step()
+! live |> fast-live()
+
+std/pump(main)
+! step |> slow-step()
+! live |> slow-live()
 
 std/pump:run(main)

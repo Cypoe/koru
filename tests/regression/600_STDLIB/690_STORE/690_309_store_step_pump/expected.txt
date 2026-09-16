@@ -1,0 +1,8 @@
+fast moved 1
+slow moved 2
+fast moved 1
+retired 1
+slow moved 2
+slow moved 2
+retired 2
+all participants retired

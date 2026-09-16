@@ -70,10 +70,10 @@ koru_std/kernel.body.kz	69
 koru_std/kernel.kz	2711
 koru_std/koru.kz	211
 koru_std/liquid_template.kz	146
+koru_std/list.explain.kz	113
 koru_std/list.free.kz	1083
 koru_std/list.get.kz	29
 koru_std/list.kjs	85
-koru_std/list.explain.kz	113
 koru_std/list.kz	73
 koru_std/list.len.kz	23
 koru_std/list.new.kz	138
@@ -88,6 +88,7 @@ koru_std/package.kz	163
 koru_std/parser.kz	2060
 koru_std/profiler.kz	283
 koru_std/proto.kz	593
+koru_std/pump.kz	833
 koru_std/refine.explain.kz	188
 koru_std/refine.k	196
 koru_std/refine.kz	472
@@ -106,8 +107,9 @@ koru_std/store.clear.kz	105
 koru_std/store.default.kz	79
 koru_std/store.insert.kz	482
 koru_std/store.kz	1690
-koru_std/store.new.kz	6504
+koru_std/store.new.kz	6436
 koru_std/store.preorder.kz	110
+koru_std/store.pverbs.kz	781
 koru_std/store.qcaps.kz	372
 koru_std/store.qrewrite.kz	231
 koru_std/store.query.kz	1019
@@ -129,6 +131,7 @@ koru_std/testing.assert.kz	106
 koru_std/testing.kz	919
 koru_std/threading.kz	141
 koru_std/time.kz	102
+koru_std/time.waits.kz	56
 koru_std/todo.kz	356
 koru_std/trellis.kz	435
 koru_std/types.kz	377

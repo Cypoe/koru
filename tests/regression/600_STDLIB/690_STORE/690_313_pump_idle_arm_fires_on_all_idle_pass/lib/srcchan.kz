@@ -1,0 +1,120 @@
+// Probe-6 participants — synthetic BLOCKING-shaped event sources.
+//
+// r5's Src was a counter: step always had work. These are real fds —
+// socketpair ends — whose readiness the step ASKS about (poll) before reading,
+// which is exactly what vaxis's `tryEvent` and orisha's `kevent` bodies do.
+// The no-progress verdict is the point: a participant answers `| quiet` —
+// "I asked, nothing was ready, I'm still alive" — an author-named word. The
+// pump reads only `| running` (progress) and `| complete` (retire); anything
+// else counts as no-progress, so a composed pump can see a pass where nobody
+// did anything — the `! idle` seam.
+//
+//   Src  — an event SOURCE: read end + write end of a socketpair. `step`
+//          polls; ready → drain + `| running`; not ready → `| quiet`; seen all
+//          `want` bytes → `| complete`.
+//   Tick — the producer standing in for "the OS": each step writes a byte to
+//          the sources' write ends. Ticks down to `| complete`.
+//
+// close returns a value (not unattended-callable) so `! discharge` is required
+// — the retirement path is exercised, same as r5.
+const std = @import("std");
+
+pub const Src = struct { id: i64, rfd: i32, wfd: i32, seen: i64, want: i64 };
+pub const Tick = struct { id: i64, w1: i32, w2: i32, left: i64 };
+
+~pub tor open-src { id: i64, want: i64 } -> *Src<live!>
+~proc open-src|zig {
+    var sv: [2]i32 = undefined;
+    if (std.c.socketpair(std.c.AF.UNIX, std.c.SOCK.STREAM, 0, &sv) != 0) unreachable;
+    const s = std.heap.page_allocator.create($mod.Src) catch unreachable;
+    s.* = .{ .id = id, .rfd = sv[0], .wfd = sv[1], .seen = 0, .want = want };
+    return s;
+}
+
+~pub tor step-src { s: *Src<live> }
+! ?moved i64
+! ?waited i64
+| running
+| quiet
+| complete
+
+~proc step-src|zig {
+    var pfd = [_]std.posix.pollfd{.{ .fd = s.rfd, .events = std.posix.POLL.IN, .revents = 0 }};
+    const n = std.posix.poll(&pfd, 0) catch return .{ .quiet = .{} };
+    if (n == 0) {
+        waited(s.id);
+        return .{ .quiet = .{} };
+    }
+    var buf: [64]u8 = undefined;
+    const got = std.posix.read(s.rfd, &buf) catch 0;
+    s.seen += @intCast(got);
+    if (got > 0) moved(s.id);
+    if (s.seen >= s.want) return .{ .complete = .{} };
+    return .{ .running = .{} };
+}
+
+// `! wait` interest contract — `{ fd: i32, wait_ns: i128 }`: fd = -1 is no
+// descriptor; wait_ns is a RELATIVE duration (how soon to re-poll), maxInt =
+// never. A source answers its read fd; a tick answers a re-poll duration.
+// The pump polls the union of these once per all-idle pass.
+~pub tor interest-src { s: *Src<live> } -> { fd: i32, wait_ns: i128 }
+! ?polled i32
+
+~proc interest-src|zig {
+    polled(s.rfd);
+    return .{ .fd = s.rfd, .wait_ns = std.math.maxInt(i128) };
+}
+
+~pub tor close-src { s: *Src<!live> } -> i64
+~proc close-src|zig {
+    const id = s.id;
+    std.posix.close(s.rfd);
+    std.posix.close(s.wfd);
+    std.heap.page_allocator.destroy(s);
+    return id;
+}
+
+~pub tor open-tick { id: i64, a: *Src<live>, b: *Src<live>, ticks: i64 } -> *Tick<live!>
+~proc open-tick|zig {
+    const t = std.heap.page_allocator.create($mod.Tick) catch unreachable;
+    t.* = .{ .id = id, .w1 = a.wfd, .w2 = b.wfd, .left = ticks };
+    return t;
+}
+
+~pub tor step-tick { t: *Tick<live> }
+! ?ticked i64
+| running
+| quiet
+| complete
+
+// Delivers a byte to both pipes every THIRD step — the other steps answer
+// `quiet`, so the pump sees whole passes where nobody did anything: the
+// `! idle` arm's firing pattern IS the measurement this probe exists for.
+~proc step-tick|zig {
+    if (t.left <= 0) return .{ .complete = .{} };
+    t.left -= 1;
+    if (@rem(t.left, 3) != 0) return .{ .quiet = .{} };
+    _ = std.posix.write(t.w1, "x") catch 0;
+    _ = std.posix.write(t.w2, "x") catch 0;
+    ticked(t.id);
+    if (t.left == 0) return .{ .complete = .{} };
+    return .{ .running = .{} };
+}
+
+~pub tor interest-tick { t: *Tick<live> } -> { fd: i32, wait_ns: i128 }
+! ?polled i32
+
+// A tick has no fd — its interest is a duration: "re-poll me in ~5ms". The
+// pump's union wait turns that into the poll timeout, so the tick paces the
+// whole dead pass.
+~proc interest-tick|zig {
+    polled(-1);
+    return .{ .fd = -1, .wait_ns = 5_000_000 };
+}
+
+~pub tor close-tick { t: *Tick<!live> } -> i64
+~proc close-tick|zig {
+    const id = t.id;
+    std.heap.page_allocator.destroy(t);
+    return id;
+}

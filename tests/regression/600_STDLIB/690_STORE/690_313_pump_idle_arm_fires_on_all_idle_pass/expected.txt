@@ -1,0 +1,19 @@
+tick 0
+tty read 1
+sock read 2
+tty idle 1
+sock idle 2
+pump idle — nothing ready anywhere
+tty idle 1
+sock idle 2
+pump idle — nothing ready anywhere
+tick 0
+tty read 1
+tty retired 1
+sock read 2
+sock retired 2
+pump idle — nothing ready anywhere
+pump idle — nothing ready anywhere
+tick 0
+tick retired 0
+all participants retired

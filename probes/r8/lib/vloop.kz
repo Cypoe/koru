@@ -1,0 +1,70 @@
+// A vaxis-shaped participant: singleton module state, a readable fd AND a
+// tick deadline multiplexed into one interest record — the `! tick`
+// presence-gate problem, without the store. The pump supplies the loop; this
+// module supplies one pass of it.
+//
+//   step() -> i32    drain pending bytes + fire a due tick; return count
+//   live() -> i64    0 once should_quit — vaxis's `while (!should_quit)`
+//   wait(i) -> {fd, wait_ns}   the pipe's read end + nanoseconds to next tick
+
+const std = @import("std");
+
+var rfd: i32 = -1;
+var should_quit: bool = false;
+var next_tick: i128 = 0;
+var ticks_seen: i64 = 0;
+const tick_ns: i128 = 5_000_000;
+const quit_after: i64 = 3;
+
+// open() -> i32 — self-pipe with "ab" staged; the tick clock starts now.
+~pub tor open {} -> i32
+
+~proc open|zig {
+    const pf = std.posix.pipe() catch return 1;
+    $mod.rfd = pf[0];
+    _ = std.posix.write(pf[1], "ab") catch 0;
+    $mod.next_tick = std.time.nanoTimestamp() + $mod.tick_ns;
+    return 0;
+}
+
+~pub tor step {} -> i32
+! ?byte i64
+! ?tick i64
+
+~proc step|zig {
+    var n: i32 = 0;
+    // A due tick is work — vaxis's `next_tick` check, one pass's worth.
+    const now = std.time.nanoTimestamp();
+    if (now >= $mod.next_tick) {
+        $mod.next_tick = now + $mod.tick_ns;
+        $mod.ticks_seen += 1;
+        tick(@intCast(@divTrunc(now, std.time.ns_per_ms)));
+        n += 1;
+        if ($mod.ticks_seen >= $mod.quit_after) $mod.should_quit = true;
+    }
+    // tryEvent: readable fd means drain it — all pending bytes, one pass.
+    var pfd = [_]std.posix.pollfd{.{ .fd = $mod.rfd, .events = std.posix.POLL.IN, .revents = 0 }};
+    while ((std.posix.poll(&pfd, 0) catch 0) > 0) {
+        var b: [1]u8 = undefined;
+        const r = std.posix.read($mod.rfd, &b) catch 0;
+        if (r == 0) break;
+        byte(@intCast(b[0]));
+        n += 1;
+        pfd[0].revents = 0;
+    }
+    return n;
+}
+
+~pub tor live {} -> i64
+
+~proc live|zig {
+    return @intFromBool(!$mod.should_quit);
+}
+
+~pub tor wait { i: i64 } -> { fd: i32, wait_ns: i128 }
+
+~proc wait|zig {
+    _ = i;
+    const remain = $mod.next_tick - std.time.nanoTimestamp();
+    return .{ .fd = $mod.rfd, .wait_ns = if (remain < 0) 0 else remain };
+}

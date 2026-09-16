@@ -31,7 +31,20 @@ The same conflation is worth watching for anywhere a collection pass treats
 closure, and a declaration-only module is exactly where the closure's edges
 terminate.
 
-Open: the scan reads type STRINGS (`signatureBaseName` strips prefixes and
-qualifiers, declines compound expressions), so a type reachable only through a
-`[]const [N]T`-shaped spelling still escapes the closure. No pin exercises that
-yet.
+Measured 2026-09-16 (orisha + openssl consumer): the closure's edge was wrong
+in the other direction too. A QUALIFIED spelling `?std.mem.Allocator` was
+reduced to its last segment and fed to the same bare-name map — and
+`const Allocator = std.mem.Allocator`, a private convenience alias inside
+`[comptime]` std.compiler, had claimed `Allocator` first. Every consumer with
+an allocator parameter welded the whole compiler module (imports of `ast`,
+`log`, the pass machinery) into its runtime binary. Resolution now matches
+how a reader resolves the spelling: **a qualified type names its own module**
+(`std.mem.*` — no koru home, no pin; `orisha.Request` — orisha pins), and
+`host_type_homes` is the fallback for bare names only. The map's first-wins
+collision semantics are untouched — that ambiguity was already the contract
+([[frag-bare-host-type-is-module-local-cross-module-is-qualified]] is the
+spelling side).
+
+Open: the scan still reads type STRINGS — a compound spelling like
+`[]const [N]T` or `*const fn(...)void` names no home at all and escapes the
+closure. No pin exercises that yet.

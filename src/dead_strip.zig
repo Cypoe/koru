@@ -128,7 +128,21 @@ pub const DeadStripPass = struct {
                     try self.collectFromContinuations(tap.continuations);
                 },
                 .module_decl => |mod| {
-                    try self.collectUsedPaths(mod.items, main_module);
+                    // Bare names inside a module's items resolve against that
+                    // module, not the entry module — pass its logical name
+                    // down as the marking context.
+                    try self.collectUsedPaths(mod.items, mod.logical_name);
+                },
+                .proc_decl => |pd| {
+                    // A host proc that calls `sibling_event.handler(...)`
+                    // keeps that sibling alive — same rule as flow inline
+                    // bodies, scoped to the module the proc lives in.
+                    try self.collectFromInlineBody(pd.body.text, main_module);
+                    for (pd.inline_flows) |*iflow| {
+                        try self.collectFromInvocation(iflow.inv());
+                        try self.collectFromContinuations(iflow.body.continuations);
+                        if (iflow.inline_body) |ib| try self.collectFromInlineBody(ib, main_module);
+                    }
                 },
                 .immediate_impl => |impl| {
                     try self.markPath(&impl.event_path);

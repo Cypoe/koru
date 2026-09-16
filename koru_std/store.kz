@@ -1236,7 +1236,6 @@ fn isStoreNewFor(f: *const ast_find.Flow, want: []const u8) bool {
     }
     return false;
 }
-
 // ============================================================================
 // THE INDEXED STORE READ — one implementation, every position
 // ============================================================================
@@ -1687,4 +1686,5 @@ fn storeLowerText(
 ~part stripe
 ~part qrewrite
 ~part qcaps
+~part pverbs
 ~part sitetag

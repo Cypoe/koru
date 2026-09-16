@@ -6424,8 +6424,10 @@ fn rewriteEffectfulProcBody(
 
     // Effect branch → handled continuation index (or null = unhandled optional).
     const EffectSite = struct { lowered: []const u8, cont_idx: ?usize };
-    var sites_buf: [32]EffectSite = undefined;
-    var name_bufs: [32][128]u8 = undefined;
+    const sites_buf = try allocator.alloc(EffectSite, event_decl.branches.len);
+    defer allocator.free(sites_buf);
+    const name_bufs = try allocator.alloc([128]u8, event_decl.branches.len);
+    defer allocator.free(name_bufs);
     var n_sites: usize = 0;
     for (event_decl.branches) |*b| {
         if (b.kind != .effect) continue;

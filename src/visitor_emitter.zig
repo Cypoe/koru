@@ -485,6 +485,35 @@ pub const VisitorEmitter = struct {
         return t;
     }
 
+    /// The module qualifier a signature type names, normalized to dotted
+    /// logical-name spelling — `std.mem.Allocator` → `std.mem`, `orisha:X` →
+    /// `orisha`. Null for bare types: a bare name has no qualifier and falls
+    /// back to the first-wins host_type_homes map.
+    fn signatureModuleQualifier(allocator: std.mem.Allocator, type_name: []const u8) !?[]const u8 {
+        var t = std.mem.trim(u8, type_name, " \t");
+        if (std.mem.indexOfScalar(u8, t, '<')) |lt| t = std.mem.trim(u8, t[0..lt], " \t");
+        const prefixes = [_][]const u8{ "[]const ", "?*const ", "*const ", "[]", "?*", "?", "*" };
+        strip: while (true) {
+            for (prefixes) |prefix| {
+                if (std.mem.startsWith(u8, t, prefix)) {
+                    t = t[prefix.len..];
+                    continue :strip;
+                }
+            }
+            break;
+        }
+        var last_sep: ?usize = null;
+        for (t, 0..) |c, i| {
+            if (c == '.' or c == ':') last_sep = i;
+        }
+        const sep = last_sep orelse return null;
+        const qual = try allocator.dupe(u8, t[0..sep]);
+        for (qual) |*c| {
+            if (c.* == ':' or c.* == '/') c.* = '.';
+        }
+        return qual;
+    }
+
     /// Would this event emit in the current mode? Mirrors visitItem's early
     /// returns so the type scan only counts signatures that actually reach the
     /// emitted file.
@@ -508,32 +537,37 @@ pub const VisitorEmitter = struct {
     fn collectSignatureBaseTypes(
         self: *VisitorEmitter,
         set: *std.StringHashMap(void),
+        qualified: *std.StringHashMap(void),
         items: []const ast.Item,
         module_annotations: []const []const u8,
     ) !void {
+        const noteType = struct {
+            fn go(s: *VisitorEmitter, set_: *std.StringHashMap(void), qual_set: *std.StringHashMap(void), ty: []const u8) !void {
+                // A qualified spelling names its own module — `std.mem.Allocator`
+                // is zig's, `orisha.Request` is orisha's. Feeding its LAST segment
+                // to the bare-name homes map lets any module's private alias
+                // (`const Allocator = std.mem.Allocator`) weld itself in as the
+                // type's home.
+                if (try signatureModuleQualifier(s.allocator, ty)) |q| {
+                    try qual_set.put(q, {});
+                    return;
+                }
+                if (signatureBaseName(ty)) |b| try set_.put(b, {});
+            }
+        }.go;
         for (items) |*item| {
             switch (item.*) {
                 .event_decl => |*event| {
                     if (!self.eventSignatureEmits(event, module_annotations)) continue;
-                    for (event.input.fields) |f| {
-                        if (signatureBaseName(f.type)) |b| try set.put(b, {});
-                    }
-                    if (event.return_type) |rt| {
-                        if (signatureBaseName(rt)) |b| try set.put(b, {});
-                    }
+                    for (event.input.fields) |f| try noteType(self, set, qualified, f.type);
+                    if (event.return_type) |rt| try noteType(self, set, qualified, rt);
                     for (event.branches) |branch| {
-                        for (branch.payload.fields) |f| {
-                            if (signatureBaseName(f.type)) |b| try set.put(b, {});
-                        }
-                        if (branch.resume_type) |rt| {
-                            if (signatureBaseName(rt)) |b| try set.put(b, {});
-                        }
+                        for (branch.payload.fields) |f| try noteType(self, set, qualified, f.type);
+                        if (branch.resume_type) |rt| try noteType(self, set, qualified, rt);
                     }
                 },
                 .host_type_decl => |*ht| {
-                    for (ht.shape.fields) |f| {
-                        if (signatureBaseName(f.type)) |b| try set.put(b, {});
-                    }
+                    for (ht.shape.fields) |f| try noteType(self, set, qualified, f.type);
                 },
                 else => {},
             }
@@ -565,14 +599,25 @@ pub const VisitorEmitter = struct {
 
         var referenced = std.StringHashMap(void).init(self.allocator);
         defer referenced.deinit();
+        var qualified = std.StringHashMap(void).init(self.allocator);
+        defer qualified.deinit();
 
         var added = true;
         while (added) {
             added = false;
             referenced.clearRetainingCapacity();
-            try self.collectSignatureBaseTypes(&referenced, items, module_annotations);
+            qualified.clearRetainingCapacity();
+            try self.collectSignatureBaseTypes(&referenced, &qualified, items, module_annotations);
             for (modules.items) |m| {
-                try self.collectSignatureBaseTypes(&referenced, m.items, m.annotations);
+                try self.collectSignatureBaseTypes(&referenced, &qualified, m.items, m.annotations);
+            }
+            var qit = qualified.keyIterator();
+            while (qit.next()) |q| {
+                if (collected.contains(q.*)) continue;
+                const module = by_name.get(q.*) orelse continue;
+                try modules.append(self.allocator, module);
+                try collected.put(q.*, {});
+                added = true;
             }
             var it = referenced.keyIterator();
             while (it.next()) |base| {

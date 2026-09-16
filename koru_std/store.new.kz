@@ -1357,82 +1357,11 @@
         // carry `<state!>`, so the phantom checker forces the body to
         // discharge each element. Exactly one per store.
         var discharge_arm: ?ast.Continuation = null;
-        // KORU100 for interceptor payloads: a bound row field must be USED in
-        // the body (or discarded with `_`). flow_checker's unused-binding pass
-        // skips `[transform]` invocations, and `std/store:new` is one, so the
-        // store transform enforces it here — scanning the body's expression /
-        // source text for the field name at a word boundary.
-        const Usage = struct {
-            fn inText(text: []const u8, name: []const u8) bool {
-                if (name.len == 0) return false;
-                var i: usize = 0;
-                while (i + name.len <= text.len) : (i += 1) {
-                    if (!std.mem.eql(u8, text[i .. i + name.len], name)) continue;
-                    const before_ok = ast.identBoundaryBefore(text, i);
-                    const after_ok = i + name.len == text.len or !H.isIdentChar(text[i + name.len]);
-                    if (before_ok and after_ok) return true;
-                }
-                return false;
-            }
-            // A store-read site nested in the interceptor body transplants its
-            // body into a `__store_sweepbody_<s>_L<n>` / `__store_qbody_<s>_L<n>`
-            // event whose INPUTS carry the captures the body references. The
-            // interceptor body at create time holds only the spliced loop, so a
-            // body-only use of the payload lives here — the field name shows up
-            // as an event input, which is exactly the thread that makes it
-            // compile (690_093).
-            fn readBodyEventUses(prog: *const ast.Program, text: []const u8, name: []const u8) bool {
-                const markers = [_][]const u8{ "__store_sweepbody_", "__store_qbody_" };
-                for (markers) |m| {
-                    var pos: usize = 0;
-                    while (std.mem.indexOfPos(u8, text, pos, m)) |at| {
-                        var i = at + m.len;
-                        while (i < text.len and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) i += 1;
-                        const ev_name = text[at .. i];
-                        pos = i;
-                        if (findSynthDecl(prog.items, ev_name)) |ed| {
-                            for (ed.input.fields) |f2| {
-                                if (std.mem.eql(u8, f2.name, name)) return true;
-                            }
-                        }
-                    }
-                }
-                return false;
-            }
-            fn inCont(cont: *const ast.Continuation, name: []const u8, prog: *const ast.Program) bool {
-                if (cont.condition) |c| {
-                    if (inText(c, name)) return true;
-                }
-                if (cont.node) |n| {
-                    switch (n) {
-                        .invocation => {
-                            for (n.invocation.args) |a| {
-                                if (inText(a.value, name)) return true;
-                                if (a.expression_value) |ev| {
-                                    if (inText(ev.text, name)) return true;
-                                }
-                                if (a.source_value) |sv| {
-                                    if (inText(sv.text, name)) return true;
-                                }
-                            }
-                        },
-                        .inline_code => {
-                            // The spliced loop a nested read site leaves behind
-                            // (690_093): its relocated guard carries the payload
-                            // name in the text, and its body call names the
-                            // transplanted event whose inputs carry the capture.
-                            if (inText(n.inline_code, name)) return true;
-                            if (readBodyEventUses(prog, n.inline_code, name)) return true;
-                        },
-                        else => {},
-                    }
-                }
-                for (cont.continuations) |*c| {
-                    if (inCont(c, name, prog)) return true;
-                }
-                return false;
-            }
-        };
+        // `! step`/`! wait` — the participant contract (the pump slice);
+        // collection and emission live in PVerbs (store.pverbs.kz).
+        var step_arm: ?ast.Continuation = null;
+        var step_terminal_branches = std.ArrayList(ast.Branch).initCapacity(allocator, 2) catch unreachable;
+        var wait_arm: ?ast.Continuation = null;
         for (flow.body.continuations) |*ic| {
             const bname = std.mem.trim(u8, ic.branch, " ");
             // Profiler taps splice void-branch continuations here — not store interceptors.
@@ -1495,6 +1424,11 @@
                     .body = ast_functional.cloneContinuation(allocator, ic) catch unreachable,
                 }) catch unreachable;
                 continue;
+            }
+            switch (PVerbs.collectArm(allocator, program, flow, reporter, store_name, field_names, field_owned_info, bname, ic, &step_arm, &step_terminal_branches, &wait_arm)) {
+                .ok => continue,
+                .refuse => |ritem| return .{ .transformed = .{ .replacement = ritem } },
+                .not_mine => {},
             }
             const is_inserted = std.mem.eql(u8, bname, "inserted");
             const is_removed = std.mem.eql(u8, bname, "removed");
@@ -4920,6 +4854,8 @@
             }
         }
 
+        PVerbs.emit(allocator, program, flow, store_name, home_ns, field_names, field_types, field_owned_info, pstore_names.items, pstore_identity.items, discharge_arm, removed_arms.items, step_arm, step_terminal_branches.items, wait_arm, &appended_items, H, HS, host_is_js, host_target, proc_target);
+
         // Rung 0 (per-store disposal contract): the store provides NO disposal
         // verb. A BARE store's `take` carries no obligation (frictionless). When
         // a store opts in via `[entity(<name>)]`, `take` mints `<std/store:taken!>`
@@ -6498,4 +6434,3 @@
 
     return .{ .transformed = .{ .replacement = replacement, .appended = appended } };
 }
-
