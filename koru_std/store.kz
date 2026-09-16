@@ -182,8 +182,7 @@ fn storeEnvwriteSpecName(alloc: std.mem.Allocator, store: []const u8, cols: []co
 /// it matches the pre-transform spelling and lets a site that has already been
 /// rewritten fall through. A missed site is not specialised and runs the
 /// general masked unit — slower, never wrong.
-fn storeCollectWriteSet(
-    alloc: std.mem.Allocator,
+fn storeCollectWriteSet(alloc: std.mem.Allocator,
     inv: ast_find.Invocation,
     aliases: []const []const u8,
     order: []const []const u8,
@@ -236,8 +235,7 @@ fn storeCollectWriteSet(
 /// after this scan runs. So the walk carries the set of names that mean "this
 /// store" in the current subtree: the store itself, plus every binding
 /// introduced by an arm of a flow whose head is a store verb on it.
-fn storeCollectAliases(
-    alloc: std.mem.Allocator,
+fn storeCollectAliases(alloc: std.mem.Allocator,
     c: *const ast_find.Continuation,
     out: *std.ArrayList([]const u8),
 ) void {
@@ -1688,3 +1686,4 @@ fn storeLowerText(
 ~part sites
 ~part leaf
 ~part index
+~part qnone

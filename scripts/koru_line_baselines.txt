@@ -55,6 +55,7 @@ koru_std/grid.stored.kz	240
 koru_std/grid.sweep.kz	307
 koru_std/http.kz	215
 koru_std/index.kz	7
+koru_std/indexes.kz	15
 koru_std/inter.kz	176
 koru_std/interpreter.args.kz	144
 koru_std/interpreter.define.kz	152
@@ -115,12 +116,14 @@ koru_std/simple.kz	7
 koru_std/store.clear.kz	105
 koru_std/store.default.kz	79
 koru_std/store.explain.kz	104
+koru_std/store.index.kz	276
 koru_std/store.insert.kz	482
 koru_std/store.kz	1690
 koru_std/store.new.kz	6436
 koru_std/store.preorder.kz	110
 koru_std/store.pverbs.kz	781
 koru_std/store.qcaps.kz	372
+koru_std/store.qnone.kz	172
 koru_std/store.qrewrite.kz	231
 koru_std/store.query.kz	1019
 koru_std/store.rule.kz	148
