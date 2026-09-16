@@ -758,6 +758,17 @@
     }
     const none_call = none_call_buf.items;
 
+    // `! first` on a declared index column answers a map lookup, not a sweep —
+    // the projections, `__koru_found` and `| none` below run unchanged.
+    var index_icol: []const u8 = "";
+    var index_rhs: ?[]const u8 = null;
+    if (is_first and !is_view) switch (StoreIndex.firstRoute(allocator, program, store_name, guard_z, srf_prefix)) {
+        .scan => {},
+        .route => |r| { index_icol = r.icol; index_rhs = r.key; },
+        .refuse => |op| return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): the index key names `@{s}`, and that operation has no lowering for this target - a store guard is a Koru expression, and the operations Koru names with `@` are the shared table in codegen_utils.lowerBuiltin", .{ store_name, op }) } },
+    };
+    const scan_guard: ?[]const u8 = if (index_rhs == null) guard_z else null;
+
     var loop = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
     if (is_view) {
         loop.appendSlice(allocator, "{\n") catch unreachable;
@@ -837,7 +848,10 @@
         const cell_len = std.fmt.allocPrint(allocator, "{s}__koru_store_{s}.len", .{ cellq, store_name }) catch unreachable;
         loop.appendSlice(allocator, "{\n") catch unreachable;
         loop.appendSlice(allocator, found_decl) catch unreachable;
-        if (q_may_remove) {
+        // The index path: key → handle → dense row — no loop, no `break`.
+        if (index_rhs) |kr|
+            loop.appendSlice(allocator, StoreIndex.firstHead(allocator, host_is_js, cellq, store_name, index_icol, kr)) catch unreachable
+        else if (q_may_remove) {
             // Removal-tolerant sweep: len is re-read each iteration and the
             // cursor only advances when the body left len unchanged — a take
             // swap-removes the last row into the freed slot, and that row has
@@ -854,27 +868,12 @@
         } else {
             loop.appendSlice(allocator, HS.loopHead(allocator, host_target, "__koru_si", cell_len)) catch unreachable;
         }
-        for (proj_names, proj_cols) |pn, ci| {
-            const esc_cn = codegen_utils_store.escapeZigIdentifier(allocator, col_names[ci]) catch col_names[ci];
-            const read = std.fmt.allocPrint(allocator, "{s}__koru_store_{s}.{s}[__koru_si]", .{ cellq, store_name, esc_cn }) catch unreachable;
-            loop.appendSlice(allocator, HS.constBind(allocator, host_target, pn, read)) catch unreachable;
-        }
-        if (guard_z) |cond| {
-            var unknown_op: []const u8 = "";
-            const lowered_c = storeLowerExpr(allocator, cond, &unknown_op) orelse
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): the sweep guard names `@{s}`, and that operation has no lowering for this target - a store guard is a Koru expression, and the operations Koru names with `@` are the shared table in codegen_utils.lowerBuiltin", .{ store_name, unknown_op }) } };
-            const gz = if (q_may_remove)
-                std.fmt.allocPrint(allocator, "if (!({s})) {{ __koru_si += 1; continue; }}\n", .{lowered_c}) catch unreachable
-            else
-                std.fmt.allocPrint(allocator, "if (!({s})) continue;\n", .{lowered_c}) catch unreachable;
-            loop.appendSlice(allocator, gz) catch unreachable;
-        }
-        if (is_first and none_arm != null) loop.appendSlice(allocator, "__koru_found = true;\n") catch unreachable;
-        loop.appendSlice(allocator, storeEventQualifier(allocator, home_ns, program.main_module_name)) catch unreachable;
-        loop.appendSlice(allocator, sbody_name) catch unreachable;
-        loop.appendSlice(allocator, "_event.handler(") catch unreachable;
-        loop.appendSlice(allocator, HS.argRec(allocator, host_target, argb.items)) catch unreachable;
-        if (is_first) {
+        var bad_op: []const u8 = "";
+        if (!StoreIndex.fireRow(allocator, &loop, host_target, proj_names, proj_cols, col_names, cellq, store_name, scan_guard, q_may_remove, is_first and none_arm != null, home_ns, sbody_name, program.main_module_name, argb.items, &bad_op))
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): the sweep guard names `@{s}`, and that operation has no lowering for this target - a store guard is a Koru expression, and the operations Koru names with `@` are the shared table in codegen_utils.lowerBuiltin", .{ store_name, bad_op }) } };
+        if (index_rhs != null)
+            loop.appendSlice(allocator, StoreIndex.firstClose(allocator, host_is_js, none_call)) catch unreachable
+        else if (is_first) {
             loop.appendSlice(allocator, ");\nbreak;\n}\n") catch unreachable;
             loop.appendSlice(allocator, none_call) catch unreachable;
             loop.appendSlice(allocator, "}\n") catch unreachable;

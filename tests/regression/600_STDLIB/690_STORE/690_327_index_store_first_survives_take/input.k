@@ -1,4 +1,4 @@
-// PINS: first-class std/index — `std/index:store(players, key)` is a pure
+// PINS: first-class std/index — `std/indexes:store(players, key)` is a pure
 // AST-data declaration (kernel:shape's `[norun]` pattern): it claims the
 // site, never executes, and std/store's transforms discover it on the
 // whole-program walk and emit what an indexed store needs — a key→handle
@@ -18,15 +18,16 @@
 // answers — declaring an index must not change what unindexed `when` means.
 
 import std/store
+import std/indexes
 import std/io
 
 std/store:new(players, capacity: 8) { key: i64, val: i64 }
-std/index:store(players, key)
+std/indexes:store(players, key)
 
 std/store:insert(players) { key: 10, val: 100 }
 | row a |> std/store:insert(players) { key: 20, val: 200 }
     | row b |> std/store:insert(players) { key: 30, val: 300 }
-        |> std/store:take(players[a])
+        |> std/store:take(players[b])
             | item _ |> std/io:print.ln("took")
             | empty |> std/io:print.ln("take-empty")
 

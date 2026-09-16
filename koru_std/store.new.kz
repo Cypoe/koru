@@ -2420,6 +2420,30 @@
             pc.appendSlice(allocator, col) catch unreachable;
         }
         pc.appendSlice(allocator, "    len: usize = 0,\n") catch unreachable;
+        // `std/indexes:store(<s>, <col>)` — a declared index is AST-data
+        // (store.index.kz): the store OWNS the backing key→handle map, and
+        // the verbs maintain it inside their own emit. The map values are
+        // handles, so swap-remove moves no entry (the moved row's handle is
+        // unchanged); `take` owes only the taken row's own removal.
+        var index_col: ?[]const u8 = null;
+        var index_idx: usize = 0;
+        if (StoreIndex.columnOf(allocator, program, store_name)) |icol| {
+            var icol_type: ?[]const u8 = null;
+            for (field_names, field_types, field_char_caps, field_owned_info, 0..) |fname, ftype, fcc, foi, fi| {
+                if (!std.mem.eql(u8, fname, icol)) continue;
+                if (fcc != null or foi != null) {
+                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/indexes:store({s}, {s}): the indexed column must be a scalar column - fixed-char and owned columns are a later rung", .{ store_name, icol }) } };
+                }
+                icol_type = ftype;
+                index_idx = fi;
+            }
+            const it = icol_type orelse {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/indexes:store({s}, {s}): no column named '{s}' - the index names a declared column of the store", .{ store_name, icol, icol }) } };
+            };
+            const ifield = std.fmt.allocPrint(allocator, "    __index_{s}: @import(\"std\").AutoHashMapUnmanaged({s}, i64) = .{{}},\n", .{ icol, it }) catch unreachable;
+            pc.appendSlice(allocator, ifield) catch unreachable;
+            index_col = icol;
+        }
         // The sparse-set half of THE MEMORY CONTRACT (O10.iii/iv, DESIGN.md):
         // a program-visible row value is a HANDLE — sparse slot in the low 24
         // bits, the minting store's ordinal in bits 24..31, that slot's
@@ -2602,6 +2626,12 @@
                 const seed_v: []const u8 = if (fcc != null) "\"\"" else if (foi != null) "null" else "0";
                 const col = std.fmt.allocPrint(allocator, "  {s}: new Array({d}).fill({s}),\n", .{ fname, CAP, seed_v }) catch unreachable;
                 jc.appendSlice(allocator, col) catch unreachable;
+            }
+            // `std/indexes:store` — the key→handle map is a JS Map on the
+            // cell object, the same organ the Zig cell carries as a field.
+            if (index_col) |icol| {
+                const im = std.fmt.allocPrint(allocator, "  __index_{s}: new Map(),\n", .{icol}) catch unreachable;
+                jc.appendSlice(allocator, im) catch unreachable;
             }
             const tail = std.fmt.allocPrint(allocator,
                 \\  len: 0,
@@ -2813,6 +2843,11 @@
             }
             const bump = std.fmt.allocPrint(allocator, "__koru_store_{s}.len += 1;\n", .{store_name}) catch unreachable;
             ap.appendSlice(allocator, bump) catch unreachable;
+            // `std/indexes:store` — the row is live, so it claims its key
+            // (getOrPut-keep: a duplicate keeps the lower-dense holder).
+            if (index_col) |icol| {
+                ap.appendSlice(allocator, StoreIndex.insertPut(allocator, host_is_js, store_name, icol, icol)) catch unreachable;
+            }
             for (inserted_arms.items, 0..) |arm, ai| {
                 const head = std.fmt.allocPrint(allocator, "{s}__store_inserted_{s}_{d}_event.handler({{ ", .{ emit_ns, store_name, ai }) catch unreachable;
                 ap.appendSlice(allocator, head) catch unreachable;
@@ -2911,6 +2946,12 @@
             }
             const bump = std.fmt.allocPrint(allocator, "__koru_store_{s}.len += 1;\n", .{store_name}) catch unreachable;
             ap.appendSlice(allocator, bump) catch unreachable;
+            // `std/indexes:store` — the row is live, so it claims its key
+            // (getOrPut-keep: a duplicate keeps the lower-dense holder).
+            if (index_col) |icol| {
+                const iec = codegen_utils_store.escapeZigIdentifier(allocator, icol) catch icol;
+                ap.appendSlice(allocator, StoreIndex.insertPut(allocator, host_is_js, store_name, icol, iec)) catch unreachable;
+            }
             // `inserted` lifecycle interceptors fire as part of the write (the
             // store's contract), before standing query enters observe settled
             // state ((h)). The destructured fields are in scope as insert
@@ -3314,7 +3355,7 @@
                 // `<host>.<event>_event.handler`), then move the new pointer
                 // in. The caller's <!state> was consumed at the write event.
                 const esc_fname = codegen_utils_store.escapeZigIdentifier(allocator, fname) catch fname;
-                const wr = if (field_owned_info[i]) |oi| (if (host_is_js)
+                var wr: []const u8 = if (field_owned_info[i]) |oi| (if (host_is_js)
                     std.fmt.allocPrint(allocator, "const __koru_old_ptr = __koru_store_{s}.{s}[__koru_r]; {s}.{s}_event.handler({{ {s}: __koru_old_ptr }}); __koru_store_{s}.{s}[__koru_r] = value_{d}; ", .{ store_name, fname, oi.disch_host, oi.disch_event, oi.disch_param, store_name, fname, i }) catch unreachable
                 else
                     std.fmt.allocPrint(allocator, "const __koru_old_ptr = __koru_store_{s}.{s}[__koru_r]; _ = {s}.{s}_event.handler(.{{ .{s} = __koru_old_ptr }}); __koru_store_{s}.{s}[__koru_r] = value_{d}; ", .{ store_name, esc_fname, oi.disch_host, oi.disch_event, oi.disch_param, store_name, esc_fname, i }) catch unreachable)
@@ -3326,6 +3367,13 @@
                     std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = @import(\"std\").mem.zeroes([{d}]u8); const __koru_wl = @min(value_{d}.len, {d}); @memcpy(__koru_store_{s}.{s}[__koru_r][0..__koru_wl], value_{d}[0..__koru_wl]); ", .{ store_name, esc_fname, n, i, n, store_name, esc_fname, i }) catch unreachable)
                 else
                     std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = value_{d}; ", .{ store_name, esc_fname, i }) catch unreachable;
+                // `std/indexes:store` — a write to the indexed column moves
+                // the row's key: release the old (reseat the next-lowest
+                // claimant), claim the new when it is now the lowest.
+                if (index_col != null and i == index_idx) {
+                    const vv = std.fmt.allocPrint(allocator, "value_{d}", .{i}) catch unreachable;
+                    wr = StoreIndex.writeWrap(allocator, host_is_js, store_name, index_col.?, esc_fname, wr, vv);
+                }
                 atext.appendSlice(allocator, wr) catch unreachable;
                 for (updated_arms.items, 0..) |ua, ai| {
                     const upd_payload = if (ua.fields.len != 0) blk_up: {
@@ -3514,12 +3562,18 @@
                     }
                     // An OWNED arm is discharge-old + consume-new (690_062);
                     // the caller's <!state> was consumed at the fwrite event.
-                    const fwr = if (field_owned_info[i]) |oi|
+                    var fwr: []const u8 = if (field_owned_info[i]) |oi|
                         std.fmt.allocPrint(allocator, "const __koru_old_ptr = __koru_store_{s}.{s}[__koru_r]; {s}{s}.{s}_event.handler({s}); __koru_store_{s}.{s}[__koru_r] = value; ", .{ store_name, fname, if (host_is_js) "" else "_ = ", oi.disch_host, oi.disch_event, HS.argRec(allocator, host_target, HS.recField(allocator, host_target, oi.disch_param, "__koru_old_ptr")), store_name, fname }) catch unreachable
                     else if (field_char_caps[i]) |n|
                         std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = @import(\"std\").mem.zeroes([{d}]u8); const __koru_wl = @min(value.len, {d}); @memcpy(__koru_store_{s}.{s}[__koru_r][0..__koru_wl], value[0..__koru_wl]); ", .{ store_name, fname, n, n, store_name, fname }) catch unreachable
                     else
                         std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = value; ", .{ store_name, fname }) catch unreachable;
+                    // `std/indexes:store` — same key maintenance as the
+                    // bundled apply arm (an owned-containing store still
+                    // writes its scalar columns through this targeted path).
+                    if (index_col != null and i == index_idx) {
+                        fwr = StoreIndex.writeWrap(allocator, host_is_js, store_name, index_col.?, index_col.?, fwr, "value");
+                    }
                     fatext.appendSlice(allocator, fwr) catch unreachable;
                     for (updated_arms.items, 0..) |ua, ai| {
                         const fcall = if (ua.fields.len != 0)
@@ -3685,10 +3739,17 @@
                             std.fmt.allocPrint(allocator, "const __koru_old = __koru_store_{s}.{s}[__koru_r]; ", .{ store_name, esc_fname }) catch unreachable;
                         ab.appendSlice(allocator, eoldr) catch unreachable;
                     }
-                    const ewr = if (field_char_caps[i]) |n|
+                    var ewr: []const u8 = if (field_char_caps[i]) |n|
                         std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = @import(\"std\").mem.zeroes([{d}]u8); const __koru_wl = @min(value_{d}.len, {d}); @memcpy(__koru_store_{s}.{s}[__koru_r][0..__koru_wl], value_{d}[0..__koru_wl]); ", .{ store_name, esc_fname, n, i, n, store_name, esc_fname, i }) catch unreachable
                     else
                         std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = value_{d}; ", .{ store_name, esc_fname, i }) catch unreachable;
+                    // `std/indexes:store` — one write text, composed into the
+                    // masked unit and the specialisations alike, so the key
+                    // maintenance rides the shared col_arm verbatim.
+                    if (index_col != null and i == index_idx) {
+                        const ev = std.fmt.allocPrint(allocator, "value_{d}", .{i}) catch unreachable;
+                        ewr = StoreIndex.writeWrap(allocator, host_is_js, store_name, index_col.?, esc_fname, ewr, ev);
+                    }
                     ab.appendSlice(allocator, ewr) catch unreachable;
                     for (updated_arms.items, 0..) |ua, ai| {
                         const ecall = if (ua.fields.len != 0)
@@ -4519,6 +4580,15 @@
                 "+%= 1";
             const tail = std.fmt.allocPrint(allocator, "}}\n__koru_store_{s}.len = __koru_last;\n__koru_store_{s}.__koru_hslot_gen[__koru_gone_slot] {s};\n__koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_gone_slot;\n__koru_store_{s}.__koru_hslot_free_len += 1;\n", .{ store_name, store_name, genbump, store_name, store_name, store_name }) catch unreachable;
             tb.appendSlice(allocator, tail) catch unreachable;
+            // `std/indexes:store` — the taken row drops its own key entry
+            // (a lower live duplicate owns the entry and survives); when the
+            // holder dies the next-lowest claimant is reseated. Runs after
+            // the swap so the rescan reads settled columns — which is also
+            // why the MOVED row needs no fixup here: the map holds its
+            // handle, and the handle did not change.
+            if (index_col) |icol| {
+                tb.appendSlice(allocator, StoreIndex.takeReseat(allocator, host_is_js, store_name, icol, icol)) catch unreachable;
+            }
             if (item_identity_owned) {
                 const o = std.fmt.allocPrint(allocator, "return {s};", .{HS.branchOne(allocator, host_target, "item", std.fmt.allocPrint(allocator, "__koru_out_{s}", .{field_names[0]}) catch unreachable)}) catch unreachable;
                 tb.appendSlice(allocator, o) catch unreachable;
@@ -4946,15 +5016,17 @@
             }
         }
 
-        // ---- teardown unit (owned-string stores only, 690_053) ----
+        // ---- teardown unit (owned-column and indexed stores) ----
         // The store OWNS its live elements; at program end each still-live
         // owned pointer is discharged through the canonical discharger's
         // handler (std/string:free — the same call auto-discharge inserts,
-        // 690_036's cross-module resolution done at generation time). The
-        // teardown FLOW is appended LAST, and appended items land at the END
-        // of program.items (transform_pass_runner), so it runs after every
-        // user flow — before the emitter's leak check.
-        if (has_owned) {
+        // 690_036's cross-module resolution done at generation time) — and a
+        // declared index's map backing is freed, which is what keeps the
+        // end-of-run allocation audit quiet on an all-scalar indexed store
+        // (690_327). The teardown FLOW is appended LAST, and appended items
+        // land at the END of program.items (transform_pass_runner), so it
+        // runs after every user flow — before the emitter's leak check.
+        if (has_owned or index_col != null) {
             const td_name = std.fmt.allocPrint(allocator, "__store_teardown_{s}", .{store_name}) catch unreachable;
             // Arity picks the payload shape. Same predicate as `| item`
             // (store.kz:2653): the store's ONLY column, and it owned.
@@ -5018,8 +5090,13 @@
                 .module = allocator.dupe(u8, flow.module) catch unreachable,
             } }) catch unreachable;
             var td = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
-            const td_head = HS.loopHead(allocator, host_target, "__koru_i", std.fmt.allocPrint(allocator, "__koru_store_{s}.len", .{store_name}) catch unreachable);
-            td.appendSlice(allocator, td_head) catch unreachable;
+            // The row drain exists only when the store owns something; an
+            // index-only store's teardown is the map deinit alone — a bare
+            // `for (0..len) |__koru_i| {}` is an unused-capture error in Zig.
+            if (has_owned) {
+                const td_head = HS.loopHead(allocator, host_target, "__koru_i", std.fmt.allocPrint(allocator, "__koru_store_{s}.len", .{store_name}) catch unreachable);
+                td.appendSlice(allocator, td_head) catch unreachable;
+            }
             if (drain_required) {
                 // Fire the user's `! discharge` handler with the row record —
                 // the 400_105 producer move (`make(r)`), record payload per
@@ -5052,7 +5129,16 @@
                     td.appendSlice(allocator, fr) catch unreachable;
                 }
             }
-            const td_tail = std.fmt.allocPrint(allocator, "}}\n__koru_store_{s}.len = 0;\nreturn;", .{store_name}) catch unreachable;
+            // A declared index frees its map backing here — the handle-keyed
+            // entries outlive no row past this point anyway. The loop's
+            // close belongs to the row drain (emitted only under has_owned).
+            const td_close: []const u8 = if (has_owned) "}\n" else "";
+            const td_tail = if (index_col) |icol| (if (host_is_js)
+                std.fmt.allocPrint(allocator, "{s}__koru_store_{s}.__index_{s}.clear();\n__koru_store_{s}.len = 0;\nreturn;", .{ td_close, store_name, icol, store_name }) catch unreachable
+            else
+                std.fmt.allocPrint(allocator, "{s}__koru_store_{s}.__index_{s}.deinit(koru_allocator());\n__koru_store_{s}.len = 0;\nreturn;", .{ td_close, store_name, icol, store_name }) catch unreachable)
+            else
+                std.fmt.allocPrint(allocator, "{s}__koru_store_{s}.len = 0;\nreturn;", .{ td_close, store_name }) catch unreachable;
             td.appendSlice(allocator, td_tail) catch unreachable;
             appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
                 .path = H.mkPathH(allocator, home_ns, td_name),

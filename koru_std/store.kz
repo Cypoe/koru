@@ -1277,8 +1277,7 @@ fn storeIdentChar(ch: u8) bool {
 }
 
 fn storeStripQuotes(n: []const u8) []const u8 {
-    if (n.len >= 2 and n[0] == '"') return n[1 .. n.len - 1];
-    return n;
+    return if (n.len >= 2 and n[0] == '"') n[1 .. n.len - 1] else n;
 }
 
 /// Every store name visible in the program — untransformed `new` sites plus the
@@ -1688,3 +1687,4 @@ fn storeLowerText(
 ~part explain
 ~part sites
 ~part leaf
+~part index
