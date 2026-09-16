@@ -1,0 +1,11 @@
+name: repudiation-resolved
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a belief previously repudiated (or held as a wart/gap) turns out
+  to have been a stale pin on a shipped mechanism — the machinery was
+  green, the evidence was rotten. df72d80eb: event globbing was
+  "never green" only because its tests predated the SiteResult ABI;
+  the resolver/matcher had shipped whole. Distinct from a real
+  repudiation: nothing about the design was wrong — the *record* was.
