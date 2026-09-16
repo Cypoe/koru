@@ -3,7 +3,7 @@
 // log.warning("...") should fail because "warning" is not a valid level.
 // The transform should:
 // 1. Match log.* pattern
-// 2. Extract suffix "warning"
+// 2. Extract suffix "warning" from the invocation's event_name
 // 3. Check against valid levels: ["error", "warn", "info", "debug"]
 // 4. Find closest match via Levenshtein: "warn"
 // 5. Emit compile error: "Unknown log level 'warning', did you mean 'warn'?"
@@ -12,14 +12,16 @@
     event_name: string,
     item: *const std/compiler:Item,
     program: *const std/compiler:Program,
-}
-| transformed *const Program
-| compile-error string
+    reporter: *std/compiler:ErrorReporter,
+} -> SiteResult
 
 ~proc log.*|zig {
     const std = @import("std");
+    const ast = @import("ast");
     const allocator = std.heap.page_allocator;
     const valid_levels = [_][]const u8{ "error", "warn", "info", "debug" };
+
+    const flow = if (item.* == .flow) &item.flow else return .{};
 
     // Levenshtein edit distance - computes minimum edits to transform a into b
     const levenshtein = struct {
@@ -82,36 +84,25 @@
             }
         }
 
-        const msg = std.fmt.allocPrint(
-            allocator,
+        reporter.addErrorAtLocation(
+            .KORU122,
+            flow.location,
             "Unknown log level '{s}', did you mean '{s}'?",
-            .{ level, closest }
-        ) catch return .{ .compile_error = "allocation failed" };
-
-        return .{ .compile_error = msg };
+            .{ level, closest },
+        ) catch {};
+        return .{};
     }
 
     // Valid level - emit logging code (just replace with comment for now)
-    const ast = @import("ast");
-    const ast_functional = @import("ast_functional");
-
-    const flow = if (item.* == .flow) &item.flow else return .{ .transformed = program };
-
     const inline_code_item = ast.Item{
         .inline_code = .{
             .code = "// valid log level",
             .location = flow.location,
-            .module = allocator.dupe(u8, flow.module) catch return .{ .transformed = program },
+            .module = allocator.dupe(u8, flow.module) catch return .{},
         },
     };
 
-    const maybe_new_program = ast_functional.replaceFlowRecursive(allocator, program, flow, inline_code_item) catch return .{ .transformed = program };
-    if (maybe_new_program) |new_program| {
-        const result = allocator.create(ast.Program) catch return .{ .transformed = program };
-        result.* = new_program;
-        return .{ .transformed = result };
-    }
-    return .{ .transformed = program };
+    return .{ .replacement = inline_code_item };
 }
 
 // This should trigger the Levenshtein suggestion
