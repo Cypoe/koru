@@ -53,11 +53,27 @@ pinned by 440_024. The remaining asymmetry is deliberately loud: a guard
 that cannot be judged is `GuardUnjudgable`, a dispatch-error, never a
 silent skip.
 
+The third leg is that admission's edge must be *derived*, not paraphrased.
+`parsewire.kz`'s header long declared "an unknown field on a known verb is
+`validation-error` at dispatch" — a refusal nobody had built, silently
+tolerated on every turn shape (bridge-mirror 2026-09-12-field-membership).
+The wall that now exists does not carry its own copy of the vocabulary:
+`validateFlow` walks the parsed flow and judges each invocation's named
+fields against the scope's own `get_event_input` table — the same registry
+data the prompt text and the dispatcher are emitted from. A verb that
+gains a field gains the allowance in the same breath; the enforcement
+cannot drift from the declaration because there is no second place the
+declaration lives. Pinned by 440_025 — foreign field refused by name on
+the head call, a mid-turn step, and a nested arm-body call; a name
+outside the vocabulary is still `event-denied`, never a field complaint.
+
 ## Open questions
 
-- Per-field checking at parse time (naming the verb's real fields in the
-  refusal) is available from the same comptime scope table — deferred, not
-  rejected.
+- Field-membership landed at pre-execution validation, not in the wire
+  gate — `wireValidate` is scope-blind by construction, so the check lives
+  where the scope's vocabulary is reachable. Still unjudged: argument
+  *types* (the wire carries only strings; coercion failures surface from
+  the dispatcher, not the gate).
 - `430_055` pins the same prose-refusal against the *general* interpreter;
   whether `flow_parser` itself tightens is a compiler-core question, Lars's
   call.

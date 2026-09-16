@@ -1,0 +1,9 @@
+echo: ok
+t1 result
+t2 refused unknown field 'bogus' on 'echo'
+echo: a
+t3 partial step 1/2 result: {"branch":""}
+step 2/2 validation-error: unknown field 'stray' on 'echo'
+
+t4 refused unknown field 'foreign' on 'echo'
+t5 denied notaverb

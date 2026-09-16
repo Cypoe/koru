@@ -30,7 +30,7 @@ koru_std/compiler_visitor.kz	505
 koru_std/compiler.ccp.kz	58
 koru_std/compiler.control.kz	31
 koru_std/compiler.flags.kz	6
-koru_std/compiler.kz	3136
+koru_std/compiler.kz	3135
 koru_std/compiler.paths.kz	33
 koru_std/constructor.kz	305
 koru_std/control.kz	551
@@ -58,11 +58,12 @@ koru_std/index.kz	7
 koru_std/inter.kz	176
 koru_std/interpreter.define.kz	152
 koru_std/interpreter.guards.kz	63
-koru_std/interpreter.kz	1202
+koru_std/interpreter.kz	1164
 koru_std/interpreter.names.kz	18
 koru_std/interpreter.parse.kz	52
 koru_std/interpreter.run.kz	1659
 koru_std/interpreter.select.kz	42
+koru_std/interpreter.validate.kz	113
 koru_std/invariants.kz	181
 koru_std/io_registry.kz	30
 koru_std/io.jsprec.kz	48
@@ -90,7 +91,7 @@ koru_std/package.kz	163
 koru_std/parser.kz	2060
 koru_std/profiler.kz	283
 koru_std/proto.kz	593
-koru_std/pump.explain.kz	303
+koru_std/pump.explain.kz	301
 koru_std/pump.kz	833
 koru_std/pump.messages.kz	37
 koru_std/pump.synth.kz	59
@@ -111,7 +112,7 @@ koru_std/set.kz	96
 koru_std/simple.kz	7
 koru_std/store.clear.kz	105
 koru_std/store.default.kz	79
-koru_std/store.explain.kz	241
+koru_std/store.explain.kz	104
 koru_std/store.insert.kz	482
 koru_std/store.kz	1690
 koru_std/store.new.kz	6436

@@ -35,7 +35,7 @@
         if (std.mem.eql(u8, name, scope_info.name)) {
             const events = scope_info.events_fn.?();
             for (events) |event_name| {
-                const input = if (scope_info.input_fn) |f| f(event_name) else &.{};
+                const input = if (scope_info.input_fn) |f| f(event_name) orelse &.{} else &.{};
                 // Callable NOW iff every `!type` phantom is among the held
                 // resource types.
                 var callable = true;

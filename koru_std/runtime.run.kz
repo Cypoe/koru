@@ -41,7 +41,7 @@
                 .fail_fast = fail_fast,
                 .scope_name = scope,  // Pass actual scope name for handle isolation
                 .auto_discharge = auto_discharge,
-                .defined = defined,
+                .defined = defined, .input_fn = s.input_fn,
                 .lenient = lenient,
             });
             switch (result) {
@@ -167,7 +167,7 @@
                 .fail_fast = fail_fast,
                 .scope_name = scope,
                 .auto_discharge = auto_discharge,
-                .lenient = lenient,
+                .lenient = lenient, .input_fn = s.input_fn,
             });
             switch (result) {
                 .unhandled_branch => |u| return .{ .unhandled_branch = .{ .branch = u.branch, .payload = u.payload, .handles = u.handles } },

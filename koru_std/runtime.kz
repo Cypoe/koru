@@ -1314,16 +1314,16 @@ const ast_reg = @import("ast");
     code.appendSlice(allocator, "_event_names;\n") catch unreachable;
     code.appendSlice(allocator, I ++ "}\n\n") catch unreachable;
 
-    // Generate input-field lookup - returns an event's argument vocabulary.
+    // Generate input-field lookup - an event's argument vocabulary (null = not this scope's verb).
     code.appendSlice(allocator, I ++ "pub fn get_event_input_") catch unreachable;
     code.appendSlice(allocator, scope_ident) catch unreachable;
-    code.appendSlice(allocator, "(__koru_event_name: []const u8) []const koru_std.koru_runtime.InputFieldSpec {\n") catch unreachable;
+    code.appendSlice(allocator, "(__koru_event_name: []const u8) ?[]const koru_std.koru_runtime.InputFieldSpec {\n") catch unreachable;
     code.appendSlice(allocator, I ++ "    inline for (scope_events_") catch unreachable;
     code.appendSlice(allocator, scope_ident) catch unreachable;
     code.appendSlice(allocator, ") |__koru_ev| {\n") catch unreachable;
     code.appendSlice(allocator, I ++ "        if (__koru_dispatcher_std.mem.eql(u8, __koru_event_name, __koru_ev.name)) return __koru_ev.input_fields;\n") catch unreachable;
     code.appendSlice(allocator, I ++ "    }\n") catch unreachable;
-    code.appendSlice(allocator, I ++ "    return &[_]koru_std.koru_runtime.InputFieldSpec{};\n") catch unreachable;
+    code.appendSlice(allocator, I ++ "    return null;\n") catch unreachable;
     code.appendSlice(allocator, I ++ "}\n\n") catch unreachable;
 
     code.appendSlice(allocator, I ++ "pub const ") catch unreachable;
@@ -1552,8 +1552,9 @@ pub const ScopeDescriptor = struct {
 pub const BranchesLookupFn = *const fn([]const u8) []const BranchSpec;
 // Event-name enumeration type — the scope's whole vocabulary, order-preserving
 pub const EventsLookupFn = *const fn() []const []const u8;
-// Input-field lookup type — an event's argument vocabulary
-pub const InputLookupFn = *const fn([]const u8) []const InputFieldSpec;
+// Input-field lookup type — an event's argument vocabulary; null = the name
+// is not this scope's verb (vocabulary membership answers first).
+pub const InputLookupFn = *const fn([]const u8) ?[]const InputFieldSpec;
 
 pub const ScopeRuntime = struct {
     name: []const u8,
@@ -1775,8 +1776,7 @@ fn buildScopeTable() []const ScopeRuntime {
 }
 | not-found
 
-// Look up scope dispatcher by name
-// Dispatchers are generated into main_module with naming convention: dispatch_<scope>
+// Look up scope dispatcher by name — generated beside the register as dispatch_<scope>
 ~proc get-scope|zig {
     inline for (comptime buildScopeTable()) |scope_info| {
         if (std.mem.eql(u8, name, scope_info.name)) {
@@ -1837,7 +1837,7 @@ fn buildScopeTable() []const ScopeRuntime {
                 if (out.items.len > 0) out.append(allocator, '\n') catch unreachable;
                 out.appendSlice(allocator, event_name) catch unreachable;
                 out.append(allocator, '(') catch unreachable;
-                const input = if (scope_info.input_fn) |f| f(event_name) else &.{};
+                const input = if (scope_info.input_fn) |f| f(event_name) orelse &.{} else &.{};
                 for (input, 0..) |field, i| {
                     if (i > 0) out.appendSlice(allocator, ", ") catch unreachable;
                     out.appendSlice(allocator, field.name) catch unreachable;

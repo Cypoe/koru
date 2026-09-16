@@ -22,7 +22,7 @@
     fail_fast: bool = true,
     scope_name: string = "default",  // Scope name for handle isolation
     auto_discharge: bool = true,  // Auto-discharge undischarged handles at end
-    defined: ?*DefinedFlows = null,  // Runtime-defined flows (the REPL define)
+    defined: ?*DefinedFlows = null, input_fn: ?InputLookupFn = null,  // REPL define; event -> declared input fields
     lenient: bool = false  // 430_056: under-handling hands back `unhandled-branch` instead of refusing
 }
 | result { value: Value, used: u64, handles: u32 }
@@ -47,7 +47,7 @@
     fail_fast: bool = true,
     scope_name: string = "default",  // Scope name for handle isolation
     auto_discharge: bool = true,  // Auto-discharge undischarged handles at end
-    defined: ?*DefinedFlows = null,  // Runtime-defined flows (the REPL define)
+    defined: ?*DefinedFlows = null, input_fn: ?InputLookupFn = null,  // REPL define; event -> declared input fields
     lenient: bool = false  // 430_056: under-handling hands back `unhandled-branch`
 }
 | result { value: Value, used: u64, handles: u32 }
@@ -72,7 +72,7 @@
     handle_pool: ?*HandlePool,  // Optional external pool (for bridges)
     scope_name: string = "default",  // Scope name for handle isolation
     auto_discharge: bool = true,  // Auto-discharge undischarged handles at end
-    defined: ?*DefinedFlows = null,  // Runtime-defined flows (the REPL define)
+    defined: ?*DefinedFlows = null, input_fn: ?InputLookupFn = null,  // REPL define; event -> declared input fields
     lenient: bool = false  // 430_056: under-handling hands back `unhandled-branch`
 }
 | result { value: Value, used: u64, handles: u32 }
@@ -149,7 +149,7 @@
     }
 
     // Validation pass
-    if (validateFlow(flow, allocator)) |validation_err| {
+    if (validateFlow(flow, allocator, input_fn, defined)) |validation_err| {
         return .{ .validation_error = std.heap.page_allocator.dupe(u8, validation_err.message) catch "validation error" };
     }
 
@@ -313,7 +313,7 @@
         return .{ .parse_error = .{ .message = "No flow found in source", .line = 0, .column = 0 }};
     };
 
-    if (validateFlow(cached_flow, allocator)) |validation_err| {
+    if (validateFlow(cached_flow, allocator, input_fn, defined)) |validation_err| {
         return .{ .validation_error = std.heap.page_allocator.dupe(u8, validation_err.message) catch "validation error" };
     }
 
@@ -1545,7 +1545,7 @@ fn executeFlow(
     const allocator = InterpreterThreadState.prepare();
 
     // Validation pass - check for errors BEFORE execution
-    if (validateFlow(flow, allocator)) |validation_err| {
+    if (validateFlow(flow, allocator, input_fn, defined)) |validation_err| {
         return .{ .validation_error = validation_err.message };
     }
 
