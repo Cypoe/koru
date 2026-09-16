@@ -20,18 +20,15 @@
 // fields only, static init datasets only — no store kernels, no `step`
 // (beat semantics unruled), no `pairwise`/`reduce` (the fpga-legal trellis
 // names those verdicts). Fields the body never mentions pass through the
-// stage untouched — probes/fpga_self's `mode` is the pin. The SEMANTIC PIN
-// the probe's hand sketch carries still stands: `*= 2` on [7:0] truncates
-// mod 256; a clamp-claimed facet wants saturation instead — which the atoms
-// should force is the width-semantics question, unruled here.
+// stage untouched — probes/fpga_self's `mode` is the pin. Truncate-vs-
+// saturate is the unruled width question; the testbench computes the map
+// wide and prints a `note:` on divergence rather than guess a ruling.
 
-// `std`/`koru_std`/`kast` ride the module's shared namespace — `kast` is
-// kernel.scan.kz's `ast` import (a module-scope `const ast` would collide
-// with the proc bodies' locals under Zig's no-shadowing rule).
+// `kast` is kernel.scan.kz's `ast` import — module-scope, shared.
 
 // A `std/proto`-door invocation naming `name`? Local copy of refine's own
-// test — kept here so this part never reaches into koru_refine's internals
-// except through the one guarded `metFields` fold call below.
+// test — this part reaches koru_refine only through the guarded
+// `metFields` fold call below.
 fn fpgaIsProtoDoor(inv: *const kast.Invocation) bool {
     if (inv.path.segments.len != 1) return false;
     const verb = inv.path.segments[0];
@@ -304,6 +301,8 @@ fn emitFpgaSelf(
         w(&tb, alloc, "    logic [{d}:0] out_{s};\n", .{ widths[sfi] - 1, sf.name });
         w(&tb, alloc, "    logic [{d}:0] exp_{s};\n", .{ widths[sfi] - 1, sf.name });
     }
+    // The gate slices expw_* (host-width map) to the port; wide-vs-port divergence prints `note:`, never a fail.
+    w(&tb, alloc, "    logic [63:0] expw_{s};\n", .{shape_fields[mapped].name});
     w(&tb, alloc, "\n    {s} dut (.*);\n\n    always #5 clk = ~clk;\n\n    int errors = 0;\n\n", .{sym});
     // check(): every port against its expected reg — the transformed field
     // against the map applied to the last-driven input, the rest against the
@@ -336,7 +335,8 @@ fn emitFpgaSelf(
     for (shape_fields) |sf| {
         w(&tb, alloc, ", out_{s}", .{sf.name});
     }
-    w(&tb, alloc, ");\n        end\n    endtask\n\n    initial begin\n        @(negedge clk); rst_n = 1;\n", .{});
+    w(&tb, alloc, ");\n            if (expw_{s} != out_{s}) $display(\"note: {s} truncated %0d -> %0d ({d}-bit port)\", expw_{s}, out_{s});\n", .{ shape_fields[mapped].name, shape_fields[mapped].name, shape_fields[mapped].name, widths[mapped], shape_fields[mapped].name, shape_fields[mapped].name });
+    w(&tb, alloc, "        end\n    endtask\n\n    initial begin\n        @(negedge clk); rst_n = 1;\n", .{});
 
     for (elems, 0..) |ev, ei| {
         w(&tb, alloc, "        // beat {d}: drive element {d}\n        @(negedge clk);", .{ ei + 1, ei });
@@ -348,7 +348,7 @@ fn emitFpgaSelf(
         w(&tb, alloc, "\n        ", .{});
         for (shape_fields, 0..) |sf, sfi| {
             if (sfi == mapped) {
-                w(&tb, alloc, "exp_{s} = in_{s} {c} {s}{d}'d{d};", .{ sf.name, sf.name, sv_op, if (lit < 0) "-" else "", widths[sfi], @abs(lit) });
+                w(&tb, alloc, "expw_{s} = in_{s} {c} {s}64'd{d}; exp_{s} = expw_{s}[{d}:0];", .{ sf.name, sf.name, sv_op, if (lit < 0) "-" else "", @abs(lit), sf.name, sf.name, widths[sfi] - 1 });
             } else {
                 w(&tb, alloc, "exp_{s} = in_{s};", .{ sf.name, sf.name });
             }
