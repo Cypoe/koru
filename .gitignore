@@ -274,6 +274,15 @@ probes/**/backend_output_emitted.zig
 probes/**/program.ast.json
 probes/**/.zig-cache/
 probes/**/zig-out/
+# ...and what the current compiler actually writes beside them: the env dump is
+# JSON, and the FPGA probes leave generated SystemVerilog named by content hash.
+# The hand-written benches beside them (probes/fpga_self/sample_self.sv,
+# sample_self_tb.sv) are sources and stay tracked, so the deny is by generated
+# SUFFIX, never by extension.
+probes/**/compiler_env.json
+probes/**/*.fpga.sv
+probes/**/*.fpga_tb.sv
+probes/**/tb_sim
 
 # Python bytecode — scripts/js-sweep.py etc.; only invariants/checks/ was denied before
 **/__pycache__/
