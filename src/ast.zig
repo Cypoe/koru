@@ -573,6 +573,15 @@ pub const FacetField = struct {
     hi: ?FacetBound = null,
     eq: ?FacetBound = null,
     clamp: ?FacetClamp = null,
+    /// A disjunction's reachable values — ascending, deduplicated. The
+    /// singleton case is canonicalized into `eq`, so a landed facet carries
+    /// either an `eq` or two-or-more `alts`, never both.
+    alts: ?[]const i64 = null,
+    /// The alternative marked `*`: the value a decode boundary falls back to
+    /// when nothing else decides. Meaningful only while `alts` is set, and
+    /// never part of the predicate — a boundary that JUDGES a value tests
+    /// membership; only a boundary that SUPPLIES one reads the default.
+    alt_default: ?i64 = null,
 
     pub fn deinit(self: *FacetField, allocator: std.mem.Allocator) void {
         allocator.free(self.name);

@@ -85,6 +85,9 @@ fn refineDefault(
 
     for (meet.items) |*f| {
         if (legalBase(allocator, reporter, flow, type_name, program, want.home, f)) |r| return r;
+        if (canonAlts(allocator, f)) |pair| {
+            return .{ .replacement = ast.refusal(allocator, reporter, .KORU205, flow.location, flow.module, "std/refine({s}): field '{s}' refines to nothing — '{s}' and '{s}' cannot both hold", .{ type_name, f.name, pair[0], pair[1] }) };
+        }
         if (emptyField(f)) |pair| {
             return .{ .replacement = ast.refusal(allocator, reporter, .KORU205, flow.location, flow.module, "std/refine({s}): field '{s}' refines to nothing — '{s}' and '{s}' cannot both hold", .{ type_name, f.name, pair[0], pair[1] }) };
         }
@@ -119,6 +122,10 @@ fn refineDefault(
                 out.appendSlice(allocator, " & ") catch unreachable;
                 out.appendSlice(allocator, hi.src) catch unreachable;
             }
+        }
+        if (f.alts) |_| {
+            out.appendSlice(allocator, " & ") catch unreachable;
+            out.appendSlice(allocator, f.alts_src orelse "") catch unreachable;
         }
         if (f.clamp) |c| {
             out.appendSlice(allocator, " & ") catch unreachable;
@@ -155,6 +162,8 @@ fn refineDefault(
             .hi = if (f.hi) |b| .{ .value = b.value, .exclusive = b.exclusive } else null,
             .eq = if (f.eq) |b| .{ .value = b.value, .exclusive = b.exclusive } else null,
             .clamp = if (f.clamp) |c| .{ .lo = c.lo, .hi = c.hi } else null,
+            .alts = if (f.alts) |set| (allocator.dupe(i64, set) catch unreachable) else null,
+            .alt_default = f.alt_default,
         };
     }
     return .{ .replacement = ast.Item{ .facet_decl = ast.FacetDecl{

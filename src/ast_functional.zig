@@ -3491,6 +3491,16 @@ pub const facets = struct {
             std.fmt.allocPrint(alloc, "@min(@max({s}, {d}), {d})", .{ name, c.lo, c.hi }) catch unreachable;
     }
 
+    /// True when a field carries a term a boundary can JUDGE — the question
+    /// `predicate` answers, asked without building the text. A clamp alone is
+    /// not one: it rewrites the value, it does not rule on it. Every site
+    /// asks here, so a new atom kind cannot reach one boundary and miss
+    /// another (`std/store`'s own prelude asks it too — finding that it did
+    /// not is what made this a function).
+    pub fn hasTerms(ff: anytype) bool {
+        return ff.lo != null or ff.hi != null or ff.eq != null or ff.alts != null;
+    }
+
     /// The judgeable predicate for one met field — null when the field
     /// carries no term a boundary can test. `expr` is what to test, already
     /// rendered for the host and already normalized by `normExprFor`.
@@ -3501,16 +3511,31 @@ pub const facets = struct {
     /// atom kind cannot reach one boundary and miss another, and the two
     /// enforcers cannot disagree about what a field's facet says.
     pub fn predicate(alloc: std.mem.Allocator, ff: anytype, expr: []const u8, js: bool) ?[]const u8 {
-        if (ff.lo == null and ff.hi == null and ff.eq == null) return null;
+        const alts: ?[]const i64 = ff.alts;
+        const has_alts = alts != null and alts.?.len > 0;
+        if (!hasTerms(ff)) return null;
+        const conj = if (js) " && " else " and ";
         var cond = std.ArrayList(u8).initCapacity(alloc, 64) catch unreachable;
+        if (has_alts) {
+            // Membership: the met set is the reachable values for this field,
+            // so a boundary admits exactly its members.
+            cond.appendSlice(alloc, "(") catch unreachable;
+            for (alts.?, 0..) |v, i| {
+                if (i > 0) cond.appendSlice(alloc, if (js) " || " else " or ") catch unreachable;
+                cond.appendSlice(alloc, std.fmt.allocPrint(alloc, "{s} == {d}", .{ expr, v }) catch unreachable) catch unreachable;
+            }
+            cond.appendSlice(alloc, ")") catch unreachable;
+        }
         if (ff.eq) |b| {
+            if (cond.items.len > 0) cond.appendSlice(alloc, conj) catch unreachable;
             cond.appendSlice(alloc, std.fmt.allocPrint(alloc, "{s} == {d}", .{ expr, b.value }) catch unreachable) catch unreachable;
         } else {
             if (ff.lo) |b| {
+                if (cond.items.len > 0) cond.appendSlice(alloc, conj) catch unreachable;
                 cond.appendSlice(alloc, std.fmt.allocPrint(alloc, "{s} {s} {d}", .{ expr, if (b.exclusive) ">" else ">=", b.value }) catch unreachable) catch unreachable;
             }
             if (ff.hi) |b| {
-                if (cond.items.len > 0) cond.appendSlice(alloc, if (js) " && " else " and ") catch unreachable;
+                if (cond.items.len > 0) cond.appendSlice(alloc, conj) catch unreachable;
                 cond.appendSlice(alloc, std.fmt.allocPrint(alloc, "{s} {s} {d}", .{ expr, if (b.exclusive) "<" else "<=", b.value }) catch unreachable) catch unreachable;
             }
         }

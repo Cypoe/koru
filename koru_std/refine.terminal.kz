@@ -75,7 +75,7 @@ fn terminalScalar(alloc: std.mem.Allocator, prog: *const ast.Program, home: []co
 // integer scalar spelled directly (`i64`) or through a terminal
 // (`Port` → `i64` via `std/proto:i64(Port)`).
 fn legalBase(alloc: std.mem.Allocator, rep: *koru_std.koru_compiler.ErrorReporter, fl: *const ast.Flow, entry_name: []const u8, prog: *const ast.Program, home: []const u8, f: *const Field) ?SiteResult {
-    if (f.lo == null and f.hi == null and f.eq == null and f.clamp == null) return null;
+    if (!carriesTerms(f)) return null;
     const scalar = terminalScalar(alloc, prog, home, f.base) orelse f.base;
     if (!af.isIntScalar(scalar)) {
         return .{ .replacement = ast.refusal(alloc, rep, .KORU205, fl.location, fl.module, "std/refine({s}): field '{s}' constrains base '{s}' — bounds and clamps refine integer scalars only", .{ entry_name, f.name, f.base }) };

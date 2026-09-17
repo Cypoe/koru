@@ -91,6 +91,31 @@ fn walkRefine(alloc: std.mem.Allocator, rep: ?*koru_std.koru_compiler.ErrorRepor
                             f.clamp = .{ .lo = c.lo, .hi = c.hi, .src = csrc };
                         }
                     }
+                    if (ff.alts) |set| {
+                        const src = altsSrc(alloc, set, ff.alt_default);
+                        if (f.alts) |prev| {
+                            var keep = std.ArrayList(i64).initCapacity(alloc, set.len) catch unreachable;
+                            for (set) |v| {
+                                if (containsInt(prev, v)) keep.append(alloc, v) catch unreachable;
+                            }
+                            if (keep.items.len == 0) {
+                                f.alts_conflict = .{ src, f.alts_src orelse src };
+                            }
+                            f.alts = keep.toOwnedSlice(alloc) catch unreachable;
+                            if (f.alts.?.len > 0) f.alts_src = altsSrc(alloc, f.alts.?, f.alt_default);
+                        } else {
+                            f.alts = alloc.dupe(i64, set) catch unreachable;
+                            f.alts_src = src;
+                            f.alt_default = ff.alt_default;
+                        }
+                        if (ff.alt_default) |d| {
+                            if (f.alt_default) |existing| {
+                                if (existing != d) f.alts_conflict = .{ starSrc(alloc, d), starSrc(alloc, existing) };
+                            } else {
+                                f.alt_default = d;
+                            }
+                        }
+                    }
                 }
             },
             .module_decl => |module| {

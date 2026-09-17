@@ -2747,7 +2747,7 @@
                 const met = koru_std.koru_refine.metFields(allocator, program, pv.scope, pv.proto, null);
                 for (met) |*mf| {
                     if (!std.mem.eql(u8, mf.name, pv.field)) continue;
-                    if (mf.lo == null and mf.hi == null and mf.eq == null and mf.clamp == null) break;
+                    if (!ast_functional.facets.hasTerms(mf) and mf.clamp == null) break;
                     const pexpr = if (host_is_js) pv.col else (codegen_utils_store.escapeZigIdentifier(allocator, pv.col) catch pv.col);
                     const vexpr = ast_functional.facets.normExprFor(allocator, mf, pexpr, host_is_js);
                     for (field_names[0..user_field_count], 0..) |fname, fci| {

@@ -397,6 +397,20 @@ pub const AstSerializer = struct {
                 defer self.allocator.free(s);
                 try self.write(s);
             }
+            if (field.alts) |set| {
+                try self.write(", .alts = &[_]i64{");
+                for (set) |v| {
+                    const s = try std.fmt.allocPrint(self.allocator, "{d}, ", .{v});
+                    defer self.allocator.free(s);
+                    try self.write(s);
+                }
+                try self.write("}");
+            }
+            if (field.alt_default) |d| {
+                const s = try std.fmt.allocPrint(self.allocator, ", .alt_default = {d}", .{d});
+                defer self.allocator.free(s);
+                try self.write(s);
+            }
             try self.write(" }, ");
         }
         try self.write("}, .location = ");
@@ -1999,6 +2013,21 @@ pub const AstSerializer = struct {
             }
             if (field.clamp) |c| {
                 const s = try std.fmt.allocPrint(self.allocator, ", \"clamp\": {{ \"lo\": {d}, \"hi\": {d} }}", .{ c.lo, c.hi });
+                defer self.allocator.free(s);
+                try self.write(s);
+            }
+            if (field.alts) |set| {
+                try self.write(", \"alts\": [");
+                for (set, 0..) |v, vi| {
+                    if (vi > 0) try self.write(", ");
+                    const s = try std.fmt.allocPrint(self.allocator, "{d}", .{v});
+                    defer self.allocator.free(s);
+                    try self.write(s);
+                }
+                try self.write("]");
+            }
+            if (field.alt_default) |d| {
+                const s = try std.fmt.allocPrint(self.allocator, ", \"alt_default\": {d}", .{d});
                 defer self.allocator.free(s);
                 try self.write(s);
             }

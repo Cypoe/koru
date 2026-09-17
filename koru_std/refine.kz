@@ -17,6 +17,7 @@ const af = @import("ast_functional");
 ~part body
 ~part fold
 ~part explain
+~part alts
 
 const Bound = struct {
     value: i64,
@@ -42,6 +43,21 @@ const Field = struct {
     // winner), so like an empty clamp intersection it is RECORDED and
     // judged by emptyField, never resolved by declaration order.
     eq_conflict: ?[2][]const u8 = null,
+    // A disjunction's values: ascending, deduplicated. Two sets meet by
+    // intersection — the same rule as everything else here — and a set that
+    // lands on one value IS that equality, which is why the canonical form
+    // is `eq` for a singleton and `alts` for two or more: one lattice
+    // element, two spellings, never both at once.
+    alts: ?[]const i64 = null,
+    // The canonical spelling of `alts` (`*1 | 2 | 3`), kept for the marker
+    // text and for naming a disagreement.
+    alts_src: ?[]const u8 = null,
+    // The value marked `*`. It is not a term any boundary judges — it is
+    // what a boundary that SUPPLIES a value falls back to, so it rides the
+    // facet and is reported, never enforced.
+    alt_default: ?i64 = null,
+    // Two disjunctions intersecting to nothing — the disagreeing pair.
+    alts_conflict: ?[2][]const u8 = null,
 };
 const ProtoField = struct { name: []const u8, base: []const u8 };
 const Op = enum { gt, ge, lt, le, eq };
@@ -198,6 +214,14 @@ fn parseInto(
             const atom = std.mem.trim(u8, seg, " \t");
             if (atom.len == 0) continue;
 
+            // A disjunction atom: a set of alternatives, at most one marked
+            // as the fallback. It meets by intersection like every other term;
+            // the grammar and the canonicalization live in the `alts` part.
+            if (isAltsAtom(atom)) {
+                if (parseAltsAtom(alloc, rep, fl, entry_name, atom, f, strict)) |r| return r;
+                continue;
+            }
+
             var op: Op = undefined;
             var digits: []const u8 = undefined;
             var op_str: []const u8 = undefined;
@@ -301,6 +325,7 @@ fn parseInto(
 fn emptyField(f: *const Field) ?[2][]const u8 {
     if (f.clamp_conflict) |pair| return pair;
     if (f.eq_conflict) |pair| return pair;
+    if (f.alts_conflict) |pair| return pair;
     if (f.clamp) |c| {
         // Stored values live in [c.lo, c.hi]; a bound no value in
         // that range can satisfy refines the field to nothing.

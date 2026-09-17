@@ -40,6 +40,10 @@ fn spellTerms(alloc: std.mem.Allocator, f: *const Field) []const u8 {
             out.appendSlice(alloc, b.src) catch unreachable;
         }
     }
+    if (f.alts) |_| {
+        out.appendSlice(alloc, " & ") catch unreachable;
+        out.appendSlice(alloc, f.alts_src orelse "") catch unreachable;
+    }
     if (f.clamp) |c| {
         out.appendSlice(alloc, " & ") catch unreachable;
         out.appendSlice(alloc, c.src) catch unreachable;
@@ -47,10 +51,18 @@ fn spellTerms(alloc: std.mem.Allocator, f: *const Field) []const u8 {
     return out.toOwnedSlice(alloc) catch unreachable;
 }
 
+// A field a consumer acts on AT ALL — a term it JUDGES, or a normalizer it
+// applies to the value on the way in. Every catalog count is this test, so
+// the number cannot disagree with the rows printed above it (`facets_enforced
+// = 0` beside a guarded field is the failure this prevents).
+fn carriesTerms(f: *const Field) bool {
+    return af.facets.hasTerms(f) or f.clamp != null;
+}
+
 // The effect the meet declares for one field — what a consumer that
 // enforces the facet will DO at its boundary.
 fn fieldEffect(f: *const Field) []const u8 {
-    const has_bounds = f.lo != null or f.hi != null or f.eq != null;
+    const has_bounds = af.facets.hasTerms(f);
     if (f.clamp != null and has_bounds) return "saturate then refuse";
     if (f.clamp != null) return "saturate";
     if (has_bounds) return "refuse";
@@ -76,7 +88,7 @@ fn fieldStatus(alloc: std.mem.Allocator, prog: *const ast.Program, home: []const
         return std.fmt.allocPrint(alloc, "refused: names no field '{s}' on the declaration", .{f.name}) catch unreachable;
     if (!std.mem.eql(u8, p.base, f.base))
         return std.fmt.allocPrint(alloc, "refused: base '{s}' but the declaration says '{s}' — a meet needs one base", .{ f.base, p.base }) catch unreachable;
-    const has_terms = f.lo != null or f.hi != null or f.eq != null or f.clamp != null;
+    const has_terms = af.facets.hasTerms(f) or f.clamp != null;
     if (has_terms) {
         const scalar = terminalScalar(alloc, prog, home, f.base) orelse f.base;
         if (!af.isIntScalar(scalar))
@@ -126,6 +138,11 @@ fn fieldStatus(alloc: std.mem.Allocator, prog: *const ast.Program, home: []const
             entries.append(allocator, .{ .property = .{ .key = "status", .value = .{ .string = "refused: no std/proto declaration — an orphan refine" } } }) catch unreachable;
         }
         for (meet.items) |*f| {
+            // The explainer reports the SAME canonical form the transform
+            // lands: filtering a set against the field's other terms happens
+            // here too, through the one helper, so the catalog cannot spell a
+            // facet the compiler would not have carried.
+            _ = canonAlts(allocator, f);
             if (fieldStatus(allocator, program, t.want.home, t.want.name, pfields.items, anchor_found, f)) |why| {
                 entries.append(allocator, .{ .note = std.fmt.allocPrint(allocator, "{s} — {s}", .{ spellField(allocator, f), why }) catch unreachable }) catch unreachable;
                 entries.append(allocator, .{ .property = .{ .key = fieldKey(allocator, f.name, "status"), .value = .{ .string = why } } }) catch unreachable;
@@ -142,6 +159,10 @@ fn fieldStatus(alloc: std.mem.Allocator, prog: *const ast.Program, home: []const
                 entries.append(allocator, .{ .property = .{ .key = fieldKey(allocator, f.name, "scalar"), .value = .{ .string = s } } }) catch unreachable;
             }
             entries.append(allocator, .{ .property = .{ .key = fieldKey(allocator, f.name, "effect"), .value = .{ .string = fieldEffect(f) } } }) catch unreachable;
+            if (f.alt_default) |d| {
+                entries.append(allocator, .{ .property = .{ .key = fieldKey(allocator, f.name, "default"), .value = .{ .integer = d } } }) catch unreachable;
+                entries.append(allocator, .{ .note = "the `*` marks the fallback a boundary that SUPPLIES a value would select — push and insert enforce membership, never the default" }) catch unreachable;
+            }
         }
         sections.append(allocator, .{ .heading = heading, .entries = entries.toOwnedSlice(allocator) catch &.{} }) catch unreachable;
     }

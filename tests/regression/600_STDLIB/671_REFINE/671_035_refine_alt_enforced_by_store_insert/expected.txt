@@ -1,0 +1,2 @@
+committed
+rejected a.mode

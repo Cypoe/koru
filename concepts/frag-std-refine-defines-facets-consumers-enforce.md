@@ -104,9 +104,9 @@ has no home left to match — the facet falls back to name-only identity,
 the proto marker reader's own rule. A typed `proto_decl` (the next
 namespace off the wire) restores home scoping.
 
-Open rungs: disjunction-with-default atoms; non-integer bases;
-enforcement at remaining boundaries (std/json decode — std/store
-insert landed 2026-09-16).
+Open rungs: non-integer bases; enforcement at remaining boundaries
+(std/json decode); a consumer for the `*` fallback (no boundary
+SUPPLIES a value yet).
 
 Pins: 671_001 (meet), 671_002 (empty meet refused), 671_003 (cross-home
 layering), 671_004 (unknown field), 671_005 (base mismatch), 671_006
@@ -238,3 +238,18 @@ byte-identical emitted output for both consumers, not by reading the
 diff. The transferable part, which is why this is a belief and not a
 changelog entry: **a "shared surface" claim is verified by counting its
 callers, never by reading the surface's doc comment.**
+
+EVOLVED 2026-09-17 (disjunction landed; 671_029–671_035): the open rung
+is closed — a field may carry a SET of alternatives, at most one marked
+`*`. It is a lattice element like the others, so it obeys the rule the
+eq fix wrote down the same day: sets MEET BY INTERSECTION (`1 | 2 | 3`
+met with `2 | 3 | 4` is `2 | 3`), and an empty intersection is the same
+loud KORU205. Two canonicalizations keep the lattice small: the field's
+other terms FILTER the set (a member the bounds exclude was never
+reachable, so what is printed is what can arrive), and a set that lands
+on one value IS that equality — `5 | 7 & >6` is `==7`. One lattice
+element, two spellings, so no consumer has to know that a singleton set
+and an equality are the same thing. The `*` fallback is this corpus's
+"declared but not enforced" case by construction: it is what a boundary
+that SUPPLIES a value would pick, so push and insert enforce membership
+while the catalog reports the fallback with its reader named.

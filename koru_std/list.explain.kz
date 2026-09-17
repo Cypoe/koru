@@ -95,7 +95,7 @@ fn collectElems(alloc: std.mem.Allocator, items: []const ast_find.Item, scope_ho
             }
             var guarded: usize = 0;
             for (fields) |*f| {
-                if (f.lo != null or f.hi != null or f.eq != null or f.clamp != null) guarded += 1;
+                if (koru_std.koru_refine.carriesTerms(f)) guarded += 1;
                 const effect = koru_std.koru_refine.fieldEffect(f);
                 entries.append(allocator, .{ .note = std.fmt.allocPrint(allocator, "{s} — push {s}", .{ koru_std.koru_refine.spellField(allocator, f), effect }) catch unreachable }) catch unreachable;
                 entries.append(allocator, .{ .property = .{ .key = std.fmt.allocPrint(allocator, "{s}.enforced", .{f.name}) catch unreachable, .value = .{ .string = effect } } }) catch unreachable;
