@@ -636,6 +636,14 @@ pub fn terminalBeforeEffect(
     );
 }
 
+/// Number agreement for a candidate list. One candidate is an instruction —
+/// `Call: tx.exec` — while several are a choice set — `Call one of: a, b`.
+/// Splice this between the verb and the colon (`"Call{s}: {s}"`) so a list of
+/// one never reads as a choice among many.
+pub fn oneOfInfix(count: usize) []const u8 {
+    return if (count == 1) "" else " one of";
+}
+
 pub fn unknownBranch(reporter: *ErrorReporter, line: usize, column: usize, branch: []const u8, event: []const u8, valid_branches: []const []const u8) !void {
     var hint_buf: [256]u8 = undefined;
     var stream = std.io.fixedBufferStream(&hint_buf);

@@ -1944,8 +1944,8 @@ pub const PhantomSemanticChecker = struct {
                     .{ display_name, display_state, state_without_bang },
                 );
             } else {
-                // One vocabulary for "candidates are known" — `Call one of:`
-                // reads fine with a single entry (330_124).
+                // Number agreement: one candidate is an instruction
+                // (`Call: finalize`), several are a choice set.
                 var options_buf: [512]u8 = undefined;
                 var fbs = std.io.fixedBufferStream(&options_buf);
                 for (disposal_events.items, 0..) |event_name, i| {
@@ -1956,8 +1956,8 @@ pub const PhantomSemanticChecker = struct {
                     .KORU030,
                     location.line,
                     location.column,
-                    "Resource '{s}' carries obligation <{s}> was not discharged. Call one of: {s}",
-                    .{ display_name, display_state, fbs.getWritten() },
+                    "Resource '{s}' carries obligation <{s}> was not discharged. Call{s}: {s}",
+                    .{ display_name, display_state, errors.oneOfInfix(disposal_events.items.len), fbs.getWritten() },
                 );
             }
             has_errors = true;
@@ -2772,10 +2772,10 @@ pub const PhantomSemanticChecker = struct {
                                 .{ display_name, display_state, state_without_bang },
                             );
                         } else {
-                            // One vocabulary for "candidates are known" —
-                            // `Call one of:` reads fine with a single entry
-                            // (330_124). Build comma-separated list of disposal
-                            // options.
+                            // Number agreement: one candidate is an
+                            // instruction (`Call: finalize`), several are a
+                            // choice set. Build comma-separated list of
+                            // disposal options.
                             var options_buf: [512]u8 = undefined;
                             var fbs = std.io.fixedBufferStream(&options_buf);
                             for (disposal_events.items, 0..) |event_name, i| {
@@ -2786,8 +2786,8 @@ pub const PhantomSemanticChecker = struct {
                                 .KORU030,
                                 location.line,
                                 location.column,
-                                "Resource '{s}' carries obligation <{s}> was not discharged. Call one of: {s}",
-                                .{ display_name, display_state, fbs.getWritten() },
+                                "Resource '{s}' carries obligation <{s}> was not discharged. Call{s}: {s}",
+                                .{ display_name, display_state, errors.oneOfInfix(disposal_events.items.len), fbs.getWritten() },
                             );
                         }
                         has_errors = true;

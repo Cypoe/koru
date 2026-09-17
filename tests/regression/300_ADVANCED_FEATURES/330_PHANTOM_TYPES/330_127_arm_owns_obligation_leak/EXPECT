@@ -1,4 +1,4 @@
 CONTAINS carries obligation <owned!> was not discharged
-CONTAINS Call one of:
+CONTAINS Call: input:drop
 ERROR_AT 37
 NOT_CONTAINS :36:

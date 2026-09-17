@@ -22,9 +22,9 @@ auto-discharge insert `finalize` (the frontier
 [[frag-obligation-enforcement-keys-off-return-binding]] leaves open) — a message
 that denies the existence of a discharger sends the author to write a second
 disposer that already exists, or to conclude the union spelling is broken. The
-message already has vocabulary for the honest case: `Call one of: …`, which is
-what the same program prints for its `opened!` obligation. So the fix is
-membership in an existing list, not new surface.
+message already has vocabulary for the honest case: a `Call` clause naming the
+candidates, which is what the same program prints for its `opened!` obligation.
+So the fix is membership in an existing list, not new surface.
 
 What this does NOT establish is that auto-discharge should insert here. That is a
 claim about the *other* index — the inserter builds its candidates by EFFECT,
@@ -55,11 +55,18 @@ visualiser's.
 Fixed in `auto_discharge_inserter.zig` / `phantom_semantic_checker.zig`: the
 suggestion candidate search treats a union input with ANY consuming member as
 a discharger for every member state — the same rule the checker applies to the
-call itself. `330_124` is green; `finalize` is named under `Call one of:`
-exactly as this frag proposed. The sibling phrasing problem died with it:
-candidate-bearing refusals now spell `Call one of:` uniformly rather than
-forking `Call:` for the single-candidate case, so the vocabulary can no longer
-suggest the candidate set is a different kind when it happens to hold one name.
+call itself. `330_124` is green; `finalize` is named as the answer exactly as
+this frag proposed.
+
+Candidate-bearing refusals agree in NUMBER: `Call: finalize` when one name is
+the answer, `Call one of: a, b` when the author faces a choice. The uniform
+`Call one of:` spelling held from 2026-09-11 to 2026-09-17 — adopted so a single
+candidate would not read as a different KIND of answer — and was reversed
+because "one of" over one name is not a terser answer but a false description of
+the set in front of the author. Keeping the verb and the list and varying only
+the number words answers the original worry without asserting a choice that is
+not there. The fork is on the count, never on the kind: a singular and a plural
+refusal still speak one vocabulary for "the candidates are known".
 
 The open question above was deliberately NOT taken: auto-INSERTION still
 requires the per-member `!` marker. Routing a debt through a borrow-spelled

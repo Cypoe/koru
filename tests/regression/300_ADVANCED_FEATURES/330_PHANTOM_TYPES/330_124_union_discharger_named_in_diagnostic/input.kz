@@ -23,7 +23,8 @@
 // frag-obligation-enforcement-keys-off-return-binding) — the diagnostic must not
 // deny that a discharger exists. Hence NOT_CONTAINS on the falsehood plus
 // CONTAINS on the vocabulary the message already uses when candidates are known
-// ("Call one of: …"), and no assertion about insertion.
+// ("Call: …" for one candidate, "Call one of: …" for several), and no assertion
+// about insertion.
 //
 // The obligation is BOUND (`: h2`) on purpose: that keeps this pin clear of the
 // unbound-tail frontier owned by 330_097/330_123, which is about enforcement
