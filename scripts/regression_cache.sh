@@ -47,6 +47,41 @@ cache_compute_compiler_mtime() {
     echo "$newest"
 }
 
+# Content fingerprint over the backend's compiler-side inputs — the salt for
+# backend_cache_key (scripts/regression_lib.sh).
+#
+# This replaces an mtime census as the salt because mtime is NOT a build input.
+# Rebuilding zig-out/bin/koruc, `touch`ing a source, or restoring a checkout all
+# advanced the old salt and made every cached backend unreachable while leaving
+# every one of them on disk. Measured 2026-09-17 in a single checkout: 1088
+# fresh entries / 11.25 GB in 21.7 hours — nine generations in one day, each a
+# full rebuild of the ~121 backends the cache exists to skip. Hashing
+# (relpath, content) makes the salt depend only on what changes the binary, and
+# costs less than the census it replaces: 2.18s vs 2.91s over the 268-file tree.
+#
+# Deliberately NOT the same notion as cache_compute_compiler_mtime above. That
+# one drives the RESULT cache, where a conservative "something in the tree
+# moved" is the safe answer and a stale fingerprint only costs a re-run. This
+# one gates BINARY REUSE, where a false mismatch costs a 9.6 MB rebuild per
+# backend — so it must be exact in both directions.
+#
+# Filenames are hashed before their bytes: a rename carrying identical content
+# is a different tree and must move the fingerprint.
+#
+# Args: $1 = repo root. Fails (nonzero, empty) if the tree cannot be read, so the
+# caller can disable the cache instead of salting with "".
+cache_compute_compiler_fingerprint() {
+    local repo_root="$1"
+    {
+        find "$repo_root/src" "$repo_root/koru_std" "$repo_root/build.zig" \
+            -type f 2>/dev/null \
+            | LC_ALL=C sort | while IFS= read -r f; do
+                printf '%s\n' "${f#"$repo_root"/}"
+                cat "$f"
+            done
+    } | _backend_sha256
+}
+
 # Emit the fingerprint to stdout (sorted, one line per entry).
 # Args: $1 = test_dir, $2 = koruc binary path, $3 = compiler_mtime
 #
@@ -196,4 +231,121 @@ cache_write() {
 # previous run doesn't survive.
 cache_invalidate() {
     rm -f "$1/.cache-fingerprint"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Backend-binary cache hygiene
+# ═══════════════════════════════════════════════════════════════════════════
+# $BACKEND_CACHE_DIR is ONE flat directory shared by every checkout on this
+# machine ($TMPDIR is per-user, not per-worktree) and written by TWO producers
+# with different naming schemes:
+#
+#   - this harness — backend_cache_key (regression_lib.sh): sha256 of the
+#     backend's build inputs, 64 hex chars.
+#   - koruc itself — backendCacheKey (src/main.zig): FNV1a-64 over src/ and
+#     koru_std/, printed `{x}` — unpadded, so 14..16 hex chars.
+#
+# Neither evicted. Measured 2026-09-17: 3382 entries / 33.8 GB, of which 223 of
+# koruc's entries were byte-identical to a harness entry (two schemes, one
+# binary, stored twice). The only in-tree way it ever shrank was
+# run_regression.sh --clean, which rm -rf's the whole cache by hand.
+#
+# So the prune below is SCHEME-AGNOSTIC on purpose: it must bound koruc's
+# entries too, or the leak survives in the half no harness code touches.
+
+# Byte cap on the shared backend cache (env KORU_BACKEND_CACHE_MAX_BYTES).
+# Sized for the working set, not for tidiness: a generation is ~1.2 GB (121
+# distinct backends x 9.6 MB) and this machine runs ~14 compiler checkouts, each
+# legitimately at a different commit and wanting its own. Below ~14 generations
+# the checkouts evict each other and the cache stops paying for itself — an
+# entry costs 1.2 GB of disk to save ~120 backend builds, so the cap exists to
+# stop unbounded growth, not to make the cache small.
+: "${KORU_BACKEND_CACHE_MAX_BYTES:=21474836480}"   # 20 GiB
+
+# Never evict an entry touched this recently (env
+# KORU_BACKEND_CACHE_LIVE_SECONDS). An entry's mtime is when it was last STORED
+# or HIT, and a suite stores its generation at the start of the run — so a
+# 30-minute board holds entries that look half an hour stale while it is still
+# using them. This window is what makes eviction safe under concurrent suites:
+# several boards share the one directory, and no prune can reach a generation
+# any of them might still need.
+: "${KORU_BACKEND_CACHE_LIVE_SECONDS:=7200}"       # 2 h
+
+backend_human() {
+    awk -v b="$1" 'BEGIN{
+        if (b >= 1073741824)   printf "%.2f GiB", b/1073741824;
+        else if (b >= 1048576) printf "%.1f MiB", b/1048576;
+        else if (b >= 1024)    printf "%.1f KiB", b/1024;
+        else                   printf "%d B", b;
+    }'
+}
+
+# "mtime size path", one line per file, least-recently-used first.
+#
+# GNU and BSD stat disagree on BOTH the flag and the format letters, and this
+# machine has both (a Nix profile shadows /usr/bin), so the dialect is probed
+# rather than assumed — the same shape as _backend_sha256's shasum/sha256sum
+# probe. A GNU-shaped stat driven with -f silently mis-parses as filesystem mode
+# the moment it is handed several files (`{} +`), so the GNU branch must use -c.
+backend_cache_lru() {
+    if stat -c '%Y %s %n' / >/dev/null 2>&1; then
+        find "$1" -maxdepth 1 -type f -exec stat -c '%Y %s %n' {} + 2>/dev/null | sort -n
+    else
+        find "$1" -maxdepth 1 -type f -exec stat -f '%m %z %N' {} + 2>/dev/null | sort -n
+    fi
+}
+
+# Evict least-recently-used entries until the directory is at or under the cap.
+# Args: $1 = cache dir, $2 = cap in bytes (default $KORU_BACKEND_CACHE_MAX_BYTES)
+#
+# Deleting an entry can only ever cost a rebuild, never a wrong answer, so this
+# needs no coordination with a running suite: a concurrent store either writes a
+# fresh entry or loses a race and rebuilds. The live window is what keeps it
+# from costing a rebuild the machine is not willing to pay mid-board.
+backend_cache_prune() {
+    local dir="$1" max="${2:-$KORU_BACKEND_CACHE_MAX_BYTES}"
+    [ -d "$dir" ] || return 0
+
+    # An interrupted store leaves `.$key.$$.tmp` (both producers stage that way).
+    # A live one renames it away within milliseconds, so anything an hour old is
+    # crash residue rather than a race in progress.
+    find "$dir" -maxdepth 1 -name '.*.tmp' -type f -mmin +60 -delete 2>/dev/null
+
+    local entries total
+    entries=$(backend_cache_lru "$dir")
+    [ -n "$entries" ] || return 0
+    total=$(printf '%s\n' "$entries" | awk '{s += $2} END {print s + 0}')
+    [ "$total" -le "$max" ] && return 0
+
+    # The live window is honoured even when it alone exceeds the cap: a board in
+    # flight is worth more than a bound on the residue, and the residue is what
+    # ages out on the next run instead.
+    local cutoff=$(( $(date +%s) - KORU_BACKEND_CACHE_LIVE_SECONDS ))
+    local before="$total" removed=0 freed=0 mt sz path
+    while IFS=' ' read -r mt sz path; do
+        [ "$total" -le "$max" ] && break
+        [ -n "$path" ] || continue
+        [ "$mt" -ge "$cutoff" ] && break        # LRU order: this and the rest are live
+        rm -f "$path" 2>/dev/null || continue
+        total=$((total - sz))
+        freed=$((freed + sz))
+        removed=$((removed + 1))
+    done <<< "$entries"
+
+    [ "$removed" -eq 0 ] && return 0
+    printf '   cache prune: removed %d entries, freed %s (%s -> %s, cap %s)\n' \
+        "$removed" "$(backend_human "$freed")" \
+        "$(backend_human "$before")" "$(backend_human "$total")" \
+        "$(backend_human "$max")"
+}
+
+# Prune once per shell, from the staging path rather than from the entry
+# scripts, so every consumer gets it without having to remember — including the
+# parallel workers, which only ever source these files.
+backend_cache_prune_once() {
+    [ "${_BACKEND_CACHE_PRUNED:-false}" = true ] && return 0
+    _BACKEND_CACHE_PRUNED=true
+    [ "${BACKEND_CACHE_MODE:-off}" = "on" ] || return 0
+    [ -n "${BACKEND_CACHE_DIR:-}" ] || return 0
+    backend_cache_prune "$BACKEND_CACHE_DIR"
 }

@@ -50,10 +50,15 @@ backend_cache_key() {
 # Args: $1 = test_dir, $2 = BUILD_FILE, $3 = cache key (may be empty).
 backend_stage_or_build() {
     local td="$1" bf="$2" key="$3"
+    backend_cache_prune_once
     if [ "$BACKEND_CACHE_MODE" = "on" ] && [ -n "$key" ] && [ -f "$BACKEND_CACHE_DIR/$key" ]; then
         mkdir -p "$td/zig-out/bin"
         if cp "$BACKEND_CACHE_DIR/$key" "$td/zig-out/bin/backend" 2>/dev/null; then
             chmod +x "$td/zig-out/bin/backend" 2>/dev/null
+            # A hit is a USE. macOS does not maintain atime, so eviction order
+            # reads mtime — without this touch a generation in constant use looks
+            # exactly as stale as one nobody has wanted for a week.
+            touch "$BACKEND_CACHE_DIR/$key" 2>/dev/null
             BACKEND_CACHE_HIT=true
             return 0
         fi
