@@ -58,6 +58,7 @@ koru_std/index.kz	7
 koru_std/indexes.kz	15
 koru_std/inter.kz	176
 koru_std/interpreter.args.kz	144
+koru_std/interpreter.arms.kz	52
 koru_std/interpreter.define.kz	152
 koru_std/interpreter.guards.kz	63
 koru_std/interpreter.kz	1164

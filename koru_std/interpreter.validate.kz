@@ -13,9 +13,10 @@ pub const ValidationError = struct {
 };
 
 /// Validates a flow AST before execution.
-/// Checks for shadowing (duplicate bindings), field membership (a named
-/// field the verb's signature does not declare), and bound references (a
-/// bare identifier in arg position no arm on this path binds).
+/// Checks for shadowing (duplicate bindings), unreachable arms (a second
+/// unguarded handler for a branch first-match selection already answers),
+/// field membership (a named field the verb's signature does not declare),
+/// and bound references (a bare identifier no arm on this path binds).
 /// Returns null if valid, or ValidationError if invalid.
 pub fn validateFlow(
     flow: *const ast.Flow,
@@ -25,9 +26,8 @@ pub fn validateFlow(
 ) ?ValidationError {
     var seen_bindings = std.StringHashMap(void).init(allocator);
     defer seen_bindings.deinit();
-
     if (validateFlowRecursive(flow, &seen_bindings)) |e| return e;
-
+    if (checkShadowedArms(flow.body.continuations, allocator)) |e| return e;
     return checkFlowArgs(flow, input_fn, defined, allocator);
 }
 

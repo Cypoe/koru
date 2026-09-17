@@ -56,3 +56,20 @@ emitted one without anybody being told.
 Related: [[frag-effect-continuation-marker-kinds]] — the other place where two
 surface forms that read as interchangeable turned out to be separate kinds, and
 the fix was a wall rather than a convention.
+
+## 2026-09-17: exclusivity now has teeth on the interpreted surface too
+
+The compiled side always enforced the consequence of first-match: SHAPE002
+refuses a second unguarded handler for a branch an earlier sibling answers
+(`branch_checker.firstDuplicateSibling`). The interpreter's `validateFlow`
+never carried the mirror, so a wire flow could hold a dead arm and report
+`result` — the shape a model writes when it means a chain
+(`open | ok h |> append | ok h2 |> close(h2)` parses as two `ok` siblings on
+`open`; `close` never dispatched, the pool kept the handle, and the next
+turn's append on the still-live handle duplicated the bytes). Interpreted
+flows now meet the same judge: `checkShadowedArms` refuses the second
+unguarded same-branch terminal arm as `validation-error`, teaching the
+indented nesting spelling in the message. `when` narrows, `|?` falls back,
+`!` links compose — none shadow, exactly as on the compiled side. Pinned by
+`440_027`; `410_002` had silently carried the dead-arm shape itself (masked
+by budget exhaustion) and now spells the chain nested.

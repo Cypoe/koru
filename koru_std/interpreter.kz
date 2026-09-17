@@ -1153,8 +1153,8 @@ fn exprFloatOp(l: f64, r: f64, op: ExprArithOp) ExprEvalError!ExprValue {
         .mod => @mod(l, r),
     } };
 }
-
 ~part args
+~part arms
 ~part define
 ~part guards
 ~part names

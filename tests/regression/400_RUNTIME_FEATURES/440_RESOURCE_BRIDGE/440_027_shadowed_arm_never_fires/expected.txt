@@ -1,0 +1,9 @@
+t1 refused unreachable 'found' arm — an earlier unguarded 'found' sibling answers that outcome and first match wins; indent the arm under the step it follows to chain deeper, or 'when'-guard all but one same-branch arm
+t2 refused unreachable 'found' arm — an earlier unguarded 'found' sibling answers that outcome and first match wins; indent the arm under the step it follows to chain deeper, or 'when'-guard all but one same-branch arm
+echo: fallback-t3
+t3 result
+echo: first
+echo: second
+t4 result
+echo: on-found
+t5 result
