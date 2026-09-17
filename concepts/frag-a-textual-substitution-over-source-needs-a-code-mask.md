@@ -42,6 +42,20 @@ wholesale would break every rule arm that prints — and would have looked like
 the fix, passed casual inspection, and failed a different set of tests. Both
 pins carry that control in the same file as the defect for exactly that reason.
 
+Third site, 2026-09-17, and a new wrinkle: this time the mask WAS consulted
+and still shipped the defect. `{{ d.id:d }}` inside a sweep body emitted the
+row's `__koru_handle_of` mint into the *format placeholder* — the rewriter
+correctly stayed out of the literal and correctly entered the interpolation,
+but the mask's model of "expression context" stopped at the placeholder
+boundary, while the io transform's contract splits `{{ expr:spec }}` at the
+first `:`. The spec tail is a THIRD class — neither literal text nor
+expression — so "is this inside `{{ }}`" is not the whole question; inside
+one, only the text before the first `:` is an expression (690_122/124/192,
+fixed in `expressionMask` itself so all twelve rewriter sites get it). The
+belief sharpens: a consulted mask can still be wrong — the mask's model of
+context has to match the downstream parser's grammar, not just the
+code/string boundary.
+
 Open: nothing enumerates the substitution sites. Three are known
 (visitor_emitter, store's entityRefs, store's bindStrip); there is no list, so
 the next one is found the way these two were — by a consumer shipping text

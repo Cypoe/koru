@@ -878,16 +878,30 @@ pub fn expressionMask(alloc: std.mem.Allocator, text: []const u8) []bool {
     const mask = alloc.alloc(bool, text.len) catch unreachable;
     var in_str = false;
     var in_interp = false;
+    var interp_spec = false;
     var i: usize = 0;
     while (i < text.len) : (i += 1) {
-        if (in_str and !in_interp and text[i] == '{' and i + 1 < text.len and text[i + 1] == '{') in_interp = true;
-        if (in_str and in_interp and text[i] == '}' and i + 1 < text.len and text[i + 1] == '}') in_interp = false;
+        if (in_str and !in_interp and text[i] == '{' and i + 1 < text.len and text[i + 1] == '{') {
+            in_interp = true;
+            interp_spec = false;
+        }
+        if (in_str and in_interp and text[i] == '}' and i + 1 < text.len and text[i + 1] == '}') {
+            in_interp = false;
+            interp_spec = false;
+        }
+        // `{{ expr:spec }}` — the io transform splits the placeholder at the
+        // FIRST ':', so everything after it is format-spec text, never an
+        // expression. Without this a rewriter will happily rewrite a spec
+        // char that collides with a binding — `{{ d.id:d }}` emitted the
+        // row's `__koru_handle_of` mint INTO the format placeholder
+        // (690_122/124/192).
+        if (in_str and in_interp and !interp_spec and text[i] == ':') interp_spec = true;
         if (text[i] == '"' and (i == 0 or text[i - 1] != '\\') and !in_interp) {
             in_str = !in_str;
             mask[i] = false;
             continue;
         }
-        mask[i] = !in_str or in_interp;
+        mask[i] = (!in_str or in_interp) and !interp_spec;
     }
     return mask;
 }
