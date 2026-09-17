@@ -1245,12 +1245,42 @@ pub const ShapeChecker = struct {
     fn declaredBranchNames(buf: []u8, branches: []const ast.Branch) []const u8 {
         var fbs = std.io.fixedBufferStream(buf);
         const w = fbs.writer();
+        var truncated = false;
+        // End of the last COMPLETE element: the marker goes after it, never
+        // through the middle of a name (see the fallback below for the one case
+        // where the buffer cannot hold it there).
+        var last_complete: usize = 0;
         for (branches, 0..) |b, i| {
-            if (i > 0) w.writeAll(", ") catch break;
-            w.writeAll(b.name) catch break;
+            const need = b.name.len + (if (i > 0) @as(usize, 2) else 0);
+            if (fbs.pos + need > buf.len) {
+                truncated = true;
+                break;
+            }
+            // Cannot fail: `need` was checked against the buffer above, so a
+            // partial element never reaches the list.
+            if (i > 0) w.writeAll(", ") catch unreachable;
+            w.writeAll(b.name) catch unreachable;
+            last_complete = fbs.pos;
         }
-        if (fbs.getWritten().len == 0) return "(none)";
-        return fbs.getWritten();
+        if (!truncated) {
+            if (fbs.pos == 0) return "(none)";
+            return fbs.getWritten();
+        }
+        // Truncated: spend the tail on a marker, so the hint cannot read as the
+        // complete set. A list that FITS still uses the whole buffer — the
+        // marker costs room only when there is something to mark.
+        const marker = ", \u{2026}";
+        // A buffer too small for the marker itself can only say "there is more".
+        if (last_complete == 0 or buf.len < marker.len) return "\u{2026}";
+        if (last_complete + marker.len > buf.len) {
+            // No room for the marker after the last complete name, so it comes
+            // out of that name's own bytes — clipped, but never silent.
+            const keep = buf.len - marker.len;
+            @memcpy(buf[keep..][0..marker.len], marker);
+            return buf[0..buf.len];
+        }
+        @memcpy(buf[last_complete..][0..marker.len], marker);
+        return buf[0 .. last_complete + marker.len];
     }
 
     fn checkBranchCoverageWithTerminals(
@@ -2567,6 +2597,29 @@ const ShapeUnion = struct {
 };
 
 // Tests
+test "declared branch names spend their buffer on the truncation marker" {
+    // The list IS the hint's answer, so a prefix of it must not read as the
+    // complete set. The marker is taken from the tail of the caller's buffer —
+    // the refusal path does not allocate — and a buffer that holds everything
+    // carries no marker at all.
+    const branches = [_]ast.Branch{
+        .{ .name = "first_branch_name", .payload = ast.Shape{ .fields = &[_]ast.Field{} } },
+        .{ .name = "second_branch_name", .payload = ast.Shape{ .fields = &[_]ast.Field{} } },
+        .{ .name = "third_branch_name", .payload = ast.Shape{ .fields = &[_]ast.Field{} } },
+    };
+
+    var tight: [32]u8 = undefined;
+    const clipped = ShapeChecker.declaredBranchNames(&tight, &branches);
+    try std.testing.expect(std.mem.endsWith(u8, clipped, ", \u{2026}"));
+    try std.testing.expect(clipped.len <= tight.len);
+    try std.testing.expectEqualStrings("first_branch_name", clipped[0 .. "first_branch_name".len]);
+
+    var roomy: [128]u8 = undefined;
+    const whole = ShapeChecker.declaredBranchNames(&roomy, &branches);
+    try std.testing.expectEqualStrings("first_branch_name, second_branch_name, third_branch_name", whole);
+}
+
+
 test "shapes equal - empty shapes" {
     const allocator = std.testing.allocator;
     var reporter = try errors.ErrorReporter.init(allocator, "test.kz", "");
