@@ -30,6 +30,8 @@ Do not weld pins + stale comments + “when it goes green” into a wall Lars ca
 
 **Answer the question.** “Do you understand X?” is yes or no. Do not look X up and lecture the spelling. Lead with a sentence that parses. Archaeology after, or not at all.
 
+**Signal over noise — no clickbait.** No narrative-hookup ledes (“We thought X. Then Y.”), no suspense arcs, no discovery theatre, no selling. State the finding, cite the evidence, let the numbers carry it. This holds in session replies, commit messages, and blog drafts — a sentence whose job is to make the reader feel something instead of know something is noise, and it gets cut.
+
 ## Find It Before You Build It
 - Before building a check, a wall, a helper, or a shared surface, **find out whether it already exists.** This is a precondition on every task, not a step in one.
 - **A forgotten mechanism is indistinguishable from an absent one until someone counts** — and the count comes back describing a catastrophe the mechanism has been silently preventing. The negative-test corpus was measured as 75% rotten, twice, before the wall holding it at 223/227 was found at `regression_lib.sh:608`.
