@@ -775,6 +775,18 @@ pub fn build(b: *std.Build) void {
         .root_module = shape_checker_module,
     });
 
+    // codegen_utils tests — the shared expression lowering, including the
+    // span-tracking operator rewrite that conditions, guards and body values
+    // all pass through. `std`-only, so it needs no module wiring.
+    const codegen_utils_tests = b.addTest(.{
+        .name = "codegen_utils_tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/codegen_utils.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
     const tap_collector_tests = b.addTest(.{
         .name = "tap_collector_tests",
         .root_module = tap_collector_module,
@@ -982,6 +994,7 @@ pub fn build(b: *std.Build) void {
     const run_errors_tests = b.addRunArtifact(errors_tests);
     const run_lexer_tests = b.addRunArtifact(lexer_tests);
     const run_shape_checker_tests = b.addRunArtifact(shape_checker_tests);
+    const run_codegen_utils_tests = b.addRunArtifact(codegen_utils_tests);
     const run_tap_collector_tests = b.addRunArtifact(tap_collector_tests);
     const run_tap_codegen_tests = b.addRunArtifact(tap_codegen_tests);
     const run_visitor_emitter_tests = b.addRunArtifact(visitor_emitter_tests);
@@ -1464,6 +1477,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_ast_json_tests.step);
     test_step.dependOn(&run_ast_printer_tests.step);
     test_step.dependOn(&run_shape_checker_tests.step);
+    test_step.dependOn(&run_codegen_utils_tests.step);
     test_step.dependOn(&run_tap_collector_tests.step);
     test_step.dependOn(&run_purity_checker_tests.step);
     test_step.dependOn(&run_tap_codegen_tests.step);

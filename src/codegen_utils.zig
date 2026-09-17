@@ -682,6 +682,15 @@ test "koruWrapperPrefix Phase 2" {
 // are Zig keywords, arithmetic and comparison are shared, `++` is Zig's own
 // concat), and Zig accepts an unmodelled `@foo` because it is a Zig builtin.
 //
+// THE IDENTITY CLAIM'S PREMISE HAS TWO MEASURED HOLES, both fixed by rewriting
+// rather than by touching the ruling (which is about the VOCABULARY — the `@`
+// operations — not about these two operators): `==`/`!=` on strings
+// (2026-08-07) and `%` on a signed integer (2026-09-17). Both are operators the
+// language already had a meaning for in every other organ. "Arithmetic and
+// comparison are shared" is what has to be checked per OPERATOR: `%` is the
+// same GLYPH in both hosts and is still not the same operator, because Zig
+// defines it only on unsigned integers. See the spelling section below.
+//
 // WHAT THAT DEFERS, said plainly so it does not go invisible: the vocabulary is
 // ENFORCED on JS and ABSENT on Zig. A `.k` naming an `@foo` nobody modelled is
 // accepted by one target and refused by the other, so the table can drift into
@@ -738,15 +747,24 @@ pub fn lowerKoruExpr(
 ) LowerError![]const u8 {
     if (target == .zig) {
         // The `.zig` arm is the identity for the OPERATION VOCABULARY (ruled
-        // 2026-08-07, above) — but "comparison is shared" has one hole: `==`
-        // on two strings. Koru's `==` is value equality (comptime_eval.zig
-        // folds it with `mem.eql`; the interpreter and the JS target agree),
-        // and Zig has no spelling for that on slices — pasted through, it is
-        // a raw Stage-D "cannot compare strings with ==". So the one rewrite
-        // this arm carries is semantic, not vocabulary: a literal-grounded
-        // string comparison becomes `@import("std").mem.eql(u8, …)`.
+        // 2026-08-07, above) — but "arithmetic and comparison are shared" has
+        // two holes, and they are the rewrites this arm carries:
+        //
+        //   `==` on two strings — Koru's is value equality (comptime_eval.zig
+        //   folds it with `mem.eql`; the interpreter and the JS target agree)
+        //   and Zig refuses it on slices at Stage D ("cannot compare strings
+        //   with =="), so a literal-grounded comparison becomes
+        //   `@import("std").mem.eql(u8, …)`.
+        //
+        //   `%` on a signed integer — Zig's `%` is unsigned-only, Koru's is
+        //   C's truncated remainder (`comptime_eval.zig` folds it with
+        //   `@rem`, "the C-parity choice"), so it becomes `@rem(lhs, rhs)`.
+        //
+        // Both are semantic, not vocabulary: the operation is the one Koru
+        // already has, spelled for this host. See the operator-spelling section
+        // below for the boundary of what the rewrite can read.
         if (mode != .host_text) {
-            if (rewriteStringEqualityZig(allocator, text) catch null) |rewritten| {
+            if (rewriteZigExpr(allocator, text) catch null) |rewritten| {
                 return rewritten;
             }
         }
@@ -1744,30 +1762,43 @@ pub fn collectZigCaptureNames(allocator: std.mem.Allocator, text: []const u8, ou
 }
 
 // ============================================================================
-// RUNTIME STRING EQUALITY — the Zig spelling of Koru's `==` on strings
+// THE ZIG SPELLING OF KORU OPERATORS — the two the host does not share
 // ============================================================================
 //
-// Koru's `==` on two strings is VALUE equality. Every organ that already has
-// an opinion agrees: the comptime fold (`comptime_eval.zig`, `.equal` on two
-// `.string`s is `mem.eql`), the interpreter (`koru_std/interpreter.kz`), and
-// the JS target (verbatim `==` — which in JavaScript IS string value
-// equality). The Zig target was the odd one out: the expression text was
-// pasted through, and `[]const u8 == []const u8` is a Zig compile error, so a
-// `when` guard or `if` condition comparing strings died at Stage D quoting the
-// host ("cannot compare strings with ==") — one target implementing what the
-// other three meant.
+// Koru expression text is pasted into Zig verbatim, and for `+ - * < and or ++`
+// that is the whole story: the hosts spell them the same way. Two operators
+// Koru HAD a meaning for reached Zig as the wrong spelling, each refused by the
+// host at Stage D with its own builtin list:
 //
-// WHAT REWRITES: a `==` / `!=` whose either operand is a double-quoted string
-// LITERAL — the syntactically decidable subset, and the whole dispatch family
-// ("is this command/route/config-key equal to that word"). It becomes
-// `@import("std").mem.eql(u8, lhs, rhs)` (negated for `!=`), spliced back
-// with every other byte of the expression preserved.
+//   `==` / `!=` on STRINGS is VALUE equality. Every organ that already has an
+//   opinion agrees: the comptime fold (`comptime_eval.zig`, `.equal` on two
+//   `.string`s is `mem.eql`), the interpreter (`koru_std/interpreter.kz`), and
+//   the JS target (verbatim `==` — which in JavaScript IS string value
+//   equality). Zig refuses `[]const u8 == []const u8` outright ("cannot
+//   compare strings with ==") — one target implementing what the other three
+//   meant.
 //
-// WHAT DOES NOT (yet): `a == b` where both sides are string-TYPED names.
-// Deciding that needs a type oracle at the rewrite site; guessing would
-// rewrite numeric comparisons into `mem.eql` and corrupt working code. Those
-// comparisons still fail loudly at Stage D on Zig (and work on JS) — the
-// remaining half of this symmetry, not a silent wrong answer.
+//   `%` on a SIGNED runtime integer is C's truncated remainder. Zig's `%` is
+//   UNSIGNED-ONLY (`signed integers and floats must use @rem or @mod`), and
+//   Koru's is `@rem` in every organ that has an opinion — the comptime fold
+//   folds `.modulo` with `@rem`, its own comment calling that "the C-parity
+//   choice", and the JS target passes `%` through, JS `%` on numbers being
+//   that same truncated remainder. So `n % 2` compiled on JS and died on Zig.
+//
+// WHAT REWRITES: `%` → `@rem(lhs, rhs)`, the identical operator for unsigned
+// operands and the only one Zig accepts for signed; and a `==` / `!=` whose
+// either operand is a double-quoted string LITERAL (the syntactically
+// decidable subset, and the whole dispatch family — "is this command/route/
+// config-key equal to that word") → `@import("std").mem.eql(u8, lhs, rhs)`,
+// negated for `!=`. Each rewrite is spliced back with every other byte of the
+// expression preserved.
+//
+// WHAT DOES NOT (yet): `a == b` where both sides are string-TYPED names, and
+// `/` on signed integers (`@divTrunc` for ints, `/` for floats — deciding
+// which needs a type oracle at a site that carries none; pinned by
+// 030_143_signed_runtime_division, NEEDS_RULING). Both still fail loudly at
+// Stage D on Zig and work on JS — the remaining half of this symmetry, not a
+// silent wrong answer.
 //
 // The scan is CONSERVATIVE BY CONSTRUCTION: the text is parsed with a small
 // span-tracking expression parser, and anything it does not fully recognize —
@@ -1776,11 +1807,11 @@ pub fn collectZigCaptureNames(allocator: std.mem.Allocator, text: []const u8, ou
 // from the source by span, never re-rendered, so a non-matching expression is
 // byte-identical.
 
-const StrEqError = error{ NoParse, OutOfMemory };
+const ZigExprError = error{ NoParse, OutOfMemory };
 
 /// A parsed subexpression: its rendered text (rewritten iff `changed`),
 /// its source span, and whether it is exactly one string literal.
-const StrEqPiece = struct {
+const ZigExprPiece = struct {
     text: []const u8,
     start: usize,
     end: usize,
@@ -1788,21 +1819,21 @@ const StrEqPiece = struct {
     changed: bool,
 };
 
-const StrEqParser = struct {
+const ZigExprParser = struct {
     allocator: std.mem.Allocator,
     text: []const u8,
     pos: usize,
 
-    fn skipWs(self: *StrEqParser) void {
+    fn skipWs(self: *ZigExprParser) void {
         while (self.pos < self.text.len and std.ascii.isWhitespace(self.text[self.pos])) self.pos += 1;
     }
 
-    fn peek(self: *StrEqParser) u8 {
+    fn peek(self: *ZigExprParser) u8 {
         return if (self.pos < self.text.len) self.text[self.pos] else 0;
     }
 
     /// Word-boundary keyword match at the current position.
-    fn atKeyword(self: *StrEqParser, kw: []const u8) bool {
+    fn atKeyword(self: *ZigExprParser, kw: []const u8) bool {
         if (self.pos + kw.len > self.text.len) return false;
         if (!std.mem.eql(u8, self.text[self.pos .. self.pos + kw.len], kw)) return false;
         if (self.pos > 0 and exprIdentChar(self.text[self.pos - 1])) return false;
@@ -1815,17 +1846,17 @@ const StrEqParser = struct {
     /// rewritten the piece is the original source slice; otherwise the two
     /// rendered halves are joined by the ORIGINAL inter-operand bytes (the
     /// operator and its spacing), so nothing outside a rewrite is respelled.
-    fn combine(self: *StrEqParser, left: StrEqPiece, right: StrEqPiece) StrEqError!StrEqPiece {
+    fn combine(self: *ZigExprParser, left: ZigExprPiece, right: ZigExprPiece) ZigExprError!ZigExprPiece {
         if (!left.changed and !right.changed) {
             return .{ .text = self.text[left.start..right.end], .start = left.start, .end = right.end, .is_string_lit = false, .changed = false };
         }
         const joined = std.fmt.allocPrint(self.allocator, "{s}{s}{s}", .{
             left.text, self.text[left.end..right.start], right.text,
-        }) catch return StrEqError.OutOfMemory;
+        }) catch return ZigExprError.OutOfMemory;
         return .{ .text = joined, .start = left.start, .end = right.end, .is_string_lit = false, .changed = true };
     }
 
-    fn parseOr(self: *StrEqParser) StrEqError!StrEqPiece {
+    fn parseOr(self: *ZigExprParser) ZigExprError!ZigExprPiece {
         var left = try self.parseAnd();
         while (true) {
             self.skipWs();
@@ -1840,7 +1871,7 @@ const StrEqParser = struct {
         return left;
     }
 
-    fn parseAnd(self: *StrEqParser) StrEqError!StrEqPiece {
+    fn parseAnd(self: *ZigExprParser) ZigExprError!ZigExprPiece {
         var left = try self.parseEq();
         while (true) {
             self.skipWs();
@@ -1857,7 +1888,7 @@ const StrEqParser = struct {
 
     /// THE REWRITE LEVEL. `==` / `!=` with a string-literal operand becomes
     /// the `mem.eql` call; every other comparison combines verbatim.
-    fn parseEq(self: *StrEqParser) StrEqError!StrEqPiece {
+    fn parseEq(self: *ZigExprParser) ZigExprError!ZigExprPiece {
         var left = try self.parseCmp();
         while (true) {
             self.skipWs();
@@ -1872,7 +1903,7 @@ const StrEqParser = struct {
             if (left.is_string_lit or right.is_string_lit) {
                 const call = std.fmt.allocPrint(self.allocator, "{s}@import(\"std\").mem.eql(u8, {s}, {s})", .{
                     if (negated) "!" else "", left.text, right.text,
-                }) catch return StrEqError.OutOfMemory;
+                }) catch return ZigExprError.OutOfMemory;
                 left = .{ .text = call, .start = left.start, .end = right.end, .is_string_lit = false, .changed = true };
             } else {
                 left = try self.combine(left, right);
@@ -1881,7 +1912,7 @@ const StrEqParser = struct {
         return left;
     }
 
-    fn parseCmp(self: *StrEqParser) StrEqError!StrEqPiece {
+    fn parseCmp(self: *ZigExprParser) ZigExprError!ZigExprPiece {
         var left = try self.parseConcat();
         while (true) {
             self.skipWs();
@@ -1902,7 +1933,7 @@ const StrEqParser = struct {
         return left;
     }
 
-    fn parseConcat(self: *StrEqParser) StrEqError!StrEqPiece {
+    fn parseConcat(self: *ZigExprParser) ZigExprError!ZigExprPiece {
         var left = try self.parseAdd();
         while (true) {
             self.skipWs();
@@ -1915,7 +1946,7 @@ const StrEqParser = struct {
         return left;
     }
 
-    fn parseAdd(self: *StrEqParser) StrEqError!StrEqPiece {
+    fn parseAdd(self: *ZigExprParser) ZigExprError!ZigExprPiece {
         var left = try self.parseMul();
         while (true) {
             self.skipWs();
@@ -1933,21 +1964,65 @@ const StrEqParser = struct {
         return left;
     }
 
-    fn parseMul(self: *StrEqParser) StrEqError!StrEqPiece {
+    /// THE SECOND REWRITE LEVEL. `*` and `/` are tokens both hosts spell the
+    /// same way; `%` is not (see the section header) — it renders as the
+    /// `@rem` builtin call, which is that same operator for an unsigned
+    /// operand and the only spelling Zig accepts for a signed one.
+    ///
+    /// Tighter than `parseAdd`, so only the operands of THIS `%` move:
+    /// `a + b % c` → `a + @rem(b, c)`, `a % b * c` → `@rem(a, b) * c`.
+    fn parseMul(self: *ZigExprParser) ZigExprError!ZigExprPiece {
         var left = try self.parseUnary();
         while (true) {
             self.skipWs();
             const c = self.peek();
-            if (c == '*' or c == '/' or c == '%') {
-                self.pos += 1;
-            } else break;
+            if (c != '*' and c != '/' and c != '%') break;
+            self.pos += 1;
             const right = try self.parseUnary();
-            left = try self.combine(left, right);
+            if (c != '%') {
+                left = try self.combine(left, right);
+                continue;
+            }
+            const call = std.fmt.allocPrint(self.allocator, "@rem({s}, {s})", .{ left.text, right.text }) catch return ZigExprError.OutOfMemory;
+            left = .{ .text = call, .start = left.start, .end = right.end, .is_string_lit = false, .changed = true };
         }
         return left;
     }
 
-    fn parseUnary(self: *StrEqParser) StrEqError!StrEqPiece {
+    /// A conditional EXPRESSION: `if (<cond>) <then> else <else>`, the Zig
+    /// spelling a `.k` body writes (`-> if (n % 2 == 0) 1 else 0`). Its whole
+    /// point here is the CONDITION: that is where a `%` or a literal-grounded
+    /// string `==` sits, one nesting level below the operator the caller's text
+    /// starts with.
+    ///
+    /// The shape is Zig's, not Koru's: `if` needs a parenthesized condition and
+    /// an `else` arm. A statement `if (c) { … }` — block arms, no `else`, a
+    /// trailing `;` — does not read here and returns NoParse, so the caller
+    /// keeps its bytes. The `else` that a nested `if` binds to is the NEAREST
+    /// one, exactly as both hosts read it.
+    fn parseConditional(self: *ZigExprParser) ZigExprError!ZigExprPiece {
+        const start = self.pos;
+        self.pos += 2; // `if`
+        self.skipWs();
+        if (self.peek() != '(') return ZigExprError.NoParse;
+        self.pos += 1;
+        const cond = try self.parseOr();
+        self.skipWs();
+        if (self.peek() != ')') return ZigExprError.NoParse;
+        self.pos += 1;
+        const then_piece = try self.parseOr();
+        self.skipWs();
+        if (!self.atKeyword("else")) return ZigExprError.NoParse;
+        self.pos += 4;
+        const else_piece = try self.parseOr();
+        if (!cond.changed and !then_piece.changed and !else_piece.changed) {
+            return .{ .text = self.text[start..else_piece.end], .start = start, .end = else_piece.end, .is_string_lit = false, .changed = false };
+        }
+        const joined = std.fmt.allocPrint(self.allocator, "if ({s}) {s} else {s}", .{ cond.text, then_piece.text, else_piece.text }) catch return ZigExprError.OutOfMemory;
+        return .{ .text = joined, .start = start, .end = else_piece.end, .is_string_lit = false, .changed = true };
+    }
+
+    fn parseUnary(self: *ZigExprParser) ZigExprError!ZigExprPiece {
         self.skipWs();
         const start = self.pos;
         if (self.peek() == '!' or self.peek() == '-') {
@@ -1958,25 +2033,25 @@ const StrEqParser = struct {
             }
             const joined = std.fmt.allocPrint(self.allocator, "{s}{s}", .{
                 self.text[start..operand.start], operand.text,
-            }) catch return StrEqError.OutOfMemory;
+            }) catch return ZigExprError.OutOfMemory;
             return .{ .text = joined, .start = start, .end = operand.end, .is_string_lit = false, .changed = true };
         }
         return self.parsePostfix();
     }
 
-    fn parsePostfix(self: *StrEqParser) StrEqError!StrEqPiece {
+    fn parsePostfix(self: *ZigExprParser) ZigExprError!ZigExprPiece {
         var result = try self.parsePrimary();
         while (true) {
             // No skipWs here: postfix binds tightly, and a space before `(`
             // or `[` in guard text is not a call we need to model.
             const c = self.peek();
             if (c == '.') {
-                if (self.pos + 1 >= self.text.len or !exprIdentStartChar(self.text[self.pos + 1])) return StrEqError.NoParse;
+                if (self.pos + 1 >= self.text.len or !exprIdentStartChar(self.text[self.pos + 1])) return ZigExprError.NoParse;
                 const dot_at = self.pos;
                 self.pos += 1;
                 _ = try self.parseIdentName();
                 if (result.changed) {
-                    const joined = std.fmt.allocPrint(self.allocator, "{s}{s}", .{ result.text, self.text[dot_at..self.pos] }) catch return StrEqError.OutOfMemory;
+                    const joined = std.fmt.allocPrint(self.allocator, "{s}{s}", .{ result.text, self.text[dot_at..self.pos] }) catch return ZigExprError.OutOfMemory;
                     result = .{ .text = joined, .start = result.start, .end = self.pos, .is_string_lit = false, .changed = true };
                 } else {
                     result = .{ .text = self.text[result.start..self.pos], .start = result.start, .end = self.pos, .is_string_lit = false, .changed = false };
@@ -1984,7 +2059,7 @@ const StrEqParser = struct {
             } else if (c == '(' or c == '[') {
                 const inner = try self.parseBalanced(c);
                 if (inner.changed or result.changed) {
-                    const joined = std.fmt.allocPrint(self.allocator, "{s}{s}", .{ result.text, inner.text }) catch return StrEqError.OutOfMemory;
+                    const joined = std.fmt.allocPrint(self.allocator, "{s}{s}", .{ result.text, inner.text }) catch return ZigExprError.OutOfMemory;
                     result = .{ .text = joined, .start = result.start, .end = self.pos, .is_string_lit = false, .changed = true };
                 } else {
                     result = .{ .text = self.text[result.start..self.pos], .start = result.start, .end = self.pos, .is_string_lit = false, .changed = false };
@@ -1999,12 +2074,12 @@ const StrEqParser = struct {
     /// rewrite independently, so `@intFromBool(s == "x")` rewrites while an
     /// argument this parser cannot read keeps its own bytes — per-segment
     /// identity, never per-expression abandonment.
-    fn parseBalanced(self: *StrEqParser, open: u8) StrEqError!StrEqPiece {
+    fn parseBalanced(self: *ZigExprParser, open: u8) ZigExprError!ZigExprPiece {
         const close: u8 = if (open == '(') ')' else ']';
         const start = self.pos;
         self.pos += 1;
-        var out = std.ArrayList(u8).initCapacity(self.allocator, 8) catch return StrEqError.OutOfMemory;
-        out.append(self.allocator, open) catch return StrEqError.OutOfMemory;
+        var out = std.ArrayList(u8).initCapacity(self.allocator, 8) catch return ZigExprError.OutOfMemory;
+        out.append(self.allocator, open) catch return ZigExprError.OutOfMemory;
         var changed = false;
         var seg_start = self.pos;
         var depth: usize = 0;
@@ -2017,19 +2092,19 @@ const StrEqParser = struct {
             if (c == '(' or c == '[' or c == '{') depth += 1;
             if (c == ')' or c == ']' or c == '}') {
                 if (depth == 0) {
-                    if (c != close) return StrEqError.NoParse;
+                    if (c != close) return ZigExprError.NoParse;
                     const seg = self.text[seg_start..self.pos];
-                    const low = rewriteStrEqInner(self.allocator, seg);
+                    const low = rewriteZigExprInner(self.allocator, seg);
                     if (low) |l| {
                         changed = true;
-                        out.appendSlice(self.allocator, l) catch return StrEqError.OutOfMemory;
+                        out.appendSlice(self.allocator, l) catch return ZigExprError.OutOfMemory;
                     } else {
-                        out.appendSlice(self.allocator, seg) catch return StrEqError.OutOfMemory;
+                        out.appendSlice(self.allocator, seg) catch return ZigExprError.OutOfMemory;
                     }
-                    out.append(self.allocator, close) catch return StrEqError.OutOfMemory;
+                    out.append(self.allocator, close) catch return ZigExprError.OutOfMemory;
                     self.pos += 1;
                     return .{
-                        .text = if (changed) (out.toOwnedSlice(self.allocator) catch return StrEqError.OutOfMemory) else self.text[start..self.pos],
+                        .text = if (changed) (out.toOwnedSlice(self.allocator) catch return ZigExprError.OutOfMemory) else self.text[start..self.pos],
                         .start = start,
                         .end = self.pos,
                         .is_string_lit = false,
@@ -2040,24 +2115,24 @@ const StrEqParser = struct {
             }
             if (c == ',' and depth == 0) {
                 const seg = self.text[seg_start..self.pos];
-                const low = rewriteStrEqInner(self.allocator, seg);
+                const low = rewriteZigExprInner(self.allocator, seg);
                 if (low) |l| {
                     changed = true;
-                    out.appendSlice(self.allocator, l) catch return StrEqError.OutOfMemory;
+                    out.appendSlice(self.allocator, l) catch return ZigExprError.OutOfMemory;
                 } else {
-                    out.appendSlice(self.allocator, seg) catch return StrEqError.OutOfMemory;
+                    out.appendSlice(self.allocator, seg) catch return ZigExprError.OutOfMemory;
                 }
-                out.append(self.allocator, ',') catch return StrEqError.OutOfMemory;
+                out.append(self.allocator, ',') catch return ZigExprError.OutOfMemory;
                 seg_start = self.pos + 1;
             }
             self.pos += 1;
         }
-        return StrEqError.NoParse;
+        return ZigExprError.NoParse;
     }
 
     /// Skip a `"…"` or `'…'` literal including escapes; pos lands after the
     /// closing quote.
-    fn skipStringLike(self: *StrEqParser, quote: u8) StrEqError!void {
+    fn skipStringLike(self: *ZigExprParser, quote: u8) ZigExprError!void {
         self.pos += 1;
         while (self.pos < self.text.len) {
             const c = self.text[self.pos];
@@ -2071,11 +2146,11 @@ const StrEqParser = struct {
             }
             self.pos += 1;
         }
-        return StrEqError.NoParse;
+        return ZigExprError.NoParse;
     }
 
-    fn parseIdentName(self: *StrEqParser) StrEqError!void {
-        if (!exprIdentStartChar(self.peek())) return StrEqError.NoParse;
+    fn parseIdentName(self: *ZigExprParser) ZigExprError!void {
+        if (!exprIdentStartChar(self.peek())) return ZigExprError.NoParse;
         while (self.pos < self.text.len) {
             const c = self.text[self.pos];
             if (exprIdentChar(c)) {
@@ -2088,10 +2163,15 @@ const StrEqParser = struct {
         }
     }
 
-    fn parsePrimary(self: *StrEqParser) StrEqError!StrEqPiece {
+    fn parsePrimary(self: *ZigExprParser) ZigExprError!ZigExprPiece {
         self.skipWs();
         const start = self.pos;
         const c = self.peek();
+        // `if (<cond>) <then> else <else>` — a body-position conditional, which
+        // is where the rewrites are most often NESTED: `-> if (n % 2 == 0) 1
+        // else 0`, `if (cmd == "start") … else …`. Read BEFORE the identifier
+        // branch, which would otherwise take `if` for a name.
+        if (self.atKeyword("if")) return self.parseConditional();
         if (c == '"') {
             try self.skipStringLike('"');
             return .{ .text = self.text[start..self.pos], .start = start, .end = self.pos, .is_string_lit = true, .changed = false };
@@ -2104,24 +2184,24 @@ const StrEqParser = struct {
             self.pos += 1;
             const inner = try self.parseOr();
             self.skipWs();
-            if (self.peek() != ')') return StrEqError.NoParse;
+            if (self.peek() != ')') return ZigExprError.NoParse;
             self.pos += 1;
             if (!inner.changed) {
                 return .{ .text = self.text[start..self.pos], .start = start, .end = self.pos, .is_string_lit = false, .changed = false };
             }
-            const joined = std.fmt.allocPrint(self.allocator, "({s})", .{inner.text}) catch return StrEqError.OutOfMemory;
+            const joined = std.fmt.allocPrint(self.allocator, "({s})", .{inner.text}) catch return ZigExprError.OutOfMemory;
             return .{ .text = joined, .start = start, .end = self.pos, .is_string_lit = false, .changed = true };
         }
         if (c == '@') {
             self.pos += 1;
             try self.parseIdentName();
             self.skipWs();
-            if (self.peek() != '(') return StrEqError.NoParse;
+            if (self.peek() != '(') return ZigExprError.NoParse;
             const inner = try self.parseBalanced('(');
             if (!inner.changed) {
                 return .{ .text = self.text[start..self.pos], .start = start, .end = self.pos, .is_string_lit = false, .changed = false };
             }
-            const joined = std.fmt.allocPrint(self.allocator, "{s}{s}", .{ self.text[start..inner.start], inner.text }) catch return StrEqError.OutOfMemory;
+            const joined = std.fmt.allocPrint(self.allocator, "{s}{s}", .{ self.text[start..inner.start], inner.text }) catch return ZigExprError.OutOfMemory;
             return .{ .text = joined, .start = start, .end = self.pos, .is_string_lit = false, .changed = true };
         }
         if (std.ascii.isDigit(c)) {
@@ -2139,7 +2219,7 @@ const StrEqParser = struct {
             try self.parseIdentName();
             return .{ .text = self.text[start..self.pos], .start = start, .end = self.pos, .is_string_lit = false, .changed = false };
         }
-        return StrEqError.NoParse;
+        return ZigExprError.NoParse;
     }
 };
 
@@ -2147,27 +2227,37 @@ fn exprIdentStartChar(c: u8) bool {
     return std.ascii.isAlphabetic(c) or c == '_';
 }
 
-/// Rewrite literal-grounded string `==` / `!=` in one Koru expression into the
-/// Zig value-equality spelling. Returns null when the text has no such
-/// comparison OR cannot be fully read as an expression — in both cases the
-/// caller keeps the original bytes, so this can never corrupt text it does
-/// not understand. The result (when non-null) is owned by the caller; every
-/// intermediate lives in an arena.
-pub fn rewriteStringEqualityZig(allocator: std.mem.Allocator, text: []const u8) StrEqError!?[]const u8 {
-    // Fast reject: no `==` / `!=` — nothing to parse at all.
-    if (std.mem.indexOf(u8, text, "==") == null and std.mem.indexOf(u8, text, "!=") == null) return null;
+/// Rewrite the operators in one Koru expression whose Zig spelling differs —
+/// `%` into `@rem`, a literal-grounded string `==` / `!=` into `mem.eql`.
+/// Returns null when the text carries no such operator OR cannot be fully read
+/// as an expression — in both cases the caller keeps the original bytes, so
+/// this can never corrupt text it does not understand. The result (when
+/// non-null) is owned by the caller; every intermediate lives in an arena.
+pub fn rewriteZigExpr(allocator: std.mem.Allocator, text: []const u8) ZigExprError!?[]const u8 {
+    // Fast reject: none of the three trigger substrings — nothing to parse at
+    // all. This is the common case on the emission path, so it is one scan.
+    if (!zigExprMayRewrite(text)) return null;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const rewritten = rewriteStrEqInner(arena.allocator(), text) orelse return null;
-    return allocator.dupe(u8, rewritten) catch return StrEqError.OutOfMemory;
+    const rewritten = rewriteZigExprInner(arena.allocator(), text) orelse return null;
+    return allocator.dupe(u8, rewritten) catch return ZigExprError.OutOfMemory;
+}
+
+/// Could this text contain an operator the rewrite acts on? Substring-level, so
+/// a `%` inside a string literal answers yes — the parse itself then finds
+/// nothing to change and the caller keeps its bytes.
+fn zigExprMayRewrite(text: []const u8) bool {
+    return std.mem.indexOfScalar(u8, text, '%') != null or
+        std.mem.indexOf(u8, text, "==") != null or
+        std.mem.indexOf(u8, text, "!=") != null;
 }
 
 /// Arena-side worker: parse and rewrite, or null for identity. Recursion
 /// (call-argument segments in `parseBalanced`) re-enters HERE so every
 /// intermediate shares one arena and one lifetime.
-fn rewriteStrEqInner(allocator: std.mem.Allocator, text: []const u8) ?[]const u8 {
-    if (std.mem.indexOf(u8, text, "==") == null and std.mem.indexOf(u8, text, "!=") == null) return null;
-    var parser = StrEqParser{ .allocator = allocator, .text = text, .pos = 0 };
+fn rewriteZigExprInner(allocator: std.mem.Allocator, text: []const u8) ?[]const u8 {
+    if (!zigExprMayRewrite(text)) return null;
+    var parser = ZigExprParser{ .allocator = allocator, .text = text, .pos = 0 };
     const piece = parser.parseOr() catch return null;
     parser.skipWs();
     if (parser.pos < text.len) return null; // trailing content — not a whole expression
@@ -2188,51 +2278,106 @@ fn rewriteStrEqInner(allocator: std.mem.Allocator, text: []const u8) ?[]const u8
 }
 
 test "string equality: literal RHS in a guard rewrites to mem.eql" {
-    const out = (try rewriteStringEqualityZig(std.testing.allocator, "cmd == \"start\"")).?;
+    const out = (try rewriteZigExpr(std.testing.allocator, "cmd == \"start\"")).?;
     defer std.testing.allocator.free(out);
     try std.testing.expectEqualStrings("@import(\"std\").mem.eql(u8, cmd, \"start\")", out);
 }
 
 test "string equality: literal LHS and != negates" {
-    const out = (try rewriteStringEqualityZig(std.testing.allocator, "\"stop\" != cmd")).?;
+    const out = (try rewriteZigExpr(std.testing.allocator, "\"stop\" != cmd")).?;
     defer std.testing.allocator.free(out);
     try std.testing.expectEqualStrings("!@import(\"std\").mem.eql(u8, \"stop\", cmd)", out);
 }
 
 test "string equality: compound guard rewrites only the string comparison" {
-    const out = (try rewriteStringEqualityZig(std.testing.allocator, "name == \"lars\" and age > 40")).?;
+    const out = (try rewriteZigExpr(std.testing.allocator, "name == \"lars\" and age > 40")).?;
     defer std.testing.allocator.free(out);
     try std.testing.expectEqualStrings("@import(\"std\").mem.eql(u8, name, \"lars\") and age > 40", out);
 }
 
 test "string equality: field access operand" {
-    const out = (try rewriteStringEqualityZig(std.testing.allocator, "req.path == \"/health\"")).?;
+    const out = (try rewriteZigExpr(std.testing.allocator, "req.path == \"/health\"")).?;
     defer std.testing.allocator.free(out);
     try std.testing.expectEqualStrings("@import(\"std\").mem.eql(u8, req.path, \"/health\")", out);
 }
 
 test "string equality: numeric comparisons are untouched (null)" {
-    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteStringEqualityZig(std.testing.allocator, "acc.floor == -1 and acc.pos == 0"));
-    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteStringEqualityZig(std.testing.allocator, "c == '('"));
-    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteStringEqualityZig(std.testing.allocator, "pv == 0"));
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "acc.floor == -1 and acc.pos == 0"));
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "c == '('"));
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "pv == 0"));
 }
 
 test "string equality: an == inside a string literal does not fire" {
-    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteStringEqualityZig(std.testing.allocator, "\"a == b\""));
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "\"a == b\""));
+}
+
+test "remainder: % rewrites to @rem at every operand type" {
+    const out = (try rewriteZigExpr(std.testing.allocator, "n % 2")).?;
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings("@rem(n, 2)", out);
+}
+
+test "remainder: only this operator's operands move (precedence)" {
+    const sum = (try rewriteZigExpr(std.testing.allocator, "a + b % c")).?;
+    defer std.testing.allocator.free(sum);
+    try std.testing.expectEqualStrings("a + @rem(b, c)", sum);
+
+    const mul = (try rewriteZigExpr(std.testing.allocator, "a % b * c")).?;
+    defer std.testing.allocator.free(mul);
+    try std.testing.expectEqualStrings("@rem(a, b) * c", mul);
+
+    // Chained remainder nests left-associatively, like the operator it replaces.
+    const chain = (try rewriteZigExpr(std.testing.allocator, "a % b % c")).?;
+    defer std.testing.allocator.free(chain);
+    try std.testing.expectEqualStrings("@rem(@rem(a, b), c)", chain);
+}
+
+test "remainder: a condition carrying both rewrites lowers both" {
+    const out = (try rewriteZigExpr(std.testing.allocator, "n % 2 == 0 and cmd == \"go\"")).?;
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings("@rem(n, 2) == 0 and @import(\"std\").mem.eql(u8, cmd, \"go\")", out);
+}
+
+test "remainder: a % inside a string literal does not fire" {
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "\"50% off\""));
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "@import(\"std\").fmt.bufPrint(&b, \"{d}%\", .{share})"));
+}
+
+test "remainder: a % nested in a body conditional still lowers" {
+    const out = (try rewriteZigExpr(std.testing.allocator, "if (n % 2 == 0) 1 else 0")).?;
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings("if (@rem(n, 2) == 0) 1 else 0", out);
+}
+
+test "conditional: a nested if binds its else to the nearest if" {
+    const out = (try rewriteZigExpr(std.testing.allocator, "if (a == 1) if (b % 2 == 0) x else y else z")).?;
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings("if (a == 1) if (@rem(b, 2) == 0) x else y else z", out);
+}
+
+test "conditional: a statement if (block arms, no else) is left alone" {
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "if (n % 2 == 0) { x = 1; }"));
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "if (n % 2 == 0) x = 1;"));
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "if (n % 2 == 0) 1"));
+}
+
+test "division: bare / is left alone (needs a type oracle — 030_143)" {
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "n / 2"));
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "total / count + 1"));
 }
 
 test "string equality: unreadable text returns null, never a guess" {
     // Bit ops, statements, struct literals — all outside the modeled subset.
-    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteStringEqualityZig(std.testing.allocator, "(mask >> j) & 1 == \"x\""));
-    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteStringEqualityZig(std.testing.allocator, "const dx = a == \"x\";"));
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "(mask >> j) & 1 == \"x\""));
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "const dx = a == \"x\";"));
 }
 
 test "string equality: rewrites inside builtin-call arguments" {
-    const out = (try rewriteStringEqualityZig(std.testing.allocator, "@intFromBool(s == \"x\")")).?;
+    const out = (try rewriteZigExpr(std.testing.allocator, "@intFromBool(s == \"x\")")).?;
     defer std.testing.allocator.free(out);
     try std.testing.expectEqualStrings("@intFromBool(@import(\"std\").mem.eql(u8, s, \"x\"))", out);
 }
 
 test "string equality: identifier == identifier is left alone (needs a type oracle)" {
-    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteStringEqualityZig(std.testing.allocator, "left == right"));
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "left == right"));
 }

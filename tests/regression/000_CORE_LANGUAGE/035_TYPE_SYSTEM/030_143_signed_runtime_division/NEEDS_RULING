@@ -1,17 +1,26 @@
-Signed runtime `/` and `%`: lower them to `@divTrunc`/`@rem`, or refuse them with a Koru diagnostic that names the operand's signedness?
+Signed runtime `/`: lower it to `@divTrunc`, or refuse it with a Koru diagnostic that names the operand's signedness?
 
 Both beat what happens today, which is Zig's own error reaching the user verbatim —
 "signed integers must use @divTrunc, @divFloor, or @divExact" — a raw host error with
 Zig's builtin list in it.
 
 The asymmetry that makes this a decision and not a bug report: koru's COMPTIME evaluator
-already answers it one way. src/comptime_eval.zig uses `@divTrunc`/`@rem` and its own
-comment calls that "the C-parity choice". The runtime emitter has no matching lowering,
-so comptime and runtime disagree about the same operator. Characterised 2026-07-25:
-signed `/` fails, signed `%` fails, unsigned `/` works, signed `*` works.
+already answers it one way. src/comptime_eval.zig uses `@divTrunc` for `.divide` and its
+own comment calls that "the C-parity choice". The runtime emitter has no matching
+lowering, so comptime and runtime disagree about the same operator. Characterised
+2026-07-25: signed `/` fails, unsigned `/` works, signed `*` works.
+
+The `%` half of this pin is SETTLED and landed 2026-09-17: `%` lowers to `@rem` in the
+Zig spelling of the expression text (codegen_utils.rewriteZigExpr), which is decidable
+without a type oracle because `@rem` is the same operator for an unsigned operand and
+the only Zig accepts for a signed one. `/` is not decidable that way — `@divTrunc` is
+truncating division and `/` is exact division, so which one is right depends on whether
+the operand is an integer or a float, and the rewrite site carries text, not types. That
+type oracle is the whole of what is owed here.
 
 Options:
-  - lower it, matching comptime_eval's C-parity choice — this test goes green as written;
+  - lower it, matching comptime_eval's C-parity choice — needs the operand type at the
+    site (the emitter's parsed `.binary` nodes have no types today either);
   - refuse it in Koru, naming the signedness — this pin flips to MUST_ERROR with that
     diagnostic as its expectation.
 

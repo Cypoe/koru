@@ -3054,7 +3054,7 @@ fn emitSubflowContinuationsWithDepth(
                         try emitter.write(" = ");
                         // Check for plain value (identity branch constructor)
                         if (bc.plain_value) |pv| {
-                            try emitter.write(pv);
+                            try emitter.write(lowerExprZig(emitter, pv));
                         } else {
                             try emitter.write(".{");
                             for (bc.fields, 0..) |field, i| {
@@ -3063,7 +3063,7 @@ fn emitSubflowContinuationsWithDepth(
                                 try emitter.write(field.name);
                                 try emitter.write(" = ");
                                 if (field.expression_str) |expr| {
-                                    try emitter.write(expr);
+                                    try emitter.write(lowerExprZig(emitter, expr));
                                 } else {
                                     try emitter.write(field.type);
                                 }
@@ -3399,7 +3399,7 @@ fn emitSubflowContinuationsWithDepth(
                         } else {
                             try emitter.write("else if (");
                         }
-                        try emitter.write(strEqGuard(emitter, condition));
+                        try emitter.write(lowerExprZig(emitter, condition));
                         try emitter.write(") {\n");
                     } else {
                         // No when-clause - this is the else case
@@ -3884,7 +3884,7 @@ fn emitSubflowContinuationsWithDepth(
                             try emitter.write(" = ");
                             // Check for plain value (identity branch constructor)
                             if (bc.plain_value) |pv| {
-                                try emitter.write(pv);
+                                try emitter.write(lowerExprZig(emitter, pv));
                             } else {
                                 try emitter.write(".{");
                                 for (bc.fields, 0..) |field, idx| {
@@ -3893,7 +3893,7 @@ fn emitSubflowContinuationsWithDepth(
                                     try emitter.write(field.name);
                                     try emitter.write(" = ");
                                     if (field.expression_str) |expr| {
-                                        try emitter.write(expr);
+                                        try emitter.write(lowerExprZig(emitter, expr));
                                     } else {
                                         try emitter.write(field.type);
                                     }
@@ -4045,7 +4045,7 @@ fn emitSubflowContinuationsWithDepth(
                         // at the impl-body sites that pass `ctx.inline_fire_conts`.
                         break :blk (try presenceConditionRewrite(alloc, condition, ev, null)) orelse condition;
                     };
-                    try emitter.write(strEqGuard(emitter, cond_out));
+                    try emitter.write(lowerExprZig(emitter, cond_out));
                     try emitter.write(") ");
                 } else {
                     // No when-clause - this is the else case
@@ -4063,7 +4063,7 @@ fn emitSubflowContinuationsWithDepth(
                             try emitter.write(" = ");
                             // Check for plain value (identity branch constructor)
                             if (bc.plain_value) |pv| {
-                                try emitter.write(pv);
+                                try emitter.write(lowerExprZig(emitter, pv));
                             } else {
                                 try emitter.write(".{");
                                 for (bc.fields, 0..) |field, field_idx| {
@@ -4072,7 +4072,7 @@ fn emitSubflowContinuationsWithDepth(
                                     try emitter.write(field.name);
                                     try emitter.write(" = ");
                                     if (field.expression_str) |expr| {
-                                        try emitter.write(expr);
+                                        try emitter.write(lowerExprZig(emitter, expr));
                                     } else {
                                         try emitter.write(field.type);
                                     }
@@ -5009,7 +5009,7 @@ fn emitInlineCodeResolvingSplices(
                         break :blk (try presenceConditionRewrite(alloc, cont.condition.?, ev, ctx.inline_fire_conts)) orelse cont.condition.?;
                     };
                     try emitter.write("if (");
-                    try emitter.write(strEqGuard(emitter, cond_out));
+                    try emitter.write(lowerExprZig(emitter, cond_out));
                     try emitter.write(") { ");
                 }
                 // Give the spliced body a unique `result_N` namespace, so a
@@ -5161,9 +5161,9 @@ fn emitInlineCodeResolvingSplices(
                 };
                 try emitter.write("if (");
                 if (bind_rename) |br| {
-                    try emitValueWithBindingSubstitution(emitter, strEqGuard(emitter, cond_out), br);
+                    try emitValueWithBindingSubstitution(emitter, lowerExprZig(emitter, cond_out), br);
                 } else {
-                    try emitter.write(strEqGuard(emitter, cond_out));
+                    try emitter.write(lowerExprZig(emitter, cond_out));
                 }
                 try emitter.write(") { ");
             }
@@ -7679,7 +7679,7 @@ pub fn emitHandlersStruct(
             if (guarded) {
                 try emitter.writeIndent();
                 try emitter.write("if (");
-                try emitter.write(strEqGuard(emitter, cont.condition.?));
+                try emitter.write(lowerExprZig(emitter, cont.condition.?));
                 try emitter.write(") {\n");
                 emitter.indent();
             }
@@ -7713,7 +7713,7 @@ pub fn emitHandlersStruct(
                             var fld_buf: [128]u8 = undefined;
                             try w.print(" .{s} = ({s})", .{
                                 lowerIdent(&fld_buf, field.name),
-                                field.expression_str orelse field.type,
+                                lowerExprZig(emitter, field.expression_str orelse field.type),
                             });
                         }
                         try w.writeAll(" } }");
@@ -7722,7 +7722,7 @@ pub fn emitHandlersStruct(
                         resume_expr_owned = try std.fmt.allocPrint(
                             ctx.allocator,
                             ".{{ .{s} = ({s}) }}",
-                            .{ lowered_arm, pv },
+                            .{ lowered_arm, lowerExprZig(emitter, pv) },
                         );
                     } else {
                         resume_expr_owned = try std.fmt.allocPrint(
@@ -7737,7 +7737,7 @@ pub fn emitHandlersStruct(
                 if (cont.continuations.len != 0) break :blk null;
                 const node = cont.node orelse break :blk null;
                 switch (node) {
-                    .expression => |code| break :blk code,
+                    .expression => |code| break :blk lowerExprZig(emitter, code),
                     .branch_constructor => |bc| {
                         if (bc.fields.len != 0) break :blk null;
                         if (bc.plain_value) |pv| {
@@ -7756,7 +7756,7 @@ pub fn emitHandlersStruct(
                                 resume_expr_owned = try std.fmt.allocPrint(
                                     ctx.allocator,
                                     "{s} {s}",
-                                    .{ bc.branch_name, pv },
+                                    .{ bc.branch_name, lowerExprZig(emitter, pv) },
                                 );
                             }
                             break :blk resume_expr_owned.?;
@@ -7905,16 +7905,25 @@ fn presenceConditionRewrite(
     return null;
 }
 
-/// Runtime string equality (Zig target): apply the value-equality spelling
-/// to a `when` guard before it is written. Koru's `==` on strings is value
-/// equality (the comptime fold, the interpreter, and the JS target all agree);
-/// pasted through, Zig refuses `[]const u8 == []const u8` at Stage D. The
-/// rewrite (codegen_utils.rewriteStringEqualityZig) fires only on a
-/// literal-grounded comparison it fully parsed — identity otherwise, and
-/// identity when this emitter has no allocator to build the new text with.
-fn strEqGuard(emitter: *CodeEmitter, cond: []const u8) []const u8 {
-    const alloc = emitter.allocator orelse return cond;
-    return (codegen_utils.rewriteStringEqualityZig(alloc, cond) catch null) orelse cond;
+/// THE ZIG TARGET'S DOOR ONTO THE OPERATOR REWRITE — the `.zig` arm's
+/// `codegen_utils.rewriteZigExpr`, called directly so an expression with
+/// nothing to rewrite costs no allocation; the twin of
+/// `js_emitter.writeJsExpr` (same seam, other target). Every KORU EXPRESSION
+/// this emitter writes goes through here: a `when` guard, an `if` condition, a
+/// body or field value. What it changes is the two operators Zig does not
+/// spell Koru's way — `%` (Zig's is unsigned-only) and a literal-grounded
+/// string `==` / `!=` (Koru's is value equality); see the operator-spelling
+/// section in codegen_utils for the boundary.
+///
+/// It is an IDENTITY, not a fallback: the rewrite touches only text it read
+/// whole as one expression and has something to change in, so already-Zig host
+/// text, statements, bit operators and struct literals come back byte-identical
+/// (`@sqrt(x)` stays `@sqrt(x)` — Zig names it too). Identity also when this
+/// emitter has no allocator to build new text with; a rewritten result is
+/// borrowed from that allocator, which is the compile arena.
+fn lowerExprZig(emitter: *CodeEmitter, text: []const u8) []const u8 {
+    const alloc = emitter.allocator orelse return text;
+    return (codegen_utils.rewriteZigExpr(alloc, text) catch null) orelse text;
 }
 
 /// Write an arm-fire's payload argument list — the POSITIONAL shape shared
@@ -9080,7 +9089,11 @@ const EmitError = error{
     OutOfMemory, // growable CodeEmitter buffers allocate on demand
 };
 
-/// Emit a value expression (may reference input fields)
+/// Emit a value expression (may reference input fields).
+///
+/// A Koru EXPRESSION, so it goes through `lowerExprZig` — the body of `-> n % 2`
+/// and every field RHS arrives here as raw text, and this is the Zig target's
+/// only chance to spell it.
 pub fn emitValue(emitter: *CodeEmitter, ctx: *EmissionContext, value: []const u8) EmitError!void {
     const trimmed = std.mem.trim(u8, value, " \t");
 
@@ -9117,11 +9130,13 @@ pub fn emitValue(emitter: *CodeEmitter, ctx: *EmissionContext, value: []const u8
         }
     }
 
-    // Otherwise write value as-is
-    try emitter.write(value);
+    // Otherwise write value as-is — spelled for this target
+    try emitter.write(lowerExprZig(emitter, value));
 }
 
-/// Emit a value expression with binding substitution (for tap pipeline emission)
+/// Emit a value expression with binding substitution (for tap pipeline emission).
+/// Lowered FIRST, then spliced: the substitute walks the text it is given, and a
+/// `%` it cannot see is one the emitter cannot spell.
 fn emitValueWithBindingSubstitution(
     emitter: *CodeEmitter,
     value: []const u8,
@@ -9132,9 +9147,13 @@ fn emitValueWithBindingSubstitution(
         return error.ArrayLiteralMissingType;
     }
 
+    // Spell it for this target BEFORE splicing: the walk below is a text scan,
+    // so an unlowered `%` would be carried into the output verbatim.
+    const lowered = lowerExprZig(emitter, value);
+
     if (substitution == null) {
         // No substitution needed
-        try emitter.write(value);
+        try emitter.write(lowered);
         return;
     }
 
@@ -9143,28 +9162,28 @@ fn emitValueWithBindingSubstitution(
     var in_string = false;
     var in_char = false;
 
-    while (i < value.len) {
-        const c = value[i];
+    while (i < lowered.len) {
+        const c = lowered[i];
 
         // Track string literals
-        if (!in_char and c == '"' and !isEscaped(value, i)) {
+        if (!in_char and c == '"' and !isEscaped(lowered, i)) {
             in_string = !in_string;
-            try emitter.write(value[i .. i + 1]);
+            try emitter.write(lowered[i .. i + 1]);
             i += 1;
             continue;
         }
 
         // Track char literals
-        if (!in_string and c == '\'' and !isEscaped(value, i)) {
+        if (!in_string and c == '\'' and !isEscaped(lowered, i)) {
             in_char = !in_char;
-            try emitter.write(value[i .. i + 1]);
+            try emitter.write(lowered[i .. i + 1]);
             i += 1;
             continue;
         }
 
         // If we're in a string or char literal, just emit as-is
         if (in_string or in_char) {
-            try emitter.write(value[i .. i + 1]);
+            try emitter.write(lowered[i .. i + 1]);
             i += 1;
             continue;
         }
@@ -9173,17 +9192,17 @@ fn emitValueWithBindingSubstitution(
         if (isIdentStartChar(c)) {
             // Find the end of the identifier
             var j = i + 1;
-            while (j < value.len and isIdentChar(value[j])) {
+            while (j < lowered.len and isIdentChar(lowered[j])) {
                 j += 1;
             }
 
-            const identifier = value[i..j];
+            const identifier = lowered[i..j];
 
             // Check if this matches the binding we want to substitute
             if (std.mem.eql(u8, identifier, sub.from)) {
                 // Check word boundaries
-                const before_ok = i == 0 or (!isIdentChar(value[i - 1]) and value[i - 1] != '@');
-                const after_ok = j >= value.len or !isIdentChar(value[j]);
+                const before_ok = i == 0 or (!isIdentChar(lowered[i - 1]) and lowered[i - 1] != '@');
+                const after_ok = j >= lowered.len or !isIdentChar(lowered[j]);
 
                 if (before_ok and after_ok) {
                     // Substitute
@@ -9200,7 +9219,7 @@ fn emitValueWithBindingSubstitution(
         }
 
         // Not an identifier, just emit the character
-        try emitter.write(value[i .. i + 1]);
+        try emitter.write(lowered[i .. i + 1]);
         i += 1;
     }
 }
@@ -9212,32 +9231,35 @@ fn emitValueWithInputPrefixing(
     input_var: []const u8,
     input_fields: []const ast.Field,
 ) !void {
+    // Spell it for this target before rewriting field references: the walk below
+    // is a text scan, so an unlowered `%` would be carried out verbatim.
+    const lowered = lowerExprZig(emitter, value);
     var i: usize = 0;
     var in_string = false;
     var in_char = false;
 
-    while (i < value.len) {
-        const c = value[i];
+    while (i < lowered.len) {
+        const c = lowered[i];
 
         // Track string literals
-        if (!in_char and c == '"' and !isEscaped(value, i)) {
+        if (!in_char and c == '"' and !isEscaped(lowered, i)) {
             in_string = !in_string;
-            try emitter.write(value[i .. i + 1]);
+            try emitter.write(lowered[i .. i + 1]);
             i += 1;
             continue;
         }
 
         // Track char literals
-        if (!in_string and c == '\'' and !isEscaped(value, i)) {
+        if (!in_string and c == '\'' and !isEscaped(lowered, i)) {
             in_char = !in_char;
-            try emitter.write(value[i .. i + 1]);
+            try emitter.write(lowered[i .. i + 1]);
             i += 1;
             continue;
         }
 
         // If we're in a string or char literal, just emit as-is
         if (in_string or in_char) {
-            try emitter.write(value[i .. i + 1]);
+            try emitter.write(lowered[i .. i + 1]);
             i += 1;
             continue;
         }
@@ -9246,19 +9268,19 @@ fn emitValueWithInputPrefixing(
         if (isIdentStartChar(c)) {
             // Find the end of the identifier
             var j = i + 1;
-            while (j < value.len and isIdentChar(value[j])) {
+            while (j < lowered.len and isIdentChar(lowered[j])) {
                 j += 1;
             }
 
             // Check if this identifier is an input field reference
-            if (isInputFieldReference(value, i, j, input_fields)) {
+            if (isInputFieldReference(lowered, i, j, input_fields)) {
                 // Emit as input_var.field
                 try emitter.write(input_var);
                 try emitter.write(".");
-                try emitter.write(value[i..j]);
+                try emitter.write(lowered[i..j]);
             } else {
                 // Not a field reference, emit as-is
-                try emitter.write(value[i..j]);
+                try emitter.write(lowered[i..j]);
             }
 
             i = j;
@@ -9266,7 +9288,7 @@ fn emitValueWithInputPrefixing(
         }
 
         // Not an identifier, just emit the character
-        try emitter.write(value[i .. i + 1]);
+        try emitter.write(lowered[i .. i + 1]);
         i += 1;
     }
 }
@@ -9312,13 +9334,29 @@ fn emitExpression(
             try emitter.write(fa.field);
         },
         .binary => |bin| {
-            try emitter.write("(");
-            try emitExpression(emitter, ctx, bin.left, binding_substitution);
-            try emitter.write(" ");
-            try emitBinaryOperator(emitter, bin.op);
-            try emitter.write(" ");
-            try emitExpression(emitter, ctx, bin.right, binding_substitution);
-            try emitter.write(")");
+            // `%` is not a token in this host: Zig's `%` is UNSIGNED-only
+            // ("signed integers and floats must use @rem or @mod") and Koru's is
+            // C's truncated remainder — what `comptime_eval.zig` folds it with
+            // and what the JS target's `%` means. `@rem` is that same operator
+            // at every operand type, so it emits as a call. codegen_utils's
+            // rewriteZigExpr is the twin of this arm for condition TEXT; this
+            // one is reached when the same condition arrived as a parsed
+            // expression (`Continuation.condition_expr`).
+            if (bin.op == .modulo) {
+                try emitter.write("@rem(");
+                try emitExpression(emitter, ctx, bin.left, binding_substitution);
+                try emitter.write(", ");
+                try emitExpression(emitter, ctx, bin.right, binding_substitution);
+                try emitter.write(")");
+            } else {
+                try emitter.write("(");
+                try emitExpression(emitter, ctx, bin.left, binding_substitution);
+                try emitter.write(" ");
+                try emitBinaryOperator(emitter, bin.op);
+                try emitter.write(" ");
+                try emitExpression(emitter, ctx, bin.right, binding_substitution);
+                try emitter.write(")");
+            }
         },
         .unary => |un| {
             try emitUnaryOperator(emitter, un.op);
@@ -9384,14 +9422,19 @@ fn emitExpression(
     }
 }
 
-/// Emit a binary operator
+/// Emit the INFIX TOKEN for a binary operator.
+///
+/// `%` is deliberately not one: no token in Zig spells Koru's truncated
+/// remainder for a signed operand, so `emitExpression` emits it as the `@rem`
+/// call before reaching here. Routing it back here would emit a `%` Zig refuses
+/// at Stage D, so the prong is a LOUD stop rather than a silent spelling.
 fn emitBinaryOperator(emitter: *CodeEmitter, op: ast.BinaryOperator) !void {
     switch (op) {
         .add => try emitter.write("+"),
         .subtract => try emitter.write("-"),
         .multiply => try emitter.write("*"),
         .divide => try emitter.write("/"),
-        .modulo => try emitter.write("%"),
+        .modulo => unreachable, // `%` emits as `@rem(…)` — see emitExpression
         .equal => try emitter.write("=="),
         .not_equal => try emitter.write("!="),
         .less => try emitter.write("<"),
@@ -9623,7 +9666,7 @@ fn emitContinuationList(
             if (cont.condition_expr) |expr| {
                 try emitExpression(emitter, ctx, expr, null);
             } else {
-                try emitter.write(strEqGuard(emitter, condition));
+                try emitter.write(lowerExprZig(emitter, condition));
             }
             try emitter.write(") {\n");
             emitter.indent();
@@ -9908,7 +9951,7 @@ fn emitContinuationListWithUnreachableBranches(
                     } else {
                         try emitter.write("else if (");
                     }
-                    try emitter.write(strEqGuard(emitter, condition));
+                    try emitter.write(lowerExprZig(emitter, condition));
                     try emitter.write(") {\n");
                 } else {
                     if (idx > 0) {
@@ -10110,7 +10153,7 @@ fn emitContinuationCase(
         if (cont.condition_expr) |expr| {
             try emitExpression(emitter, ctx, expr, null);
         } else {
-            try emitter.write(strEqGuard(emitter, condition));
+            try emitter.write(lowerExprZig(emitter, condition));
         }
         try emitter.write(") {\n");
         emitter.indent();
@@ -10188,7 +10231,7 @@ fn emitWhenClauseCase(
             } else {
                 try emitter.write("else if (");
             }
-            try emitter.write(strEqGuard(emitter, condition));
+            try emitter.write(lowerExprZig(emitter, condition));
             try emitter.write(") {\n");
         } else {
             // No when-clause - this is the else case
@@ -11264,7 +11307,7 @@ fn emitStep(
                     const ev = ctx.impl_event_decl orelse break :blk cond;
                     break :blk (try presenceConditionRewrite(alloc, cond, ev, ctx.inline_fire_conts)) orelse cond;
                 };
-                try emitter.write(strEqGuard(emitter, cond_out));
+                try emitter.write(lowerExprZig(emitter, cond_out));
             }
 
             try emitter.write(") {\n");
@@ -11545,7 +11588,7 @@ fn emitStep(
             try emitter.write(code);
             try emitter.write("\n");
         },
-        .expression => |code| {
+        .expression => |code_raw| {
             // A Zig expression at body position. In a bare-return handler the
             // `->` produce IS the event's return value, so it lowers to
             // `return EXPR;` (020_025: `| big b -> b * 100`). A bare `_`
@@ -11554,6 +11597,10 @@ fn emitStep(
             // well-formed. (The effect-branch-handler context has its own
             // override in emitHandlersStruct, where the expression becomes the
             // `return EXPR;` of the synthesized resume fn.)
+            //
+            // Spell it for this target first: this node IS a `->` body, and a
+            // `->` body is raw Koru expression text.
+            const code = lowerExprZig(emitter, code_raw);
             try emitter.writeIndent();
             if (ctx.bare_return_active and !std.mem.eql(u8, std.mem.trim(u8, code, " \t"), "_")) {
                 try emitter.write("return ");
@@ -11703,7 +11750,7 @@ fn emitStep(
                     const ev = ctx.impl_event_decl orelse break :blk cond.condition;
                     break :blk (try presenceConditionRewrite(alloc, cond.condition, ev, ctx.inline_fire_conts)) orelse cond.condition;
                 };
-                try emitter.write(strEqGuard(emitter, cond_out));
+                try emitter.write(lowerExprZig(emitter, cond_out));
             }
             try emitter.write(") {\n");
             emitter.indent();
@@ -11860,7 +11907,7 @@ fn emitStep(
                     try emitter.write(tmp);
                     try emitter.write(" = ");
                     if (field.expression_str) |expr| {
-                        try emitter.write(expr);
+                        try emitter.write(lowerExprZig(emitter, expr));
                     } else {
                         try emitter.write(field.type);
                     }
@@ -11887,7 +11934,7 @@ fn emitStep(
                 try emitter.write(field.name); // Can be "sum" or "arr[i]"
                 try emitter.write(" = ");
                 if (field.expression_str) |expr| {
-                    try emitter.write(expr);
+                    try emitter.write(lowerExprZig(emitter, expr));
                 } else {
                     try emitter.write(field.type);
                 }
@@ -11974,7 +12021,7 @@ fn emitStepWithBindingSubstitution(
             if (cb.condition_expr) |expr| {
                 try emitExpression(emitter, ctx, expr, substitution);
             } else if (cb.condition) |cond| {
-                try emitValueWithBindingSubstitution(emitter, strEqGuard(emitter, cond), substitution);
+                try emitValueWithBindingSubstitution(emitter, lowerExprZig(emitter, cond), substitution);
             }
 
             try emitter.write(") {\n");
@@ -12145,7 +12192,7 @@ fn emitStepWithBindingSubstitution(
 
             try emitter.writeIndent();
             try emitter.write("if (");
-            try emitValueWithBindingSubstitution(emitter, strEqGuard(emitter, cond.condition), substitution);
+            try emitValueWithBindingSubstitution(emitter, lowerExprZig(emitter, cond.condition), substitution);
             try emitter.write(") {\n");
             emitter.indent();
 

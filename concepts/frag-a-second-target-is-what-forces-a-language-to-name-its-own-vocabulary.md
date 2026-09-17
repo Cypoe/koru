@@ -68,19 +68,40 @@ the load-bearing part: the shape is cheap to change once there is *one home* for
 it, and expensive to argue about while there are two. Getting something in place
 that has a relationship to a vocabulary beats getting the vocabulary right.
 
-So the `.zig` arm is the identity **for the vocabulary** — with one semantic
-carve-out it now carries (2026-08-07): a literal-grounded string `==`/`!=`
-rewrites to `@import("std").mem.eql(u8, …)`, because that operator's Koru
-meaning has no verbatim Zig spelling at all (see above). That rewrite is not
-the wall this section defers — it refuses nothing; it makes programs run that
-every other organ already accepted. The distinction worth keeping: *identity
-is a sound default where the host shares the semantics, and a silent leak
-where it does not* — "comparison is shared" was true of every comparison
-except the one on strings. What the ruling still defers, stated plainly
-because the whole point of writing it down is that it not go invisible: **the
-vocabulary is enforced on JS and absent on Zig.** A `.k` naming an `@foo` nobody modelled is
-accepted by one target and refused by the other, so the table can drift into
-"whatever JS happened to need" rather than "what Koru means" — which is
+So the `.zig` arm is the identity **for the vocabulary** — with two semantic
+carve-outs it now carries:
+
+- 2026-08-07: a literal-grounded string `==`/`!=` rewrites to
+  `@import("std").mem.eql(u8, …)`, because that operator's Koru meaning has no
+  verbatim Zig spelling at all (see above).
+- 2026-09-17: `%` rewrites to `@rem(lhs, rhs)`. Zig's `%` is **unsigned-only**
+  (`signed integers and floats must use @rem or @mod`), while Koru's is C's
+  truncated remainder — what `comptime_eval.zig` folds it with (its own comment
+  calls `@rem` "the C-parity choice") and what the JS target's `%` already was.
+  `n % 2` compiled on JS and died on Zig; again every other organ agreed and the
+  Zig emission leaked the host's error.
+
+These rewrite nothing the language already had; they make programs run that
+every other organ accepted. The distinction worth keeping: *identity is a sound
+default where the host shares the semantics, and a silent leak where it does
+not* — "comparison is shared" was true of every comparison except the one on
+strings, and "arithmetic is shared" was true of every arithmetic operator except
+the one the host had narrowed.
+
+The second carve-out is the more instructive one, because it is invisible to
+reading: `%` is the SAME GLYPH on both sides, so nothing in the text looks
+wrong — the host simply defines it on a smaller domain. `==` on strings failed
+loudly in a shape Zig has no operator for at all; a same-glyph operator with a
+narrower domain looks like agreement until a signed operand arrives. A glyph
+being spelled the same in both languages is not evidence that the same operand
+types are accepted, and it is the operand-type condition, not the spelling, that
+identity is really claiming.
+
+What the ruling still defers, stated plainly because the whole point of writing
+it down is that it not go invisible: **the vocabulary is enforced on JS and
+absent on Zig.** A `.k` naming an `@foo` nobody modelled is accepted by one
+target and refused by the other, so the table can drift into "whatever JS
+happened to need" rather than "what Koru means" — which is
 [[frag-a-wall-guards-one-direction-of-a-symmetry]] with the guarded direction
 being, as always, the one that already hurt.
 

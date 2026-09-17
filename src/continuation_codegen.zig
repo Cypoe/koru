@@ -704,10 +704,11 @@ fn generatePipelineCode(
                 defer allocator.free(ind);
                 try buf.appendSlice(allocator, ind);
                 try buf.appendSlice(allocator, "if (");
-                // Runtime string equality (Zig): this module generates Zig
-                // only (header prose above), so the value-equality spelling
-                // for a literal-grounded string comparison applies here too.
-                const cond_out = (codegen_utils.rewriteStringEqualityZig(allocator, cond.condition) catch null) orelse cond.condition;
+                // The Zig spelling of the operators this host does not share:
+                // this module generates Zig only (header prose above), so the
+                // rewrites (`%` → @rem, literal-grounded string `==` → mem.eql)
+                // apply here too.
+                const cond_out = (codegen_utils.rewriteZigExpr(allocator, cond.condition) catch null) orelse cond.condition;
                 try buf.appendSlice(allocator, cond_out);
                 try buf.appendSlice(allocator, ") {\n");
 

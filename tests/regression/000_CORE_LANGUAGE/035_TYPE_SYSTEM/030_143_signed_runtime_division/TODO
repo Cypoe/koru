@@ -1,5 +1,9 @@
-OWED: signed runtime `/` and `%` emit Zig `@divTrunc` (or equivalent), not bare `/`.
+OWED: signed runtime `/` emits Zig `@divTrunc` (or equivalent), not bare `/`.
 
 Never green on the 2026-08-26..09-07 boards. Parked so the failed
 column means regression again. Driven by --todo-sweep; drop this
 marker when the pin is promotable.
+
+The `%` half of this shape landed 2026-09-17 (010_063 and 320_144/145/146
+pin it); `/` still needs the operand type, so it is the ruling in
+NEEDS_RULING that is outstanding, not the mechanism.
