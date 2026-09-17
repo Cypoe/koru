@@ -2631,8 +2631,8 @@ const codegen_utils_kernel = @import("codegen_utils");
 
 // [comptime|transform]pub event reduce { ... }
 // [comptime|transform]pub event cross { ... }
-
 ~part body
 ~part scan
 ~part fpga
 ~part fpgatb
+~part fpgaemit

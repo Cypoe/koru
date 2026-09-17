@@ -189,7 +189,11 @@ truncated` where host and fabric diverge); a `clamp(lo,hi)` term in
 the meet claims the boundary saturates, so the emitter generates
 saturating logic and the bench notes "saturated" instead. Either way
 the host-vs-fabric gap is printed, never silent and never a fail —
-the facet governs the artifact's arithmetic, not the host's i64. The
-same build also runs `yosys … check` on every `*.fpga.sv` — the
-artifact is gated structurally (0 problems) and behaviorally (the
-sim), the way spirv-val gates the [gpu] blob.
+the facet governs the artifact's arithmetic, not the host's i64.
+Signedness is the same read (390_126): a met range admitting
+negatives (`lo < 0`, `== -N`, an unbounded i64) is `logic signed
+[W-1:0]` with sign-extended wide math; `lo >= 0` stays unsigned and
+refuses negatives at the boundary. The same build also runs
+`yosys … check` on every `*.fpga.sv` — the artifact is gated
+structurally (0 problems) and behaviorally (the sim), the way
+spirv-val gates the [gpu] blob.
