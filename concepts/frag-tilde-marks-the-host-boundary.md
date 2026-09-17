@@ -1,8 +1,8 @@
 ---
 type: belief
 id: frag-tilde-marks-the-host-boundary
-provenance: ruled while orienting on the budgeted interpreter / resource bridge / shell direction; settles the design question 430_047's TODO had carried open since 2026-05-15. Corrected 2026-08-07 after Lars asked whether the interpreter still accepted `~` and the answer turned out to be "on one route it is mandatory". Evolved later the same day by a four-repo sweep for the forbidden spelling: the corpus came back clean, but the enforcement did not — the compiler half of the rule had no pin, and the interpreter's flow parser still documents and unit-tests the tilde as optional beneath every guarded door. Evolved 2026-08-12 by the corpus-presentation sweep: the by-example generator embedded raw `.kz` verbatim into every context-facing artifact, teaching `~tor`/`~import`/`~hello()` as the surface for months — a door that taught the negation; the generator now strips the marker at presentation and the corpus sources' comment prose was swept
-ts: 2026-08-16
+provenance: ruled while orienting on the budgeted interpreter / resource bridge / shell direction; settles the design question 430_047's TODO had carried open since 2026-05-15. Corrected 2026-08-07 after Lars asked whether the interpreter still accepted `~` and the answer turned out to be "on one route it is mandatory". Evolved later the same day by a four-repo sweep for the forbidden spelling: the corpus came back clean, but the enforcement did not — the compiler half of the rule had no pin, and the interpreter's flow parser still documents and unit-tests the tilde as optional beneath every guarded door. Evolved 2026-08-12 by the corpus-presentation sweep: the by-example generator embedded raw `.kz` verbatim into every context-facing artifact, teaching `~tor`/`~import`/`~hello()` as the surface for months — a door that taught the negation; the generator now strips the marker at presentation and the corpus sources' comment prose was swept. Evolved 2026-09-17 by the corpus-SELECTION door: presentation was fixed and the pick list was not, so the by-example corpus kept printing host text for tests that have a pure `.k` sibling, and the same picks implemented their subject in host proc bodies
+ts: 2026-09-17
 ---
 
 # `~` marks the host boundary, and nothing else
@@ -177,3 +177,50 @@ its `{`, while an assignment does. Found 2026-09-17 writing the
 disjunction atom's parser in `koru_std/refine.kz`, where a local holds
 one part of a `|`-split — a name that is not exotic, only spelled like
 a keyword.
+
+## The corpus-selection door (2026-09-17)
+
+The presentation door closed in August by making the generator strip the
+line-start tilde. That fixed what the generator **embeds** and said nothing about
+what the config **picks** — and selection is the earlier door. Picks are named
+one at a time, long before the pure-surface rule existed, and a `.kz` pick with
+an `input.k` sibling is not a fault the generator can see: falling back to the
+host file is that mechanism working exactly as built. So the corpus could be
+reprinted clean, with zero tildes in it, and still show Zig throughout — the
+host surface was chosen upstream, in the list.
+
+`.kz` and `proc …|zig` are the same fact at two resolutions, which is why this
+is one belief rather than two. The tilde is only the cheapest tell that a file
+is host-embedded; the picks carrying it also did their work inside host proc
+bodies — branch selection by a host `if`, payloads no Koru form ever produced.
+Presenting the escape hatch as the default is the tilde's error one layer up,
+and it is the worse of the two: a reader who meets `~` sees a marker and can ask
+what it marks, while a reader who meets a proc body has no reason to suspect the
+language spells the same thing purely. Both answer "what does normal Koru look
+like" with the host.
+
+What follows:
+
+- **A `.kz` pick is admissible only when the host boundary is its subject.** A
+  server flow, a host facet's routing, host passthrough itself — those are
+  `.kz` facts and belong in the corpus as `.kz`. A test merely *written* in a
+  host file belongs as its `input.k`; where no `input.k` exists the fix is the
+  twin, not a different subject.
+- **A test whose subject the generator strips is not admissible at all.** The
+  part-spelling pin exists to show `~part`; the corpus de-tildes what it
+  embeds, so the example would print the declaration with its own subject
+  removed. A pin and its presentation context can contradict each other, and
+  only the selection step is positioned to notice.
+- **Selection has no wall, so this door reopens.** Generation is a program;
+  picking is a judgment, re-made every time a name is added to the config, and
+  nothing in the pipeline compares the two. The drift is therefore silent by
+  construction — [[frag-a-watcher-off-the-normal-path-is-not-a-wall]] moved one
+  level up, where the unwatched act is not a code path but a person choosing.
+  Whether selection admits a wall at all, rather than a reported count of
+  host-bearing picks, is open.
+- **A host-bearing pick can also be a gap in the pure surface, not a bad
+  choice.** Where the suite pins a construct only in `.kz` — the
+  literal-in-a-flow-argument shapes, `030_010`/`030_012` — no pick can be pure,
+  because there is nothing pure to pick. The cure is a `.k` twin, and until one
+  exists the corpus is honest to show host text and dishonest to pretend
+  otherwise.
