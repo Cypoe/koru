@@ -82,3 +82,21 @@ KORU168
 KORU169
 KORU170
 KORU171
+
+# `unknownConstruct` was the only emitter and nothing called it — the DEAD check
+# could not see that until 2026-09-17, when the emit-scan stopped crediting a
+# `.KORUxxx` tag in src/errors.zig whose enclosing helper has no call site. The
+# helper is deleted; the code stays declared because whether the condition it
+# names SHOULD be refused is unsettled, and that is a language question, not a
+# tidiness one.
+#
+# What would have to exist: a parser fallback for a `~` construct that is none of
+# event / proc / @label / [Attr] / invocation. Measured this session, none of
+# `~gibberish()`, `~@nope`, `~[Bad attr]`, `~}` at top level produced ANY
+# diagnostic (all four compiled clean), while `~` in continuation position is
+# refused as PARSE001 — a different condition, with its own message. So the
+# fallback does not exist today. Whether that is a missing wall (an unresolvable
+# construct vanishing silently) or obsolete vocabulary (every `~` form now
+# answered by a specific PARSE code or accepted as an invocation) needs a ruling
+# before this code is wired or retired.
+KORU001

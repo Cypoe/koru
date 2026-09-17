@@ -71,6 +71,19 @@ anyway.
 That is the argument for a census of walls rather than a habit of building them.
 The build is the cheap half; staying discoverable is the half that decays.
 
+## Corollary, 2026-09-17 — the enforcer's predicate is a program, and it can be one step off
+
+Using the enforcer's predicate settles the human half. The program half is
+separate: a predicate can count MENTIONS where the rule needs INSTANCES, and then
+the count is wrong in the confident register. `scripts/registry_check.zig`
+counted a code as EMITTED on sighting a `.KORUxxx` tag — but the file it scans,
+`src/errors.zig`, is where those tags are DECLARED, so an uncalled helper
+credited its own code. Four such helpers hid from the DEAD check, one of them
+naming a condition no pass computes. Read the predicate and ask which of the two
+it counts, then narrow it until it counts the one the rule is about;
+[[frag-a-register-of-guards-must-be-derived-not-written]] carries the argument
+and the shape.
+
 ## Open
 
 - No inventory of the suite's walls exists. Known so far:

@@ -139,6 +139,19 @@ fn synthPanicBody(
     );
 }
 
+/// `errors.writeCandidateNames` wants a plain fn; both the candidate type and
+/// its display rule live on the inserter.
+fn disposalCandidateName(d: AutoDischargeInserter.DisposalEvent) []const u8 {
+    return AutoDischargeInserter.displayDischargerName(d.qualified_name);
+}
+
+/// The `| dropped` path's own event is not a candidate — calling it from inside
+/// its own body is recursion, not a discharge. Compared on the QUALIFIED name so
+/// the exclusion is identity, not the tail both sides render to.
+fn isNotImplEvent(d: AutoDischargeInserter.DisposalEvent, impl_qualified: []const u8) bool {
+    return !std.mem.eql(u8, d.qualified_name, impl_qualified);
+}
+
 pub const AutoDischargeInserter = struct {
     allocator: std.mem.Allocator,
     reporter: *errors.ErrorReporter,
@@ -1835,12 +1848,9 @@ pub const AutoDischargeInserter = struct {
                                     const all_disposals = try self.findAllDisposalEvents(info.phantom_state, info.base_type);
                                     defer self.allocator.free(all_disposals);
                                     if (all_disposals.len > 0) {
-                                        var options_buf: [512]u8 = undefined;
-                                        var fbs = std.io.fixedBufferStream(&options_buf);
-                                        for (all_disposals, 0..) |d, i| {
-                                            if (i > 0) fbs.writer().writeAll(", ") catch {};
-                                            fbs.writer().writeAll(displayDischargerName(d.qualified_name)) catch {};
-                                        }
+                                        var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+                                        defer options.deinit(self.allocator);
+                                        const n_candidates = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, all_disposals);
                                         // Number agreement: one candidate is
                                         // an instruction (`Call: finalize`),
                                         // several are a choice set.
@@ -1849,7 +1859,7 @@ pub const AutoDischargeInserter = struct {
                                             site_loc.line,
                                             site_loc.column,
                                             "Resource '{s}' obligation <{s}> was not discharged. Call{s}: {s}",
-                                            .{ display_name, display_state, errors.oneOfInfix(all_disposals.len), fbs.getWritten() },
+                                            .{ display_name, display_state, errors.oneOfInfix(n_candidates), options.items },
                                         );
                                     } else {
                                         try self.reporter.addError(
@@ -1862,20 +1872,15 @@ pub const AutoDischargeInserter = struct {
                                     }
                                 } else {
                                     // Build list of discharge options
-                                    var options_buf: [512]u8 = undefined;
-                                    var fbs = std.io.fixedBufferStream(&options_buf);
-                                    for (disposals, 0..) |d, i| {
-                                        if (i > 0) fbs.writer().writeAll(", ") catch {};
-                                        // Extract just event name from qualified name
-                                        const disp_name = displayDischargerName(d.qualified_name);
-                                        fbs.writer().writeAll(disp_name) catch {};
-                                    }
+                                    var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+                                    defer options.deinit(self.allocator);
+                                    _ = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, disposals);
                                     try self.reporter.addError(
                                         .KORU030,
                                         site_loc.line,
                                         site_loc.column,
                                         "Resource '{s}' <{s}> has multiple discharge options: {s}. Discharge explicitly.",
-                                        .{ display_name, display_state, fbs.getWritten() },
+                                        .{ display_name, display_state, options.items },
                                     );
                                 }
                                 return error.ValidationFailed;
@@ -2017,22 +2022,16 @@ pub const AutoDischargeInserter = struct {
                 const display_state = formatStateForError(info.phantom_state);
                 const all_disposals = try self.findAllDisposalEvents(info.phantom_state, info.base_type);
                 defer self.allocator.free(all_disposals);
-                var options_buf: [512]u8 = undefined;
-                var fbs = std.io.fixedBufferStream(&options_buf);
-                var n_options: usize = 0;
-                for (all_disposals) |d| {
-                    if (std.mem.eql(u8, d.qualified_name, impl_qualified.?)) continue;
-                    if (n_options > 0) fbs.writer().writeAll(", ") catch {};
-                    fbs.writer().writeAll(displayDischargerName(d.qualified_name)) catch {};
-                    n_options += 1;
-                }
+                var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+                defer options.deinit(self.allocator);
+                const n_options = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, isNotImplEvent, impl_qualified.?, self.allocator, &options, all_disposals);
                 if (n_options > 0) {
                     try self.reporter.addError(
                         .KORU030,
                         flow.location.line,
                         flow.location.column,
                         "Resource '{s}' obligation <{s}> was not discharged. Call{s}: {s}",
-                        .{ display_name, display_state, errors.oneOfInfix(n_options), fbs.getWritten() },
+                        .{ display_name, display_state, errors.oneOfInfix(n_options), options.items },
                     );
                 } else {
                     try self.reporter.addError(
@@ -2724,12 +2723,9 @@ pub const AutoDischargeInserter = struct {
                                     const all_disposals = try self.findAllDisposalEvents(info.phantom_state, info.base_type);
                                     defer self.allocator.free(all_disposals);
                                     if (all_disposals.len > 0) {
-                                        var options_buf: [512]u8 = undefined;
-                                        var fbs = std.io.fixedBufferStream(&options_buf);
-                                        for (all_disposals, 0..) |d, i| {
-                                            if (i > 0) fbs.writer().writeAll(", ") catch {};
-                                            fbs.writer().writeAll(displayDischargerName(d.qualified_name)) catch {};
-                                        }
+                                        var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+                                        defer options.deinit(self.allocator);
+                                        const n_candidates = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, all_disposals);
                                         // Number agreement: one candidate is
                                         // an instruction (`Call: finalize`),
                                         // several are a choice set.
@@ -2738,7 +2734,7 @@ pub const AutoDischargeInserter = struct {
                                             site_loc.line,
                                             site_loc.column,
                                             "Resource '{s}' obligation <{s}> was not discharged. Call{s}: {s}",
-                                            .{ display_name, display_state, errors.oneOfInfix(all_disposals.len), fbs.getWritten() },
+                                            .{ display_name, display_state, errors.oneOfInfix(n_candidates), options.items },
                                         );
                                     } else {
                                         try self.reporter.addError(
@@ -2750,19 +2746,15 @@ pub const AutoDischargeInserter = struct {
                                         );
                                     }
                                 } else {
-                                    var options_buf: [512]u8 = undefined;
-                                    var fbs = std.io.fixedBufferStream(&options_buf);
-                                    for (disposals, 0..) |d, i| {
-                                        if (i > 0) fbs.writer().writeAll(", ") catch {};
-                                        const disp_name = displayDischargerName(d.qualified_name);
-                                        fbs.writer().writeAll(disp_name) catch {};
-                                    }
+                                    var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+                                    defer options.deinit(self.allocator);
+                                    _ = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, disposals);
                                     try self.reporter.addError(
                                         .KORU030,
                                         site_loc.line,
                                         site_loc.column,
                                         "Resource '{s}' <{s}> has multiple discharge options: {s}. Discharge explicitly.",
-                                        .{ display_name, display_state, fbs.getWritten() },
+                                        .{ display_name, display_state, options.items },
                                     );
                                 }
                                 return error.ValidationFailed;
@@ -3131,13 +3123,9 @@ pub const AutoDischargeInserter = struct {
                         const all_disposals = try self.findAllDisposalEvents(info.phantom_state, info.base_type);
                         defer self.allocator.free(all_disposals);
                         if (all_disposals.len > 0) {
-                            var options_buf: [1024]u8 = undefined;
-                            var fbs = std.io.fixedBufferStream(&options_buf);
-                            for (all_disposals, 0..) |d, i| {
-                                if (i > 0) fbs.writer().writeAll(", ") catch {};
-                                const disp_name = displayDischargerName(d.qualified_name);
-                                fbs.writer().writeAll(disp_name) catch {};
-                            }
+                            var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+                            defer options.deinit(self.allocator);
+                            const n_candidates = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, all_disposals);
                             // Number agreement: one candidate is an
                             // instruction (`Call: finalize`), several are a
                             // choice set.
@@ -3146,7 +3134,7 @@ pub const AutoDischargeInserter = struct {
                                 site_loc.line,
                                 site_loc.column,
                                 "Resource '{s}' obligation <{s}> was not discharged. Call{s}: {s}",
-                                .{ display_name, display_state, errors.oneOfInfix(all_disposals.len), fbs.getWritten() },
+                                .{ display_name, display_state, errors.oneOfInfix(n_candidates), options.items },
                             );
                         } else {
                             try self.reporter.addError(
@@ -3158,19 +3146,15 @@ pub const AutoDischargeInserter = struct {
                             );
                         }
                     } else {
-                        var options_buf: [1024]u8 = undefined;
-                        var fbs = std.io.fixedBufferStream(&options_buf);
-                        for (disposals, 0..) |d, i| {
-                            if (i > 0) fbs.writer().writeAll(", ") catch {};
-                            const disp_name = displayDischargerName(d.qualified_name);
-                            fbs.writer().writeAll(disp_name) catch {};
-                        }
+                        var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+                        defer options.deinit(self.allocator);
+                        _ = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, disposals);
                         try self.reporter.addError(
                             .KORU030,
                             site_loc.line,
                             site_loc.column,
                             "Resource '{s}' <{s}> has multiple discharge options: {s}. Discharge explicitly.",
-                            .{ display_name, display_state, fbs.getWritten() },
+                            .{ display_name, display_state, options.items },
                         );
                     }
                     return error.ValidationFailed;
@@ -3396,13 +3380,9 @@ pub const AutoDischargeInserter = struct {
                     const all_disposals = try self.findAllDisposalEvents(info.phantom_state, info.base_type);
                     defer self.allocator.free(all_disposals);
                     if (all_disposals.len > 0) {
-                        var options_buf: [1024]u8 = undefined;
-                        var fbs = std.io.fixedBufferStream(&options_buf);
-                        for (all_disposals, 0..) |d, i| {
-                            if (i > 0) fbs.writer().writeAll(", ") catch {};
-                            const disp_name = displayDischargerName(d.qualified_name);
-                            fbs.writer().writeAll(disp_name) catch {};
-                        }
+                        var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+                        defer options.deinit(self.allocator);
+                        const n_candidates = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, all_disposals);
                         // Number agreement: one candidate is an
                         // instruction (`Call: finalize`), several are a
                         // choice set.
@@ -3411,7 +3391,7 @@ pub const AutoDischargeInserter = struct {
                             site_loc.line,
                             site_loc.column,
                             "Resource '{s}' obligation <{s}> was not discharged. Call{s}: {s}",
-                            .{ display_name, display_state, errors.oneOfInfix(all_disposals.len), fbs.getWritten() },
+                            .{ display_name, display_state, errors.oneOfInfix(n_candidates), options.items },
                         );
                     } else {
                         // Strip trailing `!` from the state literal for the consumer-form suggestion:
@@ -3429,19 +3409,15 @@ pub const AutoDischargeInserter = struct {
                         );
                     }
                 } else {
-                    var options_buf: [1024]u8 = undefined;
-                    var fbs = std.io.fixedBufferStream(&options_buf);
-                    for (disposals, 0..) |d, i| {
-                        if (i > 0) fbs.writer().writeAll(", ") catch {};
-                        const disp_name = displayDischargerName(d.qualified_name);
-                        fbs.writer().writeAll(disp_name) catch {};
-                    }
+                    var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+                    defer options.deinit(self.allocator);
+                    _ = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, disposals);
                     try self.reporter.addError(
                         .KORU030,
                         site_loc.line,
                         site_loc.column,
                         "Resource '{s}' <{s}> has multiple discharge options: {s}. Discharge explicitly.",
-                        .{ display_name, display_state, fbs.getWritten() },
+                        .{ display_name, display_state, options.items },
                     );
                 }
                 return error.ValidationFailed;

@@ -62,3 +62,26 @@ descending confidence:
 Related: [[frag-a-wall-guards-one-direction-of-a-symmetry]] — the register's
 mirror column exists because the highest-yield census question is not "what
 rule has no wall" but "what direction does each existing wall not cover."
+
+## The predicate is the ceiling (added 2026-09-17)
+
+Tier 1 says "complete by construction". That is true only *relative to a
+predicate*, because the derivation is exactly as sound as the predicate's answer
+to "what counts as an instance?" `scripts/registry_check.zig` answered it with a
+token scan for `.KORUxxx` — and `src/errors.zig`, the file those codes are
+DECLARED in, is made of those tokens. A helper nothing calls therefore certified
+its own code as EMITTED, and the DEAD check — the one wall whose whole job is
+"the enum claims the compiler catches something it doesn't" — stayed green over
+four helpers with no call site in the tree. One of the four named a condition no
+pass computes at all. A `.KORUxxx` tag in the vocabulary module is intent: what
+would print if something called this helper. The register now credits such a tag
+only when its enclosing helper has a call site, and credits nothing inside a
+`test`, because a test is not an emission path.
+
+The shape to keep: **derivation is weakest exactly where the artifact and its
+subject OVERLAP.** The scan reads the module that declares the vocabulary, so
+mention and instance are the same bytes, and no amount of regex care separates
+them — the predicate needs the second question ("is the carrier reached?")
+rather than a tighter pattern. Read
+[[frag-compliance-is-counted-with-the-enforcers-predicate]] for the human half:
+count with the enforcer's own predicate, then read what that predicate tests.

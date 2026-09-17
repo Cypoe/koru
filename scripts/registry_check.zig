@@ -118,7 +118,7 @@ fn nextTolerant(walker: *std.fs.Dir.Walker) !?std.fs.Dir.Walker.Entry {
     }
 }
 
-fn collectTree(a: std.mem.Allocator, map: *CountMap, root: []const u8, ext: []const u8, mode: Mode) !void {
+fn collectTree(a: std.mem.Allocator, map: *CountMap, root: []const u8, ext: []const u8, mode: Mode, skip_basename: ?[]const u8) !void {
     var dir = std.fs.cwd().openDir(root, .{ .iterate = true }) catch return;
     defer dir.close();
     var walker = try dir.walk(a);
@@ -126,6 +126,9 @@ fn collectTree(a: std.mem.Allocator, map: *CountMap, root: []const u8, ext: []co
     while (try nextTolerant(&walker)) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.basename, ext)) continue;
+        if (skip_basename) |skip| {
+            if (std.mem.eql(u8, entry.basename, skip)) continue;
+        }
         const content = dir.readFileAlloc(a, entry.path, 16 * 1024 * 1024) catch continue;
         try collect(a, map, content, mode);
     }
@@ -142,6 +145,94 @@ fn collectPins(a: std.mem.Allocator, map: *CountMap, root: []const u8) !void {
         if (!(std.mem.startsWith(u8, b, "expected") or std.mem.eql(u8, b, "EXPECT"))) continue;
         const content = dir.readFileAlloc(a, entry.path, 16 * 1024 * 1024) catch continue;
         try collect(a, map, content, .pin);
+    }
+}
+
+/// One `fn NAME(` or `test ` line of src/errors.zig — the unit a vocabulary emit
+/// is attributed to.
+const FnLine = struct { line: usize, name: []const u8, is_test: bool };
+
+/// Every `fn NAME(` and `test ` line in src/errors.zig, in file order.
+fn collectFnLines(a: std.mem.Allocator, src: []const u8, list: *std.ArrayList(FnLine)) !void {
+    var lineno: usize = 0;
+    var it = std.mem.splitScalar(u8, src, '\n');
+    while (it.next()) |line| {
+        lineno += 1;
+        if (std.mem.startsWith(u8, std.mem.trimLeft(u8, line, " \t"), "test ")) {
+            try list.append(a, .{ .line = lineno, .name = "<test>", .is_test = true });
+            continue;
+        }
+        const at = std.mem.indexOf(u8, line, "fn ") orelse continue;
+        var j = at + 3;
+        const start = j;
+        while (j < line.len and (std.ascii.isAlphanumeric(line[j]) or line[j] == '_')) j += 1;
+        if (j == start or j >= line.len or line[j] != '(') continue;
+        try list.append(a, .{ .line = lineno, .name = try a.dupe(u8, line[start..j]), .is_test = false });
+    }
+}
+
+/// The unit owning `line`: the last `fn`/`test` line at or above it.
+fn fnOwning(fns: []const FnLine, line: usize) ?FnLine {
+    var owner: ?FnLine = null;
+    for (fns) |f| {
+        if (f.line > line) break;
+        owner = f;
+    }
+    return owner;
+}
+
+/// How many places call `name`? Every call site in this repo spells it
+/// `errors.<name>(`; `@import("errors").<name>(` is matched too, so a helper
+/// called by a different spelling cannot read as dead.
+fn countCallSites(a: std.mem.Allocator, name: []const u8) !usize {
+    const qualified = try std.fmt.allocPrint(a, "errors.{s}(", .{name});
+    const imported = try std.fmt.allocPrint(a, "@import(\"errors\").{s}(", .{name});
+    var list = try std.ArrayList(Loc).initCapacity(a, 0);
+    for ([_][]const u8{ qualified, imported }) |needle| {
+        try grepTree(a, "src", ".zig", needle, &list);
+        try grepTree(a, "koru_std", ".kz", needle, &list);
+        try grepTree(a, "koru_std", ".k", needle, &list);
+        try grepTree(a, "koru_std", ".kjs", needle, &list);
+    }
+    return list.items.len;
+}
+
+/// Count the emits src/errors.zig is allowed to credit.
+///
+/// The vocabulary module is different in kind from every other file: a `.KORUxxx`
+/// tag inside one of its helpers is a DECLARATION OF INTENT — what the compiler
+/// would print if something called this helper — not an emission. Counting the tag
+/// as one let dead code hide. Measured 2026-09-17: `unknownConstruct`,
+/// `duplicateBranch`, `strayContinuation` and `unknownBranch` had no call site
+/// anywhere in the tree while their codes read as EMITTED, so the DEAD check —
+/// whose whole job is "the enum claims the compiler catches something it doesn't" —
+/// could not see them; one of the four (`KORU001`) names a condition no pass
+/// computes, and it was invisible for that reason alone. A vocabulary emit now
+/// counts only when its enclosing helper is CALLED, and a token inside a `test`
+/// block credits nothing: a test is not an emission path.
+fn collectVocabEmits(a: std.mem.Allocator, map: *CountMap, src: []const u8, fns: []const FnLine, called: *std.StringHashMap(bool)) !void {
+    var lineno: usize = 1;
+    var i: usize = 0;
+    while (i < src.len) {
+        if (src[i] == '\n') lineno += 1;
+        if (isUpper(src[i])) {
+            const len = codeAt(src[i..]);
+            if (len > 0) {
+                const prev: u8 = if (i > 0) src[i - 1] else 0;
+                if ((prev == '.' or prev == '[')) {
+                    if (fnOwning(fns, lineno)) |owner| {
+                        if (!owner.is_test) {
+                            const gop = try called.getOrPut(owner.name);
+                            if (!gop.found_existing) gop.value_ptr.* = (try countCallSites(a, owner.name)) > 0;
+                            if (gop.value_ptr.*) try bump(a, map, src[i .. i + len]);
+                        }
+                    }
+                }
+                i += len;
+                continue;
+            }
+        }
+        i += 1;
     }
 }
 
@@ -349,8 +440,34 @@ fn confirm(a: std.mem.Allocator, code: []const u8, lines: *LineMap, descs: *Desc
     try grepTree(a, "src", ".zig", tag, &emits);
     try grepTree(a, "koru_std", ".zig", tag, &emits);
     try grepTree(a, "src", ".zig", lit, &emits);
+    // A site in the vocabulary module is intent, not emission (see
+    // collectVocabEmits). An operator reading "EMITTED: 1 site" there would
+    // disposition a helper nothing calls, so name the helper and say whether
+    // anything reaches it.
+    var cf_lines = try std.ArrayList(FnLine).initCapacity(a, 32);
+    try collectFnLines(a, std.fs.cwd().readFileAlloc(a, "src/errors.zig", 16 * 1024 * 1024) catch "", &cf_lines);
     out("  EMITTED  : {d} site(s)\n", .{emits.items.len});
-    for (emits.items) |loc| out("             {s}:{d}\n", .{ loc.path, loc.line });
+    for (emits.items) |loc| {
+        out("             {s}:{d}", .{ loc.path, loc.line });
+        if (!std.mem.eql(u8, loc.path, "src/errors.zig")) {
+            out("\n", .{});
+            continue;
+        }
+        if (fnOwning(cf_lines.items, loc.line)) |owner| {
+            if (owner.is_test) {
+                out("  <- inside a test block: credits nothing (a test is not an emission path)\n", .{});
+            } else {
+                const n = try countCallSites(a, owner.name);
+                if (n == 0) {
+                    out("  <- helper '{s}' has NO call site — intent, not an emission\n", .{owner.name});
+                } else {
+                    out("  <- helper '{s}', {d} call site(s)\n", .{ owner.name, n });
+                }
+            }
+        } else {
+            out("\n", .{});
+        }
+    }
 
     // PINNED — regression expectations referencing the code.
     var pins = try std.ArrayList(Loc).initCapacity(a, 0);
@@ -427,11 +544,17 @@ pub fn main() !void {
     // std library refuses via `ast.refusal(..., .KORUxxx, ...)` in its Koru
     // sources, so the koru-file extensions must be scanned too — without
     // them, every std-side diagnostic code reads as DEAD.
-    try collectTree(a, &emitted, "src", ".zig", .emit);
-    try collectTree(a, &emitted, "koru_std", ".zig", .emit);
-    try collectTree(a, &emitted, "koru_std", ".kz", .emit);
-    try collectTree(a, &emitted, "koru_std", ".k", .emit);
-    try collectTree(a, &emitted, "koru_std", ".kjs", .emit);
+    try collectTree(a, &emitted, "src", ".zig", .emit, "errors.zig");
+    try collectTree(a, &emitted, "koru_std", ".zig", .emit, null);
+    try collectTree(a, &emitted, "koru_std", ".kz", .emit, null);
+    try collectTree(a, &emitted, "koru_std", ".k", .emit, null);
+    try collectTree(a, &emitted, "koru_std", ".kjs", .emit, null);
+
+    // src/errors.zig is credited by its own rule — see collectVocabEmits.
+    var fn_lines = try std.ArrayList(FnLine).initCapacity(a, 32);
+    try collectFnLines(a, errors_src, &fn_lines);
+    var called = std.StringHashMap(bool).init(a);
+    try collectVocabEmits(a, &emitted, errors_src, fn_lines.items, &called);
 
     // Subcommand: `confirm <CODE>` runs the verification battery for one code.
     if (args.len >= 3 and std.mem.eql(u8, args[1], "confirm")) {

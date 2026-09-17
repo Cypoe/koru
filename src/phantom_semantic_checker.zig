@@ -16,6 +16,12 @@ const CompilerEnv = if (@hasDecl(root, "CompilerEnv")) root.CompilerEnv else str
     }
 };
 
+/// `errors.writeCandidateNames` wants a plain fn; these candidates are already
+/// display strings.
+fn ownName(name: []const u8) []const u8 {
+    return name;
+}
+
 /// Checks that module-qualified phantom states reference valid imported modules
 pub const PhantomSemanticChecker = struct {
     allocator: std.mem.Allocator,
@@ -1946,18 +1952,15 @@ pub const PhantomSemanticChecker = struct {
             } else {
                 // Number agreement: one candidate is an instruction
                 // (`Call: finalize`), several are a choice set.
-                var options_buf: [512]u8 = undefined;
-                var fbs = std.io.fixedBufferStream(&options_buf);
-                for (disposal_events.items, 0..) |event_name, i| {
-                    if (i > 0) fbs.writer().writeAll(", ") catch {};
-                    fbs.writer().writeAll(event_name) catch {};
-                }
+                var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+                defer options.deinit(self.allocator);
+                const n_candidates = try errors.writeCandidateNames([]const u8, ownName, null, "", self.allocator, &options, disposal_events.items);
                 try self.reporter.addError(
                     .KORU030,
                     location.line,
                     location.column,
                     "Resource '{s}' carries obligation <{s}> was not discharged. Call{s}: {s}",
-                    .{ display_name, display_state, errors.oneOfInfix(disposal_events.items.len), fbs.getWritten() },
+                    .{ display_name, display_state, errors.oneOfInfix(n_candidates), options.items },
                 );
             }
             has_errors = true;
@@ -2774,20 +2777,16 @@ pub const PhantomSemanticChecker = struct {
                         } else {
                             // Number agreement: one candidate is an
                             // instruction (`Call: finalize`), several are a
-                            // choice set. Build comma-separated list of
-                            // disposal options.
-                            var options_buf: [512]u8 = undefined;
-                            var fbs = std.io.fixedBufferStream(&options_buf);
-                            for (disposal_events.items, 0..) |event_name, i| {
-                                if (i > 0) fbs.writer().writeAll(", ") catch {};
-                                fbs.writer().writeAll(event_name) catch {};
-                            }
+                            // choice set.
+                            var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+                            defer options.deinit(self.allocator);
+                            const n_candidates = try errors.writeCandidateNames([]const u8, ownName, null, "", self.allocator, &options, disposal_events.items);
                             try self.reporter.addError(
                                 .KORU030,
                                 location.line,
                                 location.column,
                                 "Resource '{s}' carries obligation <{s}> was not discharged. Call{s}: {s}",
-                                .{ display_name, display_state, errors.oneOfInfix(disposal_events.items.len), fbs.getWritten() },
+                                .{ display_name, display_state, errors.oneOfInfix(n_candidates), options.items },
                             );
                         }
                         has_errors = true;

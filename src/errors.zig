@@ -8,7 +8,6 @@ pub const ErrorCode = enum(u16) {
     KORU010, // Stray continuation (| without context)
 
     // Branch errors
-    KORU020, // Duplicate branch in event
     KORU021, // Unknown branch in continuation
     KORU022, // Missing required branch
     KORU023, // Yielding `!` branches must precede terminal `|` branches
@@ -507,18 +506,6 @@ pub const ErrorReporter = struct {
 
 // Helper functions for common error messages
 
-pub fn unknownConstruct(reporter: *ErrorReporter, line: usize, column: usize, construct: []const u8) !void {
-    try reporter.addErrorWithHint(
-        .KORU001,
-        line,
-        column,
-        "unknown Koru construct after '~': '{s}'",
-        .{construct},
-        "expected event, proc, @label, [Attr], or invocation",
-        .{},
-    );
-}
-
 pub fn moduleNotFound(reporter: *ErrorReporter, line: usize, column: usize, import_path: []const u8) !void {
     try reporter.addErrorWithHint(
         .KORU002,
@@ -539,30 +526,6 @@ pub fn inlineFlowInProc(reporter: *ErrorReporter, line: usize, column: usize, sn
         "inline flows are not supported inside `~proc` bodies: {s}",
         .{snippet},
         "lift this into a top-level subflow (e.g. `~my_event = call(args) | branch x |> done {{}}`) or invoke the event from outside the proc body",
-        .{},
-    );
-}
-
-pub fn strayContinuation(reporter: *ErrorReporter, line: usize, column: usize) !void {
-    try reporter.addErrorWithHint(
-        .KORU010,
-        line,
-        column,
-        "continuation line '|' without an open Koru construct",
-        .{},
-        "place after an event/proc/flow start",
-        .{},
-    );
-}
-
-pub fn duplicateBranch(reporter: *ErrorReporter, line: usize, column: usize, branch: []const u8, event: []const u8) !void {
-    try reporter.addErrorWithHint(
-        .KORU020,
-        line,
-        column,
-        "duplicate branch '{s}' in event '{s}'",
-        .{ branch, event },
-        "rename or remove duplicate",
         .{},
     );
 }
@@ -644,24 +607,40 @@ pub fn oneOfInfix(count: usize) []const u8 {
     return if (count == 1) "" else " one of";
 }
 
-pub fn unknownBranch(reporter: *ErrorReporter, line: usize, column: usize, branch: []const u8, event: []const u8, valid_branches: []const []const u8) !void {
-    var hint_buf: [256]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&hint_buf);
-    try stream.writer().writeAll("use one of: ");
-    for (valid_branches, 0..) |valid, i| {
-        if (i > 0) try stream.writer().writeAll(", ");
-        try stream.writer().writeAll(valid);
+/// Write the candidates comma-separated into `out` and RETURN how many were
+/// written, so a refusal's number agreement and the list it prints come from one
+/// walk and cannot disagree.
+///
+/// GROWS, never truncates. It replaced eleven hand-rolled copies that each wrote
+/// into a fixed `[512]u8`/`[1024]u8` buffer with the write error swallowed —
+/// `catch {}` turned a full buffer into a PREFIX of the candidate set that read
+/// as the whole set, so a refusal could name three of twenty disposers and look
+/// complete. That is the fixed-buffer-ceiling class `FileSink` above records for
+/// `printErrors`; it survived in the buffers that BUILD the message.
+///
+/// `keep`, when given, decides membership from `ctx` — the one caller that needs
+/// it excludes the refusing flow's own event, which is recursion rather than a
+/// discharge, and must exclude it by IDENTITY rather than by the tail rendered
+/// here.
+pub fn writeCandidateNames(
+    comptime T: type,
+    comptime nameOf: fn (T) []const u8,
+    comptime keep: ?fn (T, []const u8) bool,
+    ctx: []const u8,
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    items: []const T,
+) !usize {
+    var written: usize = 0;
+    for (items) |item| {
+        if (keep) |k| {
+            if (!k(item, ctx)) continue;
+        }
+        if (written > 0) try out.appendSlice(allocator, ", ");
+        try out.appendSlice(allocator, nameOf(item));
+        written += 1;
     }
-
-    try reporter.addErrorWithHint(
-        .KORU021,
-        line,
-        column,
-        "continuation branch '{s}' not declared by event '{s}'",
-        .{ branch, event },
-        "{s}",
-        .{stream.getWritten()},
-    );
+    return written;
 }
 
 /// The canonical sink for `printErrors`.
@@ -784,4 +763,51 @@ test "printErrors renders each diagnostic once across repeated calls" {
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, buf.items, "first message"));
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, buf.items, "second message"));
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, buf.items, "third message"));
+}
+
+/// Test-only twins of what callers pass: `writeCandidateNames` takes a plain fn,
+/// and these tests already hold rendered names.
+fn testIdentityName(name: []const u8) []const u8 {
+    return name;
+}
+
+fn testNameIsNotContext(name: []const u8, ctx: []const u8) bool {
+    return !std.mem.eql(u8, name, ctx);
+}
+
+test "candidate names render whole past the buffer ceiling they replaced" {
+    // The eleven sites this writer replaced each wrote into a fixed
+    // `[512]u8`/`[1024]u8` buffer with the write error swallowed, so a longer
+    // candidate set printed a PREFIX that read as the whole set. Sixty 20-byte
+    // names join to 1318 bytes — past both ceilings — so no fixed buffer can
+    // pass this test at any size, which is the point: the list grows with the
+    // candidate set instead of the candidate set being clipped to the list.
+    const name = "mod:long_disposer_x";
+    var names: [60][]const u8 = undefined;
+    for (&names) |*n| n.* = name;
+
+    var out = try std.ArrayList(u8).initCapacity(std.testing.allocator, 0);
+    defer out.deinit(std.testing.allocator);
+    const written = try writeCandidateNames([]const u8, testIdentityName, null, "", std.testing.allocator, &out, &names);
+
+    try std.testing.expectEqual(names.len, written);
+    // Length is exact, not merely large: every name once, one separator between
+    // neighbours — a dropped name and a doubled separator cannot both hide.
+    try std.testing.expectEqual(60 * name.len + 59 * 2, out.items.len);
+    try std.testing.expectEqual(@as(usize, 60), std.mem.count(u8, out.items, name));
+}
+
+test "candidate writer counts what it wrote, not what it was handed" {
+    // The refusal's number agreement reads this count, so it has to describe the
+    // printed list. The one caller with an exclusion (the refusing flow's own
+    // event, which is recursion rather than a discharge) hands over three items
+    // and must get "one of" language for two.
+    const items = [_][]const u8{ "input:drop", "solo", "std.string:free" };
+
+    var out = try std.ArrayList(u8).initCapacity(std.testing.allocator, 0);
+    defer out.deinit(std.testing.allocator);
+    const written = try writeCandidateNames([]const u8, testIdentityName, testNameIsNotContext, "solo", std.testing.allocator, &out, &items);
+
+    try std.testing.expectEqual(@as(usize, 2), written);
+    try std.testing.expectEqualStrings("input:drop, std.string:free", out.items);
 }
