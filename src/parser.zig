@@ -1849,7 +1849,21 @@ pub const Parser = struct {
             "part ",
         };
         for (prefixes) |prefix| {
-            if (std.mem.startsWith(u8, trimmed, prefix)) return true;
+            if (!std.mem.startsWith(u8, trimmed, prefix)) continue;
+            // The keyword alone does not make it a construct: a host line may
+            // start with one because a LOCAL is named after it — `part =
+            // std.mem.trim(...)` assigns a variable, while `part name` declares
+            // a part. No construct's first line carries `=` before its `{`, so
+            // an earlier `=` means this is host code and the missing `~` is not
+            // missing. (Found 2026-09-17: a Zig local named `part` in a `.kz`
+            // fn was refused as an unmarked Koru construct, PARSE003.)
+            const rest = std.mem.trimLeft(u8, trimmed[prefix.len..], " \t");
+            const eq = std.mem.indexOfScalar(u8, rest, '=');
+            if (eq) |at| {
+                const brace = std.mem.indexOfScalar(u8, rest, '{');
+                if (brace == null or at < brace.?) return false;
+            }
+            return true;
         }
         return false;
     }

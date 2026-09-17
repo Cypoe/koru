@@ -164,3 +164,16 @@ Two things were new here and are worth carrying:
 
 Related: [[frag-k-file-is-a-full-program]] (the `.k` half of the same rule),
 [[frag-a-watcher-off-the-normal-path-is-not-a-wall]] (the general shape).
+
+EVOLVED 2026-09-17 (the boundary test reads the line's SHAPE, not a
+keyword prefix; 100_086): enforcing this rule over-reached in the
+frontend. A host line was classified as an unmarked Koru construct by
+prefix-matching a module keyword, so `part = std.mem.trim(...)` — a
+local named after the `part` declaration keyword — was refused with
+PARSE003 although it is ordinary Zig. The boundary question is not
+"does this line start with a keyword" but "is this line a construct",
+and the `=` decides it: no construct's first line carries one before
+its `{`, while an assignment does. Found 2026-09-17 writing the
+disjunction atom's parser in `koru_std/refine.kz`, where a local holds
+one part of a `|`-split — a name that is not exotic, only spelled like
+a keyword.
