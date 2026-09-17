@@ -1,0 +1,3 @@
+MUST_ERROR
+CONTAINS error[KORU022]: branch 'then' must be handled but no continuation found
+ERROR_AT 22

@@ -15,8 +15,8 @@ const std = @import("std");
 // IF - Conditional as a template over the continuation-return mechanism.
 //
 // Syntax: if(cond)
-//         | then |> ...      // optional: runs when cond is true
-//         | else |> ...      // optional: runs when cond is false
+//         | then |> ...      // REQUIRED: an `if` with no true arm is an omission, not a shape
+//         | else |> ...      // optional: `if(c) | then |> f()` is a complete statement
 //
 // ARCHITECTURE:
 // - `if` is a `[template]` proc, NOT a dedicated AST node (no ConditionalNode).
@@ -29,7 +29,7 @@ const std = @import("std");
 //   matching arm in the enclosing scope. An omitted optional branch mints no
 //   marker, so its arm renders empty.
 ~[keyword]pub tor if { expr: Expression }
-| ?then
+| then
 | ?else
 
 ~[template]proc if|zig {
