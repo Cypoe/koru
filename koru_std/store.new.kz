@@ -2729,12 +2729,16 @@
         // ---- facet guards (std/refine) ----
         // A leaf column that expands a proto field met to bounds or a clamp
         // is judged at the head of every insert proc — before capacity,
-        // before the write. `metFields` is refine's own fold, so the guard
-        // tests exactly what the explainer reports; the verdict is the
-        // shared `?!violated` panic branch carrying the column spelling the
-        // row block used. facet_norms[i] is the write-side expression for
-        // column i — the clamp's saturation when one is declared — so the
-        // stored value IS the value the guard judged.
+        // before the write. The predicate comes from the shared
+        // `ast_functional.facets.predicate`, the same surface `std/list`'s
+        // push guard reads, so the two enforcers cannot disagree about what
+        // a facet says of a value; only the SINK differs (a branch
+        // expression here, a struct literal there). `metFields` is refine's
+        // own fold, so the guard tests exactly what the explainer reports,
+        // and the verdict is the shared `?!violated` panic branch carrying
+        // the column spelling the row block used. facet_norms[i] is the
+        // write-side expression for column i — `facets.normExprFor`'s
+        // claim — so the stored value IS the value the guard judged.
         var facet_prelude = std.ArrayList(u8).initCapacity(allocator, 64) catch unreachable;
         const facet_norms = allocator.alloc(?[]const u8, user_field_count) catch unreachable;
         @memset(facet_norms, null);
@@ -2745,32 +2749,16 @@
                     if (!std.mem.eql(u8, mf.name, pv.field)) continue;
                     if (mf.lo == null and mf.hi == null and mf.eq == null and mf.clamp == null) break;
                     const pexpr = if (host_is_js) pv.col else (codegen_utils_store.escapeZigIdentifier(allocator, pv.col) catch pv.col);
-                    const vexpr = if (mf.clamp) |c| (if (host_is_js)
-                        std.fmt.allocPrint(allocator, "Math.min(Math.max({s}, {d}), {d})", .{ pexpr, c.lo, c.hi })
-                    else
-                        std.fmt.allocPrint(allocator, "@min(@max({s}, {d}), {d})", .{ pexpr, c.lo, c.hi })) catch unreachable
-                    else pexpr;
+                    const vexpr = ast_functional.facets.normExprFor(allocator, mf, pexpr, host_is_js);
                     for (field_names[0..user_field_count], 0..) |fname, fci| {
                         if (std.mem.eql(u8, fname, pv.col)) {
                             facet_norms[fci] = vexpr;
                             break;
                         }
                     }
-                    if (mf.lo == null and mf.hi == null and mf.eq == null) break;
-                    var cond = std.ArrayList(u8).initCapacity(allocator, 64) catch unreachable;
-                    if (mf.eq) |b| {
-                        cond.appendSlice(allocator, std.fmt.allocPrint(allocator, "{s} == {d}", .{ vexpr, b.value }) catch unreachable) catch unreachable;
-                    } else {
-                        if (mf.lo) |b| {
-                            cond.appendSlice(allocator, std.fmt.allocPrint(allocator, "{s} {s} {d}", .{ vexpr, if (b.exclusive) ">" else ">=", b.value }) catch unreachable) catch unreachable;
-                        }
-                        if (mf.hi) |b| {
-                            if (cond.items.len > 0) cond.appendSlice(allocator, if (host_is_js) " && " else " and ") catch unreachable;
-                            cond.appendSlice(allocator, std.fmt.allocPrint(allocator, "{s} {s} {d}", .{ vexpr, if (b.exclusive) "<" else "<=", b.value }) catch unreachable) catch unreachable;
-                        }
-                    }
+                    const cond = ast_functional.facets.predicate(allocator, mf, vexpr, host_is_js) orelse break;
                     const payload = std.fmt.allocPrint(allocator, "\"{s}\"", .{pv.col}) catch unreachable;
-                    const g = std.fmt.allocPrint(allocator, "if (!({s})) return {s};\n", .{ cond.items, HS.branchOne(allocator, host_target, ast_functional.facets.violated, payload) }) catch unreachable;
+                    const g = std.fmt.allocPrint(allocator, "if (!({s})) return {s};\n", .{ cond, HS.branchOne(allocator, host_target, ast_functional.facets.violated, payload) }) catch unreachable;
                     facet_prelude.appendSlice(allocator, g) catch unreachable;
                     break;
                 }

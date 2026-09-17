@@ -3474,13 +3474,47 @@ pub const facets = struct {
     }
 
     /// The expression a boundary should test or store for a facet field —
-    /// the flat param name, or the saturation expression when the field
+    /// the value's own name, or the saturation expression when the field
     /// carries `& clamp(lo, hi)`. Bounds judge the POST-clamp value
     /// (normalize first, then check), so guards and record writes share
     /// this one spelling.
-    pub fn normExpr(alloc: std.mem.Allocator, ff: *const ast.FacetField, pname: []const u8) []const u8 {
-        const c = ff.clamp orelse return pname;
-        return std.fmt.allocPrint(alloc, "@min(@max({s}, {d}), {d})", .{ pname, c.lo, c.hi }) catch unreachable;
+    ///
+    /// `ff` is any facet field — the typed node (`ast.FacetField`) or the
+    /// fold's own record (`koru_refine.Field`): same terms, two structs.
+    /// `js` picks the host's spelling, so a consumer emitting JavaScript
+    /// saturates with JavaScript.
+    pub fn normExprFor(alloc: std.mem.Allocator, ff: anytype, name: []const u8, js: bool) []const u8 {
+        const c = ff.clamp orelse return name;
+        return if (js)
+            std.fmt.allocPrint(alloc, "Math.min(Math.max({s}, {d}), {d})", .{ name, c.lo, c.hi }) catch unreachable
+        else
+            std.fmt.allocPrint(alloc, "@min(@max({s}, {d}), {d})", .{ name, c.lo, c.hi }) catch unreachable;
+    }
+
+    /// The judgeable predicate for one met field — null when the field
+    /// carries no term a boundary can test. `expr` is what to test, already
+    /// rendered for the host and already normalized by `normExprFor`.
+    ///
+    /// This is the ONE home for the rule "what does this facet require of a
+    /// value". Every consumer's guard comes through here — the list's
+    /// synthesized `push` and the store's insert prelude both do — so a new
+    /// atom kind cannot reach one boundary and miss another, and the two
+    /// enforcers cannot disagree about what a field's facet says.
+    pub fn predicate(alloc: std.mem.Allocator, ff: anytype, expr: []const u8, js: bool) ?[]const u8 {
+        if (ff.lo == null and ff.hi == null and ff.eq == null) return null;
+        var cond = std.ArrayList(u8).initCapacity(alloc, 64) catch unreachable;
+        if (ff.eq) |b| {
+            cond.appendSlice(alloc, std.fmt.allocPrint(alloc, "{s} == {d}", .{ expr, b.value }) catch unreachable) catch unreachable;
+        } else {
+            if (ff.lo) |b| {
+                cond.appendSlice(alloc, std.fmt.allocPrint(alloc, "{s} {s} {d}", .{ expr, if (b.exclusive) ">" else ">=", b.value }) catch unreachable) catch unreachable;
+            }
+            if (ff.hi) |b| {
+                if (cond.items.len > 0) cond.appendSlice(alloc, if (js) " && " else " and ") catch unreachable;
+                cond.appendSlice(alloc, std.fmt.allocPrint(alloc, "{s} {s} {d}", .{ expr, if (b.exclusive) "<" else "<=", b.value }) catch unreachable) catch unreachable;
+            }
+        }
+        return cond.items;
     }
 
     /// The write-side expression for a proto field of `elem` — the flat
@@ -3496,7 +3530,7 @@ pub const facets = struct {
         const base = flat(alloc, field_name);
         const fd = find(prog, elemName(elem), protoHome(prog, elem)) orelse return base;
         for (fd.fields) |*ff| {
-            if (std.mem.eql(u8, flat(alloc, ff.name), base)) return normExpr(alloc, ff, base);
+            if (std.mem.eql(u8, flat(alloc, ff.name), base)) return normExprFor(alloc, ff, base, false);
         }
         return base;
     }
@@ -3522,28 +3556,13 @@ pub const facets = struct {
 
         var out = std.ArrayList(u8).initCapacity(alloc, 128) catch unreachable;
         for (fd.fields) |*ff| {
-            if (ff.lo == null and ff.hi == null and ff.eq == null) continue;
             const pname = flat(alloc, ff.name);
-            const vname = normExpr(alloc, ff, pname);
-            var cond = std.ArrayList(u8).initCapacity(alloc, 64) catch unreachable;
-            if (ff.eq) |b| {
-                const s = std.fmt.allocPrint(alloc, "{s} == {d}", .{ vname, b.value }) catch unreachable;
-                cond.appendSlice(alloc, s) catch unreachable;
-            } else {
-                if (ff.lo) |b| {
-                    const s = std.fmt.allocPrint(alloc, "{s} {s} {d}", .{ vname, if (b.exclusive) ">" else ">=", b.value }) catch unreachable;
-                    cond.appendSlice(alloc, s) catch unreachable;
-                }
-                if (ff.hi) |b| {
-                    if (cond.items.len > 0) cond.appendSlice(alloc, " and ") catch unreachable;
-                    const s = std.fmt.allocPrint(alloc, "{s} {s} {d}", .{ vname, if (b.exclusive) "<" else "<=", b.value }) catch unreachable;
-                    cond.appendSlice(alloc, s) catch unreachable;
-                }
-            }
+            const vname = normExprFor(alloc, ff, pname, false);
+            const cond = predicate(alloc, ff, vname, false) orelse continue;
             const guard = std.fmt.allocPrint(
                 alloc,
                 "if (!({s})) {{\n    return .{{ .{s} = \"{s}\" }};\n}}\n",
-                .{ cond.items, violated, pname },
+                .{ cond, violated, pname },
             ) catch unreachable;
             out.appendSlice(alloc, guard) catch unreachable;
         }

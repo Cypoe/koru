@@ -221,3 +221,20 @@ next atom (disjunction) to: **an atom's meet either folds by strength,
 or it RECORDS the disagreement for the emptiness judge — silence is not
 a fold.** The atom is now pinned end to end, and the two fix sites have
 a pin each, so a reverted half goes red.
+
+EVOLVED 2026-09-17 (the shared guard surface had two homes; 671_027,
+690_321, 690_323): "the protocol is shared" was true of the branch
+vocabulary and of the facet read, and false of the predicate itself —
+`std/list`'s push went through `ast_functional.facets.guardBody` while
+`std/store`'s insert prelude carried its own copy of the
+terms-to-predicate rule and its own normalizer spelling (Zig
+`@min`/`@max`, JS `Math.min`/`Math.max`). Two walls guarding one rule is
+how they drift, and the store's copy was the unpinned one: nothing
+exercised it until 671_027 was written the same day. Now one
+`facets.predicate` and one `facets.normExprFor` serve both sinks — a
+consumer contributes its SINK (a target-aware branch expression, a
+struct literal) and nothing else — and the convergence is proven by
+byte-identical emitted output for both consumers, not by reading the
+diff. The transferable part, which is why this is a belief and not a
+changelog entry: **a "shared surface" claim is verified by counting its
+callers, never by reading the surface's doc comment.**
