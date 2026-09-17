@@ -1,8 +1,8 @@
 ---
 type: belief
 id: frag-a-watcher-off-the-normal-path-is-not-a-wall
-provenance: found while wiring check D into prose-check 2026-07-26 — the watchers sat past the point `--parallel` exits, so the mode the toolchain skill tells you to use had never run them; prose-check's check A had been failing on the event→tor rename for as long as that rename had existed
-ts: 2026-07-26
+provenance: found while wiring check D into prose-check 2026-07-26 — the watchers sat past the point `--parallel` exits, so the mode the toolchain skill tells you to use had never run them; prose-check's check A had been failing on the event→tor rename for as long as that rename had existed; evolved 2026-09-17 with the sixth rung — the board's brain push had been reporting node's deprecation warning as its failure while the endpoint 500'd on the real payload
+ts: 2026-09-17
 ---
 
 # A guard is only as strong as the path that reaches it (belief)
@@ -150,6 +150,47 @@ Inverted `must-error-passed` holes are owed, not regressions: the wall never
 existed on the boards we have, so they park too. Existing TODO crud (the
 pre-2026-09-07 pile) is a separate pass — parking is not a licence to
 stop reading those files.
+
+## The sixth rung: a fail-soft step that names the WRONG cause
+
+Every rung above lost a message. This one delivered one, and lost it anyway.
+
+A full board ends by pushing its snapshot to the koru brain (`ctx patch
+test-run`), deliberately fail-soft so a missing sink never fails the run.
+Measured 2026-09-17, by hand, during a ceremony: the line it prints is
+`⚠ Brain push failed: (node:…) [DEP0205] DeprecationWarning: module.register()…`
+— and Node versions are a red herring. `ctx` runs through `tsx`, so the warning
+is the FIRST line of stderr on every invocation, and the script reports the
+first line. The actual failure was last: `Error: PATCH …/nodes/test-run → 500
+Internal Server Error`.
+
+**The channel is dark, and has been.** A synthetic patch passes at 256 KB and
+fails at 512 KB; the board's own snapshot patch is ~650–700 KB. So every board
+since the snapshot crossed that size has printed a warning, moved on, and left
+the brain's `test-run` node holding an older board. A consumer asking the brain
+"what is the board right now" has been reading whatever era last fit.
+
+**What this rung adds to the belief.** Rung one was reach, rung three was the
+record; this one had both and still lost the message. A *cause* is part of a
+report, and a wrong cause is worse than no cause, because it is
+actionable-looking: "DeprecationWarning" reads as housekeeping, "500 on a 700 KB
+patch" reads as a limit to fix. The fail-soft POLICY is not the defect — its
+whole point is that a missing sink never fails the board — the defect is that
+nothing owns the question the policy leaves open: *did the board reach every
+sink, and if not, why?*
+
+- **A wrapper reports the child's failure, not its first stderr line** — that
+  line is the runtime's chatter. Same family as the backend's refusal-vs-crash
+  split in `backend.zig` (a misleading rendering of an already-delivered
+  diagnostic): noise about the wrapper, presented where the failure belongs.
+- **A fail-soft step with no consumer on its failure path is a watcher**, and
+  rung five is what watchers become.
+- **Open, and it is a design call nobody has made:** the payload is known
+  rejected — shrink what the brain keeps (summary + a pointer to the snapshot,
+  which git already holds) or raise the endpoint's limit. Until one lands, the
+  node carries the real summary plus an explicit note that the data was
+  withheld, rather than a compact stand-in board (a stand-in would be the
+  fallback this repo bans).
 
 ## Open
 

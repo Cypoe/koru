@@ -392,6 +392,12 @@ async function saveSnapshot() {
 // backend through ~/.6digit/satellite.json; CI sets CTX_USER_KEY +
 // CTX_CONVEX_URL + CTX_BRAIN_ID and skips the file. Fail-soft — a missing or
 // broken ctx never fails the test run.
+//
+// Measured 2026-09-17: the endpoint 500s on the real payload. A synthetic patch
+// passes at 256 KB and fails at 512 KB; the board's own snapshot patch is
+// ~700 KB, so this has been failing silently for as long as the snapshot has
+// been that large — the brain's test-run node holds a stale board, not a bug in
+// this script.
 function pushToBrain(snapshot) {
 	if (process.env.KORU_SKIP_BRAIN_PUSH) return;
 
@@ -417,7 +423,12 @@ function pushToBrain(snapshot) {
 		return;
 	}
 	if (result.status !== 0) {
-		const msg = (result.stderr || '').trim().split('\n')[0] || `exit ${result.status}`;
+		// stderr's FIRST line is node's `[DEP0205]` deprecation warning on every
+		// run, so reporting it sent a reader to Node versions while the actual
+		// failure — `Error: PATCH … → 500 Internal Server Error` — sat on the last
+		// line, unseen. Report the last line that names an error.
+		const lines = (result.stderr || '').split('\n').map((l) => l.trim()).filter(Boolean);
+		const msg = [...lines].reverse().find((l) => /error/i.test(l)) || lines[lines.length - 1] || `exit ${result.status}`;
 		console.log(`  ⚠ Brain push failed: ${msg}`);
 		return;
 	}
