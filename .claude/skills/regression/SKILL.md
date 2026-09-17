@@ -35,7 +35,9 @@ names that happened to be spelled right.
 **Never `zig build`, or edit `src/` or `koru_std/`, while a suite is live.** Each
 test compiles its emitted Zig against the live `src/` tree, so a half-written
 file there becomes reds that quote your own edit — 33 in one measured case, all
-reported as `backend`, none real.
+reported as `backend`, none real. The harness itself IS safe to exercise during
+a board: `scripts/test_backend_cache.sh` checks the backend cache's content
+salt, its LRU cap and its live window in ~5s, invoking no build and no test.
 
 **I check what broke and investigate**:
 ```bash
