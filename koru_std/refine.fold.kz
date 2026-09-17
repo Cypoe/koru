@@ -54,8 +54,15 @@ fn walkRefine(alloc: std.mem.Allocator, rep: ?*koru_std.koru_compiler.ErrorRepor
                     const f = &fields.items[idx];
                     if (!std.mem.eql(u8, f.base, ff.type)) continue;
                     if (ff.eq) |b| {
-                        if (f.eq == null) {
-                            f.eq = .{ .value = b.value, .exclusive = false, .src = std.fmt.allocPrint(alloc, "=={d}", .{b.value}) catch unreachable };
+                        const esrc = std.fmt.allocPrint(alloc, "=={d}", .{b.value}) catch unreachable;
+                        if (f.eq) |e| {
+                            // A landed facet is a contributor like any
+                            // other: two equalities that disagree meet to
+                            // nothing, and the fold says so rather than
+                            // letting declaration order pick a winner.
+                            if (e.value != b.value) f.eq_conflict = .{ esrc, e.src };
+                        } else {
+                            f.eq = .{ .value = b.value, .exclusive = false, .src = esrc };
                         }
                     } else {
                         if (ff.lo) |b| {

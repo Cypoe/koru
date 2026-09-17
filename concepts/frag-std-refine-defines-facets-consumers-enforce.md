@@ -118,7 +118,14 @@ re-raises across an event boundary — the outer caller supervises),
 post-clamp value), 671_013 (clamp met to empty refuses), 671_014
 (clamp∩clamp meets by intersection), 671_015 (bounds meet on a
 terminal-typed field), 671_016 (clamp on a terminal-typed field),
-671_017 (bound on a non-integer terminal refuses).
+671_017 (bound on a non-integer terminal refuses), 671_022 (equality
+admits and refuses at the boundary), 671_023 (an equality contradicting
+another equality refuses), 671_024 (two sibling blocks disagreeing on an
+equality refuse — the confluence hole), 671_025 (a scoped equality
+contradicting a universal one refuses), 671_026 (an equality outside its
+own interval refuses), 671_027 (the equality reaches the store's own
+guard builder), 671_028 (the catalog spells the equality and counts it
+enforced).
 
 ---
 
@@ -197,3 +204,20 @@ refuses negatives at the boundary. The same build also runs
 `yosys … check` on every `*.fpga.sv` — the artifact is gated
 structurally (0 problems) and behaviorally (the sim), the way
 spirv-val gates the [gpu] blob.
+
+EVOLVED 2026-09-17 (equality is the one atom that cannot fold by
+strength; 671_022–671_028): the confluence claim above was true of four
+of the five v0 atoms and false of the fifth — which is worse than being
+false of all of them, because the other four make the guarantee look
+structural. Bounds and clamps fold by keeping the strongest term and
+letting the emptiness judge rule on the result, so a disagreement
+survives the fold and surfaces. An equality has no strongest term, and
+the fold's "keep the first" turned two disagreeing equalities into a
+DECLARATION-ORDER decision: two sibling blocks (`==8080`, `==9090`)
+compiled, printed both facets as canonical, and enforced only the first
+— `9090` rejected by the program that had just declared it, with no
+refusal anywhere. The rule the fix encodes, and the one to hold the
+next atom (disjunction) to: **an atom's meet either folds by strength,
+or it RECORDS the disagreement for the emptiness judge — silence is not
+a fold.** The atom is now pinned end to end, and the two fix sites have
+a pin each, so a reverted half goes red.

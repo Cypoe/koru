@@ -37,6 +37,11 @@ const Field = struct {
     clamp: ?Clamp = null,
     // Two clamps intersecting to nothing — the disagreeing pair.
     clamp_conflict: ?[2][]const u8 = null,
+    // Two equalities that disagree — the disagreeing pair. Equality is the
+    // one atom that cannot fold by strength (`==1` and `==2` have no
+    // winner), so like an empty clamp intersection it is RECORDED and
+    // judged by emptyField, never resolved by declaration order.
+    eq_conflict: ?[2][]const u8 = null,
 };
 const ProtoField = struct { name: []const u8, base: []const u8 };
 const Op = enum { gt, ge, lt, le, eq };
@@ -272,8 +277,14 @@ fn parseInto(
                 .eq => {
                     if (f.eq) |e| {
                         if (e.value != n) {
-                            if (!strict) continue;
-                            return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): field '{s}' refines to nothing — '{s}' contradicts '{s}'", .{ entry_name, fname, canon, e.src }) };
+                            if (strict) {
+                                return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): field '{s}' refines to nothing — '{s}' contradicts '{s}'", .{ entry_name, fname, canon, e.src }) };
+                            }
+                            // Contributor text parses leniently, but a
+                            // disagreement is not malformed text — it is an
+                            // empty meet. Record it so the refusal does not
+                            // depend on which block's transform fires first.
+                            f.eq_conflict = .{ canon, e.src };
                         }
                     } else {
                         f.eq = .{ .value = n, .exclusive = false, .src = canon };
@@ -289,6 +300,7 @@ fn parseInto(
 // bound strings on conflict.
 fn emptyField(f: *const Field) ?[2][]const u8 {
     if (f.clamp_conflict) |pair| return pair;
+    if (f.eq_conflict) |pair| return pair;
     if (f.clamp) |c| {
         // Stored values live in [c.lo, c.hi]; a bound no value in
         // that range can satisfy refines the field to nothing.

@@ -1,0 +1,2 @@
+CONTAINS refines to nothing
+CONTAINS '==5' and '>10' cannot both hold
