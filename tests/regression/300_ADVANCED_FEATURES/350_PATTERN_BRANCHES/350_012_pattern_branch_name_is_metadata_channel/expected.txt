@@ -1,0 +1,5 @@
+bug|Bug reports
+feature|Feature requests
+other|Other messages
+exhausted|exhausted
+bug fires p=0.93

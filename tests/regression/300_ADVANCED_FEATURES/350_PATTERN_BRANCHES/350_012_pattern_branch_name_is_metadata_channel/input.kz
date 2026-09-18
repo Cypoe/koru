@@ -1,0 +1,42 @@
+// Test: A pattern-named branch's text is a comptime metadata channel
+//
+// A bracketed branch name is an opaque string — spaces, colons, all of
+// it — that the emitter quotes into the union field name verbatim.
+// A proc reflecting @This().Output reads the full text back, so the
+// branch name alone can carry machine-facing and human-facing data:
+// "tag: description" splits on the first ':' into a criteria key and
+// a description, with nothing declared twice. Continuations match the
+// pattern name by equality and bind the payload.
+
+~import std/io
+
+const std = @import("std");
+
+~tor classify {}
+| [bug: Bug reports] f64
+| [feature: Feature requests] f64
+| [other: Other messages] f64
+| exhausted
+
+fn tagOf(comptime name: []const u8) []const u8 {
+    return if (std.mem.indexOfScalar(u8, name, ':')) |i| name[0..i] else name;
+}
+fn descOf(comptime name: []const u8) []const u8 {
+    return if (std.mem.indexOfScalar(u8, name, ':')) |i| std.mem.trim(u8, name[i + 1 ..], " ") else name;
+}
+
+~proc classify|zig {
+    var buf: [256]u8 = undefined;
+    const fields = @typeInfo(@This().Output).@"union".fields;
+    inline for (fields) |f| {
+        const line = std.fmt.bufPrint(&buf, "{s}|{s}\n", .{ tagOf(f.name), descOf(f.name) }) catch unreachable;
+        _ = std.posix.write(1, line) catch 0;
+    }
+    return @unionInit(@This().Output, "bug: Bug reports", 0.93);
+}
+
+~classify()
+| [bug: Bug reports] p |> std/io:print.ln("bug fires p={{ p:f }}")
+| [feature: Feature requests] p |> std/io:print.ln("feature fires")
+| [other: Other messages] p |> std/io:print.ln("other fires")
+| exhausted |> std/io:print.ln("exhausted")

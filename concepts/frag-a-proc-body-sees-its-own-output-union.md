@@ -27,7 +27,14 @@ enumerates its own f64-payload branches and `@unionInit`s the winner
 by reflected name. The splice was emergent when first depended on
 (koru-libs/odds); a change to it now breaks a test, not a consumer.
 
-The reflectable surface is **field names + payload types only.** There
-is no per-branch metadata slot — a criteria *description* has nowhere
-to live in the union yet. That is the open design question the pin
-does not answer.
+The reflectable surface is **field names + payload types only** — and
+the field name turns out to be the metadata slot after all. The
+emitter quotes a bracketed branch name verbatim (`@"bug: Bug
+reports"`), so `[tag: description]` survives into `f.name` intact: a
+proc splits on the first `:` and recovers a criteria key and its
+description from the same declared string. Nothing declared twice,
+no new syntax, payload untouched. Pinned at
+`300_ADVANCED_FEATURES/350_PATTERN_BRANCHES/350_012` — the same
+reflection, now asserting the text round-trips and the arm dispatches
+by name equality. The slot the earlier draft said was missing was the
+name itself.
