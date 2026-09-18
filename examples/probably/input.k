@@ -8,8 +8,8 @@
 // Three mails walk all three routes: a bug urgent enough to earn the
 // polish loop, a feature request rerouted through a <chaotic> judge,
 // and an other that goes straight to archive. Each gets its own
-// judge — issued, borrowed, and retired inside one subflow, the
-// obligation discharged on every arm or the program doesn't compile.
+// judge — issued, borrowed, retired inside one subflow — `retire` is
+// never spelled: the emitter splices the sole void disposer itself.
 
 import std/io
 import app/jev
@@ -34,19 +34,19 @@ tor route { m: string }
 route = app/jev:judge(budget: 8): j |> app/jev:triage(j, text: m)
 | bug p |> std/io:print.ln("route: bug     p={{ p:f }}") |> app/jev:feels(j, text: m, question: "genuinely urgent")
     | yes q when q >= 0.8 |> std/io:print.ln("drop everything        p={{ q:f }}") |> app/jev:polish(j, draft: m)
-        | polished d |> std/io:print.ln("polished: {{ d:s }}") |> app/jev:retire(j)
-        | exhausted |> std/io:print.ln("judge spent mid-polish") |> app/jev:retire(j)
-    | no q when q >= 0.8  |> std/io:print.ln("it can wait            p={{ q:f }}") |> app/jev:retire(j)
-    | yes q               |> std/io:print.ln("uncertain - follow up  p={{ q:f }}") |> app/jev:retire(j)
-    | no q                |> std/io:print.ln("uncertain - follow up  p={{ q:f }}") |> app/jev:retire(j)
-    | exhausted           |> std/io:print.ln("judge exhausted at urgency check") |> app/jev:retire(j)
+        | polished d |> std/io:print.ln("polished: {{ d:s }}")
+        | exhausted |> std/io:print.ln("judge spent mid-polish")
+    | no q when q >= 0.8  |> std/io:print.ln("it can wait            p={{ q:f }}")
+    | yes q               |> std/io:print.ln("uncertain - follow up  p={{ q:f }}")
+    | no q                |> std/io:print.ln("uncertain - follow up  p={{ q:f }}")
+    | exhausted           |> std/io:print.ln("judge exhausted at urgency check")
 | feature p |> std/io:print.ln("route: feature p={{ p:f }}") |> app/jev:chaos(j): cj |> app/jev:ctriage(j: cj, text: m)
-    | bug q     |> std/io:print.ln("chaos reroute: bug     p={{ q:f }}") |> app/jev:settle(j: cj): g |> app/jev:retire(j: g)
-    | feature q |> std/io:print.ln("chaos reroute: feature p={{ q:f }}") |> app/jev:settle(j: cj): g |> app/jev:retire(j: g)
-    | other q   |> std/io:print.ln("chaos reroute: other   p={{ q:f }}") |> app/jev:settle(j: cj): g |> app/jev:retire(j: g)
-    | exhausted |> std/io:print.ln("judge exhausted in chaos") |> app/jev:settle(j: cj): g |> app/jev:retire(j: g)
-| other p   |> std/io:print.ln("route: other   p={{ p:f }}") |> app/jev:retire(j)
-| exhausted |> std/io:print.ln("judge exhausted at triage") |> app/jev:retire(j)
+    | bug q     |> std/io:print.ln("chaos reroute: bug     p={{ q:f }}") |> app/jev:settle(j: cj)
+    | feature q |> std/io:print.ln("chaos reroute: feature p={{ q:f }}") |> app/jev:settle(j: cj)
+    | other q   |> std/io:print.ln("chaos reroute: other   p={{ q:f }}") |> app/jev:settle(j: cj)
+    | exhausted |> std/io:print.ln("judge exhausted in chaos") |> app/jev:settle(j: cj)
+| other p   |> std/io:print.ln("route: other   p={{ p:f }}")
+| exhausted |> std/io:print.ln("judge exhausted at triage")
 
 mail-bug(): m |> route(m)
 mail-feature(): m |> route(m)

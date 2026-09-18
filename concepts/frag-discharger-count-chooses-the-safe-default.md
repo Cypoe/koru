@@ -71,6 +71,33 @@ the second discharger's cost is paid by *sites that predate it and do not
 mention it*, which is exactly the kind of coupling that is invisible at review
 time.
 
+## Refinement, 2026-09-21 — the count is of SPLICEABLE consumers, not consumers
+
+`koru/odds` put this under load in a shape the frag did not anticipate: a
+phantom *cycle*. `chaos` consumes `*Judge<!greedy>` and mints
+`*Judge<chaotic!>`; `settle` consumes `*Judge<!chaotic>` and mints
+`*Judge<greedy!>`; `retire` is the void destructor. By this frag's letter,
+`<greedy>` has two consumers — `retire` and `chaos` — so auto-discharge
+should refuse and `~[!]` should be needed to restore it. It isn't, and it
+doesn't: the pick runs over the strict set — void events only — because an
+inserted call's return value could not be bound. `chaos` filters itself out
+by having a return. `retire` was sole candidate from the start.
+
+The claim survives, sharpened: **what chooses the safe default is the count
+of terminals, not the count of consumers.** A transition that reissues an
+obligation is invisible to the count — so adding `fs:redirect` beside
+`fs:close` cannot produce the `node.fence` blast radius, while adding
+`fs:abandon` still does. The design lever is exactly as strong as this frag
+claimed, but its surface is smaller: only a second *terminal* revokes the
+right to forget. A cycle's destructor is sole spliceable candidate *by
+construction*, since every transition is disqualified by its own output.
+
+(`~[!]` — the "let a disposer declare itself the default" escape
+[[frag-auto-discharge-must-not-elect-among-disposers]] left open — exists
+and is correctly spent on genuinely ambiguous terminal sets, e.g. `commit`
+vs `rollback`. Spending it on a transition-vs-terminal "tie" claims an
+ambiguity that cannot exist.)
+
 ## Where this could be wrong
 
 - **One discharger may not always be a safe default.** The claim assumes the
