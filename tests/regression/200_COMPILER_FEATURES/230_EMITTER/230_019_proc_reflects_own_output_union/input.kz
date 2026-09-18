@@ -1,0 +1,42 @@
+// PIN — a |zig proc can reflect on its own declared answer space.
+// Inside a proc body @This().Output names the event's declared return
+// union; @typeInfo enumerates its branch names and payload types at
+// comptime, and @unionInit builds a branch by reflected name. This is
+// the hook koru/odds' Jev backend stands on: f64-payload branches are
+// the category set, every other branch is control. Renaming a branch
+// renames the reflected key — the answer space is declared once, in
+// the signature, and no proc ever spells it again.
+const std = @import("std");
+~import std/io
+
+~tor pick {}
+| bug f64
+| feature f64
+| other f64
+| exhausted
+~proc pick|zig {
+    // Enumerate the category set — only f64-payload branches. stdout,
+    // one stream — stderr/stdout merge order is not pinnable.
+    const out = std.fs.File.stdout();
+    const fields = @typeInfo(@This().Output).@"union".fields;
+    inline for (fields) |f| {
+        if (f.type == f64) {
+            out.writeAll(f.name) catch unreachable;
+            out.writeAll("\n") catch unreachable;
+        }
+    }
+    // Build the winner by reflected name — the same call the backend's
+    // argmax/sampler makes on real probabilities.
+    inline for (fields) |f| {
+        if (f.type == f64) {
+            return @unionInit(@This().Output, f.name, 1.0);
+        }
+    }
+    unreachable;
+}
+
+~pick()
+| bug p |> std/io:print.ln("bug {{ p:f }}")
+| feature p |> std/io:print.ln("feature {{ p:f }}")
+| other p |> std/io:print.ln("other {{ p:f }}")
+| exhausted |> std/io:print.ln("exhausted")

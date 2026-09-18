@@ -71,7 +71,7 @@ the second discharger's cost is paid by *sites that predate it and do not
 mention it*, which is exactly the kind of coupling that is invisible at review
 time.
 
-## Refinement, 2026-09-21 — the count is of SPLICEABLE consumers, not consumers
+## Refinement, 2026-09-18 — the count is of SPLICEABLE consumers, not consumers
 
 `koru/odds` put this under load in a shape the frag did not anticipate: a
 phantom *cycle*. `chaos` consumes `*Judge<!greedy>` and mints
