@@ -337,6 +337,7 @@ examples/**/build.zig
 examples/**/build_backend.zig
 examples/**/build_output.zig
 examples/**/compiler_env.zig
+examples/**/compiler_env.json
 examples/**/program.ast.json
 examples/**/generated/
 # Generated AST dumps — never commit (13 rode in under benchmarks/probes once;
