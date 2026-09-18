@@ -53,7 +53,7 @@ verbatim — OR migrate such transforms off the whole-program escape onto
 site-local results. Then flip 210_158 MUST_FAIL→MUST_RUN. koru's own suite already
 parks the sibling frontier at `210_024_source_scope_capture` (TODO, 2026-06-03).
 
-## Unit synthesis does not need the escape — the `std/supervisor` existence proof (2026-11-15)
+## Unit synthesis does not need the escape — the `std/supervisor` existence proof (2026-09-19)
 
 `std/supervisor:supervised` is the first std transform that needed MORE than its
 own site: it must find the producing call (the parent continuation of the arm it
