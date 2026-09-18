@@ -1,13 +1,13 @@
 {
-  "timestamp": "2026-09-17T14:51:33.156Z",
+  "timestamp": "2026-09-18T09:49:59.467Z",
   "summary": {
-    "passed": 377,
+    "passed": 410,
     "failed": 0,
     "skipped": 12,
     "leaked": 0,
     "compileErrors": 0,
-    "total": 389,
-    "suiteCount": 43,
+    "total": 422,
+    "suiteCount": 44,
     "status": "success"
   },
   "suites": [
@@ -60,6 +60,14 @@
       "status": "success"
     },
     {
+      "name": "codegen_utils_tests",
+      "passed": 30,
+      "failed": 0,
+      "skipped": 0,
+      "total": 30,
+      "status": "success"
+    },
+    {
       "name": "compiler_passes_tests",
       "passed": 2,
       "failed": 0,
@@ -101,10 +109,10 @@
     },
     {
       "name": "errors_tests",
-      "passed": 2,
+      "passed": 4,
       "failed": 0,
       "skipped": 0,
-      "total": 2,
+      "total": 4,
       "status": "success"
     },
     {
@@ -261,10 +269,10 @@
     },
     {
       "name": "shape_checker_tests",
-      "passed": 9,
+      "passed": 10,
       "failed": 0,
       "skipped": 0,
-      "total": 9,
+      "total": 10,
       "status": "success"
     },
     {
