@@ -1,8 +1,9 @@
 seeded
+nested 300
 first 300
 row 10
 row 20
 row 30
 scan 100
-tree seeded
+tree nested 20
 root 10

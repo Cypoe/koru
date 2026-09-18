@@ -45,6 +45,36 @@ const SPlan = struct {
         return found;
     }
 
+    /// The continuation-nested half of the site fold: store doors inside a
+    /// flow's continuations (`| row a |> std/store:insert(...)`, a query
+    /// under a `|>` pipeline) count exactly as head sites do — except `new`,
+    /// which stays head-only. Witness pointers address the real tree via
+    /// `|*c|` iteration, the same contract collectSites' walkConts hashes.
+    fn foldNestedSites(alloc: std.mem.Allocator, stores: *std.ArrayList(SX.Store), conts: []const ast_find.Continuation, home: []const u8) void {
+        for (conts) |*c| {
+            if (c.node) |*node| {
+                if (node.* == .invocation) {
+                    const inv = &node.invocation;
+                    if (SX.isStoreDoor(inv)) |door| {
+                        const name = SX.siteName(inv);
+                        if (std.mem.eql(u8, door, "insert")) {
+                            SX.touch(alloc, stores, name, home).inserts.append(alloc, @intFromPtr(inv)) catch unreachable;
+                        } else if (std.mem.eql(u8, door, "query") or std.mem.eql(u8, door, "stripe")) {
+                            SX.touch(alloc, stores, name, home).queries.append(alloc, .{ .ptr = @intFromPtr(inv), .conts = c.continuations, .door = door }) catch unreachable;
+                        } else if (std.mem.eql(u8, door, "take")) {
+                            SX.touch(alloc, stores, name, home).takes.append(alloc, @intFromPtr(inv)) catch unreachable;
+                        } else if (std.mem.eql(u8, door, "clear")) {
+                            SX.touch(alloc, stores, name, home).clears.append(alloc, @intFromPtr(inv)) catch unreachable;
+                        } else if (std.mem.eql(u8, door, "default")) {
+                            SX.touch(alloc, stores, name, home).watches.append(alloc, @intFromPtr(inv)) catch unreachable;
+                        }
+                    }
+                }
+            }
+            foldNestedSites(alloc, stores, c.continuations, home);
+        }
+    }
+
     /// Invocation pointers for a store's query-site list — the counted row's
     /// `at` witnesses are the sites it counted.
     fn qptrs(alloc: std.mem.Allocator, qsites: []const SX.QSite) []const usize {
@@ -135,7 +165,7 @@ const SPlan = struct {
     /// never a guessed plan.
     fn planSite(alloc: std.mem.Allocator, program: *const ast_find.Program, s: *const SX.Store, q: *const SX.QSite, is_view: bool) []const u8 {
         if (std.mem.eql(u8, q.door, "stripe")) return "stripe — sweep";
-        const conts = q.flow.body.continuations;
+        const conts = q.conts;
         const sc_query = findArm(conts, "query");
         const sc_first = findArm(conts, "first");
         const none_arm = findArm(conts, "none");

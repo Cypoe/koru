@@ -1,18 +1,18 @@
 // Koru Standard Library: the `sites` part of store — joined via
 // `~part sites` in store.kz; members land in koru_store.
 //
-// The site fold shared by `store.explain.kz`'s explainer: SX walks the
-// pre-transform tree for `std/store:*` sites — a counted row's `at`
-// witnesses are the sites it counted (`inserts = 1 [deadb]`).
+// The site fold shared by `store.explain.kz`'s explainer — a counted row's
+// `at` witnesses are the sites it counted (`inserts = 1 [deadb]`).
 
 const SX = struct {
     const struct_literal = @import("struct_literal");
 
     const Member = struct { spelled: []const u8, owned: bool };
     const Arm = struct { name: []const u8, bind: []const u8 };
-    // A query/stripe site: witness pointer, the flow holding the `! query`/
-    // `! first`/`| none` arms the plan fold resolves, and the claiming door.
-    const QSite = struct { ptr: usize, flow: *const ast_find.Flow, door: []const u8 };
+    // A query/stripe site: witness pointer, the continuations carrying the
+    // `! query`/`! first` arms (nested: the holding continuation's own —
+    // the arms the transform's siteView sees), and the claiming door.
+    const QSite = struct { ptr: usize, conts: []const ast_find.Continuation, door: []const u8 };
 
     const Store = struct {
         name: []const u8,
@@ -113,8 +113,7 @@ const SX = struct {
         return null;
     }
 
-    // A site naming a store without creating one — counted on the store
-    // when it exists, a stray reference when it doesn't.
+    // A site naming a store without creating one: counted when it exists.
     fn touch(alloc: std.mem.Allocator, stores: *std.ArrayList(Store), name: []const u8, home: []const u8) *Store {
         if (find(stores, name)) |s| return s;
         stores.append(alloc, blank(alloc, name, home)) catch unreachable;
@@ -151,7 +150,7 @@ const SX = struct {
                         } else if (std.mem.eql(u8, door, "insert")) {
                             touch(alloc, stores, name, fl.module).inserts.append(alloc, @intFromPtr(inv)) catch unreachable;
                         } else if (std.mem.eql(u8, door, "query") or std.mem.eql(u8, door, "stripe")) {
-                            touch(alloc, stores, name, fl.module).queries.append(alloc, .{ .ptr = @intFromPtr(inv), .flow = fl, .door = door }) catch unreachable;
+                            touch(alloc, stores, name, fl.module).queries.append(alloc, .{ .ptr = @intFromPtr(inv), .conts = fl.body.continuations, .door = door }) catch unreachable;
                         } else if (std.mem.eql(u8, door, "take")) {
                             touch(alloc, stores, name, fl.module).takes.append(alloc, @intFromPtr(inv)) catch unreachable;
                         } else if (std.mem.eql(u8, door, "clear")) {
@@ -160,6 +159,7 @@ const SX = struct {
                             touch(alloc, stores, name, fl.module).watches.append(alloc, @intFromPtr(inv)) catch unreachable;
                         }
                     }
+                    SPlan.foldNestedSites(alloc, stores, fl.body.continuations, fl.module);
                 },
                 .module_decl => |*m| foldSites(alloc, m.items, stores),
                 else => {},

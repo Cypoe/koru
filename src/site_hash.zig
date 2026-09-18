@@ -19,7 +19,7 @@ const errors = @import("errors");
 // 32-char alphabet without i/l/o/u — five bits per char.
 const ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
 const SEG_CHARS = 3; // 15 bits per level
-const MAX_DEPTH = 4; // module, item, site, detail → 12 chars
+const MAX_DEPTH = 8; // module, item, then up to six nesting levels → 24 chars
 
 const FNV_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;

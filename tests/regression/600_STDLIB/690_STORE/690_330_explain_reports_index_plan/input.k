@@ -7,8 +7,12 @@
 // stops at first match. A `[tree]` store plans its queries like any other
 // — the fold reports the transform's own column surface, so a guard on a
 // real column plans a sweep and a guard on the invisible `parent` would
-// refuse with the transform's own words, never a guessed plan. The program
-// itself still runs — the plans it reports are the routes it executes.
+// refuse with the transform's own words, never a guessed plan. Sites
+// inside continuations count too — the two `| row`-chained inserts and
+// queries nested under `|>` pipelines are folded, not just flow heads,
+// and a site nested four invocations deep still carries its witness.
+// The program itself still runs — the plans it reports are the routes it
+// executes.
 import std/io
 import std/store
 import std/indexes
@@ -21,6 +25,9 @@ std/store:insert(players) { key: 10, val: 100 }
 | row a |> std/store:insert(players) { key: 20, val: 200 }
     | row b |> std/store:insert(players) { key: 30, val: 300 }
         |> std/io:print.ln("seeded")
+        |> std/store:query(players)
+            ! first p when p.key == 30 |> std/io:print.ln("nested {{ p.val:d }}")
+            | none |> std/io:print.ln("nested none")
 
 // routed: the guard's equality is on the indexed column
 std/store:query(players)
@@ -44,7 +51,9 @@ std/store:query(players)
 
 std/store:insert(tree) { val: 10 }
 | row r |> std/store:insert(tree) { val: 20 }
-    |> std/io:print.ln("tree seeded")
+    |> std/store:query(tree)
+        ! first n when n.val == 20 |> std/io:print.ln("tree nested {{ n.val:d }}")
+        | none |> std/io:print.ln("tree none")
 
 std/store:query(tree)
     ! first n when n.val == 10 |> std/io:print.ln("root {{ n.val:d }}")

@@ -11,8 +11,10 @@ tags: [koru, explain, glance, tooling, agents, architecture]
 # A site hash is a transient fuzzy address, not a permanent marker
 
 `src/site_hash.zig` gives every addressable node — decl, flow-head,
-nested invocation site — a 12-char coordinate over the semantic path
-module → item → site → detail. Each level emits a 3-char segment of a
+nested invocation site — a coordinate over the semantic path
+module → item → site → nested site → …, one 3-char segment per level,
+rendered shortest-unique so a shallow program never pays for the depth
+its neighbours don't use. Each level emits a 3-char segment of a
 chained digest, so **the hash is its own trie key**: chomping the right
 side zooms OUT (right neighborhood, coarser cell), never off the map.
 
@@ -39,6 +41,15 @@ Corollaries that fell out:
 - **`at` needs no tree knowledge.** Children of a site are sites whose
   hash has its hash as a one-level-longer prefix — matryoshka drill-down
   is a prefix op over the flat site list.
+- **The address space must cover every site a fold can count.** The
+  first cut capped the path at four levels, so a `! first` nested four
+  invocations deep under `| row a |> … | row b |> …` was counted by the
+  store's fold but had no coordinate — `queries = 4` beside three
+  witnesses, the self-disagreement the first corollary said was
+  impossible. The invariant "count is witnesses.len" holds only if the
+  enumerator and the folds agree on what a site is; a depth cap on one
+  side is a silent disagreement. Koru pipelines nest deep by design, so
+  the cap is generous and the render pays for depth only where it exists.
 
 `glance` is the map (decls + hashes + file:line), `explain` the ledger
 (decisions + witnesses), `at` the drill (hash → site → children). One
