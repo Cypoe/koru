@@ -1,12 +1,12 @@
 {
-  "timestamp": "2026-09-18T10:45:45.283Z",
+  "timestamp": "2026-09-18T18:36:43.360Z",
   "summary": {
-    "passed": 410,
+    "passed": 412,
     "failed": 0,
     "skipped": 12,
     "leaked": 0,
     "compileErrors": 0,
-    "total": 422,
+    "total": 424,
     "suiteCount": 44,
     "status": "success"
   },
@@ -61,10 +61,10 @@
     },
     {
       "name": "codegen_utils_tests",
-      "passed": 30,
+      "passed": 32,
       "failed": 0,
       "skipped": 0,
-      "total": 30,
+      "total": 32,
       "status": "success"
     },
     {
