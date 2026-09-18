@@ -895,30 +895,27 @@ if [ "$CACHE_MODE" = "on" ]; then
     fi
 fi
 
-# Backend-binary cache setup. The salt is a CONTENT fingerprint of the compiler
-# sources (src/, koru_std/, build.zig): any compiler/stdlib edit moves it, so a
-# stale binary can never be reused across a source change. It is deliberately
-# not an mtime census — rebuilding zig-out/bin/koruc or touching a file is not a
-# build input, and salting on mtime minted a whole dead generation each time
-# (see cache_compute_compiler_fingerprint). The cache dir persists across runs.
+# Backend-binary cache setup. A test's key is the content of its backend's LINKED
+# CLOSURE plus that test's own generated inputs (backend_cache_key, in
+# scripts/regression_cache.sh), so a file the backend never links — src/main.zig,
+# a koru_std/*.kz module — no longer invalidates anything. Nothing is computed
+# here: the first backend staged derives its closure, memoised per build-file
+# content so one walk serves the whole suite.
 export BACKEND_CACHE_MODE
 export BACKEND_CACHE_DIR
-export BACKEND_CACHE_SALT
 if [ "$BACKEND_CACHE_MODE" = "on" ]; then
     # shellcheck source=scripts/regression_cache.sh
     source "$(dirname "${BASH_SOURCE[0]}")/scripts/regression_cache.sh"
-    # Fail loud. A salt that could not be computed must not silently become "":
-    # one empty salt is shared by every compiler version ever built, which is
-    # precisely the cross-version serve the salt exists to prevent. Disable the
-    # cache for the run instead.
-    if BACKEND_CACHE_SALT=$(cache_compute_compiler_fingerprint "$(pwd)"); then
-        BACKEND_CACHE_DIR="$ZIG_GLOBAL_CACHE/koru-backend-cache"
-        mkdir -p "$BACKEND_CACHE_DIR"
-        echo "🗄  Backend-binary cache ENABLED (salt: ${BACKEND_CACHE_SALT:0:16}…, dir: $BACKEND_CACHE_DIR)"
-    else
-        BACKEND_CACHE_MODE=off
-        echo "⚠️  Could not fingerprint the compiler tree — backend-binary cache DISABLED for this run"
-    fi
+    BACKEND_CACHE_DIR="$ZIG_GLOBAL_CACHE/koru-backend-cache"
+    mkdir -p "$BACKEND_CACHE_DIR"
+    # One closure per run, computed by the first test to stage a backend and
+    # reused by every other (validated by comparing the build file byte for byte).
+    # Sound because a run FREEZES the compiler sources: editing src/ while a suite
+    # is live already makes every test red with errors quoting the edit, which is
+    # why the harness forbids it. A standalone run has no such guarantee and
+    # carries its own pid in the path, so it recomputes.
+    export KORU_BACKEND_CLOSURE="$BACKEND_CACHE_DIR/.inputs.$$"
+    echo "🗄  Backend-binary cache ENABLED (keyed on the linked closure, dir: $BACKEND_CACHE_DIR)"
 fi
 # --clean should also drop per-test cache fingerprints (the Zig cache cleanup
 # above leaves them intact otherwise).

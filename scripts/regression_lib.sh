@@ -9,41 +9,30 @@
 : "${CYAN:=\033[0;36m}"
 : "${NC:=\033[0m}"
 
+# Portable SHA-256 over files → "<digest>  <path>" lines (one per file).
+_backend_sha256_files() {
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"
+    elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$@"
+    else openssl dgst -sha256 -r "$@"; fi
+}
+
 # Portable SHA-256 over stdin → bare hex digest.
 _backend_sha256() {
-    if command -v shasum >/dev/null 2>&1; then
+    # sha256sum first: `shasum` is a Perl script on macOS (~87ms startup per
+    # call against ~3ms for one sha256sum over ten files), and the backend-cache
+    # key hashes on every test. Same digest either way.
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
         shasum -a 256 | awk '{print $1}'
     else
-        sha256sum | awk '{print $1}'
+        openssl dgst -sha256 | awk '{print $NF}'
     fi
 }
 
-# Cache key for a test's backend binary. The binary is fully determined by its
-# build inputs (backend.zig + build_backend.zig + the emitted handler code) and
-# the compiler-source salt — NOT by the program AST or compiler env, which are
-# runtime inputs (program.ast.json, compiler_env.json) the backend loads at
-# startup (see src/main.zig), and are deliberately excluded.
-#
-# Comment-only lines are dropped from the emitted handlers before hashing:
-# comments are not build inputs, and the emitter stamps `// >>> PROC: name
-# [file:line]` markers (visitor_emitter.zig) carrying absolute checkout paths
-# that would otherwise make identical sources hash differently across worktrees.
-# Only comment-only lines are dropped — trailing comments on code lines are
-# kept, so `//` inside string literals can never collide. Measured 2026-09-10:
-# across the current corpus this merges 216 keys to 210, so it is a small
-# correctness-of-keying gain, not a cache-hit rescue — the keys already collided
-# heavily on shared handler sets. Tests with the same handler set share one key
-# and one built binary.
-backend_cache_key() {
-    local td="$1"
-    {
-        printf 'salt:%s\n' "$BACKEND_CACHE_SALT"
-        cat "$td/backend.zig" \
-            "$td/build_backend.zig" 2>/dev/null
-        grep -v '^[[:space:]]*//' "$td/backend_output_emitted.zig" 2>/dev/null || true
-    } | _backend_sha256
-}
-
+# The backend-binary cache key is NOT defined here: it belongs to the cache
+# (scripts/regression_cache.sh, backend_cache_key) because it is computed from
+# the backend's linked closure. Both entry scripts source that module.
 # Stage the backend binary for a test: restore from cache on a hit (placing it at
 # zig-out/bin/backend so the caller's existing `mv` path is untouched), else run
 # `zig build`. Sets BACKEND_CACHE_HIT for the caller's store-on-miss decision.
@@ -1216,7 +1205,7 @@ EOF
         # build inputs now in place; program.ast.json is excluded (runtime input).
         BKEY=""
         if [ "$BACKEND_CACHE_MODE" = "on" ]; then
-            BKEY=$(backend_cache_key "$test_dir")
+            BKEY=$(backend_cache_key "$test_dir" "$BUILD_FILE")
         fi
         # Restore the backend from cache on a hit (placing it at zig-out/bin/backend),
         # else `zig build`. Use shared global cache so koru modules cache across tests.

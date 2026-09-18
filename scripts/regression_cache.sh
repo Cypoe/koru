@@ -47,38 +47,125 @@ cache_compute_compiler_mtime() {
     echo "$newest"
 }
 
-# Content fingerprint over the backend's compiler-side inputs — the salt for
-# backend_cache_key (scripts/regression_lib.sh).
+# ═══════════════════════════════════════════════════════════════════════════
+# Backend-cache keys: the LINKED CLOSURE, not the directory
+# ═══════════════════════════════════════════════════════════════════════════
+# A build-cache key must be COMPLETE (every file the binary embeds) and MINIMAL
+# (nothing else), and the two errors cost opposite things. An omission serves a
+# stale backend — see frag-a-backend-cache-keyed-on-mtime-can-serve-poison. An
+# inclusion re-mints every cached backend for an edit that cannot change one.
 #
-# This replaces an mtime census as the salt because mtime is NOT a build input.
-# Rebuilding zig-out/bin/koruc, `touch`ing a source, or restoring a checkout all
-# advanced the old salt and made every cached backend unreachable while leaving
-# every one of them on disk. Measured 2026-09-17 in a single checkout: 1088
-# fresh entries / 11.25 GB in 21.7 hours — nine generations in one day, each a
-# full rebuild of the ~121 backends the cache exists to skip. Hashing
-# (relpath, content) makes the salt depend only on what changes the binary, and
-# costs less than the census it replaces: 2.18s vs 2.91s over the 268-file tree.
+# This cache spent its life over-approximating instead: the salt hashed
+# src/ + koru_std/ + build.zig, 269 files, while a test's backend links 51 of
+# them. So any edit to anything covered re-minted all ~121 backends — including
+# src/main.zig (8k lines of CLI the backend never links) and koru_std/*.kz
+# (comptime module sources whose effect on a given test is already carried by
+# that test's emitted file, which the key hashes by itself). Measured
+# 2026-09-17: 5 of the day's 13 compiler commits touched nothing the backend
+# links, and each threw the whole cache away — all-or-nothing, per commit.
 #
-# Deliberately NOT the same notion as cache_compute_compiler_mtime above. That
-# one drives the RESULT cache, where a conservative "something in the tree
-# moved" is the safe answer and a stale fingerprint only costs a re-run. This
-# one gates BINARY REUSE, where a false mismatch costs a 9.6 MB rebuild per
-# backend — so it must be exact in both directions.
+# The closure is derivable, so the approximation is not needed.
 #
-# Filenames are hashed before their bytes: a rename carrying identical content
-# is a different tree and must move the fingerprint.
+# Cost discipline: this runs once per test, so the walk spawns nothing per file.
+# It was written with a per-file `shasum` first and measured 3.2s per key —
+# `shasum` is a Perl script here, ~87ms of startup per call, against 3ms for one
+# `sha256sum` over ten files. What remains is one awk for the build graph, zero
+# subprocesses per walked file, and one bulk hash for the whole closure.
+_KORU_SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+_KORU_REPO_ROOT=$(cd "$_KORU_SCRIPT_DIR/.." && pwd)
+
+# The files that determine a test's backend binary — its LINKED CLOSURE,
+# computed by scripts/backend_closure.js, which owns the resolution rules and the
+# Zig lexing (see its header: the walk needs string/char/comment state, and the
+# bash-and-awk version of this measured 5.5s per test against ~60ms there).
 #
-# Args: $1 = repo root. Fails (nonzero, empty) if the tree cannot be read, so the
-# caller can disable the cache instead of salting with "".
-cache_compute_compiler_fingerprint() {
-    local repo_root="$1"
+# Prints "<relative path> <sha256>" per line, sorted, for every linked file
+# EXCEPT the test's own generated inputs — the caller hashes those under its own
+# rules (the emitted handlers are comment-stripped, so the emitter's absolute
+# path markers cannot make identical sources differ per worktree). Paths are
+# relative to the repo root so that two checkouts holding the same compiler
+# content still key identically.
+#
+# Returns nonzero, printing nothing, when the closure cannot be proven — an
+# unresolvable import, an `@import` whose argument is not a literal string — or
+# when node is missing. A closure that cannot be proven must never key an entry,
+# so the caller keys nothing and the test rebuilds.
+#
+# Args: $1 = test dir, $2 = build file
+backend_cache_inputs() {
+    local td="$1" bf="$2"
+    [ -f "$bf" ] || return 1
+
+    # Reuse a closure already computed for this exact build file. Sound because a
+    # suite run FREEZES the compiler sources — editing src/ while a suite is live
+    # already makes every test red with errors quoting the edit, which is why the
+    # harness forbids it — and because reuse is validated by comparing the build
+    # file byte for byte. A standalone run carries its own pid in the path, so it
+    # always recomputes.
+    local reuse="${KORU_BACKEND_CLOSURE:-}"
+    if [ -n "$reuse" ] && [ -s "$reuse" ] && cmp -s "$bf" "$reuse.bf" 2>/dev/null; then
+        cat "$reuse"
+        return 0
+    fi
+
+    if ! command -v node >/dev/null 2>&1; then
+        if [ "${_KORU_NODE_WARNED:-false}" != true ]; then
+            _KORU_NODE_WARNED=true
+            echo "⚠️  node not found — backend-binary cache disabled (the backend's closure cannot be computed)" >&2
+        fi
+        return 1
+    fi
+
+    local out
+    out=$(node "$_KORU_SCRIPT_DIR/backend_closure.js" "$bf" 2>&1) || {
+        [ -n "$out" ] && printf '%s\n' "$out" >&2
+        return 1
+    }
+    [ -n "$out" ] || return 1
+
+    if [ -n "$reuse" ]; then
+        printf '%s\n' "$out" > "$reuse.tmp.$$" && mv -f "$reuse.tmp.$$" "$reuse"
+        cp -f "$bf" "$reuse.bf" 2>/dev/null || true
+    fi
+    printf '%s\n' "$out"
+}
+
+# The backend-binary cache key for one test:
+#
+#   sha256( the test's three generated inputs
+#           + path:content of every file in the LINKED CLOSURE )
+#
+# Comment-only lines are dropped from the emitted handlers — measured 2026-09-10:
+# across the corpus this merged 216 keys into 210 — because the emitter stamps
+# `// >>> PROC: name [file:line]` markers (visitor_emitter.zig) carrying absolute
+# checkout paths, which would otherwise make identical sources hash differently
+# per worktree. Only comment-only lines are dropped; trailing comments on code
+# lines are kept, so `//` inside a string literal can never collide.
+#
+# There is no salt any more, and none is wanted: the closure IS the salt, and it
+# is computed per test from the build file the test already carries. A file that
+# cannot change the binary cannot change the key.
+#
+# Args: $1 = test dir, $2 = build file (default $1/build_backend.zig)
+# Prints the key, or nothing when the closure cannot be proven.
+backend_cache_key() {
+    local td="$1" bf="${2:-build_backend.zig}"
+    # The staging site passes a bare name (`build_backend.zig`) — that is what
+    # `zig build --build-file` takes after its own `cd "$td"` — while a standalone
+    # caller may pass an absolute path. A bare name resolves against the TEST DIR,
+    # never the caller's CWD: a stray `build_backend.zig` at the repo root would
+    # otherwise key one test's backend from another build file's graph.
+    case "$bf" in
+        /*) ;;
+        *) [ -f "$td/$bf" ] && bf="$td/$bf" ;;
+    esac
+    local inputs f
+    inputs=$(backend_cache_inputs "$td" "$bf") || return 0
+    [ -n "$inputs" ] || return 0
     {
-        find "$repo_root/src" "$repo_root/koru_std" "$repo_root/build.zig" \
-            -type f 2>/dev/null \
-            | LC_ALL=C sort | while IFS= read -r f; do
-                printf '%s\n' "${f#"$repo_root"/}"
-                cat "$f"
-            done
+        cat "$td/backend.zig" "$bf" 2>/dev/null
+        grep -v '^[[:space:]]*//' "$td/backend_output_emitted.zig" 2>/dev/null || true
+        printf '%s\n' "$inputs"
     } | _backend_sha256
 }
 
@@ -281,6 +368,8 @@ backend_human() {
 }
 
 # "mtime size path", one line per file, least-recently-used first.
+# Dotfiles are excluded: staging residue and the closure memo are not entries,
+# so they must not be evicted as if they were, nor counted toward the cap.
 #
 # GNU and BSD stat disagree on BOTH the flag and the format letters, and this
 # machine has both (a Nix profile shadows /usr/bin), so the dialect is probed
@@ -289,9 +378,9 @@ backend_human() {
 # the moment it is handed several files (`{} +`), so the GNU branch must use -c.
 backend_cache_lru() {
     if stat -c '%Y %s %n' / >/dev/null 2>&1; then
-        find "$1" -maxdepth 1 -type f -exec stat -c '%Y %s %n' {} + 2>/dev/null | sort -n
+        find "$1" -maxdepth 1 -type f ! -name '.*' -exec stat -c '%Y %s %n' {} + 2>/dev/null | sort -n
     else
-        find "$1" -maxdepth 1 -type f -exec stat -f '%m %z %N' {} + 2>/dev/null | sort -n
+        find "$1" -maxdepth 1 -type f ! -name '.*' -exec stat -f '%m %z %N' {} + 2>/dev/null | sort -n
     fi
 }
 

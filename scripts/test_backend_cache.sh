@@ -27,52 +27,109 @@ mt()  { stat -c %Y "$1" 2>/dev/null; }
 S=$(mktemp -d "${TMPDIR:-/tmp}/koru-cache-test.XXXXXX")
 trap 'rm -rf "$S"' EXIT
 
-# ── salt: content, not mtime ────────────────────────────────────────────────
-echo "salt fingerprint:"
-CR="$S/compiler"; mkdir -p "$CR/src" "$CR/koru_std"
-printf 'const a = 1;\n'   > "$CR/src/a.zig"
-printf 'pub fn flow() {}\n' > "$CR/koru_std/c.kz"
-printf 'build\n'         > "$CR/build.zig"
+# ── the closure: what a key may depend on ───────────────────────────────────
+# A key must be COMPLETE (every file the backend embeds; an omission serves a
+# stale backend) and MINIMAL (nothing else; an inclusion re-mints every cached
+# backend for an edit that cannot change one). This pins both halves.
+echo "closure:"
+REPO="$S/repo"
+TD="$S/test"
+mkdir -p "$REPO/src" "$REPO/koru_std" "$TD"
 
-F0=$(cache_compute_compiler_fingerprint "$CR")
-eq "is a 64-hex digest" "64" "${#F0}"
-eq "is deterministic" "$F0" "$(cache_compute_compiler_fingerprint "$CR")"
+printf 'pub const x = 1;\n' > "$REPO/src/linked.zig"
+printf 'const l = @import("linked");\npub const y = l.x;\n' > "$REPO/src/relative_only.zig"
+printf 'pub const z = 9;\n' > "$REPO/src/unlinked.zig"
+printf 'pub const k = 3;\n' > "$REPO/koru_std/unlinked_module.kz"
+# The traps a textual walk must not read as edges: a comment naming an import,
+# and a string literal that ENDS in `@import(` — the exact shape at
+# src/visitor_emitter.zig:4812.
+printf 'const s = @import("std");\n// @import("a_comment_is_not_an_edge")\nconst t = "text ending in @import(";\n' > "$REPO/src/lexer_traps.zig"
+printf 'const traps = @import("lexer_traps");\n' > "$REPO/src/uses_lexer_traps.zig"
 
-sleep 1                                    # the mtime it must ignore is in whole seconds
-touch "$CR/src/a.zig" "$CR/koru_std/c.kz"
-eq "unchanged by touch (mtime is not a build input)" "$F0" "$(cache_compute_compiler_fingerprint "$CR")"
-
-head -c 4096 /dev/zero > "$CR/zig-out.test"   # a rebuilt binary is not an input either
-printf 'const a = 2;\n' > "$CR/src/a.zig"
-neq "moves on content" "$F0" "$(cache_compute_compiler_fingerprint "$CR")"
-F1=$(cache_compute_compiler_fingerprint "$CR")
-
-printf 'const a = 2;\n' > "$CR/src/renamed.zig"; rm -f "$CR/src/a.zig"
-neq "moves on rename with identical bytes (names are hashed)" "$F1" "$(cache_compute_compiler_fingerprint "$CR")"
-
-rm -f "$CR/src/renamed.zig"; printf 'const a = 2;\n' > "$CR/src/a.zig"
-eq "returns to the prior value when the tree is restored" "$F1" "$(cache_compute_compiler_fingerprint "$CR")"
-
-# ── key: salt + inputs, and nothing else ────────────────────────────────────
-echo "cache key:"
-export BACKEND_CACHE_MODE=on
-export BACKEND_CACHE_DIR="$S/cache"; mkdir -p "$BACKEND_CACHE_DIR"
-export BACKEND_CACHE_SALT="$F1"
-
-TD="$S/test"; mkdir -p "$TD"
-printf 'backend\n'      > "$TD/backend.zig"
-printf 'build_backend\n' > "$TD/build_backend.zig"
-printf 'emitted\n'      > "$TD/backend_output_emitted.zig"
-
-K=$(backend_cache_key "$TD")
-eq "is deterministic" "$K" "$(backend_cache_key "$TD")"
-printf '// comment-only line\n' >> "$TD/backend_output_emitted.zig"
-eq "comment-only lines are stripped" "$K" "$(backend_cache_key "$TD")"
-printf 'emitted // trailing\n' > "$TD/backend_output_emitted.zig"
-neq "trailing comments are kept (no string-literal collision)" "$K" "$(backend_cache_key "$TD")"
+printf 'const x = @import("linked");\n' > "$TD/backend.zig"
 printf 'emitted\n' > "$TD/backend_output_emitted.zig"
-(export BACKEND_CACHE_SALT=0000000000000000; backend_cache_key "$TD" > "$S/other")
-neq "a different salt gives a different key" "$K" "$(cat "$S/other")"
+cat > "$TD/build_backend.zig" <<EOF
+const REL_TO_ROOT = "$REPO";
+const std = @import("std");
+pub fn build(b: *std.Build) void {
+    const linked_module = b.createModule(.{
+        .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/linked.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    const relative_only_module = b.createModule(.{
+        .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/relative_only.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    const uses_lexer_traps_module = b.createModule(.{
+        .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/uses_lexer_traps.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    const backend_output_module = b.createModule(.{
+        .root_source_file = b.path("backend_output_emitted.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    backend_output_module.addImport("linked", linked_module);
+}
+EOF
+
+export BACKEND_CACHE_MODE=on
+export BACKEND_CACHE_DIR="$S/cache"
+mkdir -p "$BACKEND_CACHE_DIR"
+
+inputs=$(backend_cache_inputs "$TD" "$TD/build_backend.zig")
+eq "a declared module root is in the closure"   1 "$(printf '%s\n' "$inputs" | grep -c 'src/linked.zig ' || true)"
+eq "a relative @import is followed"             1 "$(printf '%s\n' "$inputs" | grep -c 'src/relative_only.zig ' || true)"
+eq "a file nothing imports is excluded"         0 "$(printf '%s\n' "$inputs" | grep -c 'src/unlinked.zig ' || true)"
+eq "an unlinked koru_std module is excluded"    0 "$(printf '%s\n' "$inputs" | grep -c 'unlinked_module.kz ' || true)"
+eq "the test's own inputs are the caller's job" 0 "$(printf '%s\n' "$inputs" | grep -c 'backend_output_emitted.zig ' || true)"
+eq "a comment naming @import is not an edge"    0 "$(printf '%s\n' "$inputs" | grep -c 'a_comment_is_not_an_edge' || true)"
+eq "the file holding the traps is still walked" 1 "$(printf '%s\n' "$inputs" | grep -c 'src/uses_lexer_traps.zig ' || true)"
+
+echo "the key moves with linked content, and only with linked content:"
+K=$(backend_cache_key "$TD" "$TD/build_backend.zig")
+[ -n "$K" ] && ok "the key is computable" || bad "the key is empty"
+eq "the key is deterministic" "$K" "$(backend_cache_key "$TD" "$TD/build_backend.zig")"
+
+printf 'pub const z = 10;\n' > "$REPO/src/unlinked.zig"
+eq "editing an unlinked file does NOT move the key" "$K" "$(backend_cache_key "$TD" "$TD/build_backend.zig")"
+
+printf 'pub const k = 4;\n' > "$REPO/koru_std/unlinked_module.kz"
+eq "editing an unlinked koru_std module does NOT move the key" "$K" "$(backend_cache_key "$TD" "$TD/build_backend.zig")"
+
+printf 'const l = @import("linked");\npub const y = l.x + 1;\n' > "$REPO/src/relative_only.zig"
+neq "editing a relatively-imported file DOES move the key" "$K" "$(backend_cache_key "$TD" "$TD/build_backend.zig")"
+K=$(backend_cache_key "$TD" "$TD/build_backend.zig")
+
+printf 'pub const x = 2;\n' > "$REPO/src/linked.zig"
+neq "editing a linked root DOES move the key" "$K" "$(backend_cache_key "$TD" "$TD/build_backend.zig")"
+
+# the staging site passes a BARE build-file name, relative to the test dir (it is
+# handed to `zig build --build-file` after its own cd); a key that only accepted
+# an absolute path silently disabled the whole cache in every suite run
+K=$(backend_cache_key "$TD" "$TD/build_backend.zig")
+eq "a bare build-file name resolves against the test dir" "$K" "$(backend_cache_key "$TD" build_backend.zig)"
+
+printf 'emitted\n// a comment-only line\n' > "$TD/backend_output_emitted.zig"
+H=$(backend_cache_key "$TD" "$TD/build_backend.zig")
+printf 'emitted\n' > "$TD/backend_output_emitted.zig"
+eq "comment-only lines in the emitted handlers are stripped" "$H" "$(backend_cache_key "$TD" "$TD/build_backend.zig")"
+
+echo "an unprovable closure keys nothing (never a partial key):"
+BROKEN="$S/broken"; mkdir -p "$BROKEN"
+printf 'const x = @import("does_not_exist");\n' > "$BROKEN/backend.zig"
+printf 'e\n' > "$BROKEN/backend_output_emitted.zig"
+printf 'const REL_TO_ROOT = "%s";\n' "$REPO" > "$BROKEN/build_backend.zig"
+eq "unresolvable import" "" "$(backend_cache_key "$BROKEN" "$BROKEN/build_backend.zig" 2>/dev/null)"
+
+NL="$S/nonliteral"; mkdir -p "$NL"
+printf 'const n = "x";\nconst m = @import(n);\n' > "$NL/backend.zig"
+printf 'e\n' > "$NL/backend_output_emitted.zig"
+printf 'const REL_TO_ROOT = "%s";\n' "$REPO" > "$NL/build_backend.zig"
+eq "non-literal @import" "" "$(backend_cache_key "$NL" "$NL/build_backend.zig" 2>/dev/null)"
 
 # ── hit path: restore, no build, and record the use ─────────────────────────
 echo "hit path:"
@@ -93,8 +150,11 @@ cmp -s "$BACKEND_CACHE_DIR/$K" "$TD/zig-out/bin/backend" \
 echo "store path:"
 printf 'built backend\n' > "$TD/backend"
 BACKEND_CACHE_HIT=false
+K=$(backend_cache_key "$TD" "$TD/build_backend.zig")
+eq "the default build file gives the same key" "$K" "$(backend_cache_key "$TD")"
 K2=$(backend_cache_key "$TD")
-eq "key ignores the built binary" "$K" "$K2"
+printf 'built backend again\n' > "$TD/backend"
+eq "key ignores the built binary" "$K2" "$(backend_cache_key "$TD")"
 printf 'backend v2\n' > "$TD/backend.zig"
 K2=$(backend_cache_key "$TD")
 neq "an input change gives a fresh key" "$K" "$K2"
@@ -121,6 +181,7 @@ done
 : > "$PD/.live.2.tmp"                            # fresh residue: must be kept
 mkdir -p "$PD/subdir"                            # not an entry: must be kept
 
+touch "$PD/.inputs.12345"                            # the per-run closure file's shape
 prune 20971520                                   # 20 MiB cap, 6 MiB present
 eq "under the cap: nothing evicted" "6" "$(nfiles)"
 [ -f "$PD/.stale.1.tmp" ] && bad "stale staging residue was kept" || ok "stale staging residue swept"
@@ -129,6 +190,7 @@ eq "under the cap: nothing evicted" "6" "$(nfiles)"
 
 prune 3145728                                    # 3 MiB cap -> e1..e3 go, e4..e6 stay
 eq "cap enforced by evicting the oldest" "3" "$(nfiles)"
+eq "a dotfile is not an eviction candidate" "1" "$([ -f "$PD/.inputs.12345" ] && echo 1 || echo 0)"
 eq "the boundary entry survived" "1" "$([ -f "$PD/e4" ] && echo 1 || echo 0)"
 eq "the oldest entries went" "0" "$([ -f "$PD/e3" ] && echo 1 || echo 0)"
 eq "the newest entry survived" "1" "$([ -f "$PD/e6" ] && echo 1 || echo 0)"

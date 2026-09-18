@@ -7,9 +7,10 @@ description: Koru regression test harness workflow. Use when checking test statu
 
 The regression suite is the hub for all Koru compiler progress. 1511 tests, 1442
 in scope; ~30 minutes for a full `--parallel 8` board (measured 2026-09-02 —
-the backend-binary cache is salt-guarded by a content fingerprint over `src/`
-and `koru_std/`, so a board after a real compiler edit runs cold while a mere
-rebuild of the compiler binary does not; the 2026-08-01 "~11 minutes" figure was
+the backend-binary cache keys on the backend's LINKED CLOSURE, the ~50 files it
+actually links, so a board cools only when one of those changes: editing
+`src/main.zig` or a `koru_std/*.kz` module invalidates nothing, and rebuilding
+the compiler binary never did; the 2026-08-01 "~11 minutes" figure was
 warm-cache and is stale).
 
 ## Our Workflow

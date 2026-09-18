@@ -63,23 +63,16 @@ if [ "${REGRESSION_QUIET:-false}" != "true" ] && [ -z "${KORU_SUITE_LOCK_BYPASS:
     fi
 fi
 
-# Backend-binary cache: default ON for standalone invocations too (when the
-# suite drives us it exports MODE/DIR/SALT itself, including MODE=off under
-# --no-backend-cache, and this block is skipped). Reuses a cached backend
-# binary across tests sharing a handler set; the content fingerprint makes a
-# binary unusable after any compiler/stdlib edit, and reusable after a mere
-# rebuild. Disable a standalone run with
-# BACKEND_CACHE_MODE=off ./run_single_test.sh <test>.
+# Backend-binary cache: default ON for standalone invocations too (when the suite
+# drives us it exports MODE/DIR itself, including MODE=off under
+# --no-backend-cache, and this block is skipped). A test's key is the content of
+# its backend's linked closure plus its own generated inputs, so a rebuild — or an
+# edit to any file the backend never links — cannot invalidate it. Disable a
+# standalone run with BACKEND_CACHE_MODE=off ./run_single_test.sh <test>.
 if [ -z "${BACKEND_CACHE_MODE:-}" ]; then
     BACKEND_CACHE_MODE=on
     BACKEND_CACHE_DIR="$ZIG_GLOBAL_CACHE/koru-backend-cache"
-    # Fail loud rather than salting with "" (see run_regression.sh).
-    if BACKEND_CACHE_SALT=$(cache_compute_compiler_fingerprint "$SCRIPT_DIR"); then
-        mkdir -p "$BACKEND_CACHE_DIR"
-    else
-        BACKEND_CACHE_MODE=off
-        echo "⚠️  Could not fingerprint the compiler tree — backend-binary cache DISABLED"
-    fi
+    mkdir -p "$BACKEND_CACHE_DIR"
 fi
 
 GREEN='\033[0;32m'

@@ -43,9 +43,10 @@ push, what to publish — is ordinary work.
 
 ## The suite is expensive
 
-~50 minutes for a full board (measured 2026-09-03; the backend-binary cache is
-salt-guarded by a content fingerprint over `src/`/`koru_std/`, so a board after a
-compiler edit runs cold while a rebuild of the compiler binary no longer does).
+~50 minutes for a full board (measured 2026-09-03; the backend-binary cache keys
+on the backend's linked closure — the files it actually links — so a board cools
+when one of those changes and stays warm when anything else does, `src/main.zig`
+and the `koru_std/*.kz` modules included).
 While iterating, run the affected tests plus controls:
 
     ./run_regression.sh <full_test_name> <full_test_name> ...

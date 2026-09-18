@@ -3,4 +3,17 @@ kind: inferred
 shape: categorical
 face: in
 membrane: false
-note: auto-registered orphan — declared before it was defined; refine me
+note: |
+  A belief that was valid is now sharper: a rule's scope narrowed, its statement
+  made precise, or its object named exactly — without inverting it and without
+  relaxing a gate.
+
+  Distinct from `belief-change` (a prior belief inverted, so the old form is now
+  wrong) and from `semantic-widening` (a gate that used to refuse a shape now
+  admits a narrower form of it). A refinement changes neither what was believed
+  nor where the boundary sits; it changes how exactly the boundary is drawn.
+
+  Declared 2026-09-18 with the backend cache key, whose belief went from "the salt
+  must be a build input" to "the key must be the artifact's linked closure" —
+  complete AND minimal, where only the first half was previously stated.
+route: surface
