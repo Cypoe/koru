@@ -8,7 +8,16 @@
             "path": "std/compiler",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_079_effect_branch_resume_expression/input.kz",
-                "line": 2,
+                "line": 1,
+                "col": 0
+            }
+        },
+        {
+            "type": "host_line",
+            "module": "input",
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_079_effect_branch_resume_expression/input.kz",
+                "line": 1,
                 "col": 0
             }
         },
@@ -45,15 +54,6 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_079_effect_branch_resume_expression/input.kz",
                 "line": 5,
-                "col": 0
-            }
-        },
-        {
-            "type": "host_line",
-            "module": "input",
-            "location": {
-                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_079_effect_branch_resume_expression/input.kz",
-                "line": 6,
                 "col": 0
             }
         },
@@ -139,6 +139,11 @@
                     "binding": "_",
                     "binding_type": "branch_payload",
                     "condition": null,
+                    "location": {
+                        "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_079_effect_branch_resume_expression/input.kz",
+                        "line": 12,
+                        "col": 0
+                    },
                     "step":                     {
                         "type": "expression",
                         "expression": "\"Alice\""
@@ -154,6 +159,11 @@
                     "binding": null,
                     "binding_type": "branch_payload",
                     "condition": null,
+                    "location": {
+                        "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_079_effect_branch_resume_expression/input.kz",
+                        "line": 13,
+                        "col": 0
+                    },
                     "step":                     {
                         "type": "terminal"
                     },
@@ -166,7 +176,7 @@
             "impl_of": null,
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_079_effect_branch_resume_expression/input.kz",
-                "line": 12,
+                "line": 11,
                 "col": 0
             }
         }

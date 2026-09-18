@@ -8,7 +8,7 @@
             "path": "std/compiler",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
-                "line": 2,
+                "line": 1,
                 "col": 0
             }
         },
@@ -17,7 +17,7 @@
             "module": "input",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
-                "line": 2,
+                "line": 1,
                 "col": 0
             }
         },
@@ -26,7 +26,7 @@
             "module": "input",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
-                "line": 4,
+                "line": 3,
                 "col": 0
             }
         },
@@ -65,7 +65,7 @@
             "impl_of": null,
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
-                "line": 6,
+                "line": 5,
                 "col": 0
             }
         },
@@ -74,7 +74,7 @@
             "module": "input",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
-                "line": 8,
+                "line": 7,
                 "col": 0
             }
         },
@@ -118,7 +118,7 @@
                             "text": "<h1>Hello!</h1>",
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
-                                "line": 13,
+                                "line": 12,
                                 "col": 0
                             },
                             "scope": {
@@ -139,7 +139,7 @@
             "impl_of": null,
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
-                "line": 10,
+                "line": 9,
                 "col": 0
             }
         },
@@ -148,7 +148,7 @@
             "module": "input",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
-                "line": 14,
+                "line": 13,
                 "col": 0
             }
         },
@@ -206,7 +206,7 @@
                             "text": "<p>${name}</p>",
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
-                                "line": 19,
+                                "line": 18,
                                 "col": 0
                             },
                             "scope": {
@@ -227,7 +227,7 @@
             "impl_of": null,
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
-                "line": 16,
+                "line": 15,
                 "col": 0
             }
         },
@@ -236,7 +236,7 @@
             "module": "input",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
-                "line": 20,
+                "line": 19,
                 "col": 0
             }
         },
@@ -295,6 +295,11 @@
                     "binding": null,
                     "binding_type": "branch_payload",
                     "condition": null,
+                    "location": {
+                        "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
+                        "line": 22,
+                        "col": 0
+                    },
                     "step":                     {
                         "type": "invocation",
                         "invocation": {
@@ -314,7 +319,16 @@
             "impl_of": null,
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
-                "line": 23,
+                "line": 22,
+                "col": 0
+            }
+        },
+        {
+            "type": "host_line",
+            "module": "input",
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
+                "line": 24,
                 "col": 0
             }
         },
@@ -324,15 +338,6 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                 "line": 25,
-                "col": 0
-            }
-        },
-        {
-            "type": "host_line",
-            "module": "input",
-            "location": {
-                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
-                "line": 26,
                 "col": 0
             }
         }

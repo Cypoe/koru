@@ -8,7 +8,16 @@
             "path": "std/compiler",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
-                "line": 2,
+                "line": 1,
+                "col": 0
+            }
+        },
+        {
+            "type": "host_line",
+            "module": "input",
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
+                "line": 1,
                 "col": 0
             }
         },
@@ -40,20 +49,11 @@
             }
         },
         {
-            "type": "host_line",
-            "module": "input",
-            "location": {
-                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
-                "line": 5,
-                "col": 0
-            }
-        },
-        {
             "type": "import_decl",
             "path": "std/build",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
-                "line": 8,
+                "line": 6,
                 "col": 0
             }
         },
@@ -62,7 +62,7 @@
             "module": "input",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
-                "line": 9,
+                "line": 8,
                 "col": 0
             }
         },
@@ -82,7 +82,7 @@
                             "text": "zig build",
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
-                                "line": 14,
+                                "line": 13,
                                 "col": 0
                             },
                             "scope": {
@@ -103,7 +103,7 @@
             "impl_of": null,
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
-                "line": 11,
+                "line": 10,
                 "col": 0
             }
         },
@@ -112,7 +112,7 @@
             "module": "input",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
-                "line": 15,
+                "line": 14,
                 "col": 0
             }
         },
@@ -132,7 +132,7 @@
                             "text": "./zig-out/bin/main",
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
-                                "line": 20,
+                                "line": 19,
                                 "col": 0
                             },
                             "scope": {
@@ -153,7 +153,7 @@
             "impl_of": null,
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
-                "line": 17,
+                "line": 16,
                 "col": 0
             }
         },
@@ -162,7 +162,7 @@
             "module": "input",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
-                "line": 21,
+                "line": 20,
                 "col": 0
             }
         },
@@ -199,7 +199,7 @@
             "module": "input",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
-                "line": 27,
+                "line": 26,
                 "col": 0
             }
         },

@@ -41,6 +41,16 @@ Corollaries that fell out:
 - **`at` needs no tree knowledge.** Children of a site are sites whose
   hash has its hash as a one-level-longer prefix — matryoshka drill-down
   is a prefix op over the flat site list.
+- **A coordinate and a location are different surfaces.** The hash is
+  path-shaped; the `file:line` beside it must answer from the tree, not
+  the flattened text. `stitchPipeChainLines` fused `|>` links into one
+  string and stamped every step with the chain head's line, and the
+  injected compiler import pushed continuation locations one buffer
+  line past every user line — so `at` named sites on the wrong lines.
+  The fix is per-link provenance at stitch time and user-coordinate
+  translation at the read surfaces (`at`, `--ast-json`); stored
+  locations stay parser-coords, because diagnostics and internal
+  uniquifiers are already correct in that space.
 - **The address space must cover every site a fold can count.** The
   first cut capped the path at four levels, so a `! first` nested four
   invocations deep under `| row a |> … | row b |> …` was counted by the

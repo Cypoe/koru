@@ -8,7 +8,16 @@
             "path": "std/compiler",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/052_lenient_multiple_errors/input.kz",
-                "line": 2,
+                "line": 1,
+                "col": 0
+            }
+        },
+        {
+            "type": "host_line",
+            "module": "input",
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/052_lenient_multiple_errors/input.kz",
+                "line": 1,
                 "col": 0
             }
         },
@@ -18,15 +27,6 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/052_lenient_multiple_errors/input.kz",
                 "line": 2,
-                "col": 0
-            }
-        },
-        {
-            "type": "host_line",
-            "module": "input",
-            "location": {
-                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/052_lenient_multiple_errors/input.kz",
-                "line": 3,
                 "col": 0
             }
         },
@@ -63,7 +63,7 @@
             "module": "input",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/052_lenient_multiple_errors/input.kz",
-                "line": 9,
+                "line": 8,
                 "col": 0
             }
         },
@@ -73,7 +73,7 @@
             "message": "unmatched '{' in tor shape",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/052_lenient_multiple_errors/input.kz",
-                "line": 9,
+                "line": 8,
                 "col": 1
             },
             "raw_text": "~tor broken-event {\n    value: i32\n\n// This event is valid - should still be parsed\n"
@@ -111,7 +111,7 @@
             "module": "input",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/052_lenient_multiple_errors/input.kz",
-                "line": 18,
+                "line": 17,
                 "col": 0
             }
         },
@@ -121,7 +121,7 @@
             "message": "unclosed annotation bracket",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/052_lenient_multiple_errors/input.kz",
-                "line": 18,
+                "line": 17,
                 "col": 1
             },
             "raw_text": "~[unclosed annotation event another_broken {\n    z: i32\n}\n\n// A valid event past the annotation; that recovery is pinned by 210_159\n"

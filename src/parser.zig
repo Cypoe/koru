@@ -369,6 +369,52 @@ fn stripTrailingLineComment(s: []const u8) []const u8 {
     return s;
 }
 
+/// Count the chain delimiters (`|>` and `=>`) at paren/brace/bracket depth 0,
+/// outside strings and line comments — the same split predicate
+/// parsePipelineSteps applies, so count k here means the flattened text holds
+/// k delimiter-introduced segments. A leading `|>` (a line-start pipe step)
+/// counts: it introduces the first step.
+fn countChainDelimiters(s: []const u8) usize {
+    var n: usize = 0;
+    var depth: i32 = 0;
+    var in_str = false;
+    var k: usize = 0;
+    while (k < s.len) {
+        const c = s[k];
+        if (in_str) {
+            if (c == '"' and (k == 0 or s[k - 1] != '\\')) in_str = false;
+            k += 1;
+            continue;
+        }
+        if (c == '"') {
+            in_str = true;
+            k += 1;
+            continue;
+        }
+        if (c == '/' and k + 1 < s.len and s[k + 1] == '/') {
+            // Line comment: skip to end — single-line texts have no '\n'.
+            while (k < s.len and s[k] != '\n') k += 1;
+            continue;
+        }
+        if (c == '{' or c == '(' or c == '[') {
+            depth += 1;
+            k += 1;
+            continue;
+        }
+        if (c == '}' or c == ')' or c == ']') {
+            depth -= 1;
+            k += 1;
+            continue;
+        }
+        if (depth == 0 and k + 1 < s.len and s[k + 1] == '>' and (c == '|' or c == '=')) {
+            n += 1;
+            k += 1; // consume the '>' too — a delimiter never overlaps itself
+        }
+        k += 1;
+    }
+    return n;
+}
+
 /// `~event -> expr` is a bare-return implementation (the `->` twin of the `=>`
 /// branch constructor). Distinguished from a call-site `~event(args) -> d` bind
 /// by the absence of call parens on the event name: an impl has a top-level `->`
@@ -4741,7 +4787,8 @@ pub const Parser = struct {
                 const tail_cont = try self.parsePipelineContinuationBase(
                     tail_full,
                     lexer.getIndent(line),
-                    self.getCurrentLocation(),
+                    location,
+                    &.{},
                 );
 
                 var cont_list = try std.ArrayList(ast.Continuation).initCapacity(self.allocator, 1);
@@ -4766,7 +4813,7 @@ pub const Parser = struct {
                 // Continuations: an inline `|>` on the same line (the twin of the
                 // block-close `}: f |> …`) or the following lines.
                 if (std.mem.indexOf(u8, back.rest, "|>") != null) {
-                    continuations = try self.parseInlineContinuation(back.rest, lexer.getIndent(line), self.current);
+                    continuations = try self.parseInlineContinuation(back.rest, lexer.getIndent(line), head_line_idx);
                 } else {
                     continuations = try self.parseContinuations(lexer.getIndent(line));
                 }
@@ -4818,7 +4865,8 @@ pub const Parser = struct {
                 const tail_cont = try self.parsePipelineContinuationBase(
                     tail_with_brace,
                     lexer.getIndent(line),
-                    self.getCurrentLocation(),
+                    location,
+                    &.{},
                 );
 
                 var cont_list = try std.ArrayList(ast.Continuation).initCapacity(self.allocator, 1);
@@ -6939,13 +6987,13 @@ pub const Parser = struct {
                         try cont_list.append(self.allocator, tail_cont);
                         output_continuations = try cont_list.toOwnedSlice(self.allocator);
                     } else {
-                        const tail_cont = try self.parsePipelineContinuationBase(tail, base_indent, tail_location);
+                        const tail_cont = try self.parsePipelineContinuationBase(tail, base_indent, tail_location, &.{});
                         var cont_list = try std.ArrayList(ast.Continuation).initCapacity(self.allocator, 1);
                         try cont_list.append(self.allocator, tail_cont);
                         output_continuations = try cont_list.toOwnedSlice(self.allocator);
                     }
                 } else {
-                    const tail_cont = try self.parsePipelineContinuationBase(tail, base_indent, tail_location);
+                    const tail_cont = try self.parsePipelineContinuationBase(tail, base_indent, tail_location, &.{});
                     var cont_list = try std.ArrayList(ast.Continuation).initCapacity(self.allocator, 1);
                     try cont_list.append(self.allocator, tail_cont);
                     output_continuations = try cont_list.toOwnedSlice(self.allocator);
@@ -7235,6 +7283,17 @@ pub const Parser = struct {
         return continuations.toOwnedSlice(self.allocator);
     }
 
+    /// The flattened text of a `|>` chain plus the provenance the inline
+    /// spelling throws away: which source line each chain LINK was written on.
+    /// `link_lines[i]` is the 0-based index into `self.lines` of the i-th
+    /// top-level `|>`/`=>` delimiter's line — the line the step it introduces
+    /// stands on. Links on the head line map to the head's index; each
+    /// absorbed line contributes one entry per delimiter it carries.
+    const StitchedChain = struct {
+        text: []const u8,
+        link_lines: []const usize,
+    };
+
     /// Join following line-start `|>` continuation lines onto `head_text`, so a
     /// multi-line pipe chain parses EXACTLY like its inline spelling — the same
     /// stitch the `=` subflow body applies (see parse of `~head = step` +
@@ -7248,9 +7307,24 @@ pub const Parser = struct {
     /// The stitched text flows into the existing inline-chain machinery, which
     /// builds the canonical nested pyramid — so every checker downstream sees
     /// one shape regardless of how the chain was laid out in source.
-    fn stitchPipeChainLines(self: *Parser, head_text: []const u8, head_indent: usize) ![]const u8 {
+    ///
+    /// The join flattens away line boundaries, and every continuation the
+    /// downstream wrap functions build used to inherit the head's location —
+    /// a `|>` step absorbed from line 28 reported the head's line. The
+    /// returned `link_lines` is the provenance that lets each wrapped step
+    /// stamp the line its own `|>` stood on.
+    fn stitchPipeChainLines(self: *Parser, head_text: []const u8, head_indent: usize) !StitchedChain {
         const head_is_pipe_step = head_text.len > 1 and head_text[0] == '|' and head_text[1] == '>';
         var text = head_text;
+        var link_lines = try std.ArrayList(usize).initCapacity(self.allocator, 4);
+        // The head line's own links: both callers consumed the head line, so
+        // its index is self.current - 1. A line-start `|>` counts its leading
+        // delimiter; a branch head counts each `|>`/`=>` after the binding —
+        // countChainDelimiters matches what parsePipelineSteps will split.
+        const head_line_idx = self.current - 1;
+        for (0..countChainDelimiters(head_text)) |_| {
+            try link_lines.append(self.allocator, head_line_idx);
+        }
         while (self.current < self.lines.len) {
             const nl = self.lines[self.current];
             const nt = lexer.trim(nl);
@@ -7265,19 +7339,43 @@ pub const Parser = struct {
             // strip them from each segment before joining (a `//` inside a
             // string literal is data and stays). Reuses the file-level
             // stripTrailingLineComment helper.
+            for (0..countChainDelimiters(nt)) |_| {
+                try link_lines.append(self.allocator, self.current);
+            }
             text = try std.fmt.allocPrint(self.allocator, "{s} {s}", .{
                 stripTrailingLineComment(text),
                 stripTrailingLineComment(nt),
             });
             self.current += 1;
         }
-        return text;
+        return .{
+            .text = text,
+            .link_lines = try link_lines.toOwnedSlice(self.allocator),
+        };
+    }
+
+    /// The stored location of the `|>`-chain link at `link_idx`: the source
+    /// line the link's delimiter stood on, keeping the head stamp's file and
+    /// column. `link_lines` is empty for chains that never crossed a line —
+    /// and for tails handed in by callers that never stitched — and a `|>`
+    /// swept up by the brace/paren collectors past the recorded links has no
+    /// provenance either; the head stamp is the truest coordinate left in
+    /// both cases (it is also what the old shared stamp produced).
+    fn chainLinkLocation(self: *Parser, base: errors.SourceLocation, link_lines: []const usize, link_idx: usize) errors.SourceLocation {
+        if (link_idx >= link_lines.len) return base;
+        return self.getLineLocation(link_lines[link_idx], base.column);
     }
 
     fn parseContinuationInternal(self: *Parser, indent: usize, parent_indent: usize, location: errors.SourceLocation) !ast.Continuation {
         _ = parent_indent;
         const line = self.lines[self.current - 1]; // We already incremented
-        const trimmed = try self.stitchPipeChainLines(lexer.trim(line), indent);
+        const stitched = try self.stitchPipeChainLines(lexer.trim(line), indent);
+        // link_lines is provenance for the wrap functions only — every stamp
+        // is copied out as a value before this scope ends. (stitched.text is
+        // NOT freed here: parsed step fields may still alias it, the same
+        // lifetime rule the pre-provenance code relied on.)
+        defer self.allocator.free(stitched.link_lines);
+        const trimmed = stitched.text;
 
         // Detect kind from prefix: `|` = terminal, `!` = effect.
         const branch_kind: ast.BranchKind = if (trimmed.len > 0 and trimmed[0] == '!') .effect else .terminal;
@@ -7293,7 +7391,7 @@ pub const Parser = struct {
             // (KORU103). Return directly: the branch post-processing below would
             // clobber the pipeline parser's chained-step continuations.
             const step_content = lexer.trim(after_bar[1..]);
-            var pcont = try self.parsePipelineContinuationBase(step_content, indent, location);
+            var pcont = try self.parsePipelineContinuationBase(step_content, indent, location, stitched.link_lines);
             pcont.kind = branch_kind;
             return pcont;
         } else if (lexer.startsWith(after_bar, "*")) {
@@ -7312,7 +7410,7 @@ pub const Parser = struct {
             );
         } else {
             // Branch continuation
-            cont = try self.parseBranchContinuationBase(after_bar, indent, location);
+            cont = try self.parseBranchContinuationBase(after_bar, indent, location, stitched.link_lines);
         }
 
         // Initialize continuations as empty, will be filled by caller if needed
@@ -7327,7 +7425,9 @@ pub const Parser = struct {
         // Multi-line `|>` chain: stitch following line-start `|>` lines onto
         // this continuation's text so the chain parses exactly like its inline
         // spelling (see stitchPipeChainLines).
-        const trimmed = try self.stitchPipeChainLines(lexer.trim(line), indent);
+        const stitched = try self.stitchPipeChainLines(lexer.trim(line), indent);
+        defer self.allocator.free(stitched.link_lines);
+        const trimmed = stitched.text;
 
         // Detect kind from prefix: `|` = terminal, `!` = effect.
         const branch_kind: ast.BranchKind = if (trimmed.len > 0 and trimmed[0] == '!') .effect else .terminal;
@@ -7342,7 +7442,7 @@ pub const Parser = struct {
             // which handles its own chained tail; its step validation still
             // rejects `|> _` and bare-value junk (KORU103).
             const step_content = lexer.trim(after_bar[1..]);
-            var pcont = try self.parsePipelineContinuationBase(step_content, indent, location);
+            var pcont = try self.parsePipelineContinuationBase(step_content, indent, location, stitched.link_lines);
             pcont.kind = branch_kind;
             return pcont;
         } else if (lexer.startsWith(after_bar, "*")) {
@@ -7361,7 +7461,7 @@ pub const Parser = struct {
             );
         } else {
             // Branch continuation
-            cont = try self.parseBranchContinuationBase(after_bar, indent, location);
+            cont = try self.parseBranchContinuationBase(after_bar, indent, location, stitched.link_lines);
         }
 
         // Parse nested continuations - ONLY greater indentation means nesting
@@ -7436,7 +7536,7 @@ pub const Parser = struct {
     }
 
     fn parsePipelineContinuation(self: *Parser, content: []const u8, indent: usize, location: errors.SourceLocation) !ast.Continuation {
-        var cont = try self.parsePipelineContinuationBase(content, indent, location);
+        var cont = try self.parsePipelineContinuationBase(content, indent, location, &.{});
 
         const multi_line_continuations = try self.parseNestedContinuationsForLevel(indent);
 
@@ -7573,7 +7673,7 @@ pub const Parser = struct {
         return try fields.toOwnedSlice(self.allocator);
     }
 
-    fn parseBranchContinuationBase(self: *Parser, content: []const u8, indent: usize, location: errors.SourceLocation) !ast.Continuation {
+    fn parseBranchContinuationBase(self: *Parser, content: []const u8, indent: usize, location: errors.SourceLocation, link_lines: []const usize) !ast.Continuation {
         // Note: *deref syntax is handled at a higher level, not here
 
         // Parse: branch [binding] [|> pipeline...]
@@ -8236,7 +8336,10 @@ pub const Parser = struct {
                             } },
                             .indent = indent,
                             .continuations = current_nested,
-                            .location = location,
+                            // A `->` produce rides on the final chain step's
+                            // line — the last link when the stitch recorded
+                            // one, else the head stamp.
+                            .location = self.chainLinkLocation(location, link_lines, if (steps_inner.len > 0) steps_inner.len - 1 else 0),
                         };
                         current_nested = conts;
                     }
@@ -8257,7 +8360,7 @@ pub const Parser = struct {
                                 .node = steps_inner[step_idx],
                                 .indent = indent,
                                 .continuations = current_nested,
-                                .location = location,
+                                .location = self.chainLinkLocation(location, link_lines, step_idx),
                             });
 
                             current_nested = try cont_list.toOwnedSlice(self.allocator);
@@ -8354,7 +8457,13 @@ pub const Parser = struct {
                     lexer.trim(lexer.trim(full_rest)[2..])
                 else
                     lexer.trim(full_rest);
-                var pipe_cont = try self.parsePipelineContinuationBase(stripped, indent, location);
+                // `stripped` consumed the leading `|>` — link_lines indexes
+                // the ORIGINAL rest's delimiters, so it is off-by-one here.
+                // And the continuation this returns IS the arm head (branch
+                // merged on below): its `|` stands on the head line — the
+                // `location` stamp an empty link_lines yields — not the first
+                // chain link's line.
+                var pipe_cont = try self.parsePipelineContinuationBase(stripped, indent, location, &.{});
                 pipe_cont.branch = owned_branch;
                 pipe_cont.binding = binding;
                 pipe_cont.destructure = destructure;
@@ -8410,7 +8519,10 @@ pub const Parser = struct {
                     } },
                     .indent = indent,
                     .continuations = &.{},
-                    .location = location,
+                    // A `->` produce rides on the final chain step's line —
+                    // the last link when the stitch recorded one, else the
+                    // head stamp.
+                    .location = self.chainLinkLocation(location, link_lines, if (steps.len > 0) steps.len - 1 else 0),
                 };
                 break :blk conts;
             } else &[_]ast.Continuation{};
@@ -8457,7 +8569,7 @@ pub const Parser = struct {
                             .node = steps[step_idx],
                             .indent = indent,
                             .continuations = current_nested,
-                            .location = location,
+                            .location = self.chainLinkLocation(location, link_lines, step_idx),
                         });
 
                         current_nested = try cont_list.toOwnedSlice(self.allocator);
@@ -8492,6 +8604,10 @@ pub const Parser = struct {
             .node = step,
             .indent = indent,
             .continuations = &[_]ast.Continuation{}, // Will be filled by caller
+            // The head stamp stays: this continuation IS the `| branch` arm —
+            // its `|` stands on the head line. Only chain LINKS (the `|>`
+            // steps inside the arm body) carry per-link lines; the same holds
+            // for the arm-head returns above and the `|?` catch-all head.
             .location = location,
         };
     }
@@ -8554,7 +8670,7 @@ pub const Parser = struct {
     }
 
     fn parseBranchContinuation(self: *Parser, content: []const u8, indent: usize, location: errors.SourceLocation) !ast.Continuation {
-        var cont = try self.parseBranchContinuationBase(content, indent, location);
+        var cont = try self.parseBranchContinuationBase(content, indent, location, &.{});
 
         // Advance cursor to look for nested continuations on following lines
         // (parseNestedContinuationsForLevel expects self.current to point at potential nested lines)
@@ -8581,7 +8697,7 @@ pub const Parser = struct {
         return cont;
     }
 
-    fn parsePipelineContinuationBase(self: *Parser, content: []const u8, indent: usize, location: errors.SourceLocation) !ast.Continuation {
+    fn parsePipelineContinuationBase(self: *Parser, content: []const u8, indent: usize, location: errors.SourceLocation, link_lines: []const usize) !ast.Continuation {
         // This is a |> continuation (pipeline step on new line)
 
         // FIRST: Check if this is a Source block invocation (event with Source parameter)
@@ -8640,7 +8756,7 @@ pub const Parser = struct {
                 .node = step_,
                 .indent = indent,
                 .continuations = continuations_,
-                .location = location,
+                .location = self.chainLinkLocation(location, link_lines, 0),
             };
         }
 
@@ -8706,7 +8822,7 @@ pub const Parser = struct {
                     .node = step,
                     .indent = indent,
                     .continuations = result.continuations,
-                    .location = location,
+                    .location = self.chainLinkLocation(location, link_lines, 0),
                 };
             }
         }
@@ -8797,6 +8913,9 @@ pub const Parser = struct {
                 // It's an invocation line - parse it as the body
                 const body_content = lexer.trim(next_line);
                 self.current += 1;
+                // Every step below is written on THIS body line — not on the
+                // `|>` line `location` names — so the site stamps point here.
+                const body_line_idx = self.current - 1;
 
                 // Parse the invocation
                 // Line-start `|>` continuation (KORU010 territory) — not a branch body.
@@ -8827,7 +8946,7 @@ pub const Parser = struct {
                             .node = body_steps[step_idx],
                             .indent = next_indent,
                             .continuations = current_nested,
-                            .location = location,
+                            .location = self.getLineLocation(body_line_idx, next_indent),
                         });
 
                         current_nested = try cont_list.toOwnedSlice(self.allocator);
@@ -8843,7 +8962,7 @@ pub const Parser = struct {
                     .node = body_step,
                     .indent = indent,
                     .continuations = body_continuations,
-                    .location = location,
+                    .location = self.getLineLocation(body_line_idx, next_indent),
                 };
             }
 
@@ -8880,7 +8999,7 @@ pub const Parser = struct {
                     .node = steps[step_idx],
                     .indent = indent,
                     .continuations = current_nested,
-                    .location = location,
+                    .location = self.chainLinkLocation(location, link_lines, step_idx),
                 });
 
                 current_nested = try cont_list.toOwnedSlice(self.allocator);
@@ -8894,7 +9013,7 @@ pub const Parser = struct {
                 .node = step,
                 .indent = indent,
                 .continuations = current_nested, // Points to steps[1] -> steps[2] -> ...
-                .location = location,
+                .location = self.chainLinkLocation(location, link_lines, 0),
             };
         }
 
@@ -8906,7 +9025,7 @@ pub const Parser = struct {
             .node = step,
             .indent = indent,
             .continuations = &[_]ast.Continuation{}, // Will be filled by caller
-            .location = location,
+            .location = self.chainLinkLocation(location, link_lines, 0),
         };
     }
 
@@ -11312,6 +11431,10 @@ pub const Parser = struct {
 
     fn parseImportDecl(self: *Parser) !ast.ImportDecl {
         const line = self.lines[self.current];
+        // Capture the decl's start BEFORE the cursor consumes the body —
+        // getCurrentLocation() at build time names the line AFTER the decl,
+        // and parseAndRegisterImport moves the cursor further still.
+        const decl_line_index = self.current;
         self.current += 1;
 
         // Reached via `~import ...` in host-embedded files, or after `.k` synthesizes
@@ -11456,7 +11579,7 @@ pub const Parser = struct {
         return ast.ImportDecl{
             .path = try self.allocator.dupe(u8, path),
             .local_name = final_name,
-            .location = self.getCurrentLocation(),
+            .location = self.getLineLocation(decl_line_index, lexer.getIndent(line)),
             .module = try self.allocator.dupe(u8, self.module_name),
         };
     }

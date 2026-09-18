@@ -8,7 +8,16 @@
             "path": "std/compiler",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_catchall_dispatch/input.kz",
-                "line": 2,
+                "line": 1,
+                "col": 0
+            }
+        },
+        {
+            "type": "host_line",
+            "module": "input",
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_catchall_dispatch/input.kz",
+                "line": 1,
                 "col": 0
             }
         },
@@ -63,15 +72,6 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_catchall_dispatch/input.kz",
                 "line": 7,
-                "col": 0
-            }
-        },
-        {
-            "type": "host_line",
-            "module": "input",
-            "location": {
-                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_catchall_dispatch/input.kz",
-                "line": 8,
                 "col": 0
             }
         },
@@ -272,6 +272,11 @@
                     "binding": "t",
                     "binding_type": "branch_payload",
                     "condition": null,
+                    "location": {
+                        "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_catchall_dispatch/input.kz",
+                        "line": 19,
+                        "col": 0
+                    },
                     "step":                     {
                         "type": "invocation",
                         "invocation": {
@@ -296,6 +301,11 @@
                     "binding": "_",
                     "binding_type": "branch_payload",
                     "condition": null,
+                    "location": {
+                        "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_catchall_dispatch/input.kz",
+                        "line": 20,
+                        "col": 0
+                    },
                     "step":                     {
                         "type": "invocation",
                         "invocation": {
@@ -320,6 +330,11 @@
                     "binding": "n",
                     "binding_type": "branch_payload",
                     "condition": null,
+                    "location": {
+                        "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_catchall_dispatch/input.kz",
+                        "line": 21,
+                        "col": 0
+                    },
                     "step":                     {
                         "type": "invocation",
                         "invocation": {
@@ -342,7 +357,7 @@
             "impl_of": null,
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_catchall_dispatch/input.kz",
-                "line": 19,
+                "line": 18,
                 "col": 0
             }
         }

@@ -80,7 +80,7 @@
             "path": "std/compiler",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_003_conditional_imports/input.kz",
-                "line": 11,
+                "line": 10,
                 "col": 0
             }
         },

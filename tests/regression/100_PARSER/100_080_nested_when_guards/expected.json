@@ -8,7 +8,7 @@
             "path": "std/compiler",
             "location": {
                 "file": "tests/regression/100_PARSER/100_080_nested_when_guards/input.kz",
-                "line": 2,
+                "line": 1,
                 "col": 0
             }
         },
@@ -17,7 +17,7 @@
             "module": "input",
             "location": {
                 "file": "tests/regression/100_PARSER/100_080_nested_when_guards/input.kz",
-                "line": 2,
+                "line": 1,
                 "col": 0
             }
         },
@@ -132,6 +132,11 @@
                     "binding": null,
                     "binding_type": "branch_payload",
                     "condition": null,
+                    "location": {
+                        "file": "tests/regression/100_PARSER/100_080_nested_when_guards/input.kz",
+                        "line": 11,
+                        "col": 0
+                    },
                     "step":                     {
                         "type": "invocation",
                         "invocation": {
@@ -153,6 +158,11 @@
                             "binding": "k",
                             "binding_type": "branch_payload",
                             "condition": "k.code == 'q'",
+                            "location": {
+                                "file": "tests/regression/100_PARSER/100_080_nested_when_guards/input.kz",
+                                "line": 12,
+                                "col": 4
+                            },
                             "step":                             {
                                 "type": "invocation",
                                 "invocation": {
@@ -174,6 +184,11 @@
                             "binding": "k",
                             "binding_type": "branch_payload",
                             "condition": null,
+                            "location": {
+                                "file": "tests/regression/100_PARSER/100_080_nested_when_guards/input.kz",
+                                "line": 13,
+                                "col": 4
+                            },
                             "step":                             {
                                 "type": "invocation",
                                 "invocation": {
@@ -198,7 +213,7 @@
             "impl_of": null,
             "location": {
                 "file": "tests/regression/100_PARSER/100_080_nested_when_guards/input.kz",
-                "line": 12,
+                "line": 11,
                 "col": 0
             }
         }

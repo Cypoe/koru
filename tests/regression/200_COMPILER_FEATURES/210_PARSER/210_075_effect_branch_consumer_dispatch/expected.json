@@ -8,7 +8,16 @@
             "path": "std/compiler",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_075_effect_branch_consumer_dispatch/input.kz",
-                "line": 2,
+                "line": 1,
+                "col": 0
+            }
+        },
+        {
+            "type": "host_line",
+            "module": "input",
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_075_effect_branch_consumer_dispatch/input.kz",
+                "line": 1,
                 "col": 0
             }
         },
@@ -18,15 +27,6 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_075_effect_branch_consumer_dispatch/input.kz",
                 "line": 2,
-                "col": 0
-            }
-        },
-        {
-            "type": "host_line",
-            "module": "input",
-            "location": {
-                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_075_effect_branch_consumer_dispatch/input.kz",
-                "line": 3,
                 "col": 0
             }
         },
@@ -154,6 +154,11 @@
                     "binding": "_",
                     "binding_type": "branch_payload",
                     "condition": null,
+                    "location": {
+                        "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_075_effect_branch_consumer_dispatch/input.kz",
+                        "line": 11,
+                        "col": 0
+                    },
                     "step":                     {
                         "type": "invocation",
                         "invocation": {
@@ -175,6 +180,11 @@
                     "binding": "_",
                     "binding_type": "branch_payload",
                     "condition": null,
+                    "location": {
+                        "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_075_effect_branch_consumer_dispatch/input.kz",
+                        "line": 12,
+                        "col": 0
+                    },
                     "step":                     {
                         "type": "invocation",
                         "invocation": {
@@ -194,7 +204,7 @@
             "impl_of": null,
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_075_effect_branch_consumer_dispatch/input.kz",
-                "line": 11,
+                "line": 10,
                 "col": 0
             }
         }

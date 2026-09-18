@@ -8,7 +8,16 @@
             "path": "std/compiler",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_080_body_position_expressions/input.kz",
-                "line": 2,
+                "line": 1,
+                "col": 0
+            }
+        },
+        {
+            "type": "host_line",
+            "module": "input",
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_080_body_position_expressions/input.kz",
+                "line": 1,
                 "col": 0
             }
         },
@@ -94,21 +103,12 @@
             }
         },
         {
-            "type": "host_line",
-            "module": "input",
-            "location": {
-                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_080_body_position_expressions/input.kz",
-                "line": 11,
-                "col": 0
-            }
-        },
-        {
             "type": "parse_error",
             "code": "PARSE003",
             "message": "tor declaration missing input shape",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_080_body_position_expressions/input.kz",
-                "line": 12,
+                "line": 11,
                 "col": 1
             },
             "raw_text": "~pub tor sample\n! one string -> string\n! two string -> usize\n! three string -> string\n! four string -> i32\n| done\n\n"
@@ -130,6 +130,11 @@
                     "binding": "_",
                     "binding_type": "branch_payload",
                     "condition": null,
+                    "location": {
+                        "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_080_body_position_expressions/input.kz",
+                        "line": 20,
+                        "col": 0
+                    },
                     "step":                     {
                         "type": "expression",
                         "expression": "\"Alice\""
@@ -145,6 +150,11 @@
                     "binding": "_",
                     "binding_type": "branch_payload",
                     "condition": null,
+                    "location": {
+                        "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_080_body_position_expressions/input.kz",
+                        "line": 21,
+                        "col": 0
+                    },
                     "step":                     {
                         "type": "expression",
                         "expression": "42"
@@ -160,6 +170,11 @@
                     "binding": "q",
                     "binding_type": "branch_payload",
                     "condition": null,
+                    "location": {
+                        "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_080_body_position_expressions/input.kz",
+                        "line": 22,
+                        "col": 0
+                    },
                     "step":                     {
                         "type": "expression",
                         "expression": "q"
@@ -175,6 +190,11 @@
                     "binding": "_",
                     "binding_type": "branch_payload",
                     "condition": null,
+                    "location": {
+                        "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_080_body_position_expressions/input.kz",
+                        "line": 23,
+                        "col": 0
+                    },
                     "step":                     {
                         "type": "expression",
                         "expression": "1 + 2"
@@ -190,6 +210,11 @@
                     "binding": null,
                     "binding_type": "branch_payload",
                     "condition": null,
+                    "location": {
+                        "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_080_body_position_expressions/input.kz",
+                        "line": 24,
+                        "col": 0
+                    },
                     "step":                     {
                         "type": "terminal"
                     },
@@ -202,7 +227,7 @@
             "impl_of": null,
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_080_body_position_expressions/input.kz",
-                "line": 20,
+                "line": 19,
                 "col": 0
             }
         }

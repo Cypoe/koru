@@ -8,7 +8,16 @@
             "path": "std/compiler",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
-                "line": 2,
+                "line": 1,
+                "col": 0
+            }
+        },
+        {
+            "type": "host_line",
+            "module": "input",
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
+                "line": 1,
                 "col": 0
             }
         },
@@ -26,16 +35,7 @@
             "module": "input",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
-                "line": 3,
-                "col": 0
-            }
-        },
-        {
-            "type": "host_line",
-            "module": "input",
-            "location": {
-                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
-                "line": 5,
+                "line": 4,
                 "col": 0
             }
         },
@@ -157,7 +157,7 @@
             "module": "input",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
-                "line": 23,
+                "line": 22,
                 "col": 0
             }
         },
@@ -166,7 +166,7 @@
             "module": "input",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
-                "line": 24,
+                "line": 23,
                 "col": 0
             }
         },
@@ -182,7 +182,7 @@
                             "text": "show",
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
-                                "line": 26,
+                                "line": 25,
                                 "col": 0
                             },
                             "scope": {
@@ -199,7 +199,7 @@
                             "text": "const data = { x: 1, y: 2 };",
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
-                                "line": 26,
+                                "line": 25,
                                 "col": 0
                             },
                             "scope": {
@@ -221,6 +221,11 @@
                     "binding": null,
                     "binding_type": "branch_payload",
                     "condition": null,
+                    "location": {
+                        "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
+                        "line": 25,
+                        "col": 0
+                    },
                     "step":                     {
                         "type": "terminal"
                     },
@@ -233,7 +238,7 @@
             "impl_of": null,
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
-                "line": 25,
+                "line": 24,
                 "col": 0
             }
         },
@@ -242,7 +247,7 @@
             "module": "input",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
-                "line": 28,
+                "line": 27,
                 "col": 0
             }
         },
@@ -263,6 +268,11 @@
                     "binding": null,
                     "binding_type": "branch_payload",
                     "condition": null,
+                    "location": {
+                        "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
+                        "line": 28,
+                        "col": 0
+                    },
                     "step":                     {
                         "type": "invocation",
                         "invocation": {
@@ -275,7 +285,7 @@
                                         "text": "show",
                                         "location": {
                                             "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
-                                            "line": 30,
+                                            "line": 29,
                                             "col": 0
                                         },
                                         "scope": {
@@ -292,7 +302,7 @@
                                         "text": "const z = 3;",
                                         "location": {
                                             "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
-                                            "line": 30,
+                                            "line": 29,
                                             "col": 0
                                         },
                                         "scope": {
@@ -315,6 +325,11 @@
                             "binding": null,
                             "binding_type": "branch_payload",
                             "condition": null,
+                            "location": {
+                                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
+                                "line": 29,
+                                "col": 0
+                            },
                             "step":                             {
                                 "type": "terminal"
                             },
@@ -329,7 +344,7 @@
             "impl_of": null,
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
-                "line": 29,
+                "line": 28,
                 "col": 0
             }
         }

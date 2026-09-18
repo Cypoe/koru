@@ -8,7 +8,16 @@
             "path": "std/compiler",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_126_panic_effect_branch_decl/input.kz",
-                "line": 2,
+                "line": 1,
+                "col": 0
+            }
+        },
+        {
+            "type": "host_line",
+            "module": "input",
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_126_panic_effect_branch_decl/input.kz",
+                "line": 1,
                 "col": 0
             }
         },
@@ -126,15 +135,6 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_126_panic_effect_branch_decl/input.kz",
                 "line": 14,
-                "col": 0
-            }
-        },
-        {
-            "type": "host_line",
-            "module": "input",
-            "location": {
-                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_126_panic_effect_branch_decl/input.kz",
-                "line": 15,
                 "col": 0
             }
         },

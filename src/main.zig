@@ -2195,7 +2195,7 @@ fn runGlance(source_file: *const ast.Program, app_only: bool) void {
 /// longest live prefix of the query (chomping right = zooming out), prints the
 /// cell it lands on, and lists each matched site's immediate children — the
 /// matryoshka drill — so a hash is always "a way back," never hit-or-miss.
-fn runAt(source_file: *const ast.Program, query: []const u8) void {
+fn runAt(source_file: *const ast.Program, query: []const u8, entry_file: []const u8, injection_lines: usize) void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -2221,7 +2221,22 @@ fn runAt(source_file: *const ast.Program, query: []const u8) void {
             .flow => "flow",
             .site => "site",
         };
-        std.debug.print("  {s}  {s}  [{s}]  {s}:{d}\n", .{ kind, s.spelling, s.hash, base, s.location.line });
+        // Flow-head and continuation-site locations are stored in parser
+        // (injected-buffer) coordinates — the bootstrap `import std/compiler`
+        // the frontend prepends shifts every entry-file line by
+        // injection_lines. Decls already store user coordinates
+        // (getUserDeclStartLocation) and imported module files were never
+        // injected, so the translate applies only to non-decl sites on the
+        // entry file. The STORED value is untouched — __koru_srf_* uniquifiers
+        // and the hash children() key on parser coords; only the printed
+        // file:line moves to the line the user wrote.
+        const line = if (s.kind != .decl and
+            std.mem.eql(u8, s.location.file, entry_file) and
+            s.location.line > injection_lines)
+            s.location.line - injection_lines
+        else
+            s.location.line;
+        std.debug.print("  {s}  {s}  [{s}]  {s}:{d}\n", .{ kind, s.spelling, s.hash, base, line });
         const kids = site_hash.children(alloc, sites, s) catch &.{};
         for (kids) |k| {
             std.debug.print("    ↳ [{s}] {s}\n", .{ k.hash[0..site_hash.displayLen(sites, k.hash)], k.spelling });
@@ -6604,6 +6619,12 @@ pub fn main() !void {
         const ast_serializer = @import("ast_serializer");
         var serializer = try ast_serializer.AstSerializer.init(compile_allocator);
         defer serializer.deinit();
+        // Parser-coordinate locations (flows, continuations, sources, taps,
+        // error nodes — everything the parser stamped on the entry file) are
+        // emitted as user coordinates; decl locations were already corrected
+        // at getUserDeclStartLocation and module files were never injected.
+        serializer.injection_line_count = parser.reporter.injection_line_count;
+        serializer.entry_file = input;
 
         const json_output = try serializer.serializeToJson(&source_file);
         log.debug("DEBUG: JSON output length = {d}\n", .{json_output.len});
@@ -7105,7 +7126,7 @@ pub fn main() !void {
                 }
             }
             if (query) |q| {
-                runAt(&source_file, q);
+                runAt(&source_file, q, input, parser.reporter.injection_line_count);
             } else {
                 std.debug.print("usage: koruc <file> at <site-hash>\n", .{});
             }

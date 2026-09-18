@@ -8,7 +8,16 @@
             "path": "std/compiler",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_074_effect_branch_resume_type/input.kz",
-                "line": 2,
+                "line": 1,
+                "col": 0
+            }
+        },
+        {
+            "type": "host_line",
+            "module": "input",
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_074_effect_branch_resume_type/input.kz",
+                "line": 1,
                 "col": 0
             }
         },
@@ -18,15 +27,6 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_074_effect_branch_resume_type/input.kz",
                 "line": 2,
-                "col": 0
-            }
-        },
-        {
-            "type": "host_line",
-            "module": "input",
-            "location": {
-                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_074_effect_branch_resume_type/input.kz",
-                "line": 3,
                 "col": 0
             }
         },

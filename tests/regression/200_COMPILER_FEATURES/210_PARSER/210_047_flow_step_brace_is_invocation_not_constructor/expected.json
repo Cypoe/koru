@@ -8,7 +8,16 @@
             "path": "std/compiler",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_047_flow_step_brace_is_invocation_not_constructor/input.kz",
-                "line": 2,
+                "line": 1,
+                "col": 0
+            }
+        },
+        {
+            "type": "host_line",
+            "module": "input",
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_047_flow_step_brace_is_invocation_not_constructor/input.kz",
+                "line": 1,
                 "col": 0
             }
         },
@@ -112,15 +121,6 @@
             }
         },
         {
-            "type": "host_line",
-            "module": "input",
-            "location": {
-                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_047_flow_step_brace_is_invocation_not_constructor/input.kz",
-                "line": 13,
-                "col": 0
-            }
-        },
-        {
             "type": "event_decl",
             "name": "render",
             "path": ["render"],
@@ -184,6 +184,11 @@
                     "binding": null,
                     "binding_type": "branch_payload",
                     "condition": null,
+                    "location": {
+                        "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_047_flow_step_brace_is_invocation_not_constructor/input.kz",
+                        "line": 15,
+                        "col": 0
+                    },
                     "step":                     {
                         "type": "invocation",
                         "invocation": {
@@ -196,7 +201,7 @@
                                         "text": "x: 1",
                                         "location": {
                                             "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_047_flow_step_brace_is_invocation_not_constructor/input.kz",
-                                            "line": 17,
+                                            "line": 16,
                                             "col": 0
                                         },
                                         "scope": {
@@ -220,7 +225,7 @@
             "impl_of": null,
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_047_flow_step_brace_is_invocation_not_constructor/input.kz",
-                "line": 16,
+                "line": 15,
                 "col": 0
             }
         }

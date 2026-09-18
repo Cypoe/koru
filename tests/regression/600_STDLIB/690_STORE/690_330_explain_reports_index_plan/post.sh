@@ -26,12 +26,16 @@ IHASH=$(echo "$TEXT" | grep -oE "inserts = 3 \[[0-9a-z]+\] \[[0-9a-z]+\]" | grep
 IAT=$(koruc "$KORU_INPUT" at "$IHASH" 2>&1)
 echo "$IAT"
 echo "$IAT" | grep -q "std.store:insert"                                  || { echo "FAIL: at missed the chained insert"; exit 1; }
+echo "$IAT" | grep -q "input.k:25"                                        || { echo "FAIL: arm head not on its own line";  exit 1; }
 
 echo "=== deep-nested query witness resolves and drifts gracefully ==="
 QHASH=$(echo "$TEXT" | grep -oE "query\[0\] = ! first p — index lookup on key \[[0-9a-z]+\]" | grep -oE "\[[0-9a-z]+\]" | tail -1 | tr -d '[]')
 QAT=$(koruc "$KORU_INPUT" at "$QHASH" 2>&1)
 echo "$QAT"
 echo "$QAT" | grep -q "std.store:query"                                  || { echo "FAIL: at missed the nested query";  exit 1; }
+echo "$QAT" | grep -q "std.store:query.*input.k:28"                      || { echo "FAIL: |> query link not on line 28"; exit 1; }
+echo "$QAT" | grep -q "std.io:print.ln.*input.k:29"                      || { echo "FAIL: ! first arm not on line 29";   exit 1; }
+echo "$QAT" | grep -q "std.io:print.ln.*input.k:30"                      || { echo "FAIL: | none arm not on line 30";    exit 1; }
 koruc "$KORU_INPUT" at "${QHASH}aa" 2>&1 | grep -q "tail drifted"        || { echo "FAIL: deep descent did not drift";  exit 1; }
 
 echo "=== index witness resolves to the declaration site ==="
@@ -40,6 +44,7 @@ AT=$(koruc "$KORU_INPUT" at "$HASH" 2>&1)
 echo "$AT"
 echo "$AT" | grep -q "std.indexes:store"                                 || { echo "FAIL: at missed the index decl";    exit 1; }
 echo "$AT" | grep -q "input.k"                                           || { echo "FAIL: at lost the file";            exit 1; }
+echo "$AT" | grep -q "input.k:22"                                        || { echo "FAIL: decl line double-subtracted"; exit 1; }
 
 echo "=== koruc explain json (typed) ==="
 JSON=$(koruc "$KORU_INPUT" explain json 2>&1)

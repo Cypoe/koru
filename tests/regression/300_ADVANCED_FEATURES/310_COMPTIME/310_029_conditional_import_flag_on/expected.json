@@ -8,7 +8,16 @@
             "path": "std/compiler",
             "location": {
                 "file": "tests/regression/300_ADVANCED_FEATURES/310_COMPTIME/310_029_conditional_import_flag_on/input.kz",
-                "line": 2,
+                "line": 1,
+                "col": 0
+            }
+        },
+        {
+            "type": "host_line",
+            "module": "input",
+            "location": {
+                "file": "tests/regression/300_ADVANCED_FEATURES/310_COMPTIME/310_029_conditional_import_flag_on/input.kz",
+                "line": 1,
                 "col": 0
             }
         },
@@ -31,20 +40,11 @@
             }
         },
         {
-            "type": "host_line",
-            "module": "input",
-            "location": {
-                "file": "tests/regression/300_ADVANCED_FEATURES/310_COMPTIME/310_029_conditional_import_flag_on/input.kz",
-                "line": 4,
-                "col": 0
-            }
-        },
-        {
             "type": "import_decl",
             "path": "std/profiler",
             "location": {
                 "file": "tests/regression/300_ADVANCED_FEATURES/310_COMPTIME/310_029_conditional_import_flag_on/input.kz",
-                "line": 7,
+                "line": 5,
                 "col": 0
             }
         },

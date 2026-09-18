@@ -8,7 +8,16 @@
             "path": "std/compiler",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
-                "line": 2,
+                "line": 1,
+                "col": 0
+            }
+        },
+        {
+            "type": "host_line",
+            "module": "input",
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
+                "line": 1,
                 "col": 0
             }
         },
@@ -130,20 +139,11 @@
             }
         },
         {
-            "type": "host_line",
-            "module": "input",
-            "location": {
-                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
-                "line": 15,
-                "col": 0
-            }
-        },
-        {
             "type": "import_decl",
             "path": "std/kernel",
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
-                "line": 18,
+                "line": 16,
                 "col": 0
             }
         },
@@ -159,7 +159,7 @@
                             "text": "Body",
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
-                                "line": 20,
+                                "line": 19,
                                 "col": 0
                             },
                             "scope": {
@@ -176,7 +176,7 @@
                             "text": "mass: f64,",
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
-                                "line": 22,
+                                "line": 21,
                                 "col": 0
                             },
                             "scope": {
@@ -197,7 +197,7 @@
             "impl_of": null,
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
-                "line": 19,
+                "line": 18,
                 "col": 0
             }
         },
@@ -213,7 +213,7 @@
                             "text": "Body",
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
-                                "line": 24,
+                                "line": 23,
                                 "col": 0
                             },
                             "scope": {
@@ -230,7 +230,7 @@
                             "text": "{ mass: 1.0 },",
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
-                                "line": 26,
+                                "line": 25,
                                 "col": 0
                             },
                             "scope": {
@@ -251,7 +251,7 @@
             "impl_of": null,
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
-                "line": 23,
+                "line": 22,
                 "col": 0
             }
         }

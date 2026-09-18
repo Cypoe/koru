@@ -19,6 +19,12 @@ pub const AstSerializer = struct {
     allocator: std.mem.Allocator,
     buffer: std.ArrayList(u8),
     indent_level: usize,
+    /// Entry-file path + injected bootstrap line count, for translating
+    /// parser-coordinate locations to user coordinates at emit time. The
+    /// defaults keep every location as stored — module files were never
+    /// injected, and neither were the metacircular serializer callers.
+    injection_line_count: usize = 0,
+    entry_file: []const u8 = "",
 
     const indent_size = 4;
 
@@ -27,6 +33,8 @@ pub const AstSerializer = struct {
             .allocator = allocator,
             .buffer = try std.ArrayList(u8).initCapacity(allocator, 4096),
             .indent_level = 0,
+            .injection_line_count = 0,
+            .entry_file = "",
         };
     }
 
@@ -2170,7 +2178,7 @@ pub const AstSerializer = struct {
         // Location
         try self.writeIndent();
         try self.write("\"location\": ");
-        try self.serializeLocationJson(&flow.location);
+        try self.serializeParserLocationJson(&flow.location);
     }
 
     fn serializeFlowDetailJson(self: *AstSerializer, flow: *const ast.Flow) !void {
@@ -2221,7 +2229,7 @@ pub const AstSerializer = struct {
         // Location
         try self.writeIndent();
         try self.write("\"location\": ");
-        try self.serializeLocationJson(&flow.location);
+        try self.serializeParserLocationJson(&flow.location);
 
         try self.write("\n");
         self.dedent();
@@ -2337,6 +2345,14 @@ pub const AstSerializer = struct {
         } else {
             try self.write("null");
         }
+        try self.write(",\n");
+
+        // Location — the line this continuation's `|>`/`|` sits on, emitted
+        // in user coordinates (translate at this surface only; the stored
+        // value stays in injected-buffer coordinates).
+        try self.writeIndent();
+        try self.write("\"location\": ");
+        try self.serializeParserLocationJson(&cont.location);
         try self.write(",\n");
 
         // Step (optional)
@@ -2627,7 +2643,7 @@ pub const AstSerializer = struct {
 
         try self.writeIndent();
         try self.write("\"location\": ");
-        try self.serializeLocationJson(&import.location);
+        try self.serializeParserLocationJson(&import.location);
     }
 
     fn serializeModuleDeclJson(self: *AstSerializer, module: *const ast.ModuleDecl) !void {
@@ -2672,7 +2688,7 @@ pub const AstSerializer = struct {
 
         try self.writeIndent();
         try self.write("\"location\": ");
-        try self.serializeLocationJson(&line.location);
+        try self.serializeParserLocationJson(&line.location);
     }
 
     fn serializeParseErrorNodeJson(self: *AstSerializer, error_node: *const ast.ParseErrorNode) !void {
@@ -2688,7 +2704,7 @@ pub const AstSerializer = struct {
 
         try self.writeIndent();
         try self.write("\"location\": ");
-        try self.serializeLocationJson(&error_node.location);
+        try self.serializeParserLocationJson(&error_node.location);
         try self.write(",\n");
 
         try self.writeIndent();
@@ -2742,7 +2758,7 @@ pub const AstSerializer = struct {
 
         try self.writeIndent();
         try self.write("\"location\": ");
-        try self.serializeLocationJson(&tap.location);
+        try self.serializeParserLocationJson(&tap.location);
     }
 
     fn serializeLabelDeclJson(self: *AstSerializer, label: *const ast.LabelDecl) !void {
@@ -2779,7 +2795,7 @@ pub const AstSerializer = struct {
 
         try self.writeIndent();
         try self.write("\"location\": ");
-        try self.serializeLocationJson(&imm.location);
+        try self.serializeParserLocationJson(&imm.location);
         try self.write(",\n");
 
         try self.writeIndent();
@@ -3063,6 +3079,32 @@ pub const AstSerializer = struct {
         try self.write("}");
     }
 
+    /// The line as the user wrote it. Locations the parser stored on the
+    /// ENTRY file sit in injected-buffer coordinates — the prepended
+    /// bootstrap `import std/compiler` shifts every line by
+    /// injection_line_count — while decls were already corrected at
+    /// getUserDeclStartLocation and module files were never injected.
+    /// Translate at this user-facing surface only; the stored value stays in
+    /// parser coordinates (site-hash uniquifiers key on it).
+    fn userLine(self: *const AstSerializer, location: anytype) usize {
+        if (self.injection_line_count == 0) return location.line;
+        if (!std.mem.eql(u8, location.file, self.entry_file)) return location.line;
+        return if (location.line > self.injection_line_count)
+            location.line - self.injection_line_count
+        else
+            location.line;
+    }
+
+    /// serializeLocationJson for a parser-coordinate location: emits the
+    /// user-coordinate line. Decl locations (event/proc) already store user
+    /// coordinates and must keep calling serializeLocationJson directly —
+    /// routing them through here would subtract the injection twice.
+    fn serializeParserLocationJson(self: *AstSerializer, location: anytype) !void {
+        var adjusted = location.*;
+        adjusted.line = self.userLine(location);
+        try self.serializeLocationJson(&adjusted);
+    }
+
     fn serializeLocationJson(self: *AstSerializer, location: anytype) !void {
         try self.write("{\n");
         self.indent();
@@ -3104,7 +3146,7 @@ pub const AstSerializer = struct {
         // Location
         try self.writeIndent();
         try self.write("\"location\": ");
-        try self.serializeLocationJson(&source.location);
+        try self.serializeParserLocationJson(&source.location);
         try self.write(",\n");
 
         // Scope
@@ -3141,7 +3183,7 @@ pub const AstSerializer = struct {
         // Location
         try self.writeIndent();
         try self.write("\"location\": ");
-        try self.serializeLocationJson(&expr.location);
+        try self.serializeParserLocationJson(&expr.location);
         try self.write(",\n");
 
         // Scope
