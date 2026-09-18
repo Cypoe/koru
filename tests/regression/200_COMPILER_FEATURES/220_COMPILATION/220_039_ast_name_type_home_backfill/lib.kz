@@ -1,0 +1,20 @@
+const std = @import("std");
+
+// A user module type sharing an ast name. `std.compiler`'s host block
+// declares `const Item = ast.Item` at column 0, so the first-wins
+// host_type_homes map registers `Item` under std.compiler whenever the
+// injected import walks first — which is always, since the bootstrap
+// import lands at line 1. A bare `*Item` in a resolved signature then
+// backfilled the whole compiler module — its processTestFlow body emits
+// `log.verbose` with no `log` binding in the program unit and the
+// emitted Zig fails to compile. The field's split-out module_path names
+// the real home directly; a bare name inside a module's own signature
+// is module-local by 220_031.
+pub const Item = struct { n: f64 };
+
+~pub tor thing.make {} -> *Item<live!>
+~proc thing.make|zig {
+    const i = std.heap.page_allocator.create(Item) catch unreachable;
+    i.* = .{ .n = 1 };
+    return i;
+}

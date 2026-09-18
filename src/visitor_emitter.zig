@@ -540,9 +540,26 @@ pub const VisitorEmitter = struct {
         qualified: *std.StringHashMap(void),
         items: []const ast.Item,
         module_annotations: []const []const u8,
+        scanning_module: ?[]const u8,
     ) !void {
         const noteType = struct {
-            fn go(s: *VisitorEmitter, set_: *std.StringHashMap(void), qual_set: *std.StringHashMap(void), ty: []const u8) !void {
+            fn go(s: *VisitorEmitter, set_: *std.StringHashMap(void), qual_set: *std.StringHashMap(void), ty: []const u8, module_path: ?[]const u8, scanning: ?[]const u8) !void {
+                // A field's split-out module path names its home directly —
+                // resolved/canonicalized fields carry `*Item` bare in .type
+                // with the qualifier in .module_path. Feeding that bare base
+                // to the first-wins homes map lets the injected std.compiler
+                // import claim any user type sharing an ast name (`Item`,
+                // `Program`, `Source`) and backfill the whole compiler
+                // module — test-gen bodies and all — into the emitted
+                // program, where its `log`/`ast` bindings dangle.
+                if (module_path) |mp| {
+                    const q = try s.allocator.dupe(u8, mp);
+                    for (q) |*c| {
+                        if (c.* == ':' or c.* == '/') c.* = '.';
+                    }
+                    try qual_set.put(q, {});
+                    return;
+                }
                 // A qualified spelling names its own module — `std.mem.Allocator`
                 // is zig's, `orisha.Request` is orisha's. Feeding its LAST segment
                 // to the bare-name homes map lets any module's private alias
@@ -552,22 +569,38 @@ pub const VisitorEmitter = struct {
                     try qual_set.put(q, {});
                     return;
                 }
-                if (signatureBaseName(ty)) |b| try set_.put(b, {});
+                if (signatureBaseName(ty)) |b| {
+                    // A bare name in a module's own signature is module-local:
+                    // bare cross-module refs are refused (220_031), so when the
+                    // module being scanned declares the name itself its home IS
+                    // that module — already collected — and the first-wins homes
+                    // map must not get a say.
+                    if (scanning) |scan_name| {
+                        if (emitter.host_type_decl_sites) |sites| {
+                            if (sites.get(b)) |mods| {
+                                for (mods.items) |mod| {
+                                    if (type_registry_module.moduleNamesMatch(mod, scan_name)) return;
+                                }
+                            }
+                        }
+                    }
+                    try set_.put(b, {});
+                }
             }
         }.go;
         for (items) |*item| {
             switch (item.*) {
                 .event_decl => |*event| {
                     if (!self.eventSignatureEmits(event, module_annotations)) continue;
-                    for (event.input.fields) |f| try noteType(self, set, qualified, f.type);
-                    if (event.return_type) |rt| try noteType(self, set, qualified, rt);
+                    for (event.input.fields) |f| try noteType(self, set, qualified, f.type, f.module_path, scanning_module);
+                    if (event.return_type) |rt| try noteType(self, set, qualified, rt, null, scanning_module);
                     for (event.branches) |branch| {
-                        for (branch.payload.fields) |f| try noteType(self, set, qualified, f.type);
-                        if (branch.resume_type) |rt| try noteType(self, set, qualified, rt);
+                        for (branch.payload.fields) |f| try noteType(self, set, qualified, f.type, f.module_path, scanning_module);
+                        if (branch.resume_type) |rt| try noteType(self, set, qualified, rt, null, scanning_module);
                     }
                 },
                 .host_type_decl => |*ht| {
-                    for (ht.shape.fields) |f| try noteType(self, set, qualified, f.type);
+                    for (ht.shape.fields) |f| try noteType(self, set, qualified, f.type, f.module_path, scanning_module);
                 },
                 else => {},
             }
@@ -607,9 +640,9 @@ pub const VisitorEmitter = struct {
             added = false;
             referenced.clearRetainingCapacity();
             qualified.clearRetainingCapacity();
-            try self.collectSignatureBaseTypes(&referenced, &qualified, items, module_annotations);
+            try self.collectSignatureBaseTypes(&referenced, &qualified, items, module_annotations, null);
             for (modules.items) |m| {
-                try self.collectSignatureBaseTypes(&referenced, &qualified, m.items, m.annotations);
+                try self.collectSignatureBaseTypes(&referenced, &qualified, m.items, m.annotations, m.logical_name);
             }
             var qit = qualified.keyIterator();
             while (qit.next()) |q| {

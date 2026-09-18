@@ -45,6 +45,21 @@ collision semantics are untouched — that ambiguity was already the contract
 ([[frag-bare-host-type-is-module-local-cross-module-is-qualified]] is the
 spelling side).
 
+Refinement 2026-09-18: the type string alone lies twice more, both fixed the
+same way — prefer structural qualifier evidence over the bare-name map. A
+resolved field splits its qualifier into `field.module_path` and leaves
+`.type` bare (`*Item`), so a scan that reads only the string feeds a
+qualified reference to the first-wins map anyway. And a bare name inside a
+module's OWN signature is module-local (220_031) — when the scanning module
+declares it, that module is the home, no lookup. The remaining failure mode
+was worse than the earlier allocator weld: `std.compiler`'s host block
+declares `const Item = ast.Item` at column 0, and the injected bootstrap
+import always walks first, so any user type sharing an AST name (`Item`,
+`Program`, `Source`) welded the whole compiler module — test-gen bodies
+included — into the program unit, where its `log`/`ast` bindings dangle.
+A consumer found it: a domain type named `Item` in a `.k` program failed
+zig codegen on `log.verbose`. Pinned at 220_039.
+
 Open: the scan still reads type STRINGS — a compound spelling like
 `[]const [N]T` or `*const fn(...)void` names no home at all and escapes the
 closure. No pin exercises that yet.
