@@ -5697,8 +5697,10 @@ pub fn emitFlow(
         // Emit state variables for loop parameters with type annotations
         for (flow.inv().args) |arg| {
             try emitter.writeIndent();
-            // Use var if label will be mutated by label_jump, const otherwise
-            if (label_is_mutable) {
+            // var only where a jump actually re-seeds this field — an
+            // under-filled jump leaves the rest carried over, and `var` on a
+            // never-assigned local is a backend error.
+            if (labelFieldWillBeMutated(label, arg.name, flow.body.continuations)) {
                 try emitter.write("var ");
             } else {
                 try emitter.write("const ");
@@ -10277,6 +10279,35 @@ fn emitWhenClauseCase(
     try emitter.write("},\n");
 }
 
+/// Per-field variant of labelWillBeMutated: does ANY @label jump to `label`
+/// re-seed `field_name`? A jump's args name the fields it updates; fields it
+/// omits carry over, so their state var can stay `const` — `var` on a
+/// never-assigned local is a backend error ("local variable is never
+/// mutated"). Same traversal as labelWillBeMutated: step nodes plus nested
+/// continuation bodies.
+fn labelFieldWillBeMutated(label: []const u8, field_name: []const u8, continuations: []const ast.Continuation) bool {
+    for (continuations) |cont| {
+        if (cont.node) |step| {
+            if (step == .label_jump) {
+                const lj = step.label_jump;
+                if (std.mem.eql(u8, lj.label, label)) {
+                    for (lj.args) |arg| {
+                        if (std.mem.eql(u8, arg.name, field_name)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (labelFieldWillBeMutated(label, field_name, cont.continuations)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 /// Check if a label will be mutated by any .label_jump in the continuation tree
 /// Returns true if any .label_jump with matching label exists (meaning var is needed)
 /// Returns false if only .label_apply exists (meaning const can be used)
@@ -10687,8 +10718,10 @@ pub fn emitContinuationBody(
         // Emit state variables for loop parameters with type annotations
         for (lwi.invocation.args) |arg| {
             try emitter.writeIndent();
-            // Use var if label will be mutated by label_jump, const otherwise
-            if (label_is_mutable) {
+            // var only where a jump actually re-seeds this field — an
+            // under-filled jump leaves the rest carried over, and `var` on a
+            // never-assigned local is a backend error.
+            if (labelFieldWillBeMutated(lwi.label, arg.name, cont.continuations)) {
                 try emitter.write("var ");
             } else {
                 try emitter.write("const ");
@@ -11573,7 +11606,12 @@ fn emitStep(
                 }
                 try emitInvocationTarget(emitter, ctx, &tctx.handler_invocation.path);
                 try emitter.write(".handler(.{ ");
-                for (lj.args, 0..) |arg, idx| {
+                // The re-call fills EVERY param from its state var — a jump
+                // arg only re-seeds the vars it names; the rest carry over,
+                // which is what the vars are `var` for. Emitting only lj.args
+                // dropped the unfilled fields: `missing struct field` at the
+                // backend (measured: @loop(j) on a {j, draft} target).
+                for (tctx.handler_invocation.args, 0..) |arg, idx| {
                     if (idx > 0) {
                         try emitter.write(", ");
                     }

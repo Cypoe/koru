@@ -129,6 +129,28 @@ a compiler's semantics, asserted in a comment, never compiled — the untested
 half, one indirection deeper: this time the prose was inside the source.
 `243_fold_subflow_union_outputs` pins it green.
 
+## The same asymmetry in a KEY SPACE, not a code path
+
+Measured and fixed 2026-09-18: label state vars are keyed by ARG NAME —
+`<label>_<name>` — and nothing validated that a `#label` call's or `@label`
+jump's args named fields of the target event. The one pinned fold
+(`round(a.text, a.rounds)` → `@loop(a.text, a.rounds)`) used names that
+happened to be fields, so the convention looked safe. Outside it, three raw
+Zig errors: a bare arg whose leaf was no field emitted `loop_<name>`
+undeclared; a wrong label (`bogus: a`) emitted `loop_bogus`; an under-filled
+jump emitted a partial re-call (`missing struct field`). The key space had a
+tested half — real field names — and the untested half was the entire failure
+mode, surfacing one indirection away from the fault at stage-D.
+
+`244_label_jump_rejects_unknown_param` pins the refusal: KORU043 names the
+arg and the event at the checker, before emission. `245_label_jump_partial_
+reseed_carries_over` pins the rule's other half, which was also unwritten:
+an omitted param is not missing — it carries over, which is what the state
+vars are `var` for (`@label` with no args is the empty-mask case and was
+already legal). A jump's arg list is a re-seed MASK, not a call signature;
+the checker now guards the mask's keys and the emitter honours its
+omissions — `var` only on fields a jump actually names.
+
 ## 2026-09-18 — the pattern holds above the suite
 
 Same asymmetry one level up, in a doc instead of a test: the blogpost skill's

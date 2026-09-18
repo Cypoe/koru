@@ -1,0 +1,15 @@
+~tor round { j: i32, draft: i32 }
+| again i32
+| done i32
+~proc round|zig {
+    if (draft > 0) return .{ .done = draft + j };
+    return .{ .again = j + 1 };
+}
+
+~pub tor work { j: i32, draft: i32 }
+| polished i32
+| broke
+
+~work = #loop round(j, draft)
+| again a |> @loop(j, bogus: a)
+| done d => polished d

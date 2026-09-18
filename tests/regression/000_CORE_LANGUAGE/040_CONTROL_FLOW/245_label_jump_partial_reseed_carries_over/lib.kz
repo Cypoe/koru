@@ -1,0 +1,15 @@
+~tor round { count: i32, tag: string }
+| again i32
+| done string
+~proc round|zig {
+    if (count >= 3) return .{ .done = tag };
+    return .{ .again = count + 1 };
+}
+
+~pub tor work { count: i32, tag: string }
+| polished string
+| broke
+
+~work = #loop round(count, tag)
+| again c |> @loop(count: c)
+| done d => polished d

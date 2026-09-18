@@ -1599,6 +1599,9 @@ pub const PhantomSemanticChecker = struct {
         // (`... |> #loop step(...)`) registers in validateContinuation.
         if (flow.pre_label) |pre_label| {
             try self.label_map.put(pre_label, .{ .decl = event_info.decl, .module = module_name });
+            if (!try self.validateLabelArgNames(flow.inv().args, event_info.decl, flow.location, "#label call")) {
+                has_errors = true;
+            }
         }
 
         // Validate root invocation args (e.g. bare literals at phantom-required params).
@@ -2473,6 +2476,9 @@ pub const PhantomSemanticChecker = struct {
                         if (event_map.get(qualified_name)) |inv_info| {
                             log.debug("[PHANTOM-FLOW]   Recording label '#{s}' mapping to event '{s}'\n", .{ lwi.label, qualified_name });
                             try self.label_map.put(lwi.label, .{ .decl = inv_info.decl, .module = inv_module_name });
+                            if (!try self.validateLabelArgNames(lwi.invocation.args, inv_info.decl, location, "#label call")) {
+                                has_errors = true;
+                            }
                         } else {
                             log.debug("[PHANTOM-FLOW]   WARNING: Label '#{s}' points to unknown tor '{s}'\n", .{ lwi.label, qualified_name });
                         }
@@ -3071,6 +3077,9 @@ pub const PhantomSemanticChecker = struct {
                 // Look up the target event for this label
                 const target = self.label_map.get(lj.label);
                 if (target) |t| {
+                    if (!try self.validateLabelArgNames(lj.args, t.decl, location, "@jump")) {
+                        has_errors = true;
+                    }
                     // Validate jump arguments against target event's signature
                     for (lj.args, 0..) |arg, arg_idx| {
                         const arg_valid = try self.validateArgument(arg, arg_idx, t.decl, t.module, context, location, lj.label);
@@ -3540,6 +3549,48 @@ pub const PhantomSemanticChecker = struct {
         }
 
         return found;
+    }
+
+    /// A `#label` call and every `@label` jump seeds/re-seeds `<label>_<name>`
+    /// state vars keyed by ARG NAME — each arg's effective name must be a
+    /// field of the target event, or the emit writes an undeclared var / an
+    /// invalid struct field and stage-D reports a raw Zig error. Positional
+    /// index-resolution is meaningless here (the vars are named, not slotted);
+    /// field-access args carry their leaf in arg.name (`a.text` → `text`), so
+    /// bare and labeled spellings take the same test. Measured: a bogus label
+    /// (`bogus: a`) and a bare non-field (`a` vs param `draft`) both emitted
+    /// `loop_<name>` with no declaration, and an under-filled jump dropped
+    /// the rest of the struct (`missing struct field`).
+    fn validateLabelArgNames(
+        self: *PhantomSemanticChecker,
+        args: []const ast.Arg,
+        decl: *const ast.EventDecl,
+        location: errors.SourceLocation,
+        site: []const u8, // "@jump" | "#label call" — which surface the arg sits on
+    ) !bool {
+        var ok = true;
+        for (args) |arg| {
+            var names_field = false;
+            for (decl.input.fields) |field| {
+                if (std.mem.eql(u8, field.name, arg.name)) {
+                    names_field = true;
+                    break;
+                }
+            }
+            if (!names_field) {
+                const target_name = try self.pathToString(decl.path);
+                defer self.allocator.free(target_name);
+                try self.reporter.addError(
+                    .KORU043,
+                    location.line,
+                    location.column,
+                    "{s} arg '{s}' names no field of '{s}' — label args re-seed loop state by param name",
+                    .{ site, arg.name, target_name },
+                );
+                ok = false;
+            }
+        }
+        return ok;
     }
 
     fn validateArgument(
