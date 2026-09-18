@@ -989,7 +989,8 @@ pub const VisitorEmitter = struct {
         // comptime_only emission (backend_output_emitted.zig) so phantom_semantic_checker
         // and friends can see it via @hasDecl(root, ...) when they're compiled
         // as part of that addObject. See emitMainModuleStart docstring.
-        try emitter.emitMainModuleStart(self.code_emitter, self.emit_mode == .comptime_only);
+        const needs_flat_lane_stack = emitter.moduleNeedsFlatLaneStack(self.all_items, self.allocator, self.main_module_name);
+        try emitter.emitMainModuleStart(self.code_emitter, self.emit_mode == .comptime_only, needs_flat_lane_stack);
         self.code_emitter.indent_level = 1; // Set indent for main_module contents
 
         // Phase 1: Emit all declarations inside main_module (events, procs, flows, etc.)
@@ -2782,6 +2783,48 @@ pub const VisitorEmitter = struct {
             }
         }
 
+        // FLAT-CONTINUATION SEGMENTS: when this event's impl flow is
+        // flat-eligible (chained non-tail self-calls over lane scalars — see
+        // emitter_helpers.flowIsFlatEligible), emit the continuation segments
+        // as struct members BEFORE the handler: the handler body below then
+        // lowers to a sentinel push + an eval-segment call, and the whole
+        // recursion runs as @call(.always_tail) segment chains. Emitted before
+        // the impl search runs — if a different impl wins, the segments are
+        // dead decls Zig never analyzes.
+        var flat_flow: ?*const ast.Flow = null;
+        var flat_canonical: ?[]const u8 = null;
+        defer if (flat_canonical) |c| self.allocator.free(c);
+        if (!has_effect) {
+            if (emitter.findFlatImplFlow(items_to_search, event)) |fflow| {
+                var flat_probe_ctx = emitter.EmissionContext{
+                    .allocator = self.allocator,
+                    .main_module_name = self.main_module_name,
+                };
+                if (emitter.buildCanonicalEventName(&event.path, self.allocator, self.main_module_name) catch null) |c| {
+                    if (emitter.flowIsFlatEligible(event, fflow, c, &flat_probe_ctx)) {
+                        flat_flow = fflow;
+                        flat_canonical = c;
+                    } else {
+                        self.allocator.free(c);
+                    }
+                }
+            }
+        }
+        if (flat_flow) |fflow| {
+            var flat_seg_ctx = emitter.EmissionContext{
+                .allocator = self.allocator,
+                .ast_items = self.all_items,
+                .tap_registry = self.tap_registry,
+                .type_registry = self.type_registry,
+                .main_module_name = self.main_module_name,
+                .is_sync = true,
+                .in_handler = true,
+                .impl_event_decl = event,
+                .bare_return_active = true,
+            };
+            try emitter.emitFlatSegments(self.code_emitter, &flat_seg_ctx, event, fflow, flat_canonical.?);
+        }
+
         // Handler function — `comptime __H: type` when the event has any
         // effect `!` branches. Inside the body we'll alias each `H.NAME`
         // back to the bare identifier so the proc body reads naturally.
@@ -3543,23 +3586,37 @@ pub const VisitorEmitter = struct {
                                     else
                                         false;
 
+                                    // Flat-continuation emission: decided in the
+                                    // pre-handler scan above — this flow is the
+                                    // impl (we're inside `if (matches)`), so a
+                                    // non-null flat_flow means this body lowers
+                                    // to a sentinel push + eval-segment call and
+                                    // the segments are already emitted. See
+                                    // emitter_helpers.emitFlatSegments /
+                                    // emitFlatHandlerBody.
+                                    const is_flat = flat_flow != null;
+
                                     // Generate implicit input bindings for consistency with procs
-                                    for (event.input.fields) |field| {
-                                        try self.code_emitter.writeIndent();
-                                        // Self-loop handlers reassign these from the tail
-                                        // self-call's args, so they must be `var`.
-                                        try self.code_emitter.write(if (is_self_loop) "var " else "const ");
-                                        try emitter.writeBranchName(self.code_emitter, field.name);
-                                        try self.code_emitter.write(" = __koru_event_input.");
-                                        try emitter.writeBranchName(self.code_emitter, field.name);
-                                        try self.code_emitter.write(";\n");
-                                    }
-                                    // Suppress unused variable warnings
-                                    for (event.input.fields) |field| {
-                                        try self.code_emitter.writeIndent();
-                                        try self.code_emitter.write("_ = &");
-                                        try emitter.writeBranchName(self.code_emitter, field.name);
-                                        try self.code_emitter.write(";\n");
+                                    // (skipped for flat: the segment call reads
+                                    // __koru_event_input fields directly).
+                                    if (!is_flat) {
+                                        for (event.input.fields) |field| {
+                                            try self.code_emitter.writeIndent();
+                                            // Self-loop handlers reassign these
+                                            // (tail-call args), so they must be `var`.
+                                            try self.code_emitter.write(if (is_self_loop) "var " else "const ");
+                                            try emitter.writeBranchName(self.code_emitter, field.name);
+                                            try self.code_emitter.write(" = __koru_event_input.");
+                                            try emitter.writeBranchName(self.code_emitter, field.name);
+                                            try self.code_emitter.write(";\n");
+                                        }
+                                        // Suppress unused variable warnings
+                                        for (event.input.fields) |field| {
+                                            try self.code_emitter.writeIndent();
+                                            try self.code_emitter.write("_ = &");
+                                            try emitter.writeBranchName(self.code_emitter, field.name);
+                                            try self.code_emitter.write(";\n");
+                                        }
                                     }
                                     try self.code_emitter.writeIndent();
                                     try self.code_emitter.write("_ = &__koru_event_input;\n");
@@ -3568,8 +3625,12 @@ pub const VisitorEmitter = struct {
                                     // self-call lowers to `continue :label` (see
                                     // `emitSelfTailReentry`). The loop only exits via the
                                     // terminal branch's `return`; the `unreachable` after
-                                    // mirrors how `#label` loops terminate.
-                                    if (is_self_loop) {
+                                    // mirrors how `#label` loops terminate. Flat-emitted
+                                    // bodies emit their own labeled loop inside
+                                    // emitFlatHandlerBody — same label, so the shared
+                                    // reentry lowering applies — and must not be
+                                    // double-wrapped here.
+                                    if (is_self_loop and !is_flat) {
                                         try self.code_emitter.writeIndent();
                                         try self.code_emitter.write("__koru_self_loop: while (true) {\n");
                                         self.code_emitter.indent_level += 1;
@@ -3610,6 +3671,13 @@ pub const VisitorEmitter = struct {
                                             .bare_return_active = event.return_type != null,
                                         };
                                         try emitter.emitFlow(self.code_emitter, &arm_fire_ctx, &flow);
+                                    } else if (is_flat) {
+                                        // Flat-continuation lowering: the
+                                        // segments were already emitted before
+                                        // the handler; the body is a sentinel
+                                        // push + eval-segment call. See
+                                        // emitter_helpers.emitFlatHandlerBody.
+                                        try emitter.emitFlatHandlerBody(self.code_emitter, event);
                                     } else
                                     // Check if the flow has preamble_code (from transforms like ~for, ~if, ~capture)
                                     // This means the flow contains a ForeachNode/ConditionalNode/CaptureNode in continuations
@@ -4089,7 +4157,7 @@ pub const VisitorEmitter = struct {
                                     // branch) or `continue` (tail self-call), so the loop never
                                     // falls through; `unreachable` tells Zig that, matching the
                                     // `#label` loop termination shape.
-                                    if (is_self_loop) {
+                                    if (is_self_loop and !is_flat) {
                                         self.code_emitter.indent_level -= 1;
                                         try self.code_emitter.writeIndent();
                                         try self.code_emitter.write("}\n");

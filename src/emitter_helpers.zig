@@ -1239,7 +1239,7 @@ pub fn emitHostLine(emitter: *CodeEmitter, content: []const u8) !void {
 ///             autorun) eagerly resolve `@import("compiler_env")`, which has
 ///             no module wired in the user's standalone build → compile error.
 ///             Non-pub keeps the decl invisible to refAllDeclsRecursive.
-pub fn emitMainModuleStart(emitter: *CodeEmitter, pub_compiler_env: bool) !void {
+pub fn emitMainModuleStart(emitter: *CodeEmitter, pub_compiler_env: bool, needs_flat_lane_stack: bool) !void {
     try emitter.write("// Access compiler flags via the per-user compiler_env module\n");
     if (pub_compiler_env) {
         try emitter.write("pub const CompilerEnv = @import(\"compiler_env\").CompilerEnv;\n\n");
@@ -1444,6 +1444,28 @@ pub fn emitMainModuleStart(emitter: *CodeEmitter, pub_compiler_env: bool) !void 
     try emitter.write("        @import(\"std\").process.exit(1);\n");
     try emitter.write("    }\n");
     try emitter.write("}\n\n");
+
+    // Flat-continuation lane stack — file scope so every flat-emitted handler
+    // in the file shares it (a flat handler calling another stays consistent,
+    // and each handler restores the pointer it entered with). Emitted only
+    // when the module holds a flat-eligible impl — 32MB nobody else should
+    // pay for. The stack is lazily mapped with a PROT_NONE tail page, so
+    // overflow faults on the guard exactly the way a native stack overflow
+    // does — no per-push bounds check in the hot path (measured: a software
+    // check costs ~25% on tak).
+    if (needs_flat_lane_stack) {
+        try emitter.write("// Flat-continuation lanes: uniform [fid][live…] lanes,\n");
+        try emitter.write("// guard-paged. See emitFlatHandlerBody/emitFlatSegments.\n");
+        try emitter.write("var __koru_cstk: []u64 = &.{};\n");
+        try emitter.write("var __koru_csp: usize = 0;\n");
+        try emitter.write("fn __koru_flat_init() void {\n");
+        try emitter.write("    const __lanes = 1 << 22;\n");
+        try emitter.write("    const __page = @import(\"std\").heap.pageSize();\n");
+        try emitter.write("    const __mem = @import(\"std\").heap.page_allocator.alignedAlloc(u64, .fromByteUnits(__page), __lanes + __page / @sizeOf(u64)) catch @panic(\"koru: flat continuation stack alloc failed\");\n");
+        try emitter.write("    @import(\"std\").posix.mprotect(@alignCast(@import(\"std\").mem.sliceAsBytes(__mem[__lanes..])), @import(\"std\").posix.PROT.NONE) catch @panic(\"koru: flat continuation stack guard failed\");\n");
+        try emitter.write("    __koru_cstk = __mem[0..__lanes];\n");
+        try emitter.write("}\n\n");
+    }
 
     try emitter.write("pub const main_module = struct {\n");
 }
@@ -9107,6 +9129,8 @@ const EmitError = error{
     BufferOverflow,
     ArrayLiteralMissingType,
     ArrayLiteralInvalidTarget,
+    FlatShapeUnsupported, // flat-emission walk hit a node the eligibility gate should have refused
+    NoSpaceLeft, // fixed-size fmt buffers (reentry temps, lane indices)
     OutOfMemory, // growable CodeEmitter buffers allocate on demand
 };
 
@@ -13393,6 +13417,896 @@ fn inputShapesMatch(a: *const ast.EventDecl, b: *const ast.EventDecl) bool {
         if (!std.mem.eql(u8, fa.type, fb.type)) return false;
     }
     return true;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FLAT CONTINUATION EMISSION — explicit-lane chained recursion.
+//
+// A non-tail self-call `f(args): r` whose resumption eventually re-enters the
+// same event in tail position (ackermann/hanoi/tak) pays a native stack frame
+// per live level — ~8 memory ops and a link-register round trip each. When
+// every non-tail self-call in the flow chains that way, the whole handler
+// lowers to a flat `while (true)` over `var` inputs: a call stores a
+// continuation frame (the scalars its resumption reads, plus a tag) on
+// `__koru_cstk`, reargs, and continues the loop; a produce stores the result
+// and runs a deliver switch that pops frames and resumes continuations. Same
+// mechanism as the self-tail reentry, extended to non-tail calls: the
+// continuation is data, not a return address. Measured on the flat-cont spike:
+// ackermann ~5x, tak ~12x, hanoi ~1.35x vs native-stack emission.
+//
+// Combining recursion (fib's `-> a + b`) does NOT qualify — its resumptions
+// never re-enter, the native stack already wins there, and an indirect
+// dispatch on every leaf return loses to the hardware return-address
+// predictor. Shapes the predicate does not fully cover keep the existing
+// structured emission: ineligible is a miss, never a misemit.
+//
+// Frame layout is variable-width, tag on top: [live_0 .. live_{L-1}][tag].
+// The deliver loop pops the tag at csp-1; each arm statically knows its own
+// L, reads its live words from csp-L, then consumes the whole frame before
+// resumption code may push the next one — the lane-consumption rule the
+// flat-cont spike pinned (a resumption that leaves its lane live is popped
+// again forever).
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// One registered continuation site: the resumption to run when the deliver
+/// switch pops this tag. `scope` is the bind names in scope at registration
+/// (ancestors only — the site's own rb arrives via `__koru_res`, not the lane).
+const FlatResumption = struct {
+    children: []const ast.Continuation,
+    return_binding: ?[]const u8,
+    live: []const []const u8,
+    scope: []const []const u8,
+};
+
+const FlatEmitState = struct {
+    resumptions: std.ArrayList(FlatResumption) = .empty,
+    self_canonical: []const u8,
+    fields: []const ast.Field,
+    return_type: []const u8,
+    n_regs: usize,
+    /// Uniform lane width in u64 words: 1 fid + the widest live set. Every
+    /// lane occupies the same span so `sp` walks a fixed stride — measured
+    /// ~25% faster than variable-width frames (LLVM folds the push chain into
+    /// counted stores instead of per-site pointer arithmetic).
+    lane_words: usize = 0,
+    /// Next resumption the emit walk consumes — sites are pre-registered in
+    /// worklist order by flatRegisterSites so lane_words is known up front.
+    next_site: usize = 0,
+};
+
+/// Lane-scalar types: values of these types travel through `__koru_cstk` as
+/// bitcast u64 words.
+fn flatScalarType(ty: []const u8) bool {
+    const scalars = [_][]const u8{ "i64", "u64", "isize", "usize" };
+    for (scalars) |s| {
+        if (std.mem.eql(u8, ty, s)) return true;
+    }
+    return false;
+}
+
+/// True if `field` can ride a continuation lane: a plain machine-word scalar
+/// with no capture semantics attached.
+fn flatFieldLaneable(field: ast.Field) bool {
+    if (field.is_source or field.is_file or field.is_embed_file or
+        field.is_expression or field.is_invocation_meta) return false;
+    if (field.phantom != null or field.module_path != null) return false;
+    return flatScalarType(field.type);
+}
+
+/// `if`-template invocation: a one-arg call to an event literally named `if`
+/// whose invocation carried a rendered Zig template — the only non-self
+/// invocation the flat walk lowers.
+fn flatIsIfInvocation(inv: *const ast.Invocation) bool {
+    if (inv.path.segments.len == 0 or inv.args.len != 1) return false;
+    return std.mem.eql(u8, inv.path.segments[inv.path.segments.len - 1], "if");
+}
+
+fn flatTargetsSelf(inv: *const ast.Invocation, self_canonical: []const u8, ctx: *EmissionContext) bool {
+    const canonical = buildCanonicalEventName(&inv.path, ctx.allocator, ctx.main_module_name) catch return false;
+    defer ctx.allocator.free(canonical);
+    return std.mem.eql(u8, canonical, self_canonical);
+}
+
+/// Does this continuation subtree hold a tail self-forward anywhere? The
+/// chained-shape test applied to a non-tail self-call's resumption.
+fn flatContsContainSelfTailForward(conts: []const ast.Continuation, self_canonical: []const u8, ctx: *EmissionContext) bool {
+    for (conts) |*cont| {
+        if (continuationIsSelfTailForwarder(cont, self_canonical, ctx)) return true;
+        if (flatContsContainSelfTailForward(cont.continuations, self_canonical, ctx)) return true;
+    }
+    return false;
+}
+
+fn flatIsIdentChar(c: u8) bool {
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_';
+}
+
+/// Word-boundary name scan over raw Koru expression text — the read test for
+/// live-value computation. Over-inclusion is safe (a stored word is simply
+/// restored); under-inclusion is the bug this guards against.
+fn flatTextMentionsName(text: []const u8, name: []const u8) bool {
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, text, pos, name)) |p| {
+        const left_ok = p == 0 or !flatIsIdentChar(text[p - 1]);
+        const right = p + name.len;
+        const right_ok = right >= text.len or !flatIsIdentChar(text[right]);
+        if (left_ok and right_ok) return true;
+        pos = p + 1;
+    }
+    return false;
+}
+
+/// Any text slot in this continuation subtree (call args, produce bodies,
+/// branch-payload expressions) that can read a local name.
+fn flatContsMentionName(conts: []const ast.Continuation, name: []const u8) bool {
+    for (conts) |*cont| {
+        if (cont.node) |*node| {
+            switch (node.*) {
+                .invocation => |*inv| {
+                    for (inv.args) |arg| {
+                        if (flatTextMentionsName(arg.value, name)) return true;
+                    }
+                },
+                .expression => |code| {
+                    if (flatTextMentionsName(code, name)) return true;
+                },
+                .branch_constructor => |*bc| {
+                    if (bc.plain_value) |pv| {
+                        if (flatTextMentionsName(pv, name)) return true;
+                    }
+                    for (bc.fields) |f| {
+                        if (f.expression_str) |es| {
+                            if (flatTextMentionsName(es, name)) return true;
+                        }
+                        if (flatTextMentionsName(f.type, name)) return true;
+                    }
+                },
+                else => {},
+            }
+        }
+        if (flatContsMentionName(cont.continuations, name)) return true;
+    }
+    return false;
+}
+
+/// Names the segment emission reserves: the lane pointer (`sp`, `lw`), the
+/// register params (`r0`, `r1`, …), and the `__koru_` internal prefix. A field
+/// or bind carrying one would shadow the segment machinery it sits inside.
+fn flatNameReserved(name: []const u8) bool {
+    if (std.mem.eql(u8, name, "sp") or std.mem.eql(u8, name, "lw")) return true;
+    if (std.mem.startsWith(u8, name, "__koru_")) return true;
+    if (name.len >= 2 and name[0] == 'r') {
+        var all_digits = true;
+        for (name[1..]) |c| {
+            if (c < '0' or c > '9') {
+                all_digits = false;
+                break;
+            }
+        }
+        if (all_digits) return true;
+    }
+    return false;
+}
+
+/// Collect every call-site result binding in the subtree (deduped, `_`
+/// skipped). Returns false when a bind name collides with an input field or
+/// a reserved segment name — a shadow the emission cannot represent.
+fn flatCollectBinds(
+    conts: []const ast.Continuation,
+    fields: []const ast.Field,
+    out: *std.ArrayList([]const u8),
+    allocator: std.mem.Allocator,
+) !bool {
+    for (conts) |*cont| {
+        if (cont.node) |*node| {
+            if (node.* == .invocation) {
+                if (node.invocation.return_binding) |rb| {
+                    if (!std.mem.eql(u8, rb, "_")) {
+                        if (flatNameReserved(rb)) return false;
+                        for (fields) |f| {
+                            if (std.mem.eql(u8, f.name, rb)) return false;
+                        }
+                        var dup = false;
+                        for (out.items) |n| {
+                            if (std.mem.eql(u8, n, rb)) {
+                                dup = true;
+                                break;
+                            }
+                        }
+                        if (!dup) try out.append(allocator, rb);
+                    }
+                }
+            }
+        }
+        if (!try flatCollectBinds(cont.continuations, fields, out, allocator)) return false;
+    }
+    return true;
+}
+
+/// The conservative shape gate. Every node in the subtree must be one the
+/// flat walk lowers: a terminal produce, a bare `-> T` branch constructor, a
+/// self-call (tail-forwarder or chained non-tail), or an `if` template whose
+/// arms are `then`/`else` only. Every non-tail self-call must be CHAINED —
+/// its resumption contains a tail self-forward — which is what keeps
+//  combining shapes (fib, coins, pascal) on the native path.
+fn flatContsEligible(
+    conts: []const ast.Continuation,
+    self_canonical: []const u8,
+    ctx: *EmissionContext,
+    any_chained: *bool,
+) bool {
+    for (conts) |*cont| {
+        if (cont.binding != null or cont.destructure.len != 0 or
+            cont.is_catchall or cont.condition != null or
+            cont.condition_expr != null or cont.is_transformed_subtree) return false;
+        const node = cont.node orelse {
+            if (!flatContsEligible(cont.continuations, self_canonical, ctx, any_chained)) return false;
+            continue;
+        };
+        switch (node) {
+            .expression => |code| {
+                if (cont.continuations.len != 0) return false;
+                if (std.mem.eql(u8, std.mem.trim(u8, code, " \t"), "_")) return false;
+            },
+            .branch_constructor => |bc| {
+                if (!bc.is_bare_return or bc.plain_value == null) return false;
+                if (cont.continuations.len != 0) return false;
+            },
+            .invocation => |*inv| {
+                if (inv.return_destructure.len != 0) return false;
+                if (flatTargetsSelf(inv, self_canonical, ctx)) {
+                    if (isTailForwarder(cont)) {
+                        // Reentry replaces the whole cont — its identity
+                        // forwarder children are never walked.
+                        continue;
+                    }
+                    if (!flatContsContainSelfTailForward(cont.continuations, self_canonical, ctx)) return false;
+                    any_chained.* = true;
+                    if (!flatContsEligible(cont.continuations, self_canonical, ctx, any_chained)) return false;
+                } else if (flatIsIfInvocation(inv) and inv.inline_body != null) {
+                    if (inv.return_binding != null) return false;
+                    for (cont.continuations) |*arm| {
+                        if (!std.mem.eql(u8, arm.branch, "then") and !std.mem.eql(u8, arm.branch, "else")) return false;
+                    }
+                    if (!flatContsEligible(cont.continuations, self_canonical, ctx, any_chained)) return false;
+                } else return false;
+            },
+            else => return false,
+        }
+    }
+    return true;
+}
+
+/// Is this impl flow a flat-emission candidate? An `if`-headed single-return
+/// flow over lane-scalar inputs where every non-tail self-call is chained and
+/// at least one exists — the shape where an explicit lane beats the native
+/// stack by a measured multiple.
+pub fn flowIsFlatEligible(
+    event: *const ast.EventDecl,
+    flow: *const ast.Flow,
+    self_canonical: []const u8,
+    ctx: *EmissionContext,
+) bool {
+    if (flow.preamble_code != null or flow.pre_label != null) return false;
+    const head = flow.inv();
+    if (findEffectArm(event, &head.path) != null) return false;
+    if (!flatIsIfInvocation(head)) return false;
+    if ((flow.inline_body orelse head.inline_body) == null) return false;
+    if (head.return_binding != null or head.return_destructure.len != 0) return false;
+    if (event.input.fields.len == 0) return false;
+    const rt = event.return_type orelse return false;
+    if (!flatScalarType(rt)) return false;
+    for (event.input.fields) |f| {
+        if (!flatFieldLaneable(f)) return false;
+        if (flatNameReserved(f.name)) return false;
+    }
+    var binds: std.ArrayList([]const u8) = .empty;
+    defer binds.deinit(ctx.allocator);
+    if (!(flatCollectBinds(flow.body.continuations, event.input.fields, &binds, ctx.allocator) catch return false)) return false;
+    for (flow.body.continuations) |*cont| {
+        if (!std.mem.eql(u8, cont.branch, "then") and !std.mem.eql(u8, cont.branch, "else")) return false;
+    }
+    var any_chained = false;
+    if (!flatContsEligible(flow.body.continuations, self_canonical, ctx, &any_chained)) return false;
+    return any_chained;
+}
+
+/// File-scope scan for the lane-stack decls: does any impl flow in this
+/// module qualify for flat emission?
+pub fn moduleNeedsFlatLaneStack(items: []const ast.Item, allocator: std.mem.Allocator, main_module_name: ?[]const u8) bool {
+    var ctx = EmissionContext{
+        .allocator = allocator,
+        .main_module_name = main_module_name,
+    };
+    for (items) |*item| {
+        switch (item.*) {
+            .flow => |*flow| {
+                const impl_path = flow.impl_of orelse continue;
+                if (flow.impl_variant != null) continue;
+                const event = findEventDeclByPath(items, &impl_path) orelse continue;
+                const canonical = buildCanonicalEventName(&event.path, allocator, main_module_name) catch continue;
+                defer allocator.free(canonical);
+                if (flowIsFlatEligible(event, flow, canonical, &ctx)) return true;
+            },
+            else => continue,
+        }
+    }
+    return false;
+}
+
+/// The lane type for a live name: an input field's own type, or the event's
+/// bare-return type for a call-result bind.
+fn flatLaneType(fx: *const FlatEmitState, name: []const u8) []const u8 {
+    for (fx.fields) |f| {
+        if (std.mem.eql(u8, f.name, name)) return f.type;
+    }
+    return fx.return_type;
+}
+
+/// The scalars a chained call site must save: fields and in-scope binds the
+/// resumption's subtree mentions, minus the site's own result binding (that
+/// value arrives through r0, not the lane).
+fn flatComputeLive(
+    fx: *const FlatEmitState,
+    inv: *const ast.Invocation,
+    resumption_conts: []const ast.Continuation,
+    scope: []const []const u8,
+    allocator: std.mem.Allocator,
+) EmitError![][]const u8 {
+    var live: std.ArrayList([]const u8) = .empty;
+    for (fx.fields) |f| {
+        if (inv.return_binding) |rb| {
+            if (std.mem.eql(u8, f.name, rb)) continue;
+        }
+        if (flatContsMentionName(resumption_conts, f.name)) try live.append(allocator, f.name);
+    }
+    for (scope) |b| {
+        if (inv.return_binding) |rb| {
+            if (std.mem.eql(u8, b, rb)) continue;
+        }
+        var dup = false;
+        for (live.items) |n| {
+            if (std.mem.eql(u8, n, b)) {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup and flatContsMentionName(resumption_conts, b)) try live.append(allocator, b);
+    }
+    return live.toOwnedSlice(allocator);
+}
+
+/// Register one chained call site's resumption and record the scope its
+/// segment body runs under (the site's own bind joins the inherited scope —
+/// it arrives through r0 inside the segment).
+fn flatRegisterSite(
+    fx: *FlatEmitState,
+    ctx: *EmissionContext,
+    inv: *const ast.Invocation,
+    conts: []const ast.Continuation,
+    scope: []const []const u8,
+) EmitError!void {
+    try fx.resumptions.append(ctx.allocator, .{
+        .children = conts,
+        .return_binding = inv.return_binding,
+        .live = try flatComputeLive(fx, inv, conts, scope, ctx.allocator),
+        .scope = try ctx.allocator.dupe([]const u8, scope),
+    });
+}
+
+/// Site-collection walk, mirroring emitFlatSegConts node-for-node in the same
+/// order the emit walk consumes tags: non-node continuations recurse in order,
+/// `if` invocations walk then-arms before else-arms, tail self-forwarders are
+/// skipped (their children never run), and a chained non-tail self-call
+/// registers itself — its resumption is a separate segment body reached by
+/// flatRegisterSites' worklist, not this walk. Running this before any
+/// emission populates `fx.resumptions`, which fixes the uniform lane width
+/// ahead of the eval segment.
+fn flatWalkSites(
+    fx: *FlatEmitState,
+    ctx: *EmissionContext,
+    conts: []const ast.Continuation,
+    scope: []const []const u8,
+) EmitError!void {
+    for (conts) |*cont| {
+        const node = cont.node orelse {
+            try flatWalkSites(fx, ctx, cont.continuations, scope);
+            continue;
+        };
+        switch (node) {
+            .invocation => |*inv| {
+                if (flatTargetsSelf(inv, fx.self_canonical, ctx)) {
+                    if (isTailForwarder(cont)) continue;
+                    // The resumption is a separate segment body — its sites are
+                    // reached by flatRegisterSites' worklist, not this walk.
+                    try flatRegisterSite(fx, ctx, inv, cont.continuations, scope);
+                } else if (flatIsIfInvocation(inv) and inv.inline_body != null) {
+                    for (cont.continuations, 0..) |*arm, i| {
+                        if (std.mem.eql(u8, arm.branch, "then")) try flatWalkSites(fx, ctx, cont.continuations[i .. i + 1], scope);
+                    }
+                    for (cont.continuations, 0..) |*arm, i| {
+                        if (std.mem.eql(u8, arm.branch, "else")) try flatWalkSites(fx, ctx, cont.continuations[i .. i + 1], scope);
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+}
+
+/// Populate `fx.resumptions` in emit order — a worklist over segment bodies,
+/// the eval flow first — then fix `fx.lane_words` from the widest live set.
+fn flatRegisterSites(
+    fx: *FlatEmitState,
+    ctx: *EmissionContext,
+    flow: *const ast.Flow,
+) EmitError!void {
+    try flatWalkSites(fx, ctx, flow.body.continuations, &.{});
+    var i: usize = 0;
+    while (i < fx.resumptions.items.len) : (i += 1) {
+        const site = fx.resumptions.items[i];
+        var child_scope: std.ArrayList([]const u8) = .empty;
+        defer child_scope.deinit(ctx.allocator);
+        try child_scope.appendSlice(ctx.allocator, site.scope);
+        if (site.return_binding) |rb| {
+            if (!std.mem.eql(u8, rb, "_")) try child_scope.append(ctx.allocator, rb);
+        }
+        try flatWalkSites(fx, ctx, site.children, child_scope.items);
+    }
+    var max_live: usize = 0;
+    for (fx.resumptions.items) |site| {
+        if (site.live.len > max_live) max_live = site.live.len;
+    }
+    fx.lane_words = max_live + 1;
+}
+
+/// An `if (cond) { then-arms } else { else-arms }` block over the flat segment
+/// walk — used for the flow head and for nested `if` invocations alike.
+/// `sp_expr` is the current lane-stack position — always the first free lane
+/// base, in the eval segment and inside a consumed resumption's lane alike.
+/// Returns true when the emitted block can fall through to the next statement
+/// — only an `if` without an `else` (or one whose arms can) leaves the path
+/// open; every terminal node ends in a segment tailcall.
+fn emitFlatSegIf(
+    emitter: *CodeEmitter,
+    ctx: *EmissionContext,
+    fx: *FlatEmitState,
+    inv: *const ast.Invocation,
+    arm_conts: []const ast.Continuation,
+    sp_expr: []const u8,
+    sp_grows: bool,
+) EmitError!bool {
+    var can_fall = false;
+    try emitter.writeIndent();
+    try emitter.write("if (");
+    try emitValue(emitter, ctx, inv.args[0].value);
+    try emitter.write(") {\n");
+    emitter.indent_level += 1;
+    var then_emitted = false;
+    for (arm_conts, 0..) |*arm, i| {
+        if (!std.mem.eql(u8, arm.branch, "then")) continue;
+        then_emitted = true;
+        can_fall = try emitFlatSegConts(emitter, ctx, fx, arm_conts[i .. i + 1], sp_expr, sp_grows);
+    }
+    emitter.indent_level -= 1;
+    var has_else = false;
+    for (arm_conts) |*arm| {
+        if (std.mem.eql(u8, arm.branch, "else")) {
+            has_else = true;
+            break;
+        }
+    }
+    try emitter.writeIndent();
+    if (!has_else) {
+        try emitter.write("}\n");
+        return true;
+    }
+    try emitter.write("} else {\n");
+    emitter.indent_level += 1;
+    var else_emitted = false;
+    for (arm_conts, 0..) |*arm, i| {
+        if (!std.mem.eql(u8, arm.branch, "else")) continue;
+        else_emitted = true;
+        can_fall = can_fall or try emitFlatSegConts(emitter, ctx, fx, arm_conts[i .. i + 1], sp_expr, sp_grows);
+    }
+    emitter.indent_level -= 1;
+    try emitter.writeIndent();
+    try emitter.write("}\n");
+    return can_fall or !then_emitted or !else_emitted;
+}
+
+/// Emit the `.{ sp_expr, w0, w1, ... }` argument tuple for a self-call segment
+/// tailcall: one u64 register per input field, filled from the invocation's
+/// matching arg (named, positional fallback) or the field's own current value
+/// when the call doesn't pass it. The tuple evaluates every RHS before the
+/// call — no simultaneous-assignment staging needed.
+fn emitFlatSegCallArgs(
+    emitter: *CodeEmitter,
+    ctx: *EmissionContext,
+    fx: *FlatEmitState,
+    inv: *const ast.Invocation,
+    sp_expr: []const u8,
+) EmitError!void {
+    try emitter.write(".{ ");
+    try emitter.write(sp_expr);
+    for (fx.fields, 0..) |field, i| {
+        try emitter.write(", @as(u64, @bitCast(@as(");
+        try emitter.write(field.type);
+        try emitter.write(", ");
+        var value: ?[]const u8 = null;
+        for (inv.args, 0..) |arg, ai| {
+            if (arg.name.len == 0) {
+                if (ai == i) value = arg.value;
+            } else if (std.mem.eql(u8, arg.name, field.name)) {
+                value = arg.value;
+            }
+        }
+        if (value) |v| {
+            try emitValue(emitter, ctx, v);
+        } else {
+            try writeBranchName(emitter, field.name);
+        }
+        try emitter.write(")))");
+    }
+    try emitter.write(" }");
+}
+
+/// Emit a produce's deliver: pop the top lane and tailcall its fid with the
+/// result in r0. `sp` is the first free lane base, so the top lane sits at
+/// `sp - lane_words` with its fid at index 0.
+fn emitFlatSegDeliver(
+    emitter: *CodeEmitter,
+    ctx: *EmissionContext,
+    fx: *FlatEmitState,
+    sp_expr: []const u8,
+    value: []const u8,
+    value_is_raw_zig: bool,
+) EmitError!void {
+    var nbuf: [64]u8 = undefined;
+    const f = try std.fmt.bufPrint(&nbuf, "({s} - {d})", .{ sp_expr, fx.lane_words });
+    try emitter.writeIndent();
+    try emitter.write("return @call(.always_tail, @as(__koru_seg_ty, @ptrFromInt(");
+    try emitter.write(f);
+    try emitter.write("[0])), .{ ");
+    try emitter.write(f);
+    try emitter.write(", @as(u64, @bitCast(@as(");
+    try emitter.write(fx.return_type);
+    try emitter.write(", ");
+    if (value_is_raw_zig) {
+        try emitter.write(value);
+    } else {
+        try emitValue(emitter, ctx, value);
+    }
+    try emitter.write(")))");
+    var z: usize = 1;
+    while (z < fx.n_regs) : (z += 1) try emitter.write(", 0");
+    try emitter.write(" });\n");
+}
+
+/// The flat segment walk. Mirrors the structured continuation dispatch over
+/// the same AST, but every terminal lowers to a segment tailcall: a chained
+/// non-tail self-call fills the current `[fid][live…]` lane and tailcalls the
+/// eval segment, a tail self-call tailcalls eval directly (args as a pure
+/// tuple — no staging), and a produce pops the top lane's fid and tailcalls
+/// it with the result in r0. Anything outside the eligible set fails loud.
+///
+/// `sp_grows` marks whether `sp_expr` is the stack's high-water mark — true
+/// only in the eval segment. A resumption's `sp` is its own just-popped lane,
+/// so its pushes rewrite memory that was provably in bounds a moment ago and
+/// skip the overflow check (measured: the check costs ~25% on tak).
+/// Returns true when the last emitted statement can fall through — only a
+/// trailing `if` without an `else` leaves a live path; every other terminal
+/// is a segment tailcall.
+fn emitFlatSegConts(
+    emitter: *CodeEmitter,
+    ctx: *EmissionContext,
+    fx: *FlatEmitState,
+    conts: []const ast.Continuation,
+    sp_expr: []const u8,
+    sp_grows: bool,
+) EmitError!bool {
+    var nbuf: [96]u8 = undefined;
+    var sbuf: [64]u8 = undefined;
+    var can_fall = true;
+    for (conts) |*cont| {
+        const node = cont.node orelse {
+            can_fall = try emitFlatSegConts(emitter, ctx, fx, cont.continuations, sp_expr, sp_grows);
+            continue;
+        };
+        can_fall = false;
+        switch (node) {
+            .expression => |code_raw| {
+                const code = lowerExprZig(emitter, code_raw);
+                try emitFlatSegDeliver(emitter, ctx, fx, sp_expr, code, true);
+            },
+            .branch_constructor => |*bc| {
+                if (!bc.is_bare_return or bc.plain_value == null) return error.FlatShapeUnsupported;
+                try emitFlatSegDeliver(emitter, ctx, fx, sp_expr, bc.plain_value.?, false);
+            },
+            .invocation => {
+                const inv = &cont.node.?.invocation;
+                if (flatTargetsSelf(inv, fx.self_canonical, ctx)) {
+                    if (isTailForwarder(cont)) {
+                        try emitter.writeIndent();
+                        try emitter.write("return @call(.always_tail, __koru_seg_eval, ");
+                        try emitFlatSegCallArgs(emitter, ctx, fx, inv, sp_expr);
+                        try emitter.write(");\n");
+                    } else {
+                        // Chained non-tail self-call: fill the free lane with
+                        // the resumption segment's fid and the scalars that
+                        // resumption reads, then tailcall eval with the call's
+                        // arguments. The site's own bind arrives via r0, never
+                        // the lane.
+                        const tag = fx.next_site;
+                        fx.next_site += 1;
+                        const site = fx.resumptions.items[tag];
+                        if (sp_grows) {
+                            // Overflow faults on the guard page — this Debug-
+                            // only check just gives it a diagnostic. Comptime-
+                            // stripped in ReleaseFast, where the check cost
+                            // ~25% on tak.
+                            try emitter.writeIndent();
+                            try emitter.write("if (comptime @import(\"builtin\").mode == .Debug) {\n");
+                            emitter.indent_level += 1;
+                            try emitter.writeIndent();
+                            try emitter.write("if (@intFromPtr(");
+                            try emitter.write(sp_expr);
+                            try emitter.write(") >= @intFromPtr(__koru_cstk.ptr + (__koru_cstk.len - __koru_lane_w + 1))) @panic(\"koru: flat continuation stack overflow\");\n");
+                            emitter.indent_level -= 1;
+                            try emitter.writeIndent();
+                            try emitter.write("}\n");
+                        }
+                        try emitter.writeIndent();
+                        try emitter.write(sp_expr);
+                        try emitter.write(try std.fmt.bufPrint(&nbuf, "[0] = @intFromPtr(&__koru_seg_k{d});\n", .{tag}));
+                        for (site.live, 0..) |name, j| {
+                            try emitter.writeIndent();
+                            try emitter.write(sp_expr);
+                            try emitter.write(try std.fmt.bufPrint(&nbuf, "[{d}] = @as(u64, @bitCast(@as(", .{j + 1}));
+                            try emitter.write(flatLaneType(fx, name));
+                            try emitter.write(", ");
+                            try writeBranchName(emitter, name);
+                            try emitter.write(")));\n");
+                        }
+                        try emitter.writeIndent();
+                        try emitter.write("return @call(.always_tail, __koru_seg_eval, ");
+                        try emitFlatSegCallArgs(emitter, ctx, fx, inv, try std.fmt.bufPrint(&sbuf, "{s} + {d}", .{ sp_expr, fx.lane_words }));
+                        try emitter.write(");\n");
+                    }
+                } else if (flatIsIfInvocation(inv) and inv.inline_body != null) {
+                    can_fall = try emitFlatSegIf(emitter, ctx, fx, inv, cont.continuations, sp_expr, sp_grows);
+                } else return error.FlatShapeUnsupported;
+            },
+            else => return error.FlatShapeUnsupported,
+        }
+    }
+    return can_fall;
+}
+
+/// Emit the continuation segments for a flat-eligible event as members of its
+/// struct — called BEFORE the handler decl so the handler can name them. A
+/// uniform `(sp, r0…rN) u64` signature lets `@call(.always_tail)` chain every
+/// segment with zero frames; r0 doubles as the result register on delivery.
+///
+/// Every lane is `__koru_lane_w` u64 words: `[fid][live…]`, fid first, so the
+/// pop is `sp - __koru_lane_w` and a resumption's own consumed lane is the
+/// free slot it rewrites. `sp` is always the first free lane base.
+///
+/// ```zig
+/// const __koru_lane_w = 5;
+/// const __koru_seg_ty = *const fn (sp: [*]u64, r0: u64, …) u64;
+/// fn __koru_seg_done(sp: [*]u64, r0: u64, …) u64 { return r0; }
+/// fn __koru_seg_eval(sp: [*]u64, r0: u64, …) u64 { <flat body> }
+/// fn __koru_seg_k0(sp: [*]u64, r0: u64, …) u64 { <resumption 0> }
+/// ```
+pub fn emitFlatSegments(
+    emitter: *CodeEmitter,
+    ctx: *EmissionContext,
+    event: *const ast.EventDecl,
+    flow: *const ast.Flow,
+    self_canonical: []const u8,
+) EmitError!void {
+    var fx = FlatEmitState{
+        .self_canonical = self_canonical,
+        .fields = event.input.fields,
+        .return_type = event.return_type.?,
+        .n_regs = @max(event.input.fields.len, 1),
+    };
+    defer {
+        for (fx.resumptions.items) |site| {
+            ctx.allocator.free(site.live);
+            ctx.allocator.free(site.scope);
+        }
+        fx.resumptions.deinit(ctx.allocator);
+    }
+
+    // Registration must complete before any emission: eval's pushes need
+    // `lane_words`, which depends on sites the resumption bodies register.
+    try flatRegisterSites(&fx, ctx, flow);
+
+    var nbuf: [96]u8 = undefined;
+
+    try emitter.writeIndent();
+    try emitter.write(try std.fmt.bufPrint(&nbuf, "const __koru_lane_w = {d};\n", .{fx.lane_words}));
+    try emitter.writeIndent();
+    try emitter.write("const __koru_seg_ty = *const fn (sp: [*]u64");
+    for (0..fx.n_regs) |r| {
+        try emitter.write(try std.fmt.bufPrint(&nbuf, ", r{d}: u64", .{r}));
+    }
+    try emitter.write(") u64;\n");
+
+    // Bottom-of-stack resumption: the handler pushes its fid as a sentinel, so
+    // the last produce's deliver tailcall lands here and returns the result.
+    try emitter.writeIndent();
+    try emitter.write("fn __koru_seg_done(sp: [*]u64");
+    for (0..fx.n_regs) |r| {
+        try emitter.write(try std.fmt.bufPrint(&nbuf, ", r{d}: u64", .{r}));
+    }
+    try emitter.write(") u64 {\n");
+    emitter.indent_level += 1;
+    try emitter.writeIndent();
+    try emitter.write("_ = sp;\n");
+    var dr: usize = 1;
+    while (dr < fx.n_regs) : (dr += 1) {
+        try emitter.writeIndent();
+        try emitter.write(try std.fmt.bufPrint(&nbuf, "_ = r{d};\n", .{dr}));
+    }
+    try emitter.writeIndent();
+    try emitter.write("return r0;\n");
+    emitter.indent_level -= 1;
+    try emitter.writeIndent();
+    try emitter.write("}\n");
+
+    // Eval segment: the flow body itself, args arriving in the registers.
+    try emitter.writeIndent();
+    try emitter.write("fn __koru_seg_eval(sp: [*]u64");
+    for (0..fx.n_regs) |r| {
+        try emitter.write(try std.fmt.bufPrint(&nbuf, ", r{d}: u64", .{r}));
+    }
+    try emitter.write(") u64 {\n");
+    emitter.indent_level += 1;
+    for (fx.fields, 0..) |field, i| {
+        try emitter.writeIndent();
+        try emitter.write("const ");
+        try writeBranchName(emitter, field.name);
+        try emitter.write(" = @as(");
+        try emitter.write(field.type);
+        try emitter.write(try std.fmt.bufPrint(&nbuf, ", @bitCast(r{d}));\n", .{i}));
+        if (!flatContsMentionName(flow.body.continuations, field.name)) {
+            try emitter.writeIndent();
+            try emitter.write("_ = ");
+            try writeBranchName(emitter, field.name);
+            try emitter.write(";\n");
+        }
+    }
+    const eval_fall = try emitFlatSegIf(emitter, ctx, &fx, flow.inv(), flow.body.continuations, "sp", true);
+    if (eval_fall) {
+        try emitter.writeIndent();
+        // An `if` without an `else` leaves a live fall-through — same dead end
+        // the structured path marks unreachable.
+        try emitter.write("unreachable;\n");
+    }
+    emitter.indent_level -= 1;
+    try emitter.writeIndent();
+    try emitter.write("}\n");
+
+    // Resumption segments — emitted in registration order (the emit walk's
+    // `next_site` consumes tags in the same order flatRegisterSites assigned
+    // them). On entry `sp` is this segment's own lane — already popped, so
+    // free — and r0 holds the produced result.
+    var i: usize = 0;
+    while (i < fx.resumptions.items.len) : (i += 1) {
+        const site = fx.resumptions.items[i];
+        try emitter.writeIndent();
+        try emitter.write(try std.fmt.bufPrint(&nbuf, "fn __koru_seg_k{d}(sp: [*]u64", .{i}));
+        for (0..fx.n_regs) |r| {
+            try emitter.write(try std.fmt.bufPrint(&nbuf, ", r{d}: u64", .{r}));
+        }
+        try emitter.write(") u64 {\n");
+        emitter.indent_level += 1;
+        // Unused params are a Zig error; r0 is used only when a real binding
+        // takes the result, r1.. never are.
+        const rb_bound = if (site.return_binding) |rb| !std.mem.eql(u8, rb, "_") else false;
+        if (!rb_bound) {
+            try emitter.writeIndent();
+            try emitter.write("_ = r0;\n");
+        }
+        var dr2: usize = 1;
+        while (dr2 < fx.n_regs) : (dr2 += 1) {
+            try emitter.writeIndent();
+            try emitter.write(try std.fmt.bufPrint(&nbuf, "_ = r{d};\n", .{dr2}));
+        }
+        if (site.return_binding) |rb| {
+            if (!std.mem.eql(u8, rb, "_")) {
+                try emitter.writeIndent();
+                try emitter.write("const ");
+                try writeBranchName(emitter, rb);
+                try emitter.write(" = @as(");
+                try emitter.write(fx.return_type);
+                try emitter.write(", @bitCast(r0));\n");
+                if (!flatContsMentionName(site.children, rb)) {
+                    try emitter.writeIndent();
+                    try emitter.write("_ = ");
+                    try writeBranchName(emitter, rb);
+                    try emitter.write(";\n");
+                }
+            }
+        }
+        var ibuf: [64]u8 = undefined;
+        for (site.live, 0..) |name, j| {
+            try emitter.writeIndent();
+            try emitter.write("const ");
+            try writeBranchName(emitter, name);
+            try emitter.write(" = @as(");
+            try emitter.write(flatLaneType(&fx, name));
+            try emitter.write(try std.fmt.bufPrint(&ibuf, ", @bitCast(sp[{d}]));\n", .{j + 1}));
+            if (!flatContsMentionName(site.children, name)) {
+                try emitter.writeIndent();
+                try emitter.write("_ = ");
+                try writeBranchName(emitter, name);
+                try emitter.write(";\n");
+            }
+        }
+        const seg_fall = try emitFlatSegConts(emitter, ctx, &fx, site.children, "sp", false);
+        if (seg_fall) {
+            try emitter.writeIndent();
+            try emitter.write("unreachable;\n");
+        }
+        emitter.indent_level -= 1;
+        try emitter.writeIndent();
+        try emitter.write("}\n");
+    }
+}
+
+/// Emit the flat handler body: push the `__koru_seg_done` sentinel on the lane
+/// stack and call the eval segment. The whole recursion runs as segment
+/// tailcalls; the last produce's deliver lands on the sentinel, which returns
+/// the u64 result straight back through this call.
+pub fn emitFlatHandlerBody(
+    emitter: *CodeEmitter,
+    event: *const ast.EventDecl,
+) EmitError!void {
+    try emitter.writeIndent();
+    try emitter.write("if (__koru_cstk.len == 0) __koru_flat_init();\n");
+    try emitter.writeIndent();
+    try emitter.write("const __koru_base = __koru_csp;\n");
+    try emitter.writeIndent();
+    try emitter.write("__koru_cstk[__koru_base] = @intFromPtr(&__koru_seg_done);\n");
+    try emitter.writeIndent();
+    try emitter.write("defer __koru_csp = __koru_base;\n");
+    try emitter.writeIndent();
+    try emitter.write("return @as(@This().Output, @bitCast(__koru_seg_eval(__koru_cstk[__koru_base + __koru_lane_w ..].ptr");
+    for (event.input.fields) |field| {
+        try emitter.write(", @as(u64, @bitCast(__koru_event_input.");
+        try writeBranchName(emitter, field.name);
+        try emitter.write("))");
+    }
+    try emitter.write(")));\n");
+}
+
+/// Find the flow that implements `event` (the same match the impl-search loop
+/// performs: `.flow` item, `impl_of` path equal to the event's, no variant) —
+/// a `*const` into `items`, stable for deferred emission.
+pub fn findFlatImplFlow(items: []const ast.Item, event: *const ast.EventDecl) ?*const ast.Flow {
+    for (items) |*item| {
+        switch (item.*) {
+            .flow => |*flow| {
+                if (flow.impl_variant != null) continue;
+                const impl_path = flow.impl_of orelse continue;
+                if (impl_path.segments.len != event.path.segments.len) continue;
+                var matches = true;
+                for (impl_path.segments, 0..) |seg, j| {
+                    if (!std.mem.eql(u8, seg, event.path.segments[j])) {
+                        matches = false;
+                        break;
+                    }
+                }
+                if (matches) return flow;
+            },
+            else => continue,
+        }
+    }
+    return null;
 }
 
 /// Build the Zig enum tag for an event: its path segments joined by `_`, kebab
