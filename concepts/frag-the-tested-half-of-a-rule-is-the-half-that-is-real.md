@@ -96,8 +96,11 @@ pins the legal multi-line form — leading `|>` lines — green at this same
 position, and it compiles today. The operator *ending* a line is not a
 continuation marker anywhere in the grammar; the stale nbody benchmark
 (`kernel_pairwise.kz`) is written assuming it is and refuses today. The gap is
-in the *refusal's* enumeration, not the chain's. Re-pinned RED as `210_238`
-with MUST_ERROR expecting the `must follow '|>'` diagnostic.
+in the *refusal's* enumeration, not the chain's. Pinned as `210_238` with
+MUST_ERROR expecting the `must follow '|>'` diagnostic — and the fix landed
+the same day: two empty-segment drops, one in the inline-chain extractor, one
+in `parsePipelineSteps`'s tail, now refuse `PARSE001` in every position the
+splitter serves. `210_238` is green.
 
 So the sharpest form yet: **a refusal is a rule too, and it is real only where
 it fires.** A diagnostic enforced in one parse position and absent in the

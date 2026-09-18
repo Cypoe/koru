@@ -6997,6 +6997,27 @@ pub const Parser = struct {
         // Extract the continuation part after |>
         var continuation_part = lexer.trim(full_line[pipe_idx.? + 2 ..]);
 
+        // A `|>` with nothing after it is a dangling operator — the same
+        // refusal branch position applies (`| ok x |>`, 210_066). Without it
+        // the operator is silently swallowed, the next line becomes an
+        // unrelated flow, and the fault resurfaces one checker later as
+        // KORU100 on a binding the author did use (210_238).
+        if (continuation_part.len == 0 or
+            lexer.trim(try lexer.stripLineComments(self.allocator, continuation_part)).len == 0)
+        {
+            try self.reporter.addErrorWithHintAndSpan(
+                .PARSE001,
+                chain_location.line,
+                chain_location.column,
+                2,
+                "Step must follow '|>' on the same line",
+                .{},
+                "Put the step inline after `|>`, or lead the next line with `|>` — a trailing `|>` does not continue the chain.",
+                .{},
+            );
+            return error.ParseError;
+        }
+
         // A trailing top-level `-> produce` on the LAST step of the chain
         // (`... |> tail(args): v -> expr`) is the produce arm at the end of a
         // chained subflow body (the metacircular `frontend` pipeline shape).
@@ -8969,8 +8990,28 @@ pub const Parser = struct {
                 k += 1;
             }
             const last = lexer.trim(working_content[seg_start..scan_end]);
-            if (last.len > 0) {
+            const last_nc = if (last.len > 0)
+                lexer.trim(try lexer.stripLineComments(self.allocator, last))
+            else
+                last;
+            if (last_nc.len > 0) {
                 try steps.append(self.allocator, try self.parseStepKind(last, seg_is_ctor));
+            } else if (seg_start > 0) {
+                // The content ends on a `|>`/`=>` delimiter — a dangling
+                // operator, refused everywhere it can be written (210_238;
+                // branch position enforces the same shape at 210_066).
+                const op: []const u8 = if (seg_is_ctor) "=>" else "|>";
+                try self.reporter.addErrorWithHintAndSpan(
+                    .PARSE001,
+                    location.line,
+                    location.column,
+                    2,
+                    "Step must follow '{s}' on the same line",
+                    .{op},
+                    "Put the step inline after `{s}`, or lead the next line with `|>` — a trailing `{s}` does not continue the chain.",
+                    .{ op, op },
+                );
+                return error.ParseError;
             }
         }
 
