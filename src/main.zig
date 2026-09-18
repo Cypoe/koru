@@ -2037,6 +2037,7 @@ const TransformEvent = struct {
     has_expression: bool, // Event accepts expr: Expression parameter
     has_optional_expression: bool = false, // Event accepts expr: ?Expression parameter (optional, may be null)
     expression_field_name: ?[]const u8 = null, // Actual field name for Expression parameter
+    expression_field_names: []const []const u8 = &.{}, // ALL required Expression param names, declaration order (multi-expression handlers)
     has_invocation: bool, // Event accepts invocation: *const Invocation parameter
     has_event_decl: bool, // Event accepts event_decl: *const EventDecl parameter
     has_item: bool, // Event accepts item: *const Item parameter
@@ -2388,6 +2389,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
             var has_expression_param = false;
             var has_optional_expression_param = false;
             var expression_field_name_param: ?[]const u8 = null;
+            var expression_field_names_list = std.ArrayList([]const u8){};
             var has_invocation_param = false;
             var has_item_param = false;
             var has_event_decl_param = false;
@@ -2400,6 +2402,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                         has_optional_expression_param = true;
                     } else {
                         has_expression_param = true;
+                        try expression_field_names_list.append(allocator, field.name);
                     }
                     expression_field_name_param = field.name;
                 } else if (std.mem.eql(u8, field.type, "*const Invocation")) {
@@ -2521,6 +2524,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                     .has_expression = has_expression_param,
                     .has_optional_expression = has_optional_expression_param,
                     .expression_field_name = expression_field_name_param,
+                    .expression_field_names = expression_field_names_list.items,
                     .has_invocation = has_invocation_param,
                     .has_event_decl = has_event_decl_param,
                     .has_item = has_item_param,
@@ -2552,6 +2556,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                     var has_expression_param = false;
                     var has_optional_expression_param = false;
                     var expression_field_name_param: ?[]const u8 = null;
+                    var expression_field_names_list = std.ArrayList([]const u8){};
                     var has_invocation_param = false;
                     var has_item_param = false;
                     var has_event_decl_param = false;
@@ -2564,6 +2569,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                                 has_optional_expression_param = true;
                             } else {
                                 has_expression_param = true;
+                                try expression_field_names_list.append(allocator, field.name);
                             }
                             expression_field_name_param = field.name;
                         } else if (std.mem.eql(u8, field.type, "*const Invocation")) {
@@ -2599,6 +2605,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                         has_source_param = false;
                         has_expression_param = false;
                         has_optional_expression_param = false;
+                        expression_field_names_list.clearRetainingCapacity();
                     }
 
                     // Emit handlers for events that consume AST types
@@ -2745,6 +2752,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                             .has_expression = has_expression_param,
                             .has_optional_expression = has_optional_expression_param,
                             .expression_field_name = expression_field_name_param,
+                            .expression_field_names = expression_field_names_list.items,
                             .has_invocation = has_invocation_param,
                             .has_event_decl = has_event_decl_param,
                             .has_item = has_item_param,
@@ -2821,6 +2829,26 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
     try code_emitter.write("    // This handles pipeline invocations where expression_value wasn't captured\n");
     try code_emitter.write("    if (args.len > 0 and args[0].value.len > 0) {\n");
     try code_emitter.write("        return args[0].value;\n");
+    try code_emitter.write("    }\n");
+    try code_emitter.write("    return null;\n");
+    try code_emitter.write("}\n\n");
+    // Named variant for multi-Expression handlers: the named arg wins, else
+    // the expr_idx-th expression arg positionally.
+    try code_emitter.write("fn extractExprFromArgsNamed(args: []const Arg, name: []const u8, expr_idx: usize) ?[]const u8 {\n");
+    try code_emitter.write("    for (args) |arg| {\n");
+    try code_emitter.write("        if (arg.name.len > 0 and __koru_std.mem.eql(u8, arg.name, name)) {\n");
+    try code_emitter.write("            if (arg.expression_value) |expr| return expr.text;\n");
+    try code_emitter.write("            if (arg.value.len > 0) return arg.value;\n");
+    try code_emitter.write("        }\n");
+    try code_emitter.write("    }\n");
+    try code_emitter.write("    var seen: usize = 0;\n");
+    try code_emitter.write("    for (args) |arg| {\n");
+    try code_emitter.write("        if (seen == expr_idx) {\n");
+    try code_emitter.write("            if (arg.expression_value) |expr| return expr.text;\n");
+    try code_emitter.write("            if (arg.value.len > 0) return arg.value;\n");
+    try code_emitter.write("            return null;\n");
+    try code_emitter.write("        }\n");
+    try code_emitter.write("        seen += 1;\n");
     try code_emitter.write("    }\n");
     try code_emitter.write("    return null;\n");
     try code_emitter.write("}\n\n");
@@ -2995,12 +3023,44 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                 try code_emitter.write("    const source_opt = extractSourceFromArgs(invocation.args);\n");
             }
 
-            if (event.has_expression) {
+            const multi_expr = event.expression_field_names.len > 1;
+            if (multi_expr) {
+                for (event.expression_field_names, 0..) |fname, i| {
+                    const eline = try std.fmt.bufPrint(&buf, "    const expr_{d} = extractExprFromArgsNamed(invocation.args, \"{s}\", {d});\n", .{ i, fname, i });
+                    try code_emitter.write(eline);
+                }
+            } else if (event.has_expression) {
                 try code_emitter.write("    const expr_opt = extractExprFromArgs(invocation.args);\n");
             }
 
             // Build guard condition and input based on what's required
-            if (event.has_source and event.has_expression) {
+            if (multi_expr) {
+                // Multi-Expression handler: every required Expression param
+                // must extract (named arg wins, positional fallback).
+                try code_emitter.write("    if (");
+                if (event.has_source) {
+                    try code_emitter.write("source_opt != null and ");
+                }
+                for (event.expression_field_names, 0..) |_, i| {
+                    if (i > 0) try code_emitter.write(" and ");
+                    const g = try std.fmt.bufPrint(&buf, "expr_{d} != null", .{i});
+                    try code_emitter.write(g);
+                }
+                try code_emitter.write(") {\n");
+                if (event.has_source) {
+                    try code_emitter.write("        const source = source_opt.?;\n");
+                }
+                try code_emitter.write("        const input = handler.Input{\n");
+                if (event.has_source) {
+                    try code_emitter.write("            .source = source,\n");
+                }
+                for (event.expression_field_names, 0..) |fname, i| {
+                    try code_emitter.write("            .");
+                    try emitter_helpers.writeBranchName(code_emitter, fname);
+                    const v = try std.fmt.bufPrint(&buf, " = expr_{d}.?,\n", .{i});
+                    try code_emitter.write(v);
+                }
+            } else if (event.has_source and event.has_expression) {
                 try code_emitter.write("    if (source_opt != null and expr_opt != null) {\n");
                 try code_emitter.write("        const source = source_opt.?;\n");
                 try code_emitter.write("        const expr_text = expr_opt.?;\n");

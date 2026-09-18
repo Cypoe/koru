@@ -152,6 +152,19 @@ pub fn buildFromItems(
 
                     try registry.registerKeyword(keyword_name, canonical_path, module_path);
                     log.debug("  Registered keyword '{s}' -> '{s}'\n", .{ keyword_name, canonical_path });
+
+                    // Multi-segment keyword names (`assert.eq`, `assert.ok`):
+                    // the dotted path is itself a keyword — `assert.eq(...)`
+                    // resolves by its full name, not by a last-segment alias.
+                    if (event.path.segments.len > 1) {
+                        var dotted: std.ArrayList(u8) = .{};
+                        defer dotted.deinit(allocator);
+                        for (event.path.segments, 0..) |seg, i| {
+                            if (i > 0) try dotted.append(allocator, '.');
+                            try dotted.appendSlice(allocator, seg);
+                        }
+                        try registry.registerKeyword(dotted.items, canonical_path, module_path);
+                    }
                 }
             },
             .module_decl => |module| {
@@ -219,8 +232,24 @@ fn bindImplicitExpressionArg(
     allocator: std.mem.Allocator,
     all_items: []const ast.Item,
 ) !void {
-    const event_name = if (invocation.path.segments.len > 0) invocation.path.segments[0] else return;
+    if (invocation.path.segments.len == 0) return;
     const module_qualifier = invocation.path.module_qualifier orelse return;
+
+    // The event name is the WHOLE dotted path — `assert.eq` binds against
+    // the assert.eq decl, not the single-segment `assert` that happens to
+    // share its first segment.
+    var name_buf: [256]u8 = undefined;
+    var name_len: usize = 0;
+    for (invocation.path.segments, 0..) |seg, i| {
+        if (i > 0) {
+            name_buf[name_len] = '.';
+            name_len += 1;
+        }
+        if (name_len + seg.len > name_buf.len) return;
+        @memcpy(name_buf[name_len..][0..seg.len], seg);
+        name_len += seg.len;
+    }
+    const event_name = name_buf[0..name_len];
 
     const event_decl = findEventDecl(all_items, module_qualifier, event_name) orelse return;
 
@@ -295,9 +324,19 @@ fn findEventDecl(
                     for (0..module.items.len) |idx| {
                         if (module.items[idx] == .event_decl) {
                             const event_decl = &module.items[idx].event_decl;
-                            if (event_decl.path.segments.len == 1 and
-                                std.mem.eql(u8, event_decl.path.segments[0], target_event))
-                            {
+                            var decl_buf: [256]u8 = undefined;
+                            var decl_len: usize = 0;
+                            for (event_decl.path.segments, 0..) |seg, si| {
+                                if (si > 0) {
+                                    if (decl_len >= decl_buf.len) break;
+                                    decl_buf[decl_len] = '.';
+                                    decl_len += 1;
+                                }
+                                if (decl_len + seg.len > decl_buf.len) break;
+                                @memcpy(decl_buf[decl_len..][0..seg.len], seg);
+                                decl_len += seg.len;
+                            }
+                            if (std.mem.eql(u8, decl_buf[0..decl_len], target_event)) {
                                 return event_decl;
                             }
                         }
@@ -368,7 +407,38 @@ fn resolveInPath(
     home_module: []const u8,
     home_items: []const ast.Item,
 ) !void {
-    if (path.segments.len != 1) return;
+    // Multi-segment invocation (`assert.eq(...)`): the dotted path is the
+    // keyword name — resolve it whole so qualified-only transform dispatch
+    // sees the home module. Single-segment handling is below.
+    if (path.segments.len != 1) {
+        if (path.module_qualifier) |qualifier| {
+            if (!std.mem.eql(u8, qualifier, home_module)) return;
+        }
+        if (localEventShadowsKeyword(home_items, path.segments[0])) return;
+        var dotted: std.ArrayList(u8) = .{};
+        defer dotted.deinit(allocator);
+        for (path.segments, 0..) |seg, i| {
+            if (i > 0) try dotted.append(allocator, '.');
+            try dotted.appendSlice(allocator, seg);
+        }
+        const resolve_result = registry.resolveKeyword(dotted.items) catch |err| switch (err) {
+            error.KeywordCollision => {
+                const collision_info = registry.getCollisionInfo(dotted.items).?;
+                log.err("ERROR: Ambiguous keyword '{s}' - defined in:\n", .{dotted.items});
+                for (collision_info) |info| {
+                    log.err("  - {s} (from {s})\n", .{ info.canonical_path, info.module_path });
+                }
+                return error.AmbiguousKeyword;
+            },
+        };
+        if (resolve_result) |canonical| {
+            if (std.mem.indexOf(u8, canonical, ":")) |colon_pos| {
+                path.module_qualifier = try allocator.dupe(u8, canonical[0..colon_pos]);
+                log.debug("  Resolved keyword '{s}' -> module '{s}'\n", .{ dotted.items, path.module_qualifier.? });
+            }
+        }
+        return;
+    }
 
     if (path.module_qualifier) |qualifier| {
         if (!std.mem.eql(u8, qualifier, home_module)) {

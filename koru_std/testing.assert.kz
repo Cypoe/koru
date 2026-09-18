@@ -90,17 +90,3 @@
     const msg = message orelse "Assertion failed";
     @panic(msg);
 }
-
-// Equality assertion
-~[keyword] pub tor assert.eq { expected: Expression, actual: Expression }
-| ok
-| failed { expected: string, actual: string }
-
-// TODO: Transform to generate Zig equality check
-
-// Contains assertion (for strings/slices)
-~[keyword] pub tor assert.contains { haystack: Expression, needle: Expression }
-| ok
-| failed
-
-// TODO: Transform to generate Zig contains check

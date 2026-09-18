@@ -7,6 +7,8 @@ examples/prep/input.kz	5
 examples/prep/main_error.kz	3
 examples/prep/main_fix.kz	15
 examples/prep/main.kz	15
+examples/probably/input.k	53
+examples/probably/jev.kz	213
 examples/profiler_scale.kz	41
 examples/unikraft/hello.k	8
 examples/unikraft/hello.kz	13
@@ -130,12 +132,13 @@ koru_std/store.insert.kz	482
 koru_std/store.kz	1689
 koru_std/store.leaf.kz	239
 koru_std/store.new.kz	6391
+koru_std/store.plan.kz	239
 koru_std/store.preorder.kz	110
 koru_std/store.pverbs.kz	781
 koru_std/store.qcaps.kz	372
 koru_std/store.qnone.kz	172
 koru_std/store.qrewrite.kz	231
-koru_std/store.query.kz	944
+koru_std/store.query.kz	933
 koru_std/store.rule.kz	148
 koru_std/store.sites.kz	169
 koru_std/store.sitetag.kz	27
@@ -151,7 +154,8 @@ koru_std/switch.kz	151
 koru_std/table.kz	62
 koru_std/taps.kz	1442
 koru_std/template.kz	71
-koru_std/testing.assert.kz	106
+koru_std/testing.assert.kz	92
+koru_std/testing.compare.kz	131
 koru_std/testing.kz	919
 koru_std/threading.kz	141
 koru_std/time.kz	102
