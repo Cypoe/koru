@@ -45,6 +45,15 @@ alone.** Lead with the concrete subject — the feature or concept, by name.
   name first and let the hook ride behind it — `Prototype Mode: <hook>` — or park
   the color in the `excerpt`, never the title. The subject drives; wit is a
   passenger.
+- **Declare the subject in frontmatter; the commit gate enforces the rule
+  against it.** `subject: "Prototype Mode"` is required whenever a title or
+  subject is written (new post, retitle, field change); `check:publication`
+  refuses a title whose lead — everything before the colon — does not equal
+  it. `LARS_HAS_READ_IT` never forgives this one. A body-only edit to a
+  subject-less legacy post passes untaxed; add the field when you touch the
+  title. (Wall landed 2026-09-18 after "The Judge Is a Phantom Type" was
+  committed as a draft — a verdict that named no subject, the exact shape
+  the ruling exists to kill.)
 - **Prefer plain-and-clear over clever-and-vague, every time.** "Prototype Mode:
   Running Incomplete Programs" beats "Doodle the Flow." When in doubt, name the
   feature and stop.
@@ -94,6 +103,7 @@ alone.** Lead with the concrete subject — the feature or concept, by name.
    ```
    ---
    title: "Title Case, No Trailing Period"
+   subject: "The Subject the Title Leads With"
    date: 2026-07-12
    excerpt: "One or two sentences that state what the feature IS. This is what shows in the index and social cards."
    readTime: 6 min read

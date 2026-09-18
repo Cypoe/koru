@@ -128,3 +128,17 @@ emitted switch refused `switch must handle all possibilities`. A claim about
 a compiler's semantics, asserted in a comment, never compiled — the untested
 half, one indirection deeper: this time the prose was inside the source.
 `243_fold_subflow_union_outputs` pins it green.
+
+## 2026-09-18 — the pattern holds above the suite
+
+Same asymmetry one level up, in a doc instead of a test: the blogpost skill's
+title rule ("title leads with the subject by name", Lars-ruled 2026-07-15)
+was prose in a skill file, and a draft post shipped the title the rule exists
+to kill — "The Judge Is a Phantom Type", a verdict naming no subject. Nothing
+had ever pushed an agent toward compliance: the publication gate checked
+`draft:` and `date:` but never read the title, so the unexercised rule was
+wrong by default, not by accident — the concept's own prediction, repeated in
+a new medium. The rule has its tested half now: `check:publication` refuses a
+staged title whose lead does not equal a declared `subject:` field, on the
+mechanical tier — no override forgives it. Prose describes; only the
+mechanism decides — in a skill file exactly as in a test header.
