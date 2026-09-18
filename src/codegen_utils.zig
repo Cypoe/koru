@@ -1901,7 +1901,13 @@ const ZigExprParser = struct {
             } else break;
             const right = try self.parseCmp();
             if (left.is_string_lit or right.is_string_lit) {
-                const call = std.fmt.allocPrint(self.allocator, "{s}@import(\"std\").mem.eql(u8, {s}, {s})", .{
+                // Optional-aware: `?string == "lit"` must answer false on
+                // null, not hand mem.eql a ?[]const u8 (backend Zig refuses)
+                // nor unwrap-panic. The @typeInfo checks are comptime — for
+                // non-optional operands this folds back to a plain mem.eql.
+                // Presence bits compare first: null==null is true,
+                // null==value is false without evaluating the payload.
+                const call = std.fmt.allocPrint(self.allocator, "{s}(blk: {{ const __koru_l = {s}; const __koru_r = {s}; const __koru_ln = if (@typeInfo(@TypeOf(__koru_l)) == .optional) __koru_l == null else false; const __koru_rn = if (@typeInfo(@TypeOf(__koru_r)) == .optional) __koru_r == null else false; break :blk (__koru_ln == __koru_rn) and (__koru_ln or @import(\"std\").mem.eql(u8, if (@typeInfo(@TypeOf(__koru_l)) == .optional) __koru_l.? else __koru_l, if (@typeInfo(@TypeOf(__koru_r)) == .optional) __koru_r.? else __koru_r)); }})", .{
                     if (negated) "!" else "", left.text, right.text,
                 }) catch return ZigExprError.OutOfMemory;
                 left = .{ .text = call, .start = left.start, .end = right.end, .is_string_lit = false, .changed = true };
@@ -2277,28 +2283,36 @@ fn rewriteZigExprInner(allocator: std.mem.Allocator, text: []const u8) ?[]const 
     return std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ lead, piece.text, trail }) catch return null;
 }
 
-test "string equality: literal RHS in a guard rewrites to mem.eql" {
+// The optional-aware emission shape: presence bits first (null==null true,
+// null==value false without touching the payload), comptime @typeInfo
+// dispatch unwraps optionals only when they are optionals. For non-optional
+// operands the emitted code comptime-folds back to a plain mem.eql.
+fn optEqBlock(comptime l: []const u8, comptime r: []const u8) []const u8 {
+    return "(blk: { const __koru_l = " ++ l ++ "; const __koru_r = " ++ r ++ "; const __koru_ln = if (@typeInfo(@TypeOf(__koru_l)) == .optional) __koru_l == null else false; const __koru_rn = if (@typeInfo(@TypeOf(__koru_r)) == .optional) __koru_r == null else false; break :blk (__koru_ln == __koru_rn) and (__koru_ln or @import(\"std\").mem.eql(u8, if (@typeInfo(@TypeOf(__koru_l)) == .optional) __koru_l.? else __koru_l, if (@typeInfo(@TypeOf(__koru_r)) == .optional) __koru_r.? else __koru_r)); })";
+}
+
+test "string equality: literal RHS in a guard rewrites to optional-aware mem.eql" {
     const out = (try rewriteZigExpr(std.testing.allocator, "cmd == \"start\"")).?;
     defer std.testing.allocator.free(out);
-    try std.testing.expectEqualStrings("@import(\"std\").mem.eql(u8, cmd, \"start\")", out);
+    try std.testing.expectEqualStrings(optEqBlock("cmd", "\"start\""), out);
 }
 
 test "string equality: literal LHS and != negates" {
     const out = (try rewriteZigExpr(std.testing.allocator, "\"stop\" != cmd")).?;
     defer std.testing.allocator.free(out);
-    try std.testing.expectEqualStrings("!@import(\"std\").mem.eql(u8, \"stop\", cmd)", out);
+    try std.testing.expectEqualStrings("!" ++ comptime optEqBlock("\"stop\"", "cmd"), out);
 }
 
 test "string equality: compound guard rewrites only the string comparison" {
     const out = (try rewriteZigExpr(std.testing.allocator, "name == \"lars\" and age > 40")).?;
     defer std.testing.allocator.free(out);
-    try std.testing.expectEqualStrings("@import(\"std\").mem.eql(u8, name, \"lars\") and age > 40", out);
+    try std.testing.expectEqualStrings(comptime optEqBlock("name", "\"lars\"") ++ " and age > 40", out);
 }
 
 test "string equality: field access operand" {
     const out = (try rewriteZigExpr(std.testing.allocator, "req.path == \"/health\"")).?;
     defer std.testing.allocator.free(out);
-    try std.testing.expectEqualStrings("@import(\"std\").mem.eql(u8, req.path, \"/health\")", out);
+    try std.testing.expectEqualStrings(optEqBlock("req.path", "\"/health\""), out);
 }
 
 test "string equality: numeric comparisons are untouched (null)" {
@@ -2335,7 +2349,7 @@ test "remainder: only this operator's operands move (precedence)" {
 test "remainder: a condition carrying both rewrites lowers both" {
     const out = (try rewriteZigExpr(std.testing.allocator, "n % 2 == 0 and cmd == \"go\"")).?;
     defer std.testing.allocator.free(out);
-    try std.testing.expectEqualStrings("@rem(n, 2) == 0 and @import(\"std\").mem.eql(u8, cmd, \"go\")", out);
+    try std.testing.expectEqualStrings("@rem(n, 2) == 0 and " ++ comptime optEqBlock("cmd", "\"go\""), out);
 }
 
 test "remainder: a % inside a string literal does not fire" {
@@ -2375,7 +2389,7 @@ test "string equality: unreadable text returns null, never a guess" {
 test "string equality: rewrites inside builtin-call arguments" {
     const out = (try rewriteZigExpr(std.testing.allocator, "@intFromBool(s == \"x\")")).?;
     defer std.testing.allocator.free(out);
-    try std.testing.expectEqualStrings("@intFromBool(@import(\"std\").mem.eql(u8, s, \"x\"))", out);
+    try std.testing.expectEqualStrings("@intFromBool(" ++ comptime optEqBlock("s", "\"x\"") ++ ")", out);
 }
 
 test "string equality: identifier == identifier is left alone (needs a type oracle)" {
