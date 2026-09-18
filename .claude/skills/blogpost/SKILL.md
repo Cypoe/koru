@@ -92,12 +92,13 @@ alone.** Lead with the concrete subject — the feature or concept, by name.
    The blog pipeline now FAILS on a tilde in code position (`bun run blog:index`
    runs the wall), so this rule is enforced, not aspirational.
 
-   **A `|` inside a table cell's code span is `&#124;`, never `\|`.** GFM
-   unescapes the pipe only outside code spans; inside backticks the backslash
-   renders literally — `` `\|>` `` shows readers "\|>". Koru's branch glyph is
-   `|`, so branch sets in tables hit this constantly. The commit gate refuses
-   the broken spelling (`check:publication`, since 2026-09-18 — the convention
-   had already drifted into seven posts before anything said no).
+   **A `|` inside a code span is `&#124;`, never `\|`.** GFM unescapes the
+   pipe only outside code spans; inside backticks the backslash renders
+   literally — `` `\|>` `` shows readers "\|>". Koru's branch glyph is `|`,
+   so branch sets in tables hit this constantly. The commit gate refuses the
+   broken spelling in ANY code span (`check:publication`, since 2026-09-18 —
+   the convention had already drifted into seven posts before anything said
+   no; widened past table cells the same day).
 
 2. **Read the two or three most recent posts** in
    `src/routes/blog/*/+page.svx` (sort by `date` in frontmatter) before writing.
