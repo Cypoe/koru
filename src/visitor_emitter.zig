@@ -2768,7 +2768,7 @@ pub const VisitorEmitter = struct {
                                         try self.code_emitter.write(";\n");
                                         compiler_rooted_conts = try voidifyHeadLabel(self.allocator, flow.body.continuations);
                                     }
-                                    try emitter.emitSubflowContinuationsRooted(self.code_emitter, compiler_rooted_conts, 0, indent_str, items_to_search, self.tap_registry, self.type_registry, self.main_module_name, source_event_name, compiler_module_name, event.return_type != null, event, defaultHandlerRootBind(flow.inv()));
+                                    try emitter.emitSubflowContinuationsRooted(self.code_emitter, compiler_rooted_conts, 0, indent_str, items_to_search, self.tap_registry, self.type_registry, self.main_module_name, source_event_name, compiler_module_name, event.return_type != null, event, defaultHandlerRootBind(flow.inv()), null);
 
                                     self.code_emitter.indent_level -= 1;
                                     try self.code_emitter.writeIndent();
@@ -3242,7 +3242,7 @@ pub const VisitorEmitter = struct {
                                                     try self.code_emitter.write(";\n");
                                                     rooted_conts = try voidifyHeadLabel(self.allocator, flow.body.continuations);
                                                 }
-                                                try emitter.emitSubflowContinuationsRooted(self.code_emitter, rooted_conts, 0, indent_str, self.all_items, self.tap_registry, self.type_registry, self.main_module_name, source_event_name, "main_module", event.return_type != null, event, defaultHandlerRootBind(flow.inv()));
+                                                try emitter.emitSubflowContinuationsRooted(self.code_emitter, rooted_conts, 0, indent_str, self.all_items, self.tap_registry, self.type_registry, self.main_module_name, source_event_name, "main_module", event.return_type != null, event, defaultHandlerRootBind(flow.inv()), null);
 
                                                 found_impl = true;
                                             }
@@ -3805,7 +3805,7 @@ pub const VisitorEmitter = struct {
                                                 const indent_str = indent_buf[0..indent_pos];
 
                                                 const source_event_name = try emitter.buildCanonicalEventName(&flow.inv().path, self.allocator, self.main_module_name);
-                                                try emitter.emitSubflowContinuations(self.code_emitter, flow.body.continuations, 0, indent_str, items_to_search, self.tap_registry, self.type_registry, self.main_module_name, source_event_name, "main_module", event.return_type != null, event);
+                                                try emitter.emitSubflowContinuations(self.code_emitter, flow.body.continuations, 0, indent_str, items_to_search, self.tap_registry, self.type_registry, self.main_module_name, source_event_name, "main_module", event.return_type != null, event, if (is_self_loop and !is_flat) self_loop_canonical else null);
                                             }
                                         } else {
                                             // Void/pipeline continuations after an inline-transform head.
@@ -4150,7 +4150,7 @@ pub const VisitorEmitter = struct {
                                             patched
                                         else
                                             flow.body.continuations;
-                                        try emitter.emitSubflowContinuations(self.code_emitter, sf_switch_conts, 0, indent_str, items_to_search, self.tap_registry, self.type_registry, self.main_module_name, source_event_name, "main_module", event.return_type != null, event);
+                                        try emitter.emitSubflowContinuations(self.code_emitter, sf_switch_conts, 0, indent_str, items_to_search, self.tap_registry, self.type_registry, self.main_module_name, source_event_name, "main_module", event.return_type != null, event, if (is_self_loop and !is_flat) self_loop_canonical else null);
                                     }
                                     // Close the self-loop `while (true)` wrapper opened before the
                                     // body dispatch. The body always exits via `return` (terminal

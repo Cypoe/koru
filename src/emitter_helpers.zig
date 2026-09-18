@@ -2265,8 +2265,11 @@ pub fn emitSubflowContinuations(
     // `.expression` produce arms lower to `return EXPR;` (see EmissionContext).
     enclosing_bare_return: bool,
     enclosing_event: ?*const ast.EventDecl,
+    // Non-null when the enclosing handler emits `__koru_self_loop` — see
+    // the param on emitSubflowContinuationsWithDepth.
+    self_loop_canonical: ?[]const u8,
 ) !void {
-    try emitSubflowContinuationsWithDepth(emitter, continuations, start_idx, indent, all_items, 0, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, null);
+    try emitSubflowContinuationsWithDepth(emitter, continuations, start_idx, indent, all_items, 0, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, null, self_loop_canonical);
 }
 
 /// Same as emitSubflowContinuations, but names the ROOT result const the
@@ -2288,8 +2291,9 @@ pub fn emitSubflowContinuationsRooted(
     enclosing_bare_return: bool,
     enclosing_event: ?*const ast.EventDecl,
     root_result_name: ?[]const u8,
+    self_loop_canonical: ?[]const u8,
 ) !void {
-    try emitSubflowContinuationsWithDepth(emitter, continuations, start_idx, indent, all_items, 0, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, root_result_name);
+    try emitSubflowContinuationsWithDepth(emitter, continuations, start_idx, indent, all_items, 0, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, root_result_name, self_loop_canonical);
 }
 
 /// Helper to check if any continuation in a list has a label
@@ -2747,6 +2751,14 @@ fn emitSubflowContinuationsWithDepth(
     // const after the bind, and every formula-derived discard here would
     // otherwise reference a nonexistent variable.
     parent_result_name: ?[]const u8,
+    // Canonical event name when the enclosing handler was lowered to
+    // `__koru_self_loop: while (true)` (same signal EmissionContext
+    // carries as self_loop_active/self_loop_event_canonical — this path
+    // has no ctx, so it arrives as a param). A call-result arm whose body
+    // is a tail self-call must emit reassign+`continue`, not a nested
+    // `handler()` call — the call would leave the loop label unreferenced
+    // and Zig rejects the emit (320_150).
+    self_loop_canonical: ?[]const u8,
 ) !void {
     if (start_idx >= continuations.len) return;
 
@@ -2801,6 +2813,8 @@ fn emitSubflowContinuationsWithDepth(
                     .current_source_event = source_event_name,
                     .bare_return_active = enclosing_bare_return,
                     .produce_event = enclosing_event,
+                    .self_loop_active = self_loop_canonical != null,
+                    .self_loop_event_canonical = self_loop_canonical,
                 };
                 var label_contexts = std.StringHashMap(LabelContext).init(ctx.allocator);
                 ctx.label_contexts = &label_contexts;
@@ -2853,6 +2867,8 @@ fn emitSubflowContinuationsWithDepth(
                 .current_source_event = source_event_name,
                 .bare_return_active = enclosing_bare_return,
                 .produce_event = enclosing_event,
+                .self_loop_active = self_loop_canonical != null,
+                .self_loop_event_canonical = self_loop_canonical,
             };
             var label_contexts = std.StringHashMap(LabelContext).init(ctx.allocator);
             ctx.label_contexts = &label_contexts;
@@ -3125,6 +3141,7 @@ fn emitSubflowContinuationsWithDepth(
                 // follows the formula (pass null); otherwise the parent is
                 // unchanged at this level.
                 step_bind orelse (if (next_needs_switch) null else parent_result_name),
+                self_loop_canonical,
             );
         }
         return;
@@ -3157,6 +3174,12 @@ fn emitSubflowContinuationsWithDepth(
             .current_source_event = source_event_name, // Set source event for inline tap emission!
             .bare_return_active = enclosing_bare_return,
             .produce_event = enclosing_event,
+            // An enclosing `__koru_self_loop` survives this bail: arm bodies
+            // re-enter emitContinuationBody, whose self-tail checkpoint reads
+            // these flags to emit reassign+`continue` instead of a nested
+            // handler() call (which would leave the label unused — 320_150).
+            .self_loop_active = self_loop_canonical != null,
+            .self_loop_event_canonical = self_loop_canonical,
         };
         // A label-fold emitted through this subflow path (visitor emitter) still
         // runs `emitContinuationBody`'s `label_with_invocation` arm, which
@@ -3503,6 +3526,8 @@ fn emitSubflowContinuationsWithDepth(
             .current_source_event = source_event_name,
             .bare_return_active = enclosing_bare_return,
             .produce_event = enclosing_event,
+            .self_loop_active = self_loop_canonical != null,
+            .self_loop_event_canonical = self_loop_canonical,
         };
         var result_counter_sole: usize = depth;
         try emitContinuationBody(emitter, &ctx_sole, &remaining_conts[0], &result_counter_sole);
@@ -3625,6 +3650,33 @@ fn emitSubflowContinuationsWithDepth(
                     try emitter.write(";\n");
                 }
 
+                // Self-tail reentry inside a call-result arm: `| boom f |>
+                // self(args)` whose children forward the result. Detection
+                // (flowContainsSelfTailForward) counts this site and the
+                // caller wrapped the handler in `__koru_self_loop: while
+                // (true)`; a plain nested `handler()` call here would leave
+                // the label unreferenced and Zig rejects the emit (320_150).
+                // Same lowering emitContinuationBody's checkpoint performs —
+                // reassign the `var` inputs and `continue` the loop.
+                var self_reentry_emitted = false;
+                if (self_loop_canonical) |canonical| {
+                    var reentry_ctx = EmissionContext{
+                        .allocator = std.heap.page_allocator,
+                        .main_module_name = main_module_name,
+                    };
+                    if (continuationIsSelfTailForwarder(&cont, canonical, &reentry_ctx)) {
+                        // emitTailReargs indents via emitter.indent_level;
+                        // align it with the arm-body depth this function
+                        // writes through the `indent` param.
+                        const saved_indent_level = emitter.indent_level;
+                        emitter.indent_level = @intCast(indent.len / emitter.indent_size + 2);
+                        defer emitter.indent_level = saved_indent_level;
+                        try emitSelfTailReentry(emitter, &reentry_ctx, &cont);
+                        self_reentry_emitted = true;
+                    }
+                }
+
+                if (!self_reentry_emitted) {
                 // Track the index of the last invocation result for nested continuation switching
                 var last_result_idx: usize = depth;
 
@@ -3892,7 +3944,7 @@ fn emitSubflowContinuationsWithDepth(
                                 const extra = "            ";
                                 @memcpy(deeper_indent_buf[indent.len .. indent.len + extra.len], extra);
                                 const deeper_indent = deeper_indent_buf[0 .. indent.len + extra.len];
-                                try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null);
+                                try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical);
                             }
 
                             try emitter.write(indent);
@@ -3943,8 +3995,9 @@ fn emitSubflowContinuationsWithDepth(
                     const extra = "        ";
                     @memcpy(deeper_indent_buf[indent.len .. indent.len + extra.len], extra);
                     const deeper_indent = deeper_indent_buf[0 .. indent.len + extra.len];
-                    try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null);
+                    try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical);
                 }
+                } // if (!self_reentry_emitted)
 
                 try emitter.write(indent);
                 try emitter.write("    },\n");
@@ -4129,6 +4182,11 @@ fn emitSubflowContinuationsWithDepth(
             .current_source_event = source_event_name,
             .bare_return_active = enclosing_bare_return,
             .produce_event = enclosing_event,
+            // Same self-loop survival as the bail path: a `|?` catchall arm
+            // re-entering emitContinuationBody must see the enclosing loop
+            // or its nested self-call leaves the label unused (320_150).
+            .self_loop_active = self_loop_canonical != null,
+            .self_loop_event_canonical = self_loop_canonical,
         };
         var result_counter_ca: usize = depth;
         try emitSubflowCatchallOptionalArms(

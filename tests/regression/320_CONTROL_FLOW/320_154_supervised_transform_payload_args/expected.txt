@@ -1,0 +1,10 @@
+try -10
+try -6
+try -2
+try 2
+got 2
+try -20
+try -16
+try -12
+try -8
+gave up -8

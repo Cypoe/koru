@@ -53,6 +53,44 @@ verbatim — OR migrate such transforms off the whole-program escape onto
 site-local results. Then flip 210_158 MUST_FAIL→MUST_RUN. koru's own suite already
 parks the sibling frontier at `210_024_source_scope_capture` (TODO, 2026-06-03).
 
+## Unit synthesis does not need the escape — the `std/supervisor` existence proof (2026-11-15)
+
+`std/supervisor:supervised` is the first std transform that needed MORE than its
+own site: it must find the producing call (the parent continuation of the arm it
+sits on), enumerate the child event's declared branch vocabulary, and inject a
+brand-new top-level unit — the generated `__sup_attempt_L<line>` event+proc whose
+`|zig` body is the bounded retry loop. The earlier framing in this file named
+"rebuild the program to add a synthesized runtime event+proc" as what
+`whole_program` was FOR. That was wrong about the mechanism:
+
+- **`SiteResult.appended` injects top-level items from any site depth.** The
+  generated event_decl + proc_decl ride the site-local result; no program
+  rebuild, no graft short-circuit, composes in continuation position.
+- **The SiteView keeps a handle to the real tree.** `item.flow.body` is a COPY
+  of the holding continuation, and `.site_of` points at the REAL one inside
+  `program.items` — discovered when the `invocation` pointer matched the copy
+  and the site lookup found the flow root instead of the arm. The producing
+  call is recovered by walking `program.items` for the continuation whose
+  `.continuations` holds the site; its `.node` is the invocation to supervise.
+- **`replacement_node` rewrites the holding arm in place** — node becomes the
+  attempt call, children become the cloned sibling arms plus the exhaustion
+  forward.
+
+What `whole_program` still uniquely owns: rewriting program parts UNRELATED to
+the site (the renderHTML/calc-fold matcher pattern). For "my site plus new
+top-level units" the escape is unnecessary — and at a nested site it is the
+wrong tool for the reason this file already records. `koru_std/supervisor.kz`
+is the reference implementation; 320_153 and 320_154 pin it end-to-end.
+
+The same family surfaced once more while building it, this time in the EMITTER:
+`emitSubflowContinuationsWithDepth`'s bail paths construct fresh
+`EmissionContext`s that dropped `self_loop_active`/`self_loop_event_canonical`,
+so an arm-nested self-call emitted a plain call under an unused
+`__koru_self_loop` label — the detection was right, the flags just never
+reached the checkpoint. The fix is the family's own prescription: thread the
+state down through every context-construction site (four of them), not through
+the one that happened to fail. Pinned at 320_150.
+
 ## Third instance of the family — the FRONTEND checker (2026-07-23, building sweep)
 
 The "nested transform loses its top-level treatment" pattern is NOT confined to
