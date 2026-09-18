@@ -8,13 +8,11 @@
 // pump participant exposing `<s>-step`/`<s>-live`/`<s>-wait`. The
 // explainer folds the sites — the member block through the same
 // `struct_literal.parseFields` the transform calls — and reports the
-// composition: capacity, declared columns, armed interceptors, site
-// counts, pump verbs, and whether a member's proto carries refine
-// facets — asked of refine's own `metFields` fold, the same fold the
-// `new` transform reads to emit its `?!violated` guards.
+// composition: capacity, columns, interceptors, site counts, pump verbs,
+// member-proto facets (refine's own `metFields` fold), and each query
+// site's plan — index routing decided by the transform's own fold (SPlan).
 
-// The site fold lives in the `sites` part (SX).
-
+// The site fold lives in `sites` (SX), the plan fold in `plan` (SPlan).
 
 // @retain: explain_store_event is referenced from generated code
 // (koruc's koru_explain_gather invokes every discovered [explainer]).
@@ -56,6 +54,7 @@
         for (s.members.items) |m| {
             entries.append(allocator, .{ .note = std.fmt.allocPrint(allocator, "{s}{s}", .{ m.spelled, if (m.owned) " — owned" else "" }) catch unreachable }) catch unreachable;
         }
+        SPlan.indexRows(allocator, program, s.name, sites, &entries);
         if (s.arms.items.len > 0) {
             var names = std.ArrayList(u8).initCapacity(allocator, 48) catch unreachable;
             for (s.arms.items, 0..) |a, i| {
@@ -70,7 +69,8 @@
             entries.append(allocator, .{ .property = .{ .key = "participant", .value = .{ .string = std.fmt.allocPrint(allocator, "pump participant — exposes {s}-step / {s}-live{s}", .{ s.name, s.name, if (s.has_wait) std.fmt.allocPrint(allocator, " / {s}-wait", .{s.name}) catch unreachable else "" }) catch unreachable }, .at = new_at } }) catch unreachable;
         }
         entries.append(allocator, .{ .property = .{ .key = "inserts", .value = .{ .integer = @intCast(s.inserts.items.len) }, .at = SH.hashesFor(allocator, sites, s.inserts.items) catch &.{} } }) catch unreachable;
-        entries.append(allocator, .{ .property = .{ .key = "queries", .value = .{ .integer = @intCast(s.queries.items.len) }, .at = SH.hashesFor(allocator, sites, s.queries.items) catch &.{} } }) catch unreachable;
+        entries.append(allocator, .{ .property = .{ .key = "queries", .value = .{ .integer = @intCast(s.queries.items.len) }, .at = SH.hashesFor(allocator, sites, SPlan.qptrs(allocator, s.queries.items)) catch &.{} } }) catch unreachable;
+        SPlan.queryRows(allocator, program, s, sites, &entries);
         entries.append(allocator, .{ .property = .{ .key = "watches", .value = .{ .integer = @intCast(s.watches.items.len) }, .at = SH.hashesFor(allocator, sites, s.watches.items) catch &.{} } }) catch unreachable;
         if (s.takes.items.len + s.clears.items.len > 0) {
             entries.append(allocator, .{ .property = .{ .key = "takes", .value = .{ .integer = @intCast(s.takes.items.len) }, .at = SH.hashesFor(allocator, sites, s.takes.items) catch &.{} } }) catch unreachable;

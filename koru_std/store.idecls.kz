@@ -19,12 +19,17 @@
 
 const StoreIndexDecls = struct {
     /// A `std/indexes:store(<s>, <col>)` declaration: the column it claims
-    /// and the flow it was declared on — the refusal points at the claim's
-    /// own location, not the store's.
+    /// and its flow — the refusal points at the claim's own location.
     const Decl = struct {
         column: ?[]const u8,
         flow: *const ast_find.Flow,
     };
+
+    // Shared KORU161 texts — fieldSpec refuses with these, and the
+    // explainer's `status` row formats the same consts (one string, two
+    // sinks, no drift between the error and its explanation).
+    const MSG_second_decl = "std/indexes:store({s}, {s}): '{s}' already carries an index on '{s}' - a second index on one store is a later rung";
+    const MSG_no_column = "std/indexes:store({s}): the declaration names no column - an index keys on one column of the store: std/indexes:store({s}, <col>)";
 
     /// Every `std/indexes:store(<s>, _)` declaration naming `store_name`.
     /// Positional args: arg[0] is the store name (lands in the implicit
@@ -38,8 +43,7 @@ const StoreIndexDecls = struct {
             const mq = inv.path.module_qualifier orelse continue;
             if (!std.mem.eql(u8, mq, "std.indexes")) continue;
             if (inv.path.segments.len != 1 or !std.mem.eql(u8, inv.path.segments[0], "store")) continue;
-            var named_store: ?[]const u8 = null;
-            var column: ?[]const u8 = null;
+            var named_store: ?[]const u8 = null; var column: ?[]const u8 = null;
             for (inv.args) |a| {
                 if (std.mem.eql(u8, a.name, "expr")) {
                     named_store = a.value;
@@ -63,11 +67,7 @@ const StoreIndexDecls = struct {
         indexed: Indexed,
         refuse: ast_find.Item,
 
-        const Indexed = struct {
-            col: []const u8,
-            idx: usize,
-            field: []const u8,
-        };
+        const Indexed = struct { col: []const u8, idx: usize, field: []const u8 };
     };
 
     fn fieldSpec(
@@ -82,10 +82,10 @@ const StoreIndexDecls = struct {
     ) FieldSpec {
         const ds = declsOf(alloc, program, store_name);
         if (ds.len > 1) {
-            return .{ .refuse = ast_find.refusal(alloc, reporter, .KORU161, ds[1].flow.location, ds[1].flow.module, "std/indexes:store({s}, {s}): '{s}' already carries an index on '{s}' - a second index on one store is a later rung", .{ store_name, ds[1].column orelse "?", store_name, ds[0].column orelse "?" }) };
+            return .{ .refuse = ast_find.refusal(alloc, reporter, .KORU161, ds[1].flow.location, ds[1].flow.module, MSG_second_decl, .{ store_name, ds[1].column orelse "?", store_name, ds[0].column orelse "?" }) };
         }
         if (ds.len == 0) return .none;
-        const icol = ds[0].column orelse return .{ .refuse = ast_find.refusal(alloc, reporter, .KORU161, ds[0].flow.location, ds[0].flow.module, "std/indexes:store({s}): the declaration names no column - an index keys on one column of the store: std/indexes:store({s}, <col>)", .{ store_name, store_name }) };
+        const icol = ds[0].column orelse return .{ .refuse = ast_find.refusal(alloc, reporter, .KORU161, ds[0].flow.location, ds[0].flow.module, MSG_no_column, .{ store_name, store_name }) };
         var icol_type: ?[]const u8 = null;
         var index_idx: usize = 0;
         for (field_names, field_types, field_char_caps, field_owned_info, 0..) |fname, ftype, fcc, foi, fi| {

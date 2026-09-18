@@ -1,0 +1,8 @@
+seeded
+first 300
+row 10
+row 20
+row 30
+scan 100
+tree seeded
+root 10

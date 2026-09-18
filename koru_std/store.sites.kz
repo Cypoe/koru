@@ -2,15 +2,17 @@
 // `~part sites` in store.kz; members land in koru_store.
 //
 // The site fold shared by `store.explain.kz`'s explainer: SX walks the
-// pre-transform tree for `std/store:*` sites and counts them as invocation
-// POINTERS — a counted row's `at` witnesses are the sites it counted, so
-// `inserts = 1 [deadb]` is the number and its sites by construction.
+// pre-transform tree for `std/store:*` sites — a counted row's `at`
+// witnesses are the sites it counted (`inserts = 1 [deadb]`).
 
 const SX = struct {
     const struct_literal = @import("struct_literal");
 
     const Member = struct { spelled: []const u8, owned: bool };
     const Arm = struct { name: []const u8, bind: []const u8 };
+    // A query/stripe site: witness pointer, the flow holding the `! query`/
+    // `! first`/`| none` arms the plan fold resolves, and the claiming door.
+    const QSite = struct { ptr: usize, flow: *const ast_find.Flow, door: []const u8 };
 
     const Store = struct {
         name: []const u8,
@@ -20,11 +22,11 @@ const SX = struct {
         members: std.ArrayList(Member),
         arms: std.ArrayList(Arm),
         new_inv: ?*const ast_find.Invocation = null,
-        // Counted rows keep the invocation pointers they counted — the count
-        // and its witnesses are the same list, so `inserts = 1 [deadb]` can't
-        // disagree with itself.
+        new_flow: ?*const ast_find.Flow = null,
+        // Counted rows keep the pointers they counted — count and witnesses
+        // are the same list, so `inserts = 1 [deadb]` can't disagree.
         inserts: std.ArrayList(usize),
-        queries: std.ArrayList(usize),
+        queries: std.ArrayList(QSite),
         watches: std.ArrayList(usize),
         takes: std.ArrayList(usize),
         clears: std.ArrayList(usize),
@@ -34,7 +36,7 @@ const SX = struct {
 
     fn blank(alloc: std.mem.Allocator, name: []const u8, home: []const u8) Store {
         const List = std.ArrayList(usize);
-        return .{ .name = name, .home = home, .members = std.ArrayList(Member).initCapacity(alloc, 4) catch unreachable, .arms = std.ArrayList(Arm).initCapacity(alloc, 4) catch unreachable, .inserts = List.initCapacity(alloc, 4) catch unreachable, .queries = List.initCapacity(alloc, 4) catch unreachable, .watches = List.initCapacity(alloc, 2) catch unreachable, .takes = List.initCapacity(alloc, 2) catch unreachable, .clears = List.initCapacity(alloc, 2) catch unreachable };
+        return .{ .name = name, .home = home, .members = std.ArrayList(Member).initCapacity(alloc, 4) catch unreachable, .arms = std.ArrayList(Arm).initCapacity(alloc, 4) catch unreachable, .inserts = List.initCapacity(alloc, 4) catch unreachable, .queries = std.ArrayList(QSite).initCapacity(alloc, 4) catch unreachable, .watches = List.initCapacity(alloc, 2) catch unreachable, .takes = List.initCapacity(alloc, 2) catch unreachable, .clears = List.initCapacity(alloc, 2) catch unreachable };
     }
 
     fn isStoreDoor(inv: *const ast_find.Invocation) ?[]const u8 {
@@ -52,8 +54,7 @@ const SX = struct {
         return "";
     }
 
-    // The labeled `capacity: N` arg, or null (store without a cap is not
-    // a shape this rung builds — absence is reported, not guessed).
+    // The labeled `capacity: N` arg, or null — absence is reported, not guessed.
     fn siteCapacity(inv: *const ast_find.Invocation) ?i64 {
         for (inv.args) |a| {
             if (!a.had_explicit_label or !std.mem.eql(u8, a.name, "capacity")) continue;
@@ -62,9 +63,8 @@ const SX = struct {
         return null;
     }
 
-    // The `{ members }` block — same parseFields the new transform runs
-    // for `name: Type` members; the owned-column spelling (`*Task<live!>`)
-    // isn't that grammar, so a bare comma split covers it.
+    // The `{ members }` block — same parseFields the new transform runs;
+    // the owned-column spelling (`*Task<live!>`) takes a bare comma split.
     fn siteMembers(alloc: std.mem.Allocator, inv: *const ast_find.Invocation, out: *std.ArrayList(Member)) void {
         for (inv.args) |a| {
             const sv = a.source_value orelse continue;
@@ -91,9 +91,8 @@ const SX = struct {
         }
     }
 
-    // A member's bare type name for the facet probe — `*T<state>` owned
-    // columns and `name: Qual:Type` spellings both reduce to the proto
-    // name refine anchors to. Empty when the member isn't proto-shaped.
+    // A member's bare type name for the facet probe — `*T<state>` and
+    // `name: Qual:Type` both reduce to the proto name; empty otherwise.
     fn memberTypeName(alloc: std.mem.Allocator, spelled: []const u8) ?[]const u8 {
         var t = spelled;
         if (std.mem.indexOfScalar(u8, t, ':')) |ci| t = std.mem.trim(u8, t[ci + 1 ..], " ");
@@ -114,8 +113,8 @@ const SX = struct {
         return null;
     }
 
-    // A site that names a store without creating one — counted on the
-    // store when it exists, noted as a stray reference when it doesn't.
+    // A site naming a store without creating one — counted on the store
+    // when it exists, a stray reference when it doesn't.
     fn touch(alloc: std.mem.Allocator, stores: *std.ArrayList(Store), name: []const u8, home: []const u8) *Store {
         if (find(stores, name)) |s| return s;
         stores.append(alloc, blank(alloc, name, home)) catch unreachable;
@@ -137,6 +136,7 @@ const SX = struct {
                             var s = blank(alloc, name, fl.module);
                             s.declared = true;
                             s.new_inv = inv;
+                            s.new_flow = fl;
                             s.capacity = siteCapacity(inv);
                             siteMembers(alloc, inv, &s.members);
                             for (fl.body.continuations) |*c| {
@@ -151,7 +151,7 @@ const SX = struct {
                         } else if (std.mem.eql(u8, door, "insert")) {
                             touch(alloc, stores, name, fl.module).inserts.append(alloc, @intFromPtr(inv)) catch unreachable;
                         } else if (std.mem.eql(u8, door, "query") or std.mem.eql(u8, door, "stripe")) {
-                            touch(alloc, stores, name, fl.module).queries.append(alloc, @intFromPtr(inv)) catch unreachable;
+                            touch(alloc, stores, name, fl.module).queries.append(alloc, .{ .ptr = @intFromPtr(inv), .flow = fl, .door = door }) catch unreachable;
                         } else if (std.mem.eql(u8, door, "take")) {
                             touch(alloc, stores, name, fl.module).takes.append(alloc, @intFromPtr(inv)) catch unreachable;
                         } else if (std.mem.eql(u8, door, "clear")) {

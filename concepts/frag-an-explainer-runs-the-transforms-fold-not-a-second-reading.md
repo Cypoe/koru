@@ -77,3 +77,22 @@ Two corollaries observed while landing it:
   `facets_declared = 2` next to "insert does NOT enforce". The gap
   between declaration and enforcement is exactly what a reader needs;
   silence would pass for "no facets exist."
+- **A plan is a fold result, and the fold's input surface is the
+  transform's, not the organ's.** `std/store`'s explainer reports per
+  query site whether `! first` routes to the declared index or sweeps —
+  by running the query transform's own chain (arm resolution, request
+  rules, guard lowering, `firstRoute`) and never by reading the `when`
+  text. The trap found landing it: the columns fed to that chain must be
+  the columns the *transform* can see, not the columns the *cell* holds.
+  A `[tree]` store's synthesized `parent` exists in the cell and is
+  invisible to `query`'s read surface; appending it "for completeness"
+  would have explained a plan for a guard the compiler refuses — the
+  inverse of the drift this concept bans, and just as much a lie.
+  Corollary: a report row that repeats per site (`query[0]`, `query[1]`)
+  is indexed in its key, because a section renders as one JSON object
+  and a repeated key silently drops rows.
+- **Open:** the plan fold lowers the guard, not the body. An unknown
+  field referenced only in a query body refuses at compile time while
+  explain still reports a plan for the site. Closing it means running the
+  body rewrite on a clone at explain time; whether that cost is worth
+  paying is undecided.

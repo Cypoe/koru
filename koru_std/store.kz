@@ -1641,7 +1641,6 @@ fn storeRefsText(alloc: std.mem.Allocator, text: []const u8, name: []const u8, p
 /// `bound` are names an enclosing binding shadows (a row binding makes
 /// `<store>.<field>` mean THE ROW); they are skipped by BOTH passes, which is
 /// why the indexed pass takes a filtered scope rather than the whole program.
-///
 /// The one function a walk calls per text slot. Every position an expression
 /// may stand in — guard, arg, captured expression, frozen template body,
 /// inline_code node, produce arm, branch payload — is the same lowering, and
@@ -1687,3 +1686,4 @@ fn storeLowerText(
 ~part index
 ~part idecls
 ~part qnone
+~part plan
