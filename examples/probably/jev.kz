@@ -1,0 +1,213 @@
+// jev.kz — a System One judge as a Koru module.
+//
+// Jev's contract — typed questions over a closed answer space, typed
+// answers with probabilities — is already the shape of a Koru tor:
+// the branch set IS the answer space, the payload IS the winner's
+// probability, and `when` clauses ARE confidence gates.
+//
+// The judge's mode is a phantom state: <greedy> argmaxes, <chaotic>
+// samples. `chaos`/`settle` are pure type-level transitions — the state
+// IS the implementation switch, so there is no mode field at runtime.
+//
+// This judge is a MOCK: deterministic hash -> probability, no network.
+// The flows don't change when the proc bodies grow a real HTTP call.
+
+const std = @import("std");
+
+pub const Judge = struct {
+    fuel: i32,
+    rng: std.Random.DefaultPrng,
+};
+
+fn prob(seed: u64, a: []const u8, b: []const u8) f64 {
+    var h = std.hash.Wyhash.init(seed);
+    h.update(a);
+    h.update(b);
+    return @as(f64, @floatFromInt(h.final() % 1000)) / 1000.0;
+}
+
+fn probs3(text: []const u8) [3]f64 {
+    const labels = [_][]const u8{ "bug", "feature", "other" };
+    var probs: [3]f64 = undefined;
+    for (labels, 0..) |label, i| {
+        probs[i] = prob(@intCast(i + 1), label, text);
+    }
+    return probs;
+}
+
+fn argmax(probs: [3]f64) usize {
+    var idx: usize = 0;
+    var best: f64 = -1;
+    for (probs, 0..) |p, i| {
+        if (p > best) {
+            best = p;
+            idx = i;
+        }
+    }
+    return idx;
+}
+
+fn sample(j: *Judge, probs: [3]f64) usize {
+    var total: f64 = 0;
+    for (probs) |p| total += p;
+    const roll = j.rng.random().float(f64) * total;
+    var acc: f64 = 0;
+    for (probs, 0..) |p, i| {
+        acc += p;
+        if (roll < acc) return i;
+    }
+    return probs.len - 1;
+}
+
+// The judge itself. Budget is fuel: every judgment spends one.
+~pub tor judge { budget: i32 } -> *Judge<greedy!>
+
+~proc judge|zig {
+    const j = std.heap.page_allocator.create(Judge) catch unreachable;
+    j.* = .{
+        .fuel = budget,
+        .rng = std.Random.DefaultPrng.init(0x9e33),
+    };
+    return j;
+}
+
+// chaos — flip to sampled mode. Consumes <greedy>, reissues <chaotic>:
+// the mode switch is a type-level act the flow checker can see.
+~pub tor chaos { j: *Judge<!greedy> } -> *Judge<chaotic!>
+
+~proc chaos|zig {
+    return j;
+}
+
+// settle — back to argmax. The two modes form a phantom cycle.
+~pub tor settle { j: *Judge<!chaotic> } -> *Judge<greedy!>
+
+~proc settle|zig {
+    return j;
+}
+
+// retire — the discharge. Every issued judge must be retired.
+~pub tor retire { j: *Judge<!greedy> }
+
+~proc retire|zig {
+    std.heap.page_allocator.destroy(j);
+}
+
+// feels — Jev "noul", greedy: argmax yes/no over a value.
+// The payload is the winner's probability — a confidence gate is a
+// `when` clause at the call site, not a language keyword.
+~pub tor feels { j: *Judge<greedy>, text: string, question: string }
+| yes f64
+| no f64
+| exhausted
+
+~proc feels|zig {
+    if (j.fuel <= 0) return .{ .exhausted = .{} };
+    j.fuel -= 1;
+    const p = prob(0xF331, question, text);
+    return if (p >= 0.5) .{ .yes = p } else .{ .no = 1.0 - p };
+}
+
+// cfeels — the same question, sampled: a 20% yes is chosen 20% of the
+// time. Only a <chaotic> judge can be asked; the type pins the mode.
+~pub tor cfeels { j: *Judge<chaotic>, text: string, question: string }
+| yes f64
+| no f64
+| exhausted
+
+~proc cfeels|zig {
+    if (j.fuel <= 0) return .{ .exhausted = .{} };
+    j.fuel -= 1;
+    const p = prob(0xF331, question, text);
+    return if (j.rng.random().float(f64) < p) .{ .yes = p } else .{ .no = 1.0 - p };
+}
+
+// triage — Jev "choice", greedy: argmax among declared labels.
+// The answer space is declared IN THE TYPE — exactly what Jev
+// asks for up front.
+~pub tor triage { j: *Judge<greedy>, text: string }
+| bug f64
+| feature f64
+| other f64
+| exhausted
+
+~proc triage|zig {
+    if (j.fuel <= 0) return .{ .exhausted = .{} };
+    j.fuel -= 1;
+    const probs = probs3(text);
+    var total: f64 = 0;
+    for (probs) |p| total += p;
+    return switch (argmax(probs)) {
+        0 => .{ .bug = probs[0] / total },
+        1 => .{ .feature = probs[1] / total },
+        else => .{ .other = probs[2] / total },
+    };
+}
+
+// ctriage — the same label set, sampled.
+~pub tor ctriage { j: *Judge<chaotic>, text: string }
+| bug f64
+| feature f64
+| other f64
+| exhausted
+
+~proc ctriage|zig {
+    if (j.fuel <= 0) return .{ .exhausted = .{} };
+    j.fuel -= 1;
+    const probs = probs3(text);
+    var total: f64 = 0;
+    for (probs) |p| total += p;
+    return switch (sample(j, probs)) {
+        0 => .{ .bug = probs[0] / total },
+        1 => .{ .feature = probs[1] / total },
+        else => .{ .other = probs[2] / total },
+    };
+}
+
+// gen — the text-model half. Only `using` crosses; the model sees
+// nothing else in scope. Fuel spent here can't be spent on judgments.
+// The mock "rewrite" appends a marker so the next judgment sees a
+// different text — a real loop needs the draft to actually change.
+~pub tor gen { j: *Judge<greedy>, instruction: string, using: string }
+| done string
+| exhausted
+
+~proc gen|zig {
+    if (j.fuel <= 0) return .{ .exhausted = .{} };
+    j.fuel -= 1;
+    _ = instruction;
+    const out = std.fmt.allocPrint(
+        std.heap.page_allocator, "{s} - edit", .{using},
+    ) catch unreachable;
+    return .{ .done = out };
+}
+
+// polish — a judgment-gated rewrite loop, Probably's
+// `while draft feels "full of corporate jargon"`.
+//
+// One round: ask the judge whether the draft is still jargon; if yes,
+// spend a generation on it and loop; if no, hand the draft back. The
+// judge is BORROWED through the back-edge — <greedy> rides @loop
+// unchanged, and fuel, not a counter, is the honest bound. Running
+// out is a named outcome, not an error.
+~tor polish-round { j: *Judge<greedy>, draft: string }
+| again string
+| done string
+| exhausted
+
+~polish-round = feels(j, text: draft, question: "full of corporate jargon")
+| yes _ |> gen(j, instruction: "Rewrite plainly.", using: draft)
+    | done d => again d
+    | exhausted => exhausted
+| no _ => done draft
+| exhausted => exhausted
+
+~pub tor polish { j: *Judge<greedy>, draft: string }
+| polished string
+| exhausted
+
+~polish = #loop polish-round(j, draft)
+| again d |> @loop(j, draft: d)
+| done out => polished out
+| exhausted => exhausted
+
