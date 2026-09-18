@@ -1,0 +1,31 @@
+// Library module for 330_134 — a phantom-typed handle with the
+// issue/borrow/consume discipline, plus `twice`: a subflow INSIDE the
+// module that re-passes its phantom param to a same-module tor.
+
+const std = @import("std");
+
+pub const Handle = struct { n: i32 };
+
+~pub tor make {} -> *Handle<live!>
+
+~proc make|zig {
+    const h = std.heap.page_allocator.create(Handle) catch unreachable;
+    h.* = .{ .n = 1 };
+    return h;
+}
+
+~pub tor use { h: *Handle<live> }
+
+~proc use|zig {
+    std.debug.print("n={d}\n", .{h.n});
+}
+
+~pub tor done { h: *Handle<!live> }
+
+~proc done|zig {
+    std.heap.page_allocator.destroy(h);
+}
+
+~pub tor twice { h: *Handle<live> }
+
+~twice = use(h) |> use(h)

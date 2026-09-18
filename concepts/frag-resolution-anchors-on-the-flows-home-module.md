@@ -86,10 +86,20 @@ switch is a placement decision, not a no-op.
 
 ## Open
 
-- Whether other passes carry `main_module_name` as a stand-in for "here". The
-  name is load-bearing in the emitter's qualifier logic too, where it means
-  something legitimately different (which module's namespace to emit INTO), and
-  the two meanings are one identifier apart.
+- ~~Whether other passes carry `main_module_name` as a stand-in for "here".~~
+  **Measured, 2026-09-18: phantom-state canonicalization does — and it carries
+  two different anchors inside one file.** A `.kz` param declaration tracks
+  `*Handle<live>` under the file's DERIVED name (`m:live`); the call site
+  checking that same value expects the import-derived LOGICAL name
+  (`app.m:live`). One spelling, one file, two state identities — the same
+  "two different domains compared" shape as the `[with]` anchor bug, one
+  organ over. A subflow that re-passes its own phantom param to a same-module
+  tor is refused (`expected 'app.m:live' but got 'm:live'`); union-state
+  `<a|b>` params and `@label` re-entry fail the same root, and KORU032's
+  scope-discharge block means a module-internal loop over phantom args cannot
+  be written at all. Pinned RED as `330_134`; the entry file's derived/logical
+  names collapse into one word, so only library modules expose the fault —
+  the same reason the `[with]` bug hid until a flow moved into a library.
 - Whether "home module" wants to be a field on the flow rather than a parameter
   threaded through every walk. A parameter is one refactor from being wrong
   again; the flow already knows the file it came from.
