@@ -34,7 +34,21 @@ The shape that fell out for `?string == "lit"`:
 operand's type" — optional unwrap, union tag, integer width. Emit the
 comptime question instead of threading a type table through the rewriter.
 
-**Open:** presence-semantics for `null != null` and optional-vs-optional
-comparisons are pinned at 320_147 but the *general* doctrine (which
-operators deserve presence dispatch) is not — `!=` got it because it is
-`!(==)`, not because anyone ruled on optional inequality as a surface.
+**Refined 2026-09-06 (same session, second half of the defect):** the
+doctrine extends from *presence* dispatch to *type* dispatch. `h1 == h2`
+(two identifiers, no literal) used to fall through the rewrite untouched
+and emit a bare `==` — uncompilable Zig when both were strings. The fix
+keeps the trigger textual (no literal operand on either side, because
+`const r = .audio` / `= null` / `= 0` would strand the literal without a
+result type) and moves the whole decision into the emitted block: unwrap
+optionals to payload types, test "is a u8 string/slice/array" per side,
+take presence-aware `mem.eql` when both match, plain `==` otherwise. One
+emission shape now covers `str==str`, `?str==str`, `int==int`, `enum==enum`
+— the comptime fold makes each specialization free. The cost is emitted-
+code size, not correctness: a non-string pair never analyzes the mem.eql
+arm.
+
+**Open:** which *other* operators deserve payload dispatch is still
+unruled — `!=` has it only because it is `!(==)`. Ordering (`<`/`>`) on
+strings (`std.mem.order`) is the next natural candidate when a consumer
+asks.

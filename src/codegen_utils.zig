@@ -1886,6 +1886,24 @@ const ZigExprParser = struct {
         return left;
     }
 
+    /// Literal operands that only compile under a `==` with its expected
+    /// type on the other side — `.audio`, `null`, `0`, `'x'`, `true`,
+    /// `undefined`, `{ ... }`. Binding them to `const` in a dispatch block
+    /// would strand them without a result type, so a comparison carrying
+    /// one stays verbatim. String literals are not listed: they take the
+    /// mem.eql path first.
+    fn eqOperandNeedsTypeContext(text: []const u8) bool {
+        const t = std.mem.trim(u8, text, " \t");
+        if (t.len == 0) return true;
+        if (t[0] == '.' or t[0] == '{' or t[0] == '\'' or t[0] == '"') return true;
+        if (std.ascii.isDigit(t[0])) return true;
+        if ((t[0] == '-' or t[0] == '+') and t.len > 1 and std.ascii.isDigit(t[1])) return true;
+        for ([_][]const u8{ "true", "false", "null", "undefined" }) |kw| {
+            if (std.mem.eql(u8, t, kw)) return true;
+        }
+        return false;
+    }
+
     /// THE REWRITE LEVEL. `==` / `!=` with a string-literal operand becomes
     /// the `mem.eql` call; every other comparison combines verbatim.
     fn parseEq(self: *ZigExprParser) ZigExprError!ZigExprPiece {
@@ -1908,6 +1926,20 @@ const ZigExprParser = struct {
                 // Presence bits compare first: null==null is true,
                 // null==value is false without evaluating the payload.
                 const call = std.fmt.allocPrint(self.allocator, "{s}(blk: {{ const __koru_l = {s}; const __koru_r = {s}; const __koru_ln = if (@typeInfo(@TypeOf(__koru_l)) == .optional) __koru_l == null else false; const __koru_rn = if (@typeInfo(@TypeOf(__koru_r)) == .optional) __koru_r == null else false; break :blk (__koru_ln == __koru_rn) and (__koru_ln or @import(\"std\").mem.eql(u8, if (@typeInfo(@TypeOf(__koru_l)) == .optional) __koru_l.? else __koru_l, if (@typeInfo(@TypeOf(__koru_r)) == .optional) __koru_r.? else __koru_r)); }})", .{
+                    if (negated) "!" else "", left.text, right.text,
+                }) catch return ZigExprError.OutOfMemory;
+                left = .{ .text = call, .start = left.start, .end = right.end, .is_string_lit = false, .changed = true };
+            } else if (!eqOperandNeedsTypeContext(left.text) and !eqOperandNeedsTypeContext(right.text)) {
+                // No literal on either side — `h1 == h2`, `a.b == c.d`,
+                // `f() == g()`. Bare `==` on two strings is uncompilable
+                // Zig; the rewrite has no type oracle, so the emitted code
+                // asks: when both payload types are u8 strings this is the
+                // presence-aware mem.eql above, anything else is `==`. All
+                // checks are comptime — a non-string pair folds to `l == r`
+                // and never analyzes the mem.eql arm. Literals are skipped
+                // because `const r = .audio` / `= null` / `= 0` would need
+                // the type context the bare `==` already supplies.
+                const call = std.fmt.allocPrint(self.allocator, "{s}(blk: {{ const __koru_l = {s}; const __koru_r = {s}; const __koru_lo = @typeInfo(@TypeOf(__koru_l)) == .optional; const __koru_ro = @typeInfo(@TypeOf(__koru_r)) == .optional; const __koru_lp = if (__koru_lo) @typeInfo(@TypeOf(__koru_l)).optional.child else @TypeOf(__koru_l); const __koru_rp = if (__koru_ro) @typeInfo(@TypeOf(__koru_r)).optional.child else @TypeOf(__koru_r); const __koru_ls = __koru_str: {{ const t = @typeInfo(__koru_lp); if (t == .array) break :__koru_str t.array.child == u8; if (t == .pointer) {{ const p = t.pointer; if (p.size == .slice and p.child == u8) break :__koru_str true; break :__koru_str p.size == .one and @typeInfo(p.child) == .array and @typeInfo(p.child).array.child == u8; }} break :__koru_str false; }}; const __koru_rs = __koru_str: {{ const t = @typeInfo(__koru_rp); if (t == .array) break :__koru_str t.array.child == u8; if (t == .pointer) {{ const p = t.pointer; if (p.size == .slice and p.child == u8) break :__koru_str true; break :__koru_str p.size == .one and @typeInfo(p.child) == .array and @typeInfo(p.child).array.child == u8; }} break :__koru_str false; }}; if (__koru_ls and __koru_rs) {{ const __koru_ln = if (__koru_lo) __koru_l == null else false; const __koru_rn = if (__koru_ro) __koru_r == null else false; break :blk (__koru_ln == __koru_rn) and (__koru_ln or @import(\"std\").mem.eql(u8, if (__koru_lo) __koru_l.? else __koru_l, if (__koru_ro) __koru_r.? else __koru_r)); }} else break :blk __koru_l == __koru_r; }})", .{
                     if (negated) "!" else "", left.text, right.text,
                 }) catch return ZigExprError.OutOfMemory;
                 left = .{ .text = call, .start = left.start, .end = right.end, .is_string_lit = false, .changed = true };
@@ -2392,6 +2424,31 @@ test "string equality: rewrites inside builtin-call arguments" {
     try std.testing.expectEqualStrings("@intFromBool(" ++ comptime optEqBlock("s", "\"x\"") ++ ")", out);
 }
 
-test "string equality: identifier == identifier is left alone (needs a type oracle)" {
-    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "left == right"));
+// The no-literal dispatch shape: both payload types are interrogated at
+// comptime — u8 strings take the presence-aware mem.eql arm, everything
+// else folds to a plain `==`. Literal operands are skipped because they
+// need the result-type context a bare `==` supplies.
+fn optEqDispatchBlock(comptime l: []const u8, comptime r: []const u8) []const u8 {
+    return "(blk: { const __koru_l = " ++ l ++ "; const __koru_r = " ++ r ++ "; const __koru_lo = @typeInfo(@TypeOf(__koru_l)) == .optional; const __koru_ro = @typeInfo(@TypeOf(__koru_r)) == .optional; const __koru_lp = if (__koru_lo) @typeInfo(@TypeOf(__koru_l)).optional.child else @TypeOf(__koru_l); const __koru_rp = if (__koru_ro) @typeInfo(@TypeOf(__koru_r)).optional.child else @TypeOf(__koru_r); const __koru_ls = __koru_str: { const t = @typeInfo(__koru_lp); if (t == .array) break :__koru_str t.array.child == u8; if (t == .pointer) { const p = t.pointer; if (p.size == .slice and p.child == u8) break :__koru_str true; break :__koru_str p.size == .one and @typeInfo(p.child) == .array and @typeInfo(p.child).array.child == u8; } break :__koru_str false; }; const __koru_rs = __koru_str: { const t = @typeInfo(__koru_rp); if (t == .array) break :__koru_str t.array.child == u8; if (t == .pointer) { const p = t.pointer; if (p.size == .slice and p.child == u8) break :__koru_str true; break :__koru_str p.size == .one and @typeInfo(p.child) == .array and @typeInfo(p.child).array.child == u8; } break :__koru_str false; }; if (__koru_ls and __koru_rs) { const __koru_ln = if (__koru_lo) __koru_l == null else false; const __koru_rn = if (__koru_ro) __koru_r == null else false; break :blk (__koru_ln == __koru_rn) and (__koru_ln or @import(\"std\").mem.eql(u8, if (__koru_lo) __koru_l.? else __koru_l, if (__koru_ro) __koru_r.? else __koru_r)); } else break :blk __koru_l == __koru_r; })";
+}
+
+test "string equality: identifier == identifier lowers to the type-dispatch block" {
+    const out = (try rewriteZigExpr(std.testing.allocator, "left == right")).?;
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings(comptime optEqDispatchBlock("left", "right"), out);
+}
+
+test "string equality: identifier != identifier negates the dispatch" {
+    const out = (try rewriteZigExpr(std.testing.allocator, "a.b != c.d")).?;
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings("!" ++ comptime optEqDispatchBlock("a.b", "c.d"), out);
+}
+
+test "string equality: literal-carrying comparisons stay verbatim" {
+    // Numbers, enum literals, null, bools — the bare `==` supplies the
+    // result-type context a `const` binding would strand them without.
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "acc.floor == -1"));
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "k == .audio"));
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "x == null"));
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "flag == true"));
 }

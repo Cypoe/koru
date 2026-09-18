@@ -2,3 +2,7 @@ match
 mismatch
 null-nomatch
 null-false
+ident-eq
+ident-ne
+int-eq
+opt-str-eq
