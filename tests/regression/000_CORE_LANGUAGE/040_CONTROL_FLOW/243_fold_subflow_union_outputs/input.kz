@@ -1,0 +1,29 @@
+// PIN — a `#label` fold whose implementing subflow declares UNION outputs:
+// the back-edge branch loops inside `while`, the remaining arms construct the
+// impl's output union after it, and the after-loop switch names the looped
+// branch `unreachable` (Zig does not narrow union(enum) through the guard).
+const std = @import("std");
+~import std/io
+
+~tor round { text: string, rounds: i32 }
+| again { text: string, rounds: i32 }
+| stop string
+| broke
+~proc round|zig {
+    if (rounds < 0) return .broke;
+    if (rounds <= 1) return .{ .stop = text };
+    return .{ .again = .{ .text = text, .rounds = rounds - 1 } };
+}
+
+~tor polish { text: string, rounds: i32 }
+| polished string
+| broke
+
+~polish = #loop round(text, rounds)
+| again a |> @loop(a.text, a.rounds)
+| stop out => polished out
+| broke => broke
+
+~polish(text: "hi", rounds: 3)
+| polished out |> std/io:print.ln("{{ out:s }}")
+| broke |> std/io:print.ln("broke")

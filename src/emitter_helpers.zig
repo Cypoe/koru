@@ -6015,11 +6015,30 @@ pub fn emitFlow(
                     }
 
                     // Emit switch with only non-looping branches
-                    // NOTE: After the while loop guard, looping branches are IMPOSSIBLE.
-                    // Zig 0.15+ knows this and considers the switch exhaustive, so we must NOT
-                    // emit else => unreachable (it would be "unreachable else prong; all cases handled")
+                    // NOTE: After the while loop guard, looping branches are IMPOSSIBLE at
+                    // runtime, but Zig does NOT narrow union(enum) through the loop
+                    // condition — an unmarked switch is non-exhaustive
+                    // ("switch must handle all possibilities"). Pure back-edge
+                    // branches take `.branch => unreachable`; a looping branch
+                    // that can also exit via `break :label` stays reachable and
+                    // gets a no-op arm. Mirror of the mid-chain label path
+                    // below (the "unreachable else" concern is handled there by
+                    // naming branches explicitly rather than `else`).
                     if (non_looping_conts.items.len > 0) {
-                        try emitContinuationList(emitter, ctx, non_looping_conts.items, first_result, &result_counter, false, &flow.inv().path, true);
+                        var purely_looping = try std.ArrayList([]const u8).initCapacity(ctx.allocator, looping_branches.len);
+                        defer purely_looping.deinit(ctx.allocator);
+                        var break_path = try std.ArrayList([]const u8).initCapacity(ctx.allocator, looping_branches.len);
+                        defer break_path.deinit(ctx.allocator);
+
+                        for (looping_branches) |branch| {
+                            if (branchHasBreakPath(branch, label, conts)) {
+                                try break_path.append(ctx.allocator, branch);
+                            } else {
+                                try purely_looping.append(ctx.allocator, branch);
+                            }
+                        }
+
+                        try emitContinuationListWithUnreachableBranches(emitter, ctx, non_looping_conts.items, first_result, &result_counter, purely_looping.items, break_path.items);
                     }
                 }
             }

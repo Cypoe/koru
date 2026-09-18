@@ -114,3 +114,17 @@ Same enumeration-gap signature as the head-label sugar
 version of this section, committed hours earlier, asserted the gap lived in
 the stitching. It was corrected by compiling the sibling positions, not by
 reading them.
+
+## The emitter had the same shape, plus a false claim to keep it company
+
+The label/fold emitter has two paths: a specialized pre-label loop and the
+general mid-chain one. The general path marks purely looping branches
+`.arm => unreachable` in the post-loop switch, because the `while` consumed
+them. The pre-label path carried a comment instead — *"Zig 0.15+ knows this
+and considers the switch exhaustive"* — and emitted nothing. Measured
+2026-09-18, on a fold whose subflow impl yields `| again | done` union
+outputs: Zig does not narrow a `union(enum)` through a while condition; the
+emitted switch refused `switch must handle all possibilities`. A claim about
+a compiler's semantics, asserted in a comment, never compiled — the untested
+half, one indirection deeper: this time the prose was inside the source.
+`243_fold_subflow_union_outputs` pins it green.
