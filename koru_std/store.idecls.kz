@@ -56,8 +56,8 @@ const StoreIndexDecls = struct {
 
     /// What `new`'s SoA-cell emit needs from the declarations: the backing
     /// key→handle map field and which seed column it keys on — or the
-    /// refusal. `.none` when nothing declares the store (a declaration
-    /// naming no column is the same nothing — the pre-refusal shape kept).
+    /// refusal. `.none` when nothing declares the store; a declaration
+    /// naming no column refuses at its own location (pin 690_329).
     const FieldSpec = union(enum) {
         none,
         indexed: Indexed,
@@ -85,7 +85,7 @@ const StoreIndexDecls = struct {
             return .{ .refuse = ast_find.refusal(alloc, reporter, .KORU161, ds[1].flow.location, ds[1].flow.module, "std/indexes:store({s}, {s}): '{s}' already carries an index on '{s}' - a second index on one store is a later rung", .{ store_name, ds[1].column orelse "?", store_name, ds[0].column orelse "?" }) };
         }
         if (ds.len == 0) return .none;
-        const icol = ds[0].column orelse return .none;
+        const icol = ds[0].column orelse return .{ .refuse = ast_find.refusal(alloc, reporter, .KORU161, ds[0].flow.location, ds[0].flow.module, "std/indexes:store({s}): the declaration names no column - an index keys on one column of the store: std/indexes:store({s}, <col>)", .{ store_name, store_name }) };
         var icol_type: ?[]const u8 = null;
         var index_idx: usize = 0;
         for (field_names, field_types, field_char_caps, field_owned_info, 0..) |fname, ftype, fcc, foi, fi| {

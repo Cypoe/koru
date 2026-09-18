@@ -51,8 +51,10 @@ columns; the Debug leak checker pins that.
 One declaration per store is the ruling, and it is enforced: a second
 `std/indexes:store` naming the same store is refused at the declaration's
 own location (pin 690_328) — the offender is the later claim, not the
-store. Before the refusal the discovery walk returned first-match and
-nothing else looked, so a second claim was silently dead text.
+store. A declaration naming no column refuses the same way (pin 690_329) —
+`store(players)` alone used to read as "no declaration" and emit nothing.
+Before the refusals the discovery walk returned first-match and nothing
+else looked, so both shapes sat silently dead.
 
 Still unpinned: indexed fixed-char and owned columns (loud refusal today —
 "a later rung") and take-side rescan cost on heavy duplicate load.
