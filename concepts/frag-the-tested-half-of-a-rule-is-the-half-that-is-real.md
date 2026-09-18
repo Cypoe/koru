@@ -78,18 +78,36 @@ see [[frag-a-diagnostics-hint-is-a-claim-not-a-tested-path]], where the hint
 named a spelling no test compiled, and following the compiler's own advice was
 the way into the bug.
 
-## The same asymmetry in a GRAMMAR position
+## The same asymmetry in a REFUSAL, not a rule
 
-Measured 2026-09-18: `parser.zig`'s stated invariant — "multi-line pipe chain
-parses EXACTLY like its inline spelling. ONE rule for `|>` chains everywhere" —
-was pinned by `210_200` inside `=` subflow bodies, and the pin made that
-position real. At top-level flow position the same two-line chain parses only
-its head: `mail(): m |>` followed by a next-line step reports
-`KORU100 unused binding 'm'` — true of the tree the parser built, false of the
-program written. The fix taught the tested position; "everywhere" covered the
-positions nobody enumerated. Pinned RED as `210_238`. Whether it regressed or
-was never taught there is unmeasured — the pin only asserts it fails today.
+Measured 2026-09-18, corrected same day: `parser.zig` enforces "the body must
+follow `|>` on the same line" — the refusal of a dangling `|>` — only where a
+test walks. Branch position enforces it cleanly: `| ok x |>` + body-below is
+`PARSE001` (210_066). `=` bodies enforce it by accident: the orphaned next
+line is blamed as `KORU010`. At flow head nothing enforces it at all —
+`mail(): m |>` silently swallows the operator, parses a chain of one step, and
+the *next* line becomes a separate flow, surfacing as `KORU100 unused binding
+'m'` — a diagnostic true of the tree built and false of the program written.
 
-Same enumeration gap as the head-label sugar
-([[frag-the-head-label-sugar-stops-at-the-subflow-body]]): a grammar
-convenience implemented per position is only real where a test walks.
+The first measurement read this as a chain-stitching gap ("the ONE-rule
+invariant was only taught at `=` bodies") and pinned `mail(): m |>` +
+next-line step as a MUST_RUN. That framing was never right: `210_208` already
+pins the legal multi-line form — leading `|>` lines — green at this same
+position, and it compiles today. The operator *ending* a line is not a
+continuation marker anywhere in the grammar; the stale nbody benchmark
+(`kernel_pairwise.kz`) is written assuming it is and refuses today. The gap is
+in the *refusal's* enumeration, not the chain's. Re-pinned RED as `210_238`
+with MUST_ERROR expecting the `must follow '|>'` diagnostic.
+
+So the sharpest form yet: **a refusal is a rule too, and it is real only where
+it fires.** A diagnostic enforced in one parse position and absent in the
+sibling position does not fail as a missing error — it fails as a *wrong tree*
+that downstream checkers then describe faithfully, one indirection away from
+the fault. The missing refusal is worse than a missing feature: the feature's
+absence is loud, the refusal's absence borrows another checker's voice.
+
+Same enumeration-gap signature as the head-label sugar
+([[frag-the-head-label-sugar-stops-at-the-subflow-body]]) — and note the prior
+version of this section, committed hours earlier, asserted the gap lived in
+the stitching. It was corrected by compiling the sibling positions, not by
+reading them.
