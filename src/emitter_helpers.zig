@@ -2999,7 +2999,7 @@ fn emitSubflowContinuationsWithDepth(
                             if (already_provided) continue;
                             if (emitted_so_far > 0) try emitter.write(", ");
                             try emitter.write(".");
-                            try emitter.write(field.name);
+                            try writeBranchName(emitter, field.name);
                             try emitter.write(" = null");
                             emitted_so_far += 1;
                         }
@@ -3731,7 +3731,7 @@ fn emitSubflowContinuationsWithDepth(
                                         if (already_provided) continue;
                                         if (emitted_so_far > 0) try emitter.write(",");
                                         try emitter.write(" .");
-                                        try emitter.write(field.name);
+                                        try writeBranchName(emitter, field.name);
                                         try emitter.write(" = null");
                                         emitted_so_far += 1;
                                     }
@@ -8960,7 +8960,7 @@ fn emitArgs(emitter: *CodeEmitter, ctx: *EmissionContext, args: []const ast.Arg,
             if (!already_provided) {
                 if (args.len > 0 or optional_injected > 0) try emitter.write(", ");
                 try emitter.write(".");
-                try emitter.write(field.name);
+                try writeBranchName(emitter, field.name);
                 try emitter.write(" = null");
                 optional_injected += 1;
             }

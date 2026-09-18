@@ -1,0 +1,19 @@
+// OPTIONAL PARAMETER INJECTION must emit the mangled spelling for kebab
+// declared names — the injection sites wrote `field.name` verbatim, so an
+// omitted `pitch-offset: ?f64` emitted `.pitch-offset = null` ('expected
+// field initializer'). Explicit kebab args always mangled correctly via
+// writeBranchName; the injection now uses the same helper.
+//
+// Found by a commissioned cell in intranquil-domain: WO-002's
+// `brush.apply(brush, peak, pitch-offset)` omitted `pitch-offset` at a .k
+// call site and hit the unemitted name. Three `= null` injection sites
+// shared the defect (emitArgs + the two impl-flow twins).
+
+const std = @import("std");
+
+~pub tor thing { gain: f64, pitch-offset: ?f64 } -> f64
+
+~proc thing|zig {
+    const off: f64 = pitch_offset orelse -1;
+    return gain + off;
+}

@@ -3969,7 +3969,7 @@ pub const VisitorEmitter = struct {
                                                     if (already_provided) continue;
                                                     if (emitted_so_far > 0) try self.code_emitter.write(",");
                                                     try self.code_emitter.write(" .");
-                                                    try self.code_emitter.write(field.name);
+                                                    try emitter.writeBranchName(self.code_emitter, field.name);
                                                     try self.code_emitter.write(" = null");
                                                     emitted_so_far += 1;
                                                 }
