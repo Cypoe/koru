@@ -77,3 +77,19 @@ And the sharpest instance: a *diagnostic* is the untested path par excellence �
 see [[frag-a-diagnostics-hint-is-a-claim-not-a-tested-path]], where the hint
 named a spelling no test compiled, and following the compiler's own advice was
 the way into the bug.
+
+## The same asymmetry in a GRAMMAR position
+
+Measured 2026-09-18: `parser.zig`'s stated invariant — "multi-line pipe chain
+parses EXACTLY like its inline spelling. ONE rule for `|>` chains everywhere" —
+was pinned by `210_200` inside `=` subflow bodies, and the pin made that
+position real. At top-level flow position the same two-line chain parses only
+its head: `mail(): m |>` followed by a next-line step reports
+`KORU100 unused binding 'm'` — true of the tree the parser built, false of the
+program written. The fix taught the tested position; "everywhere" covered the
+positions nobody enumerated. Pinned RED as `210_238`. Whether it regressed or
+was never taught there is unmeasured — the pin only asserts it fails today.
+
+Same enumeration gap as the head-label sugar
+([[frag-the-head-label-sugar-stops-at-the-subflow-body]]): a grammar
+convenience implemented per position is only real where a test walks.
