@@ -48,9 +48,14 @@ the machinery — `AutoHashMapUnmanaged(key, i64)` in Zig, `Map` in JS —
 and index-only stores run teardown (map deinit/clear) even with no owned
 columns; the Debug leak checker pins that.
 
-Still unpinned: a second index on one store, indexed fixed-char and owned
-columns (loud refusal today — "a later rung"), and take-side rescan cost
-on heavy duplicate load.
+One declaration per store is the ruling, and it is enforced: a second
+`std/indexes:store` naming the same store is refused at the declaration's
+own location (pin 690_328) — the offender is the later claim, not the
+store. Before the refusal the discovery walk returned first-match and
+nothing else looked, so a second claim was silently dead text.
+
+Still unpinned: indexed fixed-char and owned columns (loud refusal today —
+"a later rung") and take-side rescan cost on heavy duplicate load.
 
 The namespace shape is also a ruling, and it drifted at ship time: the
 vocabulary lives in `std/indexes` (plural), not `std/index` — `index.kz`

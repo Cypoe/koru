@@ -103,6 +103,7 @@ koru_std/pump.kz	833
 koru_std/pump.messages.kz	37
 koru_std/pump.synth.kz	59
 koru_std/pump.wit.kz	25
+koru_std/refine.alts.kz	183
 koru_std/refine.body.kz	176
 koru_std/refine.explain.kz	174
 koru_std/refine.fold.kz	216
@@ -123,11 +124,12 @@ koru_std/simple.kz	7
 koru_std/store.clear.kz	105
 koru_std/store.default.kz	79
 koru_std/store.explain.kz	104
-koru_std/store.index.kz	276
+koru_std/store.idecls.kz	104
+koru_std/store.index.kz	261
 koru_std/store.insert.kz	482
 koru_std/store.kz	1689
 koru_std/store.leaf.kz	239
-koru_std/store.new.kz	6399
+koru_std/store.new.kz	6391
 koru_std/store.preorder.kz	110
 koru_std/store.pverbs.kz	781
 koru_std/store.qcaps.kz	372

@@ -2427,22 +2427,14 @@
         // unchanged); `take` owes only the taken row's own removal.
         var index_col: ?[]const u8 = null;
         var index_idx: usize = 0;
-        if (StoreIndex.columnOf(allocator, program, store_name)) |icol| {
-            var icol_type: ?[]const u8 = null;
-            for (field_names, field_types, field_char_caps, field_owned_info, 0..) |fname, ftype, fcc, foi, fi| {
-                if (!std.mem.eql(u8, fname, icol)) continue;
-                if (fcc != null or foi != null) {
-                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/indexes:store({s}, {s}): the indexed column must be a scalar column - fixed-char and owned columns are a later rung", .{ store_name, icol }) } };
-                }
-                icol_type = ftype;
-                index_idx = fi;
-            }
-            const it = icol_type orelse {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/indexes:store({s}, {s}): no column named '{s}' - the index names a declared column of the store", .{ store_name, icol, icol }) } };
-            };
-            const ifield = std.fmt.allocPrint(allocator, "    __index_{s}: @import(\"std\").AutoHashMapUnmanaged({s}, i64) = .{{}},\n", .{ icol, it }) catch unreachable;
-            pc.appendSlice(allocator, ifield) catch unreachable;
-            index_col = icol;
+        switch (StoreIndexDecls.fieldSpec(allocator, reporter, program, store_name, field_names, field_types, field_char_caps, field_owned_info)) {
+            .refuse => |r| return .{ .transformed = .{ .replacement = r } },
+            .indexed => |spec| {
+                pc.appendSlice(allocator, spec.field) catch unreachable;
+                index_col = spec.col;
+                index_idx = spec.idx;
+            },
+            .none => {},
         }
         // The sparse-set half of THE MEMORY CONTRACT (O10.iii/iv, DESIGN.md):
         // a program-visible row value is a HANDLE — sparse slot in the low 24

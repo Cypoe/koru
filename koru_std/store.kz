@@ -253,8 +253,7 @@ fn storeCollectAliases(alloc: std.mem.Allocator,
 /// the flow's head is `std/control:for` and the query is a continuation node.
 /// So the alias set is extended on the way DOWN — at every site that targets
 /// this store, the arms below it bind its rows.
-fn storeScanCont(
-    alloc: std.mem.Allocator,
+fn storeScanCont(alloc: std.mem.Allocator,
     c: *const ast_find.Continuation,
     aliases: []const []const u8,
     store: []const u8,
@@ -1686,4 +1685,5 @@ fn storeLowerText(
 ~part sites
 ~part leaf
 ~part index
+~part idecls
 ~part qnone

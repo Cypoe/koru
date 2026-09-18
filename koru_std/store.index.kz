@@ -20,28 +20,13 @@ const StoreIndex = struct {
     /// The `std/indexes:store(<store>, <col>)` declaration naming
     /// `store_name`, or null. Positional args: arg[0] is the store name
     /// (lands in the implicit `expr` slot, like `new`'s own), the first
-    /// non-`expr`/`source` arg is the column.
+    /// non-`expr`/`source` arg is the column. The walk lives in
+    /// StoreIndexDecls (store.idecls.kz) — the collecting version the
+    /// one-declaration ruling needs; this is its first-match read.
     fn columnOf(alloc: std.mem.Allocator, program: *const ast_find.Program, store_name: []const u8) ?[]const u8 {
-        for (flatItems(alloc, program.items)) |pi| {
-            if (pi.* != .flow) continue;
-            const inv = pi.flow.inv();
-            const mq = inv.path.module_qualifier orelse continue;
-            if (!std.mem.eql(u8, mq, "std.indexes")) continue;
-            if (inv.path.segments.len != 1 or !std.mem.eql(u8, inv.path.segments[0], "store")) continue;
-            var named_store: ?[]const u8 = null;
-            var column: ?[]const u8 = null;
-            for (inv.args) |a| {
-                if (std.mem.eql(u8, a.name, "expr")) {
-                    named_store = a.value;
-                } else if (!std.mem.eql(u8, a.name, "source")) {
-                    column = a.value;
-                }
-            }
-            const s = named_store orelse continue;
-            if (!std.mem.eql(u8, s, store_name)) continue;
-            return column;
-        }
-        return null;
+        const ds = StoreIndexDecls.declsOf(alloc, program, store_name);
+        if (ds.len == 0) return null;
+        return ds[0].column;
     }
 
     // --- emit: the map's maintenance, spliced inside the verbs' own code ---
