@@ -100,6 +100,20 @@ switch is a placement decision, not a no-op.
   be written at all. Pinned RED as `330_134`; the entry file's derived/logical
   names collapse into one word, so only library modules expose the fault —
   the same reason the `[with]` bug hid until a flow moved into a library.
+  **Resolved, 2026-09-18:** the anchor the seed should have used was already
+  in hand — the module component of the `event_map` key the implementing
+  event was found under, the same `event_module orelse event_decl.module`
+  pattern the checker already used at its own resolution sites. `impl_ev.module`
+  (the parse-time stem) was the wrong fallback order: it should answer only
+  when no resolution key exists. The `@label` jump had the identical bug one
+  switch arm over — it validated against `decl.module`, now against the
+  registration module. Union `<a|b>` params were also never seeded at all —
+  a union param is now tracked as its union state, so union→union re-pass
+  satisfies while union→concrete still correctly refuses. `330_134` is green;
+  a `#round` fold over a phantom judge inside a `.kz` module now compiles and
+  runs.
 - Whether "home module" wants to be a field on the flow rather than a parameter
   threaded through every walk. A parameter is one refactor from being wrong
-  again; the flow already knows the file it came from.
+  again; the flow already knows the file it came from. The `330_134` fix grew
+  the count — `impl_module` is yet another parameter threaded where the found
+  key already knew the answer.

@@ -27,7 +27,7 @@ pub const PhantomSemanticChecker = struct {
     allocator: std.mem.Allocator,
     reporter: *errors.ErrorReporter,
     module_map: std.StringHashMap([]const u8),
-    label_map: std.StringHashMap(*const ast.EventDecl),
+    label_map: std.StringHashMap(LabelTarget),
     disposal_event_map: std.StringHashMap(DisposalEventInfo),
     /// `~[prototype]` module opt-in (see ShapeChecker.prototype_mode). Relaxes
     /// the "handled a branch the event doesn't produce" wall (KORU030) for
@@ -69,6 +69,15 @@ pub const PhantomSemanticChecker = struct {
         module_name: []const u8,
     };
 
+    /// A `#label`'s target: the round event's decl plus the module name the
+    /// label's invocation resolved under. `decl.module` is the parse-time file
+    /// stem — for module items that is `m`, not the logical `app.m` every
+    /// canonicalization anchors on (330_134's twin at `@label` re-entry).
+    const LabelTarget = struct {
+        decl: *const ast.EventDecl,
+        module: []const u8,
+    };
+
     /// A declared-type identity's registration site: where the declaring flow
     /// sits, whether the registrant is a compound PROTO entry, and whether it
     /// is a terminal declared through `std/proto`. The collision wall's honor
@@ -86,7 +95,7 @@ pub const PhantomSemanticChecker = struct {
             .allocator = allocator,
             .reporter = reporter,
             .module_map = std.StringHashMap([]const u8).init(allocator),
-            .label_map = std.StringHashMap(*const ast.EventDecl).init(allocator),
+            .label_map = std.StringHashMap(LabelTarget).init(allocator),
             .disposal_event_map = std.StringHashMap(DisposalEventInfo).init(allocator),
             .subflow_impl_map = std.StringHashMap(void).init(allocator),
             .declared_types = std.StringHashMap(void).init(allocator),
@@ -1457,6 +1466,13 @@ pub const PhantomSemanticChecker = struct {
                         const impl_event_name = try self.pathToString(impl_path);
                         defer self.allocator.free(impl_event_name);
 
+                        // The module component of the event_map key the impl
+                        // resolved under — the name every other canonicalization
+                        // in this frame anchors on (the logical `app.m`), NOT
+                        // `event_decl.module`, which is the parse-time file stem
+                        // (`m`) for module items (330_134).
+                        var impl_module: ?[]const u8 = null;
+
                         // event_map is keyed by the event's canonical module. For
                         // metacircular impls `current_module` carries it
                         // (`std.compiler`); for a plain user program `current_module`
@@ -1467,10 +1483,16 @@ pub const PhantomSemanticChecker = struct {
                         const impl_event: ?*const ast.EventDecl = blk: {
                             const q1 = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ module, impl_event_name });
                             defer self.allocator.free(q1);
-                            if (event_map.get(q1)) |info| break :blk info.decl;
+                            if (event_map.get(q1)) |info| {
+                                impl_module = module;
+                                break :blk info.decl;
+                            }
                             const q2 = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ flow.module, impl_event_name });
                             defer self.allocator.free(q2);
-                            if (event_map.get(q2)) |info| break :blk info.decl;
+                            if (event_map.get(q2)) |info| {
+                                impl_module = flow.module;
+                                break :blk info.decl;
+                            }
                             break :blk null;
                         };
 
@@ -1481,13 +1503,13 @@ pub const PhantomSemanticChecker = struct {
                             log.debug("[PHANTOM-FLOW]   Impl event '{s}' not found in event map\n", .{impl_event_name});
                         }
 
-                        if (!try self.validateFlow(flow, event_map, module, impl_event)) {
+                        if (!try self.validateFlow(flow, event_map, module, impl_event, impl_module)) {
                             has_errors = true;
                         }
                     } else {
                         const module = flow.module;
                         log.debug("[PHANTOM-FLOW] Validating flow in module '{s}'\n", .{module});
-                        if (!try self.validateFlow(flow, event_map, module, null)) {
+                        if (!try self.validateFlow(flow, event_map, module, null, null)) {
                             has_errors = true;
                         }
                     }
@@ -1544,6 +1566,7 @@ pub const PhantomSemanticChecker = struct {
         event_map: *std.StringHashMap(EventInfo),
         current_module: []const u8,
         implementing_event: ?*const ast.EventDecl, // Event this flow implements (for branch_constructor escape checking)
+        impl_module: ?[]const u8, // event_map key module impl_event resolved under (≠ event_decl.module for module items)
     ) !bool {
         var has_errors = false;
 
@@ -1575,7 +1598,7 @@ pub const PhantomSemanticChecker = struct {
         // silently skipping on a label_map miss. The mid-chain form
         // (`... |> #loop step(...)`) registers in validateContinuation.
         if (flow.pre_label) |pre_label| {
-            try self.label_map.put(pre_label, event_info.decl);
+            try self.label_map.put(pre_label, .{ .decl = event_info.decl, .module = module_name });
         }
 
         // Validate root invocation args (e.g. bare literals at phantom-required params).
@@ -1612,7 +1635,7 @@ pub const PhantomSemanticChecker = struct {
                     // rejected by directionality (validatePhantom is_input).
                     const canonical_phantom = try self.canonicalizePhantomStateWithBase(
                         phantom_str,
-                        impl_ev.module,
+                        impl_module orelse impl_ev.module,
                         try self.baseTypeModule(field.module_path),
                     );
                     defer self.allocator.free(canonical_phantom);
@@ -1626,10 +1649,28 @@ pub const PhantomSemanticChecker = struct {
                     defer parsed.deinit(self.allocator);
                     const concrete = switch (parsed) {
                         .concrete => |c| c,
+                        .state_union => |u| {
+                            // A BORROW union (`<a|b>`) tracks the union itself:
+                            // re-passing it to a param spelled the same way
+                            // typechecks, while a concrete `<a>` callee refuses
+                            // because the member cannot be proven. A union with
+                            // any consume member stays unseeded — the body
+                            // cannot name which member's debt it holds.
+                            var any_consume = false;
+                            for (u.members) |m| {
+                                if (m.consumes_obligation) any_consume = true;
+                            }
+                            if (!any_consume) {
+                                const union_base_type = try self.canonicalizeBaseType(field.type, field.module_path, impl_module orelse impl_ev.module);
+                                defer self.allocator.free(union_base_type);
+                                try root_context.setWithType(field.name, canonical_phantom, union_base_type);
+                            }
+                            continue;
+                        },
                         else => continue,
                     };
                     if (concrete.requires_cleanup) continue; // issue-on-input: directionality rejects
-                    const canonical_base_type = try self.canonicalizeBaseType(field.type, field.module_path, impl_ev.module);
+                    const canonical_base_type = try self.canonicalizeBaseType(field.type, field.module_path, impl_module orelse impl_ev.module);
                     defer self.allocator.free(canonical_base_type);
                     if (concrete.consumes_obligation) {
                         const held = try std.fmt.allocPrint(self.allocator, "{s}!", .{canonical_phantom});
@@ -2431,7 +2472,7 @@ pub const PhantomSemanticChecker = struct {
 
                         if (event_map.get(qualified_name)) |inv_info| {
                             log.debug("[PHANTOM-FLOW]   Recording label '#{s}' mapping to event '{s}'\n", .{ lwi.label, qualified_name });
-                            try self.label_map.put(lwi.label, inv_info.decl);
+                            try self.label_map.put(lwi.label, .{ .decl = inv_info.decl, .module = inv_module_name });
                         } else {
                             log.debug("[PHANTOM-FLOW]   WARNING: Label '#{s}' points to unknown tor '{s}'\n", .{ lwi.label, qualified_name });
                         }
@@ -3028,18 +3069,18 @@ pub const PhantomSemanticChecker = struct {
             },
             .label_jump => |lj| {
                 // Look up the target event for this label
-                const target_decl = self.label_map.get(lj.label);
-                if (target_decl) |decl| {
+                const target = self.label_map.get(lj.label);
+                if (target) |t| {
                     // Validate jump arguments against target event's signature
                     for (lj.args, 0..) |arg, arg_idx| {
-                        const arg_valid = try self.validateArgument(arg, arg_idx, decl, decl.module, context, location, lj.label);
+                        const arg_valid = try self.validateArgument(arg, arg_idx, t.decl, t.module, context, location, lj.label);
                         if (!arg_valid) {
                             has_errors = true;
                         }
                     }
 
                     // Validate event-level phantom preconditions for the jump
-                    const context_valid = try self.validateEventContextPhantom(decl, decl.module, context, location, lj.label);
+                    const context_valid = try self.validateEventContextPhantom(t.decl, t.module, context, location, lj.label);
                     if (!context_valid) has_errors = true;
                 } else {
                     log.debug("[PHANTOM-FLOW]   Label '@{s}' not found in map, skipping jump arg validation\n", .{lj.label});
