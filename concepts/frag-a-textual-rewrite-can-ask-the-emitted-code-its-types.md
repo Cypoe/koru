@@ -48,6 +48,16 @@ emission shape now covers `str==str`, `?str==str`, `int==int`, `enum==enum`
 code size, not correctness: a non-string pair never analyzes the mem.eql
 arm.
 
+**Companion failure mode (same session):** the rewrite is whole-expression
+— one unreadable piece (`x.?`, `.enum` literals were both unmodeled)
+abandons EVERY rewrite in the guard back to verbatim bytes, so a `==` on
+strings three operands away silently returns to bare `==` and an
+uncompilable backend. `parseBalanced` already does per-segment rescue
+inside calls; the top level has none. The model's operand coverage is a
+correctness boundary, not a nicety — every new surface shape (`.?` was
+added by the optional work itself) that reaches emitted expressions must
+be readable here or it disables the lowering for everything around it.
+
 **Open:** which *other* operators deserve payload dispatch is still
 unruled — `!=` has it only because it is `!(==)`. Ordering (`<`/`>`) on
 strings (`std.mem.order`) is the next natural candidate when a consumer

@@ -6,3 +6,4 @@ ident-eq
 ident-ne
 int-eq
 opt-str-eq
+unwrap-eq

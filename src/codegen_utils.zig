@@ -2083,7 +2083,17 @@ const ZigExprParser = struct {
             // No skipWs here: postfix binds tightly, and a space before `(`
             // or `[` in guard text is not a call we need to model.
             const c = self.peek();
-            if (c == '.') {
+            if (c == '.' and self.pos + 1 < self.text.len and self.text[self.pos + 1] == '?') {
+                // Optional unwrap `.?` — an opaque suffix like a field name.
+                const dot_at = self.pos;
+                self.pos += 2;
+                if (result.changed) {
+                    const joined = std.fmt.allocPrint(self.allocator, "{s}{s}", .{ result.text, self.text[dot_at..self.pos] }) catch return ZigExprError.OutOfMemory;
+                    result = .{ .text = joined, .start = result.start, .end = self.pos, .is_string_lit = false, .changed = true };
+                } else {
+                    result = .{ .text = self.text[result.start..self.pos], .start = result.start, .end = self.pos, .is_string_lit = false, .changed = false };
+                }
+            } else if (c == '.') {
                 if (self.pos + 1 >= self.text.len or !exprIdentStartChar(self.text[self.pos + 1])) return ZigExprError.NoParse;
                 const dot_at = self.pos;
                 self.pos += 1;
@@ -2251,6 +2261,13 @@ const ZigExprParser = struct {
                     self.pos += 1;
                 } else break;
             }
+            return .{ .text = self.text[start..self.pos], .start = start, .end = self.pos, .is_string_lit = false, .changed = false };
+        }
+        if (c == '.' and self.pos + 1 < self.text.len and exprIdentStartChar(self.text[self.pos + 1])) {
+            // Enum literal `.foo` — readable, and flagged context-needing
+            // by eqOperandNeedsTypeContext (its text still starts `.`).
+            self.pos += 1;
+            try self.parseIdentName();
             return .{ .text = self.text[start..self.pos], .start = start, .end = self.pos, .is_string_lit = false, .changed = false };
         }
         if (exprIdentStartChar(c)) {

@@ -61,3 +61,8 @@ src(name: "x"): o1
 |> if (o1 == s5)
 | then |> std/io:print.ln("opt-str-eq")
 | else |> std/io:print.ln("FAIL-opt-str")
+
+src(name: "clip.wav"): e
+|> if (e.? == "clip.wav" and e == "clip.wav")
+| then |> std/io:print.ln("unwrap-eq")
+| else |> std/io:print.ln("FAIL-unwrap")
