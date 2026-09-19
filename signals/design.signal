@@ -1,0 +1,16 @@
+name: design
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: |
+  A design decision was taken and sealed in the commit — not a defect removed
+  (bug-fix), not new capability (capability-gained): a choice among
+  alternatives that now carries its reason. The commit note names the
+  alternative NOT taken and why, so the next session doesn't relitigate it.
+
+  Declared 2026-09-19 with git-gate-local, whose scoping seam is the
+  declaration's own `loc` rather than a `paths` field — colocation costs
+  zero syntax, and a paths field would let an invariant claim a file it
+  does not live in.
+route: surface
