@@ -278,7 +278,58 @@ const std = @import("std");
         ctor: ?*const ast.BranchConstructor, // exhausted only — terminal produce
     };
     var rules = std.ArrayList(Rule).initCapacity(allocator, 4) catch unreachable;
+    // `[key: value]` arms arrive with the brackets stripped — a `:` in the
+    // name is the marker (plain branch names can't carry one). These are
+    // policy DECLARATIONS, not decision rules: `within` is the wall-clock
+    // min-spacing throttle; `ticks` and `policy` are pinned vocabulary
+    // waiting on their suppliers (signal tick, named model).
+    var within_spacing: ?[]const u8 = null;
     for (site.continuations) |*c| {
+        if (std.mem.indexOfScalar(u8, c.branch, ':') != null) {
+            if (c.binding != null or c.condition != null or c.node != null) {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: '[{s}]' is a policy declaration — declarations take no binding, `when`, or continuation", .{c.branch}) } };
+            }
+            const colon = std.mem.indexOfScalar(u8, c.branch, ':').?;
+            const key = std.mem.trim(u8, c.branch[0..colon], " ");
+            const value = std.mem.trim(u8, c.branch[colon + 1 ..], " ");
+            if (std.mem.eql(u8, key, "within")) {
+                if (within_spacing != null) {
+                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: 'within' declared twice — one spacing bound per policy", .{}) } };
+                }
+                var toks = std.mem.tokenizeAny(u8, value, " \t");
+                const n_tok = toks.next() orelse "";
+                const unit = toks.next() orelse "";
+                if (n_tok.len == 0 or unit.len == 0 or toks.next() != null) {
+                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: within wants `N unit` — '[within: {s}]'", .{value}) } };
+                }
+                const n = std.fmt.parseInt(i64, n_tok, 10) catch {
+                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: within wants an integer count — got '{s}'", .{n_tok}) } };
+                };
+                if (n <= 0) {
+                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: within must be positive — 'within: {s}' throttles nothing", .{value}) } };
+                }
+                if (std.mem.eql(u8, unit, "ticks")) {
+                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: 'within: {s} ticks' has no tick supplier in scope — tick clocks come from an enclosing signal model. Today the wall clock supplies the spacing: ms|us|ns|s", .{n_tok}) } };
+                }
+                const mult: []const u8 = if (std.mem.eql(u8, unit, "ns"))
+                    ""
+                else if (std.mem.eql(u8, unit, "us"))
+                    " * @import(\"std\").time.ns_per_us"
+                else if (std.mem.eql(u8, unit, "ms"))
+                    " * @import(\"std\").time.ns_per_ms"
+                else if (std.mem.eql(u8, unit, "s"))
+                    " * @import(\"std\").time.ns_per_s"
+                else {
+                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: unknown time unit '{s}' — wall-clock units are ms|us|ns|s", .{unit}) } };
+                };
+                within_spacing = std.fmt.allocPrint(allocator, "{d}{s}", .{ n, mult }) catch unreachable;
+            } else if (std.mem.eql(u8, key, "policy")) {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: '[policy: {s}]' declared but not yet honored — named-model delegation lands with the signal composition", .{value}) } };
+            } else {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: unknown policy declaration '{s}' — the vocabulary is [within: N ms|us|ns|s]", .{key}) } };
+            }
+            continue;
+        }
         if (std.mem.eql(u8, c.branch, "retry")) {
             if (c.condition == null) {
                 return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: `| retry` needs a `when` — an unconditional retry never terminates. Bound it on the attempt counter: `| retry t when t < N`", .{}) } };
@@ -315,10 +366,13 @@ const std = @import("std");
     }
 
     var terminal_exh = false;
-    if (rules.items.len > 0) {
+    if (rules.items.len > 0 or within_spacing != null) {
         // ---- arm policy mode ----
         if (block_text != null) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: policy arms and a {{ }} block are two spellings of one policy — pick one", .{}) } };
+            if (rules.items.len > 0) {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: policy arms and a {{ }} block are two spellings of one policy — pick one", .{}) } };
+            }
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: '[within: …]' rides the arm spelling — 'supervised {{ restart: N }}' doesn't carry declarations; spell the bound as `| retry t when t < N`", .{}) } };
         }
         var retry_count: usize = 0;
         var bounded = false;
@@ -459,7 +513,7 @@ const std = @import("std");
             }
         }
     }
-    body.appendSlice(allocator, "while (true) {\n    const __r = ") catch unreachable;
+    body.appendSlice(allocator, "for (0..@intCast(__left)) |_| {\n    const __r = ") catch unreachable;
     body.appendSlice(allocator, modref) catch unreachable;
     body.appendSlice(allocator, ".") catch unreachable;
     body.appendSlice(allocator, child_name) catch unreachable;
@@ -512,7 +566,7 @@ const std = @import("std");
             H.appendForward(allocator, &body, b.name, H.hasPayload(b));
         }
     }
-    body.appendSlice(allocator, "    }\n}\n") catch unreachable;
+    body.appendSlice(allocator, "    }\n    }\n    unreachable;\n") catch unreachable;
     } else {
         // Arm policy mode: `__t` counts retries SPENT — the retry arm's own
         // binding names it (`| retry t when t < N` grants exactly N
@@ -524,12 +578,25 @@ const std = @import("std");
         // call and dispatch — a fresh supervised outcome updates `f` and
         // `continue :outer` re-evaluates the policy against it.
         body.appendSlice(allocator, "var __t: i64 = 0;\n") catch unreachable;
+        // `[within: N unit]` — wall-clock min-spacing between restarts.
+        // `__last` is the nanosecond timestamp of the last re-entry (0 = the
+        // site's own failure, always allowed); a retry that would fire inside
+        // the window is declined — keep-alive fails — and the outcome falls
+        // through to `| exhausted` / forward-in-kind like any unmet bound.
+        if (within_spacing) |ws| {
+            body.appendSlice(allocator, "const __spacing: i128 = ") catch unreachable;
+            body.appendSlice(allocator, ws) catch unreachable;
+            body.appendSlice(allocator, ";\nvar __last: i128 = 0;\n") catch unreachable;
+        }
         if (H.hasPayload(supervised_branch.?)) {
             body.appendSlice(allocator, "var ") catch unreachable;
             body.appendSlice(allocator, fail_bind) catch unreachable;
             body.appendSlice(allocator, " = __fail;\n") catch unreachable;
         }
         body.appendSlice(allocator, "outer: while (true) {\n") catch unreachable;
+        if (within_spacing != null) {
+            body.appendSlice(allocator, "    const __now = @import(\"std\").time.nanoTimestamp();\n    const __within_ok = __last == 0 or __now - __last >= __spacing;\n") catch unreachable;
+        }
         for (rules.items) |r| {
             switch (r.kind) {
                 .retry => {
@@ -552,7 +619,14 @@ const std = @import("std");
                     }
                     body.appendSlice(allocator, "        if (") catch unreachable;
                     body.appendSlice(allocator, r.cond.?) catch unreachable;
-                    body.appendSlice(allocator, ") {\n            __t += 1;\n            const __r = ") catch unreachable;
+                    if (within_spacing != null) {
+                        body.appendSlice(allocator, " and __within_ok") catch unreachable;
+                    }
+                    body.appendSlice(allocator, ") {\n            __t += 1;\n") catch unreachable;
+                    if (within_spacing != null) {
+                        body.appendSlice(allocator, "            __last = __now;\n") catch unreachable;
+                    }
+                    body.appendSlice(allocator, "            const __r = ") catch unreachable;
                     H.appendCall(allocator, &body, modref, child_name, decl.input.fields, r.inv);
                     body.appendSlice(allocator, ";\n            switch (__r) {\n") catch unreachable;
                     for (decl.branches) |*b| {

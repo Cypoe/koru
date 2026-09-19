@@ -32,9 +32,10 @@ real produce. Nothing is parsed twice; the transform walks
 - **The decision vocabulary becomes checkable.** `args:` naming a field the
   child does not take was a string-level validation the transform wrote by
   hand; `|> dial(port: f + 1)` is an ordinary call the transform validates
-  against the decl — and pattern-name arms (`[within: 10 ticks]`, the
+  against the decl — and pattern-name arms (`[within: 10 ms]`, the
   `koru/odds` reflection channel) give declarations a metadata surface with no
   grammar cost.
+
 - **The inline policy and a named policy share one vocabulary.** A future
   stateful policy (a signal model consuming the failure stream) produces
   `retry`/`exhausted` decisions — the SAME branches the inline arms spell.
@@ -44,6 +45,27 @@ real produce. Nothing is parsed twice; the transform walks
 - **Ordered rules arrive already ordered.** `restart: { err: 3, busy: 5 }`
   per-branch maps and `up_to`/`again` keywords were all going to be new
   grammar. As arms they are ordinary repetition plus `when`.
+
+## Declaration arms carry suppliers — a pinned noun without one refuses with teaching
+
+The metadata channel landed as `[key: value]` arms — the parser strips the
+brackets, a `:` in the name marks the arm a declaration, and the transform
+routes it to a declaration table rather than the rule list. `within` is the
+first honored key: **wall-clock min-spacing between restarts**, emitted as a
+nanosecond timestamp stamped on each re-entry (`within: 10 ms` declines a
+retry that would fire inside the window — keep-alive fails, the outcome
+forwards in kind like any unmet bound).
+
+The ruling that mattered more than the mechanism: **`within: 10 ticks`
+refuses.** On a call the only in-scope clock is the attempt index, and on a
+pure failure stream "M restarts within N attempts" degenerates — every event
+IS a restart, so the window check collapses to the `when` bound the arm
+already carries. A tick clock has a supplier — an enclosing signal model —
+and its absence is the refusal's whole message. So vocabulary may be *pinned*
+before its supplier exists: `[within: 10 ticks]` parses, validates, and
+refuses with the name of the missing supplier, which lands the composition
+boundary in a diagnostic rather than a doc. `[policy: Name]` is pinned the
+same way — declared, refused, awaiting the named-model path.
 
 ## Where the datablock still earns its place
 
@@ -69,10 +91,13 @@ block + arms on one site refuses loudly rather than merging.
 Re-entry `|>` is same-event only in v1 (the retry arms share one outcome
 union). `| exhausted` produces in the child's vocabulary, not the parent's —
 a parent-only terminal name refuses. Multi-field failure payloads refuse
-(`__fail` threads exactly one field). The named-model path (`policy:`) is the
-designed next rung, not yet spelled.
+(`__fail` threads exactly one field). `within` honors wall-clock units only
+(`ms|us|ns|s`) — `ticks` and `[policy:]` are pinned, not supplied.
+Declaration arms do not combine with the `{ restart: N }` datablock; the
+mixing refusal points at the arm spelling.
 
 Reference: `koru_std/supervisor.kz` (arm-mode emission); pins 320_153
 (re-spelled), 320_155 (ordered rules + exhausted produce), 320_156
-(missing-bound refusal). Mechanism for the site-local rewrite itself:
+(missing-bound refusal), 320_157 (`within` honored), 320_158 (`ticks`
+refusal). Mechanism for the site-local rewrite itself:
 [[frag-transform-continuation-position]].
