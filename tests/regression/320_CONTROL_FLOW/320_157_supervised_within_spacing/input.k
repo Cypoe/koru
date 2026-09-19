@@ -1,5 +1,5 @@
-// `[within: N unit]` — a policy DECLARATION arm (brackets stripped by the
-// parser; the `:` marks it metadata, not a decision rule). `within` is the
+// `{ within: N unit }` — a policy DECLARATION field in the supervised
+// block (the data slot — rules live in the arm children). `within` is the
 // wall-clock min-spacing throttle: the generated unit stamps the
 // nanosecond timestamp of each re-entry and declines a retry that would
 // fire inside the window — keep-alive fails, and the outcome proceeds
@@ -28,8 +28,7 @@ pub tor sup { n: i64 }
 
 sup = worker(n)
 | ok v => ok v
-| boom f |> std/supervisor:supervised
-    | [within: 1 s]
+| boom f |> std/supervisor:supervised { within: 1 s }
     | retry t when t < 5
 
 sup(n: -10)

@@ -60,7 +60,8 @@ const std = @import("std");
 } -> SiteResult
 
 ~[transform]proc supervised|zig {
-    const ast = @import("ast");
+    // `ast` arrives at module scope from the `decl` part — a local import
+    // here would shadow it.
     const ast_functional = @import("ast_functional");
     const struct_literal = @import("struct_literal");
 
@@ -158,6 +159,12 @@ const std = @import("std");
     var restart_text: ?[]const u8 = null;
     var restart_rt: []const u8 = "";
     var arg_exprs: []const struct_literal.StructField = &.{};
+    // `within_spacing` — the `{ within: N unit }` DECLARATION, wall-clock
+    // min-spacing between restarts. Declarations are data and live in the
+    // block; decision rules live in the arm children — each content kind in
+    // its own slot. `ticks` and `policy` are pinned vocabulary waiting on
+    // their suppliers (signal tick, named model).
+    var within_spacing: ?[]const u8 = null;
     if (block_text) |bt| {
         const braced = std.fmt.allocPrint(allocator, "{{{s}}}", .{bt}) catch unreachable;
         const policy_fields = struct_literal.parseFields(allocator, braced) catch |err| {
@@ -170,8 +177,18 @@ const std = @import("std");
                 arg_exprs = struct_literal.parseFields(allocator, pf.value) catch |err| {
                     return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: args: {s}", .{struct_literal.describeError(err)}) } };
                 };
+            } else if (std.mem.eql(u8, pf.name, "within")) {
+                if (within_spacing != null) {
+                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: 'within' declared twice — one spacing bound per policy", .{}) } };
+                }
+                switch (parseWithin(allocator, reporter, flow.location, flow.module, pf.value)) {
+                    .ok => |ws| within_spacing = ws,
+                    .refuse => |r| return .{ .transformed = .{ .replacement = r } },
+                }
+            } else if (std.mem.eql(u8, pf.name, "policy")) {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: 'policy: {s}' declared but not yet honored — named-model delegation lands with the signal composition", .{pf.value}) } };
             } else {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: unknown policy '{s}' — supported: restart, args", .{pf.name}) } };
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: unknown policy field '{s}' — rule fields: restart, args; declarations: within", .{pf.name}) } };
             }
         }
     }
@@ -278,57 +295,13 @@ const std = @import("std");
         ctor: ?*const ast.BranchConstructor, // exhausted only — terminal produce
     };
     var rules = std.ArrayList(Rule).initCapacity(allocator, 4) catch unreachable;
-    // `[key: value]` arms arrive with the brackets stripped — a `:` in the
-    // name is the marker (plain branch names can't carry one). These are
-    // policy DECLARATIONS, not decision rules: `within` is the wall-clock
-    // min-spacing throttle; `ticks` and `policy` are pinned vocabulary
-    // waiting on their suppliers (signal tick, named model).
-    var within_spacing: ?[]const u8 = null;
     for (site.continuations) |*c| {
+        // `[key: value]` arms arrive with the brackets stripped — a `:` in
+        // the name is the marker (plain branch names can't carry one). An
+        // arm-shaped declaration is a do-nothing arm borrowing an outcome
+        // dispatch slot — declarations are DATA and live in the block.
         if (std.mem.indexOfScalar(u8, c.branch, ':') != null) {
-            if (c.binding != null or c.condition != null or c.node != null) {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: '[{s}]' is a policy declaration — declarations take no binding, `when`, or continuation", .{c.branch}) } };
-            }
-            const colon = std.mem.indexOfScalar(u8, c.branch, ':').?;
-            const key = std.mem.trim(u8, c.branch[0..colon], " ");
-            const value = std.mem.trim(u8, c.branch[colon + 1 ..], " ");
-            if (std.mem.eql(u8, key, "within")) {
-                if (within_spacing != null) {
-                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: 'within' declared twice — one spacing bound per policy", .{}) } };
-                }
-                var toks = std.mem.tokenizeAny(u8, value, " \t");
-                const n_tok = toks.next() orelse "";
-                const unit = toks.next() orelse "";
-                if (n_tok.len == 0 or unit.len == 0 or toks.next() != null) {
-                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: within wants `N unit` — '[within: {s}]'", .{value}) } };
-                }
-                const n = std.fmt.parseInt(i64, n_tok, 10) catch {
-                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: within wants an integer count — got '{s}'", .{n_tok}) } };
-                };
-                if (n <= 0) {
-                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: within must be positive — 'within: {s}' throttles nothing", .{value}) } };
-                }
-                if (std.mem.eql(u8, unit, "ticks")) {
-                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: 'within: {s} ticks' has no tick supplier in scope — tick clocks come from an enclosing signal model. Today the wall clock supplies the spacing: ms|us|ns|s", .{n_tok}) } };
-                }
-                const mult: []const u8 = if (std.mem.eql(u8, unit, "ns"))
-                    ""
-                else if (std.mem.eql(u8, unit, "us"))
-                    " * @import(\"std\").time.ns_per_us"
-                else if (std.mem.eql(u8, unit, "ms"))
-                    " * @import(\"std\").time.ns_per_ms"
-                else if (std.mem.eql(u8, unit, "s"))
-                    " * @import(\"std\").time.ns_per_s"
-                else {
-                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: unknown time unit '{s}' — wall-clock units are ms|us|ns|s", .{unit}) } };
-                };
-                within_spacing = std.fmt.allocPrint(allocator, "{d}{s}", .{ n, mult }) catch unreachable;
-            } else if (std.mem.eql(u8, key, "policy")) {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: '[policy: {s}]' declared but not yet honored — named-model delegation lands with the signal composition", .{value}) } };
-            } else {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: unknown policy declaration '{s}' — the vocabulary is [within: N ms|us|ns|s]", .{key}) } };
-            }
-            continue;
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: '| [{s}]' declares nothing on an outcome arm — policy declarations ride the block: 'supervised {{ {s} }}'", .{ c.branch, c.branch }) } };
         }
         if (std.mem.eql(u8, c.branch, "retry")) {
             if (c.condition == null) {
@@ -366,14 +339,19 @@ const std = @import("std");
     }
 
     var terminal_exh = false;
-    if (rules.items.len > 0 or within_spacing != null) {
+    // The block's fields split by KIND: `restart`/`args` are rule-source
+    // (they spell decisions) and conflict with rule arms — two spellings of
+    // one policy. `within` is a modifier — it parameterizes whatever rules
+    // exist, block-shorthand or arms, and composes with either.
+    const rule_source = restart_text != null or arg_exprs.len > 0;
+    if (rules.items.len > 0 and rule_source) {
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: 'restart:'/'args:' fields and `| retry`/`| exhausted` arms spell the same decisions — keep rules in one place (a 'within:'/'policy:' declaration composes with either)", .{}) } };
+    }
+    if (rules.items.len == 0 and !rule_source and within_spacing != null) {
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: 'within' modifies a policy — with no 'restart:' field and no `| retry` arms there is nothing to space", .{}) } };
+    }
+    if (rules.items.len > 0) {
         // ---- arm policy mode ----
-        if (block_text != null) {
-            if (rules.items.len > 0) {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: policy arms and a {{ }} block are two spellings of one policy — pick one", .{}) } };
-            }
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: '[within: …]' rides the arm spelling — 'supervised {{ restart: N }}' doesn't carry declarations; spell the bound as `| retry t when t < N`", .{}) } };
-        }
         var retry_count: usize = 0;
         var bounded = false;
         for (rules.items, 0..) |r, i| {
@@ -502,6 +480,9 @@ const std = @import("std");
         body.appendSlice(allocator, "var __left: i64 = ") catch unreachable;
         body.appendSlice(allocator, restart_rt) catch unreachable;
         body.appendSlice(allocator, ";\n") catch unreachable;
+    if (within_spacing) |ws| {
+        appendWithinPrelude(&body, allocator, ws, H.hasPayload(supervised_branch.?), modref, child_name, site.branch);
+    }
     for (decl.input.fields) |fld| {
         for (arg_exprs) |ae| {
             if (std.mem.eql(u8, ae.name, fld.name)) {
@@ -513,7 +494,11 @@ const std = @import("std");
             }
         }
     }
-    body.appendSlice(allocator, "for (0..@intCast(__left)) |_| {\n    const __r = ") catch unreachable;
+    body.appendSlice(allocator, "for (0..@intCast(__left)) |_| {\n") catch unreachable;
+    if (within_spacing != null) {
+        appendWithinGate(&body, allocator, H.hasPayload(supervised_branch.?), site.branch);
+    }
+    body.appendSlice(allocator, "    const __r = ") catch unreachable;
     body.appendSlice(allocator, modref) catch unreachable;
     body.appendSlice(allocator, ".") catch unreachable;
     body.appendSlice(allocator, child_name) catch unreachable;
@@ -549,6 +534,9 @@ const std = @import("std");
                 body.appendSlice(allocator, " = ") catch unreachable;
                 body.appendSlice(allocator, fail_bind) catch unreachable;
                 body.appendSlice(allocator, " }; }\n") catch unreachable;
+                if (within_spacing != null) {
+                    appendWithinStamp(&body, allocator, true, fail_bind);
+                }
                 for (arg_exprs) |ae| {
                     body.appendSlice(allocator, "                __arg_") catch unreachable;
                     body.appendSlice(allocator, ae.name) catch unreachable;
@@ -560,7 +548,11 @@ const std = @import("std");
             } else {
                 body.appendSlice(allocator, " => {\n                __left -= 1;\n                if (__left <= 0) { return .{ .") catch unreachable;
                 body.appendSlice(allocator, b.name) catch unreachable;
-                body.appendSlice(allocator, " = {} }; }\n            },\n") catch unreachable;
+                body.appendSlice(allocator, " = {} }; }\n") catch unreachable;
+                if (within_spacing != null) {
+                    appendWithinStamp(&body, allocator, false, "");
+                }
+                body.appendSlice(allocator, "            },\n") catch unreachable;
             }
         } else {
             H.appendForward(allocator, &body, b.name, H.hasPayload(b));
@@ -808,3 +800,5 @@ const std = @import("std");
         .appended = appended.toOwnedSlice(allocator) catch unreachable,
     } };
 }
+
+~part decl

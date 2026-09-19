@@ -1,4 +1,4 @@
-// `[within: N ticks]` pins the tick-unit refusal: `within` is a real
+// `{ within: N ticks }` pins the tick-unit refusal: `within` is a real
 // declaration, but a tick clock has no supplier in call scope — tick
 // clocks come from an enclosing signal model. The diagnostic teaches the
 // wall-clock units that ARE honored today (ms|us|ns|s).
@@ -20,8 +20,7 @@ pub tor sup { n: i64 }
 
 sup = worker(n)
 | ok v => ok v
-| boom f |> std/supervisor:supervised
-    | [within: 10 ticks]
+| boom f |> std/supervisor:supervised { within: 10 ticks }
     | retry t when t < 3
 
 sup(n: -10)

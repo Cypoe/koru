@@ -1,0 +1,108 @@
+// Koru Standard Library: the `decl` part of supervisor.kz — policy
+// declaration parsing. Joined via `~part decl` in supervisor.kz; merged
+// into the supervisor module at load.
+//
+// Declarations are DATA — they live in the supervised block, not in arm
+// position (`| [key: value]` refuses pointing here). `within: N unit` is
+// the wall-clock min-spacing throttle; `ticks` and `policy:` are pinned
+// vocabulary awaiting their suppliers (enclosing signal model, named
+// policy model).
+
+const ast = @import("ast");
+const errors = @import("errors");
+
+/// `within` parse result: the emitted spacing expression (nanoseconds)
+/// or a refusal to hand back as the transform's replacement.
+const WithinResult = union(enum) { ok: []const u8, refuse: ast.Item };
+
+/// Parse a `{ within: N unit }` value into the emitted nanosecond
+/// spacing expression. Wall-clock units only — `ticks` refuses naming
+/// the missing signal-model supplier.
+fn parseWithin(
+    allocator: std.mem.Allocator,
+    reporter: anytype,
+    loc: errors.SourceLocation,
+    module: []const u8,
+    raw: []const u8,
+) WithinResult {
+    const refuse = struct {
+        fn at(alloc: std.mem.Allocator, rep: anytype, l: errors.SourceLocation, m: []const u8, comptime fmt: []const u8, args: anytype) WithinResult {
+            return .{ .refuse = ast.refusal(alloc, rep, .KORU161, l, m, fmt, args) };
+        }
+    };
+    const value = std.mem.trim(u8, raw, " ");
+    var toks = std.mem.tokenizeAny(u8, value, " \t");
+    const n_tok = toks.next() orelse "";
+    const unit = toks.next() orelse "";
+    if (n_tok.len == 0 or unit.len == 0 or toks.next() != null) {
+        return refuse.at(allocator, reporter, loc, module, "std/supervisor:supervised: within wants `N unit` — 'within: {s}'", .{value});
+    }
+    const n = std.fmt.parseInt(i64, n_tok, 10) catch {
+        return refuse.at(allocator, reporter, loc, module, "std/supervisor:supervised: within wants an integer count — got '{s}'", .{n_tok});
+    };
+    if (n <= 0) {
+        return refuse.at(allocator, reporter, loc, module, "std/supervisor:supervised: within must be positive — 'within: {s}' throttles nothing", .{value});
+    }
+    if (std.mem.eql(u8, unit, "ticks")) {
+        return refuse.at(allocator, reporter, loc, module, "std/supervisor:supervised: 'within: {s} ticks' has no tick supplier in scope — tick clocks come from an enclosing signal model. Today the wall clock supplies the spacing: ms|us|ns|s", .{n_tok});
+    }
+    const mult: []const u8 = if (std.mem.eql(u8, unit, "ns"))
+        ""
+    else if (std.mem.eql(u8, unit, "us"))
+        " * @import(\"std\").time.ns_per_us"
+    else if (std.mem.eql(u8, unit, "ms"))
+        " * @import(\"std\").time.ns_per_ms"
+    else if (std.mem.eql(u8, unit, "s"))
+        " * @import(\"std\").time.ns_per_s"
+    else {
+        return refuse.at(allocator, reporter, loc, module, "std/supervisor:supervised: unknown time unit '{s}' — wall-clock units are ms|us|ns|s", .{unit});
+    };
+    return .{ .ok = std.fmt.allocPrint(allocator, "{d}{s}", .{ n, mult }) catch unreachable };
+}
+
+// ---- `within` emission helpers ---------------------------------------------
+// The generated unit stamps the nanosecond timestamp of each supervised
+// failure (`__last`, 0 = none yet) and gates each re-entry on
+// `__now - __last >= __spacing`. A decline proceeds upward in kind like
+// any unmet bound — keep-alive failed, the last failure is the answer.
+
+/// Block-mode prelude: spacing constant, last-failure stamp, and `__pend`
+/// carrying the pending failure so the loop-top gate can return it.
+fn appendWithinPrelude(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, ws: []const u8, has_payload: bool, modref: []const u8, child_name: []const u8, branch: []const u8) void {
+    buf.appendSlice(allocator, "const __spacing: i128 = ") catch unreachable;
+    buf.appendSlice(allocator, ws) catch unreachable;
+    buf.appendSlice(allocator, ";\nvar __last: i128 = 0;\n") catch unreachable;
+    if (has_payload) {
+        buf.appendSlice(allocator, "var __pend: @TypeOf(@as(") catch unreachable;
+        buf.appendSlice(allocator, modref) catch unreachable;
+        buf.appendSlice(allocator, ".") catch unreachable;
+        buf.appendSlice(allocator, child_name) catch unreachable;
+        buf.appendSlice(allocator, "_event.Output, undefined).") catch unreachable;
+        buf.appendSlice(allocator, branch) catch unreachable;
+        buf.appendSlice(allocator, ") = undefined;\n") catch unreachable;
+    }
+}
+
+/// Block-mode loop-top gate: precedes the call, so a declined re-entry
+/// never fires the child — the pending failure proceeds upward in kind.
+fn appendWithinGate(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, has_payload: bool, branch: []const u8) void {
+    buf.appendSlice(allocator, "    if (__last != 0) {\n        const __now = @import(\"std\").time.nanoTimestamp();\n        if (__now - __last < __spacing) { return .{ .") catch unreachable;
+    buf.appendSlice(allocator, branch) catch unreachable;
+    if (has_payload) {
+        buf.appendSlice(allocator, " = __pend") catch unreachable;
+    } else {
+        buf.appendSlice(allocator, " = {}") catch unreachable;
+    }
+    buf.appendSlice(allocator, " }; }\n    }\n") catch unreachable;
+}
+
+/// Block-mode failure stamp: on each supervised outcome, record the
+/// failure's timestamp (and payload) for the next gate check.
+fn appendWithinStamp(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, has_payload: bool, fail_bind: []const u8) void {
+    buf.appendSlice(allocator, "                __last = @import(\"std\").time.nanoTimestamp();\n") catch unreachable;
+    if (has_payload) {
+        buf.appendSlice(allocator, "                __pend = ") catch unreachable;
+        buf.appendSlice(allocator, fail_bind) catch unreachable;
+        buf.appendSlice(allocator, ";\n") catch unreachable;
+    }
+}

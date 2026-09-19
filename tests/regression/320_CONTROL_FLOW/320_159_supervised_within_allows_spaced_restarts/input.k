@@ -1,4 +1,4 @@
-// The allowed path of `[within: N unit]` — a child slower than the
+// The allowed path of `{ within: N unit }` — a child slower than the
 // spacing window re-enters every time. `within: 10 ms` under a worker
 // that sleeps 15 ms: each restart is provably ≥15 ms after the last, so
 // `t < 3` grants all three re-entries (four "try" lines) and exhaustion
@@ -24,8 +24,7 @@ pub tor sup { n: i64 }
 
 sup = worker(n)
 | ok v => ok v
-| boom f |> std/supervisor:supervised
-    | [within: 10 ms]
+| boom f |> std/supervisor:supervised { within: 10 ms }
     | retry t when t < 3
 
 sup(n: -10)

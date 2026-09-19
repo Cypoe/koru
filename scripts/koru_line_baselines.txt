@@ -11,7 +11,7 @@ examples/probably/input.k	53
 examples/probably/jev.kz	213
 examples/profiler_scale.kz	41
 examples/unikraft/hello.k	8
-examples/unikraft/hello.kz	13
+examples/unikraft/hello.kz	12
 koru_std/args.k	26
 koru_std/args.kjs	41
 koru_std/args.kz	52
@@ -150,7 +150,8 @@ koru_std/store.watch.kz	296
 koru_std/string-map.kz	126
 koru_std/string.kjs	147
 koru_std/string.kz	311
-koru_std/supervisor.kz	810
+koru_std/supervisor.decl.kz	108
+koru_std/supervisor.kz	804
 koru_std/switch.kz	151
 koru_std/table.kz	62
 koru_std/taps.kz	1442

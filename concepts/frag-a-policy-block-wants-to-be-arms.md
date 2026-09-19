@@ -32,9 +32,7 @@ real produce. Nothing is parsed twice; the transform walks
 - **The decision vocabulary becomes checkable.** `args:` naming a field the
   child does not take was a string-level validation the transform wrote by
   hand; `|> dial(port: f + 1)` is an ordinary call the transform validates
-  against the decl — and pattern-name arms (`[within: 10 ms]`, the
-  `koru/odds` reflection channel) give declarations a metadata surface with no
-  grammar cost.
+  against the decl.
 
 - **The inline policy and a named policy share one vocabulary.** A future
   stateful policy (a signal model consuming the failure stream) produces
@@ -46,15 +44,34 @@ real produce. Nothing is parsed twice; the transform walks
   per-branch maps and `up_to`/`again` keywords were all going to be new
   grammar. As arms they are ordinary repetition plus `when`.
 
-## Declaration arms carry suppliers — a pinned noun without one refuses with teaching
+## The two slots are kinded — the block is the declaration slot, arms are the rule slot
 
-The metadata channel landed as `[key: value]` arms — the parser strips the
-brackets, a `:` in the name marks the arm a declaration, and the transform
-routes it to a declaration table rather than the rule list. `within` is the
-first honored key: **wall-clock min-spacing between restarts**, emitted as a
-nanosecond timestamp stamped on each re-entry (`within: 10 ms` declines a
-retry that would fire inside the window — keep-alive fails, the outcome
-forwards in kind like any unmet bound).
+The `within` declaration first landed as a `| [within: 10 ms]` arm and the
+spelling was wrong in a way that taught: a bare arm — no `|>`, no `=>` — is
+legal Koru and means "on this outcome, swallow it." A declaration arm reads
+to the grammar as outcome dispatch with an impossible outcome, surviving
+only because a transform owns its children's vocabulary and the branch
+checker never sees them. The anomaly pointed at the real structure: **the
+site has two slots, and each content kind has its own.** `{ }` on the
+invocation is the data slot; continuation children are the decision slot.
+Declarations are data — they belong in the block:
+
+    | refused f |> std/supervisor:supervised { within: 10 ms }
+        | retry t when t < 5 |> dial(port: f + 1)
+
+So the block's fields split by kind: `restart:`/`args:` are *rule-source*
+(they spell decisions — mixing them with rule arms is the two-spellings
+refusal), while `within:`/`policy:` are *modifiers* that parameterize
+whatever rules exist and compose with either spelling — `{ restart: 3,
+within: 1 s }` is shorthand-plus-spacing with no arms needed. A modifier
+with no rules refuses ("nothing to space"). The arm-form `| [within: …]`
+died with a teaching refusal — one spelling per content kind, or the two
+slots drift back into ambiguity.
+
+`[…]` is Koru's existing metadata marker — `f[ann]` binding annotations,
+`[tag: desc]` pattern names, `[pure|async]` proc annotations — and the
+lesson is positional: metadata attaches to the noun it modifies. `within`
+modifies the supervised *site*, and the site's own data slot is the block.
 
 The ruling that mattered more than the mechanism: **`within: 10 ticks`
 refuses.** On a call the only in-scope clock is the attempt index, and on a
@@ -62,18 +79,19 @@ pure failure stream "M restarts within N attempts" degenerates — every event
 IS a restart, so the window check collapses to the `when` bound the arm
 already carries. A tick clock has a supplier — an enclosing signal model —
 and its absence is the refusal's whole message. So vocabulary may be *pinned*
-before its supplier exists: `[within: 10 ticks]` parses, validates, and
+before its supplier exists: `within: 10 ticks` parses, validates, and
 refuses with the name of the missing supplier, which lands the composition
-boundary in a diagnostic rather than a doc. `[policy: Name]` is pinned the
+boundary in a diagnostic rather than a doc. `policy: Name` is pinned the
 same way — declared, refused, awaiting the named-model path.
 
 ## Where the datablock still earns its place
 
-A datablock remains right when the content is *data* — opaque text, a template,
-a kernel body ([[frag-a-source-block-mints-declared-slots]]) — not when the
-content is a decision list the language can already spell. The supervisor keeps
-`{ restart: N }` as the terse spelling of `| retry t when t < N`, and mixing
-block + arms on one site refuses loudly rather than merging.
+A datablock remains right when the content is *data* — opaque text, a
+template, a kernel body ([[frag-a-source-block-mints-declared-slots]]) —
+and policy *declarations* are exactly that kind of data. What the arms
+abolished was not the block but decisions-in-a-string; what the `within`
+re-spell abolished was data-in-an-arm. Neither slot is the DSL; smuggling
+the wrong kind into it is.
 
 ## The parser facts that make it work today
 
@@ -83,6 +101,11 @@ block + arms on one site refuses loudly rather than merging.
   claimed by produce-branch spelling; the vocabulary form needs `supervised()`.
 - Children attach to the site continuation by strictly-deeper indent;
   same-indent arms land as siblings and fail loudly downstream.
+- `|> X { data }` and deeper-indented arm children COEXIST on one site —
+  the block text arrives as the `source:` arg and the arms as
+  `site.continuations`. That coexistence is what makes the kinded split
+  grammatical rather than conventional: the data slot and the decision
+  slot are both real, so each kind gets its own.
 - An arm's `|>` node arrives as `.invocation`, an arm's `=>` produce as
   `.branch_constructor` — the transform reads node kind, never text.
 
@@ -92,12 +115,15 @@ Re-entry `|>` is same-event only in v1 (the retry arms share one outcome
 union). `| exhausted` produces in the child's vocabulary, not the parent's —
 a parent-only terminal name refuses. Multi-field failure payloads refuse
 (`__fail` threads exactly one field). `within` honors wall-clock units only
-(`ms|us|ns|s`) — `ticks` and `[policy:]` are pinned, not supplied.
-Declaration arms do not combine with the `{ restart: N }` datablock; the
-mixing refusal points at the arm spelling.
+(`ms|us|ns|s`) — `ticks` and `policy:` are pinned, not supplied. Rule-source
+fields (`restart`/`args`) do not combine with rule arms; declarations
+(`within`, future `policy`) compose with either spelling. Arm-shaped
+declarations (`| [key: value]`) refuse with teaching — the block is their
+home.
 
 Reference: `koru_std/supervisor.kz` (arm-mode emission); pins 320_153
 (re-spelled), 320_155 (ordered rules + exhausted produce), 320_156
 (missing-bound refusal), 320_157 (`within` honored), 320_158 (`ticks`
-refusal). Mechanism for the site-local rewrite itself:
+refusal), 320_160 (declaration-arm refusal), 320_161 (`restart`+`within`
+compose). Mechanism for the site-local rewrite itself:
 [[frag-transform-continuation-position]].
