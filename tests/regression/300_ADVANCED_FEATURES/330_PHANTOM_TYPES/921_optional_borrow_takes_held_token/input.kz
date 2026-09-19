@@ -1,0 +1,22 @@
+// PINS: a held *T<live!> token passes where ?*T<live> is declared — the
+// optional wrap applies to phantom pointer args the same as it does to
+// scalars (?i32 already accepts i32). The borrow does not consume the
+// obligation; drop still discharges it afterwards.
+const std = @import("std");
+~tor make {} -> *std.fs.File<live!>
+~proc make|zig {
+    const allocator = std.heap.page_allocator;
+    const f = allocator.create(std.fs.File) catch unreachable;
+    return f;
+}
+~tor take { f: ?*std.fs.File<live> }
+~proc take|zig {
+    _ = f;
+    std.debug.print("took\n", .{});
+}
+~tor drop { f: *std.fs.File<!live> }
+~proc drop|zig {
+}
+~make(): f
+|> take(f)
+|> drop(f)
