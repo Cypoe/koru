@@ -1,0 +1,19 @@
+// PINS: a tor parameter whose name is a Zig keyword must not make that
+// keyword unusable in the proc body. The bound-name rewrite spells the
+// PARAM reference @"var" — but it must not touch the keyword position:
+// `var n: i32` is a declaration, not a reference. Today the rewrite is
+// positional-blind and emits `@"var" n: i32` — a Zig syntax error in
+// code the author never wrote.
+const std = @import("std");
+~tor bump { var: i32 } -> i32
+~proc bump|zig {
+    var n: i32 = var;
+    n += 1;
+    return n;
+}
+~tor show { x: i32 }
+~proc show|zig {
+    std.debug.print("{d}\n", .{x});
+}
+~bump(var: 41): n
+|> show(x: n)
