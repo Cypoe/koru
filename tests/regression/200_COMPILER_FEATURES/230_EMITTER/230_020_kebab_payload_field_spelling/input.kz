@@ -1,0 +1,16 @@
+// PINS: a kebab-case branch-payload field name carries the same canonical
+// spelling at every use site — the struct literal on the `=>` arm and the
+// field read downstream. Bound-name rewriting covered bindings; payload
+// FIELD names are the same class of name-writing site.
+const std = @import("std");
+~tor scan {}
+| found { pos-tempo: i32, label: string }
+| miss
+~scan => found { pos-tempo: 120, label: "x" }
+~tor report { t: i32 }
+~proc report|zig {
+    std.debug.print("tempo {d}\n", .{t});
+}
+~scan()
+| found f |> report(t: f.pos-tempo)
+| miss |> report(t: 0)

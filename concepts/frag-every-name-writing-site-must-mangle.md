@@ -31,10 +31,12 @@ site.** `writeBranchName` (kebab→snake, keyword-escapes) is the single
 spelling for any declared name reaching emitted Zig — field names, branch
 names, arg names — and a new emission path that re-implements an existing
 rule (like the four injection copies) inherits every defect the original
-had plus whatever it adds itself. The adjacent latent class is flagged, not
-fixed: `bc.fields` loops (~16 sites) emit `.{ .field-name = }` branch-payload
-literals with the same verbatim write — a kebab branch-payload field name
-would hit the identical wall, unexercised today.
+had plus whatever it adds itself. The adjacent latent class is flagged and now
+measured red: `bc.fields` loops (~16 sites) emit `.{ .field-name = }`
+branch-payload literals with the same verbatim write, and 230_020 exercises
+it — `| found { pos-tempo: i32 }` constructed by `=>` emits
+`.{ .pos-tempo = 120 }`, a Zig syntax error, pinned aspirational until the
+payload-field sites join the one-spelling invariant.
 
 2026-09-22, second surface of the same belief, pinned 230_019: the rule is
 not only *sites that write a name* but *text that contains one*. A `: i1`
