@@ -2268,8 +2268,13 @@ pub fn emitSubflowContinuations(
     // Non-null when the enclosing handler emits `__koru_self_loop` — see
     // the param on emitSubflowContinuationsWithDepth.
     self_loop_canonical: ?[]const u8,
+    // The chain head's `: bind` when the caller emitted the head const under
+    // that name — it is in scope for every continuation here, so
+    // escapeBoundNames must see it even though it lives on `flow.inv()`,
+    // outside this slice.
+    head_binding: ?[]const u8,
 ) !void {
-    try emitSubflowContinuationsWithDepth(emitter, continuations, start_idx, indent, all_items, 0, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, null, self_loop_canonical);
+    try emitSubflowContinuationsWithDepth(emitter, continuations, start_idx, indent, all_items, 0, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, null, self_loop_canonical, head_binding, null);
 }
 
 /// Same as emitSubflowContinuations, but names the ROOT result const the
@@ -2293,7 +2298,9 @@ pub fn emitSubflowContinuationsRooted(
     root_result_name: ?[]const u8,
     self_loop_canonical: ?[]const u8,
 ) !void {
-    try emitSubflowContinuationsWithDepth(emitter, continuations, start_idx, indent, all_items, 0, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, root_result_name, self_loop_canonical);
+    // The root result name doubles as the head binding for scope collection
+    // — both name the same caller-emitted const.
+    try emitSubflowContinuationsWithDepth(emitter, continuations, start_idx, indent, all_items, 0, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, root_result_name, self_loop_canonical, null, null);
 }
 
 /// Helper to check if any continuation in a list has a label
@@ -2732,6 +2739,28 @@ fn resolveTargetInputFields(
     return null;
 }
 
+/// Collect every name a continuation tree binds — `: bind` return bindings and
+/// `| x` payload bindings — into `out`. The subflow-continuations path keeps
+/// no EmissionContext, so the set escapeBoundNames rewrites against has to be
+/// gathered from the AST. Over-collects deliberately: a name bound in a later
+/// sibling subtree cannot be referenced by earlier text, so including it
+/// costs nothing.
+fn collectBoundNames(allocator: std.mem.Allocator, continuations: []const ast.Continuation, out: *std.ArrayList([]const u8)) !void {
+    for (continuations) |*cont| {
+        if (cont.binding) |b| {
+            try out.append(allocator, b);
+        }
+        if (cont.node) |node| {
+            if (node == .invocation) {
+                if (node.invocation.return_binding) |rb| {
+                    try out.append(allocator, rb);
+                }
+            }
+        }
+        try collectBoundNames(allocator, cont.continuations, out);
+    }
+}
+
 fn emitSubflowContinuationsWithDepth(
     emitter: *CodeEmitter,
     continuations: []const ast.Continuation,
@@ -2759,8 +2788,40 @@ fn emitSubflowContinuationsWithDepth(
     // `handler()` call — the call would leave the loop label unreferenced
     // and Zig rejects the emit (320_150).
     self_loop_canonical: ?[]const u8,
+    // The chain head's `: bind`, when one exists and lives outside the
+    // continuations slice (on the flow's head invocation). Same reason as
+    // ancestor_bindings — the name is in scope here but unreachable by
+    // collectBoundNames.
+    head_binding: ?[]const u8,
+    // Names bound by ancestor continuations — appended to, never popped. This
+    // path keeps no EmissionContext, so the in-scope set escapeBoundNames
+    // needs is collected from the AST instead of read off ctx.
+    ancestor_bindings: ?*const std.ArrayList([]const u8),
 ) !void {
     if (start_idx >= continuations.len) return;
+
+    const bindings_alloc = emitter.allocator orelse std.heap.page_allocator;
+    var local_bindings: std.ArrayList([]const u8) = .empty;
+    defer local_bindings.deinit(bindings_alloc);
+    if (ancestor_bindings) |ab| {
+        try local_bindings.appendSlice(bindings_alloc, ab.items);
+    }
+    try collectBoundNames(bindings_alloc, continuations, &local_bindings);
+    if (parent_result_name) |prn| {
+        try local_bindings.append(bindings_alloc, prn);
+    }
+    if (head_binding) |hb| {
+        try local_bindings.append(bindings_alloc, hb);
+    }
+    var local_ctx = EmissionContext{
+        .allocator = bindings_alloc,
+        .main_module_name = main_module_name,
+        .type_registry = type_registry,
+    };
+    // Share the slice only: an append on this list would have to realloc into
+    // a buffer local_bindings no longer owns. Nothing downstream appends —
+    // emitInvocation's binding registration rides the real ctx, not this one.
+    local_ctx.zig_scope_bindings.items = local_bindings.items;
 
     const remaining_conts = continuations[start_idx..];
 
@@ -2792,7 +2853,7 @@ fn emitSubflowContinuationsWithDepth(
                 try emitter.write(indent);
                 if (parent_result_name) |prn| {
                     try emitter.write("_ = &");
-                    try emitter.write(prn);
+                    try writeBranchName(emitter, prn);
                     try emitter.write(";\n");
                 } else if (depth == 0) {
                     try emitter.write("_ = &result;\n");
@@ -2816,6 +2877,7 @@ fn emitSubflowContinuationsWithDepth(
                     .self_loop_active = self_loop_canonical != null,
                     .self_loop_event_canonical = self_loop_canonical,
                 };
+                ctx.zig_scope_bindings.items = local_bindings.items;
                 var label_contexts = std.StringHashMap(LabelContext).init(ctx.allocator);
                 ctx.label_contexts = &label_contexts;
                 defer {
@@ -2847,7 +2909,7 @@ fn emitSubflowContinuationsWithDepth(
             try emitter.write(indent);
             if (parent_result_name) |prn| {
                 try emitter.write("_ = &");
-                try emitter.write(prn);
+                try writeBranchName(emitter, prn);
                 try emitter.write(";\n");
             } else if (depth == 0) {
                 try emitter.write("_ = &result;\n");
@@ -2870,6 +2932,7 @@ fn emitSubflowContinuationsWithDepth(
                 .self_loop_active = self_loop_canonical != null,
                 .self_loop_event_canonical = self_loop_canonical,
             };
+            ctx.zig_scope_bindings.items = local_bindings.items;
             var label_contexts = std.StringHashMap(LabelContext).init(ctx.allocator);
             ctx.label_contexts = &label_contexts;
             defer {
@@ -2915,7 +2978,7 @@ fn emitSubflowContinuationsWithDepth(
             try emitter.write(indent);
             if (parent_result_name) |prn| {
                 try emitter.write("_ = &");
-                try emitter.write(prn);
+                try writeBranchName(emitter, prn);
                 try emitter.write(";\n");
             } else if (depth == 0) {
                 try emitter.write("_ = &result;\n");
@@ -3014,9 +3077,10 @@ fn emitSubflowContinuationsWithDepth(
                                 .main_module_name = main_module_name,
                                 .type_registry = type_registry,
                             };
+                            lit_ctx.zig_scope_bindings.items = local_bindings.items;
                             try emitArrayLiteralForField(emitter, &lit_ctx, field, av);
                         } else {
-                            try emitter.write(arg.value);
+                            try emitter.write(try escapeBoundNames(&local_ctx, arg.value));
                         }
                     }
                     // OPTIONAL PARAMETER INJECTION — the twin of emitArgs's
@@ -3081,6 +3145,7 @@ fn emitSubflowContinuationsWithDepth(
                                 .main_module_name = main_module_name,
                                 .type_registry = type_registry,
                             };
+                            val_ctx.zig_scope_bindings.items = local_bindings.items;
                             try emitValue(emitter, &val_ctx, pv);
                         } else {
                             try emitter.write("undefined");
@@ -3092,7 +3157,7 @@ fn emitSubflowContinuationsWithDepth(
                         try emitter.write(" = ");
                         // Check for plain value (identity branch constructor)
                         if (bc.plain_value) |pv| {
-                            try emitter.write(lowerExprZig(emitter, pv));
+                            try emitter.write(lowerExprZig(emitter, &local_ctx, pv));
                         } else {
                             try emitter.write(".{");
                             for (bc.fields, 0..) |field, i| {
@@ -3101,7 +3166,7 @@ fn emitSubflowContinuationsWithDepth(
                                 try emitter.write(field.name);
                                 try emitter.write(" = ");
                                 if (field.expression_str) |expr| {
-                                    try emitter.write(lowerExprZig(emitter, expr));
+                                    try emitter.write(lowerExprZig(emitter, &local_ctx, expr));
                                 } else {
                                     try emitter.write(field.type);
                                 }
@@ -3142,6 +3207,8 @@ fn emitSubflowContinuationsWithDepth(
                 // unchanged at this level.
                 step_bind orelse (if (next_needs_switch) null else parent_result_name),
                 self_loop_canonical,
+                null,
+                &local_bindings,
             );
         }
         return;
@@ -3181,6 +3248,7 @@ fn emitSubflowContinuationsWithDepth(
             .self_loop_active = self_loop_canonical != null,
             .self_loop_event_canonical = self_loop_canonical,
         };
+        ctx.zig_scope_bindings.items = local_bindings.items;
         // A label-fold emitted through this subflow path (visitor emitter) still
         // runs `emitContinuationBody`'s `label_with_invocation` arm, which
         // registers each `#label` in `ctx.label_contexts` so a cross-level
@@ -3214,7 +3282,7 @@ fn emitSubflowContinuationsWithDepth(
         {
             try emitter.write(indent);
             try emitter.write("_ = &");
-            try emitter.write(result_var);
+            try writeBranchName(emitter, result_var);
             try emitter.write(";\n");
             const old_indent = emitter.indent_level;
             emitter.indent_level = 0;
@@ -3343,7 +3411,7 @@ fn emitSubflowContinuationsWithDepth(
                 if (has_payload_fields) {
                     try emitter.write(indent);
                     try emitter.write("    _ = &");
-                    try emitter.write(binding_name);
+                    try writeBranchName(emitter, binding_name);
                     try emitter.write(";\n");
                 }
 
@@ -3444,7 +3512,7 @@ fn emitSubflowContinuationsWithDepth(
                         } else {
                             try emitter.write("else if (");
                         }
-                        try emitter.write(lowerExprZig(emitter, condition));
+                        try emitter.write(lowerExprZig(emitter, &local_ctx, condition));
                         try emitter.write(") {\n");
                     } else {
                         // No when-clause - this is the else case
@@ -3513,7 +3581,7 @@ fn emitSubflowContinuationsWithDepth(
         };
         try emitter.write(indent);
         try emitter.write("_ = &");
-        try emitter.write(result_var);
+        try writeBranchName(emitter, result_var);
         try emitter.write(";\n");
         var ctx_sole = EmissionContext{
             .allocator = std.heap.page_allocator,
@@ -3529,6 +3597,7 @@ fn emitSubflowContinuationsWithDepth(
             .self_loop_active = self_loop_canonical != null,
             .self_loop_event_canonical = self_loop_canonical,
         };
+        ctx_sole.zig_scope_bindings.items = local_bindings.items;
         var result_counter_sole: usize = depth;
         try emitContinuationBody(emitter, &ctx_sole, &remaining_conts[0], &result_counter_sole);
         return;
@@ -3743,6 +3812,7 @@ fn emitSubflowContinuationsWithDepth(
                                 .allocator = std.heap.page_allocator,
                                 .main_module_name = main_module_name,
                             };
+                            value_ctx.zig_scope_bindings.items = local_bindings.items;
 
                             for (inv.args, 0..) |arg, idx| {
                                 if (idx > 0) try emitter.write(", ");
@@ -3784,7 +3854,7 @@ fn emitSubflowContinuationsWithDepth(
                                         return error.ArrayLiteralMissingType;
                                     }
                                 } else {
-                                    try emitter.write(arg.value);
+                                    try emitter.write(try escapeBoundNames(&local_ctx, arg.value));
                                 }
                             }
                             // OPTIONAL PARAMETER INJECTION — the third copy of
@@ -3944,7 +4014,7 @@ fn emitSubflowContinuationsWithDepth(
                                 const extra = "            ";
                                 @memcpy(deeper_indent_buf[indent.len .. indent.len + extra.len], extra);
                                 const deeper_indent = deeper_indent_buf[0 .. indent.len + extra.len];
-                                try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical);
+                                try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical, null, &local_bindings);
                             }
 
                             try emitter.write(indent);
@@ -3958,7 +4028,7 @@ fn emitSubflowContinuationsWithDepth(
                             try emitter.write(" = ");
                             // Check for plain value (identity branch constructor)
                             if (bc.plain_value) |pv| {
-                                try emitter.write(lowerExprZig(emitter, pv));
+                                try emitter.write(lowerExprZig(emitter, &local_ctx, pv));
                             } else {
                                 try emitter.write(".{");
                                 for (bc.fields, 0..) |field, idx| {
@@ -3967,7 +4037,7 @@ fn emitSubflowContinuationsWithDepth(
                                     try emitter.write(field.name);
                                     try emitter.write(" = ");
                                     if (field.expression_str) |expr| {
-                                        try emitter.write(lowerExprZig(emitter, expr));
+                                        try emitter.write(lowerExprZig(emitter, &local_ctx, expr));
                                     } else {
                                         try emitter.write(field.type);
                                     }
@@ -3995,7 +4065,7 @@ fn emitSubflowContinuationsWithDepth(
                     const extra = "        ";
                     @memcpy(deeper_indent_buf[indent.len .. indent.len + extra.len], extra);
                     const deeper_indent = deeper_indent_buf[0 .. indent.len + extra.len];
-                    try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical);
+                    try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical, null, &local_bindings);
                 }
                 } // if (!self_reentry_emitted)
 
@@ -4120,7 +4190,7 @@ fn emitSubflowContinuationsWithDepth(
                         // at the impl-body sites that pass `ctx.inline_fire_conts`.
                         break :blk (try presenceConditionRewrite(alloc, condition, ev, null)) orelse condition;
                     };
-                    try emitter.write(lowerExprZig(emitter, cond_out));
+                    try emitter.write(lowerExprZig(emitter, &local_ctx, cond_out));
                     try emitter.write(") ");
                 } else {
                     // No when-clause - this is the else case
@@ -4138,7 +4208,7 @@ fn emitSubflowContinuationsWithDepth(
                             try emitter.write(" = ");
                             // Check for plain value (identity branch constructor)
                             if (bc.plain_value) |pv| {
-                                try emitter.write(lowerExprZig(emitter, pv));
+                                try emitter.write(lowerExprZig(emitter, &local_ctx, pv));
                             } else {
                                 try emitter.write(".{");
                                 for (bc.fields, 0..) |field, field_idx| {
@@ -4147,7 +4217,7 @@ fn emitSubflowContinuationsWithDepth(
                                     try emitter.write(field.name);
                                     try emitter.write(" = ");
                                     if (field.expression_str) |expr| {
-                                        try emitter.write(lowerExprZig(emitter, expr));
+                                        try emitter.write(lowerExprZig(emitter, &local_ctx, expr));
                                     } else {
                                         try emitter.write(field.type);
                                     }
@@ -4188,6 +4258,7 @@ fn emitSubflowContinuationsWithDepth(
             .self_loop_active = self_loop_canonical != null,
             .self_loop_event_canonical = self_loop_canonical,
         };
+        ctx_ca.zig_scope_bindings.items = local_bindings.items;
         var result_counter_ca: usize = depth;
         try emitSubflowCatchallOptionalArms(
             emitter,
@@ -5089,7 +5160,7 @@ fn emitInlineCodeResolvingSplices(
                         break :blk (try presenceConditionRewrite(alloc, cont.condition.?, ev, ctx.inline_fire_conts)) orelse cont.condition.?;
                     };
                     try emitter.write("if (");
-                    try emitter.write(lowerExprZig(emitter, cond_out));
+                    try emitter.write(lowerExprZig(emitter, ctx, cond_out));
                     try emitter.write(") { ");
                 }
                 // Give the spliced body a unique `result_N` namespace, so a
@@ -5201,7 +5272,7 @@ fn emitInlineCodeResolvingSplices(
                 try emitter.write(" = ");
                 try emitter.write(arg);
                 try emitter.write("; _ = &");
-                try emitter.write(dst);
+                try writeBranchName(emitter, dst);
                 try emitter.write("; ");
                 try emitDestructureConsts(emitter, cont.destructure, dst);
             } else if (std.mem.eql(u8, binding, "_")) {
@@ -5218,7 +5289,7 @@ fn emitInlineCodeResolvingSplices(
                 try emitter.write(" = ");
                 try emitter.write(arg);
                 try emitter.write("; _ = &");
-                try emitter.write(br.to);
+                try writeBranchName(emitter, br.to);
                 try emitter.write("; ");
             } else {
                 try emitter.write("const ");
@@ -5241,9 +5312,9 @@ fn emitInlineCodeResolvingSplices(
                 };
                 try emitter.write("if (");
                 if (bind_rename) |br| {
-                    try emitValueWithBindingSubstitution(emitter, lowerExprZig(emitter, cond_out), br);
+                    try emitValueWithBindingSubstitution(emitter, ctx, lowerExprZig(emitter, ctx, cond_out), br);
                 } else {
-                    try emitter.write(lowerExprZig(emitter, cond_out));
+                    try emitter.write(lowerExprZig(emitter, ctx, cond_out));
                 }
                 try emitter.write(") { ");
             }
@@ -5378,6 +5449,19 @@ pub fn emitInlineBodyNode(
             const rewritten_text = try codegen_utils.replaceIdentifier(ctx.allocator, inline_code, br.from, br.to);
             if (inline_code_uniq) |owned| ctx.allocator.free(owned);
             inline_code_uniq = @constCast(rewritten_text);
+            inline_code = inline_code_uniq.?;
+        }
+    }
+
+    // Bound-name spelling on the rendered body (same disease as the splice
+    // rename above, different cause): a `{{ expr }}` hole baked by the
+    // template processor carries the author's raw spelling of an in-scope
+    // binding — `if (i1 == i1)` renders `i1` where the decl wrote `@"i1"`.
+    {
+        const escaped = try escapeBoundNames(ctx, inline_code);
+        if (escaped.ptr != inline_code.ptr) {
+            if (inline_code_uniq) |owned| ctx.allocator.free(owned);
+            inline_code_uniq = @constCast(escaped);
             inline_code = inline_code_uniq.?;
         }
     }
@@ -5815,7 +5899,7 @@ pub fn emitFlow(
             }
 
             try emitter.write(" = ");
-            try emitter.write(arg.value);
+            try emitter.write(try escapeBoundNames(ctx, arg.value));
             try emitter.write(";\n");
         }
 
@@ -7170,9 +7254,9 @@ fn emitInlineEffectfulCall(
             try emitter.write("const ");
             try emitter.write(owned_spelling);
             try emitter.write(" = (");
-            try emitter.write(arg.value);
+            try emitter.write(try escapeBoundNames(ctx, arg.value));
             try emitter.write("); _ = &");
-            try emitter.write(owned_spelling);
+            try writeBranchName(emitter, owned_spelling);
             try emitter.write(";\n");
             rewrites_body = collides or
                 (std.mem.indexOfScalar(u8, arg.name, '-') == null and codegen_utils.needsEscaping(arg.name));
@@ -7780,7 +7864,7 @@ pub fn emitHandlersStruct(
             if (guarded) {
                 try emitter.writeIndent();
                 try emitter.write("if (");
-                try emitter.write(lowerExprZig(emitter, cont.condition.?));
+                try emitter.write(lowerExprZig(emitter, ctx, cont.condition.?));
                 try emitter.write(") {\n");
                 emitter.indent();
             }
@@ -7814,7 +7898,7 @@ pub fn emitHandlersStruct(
                             var fld_buf: [128]u8 = undefined;
                             try w.print(" .{s} = ({s})", .{
                                 lowerIdent(&fld_buf, field.name),
-                                lowerExprZig(emitter, field.expression_str orelse field.type),
+                                lowerExprZig(emitter, ctx, field.expression_str orelse field.type),
                             });
                         }
                         try w.writeAll(" } }");
@@ -7823,7 +7907,7 @@ pub fn emitHandlersStruct(
                         resume_expr_owned = try std.fmt.allocPrint(
                             ctx.allocator,
                             ".{{ .{s} = ({s}) }}",
-                            .{ lowered_arm, lowerExprZig(emitter, pv) },
+                            .{ lowered_arm, lowerExprZig(emitter, ctx, pv) },
                         );
                     } else {
                         resume_expr_owned = try std.fmt.allocPrint(
@@ -7838,7 +7922,7 @@ pub fn emitHandlersStruct(
                 if (cont.continuations.len != 0) break :blk null;
                 const node = cont.node orelse break :blk null;
                 switch (node) {
-                    .expression => |code| break :blk lowerExprZig(emitter, code),
+                    .expression => |code| break :blk lowerExprZig(emitter, ctx, code),
                     .branch_constructor => |bc| {
                         if (bc.fields.len != 0) break :blk null;
                         if (bc.plain_value) |pv| {
@@ -7857,7 +7941,7 @@ pub fn emitHandlersStruct(
                                 resume_expr_owned = try std.fmt.allocPrint(
                                     ctx.allocator,
                                     "{s} {s}",
-                                    .{ bc.branch_name, lowerExprZig(emitter, pv) },
+                                    .{ bc.branch_name, lowerExprZig(emitter, ctx, pv) },
                                 );
                             }
                             break :blk resume_expr_owned.?;
@@ -8022,9 +8106,58 @@ fn presenceConditionRewrite(
 /// (`@sqrt(x)` stays `@sqrt(x)` — Zig names it too). Identity also when this
 /// emitter has no allocator to build new text with; a rewritten result is
 /// borrowed from that allocator, which is the compile arena.
-fn lowerExprZig(emitter: *CodeEmitter, text: []const u8) []const u8 {
+fn lowerExprZig(emitter: *CodeEmitter, ctx: *EmissionContext, text: []const u8) []const u8 {
     const alloc = emitter.allocator orelse return text;
-    return (codegen_utils.rewriteZigExpr(alloc, text) catch null) orelse text;
+    const lowered = (codegen_utils.rewriteZigExpr(alloc, text) catch null) orelse text;
+    // Bound-name spelling AFTER the expr rewrite: `@"i1"` would not survive
+    // the rewriter's operand parser, but the rewriter's output block
+    // (`__koru_l = i1`) rewrites to `@"i1"` cleanly by identifier match.
+    return escapeBoundNames(ctx, lowered) catch lowered;
+}
+
+/// Rewrite in-scope flow-binding names whose emitted Zig spelling differs
+/// from the author's text. A `: i1` chain bind declares `@"i1"` and a
+/// `pos-tempo` bind declares `pos_tempo` — every decl site spells through
+/// writeBranchName — but user text spliced while the binding lives (arg
+/// values, when-guards, template-rendered bodies) carried the raw name: `i1`
+/// resolves as the primitive and `pos-tempo` parses as subtraction. The decl
+/// spelling is `codegen_utils.appendBranchName`; this applies the same rule
+/// to references. Names are longest-first so `a-b` cannot eat the `b` of a
+/// bound `a-b-c`. References already inside `@"…"` are string-masked by
+/// replaceIdentifier and cannot double-escape.
+fn escapeBoundNames(ctx: *const EmissionContext, text: []const u8) ![]const u8 {
+    var out = text;
+    var names_buf: [128][]const u8 = undefined;
+    var names_len: usize = 0;
+    for (ctx.zig_scope_bindings.items) |name| {
+        if (!codegen_utils.hasKebab(name) and !codegen_utils.needsEscaping(name)) continue;
+        if (names_len == names_buf.len) break;
+        var dup = false;
+        for (names_buf[0..names_len]) |seen| {
+            if (std.mem.eql(u8, seen, name)) {
+                dup = true;
+                break;
+            }
+        }
+        if (dup) continue;
+        if (std.mem.indexOf(u8, out, name) == null) continue;
+        names_buf[names_len] = name;
+        names_len += 1;
+    }
+    std.mem.sort([]const u8, names_buf[0..names_len], {}, struct {
+        fn longer(_: void, a: []const u8, b: []const u8) bool {
+            return a.len > b.len;
+        }
+    }.longer);
+    for (names_buf[0..names_len]) |name| {
+        var spelled: std.ArrayList(u8) = .empty;
+        defer spelled.deinit(ctx.allocator);
+        try codegen_utils.appendBranchName(&spelled, ctx.allocator, name);
+        const rewritten = try codegen_utils.replaceIdentifier(ctx.allocator, out, name, spelled.items);
+        if (out.ptr != text.ptr) ctx.allocator.free(@constCast(out));
+        out = rewritten;
+    }
+    return out;
 }
 
 /// Write an arm-fire's payload argument list — the POSITIONAL shape shared
@@ -9228,13 +9361,13 @@ pub fn emitValue(emitter: *CodeEmitter, ctx: *EmissionContext, value: []const u8
     if (ctx.input_var) |input_var| {
         if (ctx.input_fields) |fields| {
             // Parse the expression and replace field references with input_var.field
-            try emitValueWithInputPrefixing(emitter, value, input_var, fields);
+            try emitValueWithInputPrefixing(emitter, ctx, value, input_var, fields);
             return;
         }
     }
 
     // Otherwise write value as-is — spelled for this target
-    try emitter.write(lowerExprZig(emitter, value));
+    try emitter.write(lowerExprZig(emitter, ctx, value));
 }
 
 /// Emit a value expression with binding substitution (for tap pipeline emission).
@@ -9242,6 +9375,7 @@ pub fn emitValue(emitter: *CodeEmitter, ctx: *EmissionContext, value: []const u8
 /// `%` it cannot see is one the emitter cannot spell.
 fn emitValueWithBindingSubstitution(
     emitter: *CodeEmitter,
+    ctx: *EmissionContext,
     value: []const u8,
     substitution: ?BindingSubstitution,
 ) !void {
@@ -9252,7 +9386,7 @@ fn emitValueWithBindingSubstitution(
 
     // Spell it for this target BEFORE splicing: the walk below is a text scan,
     // so an unlowered `%` would be carried into the output verbatim.
-    const lowered = lowerExprZig(emitter, value);
+    const lowered = lowerExprZig(emitter, ctx, value);
 
     if (substitution == null) {
         // No substitution needed
@@ -9330,13 +9464,14 @@ fn emitValueWithBindingSubstitution(
 /// Emit a value expression, replacing input field references with input_var.field
 fn emitValueWithInputPrefixing(
     emitter: *CodeEmitter,
+    ctx: *EmissionContext,
     value: []const u8,
     input_var: []const u8,
     input_fields: []const ast.Field,
 ) !void {
     // Spell it for this target before rewriting field references: the walk below
     // is a text scan, so an unlowered `%` would be carried out verbatim.
-    const lowered = lowerExprZig(emitter, value);
+    const lowered = lowerExprZig(emitter, ctx, value);
     var i: usize = 0;
     var in_string = false;
     var in_char = false;
@@ -9698,7 +9833,7 @@ fn emitContinuationList(
         if (cont.is_catchall and std.mem.eql(u8, cont.branch, "?") and cont.catchall_metatype == null) {
             try emitter.writeIndent();
             try emitter.write("_ = &");
-            try emitter.write(prev_result);
+            try writeBranchName(emitter, prev_result);
             try emitter.write(";\n");
             try emitContinuationBody(emitter, ctx, cont, result_counter);
             return;
@@ -9769,7 +9904,7 @@ fn emitContinuationList(
             if (cont.condition_expr) |expr| {
                 try emitExpression(emitter, ctx, expr, null);
             } else {
-                try emitter.write(lowerExprZig(emitter, condition));
+                try emitter.write(lowerExprZig(emitter, ctx, condition));
             }
             try emitter.write(") {\n");
             emitter.indent();
@@ -9956,7 +10091,7 @@ fn emitContinuationList(
                             // metatype_binding step path).
                             try emitter.writeIndent();
                             try emitter.write("_ = &");
-                            try emitter.write(catchall.binding.?);
+                            try writeBranchName(emitter, catchall.binding.?);
                             try emitter.write(";\n");
 
                             // Execute catch-all pipeline (can now reference binding)
@@ -10054,7 +10189,7 @@ fn emitContinuationListWithUnreachableBranches(
                     } else {
                         try emitter.write("else if (");
                     }
-                    try emitter.write(lowerExprZig(emitter, condition));
+                    try emitter.write(lowerExprZig(emitter, ctx, condition));
                     try emitter.write(") {\n");
                 } else {
                     if (idx > 0) {
@@ -10256,7 +10391,7 @@ fn emitContinuationCase(
         if (cont.condition_expr) |expr| {
             try emitExpression(emitter, ctx, expr, null);
         } else {
-            try emitter.write(lowerExprZig(emitter, condition));
+            try emitter.write(lowerExprZig(emitter, ctx, condition));
         }
         try emitter.write(") {\n");
         emitter.indent();
@@ -10334,7 +10469,7 @@ fn emitWhenClauseCase(
             } else {
                 try emitter.write("else if (");
             }
-            try emitter.write(lowerExprZig(emitter, condition));
+            try emitter.write(lowerExprZig(emitter, ctx, condition));
             try emitter.write(") {\n");
         } else {
             // No when-clause - this is the else case
@@ -10580,7 +10715,7 @@ fn emitPipelineStep(
     {
         try emitter.writeIndent();
         try emitter.write("_ = &");
-        try emitter.write(current_result);
+        try writeBranchName(emitter, current_result);
         try emitter.write(";\n");
     }
 
@@ -10837,7 +10972,7 @@ pub fn emitContinuationBody(
             }
 
             try emitter.write(" = ");
-            try emitter.write(arg.value);
+            try emitter.write(try escapeBoundNames(ctx, arg.value));
             try emitter.write(";\n");
         }
 
@@ -11294,7 +11429,7 @@ pub fn emitContinuationBody(
                 if (needs_result and !std.mem.eql(u8, current_result, "_")) {
                     try emitter.writeIndent();
                     try emitter.write("_ = &");
-                    try emitter.write(current_result);
+                    try writeBranchName(emitter, current_result);
                     try emitter.write(";\n");
                 }
                 if (needs_result) {
@@ -11441,7 +11576,7 @@ fn emitStep(
                     const ev = ctx.impl_event_decl orelse break :blk cond;
                     break :blk (try presenceConditionRewrite(alloc, cond, ev, ctx.inline_fire_conts)) orelse cond;
                 };
-                try emitter.write(lowerExprZig(emitter, cond_out));
+                try emitter.write(lowerExprZig(emitter, ctx, cond_out));
             }
 
             try emitter.write(") {\n");
@@ -11466,7 +11601,7 @@ fn emitStep(
                 if (needs_result and !std.mem.eql(u8, inner_result_var, "_")) {
                     try emitter.writeIndent();
                     try emitter.write("_ = &");
-                    try emitter.write(inner_result_var);
+                    try writeBranchName(emitter, inner_result_var);
                     try emitter.write(";\n");
                 }
 
@@ -11575,7 +11710,7 @@ fn emitStep(
             // Suppress unused constant warning (binding may be discarded with _)
             try emitter.writeIndent();
             try emitter.write("_ = &");
-            try emitter.write(mb.binding);
+            try writeBranchName(emitter, mb.binding);
             try emitter.write(";\n");
         },
         .label_with_invocation => |*lwi| {
@@ -11739,7 +11874,7 @@ fn emitStep(
             //
             // Spell it for this target first: this node IS a `->` body, and a
             // `->` body is raw Koru expression text.
-            const code = lowerExprZig(emitter, code_raw);
+            const code = lowerExprZig(emitter, ctx, code_raw);
             try emitter.writeIndent();
             if (ctx.bare_return_active and !std.mem.eql(u8, std.mem.trim(u8, code, " \t"), "_")) {
                 try emitter.write("return ");
@@ -11799,7 +11934,7 @@ fn emitStep(
             // Suppress unused capture warning (binding might not be used in body)
             try emitter.writeIndent();
             try emitter.write("_ = &");
-            try emitter.write(loop_binding);
+            try writeBranchName(emitter, loop_binding);
             try emitter.write(";\n");
 
             // Emit loop body continuations
@@ -11824,7 +11959,7 @@ fn emitStep(
                         if (node == .invocation) {
                             try emitter.writeIndent();
                             try emitter.write("_ = &");
-                            try emitter.write(inner_result);
+                            try writeBranchName(emitter, inner_result);
                             try emitter.write(";\n");
                         }
                         step_idx += 1;
@@ -11861,7 +11996,7 @@ fn emitStep(
                         if (node == .invocation) {
                             try emitter.writeIndent();
                             try emitter.write("_ = &");
-                            try emitter.write(inner_result);
+                            try writeBranchName(emitter, inner_result);
                             try emitter.write(";\n");
                         }
                         step_idx += 1;
@@ -11889,7 +12024,7 @@ fn emitStep(
                     const ev = ctx.impl_event_decl orelse break :blk cond.condition;
                     break :blk (try presenceConditionRewrite(alloc, cond.condition, ev, ctx.inline_fire_conts)) orelse cond.condition;
                 };
-                try emitter.write(lowerExprZig(emitter, cond_out));
+                try emitter.write(lowerExprZig(emitter, ctx, cond_out));
             }
             try emitter.write(") {\n");
             emitter.indent();
@@ -11909,7 +12044,7 @@ fn emitStep(
                     if (node == .invocation) {
                         try emitter.writeIndent();
                         try emitter.write("_ = &");
-                        try emitter.write(inner_result);
+                        try writeBranchName(emitter, inner_result);
                         try emitter.write(";\n");
                     }
                     step_idx += 1;
@@ -11939,7 +12074,7 @@ fn emitStep(
                         if (node == .invocation) {
                             try emitter.writeIndent();
                             try emitter.write("_ = &");
-                            try emitter.write(inner_result);
+                            try writeBranchName(emitter, inner_result);
                             try emitter.write(";\n");
                         }
                         step_idx += 1;
@@ -12002,7 +12137,7 @@ fn emitStep(
                         if (node == .invocation) {
                             try emitter.writeIndent();
                             try emitter.write("_ = &");
-                            try emitter.write(inner_result);
+                            try writeBranchName(emitter, inner_result);
                             try emitter.write(";\n");
                         }
                         step_idx += 1;
@@ -12046,7 +12181,7 @@ fn emitStep(
                     try emitter.write(tmp);
                     try emitter.write(" = ");
                     if (field.expression_str) |expr| {
-                        try emitter.write(lowerExprZig(emitter, expr));
+                        try emitter.write(lowerExprZig(emitter, ctx, expr));
                     } else {
                         try emitter.write(field.type);
                     }
@@ -12073,7 +12208,7 @@ fn emitStep(
                 try emitter.write(field.name); // Can be "sum" or "arr[i]"
                 try emitter.write(" = ");
                 if (field.expression_str) |expr| {
-                    try emitter.write(lowerExprZig(emitter, expr));
+                    try emitter.write(lowerExprZig(emitter, ctx, expr));
                 } else {
                     try emitter.write(field.type);
                 }
@@ -12113,7 +12248,7 @@ fn emitStepWithBindingSubstitution(
                 try emitter.write(".");
                 try writeBranchName(emitter, arg.name);
                 try emitter.write(" = ");
-                try emitValueWithBindingSubstitution(emitter, arg.value, substitution);
+                try emitValueWithBindingSubstitution(emitter, ctx, arg.value, substitution);
             }
             try emitter.write(" });\n");
         },
@@ -12135,7 +12270,7 @@ fn emitStepWithBindingSubstitution(
                 try emitter.write(field.name);
                 try emitter.write(" = ");
                 const value = if (field.expression_str) |expr| expr else field.type;
-                try emitValueWithBindingSubstitution(emitter, value, substitution);
+                try emitValueWithBindingSubstitution(emitter, ctx, value, substitution);
             }
             try emitter.write(" } }");
             try emitter.write(";\n");
@@ -12160,7 +12295,7 @@ fn emitStepWithBindingSubstitution(
             if (cb.condition_expr) |expr| {
                 try emitExpression(emitter, ctx, expr, substitution);
             } else if (cb.condition) |cond| {
-                try emitValueWithBindingSubstitution(emitter, lowerExprZig(emitter, cond), substitution);
+                try emitValueWithBindingSubstitution(emitter, ctx, lowerExprZig(emitter, ctx, cond), substitution);
             }
 
             try emitter.write(") {\n");
@@ -12196,7 +12331,7 @@ fn emitStepWithBindingSubstitution(
                 try emitter.write(".");
                 try writeBranchName(emitter, arg.name);
                 try emitter.write(" = ");
-                try emitValueWithBindingSubstitution(emitter, arg.value, substitution);
+                try emitValueWithBindingSubstitution(emitter, ctx, arg.value, substitution);
             }
             try emitter.write(" });\n");
         },
@@ -12241,7 +12376,7 @@ fn emitStepWithBindingSubstitution(
                     // Build state variable name and apply substitution if needed
                     const state_var = try std.fmt.allocPrint(ctx.allocator, "{s}_{s}", .{ label_name, arg.name });
                     defer ctx.allocator.free(state_var);
-                    try emitValueWithBindingSubstitution(emitter, state_var, substitution);
+                    try emitValueWithBindingSubstitution(emitter, ctx, state_var, substitution);
                 }
                 try emitter.write(" }");
                 // Effect-branches phase 3b: re-entry preserves Handlers arg.
@@ -12266,7 +12401,7 @@ fn emitStepWithBindingSubstitution(
                 try emitter.write("_");
                 try writeBranchName(emitter, arg.name);
                 try emitter.write(" = ");
-                try emitValueWithBindingSubstitution(emitter, arg.value, substitution);
+                try emitValueWithBindingSubstitution(emitter, ctx, arg.value, substitution);
                 try emitter.write(";\n");
             }
             // Continue to the labeled loop
@@ -12296,7 +12431,7 @@ fn emitStepWithBindingSubstitution(
 
             try emitter.writeIndent();
             try emitter.write("for (");
-            try emitValueWithBindingSubstitution(emitter, fe.iterable, substitution);
+            try emitValueWithBindingSubstitution(emitter, ctx, fe.iterable, substitution);
             try emitter.write(") |");
             try emitter.write(each_binding);
             try emitter.write("| {\n");
@@ -12305,7 +12440,7 @@ fn emitStepWithBindingSubstitution(
             // Suppress unused capture warning
             try emitter.writeIndent();
             try emitter.write("_ = &");
-            try emitter.write(each_binding);
+            try writeBranchName(emitter, each_binding);
             try emitter.write(";\n");
 
             for (each_body) |*cont| {
@@ -12331,7 +12466,7 @@ fn emitStepWithBindingSubstitution(
 
             try emitter.writeIndent();
             try emitter.write("if (");
-            try emitValueWithBindingSubstitution(emitter, lowerExprZig(emitter, cond.condition), substitution);
+            try emitValueWithBindingSubstitution(emitter, ctx, lowerExprZig(emitter, ctx, cond.condition), substitution);
             try emitter.write(") {\n");
             emitter.indent();
 
@@ -14074,7 +14209,7 @@ fn emitFlatSegConts(
         can_fall = false;
         switch (node) {
             .expression => |code_raw| {
-                const code = lowerExprZig(emitter, code_raw);
+                const code = lowerExprZig(emitter, ctx, code_raw);
                 try emitFlatSegDeliver(emitter, ctx, fx, sp_expr, code, true);
             },
             .branch_constructor => |*bc| {
