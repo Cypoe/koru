@@ -127,6 +127,20 @@ four questions asked of the Zig arm need a disassembler and a rebuild each.
 profiling instrument the native target does not have.** That is a reason to keep
 the JS backend honest that has nothing to do with shipping JavaScript.
 
+Measured 2026-09 (koru-benchmarks iteration-models, landed 2026-09-19): the
+inverse also holds — a cost the optimizer CANNOT delete was put there by the
+emitter, and only the emitted text shows it. `@as(i64, @intCast(i))` on a
+`usize` cursor is a no-op on the bits, but in ReleaseFast Zig spells it with
+an `llvm.assume` (operand-fits hint) at the cast site; inside a runtime-bound
+loop the vectorizer treats the assume as an opaque call and declines the
+loop: 5.9ms scalar against 1.5ms vectorized for the same fold. The emitter
+now routes the canonical cast through `__koru_intcast`, which bitcasts a
+same-width sign flip in release and keeps the checked cast where safety is
+on (230_022 pins the spelling). The rule this adds: a cast the source never
+wrote is the emitter's cost, and "the optimizer will remove it" has to be
+measured per construct — for `@intCast` it did not.
+
+
 ## Open
 
 Whether anything else on that board rests on a mock. The decomposition is now

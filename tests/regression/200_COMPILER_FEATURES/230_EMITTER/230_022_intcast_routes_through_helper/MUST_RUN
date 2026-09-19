@@ -1,0 +1,1 @@
+MUST_RUN — the value oracle proves the helper preserves cast semantics; post.sh proves the PATH (emitted spelling) rather than the result.

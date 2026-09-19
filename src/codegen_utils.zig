@@ -948,9 +948,11 @@ pub const HostShape = struct {
 
     /// `row` arrives DENSE, so Zig only needs the index cast; JS has no such
     /// distinction and binds it straight through, keeping one name for the
-    /// statements above to share.
+    /// statements above to share. The cast goes through `__koru_intcast`
+    /// rather than `@intCast` — the same-width sign flip bitcasts in release,
+    /// skipping the in-loop `llvm.assume` @intCast emits.
     pub fn rowHead(t: HostTarget) []const u8 {
-        return if (t == .js) "const __koru_r = row;\n" else "const __koru_r = @as(usize, @intCast(row));\n";
+        return if (t == .js) "const __koru_r = row;\n" else "const __koru_r = __koru_intcast(usize, row);\n";
     }
 
     /// A COUNTED LOOP over `0..limit`, binding `cursor`. Zig's range-`for` and
@@ -973,12 +975,14 @@ pub const HostShape = struct {
     }
 
     /// A dense cursor used where the host expects a signed integer. Zig needs
-    /// the cast; JS has one number type.
+    /// the cast; JS has one number type. `__koru_intcast` rather than
+    /// `@intCast`: the cursor is `usize`, so release builds bitcast the
+    /// sign flip instead of paying @intCast's in-loop `llvm.assume`.
     pub fn asI64(alloc: std.mem.Allocator, t: HostTarget, expr: []const u8) []const u8 {
         return if (t == .js)
             alloc.dupe(u8, expr) catch unreachable
         else
-            std.fmt.allocPrint(alloc, "@as(i64, @intCast({s}))", .{expr}) catch unreachable;
+            std.fmt.allocPrint(alloc, "__koru_intcast(i64, {s})", .{expr}) catch unreachable;
     }
 
     /// A dense cursor used as an INDEX. Same split, different target type.
@@ -986,7 +990,7 @@ pub const HostShape = struct {
         return if (t == .js)
             alloc.dupe(u8, expr) catch unreachable
         else
-            std.fmt.allocPrint(alloc, "@as(usize, @intCast({s}))", .{expr}) catch unreachable;
+            std.fmt.allocPrint(alloc, "__koru_intcast(usize, {s})", .{expr}) catch unreachable;
     }
 };
 
@@ -2163,7 +2167,7 @@ const ZigExprParser = struct {
                 if (depth == 0) {
                     if (c != close) return ZigExprError.NoParse;
                     const seg = self.text[seg_start..self.pos];
-                    const low = rewriteZigExprInner(self.allocator, seg);
+                    const low = try self.rewriteArg(open, seg);
                     if (low) |l| {
                         changed = true;
                         out.appendSlice(self.allocator, l) catch return ZigExprError.OutOfMemory;
@@ -2184,7 +2188,7 @@ const ZigExprParser = struct {
             }
             if (c == ',' and depth == 0) {
                 const seg = self.text[seg_start..self.pos];
-                const low = rewriteZigExprInner(self.allocator, seg);
+                const low = try self.rewriteArg(open, seg);
                 if (low) |l| {
                     changed = true;
                     out.appendSlice(self.allocator, l) catch return ZigExprError.OutOfMemory;
@@ -2263,9 +2267,19 @@ const ZigExprParser = struct {
         }
         if (c == '@') {
             self.pos += 1;
+            const name_start = self.pos;
             try self.parseIdentName();
+            const name = self.text[name_start..self.pos];
             self.skipWs();
             if (self.peek() != '(') return ZigExprError.NoParse;
+            if (std.mem.eql(u8, name, "as")) {
+                if (self.tryAsIntCast(start)) |piece| {
+                    return piece;
+                } else |err| switch (err) {
+                    ZigExprError.NoParse => {},
+                    else => return err,
+                }
+            }
             const inner = try self.parseBalanced('(');
             if (!inner.changed) {
                 return .{ .text = self.text[start..self.pos], .start = start, .end = self.pos, .is_string_lit = false, .changed = false };
@@ -2297,7 +2311,111 @@ const ZigExprParser = struct {
         }
         return ZigExprError.NoParse;
     }
+
+    /// `@as(T, @intCast(x))` — the canonical Koru cast — routes through
+    /// `__koru_intcast`: Zig's `@intCast` emits an in-loop `llvm.assume`
+    /// (operand-fits hint) that the vectorizer declines on a runtime-bound
+    /// loop, measured 5.9ms scalar vs 1.5ms vectorized for the same loop.
+    /// The helper bitcasts same-width sign flips in release modes and keeps
+    /// the real fit-check where safety is on. NoParse — pos restored — when
+    /// the second argument is not exactly an `@intCast` call.
+    fn tryAsIntCast(self: *ZigExprParser, start: usize) ZigExprError!ZigExprPiece {
+        const save = self.pos;
+        blk: {
+            self.pos += 1; // consume '('
+            self.skipWs();
+            const t_start = self.pos;
+            var depth: usize = 0;
+            var comma: usize = 0;
+            var found = false;
+            while (self.pos < self.text.len) {
+                const ch = self.text[self.pos];
+                if (ch == '"' or ch == '\'') {
+                    self.skipStringLike(ch) catch break :blk;
+                    continue;
+                }
+                if (ch == '(' or ch == '[' or ch == '{') depth += 1;
+                if (ch == ')' or ch == ']' or ch == '}') {
+                    if (depth == 0) break :blk;
+                    depth -= 1;
+                }
+                if (ch == ',' and depth == 0) {
+                    comma = self.pos;
+                    found = true;
+                    break;
+                }
+                self.pos += 1;
+            }
+            if (!found) break :blk;
+            const ty = self.text[t_start..comma];
+            self.pos = comma + 1;
+            self.skipWs();
+            const m = matchIntCastText(self.text, self.pos) orelse break :blk;
+            self.pos = m.end;
+            self.skipWs();
+            if (self.peek() != ')') break :blk;
+            self.pos += 1;
+            const inner = rewriteZigExprInner(self.allocator, m.inner) orelse m.inner;
+            const text = std.fmt.allocPrint(self.allocator, "__koru_intcast({s}, {s})", .{ ty, inner }) catch return ZigExprError.OutOfMemory;
+            return .{ .text = text, .start = start, .end = self.pos, .is_string_lit = false, .changed = true };
+        }
+        self.pos = save;
+        return ZigExprError.NoParse;
+    }
+
+    /// One comma-separated segment inside a balanced region. In `[` — postfix
+    /// index position — a segment that is exactly `@intCast(x)` coerces to
+    /// `usize`, and the same `__koru_intcast` route applies: the assume would
+    /// sit inside the loop just the same.
+    fn rewriteArg(self: *ZigExprParser, open: u8, seg: []const u8) ZigExprError!?[]const u8 {
+        if (open == '[') {
+            const t = std.mem.trim(u8, seg, " \t\n\r");
+            if (matchIntCastText(t, 0)) |m| {
+                if (m.end == t.len) {
+                    const inner = rewriteZigExprInner(self.allocator, m.inner) orelse m.inner;
+                    return std.fmt.allocPrint(self.allocator, "__koru_intcast(usize, {s})", .{inner}) catch return ZigExprError.OutOfMemory;
+                }
+            }
+        }
+        return rewriteZigExprInner(self.allocator, seg);
+    }
 };
+
+/// If `text` starting at `pos` is `@intCast( <expr> )`, returns the inner
+/// expression slice and the offset just past its closing paren — else null.
+/// Paren depth alone is right: the argument is one expression, so the first
+/// depth-0 `)` ends it.
+fn matchIntCastText(text: []const u8, pos: usize) ?struct { inner: []const u8, end: usize } {
+    if (!std.mem.startsWith(u8, text[pos..], "@intCast")) return null;
+    var p = pos + "@intCast".len;
+    if (p < text.len and exprIdentChar(text[p])) return null;
+    while (p < text.len and std.ascii.isWhitespace(text[p])) p += 1;
+    if (p >= text.len or text[p] != '(') return null;
+    const inner_start = p + 1;
+    p += 1;
+    var depth: usize = 1;
+    while (p < text.len) : (p += 1) {
+        const c = text[p];
+        if (c == '"' or c == '\'') {
+            const q = c;
+            p += 1;
+            while (p < text.len) : (p += 1) {
+                if (text[p] == '\\') {
+                    p += 1;
+                    continue;
+                }
+                if (text[p] == q) break;
+            }
+            continue;
+        }
+        if (c == '(') depth += 1;
+        if (c == ')') {
+            depth -= 1;
+            if (depth == 0) return .{ .inner = text[inner_start..p], .end = p + 1 };
+        }
+    }
+    return null;
+}
 
 fn exprIdentStartChar(c: u8) bool {
     return std.ascii.isAlphabetic(c) or c == '_';
@@ -2325,7 +2443,8 @@ pub fn rewriteZigExpr(allocator: std.mem.Allocator, text: []const u8) ZigExprErr
 fn zigExprMayRewrite(text: []const u8) bool {
     if (std.mem.indexOfScalar(u8, text, '%') != null or
         std.mem.indexOf(u8, text, "==") != null or
-        std.mem.indexOf(u8, text, "!=") != null) return true;
+        std.mem.indexOf(u8, text, "!=") != null or
+        std.mem.indexOf(u8, text, "@intCast") != null) return true;
     return hasNonZigFieldName(text);
 }
 
@@ -2517,4 +2636,38 @@ test "string equality: literal-carrying comparisons stay verbatim" {
     try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "k == .audio"));
     try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "x == null"));
     try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "flag == true"));
+}
+
+test "intCast: @as-wrapped cast routes through __koru_intcast" {
+    const out = (try rewriteZigExpr(std.testing.allocator, "@as(i64, @intCast(i))")).?;
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings("__koru_intcast(i64, i)", out);
+}
+
+test "intCast: a cast inside a larger expression rewrites only the cast" {
+    const out = (try rewriteZigExpr(std.testing.allocator, "acc.sum + @as(i64, @intCast(i)) * 3")).?;
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings("acc.sum + __koru_intcast(i64, i) * 3", out);
+}
+
+test "intCast: index-position bare cast coerces to usize" {
+    const out = (try rewriteZigExpr(std.testing.allocator, "s[@intCast(i)] == 34")).?;
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings("s[__koru_intcast(usize, i)] == 34", out);
+}
+
+test "intCast: a cast nested inside call arguments still lowers" {
+    const out = (try rewriteZigExpr(std.testing.allocator, "visit(@as(i64, @intCast(i)), flag)")).?;
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings("visit(__koru_intcast(i64, i), flag)", out);
+}
+
+test "intCast: a bare cast stays verbatim (no inferred type to feed it)" {
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "x = @intCast(i)"));
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "@intCast(i)"));
+}
+
+test "intCast: @as with a non-intCast second argument is left alone" {
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "@as(i64, x + 1)"));
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "@as(i64, @bitCast(i))"));
 }

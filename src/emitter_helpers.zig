@@ -1381,6 +1381,23 @@ pub fn emitMainModuleStart(emitter: *CodeEmitter, pub_compiler_env: bool, needs_
     try emitter.write("pub fn koru_allocator() @import(\"std\").mem.Allocator {\n");
     try emitter.write("    return .{ .ptr = undefined, .vtable = &__koru_vtable };\n");
     try emitter.write("}\n\n");
+    // `@intCast` in an optimized build emits `llvm.assume(result >= min)` —
+    // an operand-fits hint — at the cast SITE, which lands inside the loop
+    // body. LLVM's loop vectorizer treats the assume as an opaque call and
+    // declines the loop: measured 5.9ms scalar vs 1.5ms vectorized for the
+    // same runtime-bound fold (2026-09, koru-benchmarks iteration-models).
+    // A same-width signedness flip carries identical bits through `@bitCast`
+    // and no assume; checked modes keep the real fit-check panic, and any
+    // width change still needs the true `@intCast`.
+    try emitter.write("pub inline fn __koru_intcast(comptime T: type, x: anytype) T {\n");
+    try emitter.write("    if (comptime (@import(\"builtin\").mode == .Debug or @import(\"builtin\").mode == .ReleaseSafe))\n");
+    try emitter.write("        return @as(T, @intCast(x));\n");
+    try emitter.write("    const dst = @typeInfo(T);\n");
+    try emitter.write("    const src = @typeInfo(@TypeOf(x));\n");
+    try emitter.write("    if (comptime (dst == .int and src == .int and dst.int.bits == src.int.bits and dst.int.signedness != src.int.signedness))\n");
+    try emitter.write("        return @as(T, @bitCast(x));\n");
+    try emitter.write("    return @as(T, @intCast(x));\n");
+    try emitter.write("}\n\n");
 
     // THE LEAK CHECK IS A FUNCTION BECAUSE NOT EVERY PROGRAM HAS A `main`.
     //
@@ -9642,19 +9659,46 @@ fn emitExpression(
             try emitter.write(")");
         },
         .builtin_call => |bc| {
-            try emitter.write("@");
-            try emitter.write(bc.name);
-            try emitter.write("(");
-            for (bc.args, 0..) |arg, i| {
-                if (i > 0) try emitter.write(", ");
-                try emitExpression(emitter, ctx, arg, binding_substitution);
+            // `@as(T, @intCast(x))` routes through `__koru_intcast` — the
+            // cast's `llvm.assume` lands in-loop and declines vectorization
+            // (see emitMainModuleStart). Twin of rewriteZigExpr's text path.
+            if (std.mem.eql(u8, bc.name, "as") and bc.args.len == 2 and
+                bc.args[1].node == .builtin_call and
+                std.mem.eql(u8, bc.args[1].node.builtin_call.name, "intCast") and
+                bc.args[1].node.builtin_call.args.len == 1)
+            {
+                try emitter.write("__koru_intcast(");
+                try emitExpression(emitter, ctx, bc.args[0], binding_substitution);
+                try emitter.write(", ");
+                try emitExpression(emitter, ctx, bc.args[1].node.builtin_call.args[0], binding_substitution);
+                try emitter.write(")");
+            } else {
+                try emitter.write("@");
+                try emitter.write(bc.name);
+                try emitter.write("(");
+                for (bc.args, 0..) |arg, i| {
+                    if (i > 0) try emitter.write(", ");
+                    try emitExpression(emitter, ctx, arg, binding_substitution);
+                }
+                try emitter.write(")");
             }
-            try emitter.write(")");
         },
         .array_index => |ai| {
             try emitExpression(emitter, ctx, ai.object, binding_substitution);
             try emitter.write("[");
-            try emitExpression(emitter, ctx, ai.index, binding_substitution);
+            // Index position coerces to usize — the same-width sign flip
+            // bitcasts through `__koru_intcast` instead of emitting
+            // @intCast's in-loop assume.
+            if (ai.index.node == .builtin_call and
+                std.mem.eql(u8, ai.index.node.builtin_call.name, "intCast") and
+                ai.index.node.builtin_call.args.len == 1)
+            {
+                try emitter.write("__koru_intcast(usize, ");
+                try emitExpression(emitter, ctx, ai.index.node.builtin_call.args[0], binding_substitution);
+                try emitter.write(")");
+            } else {
+                try emitExpression(emitter, ctx, ai.index, binding_substitution);
+            }
             try emitter.write("]");
         },
         .conditional => |c| {
