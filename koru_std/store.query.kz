@@ -451,22 +451,8 @@
         captures.append(allocator, b) catch unreachable;
     }
 
-    // `[ordinal]n` rides the capture threading. The cursor is already computed
-    // by the loop and already handed to the body as `srow_name`; asking for it
-    // by an author's name needs no new channel, only one more threaded value —
-    // which is why this request costs a line rather than a mechanism.
-    //
-    // Synthesized ONLY when asked for: an arm that never writes `[ordinal]`
-    // adds no field and threads nothing, the same demand-driven rule an unread
-    // aggregate materializes no column under.
-    if (req_ordinal) |on| {
-        captures.append(allocator, .{
-            .name = allocator.dupe(u8, on) catch unreachable,
-            .type = allocator.dupe(u8, "i64") catch unreachable,
-            .value = allocator.dupe(u8, "@as(i64, @intCast(__koru_si))") catch unreachable,
-            .lexical = false,
-        }) catch unreachable;
-    }
+    // `[ordinal]` when asked plus the dense twin, unconditionally.
+    SCursor.threadCursorCaptures(allocator, &captures, srow_name, req_ordinal);
 
     // `[id]h` is `[ordinal]`'s twin and its opposite. The ordinal is WHERE the
     // visit is; the id is WHICH ROW it is standing on — the handle, branded and

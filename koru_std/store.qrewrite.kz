@@ -46,7 +46,7 @@ const SRewrite = struct {
                             used[ci] = true;
                             const mangled = std.mem.replaceOwned(u8, alloc, fname, ".", "_") catch unreachable;
                             break :blk3 std.fmt.allocPrint(alloc, "{s}{s}", .{ srf, mangled }) catch unreachable;
-                        } else std.fmt.allocPrint(alloc, "__koru_store_{s}.{s}[{s}]", .{ store, esc_fname, codegen_utils_store.HostShape.asIndex(alloc, storeHostTarget(), cursor) }) catch unreachable,
+                        } else std.fmt.allocPrint(alloc, "__koru_store_{s}.{s}[{s}]", .{ store, esc_fname, SCursor.liveIndex(alloc, cursor) }) catch unreachable,
                         .input => blk4: {
                             used[ci] = true;
                             const mangled = std.mem.replaceOwned(u8, alloc, fname, ".", "_") catch unreachable;
@@ -78,7 +78,7 @@ const SRewrite = struct {
                 const next_is_ident = after < text.len and isIdentCh(text[after]);
                 const next_is_dot = after < text.len and text[after] == '.';
                 if (!next_is_ident and !next_is_dot and (form == .input or form == .live)) {
-                    const t = std.fmt.allocPrint(alloc, "__koru_store_{s}.__koru_handle_of(@as(usize, @intCast({s})))", .{ store, cursor }) catch unreachable;
+                    const t = std.fmt.allocPrint(alloc, "__koru_store_{s}.__koru_handle_of({s})", .{ store, SCursor.liveIndex(alloc, cursor) }) catch unreachable;
                     out.appendSlice(alloc, t) catch unreachable;
                     i = after;
                     continue;
@@ -93,7 +93,7 @@ const SRewrite = struct {
                         .live => if (view_mode) blk4: {
                             used[0] = true;
                             break :blk4 std.fmt.allocPrint(alloc, "{s}{s}", .{ srf, fname }) catch unreachable;
-                        } else std.fmt.allocPrint(alloc, "__koru_store_{s}.{s}[{s}]", .{ store, fname, codegen_utils_store.HostShape.asIndex(alloc, storeHostTarget(), cursor) }) catch unreachable,
+                        } else std.fmt.allocPrint(alloc, "__koru_store_{s}.{s}[{s}]", .{ store, fname, SCursor.liveIndex(alloc, cursor) }) catch unreachable,
                         .input => blk5: {
                             used[0] = true;
                             break :blk5 std.fmt.allocPrint(alloc, "{s}{s}", .{ srf, fname }) catch unreachable;

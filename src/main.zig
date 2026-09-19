@@ -1549,9 +1549,9 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\                const msg2 = try __koru_std.fmt.bufPrint(&buf2, "✗ Compilation failed\n", .{});
             \\                try stdout2.writeAll(msg2);
             \\                if (result.stderr.len > 0) {
-            \\                    var err_buf2: [65536]u8 = undefined;
-            \\                    const err_msg2 = try __koru_std.fmt.bufPrint(&err_buf2, "Error: {s}\n", .{result.stderr});
-            \\                    try __koru_std.fs.File.stderr().writeAll(err_msg2);
+            \\                    try __koru_std.fs.File.stderr().writeAll("Error: ");
+            \\                    try __koru_std.fs.File.stderr().writeAll(result.stderr);
+            \\                    try __koru_std.fs.File.stderr().writeAll("\n");
             \\                }
             \\                __koru_std.process.exit(1);
             \\            },
@@ -1623,9 +1623,9 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\                const msg2 = try __koru_std.fmt.bufPrint(&buf2, "✗ Compilation failed\n", .{});
             \\                try stdout2.writeAll(msg2);
             \\                if (result.stderr.len > 0) {
-            \\                    var err_buf2: [65536]u8 = undefined;
-            \\                    const err_msg2 = try __koru_std.fmt.bufPrint(&err_buf2, "Error: {s}\n", .{result.stderr});
-            \\                    try __koru_std.fs.File.stderr().writeAll(err_msg2);
+            \\                    try __koru_std.fs.File.stderr().writeAll("Error: ");
+            \\                    try __koru_std.fs.File.stderr().writeAll(result.stderr);
+            \\                    try __koru_std.fs.File.stderr().writeAll("\n");
             \\                }
             \\                __koru_std.process.exit(1);
             \\            },

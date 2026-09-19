@@ -1567,7 +1567,6 @@ fn storeScopeBare(alloc: std.mem.Allocator, prog: *const ast_find.Program) Store
     for (px) |*p| p.* = "";
     return .{ .names = names, .prefixes = px };
 }
-
 fn storeNameIn(xs: []const []const u8, n: []const u8) bool {
     for (xs) |x| if (std.mem.eql(u8, x, n)) return true;
     return false;
@@ -1677,6 +1676,7 @@ fn storeLowerText(
 ~part clear
 ~part stripe
 ~part qrewrite
+~part cursor
 ~part qcaps
 ~part pverbs
 ~part sitetag
