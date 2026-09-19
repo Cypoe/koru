@@ -82,3 +82,21 @@ struct field is the ONLY reference naming app/lib in that test. The general
 lesson: passthrough is where references go to die; any host-text surface
 that authors want to name cross-module types from must become an AST
 surface first.
+
+Correction 2026-09-19: "narrow grammar, byte-identical fallback" was not
+narrow enough. The lift fired on every `const X = struct { a: T }` the
+field grammar could read — 1835/1835 went to 1457/1819, 357 reds, one
+mechanism. Three shapes it must not touch: a nested one-liner inside
+another host struct (`SL.ColProv`) is lifted out of its lexical parent; a
+plain host field spelled through a Zig alias (`*const ast_find.Flow`)
+goes through writeFieldType's bare-name heuristics and comes back as
+`ast_find.__koru_ast.Flow`; a top-level struct beside a `const std`
+sibling emits unfiltered while the sibling is filtered. The gate is now
+positive evidence, not absence of grammar failure: the decl sits at host
+indent 0 AND at least one field carries a `module/path:Type`. A struct
+that names no module reference has nothing to gain from being an AST
+surface, and the emitter's type rewriting is a cost it never asked for.
+The lesson sharpens: passthrough is where references go to die — but a
+host surface becomes an AST surface only when it holds a reference,
+because the emitter treats every AST field as its own to respell.
+Pinned at 220_041 (the three shapes) beside 220_040 (the lift).

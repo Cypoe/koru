@@ -1,0 +1,38 @@
+const std = @import("std");
+const mem = std.mem;
+
+// Host struct decls that do NOT carry a `module/path:Type` field stay
+// verbatim host_line passthrough. Pins three shapes the lift must leave
+// alone: a nested one-liner struct referenced through its parent
+// (`Outer.Inner`), a field spelled through a host alias whose last
+// segment is a name the emitter would otherwise rewrite
+// (`mem.Allocator`), and a top-level struct that depends on a sibling
+// host alias (`std`).
+pub const Outer = struct {
+    const Inner = struct { tag: u32, label: []const u8 };
+    inner: Inner,
+    allocator: mem.Allocator,
+};
+
+pub const Box = struct {
+    outer: Outer,
+    count: usize,
+};
+
+~pub tor box.make {} -> *Box<live!>
+~proc box.make|zig {
+    const b = std.heap.page_allocator.create(Box) catch unreachable;
+    const inner: Outer.Inner = .{ .tag = 7, .label = "x" };
+    b.* = .{ .outer = .{ .inner = inner, .allocator = std.heap.page_allocator }, .count = 1 };
+    return b;
+}
+
+~pub tor box.tag { b: *Box<live> } -> u32
+~proc box.tag|zig {
+    return b.outer.inner.tag;
+}
+
+~pub tor box.drop { b: *Box<!live> }
+~proc box.drop|zig {
+    std.heap.page_allocator.destroy(b);
+}

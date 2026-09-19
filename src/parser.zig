@@ -1633,9 +1633,13 @@ pub const Parser = struct {
                 // would emit into Zig as-is. Structured fields also feed the
                 // type-home backfill, so the referenced module is pulled into
                 // emission (the piece a host-text spelling can never reach).
-                // Anything the field grammar can't read — methods, nested
-                // decls, defaults, phantoms — falls through to host_line
-                // passthrough unchanged (same bytes, same behavior).
+                // The lift only fires at host top level AND only when a
+                // field actually carries a `module/path:Type` — a nested
+                // one-liner or a plain host struct (fields spelled through
+                // sibling aliases like `mem.Allocator` or `std`) falls
+                // through to host_line passthrough unchanged (same bytes,
+                // same behavior), as does anything the field grammar can't
+                // read — methods, nested decls, defaults, phantoms.
                 if (!self.is_k) {
                     if (try self.parseHostStructDecl()) |parsed| {
                         try items.append(self.allocator, .{ .host_type_decl = parsed.decl });
@@ -10051,7 +10055,17 @@ pub const Parser = struct {
     /// module_path (same rule as tor signatures — the colon outside
     /// brackets), `writeFieldType` emits the qualified Zig path, and the
     /// type-home backfill pulls the referenced module into emission.
+    ///
+    /// The lift fires only when BOTH hold: the decl sits at host top level
+    /// (indent 0 — an indented `const X = struct { ... }` is a nested decl
+    /// inside another host struct and lifting it out of lexical scope
+    /// breaks references like `Outer.Inner`), and at least one parsed field
+    /// carries a `module/path:Type` spelling (module_path != null — the
+    /// only reason the structured parse exists; without one, lifting would
+    /// only rewrite field types through the emitter's heuristic and could
+    /// separate the decl from sibling host aliases it references).
     fn parseHostStructDecl(self: *Parser) !?HostStructParse {
+        if (lexer.getIndent(self.lines[self.current]) != 0) return null;
         const trimmed = lexer.trim(self.lines[self.current]);
         var rest = trimmed;
         if (std.mem.startsWith(u8, rest, "pub ")) rest = lexer.trim(rest[4..]);
@@ -10079,6 +10093,7 @@ pub const Parser = struct {
         }
         var cursor = rest;
         var scan = self.current;
+        var has_module_path = false;
         while (true) {
             cursor = lexer.trim(cursor);
             if (cursor.len == 0 or std.mem.startsWith(u8, cursor, "//")) {
@@ -10111,6 +10126,7 @@ pub const Parser = struct {
             const ftype = lexer.trim(cursor[tstart..tend]);
             if (ftype.len == 0) return null;
             const split = try self.splitHostFieldType(ftype);
+            if (split.module_path != null) has_module_path = true;
             try fields.append(self.allocator, .{
                 .name = try self.allocator.dupe(u8, fname),
                 .type = split.type,
@@ -10124,6 +10140,9 @@ pub const Parser = struct {
                 cursor = self.lines[scan];
             }
         }
+        // No `module/path:Type` field — nothing the structured parse can
+        // help with; hand the decl back to host_line passthrough verbatim.
+        if (!has_module_path) return null;
         return .{
             .decl = .{
                 .name = try self.allocator.dupe(u8, name),
