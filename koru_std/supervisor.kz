@@ -10,9 +10,20 @@
 //
 //   worker(n)
 //   | ok v |> …
-//   | boom f |> std/supervisor:supervised { restart: 3 }
+//   | boom f |> std/supervisor:supervised
+//       | retry t when t < 3
 //
-// Under `[with]std/supervisor` the qualifier drops: `supervised { restart: 3 }`.
+// or, with an explicit re-entry call and terminal produce:
+//
+//   | boom f |> std/supervisor:supervised
+//       | retry t when t < 3 |> worker(n: f + 4)
+//       | exhausted => boom f
+//
+// The datablock `{ restart: N [, args: { f: expr }] }` is the terse spelling
+// of the same guarantee — `restart: N` is `| retry t when t < N`, and
+// `args:` is the implicit re-entry call's argument map. Under
+// `[with]std/supervisor` the qualifier drops, but the bare name collides
+// with produce-branch spelling — write `supervised()` there.
 //
 // SEMANTICS (pinned by 320_151's hand-written twin):
 //   - `restart: N` means N retries after the initial call — the producing
@@ -80,6 +91,44 @@ const std = @import("std");
         fn hasPayload(b: *const ast.Branch) bool {
             return b.payload.fields.len > 0 or b.payload.is_wildcard;
         }
+        fn isIdentChar(c: u8) bool {
+            return std.ascii.isAlphanumeric(c) or c == '_';
+        }
+        // Whole-word identifier scan — is `word` referenced as a name inside
+        // `haystack` (a condition or argument expression text)?
+        fn mentionsWord(haystack: []const u8, word: []const u8) bool {
+            var i: usize = 0;
+            while (std.mem.indexOfPos(u8, haystack, i, word)) |pos| {
+                const before = pos == 0 or !isIdentChar(haystack[pos - 1]);
+                const after = pos + word.len >= haystack.len or !isIdentChar(haystack[pos + word.len]);
+                if (before and after) return true;
+                i = pos + 1;
+            }
+            return false;
+        }
+        // Emit `<modref>.<name>_event.handler(.{ .field = <expr>, … })` —
+        // fields named in `inv`'s args take that arg's expression text;
+        // the rest ride at their current value (the proc's own params).
+        fn appendCall(alloc: std.mem.Allocator, buf: *std.ArrayList(u8), modref: []const u8, name: []const u8, fields: []const ast.Field, inv: ?*const ast.Invocation) void {
+            buf.appendSlice(alloc, modref) catch unreachable;
+            buf.appendSlice(alloc, ".") catch unreachable;
+            buf.appendSlice(alloc, name) catch unreachable;
+            buf.appendSlice(alloc, "_event.handler(.{") catch unreachable;
+            for (fields) |fld| {
+                var val = fld.name;
+                if (inv) |iv| {
+                    for (iv.args) |a| {
+                        if (std.mem.eql(u8, a.name, fld.name)) val = a.value;
+                    }
+                }
+                buf.appendSlice(alloc, " .") catch unreachable;
+                buf.appendSlice(alloc, fld.name) catch unreachable;
+                buf.appendSlice(alloc, " = ") catch unreachable;
+                buf.appendSlice(alloc, val) catch unreachable;
+                buf.appendSlice(alloc, ",") catch unreachable;
+            }
+            buf.appendSlice(alloc, " })") catch unreachable;
+        }
         // Emit `.<branch> => |v| return .{ .<branch> = v },` (or the void form)
         // — the pass-through arm every non-supervised branch gets in the
         // generated attempt proc's switch.
@@ -98,39 +147,33 @@ const std = @import("std");
         }
     };
 
-    // ---- 1. The policy datablock: { restart: N } ---------------------------
+    // ---- 1. The policy datablock, if written: { restart: N } ---------------
+    // The block is OPTIONAL — the arm-children policy (`| retry …`,
+    // `| exhausted …`) is the other spelling. Which one applies is decided
+    // after the site is located (its continuations carry the arms).
     var block_text: ?[]const u8 = null;
     for (invocation.args) |arg| {
         if (std.mem.eql(u8, arg.name, "source")) block_text = arg.value;
     }
-    if (block_text == null) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised requires a policy block: supervised {{ restart: N }}", .{}) } };
-    }
-    const braced = std.fmt.allocPrint(allocator, "{{{s}}}", .{block_text.?}) catch unreachable;
-    const policy_fields = struct_literal.parseFields(allocator, braced) catch |err| {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: {s}", .{struct_literal.describeError(err)}) } };
-    };
     var restart_text: ?[]const u8 = null;
+    var restart_rt: []const u8 = "";
     var arg_exprs: []const struct_literal.StructField = &.{};
-    for (policy_fields) |pf| {
-        if (std.mem.eql(u8, pf.name, "restart")) {
-            restart_text = pf.value;
-        } else if (std.mem.eql(u8, pf.name, "args")) {
-            arg_exprs = struct_literal.parseFields(allocator, pf.value) catch |err| {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: args: {s}", .{struct_literal.describeError(err)}) } };
-            };
-        } else {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: unknown policy '{s}' — supported: restart, args", .{pf.name}) } };
+    if (block_text) |bt| {
+        const braced = std.fmt.allocPrint(allocator, "{{{s}}}", .{bt}) catch unreachable;
+        const policy_fields = struct_literal.parseFields(allocator, braced) catch |err| {
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: {s}", .{struct_literal.describeError(err)}) } };
+        };
+        for (policy_fields) |pf| {
+            if (std.mem.eql(u8, pf.name, "restart")) {
+                restart_text = pf.value;
+            } else if (std.mem.eql(u8, pf.name, "args")) {
+                arg_exprs = struct_literal.parseFields(allocator, pf.value) catch |err| {
+                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: args: {s}", .{struct_literal.describeError(err)}) } };
+                };
+            } else {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: unknown policy '{s}' — supported: restart, args", .{pf.name}) } };
+            }
         }
-    }
-    const restart_rt = restart_text orelse {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: policy block must declare 'restart: N'", .{}) } };
-    };
-    const restart_n = std.fmt.parseInt(i64, std.mem.trim(u8, restart_rt, " "), 10) catch {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: restart must be a non-negative integer literal, got '{s}'", .{restart_rt}) } };
-    };
-    if (restart_n < 1) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: restart must be at least 1 — 'restart: 0' declares no retries; the plain '| {s} f => {s} f' arm already spells forward-as-is", .{ flow.body.branch, flow.body.branch }) } };
     }
 
     // ---- 2. Locate the producing call --------------------------------------
@@ -211,25 +254,180 @@ const std = @import("std");
         }
     }
 
-    // `args: { field: expr }` — retry arguments derived from the failure
-    // payload. Each expr runs in the arm's scope (its binding names the
-    // payload — `f` in `| boom f`) at the site, and against the latest
-    // failure inside the generated loop.
-    if (arg_exprs.len > 0) {
-        if (!H.hasPayload(supervised_branch.?)) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: args derives retry arguments from the failure payload — '| {s}' carries none", .{site.branch}) } };
-        }
-        const bind = site.binding orelse "";
-        if (bind.len == 0 or std.mem.eql(u8, bind, "_")) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: args references the failure payload — bind it: '| {s} f'", .{site.branch}) } };
-        }
-        for (arg_exprs) |ae| {
-            var found_field = false;
-            for (decl.input.fields) |fld| {
-                if (std.mem.eql(u8, ae.name, fld.name)) found_field = true;
+    // ---- 3.5. The policy: arm children, or the datablock -------------------
+    // Children of the site ARE the policy: `| retry <t> when <cond>` rules
+    // (optionally carrying a `|> <call>` re-entry invocation) and
+    // `| exhausted [when <cond>] => <produce>` terminal rules, evaluated in
+    // order on each supervised failure. First match wins; no match forwards
+    // the last outcome upward in kind — the supervision contract.
+    //
+    // `t` (the retry arm's own binding name) is the count of retries already
+    // spent — `| retry t when t < N` grants exactly N re-entries. The failure
+    // payload rides under the site's binding (`f` above); the call's input
+    // fields ride as the generated proc's own params.
+    const fail_bind = blk: {
+        const sb = site.binding orelse break :blk "f";
+        break :blk if (std.mem.eql(u8, sb, "_")) "f" else sb;
+    };
+    const RuleKind = enum { retry, exhausted };
+    const Rule = struct {
+        kind: RuleKind,
+        cond: ?[]const u8,
+        bind: ?[]const u8, // retry only — names the retries-spent counter
+        inv: ?*const ast.Invocation, // retry only — explicit re-entry call
+        ctor: ?*const ast.BranchConstructor, // exhausted only — terminal produce
+    };
+    var rules = std.ArrayList(Rule).initCapacity(allocator, 4) catch unreachable;
+    for (site.continuations) |*c| {
+        if (std.mem.eql(u8, c.branch, "retry")) {
+            if (c.condition == null) {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: `| retry` needs a `when` — an unconditional retry never terminates. Bound it on the attempt counter: `| retry t when t < N`", .{}) } };
             }
-            if (!found_field) {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: args names '{s}' — '{s}' has no input field '{s}'", .{ ae.name, child_name, ae.name }) } };
+            if (c.binding) |rb| {
+                if (std.mem.startsWith(u8, rb, "__")) {
+                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: counter binding '{s}' — generated names live under '__', pick another", .{rb}) } };
+                }
+                if (std.mem.eql(u8, rb, fail_bind)) {
+                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: counter binding '{s}' collides with the failure payload binding — pick another", .{rb}) } };
+                }
+            }
+            var inv: ?*const ast.Invocation = null;
+            if (c.node) |*n| {
+                switch (n.*) {
+                    .invocation => |*iv| inv = iv,
+                    else => {
+                        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: `| retry` re-enters through a `|>` call — a `=>` produce is terminal and belongs on `| exhausted`", .{}) } };
+                    },
+                }
+            }
+            rules.append(allocator, .{ .kind = .retry, .cond = c.condition, .bind = c.binding, .inv = inv, .ctor = null }) catch unreachable;
+        } else if (std.mem.eql(u8, c.branch, "exhausted")) {
+            if (c.binding != null) {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: `| exhausted` binds nothing — the failure payload rides under the arm's own binding ('{s}')", .{fail_bind}) } };
+            }
+            if (c.node == null or c.node.? != .branch_constructor) {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: `| exhausted` produces the terminal outcome: `=> {s} {s}` — or write no `| exhausted` at all for forward-in-kind", .{ site.branch, fail_bind }) } };
+            }
+            rules.append(allocator, .{ .kind = .exhausted, .cond = c.condition, .bind = null, .inv = null, .ctor = &c.node.?.branch_constructor }) catch unreachable;
+        } else {
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: policy arms are `| retry` and `| exhausted` — got '| {s}'", .{c.branch}) } };
+        }
+    }
+
+    var terminal_exh = false;
+    if (rules.items.len > 0) {
+        // ---- arm policy mode ----
+        if (block_text != null) {
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: policy arms and a {{ }} block are two spellings of one policy — pick one", .{}) } };
+        }
+        var retry_count: usize = 0;
+        var bounded = false;
+        for (rules.items, 0..) |r, i| {
+            switch (r.kind) {
+                .retry => {
+                    retry_count += 1;
+                    if (r.inv) |iv| {
+                        const re_name = iv.path.segments[iv.path.segments.len - 1];
+                        const re_module = iv.path.module_qualifier orelse flow.module;
+                        if (!std.mem.eql(u8, re_name, child_name) or !std.mem.eql(u8, re_module, child_module)) {
+                            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: re-entry calls '{s}' only — '{s}' returns a different outcome vocabulary (cross-event re-entry lands with the union work)", .{ child_name, re_name }) } };
+                        }
+                        for (iv.args) |a| {
+                            var found_field = false;
+                            for (decl.input.fields) |fld| {
+                                if (std.mem.eql(u8, a.name, fld.name)) found_field = true;
+                            }
+                            if (!found_field) {
+                                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: re-entry names '{s}' — '{s}' has no input field '{s}' (label the argument: `{s}: …`)", .{ a.name, child_name, a.name, a.name }) } };
+                            }
+                        }
+                    }
+                    if (r.bind) |rb| {
+                        if (H.mentionsWord(r.cond.?, rb)) bounded = true;
+                    }
+                },
+                .exhausted => {
+                    const ct = r.ctor.?;
+                    var found_branch = false;
+                    for (decl.branches) |*b| {
+                        if (std.mem.eql(u8, b.name, ct.branch_name)) {
+                            found_branch = true;
+                            if (H.hasPayload(b) and ct.plain_value == null) {
+                                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: `=> {s}` carries a payload — `=> {s} <expr>`", .{ ct.branch_name, ct.branch_name }) } };
+                            }
+                            if (!H.hasPayload(b) and ct.plain_value != null) {
+                                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: '| {s}' carries no payload — write `=> {s}`", .{ ct.branch_name, ct.branch_name }) } };
+                            }
+                        }
+                    }
+                    if (!found_branch) {
+                        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: `| exhausted => {s}` — '{s}' declares no branch '{s}'", .{ ct.branch_name, child_name, ct.branch_name }) } };
+                    }
+                    if (r.cond == null and i != rules.items.len - 1) {
+                        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: an unconditional `| exhausted` is terminal — it must be the last policy arm", .{}) } };
+                    }
+                    if (r.cond == null) terminal_exh = true;
+                },
+            }
+        }
+        if (retry_count == 0) {
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: a policy needs at least one `| retry` arm — `| exhausted` alone is the plain arm spelling", .{}) } };
+        }
+        if (!bounded) {
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: no `| retry` arm bounds on the attempt counter — keep-alive conditions must carry their own escape: `| retry t when t < N`", .{}) } };
+        }
+        // The policy rules evaluate against a payload that arrives as the
+        // generated unit's `__fail` input — arm mode threads exactly one
+        // field, and it must be bound at the site so the rewrite can pass it.
+        const sup_br = supervised_branch.?;
+        if (H.hasPayload(sup_br)) {
+            if (sup_br.payload.is_wildcard or sup_br.payload.fields.len != 1) {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: arm policy threads single-field failure payloads — '| {s}' carries more (multi-field threading lands later)", .{site.branch}) } };
+            }
+            const bind = site.binding orelse "";
+            if (bind.len == 0 or std.mem.eql(u8, bind, "_")) {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: policy conditions and the exhaustion forward need the failure payload — bind it: '| {s} f'", .{site.branch}) } };
+            }
+            for (decl.input.fields) |fld| {
+                if (std.mem.eql(u8, fail_bind, fld.name)) {
+                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: failure binding '{s}' collides with a '{s}' input field — pick another", .{ fail_bind, child_name }) } };
+                }
+            }
+        }
+    } else {
+        // ---- datablock policy mode ----
+        if (block_text == null) {
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised requires a policy — arm children (`| retry t when t < N`) or a block (`supervised {{ restart: N }}`)", .{}) } };
+        }
+        restart_rt = restart_text orelse {
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: policy block must declare 'restart: N'", .{}) } };
+        };
+        const restart_n = std.fmt.parseInt(i64, std.mem.trim(u8, restart_rt, " "), 10) catch {
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: restart must be a non-negative integer literal, got '{s}'", .{restart_rt}) } };
+        };
+        if (restart_n < 1) {
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: restart must be at least 1 — 'restart: 0' declares no retries; the plain '| {s} f => {s} f' arm already spells forward-as-is", .{ flow.body.branch, flow.body.branch }) } };
+        }
+        // `args: { field: expr }` — retry arguments derived from the failure
+        // payload. Each expr runs in the arm's scope (its binding names the
+        // payload — `f` in `| boom f`) at the site, and against the latest
+        // failure inside the generated loop.
+        if (arg_exprs.len > 0) {
+            if (!H.hasPayload(supervised_branch.?)) {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: args derives retry arguments from the failure payload — '| {s}' carries none", .{site.branch}) } };
+            }
+            const bind = site.binding orelse "";
+            if (bind.len == 0 or std.mem.eql(u8, bind, "_")) {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: args references the failure payload — bind it: '| {s} f'", .{site.branch}) } };
+            }
+            for (arg_exprs) |ae| {
+                var found_field = false;
+                for (decl.input.fields) |fld| {
+                    if (std.mem.eql(u8, ae.name, fld.name)) found_field = true;
+                }
+                if (!found_field) {
+                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: args names '{s}' — '{s}' has no input field '{s}'", .{ ae.name, child_name, ae.name }) } };
+                }
             }
         }
     }
@@ -246,9 +444,10 @@ const std = @import("std");
     // site seeds it with the expr evaluated against the SITE's failure, and
     // each in-loop failure re-derives it for the next attempt.
     var body = std.ArrayList(u8).initCapacity(allocator, 1024) catch unreachable;
-    body.appendSlice(allocator, "var __left: i64 = ") catch unreachable;
-    body.appendSlice(allocator, restart_rt) catch unreachable;
-    body.appendSlice(allocator, ";\n") catch unreachable;
+    if (rules.items.len == 0) {
+        body.appendSlice(allocator, "var __left: i64 = ") catch unreachable;
+        body.appendSlice(allocator, restart_rt) catch unreachable;
+        body.appendSlice(allocator, ";\n") catch unreachable;
     for (decl.input.fields) |fld| {
         for (arg_exprs) |ae| {
             if (std.mem.eql(u8, ae.name, fld.name)) {
@@ -280,7 +479,6 @@ const std = @import("std");
     body.appendSlice(allocator, " });\n    switch (__r) {\n") catch unreachable;
     // The in-loop payload rides under the arm's OWN binding name — `args`
     // exprs like `f + 4` resolve identically at the site and in the loop.
-    const fail_bind = site.binding orelse "f";
     for (decl.branches) |*b| {
         if (std.mem.eql(u8, b.name, site.branch)) {
             // The supervised arm: `restart: N` is N retries after the site's
@@ -315,6 +513,94 @@ const std = @import("std");
         }
     }
     body.appendSlice(allocator, "    }\n}\n") catch unreachable;
+    } else {
+        // Arm policy mode: `__t` counts retries SPENT — the retry arm's own
+        // binding names it (`| retry t when t < N` grants exactly N
+        // re-entries). The site's failure arrives as `__fail`; the policy
+        // rules evaluate on EVERY failure, including the first — a matched
+        // `| retry` spends the counter and re-enters through its own `|>`
+        // call (or the producing call unchanged); `| exhausted` rules and
+        // the fallthrough produce the terminal outcome. Each rule owns its
+        // call and dispatch — a fresh supervised outcome updates `f` and
+        // `continue :outer` re-evaluates the policy against it.
+        body.appendSlice(allocator, "var __t: i64 = 0;\n") catch unreachable;
+        if (H.hasPayload(supervised_branch.?)) {
+            body.appendSlice(allocator, "var ") catch unreachable;
+            body.appendSlice(allocator, fail_bind) catch unreachable;
+            body.appendSlice(allocator, " = __fail;\n") catch unreachable;
+        }
+        body.appendSlice(allocator, "outer: while (true) {\n") catch unreachable;
+        for (rules.items) |r| {
+            switch (r.kind) {
+                .retry => {
+                    body.appendSlice(allocator, "    {\n") catch unreachable;
+                    var bind_used = false;
+                    if (r.bind) |rb| {
+                        bind_used = H.mentionsWord(r.cond.?, rb);
+                        if (!bind_used) {
+                            if (r.inv) |iv| {
+                                for (iv.args) |a| {
+                                    if (H.mentionsWord(a.value, rb)) bind_used = true;
+                                }
+                            }
+                        }
+                    }
+                    if (bind_used) {
+                        body.appendSlice(allocator, "        const ") catch unreachable;
+                        body.appendSlice(allocator, r.bind.?) catch unreachable;
+                        body.appendSlice(allocator, " = __t;\n") catch unreachable;
+                    }
+                    body.appendSlice(allocator, "        if (") catch unreachable;
+                    body.appendSlice(allocator, r.cond.?) catch unreachable;
+                    body.appendSlice(allocator, ") {\n            __t += 1;\n            const __r = ") catch unreachable;
+                    H.appendCall(allocator, &body, modref, child_name, decl.input.fields, r.inv);
+                    body.appendSlice(allocator, ";\n            switch (__r) {\n") catch unreachable;
+                    for (decl.branches) |*b| {
+                        if (!std.mem.eql(u8, b.name, site.branch)) {
+                            H.appendForward(allocator, &body, b.name, H.hasPayload(b));
+                            continue;
+                        }
+                        body.appendSlice(allocator, "            .") catch unreachable;
+                        body.appendSlice(allocator, b.name) catch unreachable;
+                        if (H.hasPayload(b)) {
+                            body.appendSlice(allocator, " => |__nf| { ") catch unreachable;
+                            body.appendSlice(allocator, fail_bind) catch unreachable;
+                            body.appendSlice(allocator, " = __nf; continue :outer; },\n") catch unreachable;
+                        } else {
+                            body.appendSlice(allocator, " => { continue :outer; },\n") catch unreachable;
+                        }
+                    }
+                    body.appendSlice(allocator, "            }\n        }\n    }\n") catch unreachable;
+                },
+                .exhausted => {
+                    const ct = r.ctor.?;
+                    body.appendSlice(allocator, "    ") catch unreachable;
+                    if (r.cond) |cd| {
+                        body.appendSlice(allocator, "if (") catch unreachable;
+                        body.appendSlice(allocator, cd) catch unreachable;
+                        body.appendSlice(allocator, ") ") catch unreachable;
+                    }
+                    body.appendSlice(allocator, "return .{ .") catch unreachable;
+                    body.appendSlice(allocator, ct.branch_name) catch unreachable;
+                    body.appendSlice(allocator, " = ") catch unreachable;
+                    body.appendSlice(allocator, ct.plain_value orelse "{}") catch unreachable;
+                    body.appendSlice(allocator, " };\n") catch unreachable;
+                },
+            }
+        }
+        if (!terminal_exh) {
+            body.appendSlice(allocator, "    return .{ .") catch unreachable;
+            body.appendSlice(allocator, site.branch) catch unreachable;
+            if (H.hasPayload(supervised_branch.?)) {
+                body.appendSlice(allocator, " = ") catch unreachable;
+                body.appendSlice(allocator, fail_bind) catch unreachable;
+            } else {
+                body.appendSlice(allocator, " = {}") catch unreachable;
+            }
+            body.appendSlice(allocator, " };\n") catch unreachable;
+        }
+        body.appendSlice(allocator, "}\n") catch unreachable;
+    }
 
     var appended = std.ArrayList(ast.Item).initCapacity(allocator, 2) catch unreachable;
     const attempt_branches = allocator.alloc(ast.Branch, decl.branches.len) catch unreachable;
@@ -333,9 +619,23 @@ const std = @import("std");
             .annotations = b.annotations,
         };
     }
+    // Arm mode threads the site's failure payload into the generated unit
+    // as `__fail` — the policy rules evaluate against it before the first
+    // re-entry, so the counter bound and `f`-conditions govern every retry.
+    const threads_fail = rules.items.len > 0 and H.hasPayload(supervised_branch.?);
+    var attempt_input_fields = std.ArrayList(ast.Field).initCapacity(allocator, decl.input.fields.len + 1) catch unreachable;
+    for (decl.input.fields) |fld| {
+        attempt_input_fields.append(allocator, H.cloneField(allocator, fld)) catch unreachable;
+    }
+    if (threads_fail) {
+        attempt_input_fields.append(allocator, ast.Field{
+            .name = allocator.dupe(u8, "__fail") catch unreachable,
+            .type = allocator.dupe(u8, supervised_branch.?.payload.fields[0].type) catch unreachable,
+        }) catch unreachable;
+    }
     appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
         .path = H.mkPath(allocator, flow.module, attempt_name),
-        .input = ast.Shape{ .fields = H.cloneFields(allocator, decl.input.fields), .is_wildcard = decl.input.is_wildcard },
+        .input = ast.Shape{ .fields = attempt_input_fields.toOwnedSlice(allocator) catch unreachable, .is_wildcard = decl.input.is_wildcard },
         .branches = attempt_branches,
         .is_public = false,
         .is_implicit_flow = false,
@@ -382,6 +682,15 @@ const std = @import("std");
                 .had_explicit_label = explicit,
             }) catch unreachable;
         }
+    }
+    if (threads_fail) {
+        // `__fail: f` — the site's own failure payload, evaluated where the
+        // arm's binding is live.
+        call_args_list.append(allocator, ast.Arg{
+            .name = allocator.dupe(u8, "__fail") catch unreachable,
+            .value = allocator.dupe(u8, fail_bind) catch unreachable,
+            .had_explicit_label = true,
+        }) catch unreachable;
     }
     const call_inv = ast.Invocation{
         .path = H.mkPath(allocator, flow.module, attempt_name),
