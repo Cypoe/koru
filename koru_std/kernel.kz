@@ -1482,8 +1482,7 @@ const codegen_utils_kernel = @import("codegen_utils");
                         const par_fn = std.fmt.allocPrint(alloc,
                             \\const {s} = struct {{
                             \\    fn run(lo: usize, hi: usize) void {{
-                            \\        var __koru_i: usize = lo;
-                            \\        while (__koru_i < hi) : (__koru_i += 1) {{
+                            \\        for (lo..hi) |__koru_i| {{
                             \\            {s}
                             \\        }}
                             \\    }}
@@ -1499,8 +1498,7 @@ const codegen_utils_kernel = @import("codegen_utils");
                             \\        const __koru_p = __koru_pool_ensure();
                             \\        const __koru_nc = @max(@as(usize, 1), @min(@import("std").Thread.getCpuCount() catch 1, (__koru_n + 4095) / 4096));
                             \\        var __koru_wg: @import("std").Thread.WaitGroup = .{{}};
-                            \\        var __koru_t: usize = 0;
-                            \\        while (__koru_t < __koru_nc) : (__koru_t += 1) {{
+                            \\        for (0..__koru_nc) |__koru_t| {{
                             \\            const __koru_lo = __koru_t * __koru_n / __koru_nc;
                             \\            const __koru_hi = if (__koru_t + 1 == __koru_nc) __koru_n else (__koru_t + 1) * __koru_n / __koru_nc;
                             \\            if (__koru_hi <= __koru_lo) break;

@@ -375,6 +375,7 @@ invariants/compiler_env.zig
 invariants/program_ast.zig
 invariants/program.ast.json
 invariants/output_emitted.zig
+invariants/compiler_env.json
 invariants/a.out
 invariants/zig-out/
 invariants/.zig-cache/

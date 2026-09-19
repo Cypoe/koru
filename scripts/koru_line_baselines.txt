@@ -69,7 +69,7 @@ koru_std/interpreter.parse.kz	52
 koru_std/interpreter.run.kz	1659
 koru_std/interpreter.select.kz	42
 koru_std/interpreter.validate.kz	59
-koru_std/invariants.kz	181
+koru_std/invariants.kz	179
 koru_std/io_registry.kz	30
 koru_std/io.jsprec.kz	48
 koru_std/io.kz	2078
@@ -78,7 +78,7 @@ koru_std/kernel.body.kz	69
 koru_std/kernel.fpga.kz	192
 koru_std/kernel.fpgaemit.kz	179
 koru_std/kernel.fpgatb.kz	120
-koru_std/kernel.kz	2638
+koru_std/kernel.kz	2636
 koru_std/kernel.scan.kz	109
 koru_std/koru.kz	211
 koru_std/liquid_template.kz	146
@@ -150,6 +150,7 @@ koru_std/store.watch.kz	296
 koru_std/string-map.kz	126
 koru_std/string.kjs	147
 koru_std/string.kz	311
+koru_std/supervisor.kz	810
 koru_std/switch.kz	151
 koru_std/table.kz	62
 koru_std/taps.kz	1442

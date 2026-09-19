@@ -15,6 +15,12 @@ kernel.kz | while (i < nqf)                   | find-first search over queue fam
 kernel.kz | while (m < mp.memoryTypeCount)    | find-first search over memory types; breaks at the first host-visible+coherent type
 parser.kz | while (c.kids.len > 0)            | descent to the leaf of a parse tree; depth is a property of the parsed input
 regex.kz  | while (__koru_pos <= {s}.len)     | scanner: the cursor advances by match length, one byte on an empty match, and breaks on no-match; trip count is match-dependent
-store.kz  | while (__koru_cyc != -1)          | ancestor-chain walk by handles; chain length is data, not a nameable bound (covers all four write-path emissions of the cycle guard)
-store.kz  | while (__koru_sp > 0)             | explicit work-stack pop for preorder traversal; the stack grows while it drains
-store.kz  | while (__koru_i < __koru_store_{s}.len) | mutation-aware sweep: the store may shrink or grow mid-sweep, len is re-read every iteration and the cursor advances only when no removal occurred — the trip count does not exist before the loop runs
+regex.kz  | while (__koru_pos <= {s}.length)  | the |js variant of the same scanner — cursor advances by match length, breaks on no-match; trip count is match-dependent
+pump.kz   | while (true)                      | drain-until-quiescent event loop (zig and |js variants): it repeats the cascade until no live event remains; the trip count is however many rounds the writes generate — a data property, not a nameable bound
+supervisor.kz | while (true)                  | arm-policy retry loop (`outer:`): the bound is the user's own `| retry t when <expr>` conditions, evaluated per failure — an arbitrary predicate, not a nameable count. (The `restart: N` datablock form IS bounded and emits `for (0..__left)`.)
+store.new.kz | while (__koru_cyc != -1)       | ancestor-chain walk by handles; chain length is data, not a nameable bound (covers all write-path emissions of the cycle guard)
+store.new.kz | while (__koru_cyc !== -1)      | the |js emission of the same ancestor-chain walk
+store.new.kz | while (__koru_sp > 0)          | explicit work-stack pop for preorder traversal; the stack grows while it drains
+store.new.kz | while (__koru_i < __koru_store_{s}.len) | mutation-aware sweep: the store may shrink or grow mid-sweep, len is re-read every iteration and the cursor advances only when no removal occurred — the trip count does not exist before the loop runs
+store.pverbs.kz | while (__koru_i < __koru_store_{s}.len) | same mutation-aware sweep emitted from the pverbs part file
+store.query.kz | while (__koru_si < {s})      | the |js mutation-aware sweep: len is captured per iteration (__koru_len_before) because the store may shrink or grow mid-sweep

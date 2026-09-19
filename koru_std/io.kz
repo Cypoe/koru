@@ -367,7 +367,7 @@ const KORU_OUT_UNESCAPED: []const u8 =
     "const __kc = struct { extern var stdout: ?*anyopaque; extern var stderr: ?*anyopaque; " ++
     "extern fn fputs(__s: [*:0]const u8, __st: ?*anyopaque) c_int; }; " ++
     "var __kt: [4096]u8 = undefined; var __ki: usize = 0; " ++
-    "while (__ki < __b.len) { const __kn = @min(__kt.len - 1, __b.len - __ki); " ++
+    "for (0..(__b.len + __kt.len - 2) / (__kt.len - 1)) |_| { const __kn = @min(__kt.len - 1, __b.len - __ki); " ++
     "@memcpy(__kt[0..__kn], __b[__ki..][0..__kn]); __kt[__kn] = 0; " ++
     "@import(\"std\").mem.doNotOptimizeAway(__kc.fputs(@as([*:0]const u8, @ptrCast(&__kt)), " ++
     "if (__fd == 2) __kc.stderr else __kc.stdout)); __ki += __kn; } " ++

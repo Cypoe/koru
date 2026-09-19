@@ -1,0 +1,8 @@
+{
+  "name": "koru-invariants-gate",
+  "version": "0.1.0",
+  "entry": "gate.k",
+  "paths": {
+    "koru": "../../koru-libs"
+  }
+}

@@ -154,6 +154,7 @@
                 const name = helpers.jsonField(arg.value, "name");
                 const rule = helpers.jsonField(arg.value, "rule");
                 const tags = helpers.jsonField(arg.value, "tags");
+                const check = helpers.jsonField(arg.value, "check");
 
                 if (!printed_header) {
                     std.debug.print("\n{s}\n", .{kind});
@@ -163,12 +164,9 @@
                 if (tags.len > 0) std.debug.print("  {s}", .{tags});
                 std.debug.print("\n    {s}:{d}\n", .{ flow.location.file, flow.location.line });
                 if (rule.len > 0) std.debug.print("    {s}\n", .{rule});
+                if (check.len > 0) std.debug.print("    check: {s}\n", .{check});
 
-                if (std.mem.eql(u8, kind, "inferred")) {
-                    inferred_n += 1;
-                } else {
-                    aspirational_n += 1;
-                }
+                if (std.mem.eql(u8, kind, "inferred")) inferred_n += 1 else aspirational_n += 1;
             }
         }
     }
