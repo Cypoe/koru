@@ -500,7 +500,7 @@ pub const CompilerContext = struct {
     template_processor_module.addImport("annotation_parser", annotation_parser_module);
     template_processor_module.addImport("struct_literal", struct_literal_module);
     template_processor_module.addImport("codegen_utils", codegen_utils_module);
-
+    auto_discharge_inserter_module.addImport("template_processor", template_processor_module);
     // Purity helpers
     const purity_helpers_module = b.createModule(.{
         .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/compiler_passes/purity_helpers.zig" },

@@ -21,6 +21,7 @@ const ast_functional = @import("ast_functional");
 const errors = @import("errors");
 const phantom_parser = @import("phantom_parser");
 const annotation_parser = @import("annotation_parser");
+const template_processor = @import("template_processor");
 
 /// Does this event carry `[!]`, the preferred-discharge annotation? The way an
 /// author breaks a tie between several legal disposers.
@@ -1608,10 +1609,22 @@ pub const AutoDischargeInserter = struct {
             // Anonymous `|>` continuations on a branch-typed callee resolve to
             // its sole non-panic terminal branch — before any handling count,
             // so the renamed arm IS that branch's handler.
+            const impl_event: ?*const ast.EventDecl = if (flow.impl_of) |impl_path|
+                template_processor.findEventDeclByLastSegment(@constCast(program.items), &impl_path)
+            else
+                null;
             if (try self.resolveAnonymousArms(flow.body.continuations, event_info.decl, flow.location)) |new_conts| {
                 const resolved_flow = try self.allocator.create(ast.Flow);
                 resolved_flow.* = flow.*;
                 resolved_flow.body.continuations = new_conts;
+                // Head-flow twin of the nested re-render below: the arm list
+                // the head's template rendered against changed, so its baked
+                // `.continue` markers name the OLD list. Re-render it.
+                if (flow.inline_body != null) {
+                    if (try template_processor.renderTemplateInvocation(@constCast(program.items), flow.inv(), new_conts, flow.location, self.lang, impl_event, self.allocator)) |rendered| {
+                        resolved_flow.inline_body = rendered;
+                    }
+                }
                 const new_program = try ast_functional.replaceFlowRecursive(
                     self.allocator,
                     program,
@@ -1633,7 +1646,7 @@ pub const AutoDischargeInserter = struct {
             // whatever the callee actually returned. Silent on the Zig lane,
             // and silent on the JS lane too unless the arm's body happened to
             // dereference the payload. Pinned at 355_012.
-            if (try self.synthesizeNestedPanicArms(flow.body.continuations, flow.module)) |new_conts| {
+            if (try self.synthesizeNestedPanicArms(flow.body.continuations, flow.module, @constCast(program.items), impl_event)) |new_conts| {
                 const nested_flow = try self.allocator.create(ast.Flow);
                 nested_flow.* = flow.*;
                 nested_flow.body.continuations = new_conts;
@@ -1649,7 +1662,7 @@ pub const AutoDischargeInserter = struct {
                 result_ptr.* = new_program;
                 return .{ .transformed = true, .program = result_ptr };
             }
-            if (try self.synthesizeOptionalBranches(flow, event_info.decl)) |new_flow| {
+            if (try self.synthesizeOptionalBranches(flow, event_info.decl, @constCast(program.items))) |new_flow| {
                 // Replace the flow in the program with the synthesized version
                 const new_program = try ast_functional.replaceFlowRecursive(
                     self.allocator,
@@ -4888,6 +4901,8 @@ pub const AutoDischargeInserter = struct {
         self: *AutoDischargeInserter,
         conts: []const ast.Continuation,
         module: []const u8,
+        all_items: []ast.Item,
+        impl_event: ?*const ast.EventDecl,
     ) !?[]ast.Continuation {
         var changed = false;
         const out = try self.allocator.alloc(ast.Continuation, conts.len);
@@ -4899,7 +4914,7 @@ pub const AutoDischargeInserter = struct {
             // Depth first: a call inside a call inside an arm is the same
             // defect one level further down.
             if (cont.continuations.len > 0) {
-                if (try self.synthesizeNestedPanicArms(cont.continuations, module)) |kids| {
+                if (try self.synthesizeNestedPanicArms(cont.continuations, module, all_items, impl_event)) |kids| {
                     out[i].continuations = kids;
                     changed = true;
                 }
@@ -4913,6 +4928,7 @@ pub const AutoDischargeInserter = struct {
                     // resolves to the success branch BEFORE loudArmsFor counts
                     // handled branches — otherwise `ok` reads unhandled and a
                     // no-op arm lands beside the real one.
+                    var arms_changed = false;
                     const inv_name = try self.pathToString(inv.path);
                     defer self.allocator.free(inv_name);
                     const inv_module = inv.path.module_qualifier orelse module;
@@ -4922,11 +4938,24 @@ pub const AutoDischargeInserter = struct {
                         if (try self.resolveAnonymousArms(out[i].continuations, info.decl, cont.location)) |resolved| {
                             out[i].continuations = resolved;
                             changed = true;
+                            arms_changed = true;
                         }
                     }
                     if (try self.loudArmsFor(&inv, module, out[i].continuations, cont.location)) |extended| {
                         out[i].continuations = extended;
                         changed = true;
+                        arms_changed = true;
+                    }
+                    // The arm list this invocation's template rendered against
+                    // has changed — its `inline_body` carries `.continue`
+                    // markers baked for the OLD list, so a synthesized arm
+                    // (e.g. an omitted `| ?done` now carrying an inserted
+                    // discharge) would never emit. Re-render against the
+                    // current arms; see the head-level twin below.
+                    if (arms_changed) {
+                        if (try self.refreshInlineBody(&inv, out[i].continuations, cont.location, all_items, impl_event)) |new_inv| {
+                            out[i].node = .{ .invocation = new_inv };
+                        }
                     }
                 },
                 else => {},
@@ -4938,6 +4967,34 @@ pub const AutoDischargeInserter = struct {
             return null;
         }
         return out;
+    }
+
+    /// A template invocation's `inline_body` is rendered against its arm list
+    /// at elaborate time; padding or renaming arms after that render leaves the
+    /// `.continue` markers baked for arms that did not exist. Re-render against
+    /// the current list so a synthesized arm emits exactly like a spelled one.
+    /// Null when the invocation carries no rendered body to refresh.
+    fn refreshInlineBody(
+        self: *AutoDischargeInserter,
+        inv: *const ast.Invocation,
+        conts: []const ast.Continuation,
+        location: errors.SourceLocation,
+        all_items: []ast.Item,
+        impl_event: ?*const ast.EventDecl,
+    ) !?ast.Invocation {
+        if (inv.inline_body == null) return null;
+        const rendered = (try template_processor.renderTemplateInvocation(
+            all_items,
+            inv,
+            conts,
+            location,
+            self.lang,
+            impl_event,
+            self.allocator,
+        )) orelse return null;
+        var new_inv = inv.*;
+        new_inv.inline_body = rendered;
+        return new_inv;
     }
 
     /// The arms `inv`'s callee declares as `| ?!` that `existing` does not
@@ -5094,6 +5151,7 @@ pub const AutoDischargeInserter = struct {
         self: *AutoDischargeInserter,
         flow: *const ast.Flow,
         event_decl: *const ast.EventDecl,
+        all_items: []ast.Item,
     ) !?*const ast.Flow {
         // Find which branches are already handled
         var handled = std.StringHashMap(void).init(self.allocator);
@@ -5319,6 +5377,19 @@ pub const AutoDischargeInserter = struct {
         const new_flow = try self.allocator.create(ast.Flow);
         new_flow.* = flow.*;
         new_flow.body.continuations = new_continuations;
+
+        // The arm list the head's template rendered against changed — its
+        // baked `.continue` markers name the OLD list, so a synthesized arm
+        // carrying an inserted discharge would never emit. Re-render it.
+        if (flow.inline_body != null) {
+            const impl_event: ?*const ast.EventDecl = if (flow.impl_of) |impl_path|
+                template_processor.findEventDeclByLastSegment(all_items, &impl_path)
+            else
+                null;
+            if (try template_processor.renderTemplateInvocation(all_items, flow.inv(), new_continuations, flow.location, self.lang, impl_event, self.allocator)) |rendered| {
+                new_flow.inline_body = rendered;
+            }
+        }
 
         return new_flow;
     }

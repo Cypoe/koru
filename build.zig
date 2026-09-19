@@ -694,6 +694,11 @@ pub fn build(b: *std.Build) void {
     template_processor_module.addImport("struct_literal", struct_literal_module);
     template_processor_module.addImport("codegen_utils", codegen_utils_module);
     exe.root_module.addImport("template_processor", template_processor_module);
+    // The discharge inserter re-renders a template invocation's inline_body
+    // when it mutates that invocation's arm list (optional-arm padding,
+    // anonymous-arm resolution) — stale `.continue` markers otherwise name
+    // the arm list as it was at elaborate time.
+    auto_discharge_inserter_module.addImport("template_processor", template_processor_module);
 
     // Transform Pass Runner module - generic AST walker for transforms
     const transform_pass_runner_module = b.createModule(.{

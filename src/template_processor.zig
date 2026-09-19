@@ -728,7 +728,7 @@ fn buildCondBinds(
 /// inline_body (with the inline_stmt marker), or null if the invocation doesn't
 /// resolve to a per-call template proc. Shared by top-level flows and nested
 /// continuations so inline-template lowering works at every depth.
-fn renderTemplateInvocation(
+pub fn renderTemplateInvocation(
     all_items: []ast.Item,
     invocation: *const ast.Invocation,
     continuations: []const ast.Continuation,
@@ -1108,7 +1108,7 @@ fn presenceRewriteTemplateArg(
 /// Find the event declaration whose path's last segment matches the
 /// invocation's last segment (top-level + nested modules). Used to bind
 /// positional invocation args to the event's field names.
-fn findEventDeclByLastSegment(items: []ast.Item, path: *const ast.DottedPath) ?*const ast.EventDecl {
+pub fn findEventDeclByLastSegment(items: []ast.Item, path: *const ast.DottedPath) ?*const ast.EventDecl {
     if (path.segments.len == 0) return null;
     const target = path.segments[path.segments.len - 1];
     for (items) |*item| {
