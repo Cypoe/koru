@@ -1,7 +1,8 @@
-// PINS: a held *T<live!> token passes where ?*T<live> is declared — the
-// optional wrap applies to phantom pointer args the same as it does to
-// scalars (?i32 already accepts i32). The borrow does not consume the
-// obligation; drop still discharges it afterwards.
+// PINS: a ?*T<live> parameter accepts both halves of optionality — a
+// held *T<live!> token AND a null literal. The optional wrap applies to
+// phantom pointer args the same as it does to scalars (?i32 accepts
+// i32 and null alike). The borrow does not consume the obligation;
+// drop still discharges it afterwards.
 const std = @import("std");
 ~tor make {} -> *std.fs.File<live!>
 ~proc make|zig {
@@ -19,4 +20,5 @@ const std = @import("std");
 }
 ~make(): f
 |> take(f)
+|> take(f: null)
 |> drop(f)

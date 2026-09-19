@@ -14,6 +14,13 @@ carries a phantom state. The whole-catalog consequence in intranquil-domain
 was that `?*TempoTrack<live>` parameters are omission-only — the declared
 contract says "optional," the checker enforces "absent."
 
+Second surface, measured by the WO-012 cell the same day: the omission is
+also compulsory — `?*Section<live>` refuses a `null` literal outright
+("argument has no tracked phantom state"), because validateArgument
+requires every argument to be a tracked binding and null is no binding.
+Two different code paths, one user-facing defect: an optional phantom
+parameter accepts exactly nothing at the call site.
+
 The asymmetry is what makes this a defect rather than a choice: the wrap
 exists, it just stops at the type constructor the DAW surface uses most.
 Two sub-questions the pin does not pre-judge: whether the wrap should also
