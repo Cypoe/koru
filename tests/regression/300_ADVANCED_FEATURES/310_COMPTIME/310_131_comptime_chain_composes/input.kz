@@ -1,0 +1,30 @@
+// Comptime calls COMPOSE. The fold pass consumes a chain of [comptime] heads
+// to fixpoint — a bare-return impl evaluates (mul), a proc handler calls
+// through the Stage A thunk table (bump), a subflow implementation walks
+// (describe, producing via `-> expr` arm tails) — and each result splices
+// into the next call's argument text. Only the runtime residue (the print)
+// emits. mul(30,4)=120 -> bump=121 -> pick produces `big` -> describe=221.
+~import std/io
+
+~[comptime] tor mul { l: i64, r: i64 } -> i64
+~mul -> l * r
+
+~[comptime] tor bump { n: i64 } -> i64
+~proc bump|zig {
+    return n + 1;
+}
+
+~[comptime] tor pick { n: i64 }
+| small i64
+| big i64
+~proc pick|zig {
+    if (n < 100) return .{ .small = n };
+    return .{ .big = n };
+}
+
+~[comptime] tor describe { n: i64 } -> i64
+~describe = pick(n)
+| small v -> v
+| big v -> v + 100
+
+~mul(l: 30, r: 4): m |> bump(n: m): b |> describe(n: b): d |> std/io:print.ln("{{ d:d }}")

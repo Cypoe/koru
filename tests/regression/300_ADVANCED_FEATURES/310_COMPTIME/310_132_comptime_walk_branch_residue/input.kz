@@ -1,0 +1,24 @@
+// A walked comptime subflow's RESULT dispatches the residue's branch arms.
+// `route` walks pick, re-produces its branch through `=>` arm tails, and the
+// residue's `| small v` arm matches — its continuation chain (the print) is
+// promoted while the non-matching `| big` arm emits nothing.
+~import std/io
+
+~[comptime] tor pick { n: i64 }
+| small i64
+| big i64
+~proc pick|zig {
+    if (n < 10) return .{ .small = n };
+    return .{ .big = n };
+}
+
+~[comptime] tor route { n: i64 }
+| small i64
+| big i64
+~route = pick(n)
+| small v => small v
+| big v => big v
+
+~route(n: 4)
+| small v |> std/io:print.ln("small {{ v:d }}")
+| big v |> std/io:print.ln("big {{ v:d }}")

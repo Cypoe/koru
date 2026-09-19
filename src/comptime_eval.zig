@@ -426,8 +426,7 @@ pub const Evaluator = struct {
         }
 
         if (findSubflowImpl(items, path)) |sub| {
-            const value = try self.walkFlow(items, sub, args);
-            return .{ .branch = null, .payload = value };
+            return self.walkFlow(items, sub, args);
         }
 
         if (findBareReturnImpl(items, path)) |impl| {
@@ -444,8 +443,10 @@ pub const Evaluator = struct {
 
     /// Walk a subflow implementation with `args` bound in a FRESH scope — a
     /// subflow body sees its own arguments, never the caller's bindings.
-    /// Returns the walked flow's value (null = void).
-    pub fn walkFlow(self: *Evaluator, items: []const ast.Item, flow: *const ast.Flow, args: []const ArgValue) EvalError!?Value {
+    /// Returns the walked flow's result (branch + payload; `.{}` = void) —
+    /// callers need the branch to dispatch residue arms the way the runtime
+    /// would.
+    pub fn walkFlow(self: *Evaluator, items: []const ast.Item, flow: *const ast.Flow, args: []const ArgValue) EvalError!ThunkResult {
         var env = Env.init(self.allocator);
         for (args) |a| try env.bind(a.name, a.value);
         return self.walkLabeledBody(items, &flow.body, flow.pre_label, &env);
@@ -466,8 +467,10 @@ pub const Evaluator = struct {
 
     /// The labeled-loop core: invoke the head, dispatch the arms, re-enter
     /// the head with the jump's arguments when the matched chain bubbles a
-    /// `@label(...)` naming this flow's `#label`.
-    fn walkLabeledBody(self: *Evaluator, items: []const ast.Item, body: *const ast.Continuation, pre_label: ?[]const u8, env: *Env) EvalError!?Value {
+    /// `@label(...)` naming this flow's `#label`. The body's result is the
+    /// last arm-chain result — branch and payload both, so residue dispatch
+    /// sees what the runtime dispatch would.
+    fn walkLabeledBody(self: *Evaluator, items: []const ast.Item, body: *const ast.Continuation, pre_label: ?[]const u8, env: *Env) EvalError!ThunkResult {
         if (body.node == null or body.node.? != .invocation)
             return self.fail(error.UnsupportedConstruct, "comptime walk: flow head must be an invocation", .{});
         const inv = &body.node.?.invocation;
@@ -481,7 +484,7 @@ pub const Evaluator = struct {
 
             const result = try self.invokePath(items, &inv.path, head_args);
 
-            if (body.continuations.len == 0) return result.payload;
+            if (body.continuations.len == 0) return result;
 
             const outcome = try self.dispatchArms(items, body.continuations, result, env);
             switch (outcome) {
@@ -493,8 +496,8 @@ pub const Evaluator = struct {
                     head_args = j.args;
                     continue;
                 },
-                .result => |r| return r.payload,
-                .none => return null,
+                .result => |r| return r,
+                .none => return .{},
             }
         }
     }
@@ -504,26 +507,49 @@ pub const Evaluator = struct {
     /// see it; a guarded arm matches only when its guard is true. First match
     /// wins — the runtime's arm semantics, interpreted.
     fn dispatchArms(self: *Evaluator, items: []const ast.Item, arms: []const ast.Continuation, result: ThunkResult, env: *Env) EvalError!Outcome {
-        const branch = result.branch orelse
-            return self.fail(error.UnsupportedConstruct, "comptime walk: a void call cannot dispatch branch arms", .{});
+        const branch = result.branch orelse {
+            // Bare-return convention: a `-> T` result carries no tag, so arm
+            // names are decorative — every arm is a candidate and the
+            // when-guards select, first match wins (310_091's two `| go i`
+            // arms, guarded + fallthrough, pin the intended shape; KORU021
+            // currently refuses this upstream — when it relaxes, this is the
+            // semantics).
+            if (result.payload == null)
+                return self.fail(error.UnsupportedConstruct, "comptime walk: a void call cannot dispatch branch arms", .{});
+            for (arms) |*arm| {
+                if (arm.is_catchall or arm.branch.len == 0)
+                    return self.fail(error.UnsupportedConstruct, "comptime walk: a `-> T` result cannot dispatch a catchall or unnamed arm", .{});
+                if (try self.matchArm(items, arm, result.payload, env)) |outcome| return outcome;
+            }
+            return self.fail(error.UnsupportedConstruct, "comptime walk: `-> T` result matched no arm — every when-guard false", .{});
+        };
 
         for (arms) |*arm| {
             if (!std.mem.eql(u8, arm.branch, branch)) continue;
-            if (arm.destructure.len > 0)
-                return self.fail(error.UnsupportedConstruct, "comptime walk: shape-destructure arms are a later rung", .{});
-
-            var arm_env = env.child();
-            if (arm.binding) |b| {
-                const payload = result.payload orelse
-                    return self.fail(error.UnsupportedConstruct, "comptime walk: arm `| {s} {s}` binds a payload but branch `{s}` carried none", .{ arm.branch, b, branch });
-                try arm_env.bind(b, payload);
-            }
-
-            if (try self.armGuardPasses(arm, &arm_env)) {
-                return self.walkArm(items, arm, &arm_env);
-            }
+            if (try self.matchArm(items, arm, result.payload, env)) |outcome| return outcome;
         }
         return self.fail(error.UnsupportedConstruct, "comptime walk: branch `{s}` matched no arm — name unhandled or every guard false", .{branch});
+    }
+
+    /// Execute one matched arm: bind its payload, evaluate its when-guard,
+    /// walk its chain. Null = the guard rejected the arm — the caller keeps
+    /// scanning same-named arms. Shared by named-branch dispatch and the
+    /// bare-return convention, where the single arm matches unconditionally.
+    fn matchArm(self: *Evaluator, items: []const ast.Item, arm: *const ast.Continuation, payload: ?Value, env: *Env) EvalError!?Outcome {
+        if (arm.destructure.len > 0)
+            return self.fail(error.UnsupportedConstruct, "comptime walk: shape-destructure arms are a later rung", .{});
+
+        var arm_env = env.child();
+        if (arm.binding) |b| {
+            const value = payload orelse
+                return self.fail(error.UnsupportedConstruct, "comptime walk: arm `| {s} {s}` binds a payload but the result carried none", .{ arm.branch, b });
+            try arm_env.bind(b, value);
+        }
+
+        if (try self.armGuardPasses(arm, &arm_env)) {
+            return try self.walkArm(items, arm, &arm_env);
+        }
+        return null;
     }
 
     fn armGuardPasses(self: *Evaluator, arm: *const ast.Continuation, env: *Env) EvalError!bool {
@@ -547,6 +573,23 @@ pub const Evaluator = struct {
                 const result = try self.invokePath(items, &chain_inv.path, args);
                 if (arm.continuations.len == 0) return .{ .result = result };
                 return self.dispatchArms(items, arm.continuations, result, env);
+            },
+            .branch_constructor => |*bc| {
+                // `=> branch value` — the arm constructs the result. Scalar
+                // payloads only; named-field constructors are a later rung.
+                const text = bc.plain_value orelse
+                    return self.fail(error.UnsupportedConstruct, "comptime walk: `=> {s}` with named fields is a later rung — a single payload value so far", .{bc.branch_name});
+                const value = try self.evalText(env, text);
+                return .{ .result = .{ .branch = bc.branch_name, .payload = value } };
+            },
+            .expression => |text| {
+                // `-> expr` produce at arm tail (020_025's `| big b -> b * 100`):
+                // the arm's value is the enclosing event's bare return — a
+                // tagless payload, mirroring the emitter's bare_return_active
+                // `return EXPR`. Named produces (`-> finished d`) carry the
+                // branch inside the text — those refuse at evalText, loudly.
+                const value = try self.evalText(env, text);
+                return .{ .result = .{ .branch = null, .payload = value } };
             },
             else => return self.fail(error.UnsupportedConstruct, "comptime walk: arm node `{s}` is a later rung", .{@tagName(node)}),
         }
@@ -658,9 +701,13 @@ pub const Folder = struct {
     }
 
     /// Returns the input program untouched when nothing is consumable.
-    /// Foldable flows are rewritten to their residue; walkable flows are
-    /// EXECUTED to completion and dropped — they happened at compile time,
-    /// nothing of them reaches runtime.
+    /// Each consumable flow is consumed to FIXPOINT: every step removes the
+    /// head (a fold splices its value, a walk executes its subflow impl, a
+    /// thunk calls its proc handler), promotes the residue, and re-examines
+    /// it — a residue whose head is itself comptime folds again, so comptime
+    /// calls compose arbitrarily deep. The flow strictly shrinks each step,
+    /// so the loop terminates. A flow that ends with no residue was fully
+    /// comptime and is dropped — it happened at compile time.
     pub fn fold(self: *Folder, program: *const ast.Program) EvalError!*const ast.Program {
         var found = false;
         for (program.items) |item| {
@@ -674,15 +721,31 @@ pub const Folder = struct {
         var new_items = std.ArrayList(ast.Item).initCapacity(self.allocator, program.items.len) catch return error.OutOfMemory;
         for (program.items) |item| {
             if (item == .flow) {
-                if (flowIsInterpreterConsumable(program.items, &item.flow)) |consumable| {
-                    switch (consumable) {
-                        .fold => |impl| {
-                            new_items.append(self.allocator, .{ .flow = try self.foldFlow(&item.flow, impl) }) catch return error.OutOfMemory;
-                        },
-                        .walk => |sub| {
-                            try self.walkFlowToCompletion(program, &item.flow, sub);
-                            // Fully consumed at comptime: no residue item.
-                        },
+                if (flowIsInterpreterConsumable(program.items, &item.flow) != null) {
+                    var current: ?ast.Flow = item.flow;
+                    while (current) |*cur| {
+                        if (flowIsInterpreterConsumable(program.items, cur)) |consumable| {
+                            current = switch (consumable) {
+                                .fold => |impl| try self.foldFlow(cur, impl),
+                                .walk => |sub| try self.walkFlowResidue(program, cur, sub),
+                            };
+                            continue;
+                        }
+                        // The residue head is not interpreter-consumable. If
+                        // it is still a [comptime] event it would emit
+                        // NOTHING — the flow exists only post-fold, invisible
+                        // to Stage A's comptime_main list. A thunkable proc
+                        // head runs now through the table; a transform head
+                        // emits as a call site; anything else is a loud wall,
+                        // never a silent drop.
+                        if (try self.thunkHeadResult(program.items, cur)) |result| {
+                            current = try self.spliceResidue(cur, result);
+                            continue;
+                        }
+                        break;
+                    }
+                    if (current) |residue_flow| {
+                        new_items.append(self.allocator, .{ .flow = residue_flow }) catch return error.OutOfMemory;
                     }
                     continue;
                 }
@@ -701,20 +764,21 @@ pub const Folder = struct {
         return new_program;
     }
 
-    /// Run a walkable flow through the interpreter. Residue continuations on
-    /// a walked flow are a later rung — for now the flow must be FULLY
-    /// comptime, and the walk's effects (thunked prints, file IO) happen
-    /// right here, during compilation.
-    fn walkFlowToCompletion(self: *Folder, program: *const ast.Program, flow: *const ast.Flow, sub: *const ast.Flow) EvalError!void {
-        if (flow.body.continuations.len != 0)
-            return self.evaluator.fail(error.UnsupportedConstruct, "comptime walk: residue continuations on a walked flow are a later rung — the flow must be fully comptime", .{});
+    /// Walk the head's subflow implementation, then splice its result into
+    /// the flow's residue. The walk's effects (thunked prints, file IO)
+    /// happen right here, during compilation; the residue emits at runtime.
+    fn walkFlowResidue(self: *Folder, program: *const ast.Program, flow: *const ast.Flow, sub: *const ast.Flow) EvalError!?ast.Flow {
         const inv = &flow.body.node.?.invocation;
         var env = Env.init(self.allocator);
         const args = try self.evaluator.evalArgs(&env, inv.args);
-        _ = try self.evaluator.walkFlow(program.items, sub, args);
+        const result = try self.evaluator.walkFlow(program.items, sub, args);
+        return self.spliceResidue(flow, result);
     }
 
-    fn foldFlow(self: *Folder, flow: *const ast.Flow, impl: *const ast.ImmediateImpl) EvalError!ast.Flow {
+    /// Evaluate a foldable head — a [comptime] event with a pure-Koru
+    /// bare-return impl — then splice the value into the residue. A `-> T`
+    /// result is tagless: `.branch = null`, the payload is the value.
+    fn foldFlow(self: *Folder, flow: *const ast.Flow, impl: *const ast.ImmediateImpl) EvalError!?ast.Flow {
         const inv = &flow.body.node.?.invocation;
 
         // Bind event args: each arg value is itself a comptime expression.
@@ -727,18 +791,103 @@ pub const Folder = struct {
         const plain = impl.value.plain_value orelse
             return self.evaluator.fail(error.UnsupportedConstruct, "comptime fold: impl of `{s}` has no bare-return expression", .{lastSegment(&impl.event_path)});
         const value = try self.evalText(&env, plain);
-        const literal = try self.literalText(value);
+        return self.spliceResidue(flow, .{ .branch = null, .payload = value });
+    }
 
-        // Residue: exactly one chain continuation whose node is an invocation,
-        // promoted to flow root. Multi-arm residue is a later rung.
-        if (flow.body.continuations.len != 1)
-            return self.evaluator.fail(error.UnsupportedConstruct, "comptime fold: expected exactly one residue continuation, got {d} — multi-arm residue is a later rung", .{flow.body.continuations.len});
-        const chain = flow.body.continuations[0];
-        if (chain.node == null or chain.node.? != .invocation)
-            return self.evaluator.fail(error.UnsupportedConstruct, "comptime fold: residue must be an invocation chain — other residue shapes are a later rung", .{});
+    /// The third head kind: a residue invocation of a [comptime] event whose
+    /// handler is a source-time proc — callable NOW through the Stage A thunk
+    /// table. Null when the head is not a [comptime] event at all (ordinary
+    /// runtime residue — emit it) or is a transform (it emits as a call site,
+    /// never folds). A comptime head with no executable impl is a loud wall:
+    /// the residue flow exists only post-fold, invisible to Stage A's
+    /// comptime_main list, so it would emit NOTHING — never drop silently.
+    fn thunkHeadResult(self: *Folder, items: []const ast.Item, flow: *const ast.Flow) EvalError!?ThunkResult {
+        if (flow.body.node == null or flow.body.node.? != .invocation) return null;
+        const inv = &flow.body.node.?.invocation;
+        const decl = findEventDecl(items, &inv.path) orelse return null;
+        if (!hasAnnotationPart(decl.annotations, "comptime")) return null;
+        if (hasAnnotationPart(decl.annotations, "transform")) return null;
+        const thunk = self.evaluator.findThunk(lastSegment(&inv.path)) orelse
+            return self.evaluator.fail(error.UnsupportedConstruct, "comptime fold: residue head `{s}` is [comptime] but not comptime-executable — no bare-return impl, no subflow impl, no thunkable proc — the call would emit nothing", .{lastSegment(&inv.path)});
+        var env = Env.init(self.allocator);
+        const args = try self.evaluator.evalArgs(&env, inv.args);
+        return try thunk.call(self.allocator, args);
+    }
 
-        const new_root = try self.substituteContinuation(chain, inv.return_binding, literal);
+    /// Splice a comptime-produced result into a flow's residue continuations.
+    /// Null = no residue: the flow was fully comptime and is consumed —
+    /// nothing of it reaches runtime. Otherwise the flow is rewritten to its
+    /// residue: a `|>` chain gets the payload substituted at the return
+    /// binding; branch arms are dispatched AT COMPTIME and the matched arm's
+    /// chain promotes — what the runtime dispatch would have done, a stage
+    /// earlier. Shared by fold, walk, and thunk heads: the residue contract
+    /// does not care which engine produced the result.
+    fn spliceResidue(self: *Folder, flow: *const ast.Flow, result: ThunkResult) EvalError!?ast.Flow {
+        const inv = &flow.body.node.?.invocation;
+        const conts = flow.body.continuations;
+        if (conts.len == 0) return null;
 
+        // `|>` chain residue — the single unnamed continuation.
+        if (conts.len == 1 and conts[0].branch.len == 0) {
+            const chain = conts[0];
+            if (chain.node == null or chain.node.? != .invocation)
+                return self.evaluator.fail(error.UnsupportedConstruct, "comptime fold: residue must be an invocation chain — other residue shapes are a later rung", .{});
+            var new_root = chain;
+            if (inv.return_binding) |name| {
+                const payload = result.payload orelse
+                    return self.evaluator.fail(error.UnsupportedConstruct, "comptime fold: `{s}` produced no value but the residue binds `{s}`", .{ lastSegment(&inv.path), name });
+                const literal = try self.literalText(payload);
+                new_root = try self.substituteContinuation(chain, name, literal);
+            }
+            return try self.promoteResidue(flow, new_root);
+        }
+
+        // Branch-dispatch residue — match arms the way dispatchArms does.
+        if (result.branch == null and result.payload == null)
+            return self.evaluator.fail(error.UnsupportedConstruct, "comptime fold: `{s}` produced neither branch nor value — nothing to dispatch residue arms on", .{lastSegment(&inv.path)});
+        var env = Env.init(self.allocator);
+        for (conts) |*arm| {
+            const name_matches = if (result.branch) |b|
+                std.mem.eql(u8, arm.branch, b)
+            else blk: {
+                // `-> T` bare return: no tag to match — every named arm is a
+                // candidate, when-guards select (dispatchArms' convention).
+                if (arm.is_catchall or arm.branch.len == 0)
+                    return self.evaluator.fail(error.UnsupportedConstruct, "comptime fold: a `-> T` result cannot dispatch a catchall or unnamed residue arm", .{});
+                break :blk true;
+            };
+            if (!name_matches) continue;
+            if (arm.destructure.len > 0)
+                return self.evaluator.fail(error.UnsupportedConstruct, "comptime fold: shape-destructure arms are a later rung", .{});
+            var arm_env = env.child();
+            var literal: ?[]const u8 = null;
+            if (arm.binding) |b| {
+                const payload = result.payload orelse
+                    return self.evaluator.fail(error.UnsupportedConstruct, "comptime fold: residue arm `| {s} {s}` binds a payload but `{s}` produced none", .{ arm.branch, b, lastSegment(&inv.path) });
+                try arm_env.bind(b, payload);
+                literal = try self.literalText(payload);
+            }
+            if (!try self.evaluator.armGuardPasses(arm, &arm_env)) continue;
+            var new_root = arm.*;
+            if (literal) |lit| {
+                new_root = try self.substituteContinuation(new_root, arm.binding.?, lit);
+            }
+            new_root.branch = "";
+            new_root.binding = null;
+            new_root.binding_annotations = &.{};
+            new_root.destructure = &.{};
+            new_root.is_catchall = false;
+            new_root.catchall_metatype = null;
+            new_root.condition = null;
+            new_root.condition_expr = null;
+            if (new_root.node == null and new_root.continuations.len == 0)
+                return self.evaluator.fail(error.UnsupportedConstruct, "comptime fold: residue arm `| {s}` has no body — nothing to emit", .{arm.branch});
+            return try self.promoteResidue(flow, new_root);
+        }
+        return self.evaluator.fail(error.UnsupportedConstruct, "comptime fold: `{s}` result matched no residue arm — branch `{s}` unhandled or every guard false", .{ lastSegment(&inv.path), result.branch orelse "<bare>" });
+    }
+
+    fn promoteResidue(self: *Folder, flow: *const ast.Flow, new_root: ast.Continuation) EvalError!ast.Flow {
         var new_flow = flow.*;
         new_flow.body = new_root;
         new_flow.annotations = try self.stripAnnotationPart(flow.annotations, "comptime");
@@ -789,10 +938,82 @@ pub const Folder = struct {
 
     /// Identifier-boundary textual substitution. Koru identifiers are
     /// kebab-friendly: [A-Za-z0-9_-] are identifier characters.
+    ///
+    /// String literals are template text: a name inside `{{ ... }}` IS a use
+    /// of the binding (`"{{ r:d }}"` must splice), but plain string prose and
+    /// the `:spec` position are not — `"{{ d:d }}"` with `d` bound must become
+    /// `"{{ 4:d }}"`, never `"{{ 4:4 }}"` (the spec `d` is a format letter,
+    /// not the binding). Tracked lexically: in-string → mustache depth →
+    /// first `:` at mustache depth 1 with no inner single-brace group opens
+    /// the spec.
     fn substituteIdent(self: *Folder, text: []const u8, name: []const u8, replacement: []const u8) EvalError![]const u8 {
         var out = std.ArrayList(u8).initCapacity(self.allocator, text.len) catch return error.OutOfMemory;
         var i: usize = 0;
+        var in_string = false;
+        var mustache_depth: usize = 0;
+        var brace_depth: usize = 0; // single-{} groups inside a mustache
+        var in_spec = false;
         while (i < text.len) {
+            const c = text[i];
+
+            if (in_string and mustache_depth == 0) {
+                if (c == '\\' and i + 1 < text.len) {
+                    out.appendSlice(self.allocator, text[i .. i + 2]) catch return error.OutOfMemory;
+                    i += 2;
+                    continue;
+                }
+                if (c == '"') in_string = false;
+                if (c == '{' and i + 1 < text.len and text[i + 1] == '{') {
+                    mustache_depth = 1;
+                    in_spec = false;
+                    out.appendSlice(self.allocator, "{{") catch return error.OutOfMemory;
+                    i += 2;
+                    continue;
+                }
+                out.append(self.allocator, c) catch return error.OutOfMemory;
+                i += 1;
+                continue;
+            }
+
+            if (mustache_depth > 0) {
+                if (c == '{' and i + 1 < text.len and text[i + 1] == '{') {
+                    mustache_depth += 1;
+                    out.appendSlice(self.allocator, "{{") catch return error.OutOfMemory;
+                    i += 2;
+                    continue;
+                }
+                if (c == '}' and i + 1 < text.len and text[i + 1] == '}') {
+                    mustache_depth -= 1;
+                    if (mustache_depth == 0) {
+                        in_spec = false;
+                        brace_depth = 0;
+                    }
+                    out.appendSlice(self.allocator, "}}") catch return error.OutOfMemory;
+                    i += 2;
+                    continue;
+                }
+                if (mustache_depth == 1) {
+                    if (c == '{') brace_depth += 1;
+                    if (c == '}' and brace_depth > 0) brace_depth -= 1;
+                    if (c == ':' and brace_depth == 0 and !in_spec) {
+                        in_spec = true;
+                        out.append(self.allocator, c) catch return error.OutOfMemory;
+                        i += 1;
+                        continue;
+                    }
+                }
+                if (in_spec) {
+                    out.append(self.allocator, c) catch return error.OutOfMemory;
+                    i += 1;
+                    continue;
+                }
+            } else if (!in_string and c == '"') {
+                in_string = true;
+                out.append(self.allocator, c) catch return error.OutOfMemory;
+                i += 1;
+                continue;
+            }
+
             const match = i + name.len <= text.len and
                 std.mem.eql(u8, text[i .. i + name.len], name) and
                 (i == 0 or !isIdentChar(text[i - 1])) and

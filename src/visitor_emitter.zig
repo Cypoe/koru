@@ -5159,9 +5159,12 @@ pub const VisitorEmitter = struct {
 
     /// True when every input field and every branch payload of `decl` fits
     /// the rung's thunk boundary: scalar params, branches carrying zero or
-    /// one scalar field, no `-> T` return, no Source params.
+    /// one scalar field, no Source params. A scalar `-> T` return is
+    /// thunkable — the thunk captures it as the tagless payload.
     fn eventIsThunkable(decl: *const ast.EventDecl) bool {
-        if (decl.return_type != null) return false;
+        if (decl.return_type) |rt| {
+            if (thunkScalarOfType(rt) == null) return false;
+        }
         for (decl.input.fields) |field| {
             if (field.is_source or field.is_file) return false;
             if (thunkScalarOfType(field.type) == null) return false;
@@ -5273,9 +5276,24 @@ pub const VisitorEmitter = struct {
             }
 
             if (decl.branches.len == 0) {
-                // Void handler: side effects only (comptime print, IO).
-                w.print("    main_module.{s}_event.handler(__input);\n", .{name}) catch return error.OutOfMemory;
-                w.writeAll("    return .{};\n") catch return error.OutOfMemory;
+                if (decl.return_type) |rt| {
+                    // `-> T` bare return: capture it as the tagless payload —
+                    // the walker's bare-return convention binds it at the
+                    // call site's single named arm.
+                    const kind = thunkScalarOfType(rt).?;
+                    const ctor = switch (kind) {
+                        .int => ".{ .int = @intCast(__ret) }",
+                        .float => ".{ .float = @floatCast(__ret) }",
+                        .boolean => ".{ .boolean = __ret }",
+                        .string => ".{ .string = __ret }",
+                    };
+                    w.print("    const __ret = main_module.{s}_event.handler(__input);\n", .{name}) catch return error.OutOfMemory;
+                    w.print("    return .{{ .payload = {s} }};\n", .{ctor}) catch return error.OutOfMemory;
+                } else {
+                    // Void handler: side effects only (comptime print, IO).
+                    w.print("    main_module.{s}_event.handler(__input);\n", .{name}) catch return error.OutOfMemory;
+                    w.writeAll("    return .{};\n") catch return error.OutOfMemory;
+                }
             } else {
                 w.print("    const __out = main_module.{s}_event.handler(__input);\n", .{name}) catch return error.OutOfMemory;
                 w.writeAll("    switch (__out) {\n") catch return error.OutOfMemory;
