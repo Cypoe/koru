@@ -82,6 +82,11 @@ top-level units" the escape is unnecessary — and at a nested site it is the
 wrong tool for the reason this file already records. `koru_std/supervisor.kz`
 is the reference implementation; 320_153 and 320_154 pin it end-to-end.
 
+The same transform later moved its policy input off the `source:` datablock
+and onto the site's continuation children (`| retry` / `| exhausted` arms) —
+the mechanism above is unchanged; the surface-design ruling lives in
+[[frag-a-policy-block-wants-to-be-arms]].
+
 The same family surfaced once more while building it, this time in the EMITTER:
 `emitSubflowContinuationsWithDepth`'s bail paths construct fresh
 `EmissionContext`s that dropped `self_loop_active`/`self_loop_event_canonical`,
