@@ -645,6 +645,29 @@ pub const ShapeChecker = struct {
         const event_name = try self.pathToString(flow.inv().path);
         defer self.allocator.free(event_name); // Free temp string after lookup
 
+        // A `|variant` block in flow-body position carries a target tag but
+        // no event — `dial = |zig { ... }` has nothing to resolve and used to
+        // panic upstream on the empty path, then fall through to a cryptic
+        // "unknown tor 'mod:'". The handler spelling is `proc name|zig`.
+        if (flow.inv().path.segments.len == 0) {
+            if (flow.inv().variant) |v| {
+                try self.reporter.addErrorAtLocation(
+                    .KORU040,
+                    location,
+                    "a '|{s}' block has no event to attach to — the handler spelling is 'proc <name>|{s} {{ ... }}'",
+                    .{ v, v },
+                );
+            } else {
+                try self.reporter.addErrorAtLocation(
+                    .KORU040,
+                    location,
+                    "flow body has no event to invoke",
+                    .{},
+                );
+            }
+            return error.UnknownEvent;
+        }
+
         const final_event_info = try self.lookupEventInfo(flow.inv().path) orelse {
             log.debug("ERROR: Unknown event '{s}'\n", .{event_name});
             // Inside the declaring event's impl, the event's own effect arms

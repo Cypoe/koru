@@ -410,6 +410,7 @@ fn resolveInPath(
     // Multi-segment invocation (`assert.eq(...)`): the dotted path is the
     // keyword name — resolve it whole so qualified-only transform dispatch
     // sees the home module. Single-segment handling is below.
+    if (path.segments.len == 0) return;
     if (path.segments.len != 1) {
         if (path.module_qualifier) |qualifier| {
             if (!std.mem.eql(u8, qualifier, home_module)) return;

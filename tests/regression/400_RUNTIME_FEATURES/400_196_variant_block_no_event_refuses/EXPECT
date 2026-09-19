@@ -1,0 +1,3 @@
+MUST_ERROR
+CONTAINS error[KORU040]
+CONTAINS has no event to attach to
