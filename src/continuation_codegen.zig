@@ -86,7 +86,7 @@ pub fn generateHandlerCall(
     for (invocation.args, 0..) |arg, i| {
         if (i > 0) try buf.appendSlice(allocator, ",");
         try buf.appendSlice(allocator, " .");
-        try buf.appendSlice(allocator, arg.name);
+        try codegen_utils.appendBranchName(&buf, allocator, arg.name);
         try buf.appendSlice(allocator, " = ");
         try buf.appendSlice(allocator, arg.value);
     }
@@ -127,7 +127,7 @@ pub fn generateHandlerCallWithResult(
     for (invocation.args, 0..) |arg, i| {
         if (i > 0) try buf.appendSlice(allocator, ",");
         try buf.appendSlice(allocator, " .");
-        try buf.appendSlice(allocator, arg.name);
+        try codegen_utils.appendBranchName(&buf, allocator, arg.name);
         try buf.appendSlice(allocator, " = ");
         try buf.appendSlice(allocator, arg.value);
     }
@@ -537,7 +537,7 @@ fn generatePipelineCode(
                             try buf.appendSlice(allocator, ",");
                         }
                         try buf.appendSlice(allocator, " .");
-                        try buf.appendSlice(allocator, field.name);
+                        try codegen_utils.appendBranchName(&buf, allocator, field.name);
                         try buf.appendSlice(allocator, " = ");
                         // Use expression_str if available, otherwise fall back to type (for simple values)
                         const value = if (field.expression_str) |expr| expr else field.type;
@@ -642,7 +642,7 @@ fn generatePipelineCode(
                         try buf.appendSlice(allocator, ",");
                     }
                     try buf.appendSlice(allocator, " .");
-                    try buf.appendSlice(allocator, field.name);
+                    try codegen_utils.appendBranchName(&buf, allocator, field.name);
                     try buf.appendSlice(allocator, " = ");
                     const value = if (field.expression_str) |expr| expr else field.type;
                     try buf.appendSlice(allocator, value);

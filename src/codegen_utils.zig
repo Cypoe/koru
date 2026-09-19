@@ -348,10 +348,19 @@ fn parseFieldAndValue(
 ) ExprParseError!usize {
     var i = start;
 
-    // Read field name (identifier)
+    // Read field name (identifier) — kebab-greedy: an infix `-` joins one
+    // Koru name (`pos-tempo`); subtraction needs spaces, and a field name is
+    // never arithmetic.
     const field_start = i;
-    while (i < input.len and (std.ascii.isAlphanumeric(input[i]) or input[i] == '_')) {
-        i += 1;
+    while (i < input.len) {
+        const c = input[i];
+        if (std.ascii.isAlphanumeric(c) or c == '_') {
+            i += 1;
+        } else if (c == '-' and i + 1 < input.len and
+            (std.ascii.isAlphanumeric(input[i + 1]) or input[i + 1] == '_'))
+        {
+            i += 1;
+        } else break;
     }
     const field_name = input[field_start..i];
 
@@ -367,9 +376,10 @@ fn parseFieldAndValue(
 
     // Expect colon
     if (i < input.len and input[i] == ':') {
-        // Output ".fieldname = "
+        // Output ".fieldname = " — the field name carries the canonical
+        // spelling (kebab mangles, keywords escape), same as the decl.
         try result.append(allocator, '.');
-        try result.appendSlice(allocator, field_name);
+        try appendBranchName(result, allocator, field_name);
         try result.appendSlice(allocator, " = ");
         i += 1; // skip colon
 
@@ -382,7 +392,7 @@ fn parseFieldAndValue(
         i = try parseValue(allocator, input, i, result);
     } else {
         // No colon - just output the field name as-is (error recovery)
-        try result.appendSlice(allocator, field_name);
+        try appendBranchName(result, allocator, field_name);
     }
 
     return i;
@@ -2097,9 +2107,20 @@ const ZigExprParser = struct {
                 if (self.pos + 1 >= self.text.len or !exprIdentStartChar(self.text[self.pos + 1])) return ZigExprError.NoParse;
                 const dot_at = self.pos;
                 self.pos += 1;
+                const field_start = self.pos;
                 _ = try self.parseIdentName();
-                if (result.changed) {
-                    const joined = std.fmt.allocPrint(self.allocator, "{s}{s}", .{ result.text, self.text[dot_at..self.pos] }) catch return ZigExprError.OutOfMemory;
+                // A field segment is a Koru name arriving through
+                // host-flavored text: `f.pos-tempo` must carry the decl's
+                // spelling (`f.pos_tempo`) or Zig reads it as subtraction.
+                const field_name = self.text[field_start..self.pos];
+                const suffix = if (hasKebab(field_name) or needsEscaping(field_name)) blk: {
+                    var b = std.ArrayList(u8).initCapacity(self.allocator, field_name.len + 4) catch return ZigExprError.OutOfMemory;
+                    b.append(self.allocator, '.') catch return ZigExprError.OutOfMemory;
+                    appendBranchName(&b, self.allocator, field_name) catch return ZigExprError.OutOfMemory;
+                    break :blk b.toOwnedSlice(self.allocator) catch return ZigExprError.OutOfMemory;
+                } else self.text[dot_at..self.pos];
+                if (result.changed or suffix.ptr != self.text[dot_at..self.pos].ptr) {
+                    const joined = std.fmt.allocPrint(self.allocator, "{s}{s}", .{ result.text, suffix }) catch return ZigExprError.OutOfMemory;
                     result = .{ .text = joined, .start = result.start, .end = self.pos, .is_string_lit = false, .changed = true };
                 } else {
                     result = .{ .text = self.text[result.start..self.pos], .start = result.start, .end = self.pos, .is_string_lit = false, .changed = false };
@@ -2302,9 +2323,37 @@ pub fn rewriteZigExpr(allocator: std.mem.Allocator, text: []const u8) ZigExprErr
 /// a `%` inside a string literal answers yes — the parse itself then finds
 /// nothing to change and the caller keeps its bytes.
 fn zigExprMayRewrite(text: []const u8) bool {
-    return std.mem.indexOfScalar(u8, text, '%') != null or
+    if (std.mem.indexOfScalar(u8, text, '%') != null or
         std.mem.indexOf(u8, text, "==") != null or
-        std.mem.indexOf(u8, text, "!=") != null;
+        std.mem.indexOf(u8, text, "!=") != null) return true;
+    return hasNonZigFieldName(text);
+}
+
+/// A `.name` segment whose name is not a legal Zig identifier — kebab
+/// (`f.pos-tempo`) or a keyword (`f.type`). Both need the canonical spelling;
+/// without this trigger a bare field read never reaches the parser.
+fn hasNonZigFieldName(text: []const u8) bool {
+    var i: usize = 0;
+    var in_string: u8 = 0;
+    while (i < text.len) : (i += 1) {
+        const c = text[i];
+        if (in_string != 0) {
+            if (c == in_string and text[i - 1] != '\\') in_string = 0;
+            continue;
+        }
+        if (c == '"' or c == '\'') {
+            in_string = c;
+            continue;
+        }
+        if (c != '.') continue;
+        var j = i + 1;
+        if (j >= text.len or !exprIdentStartChar(text[j])) continue;
+        const start = j;
+        while (j < text.len and (std.ascii.isAlphanumeric(text[j]) or text[j] == '_' or text[j] == '-')) j += 1;
+        const seg = text[start..j];
+        if (hasKebab(seg) or needsEscaping(seg)) return true;
+    }
+    return false;
 }
 
 /// Arena-side worker: parse and rewrite, or null for identity. Recursion

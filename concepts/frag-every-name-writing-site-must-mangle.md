@@ -38,6 +38,28 @@ it — `| found { pos-tempo: i32 }` constructed by `=>` emits
 `.{ .pos-tempo = 120 }`, a Zig syntax error, pinned aspirational until the
 payload-field sites join the one-spelling invariant.
 
+2026-09-23: the latent class is dead — 230_020 green. Every `bc.fields` /
+struct-literal / record-shape name write now goes through `writeBranchName`
+or `appendBranchName` (emitter_helpers ×12, continuation_codegen ×4), and the
+two field-name *scans* that stopped at `-` (`emitStructLiteral`,
+`koruStructToZig`'s `parseFieldAndValue`) learned the kebab-greedy infix rule.
+Two further walls surfaced in the fix, both the same shape — a funnel that
+only half-funneled:
+
+- **A funnel with a prefilter must name every class it claims to rewrite.**
+  `f.pos-tempo` in an arg value reaches `rewriteZigExpr`, whose `parsePostfix`
+  now mangles `.field` segments — but the call never arrived:
+  `zigExprMayRewrite` fast-rejected any text without `%`/`==`/`!=`, and a
+  bare `f.pos-tempo` carries none. The rewrite existed; the gate hid it.
+  `hasNonZigFieldName` now triggers the parse on `.`-segments with kebab or
+  keyword names.
+- **A funnel that runs half its passes leaks the other half's class.**
+  Five sites called `escapeBoundNames` alone (bound names rewritten, `%` /
+  string-eq / field segments untouched) where `lowerExprZig` — which runs
+  both — was the funnel every other value went through. The four expression
+  sites now call `lowerExprZig`; only whole-body `inline_code` text keeps the
+  bare escape, correctly, since it is statements not an expression.
+
 2026-09-22, second surface of the same belief, pinned 230_019: the rule is
 not only *sites that write a name* but *text that contains one*. A `: i1`
 bind declares `@"i1"` and `pos-tempo` declares `pos_tempo`, yet every

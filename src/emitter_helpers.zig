@@ -721,6 +721,16 @@ pub fn writeMangledSeg(emitter: *CodeEmitter, seg: []const u8) !void {
     }
 }
 
+/// Write a field REFERENCE — the name position of `target.field` or
+/// `target.field[i]`. The identifier head carries the canonical spelling
+/// (writeBranchName); a trailing index suffix is host syntax and passes
+/// verbatim, so `arr[i]` and `pos-tempo[i]` both emit correctly.
+fn writeFieldRefName(emitter: *CodeEmitter, name: []const u8) !void {
+    const head_end = std.mem.indexOfScalar(u8, name, '[') orelse name.len;
+    try writeBranchName(emitter, name[0..head_end]);
+    try emitter.write(name[head_end..]);
+}
+
 /// Resolve a module alias to its actual module path
 /// For example, "build" (from ~import std/build) -> "std.build"
 fn resolveModuleAlias(alias: []const u8, items: []const ast.Item) ?[]const u8 {
@@ -1947,7 +1957,7 @@ fn emitFieldPunningLiteral(emitter: *CodeEmitter, ctx: *EmissionContext, value: 
 
         if (!first_field) try emitter.write(", ");
         try emitter.write(" .");
-        try emitter.write(field_name);
+        try writeBranchName(emitter, field_name);
         try emitter.write(" = ");
         try emitValue(emitter, ctx, field_expr);
         first_field = false;
@@ -1975,7 +1985,11 @@ fn emitStructLiteral(emitter: *CodeEmitter, ctx: *EmissionContext, value: []cons
         // Look for field name
         if (isIdentStartChar(inner[i])) {
             const field_start = i;
-            while (i < inner.len and isIdentChar(inner[i])) {
+            while (i < inner.len and (isIdentChar(inner[i]) or
+                (inner[i] == '-' and i + 1 < inner.len and isIdentChar(inner[i + 1]))))
+            {
+                // Kebab-greedy: an infix `-` joins a Koru name; the write below
+                // carries the canonical spelling.
                 i += 1;
             }
             const field_name = inner[field_start..i];
@@ -2026,7 +2040,7 @@ fn emitStructLiteral(emitter: *CodeEmitter, ctx: *EmissionContext, value: []cons
                     try emitter.write(",");
                 }
                 try emitter.write(" .");
-                try emitter.write(field_name);
+                try writeBranchName(emitter, field_name);
                 try emitter.write(" = ");
 
                 // Recursively handle nested struct/array literals
@@ -2081,7 +2095,7 @@ fn emitStructLiteral(emitter: *CodeEmitter, ctx: *EmissionContext, value: []cons
                     try emitter.write(",");
                 }
                 try emitter.write(" .");
-                try emitter.write(pun_name);
+                try writeBranchName(emitter, pun_name);
                 try emitter.write(" = ");
                 try emitValue(emitter, ctx, pun_value);
                 first_field = false;
@@ -3080,7 +3094,7 @@ fn emitSubflowContinuationsWithDepth(
                             lit_ctx.zig_scope_bindings.items = local_bindings.items;
                             try emitArrayLiteralForField(emitter, &lit_ctx, field, av);
                         } else {
-                            try emitter.write(try escapeBoundNames(&local_ctx, arg.value));
+                            try emitter.write(lowerExprZig(emitter, &local_ctx, arg.value));
                         }
                     }
                     // OPTIONAL PARAMETER INJECTION — the twin of emitArgs's
@@ -3163,7 +3177,7 @@ fn emitSubflowContinuationsWithDepth(
                             for (bc.fields, 0..) |field, i| {
                                 if (i > 0) try emitter.write(", ");
                                 try emitter.write(" .");
-                                try emitter.write(field.name);
+                                try writeBranchName(emitter, field.name);
                                 try emitter.write(" = ");
                                 if (field.expression_str) |expr| {
                                     try emitter.write(lowerExprZig(emitter, &local_ctx, expr));
@@ -3854,7 +3868,7 @@ fn emitSubflowContinuationsWithDepth(
                                         return error.ArrayLiteralMissingType;
                                     }
                                 } else {
-                                    try emitter.write(try escapeBoundNames(&local_ctx, arg.value));
+                                    try emitter.write(lowerExprZig(emitter, &local_ctx, arg.value));
                                 }
                             }
                             // OPTIONAL PARAMETER INJECTION — the third copy of
@@ -4034,7 +4048,7 @@ fn emitSubflowContinuationsWithDepth(
                                 for (bc.fields, 0..) |field, idx| {
                                     if (idx > 0) try emitter.write(", ");
                                     try emitter.write(" .");
-                                    try emitter.write(field.name);
+                                    try writeBranchName(emitter, field.name);
                                     try emitter.write(" = ");
                                     if (field.expression_str) |expr| {
                                         try emitter.write(lowerExprZig(emitter, &local_ctx, expr));
@@ -4214,7 +4228,7 @@ fn emitSubflowContinuationsWithDepth(
                                 for (bc.fields, 0..) |field, field_idx| {
                                     if (field_idx > 0) try emitter.write(", ");
                                     try emitter.write(" .");
-                                    try emitter.write(field.name);
+                                    try writeBranchName(emitter, field.name);
                                     try emitter.write(" = ");
                                     if (field.expression_str) |expr| {
                                         try emitter.write(lowerExprZig(emitter, &local_ctx, expr));
@@ -5899,7 +5913,7 @@ pub fn emitFlow(
             }
 
             try emitter.write(" = ");
-            try emitter.write(try escapeBoundNames(ctx, arg.value));
+            try emitter.write(lowerExprZig(emitter, ctx, arg.value));
             try emitter.write(";\n");
         }
 
@@ -7254,7 +7268,7 @@ fn emitInlineEffectfulCall(
             try emitter.write("const ");
             try emitter.write(owned_spelling);
             try emitter.write(" = (");
-            try emitter.write(try escapeBoundNames(ctx, arg.value));
+            try emitter.write(lowerExprZig(emitter, ctx, arg.value));
             try emitter.write("); _ = &");
             try writeBranchName(emitter, owned_spelling);
             try emitter.write(";\n");
@@ -9233,7 +9247,7 @@ fn emitArgs(emitter: *CodeEmitter, ctx: *EmissionContext, args: []const ast.Arg,
                     if (!already_provided) {
                         if (args.len > 0 or injected_count > 0) try emitter.write(", ");
                         try emitter.write(".");
-                        try emitter.write(field.name);
+                        try writeBranchName(emitter, field.name);
                         try emitter.write(" = __koru_ast.InvocationMeta{\n");
                         emitter.indent();
 
@@ -9504,9 +9518,12 @@ fn emitValueWithInputPrefixing(
 
         // Check for identifiers
         if (isIdentStartChar(c)) {
-            // Find the end of the identifier
+            // Find the end of the identifier — kebab-greedy: an infix `-`
+            // joins one Koru name (`pos-tempo`), never splits it.
             var j = i + 1;
-            while (j < lowered.len and isIdentChar(lowered[j])) {
+            while (j < lowered.len and (isIdentChar(lowered[j]) or
+                (lowered[j] == '-' and j + 1 < lowered.len and isIdentChar(lowered[j + 1]))))
+            {
                 j += 1;
             }
 
@@ -9515,7 +9532,7 @@ fn emitValueWithInputPrefixing(
                 // Emit as input_var.field
                 try emitter.write(input_var);
                 try emitter.write(".");
-                try emitter.write(lowered[i..j]);
+                try writeBranchName(emitter, lowered[i..j]);
             } else {
                 // Not a field reference, emit as-is
                 try emitter.write(lowered[i..j]);
@@ -9564,12 +9581,12 @@ fn emitExpression(
                     return;
                 }
             }
-            try emitter.write(ident);
+            try writeBranchName(emitter, ident);
         },
         .field_access => |fa| {
             try emitExpression(emitter, ctx, fa.object, binding_substitution);
             try emitter.write(".");
-            try emitter.write(fa.field);
+            try writeBranchName(emitter, fa.field);
         },
         .binary => |bin| {
             // `%` is not a token in this host: Zig's `%` is UNSIGNED-only
@@ -10778,7 +10795,7 @@ fn emitProducedConstructor(
         for (bc.fields, 0..) |field, idx| {
             if (idx > 0) try emitter.write(", ");
             try emitter.write(" .");
-            try emitter.write(field.name);
+            try writeBranchName(emitter, field.name);
             try emitter.write(" = ");
             if (field.expression_str) |expr| {
                 try emitValue(emitter, &ctx, expr);
@@ -10972,7 +10989,7 @@ pub fn emitContinuationBody(
             }
 
             try emitter.write(" = ");
-            try emitter.write(try escapeBoundNames(ctx, arg.value));
+            try emitter.write(lowerExprZig(emitter, ctx, arg.value));
             try emitter.write(";\n");
         }
 
@@ -12193,7 +12210,7 @@ fn emitStep(
                     try emitter.writeIndent();
                     try emitter.write(asgn.target);
                     try emitter.write(".");
-                    try emitter.write(field.name); // Can be "sum" or "arr[i]"
+                    try writeFieldRefName(emitter, field.name); // Can be "sum" or "arr[i]"
                     try emitter.write(" = ");
                     try emitter.write(tmp);
                     try emitter.write(";\n");
@@ -12205,7 +12222,7 @@ fn emitStep(
                 try emitter.writeIndent();
                 try emitter.write(asgn.target);
                 try emitter.write(".");
-                try emitter.write(field.name); // Can be "sum" or "arr[i]"
+                try writeFieldRefName(emitter, field.name); // Can be "sum" or "arr[i]"
                 try emitter.write(" = ");
                 if (field.expression_str) |expr| {
                     try emitter.write(lowerExprZig(emitter, ctx, expr));
@@ -12267,7 +12284,7 @@ fn emitStepWithBindingSubstitution(
                     try emitter.write(", ");
                 }
                 try emitter.write(" .");
-                try emitter.write(field.name);
+                try writeBranchName(emitter, field.name);
                 try emitter.write(" = ");
                 const value = if (field.expression_str) |expr| expr else field.type;
                 try emitValueWithBindingSubstitution(emitter, ctx, value, substitution);
@@ -12712,7 +12729,7 @@ pub fn writeBareReturnType(
             try emitter.write("struct { ");
             for (fields, 0..) |f, i| {
                 if (i > 0) try emitter.write(", ");
-                try emitter.write(f.name);
+                try writeBranchName(emitter, f.name);
                 try emitter.write(": ");
                 try writeBareReturnType(emitter, f.value, main_module_name, declaring_module);
             }
@@ -12925,7 +12942,7 @@ fn emitBranchConstructorWithEventType(
                 try emitter.write(", ");
             }
             try emitter.write(" .");
-            try emitter.write(field.name);
+            try writeBranchName(emitter, field.name);
             try emitter.write(" = ");
             const value = if (field.expression_str) |expr| expr else field.type;
             const trimmed = std.mem.trim(u8, value, " \t");
@@ -12980,7 +12997,7 @@ fn emitBranchConstructorWithEvent(
                 try emitter.write(", ");
             }
             try emitter.write(" .");
-            try emitter.write(field.name);
+            try writeBranchName(emitter, field.name);
             try emitter.write(" = ");
             const value = if (field.expression_str) |expr| expr else field.type;
             const trimmed = std.mem.trim(u8, value, " \t");
@@ -13031,7 +13048,7 @@ pub fn emitBranchConstructor(
                 try emitter.write(", ");
             }
             try emitter.write(" .");
-            try emitter.write(field.name);
+            try writeBranchName(emitter, field.name);
             try emitter.write(" = ");
             const value = if (field.expression_str) |expr| expr else field.type;
             try emitValue(emitter, ctx, value);
