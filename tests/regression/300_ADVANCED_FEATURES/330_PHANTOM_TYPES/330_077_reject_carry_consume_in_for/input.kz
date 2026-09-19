@@ -23,4 +23,3 @@ const Handle = struct { n: i32 };
 
 ~make(): h0 |> for(0..3)
     ! each _ |> consume(h: h0)  // consumes the single owned handle every iteration
-    | done |> _

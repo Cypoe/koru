@@ -3,4 +3,3 @@
 const condition = true;
 ~app/fs:open(path: "test.txt"): _ |> if(condition)
     | then |> _  // Auto-discharge inserts close here
-    | else |> _  // Auto-discharge inserts close here too

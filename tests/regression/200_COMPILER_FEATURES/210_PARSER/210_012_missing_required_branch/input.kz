@@ -18,5 +18,4 @@
 
 // This flow is INVALID - missing required 'success' branch!
 ~process(value: 10)
-| warning |> _  // Only handling optional branch
 // Missing: | success s |> ...

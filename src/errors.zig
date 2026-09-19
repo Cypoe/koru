@@ -47,6 +47,7 @@ pub const ErrorCode = enum(u16) {
     KORU051, // Proc returns unknown branch
     KORU052, // Proc payload mismatch
     KORU053, // Unguarded arm is not last in an exclusive group - the arms after it are unreachable
+    KORU054, // No-op `_` body on an OPTIONAL terminal branch - omit the arm instead (400_197)
 
     // Subflow errors
     KORU060, // Subflow arity mismatch

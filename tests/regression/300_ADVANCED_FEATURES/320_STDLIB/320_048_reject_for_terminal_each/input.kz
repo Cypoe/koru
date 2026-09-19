@@ -19,4 +19,3 @@ const std = @import("std");
 
 ~start() |> for(&[_]i32{1, 2, 3})
 | each _ |> _
-| done |> _

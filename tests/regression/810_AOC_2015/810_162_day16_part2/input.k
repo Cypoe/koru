@@ -28,7 +28,6 @@ std/string-map:new()
                 | done _ |> _
             | captured result |> if(result.ok == 1)
                 | then |> std/io:print.ln("{{ result.num:d }}")
-                | else |> _
         | no-match |> _
     | done _ |> std/string-map:free(m)
     | failed e |> std/io:print.ln("FAILED {{ e:s }}")

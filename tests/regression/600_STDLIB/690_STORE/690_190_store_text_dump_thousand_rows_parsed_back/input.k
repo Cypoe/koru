@@ -77,4 +77,3 @@ std/store:query(dst)
 
 if(check.rows > 0)
 | then |> std/io:print.ln("rows {{ check.rows:d }} ids {{ check.ids:d }} hps {{ check.hps:d }} pair {{ check.pair:d }}")
-| else |> _

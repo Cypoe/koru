@@ -102,4 +102,3 @@ const fire = true;
 
 ~if(fire)
 | then |> assert-bare-allocation()
-| else |> _

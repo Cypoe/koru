@@ -9,4 +9,3 @@ for(0..3)
 ! each _ |> for(0..3)
     ! each _ |> _
     | done |> std/io:print.ln("done")
-| done |> _

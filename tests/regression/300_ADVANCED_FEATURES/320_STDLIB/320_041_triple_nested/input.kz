@@ -16,6 +16,3 @@ const std = @import("std");
 | then |> for(&[_]i32{1, 2})
     ! each item |> if(item > 0)
         | then |> _
-        | else |> _
-    | done |> _
-| else |> _

@@ -35,7 +35,6 @@ for(2..1001)
 ! each p |> if(sieve[p].composite == 0)
     | then |> for(0..(1000000 - p * p) / p + 1)
         ! each k |> std/grid:stored { sieve[p * p + k * p].composite: 1 }
-        | done |> _
 
 std/grid:sweep(sieve)
 ! sweep c when c.composite == 0 |> std/store:stored { acc.n: acc.n + 1 }

@@ -47,5 +47,4 @@ const Resource = struct { id: usize };
 
 ~for(0..10)
 ! each _ |> run-one()
-| done |> _
 

@@ -32,4 +32,3 @@ std/store:query(world)
 
 if(cnt.rows > 0)
 | then |> std/io:print.ln("rows {{ cnt.rows:d }} xs {{ acc.xs:f }} vs {{ acc.vs:f }}")
-| else |> _

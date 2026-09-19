@@ -15,5 +15,3 @@ const std = @import("std");
 ~start() |> if(true)
 | then |> for(&[_]i32{1, 2, 3})
     ! each _ |> _
-    | done |> _
-| else |> _

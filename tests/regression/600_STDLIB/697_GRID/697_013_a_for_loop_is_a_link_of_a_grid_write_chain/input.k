@@ -43,7 +43,5 @@ std/grid:stored { g[2].sum: 10 } |> for(0..3)
 for(0..2)
 ! each _ |> std/grid:stored { g[3].n: g[3].n + 1 } |> for(0..3)
     ! each _ |> std/grid:stored { g[3].sum: g[3].sum + 1 }
-    | done |> _
-| done |> _
 
 std/io:print.ln("head {{ g[0].n:d }},{{ g[1].sum:d }} same {{ g[2].sum:d }} arm {{ g[3].n:d }},{{ g[3].sum:d }}")

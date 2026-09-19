@@ -13,5 +13,3 @@ import app/fs
 app/fs:open(path: "outermost.txt"): outermost_f |> for(0..2)
     ! each _ |> for(0..2)
         ! each _ |> app/fs:close(file: outermost_f)  // ERROR: two @scope layers deep
-        | done |> _
-    | done |> _

@@ -170,12 +170,16 @@ pub const FlowChecker = struct {
             }
         }
 
-        // KORU037 (RULING 1): ban a no-op `_` body on an OPTIONAL effect branch.
-        // Structural rule — runs in both modes so `--check` catches it at the
-        // frontend boundary (pit of success). Needs the event decl, which is in
-        // ast_items during both passes.
-        if (!is_transform_flow) {
-            if (try self.checkOptionalEffectNoop(flow)) return;
+        // KORU037 / KORU054 (RULING 1): ban a no-op `_` body on an OPTIONAL
+        // branch — `! ?` effect and `| ?` terminal alike. Frontend only: the
+        // rule judges consumer spelling, and the frontend AST is the only tree
+        // where every arm is user-authored — `.all` mode sees the discharge
+        // inserter's minted optional-arm padding, which is structurally
+        // identical to the banned spelling.
+        if (self.mode == .frontend and !is_transform_flow) {
+            const head_decl = self.findEventDecl(&flow.inv().path);
+            const head_branches: []const ast.Branch = if (head_decl) |d| d.branches else &.{};
+            if (try self.checkOptionalNoopDiscard(flow.body.continuations, head_branches)) return;
             // KORU039 (RULING 3): a no-op `_` effect handler whose branch is
             // already handled by a sibling. Same structural shape, both modes;
             // recurses the whole continuation tree so nested sites are covered.
@@ -1474,35 +1478,69 @@ pub const FlowChecker = struct {
         }
     }
 
-    /// RULING 1 — a no-op `_` body on an OPTIONAL effect branch is illegal.
-    /// Returns true (and reports KORU037) when the flow contains one, so the
-    /// caller short-circuits the rest of this flow's judgments. Subscribing to
-    /// an optional effect only to do nothing is pure noise (omit the handler),
-    /// AND a hazard: if the branch is later promoted to REQUIRED, a no-op
-    /// handler would silently swallow the event instead of surfacing the
-    /// must-handle error. A no-op `_` on a REQUIRED effect branch stays legal
-    /// (handle-and-ignore carries meaning), and `! b _ |> <action>` stays legal
-    /// (discard the payload but actually act — the body is not `_`).
-    fn checkOptionalEffectNoop(self: *FlowChecker, flow: *const ast.Flow) !bool {
-        const decl = self.findEventDecl(&flow.inv().path) orelse return false;
+    /// RULING 1 — a no-op `_` body on an OPTIONAL branch is illegal, on `! ?`
+    /// effect branches (KORU037) and `| ?` terminal branches (KORU054) alike.
+    /// Returns true (and reports) when the flow contains one, so the caller
+    /// short-circuits the rest of this flow's judgments. Arming an optional
+    /// branch only to do nothing is pure noise — omitting the arm already
+    /// discards it — AND a hazard: if the branch is later promoted to
+    /// REQUIRED, a no-op arm would silently swallow the event instead of
+    /// surfacing the must-handle error. A no-op `_` on a REQUIRED branch
+    /// stays legal (handle-and-ignore carries meaning), and `| b _ |>
+    /// <action>` stays legal (discard the payload but actually act — the body
+    /// is not `_`). Recurses the continuation tree: a nested invocation's
+    /// arms are checked against that invocation's own declared branches.
+    fn checkOptionalNoopDiscard(self: *FlowChecker, continuations: []const ast.Continuation, decl_branches: []const ast.Branch) !bool {
         var found = false;
-        for (flow.body.continuations) |*cont| {
-            if (cont.kind != .effect) continue;
+        for (continuations) |*cont| {
+            // Compiler-synthesized arms (discharge padding, transform grafts)
+            // are legal machinery, not consumer spelling — the flag exempts
+            // them from a rule that judges user-authored text.
+            if (cont.is_transformed_subtree) continue;
             const node = cont.node orelse continue;
             if (node != .terminal) continue; // body must be a bare `_` no-op
-            for (decl.branches) |b| {
+            for (decl_branches) |b| {
                 if (!std.mem.eql(u8, b.name, cont.branch)) continue;
-                if (b.kind != .effect or !b.is_optional) continue;
-                try self.reporter.addErrorAtLocationWithHint(
-                    .KORU037,
-                    cont.location,
-                    "no-op `_` body on optional effect branch '{s}' — subscribing to an optional effect only to do nothing is pure noise",
-                    .{cont.branch},
-                    "omit the handler entirely. A no-op is also a hazard: if '{s}' is later promoted to REQUIRED, this handler would silently swallow the event instead of surfacing the must-handle error. To act, replace `_` with a real step; to intentionally handle-and-ignore, the branch must be REQUIRED (drop the `?`), not optional.",
-                    .{cont.branch},
-                );
+                if (b.kind != cont.kind or !b.is_optional) continue;
+                if (b.kind == .effect) {
+                    try self.reporter.addErrorAtLocationWithHint(
+                        .KORU037,
+                        cont.location,
+                        "no-op `_` body on optional effect branch '{s}' — subscribing to an optional effect only to do nothing is pure noise",
+                        .{cont.branch},
+                        "omit the handler entirely. A no-op is also a hazard: if '{s}' is later promoted to REQUIRED, this handler would silently swallow the event instead of surfacing the must-handle error. To act, replace `_` with a real step; to intentionally handle-and-ignore, the branch must be REQUIRED (drop the `?`), not optional.",
+                        .{cont.branch},
+                    );
+                } else {
+                    try self.reporter.addErrorAtLocationWithHint(
+                        .KORU054,
+                        cont.location,
+                        "no-op `_` body on optional terminal branch '{s}' — arming an optional outcome only to discard it is pure noise",
+                        .{cont.branch},
+                        "omit the arm entirely — an unarmed optional branch already discards the outcome. A no-op is also a hazard: if '{s}' is later promoted to REQUIRED, this arm would silently swallow it instead of surfacing the must-handle error. To act, replace `_` with a real step; to intentionally handle-and-ignore, the branch must be REQUIRED (drop the `?`), not optional.",
+                        .{cont.branch},
+                    );
+                }
                 found = true;
             }
+        }
+        // Recurse one level down everywhere: children of an invocation cont
+        // arm that invocation (check them against its declared branches);
+        // children of anything else (`| then` bodies, transform arms like
+        // `| captured`, mid-chain steps) carry no checkable arms themselves —
+        // an empty branch set — but may hold invocations worth descending.
+        for (continuations) |*cont| {
+            if (cont.is_transformed_subtree) continue;
+            if (cont.continuations.len == 0) continue;
+            const child_branches: []const ast.Branch = blk: {
+                const node = cont.node orelse break :blk &.{};
+                if (node != .invocation) break :blk &.{};
+                const d = self.findEventDecl(&node.invocation.path) orelse break :blk &.{};
+                // Transform nodes' branches are transform DATA, not handlers.
+                if (annotation_parser.hasPart(d.annotations, "transform")) break :blk &.{};
+                break :blk d.branches;
+            };
+            if (try self.checkOptionalNoopDiscard(cont.continuations, child_branches)) found = true;
         }
         // Reporter carries the failure; checkSourceFile fails via hasErrors →
         // FlowValidationFailed. Return whether to short-circuit this flow.

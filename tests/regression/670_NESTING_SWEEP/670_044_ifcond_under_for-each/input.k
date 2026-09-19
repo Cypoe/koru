@@ -6,4 +6,3 @@ for(0..3)
 ! each _ |> if(1 == 1)
     | then |> std/io:print.ln("then")
     | else |> std/io:print.ln("else")
-| done |> _

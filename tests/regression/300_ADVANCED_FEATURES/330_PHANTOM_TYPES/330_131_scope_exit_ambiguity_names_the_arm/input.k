@@ -5,4 +5,3 @@ import std/control
 import app/fs2
 for(0..3)
 ! each _ |> app/fs2:open(path: "x"): f |> app/fs2:lock(file: f): g
-| done |> _

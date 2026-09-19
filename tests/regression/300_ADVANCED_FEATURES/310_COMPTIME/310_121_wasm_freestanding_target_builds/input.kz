@@ -58,4 +58,3 @@ const fire = true;
 
 ~if(fire)
 | then |> assert-target()
-| else |> _

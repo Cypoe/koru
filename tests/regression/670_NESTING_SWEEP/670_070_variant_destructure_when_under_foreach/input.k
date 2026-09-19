@@ -34,4 +34,3 @@ for(0..3)
     | found { name, age } when age > 40 |> std/io:print.ln("elder {{ name:s }} {{ age:d }}")
     | found { name, age } |> std/io:print.ln("younger {{ name:s }} {{ age:d }}")
     | missing |> std/io:print.ln("nope")
-| done |> _

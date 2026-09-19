@@ -14,5 +14,3 @@ const std = @import("std");
 ~start() |> if(true)
 | then |> if(false)
     | then |> _
-    | else |> _
-| else |> _

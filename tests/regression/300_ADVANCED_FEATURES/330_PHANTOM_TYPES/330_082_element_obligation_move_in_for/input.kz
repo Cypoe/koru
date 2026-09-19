@@ -51,4 +51,3 @@ const Handle = struct { n: i32 };
 
 ~make(): h0 |> for(0..1)
     ! each _ |> take(h: h0): v |> put(h: v)
-    | done |> _

@@ -10,4 +10,3 @@ const go = true;
 
 ~if(go)
 | then |> std/io:print.ln("print.ln, from koru, inside a unikernel")
-| else |> _

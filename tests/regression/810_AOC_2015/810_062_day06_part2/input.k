@@ -31,20 +31,14 @@ std/fs:read-lines(path: "tests/regression/810_AOC_2015/810_062_day06_part2/input
     | `turn on (?<x1>[0-9]+),(?<y1>[0-9]+) through (?<x2>[0-9]+),(?<y2>[0-9]+)` { x1: usize, y1: usize, x2: usize, y2: usize } |> for(y1..y2 + 1)
         ! each y |> for(x1..x2 + 1)
             ! each x |> std/grid:stored { lights[x, y].on: lights[x, y].on + 1 }
-            | done |> _
-        | done |> _
     | `turn off (?<x1>[0-9]+),(?<y1>[0-9]+) through (?<x2>[0-9]+),(?<y2>[0-9]+)` { x1: usize, y1: usize, x2: usize, y2: usize } |> for(y1..y2 + 1)
         ! each y |> for(x1..x2 + 1)
             ! each x |> if(lights[x, y].on == 0)
                 | then |> _
                 | else |> std/grid:stored { lights[x, y].on: lights[x, y].on - 1 }
-            | done |> _
-        | done |> _
     | `toggle (?<x1>[0-9]+),(?<y1>[0-9]+) through (?<x2>[0-9]+),(?<y2>[0-9]+)` { x1: usize, y1: usize, x2: usize, y2: usize } |> for(y1..y2 + 1)
         ! each y |> for(x1..x2 + 1)
             ! each x |> std/grid:stored { lights[x, y].on: lights[x, y].on + 2 }
-            | done |> _
-        | done |> _
     | no-match |> std/io:print.ln("BAD: {{ l:s }}")
 | done _ |> _
 | failed e |> std/io:print.ln("FAILED {{ e:s }}")

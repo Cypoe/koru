@@ -8,4 +8,3 @@ for(0..3)
 ! each _ |> capture { n: 0[i64] }
     ! as acc |> captured { n: acc.n + 1 }
     | captured r |> std/io:print.ln("n={{ r.n:d }}")
-| done |> _

@@ -13,4 +13,3 @@ import std/control
 import app/fs
 app/fs:open(path: "outer.txt"): outer_f |> for(0..1)
     ! each _ |> app/fs:close(file: outer_f)  // ERROR: outer_f is in @scope, body runs once but COULD run N times
-    | done |> _

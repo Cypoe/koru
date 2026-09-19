@@ -46,7 +46,6 @@ const std = @import("std");
 // Test 4: Mix explicit optional handling + engaging catch-all for the rest
 ~process(value: 40)
 | success _ |> _
-| warning _ |> _
 |? Transition _ |> observe(name: "t4")
 
 // Test 5: Catch-all with `_` binding but body does real work
