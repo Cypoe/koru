@@ -1,0 +1,15 @@
+// PINS: a comment line inside a flow chain is trivia — it does not split
+// the chain. The KORU010 refusal is a parse limitation, not semantics:
+// nothing about the comment changes which steps are chained.
+const std = @import("std");
+~tor a {} -> i32
+~proc a|zig {
+    return 1;
+}
+~tor b { x: i32 }
+~proc b|zig {
+    std.debug.print("b {d}\n", .{x});
+}
+~a(): n
+// the chain survives narration
+|> b(x: n)
