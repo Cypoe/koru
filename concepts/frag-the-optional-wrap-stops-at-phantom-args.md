@@ -21,13 +21,17 @@ requires every argument to be a tracked binding and null is no binding.
 Two different code paths, one user-facing defect: an optional phantom
 parameter accepts exactly nothing at the call site.
 
-The asymmetry is what makes this a defect rather than a choice: the wrap
-exists, it just stops at the type constructor the DAW surface uses most.
-Two sub-questions the pin does not pre-judge: whether the wrap should also
-shed the `!` obligation marker on the borrowed view (the natural reading —
-the borrow leaves the obligation with the caller), and whether `*T<live>`
-without `!` hits the same wall. Pinned red aspirational:
-`921_optional_borrow_takes_held_token`.
+The asymmetry is what made this a defect rather than a choice: the wrap
+existed, it just stopped at the type constructor the DAW surface uses most.
+Fixed 2026-09-22 at the two refusal sites — `bareTypeName`/`baseTypesMatch`
+now strip `?` (with an asymmetric guard: `?*T` provided into a required `*T`
+still refuses, matching the coercion Zig would reject) and `validateArgument`
+accepts a `null` literal into any optional-typed param before demanding a
+tracked binding. The `!` obligation stays with the caller through the borrow
+— only `<!state>` params consume — so a held token can be shown optional-
+borrowed and discharged later. Pin `921_optional_borrow_takes_held_token`
+green; the real consumer, intranquil-domain `tests/arrangement.k`, went
+green on the same build.
 
 Related:
 [[frag-phantom-bind-chain-threading]] — the obligation side of the same

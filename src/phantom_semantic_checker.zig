@@ -883,28 +883,45 @@ pub const PhantomSemanticChecker = struct {
         );
     }
 
-    /// The type's own name, with every module qualifier and pointer marker
-    /// removed. `app.db:*Connection` -> `Connection`, `*app/lib/db:Transaction`
-    /// -> `Transaction`, `string` -> `string`. The qualifier can sit on either
-    /// side of the `*` depending on whether the form was canonicalized here or
-    /// written that way in source, so the last `:` is the only reliable seam.
+    /// The type's own name, with every module qualifier, pointer marker and
+    /// optional marker removed. `app.db:*Connection` -> `Connection`,
+    /// `*app/lib/db:Transaction` -> `Transaction`, `?*File` -> `File`,
+    /// `string` -> `string`. The qualifier can sit on either side of the `*`
+    /// depending on whether the form was canonicalized here or written that
+    /// way in source, so the last `:` is the only reliable seam.
     fn bareTypeName(base_type: []const u8) []const u8 {
         const after_module = if (std.mem.lastIndexOfScalar(u8, base_type, ':')) |c|
             base_type[c + 1 ..]
         else
             base_type;
         var i: usize = 0;
-        while (i < after_module.len and after_module[i] == '*') i += 1;
+        while (i < after_module.len and (after_module[i] == '*' or after_module[i] == '?')) i += 1;
         return after_module[i..];
+    }
+
+    /// A type is optional when the first character after its module qualifier
+    /// is `?` — `?*File`, `?i32`, `mod:?*Handle`.
+    fn typeIsOptional(t: []const u8) bool {
+        const after_module = if (std.mem.lastIndexOfScalar(u8, t, ':')) |c|
+            t[c + 1 ..]
+        else
+            t;
+        return after_module.len > 0 and after_module[0] == '?';
     }
 
     /// Two base types name the same type when their bare names agree AND they
     /// carry the same pointer depth. The module qualifier is deliberately not
     /// compared — see the long note at the base-type check for why it cannot be
     /// trusted, and what that costs.
+    ///
+    /// Optionality is compared asymmetrically: `*T` provided into a `?*T`
+    /// parameter is the wrap Zig applies for free, while `?*T` provided into a
+    /// required `*T` is a mismatch the backend would refuse — catch it here.
     fn baseTypesMatch(a: []const u8, b: []const u8) bool {
         if (!std.mem.eql(u8, bareTypeName(a), bareTypeName(b))) return false;
-        return std.mem.count(u8, a, "*") == std.mem.count(u8, b, "*");
+        if (std.mem.count(u8, a, "*") != std.mem.count(u8, b, "*")) return false;
+        if (typeIsOptional(b) and !typeIsOptional(a)) return false;
+        return true;
     }
 
     /// Canonicalize a phantom state to its fully-qualified form
@@ -3669,6 +3686,17 @@ pub const PhantomSemanticChecker = struct {
             // marked only where a `<!state>` param consumes), so the
             // re-validation exemption the consuming path needs does not apply.
             return !try self.reportStaleReads(arg, context, location);
+        }
+
+        // A null literal into an optional-typed param is absence, not a state
+        // violation — `?*T<live>` accepts it the same as `?i32` does, and there
+        // is no binding to track or discharge. Without this, an optional
+        // phantom param is compulsory-absent: it can only be omitted, never
+        // explicitly nulled.
+        if (std.mem.eql(u8, arg.value, "null")) {
+            if (expected_base_type_raw) |raw| {
+                if (typeIsOptional(raw)) return true;
+            }
         }
 
         // Canonicalize expected base type
