@@ -68,85 +68,8 @@ const std = @import("std");
     if (item.* != .flow) @panic("supervisor:supervised transform: containing item is not a flow - walker dispatch contract broken");
     const flow = &item.flow;
 
-    const H = struct {
-        fn mkPath(alloc: std.mem.Allocator, module: []const u8, name: []const u8) ast.DottedPath {
-            const segs = alloc.alloc([]const u8, 1) catch unreachable;
-            segs[0] = alloc.dupe(u8, name) catch unreachable;
-            return ast.DottedPath{ .module_qualifier = alloc.dupe(u8, module) catch unreachable, .segments = segs };
-        }
-        fn cloneField(alloc: std.mem.Allocator, f: ast.Field) ast.Field {
-            var out = f;
-            out.name = alloc.dupe(u8, f.name) catch unreachable;
-            out.type = alloc.dupe(u8, f.type) catch unreachable;
-            if (f.module_path) |mp| out.module_path = alloc.dupe(u8, mp) catch unreachable;
-            if (f.phantom) |p| out.phantom = alloc.dupe(u8, p) catch unreachable;
-            if (f.expression_str) |es| out.expression_str = alloc.dupe(u8, es) catch unreachable;
-            if (f.default) |d| out.default = alloc.dupe(u8, d) catch unreachable;
-            return out;
-        }
-        fn cloneFields(alloc: std.mem.Allocator, fs: []const ast.Field) []ast.Field {
-            const out = alloc.alloc(ast.Field, fs.len) catch unreachable;
-            for (fs, 0..) |f, i| out[i] = cloneField(alloc, f);
-            return out;
-        }
-        fn hasPayload(b: *const ast.Branch) bool {
-            return b.payload.fields.len > 0 or b.payload.is_wildcard;
-        }
-        fn isIdentChar(c: u8) bool {
-            return std.ascii.isAlphanumeric(c) or c == '_';
-        }
-        // Whole-word identifier scan — is `word` referenced as a name inside
-        // `haystack` (a condition or argument expression text)?
-        fn mentionsWord(haystack: []const u8, word: []const u8) bool {
-            var i: usize = 0;
-            while (std.mem.indexOfPos(u8, haystack, i, word)) |pos| {
-                const before = pos == 0 or !isIdentChar(haystack[pos - 1]);
-                const after = pos + word.len >= haystack.len or !isIdentChar(haystack[pos + word.len]);
-                if (before and after) return true;
-                i = pos + 1;
-            }
-            return false;
-        }
-        // Emit `<modref>.<name>_event.handler(.{ .field = <expr>, … })` —
-        // fields named in `inv`'s args take that arg's expression text;
-        // the rest ride at their current value (the proc's own params).
-        fn appendCall(alloc: std.mem.Allocator, buf: *std.ArrayList(u8), modref: []const u8, name: []const u8, fields: []const ast.Field, inv: ?*const ast.Invocation) void {
-            buf.appendSlice(alloc, modref) catch unreachable;
-            buf.appendSlice(alloc, ".") catch unreachable;
-            buf.appendSlice(alloc, name) catch unreachable;
-            buf.appendSlice(alloc, "_event.handler(.{") catch unreachable;
-            for (fields) |fld| {
-                var val = fld.name;
-                if (inv) |iv| {
-                    for (iv.args) |a| {
-                        if (std.mem.eql(u8, a.name, fld.name)) val = a.value;
-                    }
-                }
-                buf.appendSlice(alloc, " .") catch unreachable;
-                buf.appendSlice(alloc, fld.name) catch unreachable;
-                buf.appendSlice(alloc, " = ") catch unreachable;
-                buf.appendSlice(alloc, val) catch unreachable;
-                buf.appendSlice(alloc, ",") catch unreachable;
-            }
-            buf.appendSlice(alloc, " })") catch unreachable;
-        }
-        // Emit `.<branch> => |v| return .{ .<branch> = v },` (or the void form)
-        // — the pass-through arm every non-supervised branch gets in the
-        // generated attempt proc's switch.
-        fn appendForward(alloc: std.mem.Allocator, buf: *std.ArrayList(u8), name: []const u8, payload: bool) void {
-            buf.appendSlice(alloc, "            .") catch unreachable;
-            buf.appendSlice(alloc, name) catch unreachable;
-            if (payload) {
-                buf.appendSlice(alloc, " => |v| return .{ .") catch unreachable;
-                buf.appendSlice(alloc, name) catch unreachable;
-                buf.appendSlice(alloc, " = v },\n") catch unreachable;
-            } else {
-                buf.appendSlice(alloc, " => return .{ .") catch unreachable;
-                buf.appendSlice(alloc, name) catch unreachable;
-                buf.appendSlice(alloc, " = {} },\n") catch unreachable;
-            }
-        }
-    };
+    // `H` and `PolicyInfo` arrive at module scope from the `h` and
+    // `policy` parts.
 
     // ---- 1. The policy datablock, if written: { restart: N } ---------------
     // The block is OPTIONAL — the arm-children policy (`| retry …`,
@@ -162,9 +85,15 @@ const std = @import("std");
     // `within_spacing` — the `{ within: N unit }` DECLARATION, wall-clock
     // min-spacing between restarts. Declarations are data and live in the
     // block; decision rules live in the arm children — each content kind in
-    // its own slot. `ticks` and `policy` are pinned vocabulary waiting on
-    // their suppliers (signal tick, named model).
+    // its own slot. `ticks` is pinned vocabulary waiting on its supplier
+    // (an enclosing signal model's steppable clock).
     var within_spacing: ?[]const u8 = null;
+    // `policy_name` — `{ policy: Name }` delegates the decision rules to a
+    // named same-module tor (its `retry`/`exhausted` vocabulary IS the arm
+    // vocabulary). Rule-source, same slot as `restart:`/`args:` — so it
+    // conflicts with those fields and with rule arms alike.
+    var policy_name: ?[]const u8 = null;
+    var policy_info: PolicyInfo = undefined;
     if (block_text) |bt| {
         const braced = std.fmt.allocPrint(allocator, "{{{s}}}", .{bt}) catch unreachable;
         const policy_fields = struct_literal.parseFields(allocator, braced) catch |err| {
@@ -186,9 +115,12 @@ const std = @import("std");
                     .refuse => |r| return .{ .transformed = .{ .replacement = r } },
                 }
             } else if (std.mem.eql(u8, pf.name, "policy")) {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: 'policy: {s}' declared but not yet honored — named-model delegation lands with the signal composition", .{pf.value}) } };
+                if (policy_name != null) {
+                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: 'policy' declared twice — one delegated policy per supervised call", .{}) } };
+                }
+                policy_name = std.mem.trim(u8, pf.value, " ");
             } else {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: unknown policy field '{s}' — rule fields: restart, args; declarations: within", .{pf.name}) } };
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: unknown policy field '{s}' — rule fields: restart, args, policy; modifier: within", .{pf.name}) } };
             }
         }
     }
@@ -339,16 +271,20 @@ const std = @import("std");
     }
 
     var terminal_exh = false;
-    // The block's fields split by KIND: `restart`/`args` are rule-source
-    // (they spell decisions) and conflict with rule arms — two spellings of
-    // one policy. `within` is a modifier — it parameterizes whatever rules
-    // exist, block-shorthand or arms, and composes with either.
-    const rule_source = restart_text != null or arg_exprs.len > 0;
+    // The block's fields split by KIND: `restart`/`args`/`policy` are
+    // rule-source (they spell decisions — inline, or by delegation) and
+    // conflict with rule arms — two spellings of one policy. `within` is a
+    // modifier — it parameterizes whatever rules exist, and composes with
+    // every rule-source spelling.
+    const rule_source = restart_text != null or arg_exprs.len > 0 or policy_name != null;
     if (rules.items.len > 0 and rule_source) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: 'restart:'/'args:' fields and `| retry`/`| exhausted` arms spell the same decisions — keep rules in one place (a 'within:'/'policy:' declaration composes with either)", .{}) } };
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: 'restart:'/'args:'/'policy:' fields and `| retry`/`| exhausted` arms spell the same decisions — keep rules in one place (a 'within:' declaration composes with either)", .{}) } };
+    }
+    if (policy_name != null and (restart_text != null or arg_exprs.len > 0)) {
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: 'policy:' delegates the decisions — 'restart:'/'args:' spell them inline; keep one rule-source per supervised call", .{}) } };
     }
     if (rules.items.len == 0 and !rule_source and within_spacing != null) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: 'within' modifies a policy — with no 'restart:' field and no `| retry` arms there is nothing to space", .{}) } };
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: 'within' modifies a policy — with no 'restart:'/'policy:' field and no `| retry` arms there is nothing to space", .{}) } };
     }
     if (rules.items.len > 0) {
         // ---- arm policy mode ----
@@ -426,10 +362,34 @@ const std = @import("std");
                 }
             }
         }
+    } else if (policy_name != null) {
+        // ---- delegated policy mode ----
+        // The policy tor consumes the failure stream under the arm
+        // vocabulary (`f`, `t`); `__fail` threading and the forward both
+        // need the payload bound at the site — same constraints as arms.
+        const sup_br = supervised_branch.?;
+        if (H.hasPayload(sup_br)) {
+            if (sup_br.payload.is_wildcard or sup_br.payload.fields.len != 1) {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: delegated policy threads single-field failure payloads — '| {s}' carries more (multi-field threading lands later)", .{site.branch}) } };
+            }
+            const bind = site.binding orelse "";
+            if (bind.len == 0 or std.mem.eql(u8, bind, "_")) {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: the policy reads the failure stream and the decline forward needs it — bind it: '| {s} f'", .{site.branch}) } };
+            }
+            for (decl.input.fields) |fld| {
+                if (std.mem.eql(u8, fail_bind, fld.name)) {
+                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: failure binding '{s}' collides with a '{s}' input field — pick another", .{ fail_bind, child_name }) } };
+                }
+            }
+        }
+        switch (resolvePolicy(allocator, reporter, flow.location, flow.module, program, policy_name.?, child_name, decl, site.branch, sup_br)) {
+            .ok => |pi| policy_info = pi,
+            .refuse => |r| return .{ .transformed = .{ .replacement = r } },
+        }
     } else {
         // ---- datablock policy mode ----
         if (block_text == null) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised requires a policy — arm children (`| retry t when t < N`) or a block (`supervised {{ restart: N }}`)", .{}) } };
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised requires a policy — arm children (`| retry t when t < N`), a block (`supervised {{ restart: N }}`), or delegation (`supervised {{ policy: name }}`)", .{}) } };
         }
         restart_rt = restart_text orelse {
             return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: policy block must declare 'restart: N'", .{}) } };
@@ -476,7 +436,10 @@ const std = @import("std");
     // site seeds it with the expr evaluated against the SITE's failure, and
     // each in-loop failure re-derives it for the next attempt.
     var body = std.ArrayList(u8).initCapacity(allocator, 1024) catch unreachable;
-    if (rules.items.len == 0) {
+    if (rules.items.len == 0 and policy_name != null) {
+        // ---- delegated policy mode ----
+        appendPolicyBody(&body, allocator, modref, policy_name.?, policy_info, child_name, decl, site.branch, H.hasPayload(supervised_branch.?), fail_bind, within_spacing);
+    } else if (rules.items.len == 0) {
         body.appendSlice(allocator, "var __left: i64 = ") catch unreachable;
         body.appendSlice(allocator, restart_rt) catch unreachable;
         body.appendSlice(allocator, ";\n") catch unreachable;
@@ -685,10 +648,11 @@ const std = @import("std");
             .annotations = b.annotations,
         };
     }
-    // Arm mode threads the site's failure payload into the generated unit
-    // as `__fail` — the policy rules evaluate against it before the first
-    // re-entry, so the counter bound and `f`-conditions govern every retry.
-    const threads_fail = rules.items.len > 0 and H.hasPayload(supervised_branch.?);
+    // Arm and policy modes thread the site's failure payload into the
+    // generated unit as `__fail` — the policy (inline rules or delegated
+    // call) evaluates against it before the first re-entry, and the
+    // decline forward returns it in kind.
+    const threads_fail = (rules.items.len > 0 or policy_name != null) and H.hasPayload(supervised_branch.?);
     var attempt_input_fields = std.ArrayList(ast.Field).initCapacity(allocator, decl.input.fields.len + 1) catch unreachable;
     for (decl.input.fields) |fld| {
         attempt_input_fields.append(allocator, H.cloneField(allocator, fld)) catch unreachable;
@@ -801,4 +765,6 @@ const std = @import("std");
     } };
 }
 
+~part h
 ~part decl
+~part policy

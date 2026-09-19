@@ -34,12 +34,19 @@ real produce. Nothing is parsed twice; the transform walks
   hand; `|> dial(port: f + 1)` is an ordinary call the transform validates
   against the decl.
 
-- **The inline policy and a named policy share one vocabulary.** A future
-  stateful policy (a signal model consuming the failure stream) produces
-  `retry`/`exhausted` decisions — the SAME branches the inline arms spell.
-  A rule list that outgrows counters graduates into a model whose tick
-  produces the identical vocabulary; with a datablock the two paths would
-  have needed two grammars.
+- **The inline policy and a named policy share one vocabulary.** `policy:
+  Name` landed on exactly this: a same-module tor consuming `{ f: <payload>,
+  t: i64 }` produces `retry`/`exhausted` — the SAME branches the inline
+  arms spell. `t` is required (the bound channel — the compiler cannot see
+  the escape inside an opaque tor; `within` is a throttle, not a bound).
+  `f` is optional (a counter-only policy is legitimate). `retry`'s payload
+  IS the re-entry arg map — positional `| retry i64` for a single-input
+  child (Koru refuses named single outcomes, so partial adaptation is
+  unspellable — consistent), named fields for 2+. `exhausted` bare forwards
+  in kind; `| exhausted <v>` produces on the supervised branch. The signal
+  composition still graduates this: a stateful model consuming the failure
+  stream produces the identical vocabulary — the delegation channel is
+  already shaped for it.
 - **Ordered rules arrive already ordered.** `restart: { err: 3, busy: 5 }`
   per-branch maps and `up_to`/`again` keywords were all going to be new
   grammar. As arms they are ordinary repetition plus `when`.
@@ -81,8 +88,10 @@ already carries. A tick clock has a supplier — an enclosing signal model —
 and its absence is the refusal's whole message. So vocabulary may be *pinned*
 before its supplier exists: `within: 10 ticks` parses, validates, and
 refuses with the name of the missing supplier, which lands the composition
-boundary in a diagnostic rather than a doc. `policy: Name` is pinned the
-same way — declared, refused, awaiting the named-model path.
+boundary in a diagnostic rather than a doc. `policy: Name` turned out not
+to need that wait — its supplier is ordinary same-module event lookup, so
+it landed as delegation to a stateless tor; the signal-model supplier only
+adds *state* to what the channel already delegates.
 
 ## Where the datablock still earns its place
 
@@ -115,15 +124,19 @@ Re-entry `|>` is same-event only in v1 (the retry arms share one outcome
 union). `| exhausted` produces in the child's vocabulary, not the parent's —
 a parent-only terminal name refuses. Multi-field failure payloads refuse
 (`__fail` threads exactly one field). `within` honors wall-clock units only
-(`ms|us|ns|s`) — `ticks` and `policy:` are pinned, not supplied. Rule-source
-fields (`restart`/`args`) do not combine with rule arms; declarations
-(`within`, future `policy`) compose with either spelling. Arm-shaped
+(`ms|us|ns|s`) — `ticks` is pinned, not supplied. `policy:` delegates to
+same-module tors only — cross-module paths refuse, and a stateful policy
+awaits the signal composition it was shaped for. Rule-source fields
+(`restart`/`args`/`policy`) do not combine with rule arms or each other;
+the `within` modifier composes with every spelling. Arm-shaped
 declarations (`| [key: value]`) refuse with teaching — the block is their
 home.
 
-Reference: `koru_std/supervisor.kz` (arm-mode emission); pins 320_153
-(re-spelled), 320_155 (ordered rules + exhausted produce), 320_156
+Reference: `koru_std/supervisor.kz` (arm-mode emission) + `.decl.kz`
+(within) + `.policy.kz` (delegation) + `.h.kz` (shared helpers); pins
+320_153 (re-spelled), 320_155 (ordered rules + exhausted produce), 320_156
 (missing-bound refusal), 320_157 (`within` honored), 320_158 (`ticks`
 refusal), 320_160 (declaration-arm refusal), 320_161 (`restart`+`within`
-compose). Mechanism for the site-local rewrite itself:
-[[frag-transform-continuation-position]].
+compose), 320_162 (policy delegation), 320_163 (missing policy refusal),
+320_164 (`t` required), 320_165 (policy+`within` veto). Mechanism for the
+site-local rewrite itself: [[frag-transform-continuation-position]].

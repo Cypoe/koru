@@ -4,9 +4,9 @@
 //
 // Declarations are DATA — they live in the supervised block, not in arm
 // position (`| [key: value]` refuses pointing here). `within: N unit` is
-// the wall-clock min-spacing throttle; `ticks` and `policy:` are pinned
-// vocabulary awaiting their suppliers (enclosing signal model, named
-// policy model).
+// the wall-clock min-spacing throttle; `policy: Name` delegates the
+// decision rules to a named same-module tor. `ticks` is pinned vocabulary
+// awaiting its supplier — an enclosing signal model's steppable clock.
 
 const ast = @import("ast");
 const errors = @import("errors");
