@@ -11,6 +11,9 @@
 // root — this directory — as cwd, so repo paths start with `..`.
 
 ~import std/invariants
+// Pulled in for its colocated git-gate-local declarations — the listing
+// walks imports, so a module's own invariants surface only through one.
+~import koru/odds
 
 ~std/invariants:inferred {
     "name": "emit-for-not-while",
@@ -46,6 +49,16 @@
     "name": "claim-stamps-stay-honest",
     "tags": ["git-gate"],
     "rule": "Does this diff weaken a std/rules claim silently? Declarations carry claim stamps — proven, measured, inferred, aspirational — visible inline in the source this diff touches. Flag when the diff edits the body of a declaration stamped proven or measured without the diff also touching the evidence the stamp rests on (a test, benchmark, or proof artifact), or when it removes or downgrades a stamp without saying so. Editing a claimed declaration together with its evidence, or strengthening a stamp, is NOT a violation. Answer yes ONLY if the diff leaves a stamp asserting something the edit has made untrue."
+}
+
+// The manifest guards itself: a git-gate-local row fires only when its
+// declaring file is in the staged diff, and is judged against that
+// file's hunks alone. This row is where weakening the discipline would
+// land — and it is judged exactly then.
+~std/invariants:inferred {
+    "name": "manifest-stays-enforceable",
+    "tags": ["git-gate-local"],
+    "rule": "Does this diff weaken the invariant manifest's ability to catch what it declares? Flag when it removes or renames a tag so a row stops firing, softens a rule's verdict shape (rules are questions a judge answers yes/no about the diff), drops a check: command without a stronger replacement, or adds a git-gate-local row whose declared file the listing cannot place. Narrowing an over-broad rule with the reason stated in the rule text, adding rows, or strengthening a check is NOT a violation. Answer yes ONLY if the diff makes the manifest weaker at catching what it declares."
 }
 
 ~tor main {}

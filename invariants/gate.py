@@ -6,6 +6,13 @@ For each git-gate-tagged invariant row:
   - no `check:`        → judge the staged diff via the compiled gate binary
                          (koru/odds; advisory unless GATE_BLOCK=1)
 
+A `git-gate-local` row is colocated: it is declared inside the file it
+guards and fires ONLY when that file is in a staged diff — judged
+against that file's hunks alone, in whichever repository owns the file
+(the manifest imports koru/odds so that package's own declaration is
+listed and fires on koru-libs commits). A local row whose file is not
+staged did not fire — that is a skip, never an UNJUDGED.
+
 A row's execution strategy is read off the declaration itself — `check:`
 means a deterministic checker exists; its absence means the rule is
 judgment-class and goes to the reader (Jev). That is the designed split:
@@ -85,6 +92,40 @@ def git_staged_diff():
     return proc.stdout
 
 
+def loc_file(loc):
+    """A row's loc (`file:line`) → absolute path. The listing prints
+    paths relative to its cwd (this directory) for in-repo files,
+    absolute for out-of-repo ones."""
+    f = loc.rsplit(":", 1)[0] if loc else ""
+    if f and not os.path.isabs(f):
+        f = os.path.join(HERE, f)
+    return os.path.normpath(f) if f else ""
+
+
+def file_staged_diff(path):
+    """The staged diff touching one file, in whatever repository owns
+    it. None when the file is not staged anywhere — the local row's
+    `did not fire` answer."""
+    d = path
+    while not os.path.isdir(d):
+        nd = os.path.dirname(d)
+        if nd == d:
+            return None
+        d = nd
+    proc = subprocess.run(
+        ["git", "-C", d, "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        return None
+    rel = os.path.relpath(path, proc.stdout.strip())
+    proc = subprocess.run(
+        ["git", "-C", proc.stdout.strip(), "diff", "--staged", "--", rel],
+        capture_output=True, text=True,
+    )
+    return proc.stdout if proc.stdout.strip() else None
+
+
 def ensure_gate_binary():
     if os.path.exists(GATE_BIN) and os.path.getmtime(GATE_BIN) >= os.path.getmtime(GATE_SRC):
         return True
@@ -125,7 +166,7 @@ def main():
         return 1
 
     rows = [r for r in parse_listing(koruc_invariants())
-            if '"git-gate"' in r["tags"]]
+            if '"git-gate"' in r["tags"] or '"git-gate-local"' in r["tags"]]
 
     if not rows:
         print("gate: no git-gate-tagged invariants declared")
@@ -133,15 +174,26 @@ def main():
 
     diff = git_staged_diff()
     have_diff = bool(diff.strip())
-    want_judge = any(not r["check"] for r in rows)
-    if want_judge and not checks_only and have_diff:
-        if not ensure_gate_binary():
-            return 1
+    binary_ready = False
 
     failures = []
     advisories = []
 
     for r in rows:
+        local = '"git-gate-local"' in r["tags"]
+        state = diff
+        if local:
+            path = loc_file(r["loc"])
+            if not path:
+                failures.append(f"local FAIL  {r['name']} — declaration "
+                                "carries no file location to scope to")
+                continue
+            fdiff = file_staged_diff(path)
+            if fdiff is None:
+                print(f"local skip  {r['name']} — "
+                      f"{r['loc'].rsplit(':', 1)[0] or '???'} not in a staged diff")
+                continue
+            state = fdiff
         if r["check"]:
             if judge_only:
                 continue
@@ -156,10 +208,14 @@ def main():
         else:
             if checks_only:
                 continue
-            if not have_diff:
+            if not local and not have_diff:
                 print(f"judge skip  {r['name']} — no staged changes")
                 continue
-            verdict = judge(r["rule"], diff)
+            if not binary_ready:
+                binary_ready = True
+                if not ensure_gate_binary():
+                    return 1
+            verdict = judge(r["rule"], state)
             if verdict.startswith("VIOLATION"):
                 if block:
                     failures.append(f"judge VIOLATION {r['name']}  {verdict}")
