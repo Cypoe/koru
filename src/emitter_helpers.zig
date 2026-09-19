@@ -13257,6 +13257,52 @@ pub fn emitModuleSubset(
     return result;
 }
 
+/// Registry-harvested event shapes carry bare type names legal only inside
+/// the event's declaring module (KORU115), but the descriptor emits into a
+/// test module where those names are undeclared — so default a bare base to
+/// the event's own module (`*Judge` under `koru/odds:feels` ->
+/// `*koru_koru.koru_odds.Judge`). An explicit field.module_path or a
+/// phantom-derived home still wins (base-type vs phantom-state orthogonality);
+/// scalars, `string`, and already-qualified bases pass through unchanged.
+fn writeEventShapeFieldType(
+    code_emitter: *CodeEmitter,
+    field: ast.Field,
+    main_module_name: ?[]const u8,
+    event_module: ?[]const u8,
+) !void {
+    if (event_module != null and field.module_path == null) {
+        var phantom_home: ?[]const u8 = null;
+        if (field.phantom) |ph| {
+            if (std.mem.indexOfScalar(u8, ph, ':')) |colon| {
+                const pmod = ph[0..colon];
+                if (pmod.len > 0 and phantomModuleIsTypeHome(field.type, pmod)) {
+                    phantom_home = pmod;
+                }
+            }
+        }
+        if (phantom_home == null) {
+            var i: usize = 0;
+            const prefixes = [_][]const u8{ "[]const ", "?*const ", "*const ", "[]", "?*", "?", "*" };
+            strip: while (true) {
+                for (prefixes) |prefix| {
+                    if (std.mem.startsWith(u8, field.type[i..], prefix)) {
+                        i += prefix.len;
+                        continue :strip;
+                    }
+                }
+                break;
+            }
+            if (isModuleLocalBareTypeBase(field.type[i..])) {
+                var patched = field;
+                patched.module_path = event_module;
+                try writeFieldType(code_emitter, patched, main_module_name);
+                return;
+            }
+        }
+    }
+    try writeFieldType(code_emitter, field, main_module_name);
+}
+
 fn emitEventDeclForModuleFromType(
     code_emitter: *CodeEmitter,
     ctx: *EmissionContext,
@@ -13264,6 +13310,7 @@ fn emitEventDeclForModuleFromType(
     event_type: type_registry_module.EventType,
     immediate_impl: *const ast.ImmediateImpl,
 ) !void {
+    const event_module = event_path.module_qualifier;
     // Event struct header: pub const foo_event = struct {
     try code_emitter.writeIndent();
     try code_emitter.write("pub const ");
@@ -13283,7 +13330,7 @@ fn emitEventDeclForModuleFromType(
             try code_emitter.writeIndent();
             try writeBranchName(code_emitter, field.name);
             try code_emitter.write(": ");
-            try writeFieldType(code_emitter, field, ctx.main_module_name);
+            try writeEventShapeFieldType(code_emitter, field, ctx.main_module_name, event_module);
             try code_emitter.write(",\n");
         }
     }
@@ -13295,7 +13342,7 @@ fn emitEventDeclForModuleFromType(
     try code_emitter.writeIndent();
     if (event_type.return_type) |rt| {
         try code_emitter.write("pub const Output = ");
-        try writeBareReturnType(code_emitter, rt, ctx.main_module_name, null);
+        try writeBareReturnType(code_emitter, rt, ctx.main_module_name, event_module);
         try code_emitter.write(";\n");
     } else if (event_type.branches.len == 0) {
         try code_emitter.write("pub const Output = void;\n");
@@ -13309,7 +13356,7 @@ fn emitEventDeclForModuleFromType(
             if (branch.payload) |payload| {
                 if (payload.fields.len == 1 and std.mem.eql(u8, payload.fields[0].name, "__type_ref")) {
                     try code_emitter.write(": ");
-                    try writeFieldType(code_emitter, payload.fields[0], ctx.main_module_name);
+                    try writeEventShapeFieldType(code_emitter, payload.fields[0], ctx.main_module_name, event_module);
                     try code_emitter.write(",\n");
                 } else {
                     try code_emitter.write(": struct {\n");
@@ -13318,7 +13365,7 @@ fn emitEventDeclForModuleFromType(
                         try code_emitter.writeIndent();
                         try writeBranchName(code_emitter, field.name);
                         try code_emitter.write(": ");
-                        try writeFieldType(code_emitter, field, ctx.main_module_name);
+                        try writeEventShapeFieldType(code_emitter, field, ctx.main_module_name, event_module);
                         try code_emitter.write(",\n");
                     }
                     code_emitter.indent_level -= 1;

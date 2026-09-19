@@ -12,10 +12,7 @@ judgment-class and goes to the reader (Jev). That is the designed split:
 the decidable get scripts, the readable get a model.
 
 Usage:
-  python3 gate.py [--mock] [--checks-only] [--judge-only]
-
-  --mock          judge via the deterministic mock backend — offline;
-                  proves the plumbing, verdicts are hash-shaped not real
+  python3 gate.py [--checks-only] [--judge-only]
 
 Environment:
   GATE_BLOCK=1        Jev VIOLATION verdicts also fail the gate
@@ -101,18 +98,23 @@ def ensure_gate_binary():
     return True
 
 
-def judge(question, state, mock):
-    argv = [GATE_BIN, question, state]
-    if mock:
-        argv.append("mock")
-    proc = subprocess.run(argv, cwd=HERE, capture_output=True, text=True)
+def judge(question, state):
+    proc = subprocess.run(
+        [GATE_BIN, question, state], cwd=HERE, capture_output=True, text=True,
+    )
     line = (proc.stdout.strip().splitlines() or ["UNJUDGED no output"])[0]
     return line
 
 
 def main():
     args = sys.argv[1:]
-    mock = "--mock" in args
+    known = {"--checks-only", "--judge-only"}
+    unknown = [a for a in args if a not in known]
+    if unknown:
+        print(f"gate: unknown flag(s) {' '.join(unknown)} — there is no "
+              "offline mode; judgment rows need OPENROUTER_API_KEY",
+              file=sys.stderr)
+        return 1
     checks_only = "--checks-only" in args
     judge_only = "--judge-only" in args
     block = os.environ.get("GATE_BLOCK") == "1"
@@ -157,7 +159,7 @@ def main():
             if not have_diff:
                 print(f"judge skip  {r['name']} — no staged changes")
                 continue
-            verdict = judge(r["rule"], diff, mock)
+            verdict = judge(r["rule"], diff)
             if verdict.startswith("VIOLATION"):
                 if block:
                     failures.append(f"judge VIOLATION {r['name']}  {verdict}")
