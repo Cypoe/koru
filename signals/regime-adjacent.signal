@@ -1,0 +1,16 @@
+name: regime-adjacent
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: |
+  The operating posture shifted without the belief underneath shifting:
+  enforcement tightened, a default flipped, a cadence changed — the same
+  discipline applied harder. Distinct from `regime-change` (membrane:
+  the way we work or understand the domain itself moved, owed a concept
+  evolution) — regime-adjacent is the same belief with teeth.
+
+  Declared 2026-09-19 with the invariant gate's flip from advisory to
+  GATE_BLOCK=1 enforcing across five repos: the rules didn't change;
+  their reach and consequence did.
+route: surface
