@@ -36,8 +36,8 @@ Environment:
                       report UNJUDGED loudly — never a silent pass
 
 The gate binary (a.out, from gate.k) is built on first run and whenever
-gate.k is newer than it — the stale-binary discipline applied to the gate
-itself.
+gate.k or a linked module (koru/odds) is newer than it — the stale-binary
+discipline applied to the gate itself.
 """
 
 import os
@@ -137,8 +137,18 @@ def file_staged_diff(path):
     return proc.stdout if proc.stdout.strip() else None
 
 
+# The gate binary's freshness oracle: gate.k plus the modules it links.
+# koru/odds is the only live dep today — its path resolves through
+# koru.json's "koru" mapping to ../../koru-libs.
+GATE_DEPS = [
+    GATE_SRC,
+    os.path.join(HERE, "..", "..", "koru-libs", "odds", "index.kz"),
+]
+
+
 def ensure_gate_binary():
-    if os.path.exists(GATE_BIN) and os.path.getmtime(GATE_BIN) >= os.path.getmtime(GATE_SRC):
+    newest = max(os.path.getmtime(f) for f in GATE_DEPS if os.path.exists(f))
+    if os.path.exists(GATE_BIN) and os.path.getmtime(GATE_BIN) >= newest:
         return True
     proc = subprocess.run(
         [KORUC, "build", "gate.k"], cwd=HERE, capture_output=True, text=True,
