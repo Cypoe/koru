@@ -2,6 +2,12 @@
 
 Measured with Hyperfine on Apple Silicon (M1/M2/M3).
 
+> **Provenance:** historical — date, compiler commit, and Koru build mode
+> unrecorded (the harness predates the `--release=fast` assertions added
+> 2026-09-21). The ~49ms Koru time is not a Debug signature (Debug is ~20x
+> slower on this shape), so the claim is plausible, but it is not
+> reproducible as written. Re-run before citing.
+
 ## Fast Versions (5 warmup, 5 runs)
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
