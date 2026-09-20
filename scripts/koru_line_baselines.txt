@@ -124,7 +124,7 @@ koru_std/runtime.run.kz	205
 koru_std/set.kz	96
 koru_std/simple.kz	7
 koru_std/store.clear.kz	105
-koru_std/store.cursor.kz	55
+koru_std/store.cursor.kz	38
 koru_std/store.default.kz	79
 koru_std/store.explain.kz	104
 koru_std/store.idecls.kz	104
@@ -151,10 +151,11 @@ koru_std/store.watch.kz	296
 koru_std/string-map.kz	126
 koru_std/string.kjs	147
 koru_std/string.kz	311
-koru_std/supervisor.decl.kz	108
-koru_std/supervisor.h.kz	84
-koru_std/supervisor.kz	770
-koru_std/supervisor.policy.kz	273
+koru_std/supervisor.decl.kz	63
+koru_std/supervisor.fold.kz	1172
+koru_std/supervisor.h.kz	63
+koru_std/supervisor.kz	73
+koru_std/supervisor.policy.kz	149
 koru_std/switch.kz	151
 koru_std/table.kz	62
 koru_std/taps.kz	1442
