@@ -1498,98 +1498,7 @@
             /// `[ordinal]` is meaningless and refused by name.
             req_id: ?[]const u8 = null,
         };
-        // Can ANY row of this store be removed while a rule pass is running?
-        // Only a `take` can remove one, and a take reached through a CALLED
-        // flow is invisible to a scan of the rule's own arm — so the question
-        // is asked of the WHOLE PROGRAM, not of the arm. A program that never
-        // mentions take cannot remove a row from anywhere, by construction,
-        // and every one of its rule passes can use the query path's
-        // `for (0..len)` instead of the removal-tolerant `while`.
-        //
-        // The question is whether a row of THIS store can be removed while one
-        // of its passes is running. The old predicate asked something far
-        // cruder — `std.mem.indexOf(text, "take") != null` over every
-        // condition, path segment and argument in the program.
-        //
-        // MEASURED 2026-08-03, and it is worth 6.1x: one match flips every
-        // standing rule in the program off the dense cursor onto the handle
-        // round-trip, and that round-trip's @panic sites forbid vectorization
-        // (0.77 -> 4.8 cycles/row, rf_stripe_1 at 10k rows, 2260 -> 13806
-        // ns/iter, checksum oracle identical). What tripped it:
-        //   - `taken`, the store's OWN obligation state, so any program with an
-        //     [entity(...)] discharger de-optimized itself;
-        //   - a take on a COMPLETELY UNRELATED store;
-        //   - the word `mistake` inside a string literal, measured directly.
-        // The grep itself is free; it is the wrong ANSWER that costs 6.1x.
-        //
-        // Now: an actual `std/store:take` invocation whose addressing head
-        // names THIS store, in either spelling (raw, or already lowered to
-        // `__store_take_<s>` if this scan runs after that rewrite). Per-ARM
-        // since 690_301: the reachability machinery — the arm's own
-        // continuation tree plus every subflow impl it invokes — is
-        // ast_functional.armReachesInvocation; what lives here is the
-        // predicate that knows what a take on THIS store spells like.
-        // Anything unparseable answers YES and stays conservative.
-        const TakeScan = struct {
-            fn isTakeOn(store: []const u8, inv: *const ast.Invocation) bool {
-                if (inv.path.segments.len != 1) return false;
-                const seg = inv.path.segments[0];
-                if (std.mem.startsWith(u8, seg, "__store_take_")) {
-                    return std.mem.eql(u8, seg["__store_take_".len..], store);
-                }
-                if (!std.mem.eql(u8, seg, "take")) return false;
-                const mq = inv.path.module_qualifier orelse return true;
-                if (!std.mem.eql(u8, mq, "std.store")) return false;
-                for (inv.args) |a| {
-                    if (!std.mem.eql(u8, a.name, "expr")) continue;
-                    const v = if (a.value.len >= 2 and a.value[0] == '"') a.value[1 .. a.value.len - 1] else a.value;
-                    const lb = std.mem.indexOfScalar(u8, v, '[') orelse return true;
-                    return std.mem.eql(u8, std.mem.trim(u8, v[0..lb], " "), store);
-                }
-                return true;
-            }
-        };
         const program_items = flatItems(allocator, program.items);
-        const TapPeel = struct {
-            fn voidBranch(conts: []const ast.Continuation) ?*const ast.Continuation {
-                for (conts) |*k| {
-                    if (std.mem.trim(u8, k.branch, " ").len == 0) return k;
-                }
-                if (conts.len == 1) return &conts[0];
-                return null;
-            }
-            fn findArm(conts: []const ast.Continuation, arm: []const u8) ?*const ast.Continuation {
-                var found: ?*const ast.Continuation = null;
-                for (conts) |*c| {
-                    const bname = std.mem.trim(u8, c.branch, " ");
-                    if (bname.len == 0) continue;
-                    if (!std.mem.eql(u8, bname, arm)) continue;
-                    if (found != null) return null;
-                    found = c;
-                }
-                return found;
-            }
-            fn peel(c: *const ast.Continuation) ?*const ast.Continuation {
-                var cur: *const ast.Continuation = c;
-                var depth: usize = 0;
-                while (depth < 12) : (depth += 1) {
-                    const node = cur.node orelse return null;
-                    switch (node) {
-                        .label_with_invocation => return cur,
-                        .invocation => |inv| {
-                            if (!inv.inserted_by_tap) return cur;
-                            if (cur.continuations.len == 0) return null;
-                            cur = voidBranch(cur.continuations) orelse return null;
-                        },
-                        else => {
-                            if (cur.continuations.len == 0) return null;
-                            cur = voidBranch(cur.continuations) orelse return null;
-                        },
-                    }
-                }
-                return null;
-            }
-        };
         var qsites = std.ArrayList(QuerySite).initCapacity(allocator, 4) catch unreachable;
         for (flatItems(allocator, program.items)) |pi| {
             if (pi.* != .flow) continue;
@@ -1717,8 +1626,20 @@
                 .req_id = if (q_req_id) |idn| allocator.dupe(u8, std.mem.trim(u8, idn, " ")) catch unreachable else null,
             }) catch unreachable;
         }
-
-        // ---- [name]/[depends_on] rule scheduling ----
+        // The proc-local lists reduce to two bools here; the decision itself
+        // (semantic overrides + the whole-program walk) is Gate.needsHandles.
+        var lifecycle_id = false;
+        for (inserted_arms.items) |arm| {
+            if (arm.id_requests.len > 0) lifecycle_id = true;
+        }
+        for (removed_arms.items) |arm| {
+            if (arm.id_requests.len > 0) lifecycle_id = true;
+        }
+        var rule_needs = false;
+        for (qsites.items) |qs| {
+            if (qs.req_id != null or qs.may_remove) rule_needs = true;
+        }
+        const needs_handles = Gate.needsHandles(allocator, program, program_items, store_name, field_names, is_tree, step_arm != null, lifecycle_id, rule_needs);
         // Topological order over the declared DAG; rules with no edges keep
         // collection order RELATIVE TO EACH OTHER but that order is
         // contractually UNSPECIFIED (the fusion license). Cycle = comptime
@@ -2507,7 +2428,10 @@
         if (store_ordinal > 0xFF) {
             return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): more than 255 stores in one program is a later rung - the row handle carries the minting store's brand in 8 bits, and brand 0 is reserved so a non-handle integer cannot pass as an address (690_196)", .{store_name}) } };
         }
-        const hs = std.fmt.allocPrint(allocator,
+        // The handle table. A lean store carries none of this — no hslot
+        // arrays, no brand, no resolve/row_of/handle_of methods — and the
+        // gate above guarantees no emitted unit is left to name one.
+        const hs: []const u8 = if (needs_handles) std.fmt.allocPrint(allocator,
             \\    __koru_hslot_row: [{d}]usize = undefined,
             \\    __koru_hslot_gen: [{d}]u32 = [_]u32{{0}} ** {d},
             \\    __koru_row_hslot: [{d}]usize = undefined,
@@ -2552,7 +2476,7 @@
             \\        return @as(i64, @intCast(slot | (@as(usize, __koru_brand) << 24))) | (@as(i64, @intCast(self.__koru_hslot_gen[slot])) << 32);
             \\    }}
             \\
-        , .{ CAP, CAP, CAP, CAP, CAP, store_ordinal, store_name, store_name, store_name }) catch unreachable;
+        , .{ CAP, CAP, CAP, CAP, CAP, store_ordinal, store_name, store_name, store_name }) catch unreachable else "";
         pc.appendSlice(allocator, hs) catch unreachable;
         pc.appendSlice(allocator, "};\n") catch unreachable;
         pc.appendSlice(allocator, "var __koru_store_") catch unreachable;
@@ -2625,8 +2549,10 @@
                 const im = std.fmt.allocPrint(allocator, "  __index_{s}: new Map(),\n", .{icol}) catch unreachable;
                 jc.appendSlice(allocator, im) catch unreachable;
             }
-            const tail = std.fmt.allocPrint(allocator,
-                \\  len: 0,
+            // Lean stores carry the column arrays and len only — the hslot
+            // arrays and the three handle methods are the machinery the gate
+            // just proved unreachable.
+            const hslot_js: []const u8 = if (needs_handles) std.fmt.allocPrint(allocator,
                 \\  __koru_hslot_row: new Array({d}).fill(0),
                 \\  __koru_hslot_gen: new Array({d}).fill(0),
                 \\  __koru_row_hslot: new Array({d}).fill(0),
@@ -2664,9 +2590,10 @@
                 \\    const slot = this.__koru_row_hslot[dense];
                 \\    return slot + this.__koru_brand * 16777216 + this.__koru_hslot_gen[slot] * 4294967296;
                 \\  }},
-                \\}};
-            , .{ CAP, CAP, CAP, CAP, store_ordinal, store_name, store_name }) catch unreachable;
-            jc.appendSlice(allocator, tail) catch unreachable;
+            , .{ CAP, CAP, CAP, CAP, store_ordinal, store_name, store_name }) catch unreachable else "";
+            jc.appendSlice(allocator, "  len: 0,\n") catch unreachable;
+            jc.appendSlice(allocator, hslot_js) catch unreachable;
+            jc.appendSlice(allocator, "};\n") catch unreachable;
             break :blk_pjs jc.toOwnedSlice(allocator) catch unreachable;
         } else pc.toOwnedSlice(allocator) catch unreachable;
 
@@ -2784,19 +2711,25 @@
             const grow = std.fmt.allocPrint(allocator,
                 \\if (__koru_store_{s}.len >= {d}) throw new Error("std/store: store '{s}' is full (capacity {d}) - declared capacity and the `| full` branch are pinned at 690_011");
                 \\const __koru_new_row = __koru_store_{s}.len;
-                \\let __koru_hslot;
-                \\if (__koru_store_{s}.__koru_hslot_free_len > 0) {{
-                \\  __koru_store_{s}.__koru_hslot_free_len -= 1;
-                \\  __koru_hslot = __koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len];
-                \\}} else {{
-                \\  __koru_hslot = __koru_store_{s}.__koru_hslot_next;
-                \\  __koru_store_{s}.__koru_hslot_next += 1;
-                \\}}
-                \\__koru_store_{s}.__koru_hslot_row[__koru_hslot] = __koru_new_row;
-                \\__koru_store_{s}.__koru_row_hslot[__koru_new_row] = __koru_hslot;
                 \\
-            , .{ store_name, CAP, store_name, CAP, store_name, store_name, store_name, store_name, store_name, store_name, store_name, store_name, store_name }) catch unreachable;
+            , .{ store_name, CAP, store_name, CAP, store_name }) catch unreachable;
             ap.appendSlice(allocator, grow) catch unreachable;
+            if (needs_handles) {
+                const mint = std.fmt.allocPrint(allocator,
+                    \\let __koru_hslot;
+                    \\if (__koru_store_{s}.__koru_hslot_free_len > 0) {{
+                    \\  __koru_store_{s}.__koru_hslot_free_len -= 1;
+                    \\  __koru_hslot = __koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len];
+                    \\}} else {{
+                    \\  __koru_hslot = __koru_store_{s}.__koru_hslot_next;
+                    \\  __koru_store_{s}.__koru_hslot_next += 1;
+                    \\}}
+                    \\__koru_store_{s}.__koru_hslot_row[__koru_hslot] = __koru_new_row;
+                    \\__koru_store_{s}.__koru_row_hslot[__koru_new_row] = __koru_hslot;
+                    \\
+                , .{ store_name, store_name, store_name, store_name, store_name, store_name, store_name, store_name }) catch unreachable;
+                ap.appendSlice(allocator, mint) catch unreachable;
+            }
             for (field_names[0..user_field_count], 0..) |fname, fci| {
                 // A char column is a JS string, so the fixed-width buffer is
                 // just a truncation — the zero-fill has no observable analogue.
@@ -2874,24 +2807,26 @@
                 \\
             , .{ store_name, CAP, store_name, CAP, store_name }) catch unreachable;
             ap.appendSlice(allocator, grow) catch unreachable;
-            // Mint the row's handle slot: reuse a freed slot (its generation
-            // was bumped at free, so the dead handle stays dead) else bump-
-            // allocate — which keeps slot == dense index for a store that
-            // never removes.
-            const mint = std.fmt.allocPrint(allocator,
-                \\const __koru_hslot = if (__koru_store_{s}.__koru_hslot_free_len > 0) blk_hs: {{
-                \\    __koru_store_{s}.__koru_hslot_free_len -= 1;
-                \\    break :blk_hs __koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len];
-                \\}} else blk_hs: {{
-                \\    const __koru_hn = __koru_store_{s}.__koru_hslot_next;
-                \\    __koru_store_{s}.__koru_hslot_next += 1;
-                \\    break :blk_hs __koru_hn;
-                \\}};
-                \\__koru_store_{s}.__koru_hslot_row[__koru_hslot] = __koru_new_row;
-                \\__koru_store_{s}.__koru_row_hslot[__koru_new_row] = __koru_hslot;
-                \\
-            , .{ store_name, store_name, store_name, store_name, store_name, store_name, store_name, store_name }) catch unreachable;
-            ap.appendSlice(allocator, mint) catch unreachable;
+            if (needs_handles) {
+                // Mint the row's handle slot: reuse a freed slot (its generation
+                // was bumped at free, so the dead handle stays dead) else bump-
+                // allocate — which keeps slot == dense index for a store that
+                // never removes.
+                const mint = std.fmt.allocPrint(allocator,
+                    \\const __koru_hslot = if (__koru_store_{s}.__koru_hslot_free_len > 0) blk_hs: {{
+                    \\    __koru_store_{s}.__koru_hslot_free_len -= 1;
+                    \\    break :blk_hs __koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len];
+                    \\}} else blk_hs: {{
+                    \\    const __koru_hn = __koru_store_{s}.__koru_hslot_next;
+                    \\    __koru_store_{s}.__koru_hslot_next += 1;
+                    \\    break :blk_hs __koru_hn;
+                    \\}};
+                    \\__koru_store_{s}.__koru_hslot_row[__koru_hslot] = __koru_new_row;
+                    \\__koru_store_{s}.__koru_row_hslot[__koru_new_row] = __koru_hslot;
+                    \\
+                , .{ store_name, store_name, store_name, store_name, store_name, store_name, store_name, store_name }) catch unreachable;
+                ap.appendSlice(allocator, mint) catch unreachable;
+            }
             // User columns write their insert bindings; the [tree]-synthesized
             // `parent` has NO user binding (TT1 — invisible): every new row is
             // born a root (-1) and is attached by the self-FK stored write.
@@ -3087,7 +3022,15 @@
                 .location = flow.location,
                 .module = allocator.dupe(u8, flow.module) catch unreachable,
             } }) catch unreachable;
-            const handle_expr = std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_handle_of(__koru_new_row)", .{store_name}) catch unreachable;
+            // A lean store mints no slot, so `| row` carries the dense index
+            // — a payload only `| row _` sites can reach, because a site that
+            // BINDS it flips the handle gate.
+            const handle_expr: []const u8 = if (needs_handles)
+                std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_handle_of(__koru_new_row)", .{store_name}) catch unreachable
+            else if (host_is_js)
+                "__koru_new_row"
+            else
+                "@as(i64, @intCast(__koru_new_row))";
             const hbody = std.fmt.allocPrint(allocator, "{s}{s}return {s};", .{ facet_prelude.items, append_text, HS.branchOne(allocator, host_target, "row", handle_expr) }) catch unreachable;
             appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
                 .path = H.mkPathH(allocator, home_ns, inserth_name),
@@ -3183,7 +3126,12 @@
                 break :blk fb.toOwnedSlice(allocator) catch unreachable;
             } else
                 std.fmt.allocPrint(allocator, "if (__koru_store_{s}.len >= {d}) return {s};\n", .{ store_name, CAP, HS.branchEmpty(allocator, host_target, "full") }) catch unreachable;
-            const fhandle = std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_handle_of(__koru_new_row)", .{store_name}) catch unreachable;
+            const fhandle: []const u8 = if (needs_handles)
+                std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_handle_of(__koru_new_row)", .{store_name}) catch unreachable
+            else if (host_is_js)
+                "__koru_new_row"
+            else
+                "@as(i64, @intCast(__koru_new_row))";
             // The facet prelude runs ahead of the capacity check: a value
             // that violates its declared bounds is wrong at any fill level,
             // and `?!violated` judges the value where `| full` judges the
@@ -4358,7 +4306,9 @@
         }
 
         // ---- unit 5: take — swap-remove through the handle head ----
-        {
+        // Omitted entirely under the gate: a lean store has no handles to
+        // resolve, no slot to retire, and — by construction — no caller.
+        if (needs_handles) {
             const take_name = std.fmt.allocPrint(allocator, "__store_take_{s}", .{store_name}) catch unreachable;
             const take_in = allocator.alloc(ast.Field, 1) catch unreachable;
             take_in[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
@@ -4860,29 +4810,36 @@
                 cb.appendSlice(allocator, cnt_decl) catch unreachable;
                 }
                 // Trip count is known before the loop starts, so this is a
-                // `for` (see CLAUDE.md — it is measurable, not style).
-                const genloop = if (host_is_js)
-                    std.fmt.allocPrint(allocator,
-                        \\for (let __koru_i = 0; __koru_i < __koru_store_{s}.__koru_hslot_next; __koru_i++) {{
-                        \\  __koru_store_{s}.__koru_hslot_gen[__koru_i] = (__koru_store_{s}.__koru_hslot_gen[__koru_i] + 1) % 2097152;
-                        \\}}
+                // `for` (see CLAUDE.md — it is measurable, not style). A lean
+                // store has no generations to invalidate — no handle can be
+                // outstanding when none was ever minted.
+                if (needs_handles) {
+                    const genloop = if (host_is_js)
+                        std.fmt.allocPrint(allocator,
+                            \\for (let __koru_i = 0; __koru_i < __koru_store_{s}.__koru_hslot_next; __koru_i++) {{
+                            \\  __koru_store_{s}.__koru_hslot_gen[__koru_i] = (__koru_store_{s}.__koru_hslot_gen[__koru_i] + 1) % 2097152;
+                            \\}}
+                            \\
+                        , .{ store_name, store_name, store_name }) catch unreachable
+                    else
+                        std.fmt.allocPrint(allocator,
+                            \\for (0..__koru_store_{s}.__koru_hslot_next) |__koru_i| {{
+                            \\    __koru_store_{s}.__koru_hslot_gen[__koru_i] +%= 1;
+                            \\}}
+                            \\
+                        , .{ store_name, store_name }) catch unreachable;
+                    cb.appendSlice(allocator, genloop) catch unreachable;
+                    const reset = std.fmt.allocPrint(allocator,
+                        \\__koru_store_{s}.len = 0;
+                        \\__koru_store_{s}.__koru_hslot_free_len = 0;
+                        \\__koru_store_{s}.__koru_hslot_next = 0;
                         \\
-                    , .{ store_name, store_name, store_name }) catch unreachable
-                else
-                    std.fmt.allocPrint(allocator,
-                        \\for (0..__koru_store_{s}.__koru_hslot_next) |__koru_i| {{
-                        \\    __koru_store_{s}.__koru_hslot_gen[__koru_i] +%= 1;
-                        \\}}
-                        \\
-                    , .{ store_name, store_name }) catch unreachable;
-                cb.appendSlice(allocator, genloop) catch unreachable;
-                const reset = std.fmt.allocPrint(allocator,
-                    \\__koru_store_{s}.len = 0;
-                    \\__koru_store_{s}.__koru_hslot_free_len = 0;
-                    \\__koru_store_{s}.__koru_hslot_next = 0;
-                    \\
-                , .{ store_name, store_name, store_name }) catch unreachable;
-                cb.appendSlice(allocator, reset) catch unreachable;
+                    , .{ store_name, store_name, store_name }) catch unreachable;
+                    cb.appendSlice(allocator, reset) catch unreachable;
+                } else {
+                    const reset = std.fmt.allocPrint(allocator, "__koru_store_{s}.len = 0;\n", .{store_name}) catch unreachable;
+                    cb.appendSlice(allocator, reset) catch unreachable;
+                }
                 // The arm fires AFTER the store is empty: `cleared` is a
                 // past-tense fact about the whole store, and a body that could
                 // still see rows would be describing a half-done operation.

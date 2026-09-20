@@ -773,3 +773,15 @@ today's envelope), not a new cell type. The real cost of flattening is
 write-mask width — a 4x4 pair already spends 32 of 64 mask bits — not
 speed. Chunked envelopes or a wider mask are the follow-on when tables
 get wide.
+
+Handle machinery is the closure of the observations (2026-09-20, lean
+store): a store nothing can observe by identity emits no handle tables at
+all — no hslot freelist, no generation table, no resolve. The gate is a
+whole-program scan (`Gate` in store.gate.kz): `[tree]`, `! step`, declared
+indexes, `[id]` requests, rules that may remove, indexed references, bound
+`| row`, any `take`, or anything unparseable keeps the full machinery;
+otherwise insert is `col[len] = v; len++`. Measured on 003_ecs_reactive:
+add_remove 0.53ms -> ~0.28ms, insert 3.3 -> ~2.5ns/row. The same TakeScan
+predicate that picks a rule's loop form now gates the store's storage —
+removal tolerance and handle elision are one observation question asked at
+two boundaries. What the program cannot see, the emitter does not build.

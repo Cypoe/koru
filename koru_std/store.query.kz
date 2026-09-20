@@ -168,35 +168,6 @@
     // in a `stored` target alike. Which columns this site touches is DERIVED
     // from those references, not listed by the author: the projection block
     // said the same thing twice and let the two halves disagree.
-    const TapPeel = struct {
-        fn voidBranch(conts: []const ast.Continuation) ?*const ast.Continuation {
-            for (conts) |*k| {
-                if (std.mem.trim(u8, k.branch, " ").len == 0) return k;
-            }
-            if (conts.len == 1) return &conts[0];
-            return null;
-        }
-        fn peel(c: *const ast.Continuation) ?*const ast.Continuation {
-            var cur: *const ast.Continuation = c;
-            var depth: usize = 0;
-            while (depth < 12) : (depth += 1) {
-                const node = cur.node orelse return null;
-                switch (node) {
-                    .label_with_invocation => return cur,
-                    .invocation => |inv| {
-                        if (!inv.inserted_by_tap) return cur;
-                        if (cur.continuations.len == 0) return null;
-                        cur = voidBranch(cur.continuations) orelse return null;
-                    },
-                    else => {
-                        if (cur.continuations.len == 0) return null;
-                        cur = voidBranch(cur.continuations) orelse return null;
-                    },
-                }
-            }
-            return null;
-        }
-    };
     // `! first <row>` is `! query`'s early-exit sibling: same row binding,
     // same `when` guard, same derived projection — the sweep stops after the
     // first matching visit. `| none` pairs with it as the absent case (the
@@ -616,25 +587,8 @@
     // taking sweep must re-check the SAME index when len shrinks — the
     // removal-tolerant `while` the rule path already emits (690_031). Same
     // conservative predicate: anything unparseable answers YES.
-    const TakeScan = struct {
-        fn isTakeOn(store: []const u8, inv: *const ast.Invocation) bool {
-            if (inv.path.segments.len != 1) return false;
-            const seg = inv.path.segments[0];
-            if (std.mem.startsWith(u8, seg, "__store_take_")) {
-                return std.mem.eql(u8, seg["__store_take_".len..], store);
-            }
-            if (!std.mem.eql(u8, seg, "take")) return false;
-            const mq = inv.path.module_qualifier orelse return true;
-            if (!std.mem.eql(u8, mq, "std.store")) return false;
-            for (inv.args) |a| {
-                if (!std.mem.eql(u8, a.name, "expr")) continue;
-                const v = if (a.value.len >= 2 and a.value[0] == '"') a.value[1 .. a.value.len - 1] else a.value;
-                const lb = std.mem.indexOfScalar(u8, v, '[') orelse return true;
-                return std.mem.eql(u8, std.mem.trim(u8, v[0..lb], " "), store);
-            }
-            return true;
-        }
-    };
+    // `TakeScan` is module scope (store.gate.kz) — the same predicate the
+    // handle gate uses: anything unparseable answers YES.
     // `! first` never needs the removal-tolerant `while`: its body runs once
     // and the sweep breaks, so there is no post-take iteration to protect.
     const q_may_remove = !is_first and (ast_functional.armReachesInvocation(allocator, flatItems(allocator, program.items), &body_clone, store_name, TakeScan.isTakeOn) catch true);

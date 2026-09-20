@@ -127,6 +127,7 @@ koru_std/store.clear.kz	105
 koru_std/store.cursor.kz	38
 koru_std/store.default.kz	79
 koru_std/store.explain.kz	104
+koru_std/store.gate.kz	525
 koru_std/store.idecls.kz	104
 koru_std/store.index.kz	261
 koru_std/store.insert.kz	482

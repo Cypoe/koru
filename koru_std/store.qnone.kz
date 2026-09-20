@@ -42,36 +42,6 @@ const QueryNone = struct {
         }
     };
 
-    const TapPeel = struct {
-        fn voidBranch(conts: []const ast_find.Continuation) ?*const ast_find.Continuation {
-            for (conts) |*k| {
-                if (std.mem.trim(u8, k.branch, " ").len == 0) return k;
-            }
-            if (conts.len == 1) return &conts[0];
-            return null;
-        }
-        fn peel(c: *const ast_find.Continuation) ?*const ast_find.Continuation {
-            var cur: *const ast_find.Continuation = c;
-            var depth: usize = 0;
-            while (depth < 12) : (depth += 1) {
-                const node = cur.node orelse return null;
-                switch (node) {
-                    .label_with_invocation => return cur,
-                    .invocation => |inv| {
-                        if (!inv.inserted_by_tap) return cur;
-                        if (cur.continuations.len == 0) return null;
-                        cur = voidBranch(cur.continuations) orelse return null;
-                    },
-                    else => {
-                        if (cur.continuations.len == 0) return null;
-                        cur = voidBranch(cur.continuations) orelse return null;
-                    },
-                }
-            }
-            return null;
-        }
-    };
-
     /// Mint the `__store_nonebody_*` event + impl flow for `none_arm` into
     /// `appended`; on success hand back its name, the capture-record text for
     /// the post-loop call, and how many of those captures were lexical. A
