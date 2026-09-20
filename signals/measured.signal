@@ -1,0 +1,10 @@
+name: measured
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a claim established by measurement in this commit — the number
+  was observed, not asserted. Fires when the diff's truth rests on a
+  quantity the session took (a threshold, a count, a latency), and the
+  commit message carries the measurement so the next session inherits
+  the bound, not just the conclusion.
