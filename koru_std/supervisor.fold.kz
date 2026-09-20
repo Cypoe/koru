@@ -57,13 +57,6 @@ const F = struct {
         };
     }
 
-    /// The call-args record shape for a child input list: `{ f: t, … }`,
-    /// collapsing to positional `__type_ref` on a sole input (Koru refuses
-    /// named single outcomes — one field rides bare).
-    fn argsRecordFields(alloc: std.mem.Allocator, inputs: []const ast.Field) []ast.Field {
-        if (inputs.len == 1) return positionalField(alloc, inputs[0].type);
-        return H.cloneFields(alloc, inputs);
-    }
     fn positionalField(alloc: std.mem.Allocator, ty: []const u8) []ast.Field {
         const fs = alloc.alloc(ast.Field, 1) catch unreachable;
         fs[0] = ast.Field{
@@ -72,35 +65,24 @@ const F = struct {
         };
         return fs;
     }
-    /// The produce for an augmented void branch: `=> b` when nothing is
-    /// carried, `=> b <sole>` for a sole input, `=> b { f: f, … }` else.
-    fn argsProduceNode(alloc: std.mem.Allocator, name: []const u8, inputs: []const ast.Field, augmented: bool) ast.Node {
-        if (!augmented) return ctorBareNode(alloc, name);
-        if (inputs.len == 1) return ctorNode(alloc, name, inputs[0].name);
-        const fs = alloc.alloc(ast.Field, inputs.len) catch unreachable;
-        for (inputs, 0..) |fld, i| fs[i] = ctorField(alloc, fld.name, fld.name);
-        return ctorFieldsNode(alloc, name, fs);
-    }
     /// The "forward the last outcome" produce on the supervised branch:
-    /// the child's own payload when it has one, else the args record.
-    fn lastOutcomeNode(alloc: std.mem.Allocator, name: []const u8, has_payload: bool, fail_bind: []const u8, inputs: []const ast.Field, augmented: bool) ast.Node {
+    /// `=> b <bind>` when the child's branch carries a payload, `=> b` bare
+    /// when it is void. The step's branches are the child's declaration —
+    /// a void branch declares nothing, so nothing is produced for it.
+    fn lastOutcomeNode(alloc: std.mem.Allocator, name: []const u8, has_payload: bool, fail_bind: []const u8) ast.Node {
         if (has_payload) return ctorNode(alloc, name, fail_bind);
-        return argsProduceNode(alloc, name, inputs, augmented);
+        return ctorBareNode(alloc, name);
     }
-    /// Map an `| exhausted => X […]` ctor onto the step's vocabulary: the
-    /// target is a STEP branch now, so a bare `=> X` on an augmented void
-    /// gains the args record; payloads and field ctors pass verbatim.
-    fn mappedCtorNode(alloc: std.mem.Allocator, ct: *const ast.BranchConstructor, child_branches: []const ast.Branch, child_inputs: []const ast.Field, augment: []const bool) ast.Node {
+    /// Map an `| exhausted => X […]` ctor onto the step's vocabulary — the
+    /// target is a STEP branch now, and the step's branches pass through
+    /// verbatim, so the produce is legal exactly when it would be on the
+    /// child itself.
+    fn mappedCtorNode(alloc: std.mem.Allocator, ct: *const ast.BranchConstructor) ast.Node {
         if (ct.plain_value != null) return ctorNode(alloc, ct.branch_name, ct.plain_value.?);
         if (ct.fields.len > 0) {
             const fs = alloc.alloc(ast.Field, ct.fields.len) catch unreachable;
             for (ct.fields, 0..) |f, i| fs[i] = H.cloneField(alloc, f);
             return ctorFieldsNode(alloc, ct.branch_name, fs);
-        }
-        for (child_branches, 0..) |b, i| {
-            if (std.mem.eql(u8, b.name, ct.branch_name)) {
-                return argsProduceNode(alloc, ct.branch_name, child_inputs, augment[i]);
-            }
         }
         return ctorBareNode(alloc, ct.branch_name);
     }
@@ -538,7 +520,6 @@ const F = struct {
     const label_name = std.fmt.allocPrint(allocator, "__sup_L{d}", .{line_no}) catch unreachable;
     const sup_br = supervised_branch.?;
     const sup_has_payload = H.hasPayload(sup_br);
-    const has_inputs = decl.input.fields.len > 0;
 
     // The counter is a step input named after the retry arm's own binding —
     // `| retry t when t < 5` makes `t` the field, so `when` conditions and
@@ -617,11 +598,13 @@ const F = struct {
     // outcome through verbatim.
     var home_branch: ?*const ast.Branch = null;
     var home_has_decl = false;
+    var home_name: []const u8 = child_name;
     home: for (program.items) |*pi| {
         switch (pi.*) {
             .flow => |*hf| {
                 if (!H.contContains(&hf.body, parent)) continue;
                 if (hf.impl_of) |io| {
+                    if (io.segments.len > 0) home_name = io.segments[io.segments.len - 1];
                     for (program.items) |*di| {
                         if (di.* != .event_decl) continue;
                         const ed = &di.event_decl;
@@ -638,6 +621,7 @@ const F = struct {
                 if (findHomeDecl(m.items, parent, site.branch)) |hb| {
                     home_branch = hb.branch;
                     home_has_decl = hb.found_decl;
+                    if (hb.name) |n| home_name = n;
                     break :home;
                 }
             },
@@ -645,44 +629,11 @@ const F = struct {
         }
     }
 
-    // Which void child branches carry the attempt's call-args record: the
-    // supervised branch always can (the forward may owe the enclosing tor a
-    // payload); any other branch only where a sibling arm binds it —
-    // `| ok p` asks for the winning attempt's args, and the record is how
-    // the loop answers. Zero-input children report nothing — void stays void.
-    const augment = allocator.alloc(bool, decl.branches.len) catch unreachable;
-    for (decl.branches, 0..) |*b, i| {
-        var want = false;
-        if (!H.hasPayload(b) and has_inputs) {
-            if (std.mem.eql(u8, b.name, site.branch)) {
-                // The supervised branch reports the args record whenever the
-                // child takes inputs — the forward discards it when the
-                // enclosing tor declares void.
-                want = true;
-            } else {
-                for (parent.continuations) |*sib| {
-                    if (sib == site) continue;
-                    if (!std.mem.eql(u8, sib.branch, b.name)) continue;
-                    if (sib.destructure.len > 0) want = true;
-                    if (sib.binding) |bn| {
-                        if (!std.mem.eql(u8, bn, "_")) want = true;
-                    }
-                }
-            }
-        }
-        augment[i] = want;
-    }
-    // The home branch owes a payload the step cannot produce: child void
-    // with no inputs leaves nothing to forward.
+    // The home branch owes a payload the child cannot produce: the child
+    // declares '| <site.branch>' void, so nothing exists to forward.
     if (home_branch) |hb| {
         if (H.hasPayload(hb) and !sup_has_payload) {
-            var sup_augmented = false;
-            for (decl.branches, 0..) |*b, i| {
-                if (std.mem.eql(u8, b.name, site.branch) and augment[i]) sup_augmented = true;
-            }
-            if (!sup_augmented) {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: '{s}' declares '| {s}' with a payload — '{s}'s carries nothing to forward (a void branch reports args only when the child takes inputs)", .{ child_name, site.branch, site.branch }) } };
-            }
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: '{s}' declares '| {s}' with a payload — '{s}'s '| {s}' is void and carries nothing to forward", .{ home_name, site.branch, child_name, site.branch }) } };
         }
     }
 
@@ -704,20 +655,16 @@ const F = struct {
     const step_inputs = step_input_list.toOwnedSlice(allocator) catch unreachable;
     const more_positional = step_inputs.len == 1;
 
-    // Step branches: the child's vocabulary, with `augment`ed void branches
-    // carrying the args record — plus `__more` carrying the step inputs.
+    // Step branches: the child's vocabulary verbatim — a void branch stays
+    // void — plus `__more` carrying the step inputs.
     const step_branches = allocator.alloc(ast.Branch, decl.branches.len + 1) catch unreachable;
     for (decl.branches, 0..) |*b, i| {
-        var payload = ast.Shape{
-            .fields = H.cloneFields(allocator, b.payload.fields),
-            .is_wildcard = b.payload.is_wildcard,
-        };
-        if (augment[i]) {
-            payload = ast.Shape{ .fields = F.argsRecordFields(allocator, decl.input.fields) };
-        }
         step_branches[i] = ast.Branch{
             .name = allocator.dupe(u8, b.name) catch unreachable,
-            .payload = payload,
+            .payload = ast.Shape{
+                .fields = H.cloneFields(allocator, b.payload.fields),
+                .is_wildcard = b.payload.is_wildcard,
+            },
             .is_optional = b.is_optional,
             .is_panic = b.is_panic,
             .kind = b.kind,
@@ -746,14 +693,14 @@ const F = struct {
     var step_arms = std.ArrayList(ast.Continuation).initCapacity(allocator, decl.branches.len + rules.items.len + 3) catch unreachable;
     const step_bind: ?[]const u8 = if (sup_has_payload) fail_bind else null;
 
-    for (decl.branches, 0..) |*b, i| {
+    for (decl.branches) |*b| {
         if (std.mem.eql(u8, b.name, site.branch)) continue;
         if (H.hasPayload(b)) {
             // `| b __v => b __v` — payload forwards verbatim.
             step_arms.append(allocator, F.produceCont(allocator, b.name, "__v", null, F.ctorNode(allocator, b.name, "__v"), flow.location)) catch unreachable;
         } else {
-            // `| b => b <args-record>` (augmented) or `=> b` (still void).
-            step_arms.append(allocator, F.produceCont(allocator, b.name, null, null, F.argsProduceNode(allocator, b.name, decl.input.fields, augment[i]), flow.location)) catch unreachable;
+            // `| b => b` — void forwards bare.
+            step_arms.append(allocator, F.produceCont(allocator, b.name, null, null, F.ctorBareNode(allocator, b.name), flow.location)) catch unreachable;
         }
     }
 
@@ -802,7 +749,7 @@ const F = struct {
                 .branch = allocator.dupe(u8, "retry") catch unreachable,
                 .binding = if (H.hasPayload(policy_info.retry)) allocator.dupe(u8, "a") catch unreachable else null,
                 .condition = null,
-                .node = F.lastOutcomeNode(allocator, site.branch, sup_has_payload, fail_bind, decl.input.fields, augmentOf(augment, decl.branches, site.branch)),
+                .node = F.lastOutcomeNode(allocator, site.branch, sup_has_payload, fail_bind),
                 .continuations = &[_]ast.Continuation{},
                 .is_transformed_subtree = true,
                 .location = site.location,
@@ -818,7 +765,7 @@ const F = struct {
                 .node = if (eb_payload)
                     F.ctorNode(allocator, site.branch, "e")
                 else
-                    F.lastOutcomeNode(allocator, site.branch, sup_has_payload, fail_bind, decl.input.fields, augmentOf(augment, decl.branches, site.branch)),
+                    F.lastOutcomeNode(allocator, site.branch, sup_has_payload, fail_bind),
                 .continuations = &[_]ast.Continuation{},
                 .is_transformed_subtree = true,
                 .location = site.location,
@@ -867,7 +814,7 @@ const F = struct {
                         .branch = allocator.dupe(u8, site.branch) catch unreachable,
                         .binding = step_bind,
                         .condition = if (r.cond) |cd| allocator.dupe(u8, cd) catch unreachable else null,
-                        .node = F.mappedCtorNode(allocator, ct, decl.branches, decl.input.fields, augment),
+                        .node = F.mappedCtorNode(allocator, ct),
                         .continuations = &[_]ast.Continuation{},
                         .is_transformed_subtree = true,
                         .location = site.location,
@@ -882,7 +829,7 @@ const F = struct {
                 .branch = allocator.dupe(u8, site.branch) catch unreachable,
                 .binding = step_bind,
                 .condition = null,
-                .node = F.lastOutcomeNode(allocator, site.branch, sup_has_payload, fail_bind, decl.input.fields, augmentOf(augment, decl.branches, site.branch)),
+                .node = F.lastOutcomeNode(allocator, site.branch, sup_has_payload, fail_bind),
                 .continuations = &[_]ast.Continuation{},
                 .is_transformed_subtree = true,
                 .location = site.location,
@@ -909,7 +856,7 @@ const F = struct {
             .branch = allocator.dupe(u8, site.branch) catch unreachable,
             .binding = step_bind,
             .condition = null,
-            .node = F.lastOutcomeNode(allocator, site.branch, sup_has_payload, fail_bind, decl.input.fields, augmentOf(augment, decl.branches, site.branch)),
+            .node = F.lastOutcomeNode(allocator, site.branch, sup_has_payload, fail_bind),
             .continuations = &[_]ast.Continuation{},
             .is_transformed_subtree = true,
             .location = site.location,
@@ -1043,7 +990,7 @@ const F = struct {
         .indent = 0,
     }) catch unreachable;
 
-    const step_sup_payload = augmentOf(augment, decl.branches, site.branch) or sup_has_payload;
+    const step_sup_payload = sup_has_payload;
     for (parent.continuations) |*sib| {
         if (sib == site) {
             // The forward arm where the supervised arm stood: produce the
@@ -1130,33 +1077,26 @@ const F = struct {
     } };
 }
 
-/// Whether `b` is an augmented void branch — i.e. the args record rides it.
-fn augmentOf(augment: []const bool, branches: []const ast.Branch, name: []const u8) bool {
-    for (branches, 0..) |b, i| {
-        if (std.mem.eql(u8, b.name, name)) return augment[i];
-    }
-    return false;
-}
-
 /// The enclosing tor's declared `| <site.branch>` for a site inside a
 /// module_decl — the same lookup the main body runs at program top level.
-const HomeBranch = struct { branch: ?*const ast.Branch, found_decl: bool };
+const HomeBranch = struct { branch: ?*const ast.Branch, found_decl: bool, name: ?[]const u8 = null };
 fn findHomeDecl(items: []const ast.Item, parent: *const ast.Continuation, branch_name: []const u8) ?HomeBranch {
     for (items) |*pi| {
         switch (pi.*) {
             .flow => |*hf| {
                 if (!H.contContains(&hf.body, parent)) continue;
                 if (hf.impl_of) |io| {
+                    const nm: ?[]const u8 = if (io.segments.len > 0) io.segments[io.segments.len - 1] else null;
                     for (items) |*di| {
                         if (di.* != .event_decl) continue;
                         const ed = &di.event_decl;
                         if (!H.pathEq(io, ed.path)) continue;
                         for (ed.branches) |*b| {
                             if (std.mem.eql(u8, b.name, branch_name)) {
-                                return .{ .branch = b, .found_decl = true };
+                                return .{ .branch = b, .found_decl = true, .name = nm };
                             }
                         }
-                        return .{ .branch = null, .found_decl = true };
+                        return .{ .branch = null, .found_decl = true, .name = nm };
                     }
                 }
                 return .{ .branch = null, .found_decl = false };

@@ -4,9 +4,10 @@
 // Failure-handling as a compile-time fact, in the `stored`/`captured`
 // family: the arm declares that its producing call is supervised, the
 // transform elaborates the declaration into an ordinary bounded retry
-// loop. There is no supervisor object, no registry, no runtime service —
-// the policy is a datablock read at compile time and the mechanism is a
-// generated proc containing a `while (true)`.
+// loop — the language's own `#`/`@` fold. There is no supervisor object,
+// no registry, no runtime service: the policy is a datablock read at
+// compile time and the mechanism is a generated step tor plus a labeled
+// fold loop.
 //
 //   worker(n)
 //   | ok v |> …
@@ -43,27 +44,25 @@
 // ELABORATION — the language's own `#`/`@` fold, no generated proc:
 //
 //   connect = dial(port)                     tor __sup_step_L<n> { port, t }
-//   | ok p => ok p                           | ok i64 | refused i64
+//   | ok => ok                               | ok | refused
 //   | refused |> supervised                  | __more { port, t }
 //       | retry t when t < 5
-//         |> dial(port: port + 1 + t)   ==>  __sup_step_L<n> = dial(port)
-//       | exhausted => refused               | ok => ok port
+//         |> dial(port: port + 1)       ==>  __sup_step_L<n> = dial(port)
+//       | exhausted => refused               | ok => ok
 //                                            | refused when t < 5
-//                                              => __more { port: port+1+t, t: t+1 }
-//                                            | refused => refused port
+//                                              => __more { port: port+1, t: t+1 }
+//                                            | refused => refused
 //
 //                                            connect = #__sup_L<n> __sup_step_L<n>(port, t: 0)
 //                                            | __more s |> @__sup_L<n>(s.port, s.t)
-//                                            | ok p => ok p
+//                                            | ok => ok
 //                                            | refused => refused
 //
 // The step's `port` IS the failing attempt's argument — ambient reader
-// semantics, not threading — so `port + 1 + t` reads the failed port. A
-// VOID child branch that the site binds (or that must produce a payload
-// upward) carries the attempt's call-args record: `{ port }` collapses to
-// positional `i64`, so `| ok p` reports WHICH port won — information the
-// loop produced, not an echo of the caller's input. `dial` stays `| ok |
-// refused`, fully void.
+// semantics, not threading — so `port + 1` reads the failed port. Branch
+// shapes pass through verbatim: a void branch stays void inside the fold,
+// so `| ok p` on a `| ok` declaration refuses at the site exactly as it
+// would without `supervised`.
 
 const std = @import("std");
 
