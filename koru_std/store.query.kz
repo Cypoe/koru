@@ -451,8 +451,8 @@
         captures.append(allocator, b) catch unreachable;
     }
 
-    // `[ordinal]` when asked plus the dense twin, unconditionally.
-    SCursor.threadCursorCaptures(allocator, &captures, srow_name, req_ordinal);
+    // `[ordinal]` when asked; the cursor itself is usize now.
+    SCursor.threadCursorCaptures(allocator, &captures, req_ordinal);
 
     // `[id]h` is `[ordinal]`'s twin and its opposite. The ordinal is WHERE the
     // visit is; the id is WHICH ROW it is standing on — the handle, branded and
@@ -545,7 +545,7 @@
     }
     sbody_in[proj_names.len + captures.items.len] = ast.Field{
         .name = allocator.dupe(u8, srow_name) catch unreachable,
-        .type = allocator.dupe(u8, "i64") catch unreachable,
+        .type = allocator.dupe(u8, "usize") catch unreachable,
     };
     const retain_ann = blk: {
         const anns = allocator.alloc([]const u8, 1) catch unreachable;
@@ -604,7 +604,7 @@
         argb.appendSlice(allocator, HS.recField(allocator, host_target, c.name, cv)) catch unreachable;
     }
     if (argb.items.len > 0) argb.appendSlice(allocator, ", ") catch unreachable;
-    argb.appendSlice(allocator, HS.recField(allocator, host_target, srow_name, HS.asI64(allocator, host_target, "__koru_si"))) catch unreachable;
+    argb.appendSlice(allocator, HS.recField(allocator, host_target, srow_name, "__koru_si")) catch unreachable;
 
     // --- the inline sweep loop, emitted SITE-LOCAL (never a coordinator unit).
     //     Reads the SoA cell (__koru_store_<s>.len + column arrays), binds the

@@ -946,13 +946,10 @@ pub const HostShape = struct {
             "    else => unreachable,\n};";
     }
 
-    /// `row` arrives DENSE, so Zig only needs the index cast; JS has no such
-    /// distinction and binds it straight through, keeping one name for the
-    /// statements above to share. The cast goes through `__koru_intcast`
-    /// rather than `@intCast` — the same-width sign flip bitcasts in release,
-    /// skipping the in-loop `llvm.assume` @intCast emits.
+    /// `row` arrives DENSE and is `usize` already — both targets bind it
+    /// straight through, keeping one name for the statements above to share.
     pub fn rowHead(t: HostTarget) []const u8 {
-        return if (t == .js) "const __koru_r = row;\n" else "const __koru_r = __koru_intcast(usize, row);\n";
+        return if (t == .js) "const __koru_r = row;\n" else "const __koru_r: usize = row;\n";
     }
 
     /// A COUNTED LOOP over `0..limit`, binding `cursor`. Zig's range-`for` and

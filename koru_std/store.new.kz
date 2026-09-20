@@ -2978,7 +2978,7 @@
                 if (qs.is_preorder) continue;
                 const call = std.fmt.allocPrint(allocator,
                     \\if (__site_line > {d}) {{
-                    \\    {s}__store_qrow_{s}_L{d}_{s}_event.handler(.{{ .row = @as(i64, @intCast(__koru_new_row)) }});
+                    \\    {s}__store_qrow_{s}_L{d}_{s}_event.handler(.{{ .row = __koru_new_row }});
                     \\}}
                     \\
                 , .{ qs.line, emit_ns, store_name, qs.line, storeSiteTag(allocator, qs.file) }) catch unreachable;
@@ -3226,7 +3226,7 @@
             const mkWriteInput = struct {
                 fn call(alloc: std.mem.Allocator, ftypes: []const []const u8, foinfo: []const ?OwnedCol, with_consume: bool) []ast.Field {
                     const fields = alloc.alloc(ast.Field, ftypes.len + 2) catch unreachable;
-                    fields[0] = ast.Field{ .name = alloc.dupe(u8, "row") catch unreachable, .type = alloc.dupe(u8, "i64") catch unreachable };
+                    fields[0] = ast.Field{ .name = alloc.dupe(u8, "row") catch unreachable, .type = alloc.dupe(u8, "usize") catch unreachable };
                     fields[1] = ast.Field{ .name = alloc.dupe(u8, "field") catch unreachable, .type = alloc.dupe(u8, "i64") catch unreachable };
                     for (ftypes, foinfo, 0..) |ft, foi, i| {
                         fields[2 + i] = ast.Field{
@@ -3488,7 +3488,7 @@
                     // host cell type; no phantom), mirroring the bundled
                     // in_fields (with_consume=false).
                     const fa_in = allocator.alloc(ast.Field, 2) catch unreachable;
-                    fa_in[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
+                    fa_in[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "usize") catch unreachable };
                     fa_in[1] = ast.Field{
                         .name = allocator.dupe(u8, "value") catch unreachable,
                         .type = allocator.dupe(u8, field_types[i]) catch unreachable,
@@ -3580,7 +3580,7 @@
                     // fwrite: the user-facing event — the consume phantom
                     // (`<mod:!state>`) rides ONLY an owned field's own value.
                     const fw_in = allocator.alloc(ast.Field, 2) catch unreachable;
-                    fw_in[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
+                    fw_in[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "usize") catch unreachable };
                     fw_in[1] = ast.Field{
                         .name = allocator.dupe(u8, "value") catch unreachable,
                         .type = allocator.dupe(u8, field_types[i]) catch unreachable,
@@ -3694,7 +3694,7 @@
                 const ew_head = if (host_is_js)
                     allocator.dupe(u8, "const __koru_r = row;\nconst __koru_mask = field;\n") catch unreachable
                 else
-                    allocator.dupe(u8, "const __koru_r = @as(usize, @intCast(row));\nconst __koru_mask = @as(u64, @bitCast(field));\n") catch unreachable;
+                    allocator.dupe(u8, "const __koru_r = row;\nconst __koru_mask = @as(u64, @bitCast(field));\n") catch unreachable;
                 ewb.appendSlice(allocator, ew_head) catch unreachable;
                 // ONE COLUMN'S WRITE, built once and composed twice: guarded by
                 // a mask bit in the general unit below, and unconditionally in
@@ -3772,11 +3772,11 @@
                 const spec_head = if (host_is_js)
                     "const __koru_r = row;\n"
                 else
-                    "const __koru_r = @as(usize, @intCast(row));\n";
+                    "const __koru_r = row;\n";
                 for (storeWriteColumnSets(allocator, program, store_name, field_names)) |set| {
                     const spec_name = storeEnvwriteSpecName(allocator, store_name, set);
                     const sp_in = allocator.alloc(ast.Field, set.len + 1) catch unreachable;
-                    sp_in[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
+                    sp_in[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "usize") catch unreachable };
                     for (set, 0..) |ci, k| {
                         // Named by COLUMN INDEX, not by position, so `col_arm`'s
                         // `value_<i>` references land unchanged.
@@ -3813,7 +3813,7 @@
                 // peek: read the CURRENT value at the row, answer the field
                 // branch — announce's read half (the singleton peek, rowed).
                 const ppk_in = allocator.alloc(ast.Field, 2) catch unreachable;
-                ppk_in[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
+                ppk_in[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "usize") catch unreachable };
                 ppk_in[1] = ast.Field{ .name = allocator.dupe(u8, "field") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
                 const ppk_branches = allocator.alloc(ast.Branch, field_names.len) catch unreachable;
                 for (field_names, 0..) |fname, i| {
@@ -3868,7 +3868,7 @@
                 // (fresh clones — the shared-pointer footgun is real), off the
                 // peek read. Mirrors the bundled write's warms loop.
                 const pann_in = allocator.alloc(ast.Field, 2) catch unreachable;
-                pann_in[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
+                pann_in[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "usize") catch unreachable };
                 pann_in[1] = ast.Field{ .name = allocator.dupe(u8, "field") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
                 appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
                     .path = H.mkPathH(allocator, home_ns, pann_name),
@@ -3977,7 +3977,7 @@
         if (is_tree) {
             const pwritec_name = std.fmt.allocPrint(allocator, "__store_writec_{s}", .{store_name}) catch unreachable;
             const cin_fields = allocator.alloc(ast.Field, 3) catch unreachable;
-            cin_fields[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
+            cin_fields[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "usize") catch unreachable };
             cin_fields[1] = ast.Field{ .name = allocator.dupe(u8, "field") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
             cin_fields[2] = ast.Field{ .name = allocator.dupe(u8, "value") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
             const c_branches = allocator.alloc(ast.Branch, 2) catch unreachable;
@@ -4034,7 +4034,7 @@
                 \\return {s};
             , .{
                 store_name,
-                HS.asIndex(allocator, host_target, "row"),
+                "row",
                 HS.branchEmpty(allocator, host_target, "cycle"),
                 store_name,
                 store_name,
@@ -4065,7 +4065,7 @@
 
             // qrow: guard + projection over one row; fires the body event.
             const qrow_in = allocator.alloc(ast.Field, 1) catch unreachable;
-            qrow_in[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
+            qrow_in[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "usize") catch unreachable };
             const retain_ann = blk: {
                 const anns = allocator.alloc([]const u8, 1) catch unreachable;
                 anns[0] = allocator.dupe(u8, "retain") catch unreachable;
@@ -4160,7 +4160,7 @@
             // `handle_of` on the way in and no `__koru_resolve` on the way out,
             // which is the whole four-deep dependent-load chain gone.
             const qrow_cursor = if (qs.cursor_dense)
-                std.fmt.allocPrint(allocator, "{s} ", .{HS.recField(allocator, host_target, qs.cursor, HS.asI64(allocator, host_target, "__koru_r"))}) catch unreachable
+                std.fmt.allocPrint(allocator, "{s} ", .{HS.recField(allocator, host_target, qs.cursor, "__koru_r")}) catch unreachable
             else
                 std.fmt.allocPrint(allocator, "{s} ", .{HS.recField(allocator, host_target, qs.cursor, std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_handle_of(__koru_r)", .{store_name}) catch unreachable)}) catch unreachable;
             qr.appendSlice(allocator, qrow_cursor) catch unreachable;
@@ -4198,7 +4198,7 @@
                     .phantom = std.fmt.allocPrint(allocator, "{s}:{s}", .{ oi.module_dot, oi.state }) catch unreachable,
                 } else ast.Field{ .name = allocator.dupe(u8, pname) catch unreachable, .type = allocator.dupe(u8, field_types[pfidx]) catch unreachable };
             }
-            qbody_in[qs.proj_names.len] = ast.Field{ .name = allocator.dupe(u8, qs.cursor) catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
+            qbody_in[qs.proj_names.len] = ast.Field{ .name = allocator.dupe(u8, qs.cursor) catch unreachable, .type = allocator.dupe(u8, if (qs.cursor_dense) "usize" else "i64") catch unreachable };
             if (qs.req_id) |idn| {
                 qbody_in[qs.proj_names.len + 1] = ast.Field{ .name = allocator.dupe(u8, idn) catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
             }
@@ -4319,7 +4319,7 @@
                 \\while (__koru_sp > 0) {{
                 \\    __koru_sp -= 1;
                 \\    const __koru_cur = __koru_stack[__koru_sp];
-                \\    {s}{s}_event.handler(.{{ .row = @as(i64, @intCast(__koru_cur)) }});
+                \\    {s}{s}_event.handler(.{{ .row = __koru_cur }});
                 \\    for (0..__koru_store_{s}.len) |__koru_rj| {{
                 \\        const __koru_j = __koru_store_{s}.len - 1 - __koru_rj;
                 \\        if (__koru_store_{s}.parent[__koru_j] == __koru_store_{s}.__koru_handle_of(__koru_cur)) {{
@@ -4333,7 +4333,7 @@
                 \\var __koru_i: usize = 0;
                 \\while (__koru_i < __koru_store_{s}.len) {{
                 \\    const __koru_len_before = __koru_store_{s}.len;
-                \\    {s}{s}_event.handler(.{{ .row = @as(i64, @intCast(__koru_i)) }});
+                \\    {s}{s}_event.handler(.{{ .row = __koru_i }});
                 \\    if (__koru_store_{s}.len >= __koru_len_before) __koru_i += 1;
                 \\}}
                 \\return;
@@ -4343,7 +4343,7 @@
                 // once and the induction variable carries no dependency on a
                 // load, which is what lets the pass vectorise at all.
                 \\for (0..__koru_store_{s}.len) |__koru_i| {{
-                \\    {s}{s}_event.handler(.{{ .row = @as(i64, @intCast(__koru_i)) }});
+                \\    {s}{s}_event.handler(.{{ .row = __koru_i }});
                 \\}}
                 \\return;
             , .{ store_name, emit_ns, qrow_name }) catch unreachable;

@@ -757,10 +757,6 @@ columns): the O10.iv dense cursor reached the sweep body as `i64` — the
 write family's row convention — and every `.live` column read cast it
 back to `usize` at the operand: 1504 casts on one emitted line, one per
 column mention. Zig's comptime quota was the instrument that noticed, not
-a profiler. The cursor is now two inputs to the body event, `__koru_sdix_*`
-(i64, what the write units take) and `__koru_sdux_*` (usize, `__koru_si`
-threaded as-is), and a read indexes with the twin. The rule: a value the
-loop already holds in the right type is threaded, not re-derived at each
-use — a cast per read is the emitter narrating a type mismatch it created.
-The i64 row convention itself is the remaining tax: one cast per write,
-at `rowHead`, until the write family takes `usize`.
+a profiler. The dense row is now `usize` end to end — sweep cursor, rule cursor,
+every write-family `row` input — and the only casts left are at the
+handle boundary (`__koru_resolve`, `__koru_handle_of`, `[ordinal]`).

@@ -1,28 +1,22 @@
 // Koru Standard Library: the `cursor` part of store.kz.
 // Joined via `~part cursor` in store.kz; merged into the module at load.
 
-// The sweep cursor's spellings — lifted out of store.qrewrite.kz so both
-// parts stay under their line baselines. Self-contained: every dependency
-// arrives as a parameter or a module-scope name.
+// The sweep cursor's spellings and cursor-derived captures — lifted out of
+// store.qrewrite.kz so both parts stay under their line baselines.
+// Self-contained: every dependency arrives as a parameter or a module-scope
+// name. A dense cursor is `usize` end to end, so a column read indexes with
+// it directly.
 const SCursor = struct {
-    /// The usize twin of a dense sweep cursor: the `sdix` spelling is the i64
-    /// the write family keys on, `sdux` is the same row as an index.
-    fn denseTwin(alloc: std.mem.Allocator, cursor: []const u8) []const u8 {
-        if (std.mem.startsWith(u8, cursor, "__koru_sdix_"))
-            return std.fmt.allocPrint(alloc, "__koru_sdux_{s}", .{cursor["__koru_sdix_".len..]}) catch unreachable;
-        return alloc.dupe(u8, cursor) catch unreachable;
-    }
-    /// A dense cursor used as a column-read index. A sweep cursor's usize twin
-    /// is already threaded into the body, so a `.live` read indexes with it
-    /// directly; any other spelling keeps the per-use cast.
+    /// A dense cursor used as a column-read index. A sweep cursor is `usize`
+    /// already, so a `.live` read indexes with it directly; any other
+    /// spelling keeps the per-use cast.
     fn liveIndex(alloc: std.mem.Allocator, cursor: []const u8) []const u8 {
         if (std.mem.startsWith(u8, cursor, "__koru_sdix_"))
-            return denseTwin(alloc, cursor);
+            return alloc.dupe(u8, cursor) catch unreachable;
         return codegen_utils_store.HostShape.asIndex(alloc, storeHostTarget(), cursor);
     }
-    /// The sweep's cursor-derived captures: `[ordinal]` when asked for, and
-    /// the dense twin unconditionally.
-    fn threadCursorCaptures(allocator: std.mem.Allocator, captures: *std.ArrayList(Cap.Bind), srow_name: []const u8, req_ordinal: ?[]const u8) void {
+    /// The sweep's cursor-derived captures: `[ordinal]` when asked for.
+    fn threadCursorCaptures(allocator: std.mem.Allocator, captures: *std.ArrayList(Cap.Bind), req_ordinal: ?[]const u8) void {
         // `[ordinal]n` rides the capture threading. The cursor is already computed
         // by the loop and already handed to the body as `srow_name`; asking for it
         // by an author's name needs no new channel, only one more threaded value —
@@ -30,7 +24,8 @@ const SCursor = struct {
         //
         // Synthesized ONLY when asked for: an arm that never writes `[ordinal]`
         // adds no field and threads nothing, the same demand-driven rule an unread
-        // aggregate materializes no column under.
+        // aggregate materializes no column under. `[ordinal]` is author-facing
+        // `i64`, so it keeps its cast even though the cursor itself is `usize`.
         if (req_ordinal) |on| {
             captures.append(allocator, .{
                 .name = allocator.dupe(u8, on) catch unreachable,
@@ -39,17 +34,5 @@ const SCursor = struct {
                 .lexical = false,
             }) catch unreachable;
         }
-
-        // The dense twin rides unconditionally. The body's cursor input is `i64`
-        // — the write family's row convention — but a column READ indexes with
-        // `usize`, and the loop's `__koru_si` already is one, so it threads in as
-        // a second input and every `.live` read indexes with it directly: one
-        // cast per row at the write site, none per read.
-        captures.append(allocator, .{
-            .name = denseTwin(allocator, srow_name),
-            .type = allocator.dupe(u8, "usize") catch unreachable,
-            .value = allocator.dupe(u8, "__koru_si") catch unreachable,
-            .lexical = false,
-        }) catch unreachable;
     }
 };

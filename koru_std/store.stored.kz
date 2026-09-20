@@ -399,7 +399,7 @@
             const env_row_arg = if (std.mem.startsWith(u8, re, "__koru_sdix_"))
                 re
             else
-                std.fmt.allocPrint(allocator, "@as(i64, @intCast(__koru_store_{s}.__koru_resolve({s})))", .{ env_store, re }) catch unreachable;
+                std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_resolve({s})", .{ env_store, re }) catch unreachable;
             // THE SPECIALISED UNIT IF `new` EMITTED ONE, else the general
             // masked one. Both sides derive the name from the same ascending
             // column list, so agreement is by construction; the existence check
@@ -648,7 +648,7 @@
         (if (std.mem.startsWith(u8, re, "__koru_sdix_"))
             re
         else
-            std.fmt.allocPrint(allocator, "@as(i64, @intCast(__koru_store_{s}.__koru_resolve({s})))", .{ target_store, re }) catch unreachable)
+            std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_resolve({s})", .{ target_store, re }) catch unreachable)
     else
         null;
 
