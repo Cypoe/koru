@@ -1466,10 +1466,11 @@ test "tagged-dfa: ambiguous (groups over star) is rejected as not-one-pass" {
 // refinement; this table form is correct and fast and unblocks the e2e + the
 // benchmark.) This is the function the `match` transform emits per `…`-branch.
 
-/// Compile a regex pattern straight to emitted Zig matcher source. Convenience
-/// for the `match` transform: pattern bytes in, `fn <name>(input: []const u8) bool`
-/// source out. Uses an arena internally; the returned source is owned by `out`.
-pub fn compileToZig(out: std.mem.Allocator, pattern: []const u8, name: []const u8) ![]const u8 {
+/// Shared body of the `compile*To*` family: pattern bytes in, self-contained
+/// matcher source out — parse → NFA → DFA, then `emit` writes the matcher in
+/// the target language (emitMatcher, emitSearchMatcherJs, …). Uses an arena
+/// internally; the returned source is owned by `out`.
+fn compileWithEmitter(out: std.mem.Allocator, pattern: []const u8, name: []const u8, emit: anytype) ![]const u8 {
     var arena = std.heap.ArenaAllocator.init(out);
     defer arena.deinit();
     const a = arena.allocator();
@@ -1478,8 +1479,15 @@ pub fn compileToZig(out: std.mem.Allocator, pattern: []const u8, name: []const u
     var nfa = try buildNfa(a, ast);
     var dfa = try buildDfa(a, &nfa);
     var buf = std.ArrayList(u8){};
-    try emitMatcher(buf.writer(out), &dfa, name);
+    try emit(buf.writer(out), &dfa, name);
     return buf.toOwnedSlice(out);
+}
+
+/// Compile a regex pattern straight to emitted Zig matcher source. Convenience
+/// for the `match` transform: pattern bytes in, `fn <name>(input: []const u8) bool`
+/// source out. Uses an arena internally; the returned source is owned by `out`.
+pub fn compileToZig(out: std.mem.Allocator, pattern: []const u8, name: []const u8) ![]const u8 {
+    return compileWithEmitter(out, pattern, name, emitMatcher);
 }
 
 /// Emit `fn <name>(input: []const u8) bool { … }` for the given DFA.
@@ -1542,16 +1550,7 @@ pub fn emitSearchMatcher(w: anytype, dfa: *const Dfa, name: []const u8) !void {
 /// span-finder `scan` loops over). Captures, if any, are extracted per span by
 /// the matcher from `compileCapturesToZig` — this only locates the spans.
 pub fn compileSearchToZig(out: std.mem.Allocator, pattern: []const u8, name: []const u8) ![]const u8 {
-    var arena = std.heap.ArenaAllocator.init(out);
-    defer arena.deinit();
-    const a = arena.allocator();
-    var p = Parser.init(a, pattern);
-    const ast = try p.parse();
-    var nfa = try buildNfa(a, ast);
-    var dfa = try buildDfa(a, &nfa);
-    var buf = std.ArrayList(u8){};
-    try emitSearchMatcher(buf.writer(out), &dfa, name);
-    return buf.toOwnedSlice(out);
+    return compileWithEmitter(out, pattern, name, emitSearchMatcher);
 }
 
 /// Emit `fn <name>(input: []const u8, from: usize) ?usize { … }` — the ANCHORED
@@ -1651,16 +1650,7 @@ pub fn emitPrefixMatcher(w: anytype, dfa: *const Dfa, name: []const u8) !void {
 /// if any, are extracted from the matched span by the matcher from
 /// `compileCapturesToZig` — exactly the search/captures split `scan` uses.
 pub fn compilePrefixToZig(out: std.mem.Allocator, pattern: []const u8, name: []const u8) ![]const u8 {
-    var arena = std.heap.ArenaAllocator.init(out);
-    defer arena.deinit();
-    const a = arena.allocator();
-    var p = Parser.init(a, pattern);
-    const ast = try p.parse();
-    var nfa = try buildNfa(a, ast);
-    var dfa = try buildDfa(a, &nfa);
-    var buf = std.ArrayList(u8){};
-    try emitPrefixMatcher(buf.writer(out), &dfa, name);
-    return buf.toOwnedSlice(out);
+    return compileWithEmitter(out, pattern, name, emitPrefixMatcher);
 }
 
 /// C sibling of `emitPrefixMatcher`. Same DFA, C vocabulary: a slice is a
@@ -1749,16 +1739,7 @@ pub fn emitPrefixMatcherC(w: anytype, dfa: *const Dfa, name: []const u8) !void {
 /// C sibling of `compilePrefixToZig` — compile a pattern to a self-contained
 /// anchored longest-prefix-at-offset C function.
 pub fn compilePrefixToC(out: std.mem.Allocator, pattern: []const u8, name: []const u8) ![]const u8 {
-    var arena = std.heap.ArenaAllocator.init(out);
-    defer arena.deinit();
-    const a = arena.allocator();
-    var p = Parser.init(a, pattern);
-    const ast = try p.parse();
-    var nfa = try buildNfa(a, ast);
-    var dfa = try buildDfa(a, &nfa);
-    var buf = std.ArrayList(u8){};
-    try emitPrefixMatcherC(buf.writer(out), &dfa, name);
-    return buf.toOwnedSlice(out);
+    return compileWithEmitter(out, pattern, name, emitPrefixMatcherC);
 }
 
 /// JS sibling of `emitPrefixMatcherC`. Same DFA, JS vocabulary: a slice is a
@@ -1835,16 +1816,7 @@ pub fn emitPrefixMatcherJs(w: anytype, dfa: *const Dfa, name: []const u8) !void 
 
 /// JS sibling of `compilePrefixToC`.
 pub fn compilePrefixToJs(out: std.mem.Allocator, pattern: []const u8, name: []const u8) ![]const u8 {
-    var arena = std.heap.ArenaAllocator.init(out);
-    defer arena.deinit();
-    const a = arena.allocator();
-    var p = Parser.init(a, pattern);
-    const ast = try p.parse();
-    var nfa = try buildNfa(a, ast);
-    var dfa = try buildDfa(a, &nfa);
-    var buf = std.ArrayList(u8){};
-    try emitPrefixMatcherJs(buf.writer(out), &dfa, name);
-    return buf.toOwnedSlice(out);
+    return compileWithEmitter(out, pattern, name, emitPrefixMatcherJs);
 }
 
 /// JS sibling of `emitMatcher` — `function <name>(input) { … } → bool`, the
@@ -1878,16 +1850,7 @@ pub fn emitMatcherJs(w: anytype, dfa: *const Dfa, name: []const u8) !void {
 
 /// JS sibling of `compileToZig`.
 pub fn compileToJs(out: std.mem.Allocator, pattern: []const u8, name: []const u8) ![]const u8 {
-    var arena = std.heap.ArenaAllocator.init(out);
-    defer arena.deinit();
-    const a = arena.allocator();
-    var p = Parser.init(a, pattern);
-    const ast = try p.parse();
-    var nfa = try buildNfa(a, ast);
-    var dfa = try buildDfa(a, &nfa);
-    var buf = std.ArrayList(u8){};
-    try emitMatcherJs(buf.writer(out), &dfa, name);
-    return buf.toOwnedSlice(out);
+    return compileWithEmitter(out, pattern, name, emitMatcherJs);
 }
 
 /// JS sibling of `emitSearchMatcher` — `function <name>(input, from)` returning
@@ -1926,16 +1889,7 @@ pub fn emitSearchMatcherJs(w: anytype, dfa: *const Dfa, name: []const u8) !void 
 
 /// JS sibling of `compileSearchToZig`.
 pub fn compileSearchToJs(out: std.mem.Allocator, pattern: []const u8, name: []const u8) ![]const u8 {
-    var arena = std.heap.ArenaAllocator.init(out);
-    defer arena.deinit();
-    const a = arena.allocator();
-    var p = Parser.init(a, pattern);
-    const ast = try p.parse();
-    var nfa = try buildNfa(a, ast);
-    var dfa = try buildDfa(a, &nfa);
-    var buf = std.ArrayList(u8){};
-    try emitSearchMatcherJs(buf.writer(out), &dfa, name);
-    return buf.toOwnedSlice(out);
+    return compileWithEmitter(out, pattern, name, emitSearchMatcherJs);
 }
 
 /// The admissible FIRST-BYTE set of an anchored-prefix matcher: for each byte,
