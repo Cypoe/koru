@@ -9,6 +9,7 @@
 ~part flags
 ~part control
 ~part paths
+~part context
 // Compiler system dependencies
 ~std/deps:requires.system {
     "name": "zig",
@@ -27,59 +28,10 @@ const Item = ast.Item;
 const Source = ast.Source;
 const Allocator = std.mem.Allocator;
 
-// The diagnostic channel, re-exported under this module's name so a pass or a
-// `[comptime|transform]` event can spell it `std/compiler:ErrorReporter`.
-// `CompilerError` below is message-plus-location; this carries the code, the
-// hint and the source preview that make a koru diagnostic look like one.
-pub const ErrorReporter = @import("errors").ErrorReporter;
-
 // Compiler backend build requirements are defined below via requires
 
 // Simplified Koru Compiler Library
 // A working implementation that can actually be injected and used
-
-// ============================================================
-// COMPILER CONTEXT - Threading state for all passes
-// ============================================================
-
-pub const SourceLocation = struct {
-    file: []const u8,
-    line: u32,
-    column: u32,
-};
-
-pub const CompilerError = struct {
-    message: []const u8,
-    location: SourceLocation,
-};
-
-pub const CompilerWarning = struct {
-    message: []const u8,
-    location: SourceLocation,
-};
-
-pub const ErrorPolicy = enum {
-    abort_on_first,
-    collect_all,
-};
-
-pub const CompilerContext = struct {
-    ast: *const Program,
-    original_ast: *const Program,  // Unfiltered AST for metadata queries (TypeRegistry, etc.)
-    allocator: std.mem.Allocator,
-    errors: std.ArrayList(CompilerError),
-    warnings: std.ArrayList(CompilerWarning),
-    error_policy: ErrorPolicy,
-    current_pass: ?[]const u8,
-    passes_completed: u32,
-    tap_registry: ?*@import("tap_registry").TapRegistry,
-    /// The compilation's ONE diagnostic reporter, bound to the user's source
-    /// file at `context-create` and shared by every pass downstream. A pass
-    /// that wants a code, a hint or a source preview reaches for this rather
-    /// than appending to `errors` — same pipeline, one grade of diagnostic.
-    /// Null only on a context built outside the pipeline head.
-    reporter: ?*ErrorReporter,
-};
 
 // ============================================================
 // BUILD REQUIREMENTS - Self-documenting build dependencies
@@ -425,6 +377,15 @@ pub const CompilerContext = struct {
     site_hash_module.addImport("ast", ast_module);
     site_hash_module.addImport("errors", errors_module);
 
+    // AST printer — canonical AST → Koru source; explainers print the items
+    // a transform wrote (the elaborated view) through printItemSource.
+    const ast_printer_module = b.createModule(.{
+        .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/ast_printer.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    ast_printer_module.addImport("ast", ast_module);
+
     // Compiler config
     const compiler_config_module = b.createModule(.{
         .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/compiler_config.zig" },
@@ -678,6 +639,7 @@ pub const CompilerContext = struct {
     backend_output_module.addImport("liquid", liquid_module);
     backend_output_module.addImport("struct_literal", struct_literal_module);
     backend_output_module.addImport("site_hash", site_hash_module);
+    backend_output_module.addImport("ast_printer", ast_printer_module);
     backend_output_module.addImport("keyword_registry", keyword_registry_module);
 
     // backend_output_emitted as a MODULE of the exe (single compilation unit =

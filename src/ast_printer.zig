@@ -55,6 +55,16 @@ pub fn printProgram(allocator: std.mem.Allocator, program: *const ast.Program) P
     return p.buf.toOwnedSlice(allocator);
 }
 
+/// Print one top-level item — a decl or a flow — as canonical source. The
+/// explain surface's elaborated view prints the items a transform wrote
+/// (a generated tor, the retargeted home flow), not the whole program.
+pub fn printItemSource(allocator: std.mem.Allocator, item: *const ast.Item) PrintError![]u8 {
+    var p = Printer{ .allocator = allocator };
+    errdefer p.buf.deinit(allocator);
+    try p.printItem(item);
+    return p.buf.toOwnedSlice(allocator);
+}
+
 /// Blank-line policy (canonical): one blank line between top-level items,
 /// except (a) host_line → host_line (code/comment blocks stay contiguous)
 /// and (b) after a comment host_line (a comment attaches to what follows).

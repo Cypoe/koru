@@ -96,3 +96,29 @@ Two corollaries observed while landing it:
   explain still reports a plan for the site. Closing it means running the
   body rewrite on a clone at explain time; whether that cost is worth
   paying is undecided.
+
+## Evolved 2026-09-21 — the clone-run is worth it where the transform retargets
+
+`std/supervisor`'s explainer (`supervisor.explain.kz`, pinned by
+`320_168_supervised_explain_reports`) is the strongest form of this
+discipline: the derived rows (producer, vocabulary, step signature,
+policy, scope lift) read the same surfaces the transform reads, and then
+the `elaborated` section **clones the program, runs the real transform
+pass over the clone, and prints the generated step decl + retargeted home
+flow through `ast_printer.printItemSource`**. For a `retarget_producer`
+transform this is the difference between describing and showing: the
+rewrite happens to a call the user wrote, so only the transform's own
+output can prove what the call became. The printer refuses nodes with no
+surface spelling — which is also honest information about what the
+elaboration produces.
+
+Mechanics that made it work: `run_pass`/`process_all_transforms` is a
+file-level decl in the emitted backend — reachable from an explainer proc
+as `@import("root").process_all_transforms` (the extern-shim path). A
+minimal `CompilerContext` with a fresh `ErrorReporter` satisfies
+transforms that declare `reporter:` — `hasErrors()` is the refusal
+signal. `site_hash` indexes invocations, not continuations, so a site
+witness is the `|> supervised` invocation's pointer. Generated names
+(`__sup_step_L<line>`) are mintable in the explainer from
+`site.location.line` — the transform derives them the same way, so the
+explainer can find its items in the elaborated clone by name.
