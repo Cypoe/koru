@@ -419,6 +419,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    ast_module.addImport("glob_pattern_matcher", glob_pattern_matcher_module);
+    shape_checker_module.addImport("glob_pattern_matcher", glob_pattern_matcher_module);
 
     // Tap Registry module - backend pass for event tap collection
     const tap_registry_module = b.createModule(.{
@@ -712,6 +714,7 @@ pub fn build(b: *std.Build) void {
     transform_pass_runner_module.addImport("template_utils", template_utils_module);
     transform_pass_runner_module.addImport("liquid", liquid_module);
     transform_pass_runner_module.addImport("log", log_module);
+    transform_pass_runner_module.addImport("glob_pattern_matcher", glob_pattern_matcher_module);
     exe.root_module.addImport("transform_pass_runner", transform_pass_runner_module);
 
     // NOTE: compiler.zig (CompilerBootstrap) removed - abstract/impl handles coordinate overrides

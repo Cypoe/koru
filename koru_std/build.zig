@@ -24,21 +24,18 @@ pub fn build(__koru_b: *std.Build) void {
 // This will be baked into the generated build.zig
 const REL_TO_ROOT = "/Users/larsde/src/koru";
 
-// Errors module - error reporting
 const errors_module = b.createModule(.{
     .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/errors.zig" },
     .target = target,
     .optimize = optimize,
 });
 
-// Log module - logging utilities
 const log_module = b.createModule(.{
     .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/log.zig" },
     .target = target,
     .optimize = optimize,
 });
 
-// AST module - core AST data structures
 const ast_module = b.createModule(.{
     .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/ast.zig" },
     .target = target,
@@ -358,6 +355,8 @@ const glob_pattern_matcher_module = b.createModule(.{
     .target = target,
     .optimize = optimize,
 });
+ast_module.addImport("glob_pattern_matcher", glob_pattern_matcher_module);
+shape_checker_module.addImport("glob_pattern_matcher", glob_pattern_matcher_module);
 
 // Tap registry - tap/observer system
 const tap_registry_module = b.createModule(.{
@@ -483,6 +482,7 @@ transform_pass_runner_module.addImport("annotation_parser", annotation_parser_mo
 transform_pass_runner_module.addImport("template_utils", template_utils_module);
 transform_pass_runner_module.addImport("ast_functional", ast_functional_module);
 transform_pass_runner_module.addImport("liquid", liquid_module);
+transform_pass_runner_module.addImport("glob_pattern_matcher", glob_pattern_matcher_module);
 
 // Add all imports to the backend executable
 // Backend_output_emitted as its own compilation unit, linked via addObject.

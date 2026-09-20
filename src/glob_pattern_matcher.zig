@@ -12,6 +12,8 @@
 //   - Prefix wildcard: *.io matches std.io, test.io, etc
 //   - Suffix wildcard: file.* matches file.read, file.write, etc
 //   - Bare suffix: print* matches println, printf, etc
+//   - Bare prefix: *fix matches suffix, prefix, etc
+//   - Middle wildcard: a.*.b, pre*suf — first '*' splits into prefix+suffix
 //
 // Examples:
 //   log.*        matches log.error, log.warn, log.info
@@ -76,6 +78,22 @@ pub fn matchSegment(pattern: []const u8, value: []const u8) bool {
         return std.mem.startsWith(u8, value, prefix);
     }
 
+    // Bare prefix wildcard: *fix matches suffix, prefix
+    if (pattern.len > 1 and pattern[0] == '*') {
+        const suffix = pattern[1..];
+        return std.mem.endsWith(u8, value, suffix);
+    }
+
+    // Middle wildcard: any interior '*' splits the pattern into a
+    // prefix and suffix — a.*.b, pre*suf, pre.*suf all reduce to
+    // startsWith(prefix) + endsWith(suffix) + length check.
+    if (std.mem.indexOfScalar(u8, pattern, '*')) |star_idx| {
+        const prefix = pattern[0..star_idx];
+        const suffix = pattern[star_idx + 1 ..];
+        return std.mem.startsWith(u8, value, prefix) and std.mem.endsWith(u8, value, suffix) and
+            value.len >= prefix.len + suffix.len;
+    }
+
     return false;
 }
 
@@ -137,6 +155,25 @@ test "matchSegment: bare suffix wildcard" {
     try std.testing.expect(matchSegment("print*", "print.ln")); // also matches dotted
     try std.testing.expect(!matchSegment("print*", "sprint")); // doesn't start with print
     try std.testing.expect(!matchSegment("print*", "prin")); // too short
+}
+
+test "matchSegment: bare prefix wildcard" {
+    // *fix matches anything ending in fix (no dot required)
+    try std.testing.expect(matchSegment("*fix", "suffix"));
+    try std.testing.expect(matchSegment("*fix", "prefix"));
+    try std.testing.expect(matchSegment("*fix", "fix"));
+    try std.testing.expect(!matchSegment("*fix", "fixture")); // doesn't end with fix
+}
+
+test "matchSegment: middle wildcard" {
+    // a.*.b and pre*suf — first '*' splits into prefix + suffix
+    try std.testing.expect(matchSegment("a.*.b", "a.x.b"));
+    try std.testing.expect(matchSegment("a.*.b", "a..b")); // empty middle segment
+    try std.testing.expect(!matchSegment("a.*.b", "a.b")); // too short to cover prefix+suffix
+    try std.testing.expect(matchSegment("pre*suf", "presuf"));
+    try std.testing.expect(matchSegment("pre*suf", "preXYZsuf"));
+    try std.testing.expect(!matchSegment("a.*.b", "a.x.c"));
+    try std.testing.expect(!matchSegment("pre*suf", "preXYZ")); // missing suffix
 }
 
 test "Pattern: exact match on all components" {

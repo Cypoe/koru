@@ -6,6 +6,7 @@ const errors = @import("errors");
 const type_inference = @import("type_inference");
 const branch_checker = @import("branch_checker");
 const type_registry = @import("type_registry");
+const glob_pattern_matcher = @import("glob_pattern_matcher");
 
 /// The shape checker validates that:
 /// 1. Event continuations cover all branches
@@ -515,52 +516,11 @@ pub const ShapeChecker = struct {
             else
                 event_name;
 
-            if (matchGlob(pattern_event, event_path)) {
+            if (glob_pattern_matcher.matchSegment(pattern_event, event_path)) {
                 return entry.value_ptr.*;
             }
         }
         return null;
-    }
-
-    /// Simple glob matching for event patterns
-    fn matchGlob(pattern: []const u8, value: []const u8) bool {
-        // Full wildcard matches anything
-        if (std.mem.eql(u8, pattern, "*")) return true;
-
-        // Prefix wildcard: *.suffix
-        if (pattern.len > 2 and pattern[0] == '*' and pattern[1] == '.') {
-            const suffix = pattern[1..];
-            return std.mem.endsWith(u8, value, suffix);
-        }
-
-        // Suffix wildcard with dot: prefix.*
-        if (pattern.len > 2 and pattern[pattern.len - 2] == '.' and pattern[pattern.len - 1] == '*') {
-            const prefix = pattern[0 .. pattern.len - 2];
-            return std.mem.startsWith(u8, value, prefix) and
-                value.len > prefix.len and value[prefix.len] == '.';
-        }
-
-        // Bare suffix wildcard: prefix*
-        if (pattern.len > 1 and pattern[pattern.len - 1] == '*') {
-            const prefix = pattern[0 .. pattern.len - 1];
-            return std.mem.startsWith(u8, value, prefix);
-        }
-
-        // Bare prefix wildcard: *suffix
-        if (pattern.len > 1 and pattern[0] == '*') {
-            const suffix = pattern[1..];
-            return std.mem.endsWith(u8, value, suffix);
-        }
-
-        // Middle wildcard: prefix.*.suffix
-        if (std.mem.indexOfScalar(u8, pattern, '*')) |star_idx| {
-            const prefix = pattern[0..star_idx];
-            const suffix = pattern[star_idx + 1 ..];
-            return std.mem.startsWith(u8, value, prefix) and std.mem.endsWith(u8, value, suffix) and
-                value.len >= prefix.len + suffix.len;
-        }
-
-        return false;
     }
 
     /// Check if a path is a namespace wildcard (e.g., "http.*")
