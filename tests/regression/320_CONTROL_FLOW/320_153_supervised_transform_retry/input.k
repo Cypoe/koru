@@ -7,17 +7,19 @@
 // declares that the producing call is supervised: the site's children ARE
 // the policy. `| retry t when t < N` binds `t` to the count of retries
 // already spent — `t < 3` grants exactly three re-entries, the same bound
-// the datablock spelling `{ restart: 3 }` gives. The transform generates
-// an `__sup_attempt_L<line>` unit (child's input + `__fail` + branch
-// vocabulary) whose |zig proc evaluates the policy rules on EVERY failure
-// — including the site's own, passed in as `__fail` — and rewrites the arm
-// into a call to it with the site's sibling arms cloned underneath.
+// the datablock spelling `{ restart: 3 }` gives. The transform elaborates
+// to the language's own `#`/`@` fold: a generated `__sup_step_L<line>`
+// tor (child's inputs + the `t` counter field) whose `__more` branch
+// carries the next attempt's inputs; the site reroutes its producing
+// call to `#label __sup_step(args, t: 0)` and gains a
+// `| __more s |> @label(s.…)` re-entry arm.
 //
 // Semantics pinned: `t < 3` = three re-entries after the site's call
 // (worker prints once per invocation — sup(-10) shows exactly four
 // "try -10" lines); exhaustion forwards the LAST outcome upward in its
-// own kind (`?!boom` stays a panic, caught at the top); the counter is a
-// literal inside the generated proc, never a signature field.
+// own kind (`?!boom` stays a panic, caught at the top); the counter rides
+// as a step input named after the retry arm's own binding — `t` resolves
+// verbatim in `when` clauses, never threaded.
 import std/io
 import std/supervisor
 

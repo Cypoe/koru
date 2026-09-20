@@ -87,6 +87,38 @@ and onto the site's continuation children (`| retry` / `| exhausted` arms) —
 the mechanism above is unchanged; the surface-design ruling lives in
 [[frag-a-policy-block-wants-to-be-arms]].
 
+## The generated unit is a tor, not a proc — and the site needs its PRODUCER (2026-09-21)
+
+The `__sup_attempt` event+proc described above is gone. `supervised` now
+elaborates to the language's own `#`/`@` labeled fold over a generated
+`__sup_step_L<n>` tor (the hand-written shape 320_151 pins): the step's
+inputs are the child's plus the retry state, a `__more` branch carries the
+next attempt's inputs, and the site's arms dispatch on the step's
+vocabulary. Nothing `|zig` is emitted — the transform constructs AST and
+ordinary passes check it. Two consequences this file did not foresee:
+
+- **A branch-arm transform needs to rewrite its PRODUCER, not just its own
+  site.** The fold replaces `dial(port)` with `#__sup __step(port, t: 0)` —
+  the producing invocation, one node up from the arm. `NodeReplacement`
+  gained `retarget_producer`; the runner resolves the producer in the REAL
+  tree (`findSiteProducer`) because the site view shallow-copies
+  `flow.body` — a pointer computed inside the view is not a valid address
+  into `program.items` when the site sits at a flow head. The earlier note
+  that "the producing call is recovered by walking `program.items`" was
+  right about the lookup and wrong about where the write-back could aim:
+  finding the producer and REPLACING it are different operations, and only
+  the runner holds the real tree.
+- **`label_with_invocation` at a flow head is `flow.pre_label`, not a node.**
+  `Flow.inv()` asserts `.invocation`, so a label node landing in body
+  position would panic — the replacement walk lifts it (`ast_functional`).
+  Nested position already emitted `label_with_invocation` correctly; only
+  the head needed the lift.
+
+The pointer-identity subtlety is the durable part: any nested-site
+transform that addresses program structure MUST do it by search contract
+(`findSiteProducer`-style, resolved by the runner), never by pointer into
+the view. The view's copies are read-through, not addressable.
+
 The same family surfaced once more while building it, this time in the EMITTER:
 `emitSubflowContinuationsWithDepth`'s bail paths construct fresh
 `EmissionContext`s that dropped `self_loop_active`/`self_loop_event_canonical`,

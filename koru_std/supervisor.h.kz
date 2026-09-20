@@ -42,43 +42,22 @@ const H = struct {
         }
         return false;
     }
-    // Emit `<modref>.<name>_event.handler(.{ .field = <expr>, … })` —
-    // fields named in `inv`'s args take that arg's expression text;
-    // the rest ride at their current value (the proc's own params).
-    fn appendCall(alloc: std.mem.Allocator, buf: *std.ArrayList(u8), modref: []const u8, name: []const u8, fields: []const ast.Field, inv: ?*const ast.Invocation) void {
-        buf.appendSlice(alloc, modref) catch unreachable;
-        buf.appendSlice(alloc, ".") catch unreachable;
-        buf.appendSlice(alloc, name) catch unreachable;
-        buf.appendSlice(alloc, "_event.handler(.{") catch unreachable;
-        for (fields) |fld| {
-            var val = fld.name;
-            if (inv) |iv| {
-                for (iv.args) |a| {
-                    if (std.mem.eql(u8, a.name, fld.name)) val = a.value;
-                }
-            }
-            buf.appendSlice(alloc, " .") catch unreachable;
-            buf.appendSlice(alloc, fld.name) catch unreachable;
-            buf.appendSlice(alloc, " = ") catch unreachable;
-            buf.appendSlice(alloc, val) catch unreachable;
-            buf.appendSlice(alloc, ",") catch unreachable;
+    /// Pointer-identity containment: is `target` `cont` itself or nested in
+    /// its continuations? Used to find the flow that owns a producer site.
+    fn contContains(cont: *const ast.Continuation, target: *const ast.Continuation) bool {
+        if (cont == target) return true;
+        for (cont.continuations) |*c| {
+            if (contContains(c, target)) return true;
         }
-        buf.appendSlice(alloc, " })") catch unreachable;
+        return false;
     }
-    // Emit `.<branch> => |v| return .{ .<branch> = v },` (or the void form)
-    // — the pass-through arm every non-supervised branch gets in the
-    // generated attempt proc's switch.
-    fn appendForward(alloc: std.mem.Allocator, buf: *std.ArrayList(u8), name: []const u8, payload: bool) void {
-        buf.appendSlice(alloc, "            .") catch unreachable;
-        buf.appendSlice(alloc, name) catch unreachable;
-        if (payload) {
-            buf.appendSlice(alloc, " => |v| return .{ .") catch unreachable;
-            buf.appendSlice(alloc, name) catch unreachable;
-            buf.appendSlice(alloc, " = v },\n") catch unreachable;
-        } else {
-            buf.appendSlice(alloc, " => return .{ .") catch unreachable;
-            buf.appendSlice(alloc, name) catch unreachable;
-            buf.appendSlice(alloc, " = .{} },\n") catch unreachable;
+    /// Structural equality on dotted paths — qualifier + segments.
+    fn pathEq(a: ast.DottedPath, b: ast.DottedPath) bool {
+        if (!std.mem.eql(u8, a.module_qualifier orelse "", b.module_qualifier orelse "")) return false;
+        if (a.segments.len != b.segments.len) return false;
+        for (a.segments, 0..) |s, i| {
+            if (!std.mem.eql(u8, s, b.segments[i])) return false;
         }
+        return true;
     }
 };

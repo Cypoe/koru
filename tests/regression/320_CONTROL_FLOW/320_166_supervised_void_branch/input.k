@@ -1,13 +1,15 @@
 // `| refused` bare is a void branch — the failure is a fact, not a payload.
 // Supervising it needs no `f` binding: `| refused |> supervised` works
-// unchanged, and the retry derives the next attempt's args from the counter
-// (`port + 1 + t` walks the range) or any enclosing scope — nothing about
-// the keep-alive machinery requires the failure to carry a value.
+// unchanged, and the retry derives the next attempt's args from ambient
+// inputs (`port + 1` reads the port that just REFUSED — the step's inputs
+// are the last attempt's args, so the derivation walks the range one up
+// from each failure) — nothing about the keep-alive machinery requires
+// the failure to carry a value.
 //
 // Pinned: arm mode (retry + exhausted forward), block shorthand
 // (`{ restart: N }`), and `{ policy: }` delegation all honor void
-// supervised branches — the emitted exhaustion returns `.{}` (empty
-// struct payload), never `void`, and never binds a phantom payload name.
+// supervised branches — exhaustion forwards in kind, never binds a
+// phantom payload name.
 import std/io
 import std/supervisor
 
@@ -35,7 +37,7 @@ pub tor connect { port: i64 }
 connect = dial(port)
 | ok p => ok p
 | refused |> std/supervisor:supervised
-    | retry t when t < 5 |> dial(port: port + 1 + t)
+    | retry t when t < 5 |> dial(port: port + 1)
     | exhausted => refused
 
 pub tor block-scan { port: i64 }
