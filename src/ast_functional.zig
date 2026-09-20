@@ -408,6 +408,34 @@ fn replaceInvocationNodeAndContinuationsInItems(
     for (items, 0..) |*item, i| {
         switch (item.*) {
             .flow => |*flow| {
+                // The flow HEAD itself can be the target: a branch-arm
+                // transform retargeting its producer (NodeReplacement's
+                // `retarget_producer`) points at `flow.body.node.invocation`,
+                // which the continuation walk below never reaches.
+                // `label_with_invocation` lifts to `pre_label` — the parser's
+                // own spelling of `#label` at flow-root position — so the
+                // emitter sees one canonical fold shape.
+                const head_is_target = if (flow.body.node) |*bnode|
+                    bnode.* == .invocation and &bnode.invocation == target_invocation
+                else
+                    false;
+                if (head_is_target) {
+                    var new_flow = try cloneFlowWithContinuations(
+                        allocator,
+                        flow,
+                        try cloneContinuationSlice(allocator, new_continuations),
+                    );
+                    if (new_node == .label_with_invocation) {
+                        const lwi = new_node.label_with_invocation;
+                        new_flow.pre_label = try allocator.dupe(u8, lwi.label);
+                        new_flow.body.node = ast.Node{ .invocation = lwi.invocation };
+                    } else {
+                        new_flow.body.node = new_node;
+                    }
+                    new_items[i] = ast.Item{ .flow = new_flow };
+                    found = true;
+                    continue;
+                }
                 const cont_result = try replaceInvocationNodeAndContinuationsInContinuations(
                     allocator,
                     flow.body.continuations,

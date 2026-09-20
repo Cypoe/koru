@@ -165,6 +165,38 @@ fn contHoldsTarget(conts: []const ast.Continuation, target: *const ast.Continuat
     return false;
 }
 
+/// The call that produced a nested site's branch: the continuation whose
+/// children list holds `site` — `flow.body` itself when the site sits on the
+/// flow head. Returns a REAL-tree pointer (walks `program.items`, not the
+/// site view's shallow-copied items), so `&result.node.?.invocation`
+/// resolves in the functional-replacement pass.
+fn findSiteProducer(items: []const ast.Item, site: *const ast.Continuation) ?*const ast.Continuation {
+    for (items) |*item| {
+        switch (item.*) {
+            .flow => |*f| {
+                for (f.body.continuations) |*c| {
+                    if (c == site) return &f.body;
+                }
+                if (findSiteProducerInConts(f.body.continuations, site)) |p| return p;
+            },
+            .module_decl => |*m| {
+                if (findSiteProducer(m.items, site)) |p| return p;
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+fn findSiteProducerInConts(conts: []const ast.Continuation, site: *const ast.Continuation) ?*const ast.Continuation {
+    for (conts) |*cont| {
+        for (cont.continuations) |*c| {
+            if (c == site) return cont;
+        }
+        if (findSiteProducerInConts(cont.continuations, site)) |p| return p;
+    }
+    return null;
+}
+
 /// A read-only view of a nested site AS a top-level flow. Handlers build their
 /// replacement from `item.flow.body`, so they must read the SITE's invocation
 /// and children — not the containing flow's. This wraps the site continuation
@@ -428,8 +460,22 @@ fn spliceSiteResult(
         } else {
             // Nested site: replace the holding continuation's invocation node.
             // null children → keep existing (node-only replace); non-null →
-            // replace node + children.
-            const target_inv = &sr.holding.node.?.invocation;
+            // replace node + children. `retarget_producer` rewrites the call
+            // that PRODUCED the site's branch instead — the runner finds it
+            // in the real program (site-view items are shallow copies: the
+            // continuation arrays are shared, but `flow.body` itself is
+            // copied, so only a real-tree lookup resolves a flow head).
+            const target_inv = if (nr.retarget_producer) blk: {
+                const producer = findSiteProducer(current.items, sr.holding) orelse {
+                    log.err("TRANSFORM ERROR: retarget_producer found no call holding the site.\n", .{});
+                    return error.TransformSiteNotFound;
+                };
+                if (producer.node == null or producer.node.? != .invocation) {
+                    log.err("TRANSFORM ERROR: retarget_producer resolved to a non-invocation node.\n", .{});
+                    return error.TransformSiteNotFound;
+                }
+                break :blk &producer.node.?.invocation;
+            } else &sr.holding.node.?.invocation;
             const maybe = if (nr.children) |ch|
                 try ast_functional.replaceInvocationNodeAndContinuationsRecursive(allocator, current, target_inv, nr.node, ch, false)
             else

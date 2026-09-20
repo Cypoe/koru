@@ -302,6 +302,18 @@ pub const NodeReplacement = struct {
     /// null = keep the site's existing children (replace the node only);
     /// non-null = replace the children too (including with an empty slice).
     children: ?[]const Continuation = null,
+    /// false = replace the site's own `|>` invocation (the default);
+    /// true = replace the PRODUCING call instead — the invocation whose
+    /// continuations hold the site arm. A branch-arm transform rerouting
+    /// its producer (e.g. `supervised` rewriting `dial(port)` into a
+    /// `#`-labeled fold over a generated step tor, so the sibling arms
+    /// dispatch on the step's outcome vocabulary) needs this: the runner
+    /// locates the producer in the real program — site-view items are
+    /// shallow copies, so a handler-forged pointer to a flow head would
+    /// never be found — and `children` replaces its handler list wholesale.
+    /// `label_with_invocation` at a flow head lifts to `flow.pre_label`
+    /// (the parser's own spelling of `#label` in root position).
+    retarget_producer: bool = false,
 };
 
 /// The site-local write-back ABI: what a transform handler decides at one
