@@ -511,7 +511,7 @@ const std = @import("std");
             } else {
                 body.appendSlice(allocator, " => {\n                __left -= 1;\n                if (__left <= 0) { return .{ .") catch unreachable;
                 body.appendSlice(allocator, b.name) catch unreachable;
-                body.appendSlice(allocator, " = {} }; }\n") catch unreachable;
+                body.appendSlice(allocator, " = .{} }; }\n") catch unreachable;
                 if (within_spacing != null) {
                     appendWithinStamp(&body, allocator, false, "");
                 }
@@ -612,7 +612,7 @@ const std = @import("std");
                     body.appendSlice(allocator, "return .{ .") catch unreachable;
                     body.appendSlice(allocator, ct.branch_name) catch unreachable;
                     body.appendSlice(allocator, " = ") catch unreachable;
-                    body.appendSlice(allocator, ct.plain_value orelse "{}") catch unreachable;
+                    body.appendSlice(allocator, ct.plain_value orelse ".{}") catch unreachable;
                     body.appendSlice(allocator, " };\n") catch unreachable;
                 },
             }
@@ -624,7 +624,7 @@ const std = @import("std");
                 body.appendSlice(allocator, " = ") catch unreachable;
                 body.appendSlice(allocator, fail_bind) catch unreachable;
             } else {
-                body.appendSlice(allocator, " = {}") catch unreachable;
+                body.appendSlice(allocator, " = .{}") catch unreachable;
             }
             body.appendSlice(allocator, " };\n") catch unreachable;
         }
@@ -737,7 +737,7 @@ const std = @import("std");
             // upward in its own kind (a `?!` stays a panic, an `err` an err).
             new_children[ci] = ast.Continuation{
                 .branch = allocator.dupe(u8, site.branch) catch unreachable,
-                .binding = allocator.dupe(u8, "__sup_r") catch unreachable,
+                .binding = if (H.hasPayload(supervised_branch.?)) allocator.dupe(u8, "__sup_r") catch unreachable else null,
                 .kind = site.kind,
                 .condition = null,
                 .node = ast.Node{ .branch_constructor = ast.BranchConstructor{

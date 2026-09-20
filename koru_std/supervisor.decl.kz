@@ -91,7 +91,7 @@ fn appendWithinGate(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, has_p
     if (has_payload) {
         buf.appendSlice(allocator, " = __pend") catch unreachable;
     } else {
-        buf.appendSlice(allocator, " = {}") catch unreachable;
+        buf.appendSlice(allocator, " = .{}") catch unreachable;
     }
     buf.appendSlice(allocator, " }; }\n    }\n") catch unreachable;
 }

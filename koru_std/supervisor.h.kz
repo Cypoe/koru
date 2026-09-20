@@ -78,7 +78,7 @@ const H = struct {
         } else {
             buf.appendSlice(alloc, " => return .{ .") catch unreachable;
             buf.appendSlice(alloc, name) catch unreachable;
-            buf.appendSlice(alloc, " = {} },\n") catch unreachable;
+            buf.appendSlice(alloc, " = .{} },\n") catch unreachable;
         }
     }
 };

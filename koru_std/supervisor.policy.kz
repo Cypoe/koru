@@ -205,7 +205,7 @@ fn appendPolicyBody(
         buf.appendSlice(allocator, "            if (!__within_ok) { return .{ .") catch unreachable;
         buf.appendSlice(allocator, site_branch) catch unreachable;
         buf.appendSlice(allocator, " = ") catch unreachable;
-        buf.appendSlice(allocator, if (has_payload) fail_bind else "{}") catch unreachable;
+        buf.appendSlice(allocator, if (has_payload) fail_bind else ".{}") catch unreachable;
         buf.appendSlice(allocator, " }; }\n") catch unreachable;
     }
     buf.appendSlice(allocator, "            __t += 1;\n") catch unreachable;
@@ -265,7 +265,7 @@ fn appendPolicyBody(
             buf.appendSlice(allocator, "{ return .{ .") catch unreachable;
             buf.appendSlice(allocator, site_branch) catch unreachable;
             buf.appendSlice(allocator, " = ") catch unreachable;
-            buf.appendSlice(allocator, if (has_payload) fail_bind else "{}") catch unreachable;
+            buf.appendSlice(allocator, if (has_payload) fail_bind else ".{}") catch unreachable;
             buf.appendSlice(allocator, " }; },\n") catch unreachable;
         }
     }
