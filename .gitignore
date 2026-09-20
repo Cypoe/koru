@@ -252,6 +252,8 @@ tests/benchmarks/**/build.zig
 tests/benchmarks/**/build_backend.zig
 tests/benchmarks/**/backend_output_emitted.zig
 tests/benchmarks/**/output_emitted.zig
+tests/benchmarks/**/compiler_env.json
+tests/benchmarks/**/compiler_env.zig
 tests/benchmarks/**/actual.txt
 tests/benchmarks/**/koru_runtime
 tests/benchmarks/**/koru_sum

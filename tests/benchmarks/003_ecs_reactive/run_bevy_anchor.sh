@@ -21,7 +21,13 @@ cargo run --release --quiet --manifest-path "$ROOT/rust_bevy/Cargo.toml" -- \
   --scenario archetype_churn_world --entities "$ENTITIES" --frames "$FRAMES" --observers 25
 
 if [ -x "$KORUC" ]; then
-  ( cd "$KORU_DIR" && "$KORUC" build main.k >/dev/null )
+  # See run.sh: --release=fast is load-bearing, and the build line must
+  # report it — a Debug binary measured against cargo --release is not a
+  # benchmark result.
+  build_log="$(cd "$KORU_DIR" && "$KORUC" build --release=fast --compile-mem-mb=8192 main.k 2>&1)" \
+    || { printf '%s\n' "$build_log" >&2; exit 1; }
+  printf '%s\n' "$build_log" | grep -q '(ReleaseFast)' \
+    || { printf '%s\n' "$build_log" >&2; echo "koruc did not report ReleaseFast — refusing to time" >&2; exit 1; }
   "$KORU_DIR/a.out" --scenario archetype_churn_world \
     --entities "$ENTITIES" --frames "$FRAMES" --observers 25
 else

@@ -38,7 +38,17 @@ fi
 # refuses on stderr and exits 0 — so an absent line in results.jsonl means
 # "not implemented", never "ran and produced nothing".
 if [ -x "$KORUC" ]; then
-  ( cd "$KORU_DIR" && "$KORUC" build main.k >/dev/null )
+  # --release=fast is load-bearing: koruc defaults to Debug, and a Debug
+  # binary timed against -O ReleaseFast anchors measures the safety checks,
+  # not the codegen. The build line names its mode — refuse to time
+  # anything that does not report ReleaseFast.
+  # --compile-mem-mb: this port's emit pass peaks past the 4 GB default
+  # (KORU174). The budget is the sanctioned knob — raise it here, and treat
+  # the peak itself as a compile-time performance finding.
+  build_log="$(cd "$KORU_DIR" && "$KORUC" build --release=fast --compile-mem-mb=8192 main.k 2>&1)" \
+    || { printf '%s\n' "$build_log" >&2; exit 1; }
+  printf '%s\n' "$build_log" | grep -q '(ReleaseFast)' \
+    || { printf '%s\n' "$build_log" >&2; echo "koruc did not report ReleaseFast — refusing to time" >&2; exit 1; }
   for scenario in $SCENARIOS; do
     frames=100
     if [ "$scenario" = "schedule_empty" ]; then

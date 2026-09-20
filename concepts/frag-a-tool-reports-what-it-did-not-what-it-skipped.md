@@ -71,3 +71,18 @@ now names the mode — `✓ Compiled to a.out (Debug)` — on both the
 build-file and build-exe paths and on the outer `Built executable` line.
 905_build_mode_names_itself pins the Debug banner; the ruling stands, the
 invisibility does not.
+
+The belief's other half arrived the same evening (2026-09-21): a reported
+act nobody checks is still a hole. Four of the repo's five benchmark entry
+points — 003's board plus its Bevy anchor, 004, 005, and osprey's closer in
+koru-benchmarks — invoked `koruc` with no flag at all, so every one of them
+timed Debug binaries against `-O ReleaseFast` and `cargo --release` anchors.
+They were written while ReleaseFast was still the default; the ruling flip
+made each of them silently wrong without touching a line. The committed
+results.jsonl predates the flip — the trap was live, that artifact was not
+its victim — but nothing stood between the next run and a published Debug
+number. The fix is not trust but assertion: each script passes
+`--release=fast` AND greps the build output for `(ReleaseFast)`, refusing
+to time otherwise. The tool names the act; the harness refuses to proceed
+on any other act. A benchmark that cannot state its build mode is a number
+generator, not a measurement.

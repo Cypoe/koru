@@ -27,7 +27,14 @@ cp "$ROOT/ecs_integration.k" "$work/zig_arm.k"
 mkdir -p "$work/js"
 cp "$ROOT/ecs_integration.k" "$work/js/js_arm.k"
 
-( cd "$work" && "$KORUC" zig_arm.k >/dev/null 2>&1 )
+# --release=fast is load-bearing on the Zig arm: koruc defaults to Debug,
+# and the build line names its mode — refuse to time anything that does not
+# report ReleaseFast rather than publish a Debug number as a measurement.
+# (The JS arm has no optimize mode; the assertion does not apply.)
+build_log="$(cd "$work" && "$KORUC" zig_arm.k --release=fast 2>&1)" \
+    || { printf '%s\n' "$build_log" >&2; exit 1; }
+printf '%s\n' "$build_log" | grep -q '(ReleaseFast)' \
+    || { printf '%s\n' "$build_log" >&2; echo "koruc did not report ReleaseFast — refusing to time" >&2; exit 1; }
 ( cd "$work/js" && "$KORUC" js_arm.k --lang=js >/dev/null 2>&1 )
 
 # Every arm reports `checksum <n>`. They are compared below rather than eyeballed

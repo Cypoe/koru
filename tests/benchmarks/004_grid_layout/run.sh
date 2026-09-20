@@ -13,7 +13,13 @@ for variant in column row; do
     # clobbering each other's generated files.
     work="$(mktemp -d)"
     cp "$ROOT/sweep_$variant.k" "$work/sw.k"
-    ( cd "$work" && "$KORUC" sw.k >/dev/null 2>&1 )
+    # --release=fast is load-bearing: koruc defaults to Debug, and the build
+    # line names its mode — refuse to time anything that does not report
+    # ReleaseFast rather than publish a Debug number as a measurement.
+    build_log="$(cd "$work" && "$KORUC" --release=fast sw.k 2>&1)" \
+        || { printf '%s\n' "$build_log" >&2; rm -rf "$work"; exit 1; }
+    printf '%s\n' "$build_log" | grep -q '(ReleaseFast)' \
+        || { printf '%s\n' "$build_log" >&2; echo "koruc did not report ReleaseFast — refusing to time" >&2; rm -rf "$work"; exit 1; }
     printf '%-7s ' "$variant"
     { /usr/bin/time -p "$work/a.out" >"$work/out.txt"; } 2>&1 | awk '/real/{printf "%ss  ", $2}'
     tail -1 "$work/out.txt"
