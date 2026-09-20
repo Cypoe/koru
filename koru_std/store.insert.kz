@@ -185,7 +185,7 @@
             var i: usize = 0;
             while (i < text.len) {
                 const at_boundary = ast.identBoundaryBefore(text, i);
-                const starts = at_boundary and std.mem.startsWith(u8, text[i..], name);
+                const starts = at_boundary and (i == 0 or text[i - 1] != '.') and std.mem.startsWith(u8, text[i..], name);
                 const after = i + name.len;
                 if (starts and after < text.len and text[after] == '.') {
                     out.appendSlice(alloc, "__koru_store_") catch unreachable;

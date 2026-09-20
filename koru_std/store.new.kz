@@ -148,6 +148,15 @@
         fn isIdentChar(ch: u8) bool {
             return (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_' or ch == '-';
         }
+        // Items that can textually NAME the store — non-koru_std modules plus
+        // its home; stdlib's same-named locals only false-positive (690_335).
+        fn visibleStoreItems(alloc: std.mem.Allocator, items: []const ast.Item, home: []const u8, out: *std.ArrayList(*const ast.Item)) void {
+            for (items) |*it| {
+                if (it.* != .module_decl) { out.append(alloc, it) catch return; continue; }
+                if (std.mem.indexOf(u8, it.module_decl.canonical_path, "koru_std") == null or
+                    std.mem.eql(u8, it.module_decl.logical_name, home)) visibleStoreItems(alloc, it.module_decl.items, home, out);
+            }
+        }
         fn mkPathH(alloc: std.mem.Allocator, module: []const u8, name: []const u8) ast.DottedPath {
             const segs = alloc.alloc([]const u8, 1) catch unreachable;
             segs[0] = alloc.dupe(u8, name) catch unreachable;
@@ -1639,7 +1648,9 @@
         for (qsites.items) |qs| {
             if (qs.req_id != null or qs.may_remove) rule_needs = true;
         }
-        const needs_handles = Gate.needsHandles(allocator, program, program_items, store_name, field_names, is_tree, step_arm != null, lifecycle_id, rule_needs);
+        var gate_items = std.ArrayList(*const ast.Item){};
+        H.visibleStoreItems(allocator, program.items, store_scope_home, &gate_items);
+        const needs_handles = Gate.needsHandles(allocator, program, gate_items.items, store_name, field_names, is_tree, step_arm != null, lifecycle_id, rule_needs);
         // Bulk append — a counted `for` whose body is a single insert
         // into this store lowers to a hoisted capacity check, indexed
         // column writes at `base + j`, and one `len += n` (the per-row

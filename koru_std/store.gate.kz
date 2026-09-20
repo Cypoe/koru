@@ -106,10 +106,8 @@ const TakeScan = struct {
 };
 
 
-// ------------------------------------------------------------------
-// THE HANDLE GATE — does the program ever observe a row handle of
+// --- THE HANDLE GATE — does the program ever observe a row handle of
 // THIS store? A store that cannot pays nothing for one.
-// ------------------------------------------------------------------
 // A program-visible row value is a HANDLE — sparse slot | brand<<24
 // | generation<<32 — and keeping that promise costs ~3.3 ns/row on
 // insert (the hslot freelist plus two handle-table stores) and ~5.6
@@ -145,7 +143,7 @@ const Gate = struct {
         const mask = ast.expressionMask(alloc, t);
         var i: usize = 0;
         while (i + store.len < t.len) : (i += 1) {
-            if (mask[i] and ast.identBoundaryBefore(t, i) and
+            if (mask[i] and ast.identBoundaryBefore(t, i) and (i == 0 or t[i - 1] != '.') and
                 std.mem.startsWith(u8, t[i..], store) and t[i + store.len] == '[') return true;
         }
         return false;
@@ -186,7 +184,7 @@ const Gate = struct {
         var i: usize = 0;
         while (i + bind.len <= t.len) : (i += 1) {
             if (!mask[i]) continue;
-            if (!ast.identBoundaryBefore(t, i)) continue;
+            if (!ast.identBoundaryBefore(t, i) or (i > 0 and t[i - 1] == '.')) continue;
             if (!std.mem.startsWith(u8, t[i..], bind)) continue;
             const after = i + bind.len;
             const next_is_ident = after < t.len and isIdentCh(t[after]);
@@ -499,10 +497,12 @@ const Gate = struct {
     }
 
     /// The decision itself. Semantic overrides first — each is a fact the
-    /// text scan cannot see — then the whole-program walk. The caller
-    /// reduces its proc-local lists to bools; anything unrecognized upstream
-    /// keeps the machinery, because a missed consumer under lean would be an
-    /// emitted reference to a method that does not exist.
+    /// text scan cannot see — then the whole-program walk. `program_items`
+    /// arrives visibility-scoped from the caller (visibleStoreItems):
+    /// koru_std bodies' same-named locals can never name a program store
+    /// (690_335). Anything unrecognized upstream keeps the machinery — a
+    /// missed consumer under lean is an emitted reference to a method that
+    /// does not exist.
     fn needsHandles(alloc: std.mem.Allocator, prog: *const ast.Program, program_items: []const *const ast.Item, store: []const u8, fields: []const []const u8, is_tree: bool, has_step: bool, lifecycle_id: bool, rule_needs: bool) bool {
         // A [tree] store's `parent` column IS a handle column — the cycle
         // guard and the preorder walk resolve through it.

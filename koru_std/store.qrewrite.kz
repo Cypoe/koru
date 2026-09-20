@@ -17,7 +17,7 @@ const SRewrite = struct {
         var i: usize = 0;
         while (i < text.len) {
             const at_boundary = ast.identBoundaryBefore(text, i);
-            if (at_boundary and std.mem.startsWith(u8, text[i..], prefix)) {
+            if (at_boundary and (i == 0 or text[i - 1] != '.') and std.mem.startsWith(u8, text[i..], prefix)) {
                 const fstart = i + prefix.len;
                 const rest = text[fstart..];
                 var best_fi: ?usize = null;

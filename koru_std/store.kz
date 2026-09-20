@@ -1507,7 +1507,7 @@ fn storeIndexedRefs(alloc: std.mem.Allocator, prog: *const ast_find.Program, tex
     var i: usize = 0;
     while (i < text.len) {
         const at_boundary = ast_find.identBoundaryBefore(text, i);
-        if (at_boundary and i + store.len < text.len and
+        if (at_boundary and (i == 0 or text[i - 1] != '.') and i + store.len < text.len and
             std.mem.startsWith(u8, text[i..], store) and text[i + store.len] == '[')
         {
             const idx_start = i + store.len + 1;

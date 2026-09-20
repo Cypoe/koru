@@ -805,3 +805,23 @@ survives via the same `__koru_continue` marker the template renders.
 insert's transform is site-local, `for`'s body is an opaque splice marker —
 so the recognizer lives in `new`'s whole-program walk, the one place both
 sides are visible.
+
+The gate's scan domain is the set of modules that can textually NAME the
+store — not the whole program (2026-09-21, 690_335). flatItems returns
+every loaded module's items including koru_std's own bodies, and the
+name-substring predicates cannot tell a program store from a stdlib
+local: `.items[` (the ArrayList idiom all over store.new.kz), `names[i]`
+at store.kz:406, `data[wi]` in field.kz, `fields[i]` in interpreter.run
+all read as `store[` / bare-bind to the scan, so stores named `items`,
+`names`, `data`, `fields` kept full handle machinery purely by
+identifier. The conservative direction had a cost the contract never
+priced: a false positive is not safe, it is a silent deopt. Two fixes,
+both measured against the same probe: the scan now walks only
+non-koru_std module bodies plus the store's own home
+(`H.visibleStoreItems` — koru_std source predates the program and cannot
+spell its stores), and every `name`-at-boundary matcher gained the
+`.name` member-access exclusion `storeRefsText` already carried —
+`x.items[i]` is a member index on `x`, never the store. The same
+exclusion went into the rewriters (`storeIndexedRefs`,
+insert/stored `storeRefs`, qrewrite `bind.`): a `.items[` match there
+would have been a miscompile, not just a pessimization.
