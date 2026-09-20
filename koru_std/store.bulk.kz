@@ -1,0 +1,389 @@
+// Koru Standard Library: the `bulk` part of store.kz.
+// Joined via `~part bulk` in store.kz; merged into the module at load.
+
+// ------------------------------------------------------------------
+// Bulk append — `for(lo..hi) ! each i |> insert(s){fields}` lowered to
+// a hoisted capacity check, per-column writes at `base + j`, and one
+// `len += n`. The per-row path's `len += 1` is a loop-carried store no
+// optimizer can reassociate past the per-row capacity @panic; measured
+// ~294us -> ~89us on the add_remove fill by hand-editing the emitted
+// binary's loop (same checksum, same build — the marshal shape was
+// already free, the serial len was not).
+//
+// Neither end of the pattern can see the other: `std/store:insert`'s
+// transform is site-local, and `std/control:for`'s Liquid template
+// holds its body as an opaque `__koru_inline_scoped_N` marker. `new`'s
+// whole-program scan is the one place both sides are visible, so the
+// recognizer lives here. Zig only — `InlineCode` carries no lane and
+// this text IS Zig, so `proc new|js` gates it off at the call site.
+// Every doubt declines the site; a declined site stays a per-row
+// insert and is correct by construction.
+// ------------------------------------------------------------------
+const Bulk = struct {
+    const ast = @import("ast");
+    const ast_functional = @import("ast_functional");
+    const struct_literal = @import("struct_literal");
+    const codegen_utils = @import("codegen_utils");
+
+    const Range = struct { lo: []const u8, hi: []const u8 };
+
+    /// Does any leaf column carry a std/refine met (bounds or clamp)?
+    /// The same fold the emit prelude runs — refine's own metFields —
+    /// so gate and guard cannot disagree about what a facet says.
+    fn hasFacets(alloc: std.mem.Allocator, prog: *const ast.Program, provs: []const SL.ColProv) bool {
+        if (!@hasDecl(koru_std, "koru_refine")) return false;
+        for (provs) |pv| {
+            const met = koru_std.koru_refine.metFields(alloc, prog, pv.scope, pv.proto, null);
+            for (met) |*mf| {
+                if (!std.mem.eql(u8, mf.name, pv.field)) continue;
+                if (ast_functional.facets.hasTerms(mf) or mf.clamp != null) return true;
+            }
+        }
+        return false;
+    }
+
+    /// A masked-token occurrence — `word` at an identifier boundary on
+    /// both sides, in code position (strings and comments are masked).
+    /// `__koru_store_marks` cannot hit `marks`: `_` is an identifier
+    /// char and breaks the boundary. Same predicate Gate.indexes uses.
+    fn tokenIn(alloc: std.mem.Allocator, t: []const u8, word: []const u8) bool {
+        const mask = ast.expressionMask(alloc, t);
+        var i: usize = 0;
+        while (i + word.len <= t.len) : (i += 1) {
+            if (!mask[i] or !ast.identBoundaryBefore(t, i)) continue;
+            if (!std.mem.startsWith(u8, t[i..], word)) continue;
+            const end = i + word.len;
+            if (end == t.len or !Gate.isIdentCh(t[end])) return true;
+        }
+        return false;
+    }
+
+    /// Is `word` REFERENCED in `t` — a real use of the each-binding,
+    /// not just a token hit. Excludes the two non-reference shapes:
+    /// `.word` (member access/designator — `..word` in `0..i` stays a
+    /// use, the second dot is a range) and `word:` (struct-literal key
+    /// position, whitespace tolerated). Both directions must be right:
+    /// an emitted `const i` nobody uses is a Zig error, and so is a
+    /// dropped `const i` a field expr reads. Expression text only —
+    /// field values cannot declare a shadowing local.
+    fn useOf(alloc: std.mem.Allocator, t: []const u8, word: []const u8) bool {
+        const mask = ast.expressionMask(alloc, t);
+        var i: usize = 0;
+        while (i + word.len <= t.len) : (i += 1) {
+            if (!mask[i] or !ast.identBoundaryBefore(t, i)) continue;
+            if (!std.mem.startsWith(u8, t[i..], word)) continue;
+            const end = i + word.len;
+            if (end < t.len and Gate.isIdentCh(t[end])) continue;
+            if (i > 0 and t[i - 1] == '.' and (i < 2 or t[i - 2] != '.')) continue;
+            var k = end;
+            while (k < t.len and (t[k] == ' ' or t[k] == '\t')) k += 1;
+            if (k < t.len and t[k] == ':') continue;
+            return true;
+        }
+        return false;
+    }
+
+    /// The counted `for` site: `std/control:for` with exactly an `expr`
+    /// arg spelling one top-level `lo..hi` range. A `keep` arg, a
+    /// variant, a return binding, a frozen template body — all decline.
+    fn rangeOf(alloc: std.mem.Allocator, iv: *const ast.Invocation) ?Range {
+        const mq = iv.path.module_qualifier orelse return null;
+        if (!std.mem.eql(u8, mq, "std.control") and !std.mem.eql(u8, mq, "std/control")) return null;
+        if (iv.path.segments.len != 1 or !std.mem.eql(u8, iv.path.segments[0], "for")) return null;
+        if (iv.variant != null or iv.return_binding != null or iv.return_destructure.len != 0 or
+            iv.preamble_code != null) return null;
+        // A nested `for` (inside a `|>` chain) already carries its
+        // template's RENDER in `inline_body` — renderNestedTemplates
+        // fills the slot before `new` walks. That render is still a
+        // pending splice: it contains `__koru_inline_*` markers the
+        // emitter resolves against the continuation list. Overwriting
+        // it is safe — the markers die with the text and the arms
+        // stay. Anything else in the slot is not ours to replace.
+        if (iv.inline_body) |ib| {
+            if (std.mem.indexOf(u8, ib, "__koru_inline_") == null and
+                std.mem.indexOf(u8, ib, "__koru_continue_") == null) return null;
+        }
+        var expr: ?[]const u8 = null;
+        for (iv.args) |a| {
+            if (std.mem.eql(u8, a.name, "expr")) {
+                expr = a.value;
+                continue;
+            }
+            return null;
+        }
+        const t = expr orelse return null;
+        const mask = ast.expressionMask(alloc, t);
+        var at: ?usize = null;
+        var depth: i32 = 0;
+        var i: usize = 0;
+        while (i + 1 < t.len) : (i += 1) {
+            if (!mask[i]) continue;
+            switch (t[i]) {
+                '(', '[', '{' => depth += 1,
+                ')', ']', '}' => depth -= 1,
+                '.' => if (depth == 0 and t[i + 1] == '.') {
+                    if (at != null) return null;
+                    if (i + 2 < t.len and t[i + 2] == '.') return null;
+                    at = i;
+                },
+                else => {},
+            }
+        }
+        const j = at orelse return null;
+        const lo = std.mem.trim(u8, t[0..j], " \t\n\r");
+        const hi = std.mem.trim(u8, t[j + 2 ..], " \t\n\r");
+        if (lo.len == 0 or hi.len == 0) return null;
+        return .{ .lo = lo, .hi = hi };
+    }
+
+    /// The each arm's single node is a `std/store:insert` on THIS store
+    /// with the complete flat field list and zero continuations — a
+    /// `| row`, a `| full`, a piped next step all decline. Field order
+    /// is `storeInsertOrder`, the same list the insert transform reads.
+    fn insertFields(alloc: std.mem.Allocator, prog: *const ast.Program, each: *const ast.Continuation, store: []const u8) ?[]const struct_literal.StructField {
+        if (each.continuations.len != 0) return null;
+        if (each.condition != null or each.is_catchall) return null;
+        if (each.destructure.len != 0) return null;
+        if (each.node == null) return null;
+        const n: *const ast.Node = &each.node.?;
+        if (n.* != .invocation) return null;
+        const iv = &n.invocation;
+        const door = SX.isStoreDoor(iv) orelse return null;
+        if (!std.mem.eql(u8, door, "insert")) return null;
+        if (iv.variant != null or iv.return_binding != null or iv.return_destructure.len != 0 or
+            iv.inline_body != null or iv.preamble_code != null) return null;
+        var expr: ?[]const u8 = null;
+        var src: ?[]const u8 = null;
+        for (iv.args) |a| {
+            if (std.mem.eql(u8, a.name, "expr")) {
+                expr = a.value;
+                continue;
+            }
+            if (std.mem.eql(u8, a.name, "source")) {
+                src = a.value;
+                continue;
+            }
+            return null;
+        }
+        if (!std.mem.eql(u8, storeStripQuotes(expr orelse return null), store)) return null;
+        const order = storeInsertOrder(alloc, prog, store) orelse return null;
+        // A one-column identity store takes a bare value, not a field
+        // block — a different shape this lowering does not emit.
+        if (order.len == 1 and std.mem.eql(u8, order[0], ast.STORE_IDENTITY_COLUMN)) return null;
+        const braced = std.fmt.allocPrint(alloc, "{{{s}}}", .{src orelse return null}) catch unreachable;
+        const flds = struct_literal.parseFields(alloc, braced) catch return null;
+        if (flds.len != order.len) return null;
+        for (flds) |f| {
+            // Proto leaf writes (`left.health:`) and any column the
+            // block does not name decline — the check is set equality
+            // against the insert order, so a missing/extra name fails.
+            if (std.mem.indexOfScalar(u8, f.name, '.') != null) return null;
+            var hit = false;
+            for (order) |col| {
+                if (std.mem.eql(u8, f.name, col)) hit = true;
+            }
+            if (!hit) return null;
+            // The value must not observe the store mid-fill (a read
+            // would see `len` still at base) nor reach a door —
+            // masked-token scans, conservative on anything unparseable.
+            if (tokenIn(alloc, f.value, store)) return null;
+            for ([_][]const u8{ "insert", "take", "clear", "std" }) |bad| {
+                if (tokenIn(alloc, f.value, bad)) return null;
+            }
+            if (std.mem.indexOf(u8, f.value, "__koru_") != null) return null;
+        }
+        return flds;
+    }
+
+    /// The Zig text. The capacity panic is the per-row path's own
+    /// string and precondition: a normal insert panics on the first row
+    /// past CAP before writing it; this panics before writing ANY —
+    /// @panic aborts the process either way, so the difference is
+    /// unobservable. The bound arm's binding becomes `lo + j`.
+    fn emit(alloc: std.mem.Allocator, store: []const u8, cap: usize, range: Range, bind: ?[]const u8, flds: []const struct_literal.StructField) []const u8 {
+        var b = std.ArrayList(u8).initCapacity(alloc, 384) catch unreachable;
+        const w = b.writer(alloc);
+        // `//@koru:inline_stmt` — emit as statements, not the `[expand]`
+        // switch expression: the bulk block's result is void and the
+        // branch arms are dead data (emitInlineBodyNode's marker path).
+        // `n > cap - len`, not `len + n > cap`: the add can wrap usize
+        // in ReleaseFast when n is huge, and a wrapped check passes —
+        // the per-row path would panic at the cap row instead. `cap -
+        // len` cannot underflow: `len <= cap` is the store's invariant.
+        w.print("//@koru:inline_stmt\n{{\n    const __koru_bulk_lo = ({s});\n    const __koru_bulk_hi = ({s});\n    const __koru_bulk_n = __koru_bulk_hi - __koru_bulk_lo;\n    if (__koru_bulk_n > {d} - __koru_store_{s}.len) @panic(\"std/store: store '{s}' is full (capacity {d}) - declared capacity and the `| full` branch are pinned at 690_011\");\n    const __koru_bulk_base = __koru_store_{s}.len;\n    for (0..__koru_bulk_n) |__koru_bulk_j| {{\n", .{ range.lo, range.hi, cap, store, store, cap, store }) catch unreachable;
+        if (bind) |bb| {
+            // Emit the binding only when a field expr reads it — Zig
+            // rejects an unused `const i` (390_113's constant fill) and
+            // rejects `_ = i` when i IS used. `useOf` is the arbiter.
+            var used = false;
+            for (flds) |f| {
+                if (useOf(alloc, f.value, bb)) used = true;
+            }
+            if (used) {
+                w.print("        const {s} = __koru_bulk_lo + __koru_bulk_j;\n", .{codegen_utils.escapeZigIdentifier(alloc, bb) catch bb}) catch unreachable;
+            }
+        }
+        for (flds) |f| {
+            const col = codegen_utils.escapeZigIdentifier(alloc, f.name) catch f.name;
+            w.print("        __koru_store_{s}.{s}[__koru_bulk_base + __koru_bulk_j] = {s};\n", .{ store, col, f.value }) catch unreachable;
+        }
+        // `__koru_continue_1` is the done arm's hand-off — always
+        // present at index 1 (real, or the no-op arm `match`
+        // synthesizes). The resolver splices its body after the block.
+        // Written via `{d}` like the marker's four other writers so the
+        // variant-coverage derivation sees `__koru_continue_{}` — the
+        // marker class is already exempted (a splice token, not
+        // emitted code).
+        w.print("    }}\n    __koru_store_{s}.len += __koru_bulk_n;\n}}\n", .{store}) catch unreachable;
+        w.print("__koru_continue_{d}\n", .{1}) catch unreachable;
+        return b.items;
+    }
+
+    /// One continuation: if its node is the counted `for` whose each
+    /// arm is exactly this store's insert, freeze the bulk block into
+    /// the invocation's `inline_body` — the canonical "emit this
+    /// instead" slot the `~for` template itself uses — and mark the
+    /// node `@pass_ran("transform")` so the walker never hands it to
+    /// the for transform. The node stays `.invocation` (`f.inv()`
+    /// asserts that) and the continuations stay put — under an
+    /// inline_body they are metadata, not emission.
+    fn cont(alloc: std.mem.Allocator, prog: *const ast.Program, c: *ast.Continuation, store: []const u8, cap: usize) usize {
+        var n: usize = 0;
+        if (c.node) |*nd| {
+            if (nd.* == .invocation) {
+                if (match(alloc, prog, &nd.invocation, c, store, cap)) |text| {
+                    nd.invocation.inline_body = text;
+                    annotate(alloc, &nd.invocation);
+                    n += 1;
+                }
+            }
+        }
+        if (n == 0) {
+            for (c.continuations) |*cc| {
+                n += cont(alloc, prog, @constCast(cc), store, cap);
+            }
+        }
+        return n;
+    }
+
+    fn annotate(alloc: std.mem.Allocator, iv: *ast.Invocation) void {
+        const anns = alloc.alloc([]const u8, iv.annotations.len + 1) catch unreachable;
+        @memcpy(anns[0..iv.annotations.len], iv.annotations);
+        anns[iv.annotations.len] = "@pass_ran(\"transform\")";
+        iv.annotations = anns;
+    }
+
+    /// The pattern match — returns the bulk block's Zig text, or null
+    /// to leave the site a per-row insert. Every check that cannot
+    /// prove the shape declines.
+    fn match(alloc: std.mem.Allocator, prog: *const ast.Program, iv: *const ast.Invocation, c: *ast.Continuation, store: []const u8, cap: usize) ?[]const u8 {
+        const range = rangeOf(alloc, iv) orelse return null;
+        // The range bounds must not read the store being filled — a
+        // `0..s.len` hoisted check must see the same `hi` the per-row
+        // loop saw.
+        if (tokenIn(alloc, range.lo, store) or tokenIn(alloc, range.hi, store)) return null;
+        for ([_][]const u8{ "insert", "take" }) |bad| {
+            if (tokenIn(alloc, range.lo, bad) or tokenIn(alloc, range.hi, bad)) return null;
+        }
+        // Arms: exactly `! each`, optionally followed by `| done`. A
+        // done arm with a body runs after the loop — the bulk block
+        // keeps it by emitting `__koru_continue_1` at the end, the same
+        // hand-off marker the template's `{{ continuations["done"].
+        // continue }}` renders to; the splice resolver lowers it to the
+        // arm's body (guarded if the arm has a `when`). An ABSENT done
+        // is fine but must be written in: `for` declares it `| ?done`,
+        // and the obligation pass synthesizes a no-op arm for any
+        // optional branch left unhandled — an arm-list change that
+        // triggers a template RE-RENDER, which would overwrite this
+        // inline_body. Emitting the arm ourselves keeps the list
+        // stable (same shape the synthesizer makes: terminal node).
+        if (c.continuations.len == 1) {
+            // append below, after the site is proven
+        } else if (c.continuations.len == 2) {
+            const d = &c.continuations[1];
+            if (!std.mem.eql(u8, std.mem.trim(u8, d.branch, " "), "done")) return null;
+            if (d.kind != .terminal) return null;
+            if (d.is_catchall or d.destructure.len != 0) return null;
+            if (d.binding) |db| {
+                const bt = std.mem.trim(u8, db, " ");
+                if (bt.len != 0 and !std.mem.eql(u8, bt, "_")) return null;
+            }
+        } else return null;
+        const each: *const ast.Continuation = &c.continuations[0];
+        if (!std.mem.eql(u8, std.mem.trim(u8, each.branch, " "), "each")) return null;
+        if (each.kind != .effect) return null;
+        var bind: ?[]const u8 = null;
+        if (each.binding) |b0| {
+            const b = std.mem.trim(u8, b0, " ");
+            if (b.len == 0) return null;
+            if (!std.mem.eql(u8, b, "_")) {
+                for (b) |ch| {
+                    if (!Gate.isIdentCh(ch)) return null;
+                }
+                if (std.mem.eql(u8, b, store) or std.mem.startsWith(u8, b, "__koru_")) return null;
+                bind = b;
+            }
+        }
+        const flds = insertFields(alloc, prog, each, store) orelse return null;
+        const text = emit(alloc, store, cap, range, bind, flds);
+        // The bulk block carries the loop — the `each` arm is consumed
+        // DATA now, not a live handler. The flag keeps the emitter's
+        // Handlers-struct bridge from re-emitting the per-row insert
+        // beside the block (emitter_helpers.zig:5560 skips flagged arms).
+        if (c.continuations.len == 1) {
+            const nc = alloc.alloc(ast.Continuation, 2) catch unreachable;
+            nc[0] = c.continuations[0];
+            nc[0].is_transformed_subtree = true;
+            nc[1] = ast.Continuation{
+                .branch = "done",
+                .binding = null,
+                .binding_annotations = &.{},
+                .binding_type = .branch_payload,
+                .is_catchall = false,
+                .catchall_metatype = null,
+                .condition = null,
+                .condition_expr = null,
+                .node = .{ .terminal = {} },
+                .indent = 0,
+                .continuations = &.{},
+                .location = each.location,
+            };
+            c.continuations = nc;
+        } else {
+            @constCast(&c.continuations[0]).is_transformed_subtree = true;
+        }
+        return text;
+    }
+
+    /// The program walk — every flow's continuation tree. Rewrites in
+    /// place (the `@constCast` precedent is the storeRefs walk's). A
+    /// top-level `for` is its flow's OWN head invocation — the emitter
+    /// reads `Flow.inline_body` there — while a nested `for` rides
+    /// `Invocation.inline_body`. The field expressions inside the
+    /// emitted block still read like source (`cfg.entities`); `new`'s
+    /// own end-of-pass Walk lowers store refs in inline bodies, the
+    /// same slot every other text position rides.
+    fn rewrite(alloc: std.mem.Allocator, prog: *const ast.Program, program_items: []const *const ast.Item, store: []const u8, cap: usize) usize {
+        var n: usize = 0;
+        for (program_items) |pi| {
+            if (pi.* != .flow) continue;
+            const f = @constCast(&pi.flow);
+            var done = false;
+            if (f.body.node) |*nd| {
+                if (nd.* == .invocation) {
+                    if (match(alloc, prog, &nd.invocation, &f.body, store, cap)) |text| {
+                        f.inline_body = text;
+                        annotate(alloc, &nd.invocation);
+                        done = true;
+                    }
+                }
+            }
+            if (!done) {
+                for (f.body.continuations) |*cc| {
+                    n += cont(alloc, prog, @constCast(cc), store, cap);
+                }
+            } else n += 1;
+        }
+        return n;
+    }
+};

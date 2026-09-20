@@ -1233,7 +1233,6 @@ fn isStoreNewFor(f: *const ast_find.Flow, want: []const u8) bool {
 // ============================================================================
 // THE INDEXED STORE READ — one implementation, every position
 // ============================================================================
-//
 // `pool[h].hp` is a handle-addressed read, and it lowers to the SoA column
 // (`(&__koru_store_pool.hp)[__koru_store_pool.__koru_resolve(h)]`). For a long
 // time it lowered in ONE position — inside a `stored` write block — because the
@@ -1686,4 +1685,5 @@ fn storeLowerText(
 ~part idecls
 ~part qnone
 ~part gate
+~part bulk
 ~part plan

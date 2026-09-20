@@ -1640,6 +1640,38 @@
             if (qs.req_id != null or qs.may_remove) rule_needs = true;
         }
         const needs_handles = Gate.needsHandles(allocator, program, program_items, store_name, field_names, is_tree, step_arm != null, lifecycle_id, rule_needs);
+        // Bulk append — a counted `for` whose body is a single insert
+        // into this store lowers to a hoisted capacity check, indexed
+        // column writes at `base + j`, and one `len += n` (the per-row
+        // `len += 1` is a loop-carried store nothing can reassociate
+        // past the per-row capacity @panic — measured ~3.3x on the
+        // add_remove fill). The gate is STRICTER than needs_handles:
+        // nothing may observe a single insert — no rule, watch, or
+        // lifecycle arm on this store, no facets, kinds, owned or
+        // fixed-char columns — and the site itself must be a bare fill
+        // (no `| row`, `| full`, piped step, or store-reading expr).
+        // Zig only: the rewrite emits `.inline_code`, which has no lane
+        // (store.bulk.kz). Every doubt declines — the site stays a
+        // per-row insert and is correct either way.
+        const bulkable = !host_is_js and !needs_handles and
+            qsites.items.len == 0 and pwatch_arms.items.len == 0 and
+            inserted_arms.items.len == 0 and removed_arms.items.len == 0 and
+            updated_arms.items.len == 0 and cleared_arms.items.len == 0 and
+            discharge_arm == null and !want_kind and
+            !Bulk.hasFacets(allocator, program, leaf_provs.items) and
+            blk_lean_cols: {
+                var bad = false;
+                for (field_owned) |fo| {
+                    if (fo) bad = true;
+                }
+                for (field_char_caps) |fc| {
+                    if (fc != null) bad = true;
+                }
+                break :blk_lean_cols !bad;
+            };
+        if (bulkable) {
+            _ = Bulk.rewrite(allocator, program, program_items, store_name, CAP);
+        }
         // Topological order over the declared DAG; rules with no edges keep
         // collection order RELATIVE TO EACH OTHER but that order is
         // contractually UNSPECIFIED (the fusion license). Cycle = comptime

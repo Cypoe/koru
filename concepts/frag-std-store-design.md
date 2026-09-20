@@ -785,3 +785,23 @@ add_remove 0.53ms -> ~0.28ms, insert 3.3 -> ~2.5ns/row. The same TakeScan
 predicate that picks a rule's loop form now gates the store's storage —
 removal tolerance and handle elision are one observation question asked at
 two boundaries. What the program cannot see, the emitter does not build.
+
+Bulk append is the same observation question at the loop boundary
+(2026-09-20, `~part bulk`): a counted `for` whose `! each` body is a
+single insert into an observation-free store lowers to one hoisted
+capacity check, column writes at `base + j`, and one `len += n`. The
+paragraph above ended with "the rest of the churn gap vs plain Zig is
+model distance, not machinery" — measured wrong within hours. The
+per-row `len += 1` is a loop-carried store no optimizer can reassociate
+past the per-row capacity panic, and it was the fill's real cost — not
+the event-call marshal, which LLVM already ate (marking the impl
+`inline` moved nothing). Hand-editing the emitted loop proved it before
+the transform existed: 294us -> 89us; the shipped lowering lands ~63-77us
+for 100k rows on the same port's `mark-init`. The gate is stricter than
+needs_handles — insert must be unobservable (no rule, watch, lifecycle,
+`| row`, `| full`, or store-reading field expr) — and a `| done` arm
+survives via the same `__koru_continue` marker the template renders.
+690_334 pins both lanes. Neither end of the pattern could see the other —
+insert's transform is site-local, `for`'s body is an opaque splice marker —
+so the recognizer lives in `new`'s whole-program walk, the one place both
+sides are visible.
