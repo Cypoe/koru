@@ -270,7 +270,6 @@ tor observe { value: i64 }
 observe = for(0..@as(usize, @intCast(cfg.observers)))
     ! each o |> if ((((@as(u64, @bitCast(value)) ^ @as(u64, @intCast(o))) *% 0x9e3779b9) & 7) == 0)
         | then |> std/store:stored { acc.sink: acc.sink + value + @as(i64, @intCast(o)) }
-        | else |> _
 
 // One damage EVENT, `entities/10` of them per frame. The victim address is
 // respelled FOUR times for want of an expression-local binding.
@@ -780,7 +779,6 @@ tor combat-observe { value: i64, fire: i64 }
 combat-observe = for(0..@as(usize, @intCast(cfg.observers)))
     ! each o |> if (fire == 1 and (((@as(u64, @bitCast(value)) ^ @as(u64, @intCast(o))) *% 0x9e3779b9) & 7) == 0)
         | then |> std/store:stored { acc.sink: acc.sink + value + @as(i64, @intCast(o)) }
-        | else |> _
 
 // ONE STEP of the chain walk. `keep:` stops the loop at the first hit, so this
 // runs once per enemy actually inspected — the length, not the bound.
@@ -905,73 +903,57 @@ s-combat = for(0..@as(usize, @intCast(cfg.frames)))
 tor run-dense {}
 run-dense = if(cfg.scenario == 1)
 | then |> s-dense()
-| else |> _
 tor run-sparse {}
 run-sparse = if(cfg.scenario == 2)
 | then |> s-sparse()
-| else |> _
 tor run-query-get {}
 run-query-get = if(cfg.scenario == 3)
 | then |> s-query-get()
-| else |> _
 tor run-schedule-empty {}
 run-schedule-empty = if(cfg.scenario == 4)
 | then |> s-schedule-empty()
-| else |> _
 tor run-spawn {}
 run-spawn = if(cfg.scenario == 5)
 | then |> s-spawn()
-| else |> _
 tor run-spawn-batch {}
 run-spawn-batch = if(cfg.scenario == 6)
 | then |> s-spawn()
-| else |> _
 tor run-despawn {}
 run-despawn = if(cfg.scenario == 7)
 | then |> s-despawn()
-| else |> _
 tor run-add-remove {}
 run-add-remove = if(cfg.scenario == 8)
 | then |> s-add-remove()
-| else |> _
 tor run-fanout {}
 run-fanout = if(cfg.scenario == 9)
 | then |> s-fanout()
-| else |> _
 tor run-bevy-strength {}
 run-bevy-strength = if(cfg.scenario == 10)
 | then |> s-bevy-strength()
-| else |> _
 
 tor run-boids {}
 run-boids = if(cfg.scenario == 11)
 | then |> s-boids()
-| else |> _
 
 tor run-boids-fused {}
 run-boids-fused = if(cfg.scenario == 12)
 | then |> s-boids-fused()
-| else |> _
 
 tor run-boids-f2 {}
 run-boids-f2 = if(cfg.scenario == 13)
 | then |> s-boids-f2()
-| else |> _
 
 tor run-boids-f4 {}
 run-boids-f4 = if(cfg.scenario == 14)
 | then |> s-boids-f4()
-| else |> _
 
 tor run-boids-split {}
 run-boids-split = if(cfg.scenario == 15)
 | then |> s-boids-split()
-| else |> _
 
 tor run-boids-phase {}
 run-boids-phase = if(cfg.scenario == 16)
 | then |> s-boids-phase()
-| else |> _
 
 
 
@@ -982,22 +964,18 @@ run-boids-phase = if(cfg.scenario == 16)
 tor run-boids-fold {}
 run-boids-fold = if(cfg.scenario == 24)
 | then |> s-boids-fold()
-| else |> _
 
 tor run-boids-helpers {}
 run-boids-helpers = if(cfg.scenario == 23)
 | then |> s-boids-helpers()
-| else |> _
 
 tor run-churn {}
 run-churn = if(cfg.scenario == 25)
 | then |> s-churn()
-| else |> _
 
 tor run-combat {}
 run-combat = if(cfg.scenario == 26)
 | then |> s-combat()
-| else |> _
 
 tor run {}
 run = run-dense() |> run-sparse() |> run-query-get() |> run-schedule-empty()
@@ -1018,7 +996,6 @@ prep = prep-boids() |> prep-churn() |> prep-combat()
 tor prep-boids {}
 prep-boids = if(cfg.scenario >= 11 and cfg.scenario <= 24)
 | then |> flock-init() |> flock-normalize()
-| else |> _
 
 // The churn world builds AND runs one untimed warmup frame here, then zeroes
 // all four counters. The warmup is load-bearing on bevy's side — a
@@ -1030,44 +1007,35 @@ tor prep-churn {}
 prep-churn = if(cfg.scenario == 25)
 | then |> churn-init() |> churn-frame()
     |> std/store:stored { ch.csum: 0, ch.trans: 0, ch.dmge: 0, ch.deaths: 0 }
-| else |> _
 
 // Enemy and projectile construction is untimed, matching boids and the churn
 // world; the frame loop is the measurement.
 tor prep-combat {}
 prep-combat = if(cfg.scenario == 26)
 | then |> combat-init() |> combat-init-pr()
-| else |> _
 
 tor fin-dense {}
 fin-dense = if(cfg.scenario == 1)
 | then |> read-all()
-| else |> _
 tor fin-sparse {}
 fin-sparse = if(cfg.scenario == 2)
 | then |> read-active()
-| else |> _
 tor fin-spawn {}
 fin-spawn = if(cfg.scenario == 5)
 | then |> count-rows()
-| else |> _
 tor fin-spawn-batch {}
 fin-spawn-batch = if(cfg.scenario == 6)
 | then |> count-rows()
-| else |> _
 tor fin-despawn {}
 fin-despawn = if(cfg.scenario == 7)
 | then |> count-rows()
-| else |> _
 tor fin-add-remove {}
 fin-add-remove = if(cfg.scenario == 8)
 | then |> count-marks()
-| else |> _
 
 tor fin-boids {}
 fin-boids = if(cfg.scenario >= 11 and cfg.scenario <= 24)
 | then |> read-flock()
-| else |> _
 
 tor report-phases {}
 report-phases = if(cfg.scenario == 16)
@@ -1077,14 +1045,12 @@ report-phases = if(cfg.scenario == 16)
     |> std/io:eprint.ln("koru_store boids_phase scatter: {{ ph.psct:d }} ns")
     |> std/io:eprint.ln("koru_store boids_phase resolve: {{ ph.pres:d }} ns")
     |> std/io:eprint.ln("koru_store boids_phase steer: {{ ph.pstg:d }} ns")
-| else |> _
 
 // bevy assembles its sink from all four counters, weighted; the archetype
 // counts it also prints are diagnostics and are deliberately absent here.
 tor fin-churn {}
 fin-churn = if(cfg.scenario == 25)
 | then |> std/store:stored { acc.sink: ch.csum + ch.trans * 3 + ch.dmge * 5 + ch.deaths * 7 }
-| else |> _
 
 tor finish {}
 finish = fin-dense() |> fin-sparse() |> fin-spawn() |> fin-spawn-batch()
@@ -1098,94 +1064,74 @@ finish = fin-dense() |> fin-sparse() |> fin-spawn() |> fin-spawn-batch()
 tor name-dense {}
 name-dense = if(cfg.scenario == 1)
 | then |> std/io:print("dense")
-| else |> _
 tor name-sparse {}
 name-sparse = if(cfg.scenario == 2)
 | then |> std/io:print("sparse")
-| else |> _
 tor name-query-get {}
 name-query-get = if(cfg.scenario == 3)
 | then |> std/io:print("query_get")
-| else |> _
 tor name-schedule-empty {}
 name-schedule-empty = if(cfg.scenario == 4)
 | then |> std/io:print("schedule_empty")
-| else |> _
 tor name-spawn {}
 name-spawn = if(cfg.scenario == 5)
 | then |> std/io:print("spawn")
-| else |> _
 tor name-spawn-batch {}
 name-spawn-batch = if(cfg.scenario == 6)
 | then |> std/io:print("spawn_batch")
-| else |> _
 tor name-despawn {}
 name-despawn = if(cfg.scenario == 7)
 | then |> std/io:print("despawn")
-| else |> _
 tor name-add-remove {}
 name-add-remove = if(cfg.scenario == 8)
 | then |> std/io:print("add_remove")
-| else |> _
 tor name-fanout {}
 name-fanout = if(cfg.scenario == 9)
 | then |> std/io:print("fanout")
-| else |> _
 tor name-bevy-strength {}
 name-bevy-strength = if(cfg.scenario == 10)
 | then |> std/io:print("bevy_strength_world")
-| else |> _
 
 tor name-boids {}
 name-boids = if(cfg.scenario == 11)
 | then |> std/io:print("boids")
-| else |> _
 
 tor name-boids-fused {}
 name-boids-fused = if(cfg.scenario == 12)
 | then |> std/io:print("boids_fused")
-| else |> _
 
 tor name-boids-f2 {}
 name-boids-f2 = if(cfg.scenario == 13)
 | then |> std/io:print("boids_f2")
-| else |> _
 
 tor name-boids-f4 {}
 name-boids-f4 = if(cfg.scenario == 14)
 | then |> std/io:print("boids_f4")
-| else |> _
 
 tor name-boids-split {}
 name-boids-split = if(cfg.scenario == 15)
 | then |> std/io:print("boids_split")
-| else |> _
 
 tor name-boids-fold {}
 name-boids-fold = if(cfg.scenario == 24)
 | then |> std/io:print("boids_fold")
-| else |> _
 
 tor name-boids-helpers {}
 name-boids-helpers = if(cfg.scenario == 23)
 | then |> std/io:print("boids_helpers")
-| else |> _
 
 tor name-boids-phase {}
 name-boids-phase = if(cfg.scenario == 16)
 | then |> std/io:print("boids_phase")
-| else |> _
 
 tor name-churn {}
 name-churn = if(cfg.scenario == 25)
 | then |> std/io:print("archetype_churn_world")
-| else |> _
 
 
 tor name-combat {}
 name-combat = if(cfg.scenario == 26)
 | then |> std/io:print("combat_world")
-| else |> _
 
 
 
