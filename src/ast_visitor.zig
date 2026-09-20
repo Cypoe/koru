@@ -103,84 +103,41 @@ pub const ASTVisitor = struct {
         }
     }
     
-    fn visitEvent(self: *ASTVisitor, event: *ast.EventDecl) !TraversalControl {
-        // Pre-visit
+    /// Leaf visit shared by every node type with no children: pre hook,
+    /// post hook. Under `both`-order traversal a `skip_children` from the
+    /// pre hook still runs the post hook before the control propagates.
+    fn visitLeaf(self: *ASTVisitor, node: anytype, comptime pre_field: []const u8, comptime post_field: []const u8) !TraversalControl {
         if (self.order == .pre_order or self.order == .both) {
-            if (self.visitEventPre) |visitor| {
-                const control = try visitor(self, event);
+            if (@field(self, pre_field)) |visitor| {
+                const control = try visitor(self, node);
                 if (control != .continue_traversal) {
-                    if (control == .skip_children and self.order == .both and self.visitEventPost != null) {
-                        try self.visitEventPost.?(self, event);
+                    if (control == .skip_children and self.order == .both and @field(self, post_field) != null) {
+                        try @field(self, post_field).?(self, node);
                     }
                     return control;
                 }
             }
         }
-        
-        // Visit children (branches, input shape, etc.)
-        // Note: These are leaf nodes in our current AST structure
-        
-        // Post-visit
         if (self.order == .post_order or self.order == .both) {
-            if (self.visitEventPost) |visitor| {
-                try visitor(self, event);
+            if (@field(self, post_field)) |visitor| {
+                try visitor(self, node);
             }
         }
-        
         return .continue_traversal;
+    }
+
+    fn visitEvent(self: *ASTVisitor, event: *ast.EventDecl) !TraversalControl {
+        return self.visitLeaf(event, "visitEventPre", "visitEventPost");
     }
     
     fn visitProc(self: *ASTVisitor, proc: *ast.ProcDecl) !TraversalControl {
-        // Pre-visit
-        if (self.order == .pre_order or self.order == .both) {
-            if (self.visitProcPre) |visitor| {
-                const control = try visitor(self, proc);
-                if (control != .continue_traversal) {
-                    if (control == .skip_children and self.order == .both and self.visitProcPost != null) {
-                        try self.visitProcPost.?(self, proc);
-                    }
-                    return control;
-                }
-            }
-        }
-        
         // Proc body is opaque Zig code, no children to visit
-        
-        // Post-visit
-        if (self.order == .post_order or self.order == .both) {
-            if (self.visitProcPost) |visitor| {
-                try visitor(self, proc);
-            }
-        }
-        
-        return .continue_traversal;
+        return self.visitLeaf(proc, "visitProcPre", "visitProcPost");
     }
     
     fn visitFlow(self: *ASTVisitor, flow: *ast.Flow) !TraversalControl {
-        // Pre-visit
-        if (self.order == .pre_order or self.order == .both) {
-            if (self.visitFlowPre) |visitor| {
-                const control = try visitor(self, flow);
-                if (control != .continue_traversal) {
-                    if (control == .skip_children and self.order == .both and self.visitFlowPost != null) {
-                        try self.visitFlowPost.?(self, flow);
-                    }
-                    return control;
-                }
-            }
-        }
-        
-        // Visit invocation and continuations
-        // These could be expanded to visit nested structures
-        
-        // Post-visit
-        if (self.order == .post_order or self.order == .both) {
-            if (self.visitFlowPost) |visitor| {
-                try visitor(self, flow);
-            }
-        }
-        
-        return .continue_traversal;
+        // Invocations and continuations could be visited here
+        return self.visitLeaf(flow, "visitFlowPre", "visitFlowPost");
     }
     
     fn visitEventTap(self: *ASTVisitor, tap: *ast.EventTap) !TraversalControl {
@@ -191,81 +148,15 @@ pub const ASTVisitor = struct {
     }
     
     fn visitLabel(self: *ASTVisitor, label: *ast.LabelDecl) !TraversalControl {
-        // Pre-visit
-        if (self.order == .pre_order or self.order == .both) {
-            if (self.visitLabelPre) |visitor| {
-                const control = try visitor(self, label);
-                if (control != .continue_traversal) {
-                    if (control == .skip_children and self.order == .both and self.visitLabelPost != null) {
-                        try self.visitLabelPost.?(self, label);
-                    }
-                    return control;
-                }
-            }
-        }
-        
-        // Visit nested continuations if any
-        
-        // Post-visit
-        if (self.order == .post_order or self.order == .both) {
-            if (self.visitLabelPost) |visitor| {
-                try visitor(self, label);
-            }
-        }
-        
-        return .continue_traversal;
+        return self.visitLeaf(label, "visitLabelPre", "visitLabelPost");
     }
     
     fn visitImmediateImpl(self: *ASTVisitor, ii: *ast.ImmediateImpl) !TraversalControl {
-        // Pre-visit
-        if (self.order == .pre_order or self.order == .both) {
-            if (self.visitImmediateImplPre) |visitor| {
-                const control = try visitor(self, ii);
-                if (control != .continue_traversal) {
-                    if (control == .skip_children and self.order == .both and self.visitImmediateImplPost != null) {
-                        try self.visitImmediateImplPost.?(self, ii);
-                    }
-                    return control;
-                }
-            }
-        }
-
-        // Immediate impls are leaf nodes (no children)
-
-        // Post-visit
-        if (self.order == .post_order or self.order == .both) {
-            if (self.visitImmediateImplPost) |visitor| {
-                try visitor(self, ii);
-            }
-        }
-
-        return .continue_traversal;
+        return self.visitLeaf(ii, "visitImmediateImplPre", "visitImmediateImplPost");
     }
     
     fn visitImport(self: *ASTVisitor, import: *ast.ImportDecl) !TraversalControl {
-        // Pre-visit
-        if (self.order == .pre_order or self.order == .both) {
-            if (self.visitImportPre) |visitor| {
-                const control = try visitor(self, import);
-                if (control != .continue_traversal) {
-                    if (control == .skip_children and self.order == .both and self.visitImportPost != null) {
-                        try self.visitImportPost.?(self, import);
-                    }
-                    return control;
-                }
-            }
-        }
-        
-        // Imports have no children
-        
-        // Post-visit
-        if (self.order == .post_order or self.order == .both) {
-            if (self.visitImportPost) |visitor| {
-                try visitor(self, import);
-            }
-        }
-        
-        return .continue_traversal;
+        return self.visitLeaf(import, "visitImportPre", "visitImportPost");
     }
     
     fn visitHostLine(self: *ASTVisitor, line: *ast.HostLine) !TraversalControl {
