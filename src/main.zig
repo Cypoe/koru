@@ -1543,7 +1543,10 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\                    try __koru_std.fs.File.stderr().writeAll(msg2);
             \\                    __koru_std.process.exit(1);
             \\                };
-            \\                const msg2 = try __koru_std.fmt.bufPrint(&buf2, "✓ Compiled to {s}\n", .{output_exe});
+            \\                // The mode rides the success line — a silent Debug
+            \\                // default is how a benchmark ends up timing a
+            \\                // bounds-checked binary without knowing it.
+            \\                const msg2 = try __koru_std.fmt.bufPrint(&buf2, "✓ Compiled to {s} ({s})\n", .{ output_exe, out_opt });
             \\                try stdout2.writeAll(msg2);
             \\            } else {
             \\                const msg2 = try __koru_std.fmt.bufPrint(&buf2, "✗ Compilation failed\n", .{});
@@ -1617,7 +1620,7 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\        // Full Term union — same contract as the build-file path above.
             \\        switch (result.term) {
             \\            .Exited => |exit_code| if (exit_code == 0) {
-            \\                const msg2 = try __koru_std.fmt.bufPrint(&buf2, "✓ Compiled to {s}\n", .{output_exe});
+            \\                const msg2 = try __koru_std.fmt.bufPrint(&buf2, "✓ Compiled to {s} ({s})\n", .{ output_exe, if (release_fast and !debug) "ReleaseFast" else "Debug" });
             \\                try stdout2.writeAll(msg2);
             \\            } else {
             \\                const msg2 = try __koru_std.fmt.bufPrint(&buf2, "✗ Compilation failed\n", .{});
@@ -8161,7 +8164,11 @@ pub fn main() !void {
             // command that ran.
             try printStdout(allocator, "✓ {s}\n", .{cmd});
         } else if (std.fs.cwd().access(exe_name, .{})) |_| {
-            try printStdout(allocator, "✓ Built executable: {s}\n", .{exe_name});
+            // The mode rides the success line — the Debug default is
+            // deliberate (checks on for the suite to judge), but silent
+            // is how a benchmark ends up timing a bounds-checked binary.
+            const exe_mode = if (compiler_config.hasFlag("release=fast") and !compiler_config.hasFlag("debug")) "ReleaseFast" else "Debug";
+            try printStdout(allocator, "✓ Built executable: {s} ({s})\n", .{ exe_name, exe_mode });
         } else |_| {}
 
         // If run command, execute the binary

@@ -60,3 +60,14 @@ There is no positive fact available when the backend exits cleanly, no command
 ran, and no executable exists. That branch now prints nothing at all. Silence is
 the right default over narrating an absence, but whether that state is reachable
 — and whether it should be an error rather than silence — is unexamined.
+
+The same belief one level up: the act includes the MODE it ran in
+(2026-09-21). `koruc prog.k` built Debug and `✓ Compiled to a.out` said
+nothing about it — a truthful line that left the act under-specified,
+which is how a benchmark ended up timing a bounds-checked binary at 21x
+the ReleaseFast number. The Debug default is a deliberate ruling (the
+suite must judge checked code); silence was the defect. The success line
+now names the mode — `✓ Compiled to a.out (Debug)` — on both the
+build-file and build-exe paths and on the outer `Built executable` line.
+905_build_mode_names_itself pins the Debug banner; the ruling stands, the
+invisibility does not.
