@@ -760,3 +760,16 @@ column mention. Zig's comptime quota was the instrument that noticed, not
 a profiler. The dense row is now `usize` end to end — sweep cursor, rule cursor,
 every write-family `row` input — and the only casts left are at the
 handle boundary (`__koru_resolve`, `__koru_handle_of`, `[ordinal]`).
+
+Compound column substrate — measured (2026-09-20, `mat_shape_ab` probe):
+a vec/mat field flattens to scalar leaves, full stop. The tier-2/3 open
+question in 690_020 ("one compound cell vs scalar leaves") was decided by
+the workload that raised it: on a mat4 inverse over 10k rows, 32 flat
+columns run ~80us/pass where a `[16]f64` compound cell runs ~153us — LLVM
+vectorizes scalar columns across ROWS, and a row-local array can never
+form that vector. The compound declaration is sugar over the fast shape
+(`[4][4]f64` -> `ProtoExpander` leaves, ranged writes unrolling into
+today's envelope), not a new cell type. The real cost of flattening is
+write-mask width — a 4x4 pair already spends 32 of 64 mask bits — not
+speed. Chunked envelopes or a wider mask are the follow-on when tables
+get wide.

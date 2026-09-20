@@ -72,3 +72,41 @@ Existing grounded shapes to extend from, when the walk happens:
 residue pin (this) → spelling pin per tier (provisional input.kz, honest
 red) → green as `create` accepts each tier. Tier 1 may be promotable
 almost immediately once rung-two work opens store.kz anyway.
+
+## Tier 2/3 substrate — MEASURED (2026-09-20, probe `mat_shape_ab`)
+
+The open question above asked whether a vec/mat column should be one
+compound cell (SoA-of-vec) or scalar leaves the planner groups (pure SoA).
+Measured on the workload that motivated it — the 690_127 mat4 inverse,
+10k rows x 200 passes, identical math and identical sinks:
+
+| shape | ns/pass |
+|---|---|
+| 32 flat scalar columns (today's emission) | ~80,000 |
+| one `[16]f64` cell per row, math comptime-unrolled | ~153,000 |
+| same cells under a runtime ranged loop | ~121,000 |
+
+Flat leaves win 1.9x and the mechanism is visible in the disassembly:
+scalar columns let LLVM vectorize ACROSS ROWS (`ldr q` / `fmul.2d` carry
+two rows per op through the whole cofactor graph). A row-local array is a
+scalar dependency chain — no vector ever forms inside one row's inverse.
+The residue's earlier guess ("one column of N-lane elements is
+SIMD-friendly") was backwards for this workload: the SIMD dimension is the
+row axis, not the element axis.
+
+Consequence for the design: a compound field should DECLARE like a unit
+and FLATTEN like a proto field — `t: [4][4]f64` → sixteen leaf columns via
+the `ProtoExpander` path that already mints `left.health` from
+`Limb.health`. A ranged write (`stored` entry whose LHS indexes the
+declared extents — spelling NOT invented, Lars's) unrolls at transform
+time into today's envelope shape, so the emitted code keeps the winning
+layout. No compound-cell substrate is needed for performance.
+
+What that leaves real: (a) the 64-column write mask — one 4x4 pair already
+spends 32 bits, so wide tables need chunked envelopes or a wider mask;
+(b) the watch ruling below narrows — leaves are scalar columns, so the
+question becomes whether `! pos` on a compound field is a grouped event
+worth spelling at all, not which payload a cell carries.
+
+Probe: `koru-benchmarks/suites/ecs-store/probes/zig/mat_shape_ab.zig`
+(commit `4ee8c2d`), one variant per process, argv `a|b|c`.
