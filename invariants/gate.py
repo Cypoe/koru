@@ -52,6 +52,15 @@ KORUC = os.path.join(HERE, "..", "zig-out", "bin", "koruc")
 GATE_BIN = os.path.join(HERE, "a.out")
 GATE_SRC = os.path.join(HERE, "gate.k")
 
+# The judge's input window, measured 2026-09-21 against
+# typesafe/jev-1.13-20260917 via OpenRouter: a 100KB state judged fine,
+# 147KB refused with HTTP 400 max_tokens_exceeded. The real bound is
+# tokens — bytes is the proxy the gate can see — so this sits
+# deliberately under the measured cliff. A state past it is not a
+# judgment failure; it is an input the judge cannot hold, and the
+# honest answer is UNJUDGED with the cause named.
+JUDGE_STATE_MAX_BYTES = 96_000
+
 
 def koruc_invariants():
     """Run `koruc invariants.kz invariants`; return combined output.
@@ -272,7 +281,12 @@ def main():
                 binary_ready = True
                 if not ensure_gate_binary():
                     return 1
-            verdict = judge(r["rule"], state)
+            if len(state.encode()) > JUDGE_STATE_MAX_BYTES:
+                verdict = (f"UNJUDGED state {len(state.encode())}B exceeds the "
+                           f"judge's context (~{JUDGE_STATE_MAX_BYTES}B measured "
+                           "— split the commit or scope the row narrower)")
+            else:
+                verdict = judge(r["rule"], state)
             if verdict.startswith("VIOLATION"):
                 if block:
                     failures.append(f"judge VIOLATION {r['name']}  {verdict}")
