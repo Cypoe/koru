@@ -953,6 +953,81 @@ fn rewriteImportedDefaultEventCalls(allocator: std.mem.Allocator, items: []const
     }
 }
 
+// ONE ModuleDecl PER SOURCE FILE — the invariant the emitter needs.
+// `emitModuleNode` groups ModuleDecls by logical_name and emits every
+// one of them into a single Zig struct, so a file reached twice puts
+// its whole declaration surface in twice. The queue-level dedup above
+// catches a module imported twice by name, but a file can ALSO arrive
+// as a directory's submodule and again as an explicit
+// `~import <pkg>/<file>` — two different ImportedModules, one file.
+fn addModuleToAST(
+    alloc: std.mem.Allocator,
+    set_alloc: std.mem.Allocator,
+    seen: *std.StringHashMap(void),
+    items: *std.ArrayList(ast.Item),
+    module: *ImportedModule,
+    res: *ModuleResolver,
+) !void {
+    const claim = struct {
+        fn f(sa: std.mem.Allocator, s: *std.StringHashMap(void), path: []const u8) !bool {
+            if (s.contains(path)) return false;
+            try s.put(try sa.dupe(u8, path), {});
+            return true;
+        }
+    }.f;
+
+    const has_source = (module.source_file.items.len > 0 or module.source_file.module_annotations.len > 0) and
+        try claim(set_alloc, seen, module.canonical_path);
+    if (has_source) {
+        const is_system = res.isSystemModule(module.canonical_path);
+        const annotations = try alloc.alloc([]const u8, module.source_file.module_annotations.len);
+        for (module.source_file.module_annotations, 0..) |ann, ann_idx| {
+            annotations[ann_idx] = try alloc.dupe(u8, ann);
+        }
+
+        const canon_owned = try alloc.dupe(u8, module.canonical_path);
+        const module_decl = ast.ModuleDecl{
+            .logical_name = try alloc.dupe(u8, module.logical_name),
+            .canonical_path = canon_owned,
+            .items = module.source_file.items,
+            .is_system = is_system,
+            .annotations = annotations,
+            .location = .{ .file = canon_owned, .line = 1, .column = 0 },
+        };
+        module.source_file.items = &.{};
+        try items.append(alloc, .{ .module_decl = module_decl });
+    }
+
+    if (module.is_directory and module.submodules.len > 0) {
+        for (module.submodules) |*submod| {
+            if (!try claim(set_alloc, seen, submod.canonical_path)) continue;
+            const is_system = res.isSystemModule(submod.canonical_path);
+
+            const dotted_name = if (std.mem.eql(u8, submod.logical_name, "index"))
+                try alloc.dupe(u8, module.logical_name)
+            else
+                try std.fmt.allocPrint(alloc, "{s}.{s}", .{ module.logical_name, submod.logical_name });
+
+            const annotations = try alloc.alloc([]const u8, submod.source_file.module_annotations.len);
+            for (submod.source_file.module_annotations, 0..) |ann, ann_idx| {
+                annotations[ann_idx] = try alloc.dupe(u8, ann);
+            }
+
+            const submod_canon_owned = try alloc.dupe(u8, submod.canonical_path);
+            const module_decl = ast.ModuleDecl{
+                .logical_name = dotted_name,
+                .canonical_path = submod_canon_owned,
+                .items = submod.source_file.items,
+                .is_system = is_system,
+                .annotations = annotations,
+                .location = .{ .file = submod_canon_owned, .line = 1, .column = 0 },
+            };
+            submod.source_file.items = &.{};
+            try items.append(alloc, .{ .module_decl = module_decl });
+        }
+    }
+}
+
 pub const CombineResult = struct {
     imported_module_count: usize,
     /// Canonical paths of resolved imports (gpa-owned strings).
@@ -1090,83 +1165,6 @@ pub fn combineImports(
 
     var combined_items = try std.ArrayList(ast.Item).initCapacity(parse_allocator, source_file.items.len);
     defer combined_items.deinit(parse_allocator);
-
-    const addModuleToAST = struct {
-        fn add(
-            alloc: std.mem.Allocator,
-            set_alloc: std.mem.Allocator,
-            seen: *std.StringHashMap(void),
-            items: *std.ArrayList(ast.Item),
-            module: *ImportedModule,
-            res: *ModuleResolver,
-        ) !void {
-            // ONE ModuleDecl PER SOURCE FILE — the invariant the emitter needs.
-            // `emitModuleNode` groups ModuleDecls by logical_name and emits every
-            // one of them into a single Zig struct, so a file reached twice puts
-            // its whole declaration surface in twice. The queue-level dedup above
-            // catches a module imported twice by name, but a file can ALSO arrive
-            // as a directory's submodule and again as an explicit
-            // `~import <pkg>/<file>` — two different ImportedModules, one file.
-            const claim = struct {
-                fn f(sa: std.mem.Allocator, s: *std.StringHashMap(void), path: []const u8) !bool {
-                    if (s.contains(path)) return false;
-                    try s.put(try sa.dupe(u8, path), {});
-                    return true;
-                }
-            }.f;
-
-            const has_source = (module.source_file.items.len > 0 or module.source_file.module_annotations.len > 0) and
-                try claim(set_alloc, seen, module.canonical_path);
-            if (has_source) {
-                const is_system = res.isSystemModule(module.canonical_path);
-                const annotations = try alloc.alloc([]const u8, module.source_file.module_annotations.len);
-                for (module.source_file.module_annotations, 0..) |ann, ann_idx| {
-                    annotations[ann_idx] = try alloc.dupe(u8, ann);
-                }
-
-                const canon_owned = try alloc.dupe(u8, module.canonical_path);
-                const module_decl = ast.ModuleDecl{
-                    .logical_name = try alloc.dupe(u8, module.logical_name),
-                    .canonical_path = canon_owned,
-                    .items = module.source_file.items,
-                    .is_system = is_system,
-                    .annotations = annotations,
-                    .location = .{ .file = canon_owned, .line = 1, .column = 0 },
-                };
-                module.source_file.items = &.{};
-                try items.append(alloc, .{ .module_decl = module_decl });
-            }
-
-            if (module.is_directory and module.submodules.len > 0) {
-                for (module.submodules) |*submod| {
-                    if (!try claim(set_alloc, seen, submod.canonical_path)) continue;
-                    const is_system = res.isSystemModule(submod.canonical_path);
-
-                    const dotted_name = if (std.mem.eql(u8, submod.logical_name, "index"))
-                        try alloc.dupe(u8, module.logical_name)
-                    else
-                        try std.fmt.allocPrint(alloc, "{s}.{s}", .{ module.logical_name, submod.logical_name });
-
-                    const annotations = try alloc.alloc([]const u8, submod.source_file.module_annotations.len);
-                    for (submod.source_file.module_annotations, 0..) |ann, ann_idx| {
-                        annotations[ann_idx] = try alloc.dupe(u8, ann);
-                    }
-
-                    const submod_canon_owned = try alloc.dupe(u8, submod.canonical_path);
-                    const module_decl = ast.ModuleDecl{
-                        .logical_name = dotted_name,
-                        .canonical_path = submod_canon_owned,
-                        .items = submod.source_file.items,
-                        .is_system = is_system,
-                        .annotations = annotations,
-                        .location = .{ .file = submod_canon_owned, .line = 1, .column = 0 },
-                    };
-                    submod.source_file.items = &.{};
-                    try items.append(alloc, .{ .module_decl = module_decl });
-                }
-            }
-        }
-    }.add;
 
     rewriteDefaultEventCalls(parse_allocator, source_file.items);
 
@@ -1378,76 +1376,6 @@ pub fn mergeOutstandingImports(
 
     var new_module_items = try std.ArrayList(ast.Item).initCapacity(parse_allocator, imported_modules.items.len);
     defer new_module_items.deinit(parse_allocator);
-
-    const addModuleToAST = struct {
-        fn add(
-            alloc: std.mem.Allocator,
-            set_alloc: std.mem.Allocator,
-            seen: *std.StringHashMap(void),
-            items: *std.ArrayList(ast.Item),
-            module: *ImportedModule,
-            res: *ModuleResolver,
-        ) !void {
-            const claim = struct {
-                fn f(sa: std.mem.Allocator, s: *std.StringHashMap(void), path: []const u8) !bool {
-                    if (s.contains(path)) return false;
-                    try s.put(try sa.dupe(u8, path), {});
-                    return true;
-                }
-            }.f;
-
-            const has_source = (module.source_file.items.len > 0 or module.source_file.module_annotations.len > 0) and
-                try claim(set_alloc, seen, module.canonical_path);
-            if (has_source) {
-                const is_system = res.isSystemModule(module.canonical_path);
-                const annotations = try alloc.alloc([]const u8, module.source_file.module_annotations.len);
-                for (module.source_file.module_annotations, 0..) |ann, ann_idx| {
-                    annotations[ann_idx] = try alloc.dupe(u8, ann);
-                }
-
-                const canon_owned = try alloc.dupe(u8, module.canonical_path);
-                const module_decl = ast.ModuleDecl{
-                    .logical_name = try alloc.dupe(u8, module.logical_name),
-                    .canonical_path = canon_owned,
-                    .items = module.source_file.items,
-                    .is_system = is_system,
-                    .annotations = annotations,
-                    .location = .{ .file = canon_owned, .line = 1, .column = 0 },
-                };
-                module.source_file.items = &.{};
-                try items.append(alloc, .{ .module_decl = module_decl });
-            }
-
-            if (module.is_directory and module.submodules.len > 0) {
-                for (module.submodules) |*submod| {
-                    if (!try claim(set_alloc, seen, submod.canonical_path)) continue;
-                    const is_system = res.isSystemModule(submod.canonical_path);
-
-                    const dotted_name = if (std.mem.eql(u8, submod.logical_name, "index"))
-                        try alloc.dupe(u8, module.logical_name)
-                    else
-                        try std.fmt.allocPrint(alloc, "{s}.{s}", .{ module.logical_name, submod.logical_name });
-
-                    const annotations = try alloc.alloc([]const u8, submod.source_file.module_annotations.len);
-                    for (submod.source_file.module_annotations, 0..) |ann, ann_idx| {
-                        annotations[ann_idx] = try alloc.dupe(u8, ann);
-                    }
-
-                    const submod_canon_owned = try alloc.dupe(u8, submod.canonical_path);
-                    const module_decl = ast.ModuleDecl{
-                        .logical_name = dotted_name,
-                        .canonical_path = submod_canon_owned,
-                        .items = submod.source_file.items,
-                        .is_system = is_system,
-                        .annotations = annotations,
-                        .location = .{ .file = submod_canon_owned, .line = 1, .column = 0 },
-                    };
-                    submod.source_file.items = &.{};
-                    try items.append(alloc, .{ .module_decl = module_decl });
-                }
-            }
-        }
-    }.add;
 
     for (imported_modules.items) |*module| {
         try addModuleToAST(parse_allocator, gpa, &emitted_files, &new_module_items, module, resolver);
