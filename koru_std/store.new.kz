@@ -968,11 +968,15 @@
             var found_param: []const u8 = "";
             if (picked) |p| {
                 // Event name = path segments joined by '_' (the
-                // `<name>_event.handler` codegen convention).
+                // `<name>_event.handler` codegen convention). Segments are
+                // kebab-mangled for the splice: a .kz module's tor name can
+                // still be kebab here, and `<kebab>_event` is not a Zig
+                // identifier — the discharger call must spell the emitted
+                // name, not the source name.
                 var nb = std.ArrayList(u8).initCapacity(allocator, 16) catch unreachable;
                 for (p.decl.path.segments, 0..) |seg, si| {
                     if (si > 0) nb.append(allocator, '_') catch unreachable;
-                    nb.appendSlice(allocator, seg) catch unreachable;
+                    codegen_utils_store.appendMangled(&nb, allocator, seg) catch unreachable;
                 }
                 found_event = nb.toOwnedSlice(allocator) catch unreachable;
                 found_param = p.param;
@@ -1046,7 +1050,7 @@
                     var jb = std.ArrayList(u8).initCapacity(allocator, 16) catch unreachable;
                     for (segs, 0..) |seg, si| {
                         if (si > 0) jb.append(allocator, '_') catch unreachable;
-                        jb.appendSlice(allocator, seg) catch unreachable;
+                        codegen_utils_store.appendMangled(&jb, allocator, seg) catch unreachable;
                     }
                     if (!std.mem.eql(u8, jb.items, oi.disch_event)) continue;
                     switch (mi_m.*) {
