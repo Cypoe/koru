@@ -4700,6 +4700,145 @@ fn returnTypeOf(allocator: std.mem.Allocator, items: []const ast.Item, inv: *con
     return scopedTypeText(allocator, decl.return_type orelse "", decl.return_phantom);
 }
 
+/// Is `name` bound, at this site, by a take's `| item` arm — the taken row
+/// VALUE, not a handle? A dotted index `store[name.field]` on such a name is a
+/// struct read (the stored handle itself), never the self-FK hop
+/// `field[resolve(name)]` — `name` is not a handle (690_339).
+///
+/// Nested transform dispatch hands a site-view flow whose `site_of` is the
+/// REAL holding continuation; the `| item` ancestor lives in the real program
+/// the view detached from — so the search runs over `items` for that
+/// continuation pointer. A top-level dispatch has no `site_of`: the target
+/// invocation sits in `flow.body` directly and the holding continuation is
+/// found there.
+pub fn takeItemBoundAtSite(
+    items: []const ast.Item,
+    flow: *const ast.Flow,
+    target: *const ast.Invocation,
+    name: []const u8,
+) bool {
+    const site: *const ast.Continuation = flow.site_of orelse
+        (siteContOf(&flow.body, target) orelse return false);
+    const real = findFlowHoldingCont(items, site) orelse return false;
+    var hit = false;
+    _ = takeItemPath(&real.body, false, site, name, &hit);
+    return hit;
+}
+
+/// The continuation whose node IS `target`, or null.
+fn siteContOf(cont: *const ast.Continuation, target: *const ast.Invocation) ?*const ast.Continuation {
+    if (cont.node) |*n| {
+        if (n.* == .invocation and &n.invocation == target) return cont;
+    }
+    for (cont.continuations) |*c| {
+        if (siteContOf(c, target)) |found| return found;
+    }
+    if (cont.node) |*n| {
+        switch (n.*) {
+            .conditional => |cd| {
+                for (cd.branches) |*b| {
+                    for (b.body) |*c| {
+                        if (siteContOf(c, target)) |found| return found;
+                    }
+                }
+            },
+            .foreach => |fe| {
+                for (fe.branches) |*b| {
+                    for (b.body) |*c| {
+                        if (siteContOf(c, target)) |found| return found;
+                    }
+                }
+            },
+            .switch_result => |sr| {
+                for (sr.branches) |*b| {
+                    for (b.body) |*c| {
+                        if (siteContOf(c, target)) |found| return found;
+                    }
+                }
+            },
+            .conditional_block => |cb| {
+                for (cb.nodes) |*cn| {
+                    if (cn.* == .conditional) {
+                        for (cn.conditional.branches) |*b| {
+                            for (b.body) |*c| {
+                                if (siteContOf(c, target)) |found| return found;
+                            }
+                        }
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn takeInvNode(node: ?ast.Node) bool {
+    const n = node orelse return false;
+    if (n != .invocation) return false;
+    const inv = &n.invocation;
+    if (inv.path.segments.len != 1) return false;
+    const seg = inv.path.segments[0];
+    if (std.mem.startsWith(u8, seg, "__store_take_")) return true;
+    return std.mem.eql(u8, seg, "take");
+}
+
+/// Returns true when `site` sits inside `cont`'s subtree, marking `hit` when a
+/// `| item` arm of a take call on that path binds `name`. `under_take` is the
+/// parent continuation's node being a take invocation — the discriminator
+/// between a row-value `| item` and any other event's scalar `| item`.
+fn takeItemPath(cont: *const ast.Continuation, under_take: bool, site: *const ast.Continuation, name: []const u8, hit: *bool) bool {
+    if (cont != site and !contHoldsTarget(cont, site)) return false;
+    if (under_take and std.mem.eql(u8, std.mem.trim(u8, cont.branch, " "), "item")) {
+        if (cont.binding) |b| {
+            if (std.mem.eql(u8, b, name)) hit.* = true;
+        }
+    }
+    if (cont == site) return true;
+    const mine_is_take = takeInvNode(cont.node);
+    for (cont.continuations) |*c| {
+        if (takeItemPath(c, mine_is_take, site, name, hit)) return true;
+    }
+    if (cont.node) |*n| {
+        switch (n.*) {
+            .conditional => |cd| {
+                for (cd.branches) |*b| {
+                    for (b.body) |*c| {
+                        if (takeItemPath(c, false, site, name, hit)) return true;
+                    }
+                }
+            },
+            .foreach => |fe| {
+                for (fe.branches) |*b| {
+                    for (b.body) |*c| {
+                        if (takeItemPath(c, false, site, name, hit)) return true;
+                    }
+                }
+            },
+            .switch_result => |sr| {
+                for (sr.branches) |*b| {
+                    for (b.body) |*c| {
+                        if (takeItemPath(c, false, site, name, hit)) return true;
+                    }
+                }
+            },
+            .conditional_block => |cb| {
+                for (cb.nodes) |*cn| {
+                    if (cn.* == .conditional) {
+                        for (cn.conditional.branches) |*b| {
+                            for (b.body) |*c| {
+                                if (takeItemPath(c, false, site, name, hit)) return true;
+                            }
+                        }
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
 /// Find a proc declaration by its path
 /// Used for checking purity of event implementations
 pub fn findProcDeclByPath(items: []const ast.Item, path: *const ast.DottedPath) ?*const ast.ProcDecl {

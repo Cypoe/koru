@@ -137,7 +137,7 @@ koru_std/store.index.kz	261
 koru_std/store.insert.kz	482
 koru_std/store.kz	1689
 koru_std/store.leaf.kz	239
-koru_std/store.new.kz	6391
+koru_std/store.new.kz	6390
 koru_std/store.plan.kz	239
 koru_std/store.preorder.kz	110
 koru_std/store.pverbs.kz	781

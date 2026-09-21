@@ -341,7 +341,7 @@
                         break;
                     }
                 }
-                if (ref_ok) {
+                if (ref_ok and !@import("emitter_helpers").takeItemBoundAtSite(program.items, flow, invocation, base)) {
                     // Pointer-named base (`&`) — see colRead: a by-value base
                     // copies the whole column before the resolve.
                     env_row = std.fmt.allocPrint(allocator, "(&__koru_store_{s}.{s})[__koru_store_{s}.__koru_resolve({s})]", .{ env_store, ref_field, env_store, base }) catch unreachable;
@@ -626,7 +626,7 @@
                     break;
                 }
             }
-            if (ref_ok) {
+            if (ref_ok and !@import("emitter_helpers").takeItemBoundAtSite(program.items, flow, invocation, base)) {
                 // Pointer-named base (`&`) — see colRead: a by-value base
                 // copies the whole column before the resolve.
                 row_expr = std.fmt.allocPrint(allocator, "(&__koru_store_{s}.{s})[__koru_store_{s}.__koru_resolve({s})]", .{ target_store, ref_field, target_store, base }) catch unreachable;
