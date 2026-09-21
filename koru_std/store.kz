@@ -1366,7 +1366,6 @@ fn storeViewMembers(alloc: std.mem.Allocator, prog: *const ast_find.Program, vie
     }
     return null;
 }
-
 fn storeMemberColumns(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8) ?[]const StoreColInfo {
     const insert_name = std.fmt.allocPrint(alloc, "__store_insert_{s}", .{store}) catch unreachable;
     if (findSynthDecl(prog.items, insert_name)) |ed| {
@@ -1685,5 +1684,6 @@ fn storeLowerText(
 ~part qnone
 ~part gate
 ~part bulk
+~part bulkemit
 ~part plan
 ~part drain

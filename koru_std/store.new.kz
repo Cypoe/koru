@@ -1660,19 +1660,26 @@
         // column writes at `base + j`, and one `len += n` (the per-row
         // `len += 1` is a loop-carried store nothing can reassociate
         // past the per-row capacity @panic — measured ~3.3x on the
-        // add_remove fill). The gate is STRICTER than needs_handles:
-        // nothing may observe a single insert — no rule, watch, or
-        // lifecycle arm on this store, no facets, kinds, owned or
-        // fixed-char columns — and the site itself must be a bare fill
-        // (no `| row`, `| full`, piped step, or store-reading expr).
-        // Zig only: the rewrite emits `.inline_code`, which has no lane
-        // (store.bulk.kz). Every doubt declines — the site stays a
-        // per-row insert and is correct either way.
-        const bulkable = !host_is_js and !needs_handles and
-            qsites.items.len == 0 and pwatch_arms.items.len == 0 and
+        // add_remove fill). Handles keep the tier — the batch mints
+        // the identical slot sequence (freelist pops LIFO, then bump),
+        // so refilled handles are indistinguishable. What still
+        // declines is what a batch cannot reproduce per row: lifecycle
+        // arms, watches, facets, kinds, owned or fixed-char columns,
+        // trees, `! step`, index columns — and any insert site below a
+        // standing qsite's declared line, where reactive enters fire
+        // per row (`match` applies the emitter's own `__site_line >
+        // qs.line` comparison). Zig only (store.bulk.kz).
+        var reactive_min: ?usize = null;
+        for (qsites.items) |qs| {
+            if (qs.is_preorder) continue;
+            if (reactive_min == null or qs.line < reactive_min.?) reactive_min = qs.line;
+        }
+        const bulkable = !host_is_js and !is_tree and step_arm == null and
             inserted_arms.items.len == 0 and removed_arms.items.len == 0 and
             updated_arms.items.len == 0 and cleared_arms.items.len == 0 and
-            discharge_arm == null and !want_kind and
+            pwatch_arms.items.len == 0 and discharge_arm == null and
+            !want_kind and
+            StoreIndexDecls.declsOf(allocator, program, store_name).len == 0 and
             !Bulk.hasFacets(allocator, program, leaf_provs.items) and
             blk_lean_cols: {
                 var bad = false;
@@ -1685,7 +1692,7 @@
                 break :blk_lean_cols !bad;
             };
         if (bulkable) {
-            _ = Bulk.rewrite(allocator, program, program_items, store_name, CAP);
+            _ = Bulk.rewrite(allocator, program, program_items, store_name, CAP, needs_handles, reactive_min);
         }
         // Topological order over the declared DAG; rules with no edges keep
         // collection order RELATIVE TO EACH OTHER but that order is
@@ -4903,7 +4910,6 @@
                 } }) catch unreachable;
             }
         }
-
         // ---- stripe unit: __store_stripe_<s> fires the standing rules'
         // qsweeps in depends_on topo order (rung: naive per-rule passes;
         // fusion is a later, semantics-preserving scheduling change). With
@@ -4996,7 +5002,6 @@
             }
         }
 
-        // ---- teardown unit (owned-column and indexed stores) ----
         // The store OWNS its live elements; at program end each still-live
         // owned pointer is discharged through the canonical discharger's
         // handler (std/string:free — the same call auto-discharge inserts,
@@ -5196,7 +5201,6 @@
             .appended = appended_items.toOwnedSlice(allocator) catch unreachable,
         } };
     }
-
     // ------------------------------------------------------------------
     // Interceptors: effect branches on create — the store's CONTRACT
     // (ruling 4). Two shapes this slice:
@@ -5245,7 +5249,6 @@
         field_iceptors.append(allocator, .{ .field_idx = fidx, .cont = ast_functional.cloneContinuation(allocator, ic) catch unreachable }) catch unreachable;
     }
 
-    // ------------------------------------------------------------------
     // Collect watches: every `std/store:watch(<this store>)` flow's
     // branches. One watch per field for now (sequencing splice = later).
     // ------------------------------------------------------------------
@@ -5278,7 +5281,6 @@
     }
 
     // ------------------------------------------------------------------
-    // Cross-store guard closure (690_013): a watch on store T guarded by
     // `when S.field == ...` must re-evaluate when S.field is WRITTEN -
     // S's write path announces T's watched field (level-trigger on write;
     // edge-trigger/dedup is undesigned). Collected here, spliced into
@@ -5660,7 +5662,6 @@
     for (watch_arms.items) |*wa| Rewrite.rewriteCont(allocator, program, &wa.cont, local_scope, store_idents.items, &[_][]const u8{});
     for (field_iceptors.items) |*fi| Rewrite.rewriteCont(allocator, program, &fi.cont, local_scope, store_idents.items, &[_][]const u8{});
     for (updated_iceptors.items) |*ui| Rewrite.rewriteCont(allocator, program, ui, local_scope, store_idents.items, &[_][]const u8{});
-
     // ------------------------------------------------------------------
     // Unit 1: the module-scope typed cell (slice one, unchanged).
     // ------------------------------------------------------------------
@@ -5727,7 +5728,6 @@
         break :blk_zig p.toOwnedSlice(allocator) catch unreachable;
     };
 
-    // ------------------------------------------------------------------
     // Unit 2+3: the apply event (one terminal branch per field) + its
     // |zig proc (write the cell, announce the field).
     // ------------------------------------------------------------------

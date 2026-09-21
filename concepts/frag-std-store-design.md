@@ -797,14 +797,32 @@ past the per-row capacity panic, and it was the fill's real cost — not
 the event-call marshal, which LLVM already ate (marking the impl
 `inline` moved nothing). Hand-editing the emitted loop proved it before
 the transform existed: 294us -> 89us; the shipped lowering lands ~63-77us
-for 100k rows on the same port's `mark-init`. The gate is stricter than
-needs_handles — insert must be unobservable (no rule, watch, lifecycle,
-`| row`, `| full`, or store-reading field expr) — and a `| done` arm
-survives via the same `__koru_continue` marker the template renders.
-690_334 pins both lanes. Neither end of the pattern could see the other —
-insert's transform is site-local, `for`'s body is an opaque splice marker —
-so the recognizer lives in `new`'s whole-program walk, the one place both
-sides are visible.
+for 100k rows on the same port's `mark-init`. A `| done` arm survives
+via the same `__koru_continue` marker the template renders. Neither end
+of the pattern could see the other — insert's transform is site-local,
+`for`'s body is an opaque splice marker — so the recognizer lives in
+`new`'s whole-program walk, the one place both sides are visible.
+
+Handles did not actually disqualify the tier (2026-09-21, 690_338) —
+the earlier gate was over-strict on two counts, and relaxing both kept
+the semantics exact. First, handle minting is a pure function of two
+counters: a batch mints the identical slot sequence by popping the
+freelist LIFO (`free[frem-1-j]`) then bump-allocating (`next+k`), so
+refilled handles, freelist order, and generation counters are
+indistinguishable from per-row inserts — the write-set floor for the
+full nine-stream insert is ~1.6ns/row in plain Zig while the per-row
+path paid ~7.4ns. Second, the one thing a batch cannot reproduce is a
+reactive enter — but enters are positional, not existential: the
+per-row emitter already gates them with `__site_line > qs.line`, so a
+counted-for whose insert sits above every non-preorder qsite's declared
+line fires nothing, per-row or batched. The gate therefore keeps only
+what is per-row semantic: lifecycle arms, watches, facets, kinds,
+owned/fixed-char columns, trees, `! step`, index columns (the
+needs_handles blanket had been silently covering trees, steps, and
+indexes — dropping it required naming them). Measured on
+003_ecs_reactive: spawn 738->~500us, despawn 917->~773us, and every
+scenario that builds its world inside the timed region moved with it
+(dense crossed under the zig_striped anchor).
 
 The gate's scan domain is the set of modules that can textually NAME the
 store — not the whole program (2026-09-21, 690_335). flatItems returns

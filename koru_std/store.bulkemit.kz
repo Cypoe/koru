@@ -1,0 +1,183 @@
+// Koru Standard Library: the `bulkemit` part of store.kz.
+// Joined via `~part bulkemit` in store.kz; merged into the module at load.
+//
+// The bulk-append emit half — token scanners, the insert-field match,
+// and the Zig text itself. Split from `store.bulk.kz` (the recognizer's
+// walk) under the line-baseline wall: `Bulk` keeps the program walk and
+// the per-site decision; `BulkEmit` keeps everything that produces or
+// inspects the batched text. Zig only — the caller gates `host_is_js`.
+// ------------------------------------------------------------------
+const BulkEmit = struct {
+    const ast = @import("ast");
+    const struct_literal = @import("struct_literal");
+    const codegen_utils = @import("codegen_utils");
+
+    /// A masked-token occurrence — `word` at an identifier boundary on
+    /// both sides, in code position (strings and comments are masked).
+    /// `__koru_store_marks` cannot hit `marks`: `_` is an identifier
+    /// char and breaks the boundary. Same predicate Gate.indexes uses.
+    fn tokenIn(alloc: std.mem.Allocator, t: []const u8, word: []const u8) bool {
+        const mask = ast.expressionMask(alloc, t);
+        var i: usize = 0;
+        while (i + word.len <= t.len) : (i += 1) {
+            if (!mask[i] or !ast.identBoundaryBefore(t, i)) continue;
+            if (!std.mem.startsWith(u8, t[i..], word)) continue;
+            const end = i + word.len;
+            if (end == t.len or !Gate.isIdentCh(t[end])) return true;
+        }
+        return false;
+    }
+
+    /// Is `word` REFERENCED in `t` — a real use of the each-binding,
+    /// not just a token hit. Excludes the two non-reference shapes:
+    /// `.word` (member access/designator — `..word` in `0..i` stays a
+    /// use, the second dot is a range) and `word:` (struct-literal key
+    /// position, whitespace tolerated). Both directions must be right:
+    /// an emitted `const i` nobody uses is a Zig error, and so is a
+    /// dropped `const i` a field expr reads. Expression text only —
+    /// field values cannot declare a shadowing local.
+    fn useOf(alloc: std.mem.Allocator, t: []const u8, word: []const u8) bool {
+        const mask = ast.expressionMask(alloc, t);
+        var i: usize = 0;
+        while (i + word.len <= t.len) : (i += 1) {
+            if (!mask[i] or !ast.identBoundaryBefore(t, i)) continue;
+            if (!std.mem.startsWith(u8, t[i..], word)) continue;
+            const end = i + word.len;
+            if (end < t.len and Gate.isIdentCh(t[end])) continue;
+            if (i > 0 and t[i - 1] == '.' and (i < 2 or t[i - 2] != '.')) continue;
+            var k = end;
+            while (k < t.len and (t[k] == ' ' or t[k] == '\t')) k += 1;
+            if (k < t.len and t[k] == ':') continue;
+            return true;
+        }
+        return false;
+    }
+
+    /// The each arm's single node is a `std/store:insert` on THIS store
+    /// with the complete flat field list and zero continuations — a
+    /// `| row`, a `| full`, a piped next step all decline. Field order
+    /// is `storeInsertOrder`, the same list the insert transform reads.
+    fn insertFields(alloc: std.mem.Allocator, prog: *const ast.Program, each: *const ast.Continuation, store: []const u8) ?[]const struct_literal.StructField {
+        if (each.continuations.len != 0) return null;
+        if (each.condition != null or each.is_catchall) return null;
+        if (each.destructure.len != 0) return null;
+        if (each.node == null) return null;
+        const n: *const ast.Node = &each.node.?;
+        if (n.* != .invocation) return null;
+        const iv = &n.invocation;
+        const door = SX.isStoreDoor(iv) orelse return null;
+        if (!std.mem.eql(u8, door, "insert")) return null;
+        if (iv.variant != null or iv.return_binding != null or iv.return_destructure.len != 0 or
+            iv.inline_body != null or iv.preamble_code != null) return null;
+        var expr: ?[]const u8 = null;
+        var src: ?[]const u8 = null;
+        for (iv.args) |a| {
+            if (std.mem.eql(u8, a.name, "expr")) {
+                expr = a.value;
+                continue;
+            }
+            if (std.mem.eql(u8, a.name, "source")) {
+                src = a.value;
+                continue;
+            }
+            return null;
+        }
+        if (!std.mem.eql(u8, storeStripQuotes(expr orelse return null), store)) return null;
+        const order = storeInsertOrder(alloc, prog, store) orelse return null;
+        // A one-column identity store takes a bare value, not a field
+        // block — a different shape this lowering does not emit.
+        if (order.len == 1 and std.mem.eql(u8, order[0], ast.STORE_IDENTITY_COLUMN)) return null;
+        const braced = std.fmt.allocPrint(alloc, "{{{s}}}", .{src orelse return null}) catch unreachable;
+        const flds = struct_literal.parseFields(alloc, braced) catch return null;
+        if (flds.len != order.len) return null;
+        for (flds) |f| {
+            // Proto leaf writes (`left.health:`) and any column the
+            // block does not name decline — the check is set equality
+            // against the insert order, so a missing/extra name fails.
+            if (std.mem.indexOfScalar(u8, f.name, '.') != null) return null;
+            var hit = false;
+            for (order) |col| {
+                if (std.mem.eql(u8, f.name, col)) hit = true;
+            }
+            if (!hit) return null;
+            // The value must not observe the store mid-fill (a read
+            // would see `len` still at base) nor reach a door —
+            // masked-token scans, conservative on anything unparseable.
+            if (tokenIn(alloc, f.value, store)) return null;
+            for ([_][]const u8{ "insert", "take", "clear", "std" }) |bad| {
+                if (tokenIn(alloc, f.value, bad)) return null;
+            }
+            if (std.mem.indexOf(u8, f.value, "__koru_") != null) return null;
+        }
+        return flds;
+    }
+
+    /// The Zig text. The capacity panic is the per-row path's own
+    /// string and precondition: a normal insert panics on the first row
+    /// past CAP before writing it; this panics before writing ANY —
+    /// @panic aborts the process either way, so the difference is
+    /// unobservable. The bound arm's binding becomes `lo + j`. For a
+    /// handle store the loop also mints: freelist pops in LIFO order
+    /// then bump-allocations — the exact slot sequence `len`-at-a-time
+    /// inserts produce, so refilled handles are indistinguishable.
+    fn emit(alloc: std.mem.Allocator, store: []const u8, cap: usize, range: Bulk.Range, bind: ?[]const u8, flds: []const struct_literal.StructField, handles: bool) []const u8 {
+        var b = std.ArrayList(u8).initCapacity(alloc, 384) catch unreachable;
+        const w = b.writer(alloc);
+        // `//@koru:inline_stmt` — emit as statements, not the `[expand]`
+        // switch expression: the bulk block's result is void and the
+        // branch arms are dead data (emitInlineBodyNode's marker path).
+        // `n > cap - len`, not `len + n > cap`: the add can wrap usize
+        // in ReleaseFast when n is huge, and a wrapped check passes —
+        // the per-row path would panic at the cap row instead. `cap -
+        // len` cannot underflow: `len <= cap` is the store's invariant.
+        w.print("//@koru:inline_stmt\n{{\n    const __koru_bulk_lo = ({s});\n    const __koru_bulk_hi = ({s});\n    const __koru_bulk_n = __koru_bulk_hi - __koru_bulk_lo;\n    if (__koru_bulk_n > {d} - __koru_store_{s}.len) @panic(\"std/store: store '{s}' is full (capacity {d}) - declared capacity and the `| full` branch are pinned at 690_011\");\n    const __koru_bulk_base = __koru_store_{s}.len;\n", .{ range.lo, range.hi, cap, store, store, cap, store }) catch unreachable;
+        if (handles) {
+            // `cap - len` is exactly `free_len + (cap - next)` — the
+            // slots this batch can mint — so the hoisted panic covers
+            // the freelist-pop arm too. LIFO pops read the tail down;
+            // survivors are `free[0..frem-n]` when n < frem.
+            w.print("    const __koru_bulk_frem = __koru_store_{s}.__koru_hslot_free_len;\n    var __koru_bulk_fresh = __koru_store_{s}.__koru_hslot_next;\n", .{ store, store }) catch unreachable;
+        }
+        w.print("    for (0..__koru_bulk_n) |__koru_bulk_j| {{\n", .{}) catch unreachable;
+        if (handles) {
+            w.print("        const __koru_bulk_slot = if (__koru_bulk_j < __koru_bulk_frem) __koru_store_{s}.__koru_hslot_free[__koru_bulk_frem - 1 - __koru_bulk_j] else blk_hm: {{ const __koru_s2 = __koru_bulk_fresh; __koru_bulk_fresh += 1; break :blk_hm __koru_s2; }};\n        __koru_store_{s}.__koru_row_hslot[__koru_bulk_base + __koru_bulk_j] = __koru_bulk_slot;\n        __koru_store_{s}.__koru_hslot_row[__koru_bulk_slot] = __koru_bulk_base + __koru_bulk_j;\n", .{ store, store, store }) catch unreachable;
+        }
+        if (bind) |bb| {
+            // Emit the binding only when a field expr reads it — Zig
+            // rejects an unused `const i` (390_113's constant fill) and
+            // rejects `_ = i` when i IS used. `useOf` is the arbiter.
+            var used = false;
+            for (flds) |f| {
+                if (useOf(alloc, f.value, bb)) used = true;
+            }
+            if (used) {
+                w.print("        const {s} = __koru_bulk_lo + __koru_bulk_j;\n", .{codegen_utils.escapeZigIdentifier(alloc, bb) catch bb}) catch unreachable;
+            }
+        }
+        for (flds) |f| {
+            const col = codegen_utils.escapeZigIdentifier(alloc, f.name) catch f.name;
+            w.print("        __koru_store_{s}.{s}[__koru_bulk_base + __koru_bulk_j] = {s};\n", .{ store, col, f.value }) catch unreachable;
+        }
+        // `__koru_continue_1` is the done arm's hand-off — always
+        // present at index 1 (real, or the no-op arm `match`
+        // synthesizes). The resolver splices its body after the block.
+        // Written via `{d}` like the marker's four other writers so the
+        // variant-coverage derivation sees `__koru_continue_{}` — the
+        // marker class is already exempted (a splice token, not
+        // emitted code).
+        if (handles) {
+            w.print("    }}\n    __koru_store_{s}.__koru_hslot_free_len = __koru_bulk_frem -| __koru_bulk_n;\n    __koru_store_{s}.__koru_hslot_next = __koru_bulk_fresh;\n    __koru_store_{s}.len += __koru_bulk_n;\n}}\n", .{ store, store, store }) catch unreachable;
+        } else {
+            w.print("    }}\n    __koru_store_{s}.len += __koru_bulk_n;\n}}\n", .{store}) catch unreachable;
+        }
+        w.print("__koru_continue_{d}\n", .{1}) catch unreachable;
+        return b.items;
+    }
+
+    fn annotate(alloc: std.mem.Allocator, iv: *ast.Invocation) void {
+        const anns = alloc.alloc([]const u8, iv.annotations.len + 1) catch unreachable;
+        @memcpy(anns[0..iv.annotations.len], iv.annotations);
+        anns[iv.annotations.len] = "@pass_ran(\"transform\")";
+        iv.annotations = anns;
+    }
+};
