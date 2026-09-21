@@ -1,0 +1,26 @@
+// The unit token — a combatant's owned lifecycle.
+// spawn-unit mints <live!>; the ONLY discharge is kill-unit consuming
+// <!live>. kill-unit is VOID so it can serve as the column's canonical
+// discharger — a `stored` write on a store holding an owned column must
+// be able to evict the old token through it (690_062). The arena's
+// `! discharge` arm routes every death (battle cull or teardown)
+// through it.
+
+const std = @import("std");
+
+const Unit = struct { id: i64 };
+
+~pub tor spawn-unit { id: i64 } -> *Unit<live!>
+~proc spawn-unit|zig {
+    const u = std.heap.page_allocator.create(Unit) catch unreachable;
+    u.* = .{ .id = id };
+    return u;
+}
+
+~pub tor kill-unit { u: *Unit<!live> }
+~proc kill-unit|zig {
+    // Silent on purpose: std.debug.print is stderr, and the harness merges
+    // streams into actual.txt — interleaving would make the oracle flaky.
+    // The kill trace rides the `! removed` arm on stdout instead.
+    std.heap.page_allocator.destroy(u);
+}
