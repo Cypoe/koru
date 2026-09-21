@@ -85,7 +85,6 @@ fn storeEmitQualifier(alloc: std.mem.Allocator, home: []const u8, main_module_na
     const path = codegen_utils_store.buildKoruModulePath(alloc, home) catch unreachable;
     return std.fmt.allocPrint(alloc, "{s}.", .{path}) catch unreachable;
 }
-
 /// JavaScript has ONE namespace for events and ANOTHER for the cell, and
 /// neither is the Zig one — which is why this cannot be a single answer.
 /// `js_emitter` flattens every event in the program, imported modules included,
@@ -97,7 +96,6 @@ fn storeEventQualifier(alloc: std.mem.Allocator, home: []const u8, main_module_n
     if (std.mem.eql(u8, CompilerEnv.lang, "js")) return "main_module.";
     return storeEmitQualifier(alloc, home, main_module_name);
 }
-
 /// The CELL, on the other hand, is a module-scope `let` written above
 /// `main_module` (the `.inline_code` path), so it is reachable BARE from every
 /// handler and any qualifier at all is wrong. On Zig the cell lives inside the
@@ -106,7 +104,6 @@ fn storeCellQualifier(alloc: std.mem.Allocator, home: []const u8, main_module_na
     if (std.mem.eql(u8, CompilerEnv.lang, "js")) return "";
     return storeEmitQualifier(alloc, home, main_module_name);
 }
-
 /// THE BUILD'S TARGET, readable from anywhere in this module. A transform's
 /// nested helper structs cannot capture a local, and `SRewrite.refs` recurses
 /// through thirteen call sites — threading a parameter down that chain to reach
@@ -115,7 +112,6 @@ fn storeCellQualifier(alloc: std.mem.Allocator, home: []const u8, main_module_na
 fn storeHostTarget() codegen_utils_store.HostTarget {
     return if (std.mem.eql(u8, CompilerEnv.lang, "js")) .js else .zig;
 }
-
 /// A `stored` WRITE TARGET, parsed. Two spellings reach here — the dotted
 /// singleton head `store.field` and the bracket row head `store[handle].field`,
 /// which is also what a sweep arm's row binding lowers to (690_118).
@@ -1499,6 +1495,8 @@ fn storeInsertOrder(alloc: std.mem.Allocator, prog: *const ast_find.Program, sto
 /// consumes the whole span, so the inner one is lowered by an explicit recursive
 /// descent over the same scope (690_245).
 fn storeIndexedRefs(alloc: std.mem.Allocator, prog: *const ast_find.Program, text: []const u8, store: []const u8, scope: StoreScope) []const u8 {
+    // Absent name → no `store[...]` read possible; skip the program scan.
+    if (std.mem.indexOf(u8, text, store) == null) return text;
     const fields = storeFieldOrder(alloc, prog, store) orelse return text;
     const prefix = scope.prefixFor(store);
     var out = std.ArrayList(u8).initCapacity(alloc, text.len + 64) catch unreachable;
@@ -1601,6 +1599,8 @@ fn isPrecededByIs(text: []const u8, idx: usize) bool {
 /// that ALSO had the indexed rewriter carried the exclusion — the two halves of
 /// one rule, split across scopes, each correct only beside the other.
 fn storeRefsText(alloc: std.mem.Allocator, text: []const u8, name: []const u8, prefix: []const u8, is_identity: bool) []const u8 {
+    // Absent name → the walk returns text unchanged; skip it (name × slot).
+    if (std.mem.indexOf(u8, text, name) == null) return text;
     const expr_ctx = ast_find.expressionMask(alloc, text);
     var out = std.ArrayList(u8).initCapacity(alloc, text.len + 32) catch unreachable;
     var i: usize = 0;

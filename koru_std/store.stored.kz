@@ -132,13 +132,13 @@
             // home for precisely that case.
             const Find = struct {
                 fn applyIn(its: []const ast.Item, want: []const u8) ??[]const u8 {
-                    for (its) |pi| {
-                        if (pi == .event_decl) {
+                    for (its) |*pi| {
+                        if (pi.* == .event_decl) {
                             const ed = &pi.event_decl;
                             if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], want)) {
                                 return ed.path.module_qualifier;
                             }
-                        } else if (pi == .module_decl) {
+                        } else if (pi.* == .module_decl) {
                             if (applyIn(pi.module_decl.items, want)) |hit| return hit;
                         }
                     }
@@ -147,8 +147,8 @@
                 // `enclosing` is the containing module's LOGICAL name — see the
                 // twin of this helper at the top of the file.
                 fn newIn(its: []const ast.Item, want: []const u8, enclosing: ?[]const u8) ?[]const u8 {
-                    for (its) |pi| {
-                        if (pi == .flow) {
+                    for (its) |*pi| {
+                        if (pi.* == .flow) {
                             const f = &pi.flow;
                             const inv = f.inv();
                             if (inv.path.segments.len == 1 and std.mem.eql(u8, inv.path.segments[0], "new")) {
@@ -161,7 +161,7 @@
                                     }
                                 }
                             }
-                        } else if (pi == .module_decl) {
+                        } else if (pi.* == .module_decl) {
                             if (newIn(pi.module_decl.items, want, pi.module_decl.logical_name)) |m| return m;
                         }
                     }
