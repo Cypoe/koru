@@ -745,7 +745,7 @@ pub fn renderTemplateInvocation(
     // lang variant for an event that DOES have a per-call template is a loud
     // compile error (never a silent fall-through to the `|zig` body on a JS
     // build — that is the leak this whole pass exists to kill).
-    const proc = selectPerCallTemplateProc(all_items, &invocation.path, build_lang, location) orelse return null;
+    const proc = selectPerCallTemplateProc(allocator, all_items, &invocation.path, build_lang, location) orelse return null;
 
     // Build context from invocation args. Named args (`name: value`) key on the
     // arg name; positional args (`~for(&items)`, which parse with name == value)
@@ -753,7 +753,7 @@ pub fn renderTemplateInvocation(
     var ctx = liquid.Context.init(allocator);
     defer ctx.deinit();
 
-    const event_decl = findEventDeclByLastSegment(all_items, &invocation.path);
+    const event_decl = findEventDeclByLastSegment(allocator, all_items, &invocation.path);
 
     // The scrutinee of a `cond` (`~cond(expr)`) — the first arg's text. Threaded
     // to each arm's binder below: a cond arm reuses the payload-less terminal
@@ -956,7 +956,7 @@ fn maybeRenderPerCall(
     // if any — presence expressions resolve against ITS optional arms.
     const impl_event: ?*const ast.EventDecl = blk: {
         const impl_path = flow.impl_of orelse break :blk null;
-        break :blk findEventDeclByLastSegment(all_items, &impl_path);
+        break :blk findEventDeclByLastSegment(allocator, all_items, &impl_path);
     };
     if (flow.inline_body == null) {
         if (try renderTemplateInvocation(all_items, flow.inv(), flow.body.continuations, flow.location, build_lang, impl_event, allocator)) |rendered| {
@@ -1105,25 +1105,62 @@ fn presenceRewriteTemplateArg(
     return text;
 }
 
-/// Find the event declaration whose path's last segment matches the
-/// invocation's last segment (top-level + nested modules). Used to bind
-/// positional invocation args to the event's field names.
-pub fn findEventDeclByLastSegment(items: []ast.Item, path: *const ast.DottedPath) ?*const ast.EventDecl {
-    if (path.segments.len == 0) return null;
-    const target = path.segments[path.segments.len - 1];
+/// Per-epoch decl index for the two per-invocation lookups below. Both are
+/// "first match wins" DFS scans over the same item tree — the per-call pass
+/// asks them once per invocation site, so they used to cost
+/// O(invocations × items). Epoch contract: the items slice header (ptr + len)
+/// identifies the tree; any splice that changes decls reallocates the slice.
+const DeclIndex = struct {
+    /// last-segment name → first event decl in DFS order
+    events: std.StringHashMapUnmanaged(*const ast.EventDecl) = .{},
+    /// last-segment name → all [template] procs in DFS order
+    tprocs: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(*ast.ProcDecl)) = .{},
+};
+
+var declidx_epoch_ptr: usize = 0;
+var declidx_epoch_len: usize = std.math.maxInt(usize);
+var declidx: ?DeclIndex = null;
+
+fn buildDeclIndex(allocator: std.mem.Allocator, idx: *DeclIndex, items: []ast.Item) void {
     for (items) |*item| {
         switch (item.*) {
             .event_decl => |*ed| {
                 if (ed.path.segments.len == 0) continue;
-                if (std.mem.eql(u8, ed.path.segments[ed.path.segments.len - 1], target)) return ed;
+                const name = ed.path.segments[ed.path.segments.len - 1];
+                if (!idx.events.contains(name))
+                    idx.events.put(allocator, name, ed) catch unreachable;
             },
-            .module_decl => |*md| {
-                if (findEventDeclByLastSegment(@constCast(md.items), path)) |found| return found;
+            .proc_decl => |*pd| {
+                if (pd.path.segments.len == 0) continue;
+                if (perCallTemplateLang(pd) == null) continue;
+                const name = pd.path.segments[pd.path.segments.len - 1];
+                const gop = idx.tprocs.getOrPut(allocator, name) catch unreachable;
+                if (!gop.found_existing) gop.value_ptr.* = .{};
+                gop.value_ptr.append(allocator, pd) catch unreachable;
             },
+            .module_decl => |*md| buildDeclIndex(allocator, idx, @constCast(md.items)),
             else => {},
         }
     }
-    return null;
+}
+
+fn declIndex(allocator: std.mem.Allocator, items: []ast.Item) *const DeclIndex {
+    if (declidx_epoch_ptr != @intFromPtr(items.ptr) or declidx_epoch_len != items.len) {
+        var idx: DeclIndex = .{};
+        buildDeclIndex(allocator, &idx, items);
+        declidx = idx;
+        declidx_epoch_ptr = @intFromPtr(items.ptr);
+        declidx_epoch_len = items.len;
+    }
+    return &declidx.?;
+}
+
+/// Find the event declaration whose path's last segment matches the
+/// invocation's last segment (top-level + nested modules). Used to bind
+/// positional invocation args to the event's field names.
+pub fn findEventDeclByLastSegment(allocator: std.mem.Allocator, items: []ast.Item, path: *const ast.DottedPath) ?*const ast.EventDecl {
+    if (path.segments.len == 0) return null;
+    return declIndex(allocator, items).events.get(path.segments[path.segments.len - 1]);
 }
 
 /// Is this proc a `[template]`? The declaration kind lives in the bracket —
@@ -1197,6 +1234,7 @@ fn emitMissingVariantAndExit(
 ///   - If per-call template variants exist but NONE match `build_lang` → loud
 ///     KORU121 (never fall back to `|zig` on a JS build).
 fn selectPerCallTemplateProc(
+    allocator: std.mem.Allocator,
     items: []ast.Item,
     path: *const ast.DottedPath,
     build_lang: []const u8,
@@ -1205,44 +1243,19 @@ fn selectPerCallTemplateProc(
     if (path.segments.len == 0) return null;
     const target_name = path.segments[path.segments.len - 1];
 
-    const Walker = struct {
-        fn search(
-            its: []ast.Item,
-            name: []const u8,
-            blang: []const u8,
-            saw_any_template: *bool,
-        ) ?*ast.ProcDecl {
-            for (its) |*item| {
-                switch (item.*) {
-                    .proc_decl => |*pd| {
-                        if (pd.path.segments.len == 0) continue;
-                        const pd_name = pd.path.segments[pd.path.segments.len - 1];
-                        if (!std.mem.eql(u8, pd_name, name)) continue;
-                        const lang = perCallTemplateLang(pd) orelse continue;
-                        saw_any_template.* = true;
-                        if (std.mem.eql(u8, lang, blang)) return pd;
-                    },
-                    .module_decl => |*md| {
-                        if (search(@constCast(md.items), name, blang, saw_any_template)) |found| return found;
-                    },
-                    else => {},
-                }
-            }
-            return null;
-        }
-    };
-
-    var saw_any_template = false;
-    if (Walker.search(items, target_name, build_lang, &saw_any_template)) |pd| return pd;
+    // Only [template] procs are indexed; the list's existence IS the
+    // saw_any_template signal, and DFS order picks the first lang match —
+    // the same answer the item-by-item walk gave.
+    const list = declIndex(allocator, items).tprocs.get(target_name) orelse return null;
+    for (list.items) |pd| {
+        const lang = perCallTemplateLang(pd) orelse continue;
+        if (std.mem.eql(u8, lang, build_lang)) return pd;
+    }
 
     // A per-call template construct exists for this event name, but no variant
     // matches the build language — fail loudly rather than leak a wrong-target
-    // body. (If `saw_any_template` is false, this wasn't a template invocation
-    // at all; leave it for normal handling.)
-    if (saw_any_template) {
-        emitMissingVariantAndExit(location, target_name, build_lang);
-    }
-    return null;
+    // body.
+    emitMissingVariantAndExit(location, target_name, build_lang);
 }
 
 /// Find the end of the first tag in a variant chain, respecting `(...)`

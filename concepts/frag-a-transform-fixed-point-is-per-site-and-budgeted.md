@@ -127,3 +127,41 @@ bug to be found and fixed; landing it now trades a green board for a
 latent-corruption zone. (Also surfaced in the attempt: a dead 256-byte
 `debug_path` buffer built per invocation for a commented-out log line —
 a pure dead-code removal, safe to land on its own.)
+
+## The narrowing relanded — epoch-keyed, not per-pass-rebuilt (2026-09-21)
+
+A different formulation of the same direction went green. Three memos +
+one dispatch index, all keyed on the `items` slice header (ptr + len) as
+the epoch — safe under the backend's arena allocator, where free is a
+no-op so a reallocated splice can never collide on an old header:
+
+- `[expand]` decl set in `handleExpandIfMatches` — the same narrowing the
+  revert covered, but rebuilt only on epoch change instead of at the top
+  of every pass.
+- local-event decl set for `shadowedByLocalEvent`.
+- `[template]` proc + event decl index for `template_processor`'s two
+  per-invocation whole-items scans (`selectPerCallTemplateProc`,
+  `findEventDeclByLastSegment`).
+- a name-keyed `Dispatch` per stage: exact-name transform entries hash on
+  the invocation's dotted path (built once per node — the formerly dead
+  `debug_path` buffer is now the lookup key), glob entries keep their
+  per-node `matchSegment`; candidates merge ascending by declared index
+  so first-match-wins is unchanged, with a linear-scan fallback if the
+  candidate buffer overflows.
+
+Evidence, same bar as the revert demanded: `output_emitted.zig` for the
+003_ecs_reactive port is byte-identical to HEAD; the two trip-wires
+`140_019` and `115_047` are stable-PASS under the new formulation; 690
+cluster 229/0, expand + glob + kernel + AoC + grid suites green. The
+latent-UB hazard the revert named is NOT resolved — two green runs is
+evidence, not proof, and the mechanism (build-layout-dependent comptime
+lowering corruption) was never root-caused. If those tests ever flip on
+an unrelated change, this history says where to look first.
+
+Measured: backend emit on the port 28.5s -> ~10.6s wall (52.7s -> ~20s
+for the full `koruc build` including the reverted-attempt-era baseline).
+What remains on the profile is diffuse: text masking
+(`zigCodeMask`/`expressionMask`/`boyerMoore`) and residual .kz-side
+per-name scans (`findSynthDecl`, `storeViewMembers`) — each under ~5%.
+The quadratic is now width (number of rewalks, semantic by design), not
+per-node predicate cost.

@@ -1610,7 +1610,7 @@ pub const AutoDischargeInserter = struct {
             // its sole non-panic terminal branch — before any handling count,
             // so the renamed arm IS that branch's handler.
             const impl_event: ?*const ast.EventDecl = if (flow.impl_of) |impl_path|
-                template_processor.findEventDeclByLastSegment(@constCast(program.items), &impl_path)
+                template_processor.findEventDeclByLastSegment(self.allocator, @constCast(program.items), &impl_path)
             else
                 null;
             if (try self.resolveAnonymousArms(flow.body.continuations, event_info.decl, flow.location)) |new_conts| {
@@ -5383,7 +5383,7 @@ pub const AutoDischargeInserter = struct {
         // carrying an inserted discharge would never emit. Re-render it.
         if (flow.inline_body != null) {
             const impl_event: ?*const ast.EventDecl = if (flow.impl_of) |impl_path|
-                template_processor.findEventDeclByLastSegment(all_items, &impl_path)
+                template_processor.findEventDeclByLastSegment(self.allocator, all_items, &impl_path)
             else
                 null;
             if (try template_processor.renderTemplateInvocation(all_items, flow.inv(), new_continuations, flow.location, self.lang, impl_event, self.allocator)) |rendered| {

@@ -502,20 +502,20 @@ fn spliceSiteResult(
 /// Includes both top-level flows AND nested invocations in continuations.
 /// Used to detect infinite loops: if the count doesn't decrease after a transform,
 /// the transform isn't making progress.
-fn countMatchingFlowsInProgram(transform: *const TransformEntry, program: *const Program) usize {
+fn countMatchingFlowsInProgram(allocator: std.mem.Allocator, transform: *const TransformEntry, program: *const Program) usize {
     var count: usize = 0;
 
     for (program.items) |item| {
         switch (item) {
             .flow => |flow| {
-                count += countMatchingInFlow(&flow, transform, program);
+                count += countMatchingInFlow(allocator, &flow, transform, program);
             },
             .immediate_impl => {},
             .module_decl => |module| {
                 for (module.items) |mod_item| {
                     switch (mod_item) {
                         .flow => |flow| {
-                            count += countMatchingInFlow(&flow, transform, program);
+                            count += countMatchingInFlow(allocator, &flow, transform, program);
                         },
                         .immediate_impl => {},
                         else => {},
@@ -531,24 +531,24 @@ fn countMatchingFlowsInProgram(transform: *const TransformEntry, program: *const
 /// Count matching invocations in a flow. The flow's root body is just a
 /// continuation, so one recursive walk covers every depth — there is no
 /// separate "flow's own invocation" case anymore.
-fn countMatchingInFlow(flow: *const ast.Flow, transform: *const TransformEntry, program: *const Program) usize {
-    return countMatchingInContinuation(&flow.body, transform, program);
+fn countMatchingInFlow(allocator: std.mem.Allocator, flow: *const ast.Flow, transform: *const TransformEntry, program: *const Program) usize {
+    return countMatchingInContinuation(allocator, &flow.body, transform, program);
 }
 
 /// Recursively count matching invocations in a site (node + branch handlers).
-fn countMatchingInContinuation(cont: *const ast.Continuation, transform: *const TransformEntry, program: *const Program) usize {
+fn countMatchingInContinuation(allocator: std.mem.Allocator, cont: *const ast.Continuation, transform: *const TransformEntry, program: *const Program) usize {
     var count: usize = 0;
 
     if (cont.node) |node| {
         if (node == .invocation) {
-            if (flowStillMatchesTransform(&node.invocation, transform, program)) {
+            if (flowStillMatchesTransform(allocator, &node.invocation, transform, program)) {
                 count += 1;
             }
         }
     }
 
     for (cont.continuations) |*child| {
-        count += countMatchingInContinuation(child, transform, program);
+        count += countMatchingInContinuation(allocator, child, transform, program);
     }
 
     return count;
@@ -575,11 +575,11 @@ fn removeFlowFromProgram(allocator: std.mem.Allocator, program: *const Program, 
 
 /// THE dispatch predicate: does this node fire this transform?
 /// One function so walk-time matching and progress-counting can never drift.
-fn invocationMatchesEntry(node: ASTNode, transform: *const TransformEntry, program: *const Program) bool {
+fn invocationMatchesEntry(allocator: std.mem.Allocator, node: ASTNode, transform: *const TransformEntry, program: *const Program) bool {
     if (node != .invocation) return false;
     if (!qualifierGateOpen(node.invocation, transform)) return false;
     if (!node.matchesTransform(transform.name)) return false;
-    if (shadowedByLocalEvent(node.invocation, transform, program)) return false;
+    if (shadowedByLocalEvent(allocator, node.invocation, transform, program)) return false;
     return true;
 }
 
@@ -590,32 +590,90 @@ fn invocationMatchesEntry(node: ASTNode, transform: *const TransformEntry, progr
 /// the qualifier is the main module (or, pre-canonicalize, null). Globs are
 /// exempt (taps capture user events by design); qualified-only entries never
 /// reach this (the qualifier gate already decided).
-fn shadowedByLocalEvent(inv: *const Invocation, transform: *const TransformEntry, program: *const Program) bool {
+fn shadowedByLocalEvent(allocator: std.mem.Allocator, inv: *const Invocation, transform: *const TransformEntry, program: *const Program) bool {
     if (!transform.from_module) return false;
     if (inv.path.module_qualifier) |mq| {
         if (!std.mem.eql(u8, mq, program.main_module_name)) return false;
     }
     if (std.mem.indexOfScalar(u8, transform.name, '*') != null) return false;
-    return hasLocalEventDecl(program, inv.path.segments);
+    return hasLocalEventDecl(allocator, program, inv.path.segments);
+}
+
+/// The main module's event-decl path set, memoized per program-items epoch.
+/// `hasLocalEventDecl` sits inside the transform-match predicate — once per
+/// (invocation × module transform) per full-tree rewalk — so an unmemoized
+/// O(top-level items) scan there was the compile's innermost hot loop.
+/// Epoch key is the items slice header, the flatItems-memo contract: every
+/// structural write-back mints a fresh top-level array (a changed header means
+/// rebuild), and in-place content edits cannot remove a declaration.
+var local_events_epoch_ptr: usize = 0;
+var local_events_epoch_len: usize = std.math.maxInt(usize);
+var local_events_set: ?std.StringHashMap(void) = null;
+
+/// Join path segments with '.' into `buf`; returns the written slice.
+fn joinPathInto(buf: []u8, segments: []const []const u8) []const u8 {
+    var w: usize = 0;
+    for (segments, 0..) |s, i| {
+        if (i > 0) {
+            if (w >= buf.len) break;
+            buf[w] = '.';
+            w += 1;
+        }
+        if (w + s.len > buf.len) break;
+        @memcpy(buf[w..][0..s.len], s);
+        w += s.len;
+    }
+    return buf[0..w];
+}
+
+/// Stack-buffer twin of joinPathKey — NUL-separated lookup keys.
+fn joinPathKeyInto(buf: []u8, segments: []const []const u8) ?[]const u8 {
+    var w: usize = 0;
+    for (segments, 0..) |s, i| {
+        if (i > 0) {
+            if (w >= buf.len) return null;
+            buf[w] = 0;
+            w += 1;
+        }
+        if (w + s.len > buf.len) return null;
+        @memcpy(buf[w..][0..s.len], s);
+        w += s.len;
+    }
+    return buf[0..w];
+}
+
+fn joinPathKey(allocator: std.mem.Allocator, segments: []const []const u8) []const u8 {
+    var len: usize = 0;
+    for (segments, 0..) |s, i| len += s.len + @intFromBool(i > 0);
+    const key = allocator.alloc(u8, len) catch unreachable;
+    var w: usize = 0;
+    for (segments, 0..) |s, i| {
+        if (i > 0) {
+            key[w] = 0;
+            w += 1;
+        }
+        @memcpy(key[w..][0..s.len], s);
+        w += s.len;
+    }
+    return key;
 }
 
 /// True if the program's main module (top-level items) declares an event
 /// with exactly these path segments.
-fn hasLocalEventDecl(program: *const Program, segments: []const []const u8) bool {
-    for (program.items) |item| {
-        if (item != .event_decl) continue;
-        const decl = item.event_decl;
-        if (decl.path.segments.len != segments.len) continue;
-        var equal = true;
-        for (decl.path.segments, segments) |a, b| {
-            if (!std.mem.eql(u8, a, b)) {
-                equal = false;
-                break;
-            }
+fn hasLocalEventDecl(allocator: std.mem.Allocator, program: *const Program, segments: []const []const u8) bool {
+    if (local_events_epoch_ptr != @intFromPtr(program.items.ptr) or local_events_epoch_len != program.items.len) {
+        var set = std.StringHashMap(void).init(allocator);
+        for (program.items) |*item| {
+            if (item.* != .event_decl) continue;
+            set.put(joinPathKey(allocator, item.event_decl.path.segments), {}) catch unreachable;
         }
-        if (equal) return true;
+        local_events_set = set;
+        local_events_epoch_ptr = @intFromPtr(program.items.ptr);
+        local_events_epoch_len = program.items.len;
     }
-    return false;
+    var buf: [512]u8 = undefined;
+    const key = joinPathKeyInto(&buf, segments) orelse return false;
+    return local_events_set.?.contains(key);
 }
 
 /// Qualified-only gate: entries with a qualifier fire only when the
@@ -626,9 +684,9 @@ fn qualifierGateOpen(inv: *const Invocation, transform: *const TransformEntry) b
     return std.mem.eql(u8, spelled, required);
 }
 
-fn flowStillMatchesTransform(inv: *const Invocation, transform: *const TransformEntry, program: *const Program) bool {
+fn flowStillMatchesTransform(allocator: std.mem.Allocator, inv: *const Invocation, transform: *const TransformEntry, program: *const Program) bool {
     if (!qualifierGateOpen(inv, transform)) return false;
-    if (shadowedByLocalEvent(inv, transform, program)) return false;
+    if (shadowedByLocalEvent(allocator, inv, transform, program)) return false;
     const transform_name = transform.name;
     // Check if it would match the transform (uses just segments, not full path)
     var seg_path_buf: [256]u8 = undefined;
@@ -799,6 +857,10 @@ pub fn walkAndTransformStages(
         }
         if (staged.items.len == 0) continue;
 
+        // Name-keyed dispatch for this stage's entry set — built once, the
+        // index is transform-invariant across every rewalk of the fixed point.
+        const dispatch = Dispatch.build(allocator, staged.items);
+
         var iteration: usize = 0;
         while (true) {
             iteration += 1;
@@ -809,7 +871,7 @@ pub fn walkAndTransformStages(
                 return error.TransformInfiniteLoop;
             }
 
-            const result = try walkOnce(current_program, staged.items, allocator, ctx);
+            const result = try walkOnce(current_program, staged.items, &dispatch, allocator, ctx);
 
             if (result.found) {
                 current_program = result.program;
@@ -828,16 +890,74 @@ const WalkResult = struct {
     program: *const Program, // Updated program (if found=true) or original (if found=false)
 };
 
+/// Name-keyed transform dispatch. The walk used to run the full match
+/// predicate (path rebuild + glob match + shadowing) for EVERY transform at
+/// EVERY invocation node, per rewalk — O(nodes × transforms × passes). Most
+/// entries are exact names (matchSegment on a non-glob name is eql), so they
+/// index by the invocation's joined segment path; glob entries keep their
+/// per-node pattern check. Candidates must still be tried in declared order —
+/// exact hits and glob hits merge ascending by index so "first match wins"
+/// is unchanged.
+const Dispatch = struct {
+    /// exact name → transform indexes, ascending
+    exact: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(usize)),
+    /// indexes of glob-named entries, ascending
+    glob: std.ArrayListUnmanaged(usize),
+
+    fn build(allocator: std.mem.Allocator, transforms: []const TransformEntry) Dispatch {
+        var d: Dispatch = .{ .exact = .{}, .glob = .{} };
+        for (transforms, 0..) |t, i| {
+            if (std.mem.indexOfScalar(u8, t.name, '*') != null) {
+                d.glob.append(allocator, i) catch unreachable;
+            } else {
+                const gop = d.exact.getOrPut(allocator, t.name) catch unreachable;
+                if (!gop.found_existing) gop.value_ptr.* = .{};
+                gop.value_ptr.append(allocator, i) catch unreachable;
+            }
+        }
+        return d;
+    }
+
+    /// Ordered candidate indexes for `inv_path` — exact-name hits merged with
+    /// glob hits, ascending by declared index so "first match wins" is
+    /// unchanged. Null on buffer overflow: the caller falls back to the
+    /// original full scan rather than dropping a candidate.
+    fn candidateIdxs(d: *const Dispatch, transforms: []const TransformEntry, inv_path: []const u8, buf: []usize) ?[]const usize {
+        const ex: []const usize = if (d.exact.get(inv_path)) |l| l.items else &.{};
+        const gl = d.glob.items;
+        if (ex.len + gl.len > buf.len) return null;
+        var n: usize = 0;
+        var ei: usize = 0;
+        var gi: usize = 0;
+        while (ei < ex.len or gi < gl.len) {
+            if (ei < ex.len and (gi >= gl.len or ex[ei] < gl[gi])) {
+                buf[n] = ex[ei];
+                ei += 1;
+            } else {
+                if (!glob_pattern_matcher.matchSegment(transforms[gl[gi]].name, inv_path)) {
+                    gi += 1;
+                    continue;
+                }
+                buf[n] = gl[gi];
+                gi += 1;
+            }
+            n += 1;
+        }
+        return buf[0..n];
+    }
+};
+
 /// Walk the AST once, applying the FIRST transform found and returning immediately
 fn walkOnce(
     program: *const Program,
     transforms: []const TransformEntry,
+    dispatch: *const Dispatch,
     allocator: std.mem.Allocator,
     ctx: ?*anyopaque,
 ) !WalkResult {
     // Start from the program root
     const root = ASTNode{ .program = @constCast(program) };
-    return try walkNode(root, program, transforms, allocator, .none, ctx);
+    return try walkNode(root, program, transforms, dispatch, allocator, .none, ctx);
 }
 
 /// Compute the SitePosition each child of `node` should be walked with.
@@ -888,6 +1008,7 @@ fn walkNode(
     node: ASTNode,
     program: *const Program,
     transforms: []const TransformEntry,
+    dispatch: *const Dispatch,
     allocator: std.mem.Allocator,
     position: SitePosition,
     ctx: ?*anyopaque,
@@ -897,16 +1018,35 @@ fn walkNode(
     // we intentionally violate normal depth-first ordering.
     if (getClaimCandidate(node, position)) |candidate| {
         if (!candidate.node.isAlreadyTransformed()) {
-            for (transforms) |transform| {
-                if (!transform.claims_descendants) continue;
-                if (!invocationMatchesEntry(candidate.node, &transform, program)) continue;
+            var cpbuf: [256]u8 = undefined;
+            const cpath = joinPathInto(&cpbuf, candidate.node.invocation.path.segments);
+            var cbuf: [512]usize = undefined;
+            const cc = dispatch.candidateIdxs(transforms, cpath, &cbuf);
+            if (cc) |idxs| {
+                for (idxs) |ti| {
+                    const transform = transforms[ti];
+                    if (!transform.claims_descendants) continue;
+                    if (!invocationMatchesEntry(allocator, candidate.node, &transform, program)) continue;
 
-                const claim_result = try applyTransform(candidate.node, candidate.position, program, transform, allocator, ctx);
-                if (claim_result.found) {
-                    return claim_result;
+                    const claim_result = try applyTransform(candidate.node, candidate.position, program, transform, allocator, ctx);
+                    if (claim_result.found) {
+                        return claim_result;
+                    }
+
+                    break;
                 }
+            } else {
+                for (transforms) |transform| {
+                    if (!transform.claims_descendants) continue;
+                    if (!invocationMatchesEntry(allocator, candidate.node, &transform, program)) continue;
 
-                break;
+                    const claim_result = try applyTransform(candidate.node, candidate.position, program, transform, allocator, ctx);
+                    if (claim_result.found) {
+                        return claim_result;
+                    }
+
+                    break;
+                }
             }
         }
     }
@@ -916,7 +1056,7 @@ fn walkNode(
     defer allocator.free(children);
 
     for (children) |child| {
-        const result = try walkNode(child, program, transforms, allocator, childPosition(node, child, position), ctx);
+        const result = try walkNode(child, program, transforms, dispatch, allocator, childPosition(node, child, position), ctx);
         if (result.found) {
             return result; // Found deeper transform, use it
         }
@@ -947,10 +1087,21 @@ fn walkNode(
         }
 
         // Check if this invocation matches any transform
-        for (transforms) |transform| {
-            if (transform.claims_descendants) continue;
-            if (invocationMatchesEntry(node, &transform, program)) {
-                return try applyTransform(node, position, program, transform, allocator, ctx);
+        var mbuf: [512]usize = undefined;
+        if (dispatch.candidateIdxs(transforms, debug_path[0..debug_len], &mbuf)) |idxs| {
+            for (idxs) |ti| {
+                const transform = transforms[ti];
+                if (transform.claims_descendants) continue;
+                if (invocationMatchesEntry(allocator, node, &transform, program)) {
+                    return try applyTransform(node, position, program, transform, allocator, ctx);
+                }
+            }
+        } else {
+            for (transforms) |transform| {
+                if (transform.claims_descendants) continue;
+                if (invocationMatchesEntry(allocator, node, &transform, program)) {
+                    return try applyTransform(node, position, program, transform, allocator, ctx);
+                }
             }
         }
 
@@ -1168,8 +1319,8 @@ fn applyTransform(
     // CIRCUIT BREAKER: Verify the transform made progress.
     // Count matching invocations before and after - if the count didn't
     // decrease, the transform isn't making progress (infinite loop).
-    const count_before = countMatchingFlowsInProgram(&transform, program);
-    const count_after = countMatchingFlowsInProgram(&transform, spliced);
+    const count_before = countMatchingFlowsInProgram(allocator, &transform, program);
+    const count_after = countMatchingFlowsInProgram(allocator, &transform, spliced);
 
     if (count_after >= count_before and count_before > 0) {
         // Continuation/nested-position whole-program transforms: for a nested
@@ -1214,6 +1365,38 @@ fn applyTransform(
 /// Check if an invocation matches an [expand] event and handle it.
 /// Nested sites get the same lift/graft treatment as transform handlers, so
 /// expansion is position-agnostic too.
+/// [expand]-declared event paths, memoized per program-items epoch — the same
+/// items-header contract as local_events above. The walk asked this once per
+/// invocation node and paid a full program scan for the answer every time.
+var expand_epoch_ptr: usize = 0;
+var expand_epoch_len: usize = std.math.maxInt(usize);
+var expand_set: ?std.StringHashMap(void) = null;
+
+fn expandDeclSet(allocator: std.mem.Allocator, program: *const Program) *const std.StringHashMap(void) {
+    if (expand_epoch_ptr != @intFromPtr(program.items.ptr) or expand_epoch_len != program.items.len) {
+        var set = std.StringHashMap(void).init(allocator);
+        for (program.items) |*item| {
+            switch (item.*) {
+                .event_decl => |*ed| {
+                    if (annotation_parser.hasPart(ed.annotations, "expand"))
+                        set.put(joinPathKey(allocator, ed.path.segments), {}) catch unreachable;
+                },
+                .module_decl => |*md| {
+                    for (md.items) |*mi| {
+                        if (mi.* == .event_decl and annotation_parser.hasPart(mi.event_decl.annotations, "expand"))
+                            set.put(joinPathKey(allocator, mi.event_decl.path.segments), {}) catch unreachable;
+                    }
+                },
+                else => {},
+            }
+        }
+        expand_set = set;
+        expand_epoch_ptr = @intFromPtr(program.items.ptr);
+        expand_epoch_len = program.items.len;
+    }
+    return &expand_set.?;
+}
+
 fn handleExpandIfMatches(
     node: ASTNode,
     position: SitePosition,
@@ -1224,68 +1407,14 @@ fn handleExpandIfMatches(
 
     // Build the invocation path for matching
     var path_buf: [256]u8 = undefined;
-    var path_len: usize = 0;
-    for (invocation.path.segments, 0..) |segment, i| {
-        if (i > 0) {
-            path_buf[path_len] = '.';
-            path_len += 1;
-        }
-        @memcpy(path_buf[path_len..][0..segment.len], segment);
-        path_len += segment.len;
-    }
-    const inv_path = path_buf[0..path_len];
+    const inv_path = joinPathInto(&path_buf, invocation.path.segments);
 
-    // Search for matching [expand] event declaration
-    for (program.items) |item| {
-        switch (item) {
-            .event_decl => |event_decl| {
-                if (annotation_parser.hasPart(event_decl.annotations, "expand")) {
-                    // Build event path for matching
-                    var event_path_buf: [256]u8 = undefined;
-                    var event_path_len: usize = 0;
-                    for (event_decl.path.segments, 0..) |segment, i| {
-                        if (i > 0) {
-                            event_path_buf[event_path_len] = '.';
-                            event_path_len += 1;
-                        }
-                        @memcpy(event_path_buf[event_path_len..][0..segment.len], segment);
-                        event_path_len += segment.len;
-                    }
-                    const event_path = event_path_buf[0..event_path_len];
-
-                    if (std.mem.eql(u8, inv_path, event_path)) {
-                        // Found matching [expand] event - apply template
-                        return try applyExpandAtSite(node, position, program, inv_path, allocator);
-                    }
-                }
-            },
-            .module_decl => |module| {
-                for (module.items) |mod_item| {
-                    if (mod_item == .event_decl) {
-                        const event_decl = mod_item.event_decl;
-                        if (annotation_parser.hasPart(event_decl.annotations, "expand")) {
-                            // Build event path for matching
-                            var event_path_buf: [256]u8 = undefined;
-                            var event_path_len: usize = 0;
-                            for (event_decl.path.segments, 0..) |segment, i| {
-                                if (i > 0) {
-                                    event_path_buf[event_path_len] = '.';
-                                    event_path_len += 1;
-                                }
-                                @memcpy(event_path_buf[event_path_len..][0..segment.len], segment);
-                                event_path_len += segment.len;
-                            }
-                            const event_path = event_path_buf[0..event_path_len];
-
-                            if (std.mem.eql(u8, inv_path, event_path)) {
-                                return try applyExpandAtSite(node, position, program, inv_path, allocator);
-                            }
-                        }
-                    }
-                }
-            },
-            else => {},
-        }
+    // An [expand] decl matching this path applies its template; the decl
+    // itself is unused, so set membership is the whole question.
+    var key_buf: [512]u8 = undefined;
+    if (joinPathKeyInto(&key_buf, invocation.path.segments)) |key| {
+        if (expandDeclSet(allocator, program).contains(key))
+            return try applyExpandAtSite(node, position, program, inv_path, allocator);
     }
 
     return WalkResult{ .found = false, .program = program };
