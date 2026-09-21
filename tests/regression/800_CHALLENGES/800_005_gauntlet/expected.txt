@@ -7,35 +7,35 @@ culled a foe at 0 hp
 board: 4 killed
 culled a foe at -1 hp
 board: 5 killed
-culled a foe at -3 hp
+culled a foe at 0 hp
 board: 6 killed
-culled a foe at -2 hp
+culled a foe at -3 hp
 board: 7 killed
-culled a foe at -1 hp
+culled a foe at 0 hp
 board: 8 killed
-culled a foe at 0 hp
+culled a foe at -2 hp
 board: 9 killed
-culled a foe at -3 hp
-board: 10 killed
-culled a foe at -2 hp
-board: 11 killed
-culled a foe at 0 hp
-board: 12 killed
-culled a foe at -2 hp
-board: 13 killed
-culled a foe at -3 hp
-board: 14 killed
 culled a foe at -1 hp
+board: 10 killed
+culled a foe at 0 hp
+board: 11 killed
+culled a foe at -3 hp
+board: 12 killed
+culled a foe at -3 hp
+board: 13 killed
+culled a foe at 0 hp
+board: 14 killed
+culled a foe at -2 hp
 board: 15 killed
 culled a foe at -1 hp
 board: 16 killed
-culled a foe at -3 hp
-board: 17 killed
-culled a foe at 0 hp
-board: 18 killed
-culled a foe at 0 hp
-board: 19 killed
 culled a foe at -2 hp
 fought 6 rounds
-score 54 over 13 survivors
+score 166 over 16 survivors, 1783 scarred
+board: 17 killed
+culled a foe at 13 hp
+champion stands down at 13 hp
+board: 18 killed
+culled a foe at 1 hp
+the dead stay dead
 gauntlet closed after 6 rounds

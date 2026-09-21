@@ -11,13 +11,18 @@ unkilled.
 A 32-unit arena. `spawn-wave` bulk-inserts combatants through a counted
 `for`, minting `*Unit<live!>` obligations into an owned column and writing
 each row's handle into a grid. `pair-rivals` pairs combatants by indexed
-writes (`arena[a.opp]`). `strike` is a guarded query sweep that damages
-the rival row; `cull` is a rule sweep that `take`s dead rows (swap-remove)
-and clears the survivor's back-pointer through the taken payload
-(`arena[i.opp]`). `rounds` recurses strike/cull six deep. `tally` folds
-survivors into the score. The gauntlet token threads
-`open! → mustered! → fought! → scored! → closed` through every phase —
-skip a phase and the program does not type-check.
+writes (`arena[a.opp]`). `strike` is a compound-guarded query sweep
+(`a.opp != -1 and a.hp > 0` — the dead don't strike); `cull` is a rule
+sweep that `take`s dead rows (swap-remove), clears the survivor's
+back-pointer AND pays victor's vigor — two writes through the same taken
+payload handle (`arena[i.opp]`, the respell path). `rounds` recurses
+strike/cull six deep. `tally` folds survivors into the score; a standing
+`hp` watch accumulates `board.scar` off the transplanted write path. The
+`honor` phase `! first`-extracts the front survivor mid-query, then
+double-takes a fresh challenger's handle — the second take resolves the
+stale handle into `| empty`, take's graceful absence. The gauntlet token
+threads `open! → mustered! → fought! → scored! → honored! → closed`
+through every phase — skip one and the program does not type-check.
 
 ## How Koru does the work
 
@@ -29,9 +34,11 @@ skip a phase and the program does not type-check.
   swap-remove order (non-sequential ids are the tell).
 - **Reactive arms.** `! inserted` / `! removed` maintain the `board`
   aggregates (alive, kills, vested pool) and print the cull trace. The
-  `kills` watch prints the running board count.
+  `kills` watch prints the running board count; the `hp` watch folds
+  every write to the hot column into `board.scar`.
 - **The measured hot paths.** Counted-for insert, handle mint + grid
-  pairing, indexed-resolve writes, guarded query + rule sweeps, and
+  pairing, indexed-resolve writes (incl. the same payload head respelled
+  twice), guarded query + rule sweeps, take under `! first`, and
   swap-remove — the same operations the ecs-store benchmark board
   measures, assembled into a program that has to be right.
 
@@ -39,9 +46,12 @@ skip a phase and the program does not type-check.
 
 - Obligation-typed store column (`*Unit<live!>` inside `store:new`) —
   owned-column machinery with a canonical discharger.
-- Take-payload indexing (`arena[i.opp]`), conditional arms inside a take
-  continuation, recursive tors, `when`-guarded sweeps, interceptor
-  ordering against swap-remove.
+- Take-payload indexing (`arena[i.opp]`, twice per arm), conditional
+  arms inside a take continuation, recursive tors, `when`-guarded
+  sweeps incl. compound guards, a field-level `watch` on a plural
+  store, `! first` + `| none` query arms, take-under-query-arm, the
+  `| empty` take-miss arm via a stale handle, and interceptor ordering
+  against swap-remove.
 
 ## Frontiers found (now fixed)
 
