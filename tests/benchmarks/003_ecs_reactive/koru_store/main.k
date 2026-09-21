@@ -37,7 +37,7 @@ std/store:new(bodies, capacity: 100000) { px: f32, py: f32, vx: f32, vy: f32, hp
 
 // `add_remove` toggles a flag over its own array, exactly as the baseline
 // does — it never builds a world.
-std/store:new(marks, capacity: 100000) { on: i64 }
+std/store:new(marks, capacity: 100000) { on: i32 }
 
 // `bevy_strength_world` splits its population three ways — half dynamic
 // bodies, a quarter particles, a quarter orbiters — so it gets three stores.
