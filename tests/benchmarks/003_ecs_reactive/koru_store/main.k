@@ -773,11 +773,15 @@ combat-rebuild = for(0..@as(usize, @intCast(@divTrunc(cfg.entities, 10))))
         |> std/store:stored { en[cw.h].enext: bkt[@as(usize, @intCast(cw.cell))].head }
         |> std/grid:stored { bkt[@as(usize, @intCast(cw.cell))].head: if (cw.alive == 1) cw.h else bkt[@as(usize, @intCast(cw.cell))].head }
 
-// The observer fan-out, fired only on a real hit. `observe` cannot be called
-// conditionally from a chain, so the condition rides in as a parameter.
+// The observer fan-out, fired only on a real hit. The condition rides in as a
+// parameter because the call cannot be guarded mid-chain — but it gates the
+// LOOP BOUND, not the per-observer `if`: `for(0..0)` folds to nothing, so a
+// miss pays one compare instead of `observers` guarded iterations. Measured
+// 2026-09-21: combat_world 15.3ms -> ~8.4ms, sink identical (1838076) — LLVM
+// did not unswitch the loop-invariant `fire == 1` through the handler call.
 tor combat-observe { value: i64, fire: i64 }
-combat-observe = for(0..@as(usize, @intCast(cfg.observers)))
-    ! each o |> if (fire == 1 and (((@as(u64, @bitCast(value)) ^ @as(u64, @intCast(o))) *% 0x9e3779b9) & 7) == 0)
+combat-observe = for(0..(if (fire == 1) @as(usize, @intCast(cfg.observers)) else 0))
+    ! each o |> if ((((@as(u64, @bitCast(value)) ^ @as(u64, @intCast(o))) *% 0x9e3779b9) & 7) == 0)
         | then |> std/store:stored { acc.sink: acc.sink + value + @as(i64, @intCast(o)) }
 
 // ONE STEP of the chain walk. `keep:` stops the loop at the first hit, so this
