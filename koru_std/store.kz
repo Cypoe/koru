@@ -1247,7 +1247,6 @@ fn isStoreNewFor(f: *const ast_find.Flow, want: []const u8) bool {
 // much it reads as ordinary code organisation. So this lives at file scope,
 // where both transforms can reach it, and the copy that used to live in
 // `stored` now delegates here. See `concepts/frag-a-fix-lands-in-one-lowering-path.md`.
-
 /// The stores a rewrite may name, with the emitted-namespace prefix each one
 /// needs from the reader's position (`""` = same namespace).
 ///
@@ -1687,3 +1686,4 @@ fn storeLowerText(
 ~part gate
 ~part bulk
 ~part plan
+~part drain

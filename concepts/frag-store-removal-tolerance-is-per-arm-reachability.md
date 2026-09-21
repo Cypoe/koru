@@ -33,3 +33,29 @@ Now pinned: `690_301` (unrelated take ⇒ `for`), `690_031` (in-arm take ⇒
 whose body takes counts, and already-lowered `__store_take_<store>` names
 count, so a take the scan cannot see through is treated as present rather than
 missed.
+
+**Evolved 2026-10 — the arm-level lattice has a third lowering.** A `! row`
+body that is *only* `take(s[e])` with the `| item` payload discarded is a
+drain: every visited row dies, so the payload materialisation and the
+swap-remove column traffic exist for nobody. The invoked sweep lowers to the
+bookkeeping alone — and the lesson is that **removal order is observable**.
+Freelist push order determines which handles a refill mints, and handles are
+plain `i64`s a program can print and compare, so the bulk form must reproduce
+sequential take's push order, not just its final count. That order turns out
+to be a read-only traversal — `row_hslot[0]`, then `row_hslot[n-1]` down to
+`row_hslot[1]` — because the tolerant loop always re-takes index 0 and
+swap-remove keeps dropping the last row into the hole. `clear`'s canonical
+reset was the wrong lowering for the same reason. Decline conditions stay
+conservative: guard, `[id]`, owned columns, `! removed` arms, index columns,
+preorder, any body shape the recognizer cannot name. Pinned `690_336`
+(shape + decline) — measured 1582µs → ~1.0ms on the 100k×100 despawn board
+scenario; the residual over a bare `world.deinit` anchor is the bookkeeping
+itself, which is semantic, not emission.
+
+The same work surfaced the complementary invariant on the resolve side: a
+dense index `row_of` returns must be `< len`, and a taken slot's
+`hslot_row` is tombstoned — because a reactive rule can consume a row inside
+`insert`, before the insert's own `| row h` handle is minted, producing a
+live-generation handle to a dead slot. Without the bounds check that handle
+resolved to dense row 0 of an emptied store and `take` underflowed `len`.
+Pinned `690_337`.

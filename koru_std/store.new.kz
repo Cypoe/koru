@@ -445,7 +445,6 @@
     // `storeKindDemanded` (both spellings, heads and continuations). Nothing
     // asks → K1 plain behavior, no tag, no ceremony.
     const want_kind: bool = member_names.items.len > 0 and storeKindDemanded(allocator, program, store_name);
-
     // ------------------------------------------------------------------
     // T2 / queue (d): the interceptor cascade graph is comptime-visible;
     // a cross-store cycle is rejected WITH THE CYCLE NAMED (690_012) -
@@ -1105,7 +1104,6 @@
     };
     // value_type feeds the singleton (capacity-1) plumbing only.
     const value_type: []const u8 = if (cell_fields.len > 0 and !is_plural) field_types[0] else "i64";
-
     // ------------------------------------------------------------------
     // PLURAL STORE (rung two) — a separate coordinator path. Generates:
     //   1. The SoA cell: one column array per field + len.
@@ -1413,7 +1411,6 @@
                 .{ambig_module},
             ) } };
         }
-
         // ---- collect this store's watch arms (field-granular, plural) ----
         const WatchArmP = struct {
             field_idx: usize,
@@ -1455,7 +1452,6 @@
                 pwatch_arms.append(allocator, .{ .field_idx = fidx, .cont = cloned }) catch unreachable;
             }
         }
-
         // ---- collect this store's query sites (keyed by source line) ----
         const QuerySite = struct {
             line: usize, file: []const u8, // site file — units mint into the STORE's scope, so store+line alone is not unique across modules (690_306)
@@ -1492,6 +1488,7 @@
             // Detection is deliberately CONSERVATIVE: any mention of take
             // anywhere under the arm keeps the tolerant form.
             may_remove: bool,
+            drain: bool = false,
             /// The row cursor's emitted NAME and what it holds. Decided by the
             /// body walk (`may_remove` picks it) and read back by the qrow /
             /// qbody emission, so the three sites cannot disagree about
@@ -1619,6 +1616,12 @@
             // unreachable take in a sibling flow no longer forces the
             // removal-tolerant `while`. Conservative on failure.
             const q_may_remove = ast_functional.armReachesInvocation(allocator, program_items, &body_clone, store_name, TakeScan.isTakeOn) catch true;
+            // A rule whose whole row body is `take(s[e])` with the payload
+            // discarded drains the store — the invoked sweep lowers to take's
+            // bookkeeping alone (store.drain). Everything else keeps may_remove.
+            const q_drain = q_may_remove and !q_is_preorder and qc.condition == null and q_req_id == null
+                and !has_owned and removed_arms.items.len == 0
+                and DrainScan.isBody(store_name, &body_clone, std.mem.trim(u8, q_row_bind, " "));
             qsites.append(allocator, .{
                 .line = qf.location.line, .file = allocator.dupe(u8, qf.location.file) catch unreachable,
                 // Filled by the body walk below.
@@ -1632,6 +1635,7 @@
                 .rule_module = allocator.dupe(u8, qf.module) catch unreachable,
                 .is_preorder = q_is_preorder,
                 .may_remove = q_may_remove,
+                .drain = q_drain,
                 .req_id = if (q_req_id) |idn| allocator.dupe(u8, std.mem.trim(u8, idn, " ")) catch unreachable else null,
             }) catch unreachable;
         }
@@ -1772,7 +1776,6 @@
                 }
             }
         }
-
         // ---- rewrite transplanted bodies ----
         // Query bodies execute inside the qbody handler where the projected
         // names and `__koru_qrow` are event inputs. `entity.<f>` references:
@@ -2362,7 +2365,6 @@
                 return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): the `updated` interceptor over an owned column is a later rung - it carries TWO owned images (old and new) of the written field; `inserted`/`removed`/`watch` over owned are built (690_061/065/063)", .{store_name}) } };
             }
         }
-
         // ---- unit 1: the SoA cell ----
         var pc = std.ArrayList(u8).initCapacity(allocator, 512) catch unreachable;
         pc.appendSlice(allocator, "const __KoruStoreT_") catch unreachable;
@@ -2490,7 +2492,9 @@
             \\        const slot = @as(usize, @intCast(slot32 & 0xFFFFFF));
             \\        if (slot >= self.__koru_hslot_next) return null;
             \\        if (@as(u32, @truncate(u >> 32)) != self.__koru_hslot_gen[slot]) return null;
-            \\        return self.__koru_hslot_row[slot];
+            \\        const __koru_r = self.__koru_hslot_row[slot];
+            \\        if (__koru_r >= self.len) return null;
+            \\        return __koru_r;
             \\    }}
             \\    // MEASURED NEUTRAL 2026-08-03, left alone deliberately. This
             \\    // checks brand and generation inline and then calls
@@ -2611,7 +2615,9 @@
                 \\    const slot = low % 16777216;
                 \\    if (slot >= this.__koru_hslot_next) return null;
                 \\    if (gen !== this.__koru_hslot_gen[slot]) return null;
-                \\    return this.__koru_hslot_row[slot];
+                \\    const r = this.__koru_hslot_row[slot];
+                \\    if (r < 0 || r >= this.len) return null;
+                \\    return r;
                 \\  }},
                 \\  __koru_resolve(h) {{
                 \\    const r = this.__koru_row_of(h);
@@ -2687,7 +2693,6 @@
                 .module = allocator.dupe(u8, flow.module) catch unreachable,
             } }) catch unreachable;
         }
-
         // ---- facet guards (std/refine) ----
         // A leaf column that expands a proto field met to bounds or a clamp
         // is judged at the head of every insert proc — before capacity,
@@ -2739,7 +2744,6 @@
             ast_functional.facets.enforceBranches(allocator, &.{})
         else
             &.{};
-
         // ---- shared: the row-append text + standing-enter calls ----
         //
         // Most of this text is IDENTICAL on both targets — `__koru_store_x.hp
@@ -3189,7 +3193,6 @@
                 .module = allocator.dupe(u8, flow.module) catch unreachable,
             } }) catch unreachable;
         }
-
         // ---- unit 4: the row-addressed apply/write pair ((f), plural) ----
         // Generated for owned-column stores too (the WRITE rung, 690_062/063):
         // an owned column's write is discharge-old + consume-new — the apply
@@ -3449,7 +3452,6 @@
                 .location = flow.location,
                 .module = allocator.dupe(u8, flow.module) catch unreachable,
             } }) catch unreachable;
-
             // ---- unit 4c (owned-containing stores): per-field TARGETED writes ----
             // The bundled surface above carries one value slot per column, a
             // dead slot riding as a typed zero — but an OWNED slot has no
@@ -3957,7 +3959,6 @@
                 }
             }
         }
-
         // ---- unit 4b ([tree] only): the cycle-guarded parent write ----
         // Mirror of insertf (exhaustion is a branch, 690_011): acyclicity is a
         // BRANCH. `__store_writec_*` answers `| ok` (the write landed, through
@@ -4284,7 +4285,7 @@
                 \\  }}
                 \\}}
                 \\return;
-            , .{ CAP, store_name, store_name, store_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable else if (qs.may_remove) std.fmt.allocPrint(allocator,
+            , .{ CAP, store_name, store_name, store_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable else if (qs.drain and index_col == null) DrainScan.sweepBody(allocator, true, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
                 \\let __koru_i = 0;
                 \\while (__koru_i < __koru_store_{s}.len) {{
                 \\  const __koru_len_before = __koru_store_{s}.len;
@@ -4320,7 +4321,7 @@
                 \\    }}
                 \\}}
                 \\return;
-            , .{ CAP, store_name, store_name, store_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable else if (qs.may_remove) std.fmt.allocPrint(allocator,
+            , .{ CAP, store_name, store_name, store_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable else if (qs.drain and index_col == null) DrainScan.sweepBody(allocator, false, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
                 \\var __koru_i: usize = 0;
                 \\while (__koru_i < __koru_store_{s}.len) {{
                 \\    const __koru_len_before = __koru_store_{s}.len;
@@ -4347,7 +4348,6 @@
                 .module = allocator.dupe(u8, flow.module) catch unreachable,
             } }) catch unreachable;
         }
-
         // ---- unit 5: take — swap-remove through the handle head ----
         // Omitted entirely under the gate: a lean store has no handles to
         // resolve, no slot to retire, and — by construction — no caller.
@@ -4551,7 +4551,8 @@
                 std.fmt.allocPrint(allocator, "= (__koru_store_{s}.__koru_hslot_gen[__koru_gone_slot] + 1) % 2097152", .{store_name}) catch unreachable
             else
                 "+%= 1";
-            const tail = std.fmt.allocPrint(allocator, "}}\n__koru_store_{s}.len = __koru_last;\n__koru_store_{s}.__koru_hslot_gen[__koru_gone_slot] {s};\n__koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_gone_slot;\n__koru_store_{s}.__koru_hslot_free_len += 1;\n", .{ store_name, store_name, genbump, store_name, store_name, store_name }) catch unreachable;
+            const tombstone: []const u8 = if (host_is_js) "-1" else "@import(\"std\").math.maxInt(usize)";
+            const tail = std.fmt.allocPrint(allocator, "}}\n__koru_store_{s}.__koru_hslot_row[__koru_gone_slot] = {s};\n__koru_store_{s}.len = __koru_last;\n__koru_store_{s}.__koru_hslot_gen[__koru_gone_slot] {s};\n__koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_gone_slot;\n__koru_store_{s}.__koru_hslot_free_len += 1;\n", .{ store_name, tombstone, store_name, store_name, genbump, store_name, store_name, store_name }) catch unreachable;
             tb.appendSlice(allocator, tail) catch unreachable;
             // `std/indexes:store` — the taken row drops its own key entry
             // (a lower live duplicate owns the entry and survives); when the
@@ -4583,7 +4584,6 @@
                 .module = allocator.dupe(u8, flow.module) catch unreachable,
             } }) catch unreachable;
         }
-
         // ---- lifecycle interceptor units (inserted/removed, 690_016) ----
         // Each arm becomes an event whose inputs are its destructured row
         // fields plus an impl flow carrying the transplanted body (the qbody

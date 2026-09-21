@@ -1,0 +1,114 @@
+// Koru Standard Library: the `drain` part of store.kz.
+// Joined via `~part drain` in store.kz; merged into the module at load.
+
+// ------------------------------------------------------------------
+// Drain — a rule whose row body is exactly `take(s[e])` with a discard
+// `| item` removes every row the invoked sweep visits. The per-row take
+// reads every column into the `| item` payload and swap-writes every
+// column of the last row into the freed slot — work that exists for the
+// payload's sake and to keep survivors live. A drain has neither: the
+// payload is discarded and there are no survivors.
+//
+// What stays observable is the bookkeeping: every live slot's generation
+// bumps once, the freelist grows in the order sequential take would push,
+// and every freed slot's hslot_row is tombstoned. Sequential take removes
+// index 0 each iteration — so the row at the end drops into the hole and
+// dies next — which makes the freelist push order provably
+// `row_hslot[0]`, then `row_hslot[n-1]` down to `row_hslot[1]`. That is a
+// READ-ONLY traversal of the original mapping: no swap, no fixup writes,
+// no column traffic. Post-drain state is identical to sequential take's
+// (len 0, gens +1, freelist equal, all hslot_row tombstoned); row_hslot
+// beyond len diverges only in dead bytes insert overwrites on refill.
+//
+// Handles are i64s, so slot-reuse order after a refill IS observable —
+// `clear`'s canonical reset mints a different first handle than take's
+// removal-ordered freelist does, which is why this lowering reproduces
+// take's bookkeeping rather than calling the clear unit.
+//
+// Every doubt declines the site: a `when` guard makes the walk
+// selective, a `| item` body that reads the payload makes the
+// materialisation load-bearing, an owned column discharges one
+// obligation at a time, a `! removed` arm fires once per row, and an
+// index column reseats entries per take. A declined site stays a
+// per-row take and is correct by construction.
+// ------------------------------------------------------------------
+
+const DrainScan = struct {
+    const ast = @import("ast");
+
+    // The pre-rewrite body is one `take(s[row_bind])` site whose
+    // continuations are all empty `item`/`empty` arms — the payload may
+    // be bound but is never read, and nothing else runs per row.
+    fn isBody(store: []const u8, body: *const ast.Continuation, row_bind: []const u8) bool {
+        const node = body.node orelse return false;
+        const inv = switch (node) {
+            .invocation => |iv| iv,
+            else => return false,
+        };
+        if (!TakeScan.isTakeOn(store, &inv)) return false;
+        var addressed = false;
+        for (inv.args) |a| {
+            if (!std.mem.eql(u8, a.name, "expr")) continue;
+            const v = if (a.value.len >= 2 and a.value[0] == '"') a.value[1 .. a.value.len - 1] else a.value;
+            const lb = std.mem.indexOfScalar(u8, v, '[') orelse return false;
+            if (!std.mem.endsWith(u8, v, "]")) return false;
+            if (!std.mem.eql(u8, std.mem.trim(u8, v[0..lb], " "), store)) return false;
+            if (!std.mem.eql(u8, std.mem.trim(u8, v[lb + 1 .. v.len - 1], " "), row_bind)) return false;
+            addressed = true;
+        }
+        if (!addressed) return false;
+        for (body.continuations) |c| {
+            if (!std.mem.eql(u8, c.branch, "item") and !std.mem.eql(u8, c.branch, "empty")) return false;
+            if (c.node) |cn| {
+                if (cn != .terminal) return false;
+            }
+            if (c.kind != .terminal) return false;
+            if (c.continuations.len > 0 or c.condition != null or c.destructure.len > 0) return false;
+        }
+        return true;
+    }
+
+    // The sweep body a drain-lowered site emits in place of the
+    // removal-tolerant while — the freelist order and bookkeeping of
+    // sequential take, read off the original mapping without swapping.
+    fn sweepBody(alloc: std.mem.Allocator, host_is_js: bool, store: []const u8) []const u8 {
+        if (host_is_js) return std.fmt.allocPrint(alloc,
+            \\const __koru_dn = __koru_store_{s}.len;
+            \\if (__koru_dn > 0) {{
+            \\  let __koru_slot = __koru_store_{s}.__koru_row_hslot[0];
+            \\  __koru_store_{s}.__koru_hslot_gen[__koru_slot] = (__koru_store_{s}.__koru_hslot_gen[__koru_slot] + 1) % 2097152;
+            \\  __koru_store_{s}.__koru_hslot_row[__koru_slot] = -1;
+            \\  __koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_slot;
+            \\  __koru_store_{s}.__koru_hslot_free_len += 1;
+            \\  for (let __koru_k = 1; __koru_k < __koru_dn; __koru_k++) {{
+            \\    __koru_slot = __koru_store_{s}.__koru_row_hslot[__koru_dn - __koru_k];
+            \\    __koru_store_{s}.__koru_hslot_gen[__koru_slot] = (__koru_store_{s}.__koru_hslot_gen[__koru_slot] + 1) % 2097152;
+            \\    __koru_store_{s}.__koru_hslot_row[__koru_slot] = -1;
+            \\    __koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_slot;
+            \\    __koru_store_{s}.__koru_hslot_free_len += 1;
+            \\  }}
+            \\  __koru_store_{s}.len = 0;
+            \\}}
+            \\return;
+        , .{ store, store, store, store, store, store, store, store, store, store, store, store, store, store, store, store }) catch unreachable;
+        return std.fmt.allocPrint(alloc,
+            \\const __koru_dn = __koru_store_{s}.len;
+            \\if (__koru_dn > 0) {{
+            \\    const __koru_slot0 = __koru_store_{s}.__koru_row_hslot[0];
+            \\    __koru_store_{s}.__koru_hslot_gen[__koru_slot0] +%= 1;
+            \\    __koru_store_{s}.__koru_hslot_row[__koru_slot0] = @import("std").math.maxInt(usize);
+            \\    __koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_slot0;
+            \\    __koru_store_{s}.__koru_hslot_free_len += 1;
+            \\    for (1..__koru_dn) |__koru_k| {{
+            \\        const __koru_slot = __koru_store_{s}.__koru_row_hslot[__koru_dn - __koru_k];
+            \\        __koru_store_{s}.__koru_hslot_gen[__koru_slot] +%= 1;
+            \\        __koru_store_{s}.__koru_hslot_row[__koru_slot] = @import("std").math.maxInt(usize);
+            \\        __koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_slot;
+            \\        __koru_store_{s}.__koru_hslot_free_len += 1;
+            \\    }}
+            \\    __koru_store_{s}.len = 0;
+            \\}}
+            \\return;
+        , .{ store, store, store, store, store, store, store, store, store, store, store, store, store, store }) catch unreachable;
+    }
+};
