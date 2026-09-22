@@ -119,6 +119,19 @@ dedup stays undesigned. Emitter root-fix along the way: an empty
 terminal arm in the expression path now emits `{}` instead of NOTHING
 (`.mode => ,` was a Zig parse error). 690 board: 13/13 runnable green.
 
+**And the splice is plurality-aware (2026-09-07, 690_340).** The
+foreign-guard announce-call is field-only only while the TARGET is a
+singleton. A plural target's announce is `(row, field)` and a foreign
+write names no row, so the step instead calls a synthesized
+`__store_announce_each_<T>(field)` — an event whose impl loops the
+target's live rows calling its own announce per row. Writing
+`board.alarm` under a `when board.alarm == 1` watch on a 64-row store
+re-fires 56 watch evaluations after 8 rows were culled — live rows,
+not capacity. Owned-column stores still get no announce path at all
+(their `| item` discharge rules out the bundled envelope that hosts
+it), so a guarded watch there remains unexpressible — refused by
+absence, not by diagnostic.
+
 **The rung-two sweep total (2026-07-05 night): the runnable 690 board
 went 8/20 → 15/21.** Chain envelope (write-all-then-announce-all — the
 (i) lean executable; envwrite is the write-only half, announce the

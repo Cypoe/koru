@@ -4839,6 +4839,200 @@ fn takeItemPath(cont: *const ast.Continuation, under_take: bool, site: *const as
     return false;
 }
 
+/// The `__store_*` decl scan — an event_decl named `name` anywhere in the
+/// item tree (module decls included).
+fn findEventDeclIn(items: []const ast.Item, name: []const u8) ?*const ast.EventDecl {
+    for (items) |*it| {
+        switch (it.*) {
+            .event_decl => |*ed| {
+                if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], name)) return ed;
+            },
+            .module_decl => |*m| {
+                if (findEventDeclIn(m.items, name)) |found| return found;
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+const StoreNewHit = struct { flow: *const ast.Flow, home: []const u8 };
+
+/// The raw `std/store:new(<store>)` flow — still present while the target's
+/// transform has not run (transforms fire in declaration order, and a guard
+/// store may be declared before the store it guards).
+fn storeNewFlowIn(items: []const ast.Item, store: []const u8, enclosing: ?[]const u8) ?StoreNewHit {
+    for (items) |*it| {
+        switch (it.*) {
+            .flow => |*f| {
+                const inv = f.inv();
+                if (inv.path.segments.len != 1 or !std.mem.eql(u8, inv.path.segments[0], "new")) continue;
+                const mq = inv.path.module_qualifier orelse continue;
+                if (!std.mem.eql(u8, mq, "std.store")) continue;
+                for (inv.args) |a| {
+                    if (!std.mem.eql(u8, a.name, "expr")) continue;
+                    var v = a.value;
+                    if (v.len >= 2 and v[0] == '"') v = v[1 .. v.len - 1];
+                    if (std.mem.eql(u8, v, store)) return .{ .flow = f, .home = enclosing orelse f.module };
+                }
+            },
+            .module_decl => |*m| {
+                if (storeNewFlowIn(m.items, store, m.logical_name)) |found| return found;
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+/// Whether `__store_announce_<store>` takes a `row` input — true for plural
+/// stores. A guarded watch on store T becomes a foreign guard on the GUARD
+/// store: every write to the guarded field must re-fire T's watch through
+/// `__store_announce_<T>`. The decl answers directly when the target is
+/// already coordinated; otherwise the `new` flow's `capacity` arg does.
+pub fn storeAnnounceRowed(alloc: std.mem.Allocator, program: *const ast.Program, store: []const u8) bool {
+    const want = std.fmt.allocPrint(alloc, "__store_announce_{s}", .{store}) catch unreachable;
+    if (findEventDeclIn(program.items, want)) |ed| {
+        for (ed.input.fields) |fld| {
+            if (std.mem.eql(u8, fld.name, "row")) return true;
+        }
+        return false;
+    }
+    if (storeNewFlowIn(program.items, store, null)) |hit| {
+        for (hit.flow.inv().args) |a| {
+            if (std.mem.eql(u8, a.name, "capacity")) {
+                const cap = std.fmt.parseInt(i64, a.value, 10) catch 1;
+                return cap > 1;
+            }
+        }
+    }
+    return false;
+}
+
+/// The module the store's synthesized decls are emitted into — the cell and
+/// the announce event both live in the TARGET's namespace, which is not the
+/// guard store's when the two are declared in different modules.
+fn storeDeclHome(alloc: std.mem.Allocator, program: *const ast.Program, store: []const u8) ?[]const u8 {
+    const want = std.fmt.allocPrint(alloc, "__store_apply_{s}", .{store}) catch unreachable;
+    if (findEventDeclIn(program.items, want)) |ed| return ed.path.module_qualifier;
+    if (storeNewFlowIn(program.items, store, null)) |hit| return hit.home;
+    return null;
+}
+
+/// The foreign-guard re-announce step for one (target store, target field)
+/// pair. A singleton target takes the direct `__store_announce_<T>(field: N)`
+/// call (690_013). A plural target's announce is `(row, field)` and the
+/// foreign write carries no row of T, so the step calls
+/// `__store_announce_each_<T>(field: N)` — the per-store sweep event the
+/// caller synthesizes for each entry recorded in `plural_targets`.
+pub fn storeForeignGuardStep(
+    alloc: std.mem.Allocator,
+    program: *const ast.Program,
+    home_ns: []const u8,
+    location: errors.SourceLocation,
+    target_store: []const u8,
+    target_field_idx: usize,
+    plural_targets: *std.ArrayList([]const u8),
+) ast.Continuation {
+    const rowed = storeAnnounceRowed(alloc, program, target_store);
+    const t_announce = if (rowed)
+        std.fmt.allocPrint(alloc, "__store_announce_each_{s}", .{target_store}) catch unreachable
+    else
+        std.fmt.allocPrint(alloc, "__store_announce_{s}", .{target_store}) catch unreachable;
+    if (rowed) {
+        var seen = false;
+        for (plural_targets.items) |t| {
+            if (std.mem.eql(u8, t, target_store)) seen = true;
+        }
+        if (!seen) plural_targets.append(alloc, alloc.dupe(u8, target_store) catch unreachable) catch unreachable;
+    }
+    const segs = alloc.alloc([]const u8, 1) catch unreachable;
+    segs[0] = t_announce;
+    const args = alloc.alloc(ast.Arg, 1) catch unreachable;
+    args[0] = ast.Arg{
+        .name = alloc.dupe(u8, "field") catch unreachable,
+        .value = std.fmt.allocPrint(alloc, "{d}", .{target_field_idx}) catch unreachable,
+    };
+    return ast.Continuation{
+        .branch = alloc.dupe(u8, "") catch unreachable,
+        .binding = null,
+        .kind = .terminal,
+        .condition = null,
+        .node = .{ .invocation = ast.Invocation{
+            .path = .{ .module_qualifier = alloc.dupe(u8, home_ns) catch unreachable, .segments = segs },
+            .args = args,
+        } },
+        .indent = 1,
+        .continuations = &[_]ast.Continuation{},
+        .is_transformed_subtree = true,
+        .location = location,
+    };
+}
+
+/// The `__store_announce_each_<T>` pair for one plural target: an event
+/// taking `(field)` whose impl loops the live rows calling the target's
+/// `(row, field)` announce — a foreign-guard write has no single row of T to
+/// name. Returns null when the decl already exists (two guard stores can
+/// share a target; the pair is emitted once).
+pub fn storeAnnounceEachItems(
+    alloc: std.mem.Allocator,
+    program: *const ast.Program,
+    home_ns: []const u8,
+    module: []const u8,
+    location: errors.SourceLocation,
+    main_module_name: []const u8,
+    proc_target: []const u8,
+    target_store: []const u8,
+) ?[2]ast.Item {
+    const each_name = std.fmt.allocPrint(alloc, "__store_announce_each_{s}", .{target_store}) catch unreachable;
+    if (findEventDeclIn(program.items, each_name) != null) return null;
+
+    const t_home = storeDeclHome(alloc, program, target_store) orelse home_ns;
+    const zigq = if (t_home.len == 0 or std.mem.eql(u8, t_home, main_module_name))
+        alloc.dupe(u8, "main_module.") catch unreachable
+    else
+        std.fmt.allocPrint(alloc, "{s}.", .{codegen_utils.buildKoruModulePath(alloc, t_home) catch unreachable}) catch unreachable;
+    const body = if (std.mem.eql(u8, proc_target, "js"))
+        std.fmt.allocPrint(alloc,
+            \\for (let __koru_r = 0; __koru_r < __koru_store_{s}.len; __koru_r++) {{
+            \\  main_module.__store_announce_{s}_event.handler({{ row: __koru_r, field: field }});
+            \\}}
+            \\return;
+        , .{ target_store, target_store }) catch unreachable
+    else
+        std.fmt.allocPrint(alloc,
+            \\for (0..{s}__koru_store_{s}.len) |__koru_r| {{
+            \\    {s}__store_announce_{s}_event.handler(.{{ .row = __koru_r, .field = field }});
+            \\}}
+            \\return;
+        , .{ zigq, target_store, zigq, target_store }) catch unreachable;
+
+    const segs = alloc.alloc([]const u8, 1) catch unreachable;
+    segs[0] = each_name;
+    const path = ast.DottedPath{ .module_qualifier = alloc.dupe(u8, home_ns) catch unreachable, .segments = segs };
+    const in_fields = alloc.alloc(ast.Field, 1) catch unreachable;
+    in_fields[0] = ast.Field{ .name = alloc.dupe(u8, "field") catch unreachable, .type = alloc.dupe(u8, "i64") catch unreachable };
+    const ev = ast.Item{ .event_decl = ast.EventDecl{
+        .path = path,
+        .input = ast.Shape{ .fields = in_fields },
+        .branches = &[_]ast.Branch{},
+        .is_public = false,
+        .is_implicit_flow = false,
+        .annotations = &[_][]const u8{},
+        .location = location,
+        .module = alloc.dupe(u8, module) catch unreachable,
+    } };
+    const pd = ast.Item{ .proc_decl = ast.ProcDecl{
+        .path = path,
+        .body = ast.Source{ .text = body, .location = location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} } },
+        .annotations = &[_][]const u8{},
+        .target = alloc.dupe(u8, proc_target) catch unreachable,
+        .location = location,
+        .module = alloc.dupe(u8, module) catch unreachable,
+    } };
+    return .{ ev, pd };
+}
+
 /// Find a proc declaration by its path
 /// Used for checking purity of event implementations
 pub fn findProcDeclByPath(items: []const ast.Item, path: *const ast.DottedPath) ?*const ast.ProcDecl {

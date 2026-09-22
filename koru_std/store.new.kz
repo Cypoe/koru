@@ -5882,6 +5882,9 @@
     };
 
     var arms = std.ArrayList(ast.Continuation).initCapacity(allocator, cell_fields.len + 2) catch unreachable;
+    // Plural foreign-guard targets needing a per-row re-announce sweep —
+    // `__store_announce_each_<T>` decls are synthesized after the arm loop.
+    var fg_each_targets = std.ArrayList([]const u8).initCapacity(allocator, 2) catch unreachable;
     for (field_names, 0..) |fname, i| {
         // Gather this field's spliced bodies in firing order.
         var segments = std.ArrayList(*const ast.Continuation).initCapacity(allocator, 4) catch unreachable;
@@ -5902,30 +5905,13 @@
             }
         }
 
-        // Foreign-guard announce steps for THIS field (690_013).
+        // Foreign-guard announce steps for THIS field (690_013). A PLURAL
+        // target's announce is `(row, field)` and a foreign write names no
+        // row — it re-fires through a synthesized `announce_each` sweep.
         var fg_steps = std.ArrayList(ast.Continuation).initCapacity(allocator, 2) catch unreachable;
         for (foreign_guards.items) |fg| {
             if (fg.local_field_idx != i) continue;
-            const t_announce = std.fmt.allocPrint(allocator, "__store_announce_{s}", .{fg.target_store}) catch unreachable;
-            const fg_args = allocator.alloc(ast.Arg, 1) catch unreachable;
-            fg_args[0] = ast.Arg{
-                .name = allocator.dupe(u8, "field") catch unreachable,
-                .value = std.fmt.allocPrint(allocator, "{d}", .{fg.target_field_idx}) catch unreachable,
-            };
-            fg_steps.append(allocator, ast.Continuation{
-                .branch = allocator.dupe(u8, "") catch unreachable,
-                .binding = null,
-                .kind = .terminal,
-                .condition = null,
-                .node = .{ .invocation = ast.Invocation{
-                    .path = mkPath(allocator, home_ns, t_announce),
-                    .args = fg_args,
-                } },
-                .indent = 1,
-                .continuations = &[_]ast.Continuation{},
-                .is_transformed_subtree = true,
-                .location = flow.location,
-            }) catch unreachable;
+            fg_steps.append(allocator, @import("emitter_helpers").storeForeignGuardStep(allocator, program, home_ns, flow.location, fg.target_store, fg.target_field_idx, &fg_each_targets)) catch unreachable;
         }
 
         if (segments.items.len == 0 and fg_steps.items.len == 0) {
@@ -6014,6 +6000,17 @@
                 .continuations = &[_]ast.Continuation{},
                 .location = flow.location,
             }) catch unreachable;
+        }
+    }
+
+    // `__store_announce_each_<T>` pairs for every plural target collected in
+    // the arm loop — an event taking `(field)` that loops the live rows and
+    // calls the target's `(row, field)` announce per row.
+    var fg_each_items = std.ArrayList(ast.Item).initCapacity(allocator, fg_each_targets.items.len * 2) catch unreachable;
+    for (fg_each_targets.items) |tgt| {
+        if (@import("emitter_helpers").storeAnnounceEachItems(allocator, program, home_ns, flow.module, flow.location, program.main_module_name, proc_target, tgt)) |pair| {
+            fg_each_items.append(allocator, pair[0]) catch unreachable;
+            fg_each_items.append(allocator, pair[1]) catch unreachable;
         }
     }
 
@@ -6358,7 +6355,7 @@
         .module = allocator.dupe(u8, flow.module) catch unreachable,
     } };
 
-    const appended = allocator.alloc(ast.Item, 5 + stripe_items.items.len) catch unreachable;
+    const appended = allocator.alloc(ast.Item, 5 + stripe_items.items.len + fg_each_items.items.len) catch unreachable;
     // The cell rides the SAME namespace as the accessors that read it. A cell
     // left in the file-derived module is emitted outside the namespace its own
     // apply/write units live in, and every `<store>.<field>` reference resolves
@@ -6385,6 +6382,7 @@
     appended[3] = write_event_item;
     appended[4] = impl_flow_item;
     for (stripe_items.items, 0..) |si, sii| appended[5 + sii] = si;
+    for (fg_each_items.items, 0..) |fi, fii| appended[5 + stripe_items.items.len + fii] = fi;
 
     return .{ .transformed = .{ .replacement = replacement, .appended = appended } };
 }
