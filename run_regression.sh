@@ -36,6 +36,35 @@ export KORU_PATH="$PWD"
 # caught the 210_166 collision two sessions created.
 #
 # Appends to FAILED_TESTS, which both paths already consult before exiting.
+
+# A board does not stop at latest.json. korulang_org's status pipeline is
+# what turns a run into a PUBLISHED board: aggregate-history folds the new
+# snapshot into history.json, and the post-status gate compares the counts
+# against what Discord last broadcast and posts on change. When nobody ran
+# it the feed froze — measured 2026-09-22: three boards (1820→1832) ran
+# while the posted board sat at 1818, and the gate was never the problem;
+# the invocation was. This step IS the fix, not a notification about it.
+#
+# A missing sibling repo or a missing node is a skip — the suite is still
+# the suite. A FAILED publish is a loud warning, not a test failure: the
+# board stands, but the silence that let it strand is exactly what the
+# warning exists to kill. Runs only on a full board (filtered runs write
+# no snapshot — there is nothing to publish).
+publish_board_to_site() {
+    local site_dir="${KORULANG_ORG_DIR:-../korulang_org}"
+    [ -f "$site_dir/scripts/aggregate-history.js" ] || return 0
+    command -v node >/dev/null 2>&1 || return 0
+    echo ""
+    echo -e "${BLUE}Publishing board to korulang_org...${NC}"
+    if (cd "$site_dir" && \
+        node scripts/aggregate-history.js && \
+        node scripts/post-status-if-changed.js); then
+        echo -e "${GREEN}✅ board publish step done${NC}"
+    else
+        echo -e "${YELLOW}⚠️  board publish FAILED — the run stands, but korulang_org did not get it${NC}"
+    fi
+}
+
 run_coherence_watchers() {
     # prose-check's check A reads live test markers, so it has to tell OUR lock
     # from a foreign suite's. Without this it would see the lock we ourselves
@@ -1197,6 +1226,13 @@ PY
         run_coherence_watchers
     fi
 
+    # The board posts even when it is red — the feed reports what was
+    # measured, not what was hoped. (Parallel path exits below; the
+    # sequential path's twin call sits at the script tail.)
+    if [ ${#TEST_FILTERS[@]} -eq 0 ] && [ "$SMOKE_MODE" = false ]; then
+        publish_board_to_site
+    fi
+
     # A filter that matched nothing is a MISTAKE, not a pass. Zero tests run
     # means the question was never asked, and green is the worst possible answer
     # to a question nobody asked — it is indistinguishable from a real pass.
@@ -1450,6 +1486,12 @@ if [ ${#TEST_FILTERS[@]} -gt 0 ] && [ "$TOTAL_TESTS" -eq 0 ]; then
     exit 1
 fi
 
+
+# Publish the board to korulang_org — same full-run gate as the snapshot:
+# a filtered run wrote no snapshot, so there is nothing to publish.
+if [ ${#TEST_FILTERS[@]} -eq 0 ] && [ "$SMOKE_MODE" = false ]; then
+    publish_board_to_site
+fi
 
 # Exit with appropriate code
 # Success = all regression tests passed AND (unit tests passed OR skipped)

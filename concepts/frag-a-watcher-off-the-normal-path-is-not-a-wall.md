@@ -192,6 +192,37 @@ sink, and if not, why?*
   withheld, rather than a compact stand-in board (a stand-in would be the
   fallback this repo bans).
 
+## The seventh rung: the publish step itself was off every path
+
+Rung six asked *did the board reach every sink*. Measured 2026-09-22: no.
+The site's status pipeline (`aggregate-history` folds koru's snapshot into
+`history.json`; `post-status-if-changed` compares counts against what
+Discord last broadcast and posts on change) had not been invoked since
+Sep-20. Three boards ran — 1820, 1828, 1832 — while the posted board sat
+at 1818, and the gate's baseline logic was sound the whole time. The
+failure was not reach-of-a-wall or a wrong cause; it was that **nothing
+in the run called the step at all**. A ceremony that ends at `latest.json`
+produces a measured board and calls it published.
+
+This is the same topology defect one hop further out than rung one: the
+watchers existed on a path nobody took; the publish existed on *no path*.
+And it was invisible for the same reason — the gate's header documents an
+earlier suppression bug, so "the feed is stale" reads as "the gate is
+suppressing again" instead of "the step never ran."
+
+- **The fix is the invocation, in the run itself** — `publish_board_to_site`
+  in `run_regression.sh`, wired to the same full-run gate as the snapshot
+  write, on BOTH run paths (parallel exits early; it gets its own call —
+  rung one's exact pattern, applied to the step being added, not
+  retrofitted after).
+- **A missing sink is a skip; a failed publish is loud.** The step warns
+  on failure and never fails the run — the fail-soft policy rung six
+  defended, now with the question it left open owned: the warning is the
+  consumer of the failure path.
+- **"Posted" needs a reachable definition.** Before this, "the board was
+  published" meant somebody remembered a second repo's script. Now it
+  means the run ran — the only claim the suite can actually back.
+
 ## Open
 
 Whether the other end-of-run steps that parallel mode skips matter as much. The
