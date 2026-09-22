@@ -1668,21 +1668,22 @@
         // so refilled handles are indistinguishable. What still
         // declines is what a batch cannot reproduce per row: lifecycle
         // arms, watches, facets, kinds, owned or fixed-char columns,
-        // trees, `! step`, index columns — and any insert site below a
-        // standing qsite's declared line, where reactive enters fire
-        // per row (`match` applies the emitter's own `__site_line >
-        // qs.line` comparison). Zig only (store.bulk.kz).
+        // trees, `! step` — and any insert site below a standing
+        // qsite's declared line (`match` applies the emitter's own
+        // `__site_line > qs.line` comparison). Index columns do not
+        // disqualify — the bulk loop maintains the bucket map per row.
+        // Zig only (store.bulk.kz).
         var reactive_min: ?usize = null;
         for (qsites.items) |qs| {
             if (qs.is_preorder) continue;
             if (reactive_min == null or qs.line < reactive_min.?) reactive_min = qs.line;
         }
+        const bulk_idecls = StoreIndexDecls.declsOf(allocator, program, store_name);
         const bulkable = !host_is_js and !is_tree and step_arm == null and
             inserted_arms.items.len == 0 and removed_arms.items.len == 0 and
             updated_arms.items.len == 0 and cleared_arms.items.len == 0 and
             pwatch_arms.items.len == 0 and discharge_arm == null and
             !want_kind and
-            StoreIndexDecls.declsOf(allocator, program, store_name).len == 0 and
             !Bulk.hasFacets(allocator, program, leaf_provs.items) and
             blk_lean_cols: {
                 var bad = false;
@@ -1694,9 +1695,8 @@
                 }
                 break :blk_lean_cols !bad;
             };
-        if (bulkable) {
-            _ = Bulk.rewrite(allocator, program, program_items, store_name, CAP, needs_handles, reactive_min);
-        }
+        if (bulkable) _ = Bulk.rewrite(allocator, program, program_items, store_name, CAP, needs_handles, reactive_min,
+            if (bulk_idecls.len > 0) bulk_idecls[0].column else null);
         // Topological order over the declared DAG; rules with no edges keep
         // collection order RELATIVE TO EACH OTHER but that order is
         // contractually UNSPECIFIED (the fusion license). Cycle = comptime

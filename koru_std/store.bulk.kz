@@ -114,11 +114,11 @@ const Bulk = struct {
     /// the for transform. The node stays `.invocation` (`f.inv()`
     /// asserts that) and the continuations stay put — under an
     /// inline_body they are metadata, not emission.
-    fn cont(alloc: std.mem.Allocator, prog: *const ast.Program, c: *ast.Continuation, store: []const u8, cap: usize, handles: bool, reactive_min: ?usize) usize {
+    fn cont(alloc: std.mem.Allocator, prog: *const ast.Program, c: *ast.Continuation, store: []const u8, cap: usize, handles: bool, reactive_min: ?usize, icol: ?[]const u8) usize {
         var n: usize = 0;
         if (c.node) |*nd| {
             if (nd.* == .invocation) {
-                if (match(alloc, prog, &nd.invocation, c, store, cap, handles, reactive_min)) |text| {
+                if (match(alloc, prog, &nd.invocation, c, store, cap, handles, reactive_min, icol)) |text| {
                     nd.invocation.inline_body = text;
                     BulkEmit.annotate(alloc, &nd.invocation);
                     n += 1;
@@ -127,7 +127,7 @@ const Bulk = struct {
         }
         if (n == 0) {
             for (c.continuations) |*cc| {
-                n += cont(alloc, prog, @constCast(cc), store, cap, handles, reactive_min);
+                n += cont(alloc, prog, @constCast(cc), store, cap, handles, reactive_min, icol);
             }
         }
         return n;
@@ -136,7 +136,7 @@ const Bulk = struct {
     /// The pattern match — returns the bulk block's Zig text, or null
     /// to leave the site a per-row insert. Every check that cannot
     /// prove the shape declines.
-    fn match(alloc: std.mem.Allocator, prog: *const ast.Program, iv: *const ast.Invocation, c: *ast.Continuation, store: []const u8, cap: usize, handles: bool, reactive_min: ?usize) ?[]const u8 {
+    fn match(alloc: std.mem.Allocator, prog: *const ast.Program, iv: *const ast.Invocation, c: *ast.Continuation, store: []const u8, cap: usize, handles: bool, reactive_min: ?usize, icol: ?[]const u8) ?[]const u8 {
         const range = rangeOf(alloc, iv) orelse return null;
         // The range bounds must not read the store being filled — a
         // `0..s.len` hoisted check must see the same `hi` the per-row
@@ -194,7 +194,7 @@ const Bulk = struct {
         if (reactive_min) |m| {
             if (each.location.line > m) return null;
         }
-        const text = BulkEmit.emit(alloc, store, cap, range, bind, flds, handles);
+        const text = BulkEmit.emit(alloc, store, cap, range, bind, flds, handles, icol);
         // The bulk block carries the loop — the `each` arm is consumed
         // DATA now, not a live handler. The flag keeps the emitter's
         // Handlers-struct bridge from re-emitting the per-row insert
@@ -232,7 +232,7 @@ const Bulk = struct {
     /// emitted block still read like source (`cfg.entities`); `new`'s
     /// own end-of-pass Walk lowers store refs in inline bodies, the
     /// same slot every other text position rides.
-    fn rewrite(alloc: std.mem.Allocator, prog: *const ast.Program, program_items: []const *const ast.Item, store: []const u8, cap: usize, handles: bool, reactive_min: ?usize) usize {
+    fn rewrite(alloc: std.mem.Allocator, prog: *const ast.Program, program_items: []const *const ast.Item, store: []const u8, cap: usize, handles: bool, reactive_min: ?usize, icol: ?[]const u8) usize {
         var n: usize = 0;
         for (program_items) |pi| {
             if (pi.* != .flow) continue;
@@ -240,7 +240,7 @@ const Bulk = struct {
             var done = false;
             if (f.body.node) |*nd| {
                 if (nd.* == .invocation) {
-                    if (match(alloc, prog, &nd.invocation, &f.body, store, cap, handles, reactive_min)) |text| {
+                    if (match(alloc, prog, &nd.invocation, &f.body, store, cap, handles, reactive_min, icol)) |text| {
                         f.inline_body = text;
                         BulkEmit.annotate(alloc, &nd.invocation);
                         done = true;
@@ -249,7 +249,7 @@ const Bulk = struct {
             }
             if (!done) {
                 for (f.body.continuations) |*cc| {
-                    n += cont(alloc, prog, @constCast(cc), store, cap, handles, reactive_min);
+                    n += cont(alloc, prog, @constCast(cc), store, cap, handles, reactive_min, icol);
                 }
             } else n += 1;
         }

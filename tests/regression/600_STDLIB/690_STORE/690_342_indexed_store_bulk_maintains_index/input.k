@@ -1,7 +1,7 @@
-// PINS: a `for ! each |> insert` on an INDEXED store does NOT take the bulk
-// append lowering — the `bulkable` gate requires `declsOf == 0` because the
-// batch writes columns raw and would leave every row it added invisible to
-// the index's buckets. The site stays per-row and membership is maintained.
+// PINS: a `for ! each |> insert` on an INDEXED store takes the bulk append
+// lowering AND keeps the index — the batch emits the bucket join inside its
+// fill loop, so bulk-inserted rows are visible to `! first` and `! query`
+// routing exactly as per-row inserts are.
 
 import std/store
 import std/indexes

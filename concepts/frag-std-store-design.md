@@ -867,9 +867,9 @@ bucket as a dead member that `__koru_row_of` resolves to none, so the
 index emits nothing at take and swap-remove needs no fixup (a handle is
 unchanged when its row moves dense slots). `stored` writes to the
 indexed column move membership eagerly; `clear` drops every bucket with
-the map; bulk append already refused indexed stores at `new`'s
-`bulkable` gate — 690_342 pins that it is the DECLARATION, not the
-match-site, that declines.
+the map; and the counted-`for ! each` bulk lowering keeps the index too —
+the batch emits the bucket join inside its fill loop (the next paragraph
+has the measurement that forced this).
 
 The routed walk comes in two shapes, picked by a scan the body already
 had a cousin of (`armReachesInvocation`, the `TakeScan` machinery): a
@@ -887,3 +887,29 @@ output — the visit-set gap closed, and what remains is per-member cost
 (handle resolve + event chain) against the baseline's bare index read,
 ~2ns vs ~1.1ns a visit. That residual is the next lever, and it is
 dispatch overhead, not membership.
+
+The bulk decline did not survive contact with the phase-split measurement
+(2026-09-22, 690_342 rewritten): once `sparse` decomposed into init (~1.3ms
+of 4.1) versus walk, the per-row insert path was the init cost — and
+`world-init` is a counted `for ! each`, the exact shape the bulk lowering
+exists for. The gate's reason for refusing was real (the batch writes
+columns raw, invisible to the bucket map) but the remedy was maintenance,
+not refusal: the bulk loop now emits the bucket join per row, with a
+loop-local bucket memo that re-probes only when the key changes — "same
+as the previous row's cell" is the run detector, no typed memo state
+needed. Indexed stores get the fast fill AND the index. Fresh ReleaseFast
+numbers on the same benchmark: spawn 1.32→0.95ms, sparse ~4.05→~3.83ms.
+What remains against zig_striped (sparse ~2.15ms): ~0.6ms of init the
+baseline never pays (bucket appends + handle mint) and ~1ns/member of
+generational handle resolve in the walk — the price of take-safety the
+baseline's bare usize index does not carry.
+
+A query guard is not body text (2026-09-22): walking the arm's own `when`
+into the body's column-usage marks projected the guard's column into
+every event payload — a dead read per member on routed queries. The fix
+was not to skip the walk but to redirect it: the guard rewrites against a
+scratch column set and its text STAYS on the clone, because collectRefs
+reads that text for ambient-bind capture and the bound-but-unused check —
+nulling it (the first attempt) broke 690_093's interceptor payload.
+Routing then restores the body-only marks so the guard's columns are
+emitted once, in the loop, for `guard_z` — and never in the payload.

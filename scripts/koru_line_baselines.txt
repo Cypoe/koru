@@ -125,7 +125,7 @@ koru_std/runtime.run.kz	205
 koru_std/set.kz	96
 koru_std/simple.kz	7
 koru_std/store.bulk.kz	258
-koru_std/store.bulkemit.kz	183
+koru_std/store.bulkemit.kz	182
 koru_std/store.clear.kz	105
 koru_std/store.cursor.kz	38
 koru_std/store.default.kz	79

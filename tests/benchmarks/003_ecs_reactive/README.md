@@ -124,9 +124,12 @@ around them.
 - **`sparse` routes through `std/indexes`.** The baseline walks a 10%-dense
   index array; `std/indexes:store(bodies, act)` gives the `when e.act == 1`
   guard the same organ — a key→ordered-handle bucket — so the query visits
-  ~10k members instead of sweeping 100k rows. The residual gap is per-member
-  cost: a generational handle resolve plus the event chain against the
-  baseline's bare index read. That is the measurement, not a detail to hide.
+  ~10k members instead of sweeping 100k rows, and `world-init` keeps the
+  bulk append lowering with the bucket join emitted inside the fill loop.
+  The residual gap splits honestly: ~0.6 ms of init (per-row bucket appends
+  plus handle minting the raw baseline never pays) and ~1 ns/member of
+  generational handle resolve in the walk. That is the measurement, not a
+  detail to hide.
 - **`fanout` cannot pick its victim by index.** The baseline damages
   `health[(frame*131 + i*17) % len]`. Handle-addressing makes that access
   unspellable, so the port keeps the event COUNT (entities/10 per frame) and
@@ -176,12 +179,12 @@ the multipliers below have equivalence evidence behind them everywhere except
 |---|---:|---:|---:|---:|:-:|
 | schedule_empty | 28 | 867728 | 0.04 | — | = |
 | add_remove | 33 | 10787 | 349 | 31x | = |
-| spawn | 242 | 3654 | 465 | 7.9x | = |
-| spawn_batch | 236 | 3231 | 499 | 6.5x | = |
-| despawn | 228 | 3696 | 1051 | 3.5x | = |
+| spawn | 280 | 3654 | 947 | 3.9x | = |
+| spawn_batch | 236 | 3231 | 947 | 3.4x | = |
+| despawn | 280 | 3696 | 1862 | 2.0x | = |
 | query_get | 1308 | 38728 | 1696 | 23x | = |
-| dense | 2370 | 9755 | 3100 | 3.1x | = |
-| sparse | 2248 | 2431 | 4456 | 0.5x | = |
+| dense | 2556 | 9755 | 3539 | 2.8x | = |
+| sparse | 2147 | 2431 | 3830 | 0.6x | = |
 | fanout | 8543 | 25452 | 14260 | 1.8x | ✗ |
 | bevy_strength_world | 21076 | 65322 | 16627 | 3.9x | = |
 | combat_world | 3560 | 9832 | — | — | — |

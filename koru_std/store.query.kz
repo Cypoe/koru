@@ -286,10 +286,17 @@
     for (used_cols) |*u| u.* = false;
     var unknown_field: ?[]const u8 = null;
 
+    // The clone's root `when` IS the arm's guard — its columns belong to
+    // `guard_z` alone. Rewrite into a scratch column set but KEEP the text:
+    // collectRefs must see the guard's ambient binds (capture + use-check).
+    if (sc.condition != null and body_clone.condition != null and std.mem.eql(u8, sc.condition.?, body_clone.condition.?)) {
+        const gused = blk: { const g = allocator.alloc(bool, col_names.len) catch unreachable; @memset(g, false); break :blk g; };
+        @constCast(&body_clone).condition = SRewrite.refs(allocator, body_clone.condition.?, row_bind, store_name, col_names, srf_prefix, srow_name, .input, gused, &unknown_field, is_view);
+    }
     SRewrite.walkCont(allocator, &body_clone, row_bind, store_name, col_names, srf_prefix, srow_name, used_cols, &unknown_field, is_view);
+    const body_cols = allocator.dupe(bool, used_cols) catch unreachable;
 
-    // Read AFTER the walk: a replaced `inline_body` is a new slice a by-value
-    // copy taken pre-walk would never see (690_312).
+    // Read AFTER the walk: a replaced `inline_body` is a slice a pre-walk copy never sees (690_312).
     const sweep_inv = switch (body_clone.node.?) {
         .invocation => |i| i,
         .label_with_invocation => |l| l.invocation,
@@ -297,13 +304,10 @@
     };
 
     // The arm's own `when` guard is emitted in the LOOP, not the body event —
-    // but it reads the same `<srf_prefix><f>` consts, which the loop binds just
-    // above it. One spelling, two scopes, no second rule.
+    // but it reads the same `<srf_prefix><f>` consts the loop binds above it.
     var is_refusal: ?[]const u8 = null;
     const guard_is = if (sc.condition) |c| rewriteIsGuard(allocator, program, "query", store_name, row_bind, c, &is_refusal) else null;
-    if (is_refusal) |m| {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "{s}", .{m}) } };
-    }
+    if (is_refusal) |m| return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "{s}", .{m}) } };
     const guard_z: ?[]const u8 = if (sc.condition) |c|
         SRewrite.refs(allocator, guard_is orelse c, row_bind, store_name, col_names, srf_prefix, srow_name, .input, used_cols, &unknown_field, is_view)
     else
@@ -321,6 +325,17 @@
             return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "{s}", .{m}) } };
         }
     }
+
+    // One route decision serves both arms — `! first` answers the bucket's
+    // lowest dense live member, `! query` walks it. Before the projection so
+    // a routed site drops the guard-only columns.
+    var index_icol: []const u8 = ""; var index_rhs: ?[]const u8 = null;
+    var q_index_icol: []const u8 = ""; var q_index_rhs: ?[]const u8 = null; var q_bucket_stable = false;
+    switch (StoreIndexWalk.planQueryRoute(allocator, program, is_first, is_view, store_name, guard_z, srf_prefix, &body_clone, row_bind)) { .scan => {},
+        .first => |r| { index_icol = r.icol; index_rhs = r.key; }, .query => |r| { q_index_icol = r.icol; q_index_rhs = r.key; q_bucket_stable = r.stable; },
+        .refuse => |op| return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, StoreIndex.MSG_unlowered_key, .{ store_name, op }) } }, }
+    if (index_rhs != null or q_index_rhs != null) @memcpy(used_cols, body_cols);
+    const scan_guard: ?[]const u8 = if (index_rhs == null and q_index_rhs == null) guard_z else null;
 
     // The derived projection: every column the arm named, in declaration order.
     var pnames = std.ArrayList([]const u8).initCapacity(allocator, col_names.len) catch unreachable;
@@ -612,21 +627,6 @@
         none_call_buf.appendSlice(allocator, ");\n}\n") catch unreachable;
     }
     const none_call = none_call_buf.items;
-
-    // One route decision serves both arms — `! first` answers the bucket's
-    // lowest dense live member, `! query` walks it (membership IS the guard).
-    var index_icol: []const u8 = "";
-    var index_rhs: ?[]const u8 = null;
-    var q_index_icol: []const u8 = "";
-    var q_index_rhs: ?[]const u8 = null;
-    var q_bucket_stable = false;
-    switch (StoreIndexWalk.planQueryRoute(allocator, program, is_first, is_view, store_name, guard_z, srf_prefix, &body_clone, row_bind)) {
-        .scan => {},
-        .first => |r| { index_icol = r.icol; index_rhs = r.key; },
-        .query => |r| { q_index_icol = r.icol; q_index_rhs = r.key; q_bucket_stable = r.stable; },
-        .refuse => |op| return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, StoreIndex.MSG_unlowered_key, .{ store_name, op }) } },
-    }
-    const scan_guard: ?[]const u8 = if (index_rhs == null and q_index_rhs == null) guard_z else null;
 
     var loop = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
     if (is_view) {
