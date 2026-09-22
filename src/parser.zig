@@ -5932,7 +5932,7 @@ pub const Parser = struct {
         const line = self.lines[self.current];
         const trimmed = lexer.trim(line);
         // A blank line closes the body; a comment is the chain-comment rule's
-        // business (KORU010, rejectChainSplittingComment).
+        // business (KORU010, chainCommentDisposition).
         if (trimmed.len == 0) return;
         if (lexer.isCommentLine(line)) return;
         // Not indented INTO the body — it is a sibling construct, which is legal.
@@ -7191,23 +7191,45 @@ pub const Parser = struct {
         return self.parseContinuationsWithMode(base_indent, false);
     }
 
-    /// Caller is on a comment-only line while scanning for branch handlers
-    /// inside a flow chain. Peek ahead past further comments and blanks: if
-    /// the next meaningful line is a continuation `|`, the comment is
-    /// splitting a chain from its branch handlers (or sibling handlers from
-    /// each other) — emit KORU010 and return true. Otherwise return false;
-    /// the chain has ended at the comment and the caller should bail out.
-    fn rejectChainSplittingComment(self: *Parser) !bool {
+    /// What a comment-only line inside a flow chain turns out to be, decided
+    /// by the next meaningful line after it (peeked past further comments and
+    /// blanks).
+    const ChainComment = enum {
+        /// A `|`/`!` handler arm follows — the comment splits the dispatch
+        /// block from its head (or sibling arms from each other). KORU010 is
+        /// emitted; the caller returns error.ParseError. (510_080)
+        refused,
+        /// A `|>` chain step follows — narration between steps is trivia and
+        /// the chain survives. The caller consumes the comment line and keeps
+        /// scanning. (210_239)
+        trivia,
+        /// No continuation follows — the chain ended before the comment.
+        end,
+    };
+
+    /// Caller is on a comment-only line while scanning a flow chain. Peek
+    /// ahead past further comments and blanks: a `|`/`!` handler arm after
+    /// the comment means the comment splits the flow from its dispatch —
+    /// emit KORU010 and report .refused. A `|>` step after the comment is
+    /// just narration between steps — .trivia. Anything else means the chain
+    /// already ended — .end.
+    fn chainCommentDisposition(self: *Parser) !ChainComment {
         var peek = self.current + 1;
         while (peek < self.lines.len) {
             const next = self.lines[peek];
             const trimmed = lexer.trim(next);
-            if (trimmed.len == 0) return false;
+            if (trimmed.len == 0) return .end;
             if (lexer.isCommentLine(next)) {
                 peek += 1;
                 continue;
             }
             if (lexer.isContinuationLine(next)) {
+                // `|>` sequences steps — a comment between them changes
+                // nothing about which steps are chained. `| name`/`! name`
+                // are the dispatch block; a comment there still refuses.
+                if (trimmed[0] == '|' and trimmed.len >= 2 and trimmed[1] == '>') {
+                    return .trivia;
+                }
                 const indent = lexer.getIndent(self.lines[self.current]);
                 try self.reporter.addErrorWithHint(
                     .KORU010,
@@ -7218,11 +7240,11 @@ pub const Parser = struct {
                     "comments cannot split a flow from its branch handlers. Move the comment above the whole flow, or trail it after a complete line: '| ok |> done()  // note'.",
                     .{},
                 );
-                return true;
+                return .refused;
             }
-            return false;
+            return .end;
         }
-        return false;
+        return .end;
     }
 
     /// Parse continuations with optional strict indentation mode.
@@ -7251,8 +7273,14 @@ pub const Parser = struct {
             const line = self.lines[self.current];
 
             if (lexer.isCommentLine(line)) {
-                if (try self.rejectChainSplittingComment()) return error.ParseError;
-                break;
+                switch (try self.chainCommentDisposition()) {
+                    .refused => return error.ParseError,
+                    .trivia => {
+                        self.current += 1;
+                        continue;
+                    },
+                    .end => break,
+                }
             }
 
             // Check if this is a continuation
@@ -7519,8 +7547,14 @@ pub const Parser = struct {
             const line = self.lines[self.current];
 
             if (lexer.isCommentLine(line)) {
-                if (try self.rejectChainSplittingComment()) return error.ParseError;
-                break;
+                switch (try self.chainCommentDisposition()) {
+                    .refused => return error.ParseError,
+                    .trivia => {
+                        self.current += 1;
+                        continue;
+                    },
+                    .end => break,
+                }
             }
 
             if (!lexer.isContinuationLine(line)) break;
@@ -8649,8 +8683,14 @@ pub const Parser = struct {
             const line = self.lines[self.current];
 
             if (lexer.isCommentLine(line)) {
-                if (try self.rejectChainSplittingComment()) return error.ParseError;
-                break;
+                switch (try self.chainCommentDisposition()) {
+                    .refused => return error.ParseError,
+                    .trivia => {
+                        self.current += 1;
+                        continue;
+                    },
+                    .end => break,
+                }
             }
 
             // Check if this is a continuation line
