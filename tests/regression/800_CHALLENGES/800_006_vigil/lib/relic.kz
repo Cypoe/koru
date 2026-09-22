@@ -1,0 +1,23 @@
+// The relic token — a held object's owned lifecycle.
+// mint-relic produces <held!>; the ONLY discharge is release-relic
+// consuming <!held>. release-relic is VOID so it can serve as the
+// column's canonical discharger — `clear` on a store holding an owned
+// column must evict every live token through it.
+
+const std = @import("std");
+
+const Relic = struct { id: i64 };
+
+~pub tor mint-relic { id: i64 } -> *Relic<held!>
+~proc mint-relic|zig {
+    const r = std.heap.page_allocator.create(Relic) catch unreachable;
+    r.* = .{ .id = id };
+    return r;
+}
+
+~pub tor release-relic { r: *Relic<!held> }
+~proc release-relic|zig {
+    // Silent on purpose: std.debug.print is stderr, and the harness merges
+    // streams into actual.txt — interleaving would make the oracle flaky.
+    std.heap.page_allocator.destroy(r);
+}

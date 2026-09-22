@@ -1,0 +1,80 @@
+post 0 holds the watch
+post 0 holds the watch
+post 0 holds the watch
+post 0 stands down at 28
+post 8 stands down at 28
+post 16 stands down at 28
+post 24 stands down at 28
+post 32 stands down at 28
+post 40 stands down at 28
+post 48 stands down at 28
+post 56 stands down at 28
+all asleep
+all asleep
+kept 5 rounds
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+fatigue 0
+relic of worth 10 released
+relic of worth 17 released
+relic of worth 16 released
+relic of worth 15 released
+relic of worth 14 released
+relic of worth 13 released
+relic of worth 12 released
+relic of worth 11 released
+watch dismissed, 56 posts cleared
+vigil closed after 5 rounds: 0 tolled, 8 fell, 8 relics gone
