@@ -133,12 +133,13 @@ koru_std/store.drain.kz	114
 koru_std/store.explain.kz	104
 koru_std/store.gate.kz	525
 koru_std/store.idecls.kz	104
-koru_std/store.index.kz	261
+koru_std/store.index.kz	202
+koru_std/store.indexwalk.kz	279
 koru_std/store.insert.kz	482
 koru_std/store.kz	1689
 koru_std/store.leaf.kz	239
-koru_std/store.new.kz	6388
-koru_std/store.plan.kz	239
+koru_std/store.new.kz	6383
+koru_std/store.plan.kz	236
 koru_std/store.preorder.kz	110
 koru_std/store.pverbs.kz	781
 koru_std/store.qcaps.kz	372

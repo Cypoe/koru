@@ -4560,15 +4560,12 @@
             const tombstone: []const u8 = if (host_is_js) "-1" else "@import(\"std\").math.maxInt(usize)";
             const tail = std.fmt.allocPrint(allocator, "}}\n__koru_store_{s}.__koru_hslot_row[__koru_gone_slot] = {s};\n__koru_store_{s}.len = __koru_last;\n__koru_store_{s}.__koru_hslot_gen[__koru_gone_slot] {s};\n__koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_gone_slot;\n__koru_store_{s}.__koru_hslot_free_len += 1;\n", .{ store_name, tombstone, store_name, store_name, genbump, store_name, store_name, store_name }) catch unreachable;
             tb.appendSlice(allocator, tail) catch unreachable;
-            // `std/indexes:store` — the taken row drops its own key entry
-            // (a lower live duplicate owns the entry and survives); when the
-            // holder dies the next-lowest claimant is reseated. Runs after
-            // the swap so the rescan reads settled columns — which is also
-            // why the MOVED row needs no fixup here: the map holds its
-            // handle, and the handle did not change.
-            if (index_col) |icol| {
-                tb.appendSlice(allocator, StoreIndex.takeReseat(allocator, host_is_js, store_name, icol, icol)) catch unreachable;
-            }
+            // `std/indexes:store` — take emits NOTHING here. The taken row's
+            // handle stays in its key's bucket as a dead member that every
+            // reader's `__koru_row_of` resolve skips; an eager ejection
+            // would cost a bucket scan per take. The MOVED row (swap-remove
+            // drops it into the freed slot) needs no fixup either — the
+            // bucket holds its handle, and the handle did not change.
             if (item_identity_owned) {
                 const o = std.fmt.allocPrint(allocator, "return {s};", .{HS.branchOne(allocator, host_target, "item", std.fmt.allocPrint(allocator, "__koru_out_{s}", .{field_names[0]}) catch unreachable)}) catch unreachable;
                 tb.appendSlice(allocator, o) catch unreachable;
@@ -5112,14 +5109,12 @@
                     td.appendSlice(allocator, fr) catch unreachable;
                 }
             }
-            // A declared index frees its map backing here — the handle-keyed
-            // entries outlive no row past this point anyway. The loop's
+            // A declared index frees its map AND every bucket's list here —
+            // the members outlive no row past this point anyway. The loop's
             // close belongs to the row drain (emitted only under has_owned).
             const td_close: []const u8 = if (has_owned) "}\n" else "";
-            const td_tail = if (index_col) |icol| (if (host_is_js)
-                std.fmt.allocPrint(allocator, "{s}__koru_store_{s}.__index_{s}.clear();\n__koru_store_{s}.len = 0;\nreturn;", .{ td_close, store_name, icol, store_name }) catch unreachable
-            else
-                std.fmt.allocPrint(allocator, "{s}__koru_store_{s}.__index_{s}.deinit(koru_allocator());\n__koru_store_{s}.len = 0;\nreturn;", .{ td_close, store_name, icol, store_name }) catch unreachable)
+            const td_tail = if (index_col) |icol|
+                std.fmt.allocPrint(allocator, "{s}{s}__koru_store_{s}.len = 0;\nreturn;", .{ td_close, StoreIndex.clearDrop(allocator, host_is_js, store_name, icol), store_name }) catch unreachable
             else
                 std.fmt.allocPrint(allocator, "{s}__koru_store_{s}.len = 0;\nreturn;", .{ td_close, store_name }) catch unreachable;
             td.appendSlice(allocator, td_tail) catch unreachable;

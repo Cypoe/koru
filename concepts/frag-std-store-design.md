@@ -856,3 +856,34 @@ spell its stores), and every `name`-at-boundary matcher gained the
 exclusion went into the rewriters (`storeIndexedRefs`,
 insert/stored `storeRefs`, qrewrite `bind.`): a `.items[` match there
 would have been a miscompile, not just a pessimization.
+
+`std/indexes:store` is a key→ORDERED-HANDLE-BUCKET map, and one
+declaration now serves both consumers (2026-09-22, 690_341/342):
+`! first` answers the bucket's lowest dense LIVE member (the sweep's
+first-match parity, 690_327) and `! query <row> when <row>.<col> == <k>`
+walks the bucket instead of sweeping — membership IS the guard. The
+widening is what made take free: a taken row's handle stays in its
+bucket as a dead member that `__koru_row_of` resolves to none, so the
+index emits nothing at take and swap-remove needs no fixup (a handle is
+unchanged when its row moves dense slots). `stored` writes to the
+indexed column move membership eagerly; `clear` drops every bucket with
+the map; bulk append already refused indexed stores at `new`'s
+`bulkable` gate — 690_342 pins that it is the DECLARATION, not the
+match-site, that declines.
+
+The routed walk comes in two shapes, picked by a scan the body already
+had a cousin of (`armReachesInvocation`, the `TakeScan` machinery): a
+body that cannot touch the bucket — no insert/clear on this store, no
+write to the indexed column — gets a `for` over the captured slice, one
+map probe for the whole query; a body that can gets a `while` whose
+post-body survival check re-reads the bucket and re-examines the slot a
+moved member vacated (690_031's re-check contract at bucket
+granularity). Visit ORDER under the route is bucket order — join order
+— identical to the sweep's until a take reshuffles dense slots; the
+divergence is a ruling, not an accident. Measured on 003_ecs_reactive
+`sparse` (ReleaseFast, 100k×100f): the sweep paid ~4.7ms visiting 100k
+rows for a 10k-member set; the bucket walk pays ~4.4ms for the same
+output — the visit-set gap closed, and what remains is per-member cost
+(handle resolve + event chain) against the baseline's bare index read,
+~2ns vs ~1.1ns a visit. That residual is the next lever, and it is
+dispatch overhead, not membership.

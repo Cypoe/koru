@@ -8,7 +8,7 @@
 // plan comes from the very functions the transform calls — the same
 // `findArm` over the same continuations, the same `rewriteIsGuard`,
 // the same `SRewrite.refs` lowering of the `when` guard, and the same
-// `StoreIndex.firstRoute` routing decision — never a re-read of the
+// `StoreIndex.guardRoute` routing decision — never a re-read of the
 // source condition. Refusal wording is shared, not mirrored: the KORU161
 // texts below are the strings the transform itself refuses with.
 
@@ -160,7 +160,7 @@ const SPlan = struct {
 
     /// The per-site plan, run through the transform's own decision chain:
     /// arm resolution, request-block rules, row binding, the `is`-guard
-    /// rewrite, the `SRewrite.refs` lowering, then `StoreIndex.firstRoute`.
+    /// rewrite, the `SRewrite.refs` lowering, then `StoreIndex.guardRoute`.
     /// Anywhere the chain would refuse, the row reports that refusal —
     /// never a guessed plan.
     fn planSite(alloc: std.mem.Allocator, program: *const ast_find.Program, s: *const SX.Store, q: *const SX.QSite, is_view: bool) []const u8 {
@@ -227,12 +227,9 @@ const SPlan = struct {
             return std.fmt.allocPrint(alloc, "refused: " ++ MSG_unknown_field, .{ s.name, row_bind, uf, uf, s.name }) catch unreachable;
         }
 
-        if (!is_first) {
-            return std.fmt.allocPrint(alloc, "! query {s} — sweep", .{row_bind}) catch unreachable;
-        }
-        return switch (StoreIndex.firstRoute(alloc, program, s.name, guard_z, srf_prefix)) {
-            .scan => std.fmt.allocPrint(alloc, "! first {s} — sweep, stops at first match", .{row_bind}) catch unreachable,
-            .route => |r| std.fmt.allocPrint(alloc, "! first {s} — index lookup on {s}", .{ row_bind, r.icol }) catch unreachable,
+        return switch (StoreIndex.guardRoute(alloc, program, s.name, guard_z, srf_prefix)) {
+            .scan => std.fmt.allocPrint(alloc, "{s} {s} — {s}", .{ if (is_first) "! first" else "! query", row_bind, if (is_first) "sweep, stops at first match" else "sweep" }) catch unreachable,
+            .route => |r| std.fmt.allocPrint(alloc, "{s} {s} — index {s} on {s}", .{ if (is_first) "! first" else "! query", row_bind, if (is_first) "lookup" else "membership", r.icol }) catch unreachable,
             .refuse => |op| std.fmt.allocPrint(alloc, "refused: " ++ StoreIndex.MSG_unlowered_key, .{ s.name, op }) catch unreachable,
         };
     }

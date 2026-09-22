@@ -121,10 +121,12 @@ around them.
   `std/time:now` is opaque enough that the read cannot be hoisted over it.
   `query_get`, `fanout` and `bevy_strength_world` accumulate their own sink as
   the workload runs, exactly as the baseline does.
-- **`sparse` scans.** The baseline walks a 10%-dense index array; Koru has no
-  index verb, so the filter is a `when` guard and the sweep still visits every
-  row. That is why Koru is the slowest of the three here and the gap is the
-  measurement, not a detail to hide.
+- **`sparse` routes through `std/indexes`.** The baseline walks a 10%-dense
+  index array; `std/indexes:store(bodies, act)` gives the `when e.act == 1`
+  guard the same organ — a key→ordered-handle bucket — so the query visits
+  ~10k members instead of sweeping 100k rows. The residual gap is per-member
+  cost: a generational handle resolve plus the event chain against the
+  baseline's bare index read. That is the measurement, not a detail to hide.
 - **`fanout` cannot pick its victim by index.** The baseline damages
   `health[(frame*131 + i*17) % len]`. Handle-addressing makes that access
   unspellable, so the port keeps the event COUNT (entities/10 per frame) and
@@ -179,7 +181,7 @@ the multipliers below have equivalence evidence behind them everywhere except
 | despawn | 228 | 3696 | 1051 | 3.5x | = |
 | query_get | 1308 | 38728 | 1696 | 23x | = |
 | dense | 2370 | 9755 | 3100 | 3.1x | = |
-| sparse | 2065 | 2631 | 4722 | 0.6x | = |
+| sparse | 2248 | 2431 | 4456 | 0.5x | = |
 | fanout | 8543 | 25452 | 14260 | 1.8x | ✗ |
 | bevy_strength_world | 21076 | 65322 | 16627 | 3.9x | = |
 | combat_world | 3560 | 9832 | — | — | — |

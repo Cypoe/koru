@@ -30,10 +30,16 @@ import std/string
 import std/regex
 import std/time
 import std/grid
+import std/indexes
 
 // The world. Striped, so a column a scenario never touches costs its sweeps
 // nothing — `dense` reads px/py/vx/vy and never pays for hp or act.
 std/store:new(bodies, capacity: 100000) { px: f32, py: f32, vx: f32, vy: f32, hp: i64, act: i64 }
+
+// `sparse` filters on `act`, so it carries the membership index — a
+// `! query e when e.act == 1` walks the key's bucket instead of sweeping
+// all 100k rows, the same organ `! first` consumes.
+std/indexes:store(bodies, act)
 
 // `add_remove` toggles a flag over its own array, exactly as the baseline
 // does — it never builds a world.
@@ -193,9 +199,11 @@ tor integrate {}
 integrate = std/store:query(bodies)
 ! query e |> std/store:stored { e.px: e.px + e.vx, e.py: e.py + e.vy }
 
-// The baseline walks a 10%-dense index array; Koru has no index verb, so the
-// filter is a guard and the sweep still visits every row. That gap is the
-// measurement, not a detail to hide.
+// The baseline walks a 10%-dense index array; `std/indexes:store(bodies, act)`
+// gives the `when e.act == 1` guard the same organ — a key→ordered-handle
+// bucket the query walks instead of sweeping. What remains is the per-member
+// cost: a generational handle resolve plus the event chain against the
+// baseline's bare index read.
 tor integrate-active {}
 integrate-active = std/store:query(bodies)
 ! query e when e.act == 1 |> std/store:stored { e.px: e.px + e.vx, e.py: e.py + e.vy }

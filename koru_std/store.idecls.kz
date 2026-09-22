@@ -99,6 +99,6 @@ const StoreIndexDecls = struct {
         const it = icol_type orelse {
             return .{ .refuse = ast_find.refusal(alloc, reporter, .KORU161, ds[0].flow.location, ds[0].flow.module, "std/indexes:store({s}, {s}): no column named '{s}' - the index names a declared column of the store", .{ store_name, icol, icol }) };
         };
-        return .{ .indexed = .{ .col = icol, .idx = index_idx, .field = std.fmt.allocPrint(alloc, "    __index_{s}: @import(\"std\").AutoHashMapUnmanaged({s}, i64) = .{{}},\n", .{ icol, it }) catch unreachable } };
+        return .{ .indexed = .{ .col = icol, .idx = index_idx, .field = std.fmt.allocPrint(alloc, "    __index_{s}: @import(\"std\").AutoHashMapUnmanaged({s}, @import(\"std\").ArrayListUnmanaged(i64)) = .{{}},\n", .{ icol, it }) catch unreachable } };
     }
 };

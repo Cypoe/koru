@@ -23,3 +23,5 @@ store.new.kz | while (__koru_sp > 0)          | explicit work-stack pop for preo
 store.new.kz | while (__koru_i < __koru_store_{s}.len) | mutation-aware sweep: the store may shrink or grow mid-sweep, len is re-read every iteration and the cursor advances only when no removal occurred — the trip count does not exist before the loop runs
 store.pverbs.kz | while (__koru_i < __koru_store_{s}.len) | same mutation-aware sweep emitted from the pverbs part file
 store.query.kz | while (__koru_si < {s})      | the |js mutation-aware sweep: len is captured per iteration (__koru_len_before) because the store may shrink or grow mid-sweep
+store.index.kz | while (__koru_ci.next())     | map-valueIterator drain on clear: the trip count is however many buckets the index holds — a data property, not a nameable bound
+store.indexwalk.kz | while (true)             | removal-tolerant bucket walk (zig and |js variants): members move between buckets mid-iteration, so each pass re-reads the bucket and advances the cursor only when the member still sits at it — the trip count does not exist before the body runs

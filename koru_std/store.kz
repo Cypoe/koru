@@ -1,5 +1,4 @@
 // Koru Standard Library: Reactive Stores
-// ========================================
 //
 // Application state as a compiled-reactivity substrate. The FULL design —
 // 9 rulings, adversary-stamped theses, the open queue — lives in
@@ -1680,6 +1679,7 @@ fn storeLowerText(
 ~part sites
 ~part leaf
 ~part index
+~part indexwalk
 ~part idecls
 ~part qnone
 ~part gate
