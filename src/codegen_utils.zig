@@ -580,6 +580,44 @@ test "koruStructToZig stray ')' returns error, never panics" {
     try std.testing.expectError(error.UnbalancedExpression, koruStructToZig(allocator, "{ a: foo) }"));
 }
 
+// 230_021: a bound name that IS a Zig keyword must not be rewritten in the
+// keyword's own position — `var n:` is a declaration, not a reference to a
+// param named `var`. The reference positions (after `=`, at end of an
+// expression) still get the escaped spelling.
+test "replaceIdentifier spares keyword positions for a keyword name" {
+    const allocator = std.testing.allocator;
+    const result = try replaceIdentifier(allocator,
+        \\var n: i32 = var;
+        \\const m = var + 1;
+        \\x = var
+        \\y = 1;
+    , "var", "@\"var\"");
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings(
+        \\var n: i32 = @"var";
+        \\const m = @"var" + 1;
+        \\x = @"var"
+        \\y = 1;
+    , result);
+}
+
+test "replaceIdentifier spares the keyword's punctuator forms" {
+    const allocator = std.testing.allocator;
+    // `if (`, `return;`, `break :`, `error.` — keyword grammar, untouched;
+    // the operand `return` in `x = return` is a reference and rewrites.
+    const result = try replaceIdentifier(allocator,
+        \\x = return;
+        \\if (x) y else z;
+        \\return;
+    , "return", "@\"return\"");
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings(
+        \\x = @"return";
+        \\if (x) y else z;
+        \\return;
+    , result);
+}
+
 // ============================================================================
 // KORU MODULE-WRAPPER PREFIX
 // ============================================================================
@@ -1703,14 +1741,151 @@ pub fn zigCodeMask(allocator: std.mem.Allocator, text: []const u8) ![]bool {
     return mask;
 }
 
+/// Punctuators a keyword's own grammar places after it — the keyword forms
+/// whose next token is not a name: `if (`, `catch |`, `break :`, `return;`,
+/// `else {`, `error.`, `extern "`. The identifier follow (`var n`, `try f()`,
+/// `return x`) is keyword position for EVERY keyword — two adjacent
+/// identifiers parse only inside keyword grammar — so that check lives in
+/// isZigKeywordPosition and this table holds only the exceptions.
+const zig_keyword_follow = std.StaticStringMap([]const u8).initComptime(.{
+    .{ "if", "(" },
+    .{ "while", "(" },
+    .{ "for", "(" },
+    .{ "switch", "(" },
+    .{ "fn", "(" },
+    .{ "asm", "(" },
+    .{ "align", "(" },
+    .{ "callconv", "(" },
+    .{ "linksection", "(" },
+    .{ "volatile", "(" },
+    .{ "enum", "({" },
+    .{ "union", "({" },
+    .{ "catch", "|" },
+    .{ "errdefer", "|{" },
+    .{ "break", ":;" },
+    .{ "continue", ":;" },
+    .{ "return", ";" },
+    .{ "else", "{" },
+    .{ "struct", "{" },
+    .{ "opaque", "{" },
+    .{ "error", "{." },
+    .{ "test", "\"{" },
+    .{ "comptime", "{" },
+    .{ "nosuspend", "{" },
+    .{ "suspend", "{" },
+    .{ "defer", "{" },
+    .{ "orelse", "{" },
+    .{ "extern", "\"" },
+});
+
+/// Statement-only keywords — the ones that can never open an operand. For
+/// these, an operand-introducer before the occurrence overrides the follow
+/// rule: `x = var` reads the param even when the next line starts with a name
+/// (which would otherwise parse as the declared name of a `var` decl).
+/// Expression keywords are exempt — `x = if (c) a else b` and `x = comptime
+/// {}` are real keyword uses in operand position.
+const zig_stmt_keywords = std.StaticStringMap(void).initComptime(.{
+    .{ "var", {} },
+    .{ "const", {} },
+    .{ "return", {} },
+    .{ "break", {} },
+    .{ "continue", {} },
+    .{ "defer", {} },
+    .{ "errdefer", {} },
+    .{ "pub", {} },
+    .{ "export", {} },
+    .{ "extern", {} },
+    .{ "test", {} },
+    .{ "threadlocal", {} },
+    .{ "usingnamespace", {} },
+    .{ "noalias", {} },
+    .{ "noinline", {} },
+});
+
+/// Keywords whose own grammar ends in an operand — `orelse var`,
+/// `return var`, `a and var` — so a following name is a reference, never
+/// the keyword's declared name.
+const zig_operand_keywords = std.StaticStringMap(void).initComptime(.{
+    .{ "orelse", {} },
+    .{ "catch", {} },
+    .{ "else", {} },
+    .{ "return", {} },
+    .{ "break", {} },
+    .{ "continue", {} },
+    .{ "and", {} },
+    .{ "or", {} },
+    .{ "try", {} },
+});
+
+/// Whether the token ending just before `start` puts the occurrence in
+/// OPERAND position — `x = var`, `f(var)`, `x.var`, `=> var`, `orelse var`.
+/// mask marks comments and strings so `x = // note\n var` still sees the `=`.
+fn operandPreceded(text: []const u8, mask: []const bool, start: usize) bool {
+    var j = start;
+    while (j > 0) {
+        const c = text[j - 1];
+        if (c == ' ' or c == '\t' or c == '\n' or c == '\r' or !mask[j - 1]) {
+            j -= 1;
+            continue;
+        }
+        break;
+    }
+    if (j == 0) return false;
+    const c = text[j - 1];
+    if (std.mem.indexOfScalar(u8, "=([,:?.+-*/%!~<>&|^", c) != null) return true;
+    if (std.ascii.isAlphabetic(c) or c == '_') {
+        var k = j;
+        while (k > 0 and (std.ascii.isAlphanumeric(text[k - 1]) or text[k - 1] == '_')) k -= 1;
+        return zig_operand_keywords.has(text[k..j]);
+    }
+    return false;
+}
+
+/// Whether the keyword occurrence spanning `start..end` is in KEYWORD
+/// position — what surrounds it is what that keyword's grammar takes, not
+/// what a reference would sit in. Followed by a name (`var n`, `const @"x"`,
+/// `comptime var`, `try f()`, `return x` — juxtaposed identifiers parse only
+/// inside keyword grammar) or by the punctuator its form leads with
+/// (zig_keyword_follow: `if (`, `catch |`, `break :`, `return;`, `error.`).
+/// Statement keywords in operand position are references instead — `x =
+/// var` reads the param named `var` (230_021).
+fn isZigKeywordPosition(text: []const u8, mask: []const bool, start: usize, end: usize, name: []const u8) bool {
+    if (zig_stmt_keywords.has(name) and operandPreceded(text, mask, start)) return false;
+    var k = end;
+    while (k < text.len) {
+        const c = text[k];
+        if (c == ' ' or c == '\t' or c == '\n' or c == '\r') {
+            k += 1;
+            continue;
+        }
+        if (c == '/' and k + 1 < text.len and text[k + 1] == '/') {
+            while (k < text.len and text[k] != '\n') k += 1;
+            continue;
+        }
+        break;
+    }
+    if (k >= text.len) return false;
+    const c = text[k];
+    if (std.ascii.isAlphabetic(c) or c == '_' or c == '@') return true;
+    const follows = zig_keyword_follow.get(name) orelse return false;
+    return std.mem.indexOfScalar(u8, follows, c) != null;
+}
+
 /// Replace word-boundary-matched identifier occurrences in text — but only
 /// where the occurrence is code (see zigCodeMask). Rewriting a name inside a
 /// string literal ships a corrupted program that still compiles (230_016).
+/// When the name is itself a Zig keyword, an occurrence in the keyword's own
+/// position is not a reference either: `var n: i32 = var` declares with the
+/// first `var` and reads the param with the second — rewriting both emits
+/// `@"var" n: i32`, a Zig syntax error in code the author never wrote
+/// (230_021).
 pub fn replaceIdentifier(allocator: std.mem.Allocator, text: []const u8, old_name: []const u8, new_name: []const u8) ![]const u8 {
     if (old_name.len == 0) return try allocator.dupe(u8, text);
 
     const mask = try zigCodeMask(allocator, text);
     defer allocator.free(mask);
+
+    const is_keyword = zig_keywords.has(old_name);
 
     var result = try std.ArrayList(u8).initCapacity(allocator, text.len);
     var i: usize = 0;
@@ -1720,7 +1895,11 @@ pub fn replaceIdentifier(allocator: std.mem.Allocator, text: []const u8, old_nam
             const after_idx = i + old_name.len;
             const after_ok = (after_idx >= text.len) or (!std.ascii.isAlphanumeric(text[after_idx]) and text[after_idx] != '_');
             if (before_ok and after_ok) {
-                try result.appendSlice(allocator, new_name);
+                if (is_keyword and isZigKeywordPosition(text, mask, i, after_idx, old_name)) {
+                    try result.appendSlice(allocator, old_name);
+                } else {
+                    try result.appendSlice(allocator, new_name);
+                }
                 i += old_name.len;
                 continue;
             }

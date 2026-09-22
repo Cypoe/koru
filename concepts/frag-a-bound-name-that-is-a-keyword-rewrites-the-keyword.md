@@ -20,9 +20,24 @@ The escape hatch exists and is wrong to need: hoisting the body into a
 module-scope fn (which never substitutes param names) is idiomatic in
 the corpus — the cell used it — but the defect stands: a legal Koru
 param name makes a legal Zig keyword unusable in its own event's body.
-The fix direction is a rewrite that knows Zig's keyword positions, or
-canonicalizing the binding so author text never collides. Pinned red:
-`230_021_keyword_param_rewrites_body_keyword`.
+
+**Resolved 2026-09-22** along the fix direction this named: a rewrite
+that knows Zig's keyword positions. `replaceIdentifier` now asks
+`isZigKeywordPosition` before rewriting a keyword-spelled name: an
+occurrence is the keyword when followed by a declared name (`var n`,
+`try f()`, `return x` — juxtaposed identifiers parse only inside
+keyword grammar) or by the punctuator its form leads with (`if (`,
+`catch |`, `break :`, `return;`, `error.`, `extern "`), and a
+statement-only keyword (`var`, `const`, `return`, `break`, …) in
+operand position is a reference regardless — `x = var` reads the param
+even when the next line's ident would otherwise look like a declared
+name. Expression keywords keep their operand-position forms (`x = if
+(c) a else b`). `230_021` is green on the emitted `var n: i32 = @"var"`.
+
+The residual boundary is host-text-grammar wins: `error.Foo` keeps the
+error-set reading (the param's field needs `@"error".Foo`), and
+`align(8)` keeps the builtin — a param named `align` is invoked only
+through the escaped spelling.
 
 Related:
 [[frag-every-name-writing-site-must-mangle]] — the parent invariant; this
