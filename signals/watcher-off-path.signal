@@ -1,0 +1,10 @@
+name: watcher-off-path
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a guard, wall, or publish step existed but the normal run path
+  could not reach it — logic sound, reach zero. Fires when a commit's
+  fix is wiring an already-correct step INTO the path, not changing
+  the step's logic. The publish pipeline stranded three boards this
+  way (2026-09-22); the parallel-path coherence watchers before that.
