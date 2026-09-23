@@ -913,3 +913,14 @@ reads that text for ambient-bind capture and the bound-but-unused check —
 nulling it (the first attempt) broke 690_093's interceptor payload.
 Routing then restores the body-only marks so the guard's columns are
 emitted once, in the loop, for `guard_z` — and never in the payload.
+
+The drain gate had a stale doubt of its own (2026-09-22, 690_336
+extended): the take-only-rule lowering declined indexed stores on the
+theory that "an index column reseats entries per take" — but take
+reseats nothing. Dead handles stay in their buckets and resolve to no
+live row, so a drain's bookkeeping-only teardown leaves the index in
+exactly the state sequential take would. The decline was survival of an
+earlier mental model; removing it puts `despawn`'s drain back on the
+traversal (ReleaseFast: ~1.79→~1.31ms), and the pin now proves routed
+lookups over a drained index skip dead members while the standing rule
+still eats later inserts.

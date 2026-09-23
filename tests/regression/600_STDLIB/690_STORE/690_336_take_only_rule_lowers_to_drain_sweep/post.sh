@@ -41,6 +41,17 @@ if printf '%s' "$POOL_SWEEP" | grep -q '__koru_len_before'; then
     exit 1
 fi
 
+# --- ipool lowered too: an index decl does not disqualify ---
+IPOOL_SWEEP=$(awk '/qsweep_ipool/,/^    };$/' output_emitted.zig)
+if ! printf '%s' "$IPOOL_SWEEP" | grep -q 'const __koru_dn = __koru_store_ipool\.len'; then
+    echo "FAIL: indexed store's take-only rule did not lower to the drain traversal"
+    exit 1
+fi
+if printf '%s' "$IPOOL_SWEEP" | grep -q '__koru_store_ipool\.\(tag\|hp\)\['; then
+    echo "FAIL: indexed drain still moves column data"
+    exit 1
+fi
+
 # --- guarded declined: removal-tolerant while kept for it ---
 GUARDED_SWEEP=$(awk '/qsweep_guarded/,/^    };$/' output_emitted.zig)
 if ! printf '%s' "$GUARDED_SWEEP" | grep -q '__koru_len_before'; then

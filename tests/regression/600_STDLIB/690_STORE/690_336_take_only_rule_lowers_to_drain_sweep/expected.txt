@@ -1,2 +1,6 @@
 pool 0
 guarded 1
+ipool 0
+ipool drained
+after-refill 0
+rule still stands

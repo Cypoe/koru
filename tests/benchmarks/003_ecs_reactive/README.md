@@ -130,6 +130,15 @@ around them.
   plus handle minting the raw baseline never pays) and ~1 ns/member of
   generational handle resolve in the walk. That is the measurement, not a
   detail to hide.
+- **`despawn`'s drain is a take-only rule.** `drain` is
+  `std/store:rule(bodies)` whose whole `! row` body is `take(bodies[e])`
+  with the payload discarded, so its invoked sweep lowers to take's
+  bookkeeping alone — generation bumps, hslot tombstones, freelist pushes
+  in sequential-take order, no column traffic. An `std/indexes` decl does
+  not disqualify it: sequential take reseats nothing in the bucket map,
+  so the teardown leaves the index exactly as take would. The remaining
+  gap over `World.init` + `deinit` is `world-init` itself, shared with
+  every other `bodies` scenario.
 - **`fanout` cannot pick its victim by index.** The baseline damages
   `health[(frame*131 + i*17) % len]`. Handle-addressing makes that access
   unspellable, so the port keeps the event COUNT (entities/10 per frame) and
@@ -177,14 +186,14 @@ the multipliers below have equivalence evidence behind them everywhere except
 
 | scenario | zig_striped | bevy_ecs | koru_store | x bevy | = |
 |---|---:|---:|---:|---:|:-:|
-| schedule_empty | 28 | 867728 | 0.04 | — | = |
-| add_remove | 33 | 10787 | 349 | 31x | = |
-| spawn | 280 | 3654 | 947 | 3.9x | = |
-| spawn_batch | 236 | 3231 | 947 | 3.4x | = |
-| despawn | 280 | 3696 | 1862 | 2.0x | = |
-| query_get | 1308 | 38728 | 1696 | 23x | = |
-| dense | 2556 | 9755 | 3539 | 2.8x | = |
-| sparse | 2147 | 2431 | 3830 | 0.6x | = |
+| schedule_empty | 32 | 867728 | 3 | — | = |
+| add_remove | 37 | 10787 | 44 | 245x | = |
+| spawn | 284 | 3654 | 1118 | 3.3x | = |
+| spawn_batch | 278 | 3231 | 1073 | 3.0x | = |
+| despawn | 274 | 3696 | 1307 | 2.8x | = |
+| query_get | 1493 | 38728 | 2243 | 17x | = |
+| dense | 2671 | 9755 | 3354 | 2.9x | = |
+| sparse | 2135 | 2431 | 4053 | 0.6x | = |
 | fanout | 8543 | 25452 | 14260 | 1.8x | ✗ |
 | bevy_strength_world | 21076 | 65322 | 16627 | 3.9x | = |
 | combat_world | 3560 | 9832 | — | — | — |

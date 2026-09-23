@@ -4291,7 +4291,7 @@
                 \\  }}
                 \\}}
                 \\return;
-            , .{ CAP, store_name, store_name, store_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable else if (qs.drain and index_col == null) DrainScan.sweepBody(allocator, true, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
+            , .{ CAP, store_name, store_name, store_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable else if (qs.drain) DrainScan.sweepBody(allocator, true, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
                 \\let __koru_i = 0;
                 \\while (__koru_i < __koru_store_{s}.len) {{
                 \\  const __koru_len_before = __koru_store_{s}.len;
@@ -4327,7 +4327,7 @@
                 \\    }}
                 \\}}
                 \\return;
-            , .{ CAP, store_name, store_name, store_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable else if (qs.drain and index_col == null) DrainScan.sweepBody(allocator, false, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
+            , .{ CAP, store_name, store_name, store_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable else if (qs.drain) DrainScan.sweepBody(allocator, false, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
                 \\var __koru_i: usize = 0;
                 \\while (__koru_i < __koru_store_{s}.len) {{
                 \\    const __koru_len_before = __koru_store_{s}.len;

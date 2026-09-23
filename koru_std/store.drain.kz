@@ -19,18 +19,18 @@
 // no column traffic. Post-drain state is identical to sequential take's
 // (len 0, gens +1, freelist equal, all hslot_row tombstoned); row_hslot
 // beyond len diverges only in dead bytes insert overwrites on refill.
-//
 // Handles are i64s, so slot-reuse order after a refill IS observable —
 // `clear`'s canonical reset mints a different first handle than take's
 // removal-ordered freelist does, which is why this lowering reproduces
 // take's bookkeeping rather than calling the clear unit.
-//
 // Every doubt declines the site: a `when` guard makes the walk
 // selective, a `| item` body that reads the payload makes the
 // materialisation load-bearing, an owned column discharges one
-// obligation at a time, a `! removed` arm fires once per row, and an
-// index column reseats entries per take. A declined site stays a
-// per-row take and is correct by construction.
+// obligation at a time, and a `! removed` arm fires once per row.
+// An index column is NO doubt: take reseats nothing — dead handles stay
+// in their buckets and resolve to no live row — so a teardown leaves the
+// index exactly as sequential take would. A declined site stays a
+// per-row take, correct by construction.
 // ------------------------------------------------------------------
 
 const DrainScan = struct {
