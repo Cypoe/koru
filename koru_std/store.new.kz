@@ -424,11 +424,7 @@
             std.mem.eql(u8, ltype, "bool") or std.mem.eql(u8, ltype, "string");
         const char_shaped = std.mem.startsWith(u8, ltype, "char[");
         const owned_shaped = std.mem.startsWith(u8, ltype, "*") or std.mem.indexOfScalar(u8, ltype, '<') != null;
-        const ref_shaped = ltype.len > 5 and std.mem.startsWith(u8, ltype, "ref(") and ltype[ltype.len - 1] == ')';
-        if (ref_shaped) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): field '{s}' is {s} — a ref field is a row handle; the column IS the handle, declare `{s}: i64` (ref() columns lower at a later rung)", .{ store_name, cf.name, ltype, cf.name }) } };
-        }
-        if (!known_scalar_leaf and !char_shaped and !owned_shaped and !SL.TermRef.isDeclared(program, ltype, store_scope_home)) {
+        if (!known_scalar_leaf and !char_shaped and !owned_shaped and StoreRefs.inner(ltype) == null and !SL.TermRef.isDeclared(program, ltype, store_scope_home)) {
             return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): leaf '{s}' names unknown '{s}' — a leaf must be a scalar material or a terminal of its home", .{ store_name, cf.name, ltype }) } };
         }
     }
@@ -826,18 +822,22 @@
         // Slice A: a bare in-scope terminal (Health) is a column — the alias
         // emits verbatim and lowers through its host type. Qualified names
         // refuse below as before (address resolution is a later rung).
-        const known_terminal = if (!known_scalar and char_cap == null and !owned_col)
+        // A `ref(X)` leaf is a typed row handle — i64 material, checked here.
+        const ref_target = StoreRefs.inner(ftype);
+        if (StoreRefs.checkTarget(allocator, program, reporter, flow, store_name, cf.name, ftype, store_scope_home)) |r| return .{ .transformed = .{ .replacement = r } };
+        const known_terminal = if (!known_scalar and char_cap == null and !owned_col and ref_target == null)
             SL.TermRef.isDeclared(program, ftype, store_scope_home)
         else
             false;
-        if (!known_scalar and char_cap == null and !owned_col and !known_terminal) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): field '{s}' is {s} — columns are scalars (i64/i32/f64/f32), fixed-char (char[N], 690_052), or owned strings (*std/string:String<std/string:instance!>, 690_053); vec/mat tiers are pinned at 690_020", .{ store_name, cf.name, ftype }) } };
+        if (!known_scalar and char_cap == null and !owned_col and !known_terminal and ref_target == null) {
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): field '{s}' is {s} — columns are scalars (i64/i32/f64/f32), fixed-char (char[N], 690_052), owned strings (*std/string:String<std/string:instance!>, 690_053), or ref() row handles (698_009); vec/mat tiers are pinned at 690_020", .{ store_name, cf.name, ftype }) } };
         }
         field_names[i] = cf.name;
         field_types[i] = if (char_cap != null)
             allocator.dupe(u8, "string") catch unreachable
         else if (owned_info) |oi|
             std.fmt.allocPrint(allocator, "*{s}", .{oi.type_name}) catch unreachable
+        else if (ref_target != null) allocator.dupe(u8, "i64") catch unreachable
         else
             ftype;
         field_char_caps[i] = char_cap;
@@ -5147,10 +5147,10 @@
             Walk.items(allocator, program, @constCast(program.items), pscope, pstore_identity.items);
         }
 
-        const pconsumed = std.fmt.allocPrint(allocator, "// std/store: plural store '{s}' created (SoA cell + insert/query/write/take/stripe units)", .{store_name}) catch unreachable;
+        const pconsumed = std.fmt.allocPrint(allocator, "// std/store: plural store '{s}' created (SoA cell + insert/query/write/take/stripe units){s}", .{ store_name, StoreRefs.suffix(allocator, cell_fields) }) catch unreachable;
         return .{ .transformed = .{
-            .replacement = ast.Item{ .host_line = ast.HostLine{
-                .content = pconsumed,
+            .replacement = ast.Item{ .inline_code = ast.InlineCode{
+                .code = pconsumed,
                 .location = flow.location,
                 .module = allocator.dupe(u8, flow.module) catch unreachable,
             } },
@@ -6306,9 +6306,9 @@
     // Assemble: the create site dissolves into a comment; the five
     // generated units append as top-level items.
     // ------------------------------------------------------------------
-    const consumed = std.fmt.allocPrint(allocator, "// std/store: '{s}' created (cell + write-subflow at module scope)", .{store_name}) catch unreachable;
-    const replacement = ast.Item{ .host_line = ast.HostLine{
-        .content = consumed,
+    const consumed = std.fmt.allocPrint(allocator, "// std/store: '{s}' created (cell + write-subflow at module scope){s}", .{ store_name, StoreRefs.suffix(allocator, cell_fields) }) catch unreachable;
+    const replacement = ast.Item{ .inline_code = ast.InlineCode{
+        .code = consumed,
         .location = flow.location,
         .module = allocator.dupe(u8, flow.module) catch unreachable,
     } };

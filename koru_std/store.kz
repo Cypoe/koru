@@ -557,7 +557,6 @@ fn isStoreNewFor(f: *const ast_find.Flow, want: []const u8) bool {
 // a call argument or a `{{ }}` interpolation naming an indexed read failed with
 // `use of undeclared identifier 'pool'`, a Zig error naming no Koru construct
 // (690_250, 690_254).
-//
 // A private helper struct inside a transform is a LOWERING BOUNDARY, however
 // much it reads as ordinary code organisation. So this lives at file scope,
 // where both transforms can reach it, and the copy that used to live in
@@ -1009,3 +1008,4 @@ fn storeLowerText(
 ~part drain
 ~part expand
 ~part kinds
+~part refs

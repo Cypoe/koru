@@ -99,19 +99,22 @@ list.free.kz, store.leaf.kz, store.kz, phantom_semantic_checker,
 type_registry) — the rule now lives in a helper at each site.
 
 **The reference gap (surfaced by this walk, shared with
-frag-type-system-design's next-ranked item) — first rung landed:**
-`owner: ref(Dog)` validates the target is a declared compound and
-lowers to the i64 handle material in `std/list` element structs, the
-target kept in proto metadata for checkers (698_006/007). Refs are
+frag-type-system-design's next-ranked item) — landed:** `owner:
+ref(Dog)` validates the target is a declared compound and lowers to the
+i64 handle material everywhere — `std/list` element structs
+(698_006/007) and store columns alike (698_009): the column IS the
+handle, and the create-site marker carries `; ref col->Target` so the
+typed edge survives the seed's self-erase (the marker moved to
+`inline_code` to persist — `host_line` create markers never emitted).
+Unknown targets refuse at the store's own gate (698_011). Refs are
 exempt from the containment-cycle walk (`next: ref(Node)` is legal by
-design). In a store seed the column IS the handle — `ref()` there
-refuses with the `i64` spelling named (698_009). Still open: `ref`
-needs X's plurality to resolve *through* — no binder ties the handle to
-its home store yet (`X.all` typable, not just sugar). Handles stay the
-mechanism — generation-stable, checked-never-owned. Interior pointers
-stay refused (swap-remove moves rows; references point at rows, never
-cells). The walk didn't create this gap — object graphs made it
-load-bearing.
+design). Still open: `ref` needs X's plurality to resolve *through* —
+no binder ties the handle to its home store yet (`X.all` typable, not
+just sugar), and a write does not yet verify the handle's home against
+the declared target. Handles stay the mechanism — generation-stable,
+checked-never-owned. Interior pointers stay refused (swap-remove moves
+rows; references point at rows, never cells). The walk didn't create
+this gap — object graphs made it load-bearing.
 
 **Landed later the same walk:** `source: ?Source` — the first optional
 Source param — so blockless `std/proto(Cat <: Animal)` reaches the

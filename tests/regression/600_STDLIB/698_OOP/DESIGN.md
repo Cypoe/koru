@@ -109,15 +109,17 @@ table. This is the same door the type-system walk already ranked next
 OOP walk made it load-bearing.
 
 The honest shape: a **reference field kind** — `owner: ref(Dog)` —
-**landed in its first rung**: `ref(X)` validates that X names a declared
-compound, keeps the target in proto metadata for checkers, and lowers
-to the i64 handle material in `std/list` element structs (698_006/007).
-In a store seed the column IS the handle, so `ref()` there refuses with
-the `i64` spelling named (698_009) — ref columns lowering through store
-machinery is a later rung. Still OPEN: `ref` needs X's plurality to
-resolve *through* — the checker does not yet know which store a Dog row
-lives in (`X.all` becoming typable, not just sugar). Handles stay the
-mechanism: generation-stable, validity-checked-never-owned.
+**landed**: `ref(X)` validates that X names a declared compound, keeps
+the target in proto metadata for checkers, and lowers to the i64 handle
+material everywhere it appears — `std/list` element structs (698_006/007)
+AND store seeds (698_009): the column IS the handle, and the create-site
+marker carries `; ref dog->Dog` so the typed edge survives the seed's
+self-erase. Unknown targets refuse at the store's own gate (698_011).
+Still OPEN: `ref` needs X's plurality to resolve *through* — the checker
+does not yet know which store a Dog row lives in (`X.all` becoming
+typable, not just sugar), and insert/write don't yet verify a handle's
+home store against the declared target (690_196's guard is slot+gen only).
+Handles stay the mechanism: generation-stable, validity-checked-never-owned.
 **Interior pointers stay refused** — `&row.field` can't survive
 swap-remove; references point at rows, never cells. Free-floating heap
 objects stay behind the `std/list` door.
@@ -151,7 +153,7 @@ or the declaration refuses). `,` stays the arg separator; `-`
 Illustrative spelling — INVENTED, a design target:
 
 ```koru
-// animals.k — pure Koru, now COMPILING (698_001-009 green)
+// animals.k — pure Koru, now COMPILING (698_001-011 green)
 import std/proto
 import std/store
 
@@ -185,7 +187,7 @@ std/store:query(Animals)
 | `new` | `std/store:insert` | GROUNDED by absence |
 | `value V` | `std/proto(V)` | GROUNDED |
 | `instanceof` | view membership / `is` narrowing | GROUNDED — structural, not declared |
-| `ref(X)` field | typed row handle — i64 material, target kept for checking | LANDED (698_006/007/009) |
+| `ref(X)` field | typed row handle — i64 material in lists AND store columns, target on the create marker | LANDED (698_006/007/009/011) |
 
 ## The rejection catalog (RULED — this is the guide)
 
@@ -260,12 +262,14 @@ by writing real programs in it, not by argument.
 
 ## Status
 
-**Pinned — 698_001 through 698_010 green.** The walk's arc: `.koop`
+**Pinned — 698_001 through 698_011 green.** The walk's arc: `.koop`
 file form → `std/oop` transform module → **two features landed in
 `std/proto`**: field-set extension (`X <: A + B` — flatten, dedup by
 name+concept, conflict and cycle refuse; 698_001-005) and the reference
 field kind (`ref(X)` → validated target, i64 handle material in list
-structs; 698_006/007/009). Extended protos feed `std/list:new` and the
+structs (698_006/007) AND store columns — the seed leaf lowers to i64
+and the create marker carries `; ref col->Target` for checkers
+(698_009/011)). Extended protos feed `std/list:new` and the
 store/view surface (698_008 — per-proto stores + `view`, not the
 repudiated sibling-union seed). Pure inheritance is blockless —
 `std/proto(Cat <: Animal)` — via `source: ?Source`, the first optional
