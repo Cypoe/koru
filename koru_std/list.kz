@@ -3,14 +3,14 @@
 // The i64 trunk (List_i64) stays hand-written exactly as it always was; the
 // container-generating machinery generalizes it: `new(<element>)` is a
 // [transform] that routes by element name (the 660_026 dispatch-gap doctrine:
-// events lower keyed by NAME only, so every concrete container gets its own
-// suffixed events). A PRIMITIVE element routes to the hand-written
+// tors lower keyed by NAME only, so every concrete container gets its own
+// suffixed tors). A PRIMITIVE element routes to the hand-written
 // constructor (`new(i64)` -> `new-i64`); a PROTO entry (see std/types.proto,
 // types.kz) routes to a SYNTHESIZED container: the element struct, the
 // `List_<Name>` handle, and the full op set (push/len/get/pop/free) are
 // appended into the caller's module the first time that element is seen.
-// The five op events are [transform]s too: each rewrites its call site to the
-// suffixed event by resolving the container binding's element in the
+// The five op tors are [transform]s too: each rewrites its call site to the
+// suffixed tor by resolving the container binding's element in the
 // enclosing flow (a `std/list:new` invocation whose binding branch carries the
 // handle — the findShapeSource-style walk, same power std/store uses to find
 // watch bodies).
@@ -53,7 +53,7 @@ pub const List_i64 = struct {
 // and rewrites its call site to the concrete `new-<type>` runtime constructor
 // (e.g. `new-i64`). This is generic-by-name: when `new-f64` exists, `new(f64)`
 // routes to it automatically. A type expression is inherently comptime, so this
-// must be a [transform] — a plain event taking the type as an Expression would make
+// must be a [transform] — a plain tor taking the type as an Expression would make
 // the whole flow comptime. The branches (`| list` / `| err`) carry over to
 // the concrete constructor unchanged.
 // A PROTO element routes to SYNTHESIS, not a hand-written constructor: the
@@ -62,12 +62,12 @@ pub const List_i64 = struct {
 // promises to derive is appended into this flow's module exactly once per
 // element name. The dedupe marker is the REWRITTEN FIRST SITE: a later site
 // counting a `new-<Name>` invocation already present skips synthesis and
-// rewrites to the first site's announced event — no heap state.
-
+// rewrites to the first site's announced tor — no heap state.
 ~part new
 ~part push
 ~part len
 ~part get
 ~part pop
+~part protos
 ~part free
 ~part explain

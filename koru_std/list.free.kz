@@ -21,10 +21,10 @@
 
 // Concrete i64 constructor + trunk ops: `new(i64)` routes to `new-i64`, and
 // every op tor is a [transform] that routes by handle — i64 handles to the
-// `-i64` trunk event, proto handles to the synthesized `op-<Name>`. The
+// `-i64` trunk tor, proto handles to the synthesized `op-<Name>`. The
 // unsuffixed op spellings never lower directly. (A proto container's ops are
 // all synthesized under the container's own suffix — `push-Engine`,
-// `pop-Engine`, … — so two protos' containers never collide on one event name.)
+// `pop-Engine`, … — so two protos' containers never collide on one tor name.)
 
 // ============================================
 // PROTO-DERIVED CONTAINER SYNTHESIS — host half
@@ -36,28 +36,6 @@
 // mechanism std/types:string, std/store, std/field use for their host bodies.
 
 const astz = ast_find;
-
-/// Bare entry name a proto-qualified element expression names, or null for a
-/// primitive. `i64` -> null; `Engine` -> "Engine"; `app/car:Engine` -> "Engine".
-fn protoEntryName(alloc: std.mem.Allocator, elem: []const u8) ?[]const u8 {
-    const trimmed = std.mem.trim(u8, elem, " \t");
-    if (trimmed.len == 0) return null;
-    const name = if (std.mem.lastIndexOfScalar(u8, trimmed, ':')) |ci|
-        std.mem.trim(u8, trimmed[ci + 1 ..], " \t")
-    else
-        trimmed;
-    if (name.len == 0) return null;
-    const primitives = [_][]const u8{ "i64", "i32", "i16", "i8", "u64", "u32", "u16", "u8", "f64", "f32", "bool", "usize", "string", "void", "char" };
-    for (primitives) |p| {
-        if (std.mem.eql(u8, name, p)) return null;
-    }
-    return alloc.dupe(u8, name) catch unreachable;
-}
-
-const ProtoFields = struct {
-    names: []const []const u8,
-    types: []const []const u8,
-};
 
 /// True when a continuation tree carries a `new-<elem>` invocation — the
 /// rewritten marker of a container's first synthesis site.
@@ -94,306 +72,11 @@ fn hasRewrittenNew(prog: *const astz.Program, elem: []const u8) bool {
     return N.has(prog.items, prefix);
 }
 
-/// The proto declaration flow an element expression names. `elem` may be bare
-/// (`Engine`) or module-qualified (`app/car:Engine`); the entry is matched on
-/// the bare name, and a qualifier additionally requires the declaring module.
-/// Duplicate names across the whole program are refused by the checker's proto
-/// scan (the loud two-registrant wall), so a bare match is unambiguous.
-fn findProtoDecl(prog: *const astz.Program, elem: []const u8) ?*const astz.Flow {
-    const trimmed = std.mem.trim(u8, elem, " \t");
-    const want_name = if (std.mem.lastIndexOfScalar(u8, trimmed, ':')) |ci|
-        std.mem.trim(u8, trimmed[ci + 1 ..], " \t")
-    else
-        trimmed;
-    var want_mod: ?[]const u8 = null;
-    if (std.mem.lastIndexOfScalar(u8, trimmed, ':')) |ci| {
-        const qual = std.mem.trim(u8, trimmed[0..ci], " \t");
-        if (qual.len > 0) {
-            const dotted = std.mem.replaceOwned(u8, std.heap.page_allocator, qual, "/", ".") catch unreachable;
-            want_mod = dotted;
-        }
-    }
-    const Finder = struct {
-        fn invokesProto(f: *const astz.Flow, name: []const u8, mod: ?[]const u8) bool {
-            const inv = f.inv();
-            if (inv.path.segments.len != 1) return false;
-            const verb = inv.path.segments[0];
-            const mq = inv.path.module_qualifier orelse return false;
-            // Two doors to the same registry entry: the original
-            // `std/types:proto(Name)` verb form, and the default-door form
-            // `std/proto(Name)` ≡ `std/proto:default(Name)` that the
-            // default-event rule rewrites a bare module call into
-            // (import_pipeline.zig rewriteDefaultEventCalls; the post-rewrite
-            // mq is the canonical dotted path "std.proto").
-            const types_door = std.mem.eql(u8, verb, "proto") and
-                (std.mem.eql(u8, mq, "std.types") or std.mem.eql(u8, mq, "std/types"));
-            const default_door = std.mem.eql(u8, verb, "default") and
-                (std.mem.eql(u8, mq, "std.proto") or std.mem.eql(u8, mq, "std/proto"));
-            if (!(types_door or default_door)) return false;
-            if (inv.args.len == 0) return false;
-            var nm = inv.args[0].value;
-            if (nm.len >= 2 and nm[0] == '"' and nm[nm.len - 1] == '"') nm = nm[1 .. nm.len - 1];
-            if (!std.mem.eql(u8, nm, name)) return false;
-            if (mod) |m| {
-                if (f.module.len > 0 and std.mem.eql(u8, f.module, m)) return true;
-                return false;
-            }
-            return true;
-        }
-        fn findIn(items: []const astz.Item, name: []const u8, mod: ?[]const u8) ?*const astz.Flow {
-            for (items) |pi| {
-                switch (pi) {
-                    .flow => |*f| {
-                        if (invokesProto(f, name, mod)) return f;
-                    },
-                    .module_decl => |*m| {
-                        if (findIn(m.items, name, mod)) |hit| return hit;
-                    },
-                    else => {},
-                }
-            }
-            return null;
-        }
-    };
-    return Finder.findIn(prog.items, want_name, want_mod);
-}
-
-/// True when the program carries the proto entry `elem` in EITHER of the two
-/// forms the transform fixed point leaves behind: the declaration flow
-/// (pre-erase) or the self-erased `// proto <Name>: ...` marker comment
-/// (post-erase). Pass ordering decides which form a `std/list:new` site sees —
-/// a proto declared EARLIER in the file erases first, and detection keyed on
-/// the live flow alone then misroutes a proto element as a primitive
-/// (`new-Engine` with no such tor → KORU040).
-fn programHasProto(prog: *const astz.Program, elem: []const u8) bool {
-    if (findProtoDecl(prog, elem)) |_| return true;
-    const trimmed = std.mem.trim(u8, elem, " \t");
-    const want_name = if (std.mem.lastIndexOfScalar(u8, trimmed, ':')) |ci|
-        std.mem.trim(u8, trimmed[ci + 1 ..], " \t")
-    else
-        trimmed;
-    var want_mod: ?[]const u8 = null;
-    if (std.mem.lastIndexOfScalar(u8, trimmed, ':')) |ci| {
-        const qual = std.mem.trim(u8, trimmed[0..ci], " \t");
-        if (qual.len > 0) {
-            want_mod = std.mem.replaceOwned(u8, std.heap.page_allocator, qual, "/", ".") catch unreachable;
-        }
-    }
-    const Marker = struct {
-        fn matches(ic: *const astz.InlineCode, name: []const u8, mod: ?[]const u8) bool {
-            const prefix = "// proto ";
-            if (!std.mem.startsWith(u8, ic.code, prefix)) return false;
-            const colon = std.mem.indexOfScalar(u8, ic.code, ':') orelse return false;
-            if (!std.mem.eql(u8, std.mem.trim(u8, ic.code[prefix.len..colon], " \t"), name)) return false;
-            if (mod) |m| {
-                if (ic.module.len > 0 and std.mem.eql(u8, ic.module, m)) return true;
-                return false;
-            }
-            return true;
-        }
-        fn find(items: []const astz.Item, name: []const u8, mod: ?[]const u8) bool {
-            for (items) |pi| {
-                switch (pi) {
-                    .inline_code => |*ic| {
-                        if (matches(ic, name, mod)) return true;
-                    },
-                    .module_decl => |*m| {
-                        if (find(m.items, name, mod)) return true;
-                    },
-                    else => {},
-                }
-            }
-            return false;
-        }
-    };
-    return Marker.find(prog.items, want_name, want_mod);
-}
-
-/// The fields of a proto declaration flow, parsed from its `source:` argument's
-/// text (`rpm: i32, serial: string`).
-fn protoFieldsOf(alloc: std.mem.Allocator, decl: *const astz.Flow) ProtoFields {
-    const inv = decl.inv();
-    var src: ?[]const u8 = null;
-    for (inv.args) |a| {
-        if (a.source_value) |sv| {
-            src = sv.text;
-            break;
-        }
-    }
-    const text = src orelse return .{ .names = &.{}, .types = &.{} };
-    // First pass: count the fields.
-    var count: usize = 0;
-    var lines1 = std.mem.splitScalar(u8, text, '\n');
-    while (lines1.next()) |line_raw| {
-        const line = std.mem.trim(u8, line_raw, " \t\r,");
-        if (line.len == 0) continue;
-        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
-        const fname = std.mem.trim(u8, line[0..colon], " \t");
-        const ftype = std.mem.trim(u8, line[colon + 1 ..], " \t,");
-        if (fname.len > 0 and ftype.len > 0) count += 1;
-    }
-    const names = alloc.alloc([]const u8, count) catch unreachable;
-    const types = alloc.alloc([]const u8, count) catch unreachable;
-    var w: usize = 0;
-    var lines2 = std.mem.splitScalar(u8, text, '\n');
-    while (lines2.next()) |line_raw| {
-        const line = std.mem.trim(u8, line_raw, " \t\r,");
-        if (line.len == 0) continue;
-        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
-        const fname = std.mem.trim(u8, line[0..colon], " \t");
-        const ftype = std.mem.trim(u8, line[colon + 1 ..], " \t,");
-        if (fname.len == 0 or ftype.len == 0) continue;
-        names[w] = alloc.dupe(u8, fname) catch unreachable;
-        types[w] = alloc.dupe(u8, ftype) catch unreachable;
-        w += 1;
-    }
-    return .{ .names = names[0..w], .types = types[0..w] };
-}
-
-/// The fields of a proto entry, from whichever representation the walker's
-/// fixed point has left: the declaration flow (pre-self-erase) or the erased
-/// `// proto Name: fields` comment. `elem` may be module-qualified. The flat
-/// pairs expand nested compounds to dotted-leaf pairs on the way out.
-fn protoFieldsOfProgram(alloc: std.mem.Allocator, prog: *const astz.Program, elem: []const u8) ProtoFields {
-    const flat = protoFieldsOfProgramFlat(alloc, prog, elem);
-    return expandNestedFields(alloc, prog, flat.names, flat.types);
-}
-
-/// Unexpanded fetch behind protoFieldsOfProgram: the entry's own pairs,
-/// nested compounds left as named for the expansion walk.
-fn protoFieldsOfProgramFlat(alloc: std.mem.Allocator, prog: *const astz.Program, elem: []const u8) ProtoFields {
-    if (findProtoDecl(prog, elem)) |decl| {
-        return protoFieldsOf(alloc, decl);
-    }
-    const trimmed = std.mem.trim(u8, elem, " \t");
-    const want_name = if (std.mem.lastIndexOfScalar(u8, trimmed, ':')) |ci|
-        std.mem.trim(u8, trimmed[ci + 1 ..], " \t")
-    else
-        trimmed;
-    const N = struct {
-        fn find(items: []const astz.Item, name: []const u8, out: *?[]const u8) bool {
-            for (items) |pi| {
-                switch (pi) {
-                    .inline_code => |ic| {
-                        const c = ic.code;
-                        const prefix = "// proto ";
-                        if (std.mem.startsWith(u8, c, prefix)) {
-                            if (std.mem.indexOfScalar(u8, c, ':')) |colon| {
-                                if (std.mem.eql(u8, std.mem.trim(u8, c[prefix.len..colon], " \t"), name)) {
-                                    out.* = c[colon + 1 ..];
-                                    return true;
-                                }
-                            }
-                        }
-                    },
-                    .module_decl => |*m| {
-                        if (find(m.items, name, out)) return true;
-                    },
-                    else => {},
-                }
-            }
-            return false;
-        }
-    };
-    var rest: ?[]const u8 = null;
-    _ = N.find(prog.items, want_name, &rest);
-    const text = rest orelse return .{ .names = &.{}, .types = &.{} };
-    // Parse the trailing fields text like a proto body source. The erased
-    // marker is ONE line (`// proto Name: f: t, g: u`), so fields separate on
-    // ',' as well as '\n'.
-    var count: usize = 0;
-    var lines1 = std.mem.tokenizeAny(u8, text, "\n,");
-    while (lines1.next()) |line_raw| {
-        const line = std.mem.trim(u8, line_raw, " \t\r,");
-        if (line.len == 0) continue;
-        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
-        const fname = std.mem.trim(u8, line[0..colon], " \t");
-        const ftype = std.mem.trim(u8, line[colon + 1 ..], " \t,");
-        if (fname.len > 0 and ftype.len > 0) count += 1;
-    }
-    const names = alloc.alloc([]const u8, count) catch unreachable;
-    const types = alloc.alloc([]const u8, count) catch unreachable;
-    var w: usize = 0;
-    var lines2 = std.mem.tokenizeAny(u8, text, "\n,");
-    while (lines2.next()) |line_raw| {
-        const line = std.mem.trim(u8, line_raw, " \t\r,");
-        if (line.len == 0) continue;
-        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
-        const fname = std.mem.trim(u8, line[0..colon], " \t");
-        const ftype = std.mem.trim(u8, line[colon + 1 ..], " \t,");
-        if (fname.len == 0 or ftype.len == 0) continue;
-        names[w] = alloc.dupe(u8, fname) catch unreachable;
-        types[w] = alloc.dupe(u8, ftype) catch unreachable;
-        w += 1;
-    }
-    return .{ .names = names[0..w], .types = types[0..w] };
-}
-
-/// Nested-compound expansion: flatten compound-typed fields to dotted-leaf
-/// pairs (`pos: Position` with `x`,`y` becomes `pos.x`, `pos.y`), recursing
-/// to any depth. Terminals and scalars are leaves and pass through untouched;
-/// an ftype resolving to no compound is a leaf by definition — unknown names
-/// are the declaration gate's refusal, never this walk's. A name already on
-/// the expansion stack passes through unexpanded: unreachable while the gate
-/// refuses cycles, kept purely so a walk over unvalidated declarations can
-/// never hang (the gate's voice, which always runs, wins regardless).
-/// Identity rides the paths for free: terminal leaves keep their global
-/// names, raw leaves stay distinct per expansion path.
-fn expandNestedFields(alloc: std.mem.Allocator, prog: *const astz.Program, names: []const []const u8, types: []const []const u8) ProtoFields {
-    var out_names = std.ArrayList([]const u8).initCapacity(alloc, names.len) catch unreachable;
-    var out_types = std.ArrayList([]const u8).initCapacity(alloc, types.len) catch unreachable;
-    var stack = std.ArrayList([]const u8).initCapacity(alloc, 4) catch unreachable;
-    for (names, types) |fname, ftype| {
-        expandPair(alloc, prog, "", fname, ftype, &stack, &out_names, &out_types);
-    }
-    return .{ .names = out_names.toOwnedSlice(alloc) catch unreachable, .types = out_types.toOwnedSlice(alloc) catch unreachable };
-}
-
-fn expandPair(alloc: std.mem.Allocator, prog: *const astz.Program, prefix: []const u8, fname: []const u8, ftype: []const u8, stack: *std.ArrayList([]const u8), out_names: *std.ArrayList([]const u8), out_types: *std.ArrayList([]const u8)) void {
-    const full = if (prefix.len == 0)
-        alloc.dupe(u8, fname) catch unreachable
-    else
-        std.fmt.allocPrint(alloc, "{s}{s}", .{ prefix, fname }) catch unreachable;
-    const bare = if (std.mem.lastIndexOfScalar(u8, ftype, ':')) |ci|
-        std.mem.trim(u8, ftype[ci + 1 ..], " \t")
-    else
-        std.mem.trim(u8, ftype, " \t");
-    for (stack.items) |s| {
-        if (std.mem.eql(u8, s, bare)) {
-            out_names.append(alloc, full) catch unreachable;
-            out_types.append(alloc, ftype) catch unreachable;
-            return;
-        }
-    }
-    const sub = protoFieldsOfProgramFlat(alloc, prog, ftype);
-    if (sub.names.len == 0) {
-        out_names.append(alloc, full) catch unreachable;
-        out_types.append(alloc, ftype) catch unreachable;
-        return;
-    }
-    stack.append(alloc, bare) catch unreachable;
-    const inner = std.fmt.allocPrint(alloc, "{s}.", .{full}) catch unreachable;
-    for (sub.names, sub.types) |sn, st| {
-        expandPair(alloc, prog, inner, sn, st, stack, out_names, out_types);
-    }
-    _ = stack.pop();
-}
-
-/// The element a container handle was bound from, found in the enclosing flow:
-/// a `std/list:new(<elem>)` invocation whose binding branch carries the handle.
-/// The new transform rewrites `new` -> `new-<elem>` in place, so the scan keys
-/// on the REWRITTEN segment prefix.
-
-
-
-/// Zig type for a proto field type string (`string` lowers at the emission
-/// boundary; the struct body needs the Zig slice form today).
-fn elementZigType(alloc: std.mem.Allocator, ftype: []const u8) []const u8 {
-    if (std.mem.eql(u8, ftype, "string")) return alloc.dupe(u8, "[]const u8") catch unreachable;
-    return alloc.dupe(u8, ftype) catch unreachable;
-}
-
-/// A synthesized event decl + its `|zig` proc, appended as two Items.
+/// The name a proto door's first argument DECLARES. `<:` extension rides the
+/// labeled-arg split — `std/proto(Dog <: Animal)` arrives as
+/// (name: "Dog <", value: "Animal") — so the entry is the label minus '<',
+/// not the value. A plain value is a plain name.
+/// A synthesized tor decl + its `|zig` proc, appended as two Items.
 fn synthOp(
     allocator: std.mem.Allocator,
     flow: *const astz.Flow,
@@ -438,7 +121,7 @@ fn synthOp(
     return .{ ed, pd };
 }
 
-/// The std/list ops a proto container's site routes to suffixed events.
+/// The std/list ops a proto container's site routes to suffixed tors.
 fn isRoutedOp(name: []const u8) bool {
     const ops = [_][]const u8{ "push", "len", "get", "pop", "free" };
     for (ops) |op| {
@@ -496,7 +179,7 @@ fn rewriteConts(
 }
 
 /// Route the std/list ops called over THIS new site's own bindings to the
-/// synthesized suffixed events in the caller's module. Scoped to the names the
+/// synthesized suffixed tors in the caller's module. Scoped to the names the
 /// site's branch tree binds (`| list xs` → `xs`): an op over any other name is
 /// not this site's container and stays for the shape check to judge.
 fn rewriteProtoOps(
@@ -852,7 +535,7 @@ fn routeOpCall(
 
 
 /// Synthesize the container units for a proto element into the caller's module:
-/// element + handle structs (inline_code), then the six op events and their
+/// element + handle structs (inline_code), then the six op tors and their
 /// `|zig` procs (new/push/len/get/pop/free).
 fn synthesizeContainer(
     allocator: std.mem.Allocator,
@@ -937,7 +620,7 @@ fn synthesizeContainer(
         var init = std.ArrayList(u8).initCapacity(allocator, 64) catch unreachable;
         for (pf.names, 0..) |fname, i| {
             const flat = facets.flat(allocator, fname);
-            in[1 + i] = field_plain(allocator, flat, pf.types[i]);
+            in[1 + i] = field_plain(allocator, flat, fieldKoruType(pf.types[i]));
             init.appendSlice(allocator, std.fmt.allocPrint(allocator, ".{s} = {s}, ", .{ flat, facets.valueExpr(allocator, program, elem_expr, fname) }) catch unreachable) catch unreachable;
         }
         const append_body = std.fmt.allocPrint(allocator, "xs.items.append(xs.allocator, .{{ {s} }}) catch {{\n    return .{{ .oom = .{{}} }};\n}};\nreturn .{{ .ok = .{{}} }};", .{init.items}) catch unreachable;
