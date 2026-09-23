@@ -1,0 +1,11 @@
+one 10
+one 11
+neg 50
+one' 10
+one' 11
+one' 30
+took 10
+took 11
+took 30
+all gone
+neg' 50
