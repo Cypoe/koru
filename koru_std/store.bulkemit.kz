@@ -127,12 +127,11 @@ const BulkEmit = struct {
             // survivors are `free[0..frem-n]` when n < frem.
             w.print("    const __koru_bulk_frem = __koru_store_{s}.__koru_hslot_free_len;\n    var __koru_bulk_fresh = __koru_store_{s}.__koru_hslot_next;\n    const __koru_bulk_idt = __koru_store_{s}.__koru_ident;\n", .{ store, store, store }) catch unreachable;
         }
-        // `std/indexes:store` — the batch keeps the index: each row joins
-        // its key's bucket like a lone insert. `__koru_im` memoizes the
-        // probed bucket while the key repeats; `j == 0` or a cell mismatch
-        // re-probes — no typed memo variable needed. A growing `getOrPut`
-        // can rehash, so `_im` is only ever bound to a fresh `value_ptr`.
-        if (icol != null) w.print("    var __koru_im: ?*@import(\"std\").ArrayListUnmanaged(i64) = null;\n", .{}) catch unreachable;
+        // `std/indexes:store` — the batch keeps the index: `__koru_im`
+        // memoizes the probed bucket, `_mk`/`_mp` cache the just-left one so
+        // alternating keys never re-probe (`_fk` clears it on rehash), and
+        // the append is an inline capacity check + direct store.
+        if (icol) |ic0| w.print("    var __koru_im: ?*@import(\"std\").ArrayListUnmanaged(i64) = null;\n    var __koru_mp: ?*@import(\"std\").ArrayListUnmanaged(i64) = null;\n    var __koru_mk: @TypeOf(__koru_store_{s}.{s}[0]) = undefined;\n", .{ store, codegen_utils.escapeZigIdentifier(alloc, ic0) catch ic0 }) catch unreachable;
         w.print("    for (0..__koru_bulk_n) |__koru_bulk_j| {{\n", .{}) catch unreachable;
         if (handles) {
             w.print("        const __koru_bulk_slot = if (__koru_bulk_j < __koru_bulk_frem) __koru_store_{s}.__koru_hslot_free[__koru_bulk_frem - 1 - __koru_bulk_j] else blk_hm: {{ const __koru_s2 = __koru_bulk_fresh; __koru_bulk_fresh += 1; break :blk_hm __koru_s2; }};\n        if (!__koru_bulk_idt) {{\n            __koru_store_{s}.__koru_row_hslot[__koru_bulk_base + __koru_bulk_j] = __koru_bulk_slot;\n            __koru_store_{s}.__koru_hslot_row[__koru_bulk_slot] = __koru_bulk_base + __koru_bulk_j;\n        }}\n", .{ store, store, store }) catch unreachable;
@@ -155,7 +154,7 @@ const BulkEmit = struct {
         }
         if (icol) |ic| {
             const iec = codegen_utils.escapeZigIdentifier(alloc, ic) catch ic;
-            w.print("        const __koru_ik = __koru_store_{s}.{s}[__koru_bulk_base + __koru_bulk_j];\n        if (__koru_bulk_j == 0 or __koru_store_{s}.{s}[__koru_bulk_base + __koru_bulk_j - 1] != __koru_ik) {{\n            const __koru_ig = __koru_store_{s}.__index_{s}.getOrPut(koru_allocator(), __koru_ik) catch @panic(\"std/indexes: index insert ran out of memory\");\n            if (!__koru_ig.found_existing) __koru_ig.value_ptr.* = .{{}};\n            __koru_im = __koru_ig.value_ptr;\n        }}\n        __koru_im.?.append(koru_allocator(), __koru_store_{s}.__koru_handle_of(__koru_bulk_base + __koru_bulk_j)) catch @panic(\"std/indexes: index insert ran out of memory\");\n", .{ store, iec, store, iec, store, ic, store }) catch unreachable;
+            w.print("        const __koru_ik = __koru_store_{s}.{s}[__koru_bulk_base + __koru_bulk_j];\n        if (__koru_bulk_j == 0 or __koru_store_{s}.{s}[__koru_bulk_base + __koru_bulk_j - 1] != __koru_ik) {{\n            const __koru_ol = __koru_im;\n            var __koru_fk = false;\n            if (__koru_mp != null and __koru_mk == __koru_ik) {{\n                __koru_im = __koru_mp;\n            }} else {{\n                const __koru_ig = __koru_store_{s}.__index_{s}.getOrPut(koru_allocator(), __koru_ik) catch @panic(\"std/indexes: index insert ran out of memory\");\n                __koru_fk = !__koru_ig.found_existing;\n                if (__koru_fk) __koru_ig.value_ptr.* = .{{}};\n                __koru_im = __koru_ig.value_ptr;\n            }}\n            if (__koru_fk) __koru_mp = null else if (__koru_ol != null) {{ __koru_mk = __koru_store_{s}.{s}[__koru_bulk_base + __koru_bulk_j - 1]; __koru_mp = __koru_ol; }}\n        }}\n        const __koru_ib = __koru_im.?;\n        if (__koru_ib.items.len == __koru_ib.capacity) __koru_ib.ensureUnusedCapacity(koru_allocator(), 1) catch @panic(\"std/indexes: index insert ran out of memory\");\n        __koru_ib.items.ptr[__koru_ib.items.len] = __koru_store_{s}.__koru_handle_of(__koru_bulk_base + __koru_bulk_j);\n        __koru_ib.items.len += 1;\n", .{ store, iec, store, iec, store, ic, store, iec, store }) catch unreachable;
         }
         // `__koru_continue_1` is the done arm's hand-off — always
         // present at index 1 (real, or the no-op arm `match`

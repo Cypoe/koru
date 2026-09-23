@@ -126,11 +126,14 @@ around them.
   guard the same organ — a key→ordered-handle bucket — so the query visits
   ~10k members instead of sweeping 100k rows, and `world-init` keeps the
   bulk append lowering with the bucket join emitted inside the fill loop.
-  A store that has never removed a row knows slot == dense index for every
-  live handle (`__koru_ident`), so member resolve skips the mapping-table
-  load entirely. The residual gap splits honestly: ~0.5 ms of init
-  (per-row bucket appends plus handle minting the raw baseline never pays)
-  and ~0.5 ns/member of generational decode in the walk. That is the
+  The join memoizes the probed bucket, caches the just-left bucket so
+  alternating keys never re-probe, and appends members with an inline
+  capacity check rather than the method's call shape. A store that has
+  never removed a row knows slot == dense index for every live handle
+  (`__koru_ident`), so member resolve skips the mapping-table load
+  entirely. The residual gap splits honestly: ~0.3 ms of init
+  (bucket growth plus handle minting the raw baseline never pays) and
+  ~0.5 ns/member of generational decode in the walk. That is the
   measurement, not a detail to hide.
 - **`despawn`'s drain is a take-only rule.** `drain` is
   `std/store:rule(bodies)` whose whole `! row` body is `take(bodies[e])`
@@ -199,12 +202,12 @@ the multipliers below have equivalence evidence behind them everywhere except
 |---|---:|---:|---:|---:|:-:|
 | schedule_empty | 32 | 867728 | 2 | — | = |
 | add_remove | 41 | 10787 | 47 | 229x | = |
-| spawn | 283 | 3654 | 1086 | 3.4x | = |
-| spawn_batch | 273 | 3231 | 1063 | 3.0x | = |
-| despawn | 268 | 3696 | 1290 | 2.9x | = |
-| query_get | 1476 | 38728 | 2358 | 16x | = |
-| dense | 2653 | 9755 | 3348 | 2.9x | = |
-| sparse | 2272 | 2431 | 3580 | 0.7x | = |
+| spawn | 255 | 3654 | 729 | 5.0x | = |
+| spawn_batch | 251 | 3231 | 750 | 4.3x | = |
+| despawn | 271 | 3696 | 950 | 3.9x | = |
+| query_get | 1417 | 38728 | 1916 | 20x | = |
+| dense | 2544 | 9755 | 3025 | 3.2x | = |
+| sparse | 2115 | 2431 | 3173 | 0.8x | = |
 | fanout | 9202 | 25452 | 15485 | 1.6x | ✗ |
 | bevy_strength_world | 22001 | 65322 | 16741 | 3.9x | = |
 | combat_world | 3560 | 9832 | — | — | — |

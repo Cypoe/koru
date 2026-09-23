@@ -944,3 +944,16 @@ cold cost — the ~0.5ms cold/warm delta is column pages and bucket
 heap, which no flag removes. An earlier per-row `if (ident)` select in
 the drain loop measured ~110µs worse than splitting the variants —
 hoist the branch, never fold it into the row computation.
+
+The bulk bucket join is memoized twice over (2026-09-24): the probed
+bucket rides `__koru_im` while the key repeats, and a one-entry cache
+of the just-left bucket (`_mk`/`_mp`) makes alternating keys probe-free
+— the boundary walks of a two-key batch never re-enter the map. A
+fresh-key `getOrPut` can rehash, so the cache is invalidated the moment
+`!found_existing` (`_fk`); a cached `value_ptr` across a rehash is a
+dangling pointer, and "cache only when nothing moved" is the whole
+invariant. The member append is spelled inline — a capacity check plus
+a direct `items.ptr[len]` store — because the method's call shape
+measured ~65µs slower at 100k rows. Measured (003_ecs_reactive,
+ReleaseFast): world-init's index join ~480→~350µs; spawn ~1.09→0.73ms,
+despawn ~1.29→0.95ms, sparse ~3.58→~3.17ms, sinks identical.
