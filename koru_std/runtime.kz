@@ -2,7 +2,7 @@
 // Enables scoped runtime evaluation of parsed Koru code
 //
 // DESIGN:
-// - std/runtime:register(scope: "name") { events } declares a scope (norun)
+// - std/runtime:register(scope: "name") { tors } declares a scope (norun)
 // - std/runtime:collect-scopes walks AST and generates dispatch tables
 // - std/runtime:get-scope(name: "...") looks up a scope at runtime
 
@@ -217,7 +217,7 @@ const ast_reg = @import("ast");
     };
 
     // Local input-field specs for codegen (mirrors runtime InputFieldSpec).
-    // The input shape is the ARGUMENT vocabulary of an event — what the
+    // The input shape is the ARGUMENT vocabulary of an tor — what the
     // caller must name when invoking it (`handle: string<!open>`), as opposed
     // to `branches`, which describe output shapes.
     const LocalInputField = struct {
@@ -238,7 +238,7 @@ const ast_reg = @import("ast");
         input_fields: []const LocalInputField,      // Input/argument vocabulary
         symbol: []const u8,
         dispatch_name: []const u8,
-        module_name: ?[]const u8,                   // Module this event belongs to
+        module_name: ?[]const u8,                   // Module this tor belongs to
     };
 
     const ScopeDef = struct {
@@ -248,10 +248,10 @@ const ast_reg = @import("ast");
         /// The module the `register` block was WRITTEN in, as its
         /// import-derived logical name (`app.lib`), or null at program top
         /// level. A scope entry names a tor the way the author writes it in the
-        /// interpreted source — bare `expensive` — while the event registers
+        /// interpreted source — bare `expensive` — while the tor registers
         /// under `app.lib:expensive`, so the lookup needs the home to close the
         /// gap. Without it the entry resolved to nothing, the registry came up
-        /// with zero events, and the program COMPILED and took its
+        /// with zero tors, and the program COMPILED and took its
         /// `| scope-not-found` arm at run time (115_036).
         home_module: ?[]const u8,
     };
@@ -275,7 +275,7 @@ const ast_reg = @import("ast");
         name: []const u8,
         internal_name: ?[]const u8,
         cost: u64,
-        /// The home of the scope that named this event — see `ScopeDef`.
+        /// The home of the scope that named this tor — see `ScopeDef`.
         home: ?[]const u8,
     };
 
@@ -446,9 +446,9 @@ const ast_reg = @import("ast");
             return null;
         }
 
-        /// A scope entry names an event the way the interpreted source will:
-        /// bare `expensive`. An event declared inside a module registers as
-        /// `app.lib:expensive`. Try the bare name first — a top-level event
+        /// A scope entry names an tor the way the interpreted source will:
+        /// bare `expensive`. An tor declared inside a module registers as
+        /// `app.lib:expensive`. Try the bare name first — a top-level tor
         /// wins its own name — then the scope's own home. Two lookups, not a
         /// substring match, so a scope can never silently reach into a module
         /// it was not written in.
@@ -539,9 +539,9 @@ const ast_reg = @import("ast");
             return true;
         }
 
-        // An event is IMPLEMENTED when a proc_decl or a flow with impl_of
+        // An tor is IMPLEMENTED when a proc_decl or a flow with impl_of
         // matches its path. A discharge spec that names an unimplemented
-        // event must not be emitted: the pool would trust a release with no
+        // tor must not be emitted: the pool would trust a release with no
         // body and "succeed" without releasing anything (440_016 probe).
         fn eventHasImpl(prog: *const ast_reg.Program, ed: *const ast_reg.EventDecl) bool {
             return hasImplInItems(prog.items, ed);
@@ -656,7 +656,7 @@ const ast_reg = @import("ast");
                     const result = parsePhantom(alloc, phantom_str);
                     if (result.discharges) {
                         if (result.name) |name| {
-                            // Prefer phantom qualifier, fall back to event module
+                            // Prefer phantom qualifier, fall back to tor module
                             const obl_module = result.module orelse alloc.dupe(u8, default_module) catch default_module;
                             discharges.append(alloc, name) catch continue;
                             discharges_specs.append(alloc, .{
@@ -676,7 +676,7 @@ const ast_reg = @import("ast");
                         const result = parsePhantom(alloc, phantom_str);
                         if (result.creates) {
                             if (result.name) |name| {
-                                // Prefer phantom qualifier, fall back to event module
+                                // Prefer phantom qualifier, fall back to tor module
                                 const obl_module = result.module orelse alloc.dupe(u8, default_module) catch default_module;
                                 creates.append(alloc, name) catch continue;
                                 const res_type = bareResourceType(field.type);
@@ -759,7 +759,7 @@ const ast_reg = @import("ast");
         }
     }.extract;
 
-    // Helper: Extract the event's INPUT fields — its argument vocabulary. This
+    // Helper: Extract the tor's INPUT fields — its argument vocabulary. This
     // is what makes "ask a scope what it holds" answerable for a caller that
     // must name the arguments (`open(path: ...)`), and where the possession
     // phantoms (`<!open>`) live. Branches above are the OUTPUT side.
@@ -792,14 +792,14 @@ const ast_reg = @import("ast");
 
     std.debug.print("[REGISTRY] Creating dispatcher for scope '{s}'\n", .{scope_name});
 
-    // Parse events from source block with optional costs and composition
+    // Parse tors from source block with optional costs and composition
     // Syntax:
     //   event_name              - default cost 1
     //   event_name(cost)        - custom cost
     //   scope(other)            - include another scope
-    //   module:*                - include all events under module prefix
+    //   module:*                - include all tors under module prefix
     //
-    // Obligations are extracted from event signatures using phantom types:
+    // Obligations are extracted from tor signatures using phantom types:
     //   <state!> in output = creates obligation (! suffix)
     //   <!state> in input = discharges obligation (! prefix)
 
@@ -813,7 +813,7 @@ const ast_reg = @import("ast");
     defer visited.deinit();
     RegistryHelper.resolveScope(allocator, scope_defs, event_infos, scope_name, debug_enabled, &visited, &resolved_events);
 
-    // Add @retain annotation to registered events so dead strip preserves them.
+    // Add @retain annotation to registered tors so dead strip preserves them.
     // The event_infos point into the original program; replaceFlowRecursive clones
     // them, carrying the annotations into the new program.
     for (resolved_events.items) |resolved| {
@@ -843,7 +843,7 @@ const ast_reg = @import("ast");
         const dispatch_ident = Helpers.mangleIdentifier(allocator, resolved.name);
         const dispatch_name = std.fmt.allocPrint(allocator, "dispatch_{s}_{s}", .{ scope_ident, dispatch_ident }) catch dispatch_ident;
 
-        // A discharge claim (input phantom `<!state>`) on an event with NO
+        // A discharge claim (input phantom `<!state>`) on an tor with NO
         // implementation is a lie the pool would otherwise trust: the
         // synthesized no-op handler "releases" the handle without releasing
         // anything, and close reports success with the resource still held
@@ -969,7 +969,7 @@ const ast_reg = @import("ast");
             code.appendSlice(allocator, I ++ "    __koru_out.* = .{ .branch = \"control\", .fields = &.{} };\n") catch unreachable;
             code.appendSlice(allocator, I ++ "    return;\n") catch unreachable;
         } else {
-            // Generate dispatcher that handles both void and branched events
+            // Generate dispatcher that handles both void and branched tors
             code.appendSlice(allocator, I ++ "    const __koru_Input = ") catch unreachable;
             code.appendSlice(allocator, event.symbol) catch unreachable;
             code.appendSlice(allocator, ".Input;\n") catch unreachable;
@@ -1073,7 +1073,7 @@ const ast_reg = @import("ast");
     }
 
     // Scope descriptor and public dispatcher
-    // Obligations are extracted from event signatures using phantom types
+    // Obligations are extracted from tor signatures using phantom types
     code.appendSlice(allocator, I ++ "const scope_events_") catch unreachable;
     code.appendSlice(allocator, scope_ident) catch unreachable;
     code.appendSlice(allocator, " = [_]__koru_ScopeEvent{\n") catch unreachable;
@@ -1158,7 +1158,7 @@ const ast_reg = @import("ast");
         }
         code.appendSlice(allocator, "}") catch unreachable;
 
-        // Emit input_fields array — the event's argument vocabulary, carrying
+        // Emit input_fields array — the tor's argument vocabulary, carrying
         // the possession phantoms (`!open`) a caller must honor. This is what
         // lets a running program tell a model what `open(path: ...)` and
         // `append(handle: ...<!open>)` actually take.
@@ -1224,7 +1224,7 @@ const ast_reg = @import("ast");
     code.appendSlice(allocator, I ++ "    return &[_][]const u8{};\n") catch unreachable;
     code.appendSlice(allocator, I ++ "}\n\n") catch unreachable;
 
-    // Generate discharge event lookup (for auto-discharge). An event that
+    // Generate discharge tor lookup (for auto-discharge). An tor that
     // RE-ISSUES the obligation it consumes is NOT a discharger: `append`
     // (`<!open> -> <open!>`) hands back another obligation exactly like
     // `tx.exec` does, so calling it releases nothing. The compiled path has
@@ -1314,7 +1314,7 @@ const ast_reg = @import("ast");
     code.appendSlice(allocator, "_event_names;\n") catch unreachable;
     code.appendSlice(allocator, I ++ "}\n\n") catch unreachable;
 
-    // Generate input-field lookup - an event's argument vocabulary (null = not this scope's verb).
+    // Generate input-field lookup - an tor's argument vocabulary (null = not this scope's verb).
     code.appendSlice(allocator, I ++ "pub fn get_event_input_") catch unreachable;
     code.appendSlice(allocator, scope_ident) catch unreachable;
     code.appendSlice(allocator, "(__koru_event_name: []const u8) ?[]const koru_std.koru_runtime.InputFieldSpec {\n") catch unreachable;
@@ -1383,7 +1383,7 @@ const ast_reg = @import("ast");
         }
         code.appendSlice(allocator, "}") catch unreachable;
 
-        // Possession: what the event mints.
+        // Possession: what the tor mints.
         code.appendSlice(allocator, ", .creates = &[_]__koru_ManifestCreate{") catch unreachable;
         for (event.creates, 0..) |create_spec, ci| {
             if (ci > 0) code.appendSlice(allocator, ", ") catch unreachable;
@@ -1399,7 +1399,7 @@ const ast_reg = @import("ast");
         }
         code.appendSlice(allocator, "}") catch unreachable;
 
-        // Possession: what the event consumes.
+        // Possession: what the tor consumes.
         code.appendSlice(allocator, ", .discharges = &[_]__koru_ManifestDischarge{") catch unreachable;
         for (event.discharges, 0..) |discharge_spec, di| {
             if (di > 0) code.appendSlice(allocator, ", ") catch unreachable;
@@ -1490,7 +1490,7 @@ const ast_reg = @import("ast");
 }
 
 // ============================================================================
-// GET SCOPE - Runtime event to look up a scope's dispatcher
+// GET SCOPE - Runtime tor to look up a scope's dispatcher
 
 // Use interpreter's types to ensure compatibility
 // At runtime, koru_std.koru_interpreter is available via root import
@@ -1521,7 +1521,7 @@ pub const BranchSpec = struct {
     is_optional: bool = false,
 };
 
-// Input-field metadata — the argument vocabulary of an event, what a caller
+// Input-field metadata — the argument vocabulary of an tor, what a caller
 // must NAME when invoking it. Carries the raw possession phantom (`!open`
 // discharges, `open!` creates) so the vocabulary is renderable as
 // `handle: string<!open>` — the exact spelling the scope enforces.
@@ -1534,7 +1534,7 @@ pub const InputFieldSpec = struct {
 
 pub const ScopeEvent = struct {
     name: []const u8,
-    cost: u64,  // Budget cost for this event
+    cost: u64,  // Budget cost for this tor
     creates_obligations: []const []const u8,    // Legacy: just obligation names
     discharges_obligations: []const []const u8, // Legacy: just obligation names
     creates_specs: []const CreateSpec,          // Full specs with field names
@@ -1552,7 +1552,7 @@ pub const ScopeDescriptor = struct {
 pub const BranchesLookupFn = *const fn([]const u8) []const BranchSpec;
 // Event-name enumeration type — the scope's whole vocabulary, order-preserving
 pub const EventsLookupFn = *const fn() []const []const u8;
-// Input-field lookup type — an event's argument vocabulary; null = the name
+// Input-field lookup type — an tor's argument vocabulary; null = the name
 // is not this scope's verb (vocabulary membership answers first).
 pub const InputLookupFn = *const fn([]const u8) ?[]const InputFieldSpec;
 
@@ -1568,7 +1568,7 @@ pub const ScopeRuntime = struct {
     discharges_spec_fn: ?DischargesSpecFn,
     // Branch specs for shape validation
     branches_fn: ?BranchesLookupFn,
-    // Vocabulary enumeration: event names + per-event input/arg fields
+    // Vocabulary enumeration: tor names + per-event input/arg fields
     events_fn: ?EventsLookupFn,
     input_fn: ?InputLookupFn,
     // The scope's manifest record — minted at scope creation (register) from
@@ -1589,7 +1589,7 @@ pub const ScopeRuntime = struct {
 // growth) are absent by construction: the record is minted when the scope is
 // created, before any session exists — it is the compiled base.
 
-/// One event's argument — the caller's side of the surface.
+/// One tor's argument — the caller's side of the surface.
 pub const ManifestArg = struct {
     name: []const u8,
     type_name: []const u8,
@@ -1598,7 +1598,7 @@ pub const ManifestArg = struct {
     phantom: ?[]const u8 = null,
 };
 
-/// An obligation an event MINTS — carried by an output field (or
+/// An obligation an tor MINTS — carried by an output field (or
 /// `__type_ref` for a bare return). Fields mirror CreateSpec so the contract
 /// and the enforcement are the same bytes.
 pub const ManifestCreate = struct {
@@ -1608,7 +1608,7 @@ pub const ManifestCreate = struct {
     resource_type: []const u8, branch: ?[]const u8 = null, // branch carrying the create; null = bare return
 };
 
-/// An obligation an event CONSUMES — discharged by a named input arg.
+/// An obligation an tor CONSUMES — discharged by a named input arg.
 pub const ManifestDischarge = struct {
     obligation: []const u8,
     module: []const u8,
@@ -1622,7 +1622,7 @@ pub const ManifestBranchField = struct {
     is_optional: bool = false,
 };
 
-/// An output branch ("shape") an event can end in.
+/// An output branch ("shape") an tor can end in.
 pub const ManifestBranch = struct {
     name: []const u8,
     fields: []const ManifestBranchField = &.{},
@@ -1633,8 +1633,8 @@ pub const ManifestBranch = struct {
 pub const ManifestEvent = struct {
     name: []const u8,
     cost: u64 = 1,
-    /// Module that DECLARED the event (the home that closes the bare-name
-    /// gap), or null for a top-level event.
+    /// Module that DECLARED the tor (the home that closes the bare-name
+    /// gap), or null for a top-level tor.
     home: ?[]const u8 = null,
     args: []const ManifestArg = &.{},
     creates: []const ManifestCreate = &.{},
@@ -1672,7 +1672,7 @@ fn mangleScopeName(comptime name: []const u8) []const u8 {
 /// a dotted module name to.
 ///
 /// A `register` written inside a library emits its descriptor and dispatcher
-/// BESIDE the events they name, which is the only place they can be: Zig gives
+/// BESIDE the tors they name, which is the only place they can be: Zig gives
 /// a sibling struct no path to the entry struct, so the dispatcher has to sit
 /// where it can reach `koru_app.koru_lib.expensive_event`. A table built from
 /// `main_module` alone therefore found nothing — and found nothing SILENTLY.
@@ -1803,7 +1803,7 @@ fn buildScopeTable() []const ScopeRuntime {
 // must be told, accurately, what it may call — and that description must come
 // from the register declaration, not a hand-typed script that can drift. This
 // renders exactly the surface the register block enforces, as one line per
-// event with its named arguments and possession phantoms:
+// tor with its named arguments and possession phantoms:
 //
 //   open(path: string)
 //   append(handle: string<!open>, text: string)
@@ -2208,7 +2208,7 @@ pub fn scopeManifestToText(alloc: std.mem.Allocator, m: *const ScopeManifest) []
     return out.toOwnedSlice(alloc) catch "";
 }
 
-// Internal helper: Look up event branches for shape validation
+// Internal helper: Look up tor branches for shape validation
 fn lookupEventBranches(scope_name: []const u8, event_name: []const u8) []const BranchSpec {
     inline for (comptime buildScopeTable()) |scope_info| {
         if (std.mem.eql(u8, scope_name, scope_info.name)) {
@@ -2257,7 +2257,7 @@ fn lookupEventBranches(scope_name: []const u8, event_name: []const u8) []const B
 // ============================================================================
 // RUN - Parse and execute Koru source against a named scope
 
-// shape: Optional event name to validate response shape against
+// shape: Optional tor name to validate response shape against
 // @retain: run_event is referenced from generated Zig code in user pipelines (std/runtime:run invocations in continuations compile to run_event.handler(...))
 ~part eval
 ~part parsewire

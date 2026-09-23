@@ -1,4 +1,4 @@
-// Koru Standard Library: Reactive Stores — the `query` event.
+// Koru Standard Library: Reactive Stores — the `query` tor.
 // Joined via `~part query` in store.kz; merged into the store module at load.
 
 // `claims_descendants`: query MUST fire before its own `! query <row> |> body`
@@ -277,7 +277,7 @@
     //   .target — `stored` LHS → `<store>[<cursor>].<f>`, the indexed lvalue.
     //   .live   — `stored` RHS → direct column read at the cursor (the row as
     //             it is NOW, not at iteration start).
-    //   .input  — everywhere else → `<srf_prefix><f>`, per-row event input.
+    //   .input  — everywhere else → `<srf_prefix><f>`, per-row tor input.
     // `.input` names are MANGLED, which makes rule 5 (shadowing) free: the
     // row's `v` never occupies `v` in an emitted scope. `used[i]` is set by
     // the `.input` rewrite — a site threads only the fields it names, which
@@ -303,7 +303,7 @@
         else => unreachable,
     };
 
-    // The arm's own `when` guard is emitted in the LOOP, not the body event —
+    // The arm's own `when` guard is emitted in the LOOP, not the body tor —
     // but it reads the same `<srf_prefix><f>` consts the loop binds above it.
     var is_refusal: ?[]const u8 = null;
     const guard_is = if (sc.condition) |c| rewriteIsGuard(allocator, program, "query", store_name, row_bind, c, &is_refusal) else null;
@@ -351,7 +351,7 @@
 
     // --- ENCLOSING CAPTURES (690_073 / todo_tui render bridge) ---
     // The sweep loop is site-local Zig (inline where `: n` / `: body` live), but
-    // the transplanted sweepbody is a SEPARATE event. Free names from enclosing
+    // the transplanted sweepbody is a SEPARATE tor. Free names from enclosing
     // mid-pipe binds must be threaded as extra inputs — otherwise the host
     // leaks `undeclared identifier`. Watch bodies REJECT enclosing names (they
     // run at write sites elsewhere); sweep bodies CAPTURE them (they run HERE).
@@ -368,7 +368,7 @@
             if (hn.* == .invocation) {
                 if (Cap.findHostFlow(program.items, holding)) |host| {
                     _ = Cap.collectBindsOnPath(allocator, program.items, &host.body, &hn.invocation, &avail);
-                    // The host flow's own event INPUTS are in scope for its
+                    // The host flow's own tor INPUTS are in scope for its
                     // body, exactly like the mid-pipe binds collected above:
                     // `integrate { dt }` materializes `const dt` in the very
                     // frame that calls the sweeprun, one line above the call.
@@ -490,7 +490,7 @@
     // +1 for the arm-keyed row cursor. The projections hand the body
     // COPIES of the row's values; writing back needs the row itself. Query's
     // qbody takes `__koru_qrow` for exactly this reason (store.kz:1481).
-    // Always threaded, never conditional on the body writing: an unused event
+    // Always threaded, never conditional on the body writing: an unused tor
     // input lowers to a suppressed `_ = &x;`, so there is nothing to detect and
     // nothing to get wrong.
     const sbody_in = allocator.alloc(ast.Field, proj_names.len + captures.items.len + 1) catch unreachable;
@@ -563,7 +563,7 @@
     } }) catch unreachable;
 
     // `| none` — the absent case of a `! first` site — transplants its body
-    // into its own event exactly as the sweep arm does, minus the row: no
+    // into its own tor exactly as the sweep arm does, minus the row: no
     // projections, no cursor, captures only. The call lands after the loop
     // under `if (!__koru_found)` (emitted below on both loop paths).
     var nbody_name: []const u8 = "";
@@ -594,7 +594,7 @@
 
     // --- the inline sweep loop, emitted SITE-LOCAL (never a coordinator unit).
     //     Reads the SoA cell (__koru_store_<s>.len + column arrays), binds the
-    //     projected fields per row, calls the transplanted body event — plus any
+    //     projected fields per row, calls the transplanted body tor — plus any
     //     enclosing captures (names already live in this Zig scope). ---
 
     // A query arm that can reach a `take` on this store removes its own row
@@ -752,9 +752,9 @@
     // desugar-chains re-roots it into its own nested site before transforms
     // run, so the outer flow's head is still whatever preceded the `|>`.
     //
-    // A head site therefore gets the loop wrapped in a synthesized void event,
+    // A head site therefore gets the loop wrapped in a synthesized void tor,
     // and the replacement becomes a flow that invokes it — carrying `impl_of`
-    // so a subflow head keeps implementing the event it was written to
+    // so a subflow head keeps implementing the tor it was written to
     // implement.
     // BY POINTER: `|*hn|`, not `orelse` — the latter copies the payload and
     // compares the address of a local, which is never the runner's invocation.
@@ -766,7 +766,7 @@
     // too. The load-bearing question is whether the loop DEPENDS ON ENCLOSING
     // SCOPE — captures are names it reads from the frame it is spliced into
     // (690_073's `make(): n |> for(0..1) ! each _ |> sweep(items)` reads `n`),
-    // and lifting that into a separate event puts it out of scope. A loop with
+    // and lifting that into a separate tor puts it out of scope. A loop with
     // no captures reads nothing but the store globals and its own projections,
     // so it can be lifted anywhere. A top-level statement has no enclosing
     // frame to capture from, which is exactly the case that needs lifting.
@@ -780,11 +780,11 @@
 
     // The head of an IMPL flow, with captures — the nested-sweep shape: this
     // site is the whole body of another sweep's transplanted sweepbody, and
-    // its captures are that event's inputs (the outer row). The srun road
+    // its captures are that tor's inputs (the outer row). The srun road
     // lifts the loop out of their scope; the inline road has no function body
     // to splice into, because the flow item IS the site. Third road: the flow
-    // becomes a PROC implementing the same event. A proc impl binds every
-    // event input as a const, so the captures are in scope by construction.
+    // becomes a PROC implementing the same tor. A proc impl binds every
+    // tor input as a const, so the captures are in scope by construction.
     // Only LEXICAL captures constrain WHERE this loop may live. A synthesized
     // request (`[ordinal]`, `[id]`) computes its value inside the loop from
     // the cursor, so it needs nothing from the enclosing scope and must not

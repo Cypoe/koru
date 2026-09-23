@@ -3,14 +3,14 @@
 //
 // DESIGN:
 // - Parses Koru source at runtime using the same parser as the compiler
-// - Walks the AST and executes events via registered dispatchers
+// - Walks the AST and executes tors via registered dispatchers
 // - Tracks bindings in an environment; validates flows before execution
 //
 // Usage:
 //   import std/interpreter
 //   import std/runtime
 //
-//   // Register events you want callable at runtime
+//   // Register tors you want callable at runtime
 //   std/runtime:register(scope: "api") {
 //       greet
 //       process_order
@@ -21,7 +21,7 @@
 //   | result r |> handle_result(value: r.value)
 //   | parse-error e |> respond(status: 400, body: e.message)
 //   | validation-error e |> respond(status: 400, body: e.message)
-//   | dispatch-error e |> respond(status: 500, body: e.event)
+//   | dispatch-error e |> respond(status: 500, body: e.tor)
 
 ~[runtime]
 
@@ -345,7 +345,7 @@ pub const BudgetState = struct {
     limit: ?u64,
     /// Budget consumed so far
     used: u64,
-    /// Last event that was executed (for exhaustion reporting)
+    /// Last tor that was executed (for exhaustion reporting)
     last_event: []const u8,
 
     pub fn init(limit: ?u64) BudgetState {
@@ -383,25 +383,25 @@ pub const BudgetState = struct {
 pub const Handle = struct {
     /// Unique ID within this pool (persistent, incrementing)
     id: u32,
-    /// Stable handle ID (string) passed through flows - from event output field
+    /// Stable handle ID (string) passed through flows - from tor output field
     handle_id: []const u8,
     /// Module that defines this obligation (e.g., "sqlite3", "fs", "mem")
     obligation_module: []const u8,
     /// Obligation name within that module (e.g., "opened", "allocated")
     obligation_name: []const u8,
-    /// Event that discharges this obligation (e.g., "sqlite3:close")
+    /// Tor that discharges this obligation (e.g., "sqlite3:close")
     discharge_event: []const u8,
     /// Whether this handle has been discharged
     discharged: bool,
-    /// Which event created this resource (e.g., "sqlite3:open")
+    /// Which tor created this resource (e.g., "sqlite3:open")
     created_by_event: []const u8,
     /// Resource type name for inspection (e.g., "Connection")
     resource_type: []const u8,
     /// Scope that owns this handle (for isolation enforcement)
     scope_name: []const u8,
     /// Pool ids this handle depends on (borrowed providers that must outlive
-    /// it). Derived at acquire time from the creating event's input args that
-    /// name currently-held handles this event does not itself discharge.
+    /// it). Derived at acquire time from the creating tor's input args that
+    /// name currently-held handles this tor does not itself discharge.
     /// Guarded withdrawal: a handle is released only after every undischarged
     /// handle depending on it is gone (Cordis Theorem 63 ordering, mirrored).
     depends_on: [4]u32,
@@ -736,15 +736,15 @@ pub const InterpreterContext = struct {
     allocator: std.mem.Allocator,
     // Dispatcher function pointer - set by the scope
     dispatcher: ?*const fn(*const ast.Invocation, *DispatchResult) anyerror!void,
-    // Cost lookup function - returns cost for an event name
+    // Cost lookup function - returns cost for an tor name
     cost_fn: ?*const fn([]const u8) u64,
-    // Obligation lookup functions (events can create/discharge multiple obligations)
-    creates_obligations_fn: ?ObligationsArrayFn,   // event -> []obligations it creates
-    discharges_obligations_fn: ?ObligationsArrayFn, // event -> []obligations it discharges
-    discharge_event_fn: ?DischargeEventFn,         // obligation -> event that discharges it
+    // Obligation lookup functions (tors can create/discharge multiple obligations)
+    creates_obligations_fn: ?ObligationsArrayFn,   // tor -> []obligations it creates
+    discharges_obligations_fn: ?ObligationsArrayFn, // tor -> []obligations it discharges
+    discharge_event_fn: ?DischargeEventFn,         // obligation -> tor that discharges it
     // Full spec lookup functions (with field/arg names for handle registry)
-    creates_spec_fn: ?CreatesSpecFn,               // event -> []CreateSpec
-    discharges_spec_fn: ?DischargesSpecFn,         // event -> []DischargeSpec
+    creates_spec_fn: ?CreatesSpecFn,               // tor -> []CreateSpec
+    discharges_spec_fn: ?DischargesSpecFn,         // tor -> []DischargeSpec
     // Budget tracking (optional - null means unlimited)
     budget: ?*BudgetState,
     // Handle pool for resource tracking (optional)
@@ -825,22 +825,22 @@ pub const InterpreterFlowCache = struct {
 
 pub const DispatchFn = *const fn(*const ast.Invocation, *DispatchResult) anyerror!void;
 pub const CostFn = *const fn([]const u8) u64;
-// Obligation functions - events can create/discharge multiple obligations
-pub const ObligationsArrayFn = *const fn([]const u8) []const []const u8;  // event -> []obligations
-pub const DischargeEventFn = *const fn([]const u8) ?[]const u8;  // obligation -> event name
+// Obligation functions - tors can create/discharge multiple obligations
+pub const ObligationsArrayFn = *const fn([]const u8) []const []const u8;  // tor -> []obligations
+pub const DischargeEventFn = *const fn([]const u8) ?[]const u8;  // obligation -> tor name
 
-// CreateSpec describes an obligation created by an event's output field
+// CreateSpec describes an obligation created by an tor's output field
 pub const CreateSpec = struct {
     obligation_module: []const u8,  // e.g., "sqlite3"
     obligation_name: []const u8,    // e.g., "opened"
     field_name: []const u8,         // which output field holds the handle ID
     resource_type: []const u8,      // e.g., "Connection"
     // Outcome branch carrying this create, in source spelling — null = bare
-    // return. A branched event books only the spec whose branch FIRED.
+    // return. A branched tor books only the spec whose branch FIRED.
     branch: ?[]const u8 = null,
 };
 
-// DischargeSpec describes an obligation discharged by an event's input arg
+// DischargeSpec describes an obligation discharged by an tor's input arg
 pub const DischargeSpec = struct {
     obligation_module: []const u8,  // e.g., "sqlite3"
     obligation_name: []const u8,    // e.g., "opened"
@@ -848,10 +848,10 @@ pub const DischargeSpec = struct {
 };
 
 // Spec lookup functions - return full specs with field/arg names
-pub const CreatesSpecFn = *const fn([]const u8) []const CreateSpec;    // event -> []CreateSpec
-pub const DischargesSpecFn = *const fn([]const u8) []const DischargeSpec;  // event -> []DischargeSpec
+pub const CreatesSpecFn = *const fn([]const u8) []const CreateSpec;    // tor -> []CreateSpec
+pub const DischargesSpecFn = *const fn([]const u8) []const DischargeSpec;  // tor -> []DischargeSpec
 
-// Input-field lookup - an event's declared argument vocabulary. Null means
+// Input-field lookup - an tor's declared argument vocabulary. Null means
 // the name is not this scope's verb at all (vocabulary membership answers
 // first); an empty list means the verb takes no fields, so ANY named field
 // is foreign.

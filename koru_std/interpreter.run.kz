@@ -1,5 +1,5 @@
 // Koru Standard Library: the `run` part of interpreter.kz — the main
-// interpreter events (run / run-cached / eval) and the flow-execution core.
+// interpreter tors (run / run-cached / eval) and the flow-execution core.
 // Joined via `~part run` in interpreter.kz; merged into the interpreter
 // module at load.
 
@@ -12,17 +12,17 @@
     source: string,
     dispatcher: DispatchFn,
     cost_fn: ?CostFn,  // Optional cost lookup (null = default cost 1)
-    creates_obligations_fn: ?ObligationsArrayFn,   // event -> []obligations it creates
-    discharges_obligations_fn: ?ObligationsArrayFn, // event -> []obligations it discharges
-    discharge_event_fn: ?DischargeEventFn,         // obligation -> event that discharges it
-    creates_spec_fn: ?CreatesSpecFn = null,        // event -> []CreateSpec with field names
-    discharges_spec_fn: ?DischargesSpecFn = null,  // event -> []DischargeSpec with arg names
+    creates_obligations_fn: ?ObligationsArrayFn,   // tor -> []obligations it creates
+    discharges_obligations_fn: ?ObligationsArrayFn, // tor -> []obligations it discharges
+    discharge_event_fn: ?DischargeEventFn,         // obligation -> tor that discharges it
+    creates_spec_fn: ?CreatesSpecFn = null,        // tor -> []CreateSpec with field names
+    discharges_spec_fn: ?DischargesSpecFn = null,  // tor -> []DischargeSpec with arg names
     budget: ?u64,  // Optional budget limit (null = unlimited)
     handle_pool: ?*HandlePool,  // Optional external pool (for bridges)
     fail_fast: bool = true,
     scope_name: string = "default",  // Scope name for handle isolation
     auto_discharge: bool = true,  // Auto-discharge undischarged handles at end
-    defined: ?*DefinedFlows = null, input_fn: ?InputLookupFn = null,  // REPL define; event -> declared input fields
+    defined: ?*DefinedFlows = null, input_fn: ?InputLookupFn = null,  // REPL define; tor -> declared input fields
     lenient: bool = false  // 430_056: under-handling hands back `unhandled-branch` instead of refusing
 }
 | result { value: Value, used: u64, handles: u32 }
@@ -37,17 +37,17 @@
     source: string,
     dispatcher: DispatchFn,
     cost_fn: ?CostFn,  // Optional cost lookup (null = default cost 1)
-    creates_obligations_fn: ?ObligationsArrayFn,   // event -> []obligations it creates
-    discharges_obligations_fn: ?ObligationsArrayFn, // event -> []obligations it discharges
-    discharge_event_fn: ?DischargeEventFn,         // obligation -> event that discharges it
-    creates_spec_fn: ?CreatesSpecFn = null,        // event -> []CreateSpec with field names
-    discharges_spec_fn: ?DischargesSpecFn = null,  // event -> []DischargeSpec with arg names
+    creates_obligations_fn: ?ObligationsArrayFn,   // tor -> []obligations it creates
+    discharges_obligations_fn: ?ObligationsArrayFn, // tor -> []obligations it discharges
+    discharge_event_fn: ?DischargeEventFn,         // obligation -> tor that discharges it
+    creates_spec_fn: ?CreatesSpecFn = null,        // tor -> []CreateSpec with field names
+    discharges_spec_fn: ?DischargesSpecFn = null,  // tor -> []DischargeSpec with arg names
     budget: ?u64,  // Optional budget limit (null = unlimited)
     handle_pool: ?*HandlePool,  // Optional external pool (for bridges)
     fail_fast: bool = true,
     scope_name: string = "default",  // Scope name for handle isolation
     auto_discharge: bool = true,  // Auto-discharge undischarged handles at end
-    defined: ?*DefinedFlows = null, input_fn: ?InputLookupFn = null,  // REPL define; event -> declared input fields
+    defined: ?*DefinedFlows = null, input_fn: ?InputLookupFn = null,  // REPL define; tor -> declared input fields
     lenient: bool = false  // 430_056: under-handling hands back `unhandled-branch`
 }
 | result { value: Value, used: u64, handles: u32 }
@@ -66,13 +66,13 @@
     creates_obligations_fn: ?ObligationsArrayFn,
     discharges_obligations_fn: ?ObligationsArrayFn,
     discharge_event_fn: ?DischargeEventFn,
-    creates_spec_fn: ?CreatesSpecFn = null,        // event -> []CreateSpec with field names
-    discharges_spec_fn: ?DischargesSpecFn = null,  // event -> []DischargeSpec with arg names
+    creates_spec_fn: ?CreatesSpecFn = null,        // tor -> []CreateSpec with field names
+    discharges_spec_fn: ?DischargesSpecFn = null,  // tor -> []DischargeSpec with arg names
     budget: ?u64,  // Optional budget limit (null = unlimited)
     handle_pool: ?*HandlePool,  // Optional external pool (for bridges)
     scope_name: string = "default",  // Scope name for handle isolation
     auto_discharge: bool = true,  // Auto-discharge undischarged handles at end
-    defined: ?*DefinedFlows = null, input_fn: ?InputLookupFn = null,  // REPL define; event -> declared input fields
+    defined: ?*DefinedFlows = null, input_fn: ?InputLookupFn = null,  // REPL define; tor -> declared input fields
     lenient: bool = false  // 430_056: under-handling hands back `unhandled-branch`
 }
 | result { value: Value, used: u64, handles: u32 }
@@ -132,7 +132,7 @@
         },
     };
 
-    // An event name must lex as an event name — identifier segments with
+    // An tor name must lex as an tor name — identifier segments with
     // `.`/`-`/`:` between them, never spaces. The fast path already rejects
     // prose in flow_parser, but the full-parser FALLBACK above re-accepts an
     // English sentence whose first `(` makes it look like an invocation; gate
@@ -201,7 +201,7 @@
                 .handles = @intCast(active_pool.countUndischarged()),
             }};
         }
-        // Build event name for error reporting
+        // Build tor name for error reporting
         const stable_event_name = persistentEventName(flow.inv());
 
         autoDischargeHandles(
@@ -418,7 +418,7 @@ fn renderHeldHandles(pool: *HandlePool) []const u8 {
 // FLOW EXECUTION - The core interpreter loop
 // ============================================================================
 
-/// Refuse a discharge event that names a handle the pool does not hold.
+/// Refuse a discharge tor that names a handle the pool does not hold.
 ///
 /// The handle name IS the capability: a run may act on what it was handed and
 /// on nothing else. Called BEFORE the dispatcher, because the discharge proc is
@@ -454,7 +454,7 @@ fn assertHandlesHeld(
     }
 }
 
-/// The invocation's fully qualified event name, on memory that OUTLIVES the run.
+/// The invocation's fully qualified tor name, on memory that OUTLIVES the run.
 ///
 /// Every dispatch-error site used to build this into a `[256]u8` stack local and
 /// return a slice of it, so the name a caller read was a dead frame. It printed
@@ -494,7 +494,7 @@ fn autoDischargeHandles(
 }
 
 /// Release every handle still held on `pool` by invoking its recorded discharge
-/// event through `dispatcher`.
+/// tor through `dispatcher`.
 ///
 /// The ONE implementation of "release what is still held". A run ending and a
 /// session hanging up are the same act at two lifetime scales, and they were
@@ -542,7 +542,7 @@ pub fn dischargeAllHandles(
             if (handle.discharged) continue;
             if (pool.hasUndischargedDependents(handle.id)) continue;
 
-            // Find the arg_name for this discharge event by looking up DischargeSpec
+            // Find the arg_name for this discharge tor by looking up DischargeSpec
             var arg_name: ?[]const u8 = null;
             if (discharges_spec_fn) |spec_fn| {
                 const specs = spec_fn(handle.discharge_event);
@@ -585,15 +585,15 @@ pub fn dischargeAllHandles(
     }
 }
 
-/// Build an AST invocation for a discharge event
-/// Used by auto-discharge to invoke cleanup events
+/// Build an AST invocation for a discharge tor
+/// Used by auto-discharge to invoke cleanup tors
 fn buildDischargeInvocation(
     discharge_event: []const u8,
     handle_id: []const u8,
     arg_name: []const u8,
     allocator: std.mem.Allocator,
 ) ast.Invocation {
-    // Parse the event name (e.g., "sqlite3:close" -> module="sqlite3", segments=["close"])
+    // Parse the tor name (e.g., "sqlite3:close" -> module="sqlite3", segments=["close"])
     var module_qualifier: ?[]const u8 = null;
     var event_name: []const u8 = discharge_event;
 
@@ -1173,9 +1173,9 @@ fn executeFlow(
 
         return Value.fromDispatch(dispatch_result.branch, dispatch_result.fields);
     } else {
-        // Normal dispatch for other events
+        // Normal dispatch for other tors
         if (ctx.dispatcher) |dispatcher| {
-            // Get event name for budget tracking
+            // Get tor name for budget tracking
             const event_name = if (inv.path.segments.len > 0) inv.path.segments[0] else "unknown";
 
             // Check budget before dispatch - use cost_fn if available
@@ -1202,7 +1202,7 @@ fn executeFlow(
             var evaluated_inv = inv.*;
             evaluated_inv.args = evaluated_args;
 
-            // REPL-DEFINED FLOW (the runtime define). An event the session
+            // REPL-DEFINED FLOW (the runtime define). An tor the session
             // defined at runtime dispatches to its body: params bound into the
             // env, body re-parsed and executed. Every call the body makes runs
             // through THIS dispatch path — possession and obligations enforced
@@ -1248,7 +1248,7 @@ fn executeFlow(
                 }
             }
             if (!dispatched_defined) {
-                // POSSESSION IS THE AUTHORITY. A discharge event may only name a
+                // POSSESSION IS THE AUTHORITY. A discharge tor may only name a
                 // handle this pool actually holds, and the check runs BEFORE the
                 // proc, because the proc is the irreversible half — close(fd) on an
                 // fd you were never handed cannot be undone by noticing afterwards
@@ -1267,7 +1267,7 @@ fn executeFlow(
                     for (specs) |spec| {
                         // A branch-scoped spec acquires only on the outcome that carried it.
                         if (spec.branch) |sb| { if (!namesEql(sb, dispatch_result.branch)) continue; }
-                        // Find the discharge event — scope-local obligation name.
+                        // Find the discharge tor — scope-local obligation name.
                         const discharge_event = if (ctx.discharge_event_fn) |discharge_fn|
                             discharge_fn(spec.obligation_name) orelse "unknown"
                         else
@@ -1338,7 +1338,7 @@ fn executeFlow(
                     }
                 }
 
-                // Check if this event discharges obligations - prefer new spec API
+                // Check if this tor discharges obligations - prefer new spec API
                 if (ctx.discharges_spec_fn) |spec_fn| {
                     const specs = spec_fn(event_name);
                     for (specs) |spec| {
@@ -1369,7 +1369,7 @@ fn executeFlow(
     }
 
     // If no continuations, just return the dispatch result — UNLESS the
-    // event fired a NAMED branch nobody handles. A branchless void (""),
+    // tor fired a NAMED branch nobody handles. A branchless void (""),
     // like `note(text: "x")`, is plain completion; a named fire like
     // `| bad` from a two-branch pick with no arms at all is as unhandled
     // as B's under-handling (430_056): the fragment gave the outcome
@@ -1599,7 +1599,7 @@ fn executeFlow(
                 .handles = @intCast(active_pool.countUndischarged()),
             }};
         }
-        // Build event name for error reporting
+        // Build tor name for error reporting
         const stable_event_name = persistentEventName(flow.inv());
 
         autoDischargeHandles(

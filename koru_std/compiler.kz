@@ -228,7 +228,7 @@ const Allocator = std.mem.Allocator;
         .optimize = optimize,
     });
 
-    // Shape checker - validates event/branch structures
+    // Shape checker - validates tor/branch structures
     const shape_checker_module = b.createModule(.{
         .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/shape_checker.zig" },
         .target = target,
@@ -318,7 +318,7 @@ const Allocator = std.mem.Allocator;
     auto_discharge_inserter_module.addImport("phantom_parser", phantom_parser_module);
     auto_discharge_inserter_module.addImport("annotation_parser", annotation_parser_module);
 
-    // Dead strip pass - removes unreachable events/procs from AST
+    // Dead strip pass - removes unreachable tors/procs from AST
     const dead_strip_module = b.createModule(.{
         .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/dead_strip.zig" },
         .target = target,
@@ -572,7 +572,7 @@ const Allocator = std.mem.Allocator;
     ast_serializer_module.addImport("ast", ast_module);
 
     // Transform pass runner - recursive AST walker for transform handlers
-    // Also handles [expand] events via template lookup and interpolation
+    // Also handles [expand] tors via template lookup and interpolation
     const transform_pass_runner_module = b.createModule(.{
         .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/transform_pass_runner.zig" },
         .target = target,
@@ -697,7 +697,7 @@ const Allocator = std.mem.Allocator;
 // Usage:
 //   compiler:flag.declare {
 //     "name": "fusion",
-//     "description": "Enable event fusion optimization",
+//     "description": "Enable tor fusion optimization",
 //     "type": "boolean"
 //   }
 //
@@ -765,7 +765,7 @@ const Allocator = std.mem.Allocator;
 //     "description": "Install npm packages from requires.npm declarations"
 //   }
 //
-//   [comptime|command]pub event install { program, allocator, argv: []string }
+//   [comptime|command]pub tor install { program, allocator, argv: []string }
 //   proc install { /* full AST access - walk program for requires.npm, etc. */ }
 //
 // Invoke: koruc main.kz install [args...]  (or the alias: koruc main.kz i)
@@ -869,7 +869,7 @@ const Allocator = std.mem.Allocator;
 
 // Helper: Dump AST as JSON for introspection
 // Usage: Insert at key points in pipeline to inspect AST state
-// Void event - just prints and continues
+// Void tor - just prints and continues
 // Example: ast-dump(ctx: c, flag: "elaborate") |> ...
 ~[comptime]pub tor ast-dump {
     ctx: CompilerContext,
@@ -946,9 +946,9 @@ const Allocator = std.mem.Allocator;
 // frag-parser-library-peg-on-two-glyphs). Stage-A canonicalize stamps the MAIN
 // module onto every bare name with no import lookup, so a bare `match` inside a
 // grammar region arrives here as `<main>:match` and would die as an unknown
-// event. A flow annotated `[with]` opens the annotated invocation's OWN module
+// tor. A flow annotated `[with]` opens the annotated invocation's OWN module
 // for otherwise-unresolved names in its lexical subtree: a name stamped to the
-// main module that is NOT a real main-module event but IS a real event of that
+// main module that is NOT a real main-module tor but IS a real tor of that
 // module is re-qualified to it. Unresolved-only — a name that genuinely resolves
 // in the main module is never shadowed. Runs BEFORE run-pre-transforms so the
 // grammar transform (parser.kz `isVerb` keys off the qualifier being present)
@@ -1236,7 +1236,7 @@ const Allocator = std.mem.Allocator;
 }
 
 // Comptime interpreter fold: partial evaluation of [comptime] flows whose
-// head event has a pure-Koru bare-return impl. The interpreter (comptime_eval)
+// head tor has a pure-Koru bare-return impl. The interpreter (comptime_eval)
 // evaluates the head at Stage C and rewrites the flow to its runtime residue
 // with the folded value spliced in. Failure is LOUD: an unfoldable foldable
 // flow is a compile error carrying the evaluator's diagnostic, never a silent
@@ -1249,7 +1249,7 @@ const Allocator = std.mem.Allocator;
     // THE THUNK LAW: hand the walker the Stage A-generated dispatch table so
     // interpreted comptime Koru can call the natively-compiled handlers.
     // Same @hasDecl pattern as the comptime_main call — the table only
-    // exists when the user program has thunkable comptime events.
+    // exists when the user program has thunkable comptime tors.
     const backend_output = @import("backend_output_emitted.zig");
     if (@hasDecl(backend_output, "koru_comptime_thunks")) {
         folder.setThunks(&backend_output.koru_comptime_thunks);
@@ -1366,7 +1366,7 @@ const Allocator = std.mem.Allocator;
     var pending = std.ArrayList(PendingTest).initCapacity(mutable_ctx.allocator, 8) catch unreachable;
 
     // Scan AST for test invocations
-    // A test invocation is a flow that calls the "test" event from std.testing
+    // A test invocation is a flow that calls the "test" tor from std.testing
     for (mutable_ctx.ast.items, 0..) |*item, idx| {
         if (item.* == .flow) {
             const flow = &item.flow;
@@ -1424,7 +1424,7 @@ const Allocator = std.mem.Allocator;
     return mutable_ctx;
 }
 
-// Helper: Check if an invocation is calling the test event
+// Helper: Check if an invocation is calling the test tor
 const isTestInvocation = struct {
     fn call(inv: *const @import("ast").Invocation) bool {
         // Check if path is "test" from std.testing
@@ -1551,12 +1551,12 @@ const processTestFlow = struct {
             }
         }
 
-        // Build mock lookup map (event path -> branch constructor)
+        // Build mock lookup map (tor path -> branch constructor)
         var mock_map = std.StringHashMap(ast_mod.BranchConstructor).init(allocator);
         for (mocks.items) |mock_item| {
             if (mock_item == .immediate_impl) {
                 const sf = mock_item.immediate_impl;
-                // Build event path string
+                // Build tor path string
                 var path_buf = std.ArrayList(u8).initCapacity(allocator, 64) catch unreachable;
                 for (sf.event_path.segments, 0..) |seg, i| {
                     if (i > 0) path_buf.append(allocator, '.') catch {};
@@ -1574,7 +1574,7 @@ const processTestFlow = struct {
             }
         }
 
-        // If there are impure events without mocks, error. One line, names
+        // If there are impure tors without mocks, error. One line, names
         // comma-separated — kept byte-identical to the transform-pass twin in
         // koru_std/testing.kz so which producer fired is never something a
         // reader (or a pinned regression) has to know.
@@ -1633,7 +1633,7 @@ const processTestFlow = struct {
     }
 }.call;
 
-// Helper: Walk a flow checking for impure events without mocks
+// Helper: Walk a flow checking for impure tors without mocks
 const walkFlowForPurity = struct {
     fn call(
         flow_to_walk: *const @import("ast").Flow,
@@ -1663,8 +1663,8 @@ const walkFlowForPurity = struct {
             return;
         }
 
-        // Subflow/composed events: walk the implementation body instead of
-        // flagging the outer event.
+        // Subflow/composed tors: walk the implementation body instead of
+        // flagging the outer tor.
         if (emitter_helpers.findImplByPath(all_items, &flow_to_walk.inv().path)) |found_impl| {
             switch (found_impl) {
                 .immediate_impl => return,
@@ -1675,7 +1675,7 @@ const walkFlowForPurity = struct {
             }
         }
 
-        // No mock - check if event/proc is pure
+        // No mock - check if tor/proc is pure
         if (emitter_helpers.findProcDeclByPath(all_items, &flow_to_walk.inv().path)) |proc| {
             if (!proc.is_pure) {
                 // Impure proc without mock!
@@ -1837,13 +1837,13 @@ const emitFlowWithMocks = struct {
 | parsed []Item
 | failed string
 
-// Zig code emission event - the final step of compilation!
+// Zig code emission tor - the final step of compilation!
 ~pub tor emit-zig { ctx: CompilerContext } -> { ctx: CompilerContext, code: string }
 
-// Comptime evaluation pass - executes events with Program/Source parameters
+// Comptime evaluation pass - executes tors with Program/Source parameters
 ~pub tor evaluate-comptime { ctx: CompilerContext } -> CompilerContext
 
-// Structural shape checking - validates events/branches exist, base types match
+// Structural shape checking - validates tors/branches exist, base types match
 // Release gate - rejects [prototype] modules under --release (runs first in analysis)
 ~pub tor check-release-gate { ctx: CompilerContext }
 | ctx CompilerContext
@@ -1858,11 +1858,11 @@ const emitFlowWithMocks = struct {
 | ctx CompilerContext
 | failed { ctx: CompilerContext, message: string }
 
-// Phantom SIGNATURE validation - declaration-shape checks on event signatures
+// Phantom SIGNATURE validation - declaration-shape checks on tor signatures
 // (phantom syntax, obligation polarity: KORU033, unknown phantom modules: KORU040).
-// Runs BEFORE pass-auto-discharge: an illegal polarity on an event's own
+// Runs BEFORE pass-auto-discharge: an illegal polarity on an tor's own
 // declaration must be rejected before any obligation-FLOW analysis reasons
-// about programs using that event (otherwise auto-discharge halts first with
+// about programs using that tor (otherwise auto-discharge halts first with
 // a spurious KORU030 leak and the declaration error stays dormant).
 ~pub tor check-phantom-signatures { ctx: CompilerContext }
 | ctx CompilerContext
@@ -1897,13 +1897,13 @@ const emitFlowWithMocks = struct {
 | ctx CompilerContext
 | failed { ctx: CompilerContext, message: string }
 
-// Dead strip pass - removes unreachable events/flows from the AST
-// Walks from entry points, marks reachable events, prunes the rest
+// Dead strip pass - removes unreachable tors/flows from the AST
+// Walks from entry points, marks reachable tors, prunes the rest
 ~pub tor pass-dead-strip { ctx: CompilerContext } -> CompilerContext
 
 // CCP observability pass - injects universal observability taps into user AST
 // When enabled, this makes every compiled program self-observing by adding:
-// - emit_json event/proc for JSON output
+// - emit_json tor/proc for JSON output
 // - Universal tap (* -> *) that emits transition events
 ~pub tor inject-ccp { ctx: CompilerContext } -> CompilerContext
 
@@ -1941,7 +1941,7 @@ const emitFlowWithMocks = struct {
     };
 
     // Build type registry from ORIGINAL canonicalized AST (before filtering)
-    // The original_ast contains ALL events (including comptime ones) so TypeRegistry has complete metadata
+    // The original_ast contains ALL tors (including comptime ones) so TypeRegistry has complete metadata
     const type_registry_module = @import("type_registry");
     var type_registry = type_registry_module.TypeRegistry.init(ctx.allocator);
     defer type_registry.deinit();
@@ -1967,7 +1967,7 @@ const emitFlowWithMocks = struct {
 
     // JS-target spike: when --lang=js, replace the visitor's Zig output with the
     // real AST→JS emitter (src/js_emitter.zig). It walks ctx.ast and emits
-    // runnable JavaScript for the event-pump subset (events, |js proc bodies,
+    // runnable JavaScript for the event-pump subset (tors, |js proc bodies,
     // effect handlers, terminal branches, flows). Gated behind CompilerEnv.lang
     // so the default Zig path is untouched. CompilerEnv is already in scope at
     // file level in the generated backend_output_emitted.zig (re-exported pub
@@ -1976,10 +1976,10 @@ const emitFlowWithMocks = struct {
     const final_code = if (@import("std").mem.eql(u8, CompilerEnv.lang, "js")) blk: {
         const js_emitter = @import("js_emitter");
         // Fail loud: a JS-emit failure must surface, not silently fall back to
-        // Zig. A refusal is a USER error — some event has no JavaScript
+        // Zig. A refusal is a USER error — some tor has no JavaScript
         // implementation on this target (a zig-only proc, an unmodelled
         // construct) — so it becomes a clean, located diagnostic (the
-        // js_emitter already printed WHICH event) and exit 1. The old
+        // js_emitter already printed WHICH tor) and exit 1. The old
         // std.debug.panic made every refusal read as a compiler bug: SIGABRT,
         // a raw error name, and a backtrace that buried the reason. Pinned by
         // 400_191_zig_only_proc_js_build_refuses.
@@ -2028,8 +2028,8 @@ const emitFlowWithMocks = struct {
     return .{ .parsed = parse_result.source_file.items };
 }
 
-// Comptime evaluation pass - executes events with Program/Source parameters
-// This runs BEFORE emission so comptime events can transform the AST
+// Comptime evaluation pass - executes tors with Program/Source parameters
+// This runs BEFORE emission so comptime tors can transform the AST
 ~proc evaluate-comptime|zig {
     const isProgramType = struct {
         fn check(raw_type: []const u8) bool {
@@ -2051,15 +2051,15 @@ const emitFlowWithMocks = struct {
         }
     }.check;
 
-    // Phase 1: Build map of comptime-only events
-    // (Events that have Program or Source parameters)
+    // Phase 1: Build map of comptime-only tors
+    // (Tors that have Program or Source parameters)
     var comptime_events: [64][]const u8 = undefined;
     var comptime_count: usize = 0;
 
     for (ctx.ast.items) |item| {
         switch (item) {
             .event_decl => |event_decl| {
-                // Check if this event has comptime-only parameters
+                // Check if this tor has comptime-only parameters
                 var is_comptime = false;
                 for (event_decl.input.fields) |field| {
                     if (field.is_source or isProgramType(field.type)) {
@@ -2069,7 +2069,7 @@ const emitFlowWithMocks = struct {
                 }
 
                 if (is_comptime and comptime_count < 64) {
-                    // Build event name from path segments using heap allocation
+                    // Build tor name from path segments using heap allocation
                     const path_str = joinPathAlloc(ctx.allocator, event_decl.path.segments);
                     const event_name = if (event_decl.path.module_qualifier) |mq|
                         std.fmt.allocPrint(ctx.allocator, "{s}:{s}", .{mq, path_str}) catch path_str
@@ -2093,7 +2093,7 @@ const emitFlowWithMocks = struct {
                         }
 
                         if (is_comptime and comptime_count < 64) {
-                            // For module events, include the module name: "std.build:requires"
+                            // For module tors, include the module name: "std.build:requires"
                             const path_str = joinPathAlloc(ctx.allocator, event_decl.path.segments);
                             const event_name = if (module.logical_name.len > 0)
                                 std.fmt.allocPrint(ctx.allocator, "{s}:{s}", .{module.logical_name, path_str}) catch path_str
@@ -2109,7 +2109,7 @@ const emitFlowWithMocks = struct {
         }
     }
 
-    // Phase 2: Walk flows and find comptime event invocations
+    // Phase 2: Walk flows and find comptime tor invocations
     // std.debug.print("  Phase 2: Scanning flows for comptime invocations...\n", .{});
     for (ctx.ast.items) |item| {
         if (item == .flow) {
@@ -2122,10 +2122,10 @@ const emitFlowWithMocks = struct {
                 path_str;
             // std.debug.print("    Flow invokes: {s}\n", .{inv_path});
 
-            // Check if this invocation is to a comptime event
+            // Check if this invocation is to a comptime tor
             for (0..comptime_count) |i| {
                 if (std.mem.eql(u8, inv_path, comptime_events[i])) {
-                    // Found a comptime event invocation!
+                    // Found a comptime tor invocation!
                     // std.debug.print("  ✓ Found comptime invocation: {s}\n", .{inv_path});
 
                     // TODO: Call the comptime handler!
@@ -2144,7 +2144,7 @@ const emitFlowWithMocks = struct {
         }
     }
 
-    // std.debug.print("  Detected {} comptime events, {} invocations\n", .{comptime_count, invocations_found});
+    // std.debug.print("  Detected {} comptime tors, {} invocations\n", .{comptime_count, invocations_found});
 
     const backend_output = @import("backend_output_emitted.zig");
 
@@ -2160,7 +2160,7 @@ const emitFlowWithMocks = struct {
     }
 
     // Phase 2.4: Execute transform handlers FIRST (if they exist)
-    // NOTE: Transforms run BEFORE comptime events so that comptime events
+    // NOTE: Transforms run BEFORE comptime tors so that comptime tors
     // (like tap injection) can see the fully-transformed AST
     const transform_updated_ctx = if (@hasDecl(backend_output, "run_pass")) blk: {
         log.debug("[PHASE 2.4] Calling run_pass for transforms\\n", .{});
@@ -2182,7 +2182,7 @@ const emitFlowWithMocks = struct {
             }
             // Transforms either complete or fail loudly. Continuing with the
             // untransformed AST used to mask the failure behind a cascade of
-            // downstream KORU021/022 errors about events the transform should
+            // downstream KORU021/022 errors about tors the transform should
             // have rewritten away.
             log.err("FATAL: transform pass failed ({s}). The pipeline cannot continue with a partially-transformed AST.\n", .{@errorName(err)});
             @panic("transform pass failed — see error above");
@@ -2217,7 +2217,7 @@ const emitFlowWithMocks = struct {
 
     // Phase 2.5: Execute comptime flows AFTER transforms (if they exist)
     // comptime_main() calls all comptime_flowN() functions at Zig RUNTIME (when ./backend runs)
-    // Now sees the transformed AST, enabling comptime events to do post-transform work
+    // Now sees the transformed AST, enabling comptime tors to do post-transform work
     // Returns *const Program — comptime flows may modify the AST
     const comptime_updated_ctx = if (@hasDecl(backend_output, "comptime_main")) blk: {
         log.debug("[PHASE 2.5] Executing comptime_main() - running comptime flows\n", .{});
@@ -2229,13 +2229,13 @@ const emitFlowWithMocks = struct {
     } else transform_updated_ctx;
 
     // Phase 2.6: Rebuild comptime_events list from transformed AST
-    // Transforms may have added/removed events, so we need to rescan
+    // Transforms may have added/removed tors, so we need to rescan
     log.debug("[PHASE 2.6] Rescanning transformed AST ({} items)\n", .{comptime_updated_ctx.ast.items.len});
     comptime_count = 0;  // Reset counter
     for (comptime_updated_ctx.ast.items) |item| {
         switch (item) {
             .event_decl => |event_decl| {
-                // Check if this event has comptime-only parameters
+                // Check if this tor has comptime-only parameters
                 var is_comptime = false;
                 for (event_decl.input.fields) |field| {
                     if (field.is_source or isProgramType(field.type)) {
@@ -2345,7 +2345,7 @@ const emitFlowWithMocks = struct {
         }
 
         // NOTE: Don't filter modules based on [comptime] annotation here.
-        // Modules with [comptime] may contain [runtime] events that need to be emitted.
+        // Modules with [comptime] may contain [runtime] tors that need to be emitted.
         // The visitor_emitter handles this correctly by checking if the module contains
         // any emittable items before filtering the module itself.
 
@@ -2414,7 +2414,7 @@ const emitFlowWithMocks = struct {
         }
 
         // NOTE: Don't filter modules based on [comptime] annotation here.
-        // Modules with [comptime] may contain [runtime] events that need to be emitted.
+        // Modules with [comptime] may contain [runtime] tors that need to be emitted.
         // The visitor_emitter handles this correctly by checking if the module contains
         // any emittable items before filtering the module itself.
 
@@ -2436,7 +2436,7 @@ const emitFlowWithMocks = struct {
     };
 
     // Update context with transformed AST
-    // IMPORTANT: Keep original_ast unchanged - it preserves comptime event metadata!
+    // IMPORTANT: Keep original_ast unchanged - it preserves comptime tor metadata!
     var updated_ctx = ctx;
     updated_ctx.ast = transformed_ast;  // Filtered AST for emission
     // updated_ctx.original_ast stays the same - unfiltered AST for TypeRegistry
@@ -2511,7 +2511,7 @@ const emitFlowWithMocks = struct {
     // has no `.failed` arm of its own — `resolve-with-scopes` reports the KORU140
     // `[with]` pick-wall into ctx.errors, and analysis is the first boundary that
     // can halt cleanly). Print and fail BEFORE structural checking, so the real
-    // diagnostic wins instead of a downstream "unknown event" for the name
+    // diagnostic wins instead of a downstream "unknown tor" for the name
     // elaboration deliberately left unresolved.
     if (mutable_ctx.errors.items.len > 0) {
         for (mutable_ctx.errors.items) |e| {
@@ -2699,7 +2699,7 @@ const emitFlowWithMocks = struct {
     // context-create. Minting one here as
     // `init(alloc, "phantom_signature_check", "")` put the PASS NAME where the
     // filename goes and left no source to render a snippet from — an illegal
-    // polarity on an event's own signature (KORU033/KORU040) could only ever
+    // polarity on an tor's own signature (KORU033/KORU040) could only ever
     // point at `phantom_signature_check:<line>`.
     const reporter = mutable_ctx.reporter orelse {
         @panic("check-phantom-signatures: the compilation carries no diagnostic reporter");
@@ -3011,7 +3011,7 @@ const emitFlowWithMocks = struct {
     };
     defer checker.deinit();
 
-    // [prototype]: relax the "handled a branch the event doesn't produce" wall
+    // [prototype]: relax the "handled a branch the tor doesn't produce" wall
     // (KORU030) for terminal continuations — the doodle where handler arms lead
     // the declaration (see PhantomSemanticChecker.prototype_mode, 400_165).
     // Consistent with check-structure / check-flow.
@@ -3066,8 +3066,8 @@ const emitFlowWithMocks = struct {
 }
 
 // Dead Strip Pass
-// Removes unreachable events and flows from the AST
-// Walks from entry points (top-level flows), marks reachable events, prunes the rest
+// Removes unreachable tors and flows from the AST
+// Walks from entry points (top-level flows), marks reachable tors, prunes the rest
 ~proc pass-dead-strip|zig {
     var mutable_ctx = ctx;
     mutable_ctx.current_pass = "dead_strip";

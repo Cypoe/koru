@@ -33,7 +33,7 @@ var previous_event_name: []const u8 = "";
 var profiler_finished: bool = false;  // Prevents write-event from creating new file after footer
 var program_start_ns: i128 = 0;       // Envelope open (koru:start anchor); footer synthesizes the span from it
 
-// Event: Write Chrome Tracing header
+// Tor: Write Chrome Tracing header
 ~tor write-header {}
 
 ~proc write-header|zig {
@@ -53,7 +53,7 @@ var program_start_ns: i128 = 0;       // Envelope open (koru:start anchor); foot
     }
 
     // Initialize profiler state for new trace (only if not already started)
-    // Don't reset if previous_timestamp_ns is set - that means we already buffered an event
+    // Don't reset if previous_timestamp_ns is set - that means we already buffered an tor
     // (the universal tap wraps koru:start -> done BEFORE write-header fires)
     if (previous_timestamp_ns == 0) {
         first_event = true;
@@ -62,7 +62,7 @@ var program_start_ns: i128 = 0;       // Envelope open (koru:start anchor); foot
 
     // Open the program envelope. If a transition was already buffered (the
     // auto-create race above), the envelope opens at that earlier timestamp so
-    // the span always contains its first event.
+    // the span always contains its first tor.
     program_start_ns = std.time.nanoTimestamp();
     if (previous_timestamp_ns != 0 and previous_timestamp_ns < program_start_ns) {
         program_start_ns = previous_timestamp_ns;
@@ -97,7 +97,7 @@ var program_start_ns: i128 = 0;       // Envelope open (koru:start anchor); foot
     return;
 }
 
-// Event: Write a profile event
+// Tor: Write a profile tor
 ~tor write-event {
     source: string,
     timestamp_ns: i128,
@@ -126,14 +126,14 @@ var program_start_ns: i128 = 0;       // Envelope open (koru:start anchor); foot
     }
     const file = profile_file orelse return;
 
-    // First event: just buffer it, don't write yet
+    // First tor: just buffer it, don't write yet
     if (previous_timestamp_ns == 0) {
         previous_timestamp_ns = timestamp_ns;
         previous_event_name = source;
         return;
     }
 
-    // We have a previous event buffered - write it now with duration to current event
+    // We have a previous tor buffered - write it now with duration to current tor
     const duration_ns = timestamp_ns - previous_timestamp_ns;
     const start_us = @divFloor(previous_timestamp_ns, 1000);
     const duration_us = @divFloor(duration_ns, 1000);
@@ -142,7 +142,7 @@ var program_start_ns: i128 = 0;       // Envelope open (koru:start anchor); foot
     var buffer: [8192]u8 = undefined;
     var pos: usize = 0;
 
-    // Add comma separator if not first event
+    // Add comma separator if not first tor
     if (!first_event) {
         buffer[pos] = ',';
         pos += 1;
@@ -151,12 +151,12 @@ var program_start_ns: i128 = 0;       // Envelope open (koru:start anchor); foot
     }
     first_event = false;
 
-    // Build JSON: Complete event (ph: "X") with duration
-    // Format: {"name":"event","cat":"transition","ph":"X","ts":start,"dur":duration,"pid":0,"tid":0}
-    // - ph: "X" = complete event (shows as horizontal bar with duration)
-    // - ts: when the PREVIOUS event fired
-    // - dur: how long from previous event until THIS event
-    // - name: the PREVIOUS event name
+    // Build JSON: Complete tor (ph: "X") with duration
+    // Format: {"name":"tor","cat":"transition","ph":"X","ts":start,"dur":duration,"pid":0,"tid":0}
+    // - ph: "X" = complete tor (shows as horizontal bar with duration)
+    // - ts: when the PREVIOUS tor fired
+    // - dur: how long from previous tor until THIS tor
+    // - name: the PREVIOUS tor name
     // This shows "time spent in previous state" and makes all bars visible!
     const json = std.fmt.bufPrint(buffer[pos..],
         "{{\"name\":\"{s}\",\"cat\":\"transition\",\"ph\":\"X\",\"ts\":{d},\"dur\":{d},\"pid\":0,\"tid\":0}}",
@@ -168,25 +168,25 @@ var program_start_ns: i128 = 0;       // Envelope open (koru:start anchor); foot
         std.debug.print("ERROR: Failed to write profile event\n", .{});
     };
 
-    // Buffer current event for next write
+    // Buffer current tor for next write
     previous_timestamp_ns = timestamp_ns;
     previous_event_name = source;
 
     return;
 }
 
-// Event: Write Chrome Tracing footer and close file
+// Tor: Write Chrome Tracing footer and close file
 ~tor write-footer {}
 
 ~proc write-footer|zig {
     const file = profile_file orelse return;
 
-    // Write the final buffered event (if any) with small duration
+    // Write the final buffered tor (if any) with small duration
     if (previous_timestamp_ns != 0) {
         var buffer: [8192]u8 = undefined;
         var pos: usize = 0;
 
-        // Add comma separator if not first event
+        // Add comma separator if not first tor
         if (!first_event) {
             buffer[pos] = ',';
             pos += 1;
@@ -194,7 +194,7 @@ var program_start_ns: i128 = 0;       // Envelope open (koru:start anchor); foot
             pos += 1;
         }
 
-        // Emit final event with 1 microsecond duration (tiny but visible)
+        // Emit final tor with 1 microsecond duration (tiny but visible)
         const start_us = @divFloor(previous_timestamp_ns, 1000);
         const json = std.fmt.bufPrint(buffer[pos..],
             "{{\"name\":\"{s}\",\"cat\":\"transition\",\"ph\":\"X\",\"ts\":{d},\"dur\":1,\"pid\":0,\"tid\":0}}",
@@ -244,7 +244,7 @@ var program_start_ns: i128 = 0;       // Envelope open (koru:start anchor); foot
         }
     }
 
-    // Write closing bracket for events array and closing brace for JSON
+    // Write closing bracket for tors array and closing brace for JSON
     const footer = "\n]}\n";
     file.writeAll(footer) catch {
         std.debug.print("ERROR: Failed to write profile footer\n", .{});
@@ -277,7 +277,7 @@ var program_start_ns: i128 = 0;       // Envelope open (koru:start anchor); foot
 ~[opaque]tap(koru:end -> *)
 | done |> write-footer()
 
-// TAP: Every transition - write event
+// TAP: Every transition - write tor
 // NOTE: Universal tap runs LAST so it wraps all other tap-inserted calls (like write-footer)
 ~[opaque]tap(* -> *)
 | Profile p |> write-event(p.source, p.timestamp_ns)
