@@ -957,3 +957,19 @@ a direct `items.ptr[len]` store — because the method's call shape
 measured ~65µs slower at 100k rows. Measured (003_ecs_reactive,
 ReleaseFast): world-init's index join ~480→~350µs; spawn ~1.09→0.73ms,
 despawn ~1.29→0.95ms, sparse ~3.58→~3.17ms, sinks identical.
+
+`__koru_gen0` records that no generation bump has ever run (2026-09-24):
+birth-true, cleared at every gen-write site — take's tail, the sweep
+verb's bump, drain, and clear's `0..hslot_next` pass, where
+`gen0 = gen0 and next == 0` keeps it across a clear of an already-empty
+store. No bump ever ran means no removal ever ran, so slot == row for
+every minted slot and every outstanding handle carries gen 0 — the
+invariant stands on removal-freedom alone, independent of `ident`
+(a stray `materialise` on an empty store can clear `ident` with `gen0`
+still sound). Under it `row_of`/`resolve` shed the `hslot_gen` load and
+`handle_of` sheds the compose load: resolve is brand check + range
+check + shift. Measured (003_ecs_reactive, ReleaseFast): sparse
+~3.17→2.78ms, spawn ~729→700µs, sinks identical. A counting/presize
+bucket build measured WORSE than the fused memo'd join (~280 vs ~205µs
+micro) — the realloc copies amortise below the cost of a second pass;
+the join stays fused.

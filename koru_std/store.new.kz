@@ -4475,7 +4475,7 @@
             else
                 "+%= 1";
             const tombstone: []const u8 = if (host_is_js) "-1" else "@import(\"std\").math.maxInt(usize)";
-            const tail = std.fmt.allocPrint(allocator, "}}\n__koru_store_{s}.__koru_hslot_row[__koru_gone_slot] = {s};\n__koru_store_{s}.len = __koru_last;\n__koru_store_{s}.__koru_hslot_gen[__koru_gone_slot] {s};\n__koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_gone_slot;\n__koru_store_{s}.__koru_hslot_free_len += 1;\n", .{ store_name, tombstone, store_name, store_name, genbump, store_name, store_name, store_name }) catch unreachable;
+            const tail = std.fmt.allocPrint(allocator, "}}\n__koru_store_{s}.__koru_hslot_row[__koru_gone_slot] = {s};\n__koru_store_{s}.len = __koru_last;\n__koru_store_{s}.__koru_hslot_gen[__koru_gone_slot] {s};\n__koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_gone_slot;\n__koru_store_{s}.__koru_hslot_free_len += 1;\n{s}", .{ store_name, tombstone, store_name, store_name, genbump, store_name, store_name, store_name, if (host_is_js) "" else std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_gen0 = false;\n", .{store_name}) catch unreachable }) catch unreachable;
             tb.appendSlice(allocator, tail) catch unreachable;
             // `std/indexes:store` — take emits NOTHING here. The taken row's
             // handle stays in its key's bucket as a dead member that every
@@ -4791,15 +4791,15 @@
                             \\
                         , .{ store_name, store_name }) catch unreachable;
                     cb.appendSlice(allocator, genloop) catch unreachable;
-                    // The reset empties every handle structure, so the
-                    // identity invariant holds again — `ident` re-arms and the
-                    // refill skips the mapping tables until the next take.
+                    // gen0 survives a bump-free (empty-store) clear; any bump
+                    // retires it — the guard reads pre-reset `hslot_next`. The
+                    // reset re-arms `ident`: refills skip the mapping tables.
                     const reset = std.fmt.allocPrint(allocator,
-                        \\__koru_store_{s}.len = 0;
+                        \\{s}__koru_store_{s}.len = 0;
                         \\__koru_store_{s}.__koru_hslot_free_len = 0;
                         \\__koru_store_{s}.__koru_hslot_next = 0;
                         \\{s}
-                    , .{ store_name, store_name, store_name, if (host_is_js) "" else std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_ident = true;\n", .{store_name}) catch unreachable }) catch unreachable;
+                    , .{ if (host_is_js) "" else std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_gen0 = __koru_store_{s}.__koru_gen0 and __koru_store_{s}.__koru_hslot_next == 0;\n", .{ store_name, store_name, store_name }) catch unreachable, store_name, store_name, store_name, if (host_is_js) "" else std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_ident = true;\n", .{store_name}) catch unreachable }) catch unreachable;
                     cb.appendSlice(allocator, reset) catch unreachable;
                 } else {
                     const reset = std.fmt.allocPrint(allocator, "__koru_store_{s}.len = 0;\n", .{store_name}) catch unreachable;

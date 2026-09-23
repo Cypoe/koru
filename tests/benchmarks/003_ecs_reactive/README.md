@@ -130,11 +130,12 @@ around them.
   alternating keys never re-probe, and appends members with an inline
   capacity check rather than the method's call shape. A store that has
   never removed a row knows slot == dense index for every live handle
-  (`__koru_ident`), so member resolve skips the mapping-table load
-  entirely. The residual gap splits honestly: ~0.3 ms of init
-  (bucket growth plus handle minting the raw baseline never pays) and
-  ~0.5 ns/member of generational decode in the walk. That is the
-  measurement, not a detail to hide.
+  (`__koru_ident`), and a store that has never bumped a generation knows
+  every gen is zero (`__koru_gen0`), so member resolve is a brand check,
+  a range check, and a shift — zero table loads. The residual gap is
+  ~0.7 ms of init (bucket growth plus handle minting the raw baseline
+  never pays) plus the bucket indirection the `active` list does not
+  have. That is the measurement, not a detail to hide.
 - **`despawn`'s drain is a take-only rule.** `drain` is
   `std/store:rule(bodies)` whose whole `! row` body is `take(bodies[e])`
   with the payload discarded, so its invoked sweep lowers to take's
@@ -201,17 +202,17 @@ the multipliers below have equivalence evidence behind them everywhere except
 | scenario | zig_striped | bevy_ecs | koru_store | x bevy | = |
 |---|---:|---:|---:|---:|:-:|
 | schedule_empty | 32 | 867728 | 2 | — | = |
-| add_remove | 41 | 10787 | 47 | 229x | = |
-| spawn | 255 | 3654 | 729 | 5.0x | = |
-| spawn_batch | 251 | 3231 | 750 | 4.3x | = |
-| despawn | 271 | 3696 | 950 | 3.9x | = |
-| query_get | 1417 | 38728 | 1916 | 20x | = |
-| dense | 2544 | 9755 | 3025 | 3.2x | = |
-| sparse | 2115 | 2431 | 3173 | 0.8x | = |
-| fanout | 9202 | 25452 | 15485 | 1.6x | ✗ |
-| bevy_strength_world | 22001 | 65322 | 16741 | 3.9x | = |
+| add_remove | 35 | 10787 | 38 | 283.9x | = |
+| spawn | 242 | 3654 | 700 | 5.2x | = |
+| spawn_batch | 251 | 3231 | 728 | 4.4x | = |
+| despawn | 258 | 3696 | 962 | 3.8x | = |
+| query_get | 1417 | 38728 | 1884 | 20.6x | = |
+| dense | 2543 | 9755 | 2990 | 3.3x | = |
+| sparse | 2097 | 2431 | 2780 | 0.9x | = |
+| fanout | 9202 | 25452 | 14750 | 1.7x | ✗ |
+| bevy_strength_world | 22001 | 65322 | 16466 | 4.0x | = |
 | combat_world | 3560 | 9832 | — | — | — |
-| boids | 231938 | 314904 | 104445 | 3.0x | = |
+| boids | 231938 | 314904 | 102011 | 3.1x | = |
 
 Three of these are worth naming.
 

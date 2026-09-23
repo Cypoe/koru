@@ -590,11 +590,11 @@ if (step_arm) |*sa| {
             \\                __koru_store_{s}.__koru_row_hslot[__koru_i] = __koru_mv_slot;
             \\            }}
             \\            __koru_store_{s}.len = __koru_last;
-            \\            __koru_store_{s}.__koru_hslot_gen[__koru_gone_slot] +%= 1;
+            \\            __koru_store_{s}.__koru_hslot_gen[__koru_gone_slot] +%= 1; __koru_store_{s}.__koru_gen0 = false;
             \\            __koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_gone_slot;
             \\            __koru_store_{s}.__koru_hslot_free_len += 1;
             \\
-        , .{ store_name, store_name, col_name, store_name, col_name, store_name, store_name, store_name, store_name, store_name, store_name, store_name, store_name }) catch unreachable) catch unreachable;
+        , .{ store_name, store_name, col_name, store_name, col_name, store_name, store_name, store_name, store_name, store_name, store_name, store_name, store_name, store_name }) catch unreachable) catch unreachable;
     }
     // The drain: the `! discharge` arm when the column declared one,
     // the discovered unattended discharger otherwise.
