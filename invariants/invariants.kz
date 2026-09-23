@@ -61,6 +61,16 @@
     "rule": "Does this diff weaken the invariant manifest's ability to catch what it declares? Flag when it removes or renames a tag so a row stops firing, softens a rule's verdict shape (rules are questions a judge answers yes/no about the diff), drops a check: command without a stronger replacement, or adds a git-gate-local row whose declared file the listing cannot place. Narrowing an over-broad rule with the reason stated in the rule text, adding rows, or strengthening a check is NOT a violation. Answer yes ONLY if the diff makes the manifest weaker at catching what it declares."
 }
 
+// The rename residue rule: `event` → `tor` reached code but not prose
+// (swept 2026-09-21 — ~446 comment lines across koru_std + by-example).
+// Diff-scoped so the untouched backlog (internal vocabulary, diagnostics,
+// dated docs) never fires it; only NEW prose can regress.
+~std/invariants:inferred {
+    "name": "the-construct-is-a-tor",
+    "tags": ["git-gate"],
+    "rule": "Does this diff add prose — a comment, a doc, or a string a user reads — that names the language's declared unit 'event' or 'events'? The unit is a tor: `pub tor` declares it, `|` arms end it, `!` effect arms hang off it, `|>` continues it. Flag added text like 'the event's branches', 'pub event foo', 'events are tappable'. Do NOT flag: internal identifiers and generated names (EventDecl, event_decl, *_event, created_by_event, event-denied, or a test's own names like void-event); domain events — DOM, terminal, socket, input, key/mouse events, an event loop, emitted log records such as 'transition events'; verbatim quotes of older behavior; and meta-discussion of this rename itself. Answer yes ONLY if the added prose would teach a reader that the construct's name is 'event'."
+}
+
 ~tor main {}
 
 ~proc main|zig {
