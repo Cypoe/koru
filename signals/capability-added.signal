@@ -1,0 +1,12 @@
+name: capability-added
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: the commit gives the surface a capability that did not exist —
+  a new declared parameter type, a new opt-in contract, a join that
+  refused loudly before and now works by law. Distinct from defect-closed
+  (something broken became right): here nothing was wrong, the surface
+  was simply smaller. The commit message should name the capability and
+  its first customer so the next session inherits the seam, not just
+  the diff.
