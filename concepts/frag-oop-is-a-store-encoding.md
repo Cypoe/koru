@@ -73,7 +73,7 @@ carries the substrate: union stores fold shared columns across
 proto-typed members (690_274), the kind tag is synthesized (690_275),
 methods are flows over row borrows, `new` is `insert`. The entire
 residual is ONE feature in `std/proto`: **field-set extension**
-(`std/proto(Dog < Animal)` = field-set union under the existing
+(`std/proto(Dog <: Animal)` = field-set union under the existing
 name-sameness and cycle rules) — "compose the same concepts in data"
 wearing its final name. Earned by maintenance (shared set declared once)
 and protos outside union stores (`std/list:new(Dog)` needs the fields on
@@ -81,14 +81,18 @@ the entry). Substitutability is emergent: a Dog is an Animal when a
 query over shared field names sees it; no `instanceof` — "in the union"
 is the kind tag, "has the columns" is the query.
 
-**Spelling:** transform args arrive as AST, not values — the operator
-lives only inside proto's arg. `:` is rejected (it IS labeled-arg
-syntax — `capacity: 64` — and would read as parameter passing); `->`
-rejected (already means "produces"); `is` costs new grammar. `<` parses
-today as a comparison AST and is semantically correct — `<:` is the
-subtype symbol — with `+` giving multiple extension free
-(`Dog < Animal + Pet` = field-set union, diamond resolved by
-name-sameness or refused). Leaning `<`, unrated by Lars at write time.
+**Spelling:** transform args are OPAQUE TEXT — split on top-level
+commas, brace-counted, never parsed as expressions (corrected mid-walk:
+an earlier draft ranked candidates on parse-cost; every spelling costs
+nothing). The choice is pure reader-semantics. Finalists: `<:` (the
+subtype symbol verbatim, unambiguous) or `is` (word-form, plainest).
+`<` misreads as comparison; `:` collides with the labeled-arg convention
+(`capacity: 64` is transform-split the same way — a reader sees a
+parameter passed); `->` reads "produces." Multiple extension is the same
+text algebra — `Dog <: Animal + Pet`, diamond resolved by name-sameness
+or refused; `,` is the only constraint (arg separator). Multiple
+inheritance is healthy here by construction: field-set union, no MRO,
+no dominance ordering — concepts compose or the declaration refuses.
 
 **Open:** the final spelling ratification and whether even extension
 clears the bar — decided by the first real program that can't be honest
