@@ -83,8 +83,8 @@ and `std/list:new` already drink from that registry (`store.leaf.kz`,
 the same consumer act:
 
 ```koru
-std/proto(Input) { key: Key, ts: f64 }
-std/channel(inbox: Input, 256)      // element type = registry entry
+std/proto(Reading) { id: u64, ts: f64 }
+std/channel(inbox: Reading, 256)    // element type = registry entry
 ```
 
 Three things fall out:
@@ -214,7 +214,7 @@ zero-value-plus-`ok` idiom; `full`/`none` are first-class where Go needs
 ## Open questions for the gate
 
 1. ~~Type spelling~~ — **answered by proto**: the element type is a registry
-   name (`std/channel(inbox: Input, 256)`). Remaining sliver: the capacity
+   name (`std/channel(inbox: Reading, 256)`). Remaining sliver: the capacity
    spelling (`(name: T, n)` vs an arg of its own) and whether capacity-0
    needs a spelling at all or is just `n` absent.
 2. `! recv` competing vs `! each` broadcast — one arm kind or two?

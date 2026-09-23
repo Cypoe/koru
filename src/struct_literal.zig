@@ -37,6 +37,7 @@ pub const ParseError = error{
     UnterminatedStruct,
     BareEntryNotPunnable,
     RedundantExplicitLabel,
+    MissingComma,
 };
 
 /// Options for `parseFields` / `parse`. Defaults enforce the pun law.
@@ -120,6 +121,51 @@ fn topLevelColon(field: []const u8) ?usize {
     return null;
 }
 
+/// A top-level newline inside a field's VALUE followed by `ident :` is a
+/// second field fused to this one for want of a comma — `a: T` then `b: U`
+/// written on separate lines with no comma between splits as ONE field whose
+/// value is `T\nb: U`, which downstream surfaces report as a bogus type.
+/// Returns the fused line's text (`b: U`) when found, null otherwise.
+///
+/// Newline-anchored on purpose: `ident:` at depth 0 cannot appear in a value
+/// expression (Koru has no labels or ternaries in expression position), and
+/// the anchor keeps a legitimate `a +\n b` line-continuation out of scope —
+/// same-line `a: T b: U` fusions stay the old downstream error.
+fn fusedFieldLine(value: []const u8) ?[]const u8 {
+    var depth: usize = 0;
+    var i: usize = 0;
+    while (i < value.len) : (i += 1) {
+        switch (value[i]) {
+            '"' => {
+                i += 1;
+                while (i < value.len and value[i] != '"') : (i += 1) {
+                    if (value[i] == '\\' and i + 1 < value.len) i += 1;
+                }
+            },
+            '{', '(', '[' => depth += 1,
+            '}', ')', ']' => if (depth > 0) {
+                depth -= 1;
+            },
+            '\n' => if (depth == 0) {
+                var j = i + 1;
+                while (j < value.len and (value[j] == ' ' or value[j] == '\t' or value[j] == '\r')) : (j += 1) {}
+                if (j < value.len and isIdentStartChar(value[j])) {
+                    var k = j + 1;
+                    while (k < value.len and isIdentChar(value[k])) : (k += 1) {}
+                    while (k < value.len and (value[k] == ' ' or value[k] == '\t')) : (k += 1) {}
+                    if (k < value.len and value[k] == ':') {
+                        var e = k + 1;
+                        while (e < value.len and value[e] != '\n') : (e += 1) {}
+                        return std.mem.trim(u8, value[j..e], " \t\r");
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
 /// The field name a value would pun to — the segment after the last `.`, or
 /// the whole token when there's no dot — or `null` when the value CANNOT pun.
 /// Mirrors `lexer.punnableName` (kept local so this module stays free of a
@@ -153,6 +199,7 @@ fn projectRawFields(
         if (topLevelColon(raw)) |colon| {
             const name = std.mem.trim(u8, raw[0..colon], " \t\n\r");
             const value = std.mem.trim(u8, raw[colon + 1 ..], " \t\n\r");
+            if (fusedFieldLine(value) != null) return error.MissingComma;
             if (punnableName(value)) |punned| {
                 if (std.mem.eql(u8, punned, name)) return error.RedundantExplicitLabel;
             }
@@ -221,10 +268,34 @@ pub fn describeError(err: ParseError) []const u8 {
     return switch (err) {
         error.BareEntryNotPunnable => "positional assignment is never allowed — name the target (`x: expr`); a bare entry must be a punnable name or path",
         error.RedundantExplicitLabel => "punning is mandatory — drop the redundant label and write the bare pun",
+        error.MissingComma => "missing comma between fields — a `name: value` line that does not end in a comma fuses with the next line into one field",
         error.NotAStruct => "not a struct literal",
         error.UnterminatedStruct => "unterminated struct literal",
         error.OutOfMemory => "out of memory",
     };
+}
+
+/// `describeError` with the implicated fragment folded in where `input` lets
+/// it be re-derived — for MissingComma, the line that fused. Re-scans rather
+/// than plumbing a detail out of the parser: the error path is cold, and the
+/// callers that surface a refusal (`store:new`, insert/stored, capture) all
+/// hold the input. Any other error, or an input that no longer parses the same
+/// way, degrades to the static text.
+pub fn describeErrorIn(allocator: Allocator, err: ParseError, input: []const u8) []const u8 {
+    if (err != error.MissingComma) return describeError(err);
+    const trimmed = std.mem.trim(u8, input, " \t\n\r");
+    if (trimmed.len >= 2 and trimmed[0] == '{' and trimmed[trimmed.len - 1] == '}') {
+        if (splitFields(allocator, trimmed[1 .. trimmed.len - 1])) |raw_fields| {
+            for (raw_fields) |raw| {
+                if (topLevelColon(raw)) |colon| {
+                    if (fusedFieldLine(std.mem.trim(u8, raw[colon + 1 ..], " \t\n\r"))) |line| {
+                        return std.fmt.allocPrint(allocator, "missing comma — '{s}' began a new field but was read as part of the field above it; separate fields with commas", .{line}) catch describeError(err);
+                    }
+                }
+            }
+        } else |_| {}
+    }
+    return describeError(err);
 }
 
 /// Recognized Koru-native base types for the `value[type]` annotation.
@@ -514,6 +585,26 @@ test "parseFields: named + bare puns; reject bare expression and redundant label
     try std.testing.expectEqual(@as(usize, 1), seed.len);
     try std.testing.expectEqualStrings("", seed[0].name);
     try std.testing.expectEqualStrings("a + 1", seed[0].value);
+}
+
+test "comma-less multi-line field list refuses MissingComma naming the fused line" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const fused = "{ label: *std/string:String<std/string:instance!>\n    done: i64 }";
+    try std.testing.expectError(error.MissingComma, parseFields(allocator, fused));
+    try std.testing.expectEqualStrings(
+        "missing comma — 'done: i64' began a new field but was read as part of the field above it; separate fields with commas",
+        describeErrorIn(allocator, error.MissingComma, fused),
+    );
+
+    // Comma-separated multi-line lists stay legal; so do values that span
+    // lines inside nesting or continue an expression without `ident:`.
+    const ok = try parseFields(allocator, "{ a: i64,\n    b: i64\n}");
+    try std.testing.expectEqual(@as(usize, 2), ok.len);
+    const nested = try parseFields(allocator, "{ a: f(\n    x,\n    y),\n    b: i64 }");
+    try std.testing.expectEqual(@as(usize, 2), nested.len);
 }
 
 test "empty struct literal yields no fields" {

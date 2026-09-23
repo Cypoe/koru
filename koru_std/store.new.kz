@@ -367,7 +367,7 @@
         const one = allocator.alloc(struct_literal.StructField, 1) catch unreachable;
         one[0] = .{ .name = ast.STORE_IDENTITY_COLUMN, .value = std.mem.trim(u8, seed_text.?, " \t\n\r") };
         break :blk one;
-    } else struct_literal.parseFields(allocator, expr_braced) catch &[_]struct_literal.StructField{};
+    } else struct_literal.parseFields(allocator, expr_braced) catch |err| return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): {s}", .{ store_name, struct_literal.describeErrorIn(allocator, err, expr_braced) }) } };
     if (cell_fields.len == 0) {
         return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): seed block has no fields", .{store_name}) } };
     }
