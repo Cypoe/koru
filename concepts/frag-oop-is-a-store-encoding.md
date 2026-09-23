@@ -68,9 +68,22 @@ language. OOP was never a language; it was a module's worth of sugar
 over a table substrate nobody let exist. `new`'s absence is itself the
 law: refusal-by-absence beats refusal-by-diagnostic.
 
-**Open:** whether `std/oop` earns existence as a module at all, or
-dissolves into proto+store+flows-as-pattern plus `herd` — decided by the
-first real program.
+**`std/oop` dissolved to zero — ruled on the walk.** The tree already
+carries the substrate: union stores fold shared columns across
+proto-typed members (690_274), the kind tag is synthesized (690_275),
+methods are flows over row borrows, `new` is `insert`. The entire
+residual is ONE feature in `std/proto`: **field-set extension**
+(`std/proto(Dog : Animal)` = field-set union under the existing
+name-sameness and cycle rules) — "compose the same concepts in data"
+wearing its final name. Earned by maintenance (shared set declared once)
+and protos outside union stores (`std/list:new(Dog)` needs the fields on
+the entry). Substitutability is emergent: a Dog is an Animal when a
+query over shared field names sees it; no `instanceof` — "in the union"
+is the kind tag, "has the columns" is the query.
+
+**Open:** the extension spelling (`:` in the arg vs a block-level form)
+and whether even that clears the bar — decided by the first real
+program that can't be honest with restated fields.
 
 **Falsification:** a real program needing per-object heap identity or
 genuinely open-world dispatch reopens the corresponding door — by demand

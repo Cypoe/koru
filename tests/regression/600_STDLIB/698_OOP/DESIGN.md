@@ -64,72 +64,80 @@ text-reader dies with the file form (nothing left to read); the belief
 it was going to prove — declarations are library-minted — is proven by
 the module itself existing.
 
-The consequence is sharper than the convenience: `std/oop` shrinks
-toward zero. If a class is a proto + a store + flows co-located, and all
-three already exist, the "language" is `herd` (proto+store minted in one
-step), `virtual` (kind-column + switch synthesis), `new` (teaching
-diagnostic — see catalog), and method co-location — **possibly thin
-enough to be a pattern with one verb, not a language at all.** OOP was
-never a language; it was a module's worth of sugar over a table
-substrate nobody let exist.
+**RULED 2026-09-22 (same walk, later still): `std/oop` the module
+dissolves to zero.** The tree already carries the polymorphic substrate
+under other names: union stores fold shared columns across proto-typed
+members (690_274), the kind tag is synthesized (690_275, prefigured
+690_273), methods are flows over row borrows, `new` is `insert`. A union
+store IS the closed-world polymorphic container — every kind visible at
+comptime, shared fields deduped by name-sameness, the kind tag as the
+dispatch column. OOP's "treat all Animals uniformly" is a sweep over the
+union; per-kind behavior is `when`-arms. The vtable is a column.
 
-Illustrative spelling — INVENTED, a design target; the `class`/`def`
-block grammar is transform-owned, not parser grammar:
+The entire residual is **one feature, and it lives in `std/proto`:
+field-set extension** — `std/proto(Dog : Animal)` = Dog's field set is
+Animal's ∪ its own block, checked by the same rules (same name + same
+concept dedups; same name + different concept refuses; cycles reject
+through the existing `findCycle`). This is the already-ruled direction —
+"compose the same concepts in data, never in behavior" — wearing its
+final name. Extension earns its keep on maintenance (declare the shared
+set once) and on protos outside union stores (`std/list:new(Dog)` needs
+Dog's entry to really carry the fields).
+
+Substitutability needs no declaration: a Dog is an Animal precisely when
+a query over shared field names sees it — structural, checked by the
+fold. No `instanceof`; "is it in the union" is the kind tag, "does it
+have the columns" is the query.
+
+Illustrative spelling — INVENTED, a design target:
 
 ```koru
-// animals.k — pure Koru, no new file form
-import std/oop
+// animals.k — pure Koru; everything here exists except `:` extension
+import std/proto
+import std/store
 
-std/oop:value(Point) { x: f64; y: f64 }    // a column type — no identity
+std/proto(Animal) { hp: i64 }
 
-std/proto(Animal) { hp: i64; pos: Point }  // an affinity, not a layout
-
-std/oop:herd(Dog : Animal, 64) {           // proto composition + plural store
-    def flee(dt: f64) {
-        self.pos = self.pos + self.vel * dt;   // lowers to `stored`
-    }
+std/proto(Dog : Animal) {        // THE missing piece — field-set union
+    barked: bool
 }
-std/oop:herd(Cat : Animal, 64)
+std/proto(Cat : Animal)
 
-// the sweep — spelled however sweeps already spell:
-std/store:query(Dog.all) ! d when d.hp < 10 |> flee(d, 0.016)
+std/store:new(animals, capacity: 64) { dog: Dog, cat: Cat }
+
+std/store:insert(animals) { hp: 10, barked: false }
+std/store:query(animals)
+! query a when a.hp < 10 |> std/io:print.ln("{{ a.hp:d }}")
 ```
 
-`new` needs no refusal rule in `.k` — the verb doesn't exist.
-`std/oop:new(Dog)` may still be offered as the opt-in familiar spelling
-that emits the teaching diagnostic, but refusal-by-absence is the
-default and beats refusal-by-diagnostic: the law expressed as grammar.
-
-| Spelling | Lowers to | Status of target |
+| OOP want | Where it lives | Status |
 |---|---|---|
-| `class X { fields }` | `std/proto(X)` — affinity only | GROUNDED (665_PROTO) |
-| `herd X : Y` | proto composition + plural store | GROUNDED (690_STORE) |
-| `value V { fields }` | column type — inlines into rows | THESIS — proto-of-scalars today |
-| `x.f()` | flow over `*X` — row borrow, static call | GROUNDED in spirit (query borrows) |
-| `this.f = v` | `stored` — the one write path | GROUNDED — writes carry the cascade |
-| `for (d : X.all)` | store sweep — the fused stripe | GROUNDED — the hottest loop we have |
+| `class X { fields }` | `std/proto(X)` | GROUNDED (665_PROTO) |
+| `X extends Y` | `std/proto(X : Y)` — field-set union | **THE GAP** — everything else exists |
+| polymorphic collection | union store, folded columns | GROUNDED (690_274) |
+| `virtual`/`override` | synthesized kind tag + `when` arms | GROUNDED (690_275) |
+| `x.f()` | `x \|> f` / flow over `*X` | GROUNDED |
+| `this.f = v` | `stored` — the one write path | GROUNDED — carries the cascade |
+| `for (x : Xs)` | store sweep — the fused stripe | GROUNDED |
 | `static` members | singleton store | GROUNDED |
-| `virtual`/`override` | `kind` column + closed-world switch | THESIS — cond+branches dissolved it |
-| `interface` | row carrying named fields, checked point-to-point | GROUNDED direction |
+| `new` | `std/store:insert` | GROUNDED by absence |
+| `value V` | `std/proto(V)` | GROUNDED |
+| `instanceof` | kind tag / column presence | GROUNDED — structural, not declared |
 
 ## The rejection catalog (RULED — this is the guide)
 
-**`new` does not exist — and the opt-in spelling enforces plurality.**
-OOP's `new` fuses three acts the substrate deliberately split: allocate
-storage, mint identity, run hidden initialization. In `.k` the rejection
-is absence, not a diagnostic — there is simply no verb. The familiar
-spelling may exist as a transform that *checks* the law:
+**`new` does not exist.** OOP's `new` fuses three acts the substrate
+deliberately split: allocate storage, mint identity, run hidden
+initialization. In `.k` the rejection is absence, not a diagnostic —
+`std/store:insert(animals) { hp: 10 }` is the whole verb, and the
+plurality it lands in is always named at the call. There is no path that
+mints an object without declaring where it lives. Refusal-by-absence
+beats refusal-by-diagnostic: the law expressed as grammar. Allocation
+is a property of the plurality, never of the element.
 
-    std/oop:new(Dog, hp: 10)    // Dog declared a herd → Dog.all.insert
-    std/oop:new(Parser)         // error: Parser has no plurality.
-                              // Objects are not allocated; rows are inserted.
-
-The refusal is the teaching. Allocation is a property of the plurality,
-never of the element.
-
-**No pointer minting.** `std/oop:new` returning a heap pointer would
-re-fuse the three acts AND mint an object definitionally outside the
-reactive substrate: AoS, un-sweepable, writes that can't ride `stored`.
+**No pointer minting.** A heap-allocating verb would re-fuse the three
+acts AND mint an object definitionally outside the reactive substrate:
+AoS, un-sweepable, writes that can't ride `stored`.
 The one legitimate per-element allocation trigger already has a home —
 growth lives in `std/list`, allocator inside the handle. "Heap object" =
 list element; identity = index/handle. A true `alloc` is a demand-marker
@@ -183,13 +191,17 @@ by writing real programs in it, not by argument.
 - If the lowered text is *not* something the compiler already accepts,
   each named gap becomes a compiler defect to fix in `src/` — never a
   reason to shape the dialect around the gap.
-- If `.koop` programs consistently write singular flows where the sweep
-  was meant, the surface is a reasoning regression regardless of layout
-  — the dialect dies by its own hand.
+- If OOP-shaped `.k` programs consistently write singular flows where
+  the sweep was meant, the *pattern* is a reasoning regression regardless
+  of layout — and then even the doc entry dies, not just the module.
 
 ## Status
 
-**Residue.** No `input.kz` yet — the surface is honestly uninvented and
-this document is the pin-seed. First artifact when built: the mock above
-split into pins (declare, herd, sweep, virtual-dispatch, `new`-refusal,
-value-vs-class), each `MUST_ERROR` or `MUST_RUN` against the lowering.
+**Residue.** No `input.kz` yet. The walk's arc: `.koop` file form →
+`std/oop` transform module → **one missing feature in `std/proto`**:
+field-set extension (`X : Y`). First pins when built: extension flattens
+parent fields (MUST_RUN), same-name-different-type refuses (MUST_ERROR),
+extension cycles refuse (MUST_ERROR via `findCycle`), extended proto
+feeds `std/list:new` and a union store (MUST_RUN). The pattern half —
+"OOP-shaped programs are protos + union stores + flows" — needs no code;
+it may want a `koru-by-example`-style doc entry, not a cluster.
