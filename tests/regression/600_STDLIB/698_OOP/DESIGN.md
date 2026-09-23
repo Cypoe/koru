@@ -89,7 +89,28 @@ a query over shared field names sees it — structural, checked by the
 fold. No `instanceof`; "is it in the union" is the kind tag, "does it
 have the columns" is the query.
 
-### The extension spelling — a micro-language inside the arg (OPEN)
+### The reference gap — pointers to concretizations (OPEN, load-bearing)
+
+Object graphs need *declared* references, and proto today has
+**containment only**: `pos: Point` inlines a compound's columns. A
+field meaning "a row over there" has no spelling — the tree store's
+`parent: i64` is a foreign key by convention: the checker cannot see
+the relationship, codegen cannot route it through the generation
+table. This is the same door the type-system walk already ranked next
+("storage references — receipts inside storage have no binder") — the
+OOP walk made it load-bearing.
+
+The honest shape: a **reference field kind** — `owner: ref(Dog)` — which
+requires `Dog` to declare its plurality (`ref` needs a home store to
+resolve through; `X.all` becomes typable, not just sugar). Handles stay
+the mechanism: generation-stable, validity-checked-never-owned.
+**Interior pointers stay refused** — `&row.field` can't survive
+swap-remove; references point at rows, never cells. Free-floating heap
+objects stay behind the `std/list` door.
+
+The OOP walk did not create this gap; it made it load-bearing.
+
+### The extension spelling — a micro-language inside the arg (RULED `<:` + `+`)
 
 Transform args are **opaque text**: split on top-level commas, braces
 counted, never routed through the expression grammar. The arg is a
@@ -107,10 +128,10 @@ wrong.) The ranking is therefore pure reader-semantics:
   reader sees a parameter being passed.
 - `Dog -> Animal` — rejected: still reads "Dog produces Animal."
 
-Leaning `<:` (symbol-form) or `is` (word-form), pending Lars. Multiple
-extension composes in the same text algebra — `Dog <: Animal + Pet` or
-`Dog is Animal & Pet` — the diamond resolving by name-sameness or
-refusing. `,` is the one real constraint (it is the arg separator); `-`
+**RULED 2026-09-22: `<:` and `+`.** `std/proto(Dog <: Animal + Pet)` —
+field-set union, diamonds resolved by name-sameness or refused; multiple
+inheritance endorsed (no MRO, no dominance ordering — concepts compose
+or the declaration refuses). `,` stays the arg separator; `-`
 (exclusion) stays parked as demand-marker.
 
 Illustrative spelling — INVENTED, a design target:
@@ -222,10 +243,14 @@ by writing real programs in it, not by argument.
 ## Status
 
 **Residue.** No `input.kz` yet. The walk's arc: `.koop` file form →
-`std/oop` transform module → **one missing feature in `std/proto`**:
-field-set extension (`X <:/is Y`, spelling leaning `<:`). First pins when built: extension flattens
-parent fields (MUST_RUN), same-name-different-type refuses (MUST_ERROR),
-extension cycles refuse (MUST_ERROR via `findCycle`), extended proto
-feeds `std/list:new` and a union store (MUST_RUN). The pattern half —
-"OOP-shaped programs are protos + union stores + flows" — needs no code;
-it may want a `koru-by-example`-style doc entry, not a cluster.
+`std/oop` transform module → **two features in `std/proto`**:
+field-set extension (`X <: A + B`, RULED) and the reference field kind
+(`ref(X)` → handle into X's declared plurality; OPEN, shared with the
+type-system walk's storage-references door). First pins when built:
+extension flattens parent fields (MUST_RUN), same-name-different-type
+refuses (MUST_ERROR), extension cycles refuse (MUST_ERROR via
+`findCycle`), extended proto feeds `std/list:new` and a union store
+(MUST_RUN), `ref` to an unpluralized proto refuses (MUST_ERROR). The
+pattern half — "OOP-shaped programs are protos + union stores + flows"
+— needs no code; it may want a `koru-by-example`-style doc entry, not
+a cluster.

@@ -81,22 +81,29 @@ the entry). Substitutability is emergent: a Dog is an Animal when a
 query over shared field names sees it; no `instanceof` — "in the union"
 is the kind tag, "has the columns" is the query.
 
-**Spelling:** transform args are OPAQUE TEXT — split on top-level
+**Spelling RULED:** transform args are OPAQUE TEXT — split on top-level
 commas, brace-counted, never parsed as expressions (corrected mid-walk:
 an earlier draft ranked candidates on parse-cost; every spelling costs
-nothing). The choice is pure reader-semantics. Finalists: `<:` (the
-subtype symbol verbatim, unambiguous) or `is` (word-form, plainest).
-`<` misreads as comparison; `:` collides with the labeled-arg convention
-(`capacity: 64` is transform-split the same way — a reader sees a
-parameter passed); `->` reads "produces." Multiple extension is the same
-text algebra — `Dog <: Animal + Pet`, diamond resolved by name-sameness
-or refused; `,` is the only constraint (arg separator). Multiple
-inheritance is healthy here by construction: field-set union, no MRO,
-no dominance ordering — concepts compose or the declaration refuses.
+nothing). `Dog <: Animal + Pet` — the subtype symbol verbatim, `+` as
+field-set union; multiple inheritance endorsed (no MRO, no dominance —
+concepts compose or the declaration refuses). `:` rejected on the
+labeled-arg convention; `->` reads "produces"; `is` was the word-form
+runner-up.
 
-**Open:** the final spelling ratification and whether even extension
-clears the bar — decided by the first real program that can't be honest
-with restated fields.
+**The reference gap (surfaced by this walk, shared with
+frag-type-system-design's next-ranked item):** protos have containment
+only — `pos: Point` inlines. A field meaning "a row over there" has no
+spelling: the tree store's `parent: i64` is a foreign key by convention,
+invisible to the checker. The honest shape is a reference field kind —
+`owner: ref(Dog)` — which makes a proto's plurality declaration
+load-bearing (`ref` needs a home store to resolve through; `X.all`
+becomes typable, not just sugar). Handles stay the mechanism —
+generation-stable, checked-never-owned. Interior pointers stay refused
+(swap-remove moves rows; references point at rows, never cells). The
+walk didn't create this gap — object graphs made it load-bearing.
+
+**Open:** whether extension clears the bar — decided by the first real
+program that can't be honest with restated fields.
 
 **Falsification:** a real program needing per-object heap identity or
 genuinely open-world dispatch reopens the corresponding door — by demand
