@@ -152,6 +152,7 @@ koru_std/store.qnone.kz	142
 koru_std/store.qrewrite.kz	231
 koru_std/store.query.kz	873
 koru_std/store.refs.kz	60
+koru_std/store.refhome.kz	332
 koru_std/store.rule.kz	148
 koru_std/store.sites.kz	169
 koru_std/store.sitetag.kz	27

@@ -110,7 +110,7 @@ const BulkEmit = struct {
     /// the cap row — @panic aborts either way, unobservable. The bound
     /// arm's binding becomes `lo + j`; a handle store's loop also mints
     /// the exact slot sequence `len`-at-a-time inserts produce.
-    fn emit(alloc: std.mem.Allocator, store: []const u8, cap: usize, range: Bulk.Range, bind: ?[]const u8, flds: []const struct_literal.StructField, handles: bool, icol: ?[]const u8) []const u8 {
+    fn emit(alloc: std.mem.Allocator, prog: *const ast.Program, store: []const u8, cap: usize, range: Bulk.Range, bind: ?[]const u8, flds: []const struct_literal.StructField, handles: bool, icol: ?[]const u8) []const u8 {
         var b = std.ArrayList(u8).initCapacity(alloc, 384) catch unreachable;
         const w = b.writer(alloc);
         // `//@koru:inline_stmt` — emit as statements, not `[expand]`:
@@ -150,6 +150,7 @@ const BulkEmit = struct {
         }
         for (flds) |f| {
             const col = codegen_utils.escapeZigIdentifier(alloc, f.name) catch f.name;
+            if (StoreRefHome.refTargetOf(alloc, prog, store, f.name) != null) w.print("        __koru_home_{s}_{s}({s});\n", .{ store, f.name, f.value }) catch unreachable;
             w.print("        __koru_store_{s}.{s}[__koru_bulk_base + __koru_bulk_j] = {s};\n", .{ store, col, f.value }) catch unreachable;
         }
         if (icol) |ic| {

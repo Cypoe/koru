@@ -115,10 +115,19 @@ material everywhere it appears — `std/list` element structs (698_006/007)
 AND store seeds (698_009): the column IS the handle, and the create-site
 marker carries `; ref dog->Dog` so the typed edge survives the seed's
 self-erase. Unknown targets refuse at the store's own gate (698_011).
-Still OPEN: `ref` needs X's plurality to resolve *through* — the checker
-does not yet know which store a Dog row lives in (`X.all` becoming
-typable, not just sugar), and insert/write don't yet verify a handle's
-home store against the declared target (690_196's guard is slot+gen only).
+**Home-check landed**: every write into a `ref(T)` column — insert,
+`stored`, apply dispatch, envelope write, bulk append — first runs the
+store's generated `__koru_home_<store>_<col>` guard, which accepts -1
+(the unset sentinel) or a handle whose brand byte matches a HOME store:
+a plural, handle-minting store whose expanded leaf set subsumes T's flat
+fields. Subsumption, not name-matching — an extended proto's store is a
+home of its parents (698_014), and erased protos need no parent record.
+Foreign-home handles trap at the write, not at a far-off deref
+(698_012/013); a `ref(T)` no store can home refuses at create (698_016);
+the consumed marker now also carries `; fields` so homes resolve after
+the seed's self-erase. Still OPEN: `ref` needs X's plurality to resolve
+*through* — the checker does not yet know which store a Dog row lives in
+(`X.all` becoming typable, not just sugar).
 Handles stay the mechanism: generation-stable, validity-checked-never-owned.
 **Interior pointers stay refused** — `&row.field` can't survive
 swap-remove; references point at rows, never cells. Free-floating heap
@@ -187,7 +196,7 @@ std/store:query(Animals)
 | `new` | `std/store:insert` | GROUNDED by absence |
 | `value V` | `std/proto(V)` | GROUNDED |
 | `instanceof` | view membership / `is` narrowing | GROUNDED — structural, not declared |
-| `ref(X)` field | typed row handle — i64 material in lists AND store columns, target on the create marker | LANDED (698_006/007/009/011) |
+| `ref(X)` field | typed row handle — i64 material in lists AND store columns, target on the create marker, writes brand-checked against T's home stores | LANDED (698_006-016) |
 
 ## The rejection catalog (RULED — this is the guide)
 
@@ -262,14 +271,18 @@ by writing real programs in it, not by argument.
 
 ## Status
 
-**Pinned — 698_001 through 698_011 green.** The walk's arc: `.koop`
+**Pinned — 698_001 through 698_016 green.** The walk's arc: `.koop`
 file form → `std/oop` transform module → **two features landed in
 `std/proto`**: field-set extension (`X <: A + B` — flatten, dedup by
 name+concept, conflict and cycle refuse; 698_001-005) and the reference
 field kind (`ref(X)` → validated target, i64 handle material in list
 structs (698_006/007) AND store columns — the seed leaf lowers to i64
 and the create marker carries `; ref col->Target` for checkers
-(698_009/011)). Extended protos feed `std/list:new` and the
+(698_009/011)). Writes into ref columns are home-checked: the handle's
+brand byte must name a store whose expanded leaves subsume the target's
+fields — foreign handles trap at the write, -1 stays the unset
+sentinel, a homeless target refuses at create (698_012-016). Extended
+protos feed `std/list:new` and the
 store/view surface (698_008 — per-proto stores + `view`, not the
 repudiated sibling-union seed). Pure inheritance is blockless —
 `std/proto(Cat <: Animal)` — via `source: ?Source`, the first optional

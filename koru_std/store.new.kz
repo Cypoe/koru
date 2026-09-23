@@ -416,18 +416,7 @@
             }
         }
     }
-    for (cell_fields) |cf| {
-        const peeled = struct_literal.peelBaseType(cf.value);
-        const ltype = if (peeled.type.len != 0) peeled.type else std.mem.trim(u8, cf.value, " ");
-        const known_scalar_leaf = std.mem.eql(u8, ltype, "i64") or std.mem.eql(u8, ltype, "i32") or
-            std.mem.eql(u8, ltype, "f64") or std.mem.eql(u8, ltype, "f32") or
-            std.mem.eql(u8, ltype, "bool") or std.mem.eql(u8, ltype, "string");
-        const char_shaped = std.mem.startsWith(u8, ltype, "char[");
-        const owned_shaped = std.mem.startsWith(u8, ltype, "*") or std.mem.indexOfScalar(u8, ltype, '<') != null;
-        if (!known_scalar_leaf and !char_shaped and !owned_shaped and StoreRefs.inner(ltype) == null and !SL.TermRef.isDeclared(program, ltype, store_scope_home)) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): leaf '{s}' names unknown '{s}' — a leaf must be a scalar material or a terminal of its home", .{ store_name, cf.name, ltype }) } };
-        }
-    }
+    if (StoreRefHome.leafGate(allocator, program, reporter, flow, store_name, cell_fields, store_scope_home)) |r| return .{ .transformed = .{ .replacement = r } };
     // Write-demand for the kind tag (lazy by construction): the tag column
     // exists iff some insert names `kind:` for this store — see
     // `storeKindDemanded` (both spellings, heads and continuations). Nothing
@@ -822,7 +811,6 @@
         // Slice A: a bare in-scope terminal (Health) is a column — the alias
         // emits verbatim and lowers through its host type. Qualified names
         // refuse below as before (address resolution is a later rung).
-        // A `ref(X)` leaf is a typed row handle — i64 material, checked here.
         const ref_target = StoreRefs.inner(ftype);
         if (StoreRefs.checkTarget(allocator, program, reporter, flow, store_name, cf.name, ftype, store_scope_home)) |r| return .{ .transformed = .{ .replacement = r } };
         const known_terminal = if (!known_scalar and char_cap == null and !owned_col and ref_target == null)
@@ -872,6 +860,9 @@
         field_owned_info[kind_idx] = null;
         field_defaults[kind_idx] = null;
     }
+    // Ref-home checks (698_012-016): a homeless target refuses here; the guard fns append to the cell emission and every write path calls them.
+    const refhome = StoreRefHome.build(allocator, program, reporter, flow, store_name, cell_fields, store_scope_home);
+    if (refhome.refusal) |r| return .{ .transformed = .{ .replacement = r } };
     var has_owned = false;
     for (field_owned) |fo| {
         if (fo) has_owned = true;
@@ -2490,6 +2481,7 @@
         pc.appendSlice(allocator, ": __KoruStoreT_") catch unreachable;
         pc.appendSlice(allocator, store_name) catch unreachable;
         pc.appendSlice(allocator, " = .{};") catch unreachable;
+        pc.appendSlice(allocator, refhome.zig) catch unreachable;
         // The row-value type: what take extracts (obligation rides on it).
         pc.appendSlice(allocator, "\nconst __KoruStoreRow_") catch unreachable;
         pc.appendSlice(allocator, store_name) catch unreachable;
@@ -2602,6 +2594,7 @@
             jc.appendSlice(allocator, "  len: 0,\n") catch unreachable;
             jc.appendSlice(allocator, hslot_js) catch unreachable;
             jc.appendSlice(allocator, "};\n") catch unreachable;
+            jc.appendSlice(allocator, refhome.js) catch unreachable;
             break :blk_pjs jc.toOwnedSlice(allocator) catch unreachable;
         } else pc.toOwnedSlice(allocator) catch unreachable;
 
@@ -2710,6 +2703,7 @@
                 // saturation when refine declared one — the stored value is
                 // the value the prelude guard judged.
                 const rhs = facet_norms[fci] orelse fname;
+                if (StoreRefHome.colTarget(cell_fields, fci) != null) ap.appendSlice(allocator, std.fmt.allocPrint(allocator, "__koru_home_{s}_{s}({s});\n", .{ store_name, fname, rhs }) catch unreachable) catch unreachable;
                 const w = if (field_char_caps[fci]) |n|
                     std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_new_row] = {s}.slice(0, {d});\n", .{ store_name, fname, rhs, n }) catch unreachable
                 else
@@ -2812,6 +2806,7 @@
                 // site; runtime bytes truncate — the `| toolong` branch is a
                 // deferred refinement), zero-padding the rest.
                 const esc_fname = codegen_utils_store.escapeZigIdentifier(allocator, fname) catch fname;
+                if (StoreRefHome.colTarget(cell_fields, fci) != null) ap.appendSlice(allocator, std.fmt.allocPrint(allocator, "__koru_home_{s}_{s}({s});\n", .{ store_name, fname, facet_norms[fci] orelse esc_fname }) catch unreachable) catch unreachable;
                 const w = if (field_char_caps[fci]) |n|
                     std.fmt.allocPrint(allocator,
                         \\__koru_store_{s}.{s}[__koru_new_row] = @import("std").mem.zeroes([{d}]u8);
@@ -3267,6 +3262,7 @@
                     std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = @import(\"std\").mem.zeroes([{d}]u8); const __koru_wl = @min(value_{d}.len, {d}); @memcpy(__koru_store_{s}.{s}[__koru_r][0..__koru_wl], value_{d}[0..__koru_wl]); ", .{ store_name, esc_fname, n, i, n, store_name, esc_fname, i }) catch unreachable)
                 else
                     std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = value_{d}; ", .{ store_name, esc_fname, i }) catch unreachable;
+                if (StoreRefHome.colTarget(cell_fields, i) != null) wr = std.fmt.allocPrint(allocator, "__koru_home_{s}_{s}(value_{d}); {s}", .{ store_name, fname, i, wr }) catch unreachable;
                 // `std/indexes:store` — a write to the indexed column moves
                 // the row's key: release the old (reseat the next-lowest
                 // claimant), claim the new when it is now the lowest.
@@ -3467,6 +3463,7 @@
                         std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = @import(\"std\").mem.zeroes([{d}]u8); const __koru_wl = @min(value.len, {d}); @memcpy(__koru_store_{s}.{s}[__koru_r][0..__koru_wl], value[0..__koru_wl]); ", .{ store_name, fname, n, n, store_name, fname }) catch unreachable
                     else
                         std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = value; ", .{ store_name, fname }) catch unreachable;
+                    if (StoreRefHome.colTarget(cell_fields, i) != null) fwr = std.fmt.allocPrint(allocator, "__koru_home_{s}_{s}(value); {s}", .{ store_name, fname, fwr }) catch unreachable;
                     // `std/indexes:store` — same key maintenance as the
                     // bundled apply arm (an owned-containing store still
                     // writes its scalar columns through this targeted path).
@@ -3641,6 +3638,7 @@
                         std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = @import(\"std\").mem.zeroes([{d}]u8); const __koru_wl = @min(value_{d}.len, {d}); @memcpy(__koru_store_{s}.{s}[__koru_r][0..__koru_wl], value_{d}[0..__koru_wl]); ", .{ store_name, esc_fname, n, i, n, store_name, esc_fname, i }) catch unreachable
                     else
                         std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = value_{d}; ", .{ store_name, esc_fname, i }) catch unreachable;
+                    if (StoreRefHome.colTarget(cell_fields, i) != null) ewr = std.fmt.allocPrint(allocator, "__koru_home_{s}_{s}(value_{d}); {s}", .{ store_name, fname, i, ewr }) catch unreachable;
                     // `std/indexes:store` — one write text, composed into the
                     // masked unit and the specialisations alike, so the key
                     // maintenance rides the shared col_arm verbatim.
@@ -5106,7 +5104,7 @@
             Walk.items(allocator, program, @constCast(program.items), pscope, pstore_identity.items);
         }
 
-        const pconsumed = std.fmt.allocPrint(allocator, "// std/store: plural store '{s}' created (SoA cell + insert/query/write/take/stripe units){s}", .{ store_name, StoreRefs.suffix(allocator, cell_fields) }) catch unreachable;
+        const pconsumed = std.fmt.allocPrint(allocator, "// std/store: plural store '{s}' created (SoA cell + insert/query/write/take/stripe units){s}", .{ store_name, StoreRefHome.marker(allocator, cell_fields) }) catch unreachable;
         return .{ .transformed = .{
             .replacement = ast.Item{ .inline_code = ast.InlineCode{
                 .code = pconsumed,
@@ -5614,6 +5612,7 @@
             jp.appendSlice(allocator, field_defaults[i] orelse "0") catch unreachable;
         }
         jp.appendSlice(allocator, " };") catch unreachable;
+        jp.appendSlice(allocator, refhome.js) catch unreachable;
         break :blk_js jp.toOwnedSlice(allocator) catch unreachable;
     } else blk_zig: {
         var p = std.ArrayList(u8).initCapacity(allocator, 512) catch unreachable;
@@ -5639,6 +5638,7 @@
         p.appendSlice(allocator, " = ") catch unreachable;
         p.appendSlice(allocator, init_zig) catch unreachable;
         p.appendSlice(allocator, ";") catch unreachable;
+        p.appendSlice(allocator, refhome.zig) catch unreachable;
         break :blk_zig p.toOwnedSlice(allocator) catch unreachable;
     };
 
@@ -5710,9 +5710,9 @@
         pb.appendSlice(allocator, "switch (field) {\n") catch unreachable;
         for (field_names, 0..) |fname, i| {
             const arm = if (old_new_mode)
-                std.fmt.allocPrint(allocator, "  case {d}: {{ const __old = __koru_store_{s}.{s}; __koru_store_{s}.{s} = value; return {{ tag: \"{s}\", {s}: {{ old: __old, new: value }} }}; }}\n", .{ i, store_name, fname, store_name, fname, fname, fname }) catch unreachable
+                std.fmt.allocPrint(allocator, "  case {d}: {{ {s}const __old = __koru_store_{s}.{s}; __koru_store_{s}.{s} = value; return {{ tag: \"{s}\", {s}: {{ old: __old, new: value }} }}; }}\n", .{ i, StoreRefHome.call(allocator, cell_fields, i, store_name, "value"), store_name, fname, store_name, fname, fname, fname }) catch unreachable
             else
-                std.fmt.allocPrint(allocator, "  case {d}: {{ __koru_store_{s}.{s} = value; return {{ tag: \"{s}\", {s}: value }}; }}\n", .{ i, store_name, fname, fname, fname }) catch unreachable;
+                std.fmt.allocPrint(allocator, "  case {d}: {{ {s}__koru_store_{s}.{s} = value; return {{ tag: \"{s}\", {s}: value }}; }}\n", .{ i, StoreRefHome.call(allocator, cell_fields, i, store_name, "value"), store_name, fname, fname, fname }) catch unreachable;
             pb.appendSlice(allocator, arm) catch unreachable;
         }
         pb.appendSlice(allocator, "}\n") catch unreachable;
@@ -5721,9 +5721,9 @@
         pb.appendSlice(allocator, "return switch (field) {\n") catch unreachable;
         for (field_names, 0..) |fname, i| {
             const arm = if (old_new_mode)
-                std.fmt.allocPrint(allocator, "    {d} => blk: {{ const __old = __koru_store_{s}.{s}; __koru_store_{s}.{s} = value; break :blk .{{ .{s} = .{{ .old = __old, .new = value }} }}; }},\n", .{ i, store_name, fname, store_name, fname, fname }) catch unreachable
+                std.fmt.allocPrint(allocator, "    {d} => blk: {{ {s}const __old = __koru_store_{s}.{s}; __koru_store_{s}.{s} = value; break :blk .{{ .{s} = .{{ .old = __old, .new = value }} }}; }},\n", .{ i, StoreRefHome.call(allocator, cell_fields, i, store_name, "value"), store_name, fname, store_name, fname, fname }) catch unreachable
             else
-                std.fmt.allocPrint(allocator, "    {d} => blk: {{ __koru_store_{s}.{s} = value; break :blk .{{ .{s} = value }}; }},\n", .{ i, store_name, fname, fname }) catch unreachable;
+                std.fmt.allocPrint(allocator, "    {d} => blk: {{ {s}__koru_store_{s}.{s} = value; break :blk .{{ .{s} = value }}; }},\n", .{ i, StoreRefHome.call(allocator, cell_fields, i, store_name, "value"), store_name, fname, fname }) catch unreachable;
             pb.appendSlice(allocator, arm) catch unreachable;
         }
         pb.appendSlice(allocator, "    else => unreachable,\n};") catch unreachable;
@@ -6265,7 +6265,7 @@
     // Assemble: the create site dissolves into a comment; the five
     // generated units append as top-level items.
     // ------------------------------------------------------------------
-    const consumed = std.fmt.allocPrint(allocator, "// std/store: '{s}' created (cell + write-subflow at module scope){s}", .{ store_name, StoreRefs.suffix(allocator, cell_fields) }) catch unreachable;
+    const consumed = std.fmt.allocPrint(allocator, "// std/store: '{s}' created (cell + write-subflow at module scope){s}", .{ store_name, StoreRefHome.marker(allocator, cell_fields) }) catch unreachable;
     const replacement = ast.Item{ .inline_code = ast.InlineCode{
         .code = consumed,
         .location = flow.location,

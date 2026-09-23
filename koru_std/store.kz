@@ -18,7 +18,6 @@
 //   - Writes interleave, never overlap: write + full cascade is the
 //     atomicity unit ((h) lean); birth is not a write (O9 lean — the seed
 //     is stored in memory, never dispatched as an tor).
-//
 // RUNG ONE — COMPLETE (690_001-004 green runners, 690_006 green designed
 // rejection; SHOWN 2026-07-05). The (f) architecture:
 //   `create` is the coordinator. Per store it appends FIVE units:
@@ -1009,3 +1008,4 @@ fn storeLowerText(
 ~part expand
 ~part kinds
 ~part refs
+~part refhome

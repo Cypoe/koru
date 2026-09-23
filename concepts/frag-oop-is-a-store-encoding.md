@@ -108,10 +108,17 @@ typed edge survives the seed's self-erase (the marker moved to
 `inline_code` to persist — `host_line` create markers never emitted).
 Unknown targets refuse at the store's own gate (698_011). Refs are
 exempt from the containment-cycle walk (`next: ref(Node)` is legal by
-design). Still open: `ref` needs X's plurality to resolve *through* —
-no binder ties the handle to its home store yet (`X.all` typable, not
-just sugar), and a write does not yet verify the handle's home against
-the declared target. Handles stay the mechanism — generation-stable,
+design). Writes into a ref column are HOME-checked (698_012-016): the
+handle's brand byte must match a plural, handle-minting store whose
+expanded leaves subsume the target's flat field set — structural
+subsumption, so an extended proto's store is a home of its parents and
+erased protos need no parent record; foreign handles trap at the write,
+-1 stays the unset sentinel, a homeless target refuses at create. The
+consumed marker grew `; fields` so homes resolve post-self-erase.
+Still open: `ref` needs X's plurality to resolve *through* — no binder
+ties the handle to its home store in the TYPE yet (`X.all` typable, not
+just sugar); the home check is a runtime guard, not a static fact.
+Handles stay the mechanism — generation-stable,
 checked-never-owned. Interior pointers stay refused (swap-remove moves
 rows; references point at rows, never cells). The walk didn't create
 this gap — object graphs made it load-bearing.
