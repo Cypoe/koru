@@ -378,8 +378,6 @@
     // leaves (left: Limb -> left.health: Health). Distinct placements do not fold.
     // Bare { Proto } expands at the store's root: prefix is empty (""), leaves keep
     // bare field names (str, not Player.str).
-    const member_names = std.ArrayList([]const u8).initCapacity(allocator, 2) catch unreachable;
-    const member_protos = std.ArrayList([]const u8).initCapacity(allocator, 2) catch unreachable;
     var leaf_provs = std.ArrayList(SL.ColProv).initCapacity(allocator, cell_fields.len) catch unreachable;
     cell_fields = blk: {
         var out = std.ArrayList(struct_literal.StructField).initCapacity(allocator, cell_fields.len) catch unreachable;
@@ -426,25 +424,23 @@
             std.mem.eql(u8, ltype, "bool") or std.mem.eql(u8, ltype, "string");
         const char_shaped = std.mem.startsWith(u8, ltype, "char[");
         const owned_shaped = std.mem.startsWith(u8, ltype, "*") or std.mem.indexOfScalar(u8, ltype, '<') != null;
+        const ref_shaped = ltype.len > 5 and std.mem.startsWith(u8, ltype, "ref(") and ltype[ltype.len - 1] == ')';
+        if (ref_shaped) {
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): field '{s}' is {s} — a ref field is a row handle; the column IS the handle, declare `{s}: i64` (ref() columns lower at a later rung)", .{ store_name, cf.name, ltype, cf.name }) } };
+        }
         if (!known_scalar_leaf and !char_shaped and !owned_shaped and !SL.TermRef.isDeclared(program, ltype, store_scope_home)) {
             return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): leaf '{s}' names unknown '{s}' — a leaf must be a scalar material or a terminal of its home", .{ store_name, cf.name, ltype }) } };
-        }
-    }
-    // A hand-written `kind` column and union members refuse each other: the
-    // synthesized tag owns that name when members exist (690_273's manual tag
-    // has no members, so it never meets this wall).
-    if (member_names.items.len > 0) {
-        for (cell_fields) |cf| {
-            if (std.mem.eql(u8, cf.name, "kind")) {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): column 'kind' collides with the synthesized kind tag — union members own that name; drop the explicit column or the members", .{store_name}) } };
-            }
         }
     }
     // Write-demand for the kind tag (lazy by construction): the tag column
     // exists iff some insert names `kind:` for this store — see
     // `storeKindDemanded` (both spellings, heads and continuations). Nothing
-    // asks → K1 plain behavior, no tag, no ceremony.
-    const want_kind: bool = member_names.items.len > 0 and storeKindDemanded(allocator, program, store_name);
+    // asks → K1 plain behavior, no tag, no ceremony. The sibling-member seed
+    // surface this fed is repudiated (690_274/275 stand broken pending
+    // store:set + kind) — `new` has no member vocabulary, so the tag column
+    // never synthesizes on this surface; the demand gate returns with the
+    // set work.
+    const want_kind: bool = false;
     // ------------------------------------------------------------------
     // T2 / queue (d): the interceptor cascade graph is comptime-visible;
     // a cross-store cycle is rejected WITH THE CYCLE NAMED (690_012) -
@@ -2670,39 +2666,6 @@
             .module = allocator.dupe(u8, flow.module) catch unreachable,
         } };
         appended_items.append(allocator, pcell_item) catch unreachable;
-        // The kind vocabulary for insert's post-erase twin: member names in
-        // seed order (ordinals are position + 1). Emitted whenever members
-        // exist — vocabulary is not demand; the COLUMN is.
-        if (member_names.items.len > 0) {
-            var mk = std.ArrayList(u8).initCapacity(allocator, 64) catch unreachable;
-            mk.appendSlice(allocator, "// store-kinds ") catch unreachable;
-            mk.appendSlice(allocator, store_name) catch unreachable;
-            mk.appendSlice(allocator, ": ") catch unreachable;
-            for (member_names.items, 0..) |mn, mi| {
-                if (mi > 0) mk.appendSlice(allocator, ", ") catch unreachable;
-                mk.appendSlice(allocator, mn) catch unreachable;
-            }
-            appended_items.append(allocator, ast.Item{ .inline_code = ast.InlineCode{
-                .code = mk.toOwnedSlice(allocator) catch unreachable,
-                .location = flow.location,
-                .module = allocator.dupe(u8, flow.module) catch unreachable,
-            } }) catch unreachable;
-            var mt = std.ArrayList(u8).initCapacity(allocator, 64) catch unreachable;
-            mt.appendSlice(allocator, "// store-member-types ") catch unreachable;
-            mt.appendSlice(allocator, store_name) catch unreachable;
-            mt.appendSlice(allocator, ": ") catch unreachable;
-            for (member_names.items, 0..) |mn, mi| {
-                if (mi > 0) mt.appendSlice(allocator, ", ") catch unreachable;
-                mt.appendSlice(allocator, mn) catch unreachable;
-                mt.append(allocator, '=') catch unreachable;
-                mt.appendSlice(allocator, member_protos.items[mi]) catch unreachable;
-            }
-            appended_items.append(allocator, ast.Item{ .inline_code = ast.InlineCode{
-                .code = mt.toOwnedSlice(allocator) catch unreachable,
-                .location = flow.location,
-                .module = allocator.dupe(u8, flow.module) catch unreachable,
-            } }) catch unreachable;
-        }
         // ---- facet guards (std/refine) ----
         // A leaf column that expands a proto field met to bounds or a clamp
         // is judged at the head of every insert proc — before capacity,

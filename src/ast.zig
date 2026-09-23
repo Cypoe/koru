@@ -973,6 +973,15 @@ pub fn resolveArgFieldIndex(arg: Arg, index: usize, fields: []const Field) ?usiz
         }
         return if (index < fields.len) index else null;
     }
+    // A label ending in '<' is micro-syntax, not a name: `Dog <: Animal`
+    // splits at ':' into (name "Dog <", value "Animal") for the transform's
+    // own grammar (proto field-set extension). It can never name a field —
+    // '<' is no identifier char — so it binds positionally like a bare arg.
+    {
+        const label = std.mem.trim(u8, arg.name, " \t");
+        if (label.len > 0 and label[label.len - 1] == '<')
+            return if (index < fields.len) index else null;
+    }
     for (fields, 0..) |f, fi| {
         if (std.mem.eql(u8, f.name, arg.name)) return fi;
     }

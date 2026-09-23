@@ -68,42 +68,55 @@ language. OOP was never a language; it was a module's worth of sugar
 over a table substrate nobody let exist. `new`'s absence is itself the
 law: refusal-by-absence beats refusal-by-diagnostic.
 
-**`std/oop` dissolved to zero — ruled on the walk.** The tree already
-carries the substrate: union stores fold shared columns across
-proto-typed members (690_274), the kind tag is synthesized (690_275),
-methods are flows over row borrows, `new` is `insert`. The entire
-residual is ONE feature in `std/proto`: **field-set extension**
-(`std/proto(Dog <: Animal)` = field-set union under the existing
-name-sameness and cycle rules) — "compose the same concepts in data"
-wearing its final name. Earned by maintenance (shared set declared once)
-and protos outside union stores (`std/list:new(Dog)` needs the fields on
-the entry). Substitutability is emergent: a Dog is an Animal when a
-query over shared field names sees it; no `instanceof` — "in the union"
-is the kind tag, "has the columns" is the query.
+**`std/oop` dissolved to zero — ruled on the walk, landed same day.**
+The tree already carries the substrate: per-proto stores pack the
+proto's fields as root columns and `std/store:view` projects shared
+leaves across member stores with `is`-narrowing (690_287) — the
+closed-world polymorphic container. (Corrected at implementation: the
+walk cited the sibling-member seed `{ player: Player, enemy: Enemy }`
+(690_274/275) — that spelling is deliberately BROKEN, re-pinned to the
+aspirational `std/store:set` + `kind` pool at 690_288-296; the live
+surface is the view.) The residual — **field-set extension** — landed
+as `std/proto(Dog <: Animal + Pet)`: parents merge before locals,
+same-name+same-concept dedups, same-name+different-concept refuses,
+cycles and unknown parents refuse, all pinned green at 698_001-009.
+Substitutability is emergent: a Dog is an Animal when a view query
+over shared leaf names sees it; "in the union" is the view's member
+list, "has the columns" is the query.
 
-**Spelling RULED:** transform args are OPAQUE TEXT — split on top-level
-commas, brace-counted, never parsed as expressions (corrected mid-walk:
-an earlier draft ranked candidates on parse-cost; every spelling costs
-nothing). `Dog <: Animal + Pet` — the subtype symbol verbatim, `+` as
-field-set union; multiple inheritance endorsed (no MRO, no dominance —
-concepts compose or the declaration refuses). `:` rejected on the
-labeled-arg convention; `->` reads "produces"; `is` was the word-form
-runner-up.
+**Spelling RULED and implemented:** transform args are OPAQUE TEXT —
+split on top-level commas, brace-counted, never parsed as expressions
+(corrected mid-walk: an earlier draft ranked candidates on parse-cost;
+every spelling costs nothing). `Dog <: Animal + Pet` — the subtype
+symbol verbatim, `+` as field-set union; multiple inheritance endorsed
+(no MRO, no dominance — concepts compose or the declaration refuses).
+`:` rejected on the labeled-arg convention; `->` reads "produces"; `is`
+was the word-form runner-up. Implementation note: `:` DOES split at
+arg-parse (label:value), so `Dog <: Animal` arrives as
+name="Dog <", value="Animal" — every proto-door consumer extracts the
+entry name as label-minus-'<'; six sites needed it (proto.kz,
+list.free.kz, store.leaf.kz, store.kz, phantom_semantic_checker,
+type_registry) — the rule now lives in a helper at each site.
 
 **The reference gap (surfaced by this walk, shared with
-frag-type-system-design's next-ranked item):** protos have containment
-only — `pos: Point` inlines. A field meaning "a row over there" has no
-spelling: the tree store's `parent: i64` is a foreign key by convention,
-invisible to the checker. The honest shape is a reference field kind —
-`owner: ref(Dog)` — which makes a proto's plurality declaration
-load-bearing (`ref` needs a home store to resolve through; `X.all`
-becomes typable, not just sugar). Handles stay the mechanism —
-generation-stable, checked-never-owned. Interior pointers stay refused
-(swap-remove moves rows; references point at rows, never cells). The
-walk didn't create this gap — object graphs made it load-bearing.
+frag-type-system-design's next-ranked item) — first rung landed:**
+`owner: ref(Dog)` validates the target is a declared compound and
+lowers to the i64 handle material in `std/list` element structs, the
+target kept in proto metadata for checkers (698_006/007). Refs are
+exempt from the containment-cycle walk (`next: ref(Node)` is legal by
+design). In a store seed the column IS the handle — `ref()` there
+refuses with the `i64` spelling named (698_009). Still open: `ref`
+needs X's plurality to resolve *through* — no binder ties the handle to
+its home store yet (`X.all` typable, not just sugar). Handles stay the
+mechanism — generation-stable, checked-never-owned. Interior pointers
+stay refused (swap-remove moves rows; references point at rows, never
+cells). The walk didn't create this gap — object graphs made it
+load-bearing.
 
 **Open:** whether extension clears the bar — decided by the first real
-program that can't be honest with restated fields.
+program that can't be honest with restated fields; and whether the
+blockless `std/proto(Cat <: Animal)` earns `?Source` support in the
+transform wrapper codegen (today: explicit `{}`).
 
 **Falsification:** a real program needing per-object heap identity or
 genuinely open-world dispatch reopens the corresponding door — by demand

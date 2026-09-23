@@ -66,13 +66,21 @@ the module itself existing.
 
 **RULED 2026-09-22 (same walk, later still): `std/oop` the module
 dissolves to zero.** The tree already carries the polymorphic substrate
-under other names: union stores fold shared columns across proto-typed
-members (690_274), the kind tag is synthesized (690_275, prefigured
-690_273), methods are flows over row borrows, `new` is `insert`. A union
-store IS the closed-world polymorphic container — every kind visible at
-comptime, shared fields deduped by name-sameness, the kind tag as the
-dispatch column. OOP's "treat all Animals uniformly" is a sweep over the
-union; per-kind behavior is `when`-arms. The vtable is a column.
+under other names: one store per proto packs the proto's fields as its
+root columns (`std/store:new(Dogs) { Dog }`), and `std/store:view` over
+the member stores projects shared leaves and narrows with `e is Store`
+(690_287+). A view over per-kind stores IS the closed-world polymorphic
+container — every kind visible at comptime, shared leaves folding by
+name-sameness, the store membership as the dispatch answer. OOP's
+"treat all Animals uniformly" is a sweep over the view; per-kind
+behavior is `is`-arms. The vtable is membership in a store.
+
+(Corrected at implementation: this walk first cited the sibling-member
+seed `{ player: Player, enemy: Enemy }` (690_274/275) as the union
+surface — those pins are deliberately BROKEN, re-pinned to the
+store-set surface at 690_288-296; the pooled `std/store:set` +
+`std/store:kind` shape is aspirational pending abstract/virtual
+machinery. The view surface is what 698_008 pins.)
 
 The entire residual is **one feature, and it lives in `std/proto`:
 field-set extension** — `std/proto(Dog <: Animal)` = Dog's field set is
@@ -81,13 +89,13 @@ concept dedups; same name + different concept refuses; cycles reject
 through the existing `findCycle`). This is the already-ruled direction —
 "compose the same concepts in data, never in behavior" — wearing its
 final name. Extension earns its keep on maintenance (declare the shared
-set once) and on protos outside union stores (`std/list:new(Dog)` needs
+set once) and on protos outside shared views (`std/list:new(Dog)` needs
 Dog's entry to really carry the fields).
 
 Substitutability needs no declaration: a Dog is an Animal precisely when
 a query over shared field names sees it — structural, checked by the
-fold. No `instanceof`; "is it in the union" is the kind tag, "does it
-have the columns" is the query.
+projection. No `instanceof`; "is it in the union" is the view's member
+list, "does it have the columns" is the query.
 
 ### The reference gap — pointers to concretizations (OPEN, load-bearing)
 
@@ -100,10 +108,16 @@ table. This is the same door the type-system walk already ranked next
 ("storage references — receipts inside storage have no binder") — the
 OOP walk made it load-bearing.
 
-The honest shape: a **reference field kind** — `owner: ref(Dog)` — which
-requires `Dog` to declare its plurality (`ref` needs a home store to
-resolve through; `X.all` becomes typable, not just sugar). Handles stay
-the mechanism: generation-stable, validity-checked-never-owned.
+The honest shape: a **reference field kind** — `owner: ref(Dog)` —
+**landed in its first rung**: `ref(X)` validates that X names a declared
+compound, keeps the target in proto metadata for checkers, and lowers
+to the i64 handle material in `std/list` element structs (698_006/007).
+In a store seed the column IS the handle, so `ref()` there refuses with
+the `i64` spelling named (698_009) — ref columns lowering through store
+machinery is a later rung. Still OPEN: `ref` needs X's plurality to
+resolve *through* — the checker does not yet know which store a Dog row
+lives in (`X.all` becoming typable, not just sugar). Handles stay the
+mechanism: generation-stable, validity-checked-never-owned.
 **Interior pointers stay refused** — `&row.field` can't survive
 swap-remove; references point at rows, never cells. Free-floating heap
 objects stay behind the `std/list` door.
@@ -137,37 +151,41 @@ or the declaration refuses). `,` stays the arg separator; `-`
 Illustrative spelling — INVENTED, a design target:
 
 ```koru
-// animals.k — pure Koru; everything here exists except `:` extension
+// animals.k — pure Koru, now COMPILING (698_001-009 green)
 import std/proto
 import std/store
 
 std/proto(Animal) { hp: i64 }
 
-std/proto(Dog <: Animal) {       // THE missing piece — field-set union
-    barked: bool
+std/proto(Dog <: Animal) {       // field-set union — landed
+    woofs: i64
 }
-std/proto(Cat <: Animal)
+std/proto(Cat <: Animal) {}      // empty block = pure inheritance
 
-std/store:new(animals, capacity: 64) { dog: Dog, cat: Cat }
+std/store:new(Dogs, capacity: 64) { Dog }
+std/store:new(Cats, capacity: 64) { Cat }
+std/store:view(Animals) { Dogs
+                          Cats }
 
-std/store:insert(animals) { hp: 10, barked: false }
-std/store:query(animals)
+std/store:insert(Dogs) { hp: 10, woofs: 3 }
+std/store:query(Animals)
 ! query a when a.hp < 10 |> std/io:print.ln("{{ a.hp:d }}")
 ```
 
 | OOP want | Where it lives | Status |
 |---|---|---|
 | `class X { fields }` | `std/proto(X)` | GROUNDED (665_PROTO) |
-| `X extends Y` | `std/proto(X <: Y)` — field-set union | **THE GAP** — everything else exists |
-| polymorphic collection | union store, folded columns | GROUNDED (690_274) |
-| `virtual`/`override` | synthesized kind tag + `when` arms | GROUNDED (690_275) |
+| `X extends Y` | `std/proto(X <: Y)` — field-set union | LANDED (698_001-005) |
+| polymorphic collection | per-proto stores + `std/store:view` projection | GROUNDED (690_287; 698_008) |
+| `virtual`/`override` | view `is`-narrowing + `when` arms | GROUNDED (690_287; 698_008) |
 | `x.f()` | `x \|> f` / flow over `*X` | GROUNDED |
 | `this.f = v` | `stored` — the one write path | GROUNDED — carries the cascade |
 | `for (x : Xs)` | store sweep — the fused stripe | GROUNDED |
 | `static` members | singleton store | GROUNDED |
 | `new` | `std/store:insert` | GROUNDED by absence |
 | `value V` | `std/proto(V)` | GROUNDED |
-| `instanceof` | kind tag / column presence | GROUNDED — structural, not declared |
+| `instanceof` | view membership / `is` narrowing | GROUNDED — structural, not declared |
+| `ref(X)` field | typed row handle — i64 material, target kept for checking | LANDED (698_006/007/009) |
 
 ## The rejection catalog (RULED — this is the guide)
 
@@ -242,15 +260,16 @@ by writing real programs in it, not by argument.
 
 ## Status
 
-**Residue.** No `input.kz` yet. The walk's arc: `.koop` file form →
-`std/oop` transform module → **two features in `std/proto`**:
-field-set extension (`X <: A + B`, RULED) and the reference field kind
-(`ref(X)` → handle into X's declared plurality; OPEN, shared with the
-type-system walk's storage-references door). First pins when built:
-extension flattens parent fields (MUST_RUN), same-name-different-type
-refuses (MUST_ERROR), extension cycles refuse (MUST_ERROR via
-`findCycle`), extended proto feeds `std/list:new` and a union store
-(MUST_RUN), `ref` to an unpluralized proto refuses (MUST_ERROR). The
-pattern half — "OOP-shaped programs are protos + union stores + flows"
-— needs no code; it may want a `koru-by-example`-style doc entry, not
-a cluster.
+**Pinned — 698_001 through 698_009 green.** The walk's arc: `.koop`
+file form → `std/oop` transform module → **two features landed in
+`std/proto`**: field-set extension (`X <: A + B` — flatten, dedup by
+name+concept, conflict and cycle refuse; 698_001-005) and the reference
+field kind (`ref(X)` → validated target, i64 handle material in list
+structs; 698_006/007/009). Extended protos feed `std/list:new` and the
+store/view surface (698_008 — per-proto stores + `view`, not the
+repudiated sibling-union seed). `std/proto(Cat <: Animal) {}` spells
+pure inheritance with an explicit empty block — the blockless form
+needs `?Source` support in the transform wrapper codegen, not built.
+The pattern half — "OOP-shaped programs are protos + stores + views +
+flows" — needs no code; it may want a `koru-by-example`-style doc
+entry, not a cluster.

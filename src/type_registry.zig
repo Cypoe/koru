@@ -394,6 +394,17 @@ pub const TypeRegistry = struct {
                     const is_foreign = foreign_door and std.mem.eql(u8, last_seg, "struct");
                     if ((is_decl_tor or is_proto or is_foreign) and inv.args.len > 0) {
                         var name = inv.args[0].value;
+                        // `<:` extension rides the labeled-arg split —
+                        // `std/proto(Dog <: Animal)` arrives as
+                        // (name: "Dog <", value: "Animal"), so the declared
+                        // entry is the label minus '<'.
+                        if (inv.args[0].had_explicit_label) {
+                            const label = std.mem.trim(u8, inv.args[0].name, " \t");
+                            name = if (std.mem.endsWith(u8, label, "<"))
+                                std.mem.trim(u8, label[0 .. label.len - 1], " \t")
+                            else
+                                label;
+                        }
                         if (name.len >= 2 and name[0] == '"' and name[name.len - 1] == '"')
                             name = name[1 .. name.len - 1];
                         if (name.len > 0) try self.registerDeclaredType(name);
