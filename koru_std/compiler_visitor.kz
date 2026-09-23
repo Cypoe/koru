@@ -250,7 +250,7 @@ const VisitorContext = struct {
         }
         
         fn visitEventDecl(self: *ASTVisitor, event: anytype) !void {
-            // Skip compiler events (internal use only)
+            // Skip compiler tors (internal use only)
             if (event.path.len > 0 and std.mem.eql(u8, event.path[0], "compiler")) {
                 return;
             }
@@ -282,7 +282,7 @@ const VisitorContext = struct {
             // Emit handler function
             try self.emitter.emitFunctionStart("handler", "e: Input", "Output", true);
             
-            // Find proc implementation for this event
+            // Find proc implementation for this tor
             const impl = self.findProcForEvent(event.path);
             if (impl) |proc| {
                 try self.emitter.writeLine("_ = &__koru_event_input;");
@@ -303,7 +303,7 @@ const VisitorContext = struct {
         }
         
         fn visitProcDecl(self: *ASTVisitor, proc: anytype) !void {
-            // Procs are typically handled inline with their events
+            // Procs are typically handled inline with their tors
             // But we might have standalone Zig procs
             _ = proc;
             // TODO: Handle standalone procs if needed
@@ -314,7 +314,7 @@ const VisitorContext = struct {
             // These are the actual invocations like hello()
             try self.emitter.emitComment("Flow invocation");
             
-            // Build the event path
+            // Build the tor path
             try self.emitter.writeIndent();
             try self.emitter.write("_ = ");
             for (flow.inv().path, 0..) |segment, i| {
@@ -351,8 +351,8 @@ const VisitorContext = struct {
         }
         
         fn visitImmediateImpl(self: *ASTVisitor, impl: anytype) !void {
-            // Immediate implementations are inline event response constructs
-            // They define how an event responds with an immediate branch constructor
+            // Immediate implementations are inline tor response constructs
+            // They define how an tor responds with an immediate branch constructor
             try self.emitter.emitComment("Immediate implementation");
 
             // TODO: Full immediate impl code generation
@@ -375,7 +375,7 @@ const VisitorContext = struct {
         }
         
         fn visitEventTap(self: *ASTVisitor, tap: anytype) !void {
-            // Event taps for aspect-oriented programming
+            // Tor taps for aspect-oriented programming
             try self.emitter.emitComment("Event tap");
             _ = tap;
             // TODO: Implement tap generation
@@ -426,7 +426,7 @@ const VisitorContext = struct {
         }
         
         fn findProcForEvent(self: *ASTVisitor, path: []const []const u8) ?*const ProcDecl {
-            // Search the AST for a proc matching this event's path
+            // Search the AST for a proc matching this tor's path
             for (self.ast.items) |item| {
                 switch (item) {
                     .proc_decl => |proc| {

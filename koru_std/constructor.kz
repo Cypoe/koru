@@ -8,7 +8,7 @@
 // thing is comptime and DISSOLVES — allocations happen at comptime and never
 // reach the binary. Runtime collection is not the constructor; it's the store.
 //
-// SURFACE: `std/constructor(nums)` invokes the module's `default` event (the
+// SURFACE: `std/constructor(nums)` invokes the module's `default` tor (the
 // default-event rule: `std/M(args)` ≡ `std/M:default(args)`). The header arg is
 // the cell NAME; the `! construct` half drives a LINQ traversal whose `push`
 // calls collect into the cell; `| constructed <r>` is the one-shot after-read.
@@ -20,7 +20,7 @@
 
 const std = @import("std");
 
-// The module's DEFAULT event — reached bare as `std/constructor(nums)`. Not a
+// The module's DEFAULT tor — reached bare as `std/constructor(nums)`. Not a
 // keyword (keyword elides the module path; default IS the module path). `expr` is
 // the first-parameter implicit slot: `std/constructor(nums)` lands `expr = "nums"`.
 //
@@ -156,7 +156,7 @@ const std = @import("std");
     }
 
     // @pass_ran (circuit breaker) + @shape_valid (the dissolution consumes the user
-    // branches, so the replacement no longer matches the event's declared contract;
+    // branches, so the replacement no longer matches the tor's declared contract;
     // the user surface was validated by parse, not the shape checker).
     const new_annotations = allocator.alloc([]const u8, flow.inv().annotations.len + 2) catch unreachable;
     for (flow.inv().annotations, 0..) |ann, i| new_annotations[i] = ann;
@@ -213,7 +213,7 @@ const std = @import("std");
     }
     const cc = construct_cont.?;
 
-    // The `! construct` SOURCE is a traversal event — iteration is emergent, not an
+    // The `! construct` SOURCE is a traversal tor — iteration is emergent, not an
     // iterator fed to a loop. Two sources today: `for(range)` (GENERATION over a
     // range) and `fields-of(Type)` (CONSUMPTION — reflection over an existing type's
     // fields). Read which, and its argument.

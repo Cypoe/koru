@@ -1,6 +1,6 @@
 // deps.kz - System dependency management for Koru
 //
-// This module provides events for declaring system-level dependencies
+// This module provides tors for declaring system-level dependencies
 // (libraries installed via brew, apt, dnf, pacman, etc.) that are required
 // for Koru packages to build.
 //
@@ -568,7 +568,7 @@
 ~[comptime|norun]pub tor requires.system { source: Source }
 
 ~proc requires.system|zig {
-    // Void event - collected during AST walking
+    // Void tor - collected during AST walking
 }
 
 // ============================================================
@@ -578,5 +578,5 @@
 ~[comptime|norun]pub tor requires.zig { source: Source }
 
 ~proc requires.zig|zig {
-    // Void event - collected during AST walking / build.zig.zon generation
+    // Void tor - collected during AST walking / build.zig.zon generation
 }

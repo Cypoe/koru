@@ -1,4 +1,4 @@
-// Koru Standard Library: Event Taps
+// Koru Standard Library: Tor Taps
 // ==================================
 //
 // Observe event transitions without touching the flow being observed.
@@ -64,8 +64,8 @@ var metatype_global_counter: usize = 0;
     }
 
     // KEBAB-CANONICAL: names are bytes everywhere in the pipeline, so the tap
-    // pattern compares verbatim against event names — `add-five -> *` matches
-    // the event registered as `add-five`. No normalization on either side.
+    // pattern compares verbatim against tor names — `add-five -> *` matches
+    // the tor registered as `add-five`. No normalization on either side.
 
     const tap_flow = if (item.* == .flow) &item.flow
         else return .{};
@@ -81,7 +81,7 @@ var metatype_global_counter: usize = 0;
     // `v` on the tap flow HEAD (return_binding), while the observer sits on a
     // void-branch (`branch == ""`) continuation with no binding. Lift `v` onto
     // that continuation so the wrap path rewrites it like a branch tap's payload
-    // bind (to the source event's produced value at the match site).
+    // bind (to the source tor's produced value at the match site).
     if (tap_flow.inv().return_binding) |head_bind| {
         if (allocator.alloc(ast.Continuation, all_tap_branches.len) catch null) |patched| {
             for (all_tap_branches, 0..) |tc, i| {
@@ -278,8 +278,8 @@ var metatype_global_counter: usize = 0;
             return false;
         }
 
-        // Check if an event path matches a pattern
-        // Pattern can be: "event", "module:event", or "module:path.to.event"
+        // Check if an tor path matches a pattern
+        // Pattern can be: "tor", "module:tor", or "module:path.to.tor"
         // fallback_module: Used when path.module_qualifier is null (e.g., for flows declared in a module)
         fn pathMatches(pattern: []const u8, is_wildcard: bool, path: *const ast.DottedPath, fallback_module: ?[]const u8, alloc: std.mem.Allocator) bool {
             if (is_wildcard and (std.mem.eql(u8, pattern, "*") or std.mem.eql(u8, pattern, "*:*"))) return true;
@@ -576,7 +576,7 @@ var metatype_global_counter: usize = 0;
                 }
             } else if (tap_binding != null and tap_branch.len == 0 and source_produced != null) {
                 // Bare-return tap (`tap(e -> *): v |> obs(v)`): the source `-> T`
-                // event has no branch payload binding; its produced value is the
+                // tor has no branch payload binding; its produced value is the
                 // source head's `: r` bind, already declared in scope. Rewrite the
                 // tap's `v` straight to that (`obs(value: v)` → `obs(value: r)`).
                 // No effective_binding synthesized — `r` already exists.
@@ -714,7 +714,7 @@ var metatype_global_counter: usize = 0;
 
             if (is_metatype_tap) {
                 if (source_event) |src_event| {
-                    // Extract destination event from ORIGINAL flow (not the tap handler!)
+                    // Extract destination tor from ORIGINAL flow (not the tap handler!)
                     // For profiling, we want to know where the flow goes next, not what the tap does
                     var dest_event: ?[]const u8 = null;
                     if (original.node) |step| {
@@ -780,7 +780,7 @@ var metatype_global_counter: usize = 0;
             };
         }
 
-        /// Build canonical event name from DottedPath (e.g., "input:hello" or "module:path.to.event")
+        /// Build canonical tor name from DottedPath (e.g., "input:hello" or "module:path.to.tor")
         fn buildCanonicalName(alloc: std.mem.Allocator, path: *const ast.DottedPath, containing_module: ?[]const u8) ![]const u8 {
             // Calculate length
             var len: usize = 0;
@@ -863,11 +863,11 @@ var metatype_global_counter: usize = 0;
                     const tap_condition = tap_cont.condition;
                     const tap_condition_expr = tap_cont.condition_expr;
 
-                    // At terminal position (void event at end of flow), only these taps should fire:
+                    // At terminal position (void tor at end of flow), only these taps should fire:
                     // 1. Metatype taps (Profile/Transition/Audit) - observe any transition
-                    // 2. Void-branch taps (| |> with empty branch) - match void event completion
+                    // 2. Void-branch taps (| |> with empty branch) - match void tor completion
                     // Branch-specific taps (like | next v |>) should NOT fire because
-                    // "next" doesn't match a void event's empty branch.
+                    // "next" doesn't match a void tor's empty branch.
                     const is_metatype_tap = std.mem.eql(u8, tap_cont.branch, "Profile") or
                                            std.mem.eql(u8, tap_cont.branch, "Transition") or
                                            std.mem.eql(u8, tap_cont.branch, "Audit");

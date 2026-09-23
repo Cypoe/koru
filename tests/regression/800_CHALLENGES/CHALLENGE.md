@@ -34,13 +34,13 @@ contribution.* The single most valuable thing you can produce here is one
 defect. One of those is worth more than three programs that run.
 
 We have a suite full of naive tests. What we lack is *scale* — programs
-where events, flows, phantom states, and obligations interact the way
+where tors, flows, phantom states, and obligations interact the way
 they would in something a person would actually write. This challenge
 fills that gap, one submission at a time.
 
 ## The two non-negotiables
 
-1. **Koru has to actually do the work.** The logic lives in **events,
+1. **Koru has to actually do the work.** The logic lives in **tors,
    flows, phantom states, and obligations** — not stuffed inside one
    opaque `~proc|zig { ... }` body. A proc body is host code the compiler
    can't see; if your whole solution sits in one, you've written Zig in a
@@ -99,7 +99,7 @@ Before you build, look at what's already here and bring something
    second one — build a game, or a calculator, or go to Tier 2.
 2. **Language-corner gap** — which *feature combination* is
    under-exercised? Nobody's stressed obligation-transfer across a module
-   boundary yet? Nested label loops with namespaced events? Effect
+   boundary yet? Nested label loops with namespaced tors? Effect
    branches feeding a flow? The cockroaches live in the *combinations*.
    Pick a gap on this axis too, and say which one you targeted.
 

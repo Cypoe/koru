@@ -177,8 +177,8 @@ const Cap = struct {
         return lookupReturnIn(items, path);
     }
     // The payload type of one BRANCH — the arm-binding twin of lookupReturn.
-    // `! progress pr` binds the payload of `progress` on the event the arm
-    // hangs off, exactly as `f(): n` binds that event's return.
+    // `! progress pr` binds the payload of `progress` on the tor the arm
+    // hangs off, exactly as `f(): n` binds that tor's return.
     fn lookupBranchIn(its: []const ast.Item, name: []const u8, branch: []const u8) ?RetTy {
         for (its) |pi| {
             if (pi == .event_decl) {
@@ -221,7 +221,7 @@ const Cap = struct {
         const leaf = if (path.segments.len > 0) path.segments[path.segments.len - 1] else return null;
         return lookupBranchIn(items, leaf, branch);
     }
-    // A sweepbody impl flow's OWN event inputs are in scope for its body —
+    // A sweepbody impl flow's OWN tor inputs are in scope for its body —
     // the outer sweep's projected row fields and cursor arrive as inputs,
     // keyed on the outer arm. A sweep transplanted INTO that body reads
     // them as free names, so they join `avail` and take the capture road
@@ -269,7 +269,7 @@ const Cap = struct {
                 // pr` reads those names — and until this was recorded, the
                 // transplanted body got `use of undeclared identifier 'w'`.
                 // Its type is the branch payload on THIS cont's invocation,
-                // which is the event whose branches the child arm handles.
+                // which is the tor whose branches the child arm handles.
                 //
                 // gallery works around the gap by binding a sub-window
                 // mid-pipe first (`sub(parent: win, …): root`), which lands

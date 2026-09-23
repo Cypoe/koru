@@ -9,8 +9,8 @@
 // You cannot forget to hang up.
 //
 // A bridge is bound to a SCOPE at birth. The scope is the vocabulary: the set of
-// events that may act on what the bridge holds, and — through each obligation's
-// recorded discharge event — the knowledge of how to release it. That is what
+// tors that may act on what the bridge holds, and — through each obligation's
+// recorded discharge tor — the knowledge of how to release it. That is what
 // makes hanging up able to actually release rather than merely forget.
 
 ~[comptime|runtime]
@@ -67,7 +67,7 @@ pub const Bridge = struct {
         return count;
     }
 
-    /// Invoke the real discharge event for every handle still held, through the
+    /// Invoke the real discharge tor for every handle still held, through the
     /// session's scope.
     ///
     /// This used to print a line, set `discharged = true`, and call nothing: the
@@ -176,7 +176,7 @@ pub const Bridge = struct {
 // VOCABULARY - the derived prompt, session-shaped
 // ============================================================================
 //
-// `std/runtime:scope-vocabulary` renders a scope's COMPILED events — the
+// `std/runtime:scope-vocabulary` renders a scope's COMPILED tors — the
 // base vocabulary the program was built with. This tor grows that with the
 // session's DEFINED flows, so the prompt walks the whole environment a REPL
 // accumulates: compiled scopes plus the verbs the agent invented on earlier
@@ -278,7 +278,7 @@ pub const Bridge = struct {
 //
 // VOID, and that is load-bearing rather than minimal. Auto-discharge can only
 // insert a disposer with nothing to bind — `auto_discharge_inserter.zig:2742`
-// refuses any event carrying a branch or a bare return, because the inserter
+// refuses any tor carrying a branch or a bare return, because the inserter
 // appends a bare call and cannot invent a binding for its output. A `close`
 // that returned the still-held count disqualified itself, which meant every
 // failure arm of every conversation had to spell the hang-up by hand.

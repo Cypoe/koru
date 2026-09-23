@@ -3,12 +3,12 @@
 // Provides compiler pass for compiling GLSL shaders to SPIR-V
 // and generating Zig wrappers for Vulkan dispatch.
 //
-// This implements the compile.target event for "gpu" target.
+// This implements the compile.target tor for "gpu" target.
 
 const std = @import("std");
 
 // ================================================================
-// Compiler Pass Event Interface
+// Compiler Pass Tor Interface
 // ================================================================
 
 ~pub tor compile.target {
@@ -71,7 +71,7 @@ const RuntimeFile = struct {
 
     const shader_code = try extractGLSL(allocator, body);
 
-    // Generate unique shader filename based on event path
+    // Generate unique shader filename based on tor path
     const shader_name = try generateShaderName(allocator, path);
     const glsl_path = try std.fmt.allocPrint(
         allocator,

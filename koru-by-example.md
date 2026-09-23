@@ -56,7 +56,7 @@ The answer is 42.
 ### 010_003_event_multiline_shape
 
 ```koru
-// Event input shape braces may open on the line after the event name.
+// Tor input shape braces may open on the line after the tor name.
 
 tor example.write
 {
@@ -74,7 +74,7 @@ tor example.write
 ```koru
 // Test: Pure subflow implementation (no proc needed)
 // From the README example - this is idiomatic Koru
-// This is the default authoring model for ordinary event behavior.
+// This is the default authoring model for ordinary tor behavior.
 import std/io
 
 tor greet { name: string } -> string
@@ -100,7 +100,7 @@ Hello, World!
 // Koru should support clean array literal syntax: [a, b, c]
 // The compiler infers the element type from the parameter type.
 //
-// Expected: Compiles and runs, passing array to the event
+// Expected: Compiles and runs, passing array to the tor
 
 const std = @import("std");
 
@@ -136,7 +136,7 @@ sum(numbers: [1, 2, 3, 4]): r |> check(expected: 10, actual: r)
 // Koru should support clean struct literal syntax: { field: value }
 // This matches existing Koru patterns in subflows and branch constructors.
 //
-// Expected: Compiles and runs, struct passed to event
+// Expected: Compiles and runs, struct passed to tor
 
 const std = @import("std");
 
@@ -187,7 +187,7 @@ configure(config: { timeout: 30, retries: 3 }): c |> check(expected: 90, actual:
 
 import std/io
 
-// Lower-level event: arbitrary outcome names
+// Lower-level tor: arbitrary outcome names
 pub tor step {}
 | return
 | break
@@ -195,7 +195,7 @@ pub tor step {}
 
 step => continue
 
-// Outer event: its own outcome vocabulary
+// Outer tor: its own outcome vocabulary
 pub tor run {}
 | stopped
 | iterated
@@ -233,7 +233,7 @@ Testing subflow-defined semantics:
 
 const std = @import("std");
 
-// Server events
+// Server tors
 tor listen { port: u16 }
 | ready u32
 | failed string
@@ -344,7 +344,7 @@ entry ran
 ```koru
 // PIN (part): `part impl` in the entry loads every `input.impl.k*` sibling —
 // the same join the stem-facet mechanism makes, but NAMED by the declaration
-// instead of derived from the directory. Events declared in a part are in
+// instead of derived from the directory. Tors declared in a part are in
 // scope for the primary's flows, referenced unqualified — the merge puts
 // primary and parts in one module (the 140_009 facet contract, through part).
 
@@ -387,8 +387,8 @@ pong
 ### 210_013_void_event_chaining
 
 ```koru
-// Test: Parser should handle void event chaining
-// Void events (no output branches) should support continuation syntax
+// Test: Parser should handle void tor chaining
+// Void tors (no output branches) should support continuation syntax
 // void-event() |> next_event() should create a continuation
 
 tor void-event {}
@@ -494,7 +494,7 @@ Closing file
 ### 320_137_cond_constructs_named_branches
 
 ```koru
-// Pins: cond arms construct named event branches with `=>` (same glyph as
+// Pins: cond arms construct named tor branches with `=>` (same glyph as
 // `if | then => more` in 020_028 / 240). Value-produce `cond` + `->` is
 // 320_133; this pin is the branch-constructor twin for app routers
 // (page-route → | catalog | progress | …).
@@ -543,7 +543,7 @@ other
 // sibling of 400_070. `ping` declares one void-ish effect arm and NO terminal
 // branches; its impl is a SUBFLOW that FIRES the arm by CALLING it, exactly as
 // a `proc` body calls `pong(msg)` today. Ruled 2026-07-02: firing introduces
-// NO new grammar — inside the impl of the declaring event, the event's own
+// NO new grammar — inside the impl of the declaring tor, the tor's own
 // arms are callable, and everything downstream reuses the established subflow
 // forms. Here that's the simplest one: the impl body is a plain call head
 // (`ping = pong(x)`, same shape as `run = step()` in 240).

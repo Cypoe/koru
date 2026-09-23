@@ -323,7 +323,7 @@ fn printJson(v: []const u8) void {
     //
     // WALK. The scope of "rests on" is the program's flows: resolve the
     // subject to a declaration key; expand that key to the flows that
-    // implement it (a flow item's `impl_of` names the event it implements —
+    // implement it (a flow item's `impl_of` names the tor it implements —
     // the subflow `build = ...` carries impl_of = build; for flows without an
     // impl_of, the head invocation names the contract); walk every flow body
     // for invocations; every reached declaration is reported with its stamp —
@@ -353,7 +353,7 @@ fn printJson(v: []const u8) void {
     defer arena.deinit();
     const aa = arena.allocator();
 
-    // Index: every event and proc key (the reachable declarations).
+    // Index: every tor and proc key (the reachable declarations).
     var event_keys = std.ArrayList([]const u8){};
     var proc_keys = std.ArrayList([]const u8){};
     var claims_all = std.ArrayList(Claim){};
@@ -427,7 +427,7 @@ fn printJson(v: []const u8) void {
 
     const headKey = struct {
         fn call(f: *const ast.Flow, aa_param: std.mem.Allocator) []const u8 {
-            // A flow item's contract is its `impl_of` (the event it
+            // A flow item's contract is its `impl_of` (the tor it
             // implements); for flows without one, the head invocation names
             // it. The head itself is the FIRST CALL in the body (the `~for`
             // in `build = ~for(...)`), so it is the contract only for

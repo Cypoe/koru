@@ -36,7 +36,7 @@ fn ioLowerJsExpr(alloc: std.mem.Allocator, text: []const u8) []const u8 {
 // SAME implementation (__printInterpolate, with_newline=false): comptime
 // {{ }} interpolation, rerouted to print.impl for shape checking.
 //
-// The old RUNTIME passthrough event (`print { text }` + |zig/|js procs) died
+// The old RUNTIME passthrough tor (`print { text }` + |zig/|js procs) died
 // here (2026-06-11, Lars ruling: std/io's print surface is comptime-only;
 // stage/runtime printing is the future std/compiler print-family). Its
 // positional-arg mis-emit bug died with the codepath.
@@ -55,7 +55,7 @@ fn ioLowerJsExpr(alloc: std.mem.Allocator, text: []const u8) []const u8 {
 
 // Print formatted text
 // NOTE: printf with varargs would require runtime support - skipping for now
-// pub event io.printf { format: string, args: anytype }
+// pub tor io.printf { format: string, args: anytype }
 // | printed {}
 //
 // proc io.printf {
@@ -113,7 +113,7 @@ var readln_buf: [8192]u8 = undefined;
 
 // Debug print for development
 // NOTE: debug with anytype would require runtime support - skipping for now
-// pub event io.debug { label: string, value: anytype }
+// pub tor io.debug { label: string, value: anytype }
 // | printed {}
 //
 // proc io.debug {
@@ -277,7 +277,7 @@ var readln_buf: [8192]u8 = undefined;
 // - Optional format specifier: {{ name:s }} or {{ count:d }}
 // - Generates: std.debug.print("Hello {}! Count: {}\n", .{name, count});
 //
-// This is NOT a regular event - it's a pure compile-time transformation.
+// This is NOT a regular tor - it's a pure compile-time transformation.
 
 ~[keyword|comptime|transform]pub tor print.ln {
     expr: Expression,
@@ -316,7 +316,7 @@ var readln_buf: [8192]u8 = undefined;
 // ============================================================================
 // Shared interpolation engine for the comptime print family. `print` IS
 // `print.ln` without the trailing newline — ONE implementation, parameterized
-// at comptime. Both reroute to the [norun] print.impl event for shape
+// at comptime. Both reroute to the [norun] print.impl tor for shape
 // checking. (Stage/runtime printing belongs to the future std/compiler
 // print-family — std/io's print surface is comptime-only by ruling,
 // 2026-06-11.)
@@ -701,7 +701,7 @@ fn __printInterpolate(
     // Position-agnostic: the runner lifts nested sites into a synthetic
     // top-level flow, so the flow's own invocation is correct at every depth.
 
-    // Re-route path to void print.impl event for shape checking
+    // Re-route path to void print.impl tor for shape checking
     const impl_segments = allocator.alloc([]const u8, 2) catch unreachable;
     impl_segments[0] = allocator.dupe(u8, "print") catch unreachable;
     impl_segments[1] = allocator.dupe(u8, "impl") catch unreachable;
@@ -944,7 +944,7 @@ fn __printInterpolateJs(
         .{ write_fn, buf.items },
     ) catch unreachable;
 
-    // Re-route to the [norun] print.impl event for shape checking — the reroute
+    // Re-route to the [norun] print.impl tor for shape checking — the reroute
     // is analysis-only; the spliced inline_body does the write. Mirrors |zig's
     // __printInterpolate AST surgery (whole-struct copy, not a field literal).
     const impl_segments = allocator.alloc([]const u8, 2) catch unreachable;
@@ -1018,7 +1018,7 @@ fn __printInterpolateJs(
 // - Parses {{ ... }} and {% if %} placeholders
 // - Generates inline Zig print statement
 //
-// This is NOT a regular event - it's a pure compile-time transformation.
+// This is NOT a regular tor - it's a pure compile-time transformation.
 
 ~[comptime|transform]pub tor print.blk {
     source: Source,

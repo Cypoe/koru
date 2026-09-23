@@ -8,8 +8,8 @@
 //
 // `scope-vocabulary` is the static surface: everything the scope declares.
 // This is the live half: what may be called GIVEN the resource types the
-// caller holds. An event is callable now iff every discharge-kind phantom it
-// consumes (`!open`) names a held type; events with no possession requirement
+// caller holds. An tor is callable now iff every discharge-kind phantom it
+// consumes (`!open`) names a held type; tors with no possession requirement
 // are always callable. `held` is a comma-separated list of resource-type
 // names (the `created_by_event` segments of the caller's live handles). The
 // render uses the same signature spelling as scope-vocabulary, so the

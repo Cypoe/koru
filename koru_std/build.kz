@@ -124,7 +124,7 @@ pub fn matchesFlags(annotations: []const []const u8) bool {
 // When compiled with --build=debug, the emitter will use "naive" for compute.
 //
 // The Source block contains JSON-like mappings: event_name → variant_name
-// The program AST is used to validate that referenced events exist
+// The program AST is used to validate that referenced tors exist
 
 ~[comptime]pub tor variants { meta: InvocationMeta, source: Source, program: std/compiler:Program }
 | configured usize
@@ -182,12 +182,12 @@ pub fn matchesFlags(annotations: []const []const u8) bool {
         const value = text[value_start..pos];
         pos += 1; // skip closing quote
 
-        // Validate that the event exists in the AST and grab its decl
+        // Validate that the tor exists in the AST and grab its decl
         const event = ast_functional.findEventByCanonicalName(program, key) orelse {
             return .{ .invalid_event = key };
         };
 
-        // Register under the event's canonical name (e.g. "blinky:main"),
+        // Register under the tor's canonical name (e.g. "blinky:main"),
         // not the raw user-supplied key (e.g. "main"). visitor_emitter looks
         // up the canonical form at emission time, so the registry must match.
         // page_allocator: this is comptime, the slice lives until process exit.
@@ -366,7 +366,7 @@ pub fn matchesFlags(annotations: []const []const u8) bool {
 //   - ctx.program: *const Program - full AST access (optional)
 //
 // Unlike command.sh (shell) or command.zig (raw Zig), command uses normal
-// Koru flow syntax. Same patterns as everything else - events, branches, if.
+// Koru flow syntax. Same patterns as everything else - tors, branches, if.
 //
 // Examples:
 //   std/build:command(name: "check", description: "Run all checks")
@@ -481,7 +481,7 @@ pub fn matchesFlags(annotations: []const []const u8) bool {
 } -> koru_compiler_types.CompilerContext
 
 ~proc collect|zig {
-    // Extract nested fields from ctx (auto-destructuring only works for top-level event params)
+    // Extract nested fields from ctx (auto-destructuring only works for top-level tor params)
     const allocator = ctx.allocator;
     const ast_items = ctx.ast.items;
 

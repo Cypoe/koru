@@ -1,4 +1,4 @@
-// Koru Standard Library: Reactive Stores — the `insert` event.
+// Koru Standard Library: Reactive Stores — the `insert` tor.
 // Joined via `~part insert` in store.kz; merged into the store module at load.
 
 // ============================================================================
@@ -211,7 +211,7 @@
             return out.toOwnedSlice(alloc) catch unreachable;
         }
         // Every store name visible in the program — untransformed creates plus
-        // generated apply events — so a seed value can reference a cell from
+        // generated apply tors — so a seed value can reference a cell from
         // any store, under any transform order.
         fn allStoreNames(alloc: std.mem.Allocator, prog: *const ast.Program) []const []const u8 {
             return storeAllNames(alloc, prog);
@@ -306,7 +306,7 @@
         return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): {s}", .{ store_name, struct_literal.describeError(err) }) } };
     };
     // Kinded union: the row names this member's leaves only. Columns the
-    // kind does not own are zero-filled at the call site (the insert event
+    // kind does not own are zero-filled at the call site (the insert tor
     // still writes every SoA column). Kindless stores keep the exact-arity
     // contract — without a tag there is no owner to omit for.
     const kinded_own: ?StoreMemberSchema = blk_own: {
@@ -422,7 +422,7 @@
 
     // Handle form iff the site handles `| row …`; `| violated <field>` and
     // `| ok` are the supervised answers to `?!violated`/`?ok` on the
-    // generated events; anything else on an insert site is a loud wall.
+    // generated tors; anything else on an insert site is a loud wall.
     const site_is_head = invocation == flow.inv();
     var has_row_cont = false;
     var has_full_cont = false;

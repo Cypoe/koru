@@ -22,7 +22,7 @@ const std = @import("std");
 // - `if` is a `[template]` proc, NOT a dedicated AST node (no ConditionalNode).
 //   The body is a literal Zig if/else. `then` / `else` are TERMINAL
 //   continuations, CONTINUED by the template via `{{ continuations["X"].continue }}`
-//   — the same producer→consumer dispatch every branched event uses. Where
+//   — the same producer→consumer dispatch every branched tor uses. Where
 //   `for` CALLS effects during the loop, `if` CONTINUES to one of its terminals in
 //   the matching arm. Same machine; `if`'s "during" half is just empty.
 // - Zero-overhead: the consumer's `then` / `else` body is spliced into the
@@ -221,7 +221,7 @@ const std = @import("std");
 // - Pure from Koru's perspective (captured computes the NEXT value)
 // - Efficient mutation in generated Zig (var cell + field writes)
 // - Decomposes fold while preserving purity guarantees
-// The event declares the USER surface (second [transform]proc migrant after
+// The tor declares the USER surface (second [transform]proc migrant after
 // std/regex:match): a source block, the `! as` cell effect, the optional
 // `| captured` after-read. The shape checker enforces this contract with zero
 // capture-specific code. The machine interface (invocation/item/program/
@@ -513,7 +513,7 @@ const std = @import("std");
     //     exemption, WITH reason). The dissolution CONSUMES the user's
     //     `! as`/`| captured` branches — they become the cell preamble and
     //     field assignments — so the replacement flow no longer matches the
-    //     event's user contract. That is by design, and this is the rare,
+    //     tor's user contract. That is by design, and this is the rare,
     //     explicit @shape_valid case. NOTE: checkers run AFTER transforms, so
     //     the user surface is validated HERE in the transform (loud
     //     @compileError on missing block / missing `! as`), not by the shape
@@ -547,5 +547,5 @@ const std = @import("std");
 }
 
 // CONST moved to koru_std/declarations.kz — it is a value declaration, not
-// control flow (and not a type). See `declarations.kz` for the event + the
+// control flow (and not a type). See `declarations.kz` for the tor + the
 // per-target template procs.

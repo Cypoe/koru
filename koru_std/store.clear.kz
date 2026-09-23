@@ -1,4 +1,4 @@
-// Koru Standard Library: Reactive Stores — the `clear` event.
+// Koru Standard Library: Reactive Stores — the `clear` tor.
 // Joined via `~part clear` in store.kz; merged into the store module at load.
 
 // std/store:clear(s) — empty a plural store in ONE step.
@@ -6,7 +6,7 @@
 // The bulk twin of `take`. Where `take` removes one row and fires `removed`,
 // `clear` removes every row and fires `cleared` once. Each removal verb has
 // its own arm; neither fires the other's, which is what lets a bulk removal
-// stay bulk instead of degenerating into a thousand per-row events.
+// stay bulk instead of degenerating into a thousand per-row tors.
 //
 // Outstanding handles go stale across it (the generation of every live slot is
 // bumped), so the stale-handle trap 690_115 pins still fires afterwards.

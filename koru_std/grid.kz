@@ -92,7 +92,7 @@ const grid_read = struct {
     // The emitted prefix for a grid declared under `home` — `null` meaning the
     // entry file's top level. Always qualified, never conditionally: a module
     // can name itself in the emitted Zig (`main_module.` inside main_module is
-    // how `sweep` already calls its own body event), so there is no case that
+    // how `sweep` already calls its own body tor), so there is no case that
     // needs the bare spelling and therefore no second rule to get wrong.
     fn nsFor(alloc: std.mem.Allocator, prog: *const ast_grid.Program, home: ?[]const u8) []const u8 {
         // JS: the declaration lands at the emitted file's top level and is
@@ -222,7 +222,7 @@ const grid_read = struct {
         return Target{ .grid = text[0..e], .x = std.mem.trim(u8, idx_raw, " "), .y = null, .field = text[j + 2 .. fe] };
     }
     // A column's declared type. The write threads the value through a typed
-    // event input, so the type has to be recovered from the declaration — and
+    // tor input, so the type has to be recovered from the declaration — and
     // as everywhere else in this file, the declaration has two spellings
     // depending on site order: the raw `std/grid:new` flow (`count: 0[i64]`)
     // and the host line it becomes (`    count: [8]i64 = ...`).

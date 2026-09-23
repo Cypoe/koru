@@ -11,8 +11,8 @@
 //   }
 //
 // The compiler:
-//   1. Traces the flow to find impure events
-//   2. Errors if impure event not mocked
+//   1. Traces the flow to find impure tors
+//   2. Errors if impure tor not mocked
 //   3. Errors if mock is unused
 //   4. Generates Zig test block
 
@@ -251,7 +251,7 @@ const validateMocks = struct {
 // Test Declaration
 // =============================================================================
 
-// Main test event - takes name as Expression, body as Source
+// Main test tor - takes name as Expression, body as Source
 // Transform generates Zig test blocks using real emitter infrastructure
 ~[keyword|comptime|transform] pub tor test {
     expr: Expression,
@@ -461,13 +461,13 @@ const validateMocks = struct {
     };
 
     // Emit the test module using emitModuleSubset
-    // Pass the original main module name so event references are redirected to test module
+    // Pass the original main module name so tor references are redirected to test module
     const test_module_code = emitter_helpers.emitModuleSubset(
         allocator,
         test_module_items.items,
         test_module_name,
         type_registry_ptr,
-        program.main_module_name,  // original main module name for event redirection
+        program.main_module_name,  // original main module name for tor redirection
     ) catch |err| {
         // Loud failure: silently skipping emission would mean the test block
         // never exists — a test that "passes" by not being generated.
@@ -506,7 +506,7 @@ const validateMocks = struct {
     // Run transforms on test flows (for assert -> inline_code, etc.)
     var flow_items = std_import.ArrayList(ast.Item).initCapacity(allocator, cloned_flows.items.len + test_module_items.items.len) catch unreachable;
     for (cloned_flows.items) |f| flow_items.append(allocator, f) catch {};
-    // Include test module items for event resolution during transform
+    // Include test module items for tor resolution during transform
     for (test_module_items.items) |ti| flow_items.append(allocator, ti) catch {};
 
     const flow_program = allocator.create(ast.Program) catch unreachable;
@@ -547,7 +547,7 @@ const validateMocks = struct {
         }
     }
 
-    // Also scan program for constant events (immediate_impl items)
+    // Also scan program for constant tors (immediate_impl items)
     const scanForConstants = struct {
         fn scan(items: []const ast.Item, paths: *std_import.StringHashMap(ast.BranchConstructor), alloc: std_import.mem.Allocator) void {
             for (items) |prog_item| {
@@ -610,10 +610,10 @@ const validateMocks = struct {
     }
     std_import.debug.print("[TEST] Purity walk complete, {d} impure events\n", .{impure_events.items.len});
 
-    // Error on impure events without mocks.
+    // Error on impure tors without mocks.
     //
-    // The whole point of this refusal is that it names EVERY impure event at
-    // once — one recompile, not one per event. So the names go on the SAME LINE
+    // The whole point of this refusal is that it names EVERY impure tor at
+    // once — one recompile, not one per tor. So the names go on the SAME LINE
     // as the headline: a `@panic` payload is read as a single `panic: <msg>`
     // line by every tool that quotes it, and a one-per-line list is silently
     // dropped by anything that quotes only that first line (which is how this
@@ -704,8 +704,8 @@ const walkFlowForPurity = struct {
 
         if (mocks.get(inv_path)) |_| return;
 
-        // Subflow/composed events: walk the implementation body instead of
-        // flagging the outer event. Tests call process_payment etc.; purity
+        // Subflow/composed tors: walk the implementation body instead of
+        // flagging the outer tor. Tests call process_payment etc.; purity
         // lives in the leaf proc calls inside the impl.
         if (emitter_helpers.findImplByPath(all_items, &flow_to_walk.inv().path)) |found_impl| {
             switch (found_impl) {
@@ -904,10 +904,10 @@ const emitFlowWithMocks = struct {
 
 // The actual transform will:
 // 1. Parse source block as Koru AST
-// 2. Find mock definitions: lines matching `event = branch { ... }`
+// 2. Find mock definitions: lines matching `tor = branch { ... }`
 // 3. Extract the flow under test (non-mock lines)
-// 4. Trace flow to find impure events
-// 5. Error if impure event not mocked
+// 4. Trace flow to find impure tors
+// 5. Error if impure tor not mocked
 // 6. Error if mock unused
 // 7. Create mangled proc implementations for mocks
 // 8. Rewrite flow to call mangled versions

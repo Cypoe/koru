@@ -1,6 +1,6 @@
 // package.kz - Package manager integration for Koru
 //
-// This module provides events for declaring Koru package dependencies
+// This module provides tors for declaring Koru package dependencies
 // distributed via various package managers (npm, cargo, go, pip).
 //
 // NOTE: These are for importing KORU PACKAGES that happen to be distributed
@@ -137,7 +137,7 @@
 ~[comptime|norun]pub tor requires.npm { source: Source }
 
 ~proc requires.npm|zig {
-    // Void event - no return value needed
+    // Void tor - no return value needed
     // The compiler collects these during post-semantic analysis
 }
 
@@ -145,19 +145,19 @@
 ~[comptime|norun]pub tor requires.cargo { source: Source }
 
 ~proc requires.cargo|zig {
-    // Void event - collected by compiler
+    // Void tor - collected by compiler
 }
 
 // Koru packages distributed via Go modules
 ~[comptime|norun]pub tor requires.go { source: Source }
 
 ~proc requires.go|zig {
-    // Void event - collected by compiler
+    // Void tor - collected by compiler
 }
 
 // Koru packages distributed via pip
 ~[comptime|norun]pub tor requires.pip { source: Source }
 
 ~proc requires.pip|zig {
-    // Void event - collected by compiler
+    // Void tor - collected by compiler
 }

@@ -29,10 +29,10 @@
         }
         // A store-read site nested in the interceptor body transplants its
         // body into a `__store_sweepbody_<s>_L<n>` / `__store_qbody_<s>_L<n>`
-        // event whose INPUTS carry the captures the body references. The
+        // tor whose INPUTS carry the captures the body references. The
         // interceptor body at create time holds only the spliced loop, so a
         // body-only use of the payload lives here — the field name shows up
-        // as an event input, which is exactly the thread that makes it
+        // as an tor input, which is exactly the thread that makes it
         // compile (690_093).
         fn readBodyEventUses(prog: *const ast_find.Program, text: []const u8, name: []const u8) bool {
             const markers = [_][]const u8{ "__store_sweepbody_", "__store_qbody_" };
@@ -73,7 +73,7 @@
                         // The spliced loop a nested read site leaves behind
                         // (690_093): its relocated guard carries the payload
                         // name in the text, and its body call names the
-                        // transplanted event whose inputs carry the capture.
+                        // transplanted tor whose inputs carry the capture.
                         if (inText(n.inline_code, name)) return true;
                         if (readBodyEventUses(prog, n.inline_code, name)) return true;
                     },
@@ -165,7 +165,7 @@ const PVerbs = struct {
                 return .{ .refuse = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): `! step` binds '{s}' but never steps it - the body is the step call (`|> <module>:<step>({s})`)", .{ store_name, sbind, sbind }) };
             }
             // The step tor's `|` terminals become the pass's verdict
-            // vocabulary — the generated stepbody event re-declares them
+            // vocabulary — the generated stepbody tor re-declares them
             // and the impl re-raises each one it does not write. `complete`
             // must be among them: a row with no way out drains nothing.
             const step_decl = blk_sd: {

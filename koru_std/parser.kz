@@ -57,7 +57,7 @@ const std = @import("std");
 ! `*` *
 
 // The common picker: explicit ordered-choice over patterned branches at the
-// cursor. Consumed by the `parse` transform when static; a real event so the
+// cursor. Consumed by the `parse` transform when static; a real tor so the
 // page resolves honestly. `no-match` mirrors regex:match's fallback — unused
 // by cut-1 rules (a rule with no matching alternative fails upward), reserved
 // as the explicit-recovery arm.
@@ -90,7 +90,7 @@ const std = @import("std");
 //   koruc parser_def.k parser:generate --lang=c     # or the flag form
 //
 // The CLI name is `parser:generate` (the module:verb idiom) while the handler
-// event stays the legal identifier `generate` — the `event` field on the
+// tor stays the legal identifier `generate` — the `tor` field on the
 // declare decouples the two (see collectCommands in main.zig).
 // ============================================================
 

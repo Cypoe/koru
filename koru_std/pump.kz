@@ -52,7 +52,7 @@ const PH = struct {
     }
     // store.kz's storeEventQualifier, restated — a module cannot call
     // another module's private fns. `main_module.` always on JS (the flat
-    // event namespace); `main_module.`/`koru_<path>.` on Zig.
+    // tor namespace); `main_module.`/`koru_<path>.` on Zig.
     fn eventQual(alloc: std.mem.Allocator, home: []const u8, main: []const u8) []const u8 {
         if (std.mem.eql(u8, CompilerEnv.lang, "js")) return "main_module.";
         if (home.len == 0 or std.mem.eql(u8, home, main)) return "main_module.";
@@ -292,7 +292,7 @@ const PH = struct {
     }
 };
 
-// An arm compiled into a callable unit: event decl + impl. The arm's `|>`
+// An arm compiled into a callable unit: tor decl + impl. The arm's `|>`
 // chain is cloned, its last invocation bound `-> __koru_r`, and a bare-return
 // continuation hands the value up. Returns the refusal SiteResult on
 // malformed bodies so callers can return it directly.
@@ -612,7 +612,7 @@ fn siteName(invocation: *const ast.Invocation) []const u8 {
             .name = allocator.dupe(u8, wbind) catch unreachable,
             .type = allocator.dupe(u8, "i64") catch unreachable,
         };
-        // The interest record is nominal per event — rebuild the fields
+        // The interest record is nominal per tor — rebuild the fields
         // rather than returning the callee's `Output` type wholesale.
         emitVerbUnit(allocator, &appended_items, program, flow, std.fmt.allocPrint(allocator, "__pump_{s}_wait_{d}", .{ pump_name, join_idx }) catch unreachable, wa, wf, "{ fd: i32, wait_ns: i128 }", "__koru_w", ".{ .fd = __koru_w.fd, .wait_ns = __koru_w.wait_ns }");
     }

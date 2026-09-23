@@ -150,7 +150,7 @@ const SRewrite = struct {
         return out.toOwnedSlice(alloc) catch unreachable;
     }
     fn walkCont(alloc: std.mem.Allocator, cont: *ast.Continuation, bind: []const u8, store: []const u8, fields: []const []const u8, srf: []const u8, cursor: []const u8, used: []bool, unknown: *?[]const u8, view_mode: bool) void {
-        // A nested arm's `when` guard runs inside the body event, so it reads
+        // A nested arm's `when` guard runs inside the body tor, so it reads
         // the threaded inputs like any other body expression.
         if (cont.condition) |c| {
             @constCast(cont).condition = refs(alloc, c, bind, store, fields, srf, cursor, .input, used, unknown, view_mode);

@@ -60,7 +60,7 @@ const codegen_utils_kernel = @import("codegen_utils");
 }
 
 // ============================================================================
-// Internal no-op event for refactored flows
+// Internal no-op tor for refactored flows
 // (This is here for reference; the transform injects a local one into the user program)
 ~[norun]pub tor nop {}
 
@@ -78,8 +78,8 @@ const codegen_utils_kernel = @import("codegen_utils");
 // This transform:
 //   1. Looks up kernel.shape(Body) in AST
 //   2. Emits a module-scope type declaration for Body
-//   3. Generates a local init event+proc that allocates kernel data and returns a view
-//   4. Rewrites the flow to call that init event
+//   3. Generates a local init tor+proc that allocates kernel data and returns a view
+//   4. Rewrites the flow to call that init tor
 
 ~[comptime|transform|claims_descendants]pub tor init {
     expr: Expression,
@@ -558,7 +558,7 @@ const codegen_utils_kernel = @import("codegen_utils");
     else
         KernelPlan{ .step_range = null, .step_invocation = null, .ops = &[_]KernelOp{} };
 
-    // Generate a unique local event/proc name for this init
+    // Generate a unique local tor/proc name for this init
     var hash: u32 = 0;
     for (flow.module) |c| hash = hash *% 31 +% c;
     hash = hash *% 31 +% @as(u32, @intCast(flow.location.line));
@@ -1737,7 +1737,7 @@ const codegen_utils_kernel = @import("codegen_utils");
     }
 
     // ========================================================================
-    // STEP 5: Replace invocation with a local kernel init event
+    // STEP 5: Replace invocation with a local kernel init tor
     // ========================================================================
 
     // The synthesized init tor is addressed by the IMPORT-DERIVED logical name
@@ -1802,7 +1802,7 @@ const codegen_utils_kernel = @import("codegen_utils");
     }
 
     // kernel.init replaces its site with new_item and appends the generated
-    // host type (if needed), static decl, and local init event + proc as new
+    // host type (if needed), static decl, and local init tor + proc as new
     // top-level items. The runner owns placement; Zig top-level decl order is
     // irrelevant, so appending is equivalent to the old insertAt.
     {
@@ -2627,8 +2627,8 @@ const codegen_utils_kernel = @import("codegen_utils");
 // FUTURE: kernel.reduce, kernel.cross
 // ============================================================================
 
-// [comptime|transform]pub event reduce { ... }
-// [comptime|transform]pub event cross { ... }
+// [comptime|transform]pub tor reduce { ... }
+// [comptime|transform]pub tor cross { ... }
 ~part body
 ~part scan
 ~part fpga

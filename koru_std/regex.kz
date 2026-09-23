@@ -8,7 +8,7 @@
 //   | `[0-9]+`        _ |> handle-number()
 //   | no-match          |> reject()
 //
-// `match` is NOT a keyword: it is an ordinary module event and must be
+// `match` is NOT a keyword: it is an ordinary module tor and must be
 // invoked qualified (`std/regex:match`). Pattern branches carry the matched
 // text (bind or discard with `_`); `no-match` carries nothing and binds
 // nothing.
@@ -43,16 +43,16 @@
 
 const std = @import("std");
 
-// The event declares the USER surface: any raw-name branch (the name IS the
+// The tor declares the USER surface: any raw-name branch (the name IS the
 // pattern, byte-for-byte) with a bindable payload, plus an optional void
 // `no-match` fallback. The shape checker enforces this contract — binding
 // rule included — with zero match-specific code; the transform's output
 // needs no exemption.
 //
 // The `[transform]` annotation on the PROC is what makes this a transform:
-// a transform IS a proc on an ordinary event. Its machine interface
+// a transform IS a proc on an ordinary tor. Its machine interface
 // (invocation/item/program/allocator → SiteResult) is the proc-return
-// convention, not part of the event. The event keeps `[transform]` too —
+// convention, not part of the tor. The tor keeps `[transform]` too —
 // downstream passes read it as "implemented by a transform" (deferred
 // bindings, comptime-flow skipping, variant emission).
 ~[comptime|transform]pub tor match { expr: Expression, reporter: *std/compiler:ErrorReporter }

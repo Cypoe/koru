@@ -134,7 +134,7 @@
     //
     // The store never had either problem: it mints ONE unit per store and passes
     // the field as an argument, so chained store writes are ordinary calls to a
-    // shared event. A grid's unit carries the assignment itself.
+    // shared tor. A grid's unit carries the assignment itself.
     const unit = std.fmt.allocPrint(allocator, "__grid_write_L{d}_{x}", .{ flow.location.line, std.hash.Wyhash.hash(0, btext) & 0xffff }) catch unreachable;
 
     // THE NAMESPACE IS IMPORT-DERIVED, NOT FILE-DERIVED. `flow.module` is the
@@ -236,5 +236,5 @@
 // grid's trap is a floor rather than a tax.
 //
 // This lowers to an ordinary `for(0..size) ! each <i>`, with every `c.<field>`
-// in the body rewritten to a direct cell read. It mints no event and transplants
+// in the body rewritten to a direct cell read. It mints no tor and transplants
 // no body: `for` already knows how to inline effect handlers, so reusing it

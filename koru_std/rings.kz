@@ -5,7 +5,7 @@
 // based on Dmitry Vyukov's bounded queue algorithm.
 //
 // DESIGN PHILOSOPHY:
-// - Events are implicitly tappable - no hooks, no callbacks
+// - Tors are implicitly tappable - no hooks, no callbacks
 // - Users observe via tap() without modifying this library
 // - Multicast: multiple taps = multiple observers, ALL see every message
 // - `when` clauses fuse predicates into the producer (zero-cost filtering)
@@ -35,7 +35,7 @@
 //
 // MULTICAST:
 //   Unlike traditional MPMC where one consumer wins, taps enable TRUE multicast:
-//   - Multiple taps on same event = ALL observers see EVERY message
+//   - Multiple taps on same tor = ALL observers see EVERY message
 //   - Perfect for telemetry, logging, PGO, debugging
 //   - Zero cost when no taps attached
 
@@ -152,17 +152,17 @@ pub fn MpmcRing(comptime T: type, comptime capacity: usize) type {
 // KORU EVENTS (implicitly tappable)
 // ============================================================================
 //
-// These events wrap the ring operations. Users instantiate MpmcRing with their
-// concrete type, then use these events with that type.
+// These tors wrap the ring operations. Users instantiate MpmcRing with their
+// concrete type, then use these tors with that type.
 //
 // Example:
 //   const Ring = MpmcRing(u64, 1024);
 //   var ring = Ring.init();
 //   std/rings:enqueue(ring: &ring, value: 42)
 
-// Generic type alias for event signatures
+// Generic type alias for tor signatures
 // Users replace with their concrete Ring type
-// (Future: derive handler to auto-generate typed events)
+// (Future: derive handler to auto-generate typed tors)
 
 ~pub tor enqueue { ring: *anyopaque, value: u64 }
 | ok
@@ -193,12 +193,12 @@ pub fn MpmcRing(comptime T: type, comptime capacity: usize) type {
 // TYPED PATTERN (recommended)
 // ============================================================================
 //
-// For type-safe usage, define your own events with concrete types:
+// For type-safe usage, define your own tors with concrete types:
 //
 //   const MyRing = MpmcRing(MyData, 256);
 //
 //   // Identity branches: | branch Type (not | branch { field: Type })
-//   event my.enqueue { ring: *MyRing, value: MyData }
+//   tor my.enqueue { ring: *MyRing, value: MyData }
 //   | ok
 //   | full
 //
@@ -207,7 +207,7 @@ pub fn MpmcRing(comptime T: type, comptime capacity: usize) type {
 //       return .full;
 //   }
 //
-//   event my.dequeue { ring: *MyRing }
+//   tor my.dequeue { ring: *MyRing }
 //   | some MyData
 //   | none
 //
@@ -222,4 +222,4 @@ pub fn MpmcRing(comptime T: type, comptime capacity: usize) type {
 //   | none |> default { 0 }
 //
 // This gives you full type safety AND tappability.
-// The std.rings events above are convenience wrappers for u64.
+// The std.rings tors above are convenience wrappers for u64.

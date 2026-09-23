@@ -1,6 +1,6 @@
 // CCP - Compiler Control Protocol (User Program Observability)
 // ==============================================================
-// This module provides basic event observability for Koru programs.
+// This module provides basic tor observability for Koru programs.
 //
 // Usage:
 //   import std/ccp
@@ -94,14 +94,14 @@ const std = @import("std");
 
 // UNIVERSAL TAP: Observe ALL event transitions in the program
 //
-// This tap fires for every event transition:
-// - User code events (any event in your program)
-// - Standard library events (when used)
+// This tap fires for every tor transition:
+// - User code tors (any tor in your program)
+// - Standard library tors (when used)
 //
 // The Transition metatype provides:
-// - source: Source event name (e.g., "fetch", "process")
+// - source: Source tor name (e.g., "fetch", "process")
 // - branch: Branch name taken (e.g., "success", "error")
-// - destination: Next event in flow (null for terminal transitions)
+// - destination: Next tor in flow (null for terminal transitions)
 // - timestamp-ns: Execution time (null unless profiling enabled)
 //
 // Self-governing: Only fires when --ccp flag is set AND this module is imported

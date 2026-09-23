@@ -1,4 +1,4 @@
-// Koru Standard Library: Reactive Stores — the `watch` event.
+// Koru Standard Library: Reactive Stores — the `watch` tor.
 // Joined via `~part watch` in store.kz; merged into the store module at load.
 
 // ============================================================================
@@ -187,7 +187,7 @@
     };
 
     // All store names in the program (untransformed creates + generated
-    // apply events) — comptime-known, always legal in a watch body.
+    // apply tors) — comptime-known, always legal in a watch body.
     var known_stores = std.ArrayList([]const u8).initCapacity(allocator, 4) catch unreachable;
     for (flatItems(allocator, program.items)) |pi| {
         switch (pi.*) {
@@ -249,7 +249,7 @@
         return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:watch({s}): nested watch splicing is a later slice - place the watch at top level for now", .{store_name}) } };
     }
 
-    // Did the coordinator already run? Its generated write event is the marker.
+    // Did the coordinator already run? Its generated write tor is the marker.
     const write_name = std.fmt.allocPrint(allocator, "__store_write_{s}", .{store_name}) catch unreachable;
     var spliced = false;
     for (flatItems(allocator, program.items)) |pi| {

@@ -10,7 +10,7 @@
 //
 // Design Philosophy:
 // - Threading is an IMPLEMENTATION DETAIL, not part of the contract
-// - Events are the interface (SEMANTIC level)
+// - Tors are the interface (SEMANTIC level)
 // - Zig threading is hidden in procs (TECHNICAL level)
 // - Progressive disclosure allows simple AND powerful usage
 //
@@ -57,7 +57,7 @@ pub const WorkerHandle = struct {
 // Level 2: Async Worker (Returns Handle)
 // ============================================================================
 // Advanced interface - spawn and return handle for later joining
-// Threading happens INSIDE the proc, but event signature is clean
+// Threading happens INSIDE the proc, but tor signature is clean
 
 ~tor worker.spawn.async { work_fn: WorkFn, context: *anyopaque } -> WorkerHandle
 

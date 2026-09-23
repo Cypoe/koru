@@ -220,11 +220,11 @@
         return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:sweep({s}): the sweep body must start with an invocation this rung", .{grid_name}) } };
     }
 
-    // The loop proc calls the body event from RAW ZIG, which dead_strip's
-    // koru-visible reachability model cannot see — so without `retain` the event
+    // The loop proc calls the body tor from RAW ZIG, which dead_strip's
+    // koru-visible reachability model cannot see — so without `retain` the tor
     // is stripped and the emitted call names a member that does not exist. The
     // store hit exactly this when its generated |zig procs began calling
-    // generated events directly; `retain` is the designed answer, not a
+    // generated tors directly; `retain` is the designed answer, not a
     // workaround.
     const retain_ann = blk_ret: {
         const anns = allocator.alloc([]const u8, 1) catch unreachable;
@@ -275,8 +275,8 @@
         "";
     // Same loop, each host's own spelling: Zig's `for (0..N)` hands the
     // optimizer a known trip count; JS gets the plain counted `for`, its
-    // events dispatched through the flat `main_module` object (the JS emitter
-    // flattens every module's events into it — store.kz:100's rule).
+    // tors dispatched through the flat `main_module` object (the JS emitter
+    // flattens every module's tors into it — store.kz:100's rule).
     const sweep_is_js = std.mem.eql(u8, CompilerEnv.lang, "js");
     const loop = if (sweep_is_js)
         std.fmt.allocPrint(allocator, "for (let {s} = 0; {s} < {s}__KoruGridT_{s}.__koru_size; {s}++) {{\n{s}    main_module.{s}_event.handler({{ {s}: {s} }});\n}}\nreturn;", .{ cur, cur, grid_ns, grid_name, cur, guard_line, body_name, cur, cur }) catch unreachable

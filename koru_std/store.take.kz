@@ -1,4 +1,4 @@
-// Koru Standard Library: Reactive Stores — the `take` event.
+// Koru Standard Library: Reactive Stores — the `take` tor.
 // Joined via `~part take` in store.kz; merged into the store module at load.
 
 // ============================================================================
@@ -10,7 +10,7 @@
 // Swap-remove (legal: position is never identity — O2/O10.iii). Compiles to
 // `__store_take_<s>(row: <handle>)`; the `| item {fields}` branch carries
 // the row out. Obligation wiring (a taken row must be consumed or given
-// back — 690_007/690_015) rides on the take event's phantom.
+// back — 690_007/690_015) rides on the take tor's phantom.
 
 ~[keyword|comptime|transform]pub tor take {
     expr: Expression,

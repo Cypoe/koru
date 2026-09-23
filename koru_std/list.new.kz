@@ -67,7 +67,7 @@
         .args = &[_]ast.Arg{},
     };
 
-    // Ops over THIS site's bindings route to the synthesized suffixed events
+    // Ops over THIS site's bindings route to the synthesized suffixed tors
     // (`std/list:push(xs, …)` → `<caller>:push-<Name>(xs, …)`), resolved from
     // the names the site's own branches bind. A handle used in a LATER flow
     // still refuses loudly at the shape check — the sliced-scope boundary the
@@ -132,7 +132,7 @@ fn protoNameDbg(prog: *const astz.Program, elem: []const u8) bool {
 // Append a value. Void, chains with `|>`. OOM panics (the approved split: a
 // growable push is loud-on-failure, not a per-call error branch).
 //
-// PROTO containers route by the DISPATCH-GAP doctrine (660_026): events lower
+// PROTO containers route by the DISPATCH-GAP doctrine (660_026): tors lower
 // keyed by NAME only, so every concrete container gets its OWN suffixed
-// events. `push(xs, v)` over the hand-written i64 trunk stays monomorphic
+// tors. `push(xs, v)` over the hand-written i64 trunk stays monomorphic
 // HERE; a proto-derived container's op is the SYNTHESIZED `push-<Name>` the

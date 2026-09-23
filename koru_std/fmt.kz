@@ -48,12 +48,12 @@ pub const FormattedText = struct {
 // auto-discharge inserts fmt.dealloc / std/io:free accordingly; the caller
 // interpolates the text with `{{ f:s }}`.
 
-// The transform event returns SiteResult (the rewritten site) — the single-return
+// The transform tor returns SiteResult (the rewritten site) — the single-return
 // form every `[transform]` decl lands as (frag-single-return-form-is-universal;
 // `ln` is the twin). The RUNTIME value is the allocated string; a caller binds
 // it with `: name` (`f` above), and legacy `| branch` sites get the `.formatted`
 // union the inline_body breaks with. The `<allocated!>` obligation rides that
-// runtime value, not the transform event's own return.
+// runtime value, not the transform tor's own return.
 ~[comptime|transform]pub tor fmt.blk {
     source: Source,
     invocation: *const Invocation,
@@ -346,7 +346,7 @@ pub const FormattedText = struct {
 
 // TODO: fmt.blk.with_allocator - requires solving how user params
 // coexist with transform infrastructure params in the pass runner.
-// [comptime|transform]pub event fmt.blk.with_allocator { ... }
+// [comptime|transform]pub tor fmt.blk.with_allocator { ... }
 
 // ============================================================================
 // FMT.LN - One-line format with Liquid templates, returns text via continuation
@@ -781,7 +781,7 @@ pub const FormattedText = struct {
     const inline_code = code.items;
 
     // AST surgery is identical to |zig — only the spliced text differs. Reroute
-    // to `ln.impl` so the JS emitter never has to resolve a comptime event, and
+    // to `ln.impl` so the JS emitter never has to resolve a comptime tor, and
     // keep the site's `: l` bind on the invocation for the machinery that reads
     // it; the JS splice above has already declared the name itself.
     const impl_segments = allocator.alloc([]const u8, 1) catch unreachable;
