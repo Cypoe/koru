@@ -55,36 +55,50 @@ rejections were the design; see the catalog.
 
 ## The adopted surface (THESIS — spelling, all invented)
 
-Two implementation shapes, semantics identical:
+**RULED 2026-09-22 (same walk, later): there is no `.koop` file form.**
+A separate grammar would have been the fifth weld — the OOP surface is a
+bundle of declarations, and `.k` already hosts those. `std/oop` is a
+transform module in `koru_std`, spelled inside ordinary `.k` files —
+the same relationship `std/store:new` has to the parser. The comptime
+text-reader dies with the file form (nothing left to read); the belief
+it was going to prove — declarations are library-minted — is proven by
+the module itself existing.
 
-- **Comptime reader (lean):** `std/oop` is a Koru library that parses
-  OOP-shaped source and mints protos/stores/flows — a type provider
-  (GROUNDED: the type-system belief already ruled Stage C can read
-  disk/net for external schemas; koru_std carries parsing machinery).
-  Zero `src/` grammar.
-- **Third file form (heavy):** `.koop` next to `.k`/`.kz`/`.kjs` — a real
-  parser in `src/`, better hostline diagnostics. **OPEN** which ships
-  first; the reader path doubles as a proof of "types are data."
+The consequence is sharper than the convenience: `std/oop` shrinks
+toward zero. If a class is a proto + a store + flows co-located, and all
+three already exist, the "language" is `herd` (proto+store minted in one
+step), `virtual` (kind-column + switch synthesis), `new` (teaching
+diagnostic — see catalog), and method co-location — **possibly thin
+enough to be a pattern with one verb, not a language at all.** OOP was
+never a language; it was a module's worth of sugar over a table
+substrate nobody let exist.
 
-Illustrative spelling — INVENTED, a design target, not legal anything:
+Illustrative spelling — INVENTED, a design target; the `class`/`def`
+block grammar is transform-owned, not parser grammar:
 
-```java
-// animals.koop
-value Point { x: f64, y: f64 }          // a column type — no identity
+```koru
+// animals.k — pure Koru, no new file form
+import std/oop
 
-class Animal { hp: i64; pos: Point }    // a proto — an affinity, not a layout
+std/oop:value(Point) { x: f64; y: f64 }    // a column type — no identity
 
-herd Dog : Animal {                     // declares Dog.all — a plural store
+std/proto(Animal) { hp: i64; pos: Point }  // an affinity, not a layout
+
+std/oop:herd(Dog : Animal, 64) {           // proto composition + plural store
     def flee(dt: f64) {
-        this.pos = this.pos + this.vel * dt;   // lowers to `stored`
+        self.pos = self.pos + self.vel * dt;   // lowers to `stored`
     }
 }
-herd Cat : Animal
+std/oop:herd(Cat : Animal, 64)
 
-for (d : Dog.all) {                     // lowers to the fused stripe
-    if (d.hp < 10) d.flee(0.016);       // a `when`-guard inside the sweep
-}
+// the sweep — spelled however sweeps already spell:
+std/store:query(Dog.all) ! d when d.hp < 10 |> flee(d, 0.016)
 ```
+
+`new` needs no refusal rule in `.k` — the verb doesn't exist.
+`std/oop:new(Dog)` may still be offered as the opt-in familiar spelling
+that emits the teaching diagnostic, but refusal-by-absence is the
+default and beats refusal-by-diagnostic: the law expressed as grammar.
 
 | Spelling | Lowers to | Status of target |
 |---|---|---|
@@ -100,14 +114,15 @@ for (d : Dog.all) {                     // lowers to the fused stripe
 
 ## The rejection catalog (RULED — this is the guide)
 
-**`new` is refused by default.** OOP's `new` fuses three acts the
-substrate deliberately split: allocate storage, mint identity, run hidden
-initialization. `new Dog()` is legal **only when the class declared its
-plurality** — `herd Dog` gives `new` a home (`Dog.all.insert`), while
-`class Parser` has none:
+**`new` does not exist — and the opt-in spelling enforces plurality.**
+OOP's `new` fuses three acts the substrate deliberately split: allocate
+storage, mint identity, run hidden initialization. In `.k` the rejection
+is absence, not a diagnostic — there is simply no verb. The familiar
+spelling may exist as a transform that *checks* the law:
 
-    new Parser()   // error: Parser has no plurality.
-                   // Objects are not allocated; rows are inserted.
+    std/oop:new(Dog, hp: 10)    // Dog declared a herd → Dog.all.insert
+    std/oop:new(Parser)         // error: Parser has no plurality.
+                              // Objects are not allocated; rows are inserted.
 
 The refusal is the teaching. Allocation is a property of the plurality,
 never of the element.

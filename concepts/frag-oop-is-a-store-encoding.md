@@ -58,8 +58,19 @@ invites singular narration on a plural machine. The dialect must push
 the plural face (`X.all` primary, handles secondary). Whether the
 spelling earns its keep is decided by programs written in it.
 
-**Open:** comptime-reader library vs `.koop` file form for the frontend;
-the reader path doubles as a proof that declarations are library-minted.
+**There is no file form — ruled on the walk (`.koop` dies).** A separate
+grammar would have been a fifth weld; the OOP surface is a bundle of
+declarations and `.k` already hosts those via transforms
+(`std/store:new` precedent). `std/oop` is a `koru_std` transform module —
+`herd`, `virtual`, `new`-as-teaching-diagnostic, method co-location —
+possibly thin enough to be a pattern with one verb rather than a
+language. OOP was never a language; it was a module's worth of sugar
+over a table substrate nobody let exist. `new`'s absence is itself the
+law: refusal-by-absence beats refusal-by-diagnostic.
+
+**Open:** whether `std/oop` earns existence as a module at all, or
+dissolves into proto+store+flows-as-pattern plus `herd` — decided by the
+first real program.
 
 **Falsification:** a real program needing per-object heap identity or
 genuinely open-world dispatch reopens the corresponding door — by demand
