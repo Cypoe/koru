@@ -86,7 +86,7 @@ const StoreIndexWalk = struct {
         const std_store = mq == null or std.mem.eql(u8, mq.?, "std.store");
 
         // Post-transform verb units — the store name is baked into the
-        // event name.
+        // tor name.
         for ([_][]const u8{ "__store_insert_", "__store_inserth_", "__store_insertf_" }) |p| {
             if (std.mem.startsWith(u8, seg, p)) return std.mem.eql(u8, seg[p.len..], ctx.store);
         }

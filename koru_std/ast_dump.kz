@@ -1,5 +1,5 @@
 // AST Dumper - Observable debugging for compiler pipeline
-// Provides void event for dumping AST state at any pipeline stage
+// Provides void tor for dumping AST state at any pipeline stage
 //
 // Usage with taps:
 // * std/compiler:elaborate -> ctx
@@ -10,7 +10,7 @@
 
 const std = @import("std");
 
-// Void event: Dump AST to stderr with stage label
+// Void tor: Dump AST to stderr with stage label
 ~pub tor dump-ast { ctx: std/compiler:CompilerContext, stage: string }
 
 ~proc dump-ast|zig {

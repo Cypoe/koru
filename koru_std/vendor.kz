@@ -686,7 +686,7 @@ pub const VendorLock = struct {
 // BINDINGS - the pinned declaration, checked at compile time
 // ============================================================
 
-// The event declares the USER surface: a source block of `name: path` lines.
+// The tor declares the USER surface: a source block of `name: path` lines.
 // The `[transform]` annotation on the PROC is what makes the check happen during
 // compilation rather than in a command the user has to remember to invoke.
 ~[comptime|transform]pub tor bindings { source: Source, reporter: *std/compiler:ErrorReporter }

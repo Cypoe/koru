@@ -124,7 +124,7 @@ var __field_noop_alloc = std.mem.Allocator{
             if (isFieldFree(inv)) {
                 self.free_found = true;
             } else if (!isFieldCall(inv)) {
-                self.escapes = true; // handed to a non-field event → may escape
+                self.escapes = true; // handed to a non-field tor → may escape
             }
         }
         fn scanNode(self: *@This(), node: *const ast.Node) void {

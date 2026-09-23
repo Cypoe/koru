@@ -1,4 +1,4 @@
-// Very simple test event
+// Very simple test tor
 
 ~pub tor test.hello {}
 

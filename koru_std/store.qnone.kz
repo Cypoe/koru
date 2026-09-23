@@ -6,7 +6,7 @@
 // ============================================================================
 //
 // `| none` is the absent case of a `! first` site: its body transplants into
-// its own event exactly as the sweep arm does, minus the row — no
+// its own tor exactly as the sweep arm does, minus the row — no
 // projections, no cursor, captures only. The call lands after the loop
 // under `if (!__koru_found)` (emitted by the query transform on both loop
 // paths). This builder owns the body's construction end to end: mint the

@@ -75,7 +75,7 @@
     }
     const name = ed.path.segments[ed.path.segments.len - 1];
 
-    // The event name must lex as one (430_055): never spaces.
+    // The tor name must lex as one (430_055): never spaces.
     if (std.mem.indexOfScalar(u8, name, ' ') != null or std.mem.indexOfScalar(u8, name, '\t') != null) {
         return .{ .parse_error = .{ .message = "Definition name must not contain spaces", .line = 0, .column = 0 }};
     }

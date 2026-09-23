@@ -74,7 +74,7 @@ fn __mono_ns() i128 {
     };
 }
 
-// Print elapsed time to stderr (for use inside comptime event overrides)
+// Print elapsed time to stderr (for use inside comptime tor overrides)
 ~pub tor report { start: i128, label: string }
 
 ~proc report|zig {

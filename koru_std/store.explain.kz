@@ -78,7 +78,7 @@
         }
 
         // Facet enforcement: a member type's met fields become `?!violated`
-        // guards on the generated insert events — the same fold, so what is
+        // guards on the generated insert tors — the same fold, so what is
         // reported is what is enforced.
         if (has_refine) {
             var met_total: usize = 0;

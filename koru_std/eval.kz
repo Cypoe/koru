@@ -404,7 +404,7 @@ fn floatOp(l: f64, r: f64, op: ArithOp) EvalError!Value {
 }
 
 // ============================================================================
-// PUBLIC API - Koru events
+// PUBLIC API - Koru tors
 // ============================================================================
 
 // Evaluate an expression and return its value

@@ -1,5 +1,5 @@
 // Koru Standard Library - HTTP Server
-// Pure events with Zig implementations hidden in procs
+// Pure tors with Zig implementations hidden in procs
 
 const std = @import("std");
 

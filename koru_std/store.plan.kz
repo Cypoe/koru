@@ -84,7 +84,7 @@ const SPlan = struct {
     }
 
     /// The store's column names as `__store_insert_<s>` would declare them —
-    /// pre-transform that event does not exist, so the fold reads the same
+    /// pre-transform that tor does not exist, so the fold reads the same
     /// member block through the same `SL.ProtoExpander` the `new` transform
     /// runs (a proto member dissolves into `left.health`-spelled leaves; a
     /// bare single member is the `__koru_value` identity column). A demanded

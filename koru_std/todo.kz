@@ -87,7 +87,7 @@
 //     "evicts": "21 residuals and their dead stubs: nine slots in
 //               src/compiler_coordinator.zig that take a program and return
 //               false, four emit sites writing a comment where a fused or
-//               inlined event belongs, and the loop and kernel notes in
+//               inlined tor belongs, and the loop and kernel notes in
 //               koru_std/optimizations/.",
 //     "tags": ["ruling"]
 //   }

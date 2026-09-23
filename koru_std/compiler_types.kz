@@ -3,7 +3,7 @@
 // If runtime code needs context, use a different type without AST dependencies.
 ~[comptime]
 
-// Dummy event to prevent auto-injection of compiler import (which would create circular dependency)
+// Dummy tor to prevent auto-injection of compiler import (which would create circular dependency)
 ~tor __compiler_types_marker {}
 
 const std = @import("std");

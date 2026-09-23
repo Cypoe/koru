@@ -5,7 +5,7 @@
 //   koruc myapp.kz --inter
 //
 // Launches an interactive TUI during compilation. Commands 1-9 print item
-// counts (events, procs, flows, imports, ...) for each captured pipeline
+// counts (tors, procs, flows, imports, ...) for each captured pipeline
 // stage; h for help, q to quit.
 //
 // This is a COMPTIME-ONLY feature - it runs during backend compilation,

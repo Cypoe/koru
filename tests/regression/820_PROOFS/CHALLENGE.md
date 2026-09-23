@@ -35,7 +35,7 @@ that's an 800 submission. "Top ten words in a text" is.
 
 ## The two non-negotiables (inherited from 800)
 
-1. **Koru has to actually do the work.** The structure lives in events, flows,
+1. **Koru has to actually do the work.** The structure lives in tors, flows,
    phantom states, and obligations. Procs are leaves — a print, a primitive,
    one side effect. If your solution would survive with the flows deleted,
    it's Zig in a Koru hat and it doesn't count.

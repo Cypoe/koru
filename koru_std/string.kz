@@ -24,7 +24,7 @@ pub const String = struct {
 };
 
 // ============================================
-// Creation events - different allocator sources
+// Creation tors - different allocator sources
 // ============================================
 
 // Create with explicit allocator

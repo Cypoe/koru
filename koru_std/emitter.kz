@@ -1,6 +1,6 @@
-// Emitter Wrapper - Koru Events for Emitter Zig Library
+// Emitter Wrapper - Koru Tors for Emitter Zig Library
 // ======================================================
-// Makes the Zig emitter available as Koru events at backend runtime.
+// Makes the Zig emitter available as Koru tors at backend runtime.
 //
 // Usage:
 //   import std/emitter

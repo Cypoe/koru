@@ -13,7 +13,7 @@
 // the shape as SHAPE002 (branch_checker's `firstDuplicateSibling` is the
 // single source of truth this mirrors); an interpreted flow now meets the
 // same judge. `when` narrows rather than duplicates, `!` links compose
-// (every link fires during the event), `|?` is the fallback — none of
+// (every link fires during the tor), `|?` is the fallback — none of
 // them shadow. A transformed subtree's synthesized children are exempt —
 // the same carve-out the compiled checkers take.
 //

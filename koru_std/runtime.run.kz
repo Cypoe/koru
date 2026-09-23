@@ -1,5 +1,5 @@
 // Koru Standard Library: the `run` part of runtime.kz — the scoped
-// run / run-cached events. Joined via `~part run` in runtime.kz.
+// run / run-cached tors. Joined via `~part run` in runtime.kz.
 ~[retain]pub tor run {
     source: string,
     scope: string,

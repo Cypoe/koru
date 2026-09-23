@@ -3,11 +3,11 @@
 // Safe access to the process's command-line arguments. Works on both the Zig
 // and JavaScript targets.
 //
-// (Pure `.k` contract facet.) The public events live here, in the
+// (Pure `.k` contract facet.) The public tors live here, in the
 // target-agnostic facet. The Zig
 // implementation is in `args.kz`; the JavaScript implementation in `args.kjs`.
 // `import std/args` merges all same-stem facets into one module, so these
-// events are in scope (unqualified) for every implementation proc.
+// tors are in scope (unqualified) for every implementation proc.
 //
 // For flag parsing and CLI frameworks, see std/cli (future).
 

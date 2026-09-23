@@ -27,7 +27,7 @@ const std = @import("std");
     allocator: std.mem.Allocator
 } -> SiteResult
 
-// Internal event for shape checking (never runs)
+// Internal tor for shape checking (never runs)
 ~[norun]pub tor emit.impl {
     text: string,
 }
@@ -42,7 +42,7 @@ const std = @import("std");
     else
         return .{};
 
-    // Build Liquid context from named event arguments (skip expr)
+    // Build Liquid context from named tor arguments (skip expr)
     var ctx = liquid.Context.init(allocator);
 
     for (flow.inv().args) |arg| {

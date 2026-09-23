@@ -60,7 +60,7 @@ fn kernelScanShapeSource(items_internal: []const kast.Item, target_type: []const
 // Recover a store's SoA column schema. The `std/store:new` flow is
 // consumed by the store transform BEFORE this init transform runs (measured
 // 2026-08-14: zero `new` flows remain at init time), so the declaration is
-// gone. What survives is the per-store apply event the store transform
+// gone. What survives is the per-store apply tor the store transform
 // synthesizes — `__store_apply_<name>` — whose BRANCHES are exactly the
 // typed column list in declaration order (`x : f64` branch, `vx : f64`
 // branch, …). Returns a shape-source `{ x: f64, vx: f64, mass: f64 }` or

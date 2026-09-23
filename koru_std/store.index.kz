@@ -16,7 +16,7 @@
 // needs no fixup either: the dead handle resolves to no row through the
 // generational path (690_115/116) and every reader skips it. Maintenance
 // is emitted inside the verbs — an outside watcher could never see the
-// displaced row; no event fires for it.
+// displaced row; no tor fires for it.
 //
 // The one declaration serves both consumers: `! first` answers the
 // LOWEST dense live member (the sweep's first-match parity) and

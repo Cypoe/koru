@@ -13,7 +13,7 @@
 //   | `.*std/kernel:pairwise` => error "std/kernel:pairwise found outside std/kernel:init"
 //   | `.*std/kernel:self` => error "std/kernel:self found outside std/kernel:init"
 //
-// PATH ALPHABET: every invocation in every flow yields one path — event
+// PATH ALPHABET: every invocation in every flow yields one path — tor
 // names (module qualifier slash-rendered, segments dot-joined) and branch
 // labels as `/`-separated segments, root-to-node. Bindings and args are
 // excluded: patterns describe SHAPE, not data. Example:

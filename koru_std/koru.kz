@@ -1,6 +1,6 @@
-// Parser Wrapper - Koru Events for Parser Zig Library
+// Parser Wrapper - Koru Tors for Parser Zig Library
 // ====================================================
-// Makes the Zig parser available as Koru events at RUNTIME.
+// Makes the Zig parser available as Koru tors at RUNTIME.
 //
 // Usage:
 //   import std/koru
@@ -21,7 +21,7 @@ const parser_impl = @import("parser");
 const ast_serializer = @import("ast_serializer");
 
 // Re-export types for use with module:Type syntax
-// Usage: event my_event { result: std/koru:ParseResult }
+// Usage: tor my_event { result: std/koru:ParseResult }
 pub const ParseResult = parser_impl.ParseResult;
 
 // =============================================================================

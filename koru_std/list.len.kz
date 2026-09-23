@@ -2,7 +2,7 @@
 // Joined via `~part len` in list.kz; merged into the list module at load.
 
 // Current length as a scalar. (The `xs.len` expression form rides a separate
-// bridge; this event is the plain call form.)
+// bridge; this tor is the plain call form.)
 ~[comptime|transform]pub tor len {
     invocation: *const Invocation,
     item: *const std/compiler:Item,

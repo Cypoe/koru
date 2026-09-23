@@ -9,7 +9,7 @@
 // `vocabulary` is the static surface: everything the scope declares. This is
 // the live half: what you may call GIVEN the handles you currently hold —
 // the answer to "given note_0, what can I do next?" Each live handle knows
-// the event that created it (`created_by_event`); the scope's events declare
+// the tor that created it (`created_by_event`); the scope's tors declare
 // which resources they consume (`!open`); a call is legal now iff every
 // resource it requires is held. The render leads with the held state, then
 // the callable subset of the vocabulary, then the session's inventions
