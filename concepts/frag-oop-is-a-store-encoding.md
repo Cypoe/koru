@@ -73,7 +73,7 @@ carries the substrate: union stores fold shared columns across
 proto-typed members (690_274), the kind tag is synthesized (690_275),
 methods are flows over row borrows, `new` is `insert`. The entire
 residual is ONE feature in `std/proto`: **field-set extension**
-(`std/proto(Dog : Animal)` = field-set union under the existing
+(`std/proto(Dog < Animal)` = field-set union under the existing
 name-sameness and cycle rules) — "compose the same concepts in data"
 wearing its final name. Earned by maintenance (shared set declared once)
 and protos outside union stores (`std/list:new(Dog)` needs the fields on
@@ -81,9 +81,18 @@ the entry). Substitutability is emergent: a Dog is an Animal when a
 query over shared field names sees it; no `instanceof` — "in the union"
 is the kind tag, "has the columns" is the query.
 
-**Open:** the extension spelling (`:` in the arg vs a block-level form)
-and whether even that clears the bar — decided by the first real
-program that can't be honest with restated fields.
+**Spelling:** transform args arrive as AST, not values — the operator
+lives only inside proto's arg. `:` is rejected (it IS labeled-arg
+syntax — `capacity: 64` — and would read as parameter passing); `->`
+rejected (already means "produces"); `is` costs new grammar. `<` parses
+today as a comparison AST and is semantically correct — `<:` is the
+subtype symbol — with `+` giving multiple extension free
+(`Dog < Animal + Pet` = field-set union, diamond resolved by
+name-sameness or refused). Leaning `<`, unrated by Lars at write time.
+
+**Open:** the final spelling ratification and whether even extension
+clears the bar — decided by the first real program that can't be honest
+with restated fields.
 
 **Falsification:** a real program needing per-object heap identity or
 genuinely open-world dispatch reopens the corresponding door — by demand

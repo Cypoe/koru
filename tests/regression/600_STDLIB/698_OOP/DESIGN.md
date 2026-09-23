@@ -75,7 +75,7 @@ dispatch column. OOP's "treat all Animals uniformly" is a sweep over the
 union; per-kind behavior is `when`-arms. The vtable is a column.
 
 The entire residual is **one feature, and it lives in `std/proto`:
-field-set extension** — `std/proto(Dog : Animal)` = Dog's field set is
+field-set extension** — `std/proto(Dog < Animal)` = Dog's field set is
 Animal's ∪ its own block, checked by the same rules (same name + same
 concept dedups; same name + different concept refuses; cycles reject
 through the existing `findCycle`). This is the already-ruled direction —
@@ -89,6 +89,30 @@ a query over shared field names sees it — structural, checked by the
 fold. No `instanceof`; "is it in the union" is the kind tag, "does it
 have the columns" is the query.
 
+### The extension spelling — a micro-language inside the arg (OPEN)
+
+Transform args arrive as **AST, not values** — the transform owns the
+interpretation, so the extension operator lives only inside proto's arg
+and reserves nothing language-wide. Candidates walked:
+
+- `Dog : Animal` — parses today as a *labeled arg* (`capacity: 64` is
+  the same grammar). Semantically defensible (type ascription,
+  `x : T` = "x is a T") but syntactically misleading in Koru and blocks
+  a real label named `Dog`. Rejected on collision.
+- `Dog < Animal` — parses today as a comparison AST; `<:` is the
+  subtype symbol in type theory (`A <: B` = "A is a subtype of B"), so
+  the operator is *correct*, not merely available. Zero grammar work.
+- `Dog is Animal` — most readable, but `is` is no keyword/operator
+  anywhere in the lexer: it costs new grammar for aesthetics.
+- `Dog -> Animal` — `->` already means "produces/returns" (arm arrows,
+  return types); "Dog produces Animal" actively lies. Rejected.
+
+Leaning `<`, pending Lars. The arg grows a small field-set algebra with
+no new grammar: `Dog < Animal + Pet` (multiple extension — `+` as
+set-union, the diamond resolving by name-sameness or refusing). `-`
+(exclusion) is parked as demand-marker — power that invents complexity
+nobody asked for.
+
 Illustrative spelling — INVENTED, a design target:
 
 ```koru
@@ -98,10 +122,10 @@ import std/store
 
 std/proto(Animal) { hp: i64 }
 
-std/proto(Dog : Animal) {        // THE missing piece — field-set union
+std/proto(Dog < Animal) {        // THE missing piece — field-set union
     barked: bool
 }
-std/proto(Cat : Animal)
+std/proto(Cat < Animal)
 
 std/store:new(animals, capacity: 64) { dog: Dog, cat: Cat }
 
@@ -113,7 +137,7 @@ std/store:query(animals)
 | OOP want | Where it lives | Status |
 |---|---|---|
 | `class X { fields }` | `std/proto(X)` | GROUNDED (665_PROTO) |
-| `X extends Y` | `std/proto(X : Y)` — field-set union | **THE GAP** — everything else exists |
+| `X extends Y` | `std/proto(X < Y)` — field-set union | **THE GAP** — everything else exists |
 | polymorphic collection | union store, folded columns | GROUNDED (690_274) |
 | `virtual`/`override` | synthesized kind tag + `when` arms | GROUNDED (690_275) |
 | `x.f()` | `x \|> f` / flow over `*X` | GROUNDED |
@@ -199,7 +223,7 @@ by writing real programs in it, not by argument.
 
 **Residue.** No `input.kz` yet. The walk's arc: `.koop` file form →
 `std/oop` transform module → **one missing feature in `std/proto`**:
-field-set extension (`X : Y`). First pins when built: extension flattens
+field-set extension (`X < Y`, spelling leaning `<`). First pins when built: extension flattens
 parent fields (MUST_RUN), same-name-different-type refuses (MUST_ERROR),
 extension cycles refuse (MUST_ERROR via `findCycle`), extended proto
 feeds `std/list:new` and a union store (MUST_RUN). The pattern half —
