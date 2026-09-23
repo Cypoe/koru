@@ -34,7 +34,7 @@ import std/indexes
 
 // The world. Striped, so a column a scenario never touches costs its sweeps
 // nothing — `dense` reads px/py/vx/vy and never pays for hp or act.
-std/store:new(bodies, capacity: 100000) { px: f32, py: f32, vx: f32, vy: f32, hp: i64, act: i64 }
+std/store:new(bodies, capacity: 100000) { px: f32, py: f32, vx: f32, vy: f32, hp: i32, act: i32 }
 
 // `sparse` filters on `act`, so it carries the membership index — a
 // `! query e when e.act == 1` walks the key's bucket instead of sweeping
@@ -172,13 +172,13 @@ handle-arg = std/regex:match(a)
 // and the every-tenth `act` flag that `sparse` filters on.
 tor world-init {}
 world-init = for(0..@as(usize, @intCast(cfg.entities)))
-    ! each i |> std/store:insert(bodies) { px: @as(f32, @floatFromInt(i)), py: 0.0, vx: 1.0, vy: -1.0, hp: 1000, act: @as(i64, @intFromBool(i % 10 == 0)) }
+    ! each i |> std/store:insert(bodies) { px: @as(f32, @floatFromInt(i)), py: 0.0, vx: 1.0, vy: -1.0, hp: 1000, act: @intFromBool(i % 10 == 0) }
 
 // `world-init` with the handle table recorded beside it. Kept separate so the
 // scenarios that never index by position do not pay for the grid write.
 tor fanout-init {}
 fanout-init = for(0..@as(usize, @intCast(cfg.entities)))
-    ! each i |> std/store:insert(bodies) { px: @as(f32, @floatFromInt(i)), py: 0.0, vx: 1.0, vy: -1.0, hp: 1000, act: @as(i64, @intFromBool(i % 10 == 0)) }
+    ! each i |> std/store:insert(bodies) { px: @as(f32, @floatFromInt(i)), py: 0.0, vx: 1.0, vy: -1.0, hp: 1000, act: @intFromBool(i % 10 == 0) }
         | row t |> std/grid:stored { bxref[i].h: t }
         | full |> _
 

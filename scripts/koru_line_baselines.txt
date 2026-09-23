@@ -135,6 +135,7 @@ koru_std/store.drain.kz	114
 koru_std/store.expand.kz	130
 koru_std/store.explain.kz	104
 koru_std/store.gate.kz	525
+koru_std/store.hstruct.kz	76
 koru_std/store.idecls.kz	104
 koru_std/store.index.kz	202
 koru_std/store.indexwalk.kz	279
@@ -142,7 +143,7 @@ koru_std/store.insert.kz	482
 koru_std/store.kinds.kz	704
 koru_std/store.kz	1011
 koru_std/store.leaf.kz	207
-koru_std/store.new.kz	6346
+koru_std/store.new.kz	6305
 koru_std/store.plan.kz	236
 koru_std/store.preorder.kz	110
 koru_std/store.pverbs.kz	781

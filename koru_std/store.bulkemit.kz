@@ -125,7 +125,7 @@ const BulkEmit = struct {
             // slots this batch can mint — so the hoisted panic covers
             // the freelist-pop arm too. LIFO pops read the tail down;
             // survivors are `free[0..frem-n]` when n < frem.
-            w.print("    const __koru_bulk_frem = __koru_store_{s}.__koru_hslot_free_len;\n    var __koru_bulk_fresh = __koru_store_{s}.__koru_hslot_next;\n", .{ store, store }) catch unreachable;
+            w.print("    const __koru_bulk_frem = __koru_store_{s}.__koru_hslot_free_len;\n    var __koru_bulk_fresh = __koru_store_{s}.__koru_hslot_next;\n    const __koru_bulk_idt = __koru_store_{s}.__koru_ident;\n", .{ store, store, store }) catch unreachable;
         }
         // `std/indexes:store` — the batch keeps the index: each row joins
         // its key's bucket like a lone insert. `__koru_im` memoizes the
@@ -135,7 +135,7 @@ const BulkEmit = struct {
         if (icol != null) w.print("    var __koru_im: ?*@import(\"std\").ArrayListUnmanaged(i64) = null;\n", .{}) catch unreachable;
         w.print("    for (0..__koru_bulk_n) |__koru_bulk_j| {{\n", .{}) catch unreachable;
         if (handles) {
-            w.print("        const __koru_bulk_slot = if (__koru_bulk_j < __koru_bulk_frem) __koru_store_{s}.__koru_hslot_free[__koru_bulk_frem - 1 - __koru_bulk_j] else blk_hm: {{ const __koru_s2 = __koru_bulk_fresh; __koru_bulk_fresh += 1; break :blk_hm __koru_s2; }};\n        __koru_store_{s}.__koru_row_hslot[__koru_bulk_base + __koru_bulk_j] = __koru_bulk_slot;\n        __koru_store_{s}.__koru_hslot_row[__koru_bulk_slot] = __koru_bulk_base + __koru_bulk_j;\n", .{ store, store, store }) catch unreachable;
+            w.print("        const __koru_bulk_slot = if (__koru_bulk_j < __koru_bulk_frem) __koru_store_{s}.__koru_hslot_free[__koru_bulk_frem - 1 - __koru_bulk_j] else blk_hm: {{ const __koru_s2 = __koru_bulk_fresh; __koru_bulk_fresh += 1; break :blk_hm __koru_s2; }};\n        if (!__koru_bulk_idt) {{\n            __koru_store_{s}.__koru_row_hslot[__koru_bulk_base + __koru_bulk_j] = __koru_bulk_slot;\n            __koru_store_{s}.__koru_hslot_row[__koru_bulk_slot] = __koru_bulk_base + __koru_bulk_j;\n        }}\n", .{ store, store, store }) catch unreachable;
         }
         if (bind) |bb| {
             // Emit the binding only when a field expr reads it — Zig

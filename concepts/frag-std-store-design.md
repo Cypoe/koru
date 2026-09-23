@@ -924,3 +924,23 @@ earlier mental model; removing it puts `despawn`'s drain back on the
 traversal (ReleaseFast: ~1.79→~1.31ms), and the pin now proves routed
 lookups over a drained index skip dead members while the standing rule
 still eats later inserts.
+
+The handle mapping is lazy (2026-09-23, `__koru_ident` in
+`store.hstruct.kz`): a store that has never removed a row satisfies
+slot == dense index for every live handle, so `hslot_row`/`row_hslot`
+carry undefined bytes no reader may consult. Mint and the bulk fill
+skip both table writes, `row_of`/`handle_of` skip the table load, and
+the first take pays one `t[i] = i` materialise pass before flipping the
+flag. Drain cannot re-arm it — the freelist it fills is exactly what
+makes slots ≠ rows — but under identity the freelist sequence is known
+arithmetically (`0, n-1 .. 1`), so drain's teardown is three streaming
+passes with no tombstone writes: dead table bytes are unreachable
+behind the bumped generations. `clear` re-arms because its canonical
+reset empties every handle structure. Measured on 003_ecs_reactive
+(ReleaseFast, 100k×100f): sparse ~4.05→~3.5ms — the resolve fast path
+sheds the per-member table load; the drain is ~185µs vs ~350. What the
+flag did NOT move is init: the skipped table writes were never the
+cold cost — the ~0.5ms cold/warm delta is column pages and bucket
+heap, which no flag removes. An earlier per-row `if (ident)` select in
+the drain loop measured ~110µs worse than splitting the variants —
+hoist the branch, never fold it into the row computation.

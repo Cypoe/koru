@@ -1,0 +1,76 @@
+// Koru Standard Library: the `hstruct` part of store.kz.
+// Joined via `~part hstruct` in store.kz; merged into the module at load.
+
+// ------------------------------------------------------------------
+// The handle-table slice of a needs-handles store struct: the slot
+// arrays, the identity flag, the materialise helper, and the
+// row_of/resolve/handle_of methods. Emitted as one block — the text
+// is the contract a thousand call sites lean on.
+// ------------------------------------------------------------------
+
+const HStruct = struct {
+    fn emit(allocator: std.mem.Allocator, cap: usize, ordinal: usize, store_name: []const u8) []const u8 {
+        return std.fmt.allocPrint(allocator,
+            \\    __koru_hslot_row: [{d}]usize = undefined,
+            \\    __koru_hslot_gen: [{d}]u32 = [_]u32{{0}} ** {d},
+            \\    __koru_row_hslot: [{d}]usize = undefined,
+            \\    __koru_hslot_free: [{d}]usize = undefined,
+            \\    __koru_hslot_free_len: usize = 0,
+            \\    __koru_hslot_next: usize = 0,
+            \\    // `__koru_ident` — no removal has run, so slot == dense row for
+            \\    // every live row and the mapping tables hold dead bytes no
+            \\    // reader may consult. Mint/resolve skip both table loads; the
+            \\    // first take materialises the tables and flips the flag. A
+            \\    // drain refills the freelist, so it leaves the flag false;
+            \\    // clear's canonical reset re-arms it.
+            \\    __koru_ident: bool = true,
+            \\    const __koru_brand: u32 = {d};
+            \\    fn __koru_materialize(self: *@This()) void {{
+            \\        if (!self.__koru_ident) return;
+            \\        for (0..self.len) |i| {{ self.__koru_hslot_row[i] = i; self.__koru_row_hslot[i] = i; }}
+            \\        self.__koru_ident = false;
+            \\    }}
+            \\    fn __koru_row_of(self: *const @This(), h: i64) ?usize {{
+            \\        if (h < 0) return null;
+            \\        const u = @as(u64, @bitCast(h));
+            \\        const slot32 = @as(u32, @truncate(u));
+            \\        if ((slot32 >> 24) != __koru_brand) return null;
+            \\        const slot = @as(usize, @intCast(slot32 & 0xFFFFFF));
+            \\        if (slot >= self.__koru_hslot_next) return null;
+            \\        if (@as(u32, @truncate(u >> 32)) != self.__koru_hslot_gen[slot]) return null;
+            \\        if (self.__koru_ident) return slot;
+            \\        const __koru_r = self.__koru_hslot_row[slot];
+            \\        if (__koru_r >= self.len) return null;
+            \\        return __koru_r;
+            \\    }}
+            \\    // MEASURED NEUTRAL 2026-08-03, left alone deliberately. This
+            \\    // checks brand and generation inline and then calls
+            \\    // `__koru_row_of`, which checks brand, bounds AND generation
+            \\    // again — two loads of `__koru_hslot_gen[slot]` for one answer.
+            \\    // Collapsing it to a single flat pass measured IDENTICAL (13533
+            \\    // vs 13526 ns/iter, rf_stripe_1 on the handle path), so LLVM
+            \\    // already folds the duplicate. Reading found waste the optimizer
+            \\    // had already removed.
+            \\    // A first attempt that nested the happy path three `if`s deep
+            \\    // measured 3.7x WORSE (50.7M vs 13.7M ns). SHAPE MATTERS FAR MORE
+            \\    // THAN BRANCH COUNT HERE — do not restructure this function
+            \\    // without an interleaved measurement.
+            \\    fn __koru_resolve(self: *const @This(), h: i64) usize {{
+            \\        if (h >= 0) {{
+            \\            const u = @as(u64, @bitCast(h));
+            \\            const slot32 = @as(u32, @truncate(u));
+            \\            if ((slot32 >> 24) != __koru_brand) @panic("std/store: '{s}[...]' does not address a row - the value is not a handle this store issued (handles come from `| row` and row cursors)");
+            \\            const slot = @as(usize, @intCast(slot32 & 0xFFFFFF));
+            \\            if (slot < self.__koru_hslot_next and @as(u32, @truncate(u >> 32)) != self.__koru_hslot_gen[slot]) @panic("std/store: stale row handle into store '{s}' - the row it addressed was removed (stale-handle trap pinned at 690_115)");
+            \\        }}
+            \\        return self.__koru_row_of(h) orelse @panic("std/store: '{s}[...]' does not address a row - the value is not a handle this store issued (handles come from `| row` and row cursors)");
+            \\    }}
+            \\    fn __koru_handle_of(self: *const @This(), dense: usize) i64 {{
+            \\        var slot = dense;
+            \\        if (!self.__koru_ident) slot = self.__koru_row_hslot[dense];
+            \\        return @as(i64, @intCast(slot | (@as(usize, __koru_brand) << 24))) | (@as(i64, @intCast(self.__koru_hslot_gen[slot])) << 32);
+            \\    }}
+            \\
+        , .{ cap, cap, cap, cap, cap, ordinal, store_name, store_name, store_name }) catch unreachable;
+    }
+};

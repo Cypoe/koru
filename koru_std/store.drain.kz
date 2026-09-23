@@ -3,42 +3,34 @@
 
 // ------------------------------------------------------------------
 // Drain — a rule whose row body is exactly `take(s[e])` with a discard
-// `| item` removes every row the invoked sweep visits. The per-row take
-// reads every column into the `| item` payload and swap-writes every
-// column of the last row into the freed slot — work that exists for the
-// payload's sake and to keep survivors live. A drain has neither: the
-// payload is discarded and there are no survivors.
+// `| item` removes every row the invoked sweep visits. Per-row take
+// reads every column into the payload and swap-writes the last row's
+// columns into the freed slot — work for the payload's sake and for
+// survivor liveness. A drain has neither.
 //
-// What stays observable is the bookkeeping: every live slot's generation
-// bumps once, the freelist grows in the order sequential take would push,
-// and every freed slot's hslot_row is tombstoned. Sequential take removes
-// index 0 each iteration — so the row at the end drops into the hole and
-// dies next — which makes the freelist push order provably
-// `row_hslot[0]`, then `row_hslot[n-1]` down to `row_hslot[1]`. That is a
-// READ-ONLY traversal of the original mapping: no swap, no fixup writes,
-// no column traffic. Post-drain state is identical to sequential take's
-// (len 0, gens +1, freelist equal, all hslot_row tombstoned); row_hslot
-// beyond len diverges only in dead bytes insert overwrites on refill.
-// Handles are i64s, so slot-reuse order after a refill IS observable —
-// `clear`'s canonical reset mints a different first handle than take's
-// removal-ordered freelist does, which is why this lowering reproduces
-// take's bookkeeping rather than calling the clear unit.
-// Every doubt declines the site: a `when` guard makes the walk
-// selective, a `| item` body that reads the payload makes the
-// materialisation load-bearing, an owned column discharges one
-// obligation at a time, and a `! removed` arm fires once per row.
-// An index column is NO doubt: take reseats nothing — dead handles stay
-// in their buckets and resolve to no live row — so a teardown leaves the
-// index exactly as sequential take would. A declined site stays a
-// per-row take, correct by construction.
+// What stays observable: every live slot's generation bumps once, the
+// freelist grows in sequential-take push order — `row_hslot[0]`, then
+// `row_hslot[n-1]` down to `row_hslot[1]` (take removes index 0 each
+// iteration, so the tail row drops into the hole and dies next) — and
+// every freed slot's hslot_row is tombstoned. That is a READ-ONLY
+// traversal of the mapping: no swap, no fixup, no column traffic; the
+// post-state equals sequential take's modulo dead bytes insert
+// overwrites. Slot-reuse order after a refill IS observable, so this
+// reproduces take's bookkeeping rather than calling the clear unit.
+// Every doubt declines the site: `when` makes the walk selective, a
+// `| item` read makes materialisation load-bearing, an owned column
+// discharges one obligation at a time, a `! removed` arm fires per row.
+// An index column is NO doubt — take reseats nothing and dead handles
+// idle in buckets — so a teardown leaves the index exactly as
+// sequential take would. A declined site stays per-row take.
 // ------------------------------------------------------------------
 
 const DrainScan = struct {
     const ast = @import("ast");
 
     // The pre-rewrite body is one `take(s[row_bind])` site whose
-    // continuations are all empty `item`/`empty` arms — the payload may
-    // be bound but is never read, and nothing else runs per row.
+    // continuations are all empty `item`/`empty` arms — the payload
+    // may be bound but nothing else runs per row.
     fn isBody(store: []const u8, body: *const ast.Continuation, row_bind: []const u8) bool {
         const node = body.node orelse return false;
         const inv = switch (node) {
@@ -68,9 +60,8 @@ const DrainScan = struct {
         return true;
     }
 
-    // The sweep body a drain-lowered site emits in place of the
-    // removal-tolerant while — the freelist order and bookkeeping of
-    // sequential take, read off the original mapping without swapping.
+    // The body a drain-lowered site emits — the freelist order and
+    // bookkeeping of sequential take, read off the original mapping.
     fn sweepBody(alloc: std.mem.Allocator, host_is_js: bool, store: []const u8) []const u8 {
         if (host_is_js) return std.fmt.allocPrint(alloc,
             \\const __koru_dn = __koru_store_{s}.len;
@@ -94,21 +85,30 @@ const DrainScan = struct {
         return std.fmt.allocPrint(alloc,
             \\const __koru_dn = __koru_store_{s}.len;
             \\if (__koru_dn > 0) {{
-            \\    const __koru_slot0 = __koru_store_{s}.__koru_row_hslot[0];
-            \\    __koru_store_{s}.__koru_hslot_gen[__koru_slot0] +%= 1;
-            \\    __koru_store_{s}.__koru_hslot_row[__koru_slot0] = @import("std").math.maxInt(usize);
-            \\    __koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_slot0;
-            \\    __koru_store_{s}.__koru_hslot_free_len += 1;
-            \\    for (1..__koru_dn) |__koru_k| {{
-            \\        const __koru_slot = __koru_store_{s}.__koru_row_hslot[__koru_dn - __koru_k];
-            \\        __koru_store_{s}.__koru_hslot_gen[__koru_slot] +%= 1;
-            \\        __koru_store_{s}.__koru_hslot_row[__koru_slot] = @import("std").math.maxInt(usize);
-            \\        __koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_slot;
+            \\    if (__koru_store_{s}.__koru_ident) {{
+            \\        __koru_store_{s}.__koru_ident = false;
+            \\        // Identity: freelist 0, n-1 .. 1, free_len 0; tombstones are dead bytes.
+            \\        for (0..__koru_dn) |__koru_i| __koru_store_{s}.__koru_hslot_gen[__koru_i] +%= 1;
+            \\        __koru_store_{s}.__koru_hslot_free[0] = 0;
+            \\        for (1..__koru_dn) |__koru_k| __koru_store_{s}.__koru_hslot_free[__koru_k] = __koru_dn - __koru_k;
+            \\        __koru_store_{s}.__koru_hslot_free_len = __koru_dn;
+            \\    }} else {{
+            \\        const __koru_slot0 = __koru_store_{s}.__koru_row_hslot[0];
+            \\        __koru_store_{s}.__koru_hslot_gen[__koru_slot0] +%= 1;
+            \\        __koru_store_{s}.__koru_hslot_row[__koru_slot0] = @import("std").math.maxInt(usize);
+            \\        __koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_slot0;
             \\        __koru_store_{s}.__koru_hslot_free_len += 1;
+            \\        for (1..__koru_dn) |__koru_k| {{
+            \\            const __koru_slot = __koru_store_{s}.__koru_row_hslot[__koru_dn - __koru_k];
+            \\            __koru_store_{s}.__koru_hslot_gen[__koru_slot] +%= 1;
+            \\            __koru_store_{s}.__koru_hslot_row[__koru_slot] = @import("std").math.maxInt(usize);
+            \\            __koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_slot;
+            \\            __koru_store_{s}.__koru_hslot_free_len += 1;
+            \\        }}
             \\    }}
             \\    __koru_store_{s}.len = 0;
             \\}}
             \\return;
-        , .{ store, store, store, store, store, store, store, store, store, store, store, store, store, store }) catch unreachable;
+        , .{ store, store, store, store, store, store, store, store, store, store, store, store, store, store, store, store, store, store, store, store }) catch unreachable;
     }
 };

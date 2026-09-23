@@ -534,7 +534,7 @@ if (step_arm) |*sa| {
         , .{ store_name, body_ns, store_name, sbind, store_name, col_name, if (step_has_running) "if (__koru_res.tag === \"running\" || __koru_res.tag === \"complete\") __koru_worked += 1;" else "if (__koru_res.tag === \"complete\") __koru_worked += 1;", store_name, col_name, store_name }) catch unreachable) catch unreachable;
     } else {
         pb.appendSlice(allocator, std.fmt.allocPrint(allocator,
-            \\var __koru_i: usize = 0;
+            \\__koru_store_{s}.__koru_materialize(); var __koru_i: usize = 0;
             \\var __koru_worked: i32 = 0;
             \\while (__koru_i < __koru_store_{s}.len) {{
             \\    const __koru_res = {s}__store_stepbody_{s}_event.handler(.{{ .{s} = __koru_store_{s}.{s}[__koru_i] }});
@@ -544,7 +544,7 @@ if (step_arm) |*sa| {
             \\            const __koru_out = __koru_store_{s}.{s}[__koru_i];
             \\            const __koru_gone_slot = __koru_store_{s}.__koru_row_hslot[__koru_i];
             \\
-        , .{ store_name, body_ns, store_name, sbind, store_name, col_name, if (step_has_running) "__koru_worked += @intFromBool(__koru_res == .running or __koru_res == .complete);" else "__koru_worked += @intFromBool(__koru_res == .complete);", store_name, col_name, store_name }) catch unreachable) catch unreachable;
+        , .{ store_name, store_name, body_ns, store_name, sbind, store_name, col_name, if (step_has_running) "__koru_worked += @intFromBool(__koru_res == .running or __koru_res == .complete);" else "__koru_worked += @intFromBool(__koru_res == .complete);", store_name, col_name, store_name }) catch unreachable) catch unreachable;
     }
     // `removed` observers fire on the outgoing copy, before the
     // swap-remove — take's ordering, verbatim.

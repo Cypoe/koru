@@ -950,7 +950,6 @@ fn storeRefsText(alloc: std.mem.Allocator, text: []const u8, name: []const u8, p
 /// A text slot, FULLY lowered: cell paths first, then indexed reads — the order
 /// `stored`'s value pass has always used, so a cross-store index inside an
 /// indexed read is already a cell path by the time the indexed pass reads it.
-///
 /// `bound` are names an enclosing binding shadows (a row binding makes
 /// `<store>.<field>` mean THE ROW); they are skipped by BOTH passes, which is
 /// why the indexed pass takes a filtered scope rather than the whole program.
@@ -978,6 +977,7 @@ fn storeLowerText(
     return storeIndexedRefsIn(alloc, prog, t, .{ .names = live_n.items, .prefixes = live_p.items });
 }
 ~part new
+~part hstruct
 ~part view
 ~part stored
 ~part default

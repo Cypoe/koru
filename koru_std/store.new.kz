@@ -2482,54 +2482,7 @@
         // The handle table. A lean store carries none of this — no hslot
         // arrays, no brand, no resolve/row_of/handle_of methods — and the
         // gate above guarantees no emitted unit is left to name one.
-        const hs: []const u8 = if (needs_handles) std.fmt.allocPrint(allocator,
-            \\    __koru_hslot_row: [{d}]usize = undefined,
-            \\    __koru_hslot_gen: [{d}]u32 = [_]u32{{0}} ** {d},
-            \\    __koru_row_hslot: [{d}]usize = undefined,
-            \\    __koru_hslot_free: [{d}]usize = undefined,
-            \\    __koru_hslot_free_len: usize = 0,
-            \\    __koru_hslot_next: usize = 0,
-            \\    const __koru_brand: u32 = {d};
-            \\    fn __koru_row_of(self: *const @This(), h: i64) ?usize {{
-            \\        if (h < 0) return null;
-            \\        const u = @as(u64, @bitCast(h));
-            \\        const slot32 = @as(u32, @truncate(u));
-            \\        if ((slot32 >> 24) != __koru_brand) return null;
-            \\        const slot = @as(usize, @intCast(slot32 & 0xFFFFFF));
-            \\        if (slot >= self.__koru_hslot_next) return null;
-            \\        if (@as(u32, @truncate(u >> 32)) != self.__koru_hslot_gen[slot]) return null;
-            \\        const __koru_r = self.__koru_hslot_row[slot];
-            \\        if (__koru_r >= self.len) return null;
-            \\        return __koru_r;
-            \\    }}
-            \\    // MEASURED NEUTRAL 2026-08-03, left alone deliberately. This
-            \\    // checks brand and generation inline and then calls
-            \\    // `__koru_row_of`, which checks brand, bounds AND generation
-            \\    // again — two loads of `__koru_hslot_gen[slot]` for one answer.
-            \\    // Collapsing it to a single flat pass measured IDENTICAL (13533
-            \\    // vs 13526 ns/iter, rf_stripe_1 on the handle path), so LLVM
-            \\    // already folds the duplicate. Reading found waste the optimizer
-            \\    // had already removed.
-            \\    // A first attempt that nested the happy path three `if`s deep
-            \\    // measured 3.7x WORSE (50.7M vs 13.7M ns). SHAPE MATTERS FAR MORE
-            \\    // THAN BRANCH COUNT HERE — do not restructure this function
-            \\    // without an interleaved measurement.
-            \\    fn __koru_resolve(self: *const @This(), h: i64) usize {{
-            \\        if (h >= 0) {{
-            \\            const u = @as(u64, @bitCast(h));
-            \\            const slot32 = @as(u32, @truncate(u));
-            \\            if ((slot32 >> 24) != __koru_brand) @panic("std/store: '{s}[...]' does not address a row - the value is not a handle this store issued (handles come from `| row` and row cursors)");
-            \\            const slot = @as(usize, @intCast(slot32 & 0xFFFFFF));
-            \\            if (slot < self.__koru_hslot_next and @as(u32, @truncate(u >> 32)) != self.__koru_hslot_gen[slot]) @panic("std/store: stale row handle into store '{s}' - the row it addressed was removed (stale-handle trap pinned at 690_115)");
-            \\        }}
-            \\        return self.__koru_row_of(h) orelse @panic("std/store: '{s}[...]' does not address a row - the value is not a handle this store issued (handles come from `| row` and row cursors)");
-            \\    }}
-            \\    fn __koru_handle_of(self: *const @This(), dense: usize) i64 {{
-            \\        const slot = self.__koru_row_hslot[dense];
-            \\        return @as(i64, @intCast(slot | (@as(usize, __koru_brand) << 24))) | (@as(i64, @intCast(self.__koru_hslot_gen[slot])) << 32);
-            \\    }}
-            \\
-        , .{ CAP, CAP, CAP, CAP, CAP, store_ordinal, store_name, store_name, store_name }) catch unreachable else "";
+        const hs: []const u8 = if (needs_handles) HStruct.emit(allocator, CAP, store_ordinal, store_name) else "";
         pc.appendSlice(allocator, hs) catch unreachable;
         pc.appendSlice(allocator, "};\n") catch unreachable;
         pc.appendSlice(allocator, "var __koru_store_") catch unreachable;
@@ -2841,10 +2794,12 @@
                     \\    __koru_store_{s}.__koru_hslot_next += 1;
                     \\    break :blk_hs __koru_hn;
                     \\}};
-                    \\__koru_store_{s}.__koru_hslot_row[__koru_hslot] = __koru_new_row;
-                    \\__koru_store_{s}.__koru_row_hslot[__koru_new_row] = __koru_hslot;
+                    \\if (!__koru_store_{s}.__koru_ident) {{
+                    \\    __koru_store_{s}.__koru_hslot_row[__koru_hslot] = __koru_new_row;
+                    \\    __koru_store_{s}.__koru_row_hslot[__koru_new_row] = __koru_hslot;
+                    \\}}
                     \\
-                , .{ store_name, store_name, store_name, store_name, store_name, store_name, store_name, store_name }) catch unreachable;
+                , .{ store_name, store_name, store_name, store_name, store_name, store_name, store_name, store_name, store_name }) catch unreachable;
                 ap.appendSlice(allocator, mint) catch unreachable;
             }
             // User columns write their insert bindings; the [tree]-synthesized
@@ -4440,10 +4395,11 @@
                 , .{ store_name, t_empty, store_name }) catch unreachable
             else
                 std.fmt.allocPrint(allocator,
+                    \\__koru_store_{s}.__koru_materialize();
                     \\const __koru_r = __koru_store_{s}.__koru_row_of(row) orelse return {s};
                     \\const __koru_gone_slot = __koru_store_{s}.__koru_row_hslot[__koru_r];
                     \\
-                , .{ store_name, t_empty, store_name }) catch unreachable;
+                , .{ store_name, store_name, t_empty, store_name }) catch unreachable;
             tb.appendSlice(allocator, thead) catch unreachable;
             for (field_names) |fname| {
                 const ld = std.fmt.allocPrint(allocator, "const __koru_out_{s} = __koru_store_{s}.{s}[__koru_r];\n", .{ fname, store_name, fname }) catch unreachable;
@@ -4837,12 +4793,15 @@
                             \\
                         , .{ store_name, store_name }) catch unreachable;
                     cb.appendSlice(allocator, genloop) catch unreachable;
+                    // The reset empties every handle structure, so the
+                    // identity invariant holds again — `ident` re-arms and the
+                    // refill skips the mapping tables until the next take.
                     const reset = std.fmt.allocPrint(allocator,
                         \\__koru_store_{s}.len = 0;
                         \\__koru_store_{s}.__koru_hslot_free_len = 0;
                         \\__koru_store_{s}.__koru_hslot_next = 0;
-                        \\
-                    , .{ store_name, store_name, store_name }) catch unreachable;
+                        \\{s}
+                    , .{ store_name, store_name, store_name, if (host_is_js) "" else std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_ident = true;\n", .{store_name}) catch unreachable }) catch unreachable;
                     cb.appendSlice(allocator, reset) catch unreachable;
                 } else {
                     const reset = std.fmt.allocPrint(allocator, "__koru_store_{s}.len = 0;\n", .{store_name}) catch unreachable;

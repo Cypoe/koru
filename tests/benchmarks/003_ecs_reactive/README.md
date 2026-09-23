@@ -126,19 +126,30 @@ around them.
   guard the same organ — a key→ordered-handle bucket — so the query visits
   ~10k members instead of sweeping 100k rows, and `world-init` keeps the
   bulk append lowering with the bucket join emitted inside the fill loop.
-  The residual gap splits honestly: ~0.6 ms of init (per-row bucket appends
-  plus handle minting the raw baseline never pays) and ~1 ns/member of
-  generational handle resolve in the walk. That is the measurement, not a
-  detail to hide.
+  A store that has never removed a row knows slot == dense index for every
+  live handle (`__koru_ident`), so member resolve skips the mapping-table
+  load entirely. The residual gap splits honestly: ~0.5 ms of init
+  (per-row bucket appends plus handle minting the raw baseline never pays)
+  and ~0.5 ns/member of generational decode in the walk. That is the
+  measurement, not a detail to hide.
 - **`despawn`'s drain is a take-only rule.** `drain` is
   `std/store:rule(bodies)` whose whole `! row` body is `take(bodies[e])`
   with the payload discarded, so its invoked sweep lowers to take's
   bookkeeping alone — generation bumps, hslot tombstones, freelist pushes
   in sequential-take order, no column traffic. An `std/indexes` decl does
   not disqualify it: sequential take reseats nothing in the bucket map,
-  so the teardown leaves the index exactly as take would. The remaining
-  gap over `World.init` + `deinit` is `world-init` itself, shared with
-  every other `bodies` scenario.
+  so the teardown leaves the index exactly as take would. On a store that
+  never removed a row the freelist sequence is known arithmetically
+  (`0, n-1 .. 1`), so the sweep emits three streaming passes — a
+  generation bump, a descending freelist fill, a len reset — and skips
+  tombstone writes the generation check already made unreachable. The
+  remaining gap over `World.init` + `deinit` is `world-init` itself,
+  shared with every other `bodies` scenario.
+- **`hp` and `act` are `i32`, matching the baseline's `i32` health.** The
+  port originally declared both `i64` out of habit — values are 0..1000
+  and 0/1. The narrower decl removes ~0.8 MB of init writes from every
+  `bodies` scenario; the columns' types are what the program declares,
+  so this is a port correction, not a semantic dodge.
 - **`fanout` cannot pick its victim by index.** The baseline damages
   `health[(frame*131 + i*17) % len]`. Handle-addressing makes that access
   unspellable, so the port keeps the event COUNT (entities/10 per frame) and
@@ -186,18 +197,18 @@ the multipliers below have equivalence evidence behind them everywhere except
 
 | scenario | zig_striped | bevy_ecs | koru_store | x bevy | = |
 |---|---:|---:|---:|---:|:-:|
-| schedule_empty | 32 | 867728 | 3 | — | = |
-| add_remove | 37 | 10787 | 44 | 245x | = |
-| spawn | 284 | 3654 | 1118 | 3.3x | = |
-| spawn_batch | 278 | 3231 | 1073 | 3.0x | = |
-| despawn | 274 | 3696 | 1307 | 2.8x | = |
-| query_get | 1493 | 38728 | 2243 | 17x | = |
-| dense | 2671 | 9755 | 3354 | 2.9x | = |
-| sparse | 2135 | 2431 | 4053 | 0.6x | = |
-| fanout | 8543 | 25452 | 14260 | 1.8x | ✗ |
-| bevy_strength_world | 21076 | 65322 | 16627 | 3.9x | = |
+| schedule_empty | 32 | 867728 | 2 | — | = |
+| add_remove | 41 | 10787 | 47 | 229x | = |
+| spawn | 283 | 3654 | 1086 | 3.4x | = |
+| spawn_batch | 273 | 3231 | 1063 | 3.0x | = |
+| despawn | 268 | 3696 | 1290 | 2.9x | = |
+| query_get | 1476 | 38728 | 2358 | 16x | = |
+| dense | 2653 | 9755 | 3348 | 2.9x | = |
+| sparse | 2272 | 2431 | 3580 | 0.7x | = |
+| fanout | 9202 | 25452 | 15485 | 1.6x | ✗ |
+| bevy_strength_world | 22001 | 65322 | 16741 | 3.9x | = |
 | combat_world | 3560 | 9832 | — | — | — |
-| boids | 217432 | 314904 | 98350 | 3.2x | = |
+| boids | 231938 | 314904 | 104445 | 3.0x | = |
 
 Three of these are worth naming.
 
