@@ -160,7 +160,7 @@ std/proto(Animal) { hp: i64 }
 std/proto(Dog <: Animal) {       // field-set union — landed
     woofs: i64
 }
-std/proto(Cat <: Animal) {}      // empty block = pure inheritance
+std/proto(Cat <: Animal)         // blockless = pure inheritance (698_010)
 
 std/store:new(Dogs, capacity: 64) { Dog }
 std/store:new(Cats, capacity: 64) { Cat }
@@ -260,16 +260,18 @@ by writing real programs in it, not by argument.
 
 ## Status
 
-**Pinned — 698_001 through 698_009 green.** The walk's arc: `.koop`
+**Pinned — 698_001 through 698_010 green.** The walk's arc: `.koop`
 file form → `std/oop` transform module → **two features landed in
 `std/proto`**: field-set extension (`X <: A + B` — flatten, dedup by
 name+concept, conflict and cycle refuse; 698_001-005) and the reference
 field kind (`ref(X)` → validated target, i64 handle material in list
 structs; 698_006/007/009). Extended protos feed `std/list:new` and the
 store/view surface (698_008 — per-proto stores + `view`, not the
-repudiated sibling-union seed). `std/proto(Cat <: Animal) {}` spells
-pure inheritance with an explicit empty block — the blockless form
-needs `?Source` support in the transform wrapper codegen, not built.
+repudiated sibling-union seed). Pure inheritance is blockless —
+`std/proto(Cat <: Animal)` — via `source: ?Source`, the first optional
+Source param: the wrapper fires the handler with null rather than
+skipping it in silence (698_010; opt-in, `source: Source` keeps
+refusing blockless sites).
 The pattern half — "OOP-shaped programs are protos + stores + views +
 flows" — needs no code; it may want a `koru-by-example`-style doc
 entry, not a cluster.

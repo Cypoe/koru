@@ -113,10 +113,16 @@ stay refused (swap-remove moves rows; references point at rows, never
 cells). The walk didn't create this gap — object graphs made it
 load-bearing.
 
+**Landed later the same walk:** `source: ?Source` — the first optional
+Source param — so blockless `std/proto(Cat <: Animal)` reaches the
+handler with null instead of skipping in silence (698_010). Opt-in:
+`source: Source` still refuses blockless sites. The wrapper's silent
+`return .{}` on unbound required args is the no-fallbacks shape doing
+its job — the optional form had to be *declared* before a missing
+block could mean anything.
+
 **Open:** whether extension clears the bar — decided by the first real
-program that can't be honest with restated fields; and whether the
-blockless `std/proto(Cat <: Animal)` earns `?Source` support in the
-transform wrapper codegen (today: explicit `{}`).
+program that can't be honest with restated fields.
 
 **Falsification:** a real program needing per-object heap identity or
 genuinely open-world dispatch reopens the corresponding door — by demand

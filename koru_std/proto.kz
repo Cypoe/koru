@@ -31,7 +31,7 @@ const af = @import("ast_functional");
 
 ~[comptime|transform]pub tor default {
     expr: Expression,
-    source: Source,
+    source: ?Source,
     item: *const std/compiler:Item,
     program: *const std/compiler:Program,
     allocator: std.mem.Allocator,
@@ -113,7 +113,6 @@ const af = @import("ast_functional");
             return .{ .replacement = ast.refusal(allocator, reporter, .KORU173, flow.location, flow.module, "{s}", .{msg}) };
         }
     }
-
     // Field grammar: one `name: type` per line (comma optional, trailing commas
     // fine). A field may name a scalar material, a terminal of its own home, a
     // qualified name (`app/alpha:Health`) from another home by address, a
@@ -122,7 +121,8 @@ const af = @import("ast_functional");
     // to a declared compound (lowers to the handle material, exempt from the
     // containment walk). Local fields merge into the inherited set: same name
     // + same concept dedups, same name + different concept refuses.
-    var lines1 = std.mem.splitScalar(u8, source.text, '\n');
+    // `?Source`: a blockless decl (`Cat <: Animal`) arrives with source null.
+    var lines1 = std.mem.splitScalar(u8, if (source) |s| s.text else "", '\n');
     while (lines1.next()) |line_raw| {
         const line = std.mem.trim(u8, line_raw, " \t\r,");
         if (line.len == 0) continue;
@@ -191,7 +191,7 @@ const af = @import("ast_functional");
     // The marker is the MERGED set — consumers never see `<:`; the parents'
     // fields are already flat here.
     const flat = blk: {
-        var buf = std.ArrayList(u8).initCapacity(allocator, source.text.len + 32) catch unreachable;
+        var buf = std.ArrayList(u8).initCapacity(allocator, merged.items.len * 24) catch unreachable;
         for (merged.items) |p| {
             if (buf.items.len > 0) buf.appendSlice(allocator, ", ") catch unreachable;
             buf.appendSlice(allocator, p.name) catch unreachable;

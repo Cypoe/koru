@@ -2294,7 +2294,11 @@ pub const VisitorEmitter = struct {
             if (field.is_file or field.is_embed_file) {
                 try self.code_emitter.write("[]const u8");
             } else if (field.is_source) {
-                try self.code_emitter.write("__koru_ast.Source"); // Full Source struct with .text, .scope.bindings, .phantom_type
+                if (std.mem.startsWith(u8, field.type, "?")) {
+                    try self.code_emitter.write("?__koru_ast.Source = null"); // Optional source — blockless calls pass null (698_010)
+                } else {
+                    try self.code_emitter.write("__koru_ast.Source"); // Full Source struct with .text, .scope.bindings, .phantom_type
+                }
             } else if (field.is_expression) {
                 if (std.mem.startsWith(u8, field.type, "?")) {
                     try self.code_emitter.write("?[]const u8 = null"); // Optional expression, defaults to null

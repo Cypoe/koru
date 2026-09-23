@@ -11368,7 +11368,13 @@ pub const Parser = struct {
             var is_embed_file = false;
             var is_expression = false;
             var is_invocation_meta = false;
-            if (std.mem.eql(u8, field_type, "Source") or std.mem.startsWith(u8, field_type, "Source<")) {
+            if (std.mem.eql(u8, field_type, "Source") or std.mem.startsWith(u8, field_type, "Source<") or
+                std.mem.eql(u8, field_type, "?Source") or std.mem.startsWith(u8, field_type, "?Source<"))
+            {
+                // `source: ?Source` is the blockless-declaring form: the block
+                // binds when present and the handler still fires without one —
+                // opt-in, declared on the param, same rule `?Expression`
+                // follows for positionals (698_010).
                 is_source = true;
             } else if (std.mem.eql(u8, field_type, "Expression") or std.mem.startsWith(u8, field_type, "Expression<") or
                 std.mem.eql(u8, field_type, "?Expression") or std.mem.startsWith(u8, field_type, "?Expression<"))

@@ -2037,6 +2037,7 @@ const TransformEvent = struct {
     claims_descendants: bool = false, // Transform should run before walking lexical descendants
     stage: []const u8 = "main", // Ordered transform stage: "pre" | "main" | "post" ([transform|pre]/[transform|post])
     has_source: bool, // Event accepts source: Source[T] parameter
+    source_optional: bool = false, // The source param is `?Source` — blockless calls still fire the handler with null
     has_expression: bool, // Event accepts expr: Expression parameter
     has_optional_expression: bool = false, // Event accepts expr: ?Expression parameter (optional, may be null)
     expression_field_name: ?[]const u8 = null, // Actual field name for Expression parameter
@@ -2404,6 +2405,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
             // Events with *const EventDecl are derive handlers (operate on declarations)
             // The frontend is agnostic to [transform]/[derive] annotations - that's backend dispatch
             var has_source_param = false;
+            var source_optional_param = false;
             var has_expression_param = false;
             var has_optional_expression_param = false;
             var expression_field_name_param: ?[]const u8 = null;
@@ -2415,6 +2417,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
             for (event_decl.input.fields) |field| {
                 if (field.is_source) {
                     has_source_param = true;
+                    if (std.mem.startsWith(u8, field.type, "?")) source_optional_param = true;
                 } else if (field.is_expression) {
                     if (std.mem.startsWith(u8, field.type, "?")) {
                         has_optional_expression_param = true;
@@ -2539,6 +2542,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                     .claims_descendants = claims_descendants,
                     .stage = stage_name,
                     .has_source = has_source_param,
+                    .source_optional = source_optional_param,
                     .has_expression = has_expression_param,
                     .has_optional_expression = has_optional_expression_param,
                     .expression_field_name = expression_field_name_param,
@@ -2571,6 +2575,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
 
                     // TYPE-DRIVEN DETECTION: Check if this event consumes AST types
                     var has_source_param = false;
+                    var source_optional_param = false;
                     var has_expression_param = false;
                     var has_optional_expression_param = false;
                     var expression_field_name_param: ?[]const u8 = null;
@@ -2582,6 +2587,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                     for (event_decl.input.fields) |field| {
                         if (field.is_source) {
                             has_source_param = true;
+                            if (std.mem.startsWith(u8, field.type, "?")) source_optional_param = true;
                         } else if (field.is_expression) {
                             if (std.mem.startsWith(u8, field.type, "?")) {
                                 has_optional_expression_param = true;
@@ -2621,6 +2627,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                         // (emitTransformProcEventStruct emits machine fields
                         // only — a wrapper passing .source would not compile).
                         has_source_param = false;
+                        source_optional_param = false;
                         has_expression_param = false;
                         has_optional_expression_param = false;
                         expression_field_names_list.clearRetainingCapacity();
@@ -2767,6 +2774,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                             .claims_descendants = claims_descendants,
                             .stage = stage_name,
                             .has_source = has_source_param,
+                            .source_optional = source_optional_param,
                             .has_expression = has_expression_param,
                             .has_optional_expression = has_optional_expression_param,
                             .expression_field_name = expression_field_name_param,
@@ -3052,11 +3060,16 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
             }
 
             // Build guard condition and input based on what's required
+            // `source: ?Source` is the blockless-declaring form: it is always
+            // extracted and passed through (null when no block), but it never
+            // joins the guard — the handler fires on a bare invocation and
+            // reads `source` as an optional.
+            const src_required = event.has_source and !event.source_optional;
             if (multi_expr) {
                 // Multi-Expression handler: every required Expression param
                 // must extract (named arg wins, positional fallback).
                 try code_emitter.write("    if (");
-                if (event.has_source) {
+                if (src_required) {
                     try code_emitter.write("source_opt != null and ");
                 }
                 for (event.expression_field_names, 0..) |_, i| {
@@ -3065,12 +3078,12 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                     try code_emitter.write(g);
                 }
                 try code_emitter.write(") {\n");
-                if (event.has_source) {
+                if (src_required) {
                     try code_emitter.write("        const source = source_opt.?;\n");
                 }
                 try code_emitter.write("        const input = handler.Input{\n");
                 if (event.has_source) {
-                    try code_emitter.write("            .source = source,\n");
+                    try code_emitter.write(if (src_required) "            .source = source,\n" else "            .source = source_opt,\n");
                 }
                 for (event.expression_field_names, 0..) |fname, i| {
                     try code_emitter.write("            .");
@@ -3079,25 +3092,27 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                     try code_emitter.write(v);
                 }
             } else if (event.has_source and event.has_expression) {
-                try code_emitter.write("    if (source_opt != null and expr_opt != null) {\n");
-                try code_emitter.write("        const source = source_opt.?;\n");
+                try code_emitter.write(if (src_required) "    if (source_opt != null and expr_opt != null) {\n" else "    if (expr_opt != null) {\n");
+                if (src_required) {
+                    try code_emitter.write("        const source = source_opt.?;\n");
+                }
                 try code_emitter.write("        const expr_text = expr_opt.?;\n");
                 try code_emitter.write("        const input = handler.Input{\n");
-                try code_emitter.write("            .source = source,\n");
+                try code_emitter.write(if (src_required) "            .source = source,\n" else "            .source = source_opt,\n");
                 try code_emitter.write("            .");
                 try code_emitter.write(event.expression_field_name orelse "expr");
                 try code_emitter.write(" = expr_text,\n");
             } else if (event.has_source and event.has_optional_expression) {
-                try code_emitter.write("    if (source_opt) |source| {\n");
+                try code_emitter.write(if (src_required) "    if (source_opt) |source| {\n" else "    {\n");
                 try code_emitter.write("        const input = handler.Input{\n");
-                try code_emitter.write("            .source = source,\n");
+                try code_emitter.write(if (src_required) "            .source = source,\n" else "            .source = source_opt,\n");
                 try code_emitter.write("            .");
                 try code_emitter.write(event.expression_field_name orelse "expr");
                 try code_emitter.write(" = extractOptionalExprFromArgs(invocation.args),\n");
             } else if (event.has_source) {
-                try code_emitter.write("    if (source_opt) |source| {\n");
+                try code_emitter.write(if (src_required) "    if (source_opt) |source| {\n" else "    {\n");
                 try code_emitter.write("        const input = handler.Input{\n");
-                try code_emitter.write("            .source = source,\n");
+                try code_emitter.write(if (src_required) "            .source = source,\n" else "            .source = source_opt,\n");
             } else if (event.has_optional_expression) {
                 try code_emitter.write("    {\n");
                 try code_emitter.write("        const input = handler.Input{\n");
@@ -3283,8 +3298,10 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
         }
 
         // Close guard and add else case if needed (only for transform handlers, not derive)
+        // An optional `?Source` (and optional-only expressions) emits a bare
+        // `{` — there is no guard to else, and no args can be "not present".
         if (!event.has_event_decl) {
-            if (event.has_source or event.has_expression) {
+            if ((event.has_source and !event.source_optional) or event.has_expression) {
                 try code_emitter.write("    } else {\n");
                 try code_emitter.write("        return .{};  // Required args not present, no change\n");
                 try code_emitter.write("    }\n");
