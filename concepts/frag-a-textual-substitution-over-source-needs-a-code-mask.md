@@ -56,6 +56,25 @@ belief sharpens: a consulted mask can still be wrong — the mask's model of
 context has to match the downstream parser's grammar, not just the
 code/string boundary.
 
+Fourth site, 2026-09-23, and the sharpest version yet: `replaceIdentifier` —
+the bound-name rewrite behind `__koru_arg_<n>_<u>` mints — consulted the code
+mask faithfully (strings and comments untouched, keyword positions handled)
+and still corrupted the program, because "code" is not one context. `.name`
+in Zig is a MEMBER name — struct-literal label, member access, enum literal —
+bound to the left side's namespace, never a reference to the in-scope
+identifier. Kopium's `live.k` emitted `p.* = .{ .__koru_arg_m_0 = ... }`
+against koru_curl's library-declared `Pending` and the backend compile
+refused a field that exists nowhere (230_023). Two compounding subtleties,
+both pinned: a naive "skip when preceded by `.`" passes the compile while
+shipping the wrong bound value, because `0..m`'s range end IS the reference
+(`..` is not member position); and the same corruption inside the body
+self-heals — a struct decl in the spliced text flips along with its uses, so
+the defect only ever breaks when the type lives outside the rewrite's reach,
+which is exactly the library-code case. The belief sharpens a third time: the
+mask must model REFERENCE position, not merely code — inside code, "is this
+identifier a reference or a name in someone else's namespace" is the next
+question down, and `..` keeps it honest.
+
 Open: nothing enumerates the substitution sites. Three are known
 (visitor_emitter, store's entityRefs, store's bindStrip); there is no list, so
 the next one is found the way these two were — by a consumer shipping text

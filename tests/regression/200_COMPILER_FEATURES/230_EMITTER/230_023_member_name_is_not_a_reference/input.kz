@@ -1,0 +1,63 @@
+// PINS: when an inlined proc's arg name collides with a name already bound
+// in the Zig scope, the bound-name rewrite mints `__koru_arg_<name>_<n>` and
+// rewrites the spliced body — but `.m` is a MEMBER name, not a reference to
+// the in-scope `m`. A struct-literal label (`.{ .m = ... }`), a member
+// access (`p.m`), and an enum literal all bind to the left side's namespace;
+// rewriting them emits field names the type never declared. Measured live:
+// kopium's live.k emitted `p.* = .{ .__koru_arg_m_0 = __koru_arg_m_0 }`
+// against koru_curl.Pending — "no field named '__koru_arg_m_0'".
+//
+// Control inside the same body: `0..m` — the range operator's second dot is
+// not member position; the range end IS the reference and must still
+// rewrite. A naive "skip when preceded by `.`" passes the compile and ships
+// the wrong bound value (7, not 8) — the 44 in expected.txt pins the value,
+// not just the shape.
+//
+// The collision needs the inline path: only an EFFECT branch (`!`) makes the
+// invocation splice its proc body at the call site — terminal branches
+// alone lower to an ordinary handler call and no mint fires (measured).
+//
+// Siblings: 230_016 (rewrote inside a string), 230_021 (rewrote a keyword's
+// own position) — the same substitution blind to a context class. This is
+// the third class: member position.
+
+const std = @import("std");
+
+// Declared at module level, OUTSIDE the spliced body — the way koru_curl's
+// Pending lives in library code. A struct decl inside the body would be
+// rewritten along with everything else and the corruption self-heals into
+// compiling code (measured: decl, label, and access all flip together).
+const P = struct { m: usize };
+
+~tor mint {} -> usize
+~proc mint|zig {
+    return 7;
+}
+
+~tor boxed { m: usize }
+! ?tick usize
+| ok usize
+| err
+
+~proc boxed|zig {
+    const p: P = .{ .m = m };
+    var s: usize = 0;
+    for (0..m) |i| {
+        s += i;
+    }
+    return .{ .ok = p.m + s + m };
+}
+
+~tor show { x: usize }
+~proc show|zig {
+    std.debug.print("{d}\n", .{x});
+}
+
+// `: m` binds the name in the Zig scope, so `boxed`'s `m` param collides and
+// mints __koru_arg_m_0. The body must keep .m / p.m spelled `m` while the
+// reference positions (the init value, the range end, the tail sum) follow
+// the mint.
+~mint(): m
+|> boxed(m: m + 1)
+| ok r |> show(x: r)
+| err |> show(x: 0)

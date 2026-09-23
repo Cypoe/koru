@@ -1894,7 +1894,13 @@ pub fn replaceIdentifier(allocator: std.mem.Allocator, text: []const u8, old_nam
             const before_ok = (i == 0) or (!std.ascii.isAlphanumeric(text[i - 1]) and text[i - 1] != '_');
             const after_idx = i + old_name.len;
             const after_ok = (after_idx >= text.len) or (!std.ascii.isAlphanumeric(text[after_idx]) and text[after_idx] != '_');
-            if (before_ok and after_ok) {
+            // Member position is not a reference: `.name` binds to the left
+            // side's namespace (struct-literal label, member access, enum
+            // literal), never to the in-scope identifier — rewriting it emits
+            // field names the type never declared (230_023). `..` is the
+            // range operator, not member access: `0..m` still names m.
+            const member_position = i > 0 and text[i - 1] == '.' and (i < 2 or text[i - 2] != '.');
+            if (before_ok and after_ok and !member_position) {
                 if (is_keyword and isZigKeywordPosition(text, mask, i, after_idx, old_name)) {
                     try result.appendSlice(allocator, old_name);
                 } else {
