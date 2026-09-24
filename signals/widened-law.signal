@@ -1,0 +1,10 @@
+name: widened-law
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a rule already enforced on one surface was found to govern
+  surfaces the check never saw — the law widened without changing. Fires
+  when the diff extends an existing invariant to a new carrier (a new AST
+  node kind, an opaque text form, an exempted callee class) rather than
+  stating a new rule.
