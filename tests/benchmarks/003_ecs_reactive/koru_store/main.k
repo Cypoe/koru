@@ -24,6 +24,7 @@
 //     not spellable; a whole-store sum is the stronger oracle anyway.
 //     `std/time:now` is opaque enough that the read cannot be hoisted over it.
 import std/io
+import std/control
 import std/store
 import std/args
 import std/string
@@ -193,7 +194,7 @@ fanout-init = for(0..@as(usize, @intCast(cfg.entities)))
 // The positionally-addressed twin of `bodies` — the baseline's bare array index,
 // which a store row (named by handle, never by position) otherwise cannot offer.
 [unsafe(bounds)]std/grid:new(bxref, size: 100000) { h: 0[i64] }
-std/store:new(fw) { frame: 0[i64], last: 0[i64] }
+std/store:new(fw) { frame: 0[i64] }
 
 tor integrate {}
 integrate = std/store:query(bodies)
@@ -275,25 +276,25 @@ count-marks = std/store:query(marks)
 // cannot arbitrate a third; that one is the next thing to settle.
 
 tor observe { value: i64 }
-observe = for(0..@as(usize, @intCast(cfg.observers)))
-    ! each o |> if ((((@as(u64, @bitCast(value)) ^ @as(u64, @intCast(o))) *% 0x9e3779b9) & 7) == 0)
-        | then |> std/store:stored { acc.sink: acc.sink + value + @as(i64, @intCast(o)) }
+observe = capture { s: 0[i64] }
+    ! as c |> for(0..@as(usize, @intCast(cfg.observers)))
+        ! each o |> if ((((@as(u64, @bitCast(value)) ^ @as(u64, @intCast(o))) *% 0x9e3779b9) & 7) == 0)
+            | then |> captured { s: c.s + value + @as(i64, @intCast(o)) }
+    | captured final |> std/store:stored { acc.sink: acc.sink + final.s }
 
 // One damage EVENT, `entities/10` of them per frame. The victim address is
-// respelled FOUR times for want of an expression-local binding.
+// respelled three times for want of an expression-local binding — the write's
+// row address, the write's value, and the observer argument.
 //
-// The third rung is not stylistic — it is a WALL. An indexed store read lowers
-// in a write block and inside a write's ROW ADDRESS, but NOT in a call
-// ARGUMENT: `observe(value: bodies[bxref[i].h].hp)` reaches the host as the
-// literal text `bodies[...]` and the backend refuses with `use of undeclared
-// identifier 'bodies'`. Same reach gap as `print.ln`, which does not run the
-// lowering at all. So the value is parked in a column and passed from there.
-// Pinned aspirationally as 690_254.
+// The call-argument spelling WAS a wall: `observe(value: bodies[bxref[i].h].hp)`
+// reached the host as literal text and refused with `use of undeclared
+// identifier 'bodies'`, so the value was parked in `fw.last` and passed from
+// there. 690_254 went green when `indexedFieldRefs` moved to file scope and
+// the whole-program walk gained argument position — the parking is gone.
 tor damage {}
 damage = for(0..@as(usize, @intCast(@divTrunc(cfg.entities, 10))))
     ! each i |> std/store:stored { bodies[bxref[@as(usize, @intCast(@mod(fw.frame * 131 + @as(i64, @intCast(i)) * 17, cfg.entities)))].h].hp: bodies[bxref[@as(usize, @intCast(@mod(fw.frame * 131 + @as(i64, @intCast(i)) * 17, cfg.entities)))].h].hp - 1 }
-        |> std/store:stored { fw.last: bodies[bxref[@as(usize, @intCast(@mod(fw.frame * 131 + @as(i64, @intCast(i)) * 17, cfg.entities)))].h].hp }
-        |> observe(value: fw.last)
+        |> observe(value: bodies[bxref[@as(usize, @intCast(@mod(fw.frame * 131 + @as(i64, @intCast(i)) * 17, cfg.entities)))].h].hp)
 
 tor fanout-frame {}
 fanout-frame = damage() |> std/store:stored { fw.frame: fw.frame + 1 }
@@ -788,9 +789,11 @@ combat-rebuild = for(0..@as(usize, @intCast(@divTrunc(cfg.entities, 10))))
 // 2026-09-21: combat_world 15.3ms -> ~8.4ms, sink identical (1838076) — LLVM
 // did not unswitch the loop-invariant `fire == 1` through the handler call.
 tor combat-observe { value: i64, fire: i64 }
-combat-observe = for(0..(if (fire == 1) @as(usize, @intCast(cfg.observers)) else 0))
-    ! each o |> if ((((@as(u64, @bitCast(value)) ^ @as(u64, @intCast(o))) *% 0x9e3779b9) & 7) == 0)
-        | then |> std/store:stored { acc.sink: acc.sink + value + @as(i64, @intCast(o)) }
+combat-observe = capture { s: 0[i64] }
+    ! as c |> for(0..(if (fire == 1) @as(usize, @intCast(cfg.observers)) else 0))
+        ! each o |> if ((((@as(u64, @bitCast(value)) ^ @as(u64, @intCast(o))) *% 0x9e3779b9) & 7) == 0)
+            | then |> captured { s: c.s + value + @as(i64, @intCast(o)) }
+    | captured final |> std/store:stored { acc.sink: acc.sink + final.s }
 
 // ONE STEP of the chain walk. `keep:` stops the loop at the first hit, so this
 // runs once per enemy actually inspected — the length, not the bound.

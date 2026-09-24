@@ -154,65 +154,65 @@ around them.
   and 0/1. The narrower decl removes ~0.8 MB of init writes from every
   `bodies` scenario; the columns' types are what the program declares,
   so this is a port correction, not a semantic dodge.
-- **`fanout` cannot pick its victim by index.** The baseline damages
-  `health[(frame*131 + i*17) % len]`. Handle-addressing makes that access
-  unspellable, so the port keeps the event COUNT (entities/10 per frame) and
-  the per-event observer work identical and damages the every-tenth rows
-  instead. The three impls' sinks all differ here — bevy_ecs's already differed
-  from the baseline's before Koru existed.
+- **`fanout` picks its victim by index, through a handle grid.** The
+  baseline damages `health[(frame*131 + i*17) % len]`; the port keeps a
+  `bxref` grid whose cells hold row handles, so the same formula resolves
+  `bodies[bxref[i].h].hp` — grid lookup, then a generational resolve.
+  Koru's sink matches zig's bit-for-bit; bevy_ecs's still differs because
+  its `Changed<Health>` fold deduplicates per frame, contributing an entity
+  once at its final value where zig and koru contribute every event.
+- **`fanout`'s observer fold runs on a `capture` cell, not the sink
+  store.** `observe` used to write `acc.sink` once per observer hit — a
+  load-modify-store chain through a heap column that the optimizer cannot
+  promote to a register. The fold now accumulates in a comptime `capture`
+  cell and lands one store write per event, which is the baseline's shape
+  (a local `sink +=`) with the store's semantics (one observable write).
+  Measured 2026-09-24: fanout ~14.7 ms → ~11.5 ms, sink identical. The
+  same fold now covers `combat-observe`.
 - **`spawn_batch` IS `spawn`.** Koru has no batch-insert verb, which is the
   same statement the Zig baseline makes by aliasing the two. bevy_ecs's
   batch path is genuinely faster than its own single spawn.
 
-### combat_world has no Koru entry, and the reason has narrowed
+### combat_world is ported, bucket and all
 
-This section used to end: *"A spatial index is the first thing a borrowed ECS
-workload asked for that `std/store` has no answer to."* That sentence was true
-when it was written and is now half wrong, so here is the correction rather
-than a quiet edit.
+The bucket question this file used to leave open — "each cell holds a list
+that grows to however many enemies land in it" — is answered by an
+intrusive chain: `bkt` is a grid whose cells hold the chain HEAD, and each
+enemy row carries `enext`. `combat-rebuild` relinks the chains per frame;
+`combat-step` walks one link per call under a `keep:` guard, so the walk
+runs once per enemy inspected, not once per bucket bound. The port's sink
+(`1838076`) is bit-identical to both other arms.
 
-`std/grid` is the answer to the spatial-index half — a static,
-positionally-addressed table declared beside the store, with no handle to
-thread and nothing to allocate. `boids` is the proof: it is the same quantize/
-scatter/gather that combat_world's collision pass wants, it is ported, and its
-checksum agrees with the other two arms bit-for-bit.
-
-What still has no spelling is combat_world's BUCKET: each cell holds a list
-that grows to however many enemies land in it, and a grid cell's columns are
-fixed at compile time exactly as a store row's are. The alternatives remain a
-capacity chosen by guesswork or a different algorithm. The pieces for the real
-answer now exist and have not been assembled — a cell holding the HEAD of an
-intrusive chain, with each enemy row carrying `next`, which needs no nested
-collection and no new verb (`690_245`/`690_246` pin the two reads that make it
-walkable). Until someone writes it the row stays missing, and it stays missing
-for a smaller reason than before.
-
-So the corrected claim: **a spatial index was the first thing a borrowed ECS
-workload asked for that `std/store` had no answer to, and the answer turned out
-to be a second table rather than a bigger store.**
+What the residual 1.7x over zig is: the workload is ~7.5M store-write
+events per run — each `std/store:stored` step in a query chain is a
+separate event with a field-tagged dispatch, where the baseline writes a
+bare array element. Decomposed 2026-09-24 by forced inlining of every
+`__koru_handler_impl` in the emitted backend: ~0.4 ms of the ~2.6 ms gap
+is call boundary; the rest is the per-write event shape itself — the
+systemic emission cost, not a scenario defect.
 
 ### Results
 
 One run of `./run.sh`, same machine, interleaved by scenario. Times in
 microseconds; `x bevy` is bevy_ecs divided by koru_store. `=` marks a scenario
-whose `sink` is bit-identical across all three arms — eleven of twelve now, so
-the multipliers below have equivalence evidence behind them everywhere except
-`fanout`, which is documented above as damaging a different victim set.
+whose `sink` is bit-identical across all three arms — eleven of twelve. On
+`fanout` koru matches zig exactly; bevy_ecs is the odd one out, for the
+deduplicated-fold reason documented above.
 
 | scenario | zig_striped | bevy_ecs | koru_store | x bevy | = |
 |---|---:|---:|---:|---:|:-:|
-| schedule_empty | 32 | 867728 | 2 | — | = |
-| add_remove | 35 | 10787 | 38 | 283.9x | = |
-| spawn | 242 | 3654 | 700 | 5.2x | = |
-| spawn_batch | 251 | 3231 | 728 | 4.4x | = |
-| despawn | 258 | 3696 | 962 | 3.8x | = |
-| query_get | 1417 | 38728 | 1884 | 20.6x | = |
-| dense | 2543 | 9755 | 2990 | 3.3x | = |
-| sparse | 2097 | 2431 | 2780 | 0.9x | = |
-| fanout | 9202 | 25452 | 14750 | 1.7x | ✗ |
-| bevy_strength_world | 22001 | 65322 | 16466 | 4.0x | = |
-| combat_world | 3560 | 9832 | — | — | — |
-| boids | 231938 | 314904 | 102011 | 3.1x | = |
+| schedule_empty | 2 | 1030 | 2 | 475.4x | = |
+| add_remove | 39 | 10744 | 38 | 281.5x | = |
+| spawn | 261 | 3544 | 785 | 4.5x | = |
+| spawn_batch | 236 | 2668 | 717 | 3.7x | = |
+| despawn | 251 | 3740 | 933 | 4.0x | = |
+| query_get | 1438 | 38884 | 1884 | 20.6x | = |
+| dense | 2521 | 9588 | 2932 | 3.3x | = |
+| sparse | 2099 | 1787 | 2736 | 0.7x | = |
+| fanout | 8792 | 25853 | 11446 | 2.3x | ✗ |
+| bevy_strength_world | 21643 | 60720 | 16141 | 3.8x | = |
+| combat_world | 3691 | 8278 | 6321 | 1.3x | = |
+| boids | 221221 | 318790 | 100932 | 3.2x | = |
 
 Three of these are worth naming.
 

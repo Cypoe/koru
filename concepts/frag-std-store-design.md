@@ -973,3 +973,17 @@ check + shift. Measured (003_ecs_reactive, ReleaseFast): sparse
 bucket build measured WORSE than the fused memo'd join (~280 vs ~205µs
 micro) — the realloc copies amortise below the cost of a second pass;
 the join stays fused.
+
+The write side has its own floor (2026-09-24): a `stored { acc.f: acc.f + e }`
+inside a hot inner loop is a load-modify-store chain through a heap column,
+and LLVM does not promote the cell across iterations — the store's
+per-write visibility is the semantics, and a serial ~1ns RMW per write is
+its price. In `fanout`'s observer loop that was ~3 ms of a 5.5 ms gap over
+the baseline's register accumulator. The honest shape is `capture`: the
+fold accumulates in a comptime cell and lands one store write per event —
+identical sink, one observable write, and the baseline's loop shape. The
+fold is not a workaround for a missing optimization; per-hit write-through
+IS the correct cost when a cell is written per hit. `captured` inside a
+`std/store:query` arm does not lower (the query body is transplanted out
+of the transform's subtree) — per-row folds across a query still pay the
+write-through, which is where the next store-side lever lives.
