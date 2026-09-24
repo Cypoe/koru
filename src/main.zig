@@ -5883,6 +5883,26 @@ fn checkRecordTextBindOnce(
     }
 }
 
+/// Every invocation arg list — a call's `value` and Source `text` are both
+/// places a `{...}` binding list can hide (`captured { p: st.m, p: x }`).
+/// `owner` names the list in the diagnostic.
+fn checkArgsBindOnce(
+    args: []const ast.Arg,
+    owner: []const u8,
+    reporter: *ErrorReporter,
+    location: errors.SourceLocation,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!void {
+    for (args) |arg| {
+        try checkRecordTextBindOnce(arg.value, owner, reporter, location, allocator, true);
+        if (arg.source_value) |sv| {
+            if (!std.mem.eql(u8, sv.text, arg.value)) {
+                try checkRecordTextBindOnce(sv.text, owner, reporter, location, allocator, true);
+            }
+        }
+    }
+}
+
 /// A `@label(...)` jump binds the label's parameters like a call does — the
 /// pun law already applies to its args (PARSE005 fires on them). PARSE009's
 /// one-name rule holds here too, but checkBareArgPunning only sees
@@ -5973,14 +5993,7 @@ fn enforceUniqueBindingNamesInItems(
                     const callee = flow.inv().path.segments[flow.inv().path.segments.len - 1];
                     const call_owner = try std.fmt.allocPrint(allocator, "'{s}'", .{callee});
                     defer allocator.free(call_owner);
-                    for (flow.inv().args) |arg| {
-                        try checkRecordTextBindOnce(arg.value, call_owner, reporter, flow.location, allocator, true);
-                        if (arg.source_value) |sv| {
-                            if (!std.mem.eql(u8, sv.text, arg.value)) {
-                                try checkRecordTextBindOnce(sv.text, call_owner, reporter, flow.location, allocator, true);
-                            }
-                        }
-                    }
+                    try checkArgsBindOnce(flow.inv().args, call_owner, reporter, flow.location, allocator);
                 }
             },
             .event_tap => |tap| {
@@ -6035,26 +6048,12 @@ fn enforceUniqueBindingNamesInNode(
         .invocation => |*inv| {
             const call_owner = try std.fmt.allocPrint(allocator, "'{s}'", .{inv.path.segments[inv.path.segments.len - 1]});
             defer allocator.free(call_owner);
-            for (inv.args) |arg| {
-                try checkRecordTextBindOnce(arg.value, call_owner, reporter, location, allocator, true);
-                if (arg.source_value) |sv| {
-                    if (!std.mem.eql(u8, sv.text, arg.value)) {
-                        try checkRecordTextBindOnce(sv.text, call_owner, reporter, location, allocator, true);
-                    }
-                }
-            }
+            try checkArgsBindOnce(inv.args, call_owner, reporter, location, allocator);
         },
         .label_with_invocation => |*lwi| {
             const call_owner = try std.fmt.allocPrint(allocator, "'{s}'", .{lwi.invocation.path.segments[lwi.invocation.path.segments.len - 1]});
             defer allocator.free(call_owner);
-            for (lwi.invocation.args) |arg| {
-                try checkRecordTextBindOnce(arg.value, call_owner, reporter, location, allocator, true);
-                if (arg.source_value) |sv| {
-                    if (!std.mem.eql(u8, sv.text, arg.value)) {
-                        try checkRecordTextBindOnce(sv.text, call_owner, reporter, location, allocator, true);
-                    }
-                }
-            }
+            try checkArgsBindOnce(lwi.invocation.args, call_owner, reporter, location, allocator);
         },
         .label_jump => |lj| {
             try checkJumpArgsBindOnce(lj.args, lj.label, reporter, location);
