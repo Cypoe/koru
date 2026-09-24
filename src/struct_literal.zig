@@ -375,6 +375,42 @@ pub fn peelBaseType(field_value: []const u8) struct { value: []const u8, type: [
     return .{ .value = prefix, .type = inner };
 }
 
+/// Split a shape field's `= <expr>` default off its type text: `i64 = 5` →
+/// `{ .type = "i64", .default = "5" }`. THE single parser for the tail —
+/// parseShape (parser.zig) splits it off `Field.type` here, and the
+/// expression-admission wall (flow_checker.zig) reads it back out of record
+/// return-type text. An `=` inside brackets belongs to a nested type, and
+/// `==`/`!=`/`<=`/`>=` are comparisons, not defaults.
+pub fn splitTypeDefault(field_type: []const u8) struct { type: []const u8, default: ?[]const u8 } {
+    var depth: i32 = 0;
+    var k: usize = 0;
+    while (k < field_type.len) : (k += 1) {
+        const ch = field_type[k];
+        switch (ch) {
+            '[', '(', '{' => depth += 1,
+            ']', ')', '}' => depth -= 1,
+            '=' => {
+                if (depth != 0) continue;
+                if (k + 1 < field_type.len and field_type[k + 1] == '=') {
+                    k += 1;
+                    continue;
+                }
+                if (k > 0) {
+                    const prev = field_type[k - 1];
+                    if (prev == '!' or prev == '<' or prev == '>' or prev == '=') continue;
+                }
+                const rhs = std.mem.trim(u8, field_type[k + 1 ..], " \t\r\n");
+                return .{
+                    .type = std.mem.trim(u8, field_type[0..k], " \t\r\n"),
+                    .default = if (rhs.len > 0) rhs else null,
+                };
+            },
+            else => {},
+        }
+    }
+    return .{ .type = field_type, .default = null };
+}
+
 /// Parse a Koru struct literal into ordered (name, value) field pairs. Bare
 /// entries are resolved to puns; bare expressions and redundant labels error.
 pub fn parseFields(allocator: Allocator, input: []const u8) ParseError![]const StructField {

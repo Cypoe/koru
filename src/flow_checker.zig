@@ -6,6 +6,7 @@ const branch_checker = @import("branch_checker");
 const annotation_parser = @import("annotation_parser");
 const expression_parser = @import("expression_parser");
 const phantom_parser = @import("phantom_parser");
+const struct_literal = @import("struct_literal");
 
 /// The flow checker validates control flow properties:
 /// 1. When-clause exhaustiveness (exactly one continuation without `when` per branch)
@@ -693,58 +694,32 @@ pub const FlowChecker = struct {
         }
         // `-> { x: T = <expr>, ... }` record returns carry defaults inside the
         // type text itself — the emitter splices the record verbatim into the
-        // Output struct. Scan each field's `= <expr>` tail.
-        if (ev.return_type) |rt_raw| {
-            const rt = std.mem.trim(u8, rt_raw, " \t");
-            if (rt.len >= 2 and rt[0] == '{' and rt[rt.len - 1] == '}') {
-                try self.checkRecordTextDefaultTails(rt[1 .. rt.len - 1], decl_loc);
-            }
+        // Output struct. Parse the fields and scan each `= <expr>` tail.
+        if (ev.return_type) |rt| {
+            try self.checkReturnRecordDefaults(rt, decl_loc);
         }
     }
 
-    /// Scan a record shape's field list (text inside the braces) for `= <expr>`
-    /// tails containing a call. Splits fields on commas at brace depth zero and
-    /// finds each field's `=` the same way parseShape does.
-    fn checkRecordTextDefaultTails(self: *FlowChecker, fields_text: []const u8, location: errors.SourceLocation) anyerror!void {
-        var start: usize = 0;
-        var depth: i32 = 0;
-        var i: usize = 0;
-        while (i <= fields_text.len) : (i += 1) {
-            const at_boundary = i == fields_text.len or (depth == 0 and fields_text[i] == ',');
-            if (!at_boundary) {
-                switch (fields_text[i]) {
-                    '[', '(', '{' => depth += 1,
-                    ']', ')', '}' => depth -= 1,
-                    else => {},
-                }
-                continue;
-            }
-            const field_text = fields_text[start..i];
-            start = i + 1;
-            var fdepth: i32 = 0;
-            var k: usize = 0;
-            while (k < field_text.len) : (k += 1) {
-                const ch = field_text[k];
-                switch (ch) {
-                    '[', '(', '{' => fdepth += 1,
-                    ']', ')', '}' => fdepth -= 1,
-                    '=' => {
-                        if (fdepth != 0) continue;
-                        if (k + 1 < field_text.len and (field_text[k + 1] == '=' or field_text[k + 1] == '>')) {
-                            k += 1;
-                            continue;
-                        }
-                        if (k > 0) {
-                            const prev = field_text[k - 1];
-                            if (prev == '!' or prev == '<' or prev == '>' or prev == '=') continue;
-                        }
-                        const tail = std.mem.trim(u8, field_text[k + 1 ..], " \t");
-                        if (tail.len > 0 and self.exprTextHasCall(tail)) {
-                            try self.reportCallInExpression("a return-field default", location);
-                        }
-                        break;
-                    },
-                    else => {},
+    /// Scan the `= <expr>` tails of a `-> { ... }` record return type.
+    fn checkReturnRecordDefaults(self: *FlowChecker, return_type: []const u8, location: errors.SourceLocation) anyerror!void {
+        var rt = std.mem.trim(u8, return_type, " \t\r\n");
+        // Peel prefixes that can precede a record type: ?{..}, *{..}, []{..}
+        // — the same list checkRecordTextBindOnce peels in main.zig.
+        while (rt.len > 0 and (rt[0] == '?' or rt[0] == '*')) rt = rt[1..];
+        while (std.mem.startsWith(u8, rt, "[]")) rt = rt[2..];
+        if (rt.len < 2 or rt[0] != '{' or rt[rt.len - 1] != '}') return;
+        const fields = struct_literal.parseFields(self.allocator, rt) catch |err| {
+            if (err == error.OutOfMemory) return error.OutOfMemory;
+            // Every other parse error (NotAStruct, DuplicateField, …) means
+            // the record text is malformed — the shape checker and PARSE010
+            // report that; there is no field list here for this wall to scan.
+            return;
+        };
+        for (fields) |field| {
+            const split = struct_literal.splitTypeDefault(field.value);
+            if (split.default) |d| {
+                if (self.exprTextHasCall(d)) {
+                    try self.reportCallInExpression("a return-field default", location);
                 }
             }
         }

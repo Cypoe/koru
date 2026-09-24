@@ -11331,33 +11331,9 @@ pub const Parser = struct {
             // looked implemented, while every Koru pass that reads `field.type`
             // was handed a string that is not a type (400_185, 400_186).
             var field_default: ?[]const u8 = null;
-            {
-                var depth: i32 = 0;
-                var k: usize = 0;
-                while (k < field_type.len) : (k += 1) {
-                    const ch = field_type[k];
-                    switch (ch) {
-                        '[', '(', '{' => depth += 1,
-                        ']', ')', '}' => depth -= 1,
-                        '=' => {
-                            if (depth != 0) continue;
-                            if (k + 1 < field_type.len and field_type[k + 1] == '=') {
-                                k += 1;
-                                continue;
-                            }
-                            if (k > 0) {
-                                const prev = field_type[k - 1];
-                                if (prev == '!' or prev == '<' or prev == '>' or prev == '=') continue;
-                            }
-                            const rhs = lexer.trim(field_type[k + 1 ..]);
-                            if (rhs.len > 0) field_default = try self.allocator.dupe(u8, rhs);
-                            field_type = lexer.trim(field_type[0..k]);
-                            break;
-                        },
-                        else => {},
-                    }
-                }
-            }
+            const split = struct_literal.splitTypeDefault(field_type);
+            if (split.default) |d| field_default = try self.allocator.dupe(u8, d);
+            field_type = split.type;
 
             // Check for special types: Source, File, EmbedFile, Expression, and InvocationMeta
             // Source can have scope type: Source<HTML>, Source<SQL>, etc.

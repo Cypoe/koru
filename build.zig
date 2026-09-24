@@ -682,6 +682,9 @@ pub fn build(b: *std.Build) void {
     // produce bodies and the emitter lowers records, both from this one module.
     parser_module.addImport("struct_literal", struct_literal_module);
     emitter_helpers_module.addImport("struct_literal", struct_literal_module);
+    // flow_checker reads field defaults back out of record return-type text —
+    // the same field splitter parseShape uses.
+    flow_checker_module.addImport("struct_literal", struct_literal_module);
 
     // Template processor: walks AST, renders `[template]` proc bodies
     // through Liquid.
