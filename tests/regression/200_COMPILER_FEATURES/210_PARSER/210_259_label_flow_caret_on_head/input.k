@@ -1,6 +1,5 @@
 // PINS: Flow.location on the label-declared flow path (`#lbl capture { … }`)
-// names the `#lbl` head line. The capture seed refusal rides flow.location —
-// before head-line semantics this caret landed past the flow.
+// names the `#lbl` head line. The capture seed refusal rides flow.location.
 import std/io
 
 pub tor tick { n: i64 }

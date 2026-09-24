@@ -1,7 +1,6 @@
 // PINS: Flow.location on the `name =` + next-line-invocation subflow path
 // names the head invocation's own line. The transform refusal (regex match
-// takes an input argument) rides flow.location — before head-line semantics
-// this caret landed past the flow.
+// takes an input argument) rides flow.location.
 import std/io
 import std/regex
 
