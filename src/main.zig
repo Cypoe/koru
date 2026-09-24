@@ -5845,11 +5845,12 @@ fn enforceUniqueBindingNamesInItems(
     for (items) |item| {
         switch (item) {
             .event_decl => |ev| {
-                // EventDecl.location is 0-based (decl on source line N carries
-                // line N-1); the reporter prints 1-based. Compensate here.
+                // EventDecl.location is stored in USER coordinates
+                // (getUserDeclStartLocation subtracts the injection); the
+                // reporter's addError* take parser coordinates and classify.
+                // Convert back: user line -> parser line.
                 var loc = ev.location;
-                loc.line += 1;
-                loc.column += 1;
+                loc.line += reporter.injection_line_count;
                 const segment = if (ev.path.segments.len > 0) ev.path.segments[0] else "?";
                 const owner = try std.fmt.allocPrint(allocator, "tor '{s}'", .{segment});
                 defer allocator.free(owner);
@@ -5867,10 +5868,9 @@ fn enforceUniqueBindingNamesInItems(
                 }
             },
             .immediate_impl => |impl| {
-                // ImmediateImpl.location points one line past the impl line —
-                // walk it back so the caret lands on the author's `=>` line.
-                var loc = impl.location;
-                if (loc.line > 1) loc.line -= 1;
+                // ImmediateImpl.location is the impl head line in parser
+                // coordinates — the reporter's classify translates it.
+                const loc = impl.location;
                 try checkFieldsBindOnce(impl.value.fields, "the branch constructor", reporter, loc);
                 if (impl.value.plain_value) |pv| {
                     try checkRecordTextBindOnce(pv, "the bare return", reporter, loc, allocator);

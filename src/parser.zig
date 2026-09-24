@@ -6010,7 +6010,7 @@ pub const Parser = struct {
                         .is_bare_return = true,
                     },
                     .annotations = try self.dupeAnnotations(annotations),
-                    .location = self.getCurrentLocation(),
+                    .location = self.getLineLocation(head_line_idx, lexer.getIndent(line)),
                     .module = try self.allocator.dupe(u8, self.module_name),
                     .is_impl = ep.module_qualifier != null,
                 } };
@@ -6084,7 +6084,7 @@ pub const Parser = struct {
                             .event_path = event_path,
                             .value = branch_constructor,
                             .annotations = try self.dupeAnnotations(annotations),
-                            .location = self.getCurrentLocation(),
+                            .location = self.getLineLocation(head_line_idx, lexer.getIndent(line)),
                             .module = try self.allocator.dupe(u8, self.module_name),
                             .is_impl = event_path.module_qualifier != null,
                         } };
@@ -6123,7 +6123,7 @@ pub const Parser = struct {
                             .event_path = event_path,
                             .value = branch_constructor,
                             .annotations = try self.dupeAnnotations(annotations),
-                            .location = self.getCurrentLocation(),
+                            .location = self.getLineLocation(head_line_idx, lexer.getIndent(line)),
                             .module = try self.allocator.dupe(u8, self.module_name),
                             .is_impl = event_path.module_qualifier != null,
                         } };
@@ -6155,7 +6155,7 @@ pub const Parser = struct {
                                 .has_expressions = true,
                             },
                             .annotations = try self.dupeAnnotations(annotations),
-                            .location = self.getCurrentLocation(),
+                            .location = self.getLineLocation(head_line_idx, lexer.getIndent(line)),
                             .module = try self.allocator.dupe(u8, self.module_name),
                             .is_impl = event_path.module_qualifier != null,
                         } };
@@ -6170,7 +6170,7 @@ pub const Parser = struct {
                                 .has_expressions = false,
                             },
                             .annotations = try self.dupeAnnotations(annotations),
-                            .location = self.getCurrentLocation(),
+                            .location = self.getLineLocation(head_line_idx, lexer.getIndent(line)),
                             .module = try self.allocator.dupe(u8, self.module_name),
                             .is_impl = event_path.module_qualifier != null,
                         } };
@@ -6514,7 +6514,7 @@ pub const Parser = struct {
                         .event_path = event_path,
                         .value = branch_constructor,
                         .annotations = try self.dupeAnnotations(annotations),
-                        .location = self.getCurrentLocation(),
+                        .location = self.getLineLocation(head_line_idx, lexer.getIndent(line)),
                         .module = try self.allocator.dupe(u8, self.module_name),
                         .is_impl = event_path.module_qualifier != null,
                     } };
@@ -6554,7 +6554,7 @@ pub const Parser = struct {
                         .event_path = event_path,
                         .value = branch_constructor,
                         .annotations = try self.dupeAnnotations(annotations),
-                        .location = self.getCurrentLocation(),
+                        .location = self.getLineLocation(head_line_idx, lexer.getIndent(line)),
                         .module = try self.allocator.dupe(u8, self.module_name),
                         .is_impl = event_path.module_qualifier != null,
                     } };
