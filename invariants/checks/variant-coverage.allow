@@ -27,3 +27,4 @@ parser.kz      | __he{}                            | std/parser JS-target genera
 parser.kz      | __hv{}                            | std/parser JS-target generator; same site family as __he{}
 parser.kz      | __koru_lit_eq                     | std/parser JS-target literal comparator (parser.kz:868, JS `===` template); the Zig dual __koru_lit_eq_{} is covered
 parser.kz      | __koru_main_{}                    | std/parser JS-target entrypoint (`function __koru_main_{s}()`, process.argv); JS output only
+store.refhome.kz | __g                               | std/store ref-home JS guard's generation extraction (`const __g = Math.floor(__v / 4294967296)`); emitted only into output_emitted.js, outside the Zig artifact scan — the Zig dual's __v/__b carry the covered site (698_012-016)
