@@ -1,8 +1,8 @@
-// A destructure list is a binding list — each field name binds once.
-// `| found { name, name }` compiled at HEAD and the emitter wrote two
-// `const name` decls; the backend died on `redeclaration of local
-// constant 'name'` (rung 3). Same law as PARSE010's field lists; the
-// destructure list was never walked.
+// PINS: a continuation destructure is a binding list — each name binds
+// once. `| found { name, name }` refuses PARSE010 at the branch line,
+// in the frontend, before any Zig is emitted. Same law as PARSE010's
+// field lists (210_247); `_` discards are exempt and may repeat
+// (320_145).
 ~import std/io
 
 ~tor fetch { id: i64 }

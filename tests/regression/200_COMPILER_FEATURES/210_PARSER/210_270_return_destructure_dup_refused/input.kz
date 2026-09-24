@@ -1,8 +1,8 @@
-// Bind-position twin of 210_269: `~f(): { name, name }` destructures the
-// return into two bindings of one name — same binding list, same law.
-// At HEAD the emitter wrote `const name` twice and Zig refused the
-// redeclaration (rung 3); the walker only saw continuation destructure
-// sites it happened to reach, never `Invocation.return_destructure`.
+// PINS: the head invocation's return destructure is a binding list too.
+// `~f(): { name, name }` refuses PARSE010 on the call line, in the
+// frontend. Bind-position twin of 210_269: the same law holds whether
+// the destructure sits on a continuation or on the invocation that
+// produces the value.
 ~import std/io
 
 ~tor fetch { id: i64 }
