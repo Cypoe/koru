@@ -109,7 +109,9 @@ table. This is the same door the type-system walk already ranked next
 OOP walk made it load-bearing.
 
 The honest shape: a **reference field kind** — `owner: ref(Dog)` —
-**landed**: `ref(X)` validates that X names a declared compound, keeps
+**landed** and **RULED 2026-09-24** (the spelling shipped unruled on
+inherited vocabulary; Lars ratified it after the fact — "wonky in all
+the right ways"). `ref(X)` validates that X names a declared compound, keeps
 the target in proto metadata for checkers, and lowers to the i64 handle
 material everywhere it appears — `std/list` element structs (698_006/007)
 AND store seeds (698_009): the column IS the handle, and the create-site
