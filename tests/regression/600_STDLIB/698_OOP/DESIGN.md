@@ -49,9 +49,13 @@ OOP's syntax is innocent. The disease is four orthogonal ideas welded:
 4. **Encapsulation that hides from the compiler** — indirection as the
    enforcement mechanism, paid in cache misses.
 
-Every "no" Koru already said — no `struct`, no pointers, no constructors,
-no `const`, no `if` — severed one of these welds, not the idea. The
-rejections were the design; see the catalog.
+Every "no" Koru already said — no `struct`, no pointers, no constructors —
+severed one of these welds, not the idea. And the words that do exist
+aren't grammar: `if`, `for`, `cond`, `const` are `[keyword]` tors in
+`std/control` and `std/declarations`, auto-imported through `std/index` —
+the language's own control flow is a compile-time library interpretation,
+the same move the proto makes. The rejections were the design; so was
+where the survivors live. See the catalog.
 
 ## The adopted surface (THESIS — spelling, all invented)
 

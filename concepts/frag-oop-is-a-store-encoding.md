@@ -40,10 +40,13 @@ compiles to what the JITs approximate.
 each severed a weld, and what remained standing is OOP's semantic core:
 no `struct` (proto keeps affinity, kills the layout weld), no premature
 concretization (layout is a consumer-chosen projection), no pointers
-(handles/borrows, not free addresses), no constructors/`const`/`if`
-(presence, immutability, branching — never welded to keywords). The
-dialect inherits the discipline by omission; `if` in `.koop` is a
-lowering, which is *why* it can exist.
+(handles/borrows, not free addresses), no constructors (presence and
+initialization are library behaviors, never welded to `new`). And the
+concepts that *do* have spellings — `if`, `for`, `cond`, `const` — are
+not grammar either: `[keyword]` tors in `std/control` and
+`std/declarations`, auto-imported through `std/index`. The dialect's own
+control flow is a compile-time library interpretation — the same move
+the proto makes.
 
 **The law: allocation is a property of the plurality, never of the
 element.** OOP's `new` fuses allocate + mint + initialize — the one
