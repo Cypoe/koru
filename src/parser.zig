@@ -6438,13 +6438,13 @@ pub const Parser = struct {
                 try self.parseContinuations(lexer.getIndent(line));
 
             return ast.Item{ .flow = .{
-                .body = ast.rootSite(invocation, continuations, self.getCurrentLocation()),
+                .body = ast.rootSite(invocation, continuations, self.getLineLocation(head_line_idx, lexer.getIndent(line))),
                 .pre_label = sub_pre_label,
                 .impl_of = event_path,
                 .impl_variant = impl_variant,
                 .annotations = try self.dupeAnnotations(annotations),
                 .is_impl = event_path.module_qualifier != null,
-                .location = self.getCurrentLocation(),
+                .location = self.getLineLocation(head_line_idx, lexer.getIndent(line)),
                 .module = try self.allocator.dupe(u8, self.module_name),
             } };
         }
@@ -6586,12 +6586,12 @@ pub const Parser = struct {
             const continuations = try self.parseContinuations(lexer.getIndent(line));
 
             return ast.Item{ .flow = .{
-                .body = ast.rootSite(invocation, continuations, self.getCurrentLocation()),
+                .body = ast.rootSite(invocation, continuations, self.getLineLocation(head_line_idx, lexer.getIndent(line))),
                 .impl_of = event_path,
                 .impl_variant = impl_variant,
                 .annotations = try self.dupeAnnotations(annotations),
                 .is_impl = event_path.module_qualifier != null,
-                .location = self.getCurrentLocation(),
+                .location = self.getLineLocation(head_line_idx, lexer.getIndent(line)),
                 .module = try self.allocator.dupe(u8, self.module_name),
             } };
         }
@@ -6661,13 +6661,13 @@ pub const Parser = struct {
             try self.parseContinuations(lexer.getIndent(body_line));
 
         return ast.Item{ .flow = .{
-            .body = ast.rootSite(invocation, continuations, self.getCurrentLocation()),
+            .body = ast.rootSite(invocation, continuations, self.getLineLocation(body_line_idx, lexer.getIndent(body_line))),
             .pre_label = sub_pre_label,
             .impl_of = event_path,
             .impl_variant = impl_variant,
             .annotations = try self.dupeAnnotations(annotations),
             .is_impl = event_path.module_qualifier != null,
-            .location = self.getCurrentLocation(),
+            .location = self.getLineLocation(body_line_idx, lexer.getIndent(body_line)),
             .module = try self.allocator.dupe(u8, self.module_name),
         } };
     }
@@ -11556,10 +11556,10 @@ pub const Parser = struct {
                 try self.parseContinuations(lexer.getIndent(line));
 
             return .{ .flow = ast.Flow{
-                .body = ast.rootSite(invocation, continuations, self.getCurrentLocation()),
+                .body = ast.rootSite(invocation, continuations, self.getLineLocation(head_line_idx, lexer.getIndent(line))),
                 .pre_label = try self.allocator.dupe(u8, label_name),
                 .super_shape = null,
-                .location = self.getCurrentLocation(),
+                .location = self.getLineLocation(head_line_idx, lexer.getIndent(line)),
                 .module = try self.allocator.dupe(u8, self.module_name),
             } };
         } else {
