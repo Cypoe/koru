@@ -1,0 +1,19 @@
+// Bind-position twin of 210_269: `~f(): { name, name }` destructures the
+// return into two bindings of one name — same binding list, same law.
+// At HEAD the emitter wrote `const name` twice and Zig refused the
+// redeclaration (rung 3); the walker only saw continuation destructure
+// sites it happened to reach, never `Invocation.return_destructure`.
+~import std/io
+
+~tor fetch { id: i64 }
+| found { name: string, age: i64 }
+| missing
+
+~proc fetch|zig {
+    if (id == 1) return .{ .found = .{ .name = "lars", .age = 44 } };
+    return .{ .missing = .{} };
+}
+
+~fetch(id: 1): { name, name }
+| found |> std/io:print.ln("{{ name:s }}")
+| missing |> std/io:print.ln("nope")

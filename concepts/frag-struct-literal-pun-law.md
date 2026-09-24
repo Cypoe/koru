@@ -200,3 +200,26 @@ decides WHO judges: AST nodes and declared-type strings are the
 frontend's; Source text belongs to its transform. Pins: `210_253`–
 `210_255`; `210_252` extended with distinct-name record values incl. a
 pun.
+
+## The destructure list was a binding list the walker never visited (2026-09-24)
+
+Two more carriers of the same list surfaced by following the emitter's
+`emitDestructureConsts` — anywhere it writes `const <name>` per entry,
+a repeated name is a Zig redeclaration:
+
+- `| found { name, name }` — `Continuation.destructure`. Compiled clean,
+  backend died on `redeclaration of local constant 'name'` (rung 3).
+- `~f(): { name, name } |>` — `Invocation.return_destructure`, the
+  bind-position twin. Same emission, same death. The walker had never
+  entered `flow.body.node` at all — the head continuation's node was
+  invisible to it.
+
+`checkDestructureBindOnce` walks both carriers (and recurses `sub` — a
+nested destructure is the same list one level down), refusing PARSE010
+with the same message the field lists use. `_` is exempt — it is a
+discard, not a binding, and repeats legally (`{ n, _ }`, 320_145).
+
+The enumeration rule sharpened again: a binding list is found not by its
+syntax but by *who emits a decl per entry*. The emitters know where the
+lists are; the walker's job is to visit every site they write. Pins:
+`210_269`, `210_270`.

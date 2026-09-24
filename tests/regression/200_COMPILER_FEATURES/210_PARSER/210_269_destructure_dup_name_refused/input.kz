@@ -1,0 +1,19 @@
+// A destructure list is a binding list — each field name binds once.
+// `| found { name, name }` compiled at HEAD and the emitter wrote two
+// `const name` decls; the backend died on `redeclaration of local
+// constant 'name'` (rung 3). Same law as PARSE010's field lists; the
+// destructure list was never walked.
+~import std/io
+
+~tor fetch { id: i64 }
+| found { name: string, age: i64 }
+| missing
+
+~proc fetch|zig {
+    if (id == 1) return .{ .found = .{ .name = "lars", .age = 44 } };
+    return .{ .missing = .{} };
+}
+
+~fetch(id: 1)
+| found { name, name } |> std/io:print.ln("{{ name:s }}")
+| missing |> std/io:print.ln("nope")

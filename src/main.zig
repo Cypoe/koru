@@ -5882,9 +5882,10 @@ fn enforceUniqueBindingNamesInItems(
                 }
             },
             .flow => |flow| {
-                for (flow.body.continuations) |cont| {
-                    try enforceUniqueBindingNamesInContinuation(&cont, reporter, allocator);
-                }
+                // The body IS the head continuation — its node carries the
+                // head invocation's `return_destructure` (`~f(): { a, b }`),
+                // its own `destructure`, and then every nested continuation.
+                try enforceUniqueBindingNamesInContinuation(&flow.body, reporter, allocator);
             },
             .event_tap => |tap| {
                 for (tap.continuations) |cont| {
@@ -5904,11 +5905,45 @@ fn enforceUniqueBindingNamesInItems(
     }
 }
 
+/// A destructure list is a binding list — `{ name, name }` emits two
+/// `const name` decls and dies in backend Zig. `_` is a discard, not a
+/// binding, and may repeat. Recurses into `sub` (a nested destructure is
+/// the same list one level down).
+fn checkDestructureBindOnce(
+    fields: []const ast.DestructureField,
+    owner: []const u8,
+    reporter: *ErrorReporter,
+    location: errors.SourceLocation,
+) !void {
+    for (fields, 0..) |field, i| {
+        if (!std.mem.eql(u8, field.name, "_")) {
+            for (fields[0..i]) |earlier| {
+                if (std.mem.eql(u8, earlier.name, "_")) continue;
+                if (!std.mem.eql(u8, earlier.name, field.name)) continue;
+                try reporter.addErrorWithHint(
+                    .PARSE010,
+                    location.line,
+                    location.column,
+                    "field '{s}' is bound twice in {s} — a field list takes each name once",
+                    .{ field.name, owner },
+                    "drop one, or rename it — the list cannot carry two '{s}'",
+                    .{field.name},
+                );
+                break;
+            }
+        }
+        try checkDestructureBindOnce(field.sub, owner, reporter, location);
+    }
+}
+
 fn enforceUniqueBindingNamesInContinuation(
     cont: *const ast.Continuation,
     reporter: *ErrorReporter,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!void {
+    if (cont.destructure.len > 0) {
+        try checkDestructureBindOnce(cont.destructure, "the destructure", reporter, cont.location);
+    }
     if (cont.node) |node| {
         try enforceUniqueBindingNamesInNode(&node, reporter, allocator, cont.location);
     }
@@ -5937,6 +5972,12 @@ fn enforceUniqueBindingNamesInNode(
         },
         .label_jump => |lj| {
             try checkJumpArgsBindOnce(lj.args, lj.label, reporter, location);
+        },
+        .invocation => |inv| {
+            try checkDestructureBindOnce(inv.return_destructure, "the return destructure", reporter, location);
+        },
+        .label_with_invocation => |lwi| {
+            try checkDestructureBindOnce(lwi.invocation.return_destructure, "the return destructure", reporter, location);
         },
         .conditional_block => |cb| {
             for (cb.nodes) |node_child| {
