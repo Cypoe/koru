@@ -5772,7 +5772,9 @@ fn fieldEntryName(segment: []const u8) ?[]const u8 {
     }
     if (j < segment.len) {
         const name = std.mem.trim(u8, segment[0..j], " \t\r\n");
-        return if (name.len > 0) name else null;
+        // A quoted "name" is a map key, not a binding — `{ "a": 1 }` names nothing.
+        if (name.len == 0 or std.mem.indexOfScalar(u8, name, '"') != null) return null;
+        return name;
     }
     // Bare entry: punnable iff it's a bare identifier path.
     if (segment.len == 0 or (segment[0] >= '0' and segment[0] <= '9')) return null;
@@ -5990,8 +5992,11 @@ fn enforceUniqueBindingNamesInItems(
                     try enforceUniqueBindingNamesInContinuation(&cont, reporter, allocator);
                 }
                 {
-                    const callee = flow.inv().path.segments[flow.inv().path.segments.len - 1];
-                    const call_owner = try std.fmt.allocPrint(allocator, "'{s}'", .{callee});
+                    const segs = flow.inv().path.segments;
+                    const call_owner = if (segs.len > 0)
+                        try std.fmt.allocPrint(allocator, "'{s}'", .{segs[segs.len - 1]})
+                    else
+                        try allocator.dupe(u8, "the call");
                     defer allocator.free(call_owner);
                     try checkArgsBindOnce(flow.inv().args, call_owner, reporter, flow.location, allocator);
                 }
@@ -6046,12 +6051,20 @@ fn enforceUniqueBindingNamesInNode(
             }
         },
         .invocation => |*inv| {
-            const call_owner = try std.fmt.allocPrint(allocator, "'{s}'", .{inv.path.segments[inv.path.segments.len - 1]});
+            const segs = inv.path.segments;
+            const call_owner = if (segs.len > 0)
+                try std.fmt.allocPrint(allocator, "'{s}'", .{segs[segs.len - 1]})
+            else
+                try allocator.dupe(u8, "the call");
             defer allocator.free(call_owner);
             try checkArgsBindOnce(inv.args, call_owner, reporter, location, allocator);
         },
         .label_with_invocation => |*lwi| {
-            const call_owner = try std.fmt.allocPrint(allocator, "'{s}'", .{lwi.invocation.path.segments[lwi.invocation.path.segments.len - 1]});
+            const segs = lwi.invocation.path.segments;
+            const call_owner = if (segs.len > 0)
+                try std.fmt.allocPrint(allocator, "'{s}'", .{segs[segs.len - 1]})
+            else
+                try allocator.dupe(u8, "the call");
             defer allocator.free(call_owner);
             try checkArgsBindOnce(lwi.invocation.args, call_owner, reporter, location, allocator);
         },
