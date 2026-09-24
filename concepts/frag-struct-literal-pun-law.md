@@ -223,3 +223,11 @@ The enumeration rule sharpened again: a binding list is found not by its
 syntax but by *who emits a decl per entry*. The emitters know where the
 lists are; the walker's job is to visit every site they write. Pins:
 `210_269`, `210_270`.
+
+The collision domain sharpened once more (2026-09-25): a leaf entry is
+what emits `const <name>` — a field with a sub-shape emits nothing
+itself — so a name can collide not only with its siblings but with every
+leaf anywhere in the tree. `{ user: { x }, x }` emitted `const x` twice
+and died `redeclaration of local constant` (rung 3, pinned `210_273`);
+the sibling-level comparison the checker started with compared the wrong
+set. The unit of the law is the emitted decl, never the syntax level.

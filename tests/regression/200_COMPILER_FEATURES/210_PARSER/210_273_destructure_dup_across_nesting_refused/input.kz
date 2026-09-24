@@ -1,0 +1,20 @@
+// PINS: the each-name-once law holds across nesting levels — every leaf
+// of a destructure emits one `const <name>`, so `{ user: { x }, x }`
+// binds `x` twice and refuses PARSE010 at the arm line. The nested-only
+// sibling `{ user: { y }, x }` binds distinct leaves and stays legal.
+~import std/io
+const std = @import("std");
+const Point = struct { x: i64, y: i64 };
+
+~tor fetch { id: i64 }
+| found { user: Point, x: i64 }
+| missing
+
+~proc fetch|zig {
+    if (id == 1) return .{ .found = .{ .user = .{ .x = 1, .y = 2 }, .x = 9 } };
+    return .{ .missing = .{} };
+}
+
+~fetch(id: 1)
+| found { user: { x }, x } |> std/io:print.ln("x = {{ x:d }}")
+| missing |> std/io:print.ln("nope")

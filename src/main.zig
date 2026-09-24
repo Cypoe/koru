@@ -5908,12 +5908,15 @@ fn enforceUniqueBindingNamesInItems(
 /// A destructure list is a binding list — `{ name, name }` emits two
 /// `const name` decls and dies in backend Zig. `_` is a discard, not a
 /// binding, and may repeat. Recurses into `sub` (a nested destructure is
-/// the same list one level down).
+/// the same list one level down), and compares leaf names across the whole
+/// tree — `{ user: { x }, x }` emits `const x` at both levels.
 fn checkDestructureBindOnce(
     fields: []const ast.DestructureField,
     owner: []const u8,
     reporter: *ErrorReporter,
     location: errors.SourceLocation,
+    bound: *std.ArrayList([]const u8),
+    allocator: std.mem.Allocator,
 ) !void {
     for (fields, 0..) |field, i| {
         if (!std.mem.eql(u8, field.name, "_")) {
@@ -5931,8 +5934,28 @@ fn checkDestructureBindOnce(
                 );
                 break;
             }
+            // A leaf entry emits one `const <name>`; a field with a sub-shape
+            // emits nothing itself — only its leaves do. So a name collides
+            // not only with its siblings but with every leaf bound anywhere
+            // in the tree (`{ user: { x }, x }` emits `const x` twice).
+            if (field.sub.len == 0) {
+                for (bound.items) |n| {
+                    if (!std.mem.eql(u8, n, field.name)) continue;
+                    try reporter.addErrorWithHint(
+                        .PARSE010,
+                        location.line,
+                        location.column,
+                        "field '{s}' is bound twice in {s} — a field list takes each name once",
+                        .{ field.name, owner },
+                        "drop one, or rename it — the list cannot carry two '{s}'",
+                        .{field.name},
+                    );
+                    break;
+                }
+                try bound.append(allocator, field.name);
+            }
         }
-        try checkDestructureBindOnce(field.sub, owner, reporter, location);
+        try checkDestructureBindOnce(field.sub, owner, reporter, location, bound, allocator);
     }
 }
 
@@ -5942,7 +5965,9 @@ fn enforceUniqueBindingNamesInContinuation(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!void {
     if (cont.destructure.len > 0) {
-        try checkDestructureBindOnce(cont.destructure, "the destructure", reporter, cont.location);
+        var bound = std.ArrayList([]const u8){};
+        defer bound.deinit(allocator);
+        try checkDestructureBindOnce(cont.destructure, "the destructure", reporter, cont.location, &bound, allocator);
     }
     if (cont.node) |node| {
         try enforceUniqueBindingNamesInNode(&node, reporter, allocator, cont.location);
@@ -5974,10 +5999,14 @@ fn enforceUniqueBindingNamesInNode(
             try checkJumpArgsBindOnce(lj.args, lj.label, reporter, location);
         },
         .invocation => |inv| {
-            try checkDestructureBindOnce(inv.return_destructure, "the return destructure", reporter, location);
+            var bound = std.ArrayList([]const u8){};
+            defer bound.deinit(allocator);
+            try checkDestructureBindOnce(inv.return_destructure, "the return destructure", reporter, location, &bound, allocator);
         },
         .label_with_invocation => |lwi| {
-            try checkDestructureBindOnce(lwi.invocation.return_destructure, "the return destructure", reporter, location);
+            var bound = std.ArrayList([]const u8){};
+            defer bound.deinit(allocator);
+            try checkDestructureBindOnce(lwi.invocation.return_destructure, "the return destructure", reporter, location, &bound, allocator);
         },
         .conditional_block => |cb| {
             for (cb.nodes) |node_child| {
