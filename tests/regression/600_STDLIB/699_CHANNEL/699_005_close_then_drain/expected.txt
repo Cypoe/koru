@@ -1,3 +1,0 @@
-drain 11
-drain 22
-closed after drain

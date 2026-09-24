@@ -1,10 +1,15 @@
 # std/channel — channels as a first-class construct
 
-**Tree pinned:** `bd31d8f2d` on `main`, measured 2026-09-21.
-**Status:** design proposal, pre-ruling. Every surface spelling below is a
-proposal for the taste-gate — nothing here asserts syntax. Semantics are
-argued from the current tree; each claim names the file or test that grounds
-it, or is marked **unmeasured**.
+**Tree pinned:** `bd31d8f2d` on `main`, measured 2026-09-21; corrected
+2026-09-24 (surface spelling under redesign — see below).
+**Status:** design proposal. The mechanism analysis below is measured
+against the tree. The **surface spelling is not ruled** — an earlier
+version of this doc shipped `std/channel(inbox: Reading, 256)`, which is
+invented syntax: positional tails on `std/` heads are illegal (calls pun;
+only the first `expr: Expression` slot is positional), and
+`name: Proto` in arg position is a named arg, not a declaration pair.
+The implementable surface awaits a legal declaration shape — do not write
+code from this doc's spelling sections until that ruling lands.
 
 ---
 
@@ -31,7 +36,7 @@ matter:
 | Mechanism | Where | What it gives the channel |
 |---|---|---|
 | Vyukov bounded MPMC ring | `koru_std/rings.kz` — `MpmcRing(T, cap)`, `enqueue \| ok \| full`, `dequeue \| some v \| none` | the buffered data plane; CAS fast path, `full`/`none` as branches |
-| Effect branches | `! ask i64 -> i64`, handler `! ask v -> expr` — `400_132`, `670_060` | synchronous suspend/resume, dynamically scoped — the rendezvous *shape* |
+| Effect branches | `! ask i64 -> i64`, handler `! ask v -> expr` — `400_132`, `670_060` | the tor calls the consumer's code; the resume is the consumer's answer — the rendezvous *shape* |
 | Thread spawn ladder | `koru_std/threading.kz` — `worker.spawn` `.async`/`.await`/`.join` | the cross-thread plane |
 | Compile-time pump | `koru_std/pump.kz` — `create`/`default`/`run`; verbs `step()->i32`, `live()->i64`, `wait(i)->{fd,wait_ns}` | the scheduler: pass loop + **one union `poll()` per all-idle pass** |
 | `default`-tor join site | `store.default.kz` (`std/store(name) ! field` → watch), `pump.kz` `default` (`std/pump(name) ! step`) | the grammar this surface reuses |
@@ -43,99 +48,66 @@ interests — `fd = -1` is deadline-only, `wait_ns` caps the wait. A participant
 with thread-arriving work can hand the pump an **eventfd** and cross-thread
 wakes land in the same union poll. That closes the threads↔pump bridge.
 
-## The grammar (proposed — Lars's gate)
+## The execution model (corrected 2026-09-24)
 
-```koru
-// Declare + attach consumers — the `default` reference form,
-// same shape as std/store(name) ! field / std/pump(name) ! step
-std/channel(ch)                    // ch: declared channel name
-! recv v |> handle(v: v)           // standing consumer — compiled into a unit
-! closed |> shutdown()             // close arm
+An earlier version of this doc named a "deferred resume frontier" — a
+missing mechanism where a flow suspends mid-expression and resumes later.
+That framing was wrong, and it's worth saying precisely why:
 
-// Chain steps — same family as std/store:insert / std/store:take
-std/channel:send(ch, 42)
-| ok |> ...
-| full |> ...                      // buffered full — or, under pump, wait interest
-| closed |> ...
+- **There is no "mid-flow" to suspend.** A `|>` chain is not a call stack
+  you stand inside; each step is a firing whose continuation is already
+  structure. "Deferred" is not a property a call can have — it is a
+  property of *who steps the unit*.
+- **The arrow is inverted from mainstream languages.** The tor calls the
+  consuming code — an effect fire invokes the handler bound at the call
+  site (`__H.ask(q)` in emitted code; the handler set is comptime-known
+  per site). The consumer never holds a handle on the producer; the
+  producer holds the consumer's code. A `Resume`-style capability object
+  is an import from languages that pass computations around as values —
+  Koru doesn't.
+- **Effect branches can already respond deferred.** The branch is
+  uncolored; the caller takes the color by which surface it invokes and
+  how the composition is arranged. Handlers can return continuations.
+  A "blocking" channel is therefore a composition question, not a
+  mechanism gap.
 
-std/channel:recv(ch)
-| some v |> ...
-| none |> ...
-| closed |> ...
+Consequence for channels: nothing about a channel needs the language to
+gain a suspend/resume primitive. A `!`-arm consumer is already deferred
+execution — the channel calls the consumer's code when a value lands.
+Rendezvous (cap 0) is a *surface* question — a send whose ok-continuation
+fires on the consumer's take — not a compiler gap.
 
-std/channel:close(ch) | ok |> ...
-```
+## The surface (UNDER RULING — spelling not legal yet)
 
-Capacity and the consumer's ring instance remain open spellings —
-`MpmcRing` is comptime-generic in Zig (`MpmcRing(u64, 1024)`), so
-`channel(T, n)` wants the same instantiation mechanism. `rings.kz` today
-exports `*anyopaque`+`u64` convenience tors plus a documented typed
-pattern (`rings.kz:196-225`) — the channel surface should be typed from day
-one, not inherit the untyped shim.
+What is settled in conversation with Lars:
 
-## The element type is a proto name (integration — Lars's direction)
+- **The element type is a proto name.** `std/proto` is the nominal-type
+  registry; `std/store` and `std/list:new` already drink from it. Channels
+  of `Reading` vs `Score` never interchange — nominal, compile-time.
+- **The consumer arm derives its name from the proto** — a channel of
+  `Reading` fires `! reading`. The proto is the channel's vocabulary, the
+  way a store's fields are its arms. `! closed` is channel state, not a
+  message, and stays a fixed word.
+- **`!` arms are competing consumers** — one value, one arm. Broadcast is
+  a separate arm kind, deliberately not silently included.
+- **Chain steps are `std/channel:send/recv/close`-family** — the
+  `std/x:verb(subject, name: arg)` shape that `std/store:insert` already
+  uses — with status arms `| ok | full | closed` and
+  `| some | none | closed`.
+- **Capacity is a named arg** (`capacity:` — the store convention), never
+  a positional tail.
 
-`std/proto` is the nominal-type registry: `std/proto(Player) { health:
-Health, hp: f32 }` declares a compile-time identity, layout-silent, and the
-first consumer derives the layout (`koru_std/proto.kz:10-26`). `std/store`
-and `std/list:new` already drink from that registry (`store.leaf.kz`,
-`list.new.kz` read `// proto` markers and live declarations). The channel is
-the same consumer act:
+What is NOT settled — the questions that block a compilable surface:
 
-```koru
-std/proto(Reading) { id: u64, ts: f64 }
-std/channel(inbox: Reading, 256)    // element type = registry entry
-```
-
-Three things fall out:
-
-- **Spelling solved.** `name: Type` is proto's own field grammar; the type
-  argument is a name, not a type expression.
-- **Layout for free.** The channel synthesizes the ring's element struct
-  from the proto entry — compound payloads (the realistic case) work from
-  day one.
-- **Nominal channels.** Proto's ruling is affinity-by-name, never structural
-  coupling — `chan Health` vs `chan Score` never interchange, `send` into
-  the wrong channel refuses at compile time. Go cannot say this. And a
-  proto-typed store row flows into `channel:send` without repacking.
-
-Boundary, honestly: proto's vocabulary is scalars + compounds. Channels of
-opaque pointers/handles sit outside it — a pointer-terminal rung, or stay
-off-proto. A possible second rung, named not built: `std/channel:i64(Inbox)`
-minting a *channel type* as a terminal, the way `std/proto:i64(Port)` mints
-a scalar.
-
-`! recv` arms are **competing consumers** — each value goes to one consumer,
-Go-true. Broadcast (every consumer sees every value — the thing taps echoed)
-is a deliberately separate arm kind, flagged as an open question rather than
-baked in.
-
-## Pump join — free by convention
-
-`std/channel` emits `<ch>-step` / `<ch>-live` / `<ch>-wait` verb units, the
-same convention stores already use (`pump.kz:30-31`). Then:
-
-```koru
-std/pump(main)
-! step |> ch-step()
-! live |> ch-live()
-! wait i |> ch-wait(i: i)
-```
-
-Verb meanings for a channel participant:
-
-- `step` — one drain pass: each declared consumer attempts `dequeue` once
-  per pass; returns items moved. (Progress = movement.)
-- `live` — `0` once closed **and** drained; `1` otherwise.
-- `wait(i)` — `{fd: -1, wait_ns: backoff}` for same-thread re-poll; a real
-  `fd` (eventfd) when a worker thread must wake the pump.
-
-**This is also the `select` answer.** Joining two channels to one pump, each
-with its own `! recv`, is program-level select — statically resolved at the
-join sites, no runtime multi-wait construct. Go compiles `select` to a
-runtime `selectgo`; Koru compiles it to join order. Per-flow select (one
-flow waiting on two channels inline) has no proven spelling — named frontier,
-not claimed.
+- The declaration head's legal shape. `std/store:new(name, capacity: N) { fields }`
+  is the existing pattern: bare name in the expr slot, `capacity:` named,
+  vocabulary declared in a `{ }` body. Whether a channel declares its
+  element as a body field (`{ reading: Reading }` — which would make
+  `! reading` a *field* name, consistent with store arms) or takes the
+  proto some other legal way is Lars's call.
+- Broadcast spelling (`! each` or otherwise) — deferred.
+- Per-flow select (one flow waiting on two channels) — a spelling
+  question, not a mechanism gap.
 
 ## The three "block" tiers
 
@@ -149,59 +121,13 @@ The futex tier is the honest Go-parity engine: Go's channel is a mutex + wait
 queues internally, so a Vyukov CAS fast path in front of a futex park is the
 *same* contention story with a lock-free head — the shootout is real.
 
-**The named frontier — deferred resume.** Effect resume is synchronous
-(`400_132`, `670_060`): a handler must produce the resume value *at fire
-time*. A flow that fires `recv` on an empty channel and parks *mid-flow*,
-resumed passes later by the pump, needs "suspend now, resume later" — a
-mechanism the language does not have. Two candidate shapes if we want it:
-(a) a deferred-resume effect kind (real machinery in `src/`), or (b) the
-brokered form — send/recv post requests into the channel participant and the
-`| ok` continuation fires on a later pass (also new machinery — continuations
-today run to completion per invocation). **Unmeasured, deliberately not
-designed here** — Tier-1 futex + Tier-2 pump cover every Go program shape
-worth benchmarking without it.
-
-**Rendezvous (cap 0)** is the same frontier in miniature: a true Go
-unbuffered send waits for the consumer. With futex + a cap-1 slot this is
-implementable today (send parks until taken); the pure effect-pair spelling
-(`! offered v -> ack` cross-wired to `! taken -> v`) is the elegant variant
-and waits on the deferred-resume question.
-
-## Go parity table
-
-| Go | Koru (proposed) | Engine |
-|---|---|---|
-| `make(chan T)` | `std/channel(ch)` cap 0 | futex handshake / effect pair |
-| `make(chan T, n)` | `std/channel(ch)` cap n | `MpmcRing` CAS |
-| `ch <- v` | `send \| ok \| full \| closed` | arm-first; park under pump/futex |
-| `<-ch` | `recv \| some v \| none \| closed` | arm-first |
-| `close(ch)`; `v, ok` | `close`; `\| closed` arm | atomic flag owned by channel — `rings.kz` untouched |
-| `select` | join all channels to one `std/pump` | union `poll()` |
-| `range ch` | `! recv` standing consumer | generated consumer unit |
-| — | `! each`-style broadcast | open question — beyond-Go |
-
-Reads better than Go, honestly: `closed` is a named arm, not the
-zero-value-plus-`ok` idiom; `full`/`none` are first-class where Go needs
-`select`+`default` boilerplate. Reads worse: per-flow `select` is a frontier.
-
-## What changes in the tree
-
-- **`koru_std/channel.kz`** — new module: `default` join site, `send`/`recv`/
-  `close` transforms, verb-unit emission. The only new file.
-- **`koru_std/rings.kz`** — untouched. `closed` is channel semantics, not
-  queue mechanics; the flag lives in the channel's generated state.
-- **`koru_std/pump.kz`** — untouched. Verb-unit convention already covers it.
-- **`src/`** — untouched for Tiers 0–2. Deferred resume (if ever wanted) is
-  the only piece that reaches the compiler.
-
 ## Done-gates
 
-1. `tests/regression/600_STDLIB/699_CHANNEL/` — next free slot under
-   `600_STDLIB`. MUST_RUN pins: buffered roundtrip; `full`/`none`/`closed`
-   arms each hit; send-after-close refusal; close-then-drain; two consumers
-   competing on one channel (deterministic oracle in `expected.txt`); a
-   pump-joined two-channel program (the select-equivalent); futex-parked
-   recv across `worker.spawn` threads.
+1. `tests/regression/600_STDLIB/699_CHANNEL/` — MUST_RUN pins once the
+   surface is ruled: buffered roundtrip; `full`/`none`/`closed` arms each
+   hit; send-after-close refusal; close-then-drain; two consumers
+   competing; a pump-joined two-channel program; futex-parked recv across
+   `worker.spawn` threads.
 2. `koru-benchmarks/suites/channels/` — the showoff artifact: prime-sieve
    pipeline (Go's own channel showcase — one goroutine per prime) against a
    Koru version with one pump participant per prime. Go reference +
@@ -211,15 +137,20 @@ zero-value-plus-`ok` idiom; `full`/`none` are first-class where Go needs
 3. On ruling: seal as `challenges/024_*.md`, `kind: commission` — convergent
    work, one right answer, appears under open commissions.
 
-## Open questions for the gate
+## Lessons the first implementation surfaced (2026-09-24)
 
-1. ~~Type spelling~~ — **answered by proto**: the element type is a registry
-   name (`std/channel(inbox: Reading, 256)`). Remaining sliver: the capacity
-   spelling (`(name: T, n)` vs an arg of its own) and whether capacity-0
-   needs a spelling at all or is just `n` absent.
-2. `! recv` competing vs `! each` broadcast — one arm kind or two?
-3. Rendezvous now (futex handshake) or after the first board?
-4. Does `send` with no consumer under pump ever refuse at compile time, or is
-   an unrunnable program the author's problem? (The pump's `live` contract
-   can detect "blocked forever" at runtime — a compile-time refusal needs
-   reachability we don't have.)
+- `std/channel(name: Proto, cap)` shipped in `koru_std/channel.kz` +
+  `699_CHANNEL` pins and **compiled** — because positional tails on `std/`
+  heads were never refused anywhere. `std/store:new(game, 37)` drops the
+  `37` silently; `std/pump:create(main, 5)` drops the `5`. Ordinary tor
+  calls did enforce the law (`PARSE006: bare argument … does not name a
+  parameter`). Fixed 2026-09-24: `checkBareArgPunning` (`src/main.zig`)
+  narrowed the machinery-callee exemption to name-matching only — arg[0]
+  stays the positional subject, later bare args must be punnable
+  identifier paths or explicit labels. Pins `210_240`–`210_242` now green;
+  `210_243` is the tor-call control. The invented channel surface was
+  removed; the surface awaits a legal spelling.
+- `had_explicit_label` was silently dropped by `flow_parser.zig`'s
+  `convertArgPairs` on the interpreter path (fixed in the same change);
+  `ast_json.zig` round-trips it correctly — the field that distinguishes
+  labeled from positional args now reaches every consumer.
