@@ -36,7 +36,8 @@ koru_std/compiler.flags.kz	6
 koru_std/compiler.kz	3093
 koru_std/compiler.paths.kz	33
 koru_std/constructor.kz	305
-koru_std/control.kz	551
+koru_std/control.capture.kz	352
+koru_std/control.kz	203
 koru_std/crypto.kz	37
 koru_std/declarations.kz	57
 koru_std/deps.kz	582
