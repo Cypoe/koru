@@ -2819,18 +2819,7 @@ pub const Parser = struct {
                         } else {
                             // A `= <expr>` tail is a field default with no
                             // field — the emitted union drops it (PARSE011).
-                            const id_split = struct_literal.splitTypeDefault(type_str);
-                            if (id_split.default != null) {
-                                return self.failWithHint(
-                                    .PARSE011,
-                                    event_line_index + 1,
-                                    1,
-                                    "identity branch '{s}' carries a default — `= <expr>` only applies to tor input fields; the emitted union drops it",
-                                    .{branch_name},
-                                    "drop the `= <expr>` — every constructor supplies the payload explicitly. For an omittable input, put the default on the tor's input shape instead",
-                                    .{},
-                                );
-                            }
+                            try self.rejectIdentityBranchDefault(type_str, event_line_index + 1, 1, branch_name);
                             // Identity: `| ok i64`. Synthesize a braced single-field
                             // record so parseBranchPayloadShape reuses the exact type
                             // grammar (phantom, module-qualified, pointer prefixes) as
@@ -10060,6 +10049,25 @@ pub const Parser = struct {
         }
     }
 
+    /// The identity-payload sibling of rejectBranchPayloadDefault: `| ok
+    /// i64 = 5` carries the `= <expr>` tail in the type text rather than in
+    /// a Field. `=` inside `[...]`/`(...)` stays type text — splitTypeDefault
+    /// only splits at depth zero.
+    fn rejectIdentityBranchDefault(self: *Parser, type_text: []const u8, line: usize, column: usize, branch_name: []const u8) !void {
+        const id_split = struct_literal.splitTypeDefault(type_text);
+        if (id_split.default != null) {
+            return self.failWithHint(
+                .PARSE011,
+                line,
+                column,
+                "identity branch '{s}' carries a default — `= <expr>` only applies to tor input fields; the emitted union drops it",
+                .{branch_name},
+                "drop the `= <expr>` — every constructor supplies the payload explicitly. For an omittable input, put the default on the tor's input shape instead",
+                .{},
+            );
+        }
+    }
+
     /// Phantom state in a type position must use ANGLE brackets: `Type<state>`.
     /// The square-bracket form `Type[state]` is otherwise silently swallowed
     /// into the type string (phantom stays null → no obligation checking, false
@@ -10938,22 +10946,8 @@ pub const Parser = struct {
 
             // A `= <expr>` tail on an identity payload is a field default with
             // no field — the emitted union drops it (PARSE011, same rule as
-            // braced payload fields). `=` inside `[...]`/`(...)` stays type
-            // text; splitTypeDefault only splits at depth zero.
-            {
-                const id_split = struct_literal.splitTypeDefault(type_and_annotation);
-                if (id_split.default != null) {
-                    return self.failWithHint(
-                        .PARSE011,
-                        self.current,
-                        1,
-                        "identity branch '{s}' carries a default — `= <expr>` only applies to tor input fields; the emitted union drops it",
-                        .{branch_name},
-                        "drop the `= <expr>` — every constructor supplies the payload explicitly. For an omittable input, put the default on the tor's input shape instead",
-                        .{},
-                    );
-                }
-            }
+            // braced payload fields).
+            try self.rejectIdentityBranchDefault(type_and_annotation, self.current, 1, branch_name);
 
             // Identity branches carry the full type string (including any phantom
             // type suffix).  Phantom extraction happens below; we no longer strip
