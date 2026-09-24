@@ -62,16 +62,18 @@
     "rule": "Does this diff weaken a std/rules claim silently? Declarations carry claim stamps — proven, measured, inferred, aspirational — visible inline in the source this diff touches. Flag when the diff edits the body of a declaration stamped proven or measured without the diff also touching the evidence the stamp rests on (a test, benchmark, or proof artifact), or when it removes or downgrades a stamp without saying so. Editing a claimed declaration together with its evidence, or strengthening a stamp, is NOT a violation. Answer yes ONLY if the diff leaves a stamp asserting something the edit has made untrue."
 }
 
-// The semantic half of the ref gap — debt, not a wall yet. Stores check
-// handle provenance at every write path (698_012-016); a `ref(T)` field
-// inside a list element accepts any handle-shaped i64 unchecked (698_006
-// pushes a literal). Declared as aspirational because the real fix may be
-// ref-ness in the type environment — undecided, Lars's call — and a gate
-// row would punish the gap before the ruling that closes it exists.
+// The semantic half of the ref gap — narrowed, not closed. Both
+// consumers that exist check at their own boundary through one shared
+// authority (StoreRefHome.homesOf): stores at column writes
+// (698_012-016), lists at push (698_017 traps, 698_018 refuses the
+// homeless). What remains debt is structural: nothing FORCES the next
+// consumer to ask — a grid or table could still lower `ref(T)` to bare
+// i64 and check nothing. Declared aspirational because the real fix may
+// be ref-ness in the type environment — undecided, Lars's call.
 ~std/invariants:aspirational {
     "name": "ref-provenance-every-consumer",
     "tags": ["review"],
-    "rule": "Every consumer that materializes `ref(T)` fields enforces handle provenance — the value's brand must trace to a plural, handle-minting store whose expanded field set subsumes T. Today only std/store's write paths check (insert, apply, envelope, bulk); std/list element structs lower `ref(T)` to bare i64 and accept anything handle-shaped. Either the check generalizes to every consumer, or ref-ness moves into the type environment and refusal becomes static — but a spelling that checks in one consumer and not another is a type that lies about its coverage."
+    "rule": "Every consumer that materializes `ref(T)` fields enforces handle provenance — the value's brand must trace to a plural, handle-minting store whose expanded field set subsumes T, via the shared StoreRefHome.homesOf enumeration. std/store checks at every write path (insert, apply, envelope, bulk); std/list checks at push and refuses a homeless ref at new. Flag when a diff adds a consumer that materializes `ref(T)` fields (element structs, cell types, columns) without routing the field through the home check — a spelling that checks in one consumer and not another is a type that lies about its coverage. Whether ref-ness moves into the type environment so checking is unskippable remains undecided."
 }
 
 // The manifest guards itself: a git-gate-local row fires only when its

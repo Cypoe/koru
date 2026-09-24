@@ -84,7 +84,7 @@ koru_std/kernel.scan.kz	109
 koru_std/koru.kz	211
 koru_std/liquid_template.kz	146
 koru_std/list.explain.kz	113
-koru_std/list.free.kz	766
+koru_std/list.free.kz	487
 koru_std/list.get.kz	29
 koru_std/list.kjs	85
 koru_std/list.kz	73
@@ -93,6 +93,7 @@ koru_std/list.new.kz	138
 koru_std/list.pop.kz	28
 koru_std/list.protos.kz	403
 koru_std/list.push.kz	30
+koru_std/list.synth.kz	336
 koru_std/map.kz	114
 koru_std/net.kz	63
 koru_std/optimizations/kernels.kz	62
@@ -135,7 +136,7 @@ koru_std/store.drain.kz	114
 koru_std/store.expand.kz	130
 koru_std/store.explain.kz	104
 koru_std/store.gate.kz	525
-koru_std/store.hstruct.kz	76
+koru_std/store.hstruct.kz	74
 koru_std/store.idecls.kz	104
 koru_std/store.index.kz	202
 koru_std/store.indexwalk.kz	279
@@ -151,8 +152,9 @@ koru_std/store.qcaps.kz	372
 koru_std/store.qnone.kz	142
 koru_std/store.qrewrite.kz	231
 koru_std/store.query.kz	873
+koru_std/store.refhome.kz	323
+koru_std/store.refhomeapi.kz	32
 koru_std/store.refs.kz	60
-koru_std/store.refhome.kz	332
 koru_std/store.rule.kz	148
 koru_std/store.sites.kz	169
 koru_std/store.sitetag.kz	27

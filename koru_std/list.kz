@@ -1,5 +1,4 @@
 // std/list — growable list with an active/free ownership model.
-//
 // The i64 trunk (List_i64) stays hand-written exactly as it always was; the
 // container-generating machinery generalizes it: `new(<element>)` is a
 // [transform] that routes by element name (the 660_026 dispatch-gap doctrine:
@@ -69,5 +68,6 @@ pub const List_i64 = struct {
 ~part get
 ~part pop
 ~part protos
+~part synth
 ~part free
 ~part explain

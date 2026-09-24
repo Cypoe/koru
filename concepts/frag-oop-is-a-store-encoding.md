@@ -149,11 +149,16 @@ miss is the git-gate invariant `surface-spellings-are-ruled`, which
 fires on any future spelling that lands without a recorded ruling.
 Still open — scope, not spelling: `ref` is a proto-field-position
 convention, not a general type constructor (it means nothing in a proc
-signature), and the home check is wired only into store write paths —
-a `ref(T)` field inside a list element accepts raw handle-shaped values
-unchecked (698_006 pushes a literal). Whether ref-ness moves into the
-type environment so every consumer checks — the aspirational invariant
-`ref-provenance-every-consumer` carries the debt — is undecided.
+signature). The home check is now wired into both consumer write paths
+that exist — store column writes and list pushes — through ONE shared
+authority: `StoreRefHome.homesOf` enumerates the program's pluralities;
+each consumer emits the same brand guard at its own boundary (698_017
+traps `dog: 3` at list push; 698_018 refuses a homeless ref at
+list:new, the carrier-side twin of 698_016). The debt
+`ref-provenance-every-consumer` carries has narrowed, not closed:
+nothing structural forces the NEXT consumer to check — grid and table
+get the same ruling when they exist, and whether ref-ness moves into
+the type environment so checking is unskippable is still undecided.
 
 **Landed later the same walk:** `source: ?Source` — the first optional
 Source param — so blockless `std/proto(Cat <: Animal)` reaches the

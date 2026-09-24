@@ -34,7 +34,7 @@
     // the re-fire fatal (KORU173 on an already-synthesized program).
     const routed_name = if (is_proto_elem) blk: {
         if (!hasRewrittenNew(program, proto_name.?)) {
-            appended_items = synthesizeContainer(allocator, program, flow, proto_name.?, elem);
+            appended_items = synthesizeContainer(allocator, program, flow, proto_name.?, elem, reporter);
             if (appended_items.len == 0) {
                 return .{ .replacement = ast.refusal(allocator, reporter, .KORU173, flow.location, flow.module, "std/list:new({s}): container synthesis produced no units — the proto entry was not found or has no parseable fields", .{elem}) };
             }

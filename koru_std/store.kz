@@ -1,5 +1,4 @@
 // Koru Standard Library: Reactive Stores
-//
 // Application state as a compiled-reactivity substrate. The FULL design —
 // 9 rulings, adversary-stamped theses, the open queue — lives in
 // tests/regression/600_STDLIB/690_STORE/DESIGN.md (delete-when-pinned).
@@ -1009,3 +1008,4 @@ fn storeLowerText(
 ~part kinds
 ~part refs
 ~part refhome
+~part refhomeapi
