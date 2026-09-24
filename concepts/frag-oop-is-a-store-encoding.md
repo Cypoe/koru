@@ -5,7 +5,20 @@ provenance: design walk 2026-09-22 (Lars + Devin) — "can we go full retard / i
 ts: 2026-09-22
 ---
 
-# OOP is a store encoding left implicit — and the rejections were the design (design belief)
+# An object is a proto, interpreted — and the rejections were the design (design belief)
+
+**Corrected framing (2026-09-24):** this concept was titled "OOP is a
+store encoding" and that named the wrong substrate. Koru is not the
+store — `std/store` is one library. A proto is a field-set concept that
+libraries interpret at compile time: the store interprets it as rows +
+minted handles + plurality; `std/list` interprets the same proto as
+element structs — same data, different memory layout, different
+ontology. Conventional OOP is a proto that ONE interpreter welded —
+layout, identity and dispatch fused at `new` before any library could
+choose. `ref(T)` means "a handle minted by an identity-interpreting
+plurality of T" — stores are merely the only such interpreter that
+exists. A pointer to a list element is a category error, not a missing
+feature: an index is a name with no validity story.
 
 **The thesis:** a heap is already a database. Object = row, class =
 relation, reference = key, method = function over the row, dispatch =
@@ -36,7 +49,8 @@ lowering, which is *why* it can exist.
 element.** OOP's `new` fuses allocate + mint + initialize — the one
 keyword that re-fuses all three welds. So `new X()` is legal only when X
 declared its plurality (`herd Dog` → `Dog.all.insert`); a class with no
-herd refuses — "objects are not allocated; rows are inserted." Per-element
+herd refuses — allocation is a property of whichever plurality
+interprets the proto, never of the element. Per-element
 growth already has its lawful home in `std/list` (allocator inside the
 handle). A pointer-minting `alloc` is a demand-marker someday, never a
 default door — a heap node is AoS and definitionally outside the reactive
