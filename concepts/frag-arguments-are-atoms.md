@@ -38,8 +38,15 @@ a flow: invocation arguments (which covers if-conditions and for-bounds —
 both parse as invocation args), `when` clauses, produce (`->`) bodies
 (including `immediate_impl` items, the bare-return impl kind), branch-
 constructor and captured fields, label-jump args, body-position
-expressions. Diagnostic: "nested call in <surface> — calls are not
-expressions; use tor chaining: bind the result first."
+expressions. Extended 2026-09-24 to the one carrier that lives on the
+declaration rather than in any flow: field defaults. `Field.default`
+(`x: i64 = <expr>` on input fields, and `= <expr>` tails inside a `-> {
+... }` record return) is spliced verbatim into the emitted Input/Output
+struct — a Koru call there sailed through the frontend and died as an
+undeclared identifier in the generated Zig. Both positions now run the
+same predicate (210_263, 210_264 pin them). Diagnostic: "nested call in
+<surface> — calls are not expressions; use tor chaining: bind the result
+first."
 
 The wall does not judge the QUOTING surfaces: Source-typed args (opaque
 code blocks) and declared-`Expression` params (comptime capture — the text

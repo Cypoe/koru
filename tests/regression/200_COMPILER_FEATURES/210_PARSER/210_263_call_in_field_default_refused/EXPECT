@@ -1,0 +1,5 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS error[KORU104]
+CONTAINS field default 'x'
+CONTAINS calls are not expressions
+ERROR_AT 11

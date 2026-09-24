@@ -77,6 +77,15 @@ pub const FlowChecker = struct {
                     try self.validateFlow(flow, flow.location);
                 },
                 .proc_decl => {},
+                // A field default is an expression carrier that lives on the
+                // declaration rather than inside a flow — the emitter splices
+                // it verbatim into the Input struct. It must pass the same
+                // KORU104 expression-admission wall.
+                .event_decl => |*ev| {
+                    if (self.mode == .frontend) {
+                        try self.checkFieldDefaultsPurity(ev);
+                    }
+                },
                 // `~event -> expr` bare-return impls are their own item kind;
                 // the produce expression rides in value.plain_value and must
                 // pass the KORU104 expression-admission wall too.
@@ -112,6 +121,11 @@ pub const FlowChecker = struct {
                                 try self.validateFlow(flow, flow.location);
                             },
                             .proc_decl => {},
+                            .event_decl => |*ev| {
+                                if (self.mode == .frontend) {
+                                    try self.checkFieldDefaultsPurity(ev);
+                                }
+                            },
                             .immediate_impl => |*ii| {
                                 if (self.mode == .frontend) {
                                     try self.checkBranchConstructorPurity(&ii.value, ii.location);
@@ -654,6 +668,85 @@ pub const FlowChecker = struct {
             var buf: [256]u8 = undefined;
             const surface = std.fmt.bufPrint(&buf, "argument '{s}'", .{arg.name}) catch "an argument";
             try self.reportCallInExpression(surface, location);
+        }
+    }
+
+    /// A tor's field defaults are expression carriers that live on the
+    /// declaration, not inside a flow — the emitter splices the default text
+    /// verbatim into the Input/Output struct, so a call hiding in one is
+    /// exactly as illegal as one in an invocation argument.
+    fn checkFieldDefaultsPurity(self: *FlowChecker, ev: *const ast.EventDecl) anyerror!void {
+        // EventDecl.location is authored (user) coordinates; the reporter's
+        // classifyLine expects parser coordinates.
+        var decl_loc = ev.location;
+        decl_loc.line += self.reporter.injection_line_count;
+        for (ev.input.fields) |*field| {
+            const dflt = field.default orelse continue;
+            // Source- and Expression-typed fields are opaque/verbatim surfaces
+            // by design — same exemptions as checkArgPurity.
+            if (field.is_source or field.is_expression) continue;
+            if (self.exprTextHasCall(dflt)) {
+                var buf: [256]u8 = undefined;
+                const surface = std.fmt.bufPrint(&buf, "field default '{s}'", .{field.name}) catch "a field default";
+                try self.reportCallInExpression(surface, decl_loc);
+            }
+        }
+        // `-> { x: T = <expr>, ... }` record returns carry defaults inside the
+        // type text itself — the emitter splices the record verbatim into the
+        // Output struct. Scan each field's `= <expr>` tail.
+        if (ev.return_type) |rt_raw| {
+            const rt = std.mem.trim(u8, rt_raw, " \t");
+            if (rt.len >= 2 and rt[0] == '{' and rt[rt.len - 1] == '}') {
+                try self.checkRecordTextDefaultTails(rt[1 .. rt.len - 1], decl_loc);
+            }
+        }
+    }
+
+    /// Scan a record shape's field list (text inside the braces) for `= <expr>`
+    /// tails containing a call. Splits fields on commas at brace depth zero and
+    /// finds each field's `=` the same way parseShape does.
+    fn checkRecordTextDefaultTails(self: *FlowChecker, fields_text: []const u8, location: errors.SourceLocation) anyerror!void {
+        var start: usize = 0;
+        var depth: i32 = 0;
+        var i: usize = 0;
+        while (i <= fields_text.len) : (i += 1) {
+            const at_boundary = i == fields_text.len or (depth == 0 and fields_text[i] == ',');
+            if (!at_boundary) {
+                switch (fields_text[i]) {
+                    '[', '(', '{' => depth += 1,
+                    ']', ')', '}' => depth -= 1,
+                    else => {},
+                }
+                continue;
+            }
+            const field_text = fields_text[start..i];
+            start = i + 1;
+            var fdepth: i32 = 0;
+            var k: usize = 0;
+            while (k < field_text.len) : (k += 1) {
+                const ch = field_text[k];
+                switch (ch) {
+                    '[', '(', '{' => fdepth += 1,
+                    ']', ')', '}' => fdepth -= 1,
+                    '=' => {
+                        if (fdepth != 0) continue;
+                        if (k + 1 < field_text.len and (field_text[k + 1] == '=' or field_text[k + 1] == '>')) {
+                            k += 1;
+                            continue;
+                        }
+                        if (k > 0) {
+                            const prev = field_text[k - 1];
+                            if (prev == '!' or prev == '<' or prev == '>' or prev == '=') continue;
+                        }
+                        const tail = std.mem.trim(u8, field_text[k + 1 ..], " \t");
+                        if (tail.len > 0 and self.exprTextHasCall(tail)) {
+                            try self.reportCallInExpression("a return-field default", location);
+                        }
+                        break;
+                    },
+                    else => {},
+                }
+            }
         }
     }
 

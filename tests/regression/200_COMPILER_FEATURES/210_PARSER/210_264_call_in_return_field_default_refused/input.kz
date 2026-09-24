@@ -1,0 +1,15 @@
+// A `-> { x: T = <expr> }` record return carries defaults inside the type
+// text; the emitter splices the record verbatim into the Output struct.
+// A call in a return-field default is the same violation the
+// expression-admission wall refuses elsewhere — calls are not expressions.
+~import std/io
+
+~tor helper {} -> i64
+
+~proc helper|zig { return 42; }
+
+~pub tor poll {} -> { v: i64 = helper(), w: i64 }
+
+~proc poll|zig { return .{ .v = 1, .w = 2 }; }
+
+~poll(): r |> std/io:print.ln("{{ r.v:d }}")

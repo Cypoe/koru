@@ -1,0 +1,22 @@
+// A call inside a tor field default is the same violation the
+// expression-admission wall refuses in every other expression carrier —
+// calls are not expressions. The default text is spliced verbatim into the
+// emitted Input struct, so a Koru call there reaches the backend raw.
+const std = @import("std");
+
+~tor helper {} -> i64
+
+~proc helper|zig { return 42; }
+
+~pub tor poll { x: i64 = helper() }
+| done
+| failed string
+
+~proc poll|zig {
+    std.debug.print("x={}\n", .{x});
+    return .{ .done = .{} };
+}
+
+~poll()
+| done |> _
+| failed _ |> _
