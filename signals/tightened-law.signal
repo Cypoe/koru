@@ -1,0 +1,12 @@
+name: tightened-law
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a surface the grammar admitted was found to declare something no
+  consumer reads — accepted text whose declared semantics are silently
+  dropped or miscompiled. Fires when the diff adds a refusal at the point
+  the lie enters the AST (e.g. a default on a payload field the emitted
+  union drops), closing a gap where no prior check stood. Sibling of
+  widened-law: that one extends an existing check to new carriers; this
+  one raises a new wall where the surface was never guarded.
