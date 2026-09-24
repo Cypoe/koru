@@ -157,7 +157,8 @@ takes each name once**, and the frontend only saw one kind of list.
 record-type strings, PARSE009 extended to label-jump args). Pins:
 `210_247`–`210_251`; legal sibling `210_252`.
 
-## Value position is a binding list too (2026-09-24)
+## Value position is a binding list too — but Source text is the
+## transform's, not the frontend's (corrected 2026-09-24)
 
 The first pass covered only lists the AST carried as `Field` nodes or type
 strings. Two more surfaces held the same list as opaque value text:
@@ -170,14 +171,32 @@ strings. Two more surfaces held the same list as opaque value text:
   list. Worse than the others: it compiled and RAN, the second `p`
   silently overwriting the first (printed `1 0`).
 
-Both are now walked by the same check — the depth-/quote-aware comma+colon
-split was refactored into one shared text helper used by record-type
-strings, record values, and Source-argument lists, with a strict mode that
-bails unless every segment names a field (so arbitrary expression strings
-in arg position are not misread as field lists). A segment with no
-depth-zero colon is a pun iff it is a bare identifier path.
+The first correction attempt got the enforcement site wrong — twice over.
+It scanned EVERY invocation arg's text, including `Source` payloads, with
+a shape heuristic, then exempted quoted keys by shape when
+`std/build:variants`' string maps refused. That violated the atoms tenet
+(frag-arguments-are-atoms): a `Source` arg is opaque text owned by the
+transform that interprets it; the frontend may judge it only by the
+parameter's DECLARED TYPE, never by the text's shape. It also built a
+second field-list splitter beside `struct_literal` — two parsers for one
+law, guaranteed to drift.
 
-The generalization sharpens again: the list's *carrier* — Field node, type
-string, value string, Source arg — is incidental. What makes it a binding
-list is that each comma entry names a slot. Pins: `210_253`–`210_255`;
-`210_252` extended with distinct-name record values including a pun.
+The correct shape: the one-name rule lives in `struct_literal` itself
+(`DuplicateField`, re-derived name via `duplicateFieldName`/
+`describeErrorIn`), so every consumer — `capture`/`captured` seeds and
+writes, `const`, store inserts/stored, grids, the emitters — inherits it
+through the parse they already do. `captured` refuses as KORU164 through
+the transform's own ParseError path, caret on the Source's recorded
+location (one line past the block in the measured pin — a pre-existing
+Source-location convention, not introduced here). Record type strings and
+record produce-values, which ARE Koru's own syntax held as strings, are
+checked in the frontend by calling that same parser and translating only
+its `DuplicateField` into PARSE010 — the declared-type judgment stays in
+the frontend, the text judgment stays in the one parser.
+
+What survives correction: the law — a binding list takes each name once.
+What died: "the carrier is incidental." The carrier is exactly what
+decides WHO judges: AST nodes and declared-type strings are the
+frontend's; Source text belongs to its transform. Pins: `210_253`–
+`210_255`; `210_252` extended with distinct-name record values incl. a
+pun.

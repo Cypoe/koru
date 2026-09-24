@@ -1,6 +1,7 @@
-// PINS: `captured { ... }` is a Source-argument field list — `p` twice
-// compiled and RAN at HEAD, silently overwriting the first binding
-// (printed `1 0`). Same one-name rule, one more surface.
+// PINS: `captured { ... }` is a Source-argument field list — a repeated `p`
+// is refused by struct_literal's one-name rule, surfacing as KORU164 through
+// the transform's own parse path. At HEAD it compiled and RAN, silently
+// overwriting the first binding (printed `1 0`).
 import std/io
 
 pub tor tick { n: i64 }

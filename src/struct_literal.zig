@@ -38,6 +38,7 @@ pub const ParseError = error{
     BareEntryNotPunnable,
     RedundantExplicitLabel,
     MissingComma,
+    DuplicateField,
 };
 
 /// Options for `parseFields` / `parse`. Defaults enforce the pun law.
@@ -195,6 +196,19 @@ fn projectRawFields(
 ) ParseError![]const StructField {
     var out = try std.ArrayList(StructField).initCapacity(allocator, raw_fields.len);
     for (raw_fields) |raw| {
+        // A field list takes each name once: a second binding for a name
+        // already taken is a silent drop downstream, explicit or pun alike.
+        const candidate: ?[]const u8 = blk: {
+            if (topLevelColon(raw)) |colon| {
+                break :blk std.mem.trim(u8, raw[0..colon], " \t\n\r");
+            }
+            break :blk punnableName(std.mem.trim(u8, raw, " \t\n\r"));
+        };
+        if (candidate) |cand| {
+            for (out.items) |seen| {
+                if (std.mem.eql(u8, seen.name, cand)) return error.DuplicateField;
+            }
+        }
         if (std.mem.trim(u8, raw, " \t\n\r").len == 0) continue;
         if (topLevelColon(raw)) |colon| {
             const name = std.mem.trim(u8, raw[0..colon], " \t\n\r");
@@ -269,6 +283,7 @@ pub fn describeError(err: ParseError) []const u8 {
         error.BareEntryNotPunnable => "positional assignment is never allowed — name the target (`x: expr`); a bare entry must be a punnable name or path",
         error.RedundantExplicitLabel => "punning is mandatory — drop the redundant label and write the bare pun",
         error.MissingComma => "missing comma between fields — a `name: value` line that does not end in a comma fuses with the next line into one field",
+        error.DuplicateField => "a field list takes each name once — the list cannot carry two fields with the same name",
         error.NotAStruct => "not a struct literal",
         error.UnterminatedStruct => "unterminated struct literal",
         error.OutOfMemory => "out of memory",
@@ -281,7 +296,38 @@ pub fn describeError(err: ParseError) []const u8 {
 /// callers that surface a refusal (`store:new`, insert/stored, capture) all
 /// hold the input. Any other error, or an input that no longer parses the same
 /// way, degrades to the static text.
+/// The field name a `DuplicateField` error was raised on, re-derived by
+/// re-scanning `input` (cold error path — same pattern as `describeErrorIn`).
+/// Returns null when the input no longer parses to a repeat.
+pub fn duplicateFieldName(allocator: Allocator, input: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, input, " \t\n\r");
+    if (trimmed.len < 2 or trimmed[0] != '{' or trimmed[trimmed.len - 1] != '}') return null;
+    const raw_fields = splitFields(allocator, trimmed[1 .. trimmed.len - 1]) catch return null;
+    var seen = std.ArrayList([]const u8).initCapacity(allocator, raw_fields.len) catch return null;
+    for (raw_fields) |raw| {
+        const candidate: ?[]const u8 = blk: {
+            if (topLevelColon(raw)) |colon| {
+                break :blk std.mem.trim(u8, raw[0..colon], " \t\n\r");
+            }
+            break :blk punnableName(std.mem.trim(u8, raw, " \t\n\r"));
+        };
+        if (candidate) |cand| {
+            for (seen.items) |s| {
+                if (std.mem.eql(u8, s, cand)) return cand;
+            }
+            seen.append(allocator, cand) catch return null;
+        }
+    }
+    return null;
+}
+
 pub fn describeErrorIn(allocator: Allocator, err: ParseError, input: []const u8) []const u8 {
+    if (err == error.DuplicateField) {
+        if (duplicateFieldName(allocator, input)) |name| {
+            return std.fmt.allocPrint(allocator, "field '{s}' is bound twice — a field list takes each name once", .{name}) catch describeError(err);
+        }
+        return describeError(err);
+    }
     if (err != error.MissingComma) return describeError(err);
     const trimmed = std.mem.trim(u8, input, " \t\n\r");
     if (trimmed.len >= 2 and trimmed[0] == '{' and trimmed[trimmed.len - 1] == '}') {
