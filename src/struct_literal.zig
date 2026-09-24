@@ -290,12 +290,6 @@ pub fn describeError(err: ParseError) []const u8 {
     };
 }
 
-/// `describeError` with the implicated fragment folded in where `input` lets
-/// it be re-derived — for MissingComma, the line that fused. Re-scans rather
-/// than plumbing a detail out of the parser: the error path is cold, and the
-/// callers that surface a refusal (`store:new`, insert/stored, capture) all
-/// hold the input. Any other error, or an input that no longer parses the same
-/// way, degrades to the static text.
 /// The field name a `DuplicateField` error was raised on, re-derived by
 /// re-scanning `input` (cold error path — same pattern as `describeErrorIn`).
 /// Returns null when the input no longer parses to a repeat.
@@ -321,6 +315,13 @@ pub fn duplicateFieldName(allocator: Allocator, input: []const u8) ?[]const u8 {
     return null;
 }
 
+/// `describeError` with the implicated fragment folded in where `input` lets
+/// it be re-derived — for MissingComma, the line that fused; for
+/// DuplicateField, the name bound twice. Re-scans rather than plumbing a
+/// detail out of the parser: the error path is cold, and the callers that
+/// surface a refusal (`store:new`, insert/stored, capture) all hold the input.
+/// Any other error, or an input that no longer parses the same way, degrades
+/// to the static text.
 pub fn describeErrorIn(allocator: Allocator, err: ParseError, input: []const u8) []const u8 {
     if (err == error.DuplicateField) {
         if (duplicateFieldName(allocator, input)) |name| {
