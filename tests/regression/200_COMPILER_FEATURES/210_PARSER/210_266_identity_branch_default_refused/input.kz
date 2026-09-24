@@ -1,0 +1,14 @@
+// `| ok i64 = 5` — a `= <expr>` tail on an identity payload is a field
+// default with no field; it reaches the emitted union as enum-value
+// syntax and dies in the backend.
+const std = @import("std");
+
+~pub tor poll {}
+| ok i64 = 5
+| done
+
+~proc poll|zig { return .{ .done = .{} }; }
+
+~poll()
+| ok _ |> _
+| done |> _

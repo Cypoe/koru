@@ -1,0 +1,15 @@
+// A `= <expr>` default on a branch payload field is silently dropped:
+// payload shapes emit as union-variant structs and only Input structs
+// carry Zig field defaults. A constructor omitting the field then dies
+// in the backend on `missing struct field` despite the declared default.
+const std = @import("std");
+
+~pub tor poll {}
+| next { v: i64 = 5, w: i64 }
+| done
+
+~proc poll|zig { return .{ .done = .{} }; }
+
+~poll()
+| next _ |> _
+| done |> _

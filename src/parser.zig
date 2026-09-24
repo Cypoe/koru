@@ -2817,6 +2817,20 @@ pub const Parser = struct {
                             // Wildcard: `| c *`
                             payload = ast.Shape{ .fields = &.{}, .is_wildcard = true };
                         } else {
+                            // A `= <expr>` tail is a field default with no
+                            // field — the emitted union drops it (PARSE011).
+                            const id_split = struct_literal.splitTypeDefault(type_str);
+                            if (id_split.default != null) {
+                                return self.failWithHint(
+                                    .PARSE011,
+                                    event_line_index + 1,
+                                    1,
+                                    "identity branch '{s}' carries a default — `= <expr>` only applies to tor input fields; the emitted union drops it",
+                                    .{branch_name},
+                                    "drop the `= <expr>` — every constructor supplies the payload explicitly. For an omittable input, put the default on the tor's input shape instead",
+                                    .{},
+                                );
+                            }
                             // Identity: `| ok i64`. Synthesize a braced single-field
                             // record so parseBranchPayloadShape reuses the exact type
                             // grammar (phantom, module-qualified, pointer prefixes) as
@@ -9933,7 +9947,9 @@ pub const Parser = struct {
         if (close_offset) |off| {
             // Single-line shape
             const content = lexer.trim(branch_line[brace_start + 1 .. brace_start + off]);
-            return self.parseShape(content);
+            const shape = try self.parseShape(content);
+            try self.rejectBranchPayloadDefault(shape, self.current, @intCast(brace_start));
+            return shape;
         }
 
         // Multi-line shape - collect lines until matching brace
@@ -10018,7 +10034,30 @@ pub const Parser = struct {
             );
         }
 
-        return self.parseShape(shape_content.items);
+        const shape = try self.parseShape(shape_content.items);
+        try self.rejectBranchPayloadDefault(shape, start_line, @intCast(brace_start));
+        return shape;
+    }
+
+    /// A `= <expr>` default on a branch payload field is silently dropped:
+    /// payload shapes emit as union-variant structs, and only Input structs
+    /// carry Zig field defaults (400_185). The author wrote a value nothing
+    /// reads — and a constructor that omits the field dies in the backend on
+    /// `missing struct field` despite the declared default.
+    fn rejectBranchPayloadDefault(self: *Parser, shape: ast.Shape, line: usize, column: usize) !void {
+        for (shape.fields) |field| {
+            if (field.default != null) {
+                return self.failWithHint(
+                    .PARSE011,
+                    line,
+                    column,
+                    "branch payload field '{s}' carries a default — `= <expr>` only applies to tor input fields; the emitted union drops it",
+                    .{field.name},
+                    "drop the `= <expr>` — every constructor supplies the field explicitly. For an omittable input, put the default on the tor's input shape instead",
+                    .{},
+                );
+            }
+        }
     }
 
     /// Phantom state in a type position must use ANGLE brackets: `Type<state>`.
@@ -10895,6 +10934,25 @@ pub const Parser = struct {
                     .resume_arms = resume_arms,
                     .annotations = try annotations.toOwnedSlice(self.allocator),
                 };
+            }
+
+            // A `= <expr>` tail on an identity payload is a field default with
+            // no field — the emitted union drops it (PARSE011, same rule as
+            // braced payload fields). `=` inside `[...]`/`(...)` stays type
+            // text; splitTypeDefault only splits at depth zero.
+            {
+                const id_split = struct_literal.splitTypeDefault(type_and_annotation);
+                if (id_split.default != null) {
+                    return self.failWithHint(
+                        .PARSE011,
+                        self.current,
+                        1,
+                        "identity branch '{s}' carries a default — `= <expr>` only applies to tor input fields; the emitted union drops it",
+                        .{branch_name},
+                        "drop the `= <expr>` — every constructor supplies the payload explicitly. For an omittable input, put the default on the tor's input shape instead",
+                        .{},
+                    );
+                }
             }
 
             // Identity branches carry the full type string (including any phantom
