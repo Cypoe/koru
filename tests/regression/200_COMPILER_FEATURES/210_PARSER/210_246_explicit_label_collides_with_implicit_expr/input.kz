@@ -1,0 +1,9 @@
+// PINS: the implicit `expr` remap + an explicit `expr:` label land on the
+// same parameter — `~test(first thing, expr: and a second)` compiled and
+// emitted only "first thing" (measured 2026-09-24). The positional binding
+// and the label collide; one is silently dropped. Refuse.
+~import std/testing
+
+~test(first thing, expr: and a second) {
+    ~assert.ok()
+}

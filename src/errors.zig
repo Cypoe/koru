@@ -78,6 +78,7 @@ pub const ErrorCode = enum(u16) {
     PARSE006, // Bare argument does not name a parameter — explicit `name: value` label required
     PARSE007, // Invalid annotation separator — annotations delimit on `|`, not `,`
     PARSE008, // `~` after a closing `]` — the annotation block's `[` already entered Koru; write the declaration directly after `]`
+    PARSE009, // A call binds the same name twice — one value is silently dropped downstream
 
     // Type inference errors
     TYPE001, // Branch not found in expected union

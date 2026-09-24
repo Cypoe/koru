@@ -5832,6 +5832,36 @@ fn checkBareArgPunning(
     }
     const free_form_callee = has_implicit_slot or all_machinery;
 
+    // A call binds each name once. Two args carrying the same name —
+    // `new(s, capacity: 64, capacity: 32)`, an explicit `expr:` beside the
+    // parser's implicit positional remap — resolved last-wins downstream
+    // with no diagnostic: measured 2026-09-24, the doubled capacity emitted
+    // [32]i64 columns and the doubled expr emitted only the first value.
+    // That is the labeled twin of the silent drop PARSE006 walls on the
+    // bare side, and it holds even where the name binds nothing the checker
+    // can see (a free-form callee's labels are its own data — a repeat is
+    // still ambiguous). Synthesized marker args are excluded: they are
+    // parser machinery gated on the slot's absence, not a user spelling.
+    for (invocation.args, 0..) |arg, dup_i| {
+        if (std.mem.eql(u8, arg.value, "<implicit_source>") or
+            std.mem.eql(u8, arg.value, "<program_ast>")) continue;
+        for (invocation.args[0..dup_i]) |earlier| {
+            if (std.mem.eql(u8, earlier.value, "<implicit_source>") or
+                std.mem.eql(u8, earlier.value, "<program_ast>")) continue;
+            if (!std.mem.eql(u8, earlier.name, arg.name)) continue;
+            try reporter.addErrorWithHint(
+                .PARSE009,
+                location.line,
+                location.column,
+                "argument '{s}' is bound twice — '{s}' takes each name once",
+                .{ arg.name, event_display },
+                "drop one, or give it a different name — the call cannot carry two '{s}'",
+                .{arg.name},
+            );
+            break;
+        }
+    }
+
     for (invocation.args, 0..) |arg, arg_index| {
         // Expression/Source args are already resolved to their parameter
         // (implicit `expr`/`source` binding included) — not raw puns to check.

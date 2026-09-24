@@ -112,3 +112,24 @@ arguments, not about any particular arg-list shape** — every new arg
 surface inherits it only when the check sees the list, so islands are
 found by probing each exempted callee class, never by assuming the shared
 parser covers it.
+
+## The labeled twin — a call binds each name once (2026-09-24)
+
+The same silent drop had a second door, through *named* args. Measured:
+`std/store:new(dogs, capacity: 64, capacity: 32)` compiled and emitted
+`[32]i64` columns — the second `capacity` silently won. `~test(a test
+block exists, expr: and a second)` — the PARSE006 hint applied literally —
+compiled and emitted only the first `expr`. `checkBareArgPunning` verified
+each arg *named* a param but never that a param got *one* binding, and on
+free-form callees explicit labels skipped matching entirely.
+
+The law completes: **a call binds each name once** — PARSE009 refuses the
+second binding at the call. It holds on free-form callee labels too (the
+labels are the callee's own data, but a repeat is still ambiguous) and it
+catches the parser's own implicit `expr` remap colliding with an explicit
+`expr:`. Synthesized marker args (`<implicit_source>`, `<program_ast>`)
+are exempt — machinery gated on the slot's absence, not a user spelling.
+
+So the surviving generalization tightens once more: the law is not "about
+bare arguments," it is **about silent drops** — every arg must bind
+honestly, and every name must bind once. Pins: `210_244`–`210_246`.
