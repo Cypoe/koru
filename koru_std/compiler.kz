@@ -10,6 +10,7 @@
 ~part control
 ~part paths
 ~part context
+~part dump
 // Compiler system dependencies
 ~std/deps:requires.system {
     "name": "zig",
@@ -407,7 +408,8 @@ const Allocator = std.mem.Allocator;
     emitter_helpers_module.addImport("codegen_utils", codegen_utils_module);
     emitter_helpers_module.addImport("annotation_parser", annotation_parser_module);
     emitter_helpers_module.addImport("struct_literal", struct_literal_module);
-    parser_module.addImport("struct_literal", struct_literal_module); flow_checker_module.addImport("struct_literal", struct_literal_module);
+    parser_module.addImport("struct_literal", struct_literal_module);
+    flow_checker_module.addImport("struct_literal", struct_literal_module);
 
     // Tap pattern matcher
     const glob_pattern_matcher_module = b.createModule(.{
@@ -865,27 +867,6 @@ const Allocator = std.mem.Allocator;
         .reporter = reporter,
     };
     return ctx;
-}
-
-// Helper: Dump AST as JSON for introspection
-// Usage: Insert at key points in pipeline to inspect AST state
-// Void tor - just prints and continues
-// Example: ast-dump(ctx: c, flag: "elaborate") |> ...
-~[comptime]pub tor ast-dump {
-    ctx: CompilerContext,
-    flag: string
-}
-
-~proc ast-dump|zig {
-    // Serialize AST to JSON
-    const ast_serializer = @import("ast_serializer");
-    var serializer = ast_serializer.AstSerializer.init(ctx.allocator) catch unreachable;
-    defer serializer.deinit();
-
-    const json_output = serializer.serializeToJson(ctx.ast) catch unreachable;
-
-    // Print to stderr with separator showing which dump this is
-    std.debug.print("=== AST DUMP: {s} ===\n{s}\n", .{flag, json_output});
 }
 
 // Template processor: walks AST, renders any proc whose variant chain
