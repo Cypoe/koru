@@ -109,6 +109,30 @@ Everything else is a **ruling question**. Write it down — the program, what it
 does today, why you think it should refuse, the evidence — and do not land it.
 It is a deliverable, not a failure.
 
+A candidate that meets a ground is **not** a ruling question. If it reaches Zig
+as garbage, it is rung 3 and self-grounding — land it. Filing a grounded case
+as a question hands Lars a ruling the brief already made.
+
+## ⛔ Where a refusal may live — argument text is opaque
+
+A `Source` argument is text owned by the transform that interprets it. The
+frontend judges an argument by its parameter's **declared type**, never by the
+text's shape (`concepts/frag-arguments-are-atoms.md`, the quoting-surfaces
+paragraph). So:
+
+- A refusal on a `Source` DSL (`capture { … }`, `captured { … }`, a store
+  declaration) lives in the parser that DSL already goes through — for
+  struct-literal text that is `src/struct_literal.zig` — and surfaces on the
+  transform's own refusal path. Every consumer of that parser inherits it.
+- Never scan invocation-argument or `Source` text in a frontend pass with a
+  splitter of your own. When that scan wrongly refuses something, exempting the
+  broken case by its text shape is the same violation again.
+- **Find the parser before you write one.** If the text you need to read is
+  already parsed somewhere, widen that parser.
+
+The first replay (2026-09-24) broke this and landed it on main. The corrected
+shape is `aa7205029`.
+
 For every tightening, write **both readings**: (A) the compiler is too loose;
 (B) the program is legal and you misread the language. Lean with a confidence:
 `grounded` cites one of the three grounds above and is the only level at which
@@ -135,9 +159,23 @@ repro.
   `pgrep -fl "run_regression|zig build"`. If a suite is live anywhere, stop and
   report — `/usr/local/lib/koru/src` symlinks the main checkout, so a worktree
   does not protect a live board from your edits.
-- Filtered runs only: `./run_regression.sh <full_name> <full_name> ...`. Check
+- Filtered runs by default: `./run_regression.sh <full_name> <full_name> ...`. Check
   the `Running N tests` line against the number you asked for — a misspelled
   name is dropped silently.
+- **A full board publishes.** An unfiltered `run_regression.sh` writes
+  korulang_org's `history.json` and posts to Discord (`publish_board_to_site`).
+  When a change reaches every program (a parser, a `koru_std` file holding
+  `if`/`for`), and only a full board can show it doesn't over-refuse, run it
+  with publishing disabled:
+  `KORULANG_ORG_DIR=/nonexistent-no-publish ./run_regression.sh`. Read
+  `run_regression.sh`'s guard first, to confirm that still disables it.
+- **Measuring the before state:** `tests/regression/koru.json` resolves
+  `koru_std` from the input file's tree, not from the binary's. An old `koruc`
+  run on the new tree's input loads the new `koru_std`. Put the input inside
+  the old tree and run that tree's binary on it.
+- **The caret is part of the refusal.** Pin it with `ERROR_AT <line>`. A
+  refusal that fires on the wrong line teaches the author the wrong thing.
+  `Flow.location` is the flow's head line (`concepts/frag-flow-location-is-the-head-line.md`).
 - Restore `test-results/unit-tests.json` before committing.
 - Controls for every fix: your new pin, its legal sibling, every existing test
   that exercises the code path you edited (find them — the diagnostic code and
@@ -172,6 +210,10 @@ repro.
 - **A pin that was never red.** If you did not watch the compiler accept it at
   HEAD, you do not know your test tests anything.
 - **Moving an existing pin** to make room. That is `010`'s banned move too.
+- **Judging opaque text by its shape.** See "Where a refusal may live." It
+  compiles, it goes green, and it breaks the language's core rule.
+- **A pin that only guards.** If the test was already right before your
+  change, it is a guard, not a demonstration. Say which one it is.
 - **Hunting where `010` hunts.** Tests already pinned red as `must-error-passed`
   are claimed. This frame finds the ones nobody wrote.
 - **Narrating instead of compiling.** "This probably compiles" is unmeasured.
