@@ -108,7 +108,7 @@
     //     last segment; bare expressions / redundant labels fail loudly.
     //     No `.capture` node, no emitter concession. ---
     const Rewriter = struct {
-        err_msg: ?[]const u8 = null,
+        err: ?struct { msg: []const u8, loc: @TypeOf(flow.location) } = null,
 
         fn rewrite(
             self: *@This(),
@@ -126,7 +126,7 @@
                         const raw = if (step.invocation.args.len > 0) step.invocation.args[0].value else "";
                         const payload = std.fmt.allocPrint(alloc, "{{{s}}}", .{raw}) catch unreachable;
                         const parsed = struct_literal.parseFields(alloc, payload) catch |err| {
-                            self.err_msg = std.fmt.allocPrint(alloc, "captured: {s}", .{struct_literal.describeErrorIn(alloc, err, payload)}) catch "captured: struct literal error";
+                            self.err = .{ .msg = std.fmt.allocPrint(alloc, "captured: {s}", .{struct_literal.describeErrorIn(alloc, err, payload)}) catch "captured: struct literal error", .loc = cont.location };
                             const out_err = alloc.create(ast.Continuation) catch unreachable;
                             out_err.* = cont.*;
                             return out_err;
@@ -160,8 +160,8 @@
 
     var rewriter = Rewriter{};
     const rewritten_as = rewriter.rewrite(allocator, as_cont.?, cell_name);
-    if (rewriter.err_msg) |em| {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU164, flow.location, flow.module, "{s}", .{em}) } };
+    if (rewriter.err) |e| {
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU164, e.loc, flow.module, "{s}", .{e.msg}) } };
     }
 
     // --- Assemble the new flow continuations: void chains so the REAL for / if
