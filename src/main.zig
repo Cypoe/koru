@@ -5724,6 +5724,269 @@ fn enforceInvocationVisibilityInNode(
     }
 }
 
+/// A binding list takes each name once — the declaration-side twin of the
+/// call-site rule PARSE009 enforces. `tor f { x: i64, x: i64 }`, a branch
+/// payload `| done { x: i64, x: i64 }`, a branch constructor
+/// `=> done { x: a, x: a }`, and a record return `-> { x: i64, x: i64 }` all
+/// compiled clean in the frontend and handed the backend a doubly-declared
+/// Zig struct field — host noise naming symbols the author never wrote
+/// (measured 2026-09-24: `.{ .x = __koru_p_0, .x = __koru_p_1 }`).
+/// A label jump `@L(l.limit, limit: 2)` is worse: accepted AND ran, the
+/// second `limit` silently dropped. Refuse at the author's text.
+fn checkFieldsBindOnce(
+    fields: []const ast.Field,
+    owner: []const u8,
+    reporter: *ErrorReporter,
+    location: errors.SourceLocation,
+) !void {
+    for (fields, 0..) |field, i| {
+        if (field.name.len == 0) continue;
+        for (fields[0..i]) |earlier| {
+            if (!std.mem.eql(u8, earlier.name, field.name)) continue;
+            try reporter.addErrorWithHint(
+                .PARSE010,
+                location.line,
+                location.column,
+                "field '{s}' is bound twice in {s} — a field list takes each name once",
+                .{ field.name, owner },
+                "drop one, or rename it — the list cannot carry two '{s}'",
+                .{field.name},
+            );
+            break;
+        }
+    }
+}
+
+/// `-> { x: i64, x: i64 }` stores the record as a TYPE STRING, not a Shape —
+/// the dup only surfaces when the emitter pastes it into a Zig struct.
+/// Split the braces like a field list and apply the same one-name rule;
+/// recurse into a field whose own type is a record.
+/// (main.zig has no lexer dep — the split below is std-only.)
+fn checkRecordTypeBindOnce(
+    type_str: []const u8,
+    owner: []const u8,
+    reporter: *ErrorReporter,
+    location: errors.SourceLocation,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!void {
+    var trimmed = std.mem.trim(u8, type_str, " \t\r\n");
+    // Peel prefixes that can precede the record: ?{..}, *{..}, []{..}.
+    while (trimmed.len > 0 and (trimmed[0] == '?' or trimmed[0] == '*')) trimmed = trimmed[1..];
+    while (std.mem.startsWith(u8, trimmed, "[]")) trimmed = trimmed[2..];
+    if (trimmed.len < 2 or trimmed[0] != '{' or trimmed[trimmed.len - 1] != '}') return;
+    const inner = std.mem.trim(u8, trimmed[1 .. trimmed.len - 1], " \t\r\n");
+    if (inner.len == 0) return;
+
+    // Split on commas at depth zero, then take each segment's name — the text
+    // before its first depth-zero ':'. Segments with no ':' name nothing.
+    var names = try std.ArrayList([]const u8).initCapacity(allocator, 8);
+    defer names.deinit(allocator);
+    var depth: i32 = 0;
+    var in_string = false;
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i <= inner.len) : (i += 1) {
+        const at_end = i == inner.len;
+        const c = if (at_end) ',' else inner[i];
+        if (in_string) {
+            if (c == '"' and inner[i - 1] != '\\') in_string = false;
+            continue;
+        }
+        if (c == '"') {
+            in_string = true;
+            continue;
+        }
+        if (c == '{' or c == '(' or c == '[' or c == '<') depth += 1;
+        if (c == '}' or c == ')' or c == ']' or c == '>') depth -= 1;
+        if (c != ',' or depth != 0) continue;
+        const segment = std.mem.trim(u8, inner[start..i], " \t\r\n");
+        start = i + 1;
+        // Field name = text before the first depth-zero ':'.
+        var d2: i32 = 0;
+        var j: usize = 0;
+        while (j < segment.len) : (j += 1) {
+            const s = segment[j];
+            if (s == '{' or s == '(' or s == '[' or s == '<') d2 += 1;
+            if (s == '}' or s == ')' or s == ']' or s == '>') d2 -= 1;
+            if (s == ':' and d2 == 0) break;
+        }
+        if (j >= segment.len) continue;
+        const name = std.mem.trim(u8, segment[0..j], " \t\r\n");
+        if (name.len == 0) continue;
+        try names.append(allocator, name);
+        // Recurse into a record-typed field.
+        try checkRecordTypeBindOnce(std.mem.trim(u8, segment[j + 1 ..], " \t\r\n"), owner, reporter, location, allocator);
+    }
+    for (names.items, 0..) |name, n| {
+        for (names.items[0..n]) |earlier| {
+            if (!std.mem.eql(u8, earlier, name)) continue;
+            try reporter.addErrorWithHint(
+                .PARSE010,
+                location.line,
+                location.column,
+                "field '{s}' is bound twice in {s} — a field list takes each name once",
+                .{ name, owner },
+                "drop one, or rename it — the list cannot carry two '{s}'",
+                .{name},
+            );
+            break;
+        }
+    }
+}
+
+/// A `@label(...)` jump binds the label's parameters like a call does — the
+/// pun law already applies to its args (PARSE005 fires on them). PARSE009's
+/// one-name rule holds here too, but checkBareArgPunning only sees
+/// Invocations: `@L(l.limit, limit: 2)` bound `limit` twice and RAN — the
+/// second binding silently dropped.
+fn checkJumpArgsBindOnce(
+    args: []const ast.Arg,
+    label: []const u8,
+    reporter: *ErrorReporter,
+    location: errors.SourceLocation,
+) !void {
+    for (args, 0..) |arg, i| {
+        if (arg.name.len == 0) continue;
+        for (args[0..i]) |earlier| {
+            if (earlier.name.len == 0) continue;
+            if (!std.mem.eql(u8, earlier.name, arg.name)) continue;
+            try reporter.addErrorWithHint(
+                .PARSE009,
+                location.line,
+                location.column,
+                "argument '{s}' is bound twice — '@{s}' takes each name once",
+                .{ arg.name, label },
+                "drop one, or give it a different name — the jump cannot carry two '{s}'",
+                .{arg.name},
+            );
+            break;
+        }
+    }
+}
+
+fn enforceUniqueBindingNames(
+    items: []const ast.Item,
+    reporter: *ErrorReporter,
+    allocator: std.mem.Allocator,
+) !void {
+    try enforceUniqueBindingNamesInItems(items, reporter, allocator);
+}
+
+fn enforceUniqueBindingNamesInItems(
+    items: []const ast.Item,
+    reporter: *ErrorReporter,
+    allocator: std.mem.Allocator,
+) !void {
+    for (items) |item| {
+        switch (item) {
+            .event_decl => |ev| {
+                // EventDecl.location is 0-based (decl on source line N carries
+                // line N-1); the reporter prints 1-based. Compensate here.
+                var loc = ev.location;
+                loc.line += 1;
+                loc.column += 1;
+                const segment = if (ev.path.segments.len > 0) ev.path.segments[0] else "?";
+                const owner = try std.fmt.allocPrint(allocator, "tor '{s}'", .{segment});
+                defer allocator.free(owner);
+                try checkFieldsBindOnce(ev.input.fields, owner, reporter, loc);
+                if (ev.return_type) |rt| {
+                    try checkRecordTypeBindOnce(rt, owner, reporter, loc, allocator);
+                }
+                for (ev.branches) |branch| {
+                    const branch_owner = try std.fmt.allocPrint(allocator, "branch '{s}'", .{branch.name});
+                    defer allocator.free(branch_owner);
+                    try checkFieldsBindOnce(branch.payload.fields, branch_owner, reporter, loc);
+                    if (branch.resume_type) |rt| {
+                        try checkRecordTypeBindOnce(rt, branch_owner, reporter, loc, allocator);
+                    }
+                }
+            },
+            .immediate_impl => |impl| {
+                // ImmediateImpl.location points one line past the impl line —
+                // walk it back so the caret lands on the author's `=>` line.
+                var loc = impl.location;
+                if (loc.line > 1) loc.line -= 1;
+                try checkFieldsBindOnce(impl.value.fields, "the branch constructor", reporter, loc);
+            },
+            .flow => |flow| {
+                for (flow.body.continuations) |cont| {
+                    try enforceUniqueBindingNamesInContinuation(&cont, reporter, allocator);
+                }
+            },
+            .event_tap => |tap| {
+                for (tap.continuations) |cont| {
+                    try enforceUniqueBindingNamesInContinuation(&cont, reporter, allocator);
+                }
+            },
+            .label_decl => |label| {
+                for (label.continuations) |cont| {
+                    try enforceUniqueBindingNamesInContinuation(&cont, reporter, allocator);
+                }
+            },
+            .module_decl => |module| {
+                try enforceUniqueBindingNamesInItems(module.items, reporter, allocator);
+            },
+            else => {},
+        }
+    }
+}
+
+fn enforceUniqueBindingNamesInContinuation(
+    cont: *const ast.Continuation,
+    reporter: *ErrorReporter,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!void {
+    if (cont.node) |node| {
+        try enforceUniqueBindingNamesInNode(&node, reporter, allocator, cont.location);
+    }
+    for (cont.continuations) |nested| {
+        try enforceUniqueBindingNamesInContinuation(&nested, reporter, allocator);
+    }
+}
+
+fn enforceUniqueBindingNamesInNode(
+    node: *const ast.Node,
+    reporter: *ErrorReporter,
+    allocator: std.mem.Allocator,
+    location: errors.SourceLocation,
+) std.mem.Allocator.Error!void {
+    switch (node.*) {
+        .branch_constructor => |bc| {
+            try checkFieldsBindOnce(bc.fields, "the branch constructor", reporter, location);
+        },
+        .label_jump => |lj| {
+            try checkJumpArgsBindOnce(lj.args, lj.label, reporter, location);
+        },
+        .conditional_block => |cb| {
+            for (cb.nodes) |node_child| {
+                try enforceUniqueBindingNamesInNode(&node_child, reporter, allocator, location);
+            }
+        },
+        .foreach => |fe| {
+            for (fe.branches) |branch| {
+                for (branch.body) |body_cont| {
+                    try enforceUniqueBindingNamesInContinuation(&body_cont, reporter, allocator);
+                }
+            }
+        },
+        .conditional => |cond| {
+            for (cond.branches) |branch| {
+                for (branch.body) |body_cont| {
+                    try enforceUniqueBindingNamesInContinuation(&body_cont, reporter, allocator);
+                }
+            }
+        },
+        .switch_result => |sr| {
+            for (sr.branches) |branch| {
+                for (branch.body) |body_cont| {
+                    try enforceUniqueBindingNamesInContinuation(&body_cont, reporter, allocator);
+                }
+            }
+        },
+        else => {},
+    }
+}
+
 /// A transform-walker "machinery" parameter type — the injected context a
 /// `[transform]` handler receives (`*const Invocation`, `*const Item`, `*const
 /// Program`, `std.mem.Allocator`). Never a user-facing call argument. Matched by
@@ -7305,6 +7568,7 @@ pub fn main() !void {
     // Populate invocation.source_module for visibility enforcement
     try populateInvocationSourceModules(@constCast(source_file.items), parse_allocator, source_file.main_module_name);
     try enforceInvocationVisibility(source_file.items, &parser.reporter, parse_allocator, source_file.main_module_name);
+    try enforceUniqueBindingNames(source_file.items, &parser.reporter, parse_allocator);
     if (parser.reporter.hasErrors()) {
         const stderr_writer = FileWriter{ .file = std.fs.File.stderr() };
         try parser.reporter.printErrors(stderr_writer);

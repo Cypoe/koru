@@ -133,3 +133,26 @@ are exempt — machinery gated on the slot's absence, not a user spelling.
 So the surviving generalization tightens once more: the law is not "about
 bare arguments," it is **about silent drops** — every arg must bind
 honestly, and every name must bind once. Pins: `210_244`–`210_246`.
+
+## The declaration side — a field list takes each name once (2026-09-24)
+
+PARSE009 was written for call-site arg lists, and the same hole sat on
+every *declaration-side* name list, all silently accepted by the frontend:
+
+- `tor f { x: i64, x: i64 }` — input shape. Emitted `.{ .x = __koru_p_0,
+  .x = __koru_p_1 }`; the backend died on Zig's `duplicate struct member
+  name`.
+- `| done { x: i64, x: i64 }` — branch payload shape. Same backend death.
+- `=> done { x: a, y: a, x: 2 }` — branch constructor. `duplicate struct
+  field name`; which value would have won is anybody's guess.
+- `-> { x: i64, x: i64 }` — a record return type is a *string*, not a
+  Shape, so no field list ever materialized for a checker to see.
+- `@L(l.limit, limit: 2)` — a label JUMP's args. Worst of the set: no Zig
+  error at all, the program compiled and *ran*, the second `limit`
+  silently dropped.
+
+The rule was never "a call binds each name once" — it is **a binding list
+takes each name once**, and the frontend only saw one kind of list.
+`enforceUniqueBindingNames` walks them all (PARSE010 on Field lists and
+record-type strings, PARSE009 extended to label-jump args). Pins:
+`210_247`–`210_251`; legal sibling `210_252`.
