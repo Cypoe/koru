@@ -987,3 +987,16 @@ IS the correct cost when a cell is written per hit. `captured` inside a
 `std/store:query` arm does not lower (the query body is transplanted out
 of the transform's subtree) — per-row folds across a query still pay the
 write-through, which is where the next store-side lever lives.
+
+The per-primitive price list (tests/benchmarks/007_primitive_price,
+2026-09-25, 100k entities × 100 frames, ReleaseFast both) sharpens the
+write-side finding: `stored` write-through, tor event calls, watch
+announce, and grid RMW all measure AT PARITY with the bare-array twin in
+a straight-line loop — the event machinery costs ~0 when LLVM sees the
+whole loop, because a singleton cell promotes to a register. The fanout
+RMW tax was therefore not the write primitive but its PLACEMENT: a write
+behind a call boundary or inside a transplanted body is where promotion
+fails. The standing prices are resolve ≈ 0.73ns/op (paid twice on an
+indexed write), index join ≈ 3.8ns/row, take/drain ≈ 1.9ns/row; sweep,
+guard, and capture fold are all ≈ 1.0x. The expensive primitives are
+lifecycle and resolve, not dispatch.
