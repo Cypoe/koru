@@ -593,8 +593,10 @@ fn scanEventDeclsOnce(
         if (item != .event_decl) continue;
         const ev = item.event_decl;
         const name = try joinEventPath(allocator, ev.path.segments);
-        if (seen.get(name)) |first_file| {
-            if (std.mem.eql(u8, first_file, ev.location.file)) {
+        const gop = try seen.getOrPut(name);
+        if (gop.found_existing) {
+            defer allocator.free(name);
+            if (std.mem.eql(u8, gop.value_ptr.*, ev.location.file)) {
                 emitLoadError(
                     allocator,
                     ev.location.file,
@@ -609,7 +611,7 @@ fn scanEventDeclsOnce(
             }
             continue;
         }
-        try seen.put(name, ev.location.file);
+        gop.value_ptr.* = ev.location.file;
     }
 }
 
@@ -735,7 +737,9 @@ fn mergeParts(
             for (part.source_file.items) |pitem| {
                 if (pitem == .event_decl) {
                     const name = try joinEventPath(allocator, pitem.event_decl.path.segments);
-                    if (seen_events.contains(name)) {
+                    const gop = try seen_events.getOrPut(name);
+                    if (gop.found_existing) {
+                        defer allocator.free(name);
                         emitLoadError(
                             allocator,
                             part_path,
@@ -748,7 +752,7 @@ fn mergeParts(
                             .{},
                         );
                     }
-                    try seen_events.put(name, part_path);
+                    gop.value_ptr.* = part_path;
                 }
                 restampModule(@constCast(&pitem), module_name);
                 try merged_items.append(parse_allocator, pitem);
