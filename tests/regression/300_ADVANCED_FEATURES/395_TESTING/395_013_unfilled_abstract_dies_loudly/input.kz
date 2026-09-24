@@ -26,7 +26,7 @@
 | found f => ok f
 | missing => gone
 
-~test(a test block exists, and mocks nothing) {
+~test(a test block exists and mocks nothing) {
     ~assert.ok()
 }
 

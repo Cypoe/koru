@@ -28,7 +28,7 @@
 | missing => gone
 
 // A test block exists — this alone stands the wall down — and it mocks nothing.
-~test(a test block exists, and mocks nothing) {
+~test(a test block exists and mocks nothing) {
     ~assert.ok()
 }
 
