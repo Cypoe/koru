@@ -363,3 +363,56 @@ test "round-trip: parsed program (event + branches + proc + host lines)" {
     try std.testing.expectEqualStrings(parse_result.source_file.main_module_name, back.main_module_name);
     try std.testing.expectEqual(parse_result.source_file.items.len, back.items.len);
 }
+
+test "round-trip: Arg.had_explicit_label survives" {
+    const allocator = std.testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // `f(x, capacity: 64)` — arg0 a bare pun, arg1 an explicit label. The flag
+    // is what lets backend transforms (and PARSE006) tell `x` from `x: x`.
+    const args = try a.alloc(ast.Arg, 2);
+    args[0] = .{ .name = try a.dupe(u8, "x"), .value = try a.dupe(u8, "x") };
+    args[1] = .{
+        .name = try a.dupe(u8, "capacity"),
+        .value = try a.dupe(u8, "64"),
+        .had_explicit_label = true,
+    };
+
+    const segs = try a.alloc([]const u8, 1);
+    segs[0] = try a.dupe(u8, "new");
+    const items = try a.alloc(ast.Item, 1);
+    items[0] = .{ .flow = .{
+        .body = .{
+            .branch = "",
+            .binding = null,
+            .condition = null,
+            .indent = 0,
+            .node = .{ .invocation = .{
+                .path = .{ .module_qualifier = try a.dupe(u8, "std.store"), .segments = segs },
+                .args = args,
+            } },
+            .continuations = &[_]ast.Continuation{},
+        },
+    } };
+    const program = ast.Program{
+        .items = items,
+        .main_module_name = try a.dupe(u8, "input"),
+        .allocator = a,
+    };
+
+    const json = try serialize(allocator, &program);
+    defer allocator.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"had_explicit_label\":true") != null);
+
+    var arena2 = std.heap.ArenaAllocator.init(allocator);
+    defer arena2.deinit();
+    const back = try deserialize(arena2.allocator(), json);
+
+    const back_args = back.items[0].flow.body.node.?.invocation.args;
+    try std.testing.expect(back_args[0].had_explicit_label == false);
+    try std.testing.expect(back_args[1].had_explicit_label == true);
+    try std.testing.expectEqualStrings("capacity", back_args[1].name);
+}

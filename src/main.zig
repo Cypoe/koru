@@ -30,6 +30,7 @@ const keyword_registry = @import("keyword_registry");
 const flow_checker = @import("flow_checker");
 const FlowChecker = flow_checker.FlowChecker;
 const codegen_utils = @import("codegen_utils");
+const struct_literal = @import("struct_literal");
 const emitter_helpers = @import("emitter_helpers");
 const site_hash = @import("site_hash");
 
@@ -5802,7 +5803,7 @@ fn checkBareArgPunning(
     // those in; the USER's call arguments are read positionally from
     // `invocation.args` inside the handler body and never bind to a declared
     // parameter. There is thus no parameter for a call-site arg to pun against,
-    // so PARSE006 does not apply.
+    // so PARSE006's name-match does not apply.
     //
     // DECISION (2026-07-07, Lars): exempt these rather than force each transform
     // to declare a user-facing parameter. The cleaner long-term shape is for a
@@ -5811,25 +5812,67 @@ fn checkBareArgPunning(
     // implicitly — revisit here if we take that on. Also unifies a prior
     // inconsistency: `list:new(i64)` was already exempt while `field:new(bits)`
     // was not.
-    if (fields.len > 0) {
-        var all_machinery = true;
+    //
+    // The exemption is from NAME-MATCHING, not from the call grammar. The first
+    // call argument is the positional subject slot; every argument after it
+    // must be an explicit `name: expr` or a bare identifier path that puns
+    // (`f(x, y)` reads `y` as `y: y`). A bare literal or compound expression
+    // can never pun — `std/store:new(game, 37)` silently dropped the 37 while
+    // the transform waited on a `capacity:` label that never came (210_240,
+    // 210_241, 210_242 pin this for store:new, pump:create, and the
+    // after-a-named-arg position).
+    var all_machinery = fields.len > 0;
+    if (all_machinery) {
         for (fields) |field| {
             if (!isTransformMachineryType(field.type)) {
                 all_machinery = false;
                 break;
             }
         }
-        if (all_machinery) return;
     }
+    const free_form_callee = has_implicit_slot or all_machinery;
 
-    for (invocation.args) |arg| {
+    for (invocation.args, 0..) |arg, arg_index| {
         // Expression/Source args are already resolved to their parameter
         // (implicit `expr`/`source` binding included) — not raw puns to check.
         if (arg.expression_value != null or arg.source_value != null) continue;
 
-        // A bare argument on a callee that declares an implicit slot is absorbed
-        // by that slot whatever it is spelled.
-        if (has_implicit_slot and !arg.had_explicit_label) continue;
+        if (!arg.had_explicit_label and free_form_callee) {
+            // On a free-form callee a bare arg carries no parameter name to
+            // match — its spelling IS the contract. args[0] is the positional
+            // subject whatever it is spelled (on an implicit-slot callee the
+            // bound subject was already skipped above; on a machinery-only
+            // callee nothing binds it, the handler reads it by position).
+            // Every later bare arg must be a punnable identifier path —
+            // `std/list:get(xs, i)` reads `i` as `i: i`. A bare literal or
+            // compound expression can never pun: refuse it.
+            var resolved = arg_index == 0 or struct_literal.punnableName(arg.value) != null;
+            if (!resolved) {
+                // The parser's implicit-slot synthesis appends bare marker
+                // args already named to their declared field —
+                // `{name: "source", value: "<implicit_source>"}` for an
+                // unwritten block, `"<program_ast>"` for a Program param.
+                // Those are resolved bindings, not user pun candidates.
+                for (fields) |field| {
+                    if (std.mem.eql(u8, field.name, arg.name)) {
+                        resolved = true;
+                        break;
+                    }
+                }
+            }
+            if (!resolved) {
+                try reporter.addErrorWithHint(
+                    .PARSE006,
+                    location.line,
+                    location.column,
+                    "bare argument '{s}' does not name a parameter of '{s}' — an explicit label is required",
+                    .{ arg.value, event_display },
+                    "write it with an explicit label: '{s}: {s}'",
+                    .{ suggest_field, arg.value },
+                );
+            }
+            continue;
+        }
 
         // A callee that declares transform machinery reads `invocation.args` in
         // its own handler, so its labels are free-form data rather than

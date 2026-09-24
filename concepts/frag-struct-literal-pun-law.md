@@ -81,3 +81,34 @@ preserve the other. The substitution now expands the pun in place
 (`{ x, y }` → `{ x: 10, y: 20 }`) when its match sits in punned field
 position. Same law, new obligation: every pass that rewrites text upstream of
 the pun lowering owes the punned name its survival.
+
+## The call-arg tail was a second island (2026-09-24)
+
+The law lived on `{ }` blocks and on ordinary tor calls
+(`PARSE006: bare argument '37' does not name a parameter`) — but
+`checkBareArgPunning` exempted **implicit-slot and machinery-only callees**
+(`std/store:new`, `std/pump:create`, `std/list:*`, `std/indexes:*`, …)
+wholesale. Free-form callees read `invocation.args` in their handler
+bodies, so the exemption existed for name-matching — but it swallowed the
+punning law with it, and each transform free-styled over the loose list:
+`std/store:new(game, 37)` silently dropped the `37` (the capacity fell
+back to default, unreported), `std/pump:create(main, 5)` dropped the `5`,
+and an invented `std/channel(name: Proto, cap)` head *consumed* a
+positional `16` as capacity. Three transforms, three different answers to
+the same illegal input — convention instead of law.
+
+The exemption is now narrowed to **name-matching only**: `args[0]` stays
+the positional subject (the `expr: Expression` slot), every later bare
+arg must be a punnable identifier path (`struct_literal.punnableName`) or
+an explicit label — same PARSE006 diagnostic as a tor call. Found via
+`had_explicit_label`, which `flow_parser.convertArgPairs` was silently
+dropping on the interpreter path (along with `phantom_type`) — the
+label-ness signal erased before the consumers that need it.
+
+Pins: `210_240`/`210_241`/`210_242` (std heads refuse bare-literal tails,
+including after a legal named arg), `210_243` (tor-call control).
+The generalization that survives: **the pun law is a law about bare
+arguments, not about any particular arg-list shape** — every new arg
+surface inherits it only when the check sees the list, so islands are
+found by probing each exempted callee class, never by assuming the shared
+parser covers it.

@@ -365,6 +365,8 @@ fn convertArgPairs(allocator: std.mem.Allocator, pairs: []const lexer.ArgPair) P
         var arg = ast.Arg{
             .name = try allocator.dupe(u8, pair.name),
             .value = try allocator.dupe(u8, pair.value),
+            .had_explicit_label = pair.had_explicit_label,
+            .phantom_type = if (pair.phantom_type) |p| try allocator.dupe(u8, p) else null,
         };
         tryParseArgExpr(allocator, &arg);
         try args.append(allocator, arg);
@@ -1001,6 +1003,27 @@ test "parseFlow: invocation with args" {
             try std.testing.expectEqualStrings("3", f.inv().args[0].value);
             try std.testing.expectEqualStrings("b", f.inv().args[1].name);
             try std.testing.expectEqualStrings("4", f.inv().args[1].value);
+        },
+        .err => return error.UnexpectedError,
+    }
+}
+
+test "parseFlow: had_explicit_label survives arg conversion" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    // `f(xs, capacity: 64)` — arg0 a bare pun, arg1 an explicit label. The
+    // flag is the only thing distinguishing `capacity` from `capacity:
+    // capacity`; the interpreter path must not flatten both to bare.
+    const result = parseFlow(alloc, "f(xs, capacity: 64)");
+    switch (result) {
+        .flow => |f| {
+            const args = f.inv().args;
+            try std.testing.expectEqual(@as(usize, 2), args.len);
+            try std.testing.expect(args[0].had_explicit_label == false);
+            try std.testing.expect(args[1].had_explicit_label == true);
+            try std.testing.expectEqualStrings("capacity", args[1].name);
         },
         .err => return error.UnexpectedError,
     }
