@@ -26,6 +26,14 @@ pub fn koruExtensionOf(name: []const u8) ?[]const u8 {
     return null;
 }
 
+/// True iff `file_path` ends with the `.k` extension specifically, distinct
+/// from `.kz` / `.kjs` / `.kc` / `.kgpu` — `koruExtensionOf` matches
+/// longest-first, so `helper.kz` does not pattern-match as `.k`.
+pub fn isContractFile(file_path: []const u8) bool {
+    const ext = koruExtensionOf(file_path) orelse return false;
+    return std.mem.eql(u8, ext, ".k");
+}
+
 /// The host language a Koru file's bytes are written in, derived from its
 /// extension — returned as a variant-tag string in the SAME namespace as
 /// `--lang` / `proc.target` (`"zig"`, `"js"`, `"c"`, `"gpu"`).

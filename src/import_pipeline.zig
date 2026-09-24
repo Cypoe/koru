@@ -579,16 +579,34 @@ fn restampModule(item: *ast.Item, module_name: []const u8) void {
 /// `registerEvent`.
 ///
 /// Scans `items` for `event_decl`s, filling `seen` (joined tor path ->
-/// declaring file, borrowed from `location.file`; keys allocator-owned). A
-/// repeat in the SAME file refuses KORU202. A repeat across a facet boundary
-/// is not refused here: stem facets are different host views of one module,
-/// and a `pub tor` landing in an impl facet is KORU111's call downstream
-/// (140_007). The part caller keeps its own tag attribution either way.
+/// declaring site; the file slice is borrowed from `location.file`, keys are
+/// allocator-owned). A repeat in the SAME file refuses KORU202, and so does a
+/// repeat across a facet boundary — except the pair KORU111 already owns: a
+/// `pub tor` in an impl facet while the module has a `.k` contract
+/// (140_007). Private decls and no-`.k` modules fall outside that rule, so
+/// they refuse here. The part caller keeps its own tag attribution either
+/// way.
+const DeclSite = struct { file: []const u8, is_public: bool };
+
 fn scanEventDeclsOnce(
     allocator: std.mem.Allocator,
     items: []const ast.Item,
-    seen: *std.StringHashMap([]const u8),
+    seen: *std.StringHashMap(DeclSite),
 ) !void {
+    // Mirrors validate_contract_impl: a `.k` contract exists in the module
+    // when some event_decl was authored in a `.k` file.
+    var module_has_k = false;
+    for (items) |item| {
+        if (item == .event_decl and file_types.isContractFile(item.event_decl.location.file)) {
+            module_has_k = true;
+            break;
+        }
+    }
+    const pubInImpl = struct {
+        fn f(file: []const u8, is_public: bool) bool {
+            return is_public and !file_types.isContractFile(file);
+        }
+    }.f;
     for (items) |item| {
         if (item != .event_decl) continue;
         const ev = item.event_decl;
@@ -596,7 +614,8 @@ fn scanEventDeclsOnce(
         const gop = try seen.getOrPut(name);
         if (gop.found_existing) {
             defer allocator.free(name);
-            if (std.mem.eql(u8, gop.value_ptr.*, ev.location.file)) {
+            const first = gop.value_ptr.*;
+            if (std.mem.eql(u8, first.file, ev.location.file)) {
                 emitLoadError(
                     allocator,
                     ev.location.file,
@@ -609,16 +628,30 @@ fn scanEventDeclsOnce(
                     .{},
                 );
             }
-            continue;
+            // The pair KORU111 owns stays with it: the contract split rule
+            // fires downstream on the impl-facet `pub tor` itself.
+            if (module_has_k and
+                (pubInImpl(first.file, first.is_public) or pubInImpl(ev.location.file, ev.is_public))) continue;
+            emitLoadError(
+                allocator,
+                ev.location.file,
+                .KORU202,
+                ev.location.line,
+                ev.location.column,
+                "tor '{s}' already declared — redeclared by companion '{s}'",
+                .{ name, std.fs.path.basename(ev.location.file) },
+                "a module declares each tor once — keep each declaration in one place",
+                .{},
+            );
         }
-        gop.value_ptr.* = ev.location.file;
+        gop.value_ptr.* = .{ .file = ev.location.file, .is_public = ev.is_public };
     }
 }
 
 /// The single-file path: no companions and no parts, but the module's own
 /// declaration list still takes each name once.
 fn checkFileDeclsOnce(allocator: std.mem.Allocator, items: []const ast.Item) !void {
-    var seen = std.StringHashMap([]const u8).init(allocator);
+    var seen = std.StringHashMap(DeclSite).init(allocator);
     defer {
         var it = seen.keyIterator();
         while (it.next()) |k| allocator.free(k.*);
@@ -654,10 +687,12 @@ fn mergeParts(
 ) !bool {
     // One declaration per name per file, checked over the merged primary +
     // facet items before any part joins — runs even when the module declares
-    // no parts, so each file's own duplicates refuse. Facet-boundary repeats
-    // are KORU111's jurisdiction downstream (140_007); they still join `seen`
-    // so a part cannot redeclare what a facet declared.
-    var seen_events = std.StringHashMap([]const u8).init(allocator);
+    // no parts, so each file's own duplicates refuse. The facet-boundary
+    // repeat KORU111 owns (pub decl in an impl facet under a `.k` contract)
+    // stays downstream (140_007); every other cross-file repeat refuses here,
+    // and all decls join `seen` so a part cannot redeclare what a facet
+    // declared.
+    var seen_events = std.StringHashMap(DeclSite).init(allocator);
     defer {
         var it = seen_events.keyIterator();
         while (it.next()) |k| allocator.free(k.*);
@@ -752,7 +787,7 @@ fn mergeParts(
                             .{},
                         );
                     }
-                    gop.value_ptr.* = part_path;
+                    gop.value_ptr.* = .{ .file = part_path, .is_public = pitem.event_decl.is_public };
                 }
                 restampModule(@constCast(&pitem), module_name);
                 try merged_items.append(parse_allocator, pitem);

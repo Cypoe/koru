@@ -66,11 +66,6 @@ pub fn validate(items: []const ast.Item, reporter: *ErrorReporter) !void {
     }
 }
 
-/// True iff `file_path` ends with the `.k` extension specifically, distinct
-/// from `.kz` / `.kjs` / `.kc` / `.kgpu`. Uses the longest-first match in
-/// `file_types.koruExtensionOf` so `helper.kz` does not pattern-match as
-/// `.k`.
-fn isContractFile(file_path: []const u8) bool {
-    const ext = file_types.koruExtensionOf(file_path) orelse return false;
-    return std.mem.eql(u8, ext, ".k");
-}
+/// True iff `file_path` ends with the `.k` extension specifically — the
+/// canonical predicate lives in `file_types.isContractFile`.
+const isContractFile = file_types.isContractFile;

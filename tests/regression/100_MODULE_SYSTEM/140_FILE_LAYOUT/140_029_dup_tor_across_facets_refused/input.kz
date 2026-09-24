@@ -1,0 +1,11 @@
+// PIN: a module declares each tor once across facet companions too —
+// 140_024 covers the part boundary, 210_262 the same file. A `.kz`/`.kjs`
+// facet pair repeating a name silently shadowed (registry dedup), and with
+// matching signatures emitted two `greet_event` structs — a Zig duplicate-
+// member error no caret could map back. KORU111 does not cover it: no `.k`
+// contract exists. The caret lands on the redeclaring companion decl.
+
+~import std/io
+~import app/helper
+
+~app/helper:greet(name: "World"): g |> std/io:print.ln("{{ g:s }}")
