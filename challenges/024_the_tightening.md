@@ -204,7 +204,9 @@ the wall says (split into `~part` siblings), or stop and report.
 
 - 1–3 tightenings, each a commit: red-at-HEAD pin (with what the compiler did
   instead, quoted), fix, legal sibling green, controls listed with their
-  results.
+  results. The red-at-HEAD evidence goes in your report and the commit body.
+  The test's header comment states only what the test pins, never what the
+  compiler used to do (`CLAUDE.md`, "Test comments").
 - For each: its rung on the ladder, the ground that licenses the refusal, both
   readings.
 - For each: **which existing refusal it is the missing sibling of**, or why it
