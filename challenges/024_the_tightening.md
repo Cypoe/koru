@@ -150,9 +150,11 @@ you have to. Replays 1 and 4 both wrote a hand-rolled comma/colon/`=` scanner,
 and both were sent back.
 
 ⛔ **Do not game a wall.** Packing two statements onto one line to stay under a
-line baseline, rewording prose to slip past a judge, or exempting the case a
-check broke by its text shape all make the wall report green without being
-right. Do what the wall says (split into `~part` siblings), or stop and report.
+line baseline, rewording to get past a judge without fixing what it flagged,
+or exempting the case a check broke by its text shape all make the wall
+report green without being right. Fixing what a judge flagged (a construct
+named by the wrong word, a silent `catch`) is compliance, not gaming. Do what
+the wall says (split into `~part` siblings), or stop and report.
 
 ## Ground yourself FIRST
 
