@@ -142,6 +142,18 @@ you may land a refusal.
 passing test uses. If you cannot write the program without a guess, it is not a
 repro.
 
+⛔ **Do not write a splitter.** If your fix needs to read text the compiler
+holds as a string (a record type, a field list, a default, an argument), the
+code that already parses that text is where the fix goes: `struct_literal`,
+`parseShape`, `expression_parser`. Extract a shared pure function from it if
+you have to. Replays 1 and 4 both wrote a hand-rolled comma/colon/`=` scanner,
+and both were sent back.
+
+⛔ **Do not game a wall.** Packing two statements onto one line to stay under a
+line baseline, rewording prose to slip past a judge, or exempting the case a
+check broke by its text shape all make the wall report green without being
+right. Do what the wall says (split into `~part` siblings), or stop and report.
+
 ## Ground yourself FIRST
 
 - Load the `koru-toolchain` skill. Compile before you theorize.
