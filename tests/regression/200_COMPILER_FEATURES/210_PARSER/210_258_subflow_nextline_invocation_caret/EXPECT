@@ -1,0 +1,4 @@
+BACKEND_COMPILE_ERROR
+CONTAINS error[KORU162]
+CONTAINS requires an input argument
+ERROR_AT 11
