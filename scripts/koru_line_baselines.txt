@@ -118,7 +118,8 @@ koru_std/refine.fold.kz	216
 koru_std/refine.k	78
 koru_std/refine.kz	417
 koru_std/refine.terminal.kz	85
-koru_std/regex.kz	875
+koru_std/regex.kz	471
+koru_std/regex.scan.kz	421
 koru_std/rings.kz	225
 koru_std/rules.kz	691
 koru_std/runtime.affordances.kz	83

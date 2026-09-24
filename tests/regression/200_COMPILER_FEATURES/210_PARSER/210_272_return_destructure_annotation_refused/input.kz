@@ -1,0 +1,12 @@
+// PINS: the bind-position twin of 210_271 — an annotation on a head
+// return destructure (`~f(): { [row]h }`) has no consumer either and
+// refuses KORU175 on the call line rather than being dropped by the
+// emitted per-field consts.
+~import std/io
+
+~tor make2 { id: i64 } -> { h: i64, g: i64 }
+~proc make2|zig {
+    return .{ .h = 1, .g = 2 };
+}
+
+~make2(id: 1): { [row]h } |> std/io:print.ln("h = {{ h:d }}")

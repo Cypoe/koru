@@ -521,6 +521,23 @@ query is the thing that already drives codegen. And every annotation is
 **honored or refused**, never silently ignored, under the same law as declared
 reductions.
 
+**The law now has teeth outside the store (2026-09-25).** The ruling was
+written for the query arm, but the AST contract
+(`ast.DestructureField.annotations`) makes it general: a destructure entry is
+a request and EVERY consumer must honor or refuse its annotations. Measured
+at the time, only the store kept it — `{ [row]name }` on a plain branch arm,
+`~f(): { [row]h }` at bind position, and `| `(?<a>..)` { [row]a }` on a
+regex match arm all compiled clean, the annotation dropped where the emitter
+never looks. The enforcement split that fell out of that measurement: the
+generic emit path shares one wall (KORU175 in the flow checker's
+deferred-binding-gated destructure walk — anything annotated that reaches it
+unconsumed is refused), while each transform consumer owns its own refusal
+(regex's match/scan arms answer KORU162, the way the query arm answers
+KORU161). Pins: `210_271`, `210_272`, `640_017`. Still unguarded on
+measurement: `std/parser`'s rule-arm destructures and
+`supervisor.fold`'s — consumers that read `destructure` and never look at
+`annotations`.
+
 ### Why the braces are legal again
 
 Three separate things had collapsed under one word, "retired", and only two of

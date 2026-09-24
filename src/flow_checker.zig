@@ -225,6 +225,7 @@ pub const FlowChecker = struct {
             if (hn == .invocation and hn.invocation.return_destructure.len > 0) {
                 const skip_check = self.mode == .frontend and self.isDeferredBindingInvocation(&flow.body);
                 if (!skip_check) {
+                    try self.refuseIgnoredDestructureAnnotations(&flow.body, hn.invocation.return_destructure);
                     try self.validateReturnDestructureUsage(&flow.body, hn.invocation.return_destructure);
                 }
             }
@@ -940,6 +941,7 @@ pub const FlowChecker = struct {
         if (cont.destructure.len > 0) {
             const skip_check = self.mode == .frontend and (root_transform or self.isDeferredBindingInvocation(cont));
             if (!skip_check) {
+                try self.refuseIgnoredDestructureAnnotations(cont, cont.destructure);
                 try self.validateDestructureUsage(cont, cont.destructure);
             }
         }
@@ -952,6 +954,7 @@ pub const FlowChecker = struct {
             if (bn == .invocation and bn.invocation.return_destructure.len > 0) {
                 const skip_check = self.mode == .frontend and self.isDeferredBindingInvocation(cont);
                 if (!skip_check) {
+                    try self.refuseIgnoredDestructureAnnotations(cont, bn.invocation.return_destructure);
                     try self.validateReturnDestructureUsage(cont, bn.invocation.return_destructure);
                 }
             }
@@ -1124,6 +1127,30 @@ pub const FlowChecker = struct {
             return annotation_parser.hasPart(event_decl.annotations, "transform");
         }
         return false;
+    }
+
+    /// KORU175 — a destructure entry's prefix annotation is a REQUEST
+    /// (`ast.DestructureField.annotations`), and every consumer must honor or
+    /// refuse it, never silently ignore it. Reaching this check means no
+    /// transform claimed the subtree (the deferred-binding skip above is what
+    /// lets store's query arm own `[row]`/`[ordinal]`/`[id]`); the generic
+    /// emit path implements no annotation, so any that survive here are
+    /// refused rather than dropped. Nested sub-shapes recurse.
+    fn refuseIgnoredDestructureAnnotations(self: *FlowChecker, cont: *const ast.Continuation, fields: []const ast.DestructureField) anyerror!void {
+        for (fields) |f| {
+            if (f.annotations.len > 0) {
+                try self.reporter.addErrorWithHint(
+                    .KORU175,
+                    cont.location.line,
+                    cont.location.column,
+                    "destructure annotation '[{s}]' on '{s}' has no consumer here — annotations are requests a transform implements; nothing on this path reads them",
+                    .{ f.annotations[0], f.name },
+                    "drop the annotation, or put the destructure on a consumer that implements it (std/store's query arm owns [row]/[ordinal]/[id])",
+                    .{},
+                );
+            }
+            if (f.sub.len > 0) try self.refuseIgnoredDestructureAnnotations(cont, f.sub);
+        }
     }
 
     /// KORU100 for destructured fields: every named leaf must be used in

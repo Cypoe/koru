@@ -1,0 +1,6 @@
+MUST_ERROR
+CONTAINS error[KORU175]
+CONTAINS '[row]'
+CONTAINS 'name'
+ERROR_AT 19
+NOT_CONTAINS output_emitted.zig

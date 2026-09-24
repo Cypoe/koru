@@ -1,0 +1,20 @@
+// PINS: a destructure entry's prefix annotation is a request, and every
+// consumer must honor or refuse it — never silently ignore it. The
+// generic emit path implements no annotation, so `{ [row]name }` on a
+// plain branch refuses KORU175 at the arm line. The same annotation is
+// honored where a consumer implements it: std/store's query arm owns
+// [row]/[ordinal]/[id] (690_069).
+~import std/io
+
+~tor fetch { id: i64 }
+| found { name: string, age: i64 }
+| missing
+
+~proc fetch|zig {
+    if (id == 1) return .{ .found = .{ .name = "lars", .age = 44 } };
+    return .{ .missing = .{} };
+}
+
+~fetch(id: 1)
+| found { [row]name } |> std/io:print.ln("{{ name:s }}")
+| missing |> std/io:print.ln("nope")
