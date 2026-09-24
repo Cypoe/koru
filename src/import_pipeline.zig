@@ -572,6 +572,59 @@ fn restampModule(item: *ast.Item, module_name: []const u8) void {
     }
 }
 
+/// A module declares each tor once — within one file, and across parts
+/// (KORU202). The type registry early-returns on a repeat name, which is what
+/// makes diamond imports idempotent — and what would silently shadow a
+/// redeclaration, so the check lives here on the item list, not in
+/// `registerEvent`.
+///
+/// Scans `items` for `event_decl`s, filling `seen` (joined tor path ->
+/// declaring file, borrowed from `location.file`; keys allocator-owned). A
+/// repeat in the SAME file refuses KORU202. A repeat across a facet boundary
+/// is not refused here: stem facets are different host views of one module,
+/// and a `pub tor` landing in an impl facet is KORU111's call downstream
+/// (140_007). The part caller keeps its own tag attribution either way.
+fn scanEventDeclsOnce(
+    allocator: std.mem.Allocator,
+    items: []const ast.Item,
+    seen: *std.StringHashMap([]const u8),
+) !void {
+    for (items) |item| {
+        if (item != .event_decl) continue;
+        const ev = item.event_decl;
+        const name = try joinEventPath(allocator, ev.path.segments);
+        if (seen.get(name)) |first_file| {
+            if (std.mem.eql(u8, first_file, ev.location.file)) {
+                emitLoadError(
+                    allocator,
+                    ev.location.file,
+                    .KORU202,
+                    ev.location.line,
+                    ev.location.column,
+                    "tor '{s}' already declared — redeclared in this file",
+                    .{name},
+                    "a file declares each tor once — rename or drop one",
+                    .{},
+                );
+            }
+            continue;
+        }
+        try seen.put(name, ev.location.file);
+    }
+}
+
+/// The single-file path: no companions and no parts, but the module's own
+/// declaration list still takes each name once.
+fn checkFileDeclsOnce(allocator: std.mem.Allocator, items: []const ast.Item) !void {
+    var seen = std.StringHashMap([]const u8).init(allocator);
+    defer {
+        var it = seen.keyIterator();
+        while (it.next()) |k| allocator.free(k.*);
+        seen.deinit();
+    }
+    try scanEventDeclsOnce(allocator, items, &seen);
+}
+
 /// Merge the files a module's `part` declarations name into the primary's
 /// program. Parts are flat (a part file may not declare parts — KORU204),
 /// discovery is loud (a tag with no file is KORU201; a tag naming a directory
@@ -597,27 +650,25 @@ fn mergeParts(
     compiler_flags: []const []const u8,
     report_gates: bool,
 ) !bool {
+    // One declaration per name per file, checked over the merged primary +
+    // facet items before any part joins — runs even when the module declares
+    // no parts, so each file's own duplicates refuse. Facet-boundary repeats
+    // are KORU111's jurisdiction downstream (140_007); they still join `seen`
+    // so a part cannot redeclare what a facet declared.
+    var seen_events = std.StringHashMap([]const u8).init(allocator);
+    defer {
+        var it = seen_events.keyIterator();
+        while (it.next()) |k| allocator.free(k.*);
+        seen_events.deinit();
+    }
+    try scanEventDeclsOnce(allocator, merged_items.items, &seen_events);
+
     if (parts.len == 0) return false;
 
     const primary_basename = std.fs.path.basename(primary_path);
     const primary_ext = file_types.koruExtensionOf(primary_basename) orelse return false;
     const stem = primary_basename[0 .. primary_basename.len - primary_ext.len];
     const dir = std.fs.path.dirname(primary_path) orelse ".";
-
-    // Top-level event names already in the module (primary + facet
-    // companions + earlier parts).
-    var seen_events = std.StringHashMap(void).init(allocator);
-    defer {
-        var it = seen_events.keyIterator();
-        while (it.next()) |k| allocator.free(k.*);
-        seen_events.deinit();
-    }
-    for (merged_items.items) |item| {
-        if (item == .event_decl) {
-            const name = try joinEventPath(allocator, item.event_decl.path.segments);
-            try seen_events.put(name, {});
-        }
-    }
 
     for (parts) |part_decl| {
         const tag = part_decl.tag;
@@ -697,7 +748,7 @@ fn mergeParts(
                             .{},
                         );
                     }
-                    try seen_events.put(name, {});
+                    try seen_events.put(name, part_path);
                 }
                 restampModule(@constCast(&pitem), module_name);
                 try merged_items.append(parse_allocator, pitem);
@@ -731,6 +782,7 @@ fn loadFileWithCompanions(
     const primary = try loadKoruFile(allocator, parse_allocator, primary_path, compiler_flags, report_gates);
 
     if (companions.len == 0 and primary.source_file.parts.len == 0) {
+        try checkFileDeclsOnce(allocator, primary.source_file.items);
         return primary;
     }
 
@@ -810,7 +862,10 @@ pub fn mergeEntryCompanions(
         for (companions) |c| allocator.free(c);
         allocator.free(companions);
     }
-    if (companions.len == 0 and primary.parts.len == 0) return primary;
+    if (companions.len == 0 and primary.parts.len == 0) {
+        try checkFileDeclsOnce(allocator, primary.items);
+        return primary;
+    }
 
     log.debug("  Entry companion merge: {} sibling(s) for {s}\n", .{ companions.len, primary_path });
 
