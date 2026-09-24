@@ -1,0 +1,23 @@
+// A `@label(name: v)` arg must name a field of the label's anchored event —
+// the jump rebinds `<label>_<name>` state vars seeded from the anchor's
+// declared inputs. `badname` names no field of `counter`: the emitter wrote
+// `loop_badname = c`, an identifier nobody declared, and the backend died on
+// it (rung 3). The wall exists (KORU043, 244) but continuation labels on a
+// void chain were never registered, so the jump's name check never ran.
+const std = @import("std");
+
+~tor counter { n: i32 }
+| next i32
+| done i32
+
+~proc counter|zig {
+    if (n < 5) { return .{ .next = n + 1 }; }
+    return .{ .done = n };
+}
+
+~tor start {}
+~proc start|zig {}
+
+~start() |> #loop counter(n: 1)
+| next c |> @loop(badname: c)
+| done |> _

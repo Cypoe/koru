@@ -1,0 +1,21 @@
+// Bare twin of 210_267: `@loop(c)` puns to `c`, which names no field of the
+// anchored `counter` — the emitter wrote `loop_c = c` and the backend died on
+// the undeclared identifier (rung 3). Same KORU043 wall, same void-chain gap:
+// a bare jump arg must pun to a field of the label's anchored event.
+const std = @import("std");
+
+~tor counter { n: i32 }
+| next i32
+| done i32
+
+~proc counter|zig {
+    if (n < 5) { return .{ .next = n + 1 }; }
+    return .{ .done = n };
+}
+
+~tor start {}
+~proc start|zig {}
+
+~start() |> #loop counter(n: 1)
+| next c |> @loop(c)
+| done |> _

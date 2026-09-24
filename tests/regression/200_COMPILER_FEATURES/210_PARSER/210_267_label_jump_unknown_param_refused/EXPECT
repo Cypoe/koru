@@ -1,0 +1,6 @@
+MUST_ERROR
+CONTAINS error[KORU043]
+CONTAINS 'badname'
+CONTAINS 'counter'
+ERROR_AT 22
+NOT_CONTAINS output_emitted.zig

@@ -2125,6 +2125,14 @@ pub const PhantomSemanticChecker = struct {
 
             // Still validate the step if present
             if (cont.node) |*step| {
+                // A `#label` decl on a void chain is the same declaration the
+                // branch path registers — without this the label never reaches
+                // `label_map` and a later `@label` jump skips
+                // `validateLabelArgNames` entirely (`~start() |> #loop ...`
+                // then `| next c |> @loop(badname: c)` died in backend Zig).
+                if (!try self.registerContinuationLabel(step, flow_module, event_map, location)) {
+                    return false;
+                }
                 const step_valid = try self.validateStep(step, &void_context, event_map, flow_module, location);
                 if (!step_valid) {
                     return false;
@@ -2243,6 +2251,9 @@ pub const PhantomSemanticChecker = struct {
 
             // Validate the step if present
             if (cont.node) |*step| {
+                if (!try self.registerContinuationLabel(step, flow_module, event_map, location)) {
+                    return false;
+                }
                 const step_valid = try self.validateStep(step, &void_chain_context, event_map, flow_module, location);
                 if (!step_valid) {
                     return false;
@@ -2490,29 +2501,8 @@ pub const PhantomSemanticChecker = struct {
         // Use flow_module for name resolution (where the flow is defined)
         if (cont.node) |*step| {
             // If this is a label declaration, record it
-            switch (step.*) {
-                .label_with_invocation => |lwi| {
-                    if (lwi.is_declaration) {
-                        // Look up the event being invoked to use its signature for the label
-                        const inv_event_name = try self.pathToString(lwi.invocation.path);
-                        defer self.allocator.free(inv_event_name);
-
-                        const inv_module_name = lwi.invocation.path.module_qualifier orelse flow_module;
-                        const qualified_name = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ inv_module_name, inv_event_name });
-                        defer self.allocator.free(qualified_name);
-
-                        if (event_map.get(qualified_name)) |inv_info| {
-                            log.debug("[PHANTOM-FLOW]   Recording label '#{s}' mapping to event '{s}'\n", .{ lwi.label, qualified_name });
-                            try self.label_map.put(lwi.label, .{ .decl = inv_info.decl, .module = inv_module_name });
-                            if (!try self.validateLabelArgNames(lwi.invocation.args, inv_info.decl, location, "#label call")) {
-                                has_errors = true;
-                            }
-                        } else {
-                            log.debug("[PHANTOM-FLOW]   WARNING: Label '#{s}' points to unknown tor '{s}'\n", .{ lwi.label, qualified_name });
-                        }
-                    }
-                },
-                else => {},
+            if (!try self.registerContinuationLabel(step, flow_module, event_map, location)) {
+                has_errors = true;
             }
 
             const step_valid = try self.validateStep(step, &context, event_map, flow_module, location);
@@ -3012,6 +3002,9 @@ pub const PhantomSemanticChecker = struct {
         if (cont.branch.len == 0) {
             // Validate the step if present
             if (cont.node) |*step| {
+                if (!try self.registerContinuationLabel(step, flow_module orelse "unknown", event_map, location)) {
+                    has_errors = true;
+                }
                 const step_valid = try self.validateStep(step, &context, event_map, flow_module, location);
                 if (!step_valid) {
                     has_errors = true;
@@ -3066,6 +3059,42 @@ pub const PhantomSemanticChecker = struct {
         }
 
         return !has_errors;
+    }
+
+    /// A `#label` on a continuation step is a declaration wherever it sits —
+    /// branch continuation, void-event chain, or empty-branch chain. Register
+    /// it against the invoked event so a later `@label` jump resolves in
+    /// `label_map`, and name-check the anchor call's args against that event.
+    /// Returns false when the anchor's args offend (the error is reported here).
+    fn registerContinuationLabel(
+        self: *PhantomSemanticChecker,
+        step: *const ast.Step,
+        flow_module: []const u8,
+        event_map: *std.StringHashMap(EventInfo),
+        location: errors.SourceLocation,
+    ) !bool {
+        switch (step.*) {
+            .label_with_invocation => |lwi| {
+                if (!lwi.is_declaration) return true;
+                // Look up the event being invoked to use its signature for the label
+                const inv_event_name = try self.pathToString(lwi.invocation.path);
+                defer self.allocator.free(inv_event_name);
+
+                const inv_module_name = lwi.invocation.path.module_qualifier orelse flow_module;
+                const qualified_name = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ inv_module_name, inv_event_name });
+                defer self.allocator.free(qualified_name);
+
+                if (event_map.get(qualified_name)) |inv_info| {
+                    log.debug("[PHANTOM-FLOW]   Recording label '#{s}' mapping to event '{s}'\n", .{ lwi.label, qualified_name });
+                    try self.label_map.put(lwi.label, .{ .decl = inv_info.decl, .module = inv_module_name });
+                    return try self.validateLabelArgNames(lwi.invocation.args, inv_info.decl, location, "#label call");
+                } else {
+                    log.debug("[PHANTOM-FLOW]   WARNING: Label '#{s}' points to unknown tor '{s}'\n", .{ lwi.label, qualified_name });
+                    return true;
+                }
+            },
+            else => return true,
+        }
     }
 
     fn validateStep(self: *PhantomSemanticChecker, step: *const ast.Step, context: *BindingContext, event_map: *std.StringHashMap(EventInfo), current_module: ?[]const u8, location: errors.SourceLocation) !bool {

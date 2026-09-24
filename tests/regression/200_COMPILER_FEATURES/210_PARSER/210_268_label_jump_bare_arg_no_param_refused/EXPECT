@@ -1,0 +1,6 @@
+MUST_ERROR
+CONTAINS error[KORU043]
+CONTAINS 'c'
+CONTAINS 'counter'
+ERROR_AT 20
+NOT_CONTAINS output_emitted.zig

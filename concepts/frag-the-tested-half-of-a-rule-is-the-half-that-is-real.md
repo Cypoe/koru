@@ -164,3 +164,25 @@ a new medium. The rule has its tested half now: `check:publication` refuses a
 staged title whose lead does not equal a declared `subject:` field, on the
 mechanical tier — no override forgives it. Prose describes; only the
 mechanism decides — in a skill file exactly as in a test header.
+
+## 2026-09-24 — the wall was real; one walker path never reached it
+
+KORU043's mask-key guard was itself the tested-half story, one level down.
+The check lives in `validateLabelArgNames`, gated on `label_map.get` — and
+`label_map` is fed by registration sites, one per walker path that can hold
+a `#label` declaration. Flow-head labels registered; branch-continuation
+labels registered; but a label on a *void chain* (`~start() |> #loop`,
+`start` a void event — the common shape, 204's own) took a walker path that
+processed the node for terminal-leak checks only and returned before the
+registration block. The label never entered the map, so `@loop(badname: c)`
+resolved to nothing and the jump's name check was silently skipped — the
+emitter wrote `loop_badname` and the backend died on it, exactly the rung-3
+failure KORU043 exists to prevent, on the exact surface the rule covered.
+
+A check behind a side-table is only as real as the registrations that feed
+it: the wall existed, was tested, and was unreachable from a whole position.
+The widening registers the label (and runs the jump's step validation) on
+every walker path a continuation node can take — one check, three paths —
+rather than adding a second name-match elsewhere. Pins: `210_267`,
+`210_268`. The counting habit extends: when a guard sits behind a registry,
+enumerate the registry's writers, not just the guard's callers.
