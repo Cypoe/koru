@@ -2,3 +2,4 @@ MUST_ERROR
 CONTAINS no traversal
 CONTAINS meaningless here
 CONTAINS [ordinal]
+ERROR_AT 16
