@@ -5757,39 +5757,79 @@ fn checkFieldsBindOnce(
     }
 }
 
-/// `-> { x: i64, x: i64 }` stores the record as a TYPE STRING, not a Shape —
-/// the dup only surfaces when the emitter pastes it into a Zig struct.
-/// Split the braces like a field list and apply the same one-name rule;
-/// recurse into a field whose own type is a record.
-/// (main.zig has no lexer dep — the split below is std-only.)
-fn checkRecordTypeBindOnce(
-    type_str: []const u8,
+/// The name a field-list segment binds: the text before its first depth-zero
+/// ':' for `name: value` entries; for a bare entry the pun — the last segment
+/// of a bare identifier path (`x` binds x, `acc.sum` binds sum). Anything else
+/// names nothing (returns null).
+fn fieldEntryName(segment: []const u8) ?[]const u8 {
+    var depth: i32 = 0;
+    var j: usize = 0;
+    while (j < segment.len) : (j += 1) {
+        const s = segment[j];
+        if (s == '{' or s == '(' or s == '[' or s == '<') depth += 1;
+        if (s == '}' or s == ')' or s == ']' or s == '>') depth -= 1;
+        if (s == ':' and depth == 0) break;
+    }
+    if (j < segment.len) {
+        const name = std.mem.trim(u8, segment[0..j], " \t\r\n");
+        return if (name.len > 0) name else null;
+    }
+    // Bare entry: punnable iff it's a bare identifier path.
+    if (segment.len == 0 or (segment[0] >= '0' and segment[0] <= '9')) return null;
+    for (segment) |c| {
+        const ok = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or
+            (c >= '0' and c <= '9') or c == '_' or c == '-' or c == '.';
+        if (!ok) return null;
+    }
+    const dot = std.mem.lastIndexOfScalar(u8, segment, '.');
+    return if (dot) |d| segment[d + 1 ..] else segment;
+}
+
+/// One depth-aware comma+colon split shared by every `{...}` text the compiler
+/// carries as a string: record TYPES (`-> { x: i64, x: i64 }`), record VALUES
+/// (`-> { x: a, x: a }`, `=> done { x: { y: 1, y: 2 } }`), and Source-arg field
+/// lists (`captured { p: st.m, p: st.m + 1 }` reaches the AST as the bare text
+/// `p: st.m, p: st.m + 1`). All are the same binding list — each name once.
+///
+/// `strict` is for texts that might not be field lists at all (a Source arg
+/// could carry host code): bail out entirely unless every segment names a
+/// field. With braces present (`{...}`) the text is a record by shape, so
+/// nameless segments are simply skipped — the pun law owns their refusal.
+fn checkRecordTextBindOnce(
+    text: []const u8,
     owner: []const u8,
     reporter: *ErrorReporter,
     location: errors.SourceLocation,
     allocator: std.mem.Allocator,
+    strict: bool,
 ) std.mem.Allocator.Error!void {
-    var trimmed = std.mem.trim(u8, type_str, " \t\r\n");
-    // Peel prefixes that can precede the record: ?{..}, *{..}, []{..}.
+    var trimmed = std.mem.trim(u8, text, " \t\r\n");
+    var braced = false;
+    // Peel prefixes that can precede a record type: ?{..}, *{..}, []{..}.
     while (trimmed.len > 0 and (trimmed[0] == '?' or trimmed[0] == '*')) trimmed = trimmed[1..];
     while (std.mem.startsWith(u8, trimmed, "[]")) trimmed = trimmed[2..];
-    if (trimmed.len < 2 or trimmed[0] != '{' or trimmed[trimmed.len - 1] != '}') return;
-    const inner = std.mem.trim(u8, trimmed[1 .. trimmed.len - 1], " \t\r\n");
-    if (inner.len == 0) return;
+    if (trimmed.len >= 2 and trimmed[0] == '{' and trimmed[trimmed.len - 1] == '}') {
+        trimmed = std.mem.trim(u8, trimmed[1 .. trimmed.len - 1], " \t\r\n");
+        braced = true;
+    }
+    if (trimmed.len == 0) return;
+    if (strict and !braced) {
+        // Only fire on a text that IS a field list: >=2 comma-separated
+        // segments and every one names a field.
+    } else if (!braced) return;
 
-    // Split on commas at depth zero, then take each segment's name — the text
-    // before its first depth-zero ':'. Segments with no ':' name nothing.
     var names = try std.ArrayList([]const u8).initCapacity(allocator, 8);
     defer names.deinit(allocator);
     var depth: i32 = 0;
     var in_string = false;
     var start: usize = 0;
+    var segments: usize = 0;
     var i: usize = 0;
-    while (i <= inner.len) : (i += 1) {
-        const at_end = i == inner.len;
-        const c = if (at_end) ',' else inner[i];
+    while (i <= trimmed.len) : (i += 1) {
+        const at_end = i == trimmed.len;
+        const c = if (at_end) ',' else trimmed[i];
         if (in_string) {
-            if (c == '"' and inner[i - 1] != '\\') in_string = false;
+            if (c == '"' and trimmed[i - 1] != '\\') in_string = false;
             continue;
         }
         if (c == '"') {
@@ -5799,24 +5839,33 @@ fn checkRecordTypeBindOnce(
         if (c == '{' or c == '(' or c == '[' or c == '<') depth += 1;
         if (c == '}' or c == ')' or c == ']' or c == '>') depth -= 1;
         if (c != ',' or depth != 0) continue;
-        const segment = std.mem.trim(u8, inner[start..i], " \t\r\n");
+        const segment = std.mem.trim(u8, trimmed[start..i], " \t\r\n");
         start = i + 1;
-        // Field name = text before the first depth-zero ':'.
-        var d2: i32 = 0;
-        var j: usize = 0;
-        while (j < segment.len) : (j += 1) {
-            const s = segment[j];
-            if (s == '{' or s == '(' or s == '[' or s == '<') d2 += 1;
-            if (s == '}' or s == ')' or s == ']' or s == '>') d2 -= 1;
-            if (s == ':' and d2 == 0) break;
+        if (segment.len == 0) {
+            if (strict) return;
+            continue;
         }
-        if (j >= segment.len) continue;
-        const name = std.mem.trim(u8, segment[0..j], " \t\r\n");
-        if (name.len == 0) continue;
-        try names.append(allocator, name);
-        // Recurse into a record-typed field.
-        try checkRecordTypeBindOnce(std.mem.trim(u8, segment[j + 1 ..], " \t\r\n"), owner, reporter, location, allocator);
+        segments += 1;
+        const name = fieldEntryName(segment);
+        if (strict and name == null) return;
+        if (name) |n| try names.append(allocator, n);
+        // Recurse into a nested record in the value/type position.
+        const colon = blk: {
+            var d2: i32 = 0;
+            var k: usize = 0;
+            while (k < segment.len) : (k += 1) {
+                const s = segment[k];
+                if (s == '{' or s == '(' or s == '[' or s == '<') d2 += 1;
+                if (s == '}' or s == ')' or s == ']' or s == '>') d2 -= 1;
+                if (s == ':' and d2 == 0) break;
+            }
+            break :blk if (k < segment.len) k else segment.len;
+        };
+        if (colon < segment.len) {
+            try checkRecordTextBindOnce(segment[colon + 1 ..], owner, reporter, location, allocator, false);
+        }
     }
+    if (strict and segments < 2) return;
     for (names.items, 0..) |name, n| {
         for (names.items[0..n]) |earlier| {
             if (!std.mem.eql(u8, earlier, name)) continue;
@@ -5890,14 +5939,14 @@ fn enforceUniqueBindingNamesInItems(
                 defer allocator.free(owner);
                 try checkFieldsBindOnce(ev.input.fields, owner, reporter, loc);
                 if (ev.return_type) |rt| {
-                    try checkRecordTypeBindOnce(rt, owner, reporter, loc, allocator);
+                    try checkRecordTextBindOnce(rt, owner, reporter, loc, allocator, false);
                 }
                 for (ev.branches) |branch| {
                     const branch_owner = try std.fmt.allocPrint(allocator, "branch '{s}'", .{branch.name});
                     defer allocator.free(branch_owner);
                     try checkFieldsBindOnce(branch.payload.fields, branch_owner, reporter, loc);
                     if (branch.resume_type) |rt| {
-                        try checkRecordTypeBindOnce(rt, branch_owner, reporter, loc, allocator);
+                        try checkRecordTextBindOnce(rt, branch_owner, reporter, loc, allocator, false);
                     }
                 }
             },
@@ -5907,10 +5956,31 @@ fn enforceUniqueBindingNamesInItems(
                 var loc = impl.location;
                 if (loc.line > 1) loc.line -= 1;
                 try checkFieldsBindOnce(impl.value.fields, "the branch constructor", reporter, loc);
+                if (impl.value.plain_value) |pv| {
+                    try checkRecordTextBindOnce(pv, "the bare return", reporter, loc, allocator, true);
+                }
+                for (impl.value.fields) |field| {
+                    if (field.expression_str) |es| {
+                        try checkRecordTextBindOnce(es, "the branch constructor", reporter, loc, allocator, false);
+                    }
+                }
             },
             .flow => |flow| {
                 for (flow.body.continuations) |cont| {
                     try enforceUniqueBindingNamesInContinuation(&cont, reporter, allocator);
+                }
+                {
+                    const callee = flow.inv().path.segments[flow.inv().path.segments.len - 1];
+                    const call_owner = try std.fmt.allocPrint(allocator, "'{s}'", .{callee});
+                    defer allocator.free(call_owner);
+                    for (flow.inv().args) |arg| {
+                        try checkRecordTextBindOnce(arg.value, call_owner, reporter, flow.location, allocator, true);
+                        if (arg.source_value) |sv| {
+                            if (!std.mem.eql(u8, sv.text, arg.value)) {
+                                try checkRecordTextBindOnce(sv.text, call_owner, reporter, flow.location, allocator, true);
+                            }
+                        }
+                    }
                 }
             },
             .event_tap => |tap| {
@@ -5953,9 +6023,44 @@ fn enforceUniqueBindingNamesInNode(
     switch (node.*) {
         .branch_constructor => |bc| {
             try checkFieldsBindOnce(bc.fields, "the branch constructor", reporter, location);
+            if (bc.plain_value) |pv| {
+                try checkRecordTextBindOnce(pv, "the bare return", reporter, location, allocator, true);
+            }
+            for (bc.fields) |field| {
+                if (field.expression_str) |es| {
+                    try checkRecordTextBindOnce(es, "the branch constructor", reporter, location, allocator, false);
+                }
+            }
+        },
+        .invocation => |*inv| {
+            const call_owner = try std.fmt.allocPrint(allocator, "'{s}'", .{inv.path.segments[inv.path.segments.len - 1]});
+            defer allocator.free(call_owner);
+            for (inv.args) |arg| {
+                try checkRecordTextBindOnce(arg.value, call_owner, reporter, location, allocator, true);
+                if (arg.source_value) |sv| {
+                    if (!std.mem.eql(u8, sv.text, arg.value)) {
+                        try checkRecordTextBindOnce(sv.text, call_owner, reporter, location, allocator, true);
+                    }
+                }
+            }
+        },
+        .label_with_invocation => |*lwi| {
+            const call_owner = try std.fmt.allocPrint(allocator, "'{s}'", .{lwi.invocation.path.segments[lwi.invocation.path.segments.len - 1]});
+            defer allocator.free(call_owner);
+            for (lwi.invocation.args) |arg| {
+                try checkRecordTextBindOnce(arg.value, call_owner, reporter, location, allocator, true);
+                if (arg.source_value) |sv| {
+                    if (!std.mem.eql(u8, sv.text, arg.value)) {
+                        try checkRecordTextBindOnce(sv.text, call_owner, reporter, location, allocator, true);
+                    }
+                }
+            }
         },
         .label_jump => |lj| {
             try checkJumpArgsBindOnce(lj.args, lj.label, reporter, location);
+            for (lj.args) |arg| {
+                try checkRecordTextBindOnce(arg.value, "the jump args", reporter, location, allocator, true);
+            }
         },
         .conditional_block => |cb| {
             for (cb.nodes) |node_child| {

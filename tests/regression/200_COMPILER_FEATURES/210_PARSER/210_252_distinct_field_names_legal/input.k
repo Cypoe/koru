@@ -16,3 +16,8 @@ f(a: 1, b: 2)
 | fail |> std/io:print.ln("f")
 
 g(a: 3): r |> std/io:print.ln("{{ r.x:d }} {{ r.y:d }}")
+
+tor h { a: i64 } -> { a: i64, y: i64 }
+h -> { a, y: a * 2 }
+
+h(a: 4): r |> std/io:print.ln("{{ r.a:d }} {{ r.y:d }}")
