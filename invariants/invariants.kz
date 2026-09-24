@@ -45,6 +45,17 @@
     "rule": "Does this diff introduce a fallback — a degraded path a reader would mistake for the real surface working? A fallback is: a default value substituted for a failed fetch or computation, placeholder output standing where real content belongs, a swallowed error converted into a silent skip or empty result, or a second code path labeled 'for now', 'minimum', 'if X fails', or 'fallback'. Designed states are NOT fallbacks: an empty state that says it is empty, a documented default parameter, an idle pose, a named and tested degraded mode. Answer yes ONLY if the diff adds or keeps a substitute output that hides the real path's failure or absence."
 }
 
+// Syntax rulings, gated: a shipped spelling nobody ruled is the failure this
+// row exists for (ref(T) entered the stdlib on inherited vocabulary, caught
+// only when Lars asked — confession udue5gx). The concept being discussed in
+// a design note is not a ruling on its spelling; the gate asks about the
+// spelling specifically.
+~std/invariants:inferred {
+    "name": "surface-spellings-are-ruled",
+    "tags": ["git-gate"],
+    "rule": "Does this diff add recognition for a new user-facing spelling — a shape a user can write that the toolchain detects by pattern — with no recorded ruling? Spellings include: type-position forms matched in field or argument text (`ref(T)`, `?T`, `<:`), new `std/` tor or proc names, and marker conventions downstream code string-matches. A ruling is recorded: a commit message, a design doc's RULED line, or a concepts/ frag naming the spelling as decided. A concept being ranked or a semantics being discussed is NOT a ruling on its spelling. Flag when the diff teaches koru_std or src/ to recognize or lower a form no ruling names. Do NOT flag: internal `__koru_*` machinery, diagnostic message text, refactors of ruled spellings, or a spelling whose ruling is recorded in this same diff. Answer yes ONLY if the diff creates public surface whose spelling nobody ruled."
+}
+
 ~std/invariants:inferred {
     "name": "claim-stamps-stay-honest",
     "tags": ["git-gate"],

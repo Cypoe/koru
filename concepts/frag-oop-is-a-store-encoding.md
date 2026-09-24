@@ -123,6 +123,19 @@ checked-never-owned. Interior pointers stay refused (swap-remove moves
 rows; references point at rows, never cells). The walk didn't create
 this gap — object graphs made it load-bearing.
 
+**Governance correction (2026-09-24):** unlike `<:`, the `ref` spelling
+was never ruled — it shipped on vocabulary inherited from
+frag-type-system-design ("storage references"), a concept-ranking
+mistaken for a spelling ruling. Two further gaps the same interrogation
+surfaced: `ref` is a proto-field-position convention, not a general
+type constructor — it means nothing in a proc signature — and the home
+check is wired only into store write paths; a `ref(T)` field inside a
+list element accepts raw handle-shaped values unchecked (698_006 pushes
+a literal). The process corrective landed as the git-gate invariant
+`surface-spellings-are-ruled`; the semantic corrective (ref-ness in the
+type environment so every consumer checks, not just stores) is undecided
+— Lars's call whether the gate is enough or `ref` becomes a real type.
+
 **Landed later the same walk:** `source: ?Source` — the first optional
 Source param — so blockless `std/proto(Cat <: Animal)` reaches the
 handler with null instead of skipping in silence (698_010). Opt-in:
