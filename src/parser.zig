@@ -574,32 +574,7 @@ fn splitTrailingReturnArrow(self: *Parser, s: []const u8, decl_line: usize) !Ret
     var return_phantom: ?[]const u8 = null;
     // Capture a trailing `<phantom>` on the return type, mirroring the
     // effect-branch resume-type phantom capture at the `| !` parser.
-    if (rt.len > 0 and rt[rt.len - 1] == '>') {
-        var angle_depth: i32 = 0;
-        var j: usize = rt.len - 1;
-        const end_pos = j;
-        var start_pos: ?usize = null;
-        while (j > 0) : (j -= 1) {
-            if (rt[j] == '>') {
-                angle_depth += 1;
-            } else if (rt[j] == '<') {
-                angle_depth -= 1;
-                if (angle_depth == 0) {
-                    start_pos = j;
-                    break;
-                }
-            }
-        }
-        if (start_pos) |start| {
-            if (start > 0) {
-                const content = rt[start + 1 .. end_pos];
-                if (content.len > 0) {
-                    return_phantom = try self.allocator.dupe(u8, content);
-                    rt = lexer.trim(rt[0..start]);
-                }
-            }
-        }
-    }
+    rt = try self.splitTrailingPhantomOwned(rt, &return_phantom);
     // `[]const u8` is not a Koru surface type in a return position either — the
     // same wall as payloads, on the phantom-stripped base. `string` is the
     // canonical text type; the slice is only the Zig lowering.
@@ -10185,6 +10160,15 @@ pub const Parser = struct {
         return type_str;
     }
 
+    /// `splitTrailingPhantom` with an owned phantom: the returned tag is a
+    /// fresh dupe, which is what every caller ended up doing with the slice.
+    fn splitTrailingPhantomOwned(self: *Parser, type_str: []const u8, phantom_out: *?[]const u8) ![]const u8 {
+        var phantom_src: ?[]const u8 = null;
+        const base = splitTrailingPhantom(type_str, &phantom_src);
+        phantom_out.* = if (phantom_src) |p| try self.allocator.dupe(u8, p) else null;
+        return base;
+    }
+
     /// Parse one resume arm: `name`, `name Type`, or `name Type<phantom>`.
     fn parseResumeArm(self: *Parser, content: []const u8, line_index: usize) !ast.ResumeArm {
         const trimmed = lexer.trim(content);
@@ -10214,8 +10198,8 @@ pub const Parser = struct {
         const arm_name = trimmed[0..name_end];
         try self.rejectSnakeName(arm_name, line_index, "resume arm");
 
-        var phantom_src: ?[]const u8 = null;
-        const type_src = splitTrailingPhantom(lexer.trim(trimmed[name_end..]), &phantom_src);
+        var phantom: ?[]const u8 = null;
+        const type_src = try self.splitTrailingPhantomOwned(lexer.trim(trimmed[name_end..]), &phantom);
 
         // Same wall as branch payloads: `()` is not a type; a payload-less
         // arm is spelled by omission (`| timeout`).
@@ -10232,7 +10216,7 @@ pub const Parser = struct {
         return ast.ResumeArm{
             .name = try self.allocator.dupe(u8, arm_name),
             .type = if (type_src.len > 0) try self.allocator.dupe(u8, type_src) else null,
-            .phantom = if (phantom_src) |p| try self.allocator.dupe(u8, p) else null,
+            .phantom = phantom,
         };
     }
 
@@ -10507,32 +10491,7 @@ pub const Parser = struct {
                     // Phantom-capture the resume type, same as a branch payload:
                     // `-> *R<!state>` → resume_type `*R`, resume_phantom `!state`.
                     // (Read from the effect-branch scope: `<!state>` discharges here.)
-                    if (rt.len > 0 and rt[rt.len - 1] == '>') {
-                        var angle_depth: i32 = 0;
-                        var j: usize = rt.len - 1;
-                        const end_pos = j;
-                        var start_pos: ?usize = null;
-                        while (j > 0) : (j -= 1) {
-                            if (rt[j] == '>') {
-                                angle_depth += 1;
-                            } else if (rt[j] == '<') {
-                                angle_depth -= 1;
-                                if (angle_depth == 0) {
-                                    start_pos = j;
-                                    break;
-                                }
-                            }
-                        }
-                        if (start_pos) |start| {
-                            if (start > 0) {
-                                const content = rt[start + 1 .. end_pos];
-                                if (content.len > 0) {
-                                    resume_phantom = try self.allocator.dupe(u8, content);
-                                    rt = lexer.trim(rt[0..start]);
-                                }
-                            }
-                        }
-                    }
+                    rt = try self.splitTrailingPhantomOwned(rt, &resume_phantom);
                     if (rt.len > 0) {
                         resume_type = try self.allocator.dupe(u8, rt);
                     }
@@ -10718,32 +10677,7 @@ pub const Parser = struct {
             // type-position meaning, so any `<...>` at type end is
             // unambiguously phantom.
             var phantom: ?[]const u8 = null;
-            if (type_str.len > 0 and type_str[type_str.len - 1] == '>') {
-                var angle_depth: i32 = 0;
-                var j: usize = type_str.len - 1;
-                const end_pos = j;
-                var start_pos: ?usize = null;
-                while (j > 0) : (j -= 1) {
-                    if (type_str[j] == '>') {
-                        angle_depth += 1;
-                    } else if (type_str[j] == '<') {
-                        angle_depth -= 1;
-                        if (angle_depth == 0) {
-                            start_pos = j;
-                            break;
-                        }
-                    }
-                }
-                if (start_pos) |start| {
-                    if (start > 0) {
-                        const angle_content = type_str[start + 1 .. end_pos];
-                        if (angle_content.len > 0) {
-                            phantom = try self.allocator.dupe(u8, angle_content);
-                            type_str = type_str[0..start];
-                        }
-                    }
-                }
-            }
+            type_str = try self.splitTrailingPhantomOwned(type_str, &phantom);
 
             // Reject the square-bracket phantom form `Type[state]` (must be `Type<state>`).
             try self.rejectSquareBracketPhantom(type_str);
@@ -11185,32 +11119,7 @@ pub const Parser = struct {
             // unambiguously phantom. Opaque capture — analyzers interpret.
             var phantom: ?[]const u8 = null;
             if (!is_source and !is_file and !is_embed_file and !is_expression) {
-                if (field_type.len > 0 and field_type[field_type.len - 1] == '>') {
-                    var angle_depth: i32 = 0;
-                    var i = field_type.len - 1;
-                    const end_pos = i;
-                    var start_pos: ?usize = null;
-                    while (i > 0) : (i -= 1) {
-                        if (field_type[i] == '>') {
-                            angle_depth += 1;
-                        } else if (field_type[i] == '<') {
-                            angle_depth -= 1;
-                            if (angle_depth == 0) {
-                                start_pos = i;
-                                break;
-                            }
-                        }
-                    }
-                    if (start_pos) |start| {
-                        if (start > 0) {
-                            const angle_content = field_type[start + 1 .. end_pos];
-                            if (angle_content.len > 0) {
-                                phantom = try self.allocator.dupe(u8, angle_content);
-                                field_type = field_type[0..start];
-                            }
-                        }
-                    }
-                }
+                field_type = try self.splitTrailingPhantomOwned(field_type, &phantom);
 
                 // Reject the square-bracket phantom form `Type[state]` (must be `Type<state>`).
                 try self.rejectSquareBracketPhantom(field_type);
