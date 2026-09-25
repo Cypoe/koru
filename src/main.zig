@@ -6056,6 +6056,23 @@ fn exitOnReportedErrors(reporter: *ErrorReporter) !void {
 /// (the lenient parser can mint the second without the first). Prints the
 /// reporter's errors and, when the reporter is empty, the AST nodes — a
 /// refused program never exits 1 in silence.
+/// Recursive variant-tag probe: true when any invocation under `cont` carries
+/// the `variant` base tag — parameterized forms like `mlir[gpu]` count.
+fn contHasVariant(cont: *const ast.Continuation, variant: []const u8) bool {
+    if (cont.node) |*nd| {
+        if (nd.* == .invocation) {
+            if (nd.invocation.variant) |v| {
+                const v_base = if (std.mem.indexOfScalar(u8, v, '[')) |bi| v[0..bi] else v;
+                if (std.mem.eql(u8, v_base, variant)) return true;
+            }
+        }
+    }
+    for (cont.continuations) |*child| {
+        if (contHasVariant(child, variant)) return true;
+    }
+    return false;
+}
+
 fn exitOnUnparseable(reporter: *ErrorReporter, source_file: *const ast.Program) !void {
     if (reporter.hasErrors() or source_file.hasParseErrors()) {
         const stderr_writer = FileWriter{ .file = std.fs.File.stderr() };
@@ -7583,21 +7600,7 @@ pub fn main() !void {
             // backend runs, so Stage A must decide "this program will link MLIR"
             // from the raw AST: any invocation carrying the `mlir` variant tag.
             fn contHasMlirVariant(cont: *const ast.Continuation) bool {
-                if (cont.node) |*nd| {
-                    if (nd.* == .invocation) {
-                        if (nd.invocation.variant) |v| {
-                            // Match the variant BASE: `mlir` and parameterized
-                            // forms like `mlir[gpu]` both mean MLIR artifacts
-                            // will exist at Stage D.
-                            const v_base = if (std.mem.indexOfScalar(u8, v, '[')) |bi| v[0..bi] else v;
-                            if (std.mem.eql(u8, v_base, "mlir")) return true;
-                        }
-                    }
-                }
-                for (cont.continuations) |*child| {
-                    if (contHasMlirVariant(child)) return true;
-                }
-                return false;
+                return contHasVariant(cont, "mlir");
             }
             fn run(alloc: std.mem.Allocator, items: []const ast.Item, out_dir: []const u8) !bool {
                 var needs_link = false;
@@ -7664,18 +7667,7 @@ pub fn main() !void {
             // AST: any invocation carrying the `fpga` variant tag — the same
             // seam `mlir` rides, no symbol coordination across stages.
             fn contHasFpgaVariant(cont: *const ast.Continuation) bool {
-                if (cont.node) |*nd| {
-                    if (nd.* == .invocation) {
-                        if (nd.invocation.variant) |v| {
-                            const v_base = if (std.mem.indexOfScalar(u8, v, '[')) |bi| v[0..bi] else v;
-                            if (std.mem.eql(u8, v_base, "fpga")) return true;
-                        }
-                    }
-                }
-                for (cont.continuations) |*child| {
-                    if (contHasFpgaVariant(child)) return true;
-                }
-                return false;
+                return contHasVariant(cont, "fpga");
             }
             fn run(alloc: std.mem.Allocator, items: []const ast.Item, out_dir: []const u8) !bool {
                 var needs_sim = false;
