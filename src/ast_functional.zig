@@ -34,6 +34,22 @@ pub const SourceLocation = struct {
     file: []const u8,
 };
 
+/// Deinit the first `count` slots of a partially-filled item array, then
+/// free the backing storage — the errdefer half of alloc-then-fill.
+fn deinitItemsPrefix(allocator: std.mem.Allocator, items: []ast.Item, count: usize) void {
+    for (items[0..], 0..) |*item, i| {
+        if (i >= count) break;
+        item.deinit(allocator);
+    }
+    allocator.free(items);
+}
+
+/// Free a slice of duplicated strings, then the slice itself.
+fn freeDupedStrings(allocator: std.mem.Allocator, strings: [][]const u8) void {
+    for (strings) |s| allocator.free(s);
+    allocator.free(strings);
+}
+
 /// Map a transformation function over all items in a Program
 /// Returns a new Program with transformed items
 pub fn mapItems(
@@ -42,13 +58,7 @@ pub fn mapItems(
     transform_fn: fn (allocator: std.mem.Allocator, item: *const ast.Item) anyerror!ast.Item,
 ) !ast.Program {
     var new_items = try allocator.alloc(ast.Item, source.items.len);
-    errdefer {
-        for (new_items[0..], 0..) |*item, i| {
-            if (i >= source.items.len) break;
-            item.deinit(allocator);
-        }
-        allocator.free(new_items);
-    }
+    errdefer deinitItemsPrefix(allocator, new_items, source.items.len);
 
     for (source.items, 0..) |*item, i| {
         new_items[i] = try transform_fn(allocator, item);
@@ -56,12 +66,7 @@ pub fn mapItems(
 
     // Clone module_annotations (preserve from source)
     var new_annotations = try allocator.alloc([]const u8, source.module_annotations.len);
-    errdefer {
-        for (new_annotations) |annotation| {
-            allocator.free(annotation);
-        }
-        allocator.free(new_annotations);
-    }
+    errdefer freeDupedStrings(allocator, new_annotations);
     for (source.module_annotations, 0..) |annotation, i| {
         new_annotations[i] = try allocator.dupe(u8, annotation);
     }
@@ -95,12 +100,7 @@ pub fn filterItems(
 
     // Clone module_annotations (preserve from source)
     var new_annotations = try allocator.alloc([]const u8, source.module_annotations.len);
-    errdefer {
-        for (new_annotations) |annotation| {
-            allocator.free(annotation);
-        }
-        allocator.free(new_annotations);
-    }
+    errdefer freeDupedStrings(allocator, new_annotations);
     for (source.module_annotations, 0..) |annotation, i| {
         new_annotations[i] = try allocator.dupe(u8, annotation);
     }
@@ -139,13 +139,7 @@ pub fn replaceAt(
     if (index >= source.items.len) return error.IndexOutOfBounds;
 
     var new_items = try allocator.alloc(ast.Item, source.items.len);
-    errdefer {
-        for (new_items[0..], 0..) |*item, i| {
-            if (i >= source.items.len) break;
-            item.deinit(allocator);
-        }
-        allocator.free(new_items);
-    }
+    errdefer deinitItemsPrefix(allocator, new_items, source.items.len);
 
     // Copy all items, replacing at the specified index
     for (source.items, 0..) |*item, i| {
@@ -158,12 +152,7 @@ pub fn replaceAt(
 
     // Clone module_annotations (preserve from source)
     var new_annotations = try allocator.alloc([]const u8, source.module_annotations.len);
-    errdefer {
-        for (new_annotations) |annotation| {
-            allocator.free(annotation);
-        }
-        allocator.free(new_annotations);
-    }
+    errdefer freeDupedStrings(allocator, new_annotations);
     for (source.module_annotations, 0..) |annotation, i| {
         new_annotations[i] = try allocator.dupe(u8, annotation);
     }
@@ -762,13 +751,7 @@ pub fn insertAt(
     if (index > source.items.len) return error.IndexOutOfBounds;
 
     var new_items = try allocator.alloc(ast.Item, source.items.len + 1);
-    errdefer {
-        for (new_items[0..], 0..) |*item, i| {
-            if (i >= source.items.len + 1) break;
-            item.deinit(allocator);
-        }
-        allocator.free(new_items);
-    }
+    errdefer deinitItemsPrefix(allocator, new_items, source.items.len + 1);
 
     // Copy items before insertion point
     for (source.items[0..index], 0..) |*item, i| {
@@ -785,12 +768,7 @@ pub fn insertAt(
 
     // Clone module_annotations (preserve from source)
     var new_annotations = try allocator.alloc([]const u8, source.module_annotations.len);
-    errdefer {
-        for (new_annotations) |annotation| {
-            allocator.free(annotation);
-        }
-        allocator.free(new_annotations);
-    }
+    errdefer freeDupedStrings(allocator, new_annotations);
     for (source.module_annotations, 0..) |annotation, i| {
         new_annotations[i] = try allocator.dupe(u8, annotation);
     }
@@ -815,13 +793,7 @@ pub fn removeAt(
     if (source.items.len == 0) return error.EmptySourceFile;
 
     var new_items = try allocator.alloc(ast.Item, source.items.len - 1);
-    errdefer {
-        for (new_items[0..], 0..) |*item, i| {
-            if (i >= source.items.len - 1) break;
-            item.deinit(allocator);
-        }
-        allocator.free(new_items);
-    }
+    errdefer deinitItemsPrefix(allocator, new_items, source.items.len - 1);
 
     // Copy items before removal point
     for (source.items[0..index], 0..) |*item, i| {
@@ -835,12 +807,7 @@ pub fn removeAt(
 
     // Clone module_annotations (preserve from source)
     var new_annotations = try allocator.alloc([]const u8, source.module_annotations.len);
-    errdefer {
-        for (new_annotations) |annotation| {
-            allocator.free(annotation);
-        }
-        allocator.free(new_annotations);
-    }
+    errdefer freeDupedStrings(allocator, new_annotations);
     for (source.module_annotations, 0..) |annotation, i| {
         new_annotations[i] = try allocator.dupe(u8, annotation);
     }
@@ -880,13 +847,7 @@ pub fn transformWhere(
     transform_fn: fn (allocator: std.mem.Allocator, item: *const ast.Item) anyerror!ast.Item,
 ) !ast.Program {
     var new_items = try allocator.alloc(ast.Item, source.items.len);
-    errdefer {
-        for (new_items[0..], 0..) |*item, i| {
-            if (i >= source.items.len) break;
-            item.deinit(allocator);
-        }
-        allocator.free(new_items);
-    }
+    errdefer deinitItemsPrefix(allocator, new_items, source.items.len);
 
     for (source.items, 0..) |*item, i| {
         if (predicate(item)) {
@@ -898,12 +859,7 @@ pub fn transformWhere(
 
     // Clone module_annotations (preserve from source)
     var new_annotations = try allocator.alloc([]const u8, source.module_annotations.len);
-    errdefer {
-        for (new_annotations) |annotation| {
-            allocator.free(annotation);
-        }
-        allocator.free(new_annotations);
-    }
+    errdefer freeDupedStrings(allocator, new_annotations);
     for (source.module_annotations, 0..) |annotation, i| {
         new_annotations[i] = try allocator.dupe(u8, annotation);
     }
@@ -927,13 +883,7 @@ pub fn transformWhereWithContext(
     transform_fn: fn (ctx: Context, allocator: std.mem.Allocator, item: *const ast.Item) anyerror!ast.Item,
 ) !ast.Program {
     var new_items = try allocator.alloc(ast.Item, source.items.len);
-    errdefer {
-        for (new_items[0..], 0..) |*item, i| {
-            if (i >= source.items.len) break;
-            item.deinit(allocator);
-        }
-        allocator.free(new_items);
-    }
+    errdefer deinitItemsPrefix(allocator, new_items, source.items.len);
 
     for (source.items, 0..) |*item, i| {
         if (predicate(item)) {
@@ -945,12 +895,7 @@ pub fn transformWhereWithContext(
 
     // Clone module_annotations (preserve from source)
     var new_annotations = try allocator.alloc([]const u8, source.module_annotations.len);
-    errdefer {
-        for (new_annotations) |annotation| {
-            allocator.free(annotation);
-        }
-        allocator.free(new_annotations);
-    }
+    errdefer freeDupedStrings(allocator, new_annotations);
     for (source.module_annotations, 0..) |annotation, i| {
         new_annotations[i] = try allocator.dupe(u8, annotation);
     }
@@ -985,13 +930,7 @@ pub fn compose(
 /// Deep clone a Program
 pub fn cloneSourceFile(allocator: std.mem.Allocator, source: *const ast.Program) !ast.Program {
     var new_items = try allocator.alloc(ast.Item, source.items.len);
-    errdefer {
-        for (new_items[0..], 0..) |*item, i| {
-            if (i >= source.items.len) break;
-            item.deinit(allocator);
-        }
-        allocator.free(new_items);
-    }
+    errdefer deinitItemsPrefix(allocator, new_items, source.items.len);
 
     for (source.items, 0..) |*item, i| {
         new_items[i] = try cloneItem(allocator, item);
@@ -2153,12 +2092,7 @@ pub fn filterByAnnotation(
 
     // Keep module annotations
     var new_annotations = try allocator.alloc([]const u8, source.module_annotations.len);
-    errdefer {
-        for (new_annotations) |annotation| {
-            allocator.free(annotation);
-        }
-        allocator.free(new_annotations);
-    }
+    errdefer freeDupedStrings(allocator, new_annotations);
     for (source.module_annotations, 0..) |annotation, i| {
         new_annotations[i] = try allocator.dupe(u8, annotation);
     }
