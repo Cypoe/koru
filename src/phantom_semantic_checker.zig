@@ -1996,48 +1996,61 @@ pub const PhantomSemanticChecker = struct {
                 binding_info.base_type
             else
                 resource;
-            const display_state = if (std.mem.lastIndexOf(u8, phantom_state, ":")) |colon_idx|
-                phantom_state[colon_idx + 1 ..]
-            else
-                phantom_state;
-
-            var disposal_events = try self.findDisposalEventsForState(phantom_state, binding_info.base_type);
-            defer {
-                for (disposal_events.items) |item| {
-                    self.allocator.free(item);
-                }
-                disposal_events.deinit(self.allocator);
-            }
-
-            if (disposal_events.items.len == 0) {
-                const state_without_bang = if (std.mem.endsWith(u8, display_state, "!"))
-                    display_state[0 .. display_state.len - 1]
-                else
-                    display_state;
-                try self.reporter.addError(
-                    .KORU030,
-                    location.line,
-                    location.column,
-                    "Resource '{s}' carries obligation <{s}> was not discharged. No tor accepts <!{s}>.",
-                    .{ display_name, display_state, state_without_bang },
-                );
-            } else {
-                // Number agreement: one candidate is an instruction
-                // (`Call: finalize`), several are a choice set.
-                var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-                defer options.deinit(self.allocator);
-                const n_candidates = try errors.writeCandidateNames([]const u8, ownName, null, "", self.allocator, &options, disposal_events.items);
-                try self.reporter.addError(
-                    .KORU030,
-                    location.line,
-                    location.column,
-                    "Resource '{s}' carries obligation <{s}> was not discharged. Call{s}: {s}",
-                    .{ display_name, display_state, errors.oneOfInfix(n_candidates), options.items },
-                );
-            }
+            try self.reportUndischargedObligation(display_name, phantom_state, binding_info.base_type, location);
             has_errors = true;
         }
         return has_errors;
+    }
+
+    /// The KORU030 report for one undischarged obligation — no candidates
+    /// is a dead end ("No tor accepts <!state>"); a nonempty list is the
+    /// `Call:` choice. `phantom_state` may carry a "module:state" prefix.
+    fn reportUndischargedObligation(
+        self: *PhantomSemanticChecker,
+        display_name: []const u8,
+        phantom_state: []const u8,
+        base_type: []const u8,
+        location: errors.SourceLocation,
+    ) !void {
+        const display_state = if (std.mem.lastIndexOf(u8, phantom_state, ":")) |colon_idx|
+            phantom_state[colon_idx + 1 ..]
+        else
+            phantom_state;
+
+        var disposal_events = try self.findDisposalEventsForState(phantom_state, base_type);
+        defer {
+            for (disposal_events.items) |item| {
+                self.allocator.free(item);
+            }
+            disposal_events.deinit(self.allocator);
+        }
+
+        if (disposal_events.items.len == 0) {
+            const state_without_bang = if (std.mem.endsWith(u8, display_state, "!"))
+                display_state[0 .. display_state.len - 1]
+            else
+                display_state;
+            try self.reporter.addError(
+                .KORU030,
+                location.line,
+                location.column,
+                "Resource '{s}' carries obligation <{s}> was not discharged. No tor accepts <!{s}>.",
+                .{ display_name, display_state, state_without_bang },
+            );
+        } else {
+            // Number agreement: one candidate is an instruction
+            // (`Call: finalize`), several are a choice set.
+            var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+            defer options.deinit(self.allocator);
+            const n_candidates = try errors.writeCandidateNames([]const u8, ownName, null, "", self.allocator, &options, disposal_events.items);
+            try self.reporter.addError(
+                .KORU030,
+                location.line,
+                location.column,
+                "Resource '{s}' carries obligation <{s}> was not discharged. Call{s}: {s}",
+                .{ display_name, display_state, errors.oneOfInfix(n_candidates), options.items },
+            );
+        }
     }
 
     /// Does an unnamed continuation follow index `i` in this sibling list?
@@ -2812,48 +2825,7 @@ pub const PhantomSemanticChecker = struct {
                             resource[dot_idx + 1 ..]
                         else
                             resource;
-                        const display_state = if (std.mem.lastIndexOf(u8, phantom_state, ":")) |colon_idx|
-                            phantom_state[colon_idx + 1 ..]
-                        else
-                            phantom_state;
-
-                        // Find events that could discharge this obligation
-                        var disposal_events = try self.findDisposalEventsForState(phantom_state, binding_info.base_type);
-                        defer {
-                            for (disposal_events.items) |item| {
-                                self.allocator.free(item);
-                            }
-                            disposal_events.deinit(self.allocator);
-                        }
-
-                        if (disposal_events.items.len == 0) {
-                            // Strip ! suffix from display_state for the <!state> suggestion
-                            const state_without_bang = if (std.mem.endsWith(u8, display_state, "!"))
-                                display_state[0 .. display_state.len - 1]
-                            else
-                                display_state;
-                            try self.reporter.addError(
-                                .KORU030,
-                                location.line,
-                                location.column,
-                                "Resource '{s}' carries obligation <{s}> was not discharged. No tor accepts <!{s}>.",
-                                .{ display_name, display_state, state_without_bang },
-                            );
-                        } else {
-                            // Number agreement: one candidate is an
-                            // instruction (`Call: finalize`), several are a
-                            // choice set.
-                            var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-                            defer options.deinit(self.allocator);
-                            const n_candidates = try errors.writeCandidateNames([]const u8, ownName, null, "", self.allocator, &options, disposal_events.items);
-                            try self.reporter.addError(
-                                .KORU030,
-                                location.line,
-                                location.column,
-                                "Resource '{s}' carries obligation <{s}> was not discharged. Call{s}: {s}",
-                                .{ display_name, display_state, errors.oneOfInfix(n_candidates), options.items },
-                            );
-                        }
+                        try self.reportUndischargedObligation(display_name, phantom_state, binding_info.base_type, location);
                         has_errors = true;
                     }
                 } else {
