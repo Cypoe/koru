@@ -86,7 +86,7 @@
     "name": "deslop-board-does-not-regrow",
     "tags": ["git-gate", "odds-10"],
     "rule": "The structural clone census over src/ (tools/deslop.zig, --min-tokens=48) must not regrow past the pin in checks/deslop-census.baseline. This row is sampled — the odds-10 tag fires it on roughly one commit in ten, so slop accumulates only until a roll lands: an alarm driven by commit activity, not a schedule. When it fires above the pin, fold the clones the census names into their canonical form, or re-pin the baseline in the same commit with the reason the duplication is intentional — dialects, public adapters, and semantically distinct twins stay duplicated by design (concepts/frag-dedup-is-lift-then-delete.md). The census reads the working tree, so uncommitted work counts against the pin; a re-pin that hides avoidable slop is a silent weakening.",
-    "check": "python3 checks/check_deslop_census.py ../src ../tools/deslop.zig checks/deslop-census.baseline 48"
+    "check": "python3 checks/check_deslop_census.py checks/deslop-census.baseline -- zig run ../tools/deslop.zig -- ../src --top=8 --min-tokens=48"
 }
 
 // The same alarm at the small-idiom floor: min-tokens=32 is where the
@@ -96,7 +96,19 @@
     "name": "deslop-small-idiom-board",
     "tags": ["git-gate", "odds-10"],
     "rule": "The structural clone census over src/ at --min-tokens=32 (tools/deslop.zig) must not regrow past the pin in checks/deslop-census-32.baseline. The 32-token floor is the small-idiom tier — micro-duplication below the main board's sightline. Same contract as its sibling row: sampled firing (odds-10), regrowth blocks until the clones are folded into their canonical form or the pin is re-set in the same commit with the reason the duplication is intentional; the census reads the working tree, so uncommitted work counts against the pin.",
-    "check": "python3 checks/check_deslop_census.py ../src ../tools/deslop.zig checks/deslop-census-32.baseline 32"
+    "check": "python3 checks/check_deslop_census.py checks/deslop-census-32.baseline -- zig run ../tools/deslop.zig -- ../src --top=8 --min-tokens=32"
+}
+
+// The same alarm aimed at a consumer repo: repo-<name> tags a check row
+// that fires only when gate.py is gating that repo — the census here
+// measures koru-libs' .kz corpus via koruc --ast-canon, the first clone
+// instrument that tree has ever had (22 files currently skip: koruc
+// cannot canon them, so they escape the count entirely).
+~std/invariants:inferred {
+    "name": "deslop-koru-libs-board",
+    "tags": ["git-gate", "repo-koru-libs", "odds-10"],
+    "rule": "The clone census over koru-libs' .kz corpus (tools/deslop_kz.py driving koruc --ast-canon, --min-nodes=32) must not regrow past the pin in checks/deslop-koru-libs.baseline. Same contract as the src/ rows: sampled firing (odds-10) on koru-libs commits only, regrowth blocks until folded or the pin is re-set with reason. The census reads the consumer's working tree and skips files koruc cannot canon — a file that stops parsing escapes the count until it parses again.",
+    "check": "python3 checks/check_deslop_census.py checks/deslop-koru-libs.baseline -- python3 ../tools/deslop_kz.py ../zig-out/bin/koruc ../../koru-libs --top=8 --min-nodes=32"
 }
 
 // The manifest guards itself: a git-gate-local row fires only when its

@@ -41,6 +41,18 @@ or blocks on concrete script output. A sampled **judged** row is a different
 and worse thing — an oracle that sometimes blinks, which erodes the standing
 of every row around it. `odds-N` lives on `check:` rows.
 
+## The instrument can name the repo it measures
+
+A `check:` row was koru-scoped by construction — the manifest lives there,
+so its instruments measured only that tree. `repo-<name>` extends the row
+one field further: the check fires only when the gate is gating that repo,
+letting one manifest hold alarms for every consumer wired through
+`--repo`. The first use pins koru-libs' `.kz` corpus — the family's
+second-largest hand-written tree, which had never had a clone instrument
+because the census spoke only Zig. The .kz census runs through
+`koruc --ast-canon` rather than a new parser: the instrument you need
+usually already emits the surface.
+
 ## Open
 
 Whether a firing alarm should emit a durable signal beyond the gate's stdout

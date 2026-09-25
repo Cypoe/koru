@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""check_deslop_census — the structural-clone census must not regrow
-past its pinned baseline.
+"""check_deslop_census — a structural-clone census must not regrow past
+its pinned baseline.
 
-Runs tools/deslop.zig over the source root and compares the totals
-against the baseline file. A regrowth fails with the delta and the top
-offenders; the remedies are to fold the clones the census names into
-their canonical form, or to re-pin the baseline in the same commit with
-the reason the duplication is intentional. The census reads the working
-tree — uncommitted work counts against the pin.
+Runs the census command given after `--` (tools/deslop.zig for Zig
+trees, tools/deslop_kz.py for .kz corpora), parses its
+`clusters: N   maximal members: M` totals line, and compares against
+the baseline file. A regrowth fails with the delta and the producer's
+top offenders; the remedies are to fold the clones the census names
+into their canonical form, or to re-pin the baseline in the same commit
+with the reason the duplication is intentional.
 
-Usage: check_deslop_census.py <src_root> <deslop.zig> <baseline_file>
-       [min_tokens]   (default 48; cwd is invariants/, so repo paths
-       start with `..`)
+Usage:
+  check_deslop_census.py <baseline_file> -- <census command...>
+(cwd is invariants/, so repo paths start with `..`)
 """
 
 import re
@@ -20,8 +21,9 @@ import sys
 
 
 def main():
-    src_root, deslop_src, baseline_path = sys.argv[1:4]
-    min_tokens = sys.argv[4] if len(sys.argv) > 4 else "48"
+    sep = sys.argv.index("--")
+    baseline_path = sys.argv[1]
+    cmd = sys.argv[sep + 1:]
 
     baseline = {}
     try:
@@ -37,11 +39,7 @@ def main():
               "clusters=<n> and members=<n> lines")
         return 2
 
-    proc = subprocess.run(
-        ["zig", "run", deslop_src, "--", src_root,
-         "--top=8", f"--min-tokens={min_tokens}"],
-        capture_output=True, text=True,
-    )
+    proc = subprocess.run(cmd, capture_output=True, text=True)
     m = re.search(r"clusters: (\d+)\s+maximal members: (\d+)",
                   proc.stdout + proc.stderr)
     if proc.returncode != 0 or not m:
@@ -51,14 +49,12 @@ def main():
 
     clusters, members = int(m.group(1)), int(m.group(2))
     if clusters <= baseline["clusters"] and members <= baseline["members"]:
-        print(f"deslop-census[{min_tokens}]: {clusters} clusters / "
-              f"{members} members — at or under pin "
-              f"({baseline['clusters']}/{baseline['members']})")
+        print(f"deslop-census: {clusters} clusters / {members} members — "
+              f"at or under pin ({baseline['clusters']}/{baseline['members']})")
         return 0
 
     top = (proc.stdout + proc.stderr).split("\n\n", 1)[-1].strip()
-    print(f"deslop-census[{min_tokens}] REGREW: {clusters} clusters / "
-          f"{members} members "
+    print(f"deslop-census REGREW: {clusters} clusters / {members} members "
           f"vs pin {baseline['clusters']}/{baseline['members']} "
           f"(+{clusters - baseline['clusters']}/"
           f"+{members - baseline['members']})\n\n{top}\n\n"

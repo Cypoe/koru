@@ -1,0 +1,5 @@
+# Pin: tools/deslop_kz.py over koru-libs at --min-nodes=32, first census
+# ever run on that corpus, 2026-10-13. 344 files parsed, 22 skipped —
+# koruc cannot canon them, so they escape the count entirely.
+clusters=629
+members=327

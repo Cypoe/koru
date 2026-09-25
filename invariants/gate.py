@@ -26,6 +26,12 @@ unpredictable only until the diff exists. Sampling a judged row makes a
 flaky oracle — the tag's home is `check:` rows, where a firing alarm
 always has a concrete script output to point at.
 
+A `repo-<name>` tag points a check at a consumer repo: the row's `check:`
+runs only when `--repo` gates that repo (matched on the repo directory's
+basename), and skips otherwise — the mirror of `manifest_repo` scoping.
+Checks still execute from this directory; the check command carries the
+foreign paths it instruments.
+
 Usage:
   python3 gate.py [--checks-only] [--judge-only] [--repo PATH]
 
@@ -278,7 +284,14 @@ def main():
         if r["check"]:
             if judge_only:
                 continue
-            if not manifest_repo:
+            repo_m = re.search(r'repo-([a-z0-9_-]+)', r["tags"])
+            if repo_m:
+                if repo_m.group(1) != os.path.basename(
+                        os.path.realpath(repo)):
+                    print(f"check skip  {r['name']} — instruments "
+                          f"{repo_m.group(1)}")
+                    continue
+            elif not manifest_repo:
                 print(f"check skip  {r['name']} — repo-scoped to "
                       f"{os.path.basename(MANIFEST_REPO)}")
                 continue
