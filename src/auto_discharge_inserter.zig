@@ -4244,27 +4244,7 @@ pub const AutoDischargeInserter = struct {
             }
         }
 
-        // Clone annotations
-        var new_annotations = try self.allocator.alloc([]const u8, flow.annotations.len);
-        for (flow.annotations, 0..) |ann, i| {
-            new_annotations[i] = try self.allocator.dupe(u8, ann);
-        }
-
-        return .{
-            .body = ast.rootSite(try ast_functional.cloneInvocation(self.allocator, flow.inv()), new_continuations, flow.location),
-            .annotations = new_annotations,
-            .pre_label = if (flow.pre_label) |l| try self.allocator.dupe(u8, l) else null,
-            .super_shape = flow.super_shape,
-            .inline_body = if (flow.inline_body) |b| try self.allocator.dupe(u8, b) else null,
-            .preamble_code = if (flow.preamble_code) |p| try self.allocator.dupe(u8, p) else null,
-            .is_pure = flow.is_pure,
-            .is_transitively_pure = flow.is_transitively_pure,
-            .location = flow.location,
-            .module = try self.allocator.dupe(u8, flow.module),
-            .impl_of = if (flow.impl_of) |io| try ast_functional.cloneDottedPath(self.allocator, &io) else null,
-            .impl_variant = if (flow.impl_variant) |v| try self.allocator.dupe(u8, v) else null,
-            .is_impl = flow.is_impl,
-        };
+        return self.rebuildFlowWithBody(flow, ast.rootSite(try ast_functional.cloneInvocation(self.allocator, flow.inv()), new_continuations, flow.location));
     }
 
     /// Replace a continuation anywhere in the flow (including inside foreach nodes)
@@ -4280,14 +4260,18 @@ pub const AutoDischargeInserter = struct {
             new_continuations[i] = try self.replaceContinuationInTree(cont, old_cont, new_cont);
         }
 
-        // Clone annotations
-        var new_annotations = try self.allocator.alloc([]const u8, flow.annotations.len);
-        for (flow.annotations, 0..) |ann, i| {
-            new_annotations[i] = try self.allocator.dupe(u8, ann);
-        }
+        return self.rebuildFlowWithBody(flow, ast.rootSite(try ast_functional.cloneInvocation(self.allocator, flow.inv()), new_continuations, flow.location));
+    }
 
+    /// The shared flow-rebuild tail for the head-rewrite helpers below: every
+    /// field deep-cloned except `body`, which the caller supplies already
+    /// built. `super_shape` is carried shallow (all sites aliased the
+    /// original).
+    fn rebuildFlowWithBody(self: *AutoDischargeInserter, flow: *const ast.Flow, new_body: ast.Continuation) !ast.Flow {
+        var new_annotations = try self.allocator.alloc([]const u8, flow.annotations.len);
+        for (flow.annotations, 0..) |ann, i| new_annotations[i] = try self.allocator.dupe(u8, ann);
         return .{
-            .body = ast.rootSite(try ast_functional.cloneInvocation(self.allocator, flow.inv()), new_continuations, flow.location),
+            .body = new_body,
             .annotations = new_annotations,
             .pre_label = if (flow.pre_label) |l| try self.allocator.dupe(u8, l) else null,
             .super_shape = flow.super_shape,
@@ -4326,23 +4310,7 @@ pub const AutoDischargeInserter = struct {
         };
         const new_body = ast.rootSite(new_head_inv, term, flow.location);
 
-        var new_annotations = try self.allocator.alloc([]const u8, flow.annotations.len);
-        for (flow.annotations, 0..) |ann, i| new_annotations[i] = try self.allocator.dupe(u8, ann);
-        return .{
-            .body = new_body,
-            .annotations = new_annotations,
-            .pre_label = if (flow.pre_label) |l| try self.allocator.dupe(u8, l) else null,
-            .super_shape = flow.super_shape,
-            .inline_body = if (flow.inline_body) |b| try self.allocator.dupe(u8, b) else null,
-            .preamble_code = if (flow.preamble_code) |p| try self.allocator.dupe(u8, p) else null,
-            .is_pure = flow.is_pure,
-            .is_transitively_pure = flow.is_transitively_pure,
-            .location = flow.location,
-            .module = try self.allocator.dupe(u8, flow.module),
-            .impl_of = if (flow.impl_of) |io| try ast_functional.cloneDottedPath(self.allocator, &io) else null,
-            .impl_variant = if (flow.impl_variant) |v| try self.allocator.dupe(u8, v) else null,
-            .is_impl = flow.is_impl,
-        };
+        return self.rebuildFlowWithBody(flow, new_body);
     }
 
     /// Materialize the implicit discard bind of an UNBOUND flow head whose
@@ -4364,23 +4332,7 @@ pub const AutoDischargeInserter = struct {
         }
         const new_body = ast.rootSite(new_head_inv, new_conts, flow.location);
 
-        var new_annotations = try self.allocator.alloc([]const u8, flow.annotations.len);
-        for (flow.annotations, 0..) |ann, i| new_annotations[i] = try self.allocator.dupe(u8, ann);
-        return .{
-            .body = new_body,
-            .annotations = new_annotations,
-            .pre_label = if (flow.pre_label) |l| try self.allocator.dupe(u8, l) else null,
-            .super_shape = flow.super_shape,
-            .inline_body = if (flow.inline_body) |b| try self.allocator.dupe(u8, b) else null,
-            .preamble_code = if (flow.preamble_code) |p| try self.allocator.dupe(u8, p) else null,
-            .is_pure = flow.is_pure,
-            .is_transitively_pure = flow.is_transitively_pure,
-            .location = flow.location,
-            .module = try self.allocator.dupe(u8, flow.module),
-            .impl_of = if (flow.impl_of) |io| try ast_functional.cloneDottedPath(self.allocator, &io) else null,
-            .impl_variant = if (flow.impl_variant) |v| try self.allocator.dupe(u8, v) else null,
-            .is_impl = flow.is_impl,
-        };
+        return self.rebuildFlowWithBody(flow, new_body);
     }
 
     /// Rename a `_` flow-head bind to a synthetic while KEEPING the head's
@@ -4404,23 +4356,7 @@ pub const AutoDischargeInserter = struct {
         }
         const new_body = ast.rootSite(new_head_inv, new_conts, flow.location);
 
-        var new_annotations = try self.allocator.alloc([]const u8, flow.annotations.len);
-        for (flow.annotations, 0..) |ann, i| new_annotations[i] = try self.allocator.dupe(u8, ann);
-        return .{
-            .body = new_body,
-            .annotations = new_annotations,
-            .pre_label = if (flow.pre_label) |l| try self.allocator.dupe(u8, l) else null,
-            .super_shape = flow.super_shape,
-            .inline_body = if (flow.inline_body) |b| try self.allocator.dupe(u8, b) else null,
-            .preamble_code = if (flow.preamble_code) |p| try self.allocator.dupe(u8, p) else null,
-            .is_pure = flow.is_pure,
-            .is_transitively_pure = flow.is_transitively_pure,
-            .location = flow.location,
-            .module = try self.allocator.dupe(u8, flow.module),
-            .impl_of = if (flow.impl_of) |io| try ast_functional.cloneDottedPath(self.allocator, &io) else null,
-            .impl_variant = if (flow.impl_variant) |v| try self.allocator.dupe(u8, v) else null,
-            .is_impl = flow.is_impl,
-        };
+        return self.rebuildFlowWithBody(flow, new_body);
     }
 
     /// Recursively replace a continuation in the tree
