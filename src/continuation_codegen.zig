@@ -17,6 +17,48 @@ fn indent(allocator: std.mem.Allocator, level: usize) ![]const u8 {
     return spaces;
 }
 
+/// `.name = value` for each field, comma-separated — expression_str wins
+/// over type for the value, and names go through the branch-name escaper.
+/// The branch-constructor and assignment emits spell this list identically.
+fn appendNamedFieldList(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, fields: []const ast.Field) !void {
+    for (fields, 0..) |field, field_idx| {
+        if (field_idx > 0) {
+            try buf.appendSlice(allocator, ",");
+        }
+        try buf.appendSlice(allocator, " .");
+        try codegen_utils.appendBranchName(buf, allocator, field.name);
+        try buf.appendSlice(allocator, " = ");
+        const value = if (field.expression_str) |expr| expr else field.type;
+        try buf.appendSlice(allocator, value);
+    }
+}
+
+/// Emit every continuation in `conts` at `indent_level` into `buf` — the
+/// foreach `each`/`done` bodies and the conditional `then`/`else` bodies
+/// all generate-then-append identically.
+fn appendContinuationBodies(
+    buf: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    conts: []const ast.Continuation,
+    main_module_name: []const u8,
+    result_counter: *usize,
+    indent_level: usize,
+    var_prefix: []const u8,
+) !void {
+    for (conts) |*cont| {
+        const code = try generateContinuationChainWithPrefix(
+            allocator,
+            cont,
+            main_module_name,
+            result_counter,
+            indent_level,
+            var_prefix,
+        );
+        defer allocator.free(code);
+        try buf.appendSlice(allocator, code);
+    }
+}
+
 
 /// Build event path string: module.event_name_event
 /// If module matches main_module_name, uses "main_module." prefix
@@ -532,17 +574,7 @@ fn generatePipelineCode(
                     }
                 } else {
                     try buf.appendSlice(allocator, ".{");
-                    for (bc.fields, 0..) |field, field_idx| {
-                        if (field_idx > 0) {
-                            try buf.appendSlice(allocator, ",");
-                        }
-                        try buf.appendSlice(allocator, " .");
-                        try codegen_utils.appendBranchName(&buf, allocator, field.name);
-                        try buf.appendSlice(allocator, " = ");
-                        // Use expression_str if available, otherwise fall back to type (for simple values)
-                        const value = if (field.expression_str) |expr| expr else field.type;
-                        try buf.appendSlice(allocator, value);
-                    }
+                    try appendNamedFieldList(&buf, allocator, bc.fields);
                     if (mark_body_allocated) {
                         try buf.appendSlice(allocator, ", .body_allocated = true");
                     }
@@ -637,16 +669,7 @@ fn generatePipelineCode(
                 try buf.appendSlice(allocator, ind);
                 try buf.appendSlice(allocator, asgn.target);
                 try buf.appendSlice(allocator, " = .{");
-                for (asgn.fields, 0..) |field, field_idx| {
-                    if (field_idx > 0) {
-                        try buf.appendSlice(allocator, ",");
-                    }
-                    try buf.appendSlice(allocator, " .");
-                    try codegen_utils.appendBranchName(&buf, allocator, field.name);
-                    try buf.appendSlice(allocator, " = ");
-                    const value = if (field.expression_str) |expr| expr else field.type;
-                    try buf.appendSlice(allocator, value);
-                }
+                try appendNamedFieldList(&buf, allocator, asgn.fields);
                 try buf.appendSlice(allocator, " };\n");
             },
             .foreach => |fe| {
@@ -665,35 +688,13 @@ fn generatePipelineCode(
                 try buf.appendSlice(allocator, "| {\n");
 
                 // Emit body continuations
-                for (each_body) |*body_cont| {
-                    const body_code = try generateContinuationChainWithPrefix(
-                        allocator,
-                        body_cont,
-                        main_module_name,
-                        result_counter,
-                        indent_level + 1,
-                        var_prefix,
-                    );
-                    defer allocator.free(body_code);
-                    try buf.appendSlice(allocator, body_code);
-                }
+                try appendContinuationBodies(&buf, allocator, each_body, main_module_name, result_counter, indent_level + 1, var_prefix);
 
                 try buf.appendSlice(allocator, ind);
                 try buf.appendSlice(allocator, "}\n");
 
                 // Emit done_body after the loop
-                for (done_body) |*done_cont| {
-                    const done_code = try generateContinuationChainWithPrefix(
-                        allocator,
-                        done_cont,
-                        main_module_name,
-                        result_counter,
-                        indent_level,
-                        var_prefix,
-                    );
-                    defer allocator.free(done_code);
-                    try buf.appendSlice(allocator, done_code);
-                }
+                try appendContinuationBodies(&buf, allocator, done_body, main_module_name, result_counter, indent_level, var_prefix);
             },
             .conditional => |cond| {
                 // Emit if/else with bodies
@@ -713,35 +714,12 @@ fn generatePipelineCode(
                 try buf.appendSlice(allocator, ") {\n");
 
                 // Emit then_body
-                for (then_body) |*then_cont| {
-                    const then_code = try generateContinuationChainWithPrefix(
-                        allocator,
-                        then_cont,
-                        main_module_name,
-                        result_counter,
-                        indent_level + 1,
-                        var_prefix,
-                    );
-                    defer allocator.free(then_code);
-                    try buf.appendSlice(allocator, then_code);
-                }
+                try appendContinuationBodies(&buf, allocator, then_body, main_module_name, result_counter, indent_level + 1, var_prefix);
 
                 if (else_body.len > 0) {
                     try buf.appendSlice(allocator, ind);
                     try buf.appendSlice(allocator, "} else {\n");
-
-                    for (else_body) |*else_cont| {
-                        const else_code = try generateContinuationChainWithPrefix(
-                            allocator,
-                            else_cont,
-                            main_module_name,
-                            result_counter,
-                            indent_level + 1,
-                            var_prefix,
-                        );
-                        defer allocator.free(else_code);
-                        try buf.appendSlice(allocator, else_code);
-                    }
+                    try appendContinuationBodies(&buf, allocator, else_body, main_module_name, result_counter, indent_level + 1, var_prefix);
                 }
 
                 try buf.appendSlice(allocator, ind);
