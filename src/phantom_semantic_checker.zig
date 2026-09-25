@@ -3119,30 +3119,9 @@ pub const PhantomSemanticChecker = struct {
                 }
                 return !has_errors;
             },
-            .foreach => |fe| {
-                log.debug("[PHANTOM-FLOW] Validating foreach with {} branches\n", .{fe.branches.len});
-                for (fe.branches) |*branch| {
-                    const branch_valid = try self.validateNamedBranchRecursive(branch, context, event_map, current_module, location);
-                    if (!branch_valid) has_errors = true;
-                }
-                return !has_errors;
-            },
-            .conditional => |cond| {
-                log.debug("[PHANTOM-FLOW] Validating conditional with {} branches\n", .{cond.branches.len});
-                for (cond.branches) |*branch| {
-                    const branch_valid = try self.validateNamedBranchRecursive(branch, context, event_map, current_module, location);
-                    if (!branch_valid) has_errors = true;
-                }
-                return !has_errors;
-            },
-            .switch_result => |sr| {
-                log.debug("[PHANTOM-FLOW] Validating switch_result with {} branches\n", .{sr.branches.len});
-                for (sr.branches) |*branch| {
-                    const branch_valid = try self.validateNamedBranchRecursive(branch, context, event_map, current_module, location);
-                    if (!branch_valid) has_errors = true;
-                }
-                return !has_errors;
-            },
+            .foreach => |fe| return self.validateNamedBranchList("foreach", fe.branches, context, event_map, current_module, location, &has_errors),
+            .conditional => |cond| return self.validateNamedBranchList("conditional", cond.branches, context, event_map, current_module, location, &has_errors),
+            .switch_result => |sr| return self.validateNamedBranchList("switch_result", sr.branches, context, event_map, current_module, location, &has_errors),
             .branch_constructor => |bc| {
                 // Validate phantom states in inline branch construction
                 for (bc.fields) |field| {
@@ -3157,6 +3136,26 @@ pub const PhantomSemanticChecker = struct {
                 return true;
             },
         }
+    }
+
+    /// Validate each named arm of a multi-branch construct, accumulating
+    /// failures into has_errors so every broken arm still reports.
+    fn validateNamedBranchList(
+        self: *PhantomSemanticChecker,
+        label: []const u8,
+        branches: []const ast.NamedBranch,
+        context: *BindingContext,
+        event_map: *std.StringHashMap(EventInfo),
+        current_module: ?[]const u8,
+        location: errors.SourceLocation,
+        has_errors: *bool,
+    ) !bool {
+        log.debug("[PHANTOM-FLOW] Validating {s} with {} branches\n", .{ label, branches.len });
+        for (branches) |*branch| {
+            const branch_valid = try self.validateNamedBranchRecursive(branch, context, event_map, current_module, location);
+            if (!branch_valid) has_errors.* = true;
+        }
+        return !has_errors.*;
     }
 
     /// Validate a NamedBranch (from foreach or conditional)
