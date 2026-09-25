@@ -2857,6 +2857,39 @@ fn emitParentResultDiscard(
     }
 }
 
+/// A fresh EmissionContext for a detached continuation-body emit — the
+/// ambient plumbing shared by emitSubflowContinuationsWithDepth's bail
+/// paths and emitVoidStepViaContinuationBody.
+fn detachedEmissionContext(
+    all_items: []const ast.Item,
+    tap_registry: ?*tap_registry_module.TapRegistry,
+    type_registry: *type_registry_module.TypeRegistry,
+    main_module_name: ?[]const u8,
+    source_event_name: ?[]const u8,
+    enclosing_bare_return: bool,
+    enclosing_event: ?*const ast.EventDecl,
+    self_loop_canonical: ?[]const u8,
+) EmissionContext {
+    return .{
+        .allocator = std.heap.page_allocator, // temp allocator for result vars
+        .indent_level = 0, // Will use emitter's indent
+        .ast_items = all_items,
+        .is_sync = true,
+        .tap_registry = tap_registry,
+        .type_registry = type_registry,
+        .main_module_name = main_module_name,
+        .current_source_event = source_event_name,
+        .bare_return_active = enclosing_bare_return,
+        .produce_event = enclosing_event,
+        // An enclosing `__koru_self_loop` survives this bail: arm bodies
+        // re-enter emitContinuationBody, whose self-tail checkpoint reads
+        // these flags to emit reassign+`continue` instead of a nested
+        // handler() call (which would leave the label unused — 320_150).
+        .self_loop_active = self_loop_canonical != null,
+        .self_loop_event_canonical = self_loop_canonical,
+    };
+}
+
 /// Route a void-chain step through emitContinuationBody when the simple
 /// step-switch can't lower it (`.label_with_invocation`, an `inline_body`
 /// invocation, …). Shared tail of the bail sites: discard the parent result,
@@ -2879,20 +2912,16 @@ fn emitVoidStepViaContinuationBody(
     parent_result_name: ?[]const u8,
 ) !void {
     try emitParentResultDiscard(emitter, indent, parent_result_name, depth);
-    var ctx = EmissionContext{
-        .allocator = std.heap.page_allocator,
-        .indent_level = 0,
-        .ast_items = all_items,
-        .is_sync = true,
-        .tap_registry = tap_registry,
-        .type_registry = type_registry,
-        .main_module_name = main_module_name,
-        .current_source_event = source_event_name,
-        .bare_return_active = enclosing_bare_return,
-        .produce_event = enclosing_event,
-        .self_loop_active = self_loop_canonical != null,
-        .self_loop_event_canonical = self_loop_canonical,
-    };
+    var ctx = detachedEmissionContext(
+        all_items,
+        tap_registry,
+        type_registry,
+        main_module_name,
+        source_event_name,
+        enclosing_bare_return,
+        enclosing_event,
+        self_loop_canonical,
+    );
     ctx.zig_scope_bindings.items = local_bindings.items;
     var label_contexts = std.StringHashMap(LabelContext).init(ctx.allocator);
     ctx.label_contexts = &label_contexts;
@@ -3281,24 +3310,16 @@ fn emitSubflowContinuationsWithDepth(
         // TODO: Add tap support - currently disabled to avoid breaking all tests
         // if (continuationsMightHaveTaps(continuations[start_idx..], tap_registry, source_event_name)) {
         // Use normal continuation emission which handles labels via emitContinuationBody
-        var ctx = EmissionContext{
-            .allocator = std.heap.page_allocator, // temp allocator for result vars
-            .indent_level = 0, // Will use emitter's indent
-            .ast_items = all_items,
-            .is_sync = true,
-            .tap_registry = tap_registry, // Pass through tap registry for inline taps!
-            .type_registry = type_registry,
-            .main_module_name = main_module_name, // Pass through for canonical event naming
-            .current_source_event = source_event_name, // Set source event for inline tap emission!
-            .bare_return_active = enclosing_bare_return,
-            .produce_event = enclosing_event,
-            // An enclosing `__koru_self_loop` survives this bail: arm bodies
-            // re-enter emitContinuationBody, whose self-tail checkpoint reads
-            // these flags to emit reassign+`continue` instead of a nested
-            // handler() call (which would leave the label unused — 320_150).
-            .self_loop_active = self_loop_canonical != null,
-            .self_loop_event_canonical = self_loop_canonical,
-        };
+        var ctx = detachedEmissionContext(
+            all_items,
+            tap_registry,
+            type_registry,
+            main_module_name,
+            source_event_name,
+            enclosing_bare_return,
+            enclosing_event,
+            self_loop_canonical,
+        );
         ctx.zig_scope_bindings.items = local_bindings.items;
         // A label-fold emitted through this subflow path (visitor emitter) still
         // runs `emitContinuationBody`'s `label_with_invocation` arm, which
@@ -3607,20 +3628,16 @@ fn emitSubflowContinuationsWithDepth(
         try emitter.write("_ = &");
         try writeBranchName(emitter, result_var);
         try emitter.write(";\n");
-        var ctx_sole = EmissionContext{
-            .allocator = std.heap.page_allocator,
-            .indent_level = 0,
-            .ast_items = all_items,
-            .is_sync = true,
-            .tap_registry = tap_registry,
-            .type_registry = type_registry,
-            .main_module_name = main_module_name,
-            .current_source_event = source_event_name,
-            .bare_return_active = enclosing_bare_return,
-            .produce_event = enclosing_event,
-            .self_loop_active = self_loop_canonical != null,
-            .self_loop_event_canonical = self_loop_canonical,
-        };
+        var ctx_sole = detachedEmissionContext(
+            all_items,
+            tap_registry,
+            type_registry,
+            main_module_name,
+            source_event_name,
+            enclosing_bare_return,
+            enclosing_event,
+            self_loop_canonical,
+        );
         ctx_sole.zig_scope_bindings.items = local_bindings.items;
         var result_counter_sole: usize = depth;
         try emitContinuationBody(emitter, &ctx_sole, &remaining_conts[0], &result_counter_sole);
@@ -4211,23 +4228,16 @@ fn emitSubflowContinuationsWithDepth(
     } // End of for loop over all branch groups
 
     if (catchall_cont_ret) |catchall| {
-        var ctx_ca = EmissionContext{
-            .allocator = std.heap.page_allocator,
-            .indent_level = 0,
-            .ast_items = all_items,
-            .is_sync = true,
-            .tap_registry = tap_registry,
-            .type_registry = type_registry,
-            .main_module_name = main_module_name,
-            .current_source_event = source_event_name,
-            .bare_return_active = enclosing_bare_return,
-            .produce_event = enclosing_event,
-            // Same self-loop survival as the bail path: a `|?` catchall arm
-            // re-entering emitContinuationBody must see the enclosing loop
-            // or its nested self-call leaves the label unused (320_150).
-            .self_loop_active = self_loop_canonical != null,
-            .self_loop_event_canonical = self_loop_canonical,
-        };
+        var ctx_ca = detachedEmissionContext(
+            all_items,
+            tap_registry,
+            type_registry,
+            main_module_name,
+            source_event_name,
+            enclosing_bare_return,
+            enclosing_event,
+            self_loop_canonical,
+        );
         ctx_ca.zig_scope_bindings.items = local_bindings.items;
         var result_counter_ca: usize = depth;
         try emitSubflowCatchallOptionalArms(
