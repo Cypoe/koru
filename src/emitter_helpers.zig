@@ -5474,7 +5474,7 @@ fn emitInlineCodeResolvingSplices(
 /// `break :__KORU_INLINE__ value` block) with a unique label and prefixing
 /// the block with that label. Mirrors the substitution visitor_emitter does
 /// for top-level flows, so value-shaped inline bodies work at every depth.
-fn writeInlineCodeWithLabel(
+pub fn writeInlineCodeWithLabel(
     emitter: *CodeEmitter,
     ctx: *EmissionContext,
     inline_code: []const u8,

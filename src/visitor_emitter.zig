@@ -2311,27 +2311,8 @@ pub const VisitorEmitter = struct {
 
         try self.code_emitter.writeIndent();
         try self.code_emitter.write("const result = ");
-
-        // If inline code uses __KORU_INLINE__ placeholder,
-        // wrap in a labeled block and replace the placeholder.
-        const placeholder = "__KORU_INLINE__";
-        if (std.mem.indexOf(u8, inline_code, placeholder) != null) {
-            try self.code_emitter.write("__koru_inline__: ");
-            var scan_pos: usize = 0;
-            while (scan_pos < inline_code.len) {
-                if (scan_pos + placeholder.len <= inline_code.len and
-                    std.mem.eql(u8, inline_code[scan_pos .. scan_pos + placeholder.len], placeholder))
-                {
-                    try self.code_emitter.write("__koru_inline__");
-                    scan_pos += placeholder.len;
-                } else {
-                    try self.code_emitter.write(inline_code[scan_pos .. scan_pos + 1]);
-                    scan_pos += 1;
-                }
-            }
-        } else {
-            try self.code_emitter.write(inline_code);
-        }
+        var label_ctx = emitter.EmissionContext{ .allocator = self.allocator };
+        try emitter.writeInlineCodeWithLabel(self.code_emitter, &label_ctx, inline_code);
         try self.code_emitter.write(";\n");
         return false;
     }
@@ -3617,27 +3598,8 @@ pub const VisitorEmitter = struct {
                                                 // Branching continuations -- emit: const result = <inline>; switch(result) { ... }
                                                 try self.code_emitter.writeIndent();
                                                 try self.code_emitter.write("const result = ");
-
-                                                // If inline code uses __KORU_INLINE__ placeholder,
-                                                // wrap in a labeled block and replace the placeholder.
-                                                const placeholder3 = "__KORU_INLINE__";
-                                                if (std.mem.indexOf(u8, inline_code, placeholder3) != null) {
-                                                    try self.code_emitter.write("__koru_inline__: ");
-                                                    var scan_pos3: usize = 0;
-                                                    while (scan_pos3 < inline_code.len) {
-                                                        if (scan_pos3 + placeholder3.len <= inline_code.len and
-                                                            std.mem.eql(u8, inline_code[scan_pos3 .. scan_pos3 + placeholder3.len], placeholder3))
-                                                        {
-                                                            try self.code_emitter.write("__koru_inline__");
-                                                            scan_pos3 += placeholder3.len;
-                                                        } else {
-                                                            try self.code_emitter.write(inline_code[scan_pos3 .. scan_pos3 + 1]);
-                                                            scan_pos3 += 1;
-                                                        }
-                                                    }
-                                                } else {
-                                                    try self.code_emitter.write(inline_code);
-                                                }
+                                                var label_ctx = emitter.EmissionContext{ .allocator = self.allocator };
+                                                try emitter.writeInlineCodeWithLabel(self.code_emitter, &label_ctx, inline_code);
                                                 try self.code_emitter.write(";\n");
 
                                                 var indent_buf: [64]u8 = undefined;
