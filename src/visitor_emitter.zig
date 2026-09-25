@@ -2437,6 +2437,19 @@ pub const VisitorEmitter = struct {
         try self.code_emitter.write("unreachable;\n");
     }
 
+    /// Emit the `// >>> SUBFLOW: file:line` source marker for a subflow impl.
+    fn emitSubflowMarker(self: *VisitorEmitter, flow: *const ast.Flow) !void {
+        if (flow.location.line == 0) return;
+        try self.code_emitter.writeIndent();
+        try self.code_emitter.write("// >>> SUBFLOW: ");
+        try self.code_emitter.write(flow.location.file);
+        try self.code_emitter.write(":");
+        var sf_line_buf: [32]u8 = undefined;
+        const sf_line_str = try std.fmt.bufPrint(&sf_line_buf, "{}", .{flow.location.line});
+        try self.code_emitter.write(sf_line_str);
+        try self.code_emitter.write("\n");
+    }
+
     /// Yielding-branch comptime aliases — `const X = __H.X` plus a discard.
     /// Optional arms get a nullable-fn-ptr alias (comptime-known present/
     /// absent) so presence guards fold and the omitted case never forces
@@ -3187,16 +3200,7 @@ pub const VisitorEmitter = struct {
                                                 const indent_str = indent_buf[0..indent_pos];
 
                                                 // Emit source marker for subflow impl
-                                                if (flow.location.line > 0) {
-                                                    try self.code_emitter.writeIndent();
-                                                    try self.code_emitter.write("// >>> SUBFLOW: ");
-                                                    try self.code_emitter.write(flow.location.file);
-                                                    try self.code_emitter.write(":");
-                                                    var sf_line_buf: [32]u8 = undefined;
-                                                    const sf_line_str = try std.fmt.bufPrint(&sf_line_buf, "{}", .{flow.location.line});
-                                                    try self.code_emitter.write(sf_line_str);
-                                                    try self.code_emitter.write("\n");
-                                                }
+                                                try self.emitSubflowMarker(&flow);
 
                                                 const source_event_name = try emitter.buildCanonicalEventName(&flow.inv().path, self.allocator, self.main_module_name);
                                                 // The other spelling of the same head bind — see
@@ -3431,16 +3435,7 @@ pub const VisitorEmitter = struct {
                                 if (matches) {
                                     log.debug("    Found matching impl flow!\n", .{});
                                     // Emit source marker for subflow impl
-                                    if (flow.location.line > 0) {
-                                        try self.code_emitter.writeIndent();
-                                        try self.code_emitter.write("// >>> SUBFLOW: ");
-                                        try self.code_emitter.write(flow.location.file);
-                                        try self.code_emitter.write(":");
-                                        var sf_loc_buf: [32]u8 = undefined;
-                                        const sf_loc_str = try std.fmt.bufPrint(&sf_loc_buf, "{}", .{flow.location.line});
-                                        try self.code_emitter.write(sf_loc_str);
-                                        try self.code_emitter.write("\n");
-                                    }
+                                    try self.emitSubflowMarker(&flow);
                                     // Tail self-continuation detection: if this flow
                                     // re-enters its own event in tail position and forwards
                                     // the result unchanged, lower the handler as a `while
