@@ -50,6 +50,24 @@ fn freeDupedStrings(allocator: std.mem.Allocator, strings: [][]const u8) void {
     allocator.free(strings);
 }
 
+/// Reassemble a Program around rebuilt items/annotations — the main name
+/// is re-duped and the allocator carried, but type_registry is dropped:
+/// cloned Programs don't inherit the registry; transforms rebuild it.
+fn rebuildProgram(
+    allocator: std.mem.Allocator,
+    source: *const ast.Program,
+    items: []const ast.Item,
+    module_annotations: []const []const u8,
+) !ast.Program {
+    return .{
+        .items = items,
+        .module_annotations = module_annotations,
+        .main_module_name = try allocator.dupe(u8, source.main_module_name),
+        .allocator = allocator,
+        .type_registry = null,
+    };
+}
+
 /// Map a transformation function over all items in a Program
 /// Returns a new Program with transformed items
 pub fn mapItems(
@@ -71,13 +89,7 @@ pub fn mapItems(
         new_annotations[i] = try allocator.dupe(u8, annotation);
     }
 
-    return ast.Program{
-        .items = new_items,
-        .module_annotations = new_annotations,
-        .main_module_name = try allocator.dupe(u8, source.main_module_name),
-        .allocator = allocator,
-        .type_registry = null,
-    };
+    return rebuildProgram(allocator, source, new_items, new_annotations);
 }
 
 /// Filter items based on a predicate
@@ -105,13 +117,7 @@ pub fn filterItems(
         new_annotations[i] = try allocator.dupe(u8, annotation);
     }
 
-    return ast.Program{
-        .items = try filtered.toOwnedSlice(allocator),
-        .module_annotations = new_annotations,
-        .main_module_name = try allocator.dupe(u8, source.main_module_name),
-        .allocator = allocator,
-        .type_registry = null,
-    };
+    return rebuildProgram(allocator, source, try filtered.toOwnedSlice(allocator), new_annotations);
 }
 
 /// Fold over the AST, accumulating a result
@@ -157,13 +163,7 @@ pub fn replaceAt(
         new_annotations[i] = try allocator.dupe(u8, annotation);
     }
 
-    return ast.Program{
-        .items = new_items,
-        .module_annotations = new_annotations,
-        .main_module_name = try allocator.dupe(u8, source.main_module_name),
-        .allocator = allocator,
-        .type_registry = null,
-    };
+    return rebuildProgram(allocator, source, new_items, new_annotations);
 }
 
 /// Replace an item anywhere in the tree by matching on the target flow pointer
@@ -243,12 +243,7 @@ fn programWithItems(
     source: *const ast.Program,
     items: []ast.Item,
 ) !ast.Program {
-    return ast.Program{
-        .items = items,
-        .module_annotations = try cloneStringSlice(allocator, source.module_annotations),
-        .main_module_name = try allocator.dupe(u8, source.main_module_name),
-        .allocator = allocator,
-    };
+    return rebuildProgram(allocator, source, items, try cloneStringSlice(allocator, source.module_annotations));
 }
 
 /// Rebuild a ModuleDecl around a replaced items slice — the module_decl arm
@@ -773,13 +768,7 @@ pub fn insertAt(
         new_annotations[i] = try allocator.dupe(u8, annotation);
     }
 
-    return ast.Program{
-        .items = new_items,
-        .module_annotations = new_annotations,
-        .main_module_name = try allocator.dupe(u8, source.main_module_name),
-        .allocator = allocator,
-        .type_registry = null,
-    };
+    return rebuildProgram(allocator, source, new_items, new_annotations);
 }
 
 /// Remove an item at a specific index
@@ -812,13 +801,7 @@ pub fn removeAt(
         new_annotations[i] = try allocator.dupe(u8, annotation);
     }
 
-    return ast.Program{
-        .items = new_items,
-        .module_annotations = new_annotations,
-        .main_module_name = try allocator.dupe(u8, source.main_module_name),
-        .allocator = allocator,
-        .type_registry = null,
-    };
+    return rebuildProgram(allocator, source, new_items, new_annotations);
 }
 
 /// Find all items matching a predicate
@@ -864,13 +847,7 @@ pub fn transformWhere(
         new_annotations[i] = try allocator.dupe(u8, annotation);
     }
 
-    return ast.Program{
-        .items = new_items,
-        .module_annotations = new_annotations,
-        .main_module_name = try allocator.dupe(u8, source.main_module_name),
-        .allocator = allocator,
-        .type_registry = null,
-    };
+    return rebuildProgram(allocator, source, new_items, new_annotations);
 }
 
 /// Transform only items matching a predicate, with context
@@ -900,13 +877,7 @@ pub fn transformWhereWithContext(
         new_annotations[i] = try allocator.dupe(u8, annotation);
     }
 
-    return ast.Program{
-        .items = new_items,
-        .module_annotations = new_annotations,
-        .main_module_name = try allocator.dupe(u8, source.main_module_name),
-        .allocator = allocator,
-        .type_registry = null,
-    };
+    return rebuildProgram(allocator, source, new_items, new_annotations);
 }
 
 /// Compose multiple transformations into a single transformation
@@ -950,14 +921,7 @@ pub fn cloneSourceFile(allocator: std.mem.Allocator, source: *const ast.Program)
         new_annotations[i] = try allocator.dupe(u8, annotation);
     }
 
-    return ast.Program{
-        .items = new_items,
-        .module_annotations = new_annotations,
-        .main_module_name = try allocator.dupe(u8, source.main_module_name),
-        .allocator = allocator,
-        // Cloned Programs don't inherit registry - transforms can build/clone if needed
-        .type_registry = null,
-    };
+    return rebuildProgram(allocator, source, new_items, new_annotations);
 }
 
 /// Safely deinit an AST, skipping PROGRAM_AST (stack-allocated)
