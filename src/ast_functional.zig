@@ -189,35 +189,14 @@ pub fn replaceFlowRecursive(
     // Try to replace in items, recursively searching module_decls
     const result = try replaceFlowInItems(allocator, source.items, target_flow, new_item);
     if (result.found) {
-        // Clone module_annotations
-        var new_annotations = try allocator.alloc([]const u8, source.module_annotations.len);
-        for (source.module_annotations, 0..) |annotation, i| {
-            new_annotations[i] = try allocator.dupe(u8, annotation);
-        }
-
-        return ast.Program{
-            .items = result.items,
-            .module_annotations = new_annotations,
-            .main_module_name = try allocator.dupe(u8, source.main_module_name),
-            .allocator = allocator,
-        };
+        return try programWithItems(allocator, source, result.items);
     }
 
     // Fallback: replace invocation inside continuations (nested transforms)
     if (new_item == .flow) {
         const replace_result = try replaceInvocationInItems(allocator, source.items, target_flow.inv(), &new_item.flow);
         if (replace_result.found) {
-            var new_annotations = try allocator.alloc([]const u8, source.module_annotations.len);
-            for (source.module_annotations, 0..) |annotation, i| {
-                new_annotations[i] = try allocator.dupe(u8, annotation);
-            }
-
-            return ast.Program{
-                .items = replace_result.items,
-                .module_annotations = new_annotations,
-                .main_module_name = try allocator.dupe(u8, source.main_module_name),
-                .allocator = allocator,
-            };
+            return try programWithItems(allocator, source, replace_result.items);
         }
     }
     return null;
@@ -231,17 +210,7 @@ pub fn replaceInvocationNodeRecursive(
 ) !?ast.Program {
     const result = try replaceInvocationNodeInItems(allocator, source.items, target_invocation, new_node);
     if (result.found) {
-        var new_annotations = try allocator.alloc([]const u8, source.module_annotations.len);
-        for (source.module_annotations, 0..) |annotation, i| {
-            new_annotations[i] = try allocator.dupe(u8, annotation);
-        }
-
-        return ast.Program{
-            .items = result.items,
-            .module_annotations = new_annotations,
-            .main_module_name = try allocator.dupe(u8, source.main_module_name),
-            .allocator = allocator,
-        };
+        return try programWithItems(allocator, source, result.items);
     }
     return null;
 }
@@ -263,17 +232,7 @@ pub fn replaceInvocationNodeAndContinuationsRecursive(
         mark_transformed,
     );
     if (result.found) {
-        var new_annotations = try allocator.alloc([]const u8, source.module_annotations.len);
-        for (source.module_annotations, 0..) |annotation, i| {
-            new_annotations[i] = try allocator.dupe(u8, annotation);
-        }
-
-        return ast.Program{
-            .items = result.items,
-            .module_annotations = new_annotations,
-            .main_module_name = try allocator.dupe(u8, source.main_module_name),
-            .allocator = allocator,
-        };
+        return try programWithItems(allocator, source, result.items);
     }
     return null;
 }
@@ -288,6 +247,71 @@ const ReplaceContResult = struct {
     conts: []ast.Continuation,
 };
 
+/// Rebuild a Program around a replaced items slice: everything else carries
+/// over cloned, unchanged items keep sharing nodes per the contract above.
+fn programWithItems(
+    allocator: std.mem.Allocator,
+    source: *const ast.Program,
+    items: []ast.Item,
+) !ast.Program {
+    return ast.Program{
+        .items = items,
+        .module_annotations = try cloneStringSlice(allocator, source.module_annotations),
+        .main_module_name = try allocator.dupe(u8, source.main_module_name),
+        .allocator = allocator,
+    };
+}
+
+/// Rebuild a ModuleDecl around a replaced items slice — the module_decl arm
+/// every items-walker below spells identically.
+fn cloneModuleDeclWithItems(
+    allocator: std.mem.Allocator,
+    mod: *const ast.ModuleDecl,
+    items: []ast.Item,
+) !ast.ModuleDecl {
+    return ast.ModuleDecl{
+        .logical_name = try allocator.dupe(u8, mod.logical_name),
+        .canonical_path = try allocator.dupe(u8, mod.canonical_path),
+        .items = items,
+        .is_system = mod.is_system,
+        .annotations = try cloneStringSlice(allocator, mod.annotations),
+        .location = mod.location,
+    };
+}
+
+/// The items-walk skeleton shared by every `replace*InItems` walker:
+/// module_decls recurse, every other item goes through `map_item` (null =
+/// share unchanged), and a mapped item flips `found`.
+fn mapItemsRecursive(
+    allocator: std.mem.Allocator,
+    items: []const ast.Item,
+    ctx: anytype,
+    map_item: anytype,
+) !ReplaceResult {
+    var new_items = try allocator.alloc(ast.Item, items.len);
+    var found = false;
+
+    for (items, 0..) |*item, i| {
+        if (item.* == .module_decl) {
+            const mod = &item.module_decl;
+            const sub_result = try mapItemsRecursive(allocator, mod.items, ctx, map_item);
+            if (sub_result.found) {
+                new_items[i] = ast.Item{ .module_decl = try cloneModuleDeclWithItems(allocator, mod, sub_result.items) };
+                found = true;
+            } else {
+                new_items[i] = item.*;
+            }
+        } else if (try map_item(allocator, ctx, item)) |mapped| {
+            new_items[i] = mapped;
+            found = true;
+        } else {
+            new_items[i] = item.*;
+        }
+    }
+
+    return ReplaceResult{ .found = found, .items = new_items };
+}
+
 /// Write-back rebuilds share UNCHANGED items by value. The new items array is
 /// fresh, but an item the rebuild did not touch is copied as a bare struct and
 /// keeps pointing at the same underlying nodes as the abandoned program. This
@@ -301,48 +325,39 @@ const ReplaceContResult = struct {
 /// spliceSiteProgram); and the metacircular pipeline already accepts in-place
 /// mutation of the writable seed (compiler.kz context-create). A caller that
 /// needs EXCLUSIVE ownership of unchanged items must deep-clone them itself.
+const ReplaceFlowCtx = struct {
+    target_flow: *const ast.Flow,
+    new_item: ast.Item,
+};
+
+fn mapReplaceFlowItem(allocator: std.mem.Allocator, ctx: ReplaceFlowCtx, item: *const ast.Item) !?ast.Item {
+    _ = allocator;
+    if (item.* == .flow and @intFromPtr(&item.flow) == @intFromPtr(ctx.target_flow)) {
+        return ctx.new_item;
+    }
+    return null;
+}
+
 fn replaceFlowInItems(
     allocator: std.mem.Allocator,
     items: []const ast.Item,
     target_flow: *const ast.Flow,
     new_item: ast.Item,
 ) !ReplaceResult {
-    var new_items = try allocator.alloc(ast.Item, items.len);
-    var found = false;
+    return mapItemsRecursive(allocator, items, ReplaceFlowCtx{ .target_flow = target_flow, .new_item = new_item }, mapReplaceFlowItem);
+}
 
-    for (items, 0..) |*item, i| {
-        if (item.* == .flow and @intFromPtr(&item.flow) == @intFromPtr(target_flow)) {
-            // Found the target flow - replace it
-            new_items[i] = new_item;
-            found = true;
-        } else if (item.* == .module_decl) {
-            // Recursively search inside module_decl
-            const mod = &item.module_decl;
-            const sub_result = try replaceFlowInItems(allocator, mod.items, target_flow, new_item);
-            if (sub_result.found) {
-                // Create new module_decl with replaced items
-                new_items[i] = ast.Item{
-                    .module_decl = ast.ModuleDecl{
-                        .logical_name = try allocator.dupe(u8, mod.logical_name),
-                        .canonical_path = try allocator.dupe(u8, mod.canonical_path),
-                        .items = sub_result.items,
-                        .is_system = mod.is_system,
-                        .annotations = try cloneStringSlice(allocator, mod.annotations),
-                        .location = mod.location,
-                    },
-                };
-                found = true;
-            } else {
-                // Not found - share the item unchanged
-                new_items[i] = item.*;
-            }
-        } else {
-            // Share the item unchanged
-            new_items[i] = item.*;
-        }
-    }
+const ReplaceNodeCtx = struct {
+    target: *const ast.Invocation,
+    new_node: ast.Node,
+};
 
-    return ReplaceResult{ .found = found, .items = new_items };
+fn mapReplaceNodeItem(allocator: std.mem.Allocator, ctx: ReplaceNodeCtx, item: *const ast.Item) !?ast.Item {
+    if (item.* != .flow) return null;
+    const flow = &item.flow;
+    const cont_result = try replaceInvocationNodeInContinuations(allocator, flow.body.continuations, ctx.target, ctx.new_node);
+    if (!cont_result.found) return null;
+    return ast.Item{ .flow = try cloneFlowWithContinuations(allocator, flow, cont_result.conts) };
 }
 
 fn replaceInvocationNodeInItems(
@@ -351,47 +366,55 @@ fn replaceInvocationNodeInItems(
     target_invocation: *const ast.Invocation,
     new_node: ast.Node,
 ) !ReplaceResult {
-    var new_items = try allocator.alloc(ast.Item, items.len);
-    var found = false;
+    return mapItemsRecursive(allocator, items, ReplaceNodeCtx{ .target = target_invocation, .new_node = new_node }, mapReplaceNodeItem);
+}
 
-    for (items, 0..) |*item, i| {
-        switch (item.*) {
-            .flow => |*flow| {
-                const cont_result = try replaceInvocationNodeInContinuations(allocator, flow.body.continuations, target_invocation, new_node);
-                if (cont_result.found) {
-                    new_items[i] = ast.Item{
-                        .flow = try cloneFlowWithContinuations(allocator, flow, cont_result.conts),
-                    };
-                    found = true;
-                } else {
-                    new_items[i] = item.*;
-                }
-            },
-            .module_decl => |*mod| {
-                const sub_result = try replaceInvocationNodeInItems(allocator, mod.items, target_invocation, new_node);
-                if (sub_result.found) {
-                    new_items[i] = ast.Item{
-                        .module_decl = ast.ModuleDecl{
-                            .logical_name = try allocator.dupe(u8, mod.logical_name),
-                            .canonical_path = try allocator.dupe(u8, mod.canonical_path),
-                            .items = sub_result.items,
-                            .is_system = mod.is_system,
-                            .annotations = try cloneStringSlice(allocator, mod.annotations),
-                            .location = mod.location,
-                        },
-                    };
-                    found = true;
-                } else {
-                    new_items[i] = item.*;
-                }
-            },
-            else => {
-                new_items[i] = item.*;
-            },
+const ReplaceNodeContsCtx = struct {
+    target: *const ast.Invocation,
+    new_node: ast.Node,
+    new_continuations: []const ast.Continuation,
+    mark_transformed: bool,
+};
+
+fn mapReplaceNodeContsItem(allocator: std.mem.Allocator, ctx: ReplaceNodeContsCtx, item: *const ast.Item) !?ast.Item {
+    if (item.* != .flow) return null;
+    const flow = &item.flow;
+    // The flow HEAD itself can be the target: a branch-arm
+    // transform retargeting its producer (NodeReplacement's
+    // `retarget_producer`) points at `flow.body.node.invocation`,
+    // which the continuation walk below never reaches.
+    // `label_with_invocation` lifts to `pre_label` — the parser's
+    // own spelling of `#label` at flow-root position — so the
+    // emitter sees one canonical fold shape.
+    const head_is_target = if (flow.body.node) |*bnode|
+        bnode.* == .invocation and &bnode.invocation == ctx.target
+    else
+        false;
+    if (head_is_target) {
+        var new_flow = try cloneFlowWithContinuations(
+            allocator,
+            flow,
+            try cloneContinuationSlice(allocator, ctx.new_continuations),
+        );
+        if (ctx.new_node == .label_with_invocation) {
+            const lwi = ctx.new_node.label_with_invocation;
+            new_flow.pre_label = try allocator.dupe(u8, lwi.label);
+            new_flow.body.node = ast.Node{ .invocation = lwi.invocation };
+        } else {
+            new_flow.body.node = ctx.new_node;
         }
+        return ast.Item{ .flow = new_flow };
     }
-
-    return ReplaceResult{ .found = found, .items = new_items };
+    const cont_result = try replaceInvocationNodeAndContinuationsInContinuations(
+        allocator,
+        flow.body.continuations,
+        ctx.target,
+        ctx.new_node,
+        ctx.new_continuations,
+        ctx.mark_transformed,
+    );
+    if (!cont_result.found) return null;
+    return ast.Item{ .flow = try cloneFlowWithContinuations(allocator, flow, cont_result.conts) };
 }
 
 fn replaceInvocationNodeAndContinuationsInItems(
@@ -402,89 +425,12 @@ fn replaceInvocationNodeAndContinuationsInItems(
     new_continuations: []const ast.Continuation,
     mark_transformed: bool,
 ) !ReplaceResult {
-    var new_items = try allocator.alloc(ast.Item, items.len);
-    var found = false;
-
-    for (items, 0..) |*item, i| {
-        switch (item.*) {
-            .flow => |*flow| {
-                // The flow HEAD itself can be the target: a branch-arm
-                // transform retargeting its producer (NodeReplacement's
-                // `retarget_producer`) points at `flow.body.node.invocation`,
-                // which the continuation walk below never reaches.
-                // `label_with_invocation` lifts to `pre_label` — the parser's
-                // own spelling of `#label` at flow-root position — so the
-                // emitter sees one canonical fold shape.
-                const head_is_target = if (flow.body.node) |*bnode|
-                    bnode.* == .invocation and &bnode.invocation == target_invocation
-                else
-                    false;
-                if (head_is_target) {
-                    var new_flow = try cloneFlowWithContinuations(
-                        allocator,
-                        flow,
-                        try cloneContinuationSlice(allocator, new_continuations),
-                    );
-                    if (new_node == .label_with_invocation) {
-                        const lwi = new_node.label_with_invocation;
-                        new_flow.pre_label = try allocator.dupe(u8, lwi.label);
-                        new_flow.body.node = ast.Node{ .invocation = lwi.invocation };
-                    } else {
-                        new_flow.body.node = new_node;
-                    }
-                    new_items[i] = ast.Item{ .flow = new_flow };
-                    found = true;
-                    continue;
-                }
-                const cont_result = try replaceInvocationNodeAndContinuationsInContinuations(
-                    allocator,
-                    flow.body.continuations,
-                    target_invocation,
-                    new_node,
-                    new_continuations,
-                    mark_transformed,
-                );
-                if (cont_result.found) {
-                    new_items[i] = ast.Item{
-                        .flow = try cloneFlowWithContinuations(allocator, flow, cont_result.conts),
-                    };
-                    found = true;
-                } else {
-                    new_items[i] = item.*;
-                }
-            },
-            .module_decl => |*mod| {
-                const sub_result = try replaceInvocationNodeAndContinuationsInItems(
-                    allocator,
-                    mod.items,
-                    target_invocation,
-                    new_node,
-                    new_continuations,
-                    mark_transformed,
-                );
-                if (sub_result.found) {
-                    new_items[i] = ast.Item{
-                        .module_decl = ast.ModuleDecl{
-                            .logical_name = try allocator.dupe(u8, mod.logical_name),
-                            .canonical_path = try allocator.dupe(u8, mod.canonical_path),
-                            .items = sub_result.items,
-                            .is_system = mod.is_system,
-                            .annotations = try cloneStringSlice(allocator, mod.annotations),
-                            .location = mod.location,
-                        },
-                    };
-                    found = true;
-                } else {
-                    new_items[i] = item.*;
-                }
-            },
-            else => {
-                new_items[i] = item.*;
-            },
-        }
-    }
-
-    return ReplaceResult{ .found = found, .items = new_items };
+    return mapItemsRecursive(allocator, items, ReplaceNodeContsCtx{
+        .target = target_invocation,
+        .new_node = new_node,
+        .new_continuations = new_continuations,
+        .mark_transformed = mark_transformed,
+    }, mapReplaceNodeContsItem);
 }
 
 fn replaceInvocationNodeInContinuations(
@@ -577,53 +523,26 @@ fn replaceInvocationNodeAndContinuationsInContinuations(
     return ReplaceContResult{ .found = found, .conts = new_conts };
 }
 
+const ReplaceInvCtx = struct {
+    target: *const ast.Invocation,
+    new_flow: *const ast.Flow,
+};
+
+fn mapReplaceInvItem(allocator: std.mem.Allocator, ctx: ReplaceInvCtx, item: *const ast.Item) !?ast.Item {
+    if (item.* != .flow) return null;
+    const flow = &item.flow;
+    const cont_result = try replaceInvocationInContinuations(allocator, flow.body.continuations, ctx.target, ctx.new_flow);
+    if (!cont_result.found) return null;
+    return ast.Item{ .flow = try cloneFlowWithContinuations(allocator, flow, cont_result.conts) };
+}
+
 fn replaceInvocationInItems(
     allocator: std.mem.Allocator,
     items: []const ast.Item,
     target_invocation: *const ast.Invocation,
     new_flow: *const ast.Flow,
 ) !ReplaceResult {
-    var new_items = try allocator.alloc(ast.Item, items.len);
-    var found = false;
-
-    for (items, 0..) |*item, i| {
-        switch (item.*) {
-            .flow => |*flow| {
-                const cont_result = try replaceInvocationInContinuations(allocator, flow.body.continuations, target_invocation, new_flow);
-                if (cont_result.found) {
-                    new_items[i] = ast.Item{
-                        .flow = try cloneFlowWithContinuations(allocator, flow, cont_result.conts),
-                    };
-                    found = true;
-                } else {
-                    new_items[i] = item.*;
-                }
-            },
-            .module_decl => |*mod| {
-                const sub_result = try replaceInvocationInItems(allocator, mod.items, target_invocation, new_flow);
-                if (sub_result.found) {
-                    new_items[i] = ast.Item{
-                        .module_decl = ast.ModuleDecl{
-                            .logical_name = try allocator.dupe(u8, mod.logical_name),
-                            .canonical_path = try allocator.dupe(u8, mod.canonical_path),
-                            .items = sub_result.items,
-                            .is_system = mod.is_system,
-                            .annotations = try cloneStringSlice(allocator, mod.annotations),
-                            .location = mod.location,
-                        },
-                    };
-                    found = true;
-                } else {
-                    new_items[i] = item.*;
-                }
-            },
-            else => {
-                new_items[i] = item.*;
-            },
-        }
-    }
-
-    return ReplaceResult{ .found = found, .items = new_items };
+    return mapItemsRecursive(allocator, items, ReplaceInvCtx{ .target = target_invocation, .new_flow = new_flow }, mapReplaceInvItem);
 }
 
 fn replaceInvocationInContinuations(
