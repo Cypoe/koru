@@ -3561,7 +3561,31 @@ pub const AutoDischargeInserter = struct {
         return self.findDisposalEventsEx(phantom_state, base_type, true);
     }
 
-    /// Create a new continuation with disposal call inserted at the end
+    /// Clone a terminal arm's branch metadata onto a new continuation whose
+    /// node is the disposal invocation — the arm name, binding, destructure,
+    /// annotations, condition, indent, location, and kind all survive the
+    /// splice; only the node and children change.
+    fn disposalArmContinuation(
+        self: *AutoDischargeInserter,
+        original: *const ast.Continuation,
+        disposal_invocation: ast.Invocation,
+        continuations: []const ast.Continuation,
+    ) !ast.Continuation {
+        return .{
+            .branch = try self.allocator.dupe(u8, original.branch),
+            .binding = if (original.binding) |b| try self.allocator.dupe(u8, b) else null,
+            .destructure = try ast.copyDestructure(self.allocator, original.destructure),
+            .binding_annotations = original.binding_annotations,
+            .condition = if (original.condition) |c| try self.allocator.dupe(u8, c) else null,
+            .node = .{ .invocation = disposal_invocation },
+            .indent = original.indent,
+            .continuations = continuations,
+            .location = original.location,
+            .kind = original.kind, // preserve effect-handler classification
+        };
+    }
+
+    /// Create a new continuation with disposal call inserted at the end.
     /// Handles two cases:
     /// 1. Original node is a terminator → insert disposal before terminal
     /// 2. Original node is an invocation (void event) → append disposal after invocation
@@ -3628,18 +3652,7 @@ pub const AutoDischargeInserter = struct {
                     };
                     break :blk @as([]const ast.Continuation, cont);
                 } else &[_]ast.Continuation{};
-                return .{
-                    .branch = try self.allocator.dupe(u8, original.branch),
-                    .binding = if (original.binding) |b| try self.allocator.dupe(u8, b) else null,
-                    .destructure = try ast.copyDestructure(self.allocator, original.destructure),
-                    .binding_annotations = original.binding_annotations,
-                    .condition = if (original.condition) |c| try self.allocator.dupe(u8, c) else null,
-                    .node = .{ .invocation = disposal_invocation },
-                    .indent = original.indent,
-                    .continuations = child_conts,
-                    .location = original.location,
-                    .kind = original.kind, // preserve effect-handler classification
-                };
+                return self.disposalArmContinuation(original, disposal_invocation, child_conts);
             } else {
                 // Disposal event with branches - nest terminal as child
                 var disposal_branch: []const u8 = "done";
@@ -3659,18 +3672,7 @@ pub const AutoDischargeInserter = struct {
                     .location = original.location,
                 };
 
-                return .{
-                    .branch = try self.allocator.dupe(u8, original.branch),
-                    .binding = if (original.binding) |b| try self.allocator.dupe(u8, b) else null,
-                    .destructure = try ast.copyDestructure(self.allocator, original.destructure),
-                    .binding_annotations = original.binding_annotations,
-                    .condition = if (original.condition) |c| try self.allocator.dupe(u8, c) else null,
-                    .node = .{ .invocation = disposal_invocation },
-                    .indent = original.indent,
-                    .continuations = after_disposal_cont,
-                    .location = original.location,
-                    .kind = original.kind, // preserve effect-handler classification
-                };
+                return self.disposalArmContinuation(original, disposal_invocation, after_disposal_cont);
             }
         } else {
             // Case 2: Original is an invocation (void event chain)
