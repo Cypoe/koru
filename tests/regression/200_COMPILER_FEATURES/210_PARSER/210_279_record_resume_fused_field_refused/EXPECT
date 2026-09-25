@@ -1,0 +1,7 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS error[PARSE003]
+CONTAINS malformed record resume
+CONTAINS missing comma
+CONTAINS 'c: i64'
+ERROR_AT 8
+NOT_CONTAINS output_emitted.zig
