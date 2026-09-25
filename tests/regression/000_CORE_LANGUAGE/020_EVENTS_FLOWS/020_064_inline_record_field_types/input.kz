@@ -2,9 +2,14 @@
 // bare-return record uses (020_063), spelled in field-type position. It emits
 // an anonymous Zig struct wherever parseShape reads field types: tor input
 // fields, branch payload fields, and record returns — including `string`
-// lowering and nested records.
+// lowering, nested records, and qualified field types like
+// `[]const threading:WorkerHandle`.
 
 ~import std/io
+~import std/threading
+
+~tor hold { r: { handles: []const threading:WorkerHandle, n: i64 } }
+~proc hold|zig { _ = r; }
 
 ~tor wrap { user: { x: i64 } }
 ~proc wrap|zig {

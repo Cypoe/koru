@@ -279,7 +279,11 @@ never runs the real parser. Widening the detector to any depth-0
 whitespace boundary is safe because no attested value carries
 `<value> <ident>:` mid-line (`mod:Type` sits at value start,
 `std/io:print` is `/`-separated, strings are skipped, nested braces are
-depth). Two second parsers had to be routed through the shared
+depth) — with one carve-out found by probe: a bare single-segment
+qualifier IS legal in type position (`420_010`'s
+`[]const threading:WorkerHandle`), so `ident:` preceded by a type-prefix
+token (`const`, or a token ending `*`/`?`/`]`) is the qualifier inside
+the field's own type, not a boundary. Two second parsers had to be routed through the shared
 detector: the ctor-payload field loop now calls `fusedFieldLine`, and
 the single-field-record verdict only fires when `parseFields` succeeds —
 a malformed record names MissingComma instead. Pin: `210_275`.

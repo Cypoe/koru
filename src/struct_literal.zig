@@ -132,7 +132,11 @@ fn topLevelColon(field: []const u8) ?usize {
 /// expression (Koru has no labels or ternaries in expression position, and
 /// no attested literal carries `<value> <ident>:` mid-line — `std/io:print`
 /// is `/`-separated, `mod:Type` sits at value start), so whitespace followed
-/// by `ident:` at depth 0 is always a second field that lost its comma.
+/// by `ident:` at depth 0 is always a second field that lost its comma —
+/// UNLESS the whitespace follows a type prefix: in `*const mod:Type`,
+/// `[]const mod:Type`, `?mod:Type`, `[N] mod:Type` the qualifier is part of
+/// the field's own type, and `const`/`?`/`*`/`]` before the space is the
+/// tell (420_010: `[]const threading:WorkerHandle`).
 pub fn fusedFieldLine(value: []const u8) ?[]const u8 {
     var depth: usize = 0;
     var i: usize = 0;
@@ -149,16 +153,33 @@ pub fn fusedFieldLine(value: []const u8) ?[]const u8 {
                 depth -= 1;
             },
             ' ', '\t', '\r', '\n' => if (depth == 0) {
-                var j = i + 1;
-                while (j < value.len and (value[j] == ' ' or value[j] == '\t' or value[j] == '\r' or value[j] == '\n')) : (j += 1) {}
-                if (j < value.len and isIdentStartChar(value[j])) {
-                    var k = j + 1;
-                    while (k < value.len and isIdentChar(value[k])) : (k += 1) {}
-                    while (k < value.len and (value[k] == ' ' or value[k] == '\t')) : (k += 1) {}
-                    if (k < value.len and value[k] == ':') {
-                        var e = k + 1;
-                        while (e < value.len and value[e] != '\n') : (e += 1) {}
-                        return std.mem.trim(u8, value[j..e], " \t\r");
+                // A type-prefix token (`const`, or one ending `*`/`?`/`]`)
+                // immediately before the whitespace means the `ident:` ahead
+                // is a module qualifier inside this field's type, not a
+                // second field boundary.
+                var t = i;
+                while (t > 0 and !std.ascii.isWhitespace(value[t - 1])) : (t -= 1) {}
+                const prev_tok = value[t..i];
+                // `prev_tok` is one non-whitespace run: `const`, `*const`,
+                // `[]const`, `*`, `?`, `[N]` all mark a type prefix.
+                const type_prefix = prev_tok.len > 0 and
+                    ((std.mem.endsWith(u8, prev_tok, "const") and
+                        (prev_tok.len == 5 or !isIdentChar(prev_tok[prev_tok.len - 6]))) or
+                        prev_tok[prev_tok.len - 1] == '*' or
+                        prev_tok[prev_tok.len - 1] == '?' or
+                        prev_tok[prev_tok.len - 1] == ']');
+                if (!type_prefix) {
+                    var j = i + 1;
+                    while (j < value.len and (value[j] == ' ' or value[j] == '\t' or value[j] == '\r' or value[j] == '\n')) : (j += 1) {}
+                    if (j < value.len and isIdentStartChar(value[j])) {
+                        var k = j + 1;
+                        while (k < value.len and isIdentChar(value[k])) : (k += 1) {}
+                        while (k < value.len and (value[k] == ' ' or value[k] == '\t')) : (k += 1) {}
+                        if (k < value.len and value[k] == ':') {
+                            var e = k + 1;
+                            while (e < value.len and value[e] != '\n') : (e += 1) {}
+                            return std.mem.trim(u8, value[j..e], " \t\r");
+                        }
                     }
                 }
             },
