@@ -2837,6 +2837,26 @@ fn argProvided(args: []const ast.Arg, name: []const u8) bool {
     return false;
 }
 
+/// Emit `: <type>` for the arg's matching input field — file/source fields
+/// spell `[]const u8`, everything else goes through writeFieldType.
+/// Returns whether the field was found (callers panic differently).
+fn writeArgFieldTypeAnnotation(emitter: *CodeEmitter, event: *const ast.EventDecl, arg_name: []const u8, main_module_name: ?[]const u8) !bool {
+    for (event.input.fields) |field| {
+        if (std.mem.eql(u8, field.name, arg_name)) {
+            try emitter.write(": ");
+            if (field.is_file or field.is_embed_file) {
+                try emitter.write("[]const u8");
+            } else if (field.is_source) {
+                try emitter.write("[]const u8");
+            } else {
+                try writeFieldType(emitter, field, main_module_name);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
 /// Emit `, .name = null` for every `?T` input field the call site omitted —
 /// an optional parameter's default IS null, and the target's input struct
 /// would be missing the field entirely (400_180).
@@ -5977,21 +5997,7 @@ pub fn emitFlow(
             // Add type annotation if we found the event
             if (event_decl) |event| {
                 // Find the matching field in the event's input
-                var found_field = false;
-                for (event.input.fields) |field| {
-                    if (std.mem.eql(u8, field.name, arg.name)) {
-                        try emitter.write(": ");
-                        if (field.is_file or field.is_embed_file) {
-                            try emitter.write("[]const u8");
-                        } else if (field.is_source) {
-                            try emitter.write("[]const u8");
-                        } else {
-                            try writeFieldType(emitter, field, ctx.main_module_name);
-                        }
-                        found_field = true;
-                        break;
-                    }
-                }
+                const found_field = try writeArgFieldTypeAnnotation(emitter, event, arg.name, ctx.main_module_name);
 
                 // CRITICAL: If mutable and field not found, this is a compiler bug
                 if (label_is_mutable and !found_field) {
@@ -10930,21 +10936,7 @@ pub fn emitContinuationBody(
             // Add type annotation if we found the event
             if (event_decl) |event| {
                 // Find the matching field in the event's input
-                var found_field = false;
-                for (event.input.fields) |field| {
-                    if (std.mem.eql(u8, field.name, arg.name)) {
-                        try emitter.write(": ");
-                        if (field.is_file or field.is_embed_file) {
-                            try emitter.write("[]const u8");
-                        } else if (field.is_source) {
-                            try emitter.write("[]const u8");
-                        } else {
-                            try writeFieldType(emitter, field, ctx.main_module_name);
-                        }
-                        found_field = true;
-                        break;
-                    }
-                }
+                const found_field = try writeArgFieldTypeAnnotation(emitter, event, arg.name, ctx.main_module_name);
 
                 if (!found_field) {
                     std.debug.panic("COMPILER BUG: Field '{s}' not found in event after checking {} fields!", .{ arg.name, event.input.fields.len });
