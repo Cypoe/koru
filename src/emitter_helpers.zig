@@ -2853,6 +2853,15 @@ fn resolveLabelTargetCtx(ctx: *const EmissionContext, label_name: []const u8) ?L
     return null;
 }
 
+/// `_ = &name;` — discard a step result the pipeline doesn't read, emitted
+/// identically after every bare-invocation step in loop/branch bodies.
+fn emitDiscardedResultRef(emitter: *CodeEmitter, result_name: []const u8) !void {
+    try emitter.writeIndent();
+    try emitter.write("_ = &");
+    try writeBranchName(emitter, result_name);
+    try emitter.write(";\n");
+}
+
 /// Emit `: <type>` for the arg's matching input field — file/source fields
 /// spell `[]const u8`, everything else goes through writeFieldType.
 /// Returns whether the field was found (callers panic differently).
@@ -11861,10 +11870,7 @@ fn emitStep(
                         try emitStep(emitter, ctx, &node, inner_result);
                         // Suppress unused result
                         if (node == .invocation) {
-                            try emitter.writeIndent();
-                            try emitter.write("_ = &");
-                            try writeBranchName(emitter, inner_result);
-                            try emitter.write(";\n");
+                            try emitDiscardedResultRef(emitter, inner_result);
                         }
                         step_idx += 1;
 
@@ -11898,10 +11904,7 @@ fn emitStep(
                         const inner_result = if (is_return_node) "_" else std.fmt.bufPrint(&result_buf, "{s}{d}", .{ branch_prefix, step_idx }) catch "_";
                         try emitStep(emitter, ctx, &node, inner_result);
                         if (node == .invocation) {
-                            try emitter.writeIndent();
-                            try emitter.write("_ = &");
-                            try writeBranchName(emitter, inner_result);
-                            try emitter.write(";\n");
+                            try emitDiscardedResultRef(emitter, inner_result);
                         }
                         step_idx += 1;
 
@@ -11946,10 +11949,7 @@ fn emitStep(
                     const inner_result = std.fmt.bufPrint(&result_buf, "then_result_{d}", .{step_idx}) catch "_";
                     try emitStep(emitter, ctx, &node, inner_result);
                     if (node == .invocation) {
-                        try emitter.writeIndent();
-                        try emitter.write("_ = &");
-                        try writeBranchName(emitter, inner_result);
-                        try emitter.write(";\n");
+                        try emitDiscardedResultRef(emitter, inner_result);
                     }
                     step_idx += 1;
 
@@ -11976,10 +11976,7 @@ fn emitStep(
                         const inner_result = std.fmt.bufPrint(&result_buf, "else_result_{d}", .{step_idx}) catch "_";
                         try emitStep(emitter, ctx, &node, inner_result);
                         if (node == .invocation) {
-                            try emitter.writeIndent();
-                            try emitter.write("_ = &");
-                            try writeBranchName(emitter, inner_result);
-                            try emitter.write(";\n");
+                            try emitDiscardedResultRef(emitter, inner_result);
                         }
                         step_idx += 1;
 
@@ -12039,10 +12036,7 @@ fn emitStep(
                         const inner_result = std.fmt.bufPrint(&inner_result_buf, "{s}{d}", .{ branch_prefix, step_idx }) catch "_";
                         try emitStep(emitter, ctx, &node, inner_result);
                         if (node == .invocation) {
-                            try emitter.writeIndent();
-                            try emitter.write("_ = &");
-                            try writeBranchName(emitter, inner_result);
-                            try emitter.write(";\n");
+                            try emitDiscardedResultRef(emitter, inner_result);
                         }
                         step_idx += 1;
 
