@@ -211,6 +211,23 @@ fn describeTerm(buf: []u8, term: std.process.Child.Term) []const u8 {
     };
 }
 
+/// Forward a spawned command's termination: exit with its code, or name a
+/// signal/machine end out loud rather than folding it into a bare exit 1.
+fn exitLikeCommand(allocator: std.mem.Allocator, cmd_name: []const u8, term: std.process.Child.Term) !noreturn {
+    switch (term) {
+        .Exited => |code| std.process.exit(code),
+        .Signal => |sig| {
+            try printStderr(allocator, "✗ Command '{s}' was killed by signal {d} ({s})\n", .{ cmd_name, sig, signalName(sig) });
+            std.process.exit(@intCast(128 + (sig & 0x7f)));
+        },
+        else => {
+            var term_buf: [64]u8 = undefined;
+            try printStderr(allocator, "✗ Command '{s}' {s}\n", .{ cmd_name, describeTerm(&term_buf, term) });
+            std.process.exit(1);
+        },
+    }
+}
+
 /// Write one requirements manifest (`package.json`, `Cargo.toml`, …) into
 /// `output_dir` and report the generated path.
 fn emitRequirementFile(
@@ -6965,18 +6982,7 @@ pub fn main() !void {
                         // Exit with command's exit code. A command that did not
                         // exit gets said out loud — a signal folded into a bare
                         // exit 1 hides that the machine (not the command) ended it.
-                        switch (result.term) {
-                            .Exited => |code| std.process.exit(code),
-                            .Signal => |sig| {
-                                try printStderr(allocator, "✗ Command '{s}' was killed by signal {d} ({s})\n", .{ cmd.name, sig, signalName(sig) });
-                                std.process.exit(@intCast(128 + (sig & 0x7f)));
-                            },
-                            else => {
-                                var term_buf: [64]u8 = undefined;
-                                try printStderr(allocator, "✗ Command '{s}' {s}\n", .{ cmd.name, describeTerm(&term_buf, result.term) });
-                                std.process.exit(1);
-                            },
-                        }
+                        try exitLikeCommand(allocator, cmd.name, result.term);
                     }
                 }
 
@@ -7078,18 +7084,7 @@ pub fn main() !void {
                         // Exit with command's exit code. Same contract as the
                         // shell-command path above: a non-exit termination is
                         // reported, never folded into a silent exit 1.
-                        switch (result.term) {
-                            .Exited => |code| std.process.exit(code),
-                            .Signal => |sig| {
-                                try printStderr(allocator, "✗ Command '{s}' was killed by signal {d} ({s})\n", .{ cmd.name, sig, signalName(sig) });
-                                std.process.exit(@intCast(128 + (sig & 0x7f)));
-                            },
-                            else => {
-                                var term_buf: [64]u8 = undefined;
-                                try printStderr(allocator, "✗ Command '{s}' {s}\n", .{ cmd.name, describeTerm(&term_buf, result.term) });
-                                std.process.exit(1);
-                            },
-                        }
+                        try exitLikeCommand(allocator, cmd.name, result.term);
                     }
                 }
 

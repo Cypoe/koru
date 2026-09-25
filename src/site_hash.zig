@@ -96,6 +96,28 @@ pub fn collectSites(alloc: std.mem.Allocator, prog: *const ast.Program) ![]Site 
     return list.items;
 }
 
+/// A decl site: `decl:<path>` under the decl's own module or the enclosing
+/// one. `decl` is an `EventDecl` or `ProcDecl` — same three fields drive
+/// both.
+fn appendDeclItem(
+    alloc: std.mem.Allocator,
+    list: *SiteList,
+    module_name: ?[]const u8,
+    decl: anytype,
+) !void {
+    const module = if (decl.module.len > 0) decl.module else module_name orelse "";
+    const spelling = try spellPath(alloc, decl.path);
+    const item_key = try std.fmt.allocPrint(alloc, "decl:{s}", .{spelling});
+    try list.append(alloc, .{
+        .hash = try hashPath(alloc, &.{ module, item_key }),
+        .ptr = @intFromPtr(decl),
+        .kind = .decl,
+        .spelling = spelling,
+        .module = module,
+        .location = decl.location,
+    });
+}
+
 fn walkItems(
     alloc: std.mem.Allocator,
     list: *SiteList,
@@ -109,32 +131,8 @@ fn walkItems(
     for (items) |*item| {
         switch (item.*) {
             .module_decl => |*m| try walkItems(alloc, list, m.items, m.logical_name),
-            .event_decl => |*ed| {
-                const module = if (ed.module.len > 0) ed.module else module_name orelse "";
-                const spelling = try spellPath(alloc, ed.path);
-                const item_key = try std.fmt.allocPrint(alloc, "decl:{s}", .{spelling});
-                try list.append(alloc, .{
-                    .hash = try hashPath(alloc, &.{ module, item_key }),
-                    .ptr = @intFromPtr(ed),
-                    .kind = .decl,
-                    .spelling = spelling,
-                    .module = module,
-                    .location = ed.location,
-                });
-            },
-            .proc_decl => |*pd| {
-                const module = if (pd.module.len > 0) pd.module else module_name orelse "";
-                const spelling = try spellPath(alloc, pd.path);
-                const item_key = try std.fmt.allocPrint(alloc, "decl:{s}", .{spelling});
-                try list.append(alloc, .{
-                    .hash = try hashPath(alloc, &.{ module, item_key }),
-                    .ptr = @intFromPtr(pd),
-                    .kind = .decl,
-                    .spelling = spelling,
-                    .module = module,
-                    .location = pd.location,
-                });
-            },
+            .event_decl => |*ed| try appendDeclItem(alloc, list, module_name, ed),
+            .proc_decl => |*pd| try appendDeclItem(alloc, list, module_name, pd),
             .flow => |*fl| {
                 const module = if (fl.module.len > 0) fl.module else module_name orelse "";
                 try walkFlow(alloc, list, fl, module, &flow_ords);
