@@ -97,13 +97,7 @@ pub const ShapeAnalyzer = struct {
     
     /// Convert DottedPath to string for registry lookups
     fn pathToString(self: *ShapeAnalyzer, path: ast.DottedPath) ![]const u8 {
-        var buf = try std.ArrayList(u8).initCapacity(self.allocator, 64);
-        defer buf.deinit(self.allocator);
-        for (path.segments, 0..) |segment, i| {
-            if (i > 0) try buf.append(self.allocator, '.');
-            try buf.appendSlice(self.allocator, segment);
-        }
-        return try self.allocator.dupe(u8, buf.items);
+        return std.mem.join(self.allocator, ".", path.segments);
     }
     
     /// Recursively collect exit points from a flow

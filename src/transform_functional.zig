@@ -355,12 +355,7 @@ pub const CaptureLocation = struct {
 // Helper functions
 
 fn pathToString(allocator: std.mem.Allocator, path: *const ast.DottedPath) ![]const u8 {
-    var buf = try std.ArrayList(u8).initCapacity(allocator, 64);
-    for (path.segments, 0..) |segment, i| {
-        if (i > 0) try buf.append(allocator, '.');
-        try buf.appendSlice(allocator, segment);
-    }
-    return try buf.toOwnedSlice(allocator);
+    return std.mem.join(allocator, ".", path.segments);
 }
 
 fn countNodes(source_file: *const ast.Program) usize {

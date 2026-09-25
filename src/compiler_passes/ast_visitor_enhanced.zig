@@ -222,15 +222,7 @@ pub fn Walker(comptime UserData: type) type {
         }
         
         fn pathToString(path: ast.DottedPath) ![]const u8 {
-            var buf = try std.ArrayList(u8).initCapacity(std.heap.page_allocator, 0);
-            defer buf.deinit(std.heap.page_allocator);
-            
-            for (path.segments, 0..) |seg, i| {
-                if (i > 0) try buf.append(std.heap.page_allocator, '.');
-                try buf.appendSlice(std.heap.page_allocator, seg);
-            }
-            
-            return try std.heap.page_allocator.dupe(u8, buf.items);
+            return std.mem.join(std.heap.page_allocator, ".", path.segments);
         }
     };
 }

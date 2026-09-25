@@ -288,12 +288,7 @@ pub const ProgramAnalysis = struct {
     data_flows: std.ArrayList(DataFlow),
     
     fn pathToString(self: *ProgramAnalysis, path: ast.DottedPath) ![]const u8 {
-        var buf = try std.ArrayList(u8).initCapacity(self.allocator, 64);
-        for (path.segments, 0..) |segment, i| {
-            if (i > 0) try buf.append(self.allocator, '.');
-            try buf.appendSlice(self.allocator, segment);
-        }
-        return try buf.toOwnedSlice(self.allocator);
+        return std.mem.join(self.allocator, ".", path.segments);
     }
     
     pub fn init(allocator: std.mem.Allocator) !ProgramAnalysis {

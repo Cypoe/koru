@@ -279,15 +279,7 @@ fn getItemKey(allocator: std.mem.Allocator, item: *const ast.Item) ![]u8 {
 
 /// Convert a dotted path to a string
 fn pathToString(allocator: std.mem.Allocator, path: *const ast.DottedPath) ![]u8 {
-    var result = std.ArrayList(u8).init(allocator);
-    defer result.deinit();
-    
-    for (path.segments, 0..) |segment, i| {
-        if (i > 0) try result.append('.');
-        try result.appendSlice(segment);
-    }
-    
-    return try result.toOwnedSlice();
+    return std.mem.join(allocator, ".", path.segments);
 }
 
 /// Check if two items conflict (simplified)

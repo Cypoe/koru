@@ -218,12 +218,7 @@ pub const ProcInfo = struct {
 
 /// Convert DottedPath to string for use as hashmap key
 fn pathToString(allocator: std.mem.Allocator, path: ast.DottedPath) ![]const u8 {
-    var buf = try std.ArrayList(u8).initCapacity(allocator, 64);
-    for (path.segments, 0..) |segment, i| {
-        if (i > 0) try buf.append(allocator, '.');
-        try buf.appendSlice(allocator, segment);
-    }
-    return try buf.toOwnedSlice(allocator);
+    return std.mem.join(allocator, ".", path.segments);
 }
 
 /// Qualifier-aware hashmap key for event/proc lookup: `<qualifier>|<segments>`.

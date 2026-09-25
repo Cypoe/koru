@@ -330,28 +330,6 @@ pub const PurityChecker = struct {
 
     /// Helper: Convert DottedPath to string (e.g., "foo.bar.baz")
     fn pathToString(self: *PurityChecker, path: ast.DottedPath) ![]const u8 {
-        if (path.segments.len == 0) return "";
-        if (path.segments.len == 1) return try self.allocator.dupe(u8, path.segments[0]);
-
-        // Calculate total length
-        var total_len: usize = 0;
-        for (path.segments) |seg| {
-            total_len += seg.len;
-        }
-        total_len += path.segments.len - 1; // dots
-
-        var result = try self.allocator.alloc(u8, total_len);
-        var pos: usize = 0;
-
-        for (path.segments, 0..) |seg, i| {
-            @memcpy(result[pos..][0..seg.len], seg);
-            pos += seg.len;
-            if (i < path.segments.len - 1) {
-                result[pos] = '.';
-                pos += 1;
-            }
-        }
-
-        return result;
+        return std.mem.join(self.allocator, ".", path.segments);
     }
 };

@@ -132,12 +132,7 @@ fn countLines(text: []const u8) usize {
 }
 
 fn pathToString(allocator: std.mem.Allocator, path: []const []const u8) ![]const u8 {
-    var buf = try std.ArrayList(u8).initCapacity(allocator, 64);
-    for (path, 0..) |segment, i| {
-        if (i > 0) try buf.append(allocator, '.');
-        try buf.appendSlice(allocator, segment);
-    }
-    return try buf.toOwnedSlice(allocator);
+    return std.mem.join(allocator, ".", path);
 }
 
 fn generateInlinedCode(
