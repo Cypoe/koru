@@ -80,18 +80,7 @@ fn modulePathToLogical(path: []const u8, buf: []u8) []const u8 {
     return buf[0..j];
 }
 
-fn eventDisplayName(module_logical: []const u8, event_name: []const u8, buf: []u8) []const u8 {
-    var logical_slash: [256]u8 = undefined;
-    var j: usize = 0;
-    for (module_logical) |c| {
-        if (j >= logical_slash.len) break;
-        logical_slash[j] = if (c == '.') '/' else c;
-        j += 1;
-    }
-    const mod_slash = logical_slash[0..j];
-    const written = std.fmt.bufPrint(buf, "{s}:{s}", .{ mod_slash, event_name }) catch return event_name;
-    return written;
-}
+const eventDisplayName = frontend_hover.eventDisplayName;
 
 const formatSignature = frontend_hover.formatSignature;
 

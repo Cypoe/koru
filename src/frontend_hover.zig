@@ -106,7 +106,7 @@ fn lastColon(path: []const u8) ?usize {
     return std.mem.lastIndexOfScalar(u8, path, ':');
 }
 
-fn eventDisplayName(module_logical: []const u8, event_name: []const u8, buf: []u8) []const u8 {
+pub fn eventDisplayName(module_logical: []const u8, event_name: []const u8, buf: []u8) []const u8 {
     // std.store + new → std/store:new
     var logical_slash: [256]u8 = undefined;
     var j: usize = 0;
