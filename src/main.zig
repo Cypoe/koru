@@ -6051,6 +6051,33 @@ fn runSkillsInstall(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     }
 }
 
+/// The koru-diagnostic gate: when the reporter holds errors they go to
+/// stderr and the process stops — a pass that produced diagnostics never
+/// reaches the user as a raw Zig error or stack trace.
+fn exitOnReportedErrors(reporter: *ErrorReporter) !void {
+    if (reporter.hasErrors()) {
+        const stderr_writer = FileWriter{ .file = std.fs.File.stderr() };
+        try reporter.printErrors(stderr_writer);
+        std.process.exit(1);
+    }
+}
+
+/// The wider unparseable gate — reporter errors OR parse_error AST nodes
+/// (the lenient parser can mint the second without the first). Prints the
+/// reporter's errors and, when the reporter is empty, the AST nodes — a
+/// refused program never exits 1 in silence.
+fn exitOnUnparseable(reporter: *ErrorReporter, source_file: *const ast.Program) !void {
+    if (reporter.hasErrors() or source_file.hasParseErrors()) {
+        const stderr_writer = FileWriter{ .file = std.fs.File.stderr() };
+        try reporter.printErrors(stderr_writer);
+        if (!reporter.hasErrors()) {
+            // Reporter is empty but AST has parse_error nodes — print them
+            try import_pipeline.printAstParseErrors(source_file, stderr_writer);
+        }
+        std.process.exit(1);
+    }
+}
+
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer {
@@ -6624,11 +6651,7 @@ pub fn main() !void {
 
     log.debug("DEBUG: Parser initialized, calling parse()...\n", .{});
     const parse_result = parser.parse() catch |err| {
-        if (parser.reporter.hasErrors()) {
-            const stderr_writer = FileWriter{ .file = std.fs.File.stderr() };
-            try parser.reporter.printErrors(stderr_writer);
-            std.process.exit(1);
-        }
+        try exitOnReportedErrors(&parser.reporter);
         return err;
     };
     log.debug("DEBUG: Parse succeeded, ast_json_mode = {}\n", .{ast_json_mode});
@@ -6670,11 +6693,7 @@ pub fn main() !void {
         try printStdout(allocator, "{s}", .{json_output});
 
         // Still report errors and exit with failure code if there were errors
-        if (parser.reporter.hasErrors()) {
-            const stderr_writer = FileWriter{ .file = std.fs.File.stderr() };
-            try parser.reporter.printErrors(stderr_writer);
-            std.process.exit(1);
-        }
+        try exitOnReportedErrors(&parser.reporter);
         return;
     }
 
@@ -6687,11 +6706,7 @@ pub fn main() !void {
     // from a failing imported module — while the reporter stays clean; a
     // canonical form of a broken program is meaningless either way).
     if (ast_canon_mode) {
-        if (parser.reporter.hasErrors() or source_file.hasParseErrors()) {
-            const stderr_writer = FileWriter{ .file = std.fs.File.stderr() };
-            try parser.reporter.printErrors(stderr_writer);
-            std.process.exit(1);
-        }
+        try exitOnUnparseable(&parser.reporter, &source_file);
         const ast_json = @import("ast_json");
         const json_output = try ast_json.serializeCanon(compile_allocator, &source_file);
         try printStdout(allocator, "{s}\n", .{json_output});
@@ -6700,11 +6715,7 @@ pub fn main() !void {
 
     // --print: canonical Koru source from the post-parse tree.
     if (print_mode) {
-        if (parser.reporter.hasErrors() or source_file.hasParseErrors()) {
-            const stderr_writer = FileWriter{ .file = std.fs.File.stderr() };
-            try parser.reporter.printErrors(stderr_writer);
-            std.process.exit(1);
-        }
+        try exitOnUnparseable(&parser.reporter, &source_file);
         const ast_printer = @import("ast_printer");
         const printed = try ast_printer.printProgram(compile_allocator, &source_file);
         try printStdout(allocator, "{s}", .{printed});
@@ -6800,15 +6811,7 @@ pub fn main() !void {
     // For non-JSON mode, fail immediately if there are parse errors
     // Defense-in-depth: check BOTH reporter errors AND parse_error AST nodes.
     // Lenient parser may create parse_error nodes without adding to reporter.
-    if (parser.reporter.hasErrors() or source_file.hasParseErrors()) {
-        const stderr_writer = FileWriter{ .file = std.fs.File.stderr() };
-        try parser.reporter.printErrors(stderr_writer);
-        if (!parser.reporter.hasErrors()) {
-            // Reporter is empty but AST has parse_error nodes — print them
-            try import_pipeline.printAstParseErrors(&source_file, stderr_writer);
-        }
-        std.process.exit(1);
-    }
+    try exitOnUnparseable(&parser.reporter, &source_file);
 
     // Check for frontend commands (shell and Zig) for instant execution
     const shell_commands = try collectShellCommands(parse_allocator, &source_file);
@@ -7204,11 +7207,7 @@ pub fn main() !void {
     // frontend with the teaching diagnostic and never reaches emission.
     const host_type_scope_checker = @import("host_type_scope_checker");
     try host_type_scope_checker.check(parse_allocator, source_file.items, &parser.reporter);
-    if (parser.reporter.hasErrors()) {
-        const stderr_writer = FileWriter{ .file = std.fs.File.stderr() };
-        try parser.reporter.printErrors(stderr_writer);
-        std.process.exit(1);
-    }
+    try exitOnReportedErrors(&parser.reporter);
 
     // Build keyword registry and resolve [keyword] events
     // This enables unqualified invocation of events marked with [keyword]
@@ -7240,21 +7239,13 @@ pub fn main() !void {
     // private inside a .k contract file in the first place."
     const validate_contract_impl = @import("validate_contract_impl");
     try validate_contract_impl.validate(source_file.items, &parser.reporter);
-    if (parser.reporter.hasErrors()) {
-        const stderr_writer = FileWriter{ .file = std.fs.File.stderr() };
-        try parser.reporter.printErrors(stderr_writer);
-        std.process.exit(1);
-    }
+    try exitOnReportedErrors(&parser.reporter);
 
     // Populate invocation.source_module for visibility enforcement
     try populateInvocationSourceModules(@constCast(source_file.items), parse_allocator, source_file.main_module_name);
     try enforceInvocationVisibility(source_file.items, &parser.reporter, parse_allocator, source_file.main_module_name);
     try enforceUniqueBindingNames(source_file.items, &parser.reporter, parse_allocator);
-    if (parser.reporter.hasErrors()) {
-        const stderr_writer = FileWriter{ .file = std.fs.File.stderr() };
-        try parser.reporter.printErrors(stderr_writer);
-        std.process.exit(1);
-    }
+    try exitOnReportedErrors(&parser.reporter);
 
     // NOTE: Declaration-level transforms run in the BACKEND alongside invocation transforms.
     // They update the type registry when they run, not here in the frontend.
@@ -7279,11 +7270,7 @@ pub fn main() !void {
         // `error: ImplTargetNotAbstract` plus a koruc stack trace off the
         // user's screen. Only a genuine ICE — a failure with nothing said —
         // propagates raw.
-        if (parser.reporter.hasErrors()) {
-            const stderr_writer = FileWriter{ .file = std.fs.File.stderr() };
-            try parser.reporter.printErrors(stderr_writer);
-            std.process.exit(1);
-        }
+        try exitOnReportedErrors(&parser.reporter);
         return err;
     };
     log.debug("Abstract/impl validation passed\n", .{});
@@ -7365,11 +7352,7 @@ pub fn main() !void {
     // (KORU038) is reported here, at the koru level, before it can reach the
     // emitter and leak a raw Zig type error. KORU092/093 (the thread) and
     // KORU094 (the terminus) surface at the same gate.
-    if (parser.reporter.hasErrors()) {
-        const stderr_writer = FileWriter{ .file = std.fs.File.stderr() };
-        try parser.reporter.printErrors(stderr_writer);
-        std.process.exit(1);
-    }
+    try exitOnReportedErrors(&parser.reporter);
 
     // Purity checking pass
     var purity_check = PurityChecker.init(compile_allocator);
@@ -7384,11 +7367,7 @@ pub fn main() !void {
         // Any checker failure with diagnostics pending must present them as
         // koru diagnostics — a raw Zig error must never reach the user when a
         // real diagnostic exists (only genuine ICEs propagate raw).
-        if (parser.reporter.hasErrors()) {
-            const stderr_writer = FileWriter{ .file = std.fs.File.stderr() };
-            try parser.reporter.printErrors(stderr_writer);
-            std.process.exit(1);
-        }
+        try exitOnReportedErrors(&parser.reporter);
         return err;
     };
 
