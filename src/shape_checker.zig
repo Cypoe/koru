@@ -1830,35 +1830,15 @@ pub const ShapeChecker = struct {
                     }
                 }
 
-                // Handle foreach nodes - recurse into their branches
+                // Handle foreach/conditional nodes - recurse into their branches
                 const cont_loc = if (cont.location.line != 0) cont.location else location;
-                if (step == .foreach) {
-                    for (step.foreach.branches) |*branch| {
-                        // Recursively validate the continuations inside each branch
-                        const branch_valid = try self.validateNestedContinuations(
-                            branch.body,
-                            cont_loc,
-                        );
-                        if (!branch_valid) {
-                            has_errors = true;
-                        }
-                    }
-                    // Also check this continuation's nested continuations
-                    if (cont.continuations.len > 0) {
-                        const nested_valid = try self.validateNestedContinuations(
-                            cont.continuations,
-                            cont_loc,
-                        );
-                        if (!nested_valid) {
-                            has_errors = true;
-                        }
-                    }
-                    continue;
-                }
-
-                // Handle conditional nodes - recurse into their branches
-                if (step == .conditional) {
-                    for (step.conditional.branches) |*branch| {
+                const node_branches: ?[]const ast.NamedBranch = switch (step) {
+                    .foreach => |fe| fe.branches,
+                    .conditional => |cond| cond.branches,
+                    else => null,
+                };
+                if (node_branches) |branches| {
+                    for (branches) |*branch| {
                         // Recursively validate the continuations inside each branch
                         const branch_valid = try self.validateNestedContinuations(
                             branch.body,
