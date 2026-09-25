@@ -1117,7 +1117,6 @@ fn exprCompareGte(left: ExprValue, right: ExprValue) ExprEvalError!ExprValue {
 }
 
 const ExprArithOp = enum { add, sub, mul, div, mod };
-
 ~part args
 ~part argref
 ~part arith
@@ -1128,4 +1127,5 @@ const ExprArithOp = enum { add, sub, mul, div, mod };
 ~part parse
 ~part run
 ~part select
+~part literal
 ~part validate

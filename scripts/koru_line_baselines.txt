@@ -26,6 +26,7 @@ koru_std/build_image.kz	357
 koru_std/build.kz	586
 koru_std/ccp_aspirational.kz	108
 koru_std/ccp.kz	109
+koru_std/channel.kz	1549
 koru_std/compiler_context.kz	253
 koru_std/compiler_types.kz	53
 koru_std/compiler_visitor.kz	505
@@ -69,6 +70,7 @@ koru_std/interpreter.arms.kz	52
 koru_std/interpreter.define.kz	152
 koru_std/interpreter.guards.kz	63
 koru_std/interpreter.kz	1131
+koru_std/interpreter.literal.kz	40
 koru_std/interpreter.names.kz	18
 koru_std/interpreter.parse.kz	52
 koru_std/interpreter.run.kz	1659
@@ -123,7 +125,9 @@ koru_std/refine.kz	417
 koru_std/refine.terminal.kz	85
 koru_std/regex.kz	471
 koru_std/regex.scan.kz	421
-koru_std/rings.kz	225
+koru_std/rings.kz	161
+koru_std/rings.new.kz	587
+koru_std/rings.ops.kz	148
 koru_std/rules.kz	691
 koru_std/runtime.affordances.kz	83
 koru_std/runtime.eval.kz	74

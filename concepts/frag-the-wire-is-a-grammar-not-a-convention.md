@@ -67,6 +67,20 @@ declaration lives. Pinned by 440_025 — foreign field refused by name on
 the head call, a mid-turn step, and a nested arm-body call; a name
 outside the vocabulary is still `event-denied`, never a field complaint.
 
+The fifth instance is inside the literal. **What the lexer tolerates for
+boundaries, eval must honor as content.** The string scanner has always
+tracked escapes (`\"` does not close the string) — the grammar admitted
+`\n` on the wire, and `evaluateExpr` then materialized the literal as
+backslash-n verbatim, because the AOT path never noticed: codegen
+re-emits the raw text into a Zig literal where escapes resolve
+downstream. The wire is the only path that *reads* the value, and the
+value it read was the token, not the text. Measured live 2026-09-25: a
+model's multi-line `edit()` wrote literal `\n` into a real file — the
+agent cannot place a raw newline inside a quoted arg on a line-oriented
+wire, so escapes were an admitted construct nobody could use.
+`unescapeStringLiteral` now runs at materialization; unknown escapes pass
+through untouched.
+
 The fourth instance is the identifier itself. **A bare identifier in arg
 position is a reference, never a literal** — and the two surfaces meet
 that law at different walls. A top-level item head admits only quoted

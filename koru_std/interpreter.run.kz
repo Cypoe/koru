@@ -639,9 +639,9 @@ fn buildDischargeInvocation(
 fn evaluateExpr(expr_str: []const u8, env: *Environment, allocator: std.mem.Allocator) ![]const u8 {
     const trimmed = std.mem.trim(u8, expr_str, " \t");
 
-    // String literal - return without quotes
+    // String literal - return without quotes, honoring escapes
     if (trimmed.len >= 2 and trimmed[0] == '"' and trimmed[trimmed.len - 1] == '"') {
-        return try allocator.dupe(u8, trimmed[1..trimmed.len - 1]);
+        return try unescapeStringLiteral(trimmed[1..trimmed.len - 1], allocator);
     }
 
     // Check for field access (binding.field)
