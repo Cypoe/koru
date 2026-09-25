@@ -3749,72 +3749,56 @@ fn installZig(allocator: std.mem.Allocator) !void {
 
     // On macOS, try brew first (it works well)
     if (builtin.os.tag == .macos) {
-        const check_result = std.process.Child.run(.{
-            .allocator = allocator,
-            .argv = &[_][]const u8{ "sh", "-c", "brew --version" },
-        }) catch {
-            std.debug.print("  brew not found, trying direct download...\n", .{});
-            return installZigDirect(allocator);
-        };
-        defer allocator.free(check_result.stdout);
-        defer allocator.free(check_result.stderr);
-
-        if (termIsClean(check_result.term)) {
-            std.debug.print("  Detected brew, running: brew install zig\n", .{});
-            const install_result = std.process.Child.run(.{
-                .allocator = allocator,
-                .argv = &[_][]const u8{ "sh", "-c", "brew install zig" },
-            }) catch |err| {
-                std.debug.print("  \x1b[31m✗\x1b[0m brew install failed: {s}, trying direct download...\n", .{@errorName(err)});
-                return installZigDirect(allocator);
-            };
-            defer allocator.free(install_result.stdout);
-            defer allocator.free(install_result.stderr);
-
-            if (termIsClean(install_result.term)) {
-                std.debug.print("  \x1b[32m✓\x1b[0m Zig installed successfully!\n", .{});
-                return;
-            }
-            var term_buf: [64]u8 = undefined;
-            std.debug.print("  \x1b[31m✗\x1b[0m brew install {s}, trying direct download...\n", .{describeTerm(&term_buf, install_result.term)});
-        }
-        return installZigDirect(allocator);
+        return installZigViaPackageManager(allocator, "brew", "brew --version", "brew install zig", "brew install zig");
     }
 
     // On Linux, try pacman first (Arch has Zig), then fall back to direct download
     if (builtin.os.tag == .linux) {
-        const check_result = std.process.Child.run(.{
-            .allocator = allocator,
-            .argv = &[_][]const u8{ "sh", "-c", "pacman --version" },
-        }) catch {
-            return installZigDirect(allocator);
-        };
-        defer allocator.free(check_result.stdout);
-        defer allocator.free(check_result.stderr);
-
-        if (termIsClean(check_result.term)) {
-            std.debug.print("  Detected pacman, running: sudo pacman -S zig\n", .{});
-            const install_result = std.process.Child.run(.{
-                .allocator = allocator,
-                .argv = &[_][]const u8{ "sh", "-c", "sudo pacman -S --noconfirm zig" },
-            }) catch |err| {
-                std.debug.print("  \x1b[31m✗\x1b[0m pacman install failed: {s}, trying direct download...\n", .{@errorName(err)});
-                return installZigDirect(allocator);
-            };
-            defer allocator.free(install_result.stdout);
-            defer allocator.free(install_result.stderr);
-
-            if (termIsClean(install_result.term)) {
-                std.debug.print("  \x1b[32m✓\x1b[0m Zig installed successfully!\n", .{});
-                return;
-            }
-            var term_buf: [64]u8 = undefined;
-            std.debug.print("  \x1b[31m✗\x1b[0m pacman install {s}, trying direct download...\n", .{describeTerm(&term_buf, install_result.term)});
-        }
-        return installZigDirect(allocator);
+        return installZigViaPackageManager(allocator, "pacman", "pacman --version", "sudo pacman -S zig", "sudo pacman -S --noconfirm zig");
     }
 
     // Windows or other - direct download
+    return installZigDirect(allocator);
+}
+
+/// One package-manager route for the Zig install: probe the manager, run its
+/// install, and on any failure hand off to the direct download.
+fn installZigViaPackageManager(
+    allocator: std.mem.Allocator,
+    comptime name: []const u8,
+    comptime check_cmd: []const u8,
+    comptime shown_cmd: []const u8,
+    comptime install_cmd: []const u8,
+) !void {
+    const check_result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{ "sh", "-c", check_cmd },
+    }) catch {
+        std.debug.print("  " ++ name ++ " not found, trying direct download...\n", .{});
+        return installZigDirect(allocator);
+    };
+    defer allocator.free(check_result.stdout);
+    defer allocator.free(check_result.stderr);
+
+    if (termIsClean(check_result.term)) {
+        std.debug.print("  Detected " ++ name ++ ", running: " ++ shown_cmd ++ "\n", .{});
+        const install_result = std.process.Child.run(.{
+            .allocator = allocator,
+            .argv = &[_][]const u8{ "sh", "-c", install_cmd },
+        }) catch |err| {
+            std.debug.print("  \x1b[31m✗\x1b[0m " ++ name ++ " install failed: {s}, trying direct download...\n", .{@errorName(err)});
+            return installZigDirect(allocator);
+        };
+        defer allocator.free(install_result.stdout);
+        defer allocator.free(install_result.stderr);
+
+        if (termIsClean(install_result.term)) {
+            std.debug.print("  \x1b[32m✓\x1b[0m Zig installed successfully!\n", .{});
+            return;
+        }
+        var term_buf: [64]u8 = undefined;
+        std.debug.print("  \x1b[31m✗\x1b[0m " ++ name ++ " install {s}, trying direct download...\n", .{describeTerm(&term_buf, install_result.term)});
+    }
     return installZigDirect(allocator);
 }
 
