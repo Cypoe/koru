@@ -3629,6 +3629,15 @@ fn generateVisitorBackend(writer: anytype, allocator: std.mem.Allocator, source_
     );
 }
 
+/// Print "  <name>" padded to a column — one entry of a help listing.
+fn printPaddedName(allocator: std.mem.Allocator, name: []const u8, max_name_len: usize) !void {
+    const padding = max_name_len - name.len + 2;
+    try printStdout(allocator, "  {s}", .{name});
+    for (0..padding) |_| {
+        try printStdout(allocator, " ", .{});
+    }
+}
+
 fn printStdout(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) !void {
     const msg = try std.fmt.allocPrint(allocator, fmt, args);
     defer allocator.free(msg);
@@ -6899,12 +6908,7 @@ pub fn main() !void {
 
                     // Print shell commands
                     for (shell_commands) |cmd| {
-                        const padding = max_name_len - cmd.name.len + 2;
-                        try printStdout(allocator, "  {s}", .{cmd.name});
-                        var pad_idx: usize = 0;
-                        while (pad_idx < padding) : (pad_idx += 1) {
-                            try printStdout(allocator, " ", .{});
-                        }
+                        try printPaddedName(allocator, cmd.name, max_name_len);
                         if (cmd.description.len > 0) {
                             try printStdout(allocator, "{s}\n", .{cmd.description});
                         } else {
@@ -6914,23 +6918,13 @@ pub fn main() !void {
 
                     // Print zig commands
                     for (zig_commands) |cmd| {
-                        const padding = max_name_len - cmd.name.len + 2;
-                        try printStdout(allocator, "  {s}", .{cmd.name});
-                        var pad_idx: usize = 0;
-                        while (pad_idx < padding) : (pad_idx += 1) {
-                            try printStdout(allocator, " ", .{});
-                        }
+                        try printPaddedName(allocator, cmd.name, max_name_len);
                         try printStdout(allocator, "(zig command)\n", .{});
                     }
 
                     // Print koru commands
                     for (koru_commands) |cmd| {
-                        const padding = max_name_len - cmd.name.len + 2;
-                        try printStdout(allocator, "  {s}", .{cmd.name});
-                        var pad_idx: usize = 0;
-                        while (pad_idx < padding) : (pad_idx += 1) {
-                            try printStdout(allocator, " ", .{});
-                        }
+                        try printPaddedName(allocator, cmd.name, max_name_len);
                         if (cmd.description.len > 0) {
                             try printStdout(allocator, "{s}\n", .{cmd.description});
                         } else {
