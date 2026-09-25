@@ -111,6 +111,27 @@ pub const AbstractImplValidator = struct {
         );
     }
 
+    /// Register `impl_path` as implemented by `item` — KORU113 on a second
+    /// impl of the same canonical name.
+    fn trackImpl(self: *AbstractImplValidator, impl_path: *const ast.DottedPath, item: ImplItem, location: errors.SourceLocation) !void {
+        const canonical_name = try self.buildCanonicalName(impl_path);
+        errdefer self.allocator.free(canonical_name);
+
+        // Check for duplicate implementation
+        if (self.impls.get(canonical_name)) |existing| {
+            const existing_location = switch (existing) {
+                .flow => |f| f.location,
+                .immediate_impl => |existing_ii| existing_ii.location,
+                .proc => |p| p.location,
+            };
+            try self.reportDuplicate(canonical_name, existing_location, location);
+            self.allocator.free(canonical_name);
+            return ValidationError.DuplicateImplementation;
+        }
+
+        try self.impls.put(canonical_name, item);
+    }
+
     fn collectFromItem(self: *AbstractImplValidator, item: *const ast.Item) !void {
         switch (item.*) {
             .event_decl => |*event| {
@@ -127,66 +148,21 @@ pub const AbstractImplValidator = struct {
 
                 // If this proc is marked as impl, also track it
                 if (proc.is_impl) {
-                    const impl_name = try self.buildCanonicalName(&proc.path);
-                    errdefer self.allocator.free(impl_name);
-
-                    // Check for duplicate implementation
-                    if (self.impls.get(impl_name)) |existing| {
-                        const existing_location = switch (existing) {
-                            .flow => |f| f.location,
-                            .immediate_impl => |ii| ii.location,
-                            .proc => |p| p.location,
-                        };
-                        try self.reportDuplicate(impl_name, existing_location, proc.location);
-                        self.allocator.free(impl_name);
-                        return ValidationError.DuplicateImplementation;
-                    }
-
-                    try self.impls.put(impl_name, ImplItem{ .proc = proc });
+                    try self.trackImpl(&proc.path, .{ .proc = proc }, proc.location);
                 }
             },
             .flow => |*flow| {
-                // If this flow implements an event, track it
+                // If this flow implements a tor, track it
                 if (flow.impl_of) |impl_path| {
                     if (flow.isImpl()) {
-                        const canonical_name = try self.buildCanonicalName(&impl_path);
-                        errdefer self.allocator.free(canonical_name);
-
-                        // Check for duplicate implementation
-                        if (self.impls.get(canonical_name)) |existing| {
-                            const existing_location = switch (existing) {
-                                .flow => |f| f.location,
-                                .immediate_impl => |ii| ii.location,
-                                .proc => |p| p.location,
-                            };
-                            try self.reportDuplicate(canonical_name, existing_location, flow.location);
-                            self.allocator.free(canonical_name);
-                            return ValidationError.DuplicateImplementation;
-                        }
-
-                        try self.impls.put(canonical_name, ImplItem{ .flow = flow });
+                        try self.trackImpl(&impl_path, .{ .flow = flow }, flow.location);
                     }
                 }
             },
             .immediate_impl => |*ii| {
                 // If this immediate impl is a cross-module override, track it
                 if (ii.isImpl()) {
-                    const canonical_name = try self.buildCanonicalName(&ii.event_path);
-                    errdefer self.allocator.free(canonical_name);
-
-                    // Check for duplicate implementation
-                    if (self.impls.get(canonical_name)) |existing| {
-                        const existing_location = switch (existing) {
-                            .flow => |f| f.location,
-                            .immediate_impl => |existing_ii| existing_ii.location,
-                            .proc => |p| p.location,
-                        };
-                        try self.reportDuplicate(canonical_name, existing_location, ii.location);
-                        self.allocator.free(canonical_name);
-                        return ValidationError.DuplicateImplementation;
-                    }
-
-                    try self.impls.put(canonical_name, ImplItem{ .immediate_impl = ii });
+                    try self.trackImpl(&ii.event_path, .{ .immediate_impl = ii }, ii.location);
                 }
             },
             .module_decl => |*module| {
