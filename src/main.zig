@@ -2118,6 +2118,36 @@ fn scanTransformParams(allocator: std.mem.Allocator, fields: []const ast.Field) 
     return scan;
 }
 
+/// The name-driven half of the Input scan: `*const Invocation`/`Item`/
+/// `EventDecl` params are detected by TYPE in TransformParamScan; these
+/// machine-convention params (program_ast, allocator, event_name, ctx,
+/// reporter) declare ordinary types and are recognized by NAME.
+const ParamNameScan = struct {
+    has_program_ast: bool = false,
+    has_allocator: bool = false,
+    has_event_name_field: bool = false,
+    has_ctx: bool = false,
+    has_reporter: bool = false,
+};
+
+fn scanParamNames(fields: []const ast.Field) ParamNameScan {
+    var names = ParamNameScan{};
+    for (fields) |field| {
+        if (std.mem.eql(u8, field.name, "program_ast") or std.mem.eql(u8, field.name, "program")) {
+            names.has_program_ast = true;
+        } else if (std.mem.eql(u8, field.name, "allocator")) {
+            names.has_allocator = true;
+        } else if (std.mem.eql(u8, field.name, "event_name")) {
+            names.has_event_name_field = true;
+        } else if (std.mem.eql(u8, field.name, "ctx")) {
+            names.has_ctx = true;
+        } else if (std.mem.eql(u8, field.name, "reporter")) {
+            names.has_reporter = true;
+        }
+    }
+    return names;
+}
+
 /// Walk items finding proc_decls whose path matches the given segments AND have a non-null,
 /// non-default-lang target. Used to collect variant procs for transform-event dispatch.
 /// `default_lang` is the variant tag that is considered the default (typically "zig",
@@ -2465,27 +2495,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                 const stub_name = try joinPathSegments(allocator, event_decl.path.segments);
                 const match_name = try joinPathSegmentsWithDots(allocator, event_decl.path.segments);
 
-                // Detect additional parameters by NAME (program, allocator, event_name)
-                // Note: invocation/event_decl/item already detected by TYPE above
-                var has_program_ast = false;
-                var has_allocator = false;
-                var has_event_name_field = false;
-                var has_ctx = false;
-                var has_reporter = false;
-
-                for (event_decl.input.fields) |field| {
-                    if (std.mem.eql(u8, field.name, "program_ast") or std.mem.eql(u8, field.name, "program")) {
-                        has_program_ast = true;
-                    } else if (std.mem.eql(u8, field.name, "allocator")) {
-                        has_allocator = true;
-                    } else if (std.mem.eql(u8, field.name, "event_name")) {
-                        has_event_name_field = true;
-                    } else if (std.mem.eql(u8, field.name, "ctx")) {
-                        has_ctx = true;
-                    } else if (std.mem.eql(u8, field.name, "reporter")) {
-                        has_reporter = true;
-                    }
-                }
+                const param_names = scanParamNames(event_decl.input.fields);
 
                 // Detect what this event returns (check branches)
                 const transform_flags = scanTransformFlags(event_decl);
@@ -2517,11 +2527,11 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                     .has_invocation = scan.has_invocation_param,
                     .has_event_decl = scan.has_event_decl_param,
                     .has_item = scan.has_item_param,
-                    .has_program_ast = has_program_ast,
-                    .has_ctx = has_ctx,
-                    .has_reporter = has_reporter,
-                    .has_allocator = has_allocator,
-                    .has_event_name_field = has_event_name_field,
+                    .has_program_ast = param_names.has_program_ast,
+                    .has_ctx = param_names.has_ctx,
+                    .has_reporter = param_names.has_reporter,
+                    .has_allocator = param_names.has_allocator,
+                    .has_event_name_field = param_names.has_event_name_field,
                     .has_compile_error = has_compile_error,
                     .returns_program = returns_program,
                     .bare_return = event_decl.return_type != null and
@@ -2609,33 +2619,13 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
 
                         const stub_name = try allocator.dupe(u8, stub_name_buf[0..stub_name_len]);
 
-                        // Detect additional parameters by NAME (program, allocator, event_name)
-                        // Note: invocation/event_decl/item already detected by TYPE above
-                        var has_program_ast = false;
-                        var has_allocator = false;
-                        var has_event_name_field = false;
-                        var has_ctx = false;
-                        var has_reporter = false;
-
-                        for (event_decl.input.fields) |field| {
-                            if (std.mem.eql(u8, field.name, "program_ast") or std.mem.eql(u8, field.name, "program")) {
-                                has_program_ast = true;
-                            } else if (std.mem.eql(u8, field.name, "allocator")) {
-                                has_allocator = true;
-                            } else if (std.mem.eql(u8, field.name, "event_name")) {
-                                has_event_name_field = true;
-                            } else if (std.mem.eql(u8, field.name, "ctx")) {
-                                has_ctx = true;
-                            } else if (std.mem.eql(u8, field.name, "reporter")) {
-                                has_reporter = true;
-                            }
-                        }
+                        var param_names = scanParamNames(event_decl.input.fields);
 
                         if (has_transform_proc) {
                             // Machine params come from the proc convention,
                             // not the event's (user-surface) fields.
-                            has_program_ast = true;
-                            has_allocator = true;
+                            param_names.has_program_ast = true;
+                            param_names.has_allocator = true;
                         }
 
                         // Detect return type
@@ -2685,11 +2675,11 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                             .has_invocation = scan.has_invocation_param,
                             .has_event_decl = scan.has_event_decl_param,
                             .has_item = scan.has_item_param,
-                            .has_program_ast = has_program_ast,
-                            .has_ctx = has_ctx,
-                            .has_reporter = has_reporter,
-                            .has_allocator = has_allocator,
-                            .has_event_name_field = has_event_name_field,
+                            .has_program_ast = param_names.has_program_ast,
+                            .has_ctx = param_names.has_ctx,
+                            .has_reporter = param_names.has_reporter,
+                            .has_allocator = param_names.has_allocator,
+                            .has_event_name_field = param_names.has_event_name_field,
                             .has_compile_error = has_compile_error,
                             .returns_program = returns_program,
                             .bare_return = event_decl.return_type != null and !has_transform_proc,
