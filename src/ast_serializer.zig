@@ -92,6 +92,26 @@ pub const AstSerializer = struct {
         try self.write("\"");
     }
 
+    /// Emit a nullable string field: `v` escaped via writeString, or `null`.
+    fn writeOptString(self: *AstSerializer, value: ?[]const u8) SerializeError!void {
+        if (value) |v| {
+            try self.writeString(v);
+        } else {
+            try self.write("null");
+        }
+    }
+
+    /// Emit a nullable raw string: `"v"` verbatim, or `null`.
+    fn writeOptQuoted(self: *AstSerializer, value: ?[]const u8) SerializeError!void {
+        if (value) |v| {
+            try self.write("\"");
+            try self.write(v);
+            try self.write("\"");
+        } else {
+            try self.write("null");
+        }
+    }
+
     fn writeMultilineString(self: *AstSerializer, str: []const u8) !void {
         // Use Zig's multiline string syntax for better readability
         try self.write("\n");
@@ -344,11 +364,7 @@ pub const AstSerializer = struct {
                 try self.write(", .raw_text = ");
                 try self.writeString(error_node.raw_text);
                 try self.write(", .hint = ");
-                if (error_node.hint) |hint| {
-                    try self.writeString(hint);
-                } else {
-                    try self.write("null");
-                }
+                try self.writeOptString(error_node.hint);
                 try self.write(" } }");
             },
 
@@ -486,19 +502,11 @@ pub const AstSerializer = struct {
         // Return type (`-> T` bare return) + its phantom/obligation
         try self.writeIndent();
         try self.write(".return_type = ");
-        if (event.return_type) |rt| {
-            try self.writeString(rt);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(event.return_type);
         try self.write(",\n");
         try self.writeIndent();
         try self.write(".return_phantom = ");
-        if (event.return_phantom) |rp| {
-            try self.writeString(rp);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(event.return_phantom);
         try self.write(",\n");
 
         // Is public
@@ -668,11 +676,7 @@ pub const AstSerializer = struct {
         // Pre-label (always write, even if null)
         try self.writeIndent();
         try self.write(".pre_label = ");
-        if (flow.pre_label) |label| {
-            try self.writeString(label);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(flow.pre_label);
         try self.write(",\n");
 
         // SuperShape for inline flows with union types
@@ -715,11 +719,7 @@ pub const AstSerializer = struct {
         // impl_variant (null unless this flow is the |variant arm of impl_of)
         try self.writeIndent();
         try self.write(".impl_variant = ");
-        if (flow.impl_variant) |v| {
-            try self.writeString(v);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(flow.impl_variant);
         try self.write(",\n");
 
         // is_impl (true for cross-module overrides, set at parse time)
@@ -931,21 +931,13 @@ pub const AstSerializer = struct {
         // variant selector (for ~event|variant() calls)
         try self.writeIndent();
         try self.write(".variant = ");
-        if (invoc.variant) |v| {
-            try self.writeString(v);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(invoc.variant);
         try self.write(",\n");
 
         // `-> name` return binding (call site of a `-> T` event)
         try self.writeIndent();
         try self.write(".return_binding = ");
-        if (invoc.return_binding) |rb| {
-            try self.writeString(rb);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(invoc.return_binding);
         try self.write(",\n");
 
         // `: r[mutable]` bind annotations (call site of a `-> T` event)
@@ -994,11 +986,7 @@ pub const AstSerializer = struct {
             try self.write("null");
         }
         try self.write(", .phantom_type = ");
-        if (arg.phantom_type) |pt| {
-            try self.writeString(pt);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(arg.phantom_type);
         // Note: parsed_expression is intentionally NOT serialized here.
         // It's an AST enrichment for internal analysis only — not valid in generated Zig backend code.
         try self.write(" }");
@@ -1033,11 +1021,7 @@ pub const AstSerializer = struct {
         // Phantom type
         try self.writeIndent();
         try self.write(".phantom_type = ");
-        if (source.phantom_type) |pt| {
-            try self.writeString(pt);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(source.phantom_type);
         try self.write(",\n");
 
         self.dedent();
@@ -1160,11 +1144,7 @@ pub const AstSerializer = struct {
         // Binding (always write, even if null)
         try self.writeIndent();
         try self.write(".binding = ");
-        if (cont.binding) |bind| {
-            try self.writeString(bind);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(cont.binding);
         try self.write(",\n");
 
         // Shape-destructure at the binding position (omit when empty — the
@@ -1216,21 +1196,13 @@ pub const AstSerializer = struct {
         // Catch-all metatype
         try self.writeIndent();
         try self.write(".catchall_metatype = ");
-        if (cont.catchall_metatype) |meta| {
-            try self.writeString(meta);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(cont.catchall_metatype);
         try self.write(",\n");
 
         // Condition (where clause)
         try self.writeIndent();
         try self.write(".condition = ");
-        if (cont.condition) |cond| {
-            try self.writeString(cond);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(cont.condition);
         try self.write(",\n");
 
         // Condition expression (parsed where clause - for now just null)
@@ -1321,11 +1293,7 @@ pub const AstSerializer = struct {
             },
             .conditional_block => |cb| {
                 try self.write(".{ .conditional_block = .{ .condition = ");
-                if (cb.condition) |cond| {
-                    try self.writeString(cond);
-                } else {
-                    try self.write("null");
-                }
+                try self.writeOptString(cb.condition);
                 try self.write(", .condition_expr = null, .nodes = &[_]Node{\n");
                 self.indent();
                 for (cb.nodes) |inner_step| {
@@ -1353,11 +1321,7 @@ pub const AstSerializer = struct {
                 try self.write(", .source_event = ");
                 try self.writeString(mb.source_event);
                 try self.write(", .dest_event = ");
-                if (mb.dest_event) |dest| {
-                    try self.writeString(dest);
-                } else {
-                    try self.write("null");
-                }
+                try self.writeOptString(mb.dest_event);
                 try self.write(", .branch = ");
                 try self.writeString(mb.branch);
                 try self.write(", .inserted_by_tap = ");
@@ -1380,11 +1344,7 @@ pub const AstSerializer = struct {
                 try self.write(".{ .foreach = .{ .iterable = ");
                 try self.writeString(fe.iterable);
                 try self.write(", .element_type = ");
-                if (fe.element_type) |et| {
-                    try self.writeString(et);
-                } else {
-                    try self.write("null");
-                }
+                try self.writeOptString(fe.element_type);
                 try self.write(", .branches = &[_]NamedBranch{} } }"); // TODO: serialize branches
             },
             .conditional => |cond| {
@@ -1427,11 +1387,7 @@ pub const AstSerializer = struct {
 
         try self.writeIndent();
         try self.write(".plain_value = ");
-        if (bc.plain_value) |pv| {
-            try self.writeString(pv);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(bc.plain_value);
         try self.write(",\n");
 
         try self.writeIndent();
@@ -1453,11 +1409,7 @@ pub const AstSerializer = struct {
         try self.write("ImportDecl{ .path = ");
         try self.writeString(import.path);
         try self.write(", .local_name = ");
-        if (import.local_name) |name| {
-            try self.writeString(name);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(import.local_name);
         try self.write(", .location = .{ .file = ");
         try self.writeString(import.location.file);
         try self.buffer.writer(self.allocator).print(", .line = {d}, .column = {d} }}, .module = ", .{ import.location.line, import.location.column });
@@ -1574,25 +1526,13 @@ pub const AstSerializer = struct {
 
         try self.writeIndent();
         try self.write(".resume_type = ");
-        if (branch.resume_type) |rt| {
-            try self.write("\"");
-            try self.write(rt);
-            try self.write("\"");
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptQuoted(branch.resume_type);
         try self.write(",\n");
 
         try self.writeIndent();
         // Must survive serialization — same lesson as is_wildcard.
         try self.write(".resume_phantom = ");
-        if (branch.resume_phantom) |rp| {
-            try self.write("\"");
-            try self.write(rp);
-            try self.write("\"");
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptQuoted(branch.resume_phantom);
         try self.write(",\n");
 
         try self.writeIndent();
@@ -1604,21 +1544,9 @@ pub const AstSerializer = struct {
                 try self.write(".{ .name = ");
                 try self.writeString(arm.name);
                 try self.write(", .type = ");
-                if (arm.type) |t| {
-                    try self.write("\"");
-                    try self.write(t);
-                    try self.write("\"");
-                } else {
-                    try self.write("null");
-                }
+                try self.writeOptQuoted(arm.type);
                 try self.write(", .phantom = ");
-                if (arm.phantom) |p| {
-                    try self.write("\"");
-                    try self.write(p);
-                    try self.write("\"");
-                } else {
-                    try self.write("null");
-                }
+                try self.writeOptQuoted(arm.phantom);
                 try self.write(" }");
             }
             try self.write(" }");
@@ -1665,11 +1593,7 @@ pub const AstSerializer = struct {
 
         // Serialize module_path for cross-module types
         try self.write(", .module_path = ");
-        if (field.module_path) |module_path| {
-            try self.writeString(module_path);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(field.module_path);
 
         try self.write(", .is_source = ");
         try self.write(if (field.is_source) "true" else "false");
@@ -1684,11 +1608,7 @@ pub const AstSerializer = struct {
 
         // Serialize phantom state (now just an opaque string)
         try self.write(", .phantom = ");
-        if (field.phantom) |phantom| {
-            try self.writeString(phantom);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(field.phantom);
 
         // Serialize expression fields for branch constructors
         try self.write(", .expression = ");
@@ -1700,21 +1620,13 @@ pub const AstSerializer = struct {
         }
 
         try self.write(", .expression_str = ");
-        if (field.expression_str) |expr_str| {
-            try self.writeString(expr_str);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(field.expression_str);
 
         try self.write(", .owns_expression = ");
         try self.write(if (field.owns_expression) "true" else "false");
 
         try self.write(", .default = ");
-        if (field.default) |d| {
-            try self.writeString(d);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(field.default);
 
         try self.write(" }");
     }
@@ -1836,11 +1748,7 @@ pub const AstSerializer = struct {
         try self.write(".{ .module_qualifier = ");
 
         // Write module qualifier (nullable)
-        if (path.module_qualifier) |mq| {
-            try self.writeString(mq);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(path.module_qualifier);
 
         try self.write(", .segments = &[_][]const u8{");
 
@@ -2135,11 +2043,7 @@ pub const AstSerializer = struct {
         // Labels
         try self.writeIndent();
         try self.write("\"pre_label\": ");
-        if (flow.pre_label) |label| {
-            try self.writeString(label);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(flow.pre_label);
         try self.write(",\n");
 
 
@@ -2186,11 +2090,7 @@ pub const AstSerializer = struct {
         // Labels
         try self.writeIndent();
         try self.write("\"pre_label\": ");
-        if (flow.pre_label) |label| {
-            try self.writeString(label);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(flow.pre_label);
         try self.write(",\n");
 
 
@@ -2264,11 +2164,7 @@ pub const AstSerializer = struct {
         // Variant selector
         try self.writeIndent();
         try self.write("\"variant\": ");
-        if (inv.variant) |v| {
-            try self.writeString(v);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(inv.variant);
         try self.write("\n");
 
         self.dedent();
@@ -2301,11 +2197,7 @@ pub const AstSerializer = struct {
 
         try self.writeIndent();
         try self.write("\"binding\": ");
-        if (cont.binding) |b| {
-            try self.writeString(b);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(cont.binding);
         try self.write(",\n");
 
         try self.writeIndent();
@@ -2318,11 +2210,7 @@ pub const AstSerializer = struct {
 
         try self.writeIndent();
         try self.write("\"condition\": ");
-        if (cont.condition) |cond| {
-            try self.writeString(cond);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(cont.condition);
         try self.write(",\n");
 
         // Location — the line this continuation's `|>`/`|` sits on, emitted
@@ -2373,11 +2261,7 @@ pub const AstSerializer = struct {
 
         try self.writeIndent();
         try self.write("\"binding\": ");
-        if (branch.binding) |b| {
-            try self.writeString(b);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(branch.binding);
         try self.write(",\n");
 
         try self.writeIndent();
@@ -2468,11 +2352,7 @@ pub const AstSerializer = struct {
                 try self.write(",\n");
                 try self.writeIndent();
                 try self.write("\"condition\": ");
-                if (cb.condition) |cond| {
-                    try self.writeString(cond);
-                } else {
-                    try self.write("null");
-                }
+                try self.writeOptString(cb.condition);
                 try self.write(",\n");
                 try self.writeIndent();
                 try self.write("\"steps\": [\n");
@@ -2503,11 +2383,7 @@ pub const AstSerializer = struct {
                 try self.write(",\n");
                 try self.writeIndent();
                 try self.write("\"dest_event\": ");
-                if (mb.dest_event) |dest| {
-                    try self.writeString(dest);
-                } else {
-                    try self.write("null");
-                }
+                try self.writeOptString(mb.dest_event);
                 try self.write(",\n");
                 try self.writeIndent();
                 try self.write("\"branch\": ");
@@ -2536,11 +2412,7 @@ pub const AstSerializer = struct {
                 try self.write(",\n");
                 try self.writeIndent();
                 try self.write("\"element_type\": ");
-                if (fe.element_type) |et| {
-                    try self.writeString(et);
-                } else {
-                    try self.write("null");
-                }
+                try self.writeOptString(fe.element_type);
                 try self.write(",\n");
                 try self.writeIndent();
                 try self.writeBranchListJson(fe.branches);
@@ -2857,11 +2729,7 @@ pub const AstSerializer = struct {
             // Phantom type annotation (e.g. File<open!> → phantom: "open!")
             try self.writeIndent();
             try self.write("\"phantom\": ");
-            if (field.phantom) |phantom| {
-                try self.writeString(phantom);
-            } else {
-                try self.write("null");
-            }
+            try self.writeOptString(field.phantom);
 
             try self.write("\n");
             self.dedent();
@@ -2899,20 +2767,12 @@ pub const AstSerializer = struct {
 
         try self.writeIndent();
         try self.write("\"resume\": ");
-        if (branch.resume_type) |rt| {
-            try self.writeString(rt);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(branch.resume_type);
         try self.write(",\n");
 
         try self.writeIndent();
         try self.write("\"resume_phantom\": ");
-        if (branch.resume_phantom) |rp| {
-            try self.writeString(rp);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(branch.resume_phantom);
         try self.write(",\n");
 
         // Emitted only on multi-arm effects — omitted (not null) elsewhere, so
@@ -2934,20 +2794,12 @@ pub const AstSerializer = struct {
 
                 try self.writeIndent();
                 try self.write("\"type\": ");
-                if (arm.type) |t| {
-                    try self.writeString(t);
-                } else {
-                    try self.write("null");
-                }
+                try self.writeOptString(arm.type);
                 try self.write(",\n");
 
                 try self.writeIndent();
                 try self.write("\"phantom\": ");
-                if (arm.phantom) |p| {
-                    try self.writeString(p);
-                } else {
-                    try self.write("null");
-                }
+                try self.writeOptString(arm.phantom);
                 try self.write("\n");
 
                 self.dedent();
@@ -3010,11 +2862,7 @@ pub const AstSerializer = struct {
 
             try self.writeIndent();
             try self.write("\"expression_str\": ");
-            if (field.expression_str) |expr| {
-                try self.writeString(expr);
-            } else {
-                try self.write("null");
-            }
+            try self.writeOptString(field.expression_str);
 
             try self.write("\n");
             self.dedent();
@@ -3028,11 +2876,7 @@ pub const AstSerializer = struct {
 
         try self.writeIndent();
         try self.write("\"plain_value\": ");
-        if (bc.plain_value) |pv| {
-            try self.writeString(pv);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(bc.plain_value);
         try self.write(",\n");
 
         try self.writeIndent();
@@ -3120,11 +2964,7 @@ pub const AstSerializer = struct {
         // Phantom type
         try self.writeIndent();
         try self.write("\"phantom_type\": ");
-        if (source.phantom_type) |pt| {
-            try self.writeString(pt);
-        } else {
-            try self.write("null");
-        }
+        try self.writeOptString(source.phantom_type);
 
         try self.write("\n");
         self.dedent();

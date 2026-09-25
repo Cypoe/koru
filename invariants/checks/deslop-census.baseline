@@ -2,5 +2,25 @@
 # on the deslop campaign's close (110+ lift commits; residue is test
 # scaffolding and small idioms). Regrowth is the alarm — fold the clones
 # it names, or re-pin here with the reason the duplication is intentional.
+# Red-pins (measured 2026-10-13, deferred — real duplication whose fold
+# needs deeper work than a same-session lift):
+#   - struct_literal.punnableName ~ lexer.punnableName: verbatim 17-line
+#     copy, kept local "to stay free of a lexer import". Folding it means
+#     rewiring the emitted module graph (build.zig + koru_std/build.zig +
+#     koru_std/build_backend.zig dep lines).
+#   - deinit-map idiom: shape_analyzer/keyword_registry/metadata_aggregator
+#     deinit bodies + the 13x `errdefer { deinit items; deinit list }`
+#     family — one shared cleanup helper needs a module all these files
+#     already import; none exists yet.
+#   - ast_serializer optional-field emitters beyond writeOptString/
+#     writeOptQuoted: serializeDottedPath x3, Json x2, SuperShape x1 —
+#     too thin per dialect to name.
+# Consciously retained: package_requires/compiler_requires fixture ASTs,
+# phantom_semantic_checker test items, serializer Zig-vs-Json dialect
+# twins — test scaffolding and intentional dialect split, not slop.
+# Re-pinned members 747 -> 750 in the writeOptString/writeOptQuoted fold:
+# deleting 43 identical emit blocks re-shaped ast_serializer's tree, so
+# three previously-shadowed nodes surfaced as maximal members. Net code
+# is down ~160 lines; the bump is a measurement artifact, not new slop.
 clusters=609
-members=747
+members=750
