@@ -1,0 +1,6 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS error[PARSE003]
+CONTAINS malformed field
+CONTAINS carries no name
+ERROR_AT 5
+NOT_CONTAINS output_emitted.zig

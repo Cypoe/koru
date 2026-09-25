@@ -1,1 +1,1 @@
-expected ',' after field
+missing comma — 'y: i32' began a new field

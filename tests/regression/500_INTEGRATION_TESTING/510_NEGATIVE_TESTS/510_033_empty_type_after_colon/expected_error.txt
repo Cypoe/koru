@@ -1,1 +1,1 @@
-expected type expression
+field 'x' carries no type

@@ -186,3 +186,22 @@ every walker path a continuation node can take — one check, three paths —
 rather than adding a second name-match elsewhere. Pins: `210_267`,
 `210_268`. The counting habit extends: when a guard sits behind a registry,
 enumerate the registry's writers, not just the guard's callers.
+
+## 2026-09-25 — the same refusal's enumeration, inside one grammar
+
+The missing-comma refusal — `struct_literal.fusedFieldLine`'s
+whitespace-`ident:` boundary detector — was real on three `{ }` surfaces:
+record returns (210_276), record resumes (210_279), branch-constructor
+values. The same text in a tor input shape or a braced branch payload took
+a different parser, `parseShape`, which read `y: i32 z: i32` as one field
+whose type was `i32 z: i32` — the module-colon split then named `i32 z` a
+*qualifier*, the field `z` vanished, and the emitted struct carried
+`y: @"koru_i32 z".i32`: a Zig error naming a module that exists nowhere.
+A resume arm's record type (`| arm { }`) saw no field parser at all and
+pasted verbatim into the resume union; Zig died on `expected ',' after
+field`. One refusal, real on half the positions that structurally need it —
+and the unwalked half failed not as silence but as phantom qualifiers and
+backend errors one indirection away from the dropped comma. The counting
+habit again: grep the validator, count the `{ }` parsers, compare. Pins:
+`210_280`–`210_284` (input shape, branch payload, resume arm; nameless and
+typeless fields on the same path).

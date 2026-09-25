@@ -3049,19 +3049,7 @@ pub const Parser = struct {
         if (return_type) |rt| {
             const rt_trimmed = std.mem.trim(u8, rt, " \t");
             if (rt_trimmed.len > 0 and rt_trimmed[0] == '{') {
-                const fields = struct_literal.parseFields(self.allocator, rt) catch |err| {
-                    if (err == error.OutOfMemory) return err;
-                    const detail = struct_literal.describeErrorIn(self.allocator, err, rt);
-                    return self.fail(.PARSE003, event_line_index + 1, 1, "malformed record return `{s}` — {s}", .{ rt, detail });
-                };
-                for (fields) |f| {
-                    if (f.name.len == 0) {
-                        return self.fail(.PARSE003, event_line_index + 1, 1, "malformed record return `{s}` — a field carries no name", .{rt});
-                    }
-                    if (std.mem.trim(u8, f.value, " \t").len == 0) {
-                        return self.fail(.PARSE003, event_line_index + 1, 1, "malformed record return `{s}` — field '{s}' carries no type", .{ rt, f.name });
-                    }
-                }
+                try self.rejectMalformedRecordType(rt, event_line_index + 1, "record return");
                 if (isSingleFieldRecordType(rt)) {
                     return self.fail(
                         .PARSE003,
@@ -10026,6 +10014,33 @@ pub const Parser = struct {
         return base;
     }
 
+    /// Every `{`-led type in a declaration position is a field list — run the
+    /// one field parser on it so a fused field (`b: i64 c: i64`, comma
+    /// dropped), a nameless field, or a typeless one refuses here instead of
+    /// reaching the emitter as verbatim record text and dying in backend Zig.
+    /// The record-return (`-> {}`), record-resume (`-> {}` on `!`), and
+    /// resume-arm (`| arm {}`) positions share this validator (210_276/279/282).
+    fn rejectMalformedRecordType(
+        self: *Parser,
+        record_text: []const u8,
+        report_line: usize,
+        comptime what: []const u8,
+    ) !void {
+        const fields = struct_literal.parseFields(self.allocator, record_text) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            const detail = struct_literal.describeErrorIn(self.allocator, err, record_text);
+            return self.fail(.PARSE003, report_line, 1, "malformed " ++ what ++ " `{s}` — {s}", .{ record_text, detail });
+        };
+        for (fields) |f| {
+            if (f.name.len == 0) {
+                return self.fail(.PARSE003, report_line, 1, "malformed " ++ what ++ " `{s}` — a field carries no name", .{record_text});
+            }
+            if (std.mem.trim(u8, f.value, " \t").len == 0) {
+                return self.fail(.PARSE003, report_line, 1, "malformed " ++ what ++ " `{s}` — field '{s}' carries no type", .{ record_text, f.name });
+            }
+        }
+    }
+
     /// Parse one resume arm: `name`, `name Type`, or `name Type<phantom>`.
     fn parseResumeArm(self: *Parser, content: []const u8, line_index: usize) !ast.ResumeArm {
         const trimmed = lexer.trim(content);
@@ -10057,6 +10072,13 @@ pub const Parser = struct {
 
         var phantom: ?[]const u8 = null;
         const type_src = try self.splitTrailingPhantomOwned(lexer.trim(trimmed[name_end..]), &phantom);
+
+        // A `{`-led arm type is a record field list — the same text a record
+        // return or record resume carries; validate it before the emitter
+        // splices it verbatim into the resume union (210_282).
+        if (type_src.len > 0 and type_src[0] == '{') {
+            try self.rejectMalformedRecordType(type_src, line_index + 1, "record resume arm");
+        }
 
         // Same wall as branch payloads: `()` is not a type; a payload-less
         // arm is spelled by omission (`| timeout`).
@@ -10365,19 +10387,7 @@ pub const Parser = struct {
         if (resume_type) |rt| {
             const rt_trimmed = std.mem.trim(u8, rt, " \t");
             if (rt_trimmed.len > 0 and rt_trimmed[0] == '{') {
-                const fields = struct_literal.parseFields(self.allocator, rt) catch |err| {
-                    if (err == error.OutOfMemory) return err;
-                    const detail = struct_literal.describeErrorIn(self.allocator, err, rt);
-                    return self.fail(.PARSE003, self.current, 1, "malformed record resume `{s}` — {s}", .{ rt, detail });
-                };
-                for (fields) |f| {
-                    if (f.name.len == 0) {
-                        return self.fail(.PARSE003, self.current, 1, "malformed record resume `{s}` — a field carries no name", .{rt});
-                    }
-                    if (std.mem.trim(u8, f.value, " \t").len == 0) {
-                        return self.fail(.PARSE003, self.current, 1, "malformed record resume `{s}` — field '{s}' carries no type", .{ rt, f.name });
-                    }
-                }
+                try self.rejectMalformedRecordType(rt, self.current, "record resume");
                 if (isSingleFieldRecordType(rt)) {
                     return self.fail(
                         .PARSE003,
@@ -10875,6 +10885,13 @@ pub const Parser = struct {
 
             const field_name = lexer.trim(trimmed_field[0..colon_idx]);
 
+            // A nameless entry (`: i32`) otherwise mints a field named "" —
+            // the shape keeps it, emission splices it, and the call site gets
+            // blamed for a parameter `''` that exists in no source (210_284).
+            if (field_name.len == 0) {
+                return self.fail(.PARSE003, self.current, 1, "malformed field '{s}' — a field carries no name; write 'name: type'", .{trimmed_field});
+            }
+
             // Validate field name is a valid identifier (starts with letter/underscore)
             if (field_name.len > 0) {
                 const first_char = field_name[0];
@@ -10892,6 +10909,24 @@ pub const Parser = struct {
 
             var field_type = lexer.trim(trimmed_field[colon_idx + 1 ..]);
 
+            // Missing comma between shape fields: `{ x: i32, y: i32 z: i32 }`
+            // reads `y`'s type as `i32 z: i32` — the fused tail reaches the
+            // module-colon split below as a phantom qualifier and the field
+            // vanishes, emitting `y: @"koru_i32 z". i32` — a Zig error on a
+            // name the author never wrote (210_280/281). The shared boundary
+            // detector (whitespace + `ident:` at depth 0, type prefixes
+            // `const`/`*`/`?`/`]` exempt) is the one the branch-constructor
+            // field parser and the record-type validators already run.
+            if (struct_literal.fusedFieldLine(field_type)) |fused| {
+                return self.fail(
+                    .PARSE003,
+                    self.current,
+                    1,
+                    "missing comma — '{s}' began a new field but was read as part of '{s}'s type; separate fields with commas",
+                    .{ fused, field_name },
+                );
+            }
+
             // Split the `= <expr>` DEFAULT off the type before anything reads
             // the type. Zig type syntax contains no top-level `=`, so the first
             // one outside brackets is unambiguously the separator; `==`/`!=`/
@@ -10906,6 +10941,13 @@ pub const Parser = struct {
             const split = struct_literal.splitTypeDefault(field_type);
             if (split.default) |d| field_default = try self.allocator.dupe(u8, d);
             field_type = split.type;
+
+            // A typeless field (`y: ` or `y: = 5`) otherwise emits `y: ,`
+            // into the Input struct — Zig's "expected type expression" on a
+            // file the author never opened (210_283).
+            if (field_type.len == 0) {
+                return self.fail(.PARSE003, self.current, 1, "malformed field '{s}' — field '{s}' carries no type; write 'name: type'", .{ trimmed_field, field_name });
+            }
 
             // An inline record field type (`user: { x: i64 }`) is the one
             // type surface whose interior the emitter re-parses — writeFieldType

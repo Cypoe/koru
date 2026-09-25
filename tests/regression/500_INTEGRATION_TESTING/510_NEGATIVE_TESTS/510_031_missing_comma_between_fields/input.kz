@@ -1,5 +1,5 @@
 // Test: Missing comma between shape fields
-// BUG: This slips to backend with Zig "expected ',' after field"
-// Should be caught by frontend: "Expected ',' between shape fields"
+// Pins: the frontend refuses a fused shape field — `x: i32 y: i32` is a
+// dropped comma, PARSE003 at the declaration, never emitted to backend Zig.
 
 ~tor foo { x: i32 y: i32 }

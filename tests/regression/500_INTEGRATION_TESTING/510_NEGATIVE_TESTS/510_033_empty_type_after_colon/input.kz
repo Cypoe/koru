@@ -1,5 +1,5 @@
 // Test: Field with missing type after colon
-// BUG: Slips to backend with Zig error "expected type expression"
-// Should be caught by frontend: "Expected type after ':'"
+// Pins: the frontend refuses a typeless shape field — `x:` carries no
+// type, PARSE003 at the declaration, never emitted to backend Zig.
 
 ~tor foo { x: }
