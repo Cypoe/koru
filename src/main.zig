@@ -210,6 +210,21 @@ fn describeTerm(buf: []u8, term: std.process.Child.Term) []const u8 {
     };
 }
 
+/// Write one requirements manifest (`package.json`, `Cargo.toml`, …) into
+/// `output_dir` and report the generated path.
+fn emitRequirementFile(
+    allocator: std.mem.Allocator,
+    output_dir: []const u8,
+    comptime filename: []const u8,
+    reqs: []const []const u8,
+    emitFn: *const fn (std.mem.Allocator, []const []const u8, []const u8) anyerror!void,
+) !void {
+    const path = try std.fs.path.join(allocator, &.{ output_dir, filename });
+    defer allocator.free(path);
+    try emitFn(allocator, reqs, path);
+    try printStdout(allocator, "✓ Generated {s}\n", .{path});
+}
+
 /// One `--install-packages` step: run a package manager inside `output_dir`
 /// and report the outcome. `action`/`done_msg` are the shown phrases
 /// ("Running npm install...", "✓ npm packages installed").
@@ -7840,33 +7855,10 @@ pub fn main() !void {
         if (zig_reqs.len > 0) try printStdout(allocator, "  - zig: {d} package(s)\n", .{zig_reqs.len});
 
         // Generate package files in output directory
-        if (npm_reqs.len > 0) {
-            const package_json_path = try std.fs.path.join(allocator, &[_][]const u8{ output_dir, "package.json" });
-            defer allocator.free(package_json_path);
-            try emit_package_files.emitPackageJson(allocator, npm_reqs, package_json_path);
-            try printStdout(allocator, "✓ Generated {s}\n", .{package_json_path});
-        }
-
-        if (cargo_reqs.len > 0) {
-            const cargo_toml_path = try std.fs.path.join(allocator, &[_][]const u8{ output_dir, "Cargo.toml" });
-            defer allocator.free(cargo_toml_path);
-            try emit_package_files.emitCargoToml(allocator, cargo_reqs, cargo_toml_path);
-            try printStdout(allocator, "✓ Generated {s}\n", .{cargo_toml_path});
-        }
-
-        if (go_reqs.len > 0) {
-            const go_mod_path = try std.fs.path.join(allocator, &[_][]const u8{ output_dir, "go.mod" });
-            defer allocator.free(go_mod_path);
-            try emit_package_files.emitGoMod(allocator, go_reqs, go_mod_path);
-            try printStdout(allocator, "✓ Generated {s}\n", .{go_mod_path});
-        }
-
-        if (pip_reqs.len > 0) {
-            const requirements_txt_path = try std.fs.path.join(allocator, &[_][]const u8{ output_dir, "requirements.txt" });
-            defer allocator.free(requirements_txt_path);
-            try emit_package_files.emitRequirementsTxt(allocator, pip_reqs, requirements_txt_path);
-            try printStdout(allocator, "✓ Generated {s}\n", .{requirements_txt_path});
-        }
+        if (npm_reqs.len > 0) try emitRequirementFile(allocator, output_dir, "package.json", npm_reqs, emit_package_files.emitPackageJson);
+        if (cargo_reqs.len > 0) try emitRequirementFile(allocator, output_dir, "Cargo.toml", cargo_reqs, emit_package_files.emitCargoToml);
+        if (go_reqs.len > 0) try emitRequirementFile(allocator, output_dir, "go.mod", go_reqs, emit_package_files.emitGoMod);
+        if (pip_reqs.len > 0) try emitRequirementFile(allocator, output_dir, "requirements.txt", pip_reqs, emit_package_files.emitRequirementsTxt);
 
         if (zig_reqs.len > 0) {
             const zon_path = try std.fs.path.join(allocator, &[_][]const u8{ output_dir, "build.zig.zon" });
