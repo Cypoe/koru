@@ -3122,10 +3122,9 @@ pub const Parser = struct {
         // Every `{`-led return type is a field list — run the one parser on
         // all of them, not only the comma-free ones: `isSingleFieldRecordType`'s
         // comma count can't see a fused field after a comma (`b: i64 c: i64`)
-        // or a malformed entry (`5`, `b:`), and unvalidated text used to reach
-        // the emitter's verbatim paste and die in Zig (210_276/277/278).
-        // The single-field collapse verdict is unchanged — it just runs on a
-        // list that already parsed.
+        // or a malformed entry (`5`, `b:`); the emitter relies on this
+        // validation and panics on an unparseable record (210_276/277/278).
+        // The single-field collapse verdict runs on a list that already parsed.
         if (return_type) |rt| {
             const rt_trimmed = std.mem.trim(u8, rt, " \t");
             if (rt_trimmed.len > 0 and rt_trimmed[0] == '{') {
