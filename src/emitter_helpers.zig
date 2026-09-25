@@ -2837,6 +2837,22 @@ fn argProvided(args: []const ast.Arg, name: []const u8) bool {
     return false;
 }
 
+/// Resolve a label jump's target context: the label_contexts map first,
+/// then the enclosing label's own handler as the same-level fallback.
+fn resolveLabelTargetCtx(ctx: *const EmissionContext, label_name: []const u8) ?LabelContext {
+    if (ctx.label_contexts) |label_map| {
+        if (label_map.get(label_name)) |tctx| return tctx;
+    }
+    if (ctx.label_handler_invocation != null and ctx.label_result_var != null) {
+        return .{
+            .handler_invocation = ctx.label_handler_invocation.?,
+            .result_var = ctx.label_result_var.?,
+            .handlers_name = null,
+        };
+    }
+    return null;
+}
+
 /// Emit `: <type>` for the arg's matching input field — file/source fields
 /// spell `[]const u8`, everything else goes through writeFieldType.
 /// Returns whether the field was found (callers panic differently).
@@ -11644,21 +11660,7 @@ fn emitStep(
         .label_apply => |label_name| {
             // Simple label jump without arguments (e.g., @label)
             // Look up the target label's context (same as label_jump, but no args to update)
-            var target_ctx: ?LabelContext = null;
-            if (ctx.label_contexts) |label_map| {
-                target_ctx = label_map.get(label_name);
-            }
-
-            // If not in map, try current label context (for same-level or subflow labels)
-            if (target_ctx == null) {
-                if (ctx.label_handler_invocation != null and ctx.label_result_var != null) {
-                    target_ctx = .{
-                        .handler_invocation = ctx.label_handler_invocation.?,
-                        .result_var = ctx.label_result_var.?,
-                        .handlers_name = null,
-                    };
-                }
-            }
+            const target_ctx = resolveLabelTargetCtx(ctx, label_name);
 
             // If we have a target context (from map OR current), call the handler
             if (target_ctx) |tctx| {
@@ -11712,21 +11714,7 @@ fn emitStep(
 
             // Look up the target label's context
             // First try the map (for cross-level jumps within a flow)
-            var target_ctx: ?LabelContext = null;
-            if (ctx.label_contexts) |label_map| {
-                target_ctx = label_map.get(lj.label);
-            }
-
-            // If not in map, try current label context (for same-level or subflow labels)
-            if (target_ctx == null) {
-                if (ctx.label_handler_invocation != null and ctx.label_result_var != null) {
-                    target_ctx = .{
-                        .handler_invocation = ctx.label_handler_invocation.?,
-                        .result_var = ctx.label_result_var.?,
-                        .handlers_name = null,
-                    };
-                }
-            }
+            const target_ctx = resolveLabelTargetCtx(ctx, lj.label);
 
             // If we have a target context (from map OR current), call the handler
             if (target_ctx) |tctx| {
@@ -12254,21 +12242,7 @@ fn emitStepWithBindingSubstitution(
         .label_apply => |label_name| {
             // Simple label jump without arguments (e.g., @label)
             // Look up the target label's context
-            var target_ctx: ?LabelContext = null;
-            if (ctx.label_contexts) |label_map| {
-                target_ctx = label_map.get(label_name);
-            }
-
-            // If not in map, try current label context (for same-level or subflow labels)
-            if (target_ctx == null) {
-                if (ctx.label_handler_invocation != null and ctx.label_result_var != null) {
-                    target_ctx = .{
-                        .handler_invocation = ctx.label_handler_invocation.?,
-                        .result_var = ctx.label_result_var.?,
-                        .handlers_name = null,
-                    };
-                }
-            }
+            const target_ctx = resolveLabelTargetCtx(ctx, label_name);
 
             // If we have a target context (from map OR current), call the handler
             if (target_ctx) |tctx| {
