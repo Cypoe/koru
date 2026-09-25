@@ -108,6 +108,44 @@ fn findTopLevelPipeArrow(s: []const u8) ?usize {
     return null;
 }
 
+/// Index where `depth` returns to 0, or null if the text never closes it —
+/// `//` comments end the scan and string/char literals don't count. `depth`
+/// is updated in place so callers tracking a multi-line span keep their
+/// running count.
+fn indexOfBraceClose(text: []const u8, depth: *i32) ?usize {
+    var in_string = false;
+    var string_char: ?u8 = null;
+    for (text, 0..) |c, idx| {
+        // Skip line comments
+        if (!in_string and c == '/' and idx + 1 < text.len and text[idx + 1] == '/') {
+            break;
+        }
+
+        // Handle string literals
+        if (!in_string and (c == '"' or c == '\'')) {
+            in_string = true;
+            string_char = c;
+        } else if (in_string) {
+            if (c == '\\' and idx + 1 < text.len) {
+                continue; // Escaped char handled by next iteration
+            } else if (c == string_char) {
+                in_string = false;
+                string_char = null;
+            }
+        } else {
+            // Not in string or comment - count braces
+            if (c == '{') depth.* += 1;
+            if (c == '}') {
+                depth.* -= 1;
+                if (depth.* == 0) {
+                    return idx;
+                }
+            }
+        }
+    }
+    return null;
+}
+
 /// Net brace depth of a line, quote-aware (braces inside string/char
 /// literals are text, not structure — the paren twin of `netParens`).
 /// The multi-line source-block gatherer uses this to know WHEN a block
@@ -2320,39 +2358,7 @@ pub const Parser = struct {
             if (trimmed.len == 0) continue;
 
             // Track braces properly, skipping those in strings/comments
-            var in_string = false;
-            var string_char: ?u8 = null;
-            var closing_brace_idx: ?usize = null;
-
-            for (trimmed, 0..) |c, idx| {
-                // Skip line comments
-                if (!in_string and c == '/' and idx + 1 < trimmed.len and trimmed[idx + 1] == '/') {
-                    break;
-                }
-
-                // Handle string literals
-                if (!in_string and (c == '"' or c == '\'')) {
-                    in_string = true;
-                    string_char = c;
-                } else if (in_string) {
-                    if (c == '\\' and idx + 1 < trimmed.len) {
-                        continue; // Escaped char handled by next iteration
-                    } else if (c == string_char) {
-                        in_string = false;
-                        string_char = null;
-                    }
-                } else {
-                    // Not in string or comment - count braces
-                    if (c == '{') brace_depth += 1;
-                    if (c == '}') {
-                        brace_depth -= 1;
-                        if (brace_depth == 0) {
-                            closing_brace_idx = idx;
-                            break;
-                        }
-                    }
-                }
-            }
+            const closing_brace_idx = indexOfBraceClose(trimmed, &brace_depth);
 
             if (closing_brace_idx) |end_idx| {
                 const final_content = lexer.trim(trimmed[0..end_idx]);
@@ -9606,39 +9612,7 @@ pub const Parser = struct {
             if (trimmed.len == 0) continue;
 
             // Count braces properly, skipping those in strings/comments
-            var in_string = false;
-            var string_char: ?u8 = null;
-            var closing_brace_idx: ?usize = null;
-
-            for (trimmed, 0..) |c, idx| {
-                // Skip line comments
-                if (!in_string and c == '/' and idx + 1 < trimmed.len and trimmed[idx + 1] == '/') {
-                    break;
-                }
-
-                // Handle string literals
-                if (!in_string and (c == '"' or c == '\'')) {
-                    in_string = true;
-                    string_char = c;
-                } else if (in_string) {
-                    if (c == '\\' and idx + 1 < trimmed.len) {
-                        continue; // Escaped char handled by next iteration
-                    } else if (c == string_char) {
-                        in_string = false;
-                        string_char = null;
-                    }
-                } else {
-                    // Not in string or comment - count braces
-                    if (c == '{') brace_depth += 1;
-                    if (c == '}') {
-                        brace_depth -= 1;
-                        if (brace_depth == 0) {
-                            closing_brace_idx = idx;
-                            break;
-                        }
-                    }
-                }
-            }
+            const closing_brace_idx = indexOfBraceClose(trimmed, &brace_depth);
 
             if (closing_brace_idx) |end_idx| {
                 // Found closing brace - extract content before it
