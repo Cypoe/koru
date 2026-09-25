@@ -86,7 +86,17 @@
     "name": "deslop-board-does-not-regrow",
     "tags": ["git-gate", "odds-10"],
     "rule": "The structural clone census over src/ (tools/deslop.zig, --min-tokens=48) must not regrow past the pin in checks/deslop-census.baseline. This row is sampled — the odds-10 tag fires it on roughly one commit in ten, so slop accumulates only until a roll lands: an alarm driven by commit activity, not a schedule. When it fires above the pin, fold the clones the census names into their canonical form, or re-pin the baseline in the same commit with the reason the duplication is intentional — dialects, public adapters, and semantically distinct twins stay duplicated by design (concepts/frag-dedup-is-lift-then-delete.md). The census reads the working tree, so uncommitted work counts against the pin; a re-pin that hides avoidable slop is a silent weakening.",
-    "check": "python3 checks/check_deslop_census.py ../src ../tools/deslop.zig checks/deslop-census.baseline"
+    "check": "python3 checks/check_deslop_census.py ../src ../tools/deslop.zig checks/deslop-census.baseline 48"
+}
+
+// The same alarm at the small-idiom floor: min-tokens=32 is where the
+// micro-duplication tier lives (indent fills, EOF guards, join bodies).
+// Independent roll stream — the row name is part of the hash.
+~std/invariants:inferred {
+    "name": "deslop-small-idiom-board",
+    "tags": ["git-gate", "odds-10"],
+    "rule": "The structural clone census over src/ at --min-tokens=32 (tools/deslop.zig) must not regrow past the pin in checks/deslop-census-32.baseline. The 32-token floor is the small-idiom tier — micro-duplication below the main board's sightline. Same contract as its sibling row: sampled firing (odds-10), regrowth blocks until the clones are folded into their canonical form or the pin is re-set in the same commit with the reason the duplication is intentional; the census reads the working tree, so uncommitted work counts against the pin.",
+    "check": "python3 checks/check_deslop_census.py ../src ../tools/deslop.zig checks/deslop-census-32.baseline 32"
 }
 
 // The manifest guards itself: a git-gate-local row fires only when its

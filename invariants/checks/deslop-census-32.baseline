@@ -1,0 +1,5 @@
+# Pin: tools/deslop.zig over src/ at --min-tokens=32, measured 2026-10-13.
+# The small-idiom tier — the floor where micro-duplication (indent fills,
+# EOF guards, join bodies) lives. Same alarm contract as the 48 pin.
+clusters=1502
+members=2054

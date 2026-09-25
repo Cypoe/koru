@@ -10,7 +10,8 @@ the reason the duplication is intentional. The census reads the working
 tree — uncommitted work counts against the pin.
 
 Usage: check_deslop_census.py <src_root> <deslop.zig> <baseline_file>
-(cwd is invariants/, so repo paths start with `..`)
+       [min_tokens]   (default 48; cwd is invariants/, so repo paths
+       start with `..`)
 """
 
 import re
@@ -20,6 +21,7 @@ import sys
 
 def main():
     src_root, deslop_src, baseline_path = sys.argv[1:4]
+    min_tokens = sys.argv[4] if len(sys.argv) > 4 else "48"
 
     baseline = {}
     try:
@@ -37,7 +39,7 @@ def main():
 
     proc = subprocess.run(
         ["zig", "run", deslop_src, "--", src_root,
-         "--top=8", "--min-tokens=48"],
+         "--top=8", f"--min-tokens={min_tokens}"],
         capture_output=True, text=True,
     )
     m = re.search(r"clusters: (\d+)\s+maximal members: (\d+)",
@@ -49,12 +51,14 @@ def main():
 
     clusters, members = int(m.group(1)), int(m.group(2))
     if clusters <= baseline["clusters"] and members <= baseline["members"]:
-        print(f"deslop-census: {clusters} clusters / {members} members — "
-              f"at or under pin ({baseline['clusters']}/{baseline['members']})")
+        print(f"deslop-census[{min_tokens}]: {clusters} clusters / "
+              f"{members} members — at or under pin "
+              f"({baseline['clusters']}/{baseline['members']})")
         return 0
 
     top = (proc.stdout + proc.stderr).split("\n\n", 1)[-1].strip()
-    print(f"deslop-census REGREW: {clusters} clusters / {members} members "
+    print(f"deslop-census[{min_tokens}] REGREW: {clusters} clusters / "
+          f"{members} members "
           f"vs pin {baseline['clusters']}/{baseline['members']} "
           f"(+{clusters - baseline['clusters']}/"
           f"+{members - baseline['members']})\n\n{top}\n\n"
