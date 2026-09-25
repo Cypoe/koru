@@ -296,6 +296,38 @@ pub const AutoDischargeInserter = struct {
         return false;
     }
 
+    /// The disposal call `mod:tor(field_name: binding)` the machinery
+    /// splices in — one arg carrying the obligation's binding path,
+    /// qualified by the disposal's declared module.
+    fn buildDisposalInvocation(
+        self: *AutoDischargeInserter,
+        binding: []const u8,
+        disposal: DisposalEvent,
+        annotations: []const []const u8,
+    ) !ast.Invocation {
+        const colon_idx = std.mem.indexOf(u8, disposal.qualified_name, ":") orelse 0;
+        const disposal_module = disposal.qualified_name[0..colon_idx];
+        const disposal_event = disposal.qualified_name[colon_idx + 1 ..];
+
+        const segments = try self.eventNameToSegments(disposal_event);
+        var args = try self.allocator.alloc(ast.Arg, 1);
+        args[0] = .{
+            .name = try self.allocator.dupe(u8, disposal.field_name),
+            .value = try self.allocator.dupe(u8, binding),
+            .expression_value = null,
+            .source_value = null,
+        };
+
+        return .{
+            .path = .{
+                .segments = segments,
+                .module_qualifier = try self.allocator.dupe(u8, disposal_module),
+            },
+            .args = args,
+            .annotations = annotations,
+        };
+    }
+
     /// A body-level trailing disposal invocation: `branch=''`, no binding, the
     /// disposer called with the obligation's binding path. Appended AFTER the
     /// last body continuation it reads exactly like the call the author would
@@ -306,19 +338,6 @@ pub const AutoDischargeInserter = struct {
         binding_path: []const u8,
         disposal: DisposalEvent,
     ) !ast.Continuation {
-        const colon_idx = std.mem.indexOf(u8, disposal.qualified_name, ":") orelse 0;
-        const disposal_module = disposal.qualified_name[0..colon_idx];
-        const disposal_event = disposal.qualified_name[colon_idx + 1 ..];
-
-        const segments = try self.eventNameToSegments(disposal_event);
-        var args = try self.allocator.alloc(ast.Arg, 1);
-        args[0] = .{
-            .name = try self.allocator.dupe(u8, disposal.field_name),
-            .value = try self.allocator.dupe(u8, binding_path),
-            .expression_value = null,
-            .source_value = null,
-        };
-
         // Stamp the machinery's own exit settlement so the KORU032 wall can
         // tell it apart from an author-written discharge inside a scope.
         var inv_annotations = try self.allocator.alloc([]const u8, 1);
@@ -329,14 +348,7 @@ pub const AutoDischargeInserter = struct {
             .binding = null,
             .binding_annotations = &[_][]const u8{},
             .condition = null,
-            .node = .{ .invocation = ast.Invocation{
-                .path = .{
-                    .segments = segments,
-                    .module_qualifier = try self.allocator.dupe(u8, disposal_module),
-                },
-                .args = args,
-                .annotations = inv_annotations,
-            } },
+            .node = .{ .invocation = try self.buildDisposalInvocation(binding_path, disposal, inv_annotations) },
             .indent = last.indent,
             .continuations = &[_]ast.Continuation{},
             .location = last.location,
@@ -3608,30 +3620,7 @@ pub const AutoDischargeInserter = struct {
         binding_path: []const u8,
         disposal: DisposalEvent,
     ) !ast.Continuation {
-        // Parse disposal event name to get path components
-        const colon_idx = std.mem.indexOf(u8, disposal.qualified_name, ":") orelse 0;
-        const disposal_module = disposal.qualified_name[0..colon_idx];
-        const disposal_event = disposal.qualified_name[colon_idx + 1 ..];
-
-        // Create invocation for disposal call
-        const segments = try self.eventNameToSegments(disposal_event);
-
-        var args = try self.allocator.alloc(ast.Arg, 1);
-        args[0] = .{
-            .name = try self.allocator.dupe(u8, disposal.field_name),
-            .value = try self.allocator.dupe(u8, binding_path),
-            .expression_value = null,
-            .source_value = null,
-        };
-
-        const disposal_invocation = ast.Invocation{
-            .path = .{
-                .segments = segments,
-                .module_qualifier = try self.allocator.dupe(u8, disposal_module),
-            },
-            .args = args,
-            .annotations = &[_][]const u8{},
-        };
+        const disposal_invocation = try self.buildDisposalInvocation(binding_path, disposal, &[_][]const u8{});
 
         // Check if original node is a terminator or an invocation
         const original_is_terminator = if (original.node) |node|
@@ -3781,28 +3770,7 @@ pub const AutoDischargeInserter = struct {
         };
 
         // Create disposal invocation
-        const colon_idx = std.mem.indexOf(u8, disposal.qualified_name, ":") orelse 0;
-        const disposal_module = disposal.qualified_name[0..colon_idx];
-        const disposal_event = disposal.qualified_name[colon_idx + 1 ..];
-
-        const segments = try self.eventNameToSegments(disposal_event);
-
-        var args = try self.allocator.alloc(ast.Arg, 1);
-        args[0] = .{
-            .name = try self.allocator.dupe(u8, disposal.field_name),
-            .value = try self.allocator.dupe(u8, binding_name),
-            .expression_value = null,
-            .source_value = null,
-        };
-
-        const disposal_invocation = ast.Invocation{
-            .path = .{
-                .segments = segments,
-                .module_qualifier = try self.allocator.dupe(u8, disposal_module),
-            },
-            .args = args,
-            .annotations = &[_][]const u8{},
-        };
+        const disposal_invocation = try self.buildDisposalInvocation(binding_name, disposal, &[_][]const u8{});
 
         // Create disposal continuation with terminal
         const disposal_is_void = disposal.event_decl.branches.len == 0;
@@ -3875,28 +3843,7 @@ pub const AutoDischargeInserter = struct {
         };
 
         // Create disposal invocation
-        const colon_idx = std.mem.indexOf(u8, disposal.qualified_name, ":") orelse 0;
-        const disposal_module = disposal.qualified_name[0..colon_idx];
-        const disposal_event = disposal.qualified_name[colon_idx + 1 ..];
-
-        const segments = try self.eventNameToSegments(disposal_event);
-
-        var args = try self.allocator.alloc(ast.Arg, 1);
-        args[0] = .{
-            .name = try self.allocator.dupe(u8, disposal.field_name),
-            .value = try self.allocator.dupe(u8, binding_name),
-            .expression_value = null,
-            .source_value = null,
-        };
-
-        const disposal_invocation = ast.Invocation{
-            .path = .{
-                .segments = segments,
-                .module_qualifier = try self.allocator.dupe(u8, disposal_module),
-            },
-            .args = args,
-            .annotations = &[_][]const u8{},
-        };
+        const disposal_invocation = try self.buildDisposalInvocation(binding_name, disposal, &[_][]const u8{});
 
         // Create disposal continuation with terminal
         const disposal_is_void = disposal.event_decl.branches.len == 0;
