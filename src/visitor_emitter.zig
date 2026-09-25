@@ -545,12 +545,10 @@ pub const VisitorEmitter = struct {
     ) !void {
         const noteType = struct {
             fn go(s: *VisitorEmitter, set_: *std.StringHashMap(void), qual_set: *std.StringHashMap(void), ty: []const u8, module_path: ?[]const u8, scanning: ?[]const u8) !void {
-                // A record return `-> { t: *app/holder:Token, n: i64 }` and an
-                // inline record field type reach this scan as raw brace text;
-                // neither helper below decomposes it, so a qualifier inside
-                // the braces was invisible and the module's namespace never
-                // emitted (`koru_app` undeclared in output_emitted.zig).
-                // Parse the field list once and scan each field's type.
+                // Brace-led type text is a field list, not a type atom:
+                // decompose it through the one field parser so qualifiers
+                // inside record-return and inline-record fields pin their
+                // home module like any flat field type does.
                 {
                     var t0 = std.mem.trim(u8, ty, " \t");
                     if (t0.len > 0 and t0[0] == '!') t0 = std.mem.trim(u8, t0[1..], " \t");
