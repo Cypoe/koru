@@ -595,37 +595,21 @@ const codegen_utils_kernel = @import("codegen_utils");
     // port is cheap at all.
     const host_is_js = std.mem.eql(u8, CompilerEnv.lang, "js");
 
-    const transformFields = struct {
-        fn call(alloc: std.mem.Allocator, block_text: []const u8, is_js: bool) []const u8 {
-            var resArr = std.ArrayList(u8).initCapacity(alloc, block_text.len * 2) catch unreachable;
-            var iter_fields = std.mem.splitSequence(u8, block_text, ",");
-            var first = true;
-            while (iter_fields.next()) |field_raw| {
-                const field = std.mem.trim(u8, field_raw, " \t\n\r{}");
-                if (field.len == 0) continue;
-
-                if (std.mem.indexOf(u8, field, ":")) |colon_idx| {
-                    const name = std.mem.trim(u8, field[0..colon_idx], " \t\n\r");
-                    const value = std.mem.trim(u8, field[colon_idx + 1 ..], " \t\n\r");
-
-                    if (!first) resArr.appendSlice(alloc, ", ") catch unreachable;
-                    first = false;
-
-                    // `.x = 1.5` is a Zig struct-field initializer; JS spells the
-                    // same thing `x: 1.5` in an object literal.
-                    if (!is_js) resArr.append(alloc, '.') catch unreachable;
-                    resArr.appendSlice(alloc, name) catch unreachable;
-                    resArr.appendSlice(alloc, if (is_js) ": " else " = ") catch unreachable;
-                    resArr.appendSlice(alloc, value) catch unreachable;
-                }
-            }
-            return resArr.items;
-        }
-    }.call;
-
     // Detect array mode: source contains nested {} blocks
     const trimmed = std.mem.trim(u8, source.text, " \t\n\r");
     const is_array_mode = std.mem.indexOf(u8, trimmed, "{") != null;
+
+    // init's dataset and the shape declaration it consumes are
+    // `{ name: value }` field lists — the consumers here (kernelTransformFields,
+    // parseShapeAstFields, kernelParseShapeFields) are bare comma splits that
+    // let a fused or half-dropped field ride into the emitted static and die
+    // in backend Zig. The source block is Source-typed, so the frontend's
+    // record-value check cannot reach it; the scan part's
+    // kernelInitFieldListRefusal gates the text through the one field parser
+    // before any splitter runs.
+    if (kernelInitFieldListRefusal(allocator, source.text, is_array_mode, shape_src, flow, reporter)) |refusal_item| {
+        return .{ .replacement = refusal_item };
+    }
 
     const parseShapeAstFields = struct {
         fn call(alloc: std.mem.Allocator, shape_source: []const u8) []ast.Field {
@@ -1656,7 +1640,7 @@ const codegen_utils_kernel = @import("codegen_utils");
         while (block_iter.next()) |block_raw| {
             if (__koru_std.mem.indexOf(u8, block_raw, "{")) |brace_idx| {
                 const block_content = block_raw[brace_idx + 1 ..];
-                const fields = transformFields(allocator, block_content, host_is_js);
+                const fields = kernelTransformFields(allocator, block_content, host_is_js);
 
                 if (fields.len > 0) {
                     if (count > 0) elements.appendSlice(allocator, ", ") catch unreachable;
@@ -1680,7 +1664,7 @@ const codegen_utils_kernel = @import("codegen_utils");
         fused_code = generateKernelOpsCode(allocator, kernel_plan.ops, kernel_plan.step_range, kernel_binding_name, static_name, count, type_fields, host_is_js, &reduce_acc, "", program, flow.module, type_name, source.text);
     } else {
         // Single mode: just one struct instance
-        const fields = transformFields(allocator, source.text, host_is_js);
+        const fields = kernelTransformFields(allocator, source.text, host_is_js);
         const single_init = std.fmt.allocPrint(allocator, "{s}{{ {s} }}", .{ if (host_is_js) "" else type_name, fields }) catch unreachable;
         static_decl = if (host_is_js)
             std.fmt.allocPrint(allocator, "let {s} = [{s}];", .{ static_name, single_init }) catch unreachable
@@ -2631,6 +2615,7 @@ const codegen_utils_kernel = @import("codegen_utils");
 // [comptime|transform]pub tor cross { ... }
 ~part body
 ~part scan
+~part fields
 ~part fpga
 ~part fpgatb
 ~part fpgaemit

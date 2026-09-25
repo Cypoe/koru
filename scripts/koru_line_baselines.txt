@@ -80,10 +80,11 @@ koru_std/io.jsprec.kz	48
 koru_std/io.kz	2078
 koru_std/json.kz	268
 koru_std/kernel.body.kz	69
+koru_std/kernel.fields.kz	108
 koru_std/kernel.fpga.kz	192
 koru_std/kernel.fpgaemit.kz	179
 koru_std/kernel.fpgatb.kz	120
-koru_std/kernel.kz	2636
+koru_std/kernel.kz	2621
 koru_std/kernel.scan.kz	109
 koru_std/koru.kz	211
 koru_std/liquid_template.kz	146
