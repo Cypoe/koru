@@ -4127,30 +4127,7 @@ pub const PhantomSemanticChecker = struct {
     }
 
     fn pathToString(self: *PhantomSemanticChecker, path: ast.DottedPath) ![]const u8 {
-        if (path.segments.len == 0) return try self.allocator.dupe(u8, "");
-        if (path.segments.len == 1) return try self.allocator.dupe(u8, path.segments[0]);
-
-        // Calculate total length
-        var total_len: usize = path.segments[0].len;
-        for (path.segments[1..]) |seg| {
-            total_len += 1 + seg.len; // dot + segment
-        }
-
-        // Build string
-        var result = try self.allocator.alloc(u8, total_len);
-        var pos: usize = 0;
-
-        @memcpy(result[pos .. pos + path.segments[0].len], path.segments[0]);
-        pos += path.segments[0].len;
-
-        for (path.segments[1..]) |seg| {
-            result[pos] = '.';
-            pos += 1;
-            @memcpy(result[pos .. pos + seg.len], seg);
-            pos += seg.len;
-        }
-
-        return result;
+        return std.mem.join(self.allocator, ".", path.segments);
     }
 };
 
