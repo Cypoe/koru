@@ -59,6 +59,19 @@ does this literal leave to defaults?") belongs inside the superset
 judgment, and the consolidated helper now owns the full field set so
 future drift has no defaults to hide behind.
 
+**Vocabulary tables extend the ruling.** The "prelude, not function" case
+had a next step it did not name: when the differing payload is *entirely*
+string literals under identical control flow, a comptime vocabulary table
+still lifts the skeleton once. The `emitPrefixMatcher{C,Js}` pair hashed
+equal because literals fold to `STR` — and they were equal *because* the
+control flow never differed, only decl keywords, `==`/`===`, sentinels,
+and cast spellings. `PrefixVocab` parameterizes exactly those; the Zig
+sibling, genuinely a different skeleton (range-for, `?usize`), stayed
+separate. The line to draw is control flow, not "has strings": shared
+flow + differing literals → vocab table; differing flow → separate
+emitters. Emitted-output equivalence deserves a receipt — a scratch
+harness diffed twelve emitted matchers byte-for-byte across the merge.
+
 **The helper already exists.** Half of this family's dedup was not
 extraction but *routing*: `cloneContinuationWithNodeAndContinuations` and
 `cloneFlowWithContinuations` were already the shared tails, and later

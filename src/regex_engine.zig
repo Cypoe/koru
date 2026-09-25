@@ -1660,6 +1660,63 @@ pub fn compilePrefixToZig(out: std.mem.Allocator, pattern: []const u8, name: []c
     return compileWithEmitter(out, pattern, name, emitPrefixMatcher);
 }
 
+/// Target vocabulary for the prefix-matcher skeleton shared by the C and JS
+/// emitters — same DFA walk, different spellings for decl keywords, the
+/// equality operator, the no-match sentinel, and the index expression (C
+/// needs the size_t casts JS doesn't). The Zig variant is NOT this skeleton
+/// (range-for over the input span, `?usize`, `end` carry-out) and stays its
+/// own emitter.
+const PrefixVocab = struct {
+    sig_fmt: []const u8, // {s} = function name
+    trans_open: []const u8,
+    sep: []const u8, // element separator inside the emitted tables
+    table_close: []const u8,
+    accept_open: []const u8,
+    start_fmt: []const u8, // {d} = dfa.start
+    i_decl: []const u8, // suffix-terminal loop index declaration
+    ns_fmt: []const u8, // suffix-terminal `ns = T[…]` line
+    ns_dead_fmt: []const u8, // {d} = dead state id
+    suffix_ret_fmt: []const u8,
+    last_end_fmt: []const u8,
+    loop_open: []const u8, // general scan loop header
+    s_update_fmt: []const u8, // `s = T[…]` line
+    s_dead_fmt: []const u8, // {d} = dead state id
+};
+
+const prefix_vocab_c: PrefixVocab = .{
+    .sig_fmt = "static size_t {s}(const uint8_t* input, size_t len, size_t from) {{\n",
+    .trans_open = "    static const uint32_t T[] = { ",
+    .sep = ", ",
+    .table_close = " };\n",
+    .accept_open = "    static const bool A[] = { ",
+    .start_fmt = "    uint32_t s = {d};\n",
+    .i_decl = "    size_t i = from;\n",
+    .ns_fmt = "        uint32_t ns = T[(size_t)s * 256 + (size_t)input[i]];\n",
+    .ns_dead_fmt = "        if (ns == {d}) break;\n",
+    .suffix_ret_fmt = "    return A[s] ? i : SIZE_MAX;\n",
+    .last_end_fmt = "    size_t last_end = A[s] ? from : SIZE_MAX;\n",
+    .loop_open = "    for (size_t i = from; i < len; i++) {\n",
+    .s_update_fmt = "        s = T[(size_t)s * 256 + (size_t)input[i]];\n",
+    .s_dead_fmt = "        if (s == {d}) break;\n",
+};
+
+const prefix_vocab_js: PrefixVocab = .{
+    .sig_fmt = "function {s}(input, len, from) {{\n",
+    .trans_open = "    const T = [",
+    .sep = ",",
+    .table_close = "];\n",
+    .accept_open = "    const A = [",
+    .start_fmt = "    let s = {d};\n",
+    .i_decl = "    let i = from;\n",
+    .ns_fmt = "        const ns = T[s * 256 + input[i]];\n",
+    .ns_dead_fmt = "        if (ns === {d}) break;\n",
+    .suffix_ret_fmt = "    return A[s] ? i : -1;\n",
+    .last_end_fmt = "    let last_end = A[s] ? from : -1;\n",
+    .loop_open = "    for (let i = from; i < len; i++) {\n",
+    .s_update_fmt = "        s = T[s * 256 + input[i]];\n",
+    .s_dead_fmt = "        if (s === {d}) break;\n",
+};
+
 /// C sibling of `emitPrefixMatcher`. Same DFA, C vocabulary: a slice is a
 /// `(const uint8_t* input, size_t len)` pair; the `?usize` result becomes a
 /// `size_t` returning the match end, or `SIZE_MAX` for "no match" (offsets are
@@ -1667,51 +1724,7 @@ pub fn compilePrefixToZig(out: std.mem.Allocator, pattern: []const u8, name: []c
 /// accept-write hoist (rung 3) carries over unchanged. Emitted functions assume
 /// <stdint.h>/<stddef.h>/<stdbool.h> are included by the enclosing file.
 pub fn emitPrefixMatcherC(w: anytype, dfa: *const Dfa, name: []const u8) !void {
-    const analysis = analyzePrefixDfa(dfa);
-    const dead = analysis.dead;
-
-    try w.print("static size_t {s}(const uint8_t* input, size_t len, size_t from) {{\n", .{name});
-    try w.writeAll("    static const uint32_t T[] = { ");
-    for (dfa.trans, 0..) |t, i| {
-        if (i != 0) try w.writeAll(", ");
-        try w.print("{d}", .{t});
-    }
-    try w.writeAll(" };\n");
-    try w.writeAll("    static const bool A[] = { ");
-    for (dfa.accept, 0..) |acc, i| {
-        if (i != 0) try w.writeAll(", ");
-        try w.writeAll(if (acc) "true" else "false");
-    }
-    try w.writeAll(" };\n");
-
-    try w.print("    uint32_t s = {d};\n", .{dfa.start});
-    // The byte-scan is a `for` over a KNOWN SPAN, never a manual-index `while`:
-    // `for (i = from; i < len; i++)` hands the C compiler a canonical monotonic
-    // induction variable + contiguous bounds over `input`, unlocking
-    // vectorization / bounds-check elision / alias analysis. A hand-index while
-    // with a bottom `i++` emits weaker IR for the same logic (the standing
-    // for-over-while rule — measured up to ~20% on hot loops). This IS the
-    // recognizer's inner loop, so it is exactly where the span form pays.
-    if (analysis.suffix_terminal) {
-        try w.writeAll("    if (A[s]) return from;\n");
-        try w.writeAll("    size_t i = from;\n");
-        try w.writeAll("    for (i = from; i < len; i++) {\n");
-        try w.writeAll("        uint32_t ns = T[(size_t)s * 256 + (size_t)input[i]];\n");
-        try w.print("        if (ns == {d}) break;\n", .{dead.?});
-        try w.writeAll("        s = ns;\n");
-        try w.writeAll("    }\n");
-        try w.writeAll("    return A[s] ? i : SIZE_MAX;\n");
-        try w.writeAll("}\n");
-        return;
-    }
-    try w.writeAll("    size_t last_end = A[s] ? from : SIZE_MAX;\n");
-    try w.writeAll("    for (size_t i = from; i < len; i++) {\n");
-    try w.writeAll("        s = T[(size_t)s * 256 + (size_t)input[i]];\n");
-    if (dead) |d| try w.print("        if (s == {d}) break;\n", .{d});
-    try w.writeAll("        if (A[s]) last_end = i + 1;\n");
-    try w.writeAll("    }\n");
-    try w.writeAll("    return last_end;\n");
-    try w.writeAll("}\n");
+    return emitPrefixMatcherVocab(w, dfa, name, prefix_vocab_c);
 }
 
 /// C sibling of `compilePrefixToZig` — compile a pattern to a self-contained
@@ -1728,40 +1741,55 @@ pub fn compilePrefixToC(out: std.mem.Allocator, pattern: []const u8, name: []con
 /// inside the loop instead of a labeled break — this matcher never needs to
 /// jump past its own loop, only return from the function.
 pub fn emitPrefixMatcherJs(w: anytype, dfa: *const Dfa, name: []const u8) !void {
+    return emitPrefixMatcherVocab(w, dfa, name, prefix_vocab_js);
+}
+
+/// The shared prefix-matcher skeleton over `vocab`: transition/accept tables,
+/// then either the suffix-terminal walk (early accept check, dead-state break,
+/// `A[s]` decides the end) or the general longest-prefix walk (`last_end`
+/// tracking with a dead-state break).
+fn emitPrefixMatcherVocab(w: anytype, dfa: *const Dfa, name: []const u8, comptime vocab: PrefixVocab) !void {
     const analysis = analyzePrefixDfa(dfa);
     const dead = analysis.dead;
 
-    try w.print("function {s}(input, len, from) {{\n", .{name});
-    try w.writeAll("    const T = [");
+    try w.print(vocab.sig_fmt, .{name});
+    try w.writeAll(vocab.trans_open);
     for (dfa.trans, 0..) |t, i| {
-        if (i != 0) try w.writeAll(",");
+        if (i != 0) try w.writeAll(vocab.sep);
         try w.print("{d}", .{t});
     }
-    try w.writeAll("];\n");
-    try w.writeAll("    const A = [");
+    try w.writeAll(vocab.table_close);
+    try w.writeAll(vocab.accept_open);
     for (dfa.accept, 0..) |acc, i| {
-        if (i != 0) try w.writeAll(",");
+        if (i != 0) try w.writeAll(vocab.sep);
         try w.writeAll(if (acc) "true" else "false");
     }
-    try w.writeAll("];\n");
+    try w.writeAll(vocab.table_close);
 
-    try w.print("    let s = {d};\n", .{dfa.start});
+    try w.print(vocab.start_fmt, .{dfa.start});
+    // The byte-scan is a `for` over a KNOWN SPAN, never a manual-index `while`:
+    // `for (i = from; i < len; i++)` hands the C compiler a canonical monotonic
+    // induction variable + contiguous bounds over `input`, unlocking
+    // vectorization / bounds-check elision / alias analysis. A hand-index while
+    // with a bottom `i++` emits weaker IR for the same logic (the standing
+    // for-over-while rule — measured up to ~20% on hot loops). This IS the
+    // recognizer's inner loop, so it is exactly where the span form pays.
     if (analysis.suffix_terminal) {
         try w.writeAll("    if (A[s]) return from;\n");
-        try w.writeAll("    let i = from;\n");
+        try w.writeAll(vocab.i_decl);
         try w.writeAll("    for (i = from; i < len; i++) {\n");
-        try w.writeAll("        const ns = T[s * 256 + input[i]];\n");
-        try w.print("        if (ns === {d}) break;\n", .{dead.?});
+        try w.writeAll(vocab.ns_fmt);
+        try w.print(vocab.ns_dead_fmt, .{dead.?});
         try w.writeAll("        s = ns;\n");
         try w.writeAll("    }\n");
-        try w.writeAll("    return A[s] ? i : -1;\n");
+        try w.writeAll(vocab.suffix_ret_fmt);
         try w.writeAll("}\n");
         return;
     }
-    try w.writeAll("    let last_end = A[s] ? from : -1;\n");
-    try w.writeAll("    for (let i = from; i < len; i++) {\n");
-    try w.writeAll("        s = T[s * 256 + input[i]];\n");
-    if (dead) |d| try w.print("        if (s === {d}) break;\n", .{d});
+    try w.writeAll(vocab.last_end_fmt);
+    try w.writeAll(vocab.loop_open);
+    try w.writeAll(vocab.s_update_fmt);
+    if (dead) |d| try w.print(vocab.s_dead_fmt, .{d});
     try w.writeAll("        if (A[s]) last_end = i + 1;\n");
     try w.writeAll("    }\n");
     try w.writeAll("    return last_end;\n");
