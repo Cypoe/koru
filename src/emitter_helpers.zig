@@ -1823,6 +1823,24 @@ fn emitBranchEnumValue(emitter: *CodeEmitter, branch: []const u8) !void {
     }
 }
 
+/// `.branch` metatype field — enum literal for Transition, string literal
+/// for Profile/Audit; an empty branch spells `__void` (void event completion).
+fn emitMetatypeBranchField(emitter: *CodeEmitter, is_transition: bool, branch: []const u8) !void {
+    if (is_transition) {
+        try emitter.write(".branch = .");
+        if (branch.len == 0) {
+            try emitter.write("__void");
+        } else {
+            try emitBranchEnumValue(emitter, branch);
+        }
+        try emitter.write(",\n");
+    } else {
+        try emitter.write(".branch = \"");
+        try emitter.write(if (branch.len == 0) "__void" else branch);
+        try emitter.write("\",\n");
+    }
+}
+
 /// Emit Transition types for event taps
 /// Three tiers: Transition (12 bytes, enum-based) -> Profile (32+ bytes, string-based) -> Audit (variable, full forensics)
 pub fn emitTransitionTypes(
@@ -3958,33 +3976,8 @@ fn emitSubflowContinuationsWithDepth(
 
                             // .branch field - enum literal for Transition, string for Profile
                             try emitter.write(indent);
-                            if (is_transition) {
-                                // Transition: .branch = .created (enum literal)
-                                // Use __void for empty branches (void event completion)
-                                try emitter.write("            .branch = .");
-                                if (mb.branch.len == 0) {
-                                    try emitter.write("__void");
-                                } else {
-                                    // Escape keywords (e.g., .@"error" for error branch)
-                                    if (codegen_utils.needsEscaping(mb.branch)) {
-                                        try emitter.write("@\"");
-                                        try emitter.write(mb.branch);
-                                        try emitter.write("\"");
-                                    } else {
-                                        try emitter.write(mb.branch);
-                                    }
-                                }
-                                try emitter.write(",\n");
-                            } else {
-                                // Profile/Audit: .branch = "done" (string literal)
-                                try emitter.write("            .branch = \"");
-                                if (mb.branch.len == 0) {
-                                    try emitter.write("__void");
-                                } else {
-                                    try emitter.write(mb.branch);
-                                }
-                                try emitter.write("\",\n");
-                            }
+                            try emitter.write("            ");
+                            try emitMetatypeBranchField(emitter, is_transition, mb.branch);
 
                             // .timestamp_ns field - ONLY for Profile/Audit (not Transition)
                             if (!is_transition) {
@@ -11817,34 +11810,8 @@ fn emitStep(
             }
 
             // .branch field - enum literal for Transition, string for Profile
-            // Use __void for empty branches (void event completion)
             try emitter.writeIndent();
-            if (is_transition) {
-                // Transition: .branch = .created (enum literal)
-                try emitter.write(".branch = .");
-                if (mb.branch.len == 0) {
-                    try emitter.write("__void");
-                } else {
-                    // Escape keywords (e.g., .@"error" for error branch)
-                    if (codegen_utils.needsEscaping(mb.branch)) {
-                        try emitter.write("@\"");
-                        try emitter.write(mb.branch);
-                        try emitter.write("\"");
-                    } else {
-                        try emitter.write(mb.branch);
-                    }
-                }
-                try emitter.write(",\n");
-            } else {
-                // Profile/Audit: .branch = "done" (string literal)
-                try emitter.write(".branch = \"");
-                if (mb.branch.len == 0) {
-                    try emitter.write("__void");
-                } else {
-                    try emitter.write(mb.branch);
-                }
-                try emitter.write("\",\n");
-            }
+            try emitMetatypeBranchField(emitter, is_transition, mb.branch);
 
             // .timestamp_ns field - ONLY for Profile/Audit (not Transition)
             if (!is_transition) {
