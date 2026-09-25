@@ -291,13 +291,16 @@ fn namedRecordProduceBrace(text: []const u8) ?usize {
     return brace;
 }
 
-fn indexOfTopLevelArrow(s: []const u8) ?usize {
+/// Index of the first two-char operator at paren/brace depth 0 outside
+/// string literals — `first` names the head character(s) (`"-"` for `->`,
+/// `"="` for `=>`, `"-="` for either) and `second` the tail.
+fn indexOfTopLevelOp(s: []const u8, first: []const u8, second: u8) ?usize {
     var paren_depth: i32 = 0;
     var brace_depth: i32 = 0;
     var in_string = false;
     var i: usize = 0;
 
-    while (i < s.len) : (i += 1) {
+    while (i + 1 < s.len) : (i += 1) {
         const c = s[i];
         if (c == '"' and (i == 0 or s[i - 1] != '\\')) {
             in_string = !in_string;
@@ -310,12 +313,18 @@ fn indexOfTopLevelArrow(s: []const u8) ?usize {
         if (c == '{') brace_depth += 1;
         if (c == '}') brace_depth -= 1;
 
-        if (c == '-' and paren_depth == 0 and brace_depth == 0 and i + 1 < s.len and s[i + 1] == '>') {
+        if (paren_depth == 0 and brace_depth == 0 and
+            std.mem.indexOfScalar(u8, first, c) != null and s[i + 1] == second)
+        {
             return i;
         }
     }
 
     return null;
+}
+
+fn indexOfTopLevelArrow(s: []const u8) ?usize {
+    return indexOfTopLevelOp(s, "-", '>');
 }
 
 fn hasTopLevelArrow(s: []const u8) bool {
@@ -389,28 +398,7 @@ fn indexOfTopLevelBindColon(s: []const u8) ?usize {
 /// source-block pre-checks never mistake a braced constructor payload
 /// (`... => final { r }`) for a source block on the branch name (pinned 100_085).
 fn indexOfTopLevelHeadArrow(s: []const u8) ?usize {
-    var paren_depth: i32 = 0;
-    var brace_depth: i32 = 0;
-    var in_string = false;
-    var i: usize = 0;
-    while (i < s.len) : (i += 1) {
-        const c = s[i];
-        if (c == '"' and (i == 0 or s[i - 1] != '\\')) {
-            in_string = !in_string;
-            continue;
-        }
-        if (in_string) continue;
-        if (c == '(') paren_depth += 1;
-        if (c == ')') paren_depth -= 1;
-        if (c == '{') brace_depth += 1;
-        if (c == '}') brace_depth -= 1;
-        if (paren_depth == 0 and brace_depth == 0 and
-            (c == '=' or c == '-') and i + 1 < s.len and s[i + 1] == '>')
-        {
-            return i;
-        }
-    }
-    return null;
+    return indexOfTopLevelOp(s, "=-", '>');
 }
 
 /// Return `s` with a trailing `// ...` line comment removed (the `//` must be
@@ -6077,24 +6065,7 @@ pub const Parser = struct {
                     if (arrow_at) |at| break :blk at;
                     break :blk null;
                 }
-                var i: usize = 0;
-                var pd: i32 = 0;
-                var bd: i32 = 0;
-                var ins = false;
-                while (i + 1 < inv_str.len) : (i += 1) {
-                    const c = inv_str[i];
-                    if (c == '"' and (i == 0 or inv_str[i - 1] != '\\')) {
-                        ins = !ins;
-                        continue;
-                    }
-                    if (ins) continue;
-                    if (c == '(') pd += 1;
-                    if (c == ')') pd -= 1;
-                    if (c == '{') bd += 1;
-                    if (c == '}') bd -= 1;
-                    if (pd == 0 and bd == 0 and c == '=' and inv_str[i + 1] == '>') break :blk i;
-                }
-                break :blk null;
+                break :blk indexOfTopLevelOp(inv_str, "=", '>');
             };
 
             // Same-line `-> produce` after a bare-return head bind
@@ -6106,24 +6077,7 @@ pub const Parser = struct {
             const same_line_produce: ?usize = blk: {
                 if (has_inline_chain) break :blk null;
                 if (invocation.return_binding == null) break :blk null;
-                var i: usize = 0;
-                var pd: i32 = 0;
-                var bd: i32 = 0;
-                var ins = false;
-                while (i + 1 < inv_str.len) : (i += 1) {
-                    const c = inv_str[i];
-                    if (c == '"' and (i == 0 or inv_str[i - 1] != '\\')) {
-                        ins = !ins;
-                        continue;
-                    }
-                    if (ins) continue;
-                    if (c == '(') pd += 1;
-                    if (c == ')') pd -= 1;
-                    if (c == '{') bd += 1;
-                    if (c == '}') bd -= 1;
-                    if (pd == 0 and bd == 0 and c == '-' and inv_str[i + 1] == '>') break :blk i;
-                }
-                break :blk null;
+                break :blk indexOfTopLevelOp(inv_str, "-", '>');
             };
 
             const continuations = if (same_line_produce) |pidx| produce_blk: {
