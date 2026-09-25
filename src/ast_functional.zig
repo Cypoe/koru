@@ -3072,6 +3072,12 @@ pub fn freeKeySet(allocator: std.mem.Allocator, map: *std.StringHashMap(void)) v
     map.deinit();
 }
 
+/// `"mod:name"`, falling back to `fallback_module` when the parsed state
+/// carries no module path of its own.
+pub fn qualifiedStateName(allocator: std.mem.Allocator, module_path: ?[]const u8, fallback_module: []const u8, name: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}:{s}", .{ module_path orelse fallback_module, name });
+}
+
 pub const facets = struct {
     /// Canonical branch names — the enforcement contract every consumer
     /// shares. `ok` is the sole non-panic terminal a bare `|>` rides;

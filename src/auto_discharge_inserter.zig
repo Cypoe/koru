@@ -3383,11 +3383,7 @@ pub const AutoDischargeInserter = struct {
                         .concrete => |concrete| {
                             if (concrete.consumes_obligation) {
                                 // Build full state name - canonicalize using event's module if no module specified
-                                const consumer_state = if (concrete.module_path) |mod|
-                                    try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ mod, concrete.name })
-                                else
-                                    // Use event's module to canonicalize
-                                    try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ entry.value_ptr.module_name, concrete.name });
+                                const consumer_state = try ast_functional.qualifiedStateName(self.allocator, concrete.module_path, entry.value_ptr.module_name, concrete.name);
                                 defer self.allocator.free(consumer_state);
 
                                 if (std.mem.eql(u8, consumer_state, base_state)) {
@@ -3424,10 +3420,7 @@ pub const AutoDischargeInserter = struct {
                             }
                             for (u.members) |member| {
                                 if (!member.consumes_obligation and !(include_multi_branch and any_consumes)) continue;
-                                const consumer_state = if (member.module_path) |mod|
-                                    try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ mod, member.name })
-                                else
-                                    try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ entry.value_ptr.module_name, member.name });
+                                const consumer_state = try ast_functional.qualifiedStateName(self.allocator, member.module_path, entry.value_ptr.module_name, member.name);
                                 defer self.allocator.free(consumer_state);
 
                                 if (std.mem.eql(u8, consumer_state, base_state)) {
