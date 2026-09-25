@@ -22,20 +22,28 @@ const codegen_utils = @import("codegen_utils");
 
 const TEMPLATE_ANNOTATION = "template";
 
-/// A `{% comp error %}` reached during template rendering is a template-author
-/// contract violation (e.g. a required branch the consumer didn't provide).
-/// Surface it as a located Koru diagnostic (KORU120) pointing at the source
-/// the template was rendered for, then fail the compile cleanly — never let
-/// the host language's downstream error be the one the user sees.
-fn emitCompErrorAndExit(location: errors.SourceLocation, message: []const u8) noreturn {
+/// Emit `error[<code>]: <message>` with a `-->` caret on the invoking flow's
+/// location, then fail the compile. The shared exit for template-render
+/// diagnostics: every refusal lands on the author's call site, not on text
+/// the backend would be the first to see.
+fn emitLocatedDiagAndExit(code: errors.ErrorCode, location: errors.SourceLocation, message: []const u8) noreturn {
     std.debug.print("error[{s}]: {s}\n  --> {s}:{d}:{d}\n", .{
-        @tagName(errors.ErrorCode.KORU120),
+        @tagName(code),
         message,
         location.file,
         location.line,
         location.column,
     });
     std.process.exit(1);
+}
+
+/// A `{% comp error %}` reached during template rendering is a template-author
+/// contract violation (e.g. a required branch the consumer didn't provide).
+/// Surface it as a located Koru diagnostic (KORU120) pointing at the source
+/// the template was rendered for, then fail the compile cleanly — never let
+/// the host language's downstream error be the one the user sees.
+fn emitCompErrorAndExit(location: errors.SourceLocation, message: []const u8) noreturn {
+    emitLocatedDiagAndExit(.KORU120, location, message);
 }
 
 /// An `{% if %}` / `{% unless %}` condition the template engine cannot parse
@@ -65,6 +73,16 @@ fn emitInvalidConditionAndExit(location: errors.SourceLocation, condition: []con
         location.column,
     });
     std.process.exit(1);
+}
+
+/// A `[template]` proc's parse filter refused the invocation's Source text —
+/// e.g. `const { … }` carrying a malformed field entry (nameless, valueless,
+/// fused for want of a comma, a name bound twice). Surface it as a located
+/// Koru diagnostic (KORU176) on the invoking flow, then fail the compile
+/// cleanly — never let the host backend be the first to see a field list the
+/// shared field-list rules would have refused.
+fn emitMalformedFieldListAndExit(location: errors.SourceLocation, message: []const u8) noreturn {
+    emitLocatedDiagAndExit(.KORU176, location, message);
 }
 
 /// Index of a top-level `..` (range operator) in `s` — one not nested inside
@@ -189,6 +207,23 @@ fn renderZigConstValue(allocator: std.mem.Allocator, value: []const u8, type_ann
     return allocator.dupe(u8, v);
 }
 
+/// The rendered refusal message for the field-list error `parse_fields` is
+/// currently raising. A liquid filter's signature is `(allocator, args)` — no
+/// diagnostic channel — so the described text waits here for the render call
+/// site, the frame that owns the invocation's location. Set only on refusal;
+/// cleared at the top of each render. Cold path: an error exits the compile.
+var field_list_diag: ?[]const u8 = null;
+
+/// Raise a field-list `err`, stashing the diagnostic text for the render call
+/// site. `describeErrorIn` is not reused wholesale: it re-derives fragments
+/// under struct_literal's comma-only grammar, while `const` splits on newlines
+/// too — so the fragment (the fused line, the twice-bound name) is named by
+/// THIS parser at the refusal site, keeping the family's wording identical.
+fn refuseFieldList(msg: []const u8, err: struct_literal.ParseError) struct_literal.ParseError {
+    field_list_diag = msg;
+    return err;
+}
+
 /// `parse_fields(struct_text)` filter: split a brace-optional Koru field list
 /// (`name: "X", count: 42[i32]`, or `{ … }`, comma- OR newline-separated) into an
 /// array of `{ name, value, type }` record nodes the template iterates with
@@ -198,6 +233,15 @@ fn renderZigConstValue(allocator: std.mem.Allocator, value: []const u8, type_ann
 /// annotation is the first thing that genuinely DIVERGES between the variants. Both
 /// `|zig` and `|js` call THIS single parser, so the lowerings cannot drift. The
 /// input is a Source's `.text`, so the caller has location context for diagnostics.
+///
+/// Malformed entries REFUSE with the shared field-list error set
+/// (`struct_literal.ParseError` — NamelessField / TypelessField / MissingComma
+/// / DuplicateField), never silently drop: a malformed entry used to end the
+/// list at the `break`, which either emitted half the declaration the author
+/// wrote or pasted the fused text into a `const` decl for the Zig backend to
+/// reject. Newline remains a separator here — unlike `struct_literal`'s
+/// comma-only grammar, `const { … }`'s canonical block shape is one field per
+/// line, so the fused-field detector runs on each VALUE, not the list.
 fn parseFieldsFilter(allocator: std.mem.Allocator, args: []const liquid.Value) anyerror!liquid.Value {
     if (args.len != 1 or args[0] != .string) return error.BadArgs;
     const input = std.mem.trim(u8, args[0].string, " \t\n\r");
@@ -208,6 +252,7 @@ fn parseFieldsFilter(allocator: std.mem.Allocator, args: []const liquid.Value) a
         input;
 
     var nodes: std.ArrayList(*liquid.Context) = .empty;
+    var seen = std.StringHashMap(void).init(allocator);
 
     var i: usize = 0;
     while (i < body.len) {
@@ -216,15 +261,27 @@ fn parseFieldsFilter(allocator: std.mem.Allocator, args: []const liquid.Value) a
             body[i] == '\n' or body[i] == '\r' or body[i] == ',')) i += 1;
         if (i >= body.len) break;
 
-        // Field name (identifier).
+        // Field name (identifier). Anything else here is an entry with no
+        // name — `: value`, or a token that was never a field.
         const name_start = i;
         while (i < body.len and (std.ascii.isAlphanumeric(body[i]) or body[i] == '_')) i += 1;
         const field_name = body[name_start..i];
-        if (field_name.len == 0) break;
+        if (field_name.len == 0)
+            return refuseFieldList(struct_literal.describeError(error.NamelessField), error.NamelessField);
+        // One binding per name — a second `a:` would emit a duplicate const.
+        if (seen.contains(field_name))
+            return refuseFieldList(
+                std.fmt.allocPrint(allocator, "field '{s}' is bound twice — a field list takes each name once", .{field_name}) catch
+                    struct_literal.describeError(error.DuplicateField),
+                error.DuplicateField);
+        try seen.put(field_name, {});
 
-        // Skip whitespace, require `:`.
+        // Skip whitespace, require `:`. A bare `name` is a field that dropped
+        // its value — const has no pun (there is nothing at container scope
+        // to pun FROM), so `x` and `x:` are the same refusal.
         while (i < body.len and (body[i] == ' ' or body[i] == '\t')) i += 1;
-        if (i >= body.len or body[i] != ':') break;
+        if (i >= body.len or body[i] != ':')
+            return refuseFieldList(struct_literal.describeError(error.TypelessField), error.TypelessField);
         i += 1;
         while (i < body.len and (body[i] == ' ' or body[i] == '\t')) i += 1;
 
@@ -232,6 +289,15 @@ fn parseFieldsFilter(allocator: std.mem.Allocator, args: []const liquid.Value) a
         const value_start = i;
         i = scanValueEnd(body, i);
         const field_value = std.mem.trim(u8, body[value_start..i], " \t\n\r");
+        if (field_value.len == 0)
+            return refuseFieldList(struct_literal.describeError(error.TypelessField), error.TypelessField);
+        // `a: v b: w` on one line fused two fields for want of a comma — the
+        // shared boundary detector names the line that began the second field.
+        if (struct_literal.fusedFieldLine(field_value)) |fused|
+            return refuseFieldList(
+                std.fmt.allocPrint(allocator, "missing comma — '{s}' began a new field but was read as part of the field above it; separate fields with commas", .{fused}) catch
+                    struct_literal.describeError(error.MissingComma),
+                error.MissingComma);
         const peeled = peelBaseType(field_value);
 
         const node = try allocator.create(liquid.Context);
@@ -928,12 +994,19 @@ pub fn renderTemplateInvocation(
     try filters.put("table_type", tableTypeFilter);
 
     var comp_err: ?[]const u8 = null;
+    field_list_diag = null;
     const rendered = liquid.renderWithEnv(allocator, proc.body.text, &ctx, &comp_err, .{ .filters = &filters }) catch |err| {
         if (err == error.CompError) {
             emitCompErrorAndExit(location, comp_err orelse "template comp error");
         }
         if (err == error.InvalidIfCondition) {
             emitInvalidConditionAndExit(location, comp_err orelse "");
+        }
+        // A parse filter's refusal (e.g. `parse_fields` on a malformed
+        // `const { … }` block) carries its described message in the stash —
+        // same emit-then-exit shape as the comp-error path above.
+        if (field_list_diag) |msg| {
+            emitMalformedFieldListAndExit(location, msg);
         }
         return err;
     };

@@ -1,0 +1,5 @@
+BACKEND_EXEC_ERROR
+CONTAINS error[KORU176]
+CONTAINS field has no value
+ERROR_AT 7
+NOT_CONTAINS output_emitted.zig

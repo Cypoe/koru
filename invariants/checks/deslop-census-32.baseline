@@ -1,5 +1,16 @@
 # Pin: tools/deslop.zig over src/ at --min-tokens=32, measured 2026-10-13.
 # The small-idiom tier — the floor where micro-duplication (indent fills,
 # EOF guards, join bodies) lives. Same alarm contract as the 48 pin.
-clusters=1502
-members=2054
+#
+# Re-pinned in "refuse malformed field lists in const blocks" (branch
+# tightening-015, parent ab5ec044d): the alarm rolled late — the tree had
+# already drifted to clusters=1509,
+# members=2062 at the parent commit (emitter_test/visitor_emitter_test
+# field-literal clones landed under rolls that missed). This commit's own
+# delta is near zero: its new emit-and-exit diagnostic was folded into the
+# shared emitLocatedDiagAndExit helper before pinning. The residual named
+# by the census is the test-file `.{ .name = ..., .type = ... }` literal
+# idiom — fold material for a dedicated deslop pass, not for this refusal
+# commit.
+clusters=1510
+members=2064

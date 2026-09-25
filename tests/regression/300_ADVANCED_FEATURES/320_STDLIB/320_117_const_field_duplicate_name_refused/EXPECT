@@ -1,0 +1,5 @@
+BACKEND_EXEC_ERROR
+CONTAINS error[KORU176]
+CONTAINS 'a' is bound twice
+ERROR_AT 7
+NOT_CONTAINS output_emitted.zig

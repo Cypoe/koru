@@ -1,0 +1,6 @@
+BACKEND_EXEC_ERROR
+CONTAINS error[KORU176]
+CONTAINS missing comma
+CONTAINS 'b: @as(i32, 2)'
+ERROR_AT 8
+NOT_CONTAINS output_emitted.zig
