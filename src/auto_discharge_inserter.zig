@@ -3769,6 +3769,22 @@ pub const AutoDischargeInserter = struct {
             return .{ .transformed = false, .program = program };
         };
 
+        return self.graftScopeExitDisposal(target_cont, binding_name, disposal, program, flow);
+    }
+
+    /// Build the disposal continuation (void branch wrapping the disposal
+    /// invocation, then the disposal's first branch as a terminal child),
+    /// graft it under `target`, splice the target back into the flow, and
+    /// warn in warn_mode. Shared by the flow-scope and continuation-scope
+    /// entries.
+    fn graftScopeExitDisposal(
+        self: *AutoDischargeInserter,
+        target: *const ast.Continuation,
+        binding_name: []const u8,
+        disposal: DisposalEvent,
+        program: *const ast.Program,
+        flow: *const ast.Flow,
+    ) RecursiveError!TransformResult {
         // Create disposal invocation
         const disposal_invocation = try self.buildDisposalInvocation(binding_name, disposal, &[_][]const u8{});
 
@@ -3789,9 +3805,9 @@ pub const AutoDischargeInserter = struct {
             .binding_annotations = &[_][]const u8{},
             .condition = null,
             .node = .{ .terminal = {} },
-            .indent = target_cont.indent + 2,
+            .indent = target.indent + 2,
             .continuations = &[_]ast.Continuation{},
-            .location = target_cont.location,
+            .location = target.location,
         };
 
         const disposal_cont = ast.Continuation{
@@ -3800,16 +3816,16 @@ pub const AutoDischargeInserter = struct {
             .binding_annotations = &[_][]const u8{},
             .condition = null,
             .node = .{ .invocation = disposal_invocation },
-            .indent = target_cont.indent + 1,
+            .indent = target.indent + 1,
             .continuations = terminal_conts,
-            .location = target_cont.location,
+            .location = target.location,
         };
 
         // Create new continuation with disposal appended to its continuations
-        const new_target_cont = try self.appendContinuationChild(target_cont, disposal_cont);
+        const new_target_cont = try self.appendContinuationChild(target, disposal_cont);
 
         // Replace the continuation in the flow
-        const new_flow = try self.replaceContinuationAnywhere(flow, target_cont, new_target_cont);
+        const new_flow = try self.replaceContinuationAnywhere(flow, target, new_target_cont);
 
         const result = try self.replacedFlowResult(program, flow, new_flow);
 
@@ -3842,57 +3858,7 @@ pub const AutoDischargeInserter = struct {
             return .{ .transformed = false, .program = program };
         };
 
-        // Create disposal invocation
-        const disposal_invocation = try self.buildDisposalInvocation(binding_name, disposal, &[_][]const u8{});
-
-        // Create disposal continuation with terminal
-        const disposal_is_void = disposal.event_decl.branches.len == 0;
-        var disposal_branch_name: []const u8 = "";
-        if (!disposal_is_void) {
-            for (disposal.event_decl.branches) |b| {
-                disposal_branch_name = b.name;
-                break;
-            }
-        }
-
-        var terminal_conts = try self.allocator.alloc(ast.Continuation, 1);
-        terminal_conts[0] = .{
-            .branch = if (disposal_is_void) "" else try self.allocator.dupe(u8, disposal_branch_name),
-            .binding = if (disposal_is_void) null else try self.allocator.dupe(u8, "_"),
-            .binding_annotations = &[_][]const u8{},
-            .condition = null,
-            .node = .{ .terminal = {} },
-            .indent = actual_target.indent + 2,
-            .continuations = &[_]ast.Continuation{},
-            .location = actual_target.location,
-        };
-
-        const disposal_cont = ast.Continuation{
-            .branch = "",
-            .binding = null,
-            .binding_annotations = &[_][]const u8{},
-            .condition = null,
-            .node = .{ .invocation = disposal_invocation },
-            .indent = actual_target.indent + 1,
-            .continuations = terminal_conts,
-            .location = actual_target.location,
-        };
-
-        // Append disposal to target's continuations
-        const new_target_cont = try self.appendContinuationChild(actual_target, disposal_cont);
-
-        const new_flow = try self.replaceContinuationAnywhere(flow, actual_target, new_target_cont);
-
-        const result = try self.replacedFlowResult(program, flow, new_flow);
-
-        if (self.warn_mode and result.transformed) {
-            std.debug.print("warning[AUTO-DISCHARGE]: Inserting '{s}' at scope exit for '{s}'\n", .{
-                disposal.qualified_name,
-                binding_name,
-            });
-        }
-
-        return result;
+        return self.graftScopeExitDisposal(actual_target, binding_name, disposal, program, flow);
     }
 
     /// Find a continuation with a specific binding within a continuation tree
@@ -3906,23 +3872,7 @@ pub const AutoDischargeInserter = struct {
         }
         // Check node's nested structures
         if (cont.node) |node| {
-            switch (node) {
-                .foreach => |fe| {
-                    for (fe.branches) |*branch| {
-                        if (findContinuationByBindingRecursive(branch.body, binding_name)) |found| {
-                            return found;
-                        }
-                    }
-                },
-                .conditional => |cond| {
-                    for (cond.branches) |*branch| {
-                        if (findContinuationByBindingRecursive(branch.body, binding_name)) |found| {
-                            return found;
-                        }
-                    }
-                },
-                else => {},
-            }
+            return findBindingInNodeBranches(node, binding_name);
         }
         return null;
     }
@@ -5042,6 +4992,30 @@ fn branchNameIsDeclared(event_decl: *const ast.EventDecl, name: []const u8) bool
     return false;
 }
 
+/// Search the continuation trees nested inside a node's branch bodies —
+/// `foreach` and `conditional` carry `body` lists the finder walks the
+/// same way at every level.
+fn findBindingInNodeBranches(node: ast.Node, binding_name: []const u8) ?*const ast.Continuation {
+    switch (node) {
+        .foreach => |fe| {
+            for (fe.branches) |*branch| {
+                if (findContinuationByBindingRecursive(branch.body, binding_name)) |found| {
+                    return found;
+                }
+            }
+        },
+        .conditional => |cond| {
+            for (cond.branches) |*branch| {
+                if (findContinuationByBindingRecursive(branch.body, binding_name)) |found| {
+                    return found;
+                }
+            }
+        },
+        else => {},
+    }
+    return null;
+}
+
 /// Standalone recursive helper for finding continuation by binding (outside struct for recursive calls)
 fn findContinuationByBindingRecursive(conts: []const ast.Continuation, binding_name: []const u8) ?*const ast.Continuation {
     for (conts) |*cont| {
@@ -5058,22 +5032,8 @@ fn findContinuationByBindingRecursive(conts: []const ast.Continuation, binding_n
         }
         // Search in node's nested structures
         if (cont.node) |node| {
-            switch (node) {
-                .foreach => |fe| {
-                    for (fe.branches) |*branch| {
-                        if (findContinuationByBindingRecursive(branch.body, binding_name)) |found| {
-                            return found;
-                        }
-                    }
-                },
-                .conditional => |cond| {
-                    for (cond.branches) |*branch| {
-                        if (findContinuationByBindingRecursive(branch.body, binding_name)) |found| {
-                            return found;
-                        }
-                    }
-                },
-                else => {},
+            if (findBindingInNodeBranches(node, binding_name)) |found| {
+                return found;
             }
         }
     }
