@@ -13314,11 +13314,17 @@ pub fn writeBareReturnType(
     try writeTypeNameQuoted(emitter, trimmed);
 }
 
-fn emitBranchConstructorWithEventType(
+/// Emit `.{ .<branch> = <payload> }` (or the bare `-> T` value) for a
+/// branch constructor, resolving `[...]` literals against the branch's
+/// declared field types via `find_field(target, branch_name, field_name)`.
+/// `target` is whatever the lookup needs — an `EventType` for registry
+/// sites or an `EventDecl` where the decl is in hand.
+fn emitBranchConstructorWithLookup(
     emitter: *CodeEmitter,
     ctx: *EmissionContext,
     bc: *const ast.BranchConstructor,
-    event_type: type_registry_module.EventType,
+    target: anytype,
+    comptime find_field: anytype,
 ) EmitError!void {
     if (bc.is_bare_return) {
         if (bc.plain_value) |pv| {
@@ -13335,7 +13341,7 @@ fn emitBranchConstructorWithEventType(
     if (bc.plain_value) |pv| {
         const trimmed = std.mem.trim(u8, pv, " \t");
         if (trimmed.len >= 2 and trimmed[0] == '[' and trimmed[trimmed.len - 1] == ']') {
-            if (findBranchFieldForEventType(event_type, bc.branch_name, null)) |field| {
+            if (find_field(target, bc.branch_name, null)) |field| {
                 try emitArrayLiteralForField(emitter, ctx, field, pv);
             } else {
                 try emitValue(emitter, ctx, pv);
@@ -13355,7 +13361,7 @@ fn emitBranchConstructorWithEventType(
             const value = if (field.expression_str) |expr| expr else field.type;
             const trimmed = std.mem.trim(u8, value, " \t");
             if (trimmed.len >= 2 and trimmed[0] == '[' and trimmed[trimmed.len - 1] == ']') {
-                if (findBranchFieldForEventType(event_type, bc.branch_name, field.name)) |branch_field| {
+                if (find_field(target, bc.branch_name, field.name)) |branch_field| {
                     try emitArrayLiteralForField(emitter, ctx, branch_field, value);
                 } else {
                     try emitValue(emitter, ctx, value);
@@ -13369,59 +13375,22 @@ fn emitBranchConstructorWithEventType(
     try emitter.write(" }");
 }
 
+fn emitBranchConstructorWithEventType(
+    emitter: *CodeEmitter,
+    ctx: *EmissionContext,
+    bc: *const ast.BranchConstructor,
+    event_type: type_registry_module.EventType,
+) EmitError!void {
+    return emitBranchConstructorWithLookup(emitter, ctx, bc, event_type, findBranchFieldForEventType);
+}
+
 fn emitBranchConstructorWithEvent(
     emitter: *CodeEmitter,
     ctx: *EmissionContext,
     bc: *const ast.BranchConstructor,
     event: *const ast.EventDecl,
 ) EmitError!void {
-    if (bc.is_bare_return) {
-        if (bc.plain_value) |pv| {
-            try emitValue(emitter, ctx, pv);
-        } else {
-            try emitter.write("undefined");
-        }
-        return;
-    }
-    try emitter.write(".{ .");
-    try writeBranchName(emitter, bc.branch_name);
-    try emitter.write(" = ");
-
-    if (bc.plain_value) |pv| {
-        const trimmed = std.mem.trim(u8, pv, " \t");
-        if (trimmed.len >= 2 and trimmed[0] == '[' and trimmed[trimmed.len - 1] == ']') {
-            if (findBranchFieldForEvent(event, bc.branch_name, null)) |field| {
-                try emitArrayLiteralForField(emitter, ctx, field, pv);
-            } else {
-                try emitValue(emitter, ctx, pv);
-            }
-        } else {
-            try emitValue(emitter, ctx, pv);
-        }
-    } else {
-        try emitter.write(".{");
-        for (bc.fields, 0..) |field, idx| {
-            if (idx > 0) {
-                try emitter.write(", ");
-            }
-            try emitter.write(" .");
-            try writeBranchName(emitter, field.name);
-            try emitter.write(" = ");
-            const value = if (field.expression_str) |expr| expr else field.type;
-            const trimmed = std.mem.trim(u8, value, " \t");
-            if (trimmed.len >= 2 and trimmed[0] == '[' and trimmed[trimmed.len - 1] == ']') {
-                if (findBranchFieldForEvent(event, bc.branch_name, field.name)) |branch_field| {
-                    try emitArrayLiteralForField(emitter, ctx, branch_field, value);
-                } else {
-                    try emitValue(emitter, ctx, value);
-                }
-            } else {
-                try emitValue(emitter, ctx, value);
-            }
-        }
-        try emitter.write(" }");
-    }
-    try emitter.write(" }");
+    return emitBranchConstructorWithLookup(emitter, ctx, bc, event, findBranchFieldForEvent);
 }
 
 /// Emit a branch constructor (.branch = .{ fields })
