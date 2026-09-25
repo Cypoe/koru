@@ -1,0 +1,5 @@
+MUST_ERROR
+CONTAINS error[KORU161]
+CONTAINS destructures nothing the fold reads
+ERROR_AT 24
+NOT_CONTAINS output_emitted.zig

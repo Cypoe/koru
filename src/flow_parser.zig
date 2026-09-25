@@ -33,7 +33,10 @@ pub const FlowParseResult = union(enum) {
 pub fn parseFlow(allocator: std.mem.Allocator, source: []const u8) FlowParseResult {
     return parseFlowInternal(allocator, source) catch |err| {
         return .{ .err = .{
-            .message = @errorName(err),
+            .message = switch (err) {
+                ParseError.DestructureNotImplemented => "destructure `| <branch> { … }` is not implemented in an interpreted flow — bind the payload by name (`| <branch> name |>`)",
+                else => @errorName(err),
+            },
             .line = 0,
             .column = 0,
         } };
@@ -54,6 +57,7 @@ const ParseError = error{
     MalformedNode,
     UnbalancedParens,
     UnbalancedBraces,
+    DestructureNotImplemented,
     OutOfMemory,
 };
 
@@ -774,6 +778,10 @@ fn parseBranchInfo(allocator: std.mem.Allocator, text: []const u8) ParseError!Br
         var rest_tokens = std.mem.tokenizeAny(u8, rest, " \t");
         const quoted_binding = rest_tokens.next();
 
+        if (quoted_binding) |b| {
+            if (b.len > 0 and b[0] == '{') return ParseError.DestructureNotImplemented;
+        }
+
         return .{
             .branch = try allocator.dupe(u8, inner),
             .binding = if (quoted_binding) |b| try allocator.dupe(u8, b) else null,
@@ -795,6 +803,15 @@ fn parseBranchInfo(allocator: std.mem.Allocator, text: []const u8) ParseError!Br
     var tokens = std.mem.tokenizeAny(u8, content, " \t");
     const branch_name = tokens.next() orelse "";
     const binding = tokens.next();
+
+    // `| branch { … }` is the destructure spelling — interpreted flows bind
+    // only `| branch name`, so a `{` here would otherwise tokenize as a
+    // literal binding named "{" while the fields (and any `[row]`-style
+    // annotations on them) drop silently. Refuse at the parser that owns
+    // the interpreted grammar.
+    if (binding) |b| {
+        if (b.len > 0 and b[0] == '{') return ParseError.DestructureNotImplemented;
+    }
 
     return .{
         .branch = try allocator.dupe(u8, branch_name),
@@ -1451,5 +1468,35 @@ test "parseFlow: module is eval" {
             try std.testing.expectEqualStrings("eval", f.module);
         },
         .err => return error.UnexpectedError,
+    }
+}
+
+test "parseFlow: destructure arm is refused" {
+    // Interpreted flows bind only `| <branch> name` — a `{ … }` destructure
+    // (and any annotation on a field) must refuse at parse, not tokenize as
+    // a literal `{` binding that drops the field names.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const result = parseFlow(alloc, "risky()\n| missing { v } |> echo(text: v)");
+    switch (result) {
+        .flow => return error.ExpectedParseError,
+        .err => |e| try std.testing.expectEqualStrings(
+            "destructure `| <branch> { … }` is not implemented in an interpreted flow — bind the payload by name (`| <branch> name |>`)",
+            e.message,
+        ),
+    }
+}
+
+test "parseFlow: annotated destructure arm is refused" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const result = parseFlow(alloc, "risky()\n| missing { [row]v } |> echo(text: v)");
+    switch (result) {
+        .flow => return error.ExpectedParseError,
+        .err => |e| try std.testing.expect(std.mem.startsWith(u8, e.message, "destructure `| <branch>")),
     }
 }

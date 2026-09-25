@@ -62,11 +62,13 @@ koru_std/http.kz	215
 koru_std/index.kz	7
 koru_std/indexes.kz	15
 koru_std/inter.kz	176
-koru_std/interpreter.args.kz	144
+koru_std/interpreter.argref.kz	31
+koru_std/interpreter.args.kz	129
+koru_std/interpreter.arith.kz	41
 koru_std/interpreter.arms.kz	52
 koru_std/interpreter.define.kz	152
 koru_std/interpreter.guards.kz	63
-koru_std/interpreter.kz	1164
+koru_std/interpreter.kz	1131
 koru_std/interpreter.names.kz	18
 koru_std/interpreter.parse.kz	52
 koru_std/interpreter.run.kz	1659
@@ -171,8 +173,9 @@ koru_std/string.kjs	147
 koru_std/string.kz	311
 koru_std/supervisor.decl.kz	63
 koru_std/supervisor.explain.kz	490
-koru_std/supervisor.fold.kz	1112
+koru_std/supervisor.fold.kz	1086
 koru_std/supervisor.h.kz	63
+koru_std/supervisor.home.kz	37
 koru_std/supervisor.kz	73
 koru_std/supervisor.policy.kz	149
 koru_std/switch.kz	151

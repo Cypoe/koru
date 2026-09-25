@@ -1,0 +1,3 @@
+echo: gone
+t1 result
+t2 refused destructure `| <branch> { … }` is not implemented in an interpreted flow — bind the payload by name (`| <branch> name |>`)

@@ -564,6 +564,13 @@ const F = struct {
             return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: '| {s} {{…}}' destructures nothing — '{s}' declares '| {s}' with no payload", .{ site.branch, child_name, site.branch }) } };
         }
     }
+    // A destructure on the supervised arm is never read even when the branch
+    // HAS a payload: the fold binds the failure through `site.binding`
+    // (`| boom f |>`), so `{ q }`'s fields — and any annotation on them —
+    // drop silently. Refuse the surface this consumer does not implement.
+    if (site.destructure.len > 0) {
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: '| {s} {{…}}' destructures nothing the fold reads — bind the failure payload by name ('| {s} f |>')", .{ site.branch, site.branch }) } };
+    }
     // Policy expressions referencing the failure binding on a payload-less
     // branch would compile to an undeclared Zig identifier — refuse here.
     if (!sup_has_payload) {
@@ -1075,38 +1082,5 @@ const F = struct {
         },
         .appended = appended.toOwnedSlice(allocator) catch unreachable,
     } };
-}
-
-/// The enclosing tor's declared `| <site.branch>` for a site inside a
-/// module_decl — the same lookup the main body runs at program top level.
-const HomeBranch = struct { branch: ?*const ast.Branch, found_decl: bool, name: ?[]const u8 = null };
-fn findHomeDecl(items: []const ast.Item, parent: *const ast.Continuation, branch_name: []const u8) ?HomeBranch {
-    for (items) |*pi| {
-        switch (pi.*) {
-            .flow => |*hf| {
-                if (!H.contContains(&hf.body, parent)) continue;
-                if (hf.impl_of) |io| {
-                    const nm: ?[]const u8 = if (io.segments.len > 0) io.segments[io.segments.len - 1] else null;
-                    for (items) |*di| {
-                        if (di.* != .event_decl) continue;
-                        const ed = &di.event_decl;
-                        if (!H.pathEq(io, ed.path)) continue;
-                        for (ed.branches) |*b| {
-                            if (std.mem.eql(u8, b.name, branch_name)) {
-                                return .{ .branch = b, .found_decl = true, .name = nm };
-                            }
-                        }
-                        return .{ .branch = null, .found_decl = true, .name = nm };
-                    }
-                }
-                return .{ .branch = null, .found_decl = false };
-            },
-            .module_decl => |*m| {
-                if (findHomeDecl(m.items, parent, branch_name)) |hb| return hb;
-            },
-            else => {},
-        }
-    }
-    return null;
 }
 

@@ -1118,42 +1118,9 @@ fn exprCompareGte(left: ExprValue, right: ExprValue) ExprEvalError!ExprValue {
 
 const ExprArithOp = enum { add, sub, mul, div, mod };
 
-fn exprArithmeticOp(left: ExprValue, right: ExprValue, op: ExprArithOp) ExprEvalError!ExprValue {
-    return switch (left) {
-        .int_val => |l| switch (right) {
-            .int_val => |r| exprIntOp(l, r, op),
-            .float_val => |r| exprFloatOp(@as(f64, @floatFromInt(l)), r, op),
-            else => ExprEvalError.TypeMismatch,
-        },
-        .float_val => |l| switch (right) {
-            .int_val => |r| exprFloatOp(l, @as(f64, @floatFromInt(r)), op),
-            .float_val => |r| exprFloatOp(l, r, op),
-            else => ExprEvalError.TypeMismatch,
-        },
-        else => ExprEvalError.TypeMismatch,
-    };
-}
-
-fn exprIntOp(l: i64, r: i64, op: ExprArithOp) ExprEvalError!ExprValue {
-    return .{ .int_val = switch (op) {
-        .add => l + r,
-        .sub => l - r,
-        .mul => l * r,
-        .div => if (r == 0) return ExprEvalError.DivisionByZero else @divTrunc(l, r),
-        .mod => if (r == 0) return ExprEvalError.DivisionByZero else @mod(l, r),
-    } };
-}
-
-fn exprFloatOp(l: f64, r: f64, op: ExprArithOp) ExprEvalError!ExprValue {
-    return .{ .float_val = switch (op) {
-        .add => l + r,
-        .sub => l - r,
-        .mul => l * r,
-        .div => if (r == 0.0) return ExprEvalError.DivisionByZero else l / r,
-        .mod => @mod(l, r),
-    } };
-}
 ~part args
+~part argref
+~part arith
 ~part arms
 ~part define
 ~part guards

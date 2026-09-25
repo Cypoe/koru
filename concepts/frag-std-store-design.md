@@ -533,10 +533,25 @@ generic emit path shares one wall (KORU175 in the flow checker's
 deferred-binding-gated destructure walk — anything annotated that reaches it
 unconsumed is refused), while each transform consumer owns its own refusal
 (regex's match/scan arms answer KORU162, the way the query arm answers
-KORU161). Pins: `210_271`, `210_272`, `640_017`. Still unguarded on
-measurement: `std/parser`'s rule-arm destructures and
-`supervisor.fold`'s — consumers that read `destructure` and never look at
-`annotations`.
+KORU161). Pins: `210_271`, `210_272`, `640_017`.
+
+The remaining consumers measured out three different ways (2026-09-25):
+`std/parser` already refused ANY destructure in a match alternative
+("waits on typed captures", KORU163) — annotated entries die with the
+surface itself, nothing to add. `supervisor.fold`'s site destructure was
+worse than annotation-dropping: nothing reads it at all — `| boom { q }`
+on a payload branch compiled clean and left `q` undeclared in the emitted
+Zig (rung 3; `{ f }` only LOOKED bound because the fold's default
+fail-bind happens to be named `f`). The fold now refuses any site
+destructure outright — KORU161, "destructures nothing the fold reads".
+The interpreter's surface is stranger: its lightweight `flow_parser`
+tokenized `| missing { v }`'s `{` as a literal BINDING NAME and never
+built a `DestructureField` at all — silent at the grammar layer. It now
+refuses `DestructureNotImplemented` at `parseBranchInfo`, and
+`checkInvocationArgs` refuses any destructure that arrives pre-built
+(the run path falls back to the full parser, which DOES populate
+`arm.destructure` — two gates because two parsers feed one consumer).
+Pin: `440_028`, unit tests in `flow_parser.zig`.
 
 ### Why the braces are legal again
 
