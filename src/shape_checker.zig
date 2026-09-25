@@ -261,17 +261,10 @@ pub const ShapeChecker = struct {
             switch (item.*) {
                 .event_decl => |*event| {
                     // Main module events need module qualification too!
-                    // Build full path: "main_module_name:event.path"
-                    var buf = try std.ArrayList(u8).initCapacity(self.allocator, 64);
-                    errdefer buf.deinit(self.allocator);
-
-                    try buf.appendSlice(self.allocator, source_file.main_module_name);
-                    try buf.append(self.allocator, ':');
-                    for (event.path.segments, 0..) |segment, i| {
-                        if (i > 0) try buf.append(self.allocator, '.');
-                        try buf.appendSlice(self.allocator, segment);
-                    }
-                    const path = try buf.toOwnedSlice(self.allocator);
+                    const path = try self.pathToString(.{
+                        .segments = event.path.segments,
+                        .module_qualifier = source_file.main_module_name,
+                    });
 
                     try self.events.put(path, EventInfo{
                         .decl = event,
@@ -283,16 +276,10 @@ pub const ShapeChecker = struct {
                 },
                 .proc_decl => |*proc| {
                     // Main module procs need module qualification too!
-                    var buf = try std.ArrayList(u8).initCapacity(self.allocator, 64);
-                    errdefer buf.deinit(self.allocator);
-
-                    try buf.appendSlice(self.allocator, source_file.main_module_name);
-                    try buf.append(self.allocator, ':');
-                    for (proc.path.segments, 0..) |segment, i| {
-                        if (i > 0) try buf.append(self.allocator, '.');
-                        try buf.appendSlice(self.allocator, segment);
-                    }
-                    const path = try buf.toOwnedSlice(self.allocator);
+                    const path = try self.pathToString(.{
+                        .segments = proc.path.segments,
+                        .module_qualifier = source_file.main_module_name,
+                    });
 
                     try self.procs.put(path, ProcInfo{
                         .decl = proc,
@@ -335,17 +322,10 @@ pub const ShapeChecker = struct {
                     for (module.items) |*module_item| {
                         switch (module_item.*) {
                             .event_decl => |*event| {
-                                // Build full path: "module.logical_name:event.path"
-                                var buf = try std.ArrayList(u8).initCapacity(self.allocator, 64);
-                                errdefer buf.deinit(self.allocator);
-
-                                try buf.appendSlice(self.allocator, module.logical_name);
-                                try buf.append(self.allocator, ':');
-                                for (event.path.segments, 0..) |segment, i| {
-                                    if (i > 0) try buf.append(self.allocator, '.');
-                                    try buf.appendSlice(self.allocator, segment);
-                                }
-                                const path = try buf.toOwnedSlice(self.allocator);
+                                const path = try self.pathToString(.{
+                                    .segments = event.path.segments,
+                                    .module_qualifier = module.logical_name,
+                                });
 
                                 try self.events.put(path, EventInfo{
                                     .decl = event,
@@ -354,17 +334,10 @@ pub const ShapeChecker = struct {
                                 try self.type_engine.registerEvent(path, event.branches);
                             },
                             .proc_decl => |*proc| {
-                                // Build full path with module qualifier (same as events)
-                                var buf = try std.ArrayList(u8).initCapacity(self.allocator, 64);
-                                errdefer buf.deinit(self.allocator);
-
-                                try buf.appendSlice(self.allocator, module.logical_name);
-                                try buf.append(self.allocator, ':');
-                                for (proc.path.segments, 0..) |segment, i| {
-                                    if (i > 0) try buf.append(self.allocator, '.');
-                                    try buf.appendSlice(self.allocator, segment);
-                                }
-                                const path = try buf.toOwnedSlice(self.allocator);
+                                const path = try self.pathToString(.{
+                                    .segments = proc.path.segments,
+                                    .module_qualifier = module.logical_name,
+                                });
 
                                 try self.procs.put(path, ProcInfo{
                                     .decl = proc,
@@ -2020,20 +1993,10 @@ pub const ShapeChecker = struct {
     fn validateProc(self: *ShapeChecker, proc: *const ast.ProcDecl, module_qualifier: ?[]const u8) !void {
         // Build the full path for lookup
         // If module_qualifier is provided, prepend it (e.g., "std.io:println")
-        const path = if (module_qualifier) |mq| blk: {
-            var buf = try std.ArrayList(u8).initCapacity(self.allocator, 64);
-            errdefer buf.deinit(self.allocator);
-
-            try buf.appendSlice(self.allocator, mq);
-            try buf.append(self.allocator, ':');
-            for (proc.path.segments, 0..) |segment, i| {
-                if (i > 0) try buf.append(self.allocator, '.');
-                try buf.appendSlice(self.allocator, segment);
-            }
-            break :blk try buf.toOwnedSlice(self.allocator);
-        } else blk: {
-            break :blk try self.pathToString(proc.path);
-        };
+        const path = try self.pathToString(.{
+            .segments = proc.path.segments,
+            .module_qualifier = module_qualifier orelse proc.path.module_qualifier,
+        });
         defer self.allocator.free(path); // Free temp string after lookup
 
         if (self.events.get(path) != null) return;
