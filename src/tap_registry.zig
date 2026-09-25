@@ -172,44 +172,33 @@ pub const TapRegistry = struct {
         return try matches.toOwnedSlice(self.allocator);
     }
 
-    /// Get sorted list of referenced events (for enum generation)
-    pub fn getReferencedEvents(self: *const TapRegistry) ![]const []const u8 {
-        var events = try std.ArrayList([]const u8).initCapacity(self.allocator, self.referenced_events.count());
-        defer events.deinit(self.allocator);
+    /// Map keys as a sorted slice, for deterministic enum generation.
+    fn sortedKeys(map: *const std.StringHashMap(void), allocator: std.mem.Allocator) ![]const []const u8 {
+        var keys = try std.ArrayList([]const u8).initCapacity(allocator, map.count());
+        defer keys.deinit(allocator);
 
-        var it = self.referenced_events.keyIterator();
+        var it = map.keyIterator();
         while (it.next()) |key| {
-            try events.append(self.allocator, key.*);
+            try keys.append(allocator, key.*);
         }
 
-        // Sort for deterministic output
-        std.sort.block([]const u8, events.items, {}, struct {
+        std.sort.block([]const u8, keys.items, {}, struct {
             fn lessThan(_: void, a: []const u8, b: []const u8) bool {
                 return std.mem.order(u8, a, b) == .lt;
             }
         }.lessThan);
 
-        return try events.toOwnedSlice(self.allocator);
+        return try keys.toOwnedSlice(allocator);
+    }
+
+    /// Get sorted list of referenced events (for enum generation)
+    pub fn getReferencedEvents(self: *const TapRegistry) ![]const []const u8 {
+        return sortedKeys(&self.referenced_events, self.allocator);
     }
 
     /// Get sorted list of referenced branches (for enum generation)
     pub fn getReferencedBranches(self: *const TapRegistry) ![]const []const u8 {
-        var branches = try std.ArrayList([]const u8).initCapacity(self.allocator, self.referenced_branches.count());
-        defer branches.deinit(self.allocator);
-
-        var it = self.referenced_branches.keyIterator();
-        while (it.next()) |key| {
-            try branches.append(self.allocator, key.*);
-        }
-
-        // Sort for deterministic output
-        std.sort.block([]const u8, branches.items, {}, struct {
-            fn lessThan(_: void, a: []const u8, b: []const u8) bool {
-                return std.mem.order(u8, a, b) == .lt;
-            }
-        }.lessThan);
-
-        return try branches.toOwnedSlice(self.allocator);
+        return sortedKeys(&self.referenced_branches, self.allocator);
     }
 
     /// Check if any taps use the Transition metatype
