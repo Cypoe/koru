@@ -2211,17 +2211,17 @@ pub const Parser = struct {
         return segs[segs.len - 1];
     }
 
-    fn parseKoruConstruct(self: *Parser) !ast.Item {
+    /// Refuse EOF mid-construct — PARSE001 at the cursor, then bail.
+    /// `msg` is the only per-site difference across the parse entries.
+    fn expectNotEOF(self: *Parser, comptime msg: []const u8) !void {
         if (self.current >= self.lines.len) {
-            try self.reporter.addError(
-                .PARSE001,
-                self.current,
-                0,
-                "unexpected end of file in parseKoruConstruct",
-                .{},
-            );
+            try self.reporter.addError(.PARSE001, self.current, 0, msg, .{});
             return error.UnexpectedEOF;
         }
+    }
+
+    fn parseKoruConstruct(self: *Parser) !ast.Item {
+        try self.expectNotEOF("unexpected end of file in parseKoruConstruct");
 
         const line = self.lines[self.current];
         const trimmed = lexer.trim(line);
@@ -2566,16 +2566,7 @@ pub const Parser = struct {
     }
 
     fn parseEventDeclWithAnnotations(self: *Parser, is_public: bool, annotations: [][]const u8) !ast.EventDecl {
-        if (self.current >= self.lines.len) {
-            try self.reporter.addError(
-                .PARSE001,
-                self.current,
-                0,
-                "unexpected end of file while parsing tor declaration",
-                .{},
-            );
-            return error.UnexpectedEOF;
-        }
+        try self.expectNotEOF("unexpected end of file while parsing tor declaration");
 
         const line = self.lines[self.current];
         self.current += 1;
@@ -3121,16 +3112,7 @@ pub const Parser = struct {
     }
 
     fn parseEventDecl(self: *Parser, is_public: bool) !ast.EventDecl {
-        if (self.current >= self.lines.len) {
-            try self.reporter.addError(
-                .PARSE001,
-                self.current,
-                0,
-                "unexpected end of file while parsing tor declaration",
-                .{},
-            );
-            return error.UnexpectedEOF;
-        }
+        try self.expectNotEOF("unexpected end of file while parsing tor declaration");
 
         const line = self.lines[self.current];
         self.current += 1;
@@ -3225,16 +3207,7 @@ pub const Parser = struct {
     }
 
     fn parseProcDeclWithAnnotations(self: *Parser, annotations: [][]const u8) !ast.ProcDecl {
-        if (self.current >= self.lines.len) {
-            try self.reporter.addError(
-                .PARSE001,
-                self.current,
-                0,
-                "unexpected end of file while parsing proc declaration",
-                .{},
-            );
-            return error.UnexpectedEOF;
-        }
+        try self.expectNotEOF("unexpected end of file while parsing proc declaration");
 
         const line = self.lines[self.current];
         // Capture the decl's start BEFORE the cursor consumes the body —
@@ -3397,16 +3370,7 @@ pub const Parser = struct {
     }
 
     fn parseProcDecl(self: *Parser) !ast.ProcDecl {
-        if (self.current >= self.lines.len) {
-            try self.reporter.addError(
-                .PARSE001,
-                self.current,
-                0,
-                "unexpected end of file while parsing proc declaration",
-                .{},
-            );
-            return error.UnexpectedEOF;
-        }
+        try self.expectNotEOF("unexpected end of file while parsing proc declaration");
 
         const line = self.lines[self.current];
         // Capture the decl's start BEFORE the cursor consumes the body —
@@ -4482,16 +4446,7 @@ pub const Parser = struct {
     // See koru_std/taps.kz for the ~tap() transform implementation.
 
     fn parseFlow(self: *Parser, annotations: [][]const u8) anyerror!ast.Flow {
-        if (self.current >= self.lines.len) {
-            try self.reporter.addError(
-                .PARSE001,
-                self.current,
-                0,
-                "unexpected end of file while parsing flow",
-                .{},
-            );
-            return error.UnexpectedEOF;
-        }
+        try self.expectNotEOF("unexpected end of file while parsing flow");
 
         const location = self.getLineLocation(self.current, lexer.getIndent(self.lines[self.current]));
         const line = self.lines[self.current];
@@ -5682,16 +5637,7 @@ pub const Parser = struct {
     }
 
     fn parseSubflowImplBody(self: *Parser, annotations: [][]const u8) !ast.Item {
-        if (self.current >= self.lines.len) {
-            try self.reporter.addError(
-                .PARSE001,
-                self.current,
-                0,
-                "unexpected end of file while parsing subflow implementation",
-                .{},
-            );
-            return error.UnexpectedEOF;
-        }
+        try self.expectNotEOF("unexpected end of file while parsing subflow implementation");
 
         const line = self.lines[self.current];
         const head_line_idx = self.current;
