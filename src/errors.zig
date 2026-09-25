@@ -123,8 +123,9 @@ pub const ErrorCode = enum(u16) {
     KORU131, // Presence test on a required arm (always installed — the test is meaningless)
 
     // Scoped vocabulary (`[with]`) errors
-    KORU140, // Bare name resolves against more than one opened `[with]` vocabulary — ambiguous, qualify the call explicitly to pick one. Emitted by the metacircular resolve-with-scopes pass (koru_std/compiler.kz), so the .zig-only registry emit-scan can't see it — reserved in scripts/registry_reserved.txt.
+    KORU140, // Bare name resolves against more than one opened `[with]` vocabulary — ambiguous, qualify the call explicitly to pick one. Emitted by the metacircular resolve-with-scopes pass (koru_std/compiler.with.kz), so the .zig-only registry emit-scan can't see it — reserved in scripts/registry_reserved.txt.
     KORU141, // Tap declared in a ~[comptime] module — the comptime pipeline does not expand transforms, so the tap-flow would leak into generated backend code as a bare invocation
+    KORU142, // A `[with(...)]` argument names a module the file never imported — the annotation abbreviates a declared dependency, it does not create one. Emitted by the metacircular resolve-with-scopes pass (koru_std/compiler.with.kz) — reserved in scripts/registry_reserved.txt.
 
     // Annotation-entry vocabulary errors (the import gate is the first consumer; the item gate is the second)
     KORU150, // Conditional-gate entry the gate cannot evaluate — an entry deciding AST membership must evaluate; silence is never an option

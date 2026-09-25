@@ -67,6 +67,10 @@ PARSE002
 
 KORU140
 
+# Emitted by koru_std/compiler.with.kz's resolve-with-scopes pass, which is Koru,
+# not Zig — the emit-scan reads .zig only. Same situation as KORU140 above.
+KORU142
+
 # Emitted by koru_std/store.kz's `new` transform, which is Koru, not Zig — the
 # emit-scan reads .zig only. Same situation as KORU140 above, and the same
 # disposition: live, not dead.

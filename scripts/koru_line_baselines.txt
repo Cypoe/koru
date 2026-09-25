@@ -35,8 +35,9 @@ koru_std/compiler.context.kz	57
 koru_std/compiler.control.kz	31
 koru_std/compiler.dump.kz	24
 koru_std/compiler.flags.kz	6
-koru_std/compiler.kz	3074
+koru_std/compiler.kz	2840
 koru_std/compiler.paths.kz	33
+koru_std/compiler.with.kz	313
 koru_std/constructor.kz	305
 koru_std/control.capture.kz	352
 koru_std/control.kz	203

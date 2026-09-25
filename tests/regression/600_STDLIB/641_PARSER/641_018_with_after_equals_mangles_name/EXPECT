@@ -1,0 +1,2 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS annotations on a subflow impl go before the name
