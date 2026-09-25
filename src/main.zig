@@ -483,6 +483,76 @@ fn generateCompilerEnvJson(
     return buffer.toOwnedSlice(allocator);
 }
 
+/// Emit one comptime-thunk body step. The `.invocation` arm writes
+/// `_ = backend_output.<path>_event.handler(.{ … })` with every arg value
+/// quoted — thunk args are AST data, not runtime expressions. `indent` is
+/// the continuation-depth prefix written first.
+fn emitThunkStep(writer: anytype, step: anytype, module_alias_map: *const std.StringHashMap([]const u8), indent: []const u8) !void {
+    try writer.writeAll(indent);
+    switch (step) {
+        .invocation => |inv| {
+            // Call the handler from backend_output
+            try writer.writeAll("_ = ");
+            if (inv.path.module_qualifier) |mq| {
+                // Module-qualified event: backend_output.koru_<module>.<event>_event
+                try writer.writeAll("backend_output.koru_");
+                if (module_alias_map.get(mq)) |full_path| {
+                    try writer.writeAll(full_path);
+                } else {
+                    try writer.writeAll(mq);
+                }
+                try writer.writeAll(".");
+                for (inv.path.segments, 0..) |seg, i| {
+                    if (i > 0) try writer.writeAll("_");
+                    try writer.writeAll(seg);
+                }
+            } else {
+                // Local event: backend_output.main_module.<event>_event
+                try writer.writeAll("backend_output.main_module.");
+                for (inv.path.segments, 0..) |seg, i| {
+                    if (i > 0) try writer.writeAll("_");
+                    try writer.writeAll(seg);
+                }
+            }
+            try writer.writeAll("_event.handler(.{");
+            // For now, use a simple heuristic: if arg.name starts with quote, it's positional
+            // and we use "text" as the field name (works for println, print, etc.)
+            for (inv.args, 0..) |arg, i| {
+                if (i > 0) try writer.writeAll(", ");
+                try writer.writeAll(" .");
+                // Check if this is a positional argument (name starts with quote or is the value)
+                if (arg.name.len > 0 and (arg.name[0] == '"' or (!arg.had_explicit_label and std.mem.eql(u8, arg.name, arg.value)))) {
+                    // Positional argument - use "text" as field name for now
+                    try writer.writeAll("text");
+                } else {
+                    try writer.writeAll(arg.name);
+                }
+                try writer.writeAll(" = ");
+                // Always quote nested invocation args in comptime thunks.
+                // These are AST data, not runtime expressions.
+                const text_to_quote = if (arg.source_value) |sv| sv.text else arg.value;
+                try writer.writeAll("\"");
+                for (text_to_quote) |c| {
+                    switch (c) {
+                        '\n' => try writer.writeAll("\\n"),
+                        '\r' => try writer.writeAll("\\r"),
+                        '\t' => try writer.writeAll("\\t"),
+                        '\\' => try writer.writeAll("\\\\"),
+                        '"' => try writer.writeAll("\\\""),
+                        else => try writer.writeByte(c),
+                    }
+                }
+                try writer.writeAll("\"");
+            }
+            try writer.writeAll(" });\n");
+        },
+        .terminal => {},
+        else => {
+            try writer.writeAll("// TODO: Handle step type\n");
+        },
+    }
+}
+
 /// Generate the backend code that will perform code generation at compile-time
 /// This is Pass 2 of the Koru compiler - the Zig backend
 fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, source_file: *ast.Program, use_visitor: bool, config: *const CompilerConfig, has_transforms: bool) ![]const u8 {
@@ -901,69 +971,7 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
                     const cont = flow.body.continuations[0];
                     try writer.writeAll("        _ = &__thunk_result;\n");
                     if (cont.node) |step| {
-                        try writer.writeAll("        ");
-                        switch (step) {
-                            .invocation => |inv| {
-                                // Call the handler from backend_output
-                                try writer.writeAll("_ = ");
-                                if (inv.path.module_qualifier) |mq| {
-                                    // Module-qualified event: backend_output.koru_<module>.<event>_event
-                                    try writer.writeAll("backend_output.koru_");
-                                    if (module_alias_map.get(mq)) |full_path| {
-                                        try writer.writeAll(full_path);
-                                    } else {
-                                        try writer.writeAll(mq);
-                                    }
-                                    try writer.writeAll(".");
-                                    for (inv.path.segments, 0..) |seg, i| {
-                                        if (i > 0) try writer.writeAll("_");
-                                        try writer.writeAll(seg);
-                                    }
-                                } else {
-                                    // Local event: backend_output.main_module.<event>_event
-                                    try writer.writeAll("backend_output.main_module.");
-                                    for (inv.path.segments, 0..) |seg, i| {
-                                        if (i > 0) try writer.writeAll("_");
-                                        try writer.writeAll(seg);
-                                    }
-                                }
-                                try writer.writeAll("_event.handler(.{");
-                                // For now, use a simple heuristic: if arg.name starts with quote, it's positional
-                                // and we use "text" as the field name (works for println, print, etc.)
-                                for (inv.args, 0..) |arg, i| {
-                                    if (i > 0) try writer.writeAll(", ");
-                                    try writer.writeAll(" .");
-                                    // Check if this is a positional argument (name starts with quote or is the value)
-                                    if (arg.name.len > 0 and (arg.name[0] == '"' or (!arg.had_explicit_label and std.mem.eql(u8, arg.name, arg.value)))) {
-                                        // Positional argument - use "text" as field name for now
-                                        try writer.writeAll("text");
-                                    } else {
-                                        try writer.writeAll(arg.name);
-                                    }
-                                    try writer.writeAll(" = ");
-                                    // Always quote nested invocation args in comptime thunks.
-                                    // These are AST data, not runtime expressions.
-                                    const text_to_quote = if (arg.source_value) |sv| sv.text else arg.value;
-                                    try writer.writeAll("\"");
-                                    for (text_to_quote) |c| {
-                                        switch (c) {
-                                            '\n' => try writer.writeAll("\\n"),
-                                            '\r' => try writer.writeAll("\\r"),
-                                            '\t' => try writer.writeAll("\\t"),
-                                            '\\' => try writer.writeAll("\\\\"),
-                                            '"' => try writer.writeAll("\\\""),
-                                            else => try writer.writeByte(c),
-                                        }
-                                    }
-                                    try writer.writeAll("\"");
-                                }
-                                try writer.writeAll(" });\n");
-                            },
-                            .terminal => {},
-                            else => {
-                                try writer.writeAll("// TODO: Handle step type\n");
-                            },
-                        }
+                        try emitThunkStep(writer, step, &module_alias_map, "        ");
                     }
                 } else {
                     try writer.writeAll("        switch (__thunk_result) {\n");
@@ -992,69 +1000,7 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
                         }
 
                         if (cont.node) |step| {
-                            try writer.writeAll("                ");
-                            switch (step) {
-                                .invocation => |inv| {
-                                    // Call the handler from backend_output
-                                    try writer.writeAll("_ = ");
-                                    if (inv.path.module_qualifier) |mq| {
-                                        // Module-qualified event: backend_output.koru_<module>.<event>_event
-                                        try writer.writeAll("backend_output.koru_");
-                                        if (module_alias_map.get(mq)) |full_path| {
-                                            try writer.writeAll(full_path);
-                                        } else {
-                                            try writer.writeAll(mq);
-                                        }
-                                        try writer.writeAll(".");
-                                        for (inv.path.segments, 0..) |seg, i| {
-                                            if (i > 0) try writer.writeAll("_");
-                                            try writer.writeAll(seg);
-                                        }
-                                    } else {
-                                        // Local event: backend_output.main_module.<event>_event
-                                        try writer.writeAll("backend_output.main_module.");
-                                        for (inv.path.segments, 0..) |seg, i| {
-                                            if (i > 0) try writer.writeAll("_");
-                                            try writer.writeAll(seg);
-                                        }
-                                    }
-                                    try writer.writeAll("_event.handler(.{");
-                                    // For now, use a simple heuristic: if arg.name starts with quote, it's positional
-                                    // and we use "text" as the field name (works for println, print, etc.)
-                                    for (inv.args, 0..) |arg, i| {
-                                        if (i > 0) try writer.writeAll(", ");
-                                        try writer.writeAll(" .");
-                                        // Check if this is a positional argument (name starts with quote or is the value)
-                                        if (arg.name.len > 0 and (arg.name[0] == '"' or (!arg.had_explicit_label and std.mem.eql(u8, arg.name, arg.value)))) {
-                                            // Positional argument - use "text" as field name for now
-                                            try writer.writeAll("text");
-                                        } else {
-                                            try writer.writeAll(arg.name);
-                                        }
-                                        try writer.writeAll(" = ");
-                                        // Always quote nested invocation args in comptime thunks.
-                                        // These are AST data, not runtime expressions.
-                                        const text_to_quote = if (arg.source_value) |sv| sv.text else arg.value;
-                                        try writer.writeAll("\"");
-                                        for (text_to_quote) |c| {
-                                            switch (c) {
-                                                '\n' => try writer.writeAll("\\n"),
-                                                '\r' => try writer.writeAll("\\r"),
-                                                '\t' => try writer.writeAll("\\t"),
-                                                '\\' => try writer.writeAll("\\\\"),
-                                                '"' => try writer.writeAll("\\\""),
-                                                else => try writer.writeByte(c),
-                                            }
-                                        }
-                                        try writer.writeAll("\"");
-                                    }
-                                    try writer.writeAll(" });\n");
-                                },
-                                .terminal => {},
-                                else => {
-                                    try writer.writeAll("// TODO: Handle step type\n");
-                                },
-                            }
+                            try emitThunkStep(writer, step, &module_alias_map, "                ");
                         }
 
                         try writer.writeAll("            },\n");
@@ -4200,58 +4146,77 @@ fn parseFlagDeclaration(allocator: std.mem.Allocator, json_text: []const u8) !Fl
     };
 }
 
-/// Collect all compiler.flag.declare invocations from AST
-fn collectFlagDeclarations(allocator: std.mem.Allocator, program: *const ast.Program) ![]FlagDeclaration {
-    var flags = try std.ArrayList(FlagDeclaration).initCapacity(allocator, 4);
-    errdefer {
-        for (flags.items) |*flag| {
-            flag.deinit(allocator);
+/// Call `f(ctx, item, enclosing)` on every top-level item and every item
+/// inside a module_decl — `enclosing` is the module's import-derived
+/// logical_name, null at top level. Items are visited as pointers into
+/// `program` (pointer-stable). Shared spine of the collect* walkers below,
+/// which all used to spell this two-level walk out twice apiece.
+fn eachItem(program: *const ast.Program, ctx: anytype, comptime f: anytype) !void {
+    for (program.items) |*item| {
+        try f(ctx, item, null);
+        if (item.* == .module_decl) {
+            const module = &item.module_decl;
+            for (module.items) |*mod_item| {
+                try f(ctx, mod_item, module.logical_name);
+            }
         }
-        flags.deinit(allocator);
+    }
+}
+
+/// Strip one layer of surrounding double quotes, if present.
+fn unquote(v: []const u8) []const u8 {
+    return if (v.len >= 2 and v[0] == '"' and v[v.len - 1] == '"') v[1 .. v.len - 1] else v;
+}
+
+/// Walk top-level items (and module_decl items) collecting every
+/// `<verb>.declare` flow's `source` arg through `parse`. Shared spine of
+/// collectFlagDeclarations / collectCommandDeclarations.
+// TODO: Shouldn't this ALSO check if the "namespace" is "compiler"?
+fn collectDeclarations(
+    allocator: std.mem.Allocator,
+    program: *const ast.Program,
+    comptime Decl: type,
+    verb: []const u8,
+    comptime parse: *const fn (std.mem.Allocator, []const u8) anyerror!Decl,
+) ![]Decl {
+    var decls = try std.ArrayList(Decl).initCapacity(allocator, 4);
+    errdefer {
+        for (decls.items) |*d| {
+            d.deinit(allocator);
+        }
+        decls.deinit(allocator);
     }
 
-    // Walk top-level items
-    for (program.items) |item| {
-        if (item == .flow) {
-            // TODO: Shouldn't this ALSO check if the "namespace" is "compiler"?
+    const Ctx = struct {
+        allocator: std.mem.Allocator,
+        decls: *std.ArrayList(Decl),
+        verb: []const u8,
+
+        fn visit(ctx: @This(), item: *const ast.Item, enclosing: ?[]const u8) !void {
+            _ = enclosing;
+            if (item.* != .flow) return;
             const flow = item.flow;
-            // Check if this is compiler.flag.declare
             if (flow.inv().path.segments.len == 2 and
-                std.mem.eql(u8, flow.inv().path.segments[0], "flag") and
+                std.mem.eql(u8, flow.inv().path.segments[0], ctx.verb) and
                 std.mem.eql(u8, flow.inv().path.segments[1], "declare"))
             {
                 // Extract source parameter (stored in .value for anonymous blocks)
                 for (flow.inv().args) |arg| {
                     if (std.mem.eql(u8, arg.name, "source")) {
-                        const flag = try parseFlagDeclaration(allocator, arg.value);
-                        try flags.append(allocator, flag);
-                    }
-                }
-            }
-        } else if (item == .module_decl) {
-            // Also check imported modules
-            const module = item.module_decl;
-            for (module.items) |mod_item| {
-                if (mod_item == .flow) {
-                    const flow = mod_item.flow;
-                    // Check for flag.declare (same pattern as top-level)
-                    if (flow.inv().path.segments.len == 2 and
-                        std.mem.eql(u8, flow.inv().path.segments[0], "flag") and
-                        std.mem.eql(u8, flow.inv().path.segments[1], "declare"))
-                    {
-                        for (flow.inv().args) |arg| {
-                            if (std.mem.eql(u8, arg.name, "source")) {
-                                const flag = try parseFlagDeclaration(allocator, arg.value);
-                                try flags.append(allocator, flag);
-                            }
-                        }
+                        try ctx.decls.append(ctx.allocator, try parse(ctx.allocator, arg.value));
                     }
                 }
             }
         }
-    }
+    };
+    try eachItem(program, Ctx{ .allocator = allocator, .decls = &decls, .verb = verb }, Ctx.visit);
 
-    return try flags.toOwnedSlice(allocator);
+    return try decls.toOwnedSlice(allocator);
+}
+
+/// Collect all compiler.flag.declare invocations from AST
+fn collectFlagDeclarations(allocator: std.mem.Allocator, program: *const ast.Program) ![]FlagDeclaration {
+    return collectDeclarations(allocator, program, FlagDeclaration, "flag", parseFlagDeclaration);
 }
 
 // ============================================================
@@ -4397,54 +4362,7 @@ fn parseCommandDeclaration(allocator: std.mem.Allocator, json_text: []const u8) 
 
 /// Collect all compiler.command.declare invocations from AST
 fn collectCommandDeclarations(allocator: std.mem.Allocator, program: *const ast.Program) ![]CommandDeclaration {
-    var commands = try std.ArrayList(CommandDeclaration).initCapacity(allocator, 4);
-    errdefer {
-        for (commands.items) |*cmd| {
-            cmd.deinit(allocator);
-        }
-        commands.deinit(allocator);
-    }
-
-    // Walk top-level items
-    for (program.items) |item| {
-        if (item == .flow) {
-            const flow = item.flow;
-            // Check if this is command.declare (could be std.compiler:command.declare or just command.declare)
-            if (flow.inv().path.segments.len == 2 and
-                std.mem.eql(u8, flow.inv().path.segments[0], "command") and
-                std.mem.eql(u8, flow.inv().path.segments[1], "declare"))
-            {
-                for (flow.inv().args) |arg| {
-                    if (std.mem.eql(u8, arg.name, "source")) {
-                        const cmd = try parseCommandDeclaration(allocator, arg.value);
-                        try commands.append(allocator, cmd);
-                    }
-                }
-            }
-        } else if (item == .module_decl) {
-            // Check imported modules
-            const module = item.module_decl;
-            for (module.items) |mod_item| {
-                if (mod_item == .flow) {
-                    const flow = mod_item.flow;
-                    // Check for command.declare in module
-                    if (flow.inv().path.segments.len == 2 and
-                        std.mem.eql(u8, flow.inv().path.segments[0], "command") and
-                        std.mem.eql(u8, flow.inv().path.segments[1], "declare"))
-                    {
-                        for (flow.inv().args) |arg| {
-                            if (std.mem.eql(u8, arg.name, "source")) {
-                                const cmd = try parseCommandDeclaration(allocator, arg.value);
-                                try commands.append(allocator, cmd);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    return try commands.toOwnedSlice(allocator);
+    return collectDeclarations(allocator, program, CommandDeclaration, "command", parseCommandDeclaration);
 }
 
 /// Print basic help flags from compiler.kz (when no input file provided)
@@ -4691,104 +4609,46 @@ fn collectShellCommands(allocator: std.mem.Allocator, program: *const ast.Progra
         commands.deinit(allocator);
     }
 
-    // Walk top-level items
-    for (program.items) |item| {
-        if (item == .flow) {
+    const Ctx = struct {
+        allocator: std.mem.Allocator,
+        commands: *std.ArrayList(ShellCommand),
+
+        fn visit(ctx: @This(), item: *const ast.Item, enclosing: ?[]const u8) !void {
+            _ = enclosing;
+            if (item.* != .flow) return;
             const flow = item.flow;
             // Check if this is std.build:command.sh (module-qualified)
-            if (flow.inv().path.module_qualifier) |mq| {
-                if (std.mem.eql(u8, mq, "std.build") and
-                    flow.inv().path.segments.len == 2 and
-                    std.mem.eql(u8, flow.inv().path.segments[0], "command") and
-                    std.mem.eql(u8, flow.inv().path.segments[1], "sh"))
-                {
-                    // Extract name, source, and description parameters
-                    var name: ?[]const u8 = null;
-                    var script: ?[]const u8 = null;
-                    var description: ?[]const u8 = null;
+            const mq = flow.inv().path.module_qualifier orelse return;
+            if (!std.mem.eql(u8, mq, "std.build") or
+                flow.inv().path.segments.len != 2 or
+                !std.mem.eql(u8, flow.inv().path.segments[0], "command") or
+                !std.mem.eql(u8, flow.inv().path.segments[1], "sh")) return;
 
-                    for (flow.inv().args) |arg| {
-                        if (std.mem.eql(u8, arg.name, "name")) {
-                            // Strip quotes from name value
-                            const raw_name = arg.value;
-                            const trimmed = if (raw_name.len >= 2 and raw_name[0] == '"' and raw_name[raw_name.len - 1] == '"')
-                                raw_name[1 .. raw_name.len - 1]
-                            else
-                                raw_name;
-                            name = try allocator.dupe(u8, trimmed);
-                        } else if (std.mem.eql(u8, arg.name, "source")) {
-                            script = try allocator.dupe(u8, arg.value);
-                        } else if (std.mem.eql(u8, arg.name, "description")) {
-                            // Strip quotes from description value
-                            const raw_desc = arg.value;
-                            const trimmed = if (raw_desc.len >= 2 and raw_desc[0] == '"' and raw_desc[raw_desc.len - 1] == '"')
-                                raw_desc[1 .. raw_desc.len - 1]
-                            else
-                                raw_desc;
-                            description = try allocator.dupe(u8, trimmed);
-                        }
-                    }
+            // Extract name, source, and description parameters
+            var name: ?[]const u8 = null;
+            var script: ?[]const u8 = null;
+            var description: ?[]const u8 = null;
 
-                    if (name != null and script != null) {
-                        try commands.append(allocator, ShellCommand{
-                            .name = name.?,
-                            .script = script.?,
-                            .description = description orelse "",
-                        });
-                    }
+            for (flow.inv().args) |arg| {
+                if (std.mem.eql(u8, arg.name, "name")) {
+                    name = try ctx.allocator.dupe(u8, unquote(arg.value));
+                } else if (std.mem.eql(u8, arg.name, "source")) {
+                    script = try ctx.allocator.dupe(u8, arg.value);
+                } else if (std.mem.eql(u8, arg.name, "description")) {
+                    description = try ctx.allocator.dupe(u8, unquote(arg.value));
                 }
             }
-        } else if (item == .module_decl) {
-            // Also check imported modules
-            const module = item.module_decl;
-            for (module.items) |mod_item| {
-                if (mod_item == .flow) {
-                    const flow = mod_item.flow;
-                    if (flow.inv().path.module_qualifier) |mq| {
-                        if (std.mem.eql(u8, mq, "std.build") and
-                            flow.inv().path.segments.len == 2 and
-                            std.mem.eql(u8, flow.inv().path.segments[0], "command") and
-                            std.mem.eql(u8, flow.inv().path.segments[1], "sh"))
-                        {
-                            var name: ?[]const u8 = null;
-                            var script: ?[]const u8 = null;
-                            var description: ?[]const u8 = null;
 
-                            for (flow.inv().args) |arg| {
-                                if (std.mem.eql(u8, arg.name, "name")) {
-                                    // Strip quotes from name value
-                                    const raw_name = arg.value;
-                                    const trimmed = if (raw_name.len >= 2 and raw_name[0] == '"' and raw_name[raw_name.len - 1] == '"')
-                                        raw_name[1 .. raw_name.len - 1]
-                                    else
-                                        raw_name;
-                                    name = try allocator.dupe(u8, trimmed);
-                                } else if (std.mem.eql(u8, arg.name, "source")) {
-                                    script = try allocator.dupe(u8, arg.value);
-                                } else if (std.mem.eql(u8, arg.name, "description")) {
-                                    // Strip quotes from description value
-                                    const raw_desc = arg.value;
-                                    const trimmed = if (raw_desc.len >= 2 and raw_desc[0] == '"' and raw_desc[raw_desc.len - 1] == '"')
-                                        raw_desc[1 .. raw_desc.len - 1]
-                                    else
-                                        raw_desc;
-                                    description = try allocator.dupe(u8, trimmed);
-                                }
-                            }
-
-                            if (name != null and script != null) {
-                                try commands.append(allocator, ShellCommand{
-                                    .name = name.?,
-                                    .script = script.?,
-                                    .description = description orelse "",
-                                });
-                            }
-                        }
-                    }
-                }
+            if (name != null and script != null) {
+                try ctx.commands.append(ctx.allocator, ShellCommand{
+                    .name = name.?,
+                    .script = script.?,
+                    .description = description orelse "",
+                });
             }
         }
-    }
+    };
+    try eachItem(program, Ctx{ .allocator = allocator, .commands = &commands }, Ctx.visit);
 
     return try commands.toOwnedSlice(allocator);
 }
@@ -4803,84 +4663,42 @@ fn collectZigCommands(allocator: std.mem.Allocator, program: *const ast.Program)
         commands.deinit(allocator);
     }
 
-    // Walk top-level items
-    for (program.items) |item| {
-        if (item == .flow) {
+    const Ctx = struct {
+        allocator: std.mem.Allocator,
+        commands: *std.ArrayList(ZigCommand),
+
+        fn visit(ctx: @This(), item: *const ast.Item, enclosing: ?[]const u8) !void {
+            _ = enclosing;
+            if (item.* != .flow) return;
             const flow = item.flow;
             // Check if this is std.build:command.zig (module-qualified)
-            if (flow.inv().path.module_qualifier) |mq| {
-                if (std.mem.eql(u8, mq, "std.build") and
-                    flow.inv().path.segments.len == 2 and
-                    std.mem.eql(u8, flow.inv().path.segments[0], "command") and
-                    std.mem.eql(u8, flow.inv().path.segments[1], "zig"))
-                {
-                    // Extract name and source parameters
-                    var name: ?[]const u8 = null;
-                    var source: ?[]const u8 = null;
+            const mq = flow.inv().path.module_qualifier orelse return;
+            if (!std.mem.eql(u8, mq, "std.build") or
+                flow.inv().path.segments.len != 2 or
+                !std.mem.eql(u8, flow.inv().path.segments[0], "command") or
+                !std.mem.eql(u8, flow.inv().path.segments[1], "zig")) return;
 
-                    for (flow.inv().args) |arg| {
-                        if (std.mem.eql(u8, arg.name, "name")) {
-                            // Strip quotes from name value
-                            const raw_name = arg.value;
-                            const trimmed = if (raw_name.len >= 2 and raw_name[0] == '"' and raw_name[raw_name.len - 1] == '"')
-                                raw_name[1 .. raw_name.len - 1]
-                            else
-                                raw_name;
-                            name = try allocator.dupe(u8, trimmed);
-                        } else if (std.mem.eql(u8, arg.name, "source")) {
-                            source = try allocator.dupe(u8, arg.value);
-                        }
-                    }
+            // Extract name and source parameters
+            var name: ?[]const u8 = null;
+            var source: ?[]const u8 = null;
 
-                    if (name != null and source != null) {
-                        try commands.append(allocator, ZigCommand{
-                            .name = name.?,
-                            .source = source.?,
-                        });
-                    }
+            for (flow.inv().args) |arg| {
+                if (std.mem.eql(u8, arg.name, "name")) {
+                    name = try ctx.allocator.dupe(u8, unquote(arg.value));
+                } else if (std.mem.eql(u8, arg.name, "source")) {
+                    source = try ctx.allocator.dupe(u8, arg.value);
                 }
             }
-        } else if (item == .module_decl) {
-            // Also check imported modules
-            const module = item.module_decl;
-            for (module.items) |mod_item| {
-                if (mod_item == .flow) {
-                    const flow = mod_item.flow;
-                    if (flow.inv().path.module_qualifier) |mq| {
-                        if (std.mem.eql(u8, mq, "std.build") and
-                            flow.inv().path.segments.len == 2 and
-                            std.mem.eql(u8, flow.inv().path.segments[0], "command") and
-                            std.mem.eql(u8, flow.inv().path.segments[1], "zig"))
-                        {
-                            var name: ?[]const u8 = null;
-                            var source: ?[]const u8 = null;
 
-                            for (flow.inv().args) |arg| {
-                                if (std.mem.eql(u8, arg.name, "name")) {
-                                    // Strip quotes from name value
-                                    const raw_name = arg.value;
-                                    const trimmed = if (raw_name.len >= 2 and raw_name[0] == '"' and raw_name[raw_name.len - 1] == '"')
-                                        raw_name[1 .. raw_name.len - 1]
-                                    else
-                                        raw_name;
-                                    name = try allocator.dupe(u8, trimmed);
-                                } else if (std.mem.eql(u8, arg.name, "source")) {
-                                    source = try allocator.dupe(u8, arg.value);
-                                }
-                            }
-
-                            if (name != null and source != null) {
-                                try commands.append(allocator, ZigCommand{
-                                    .name = name.?,
-                                    .source = source.?,
-                                });
-                            }
-                        }
-                    }
-                }
+            if (name != null and source != null) {
+                try ctx.commands.append(ctx.allocator, ZigCommand{
+                    .name = name.?,
+                    .source = source.?,
+                });
             }
         }
-    }
+    };
+    try eachItem(program, Ctx{ .allocator = allocator, .commands = &commands }, Ctx.visit);
 
     return try commands.toOwnedSlice(allocator);
 }
@@ -4895,94 +4713,43 @@ fn collectKoruCommands(allocator: std.mem.Allocator, program: *const ast.Program
         commands.deinit(allocator);
     }
 
-    // Walk top-level items (use index to get stable pointer)
-    for (program.items, 0..) |item, item_idx| {
-        if (item == .flow) {
-            // Get pointer to the actual item in the slice, not a copy
-            const flow = &program.items[item_idx].flow;
+    const Ctx = struct {
+        allocator: std.mem.Allocator,
+        commands: *std.ArrayList(KoruCommand),
+
+        fn visit(ctx: @This(), item: *const ast.Item, enclosing: ?[]const u8) !void {
+            _ = enclosing;
+            if (item.* != .flow) return;
+            const flow = &item.flow;
             // Check if this is std.build:command (not command.sh or command.zig)
-            if (flow.inv().path.module_qualifier) |mq| {
-                if (std.mem.eql(u8, mq, "std.build") and
-                    flow.inv().path.segments.len == 1 and
-                    std.mem.eql(u8, flow.inv().path.segments[0], "command"))
-                {
-                    // Extract name and description parameters
-                    var name: ?[]const u8 = null;
-                    var description: ?[]const u8 = null;
+            const mq = flow.inv().path.module_qualifier orelse return;
+            if (!std.mem.eql(u8, mq, "std.build") or
+                flow.inv().path.segments.len != 1 or
+                !std.mem.eql(u8, flow.inv().path.segments[0], "command")) return;
 
-                    for (flow.inv().args) |arg| {
-                        if (std.mem.eql(u8, arg.name, "name")) {
-                            const raw = arg.value;
-                            const trimmed = if (raw.len >= 2 and raw[0] == '"' and raw[raw.len - 1] == '"')
-                                raw[1 .. raw.len - 1]
-                            else
-                                raw;
-                            name = try allocator.dupe(u8, trimmed);
-                        } else if (std.mem.eql(u8, arg.name, "description")) {
-                            const raw = arg.value;
-                            const trimmed = if (raw.len >= 2 and raw[0] == '"' and raw[raw.len - 1] == '"')
-                                raw[1 .. raw.len - 1]
-                            else
-                                raw;
-                            description = try allocator.dupe(u8, trimmed);
-                        }
-                    }
+            // Extract name and description parameters
+            var name: ?[]const u8 = null;
+            var description: ?[]const u8 = null;
 
-                    // Must have name and at least one continuation (the execute branch)
-                    if (name != null and flow.body.continuations.len > 0) {
-                        try commands.append(allocator, KoruCommand{
-                            .name = name.?,
-                            .description = description orelse "",
-                            .flow = flow,
-                        });
-                    }
+            for (flow.inv().args) |arg| {
+                if (std.mem.eql(u8, arg.name, "name")) {
+                    name = try ctx.allocator.dupe(u8, unquote(arg.value));
+                } else if (std.mem.eql(u8, arg.name, "description")) {
+                    description = try ctx.allocator.dupe(u8, unquote(arg.value));
                 }
             }
-        } else if (item == .module_decl) {
-            // Also check imported modules - get stable pointer via index
-            const module = &program.items[item_idx].module_decl;
-            for (module.items, 0..) |mod_item, mod_item_idx| {
-                if (mod_item == .flow) {
-                    const flow = &module.items[mod_item_idx].flow;
-                    if (flow.inv().path.module_qualifier) |mq| {
-                        if (std.mem.eql(u8, mq, "std.build") and
-                            flow.inv().path.segments.len == 1 and
-                            std.mem.eql(u8, flow.inv().path.segments[0], "command"))
-                        {
-                            var name: ?[]const u8 = null;
-                            var description: ?[]const u8 = null;
 
-                            for (flow.inv().args) |arg| {
-                                if (std.mem.eql(u8, arg.name, "name")) {
-                                    const raw = arg.value;
-                                    const trimmed = if (raw.len >= 2 and raw[0] == '"' and raw[raw.len - 1] == '"')
-                                        raw[1 .. raw.len - 1]
-                                    else
-                                        raw;
-                                    name = try allocator.dupe(u8, trimmed);
-                                } else if (std.mem.eql(u8, arg.name, "description")) {
-                                    const raw = arg.value;
-                                    const trimmed = if (raw.len >= 2 and raw[0] == '"' and raw[raw.len - 1] == '"')
-                                        raw[1 .. raw.len - 1]
-                                    else
-                                        raw;
-                                    description = try allocator.dupe(u8, trimmed);
-                                }
-                            }
-
-                            if (name != null and flow.body.continuations.len > 0) {
-                                try commands.append(allocator, KoruCommand{
-                                    .name = name.?,
-                                    .description = description orelse "",
-                                    .flow = flow,
-                                });
-                            }
-                        }
-                    }
-                }
+            // Must have name and at least one continuation (the execute branch)
+            if (name != null and flow.body.continuations.len > 0) {
+                try ctx.commands.append(ctx.allocator, KoruCommand{
+                    .name = name.?,
+                    .description = description orelse "",
+                    .flow = flow,
+                });
             }
         }
-    }
+    };
+    try eachItem(program, Ctx{ .allocator = allocator, .commands = &commands }, Ctx.visit);
 
     return try commands.toOwnedSlice(allocator);
 }
@@ -5076,107 +4843,57 @@ fn collectBuildStepCandidates(allocator: std.mem.Allocator, program: *const ast.
         candidates.deinit(allocator);
     }
 
-    var has_user_defined = false; // Track if we find any non-default steps
+    const Ctx = struct {
+        allocator: std.mem.Allocator,
+        candidates: *std.ArrayList(BuildStepCandidate),
+        has_user_defined: bool = false, // Track if we find any non-default steps
 
-    // Walk top-level items (main module)
-    for (program.items) |item| {
-        if (item == .flow) {
+        fn visit(ctx: *@This(), item: *const ast.Item, enclosing: ?[]const u8) !void {
+            const alloc = ctx.allocator;
+            if (item.* != .flow) return;
             const flow = item.flow;
             // Check if this is std.build:step (module-qualified)
-            if (flow.inv().path.module_qualifier) |mq| {
-                if (std.mem.eql(u8, mq, "std.build") and
-                    flow.inv().path.segments.len == 1 and
-                    std.mem.eql(u8, flow.inv().path.segments[0], "step"))
-                {
-                    // Extract name and source parameters
-                    var name: ?[]const u8 = null;
-                    var script: ?[]const u8 = null;
+            const mq = flow.inv().path.module_qualifier orelse return;
+            if (!std.mem.eql(u8, mq, "std.build") or
+                flow.inv().path.segments.len != 1 or
+                !std.mem.eql(u8, flow.inv().path.segments[0], "step")) return;
 
-                    for (flow.inv().args) |arg| {
-                        if (std.mem.eql(u8, arg.name, "name")) {
-                            // Strip quotes from name value
-                            const raw_name = arg.value;
-                            const trimmed = if (raw_name.len >= 2 and raw_name[0] == '"' and raw_name[raw_name.len - 1] == '"')
-                                raw_name[1 .. raw_name.len - 1]
-                            else
-                                raw_name;
-                            name = try allocator.dupe(u8, trimmed);
-                        } else if (std.mem.eql(u8, arg.name, "source")) {
-                            script = try allocator.dupe(u8, arg.value);
-                        }
-                    }
+            // Extract name and source parameters
+            var name: ?[]const u8 = null;
+            var script: ?[]const u8 = null;
 
-                    if (name != null and script != null) {
-                        // Extract dependencies from annotations
-                        const dependencies = try extractDependenciesFromAnnotations(allocator, flow.annotations);
-                        // Check for ~[default] annotation
-                        const is_default = hasDefaultAnnotation(flow.annotations);
-                        if (!is_default) {
-                            has_user_defined = true; // Found a user-defined step
-                        }
-                        try candidates.append(allocator, BuildStepCandidate{
-                            .name = name.?,
-                            .script = script.?,
-                            .dependencies = dependencies,
-                            .module = try allocator.dupe(u8, "main"),
-                            .is_default = is_default,
-                        });
-                    }
+            for (flow.inv().args) |arg| {
+                if (std.mem.eql(u8, arg.name, "name")) {
+                    name = try alloc.dupe(u8, unquote(arg.value));
+                } else if (std.mem.eql(u8, arg.name, "source")) {
+                    script = try alloc.dupe(u8, arg.value);
                 }
             }
-        } else if (item == .module_decl) {
-            // Also check imported modules
-            const module = item.module_decl;
-            for (module.items) |mod_item| {
-                if (mod_item == .flow) {
-                    const flow = mod_item.flow;
-                    if (flow.inv().path.module_qualifier) |mq| {
-                        if (std.mem.eql(u8, mq, "std.build") and
-                            flow.inv().path.segments.len == 1 and
-                            std.mem.eql(u8, flow.inv().path.segments[0], "step"))
-                        {
-                            var name: ?[]const u8 = null;
-                            var script: ?[]const u8 = null;
 
-                            for (flow.inv().args) |arg| {
-                                if (std.mem.eql(u8, arg.name, "name")) {
-                                    const raw_name = arg.value;
-                                    const trimmed = if (raw_name.len >= 2 and raw_name[0] == '"' and raw_name[raw_name.len - 1] == '"')
-                                        raw_name[1 .. raw_name.len - 1]
-                                    else
-                                        raw_name;
-                                    name = try allocator.dupe(u8, trimmed);
-                                } else if (std.mem.eql(u8, arg.name, "source")) {
-                                    script = try allocator.dupe(u8, arg.value);
-                                }
-                            }
-
-                            if (name != null and script != null) {
-                                // Extract dependencies from annotations
-                                const dependencies = try extractDependenciesFromAnnotations(allocator, flow.annotations);
-                                // Check for ~[default] annotation
-                                const is_default = hasDefaultAnnotation(flow.annotations);
-                                if (!is_default) {
-                                    has_user_defined = true; // Found a user-defined step
-                                }
-                                try candidates.append(allocator, BuildStepCandidate{
-                                    .name = name.?,
-                                    .script = script.?,
-                                    .dependencies = dependencies,
-                                    .module = try allocator.dupe(u8, module.logical_name),
-                                    .is_default = is_default,
-                                });
-                            }
-                        }
-                    }
+            if (name != null and script != null) {
+                // Extract dependencies from annotations
+                const dependencies = try extractDependenciesFromAnnotations(alloc, flow.annotations);
+                // Check for ~[default] annotation
+                const is_default = hasDefaultAnnotation(flow.annotations);
+                if (!is_default) {
+                    ctx.has_user_defined = true; // Found a user-defined step
                 }
+                try ctx.candidates.append(alloc, BuildStepCandidate{
+                    .name = name.?,
+                    .script = script.?,
+                    .dependencies = dependencies,
+                    .module = try alloc.dupe(u8, enclosing orelse "main"),
+                    .is_default = is_default,
+                });
             }
         }
-    }
+    };
+    var ctx = Ctx{ .allocator = allocator, .candidates = &candidates };
+    try eachItem(program, &ctx, Ctx.visit);
 
     return BuildStepCollection{
         .candidates = try candidates.toOwnedSlice(allocator),
-        .has_user_defined = has_user_defined,
+        .has_user_defined = ctx.has_user_defined,
     };
 }
 
