@@ -2087,37 +2087,10 @@ pub const AutoDischargeInserter = struct {
                 if (node == .invocation) {
                     if (node.invocation.return_binding) |rb| {
                         if (std.mem.eql(u8, rb, "_")) {
-                            const inv_name = try self.pathToString(node.invocation.path);
-                            defer self.allocator.free(inv_name);
-                            const inv_mod = node.invocation.path.module_qualifier orelse module_name;
-                            const inv_qual = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ inv_mod, inv_name });
-                            defer self.allocator.free(inv_qual);
-                            // Obligation means a trailing `!` — a plain state
-                            // (`<closed>`) or a state variable (`<M'_>`) owes
-                            // nothing, so its `: _` stays a genuine discard.
-                            // Treating every phantom as owing minted an
-                            // `_auto_N` no disposal ever used (525's unused
-                            // local constant). Mirrors the unbound-return
-                            // seeding's `endsWith "!"` check below.
-                            const carries_obligation = if (self.event_map.get(inv_qual)) |info| blk: {
-                                const rp = info.decl.return_phantom orelse break :blk false;
-                                break :blk std.mem.endsWith(u8, std.mem.trim(u8, rp, " \t"), "!");
-                            } else false;
-                            if (carries_obligation) {
-                                const synthetic_name = try self.generateSyntheticBinding();
-                                const new_cont = try self.cloneContinuationWithReturnBinding(cont, synthetic_name);
-                                const new_flow = try self.replaceContinuationAnywhere(flow, cont, new_cont.*);
-                                const new_program = try ast_functional.replaceFlowRecursive(
-                                    self.allocator,
-                                    program,
-                                    flow,
-                                    .{ .flow = new_flow },
-                                ) orelse {
-                                    return .{ .transformed = false, .program = program };
-                                };
-                                const result_ptr = try self.allocator.create(ast.Program);
-                                result_ptr.* = new_program;
-                                return .{ .transformed = true, .program = result_ptr };
+                            switch (try self.rebindObligationDiscard(program, flow, cont, &node.invocation, module_name)) {
+                                .none => {},
+                                .rebound => |result_ptr| return .{ .transformed = true, .program = result_ptr },
+                                .splice_failed => return .{ .transformed = false, .program = program },
                             }
                         }
                     }
@@ -2153,30 +2126,10 @@ pub const AutoDischargeInserter = struct {
             if (cont.continuations.len == 0) {
                 if (cont.node) |node| {
                     if (node == .invocation and node.invocation.return_binding == null) {
-                        const inv_name = try self.pathToString(node.invocation.path);
-                        defer self.allocator.free(inv_name);
-                        const inv_mod = node.invocation.path.module_qualifier orelse module_name;
-                        const inv_qual = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ inv_mod, inv_name });
-                        defer self.allocator.free(inv_qual);
-                        const carries_obligation = if (self.event_map.get(inv_qual)) |info| blk: {
-                            const rp = info.decl.return_phantom orelse break :blk false;
-                            break :blk std.mem.endsWith(u8, std.mem.trim(u8, rp, " \t"), "!");
-                        } else false;
-                        if (carries_obligation) {
-                            const synthetic_name = try self.generateSyntheticBinding();
-                            const new_cont = try self.cloneContinuationWithReturnBinding(cont, synthetic_name);
-                            const new_flow = try self.replaceContinuationAnywhere(flow, cont, new_cont.*);
-                            const new_program = try ast_functional.replaceFlowRecursive(
-                                self.allocator,
-                                program,
-                                flow,
-                                .{ .flow = new_flow },
-                            ) orelse {
-                                return .{ .transformed = false, .program = program };
-                            };
-                            const result_ptr = try self.allocator.create(ast.Program);
-                            result_ptr.* = new_program;
-                            return .{ .transformed = true, .program = result_ptr };
+                        switch (try self.rebindObligationDiscard(program, flow, cont, &node.invocation, module_name)) {
+                            .none => {},
+                            .rebound => |result_ptr| return .{ .transformed = true, .program = result_ptr },
+                            .splice_failed => return .{ .transformed = false, .program = program },
                         }
                     }
                 }
@@ -4285,6 +4238,55 @@ pub const AutoDischargeInserter = struct {
             .impl_variant = if (flow.impl_variant) |v| try self.allocator.dupe(u8, v) else null,
             .is_impl = flow.is_impl,
         };
+    }
+
+    /// Result of rebindObligationDiscard: `.none` means the invoked tor's
+    /// return owes no obligation and the caller keeps scanning; `.rebound`
+    /// carries the spliced program; `.splice_failed` means
+    /// replaceFlowRecursive could not locate the flow and the caller must
+    /// return untransformed.
+    const ObligationDiscardRebind = union(enum) {
+        none,
+        rebound: *ast.Program,
+        splice_failed,
+    };
+
+    /// The shared tail of the two bare-discard rewrite sites (a `: _` bind and
+    /// an unbound terminal invocation): when the invoked tor's return carries
+    /// a phantom obligation — `<state!>` spelling, a trailing `!`; a plain
+    /// state or state variable owes nothing — mint a synthetic binding so the
+    /// inserted discharge has a referenceable name, splice the rebound
+    /// continuation into the flow, and hand back the new program.
+    fn rebindObligationDiscard(
+        self: *AutoDischargeInserter,
+        program: *const ast.Program,
+        flow: *const ast.Flow,
+        cont: *const ast.Continuation,
+        inv: *const ast.Invocation,
+        module_name: []const u8,
+    ) !ObligationDiscardRebind {
+        const inv_name = try self.pathToString(inv.path);
+        defer self.allocator.free(inv_name);
+        const inv_mod = inv.path.module_qualifier orelse module_name;
+        const inv_qual = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ inv_mod, inv_name });
+        defer self.allocator.free(inv_qual);
+        const carries_obligation = if (self.event_map.get(inv_qual)) |info| blk: {
+            const rp = info.decl.return_phantom orelse break :blk false;
+            break :blk std.mem.endsWith(u8, std.mem.trim(u8, rp, " \t"), "!");
+        } else false;
+        if (!carries_obligation) return .none;
+        const synthetic_name = try self.generateSyntheticBinding();
+        const new_cont = try self.cloneContinuationWithReturnBinding(cont, synthetic_name);
+        const new_flow = try self.replaceContinuationAnywhere(flow, cont, new_cont.*);
+        const new_program = try ast_functional.replaceFlowRecursive(
+            self.allocator,
+            program,
+            flow,
+            .{ .flow = new_flow },
+        ) orelse return .splice_failed;
+        const result_ptr = try self.allocator.create(ast.Program);
+        result_ptr.* = new_program;
+        return .{ .rebound = result_ptr };
     }
 
     /// Rebuild a continuation-less flow head as an explicit flow exit: rename a
