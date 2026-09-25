@@ -6170,27 +6170,7 @@ pub fn emitFlow(
             try emitter.write("while (");
 
             // Emit explicit loop condition
-            if (looping_branches.len == 0) {
-                // No branches loop - fallback to while(true)
-                try emitter.write("true");
-            } else if (looping_branches.len == 1) {
-                // Single branch loops - emit: while (result == .branch)
-                try emitter.write(first_result);
-                try emitter.write(" == .");
-                try writeBranchName(emitter, looping_branches[0]);
-            } else {
-                // Multiple branches loop - emit: while ((result == .branch1) or (result == .branch2))
-                for (looping_branches, 0..) |branch, idx| {
-                    if (idx > 0) {
-                        try emitter.write(" or ");
-                    }
-                    try emitter.write("(");
-                    try emitter.write(first_result);
-                    try emitter.write(" == .");
-                    try writeBranchName(emitter, branch);
-                    try emitter.write(")");
-                }
-            }
+            try emitLoopCondition(emitter, first_result, looping_branches);
 
             try emitter.write(") {\n");
             emitter.indent();
@@ -10616,6 +10596,33 @@ fn findLoopingBranches(
     return looping_branches.toOwnedSlice(allocator);
 }
 
+/// Emit the while condition for a label loop: `true` when no arm loops
+/// back, `result == .b` for one, `(result == .a) or (result == .b)` for
+/// several.
+fn emitLoopCondition(emitter: *CodeEmitter, result_var: []const u8, looping_branches: []const []const u8) !void {
+    if (looping_branches.len == 0) {
+        // No branches loop - fallback to while(true)
+        try emitter.write("true");
+    } else if (looping_branches.len == 1) {
+        // Single branch loops - emit: while (result == .branch)
+        try emitter.write(result_var);
+        try emitter.write(" == .");
+        try writeBranchName(emitter, looping_branches[0]);
+    } else {
+        // Multiple branches loop - emit: while ((result == .branch1) or (result == .branch2))
+        for (looping_branches, 0..) |branch, idx| {
+            if (idx > 0) {
+                try emitter.write(" or ");
+            }
+            try emitter.write("(");
+            try emitter.write(result_var);
+            try emitter.write(" == .");
+            try writeBranchName(emitter, branch);
+            try emitter.write(")");
+        }
+    }
+}
+
 /// Check if a continuation (or its nested sub-tree) loops back to a label
 fn continuationLoopsToLabel(cont: ast.Continuation, label: []const u8) bool {
     if (cont.node) |step| {
@@ -11109,27 +11116,7 @@ pub fn emitContinuationBody(
         try emitter.write("while (");
 
         // Emit explicit loop condition
-        if (looping_branches.len == 0) {
-            // No branches loop - fallback to while(true)
-            try emitter.write("true");
-        } else if (looping_branches.len == 1) {
-            // Single branch loops - emit: while (result == .branch)
-            try emitter.write(result_var);
-            try emitter.write(" == .");
-            try writeBranchName(emitter, looping_branches[0]);
-        } else {
-            // Multiple branches loop - emit: while ((result == .branch1) or (result == .branch2))
-            for (looping_branches, 0..) |branch, idx| {
-                if (idx > 0) {
-                    try emitter.write(" or ");
-                }
-                try emitter.write("(");
-                try emitter.write(result_var);
-                try emitter.write(" == .");
-                try writeBranchName(emitter, branch);
-                try emitter.write(")");
-            }
-        }
+        try emitLoopCondition(emitter, result_var, looping_branches);
 
         try emitter.write(") {\n");
         emitter.indent();
