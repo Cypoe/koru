@@ -197,7 +197,7 @@
 
     const braced = std.fmt.allocPrint(allocator, "{{{s}}}", .{block_text.?}) catch unreachable;
     const writes = struct_literal.parseFields(allocator, braced) catch |err| {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: {s}", .{struct_literal.describeError(err)}) } };
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: {s}", .{struct_literal.describeErrorIn(allocator, err, braced)}) } };
     };
     if (writes.len == 0) {
         return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: write block is empty", .{}) } };

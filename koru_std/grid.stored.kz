@@ -36,8 +36,8 @@
     }
 
     const braced = std.fmt.allocPrint(allocator, "{{{s}}}", .{btext}) catch unreachable;
-    const pairs = struct_literal.parseFields(allocator, braced) catch {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:stored: malformed write block", .{}) } };
+    const pairs = struct_literal.parseFields(allocator, braced) catch |err| {
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:stored: {s}", .{struct_literal.describeErrorIn(allocator, err, braced)}) } };
     };
 
     // THE OPERANDS ARE EVALUATED AT THE SITE, not pasted into the unit.

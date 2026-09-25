@@ -303,7 +303,7 @@
         one[0] = .{ .name = ast.STORE_IDENTITY_COLUMN, .value = std.mem.trim(u8, block_text.?, " \t\n\r") };
         break :blk one;
     } else struct_literal.parseFields(allocator, braced) catch |err| {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): {s}", .{ store_name, struct_literal.describeError(err) }) } };
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): {s}", .{ store_name, struct_literal.describeErrorIn(allocator, err, braced) }) } };
     };
     // Kinded union: the row names this member's leaves only. Columns the
     // kind does not own are zero-filled at the call site (the insert tor

@@ -1,0 +1,4 @@
+BACKEND_EXEC_ERROR
+CONTAINS error[KORU161]
+CONTAINS missing comma
+CONTAINS 'cells[0].b: 7.0'
