@@ -78,7 +78,7 @@ JUDGE_STATE_MAX_BYTES = 96_000
 
 
 def koruc_invariants():
-    """Run `koruc invariants.kz invariants`; return combined output.
+    """Run `koruc invariants.kz invariants`; return (rc, combined output).
 
     The listing prints via std.debug.print — stderr — interleaved with
     build noise on first compile. The parser is tolerant of both.
@@ -87,7 +87,7 @@ def koruc_invariants():
         [KORUC, "invariants.kz", "invariants"],
         cwd=HERE, capture_output=True, text=True,
     )
-    return proc.stdout + proc.stderr
+    return proc.returncode, proc.stdout + proc.stderr
 
 
 def parse_listing(text):
@@ -241,7 +241,17 @@ def main():
               "compiler first (zig build)", file=sys.stderr)
         return 1
 
-    rows = [r for r in parse_listing(koruc_invariants())
+    rc, listing = koruc_invariants()
+    all_rows = parse_listing(listing)
+    if rc != 0 or not all_rows:
+        # A manifest that can't be read is not an empty manifest — the
+        # gate must not pass on silence (compiler red, koruc crash).
+        tail = "\n".join(listing.strip().splitlines()[-6:])
+        print(f"gate: BROKEN — `koruc invariants.kz invariants` produced no "
+              f"listing (exit {rc}); a gate that cannot read its manifest "
+              f"judges nothing\n{tail}", file=sys.stderr)
+        return 1
+    rows = [r for r in all_rows
             if '"git-gate"' in r["tags"] or '"git-gate-local"' in r["tags"]]
 
     if not rows:
