@@ -165,19 +165,22 @@ pub const MetadataAggregator = struct {
     
     fn aggregateEffects(self: *MetadataAggregator) !void {
         const effects = self.effects orelse return;
-        
-        // Aggregate proc effects
-        var proc_iter = effects.proc_effects.iterator();
-        while (proc_iter.next()) |entry| {
+        try self.aggregateEffectEntries(effects.proc_effects.iterator());
+        try self.aggregateEffectEntries(effects.event_effects.iterator());
+    }
+
+    fn aggregateEffectEntries(self: *MetadataAggregator, iter: anytype) !void {
+        var it = iter;
+        while (it.next()) |entry| {
             const name = entry.key_ptr.*;
             const effect_set = entry.value_ptr.*;
-            
-            var meta = self.node_metadata.getPtr(name) orelse blk: {
+
+            const meta = self.node_metadata.getPtr(name) orelse blk: {
                 const new_name = try self.allocator.dupe(u8, name);
                 try self.node_metadata.put(new_name, NodeMetadata.init(self.allocator));
                 break :blk self.node_metadata.getPtr(new_name).?;
             };
-            
+
             // Convert effect set to list
             inline for (std.meta.fields(Effect)) |field| {
                 const effect = @field(Effect, field.name);
@@ -185,30 +188,8 @@ pub const MetadataAggregator = struct {
                     try meta.effects.append(self.allocator, effect);
                 }
             }
-            
+
             // Update backend compatibility based on effects
-            meta.updateBackendCompatibility();
-        }
-        
-        // Aggregate event effects
-        var event_iter = effects.event_effects.iterator();
-        while (event_iter.next()) |entry| {
-            const name = entry.key_ptr.*;
-            const effect_set = entry.value_ptr.*;
-            
-            var meta = self.node_metadata.getPtr(name) orelse blk: {
-                const new_name = try self.allocator.dupe(u8, name);
-                try self.node_metadata.put(new_name, NodeMetadata.init(self.allocator));
-                break :blk self.node_metadata.getPtr(new_name).?;
-            };
-            
-            inline for (std.meta.fields(Effect)) |field| {
-                const effect = @field(Effect, field.name);
-                if (effect_set.has(effect)) {
-                    try meta.effects.append(self.allocator, effect);
-                }
-            }
-            
             meta.updateBackendCompatibility();
         }
     }
