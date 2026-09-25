@@ -259,6 +259,18 @@ pub const ModuleResolver = struct {
         }
     }
 
+    /// Loudly refuse a non-relative, non-absolute import that names no
+    /// configured alias — dumping the known set for teaching.
+    fn failUnknownImportAlias(self: *ModuleResolver, alias: []const u8) error{UnknownImportAlias} {
+        log.debug("✗✗✗ FATAL: Unknown import alias: {s}\n", .{alias});
+        log.debug("Available aliases from koru.json:\n", .{});
+        var iter = self.config.paths.iterator();
+        while (iter.next()) |entry| {
+            log.debug("  {s} -> [{} paths]\n", .{ entry.key_ptr.*, entry.value_ptr.*.len });
+        }
+        return error.UnknownImportAlias;
+    }
+
     /// Interpolate {{ variable }} placeholders in a path string
     /// Supported variables: ENTRY, KORU_HOME
     /// Returns new string if interpolation happened, null otherwise
@@ -605,13 +617,7 @@ pub const ModuleResolver = struct {
             log.debug("\n✗✗✗ FATAL: Alias {s} - all {} fallback paths exhausted ✗✗✗\n", .{ alias, alias_paths.len });
             return error.ModuleNotFound;
         } else if (!std.mem.startsWith(u8, import_path, "./") and !std.mem.startsWith(u8, import_path, "../") and !std.fs.path.isAbsolute(import_path)) {
-            log.debug("✗✗✗ FATAL: Unknown import alias: {s}\n", .{alias});
-            log.debug("Available aliases from koru.json:\n", .{});
-            var iter = self.config.paths.iterator();
-            while (iter.next()) |entry| {
-                log.debug("  {s} -> [{} paths]\n", .{ entry.key_ptr.*, entry.value_ptr.*.len });
-            }
-            return error.UnknownImportAlias;
+            return self.failUnknownImportAlias(import_path);
         }
 
         // Helper to check both file and dir at a given base path
@@ -772,14 +778,7 @@ pub const ModuleResolver = struct {
             log.debug("\n✗✗✗ FATAL: Alias {s} - all fallback paths exhausted ✗✗✗\n", .{alias});
             return error.ModuleNotFound;
         } else if (!std.mem.startsWith(u8, import_path, "./") and !std.mem.startsWith(u8, import_path, "../") and !std.fs.path.isAbsolute(import_path)) {
-            // Alias not found in config
-            log.debug("✗✗✗ FATAL: Unknown import alias: {s}\n", .{alias});
-            log.debug("Available aliases from koru.json:\n", .{});
-            var iter = self.config.paths.iterator();
-            while (iter.next()) |entry| {
-                log.debug("  {s} -> [{} paths]\n", .{ entry.key_ptr.*, entry.value_ptr.*.len });
-            }
-            return error.UnknownImportAlias;
+            return self.failUnknownImportAlias(import_path);
         }
 
         // 1. If it's an absolute path, use it directly
