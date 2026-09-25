@@ -1947,6 +1947,36 @@ pub const Parser = struct {
         return self.fail(.PARSE003, opening_line_idx + 1, 1, "unclosed annotation bracket", .{});
     }
 
+    /// Leading `[a|b]` annotation block on a declaration head: parses the
+    /// block, stashes its trailing prose for the decl being built, dupes
+    /// names into `annotations`, and returns the remaining text (the path
+    /// start). No `[` means the input passes through as the path start.
+    fn parseDeclAnnotations(
+        self: *Parser,
+        after_keyword: []const u8,
+        annotations: *std.ArrayList([]const u8),
+    ) ![]const u8 {
+        const trimmed_after = lexer.trim(after_keyword);
+        if (!std.mem.startsWith(u8, trimmed_after, "[")) return after_keyword;
+
+        // Supports both inline tor[a|b] and vertical tor[\n-a\n-b\n].
+        const result = try self.parseAnnotationBlock(trimmed_after, self.current - 1);
+        defer {
+            for (result.annotations) |ann| {
+                self.allocator.free(ann);
+            }
+            self.allocator.free(result.annotations);
+        }
+        // Trailing vertical block (`tor foo[\n- tag\n prose\n]`): the prose
+        // belongs to the declaration being built a few lines below.
+        self.stashProse(result.prose);
+
+        for (result.annotations) |ann| {
+            try annotations.append(self.allocator, try self.allocator.dupe(u8, ann));
+        }
+        return lexer.trim(result.remaining);
+    }
+
     /// True when `trimmed` begins a Koru module-level construct. Host-embedded
     /// files must prefix these with `~`; pure `.k` synthesizes `~` before parse.
     fn looksLikeBareKoruModuleConstruct(trimmed: []const u8) bool {
@@ -3150,27 +3180,7 @@ pub const Parser = struct {
         var annotations = try std.ArrayList([]const u8).initCapacity(self.allocator, 4);
         defer annotations.deinit(self.allocator);
 
-        var path_start = after_event;
-        const trimmed_after = lexer.trim(after_event);
-        if (std.mem.startsWith(u8, trimmed_after, "[")) {
-            // Parse annotation block (supports both inline event[a|b] and vertical event[\n-a\n-b\n])
-            const result = try self.parseAnnotationBlock(trimmed_after, self.current - 1);
-            defer {
-                for (result.annotations) |ann| {
-                    self.allocator.free(ann);
-                }
-                self.allocator.free(result.annotations);
-            }
-            // Trailing vertical block (`tor foo[\n- tag\n prose\n]`): the prose
-            // belongs to the declaration being built a few lines below.
-            self.stashProse(result.prose);
-
-            for (result.annotations) |ann| {
-                try annotations.append(self.allocator, try self.allocator.dupe(u8, ann));
-            }
-
-            path_start = lexer.trim(result.remaining);
-        }
+        const path_start = try self.parseDeclAnnotations(after_event, &annotations);
 
         const trimmed_path_start = lexer.trim(path_start);
         const brace_idx_opt = std.mem.indexOf(u8, trimmed_path_start, "{");
@@ -3444,27 +3454,7 @@ pub const Parser = struct {
         var annotations = try std.ArrayList([]const u8).initCapacity(self.allocator, 4);
         defer annotations.deinit(self.allocator);
 
-        var path_start = after_proc;
-        const trimmed_after = lexer.trim(after_proc);
-        if (std.mem.startsWith(u8, trimmed_after, "[")) {
-            // Parse annotation block (supports both inline proc[a|b] and vertical proc[\n-a\n-b\n])
-            const result = try self.parseAnnotationBlock(trimmed_after, self.current - 1);
-            defer {
-                for (result.annotations) |ann| {
-                    self.allocator.free(ann);
-                }
-                self.allocator.free(result.annotations);
-            }
-            // Trailing vertical block (`tor foo[\n- tag\n prose\n]`): the prose
-            // belongs to the declaration being built a few lines below.
-            self.stashProse(result.prose);
-
-            for (result.annotations) |ann| {
-                try annotations.append(self.allocator, try self.allocator.dupe(u8, ann));
-            }
-
-            path_start = lexer.trim(result.remaining);
-        }
+        const path_start = try self.parseDeclAnnotations(after_proc, &annotations);
 
         // Find the path (everything before the first {)
         const brace_idx = std.mem.indexOf(u8, path_start, "{") orelse {
