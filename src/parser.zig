@@ -331,6 +331,21 @@ fn hasTopLevelArrow(s: []const u8) bool {
     return indexOfTopLevelArrow(s) != null;
 }
 
+/// Multi-line continuations attach to the deepest inline-chain tail — a
+/// head built from `a |> b |> c` nests them under `c`; a head with no
+/// chain takes them directly. An empty multi-line list leaves `cont`.
+fn attachToDeepestChainTail(cont: *ast.Continuation, multi_line: []ast.Continuation) void {
+    if (cont.continuations.len > 0 and multi_line.len > 0) {
+        var deepest = &cont.continuations[0];
+        while (deepest.continuations.len > 0) {
+            deepest = @constCast(&deepest.continuations[0]);
+        }
+        @constCast(deepest).continuations = multi_line;
+    } else if (cont.continuations.len == 0) {
+        cont.continuations = multi_line;
+    }
+}
+
 /// True when `s` carries a chain pipe `|>` at paren/brace depth 0 outside
 /// string literals — the definition every `has_inline_chain` call site uses.
 fn hasTopLevelChainPipe(s: []const u8) bool {
@@ -7166,15 +7181,7 @@ pub const Parser = struct {
         const multi_line_continuations = try self.parseNestedContinuationsForLevel(indent);
 
         // FIX: If we have inline chained continuations, attach multi-line ones to the deepest
-        if (cont.continuations.len > 0 and multi_line_continuations.len > 0) {
-            var deepest = &cont.continuations[0];
-            while (deepest.continuations.len > 0) {
-                deepest = @constCast(&deepest.continuations[0]);
-            }
-            @constCast(deepest).continuations = multi_line_continuations;
-        } else if (cont.continuations.len == 0) {
-            cont.continuations = multi_line_continuations;
-        }
+        attachToDeepestChainTail(&cont, multi_line_continuations);
 
         cont.kind = branch_kind;
         return cont;
@@ -7244,15 +7251,7 @@ pub const Parser = struct {
         const multi_line_continuations = try self.parseNestedContinuationsForLevel(indent);
 
         // If we have inline chained continuations, attach multi-line ones to the deepest
-        if (cont.continuations.len > 0 and multi_line_continuations.len > 0) {
-            var deepest = &cont.continuations[0];
-            while (deepest.continuations.len > 0) {
-                deepest = @constCast(&deepest.continuations[0]);
-            }
-            @constCast(deepest).continuations = multi_line_continuations;
-        } else if (cont.continuations.len == 0) {
-            cont.continuations = multi_line_continuations;
-        }
+        attachToDeepestChainTail(&cont, multi_line_continuations);
 
         return cont;
     }
@@ -8315,19 +8314,7 @@ pub const Parser = struct {
 
         // If we have inline chained continuations (from |> step1 |> step2 |> step3),
         // attach multi-line continuations to the DEEPEST continuation in the chain
-        if (cont.continuations.len > 0 and multi_line_continuations.len > 0) {
-            // Find the deepest continuation
-            var deepest = &cont.continuations[0];
-            while (deepest.continuations.len > 0) {
-                deepest = @constCast(&deepest.continuations[0]);
-            }
-            // Attach multi-line continuations to the deepest
-            @constCast(deepest).continuations = multi_line_continuations;
-        } else if (cont.continuations.len == 0) {
-            // No inline chaining, just set multi-line continuations directly
-            cont.continuations = multi_line_continuations;
-        }
-        // else: We have inline continuations but no multi-line ones, keep as-is
+        attachToDeepestChainTail(&cont, multi_line_continuations);
 
         return cont;
     }
