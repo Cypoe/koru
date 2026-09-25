@@ -2043,34 +2043,35 @@ const ZigExprParser = struct {
         return .{ .text = joined, .start = left.start, .end = right.end, .is_string_lit = false, .changed = true };
     }
 
-    fn parseOr(self: *ZigExprParser) ZigExprError!ZigExprPiece {
-        var left = try self.parseAnd();
+    /// A left-associative keyword/symbol binary-op level: `l op r op r …`
+    /// where `op` reads as either the host keyword (`or`, `and`) or its
+    /// C-style symbol (`||`, `&&`). `next` parses the tighter level.
+    fn parseKeywordBinOp(
+        self: *ZigExprParser,
+        comptime keyword: []const u8,
+        comptime symbol: []const u8,
+        comptime next: fn (*ZigExprParser) ZigExprError!ZigExprPiece,
+    ) ZigExprError!ZigExprPiece {
+        var left = try next(self);
         while (true) {
             self.skipWs();
-            if (self.atKeyword("or")) {
-                self.pos += 2;
-            } else if (self.pos + 1 < self.text.len and std.mem.eql(u8, self.text[self.pos .. self.pos + 2], "||")) {
-                self.pos += 2;
+            if (self.atKeyword(keyword)) {
+                self.pos += keyword.len;
+            } else if (self.pos + 1 < self.text.len and std.mem.eql(u8, self.text[self.pos .. self.pos + 2], symbol)) {
+                self.pos += symbol.len;
             } else break;
-            const right = try self.parseAnd();
+            const right = try next(self);
             left = try self.combine(left, right);
         }
         return left;
     }
 
+    fn parseOr(self: *ZigExprParser) ZigExprError!ZigExprPiece {
+        return self.parseKeywordBinOp("or", "||", parseAnd);
+    }
+
     fn parseAnd(self: *ZigExprParser) ZigExprError!ZigExprPiece {
-        var left = try self.parseEq();
-        while (true) {
-            self.skipWs();
-            if (self.atKeyword("and")) {
-                self.pos += 3;
-            } else if (self.pos + 1 < self.text.len and std.mem.eql(u8, self.text[self.pos .. self.pos + 2], "&&")) {
-                self.pos += 2;
-            } else break;
-            const right = try self.parseEq();
-            left = try self.combine(left, right);
-        }
-        return left;
+        return self.parseKeywordBinOp("and", "&&", parseEq);
     }
 
     /// Literal operands that only compile under a `==` with its expected
