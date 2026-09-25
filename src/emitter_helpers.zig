@@ -4449,38 +4449,50 @@ fn findFlowHoldingCont(items: []const ast.Item, site: *const ast.Continuation) ?
     return null;
 }
 
+/// First-true scan over the arm bodies nested inside `node` — every
+/// conditional, foreach, and switch_result arm, plus the conditionals
+/// inside a conditional_block. `check` sees each arm's continuation slice.
+fn anyNestedArmBody(
+    node: ast.Node,
+    ctx: anytype,
+    comptime check: fn ([]const ast.Continuation, @TypeOf(ctx)) bool,
+) bool {
+    switch (node) {
+        .conditional => |n| {
+            for (n.branches) |*b| {
+                if (check(b.body, ctx)) return true;
+            }
+        },
+        .foreach => |n| {
+            for (n.branches) |*b| {
+                if (check(b.body, ctx)) return true;
+            }
+        },
+        .switch_result => |n| {
+            for (n.branches) |*b| {
+                if (check(b.body, ctx)) return true;
+            }
+        },
+        .conditional_block => |cb| {
+            for (cb.nodes) |*n| {
+                if (n.* == .conditional) {
+                    for (n.conditional.branches) |*b| {
+                        if (check(b.body, ctx)) return true;
+                    }
+                }
+            }
+        },
+        else => {},
+    }
+    return false;
+}
+
 fn contTreeHolds(conts: []const ast.Continuation, site: *const ast.Continuation) bool {
     for (conts) |*cont| {
         if (cont == site) return true;
         if (contTreeHolds(cont.continuations, site)) return true;
         if (cont.node) |*node| {
-            switch (node.*) {
-                .conditional => |n| {
-                    for (n.branches) |*b| {
-                        if (contTreeHolds(b.body, site)) return true;
-                    }
-                },
-                .foreach => |n| {
-                    for (n.branches) |*b| {
-                        if (contTreeHolds(b.body, site)) return true;
-                    }
-                },
-                .switch_result => |n| {
-                    for (n.branches) |*b| {
-                        if (contTreeHolds(b.body, site)) return true;
-                    }
-                },
-                .conditional_block => |cb| {
-                    for (cb.nodes) |*n| {
-                        if (n.* == .conditional) {
-                            for (n.conditional.branches) |*b| {
-                                if (contTreeHolds(b.body, site)) return true;
-                            }
-                        }
-                    }
-                },
-                else => {},
-            }
+            if (anyNestedArmBody(node.*, site, contTreeHolds)) return true;
         }
     }
     return false;
@@ -4535,68 +4547,44 @@ fn scopeWalkCont(
     if (try scopeWalkConts(allocator, items, cont.continuations, child_inv, site, out)) return true;
 
     if (cont.node) |*node| {
-        switch (node.*) {
-            .conditional => |n| {
-                for (n.branches) |*b| {
-                    if (try scopeWalkConts(allocator, items, b.body, parent_inv, site, out)) return true;
-                }
-            },
-            .foreach => |n| {
-                for (n.branches) |*b| {
-                    if (try scopeWalkConts(allocator, items, b.body, parent_inv, site, out)) return true;
-                }
-            },
-            .switch_result => |n| {
-                for (n.branches) |*b| {
-                    if (try scopeWalkConts(allocator, items, b.body, parent_inv, site, out)) return true;
-                }
-            },
-            .conditional_block => |cb| {
-                for (cb.nodes) |*n| {
-                    if (n.* == .conditional) {
-                        for (n.conditional.branches) |*b| {
-                            if (try scopeWalkConts(allocator, items, b.body, parent_inv, site, out)) return true;
-                        }
-                    }
-                }
-            },
-            else => {},
+        var ctx: ScopeArmCtx = .{
+            .allocator = allocator,
+            .items = items,
+            .parent_inv = parent_inv,
+            .site = site,
+            .out = out,
+        };
+        if (anyNestedArmBody(node.*, &ctx, armBodyScopeWalks)) {
+            if (ctx.err) |e| return e;
+            return true;
         }
     }
     return false;
+}
+
+const ScopeArmCtx = struct {
+    allocator: std.mem.Allocator,
+    items: []const ast.Item,
+    parent_inv: ?*const ast.Invocation,
+    site: *const ast.Continuation,
+    out: *std.ArrayList(ast.ScopeBinding),
+    err: ?anyerror = null,
+};
+
+/// scopeWalkConts over one arm body, stashing any error so the
+/// anyNestedArmBody walk can carry it out of a bool-shaped check.
+fn armBodyScopeWalks(body: []const ast.Continuation, ctx: *ScopeArmCtx) bool {
+    return scopeWalkConts(ctx.allocator, ctx.items, body, ctx.parent_inv, ctx.site, ctx.out) catch |e| {
+        ctx.err = e;
+        return true;
+    };
 }
 
 fn contHoldsTarget(cont: *const ast.Continuation, site: *const ast.Continuation) bool {
     if (cont == site) return true;
     if (contTreeHolds(cont.continuations, site)) return true;
     if (cont.node) |*node| {
-        switch (node.*) {
-            .conditional => |n| {
-                for (n.branches) |*b| {
-                    if (contTreeHolds(b.body, site)) return true;
-                }
-            },
-            .foreach => |n| {
-                for (n.branches) |*b| {
-                    if (contTreeHolds(b.body, site)) return true;
-                }
-            },
-            .switch_result => |n| {
-                for (n.branches) |*b| {
-                    if (contTreeHolds(b.body, site)) return true;
-                }
-            },
-            .conditional_block => |cb| {
-                for (cb.nodes) |*n| {
-                    if (n.* == .conditional) {
-                        for (n.conditional.branches) |*b| {
-                            if (contTreeHolds(b.body, site)) return true;
-                        }
-                    }
-                }
-            },
-            else => {},
-        }
+        if (anyNestedArmBody(node.*, site, contTreeHolds)) return true;
     }
     return false;
 }
@@ -4671,43 +4659,28 @@ fn siteContOf(cont: *const ast.Continuation, target: *const ast.Invocation) ?*co
         if (siteContOf(c, target)) |found| return found;
     }
     if (cont.node) |*n| {
-        switch (n.*) {
-            .conditional => |cd| {
-                for (cd.branches) |*b| {
-                    for (b.body) |*c| {
-                        if (siteContOf(c, target)) |found| return found;
-                    }
-                }
-            },
-            .foreach => |fe| {
-                for (fe.branches) |*b| {
-                    for (b.body) |*c| {
-                        if (siteContOf(c, target)) |found| return found;
-                    }
-                }
-            },
-            .switch_result => |sr| {
-                for (sr.branches) |*b| {
-                    for (b.body) |*c| {
-                        if (siteContOf(c, target)) |found| return found;
-                    }
-                }
-            },
-            .conditional_block => |cb| {
-                for (cb.nodes) |*cn| {
-                    if (cn.* == .conditional) {
-                        for (cn.conditional.branches) |*b| {
-                            for (b.body) |*c| {
-                                if (siteContOf(c, target)) |found| return found;
-                            }
-                        }
-                    }
-                }
-            },
-            else => {},
-        }
+        var ctx: SiteContCtx = .{ .target = target };
+        _ = anyNestedArmBody(n.*, &ctx, armBodySiteCont);
+        return ctx.found;
     }
     return null;
+}
+
+const SiteContCtx = struct {
+    target: *const ast.Invocation,
+    found: ?*const ast.Continuation = null,
+};
+
+/// siteContOf over one arm body, carrying the found pointer out through
+/// the ctx so the result survives the bool-shaped check.
+fn armBodySiteCont(body: []const ast.Continuation, ctx: *SiteContCtx) bool {
+    for (body) |*c| {
+        if (siteContOf(c, ctx.target)) |found| {
+            ctx.found = found;
+            return true;
+        }
+    }
+    return false;
 }
 
 fn takeInvNode(node: ?ast.Node) bool {
@@ -4737,41 +4710,24 @@ fn takeItemPath(cont: *const ast.Continuation, under_take: bool, site: *const as
         if (takeItemPath(c, mine_is_take, site, name, hit)) return true;
     }
     if (cont.node) |*n| {
-        switch (n.*) {
-            .conditional => |cd| {
-                for (cd.branches) |*b| {
-                    for (b.body) |*c| {
-                        if (takeItemPath(c, false, site, name, hit)) return true;
-                    }
-                }
-            },
-            .foreach => |fe| {
-                for (fe.branches) |*b| {
-                    for (b.body) |*c| {
-                        if (takeItemPath(c, false, site, name, hit)) return true;
-                    }
-                }
-            },
-            .switch_result => |sr| {
-                for (sr.branches) |*b| {
-                    for (b.body) |*c| {
-                        if (takeItemPath(c, false, site, name, hit)) return true;
-                    }
-                }
-            },
-            .conditional_block => |cb| {
-                for (cb.nodes) |*cn| {
-                    if (cn.* == .conditional) {
-                        for (cn.conditional.branches) |*b| {
-                            for (b.body) |*c| {
-                                if (takeItemPath(c, false, site, name, hit)) return true;
-                            }
-                        }
-                    }
-                }
-            },
-            else => {},
-        }
+        const ctx: TakePathCtx = .{ .site = site, .name = name, .hit = hit };
+        if (anyNestedArmBody(n.*, ctx, armBodyTakePath)) return true;
+    }
+    return false;
+}
+
+const TakePathCtx = struct {
+    site: *const ast.Continuation,
+    name: []const u8,
+    hit: *bool,
+};
+
+/// takeItemPath over one arm body — nested arm bodies never count as
+/// "under take" (the take's own arms are `cont.continuations`, not a
+/// nested node's), matching the previous in-line descent.
+fn armBodyTakePath(body: []const ast.Continuation, ctx: TakePathCtx) bool {
+    for (body) |*c| {
+        if (takeItemPath(c, false, ctx.site, ctx.name, ctx.hit)) return true;
     }
     return false;
 }
