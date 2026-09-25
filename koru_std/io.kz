@@ -496,6 +496,7 @@ fn __printInterpolate(
 
     var missing_spec: ?[]const u8 = null;
     var function_call_expr: ?[]const u8 = null;
+    var keyed_placeholder: ?[]const u8 = null;
 
     // Use the expression parser to detect function calls properly
     const expr_parser = @import("expression_parser");
@@ -604,6 +605,14 @@ fn __printInterpolate(
                 var format_spec: []const u8 = "any";
                 var has_spec = false;
 
+                // Keyed addressing `store[key: value]` is a pinned hole
+                // (690_018): the `key:` decl emits no lookup machinery, and
+                // the bracket `:` would misfire the format-spec split below.
+                // Honor or refuse: refuse, before either defect runs.
+                if (keyed_placeholder == null and codegen_utils_io.colonInsideBrackets(placeholder)) {
+                    keyed_placeholder = placeholder;
+                }
+
                 // Check for format specifier: {{ name:s }}
                 if (std.mem.indexOf(u8, placeholder, ":")) |colon_pos| {
                     var_name = placeholder[0..colon_pos];
@@ -671,6 +680,14 @@ fn __printInterpolate(
             allocator,
             "@compileError(\"std/io:" ++ label ++ ": '{{{{ {s} }}}}' contains a function call — function calls are not allowed in expressions. Use tor chaining instead.\");",
             .{fn_expr}
+        ) catch unreachable;
+    }
+    else if (keyed_placeholder) |placeholder| kblk_keyed: {
+        rep.addErrorAtLocation(.KORU168, flow.location, "std/io:" ++ label ++ ": '{{{{ {s} }}}}' uses keyed addressing 'store[key: value]' - a pinned hole (690_018); bind the row's handle and interpolate store[handle].field instead", .{placeholder}) catch {};
+        break :kblk_keyed std.fmt.allocPrint(
+            allocator,
+            "@compileError(\"std/io:" ++ label ++ ": '{{{{ {s} }}}}' uses keyed addressing - a pinned hole (690_018); use store[handle].field\");",
+            .{placeholder}
         ) catch unreachable;
     }
     else if (missing_spec) |placeholder| kblk2: {
@@ -1003,6 +1020,5 @@ fn __printInterpolateJs(
     _ = program;
     return __printInterpolateJs(expr, item, allocator, false, 2);
 }
-
 
 ~part blk

@@ -290,7 +290,6 @@
         if (ast.declarationRefused(allocator, program, flow.module, "std/store:new({s}):", .{store_name})) return .{ .transformed = .{} };
         return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert: unknown store '{s}' - no std/store:new({s}) found", .{ store_name, store_name }) } };
     };
-
     const braced = std.fmt.allocPrint(allocator, "{{{s}}}", .{block_text.?}) catch unreachable;
     // A ONE-column store names no column, so its row block IS the value
     // expression — `insert(nums) { 7 }`, never a field list. That settles
@@ -305,6 +304,7 @@
     } else struct_literal.parseFields(allocator, braced) catch |err| {
         return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): {s}", .{ store_name, struct_literal.describeErrorIn(allocator, err, braced) }) } };
     };
+    if (KeyedAddressing.inFields(allocator, reporter, flow, "std/store:insert", row_fields)) |r| return .{ .transformed = .{ .replacement = r } };
     // Kinded union: the row names this member's leaves only. Columns the
     // kind does not own are zero-filled at the call site (the insert tor
     // still writes every SoA column). Kindless stores keep the exact-arity

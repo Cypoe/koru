@@ -1,8 +1,32 @@
-IDEA PIN (O2 head 3) — WALLED on infra (2026-07-05 sweep): key
-addressing as an LVALUE (stored target) is buildable today, but the pin
-also uses `pool[id: 7].hp` as an RVALUE inside a print interpolation in
-ORDINARY user flow text — rewriting that needs either whole-program
-rewrite capability for store transforms (taps-style whole_program
-rebuild; SiteResult is replacement+appended only) or expression-layer
-lowering of key paths. Infrastructure/design fork — float to Lars.
-Lvalue-only subset could pin separately if wanted.
+IDEA PIN (O2 head 3) — WALLED on infra (2026-07-05 sweep), corrected
+2026-09-06: the earlier claim that key addressing "as an LVALUE (stored
+target) is buildable today" was measured FALSE. `stored { pool[id: 7].hp:
+x }` splices the bracket interior verbatim into `__koru_resolve(id: 7)` —
+source syntax in a host call position, invalid Zig. The `key:` decl emits
+no lookup machinery at all (no key→row map, no maintenance at insert/
+take/swap-remove); keyed addressing was never partially working, it is
+aspirational syntax with no lowered form.
+
+Honored nowhere ⇒ refused everywhere reachable: 690_349 pins the refusal
+(KORU161 on stored targets, stored values, take heads, insert seeds — one
+shared gate, `KeyedAddressing` in store.keyed.kz; KORU168 in {{ }}
+interpolation across all four engines — which additionally misfired the
+format-spec split, taking the bracket ':' as the spec separator).
+Consumers of `store[...]` that still lack a refusal channel — the shared
+read rewriter storeIndexedRefs (store.kz) reached from rule/query/guard
+positions, and `__printInterpolateJs` (the JS print family has no
+reporter) — can still emit the verbatim splice; extend the wall when they
+get one.
+
+THE CREDITOR — koru-examples/downloads. It runs today with a linear key
+scan standing in for this head: an inner `! sweep x when x.idx ==
+pr.index` nested inside the batch sweep, purely to reach the one row a
+`! progress` names. The scan is the shape this pin retires.
+
+Honoring means emitting a key→row map keyed on the declared column,
+maintained at insert/take/swap-remove (swap-remove must update the moved
+row's entry — same invariant the position-head pin 690_092 measures).
+Reaching for a POSITION instead is not the shortcut it looks like: a
+stored position loses its write silently across a removal (690_092). A
+declared key is the identity that survives, which is why this head and
+that defect are one piece of work.

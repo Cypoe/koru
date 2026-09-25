@@ -553,6 +553,28 @@ refuses `DestructureNotImplemented` at `parseBranchInfo`, and
 `arm.destructure` — two gates because two parsers feed one consumer).
 Pin: `440_028`, unit tests in `flow_parser.zig`.
 
+**The law's extent is wider than annotations (2026-09-06 measured).**
+`store[key: value]` addressing was the same shape in worse dress: `key: id`
+is a declaration of keyed identity, `pool[id: 7].hp` is a request to use
+it — and NO consumer honored it. `std/store:new` accepts `key:` and emits
+zero lookup machinery; every `store[...]` consumer then splices the
+bracket interior verbatim into `__koru_resolve(id: 7)`, source syntax in
+a host call position — the backend's `expected ')', found ':'` was the
+first diagnostic the surface ever produced. Worse than a dropped request:
+the request produced malformed output. The correction was refusal, not
+lowering — there is no key→row map to honor against — so KORU161/KORU168
+now refuse keyed addressing on stored targets and values, take heads,
+insert seeds, and `{{ }}` interpolation across all four engines (which had
+a second latent defect: the format-spec split took the bracket `:` as the
+spec separator). The refusals share one gate — `KeyedAddressing` in
+`store.keyed.kz`, a module-scope helper the wall's line baselines bought
+by splitting `print.blk` into `io.blk.kz`. Two residuals keep the map
+honest: `storeIndexedRefs` (the shared read rewriter) has no refusal
+channel and still carries the splice into rule/query/guard positions, and
+`__printInterpolateJs` has no reporter — the JS print family refuses
+nothing yet. Pin: `690_349`; corrected TODO: `690_018` (its "lvalue
+buildable today" claim was never true — compile, don't trust the comment).
+
 ### Why the braces are legal again
 
 Three separate things had collapsed under one word, "retired", and only two of

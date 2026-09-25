@@ -205,6 +205,41 @@ pub fn appendEscapedIdentifier(list: *std.ArrayList(u8), allocator: std.mem.Allo
     }
 }
 
+/// A `:` inside a `[...]` span is keyed addressing — `store[key: value]` —
+/// pinned aspirational at 690_018 (the `key:` decl emits no lookup machinery
+/// and the bracket interior splices verbatim into `__koru_resolve`, producing
+/// invalid host code). Every consumer that accepts `store[...]` must honor or
+/// refuse that shape; this is the refusal detector. Quote- and depth-aware;
+/// colons at bracket-depth 0 (a format spec, a field separator) do not count.
+pub fn colonInsideBrackets(text: []const u8) bool {
+    var depth: usize = 0;
+    var quote: u8 = 0;
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        const c = text[i];
+        if (quote != 0) {
+            if (c == '\\') {
+                i += 1;
+            } else if (c == quote) {
+                quote = 0;
+            }
+            continue;
+        }
+        switch (c) {
+            '"', '\'' => quote = c,
+            '[' => depth += 1,
+            ']' => {
+                if (depth > 0) depth -= 1;
+            },
+            ':' => {
+                if (depth > 0) return true;
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
 /// Decimal index scan for the `__koru_*_N` splice markers — returns the
 /// digits' value and advances `pos` past them, or null when no digit is
 /// there (`pos` untouched past the first non-digit).

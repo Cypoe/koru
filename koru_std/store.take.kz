@@ -83,6 +83,7 @@
         return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:take: malformed addressing head '{s}'", .{target_text}) } };
     }
     const store_name = std.mem.trim(u8, target_text[0..lb], " ");
+    if (KeyedAddressing.in(allocator, reporter, flow, "std/store:take", target_text)) |r| return .{ .transformed = .{ .replacement = r } };
     // Cross-store cell index (`todos[ui.sel]`) must lower like stored (690_075).
     const row_expr = H.storeRefsAll(allocator, program, std.mem.trim(u8, target_text[lb + 1 .. target_text.len - 1], " "));
     if (store_name.len == 0 or row_expr.len == 0) {
@@ -156,14 +157,4 @@
         .module = allocator.dupe(u8, flow.module) catch unreachable,
     } } } };
 }
-
-// ============================================================================
-// STORE.STRIPE — the imperative sweep verb ((l)/O13, 690_014)
-// ============================================================================
-//
-//   std/store:stripe(game)
-//
-// Announce-only: standing watches re-fire with CURRENT values. No write
-// happens, so interceptors (the write contract) do NOT run. Compiles to
-// the generated `__store_stripe_<s>` unit.
 

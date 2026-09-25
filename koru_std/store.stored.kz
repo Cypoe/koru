@@ -202,7 +202,7 @@
     if (writes.len == 0) {
         return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: write block is empty", .{}) } };
     }
-
+    if (KeyedAddressing.inFields(allocator, reporter, flow, "std/store:stored", writes)) |r| return .{ .transformed = .{ .replacement = r } };
     // THE CHAIN IS THE ENVELOPE ((i) lean, 690_009): a multi-field block
     // is ONE atomic unit - every write lands (write-only envwrite), THEN
     // dispatch runs in write order (announce, which reads settled state).

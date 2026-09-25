@@ -635,7 +635,6 @@ const StoreColInfo = struct {
     module_path: ?[]const u8,
     phantom: ?[]const u8,
 };
-
 fn storeViewMembers(alloc: std.mem.Allocator, prog: *const ast_find.Program, view_name: []const u8) ?[]const []const u8 {
     for (flatItems(alloc, prog.items)) |pi| {
         if (pi.* == .inline_code) {
@@ -1009,3 +1008,4 @@ fn storeLowerText(
 ~part refs
 ~part refhome
 ~part refhomeapi
+~part keyed
