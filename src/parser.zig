@@ -6148,20 +6148,7 @@ pub const Parser = struct {
             const continuations = if (same_line_produce) |pidx| produce_blk: {
                 const produce_str = lexer.trim(inv_str[pidx + 2 ..]);
                 const conts = try self.allocator.alloc(ast.Continuation, 1);
-                conts[0] = ast.Continuation{
-                    .branch = try self.allocator.dupe(u8, ""),
-                    .binding = null,
-                    .condition = null,
-                    .node = .{ .branch_constructor = .{
-                        .branch_name = try self.allocator.dupe(u8, ""),
-                        .fields = &.{},
-                        .plain_value = try self.allocator.dupe(u8, produce_str),
-                        .has_expressions = true,
-                        .is_bare_return = true,
-                    } },
-                    .indent = 0,
-                    .continuations = &.{},
-                };
+                conts[0] = try self.bareReturnContinuation(produce_str, 0, .{ .file = "generated", .line = 0, .column = 0 }, &.{});
                 break :produce_blk conts;
             } else if (same_line_arrow) |aidx| arrow_blk: {
                 const construct_str = lexer.trim(inv_str[aidx + 2 ..]);
@@ -6619,22 +6606,7 @@ pub const Parser = struct {
             const tail_lit = lexer.trim(tail);
             if (tail_lit.len >= 2 and (std.mem.startsWith(u8, tail_lit, "->") or std.mem.startsWith(u8, tail_lit, "=>"))) {
                 const expr = lexer.trim(tail_lit[2..]);
-                const produce_cont = ast.Continuation{
-                    .branch = try self.allocator.dupe(u8, ""),
-                    .binding = null,
-                    .condition = null,
-                    .condition_expr = null,
-                    .node = .{ .branch_constructor = .{
-                        .branch_name = try self.allocator.dupe(u8, ""),
-                        .fields = &.{},
-                        .plain_value = try self.allocator.dupe(u8, expr),
-                        .has_expressions = true,
-                        .is_bare_return = true,
-                    } },
-                    .indent = base_indent,
-                    .continuations = &.{},
-                    .location = tail_location,
-                };
+                const produce_cont = try self.bareReturnContinuation(expr, base_indent, tail_location, &.{});
                 var cont_list = try std.ArrayList(ast.Continuation).initCapacity(self.allocator, 1);
                 try cont_list.append(self.allocator, produce_cont);
                 output_continuations = try cont_list.toOwnedSlice(self.allocator);
@@ -6832,23 +6804,7 @@ pub const Parser = struct {
         // value-producing step instead of a return (210_189).
         var current_continuations: []ast.Continuation = if (produce_tail) |pt| blk: {
             const conts = try self.allocator.alloc(ast.Continuation, 1 + nested_continuations.len);
-            conts[0] = ast.Continuation{
-                .branch = try self.allocator.dupe(u8, ""),
-                .binding = null,
-                .binding_type = .branch_payload,
-                .condition = null,
-                .condition_expr = null,
-                .node = .{ .branch_constructor = .{
-                    .branch_name = try self.allocator.dupe(u8, ""),
-                    .fields = &.{},
-                    .plain_value = try self.allocator.dupe(u8, pt),
-                    .has_expressions = true,
-                    .is_bare_return = true,
-                } },
-                .indent = indent,
-                .continuations = &.{},
-                .location = chain_location,
-            };
+            conts[0] = try self.bareReturnContinuation(pt, indent, chain_location, &.{});
             @memcpy(conts[1..], nested_continuations);
             self.allocator.free(nested_continuations);
             break :blk conts;
@@ -7108,6 +7064,32 @@ pub const Parser = struct {
     fn chainLinkLocation(self: *Parser, base: errors.SourceLocation, link_lines: []const usize, link_idx: usize) errors.SourceLocation {
         if (link_idx >= link_lines.len) return base;
         return self.getLineLocation(link_lines[link_idx], base.column);
+    }
+
+    /// A `-> produce` arm: bare-return branch_constructor continuation
+    /// carrying `plain_value` as the tor's payload expression.
+    fn bareReturnContinuation(
+        self: *Parser,
+        plain_value: []const u8,
+        indent: usize,
+        location: errors.SourceLocation,
+        nested: []const ast.Continuation,
+    ) !ast.Continuation {
+        return .{
+            .branch = try self.allocator.dupe(u8, ""),
+            .binding = null,
+            .condition = null,
+            .node = .{ .branch_constructor = .{
+                .branch_name = try self.allocator.dupe(u8, ""),
+                .fields = &.{},
+                .plain_value = try self.allocator.dupe(u8, plain_value),
+                .has_expressions = true,
+                .is_bare_return = true,
+            } },
+            .indent = indent,
+            .continuations = nested,
+            .location = location,
+        };
     }
 
     /// Chain `steps[1..]` back-to-front as nested void continuations over
@@ -8106,27 +8088,10 @@ pub const Parser = struct {
                     var current_nested: []const ast.Continuation = source_block_continuations;
                     if (produce_tail) |pt| {
                         const conts = try self.allocator.alloc(ast.Continuation, 1);
-                        conts[0] = ast.Continuation{
-                            .branch = try self.allocator.dupe(u8, ""),
-                            .binding = null,
-                            .binding_annotations = &[_][]const u8{},
-                            .binding_type = .branch_payload,
-                            .condition = null,
-                            .condition_expr = null,
-                            .node = .{ .branch_constructor = .{
-                                .branch_name = try self.allocator.dupe(u8, ""),
-                                .fields = &.{},
-                                .plain_value = try self.allocator.dupe(u8, pt),
-                                .has_expressions = true,
-                                .is_bare_return = true,
-                            } },
-                            .indent = indent,
-                            .continuations = current_nested,
-                            // A `->` produce rides on the final chain step's
-                            // line — the last link when the stitch recorded
-                            // one, else the head stamp.
-                            .location = self.chainLinkLocation(location, link_lines, if (steps_inner.len > 0) steps_inner.len - 1 else 0),
-                        };
+                        // A `->` produce rides on the final chain step's
+                        // line — the last link when the stitch recorded
+                        // one, else the head stamp.
+                        conts[0] = try self.bareReturnContinuation(pt, indent, self.chainLinkLocation(location, link_lines, if (steps_inner.len > 0) steps_inner.len - 1 else 0), current_nested);
                         current_nested = conts;
                     }
 
@@ -8270,27 +8235,10 @@ pub const Parser = struct {
             // subflow-head `head(): v -> expr` produce uses).
             const produce_conts: []const ast.Continuation = if (produce_tail) |pt| blk: {
                 const conts = try self.allocator.alloc(ast.Continuation, 1);
-                conts[0] = ast.Continuation{
-                    .branch = try self.allocator.dupe(u8, ""),
-                    .binding = null,
-                    .binding_annotations = &[_][]const u8{},
-                    .binding_type = .branch_payload,
-                    .condition = null,
-                    .condition_expr = null,
-                    .node = .{ .branch_constructor = .{
-                        .branch_name = try self.allocator.dupe(u8, ""),
-                        .fields = &.{},
-                        .plain_value = try self.allocator.dupe(u8, pt),
-                        .has_expressions = true,
-                        .is_bare_return = true,
-                    } },
-                    .indent = indent,
-                    .continuations = &.{},
-                    // A `->` produce rides on the final chain step's line —
-                    // the last link when the stitch recorded one, else the
-                    // head stamp.
-                    .location = self.chainLinkLocation(location, link_lines, if (steps.len > 0) steps.len - 1 else 0),
-                };
+                // A `->` produce rides on the final chain step's line —
+                // the last link when the stitch recorded one, else the
+                // head stamp.
+                conts[0] = try self.bareReturnContinuation(pt, indent, self.chainLinkLocation(location, link_lines, if (steps.len > 0) steps.len - 1 else 0), &.{});
                 break :blk conts;
             } else &[_]ast.Continuation{};
 
