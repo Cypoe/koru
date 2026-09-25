@@ -57,6 +57,26 @@ const ParsedCommand = struct {
     }
 };
 
+/// `key` as an integer coerced to `T`, or null when absent or non-numeric —
+/// floats truncate (`1.0` → 1), matching each field's original inline switch.
+fn jsonIntField(comptime T: type, obj: std.json.ObjectMap, key: []const u8) ?T {
+    const v = obj.get(key) orelse return null;
+    const n: i64 = switch (v) {
+        .integer => |i| i,
+        .float => |f| @intFromFloat(f),
+        else => return null,
+    };
+    return @intCast(n);
+}
+
+/// `key` as a bool, or null when absent or non-bool — callers assign only on
+/// non-null so `merge_companions`'s `true` default survives a missing key.
+fn jsonBoolField(obj: std.json.ObjectMap, key: []const u8) ?bool {
+    const v = obj.get(key) orelse return null;
+    if (v != .bool) return null;
+    return v.bool;
+}
+
 fn parseCommandType(cmd: []const u8) CommandType {
     if (std.mem.eql(u8, cmd, "parse")) return .parse;
     if (std.mem.eql(u8, cmd, "compile")) return .compile;
@@ -186,55 +206,26 @@ pub const CcpDaemon = struct {
             .cmd = parseCommandType(cmd_str.string),
         };
 
-        if (obj.get("id")) |id_val| {
-            cmd.id = switch (id_val) {
-                .integer => |i| i,
-                .float => |f| @intFromFloat(f),
-                else => null,
-            };
-        }
-
-        if (obj.get("file")) |v| {
-            if (v == .string) cmd.file = try self.allocator.dupe(u8, v.string);
-        }
-        if (obj.get("text")) |v| {
-            if (v == .string) cmd.text = try self.allocator.dupe(u8, v.string);
-        }
-        if (obj.get("version")) |v| {
-            cmd.version = switch (v) {
-                .integer => @intCast(v.integer),
-                .float => @intFromFloat(v.float),
-                else => null,
-            };
-        }
-        if (obj.get("entry")) |v| {
-            if (v == .string) cmd.entry = try self.allocator.dupe(u8, v.string);
-        }
-        if (obj.get("flag")) |v| {
-            if (v == .string) cmd.flag = try self.allocator.dupe(u8, v.string);
-        }
-        if (obj.get("line")) |v| {
-            cmd.line = switch (v) {
-                .integer => @intCast(v.integer),
-                .float => @intFromFloat(v.float),
-                else => null,
-            };
-        }
-        if (obj.get("column")) |v| {
-            cmd.column = switch (v) {
-                .integer => @intCast(v.integer),
-                .float => @intFromFloat(v.float),
-                else => null,
-            };
-        }
-        if (obj.get("merge_companions")) |v| {
-            if (v == .bool) cmd.merge_companions = v.bool;
-        }
-        if (obj.get("app")) |v| {
-            if (v == .bool) cmd.app = v.bool;
-        }
+        cmd.id = jsonIntField(i64, obj, "id");
+        cmd.file = try self.dupJsonString(obj, "file");
+        cmd.text = try self.dupJsonString(obj, "text");
+        cmd.version = jsonIntField(u64, obj, "version");
+        cmd.entry = try self.dupJsonString(obj, "entry");
+        cmd.flag = try self.dupJsonString(obj, "flag");
+        cmd.line = jsonIntField(u32, obj, "line");
+        cmd.column = jsonIntField(u32, obj, "column");
+        if (jsonBoolField(obj, "merge_companions")) |b| cmd.merge_companions = b;
+        if (jsonBoolField(obj, "app")) |b| cmd.app = b;
 
         return cmd;
+    }
+
+    /// `key` duplicated out of the JSON object, or null when absent or
+    /// non-string — the four optional text fields share this.
+    fn dupJsonString(self: *CcpDaemon, obj: std.json.ObjectMap, key: []const u8) !?[]const u8 {
+        const v = obj.get(key) orelse return null;
+        if (v != .string) return null;
+        return try self.allocator.dupe(u8, v.string);
     }
 
     fn handleCommand(self: *CcpDaemon, line: []const u8) !void {
