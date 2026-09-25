@@ -555,7 +555,7 @@ pub const VisitorEmitter = struct {
                     if (t0.len > 0 and t0[0] == '{') {
                         const fields = struct_literal.parseFields(s.allocator, t0) catch |e| {
                             if (e == error.OutOfMemory) return e;
-                            return; // malformed — the parser already refused it
+                            @panic("koru: `{`-led signature type passed the parser but failed parseFields");
                         };
                         for (fields) |f| try go(s, set_, qual_set, f.value, null, scanning);
                         return;

@@ -13142,11 +13142,12 @@ pub fn writeBareReturnType(
             }
             try emitter.write(" }");
             return;
-        } else |_| {
-            // Unparseable shape — preserve the prior verbatim behavior.
-            try emitter.write("struct ");
-            try emitter.write(rt);
-            return;
+        } else |err| {
+            if (err == error.OutOfMemory) return err;
+            // parseShape refuses a malformed `{`-return at PARSE003 before
+            // emission — a parseFields failure here is a broken parser
+            // contract, not a user error to paste through.
+            @panic("koru: record return type passed the parser but failed parseFields");
         }
     }
 

@@ -3119,15 +3119,30 @@ pub const Parser = struct {
             );
         }
 
-        // Single-field record RETURN (`-> { a: i64 }`) collapses to the scalar
-        // `-> i64` — the produce-side sibling of the single-field branch payload
-        // above; only a 2+-field record earns the braces. (210_149)
-        // The comma count is a guess — run the one parser so a malformed
-        // record (`{ a: i64 b: i64 }`, a dropped comma) names its real defect
-        // instead of reading as a single field.
+        // Every `{`-led return type is a field list — run the one parser on
+        // all of them, not only the comma-free ones: `isSingleFieldRecordType`'s
+        // comma count can't see a fused field after a comma (`b: i64 c: i64`)
+        // or a malformed entry (`5`, `b:`), and unvalidated text used to reach
+        // the emitter's verbatim paste and die in Zig (210_276/277/278).
+        // The single-field collapse verdict is unchanged — it just runs on a
+        // list that already parsed.
         if (return_type) |rt| {
-            if (isSingleFieldRecordType(rt)) {
-                if (struct_literal.parseFields(self.allocator, rt)) |_| {
+            const rt_trimmed = std.mem.trim(u8, rt, " \t");
+            if (rt_trimmed.len > 0 and rt_trimmed[0] == '{') {
+                const fields = struct_literal.parseFields(self.allocator, rt) catch |err| {
+                    if (err == error.OutOfMemory) return err;
+                    const detail = struct_literal.describeErrorIn(self.allocator, err, rt);
+                    return self.fail(.PARSE003, event_line_index + 1, 1, "malformed record return `{s}` — {s}", .{ rt, detail });
+                };
+                for (fields) |f| {
+                    if (f.name.len == 0) {
+                        return self.fail(.PARSE003, event_line_index + 1, 1, "malformed record return `{s}` — a field carries no name", .{rt});
+                    }
+                    if (std.mem.trim(u8, f.value, " \t").len == 0) {
+                        return self.fail(.PARSE003, event_line_index + 1, 1, "malformed record return `{s}` — field '{s}' carries no type", .{ rt, f.name });
+                    }
+                }
+                if (isSingleFieldRecordType(rt)) {
                     return self.fail(
                         .PARSE003,
                         event_line_index + 1,
@@ -3135,10 +3150,6 @@ pub const Parser = struct {
                         "single field in record return `{s}` — collapse to the scalar `-> <type>`; a record return is for two or more fields",
                         .{rt},
                     );
-                } else |err| {
-                    if (err == error.OutOfMemory) return err;
-                    const detail = struct_literal.describeErrorIn(self.allocator, err, rt);
-                    return self.fail(.PARSE003, event_line_index + 1, 1, "malformed record return `{s}` — {s}", .{ rt, detail });
                 }
             }
         }
@@ -10829,10 +10840,25 @@ pub const Parser = struct {
 
         // Single-field record resume (`! ask -> { a: i64 }`) collapses to the
         // scalar `! ask -> i64`; only a 2+-field record earns the braces. (210_150)
-        // Same malformed-record routing as the record-return check above.
+        // Same validation as the record-return check above: every `{`-led
+        // resume type is a field list — parse it before the collapse verdict.
         if (resume_type) |rt| {
-            if (isSingleFieldRecordType(rt)) {
-                if (struct_literal.parseFields(self.allocator, rt)) |_| {
+            const rt_trimmed = std.mem.trim(u8, rt, " \t");
+            if (rt_trimmed.len > 0 and rt_trimmed[0] == '{') {
+                const fields = struct_literal.parseFields(self.allocator, rt) catch |err| {
+                    if (err == error.OutOfMemory) return err;
+                    const detail = struct_literal.describeErrorIn(self.allocator, err, rt);
+                    return self.fail(.PARSE003, self.current, 1, "malformed record resume `{s}` — {s}", .{ rt, detail });
+                };
+                for (fields) |f| {
+                    if (f.name.len == 0) {
+                        return self.fail(.PARSE003, self.current, 1, "malformed record resume `{s}` — a field carries no name", .{rt});
+                    }
+                    if (std.mem.trim(u8, f.value, " \t").len == 0) {
+                        return self.fail(.PARSE003, self.current, 1, "malformed record resume `{s}` — field '{s}' carries no type", .{ rt, f.name });
+                    }
+                }
+                if (isSingleFieldRecordType(rt)) {
                     return self.fail(
                         .PARSE003,
                         self.current,
@@ -10840,10 +10866,6 @@ pub const Parser = struct {
                         "single field in record resume `{s}` — collapse to the scalar `-> <type>`; a record resume is for two or more fields",
                         .{rt},
                     );
-                } else |err| {
-                    if (err == error.OutOfMemory) return err;
-                    const detail = struct_literal.describeErrorIn(self.allocator, err, rt);
-                    return self.fail(.PARSE003, self.current, 1, "malformed record resume `{s}` — {s}", .{ rt, detail });
                 }
             }
         }

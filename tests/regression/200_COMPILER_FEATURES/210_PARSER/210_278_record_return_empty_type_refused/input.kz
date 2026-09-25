@@ -1,0 +1,9 @@
+// PINS: a record-return field with no type after its colon (`b:`) refuses
+// PARSE003 at the declaration — every field in a record return carries a
+// name and a type.
+~import std/io
+
+~tor make { id: i64 } -> { a: i64, b: }
+~proc make|zig { _ = id; return undefined; }
+
+~make(id: 1): m |> std/io:print.ln("{{ m.a:d }}")

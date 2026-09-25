@@ -1,0 +1,9 @@
+// PINS: a bare atom inside a record return's braces (`5` — no `name:`)
+// refuses PARSE003 at the declaration; a record return is a field list,
+// and a field list takes named fields.
+~import std/io
+
+~tor make { id: i64 } -> { a: i64, 5 }
+~proc make|zig { _ = id; return undefined; }
+
+~make(id: 1): m |> std/io:print.ln("{{ m.a:d }}")

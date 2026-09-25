@@ -1,0 +1,10 @@
+// PINS: a record return whose second field's type runs into a third
+// `name: type` on the same line (`b: i64 c: i64`, comma dropped) refuses
+// PARSE003 at the declaration — every `{`-led return type is validated by
+// the one field parser, not only comma-free ones.
+~import std/io
+
+~tor make { id: i64 } -> { a: i64, b: i64 c: i64 }
+~proc make|zig { _ = id; return undefined; }
+
+~make(id: 1): m |> std/io:print.ln("{{ m.a:d }}")

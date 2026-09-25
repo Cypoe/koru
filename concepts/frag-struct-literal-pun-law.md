@@ -291,3 +291,17 @@ Unrelated and left alone: the multiline `~tor {` reader comma-joins
 every line, so a missing comma inside a nested record type is repaired
 before `parseShape` sees it — it only ever accepts the correct-meaning
 spelling, never produces a wrong program.
+
+Validation must cover the field list, not the shapes the heuristic
+guessed (2026-09-25): `isSingleFieldRecordType`'s comma count gated the
+`parseFields` check, so a record return or resume carrying a comma —
+`{ a: i64, b: i64 c: i64 }`, `{ a: i64, 5 }`, `{ a: i64, b: }` — was
+never validated and fell to `writeBareReturnType`'s verbatim paste, a
+silent fallback that handed malformed text to Zig. Both `->` and `! ->`
+declarations now parse EVERY `{`-led type and refuse unnamed or
+type-less fields at PARSE003 before the collapse verdict; the emitter's
+`else |_|` paste and the signature scan's silent `return` are panics —
+once the parser owns validity, a parseFields failure downstream is a
+broken contract, never a program. The one caller that bypasses the
+parser — `store.pverbs.kz` synthesizing `{ fd: i32, wait_ns: i128 }` —
+emits well-formed text, so the contract holds. Pins: 210_276/277/278.
