@@ -125,6 +125,15 @@ pub const CcpDaemon = struct {
         }
     }
 
+    /// Every handler's error path routes here — report `fmt` (one `{}` slot
+    /// for the error) under the request id. The bufPrint fallback is the fmt
+    /// minus its `": {}"` tail, matching the messages each site spelled out.
+    fn failCmd(self: *CcpDaemon, id: ?i64, comptime fmt: []const u8, err: anyerror) void {
+        var err_buf: [512]u8 = undefined;
+        const err_msg = std.fmt.bufPrint(&err_buf, fmt, .{err}) catch fmt[0 .. fmt.len - ": {}".len];
+        self.writeError(err_msg, id);
+    }
+
     pub fn run(self: *CcpDaemon) !void {
         self.writeJson("{{\"type\":\"ready\",\"version\":\"{s}\"}}", .{koruc_version});
 
@@ -150,11 +159,7 @@ pub const CcpDaemon = struct {
                 const line = line_buf[0..newline_pos];
                 if (line.len > 0) {
                     self.trace("<< {s}", .{line});
-                    self.handleCommand(line) catch |err| {
-                        var err_buf: [256]u8 = undefined;
-                        const err_msg = std.fmt.bufPrint(&err_buf, "Command failed: {}", .{err}) catch "Command failed";
-                        self.writeError(err_msg, null);
-                    };
+                    self.handleCommand(line) catch |err| self.failCmd(null, "Command failed: {}", err);
                 }
 
                 const remaining = pos - newline_pos - 1;
@@ -316,12 +321,7 @@ pub const CcpDaemon = struct {
         var parse_arena = std.heap.ArenaAllocator.init(self.allocator);
         defer parse_arena.deinit();
 
-        const result = self.introspect(&parse_arena, file_path, cmd.merge_companions) catch |err| {
-            var err_buf: [512]u8 = undefined;
-            const err_msg = std.fmt.bufPrint(&err_buf, "Introspect failed: {}", .{err}) catch "Introspect failed";
-            self.writeError(err_msg, cmd.id);
-            return;
-        };
+        const result = self.introspect(&parse_arena, file_path, cmd.merge_companions) catch |err| return self.failCmd(cmd.id, "Introspect failed: {}", err);
         defer self.freeIntrospectResult(result);
 
         if (cmd.id) |req_id| {
@@ -344,28 +344,13 @@ pub const CcpDaemon = struct {
         var parse_arena = std.heap.ArenaAllocator.init(self.allocator);
         defer parse_arena.deinit();
 
-        const result = self.introspect(&parse_arena, file_path, cmd.merge_companions) catch |err| {
-            var err_buf: [512]u8 = undefined;
-            const err_msg = std.fmt.bufPrint(&err_buf, "Introspect failed: {}", .{err}) catch "Introspect failed";
-            self.writeError(err_msg, cmd.id);
-            return;
-        };
+        const result = self.introspect(&parse_arena, file_path, cmd.merge_companions) catch |err| return self.failCmd(cmd.id, "Introspect failed: {}", err);
         defer self.freeIntrospectResult(result);
 
-        var serializer = ast_serializer.AstSerializer.init(self.allocator) catch |err| {
-            var err_buf: [512]u8 = undefined;
-            const err_msg = std.fmt.bufPrint(&err_buf, "Failed to init serializer: {}", .{err}) catch "Failed to init serializer";
-            self.writeError(err_msg, cmd.id);
-            return;
-        };
+        var serializer = ast_serializer.AstSerializer.init(self.allocator) catch |err| return self.failCmd(cmd.id, "Failed to init serializer: {}", err);
         defer serializer.deinit();
 
-        const json_output = serializer.serializeToJson(&result.program) catch |err| {
-            var err_buf: [512]u8 = undefined;
-            const err_msg = std.fmt.bufPrint(&err_buf, "Failed to serialize AST: {}", .{err}) catch "Failed to serialize AST";
-            self.writeError(err_msg, cmd.id);
-            return;
-        };
+        const json_output = serializer.serializeToJson(&result.program) catch |err| return self.failCmd(cmd.id, "Failed to serialize AST: {}", err);
 
         self.writeRaw("{\"type\":\"ast_json\"");
         if (cmd.id) |req_id| {
@@ -393,12 +378,7 @@ pub const CcpDaemon = struct {
         var parse_arena = std.heap.ArenaAllocator.init(self.allocator);
         defer parse_arena.deinit();
 
-        const result = self.introspect(&parse_arena, file_path, true) catch |err| {
-            var err_buf: [512]u8 = undefined;
-            const err_msg = std.fmt.bufPrint(&err_buf, "Introspect failed: {}", .{err}) catch "Introspect failed";
-            self.writeError(err_msg, cmd.id);
-            return;
-        };
+        const result = self.introspect(&parse_arena, file_path, true) catch |err| return self.failCmd(cmd.id, "Introspect failed: {}", err);
         defer self.freeIntrospectResult(result);
 
         var module_count: usize = 0;
@@ -594,12 +574,7 @@ pub const CcpDaemon = struct {
             return;
         };
 
-        const found = self.lookupHover(file_path, line, column) catch |err| {
-            var err_buf: [512]u8 = undefined;
-            const err_msg = std.fmt.bufPrint(&err_buf, "Hover failed: {}", .{err}) catch "Hover failed";
-            self.writeError(err_msg, cmd.id);
-            return;
-        };
+        const found = self.lookupHover(file_path, line, column) catch |err| return self.failCmd(cmd.id, "Hover failed: {}", err);
 
         self.writeHoverJson(cmd, found, "hover");
     }
@@ -618,12 +593,7 @@ pub const CcpDaemon = struct {
             return;
         };
 
-        const found = self.lookupHover(file_path, line, column) catch |err| {
-            var err_buf: [512]u8 = undefined;
-            const err_msg = std.fmt.bufPrint(&err_buf, "Definition failed: {}", .{err}) catch "Definition failed";
-            self.writeError(err_msg, cmd.id);
-            return;
-        };
+        const found = self.lookupHover(file_path, line, column) catch |err| return self.failCmd(cmd.id, "Definition failed: {}", err);
 
         if (found) |result| {
             defer frontend_hover.deinitHoverResult(self.allocator, result);
@@ -662,12 +632,7 @@ pub const CcpDaemon = struct {
         var parse_arena = std.heap.ArenaAllocator.init(self.allocator);
         defer parse_arena.deinit();
 
-        const result = self.introspect(&parse_arena, file_path, true) catch |err| {
-            var err_buf: [512]u8 = undefined;
-            const err_msg = std.fmt.bufPrint(&err_buf, "Diagnostics failed: {}", .{err}) catch "Diagnostics failed";
-            self.writeError(err_msg, cmd.id);
-            return;
-        };
+        const result = self.introspect(&parse_arena, file_path, true) catch |err| return self.failCmd(cmd.id, "Diagnostics failed: {}", err);
         defer self.freeIntrospectResult(result);
 
         const json = frontend_diagnostics.serializeJson(self.allocator, file_path, result.diagnostics, cmd.id) catch {
@@ -699,35 +664,15 @@ pub const CcpDaemon = struct {
         defer parse_arena.deinit();
 
         var ctx: frontend_introspect.Context = undefined;
-        frontend_introspect.initContext(self.allocator, file_path, &.{}, &ctx) catch |err| {
-            var err_buf: [512]u8 = undefined;
-            const err_msg = std.fmt.bufPrint(&err_buf, "Completion failed: {}", .{err}) catch "Completion failed";
-            self.writeError(err_msg, cmd.id);
-            return;
-        };
+        frontend_introspect.initContext(self.allocator, file_path, &.{}, &ctx) catch |err| return self.failCmd(cmd.id, "Completion failed: {}", err);
         defer ctx.deinit();
 
-        const source = self.readSource(&parse_arena, file_path) catch |err| {
-            var err_buf: [512]u8 = undefined;
-            const err_msg = std.fmt.bufPrint(&err_buf, "Completion failed: {}", .{err}) catch "Completion failed";
-            self.writeError(err_msg, cmd.id);
-            return;
-        };
+        const source = self.readSource(&parse_arena, file_path) catch |err| return self.failCmd(cmd.id, "Completion failed: {}", err);
 
-        const intro = self.introspect(&parse_arena, file_path, true) catch |err| {
-            var err_buf: [512]u8 = undefined;
-            const err_msg = std.fmt.bufPrint(&err_buf, "Completion failed: {}", .{err}) catch "Completion failed";
-            self.writeError(err_msg, cmd.id);
-            return;
-        };
+        const intro = self.introspect(&parse_arena, file_path, true) catch |err| return self.failCmd(cmd.id, "Completion failed: {}", err);
         defer self.freeIntrospectResult(intro);
 
-        const completion = frontend_completion.completeAt(self.allocator, source, &intro.program, &ctx, line, column) catch |err| {
-            var err_buf: [512]u8 = undefined;
-            const err_msg = std.fmt.bufPrint(&err_buf, "Completion failed: {}", .{err}) catch "Completion failed";
-            self.writeError(err_msg, cmd.id);
-            return;
-        };
+        const completion = frontend_completion.completeAt(self.allocator, source, &intro.program, &ctx, line, column) catch |err| return self.failCmd(cmd.id, "Completion failed: {}", err);
         defer frontend_completion.deinitResult(self.allocator, completion);
 
         const json = frontend_completion.serializeJson(self.allocator, file_path, completion, cmd.id) catch {
