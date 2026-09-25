@@ -2827,6 +2827,16 @@ fn resolveTargetInputFields(
     return null;
 }
 
+/// True when `name` is already bound at the call site — every inject path
+/// (optional-null sweep, program/allocator/InvocationMeta) scans this before
+/// deciding to emit a default.
+fn argProvided(args: []const ast.Arg, name: []const u8) bool {
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg.name, name)) return true;
+    }
+    return false;
+}
+
 /// Emit `, .name = null` for every `?T` input field the call site omitted —
 /// an optional parameter's default IS null, and the target's input struct
 /// would be missing the field entirely (400_180).
@@ -2834,14 +2844,7 @@ fn emitMissingOptionalArgs(emitter: *CodeEmitter, fields: []const ast.Field, arg
     var needs_sep = args.len > 0;
     for (fields) |field| {
         if (!(field.type.len > 0 and field.type[0] == '?')) continue;
-        var already_provided = false;
-        for (args) |arg| {
-            if (std.mem.eql(u8, arg.name, field.name)) {
-                already_provided = true;
-                break;
-            }
-        }
-        if (already_provided) continue;
+        if (argProvided(args, field.name)) continue;
         if (needs_sep) try emitter.write(", ");
         try emitter.write(".");
         try writeBranchName(emitter, field.name);
@@ -9213,15 +9216,7 @@ fn emitArgs(emitter: *CodeEmitter, ctx: *EmissionContext, args: []const ast.Arg,
             for (event.input.fields) |field| {
                 // Check for Program parameter (not already provided)
                 if (std.mem.eql(u8, field.name, "program")) {
-                    // Check if program was already explicitly provided
-                    var already_provided = false;
-                    for (args) |arg| {
-                        if (std.mem.eql(u8, arg.name, "program")) {
-                            already_provided = true;
-                            break;
-                        }
-                    }
-                    if (!already_provided) {
+                    if (!argProvided(args, "program")) {
                         if (args.len > 0 or injected_count > 0) try emitter.write(", ");
                         try emitter.write(".program = program");
                         injected_count += 1;
@@ -9229,15 +9224,7 @@ fn emitArgs(emitter: *CodeEmitter, ctx: *EmissionContext, args: []const ast.Arg,
                 }
                 // Check for allocator parameter (not already provided)
                 if (std.mem.eql(u8, field.name, "allocator")) {
-                    // Check if allocator was already explicitly provided
-                    var already_provided = false;
-                    for (args) |arg| {
-                        if (std.mem.eql(u8, arg.name, "allocator")) {
-                            already_provided = true;
-                            break;
-                        }
-                    }
-                    if (!already_provided) {
+                    if (!argProvided(args, "allocator")) {
                         if (args.len > 0 or injected_count > 0) try emitter.write(", ");
                         try emitter.write(".allocator = allocator");
                         injected_count += 1;
@@ -9245,14 +9232,7 @@ fn emitArgs(emitter: *CodeEmitter, ctx: *EmissionContext, args: []const ast.Arg,
                 }
                 // Check for InvocationMeta parameter (not already provided)
                 if (field.is_invocation_meta) {
-                    var already_provided = false;
-                    for (args) |arg| {
-                        if (std.mem.eql(u8, arg.name, field.name)) {
-                            already_provided = true;
-                            break;
-                        }
-                    }
-                    if (!already_provided) {
+                    if (!argProvided(args, field.name)) {
                         if (args.len > 0 or injected_count > 0) try emitter.write(", ");
                         try emitter.write(".");
                         try writeBranchName(emitter, field.name);

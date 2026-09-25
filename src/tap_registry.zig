@@ -201,34 +201,28 @@ pub const TapRegistry = struct {
         return sortedKeys(&self.referenced_branches, self.allocator);
     }
 
-    /// Check if any taps use the Transition metatype
-    pub fn hasTransitionTaps(self: *const TapRegistry) bool {
+    fn hasBranchTaps(self: *const TapRegistry, branch: []const u8) bool {
         for (self.entries.items) |entry| {
-            if (std.mem.eql(u8, entry.branch, "Transition")) {
+            if (std.mem.eql(u8, entry.branch, branch)) {
                 return true;
             }
         }
         return false;
+    }
+
+    /// Check if any taps use the Transition metatype
+    pub fn hasTransitionTaps(self: *const TapRegistry) bool {
+        return self.hasBranchTaps("Transition");
     }
 
     /// Check if any taps use the Profile metatype
     pub fn hasProfileTaps(self: *const TapRegistry) bool {
-        for (self.entries.items) |entry| {
-            if (std.mem.eql(u8, entry.branch, "Profile")) {
-                return true;
-            }
-        }
-        return false;
+        return self.hasBranchTaps("Profile");
     }
 
     /// Check if any taps use the Audit metatype
     pub fn hasAuditTaps(self: *const TapRegistry) bool {
-        for (self.entries.items) |entry| {
-            if (std.mem.eql(u8, entry.branch, "Audit")) {
-                return true;
-            }
-        }
-        return false;
+        return self.hasBranchTaps("Audit");
     }
 
     /// Check if a module has any opaque taps
