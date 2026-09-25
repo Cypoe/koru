@@ -205,3 +205,31 @@ backend errors one indirection away from the dropped comma. The counting
 habit again: grep the validator, count the `{ }` parsers, compare. Pins:
 `210_280`–`210_284` (input shape, branch payload, resume arm; nameless and
 typeless fields on the same path).
+
+## 2026-09-25 — the enumeration splits again: produce positions, and each transform's own list
+
+The declaration-shape enumeration still covered only half the grammar's
+`{ }` carriers. A record VALUE — bare return `| done -> { a: 1 b: 2 }`,
+constructor field `~f(x: { … })`, call/jump argument `g(v: { … })`, arm
+produce — pasted verbatim into `.{ … }` with no field parser at all:
+dropped commas died in backend Zig as `expected ',' after initializer`,
+nameless `: v` as `expected field initializer`, typeless `v:` as
+`expected expression, found '}'`, and a store seed fused after a
+`]`-closed typed value was silently DROPPED from the emitted store type —
+the worst outcome, the program compiling narrower than written. The
+boundary detector also under-fired: its type-prefix exemption treated any
+`*`-/`?`-/`]`-ending token as a qualifier head, so `xs[i] y: 0` and
+`p.* y: 0` hid fused fields.
+
+And the frontend's parser cannot reach the transform-owned half:
+`std/kernel:init`/`shape`, `std/store:insert`/`stored`, `std/grid:stored`,
+and `const` source blocks are `Source` text — each owning transform must
+run the field parser itself. `kernel:init`'s manual comma splitter let
+fused fields ride into the emitted static; `parse_fields` (the `const`
+template filter) still truncates malformed lists in silence — the next
+member of this family not yet pinned.
+
+The counting habit, sharpened: enumerate a refusal's carriers by *who owns
+the text* — parser-typed positions get the frontend check; `Source`-typed
+positions get it inside the transform that consumes them. Pins:
+`210_285`–`210_297`, `390_127`/`390_128`, `690_345`–`690_348`, `697_015`.

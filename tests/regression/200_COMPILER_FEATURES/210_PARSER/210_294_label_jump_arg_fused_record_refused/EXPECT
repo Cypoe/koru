@@ -1,0 +1,6 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS error[PARSE003]
+CONTAINS missing comma
+CONTAINS 'b: c'
+ERROR_AT 20
+NOT_CONTAINS output_emitted.zig

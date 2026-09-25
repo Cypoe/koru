@@ -1810,7 +1810,7 @@ const emitFlowWithMocks = struct {
 // Emission segment: Final code generation (abstract, can be overridden)
 ~[comptime|abstract] pub tor emission { ctx: CompilerContext } -> { ctx: CompilerContext, code: string }
 
-~emission = inject-ccp(ctx): c1 |> pass-dead-strip(ctx: c1): c2 |> emit-zig(ctx: c2): c3 -> { ctx: c3.ctx, code: c3.code }
+~emission = inject-ccp(ctx): c1 |> pass-dead-strip(ctx: c1): c2 |> emit-zig(ctx: c2): c3 -> { c3.ctx, c3.code }
 
 // Parser service - makes the Koru parser available at backend comptime
 // This enables dynamic module loading during compilation passes

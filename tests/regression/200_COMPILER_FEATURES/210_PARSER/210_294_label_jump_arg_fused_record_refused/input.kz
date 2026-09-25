@@ -1,0 +1,21 @@
+// PINS: a record literal carried by a label-jump argument —
+// `@loop(n: { a: 1 b: c })` — refuses PARSE003 naming the fused field.
+// Jump args bind like call args; the record literal they carry is the same
+// `{ name: value }` list struct_literal parses.
+const std = @import("std");
+
+~tor counter { n: i32 }
+| next i32
+| done i32
+
+~proc counter|zig {
+    if (n < 5) { return .{ .next = n + 1 }; }
+    return .{ .done = n };
+}
+
+~tor start {}
+~proc start|zig {}
+
+~start() |> #loop counter(n: 1)
+| next c |> @loop(n: { a: 1 b: c })
+| done |> _

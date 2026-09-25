@@ -39,6 +39,8 @@ pub const ParseError = error{
     RedundantExplicitLabel,
     MissingComma,
     DuplicateField,
+    NamelessField,
+    TypelessField,
 };
 
 /// Options for `parseFields` / `parse`. Defaults enforce the pun law.
@@ -135,8 +137,18 @@ fn topLevelColon(field: []const u8) ?usize {
 /// by `ident:` at depth 0 is always a second field that lost its comma —
 /// UNLESS the whitespace follows a type prefix: in `*const mod:Type`,
 /// `[]const mod:Type`, `?mod:Type`, `[N] mod:Type` the qualifier is part of
-/// the field's own type, and `const`/`?`/`*`/`]` before the space is the
-/// tell (420_010: `[]const threading:WorkerHandle`).
+/// the field's own type, and the token before the space is the tell
+/// (420_010: `[]const threading:WorkerHandle`). The tell is a PREFIX token:
+/// `const`-ending (`[]const`, `*const`), bracket-OPENED (`[]`, `[N]`), or a
+/// bare `*`/`?`/`?*`. A `]`-closed run that starts with a name or digit is
+/// not a prefix — `xs[i]` is indexing and `0[i64]` is a value's `[T]`
+/// annotation, so `0[i64] extra: 0` still reads as a fused field; likewise a
+/// `*`- or `?`-ending expression tail (`p.*`, `x?`) is a value, and the
+/// exemption holds only for the bare prefix tokens.
+///
+/// The fused head is not only `name:` — a write-path head carries dots and
+/// indices (`acc.m:`, `board[i].on:` in `store:stored`/`grid:stored` blocks),
+/// so `head` here is `ident ('.' ident | '[' balanced ']')* ':'`.
 pub fn fusedFieldLine(value: []const u8) ?[]const u8 {
     var depth: usize = 0;
     var i: usize = 0;
@@ -153,27 +165,47 @@ pub fn fusedFieldLine(value: []const u8) ?[]const u8 {
                 depth -= 1;
             },
             ' ', '\t', '\r', '\n' => if (depth == 0) {
-                // A type-prefix token (`const`, or one ending `*`/`?`/`]`)
-                // immediately before the whitespace means the `ident:` ahead
-                // is a module qualifier inside this field's type, not a
-                // second field boundary.
                 var t = i;
                 while (t > 0 and !std.ascii.isWhitespace(value[t - 1])) : (t -= 1) {}
                 const prev_tok = value[t..i];
-                // `prev_tok` is one non-whitespace run: `const`, `*const`,
-                // `[]const`, `*`, `?`, `[N]` all mark a type prefix.
+                // `prev_tok` is one non-whitespace run. A TYPE-PREFIX token —
+                // `const`-suffixed, `[`-opened, or a bare `*`/`?`/`?*` —
+                // means the `ident:` ahead is a module qualifier inside this
+                // field's own type, not a second field boundary.
                 const type_prefix = prev_tok.len > 0 and
                     ((std.mem.endsWith(u8, prev_tok, "const") and
                         (prev_tok.len == 5 or !isIdentChar(prev_tok[prev_tok.len - 6]))) or
-                        prev_tok[prev_tok.len - 1] == '*' or
-                        prev_tok[prev_tok.len - 1] == '?' or
-                        prev_tok[prev_tok.len - 1] == ']');
+                        prev_tok[0] == '[' or
+                        std.mem.eql(u8, prev_tok, "*") or
+                        std.mem.eql(u8, prev_tok, "?") or
+                        std.mem.eql(u8, prev_tok, "?*"));
                 if (!type_prefix) {
                     var j = i + 1;
                     while (j < value.len and (value[j] == ' ' or value[j] == '\t' or value[j] == '\r' or value[j] == '\n')) : (j += 1) {}
                     if (j < value.len and isIdentStartChar(value[j])) {
                         var k = j + 1;
                         while (k < value.len and isIdentChar(value[k])) : (k += 1) {}
+                        // `.field` / `[index]` segments of a write head.
+                        while (k < value.len) {
+                            if (value[k] == '.') {
+                                if (k + 1 < value.len and isIdentStartChar(value[k + 1])) {
+                                    k += 1;
+                                    while (k < value.len and isIdentChar(value[k])) : (k += 1) {}
+                                    continue;
+                                }
+                                break;
+                            }
+                            if (value[k] == '[') {
+                                var bd: usize = 1;
+                                k += 1;
+                                while (k < value.len and bd > 0) : (k += 1) {
+                                    if (value[k] == '[') bd += 1;
+                                    if (value[k] == ']') bd -= 1;
+                                }
+                                continue;
+                            }
+                            break;
+                        }
                         while (k < value.len and (value[k] == ' ' or value[k] == '\t')) : (k += 1) {}
                         if (k < value.len and value[k] == ':') {
                             var e = k + 1;
@@ -235,6 +267,12 @@ fn projectRawFields(
         if (topLevelColon(raw)) |colon| {
             const name = std.mem.trim(u8, raw[0..colon], " \t\n\r");
             const value = std.mem.trim(u8, raw[colon + 1 ..], " \t\n\r");
+            // `: value` — the name was dropped; downstream emitters print the
+            // entry as a bare expression and Zig reports a missing initializer.
+            if (name.len == 0) return error.NamelessField;
+            // `name:` — the value was dropped; downstream emitters print
+            // `.name =` with nothing after it.
+            if (value.len == 0) return error.TypelessField;
             if (fusedFieldLine(value) != null) return error.MissingComma;
             if (punnableName(value)) |punned| {
                 if (std.mem.eql(u8, punned, name)) return error.RedundantExplicitLabel;
@@ -305,6 +343,8 @@ pub fn describeError(err: ParseError) []const u8 {
         error.BareEntryNotPunnable => "positional assignment is never allowed — name the target (`x: expr`); a bare entry must be a punnable name or path",
         error.RedundantExplicitLabel => "punning is mandatory — drop the redundant label and write the bare pun",
         error.MissingComma => "missing comma between fields — a `name: value` line that does not end in a comma fuses with the next line into one field",
+        error.NamelessField => "field has no name — a field is `name: value` or a bare punnable name; `: value` dropped the name",
+        error.TypelessField => "field has no value — a field is `name: value`; `name:` dropped the value",
         error.DuplicateField => "a field list takes each name once — the list cannot carry two fields with the same name",
         error.NotAStruct => "not a struct literal",
         error.UnterminatedStruct => "unterminated struct literal",
@@ -333,6 +373,42 @@ pub fn duplicateFieldName(allocator: Allocator, input: []const u8) ?[]const u8 {
             }
             seen.append(allocator, cand) catch return null;
         }
+    }
+    return null;
+}
+
+/// The field name a `RedundantExplicitLabel` error was raised on, re-derived
+/// by re-scanning `input` (cold error path — same pattern as
+/// `duplicateFieldName`). Returns null when the input no longer parses to a
+/// redundant label.
+pub fn redundantFieldName(allocator: Allocator, input: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, input, " \t\n\r");
+    if (trimmed.len < 2 or trimmed[0] != '{' or trimmed[trimmed.len - 1] != '}') return null;
+    const raw_fields = splitFields(allocator, trimmed[1 .. trimmed.len - 1]) catch return null;
+    for (raw_fields) |raw| {
+        const colon = topLevelColon(raw) orelse continue;
+        const name = std.mem.trim(u8, raw[0..colon], " \t\n\r");
+        const value = std.mem.trim(u8, raw[colon + 1 ..], " \t\n\r");
+        if (name.len == 0) continue;
+        if (punnableName(value)) |punned| {
+            if (std.mem.eql(u8, punned, name)) return name;
+        }
+    }
+    return null;
+}
+
+/// The name of the entry a `TypelessField` error was raised on — `name:` with
+/// nothing after the colon — re-derived by re-scanning `input` (cold error
+/// path, same pattern as `duplicateFieldName`).
+pub fn emptyValueFieldName(allocator: Allocator, input: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, input, " \t\n\r");
+    if (trimmed.len < 2 or trimmed[0] != '{' or trimmed[trimmed.len - 1] != '}') return null;
+    const raw_fields = splitFields(allocator, trimmed[1 .. trimmed.len - 1]) catch return null;
+    for (raw_fields) |raw| {
+        const colon = topLevelColon(raw) orelse continue;
+        const name = std.mem.trim(u8, raw[0..colon], " \t\n\r");
+        const value = std.mem.trim(u8, raw[colon + 1 ..], " \t\n\r");
+        if (name.len != 0 and value.len == 0) return name;
     }
     return null;
 }

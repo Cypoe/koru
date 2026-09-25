@@ -5440,6 +5440,103 @@ fn checkRecordTextBindOnce(
     }
 }
 
+/// A record VALUE written where an expression belongs — a bare return
+/// (`| done -> { a: 1 }`), a constructor field's expression
+/// (`~f(x: { a: 1 })`), a call or jump argument (`g(v: { a: 1 })`,
+/// `@L(v: { a: 1 })`), or an arm's produce (`| ok o -> { a: 1 }`) — is the
+/// same `{ name: value }` list struct_literal parses. Nothing on these
+/// produce paths ran that parser before the emitter pasted the text verbatim
+/// into `.{ … }` — a dropped comma reached backend Zig as
+/// "expected ',' after initializer", a nameless entry as "expected field
+/// initializer", a typeless one as "expected expression, found '}'", and a
+/// write after a `]`-closed typed value was silently DROPPED from the store
+/// type. Run the one field parser here and report its refusal as PARSE003 at
+/// the author's line (DuplicateField keeps its PARSE010 translation, matching
+/// checkRecordTextBindOnce).
+///
+/// The predicate is deliberately narrower than "starts with `{`": a one-slot
+/// identity block (`{ i64 }`, `{ expr }`) is not a field list, so a text is
+/// checked only when it is field-list-shaped — a `name:` head somewhere
+/// (isKoruStructLiteral), a leading `:` (nameless first entry), or a
+/// top-level comma (multi-entry, identity blocks excluded by construction).
+fn checkValueRecordText(
+    text: []const u8,
+    owner: []const u8,
+    reporter: *ErrorReporter,
+    location: errors.SourceLocation,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!void {
+    var trimmed = std.mem.trim(u8, text, " \t\r\n");
+    while (trimmed.len > 0 and (trimmed[0] == '?' or trimmed[0] == '*')) trimmed = trimmed[1..];
+    while (std.mem.startsWith(u8, trimmed, "[]")) trimmed = trimmed[2..];
+    if (trimmed.len < 2 or trimmed[0] != '{' or trimmed[trimmed.len - 1] != '}') return;
+
+    const inner = std.mem.trim(u8, trimmed[1 .. trimmed.len - 1], " \t\r\n");
+    const nameless_head = inner.len > 0 and inner[0] == ':';
+    const multi_entry = blk: {
+        var depth: usize = 0;
+        for (inner) |c| {
+            switch (c) {
+                '{', '(', '[' => depth += 1,
+                '}', ')', ']' => if (depth > 0) {
+                    depth -= 1;
+                },
+                ',' => if (depth == 0) break :blk true,
+                else => {},
+            }
+        }
+        break :blk false;
+    };
+    if (!nameless_head and !multi_entry and !struct_literal.isKoruStructLiteral(trimmed)) return;
+
+    const fields = struct_literal.parseFields(allocator, trimmed) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.DuplicateField => {
+            const name = struct_literal.duplicateFieldName(allocator, trimmed) orelse "?";
+            try reporter.addErrorWithHint(
+                .PARSE010,
+                location.line,
+                location.column,
+                "field '{s}' is bound twice in {s} — a field list takes each name once",
+                .{ name, owner },
+                "drop one, or rename it — the list cannot carry two '{s}'",
+                .{name},
+            );
+            return;
+        },
+        error.RedundantExplicitLabel => {
+            // The pun law's own code — same refusal the constructor-field
+            // path gives `{ x: p.x }` (PARSE005), here for a produce/call/jump
+            // record whose label duplicates the pun.
+            const name = struct_literal.redundantFieldName(allocator, trimmed) orelse "?";
+            try reporter.addErrorWithHint(
+                .PARSE005,
+                location.line,
+                location.column,
+                "redundant explicit label '{s}:' in {s} — punning is mandatory",
+                .{ name, owner },
+                "drop the label: write the bare pun instead",
+                .{},
+            );
+            return;
+        },
+        else => {
+            const detail = struct_literal.describeErrorIn(allocator, err, trimmed);
+            try reporter.addError(
+                .PARSE003,
+                location.line,
+                location.column,
+                "malformed record value `{s}` in {s} — {s}",
+                .{ trimmed, owner, detail },
+            );
+            return;
+        },
+    };
+    for (fields) |field| {
+        try checkValueRecordText(field.value, owner, reporter, location, allocator);
+    }
+}
+
 /// A `@label(...)` jump binds the label's parameters like a call does — the
 /// pun law already applies to its args (PARSE005 fires on them). PARSE009's
 /// one-name rule holds here too, but checkBareArgPunning only sees
@@ -5514,11 +5611,11 @@ fn enforceUniqueBindingNamesInItems(
                 const loc = impl.location;
                 try checkFieldsBindOnce(impl.value.fields, "the branch constructor", reporter, loc);
                 if (impl.value.plain_value) |pv| {
-                    try checkRecordTextBindOnce(pv, "the bare return", reporter, loc, allocator);
+                    try checkValueRecordText(pv, "the bare return", reporter, loc, allocator);
                 }
                 for (impl.value.fields) |field| {
                     if (field.expression_str) |es| {
-                        try checkRecordTextBindOnce(es, "the branch constructor", reporter, loc, allocator);
+                        try checkValueRecordText(es, "the branch constructor", reporter, loc, allocator);
                     }
                 }
             },
@@ -5628,26 +5725,43 @@ fn enforceUniqueBindingNamesInNode(
         .branch_constructor => |bc| {
             try checkFieldsBindOnce(bc.fields, "the branch constructor", reporter, location);
             if (bc.plain_value) |pv| {
-                try checkRecordTextBindOnce(pv, "the bare return", reporter, location, allocator);
+                try checkValueRecordText(pv, "the bare return", reporter, location, allocator);
             }
             for (bc.fields) |field| {
                 if (field.expression_str) |es| {
-                    try checkRecordTextBindOnce(es, "the branch constructor", reporter, location, allocator);
+                    try checkValueRecordText(es, "the branch constructor", reporter, location, allocator);
                 }
             }
         },
         .label_jump => |lj| {
             try checkJumpArgsBindOnce(lj.args, lj.label, reporter, location);
+            for (lj.args) |arg| {
+                if (arg.source_value != null) continue; // Source text is the callee transform's, not the frontend's
+                try checkValueRecordText(arg.value, "the jump arguments", reporter, location, allocator);
+            }
         },
         .invocation => |inv| {
             var bound = std.ArrayList([]const u8){};
             defer bound.deinit(allocator);
             try checkDestructureBindOnce(inv.return_destructure, "the return destructure", reporter, location, &bound, allocator);
+            for (inv.args) |arg| {
+                if (arg.source_value != null) continue;
+                try checkValueRecordText(arg.value, "the call arguments", reporter, location, allocator);
+            }
         },
         .label_with_invocation => |lwi| {
             var bound = std.ArrayList([]const u8){};
             defer bound.deinit(allocator);
             try checkDestructureBindOnce(lwi.invocation.return_destructure, "the return destructure", reporter, location, &bound, allocator);
+            for (lwi.invocation.args) |arg| {
+                if (arg.source_value != null) continue;
+                try checkValueRecordText(arg.value, "the call arguments", reporter, location, allocator);
+            }
+        },
+        .expression => |code| {
+            // A continuation-arm produce (`| ok o -> { … }`) is an
+            // `.expression` node; a `{`-led text there is a record literal.
+            try checkValueRecordText(code, "the produce expression", reporter, location, allocator);
         },
         .conditional_block => |cb| {
             for (cb.nodes) |node_child| {

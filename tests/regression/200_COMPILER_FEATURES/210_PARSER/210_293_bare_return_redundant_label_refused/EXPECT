@@ -1,0 +1,5 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS error[PARSE005]
+CONTAINS redundant explicit label
+ERROR_AT 8
+NOT_CONTAINS output_emitted.zig

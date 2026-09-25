@@ -9284,6 +9284,28 @@ pub const Parser = struct {
                 else
                     trimmed; // The whole expression becomes the value
 
+                // `: value` / `name:` — a dropped name or dropped value used
+                // to append a half-empty field that reached emitted Zig as
+                // `expected field initializer` / `expected expression, found '}'`.
+                if (sep_idx != null and field_name.len == 0) {
+                    return self.fail(
+                        .PARSE003,
+                        self.current,
+                        1,
+                        "field has no name — a field is `name: value` or a bare punnable name; `: value` dropped the name",
+                        .{},
+                    );
+                }
+                if (sep_idx != null and field_value.len == 0) {
+                    return self.fail(
+                        .PARSE003,
+                        self.current,
+                        1,
+                        "field '{s}' has no value — a field is `name: value`; `{s}:` dropped the value",
+                        .{ field_name, field_name },
+                    );
+                }
+
                 // Missing comma between fields on one line: `{ a: 1 b: 2 }`
                 // reads as one field `a` whose value is `1 b: 2`. The shared
                 // boundary detector lives in struct_literal — a whitespace +
@@ -9960,6 +9982,16 @@ pub const Parser = struct {
     ) !void {
         const fields = struct_literal.parseFields(self.allocator, record_text) catch |err| {
             if (err == error.OutOfMemory) return err;
+            // In a type list the dropped side of `name:` is the field's TYPE —
+            // keep the type-position wording the shape pins assert rather than
+            // the shared parser's value-position phrasing.
+            if (err == error.TypelessField) {
+                const fname = struct_literal.emptyValueFieldName(self.allocator, record_text) orelse "?";
+                return self.fail(.PARSE003, report_line, 1, "malformed " ++ what ++ " `{s}` — field '{s}' carries no type", .{ record_text, fname });
+            }
+            if (err == error.NamelessField) {
+                return self.fail(.PARSE003, report_line, 1, "malformed " ++ what ++ " `{s}` — a field carries no name", .{record_text});
+            }
             const detail = struct_literal.describeErrorIn(self.allocator, err, record_text);
             return self.fail(.PARSE003, report_line, 1, "malformed " ++ what ++ " `{s}` — {s}", .{ record_text, detail });
         };

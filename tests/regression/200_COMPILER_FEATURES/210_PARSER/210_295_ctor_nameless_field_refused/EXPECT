@@ -1,0 +1,5 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS error[PARSE003]
+CONTAINS field has no name
+ERROR_AT 10
+NOT_CONTAINS output_emitted.zig
