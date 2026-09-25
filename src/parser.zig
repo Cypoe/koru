@@ -82,6 +82,32 @@ fn netParens(s: []const u8) i32 {
     return depth;
 }
 
+/// Index of the first `|>` at paren/brace depth 0 outside string literals,
+/// or null — the "is there an inline chain, and where does the head end"
+/// scan shared by the file-source, multi-line-block, and body-line paths.
+fn findTopLevelPipeArrow(s: []const u8) ?usize {
+    var i: usize = 0;
+    var paren_depth: i32 = 0;
+    var brace_depth: i32 = 0;
+    var in_string = false;
+    while (i + 1 < s.len) : (i += 1) {
+        const c = s[i];
+        if (c == '"' and (i == 0 or s[i - 1] != '\\')) {
+            in_string = !in_string;
+            continue;
+        }
+        if (in_string) continue;
+        if (c == '(') paren_depth += 1;
+        if (c == ')') paren_depth -= 1;
+        if (c == '{') brace_depth += 1;
+        if (c == '}') brace_depth -= 1;
+        if (paren_depth == 0 and brace_depth == 0 and c == '|' and s[i + 1] == '>') {
+            return i;
+        }
+    }
+    return null;
+}
+
 /// Net brace depth of a line, quote-aware (braces inside string/char
 /// literals are text, not structure — the paren twin of `netParens`).
 /// The multi-line source-block gatherer uses this to know WHEN a block
@@ -4791,28 +4817,7 @@ pub const Parser = struct {
             // route it through parsePipelineContinuationBase, which builds the
             // source step there; the bind and continuations on the tail belong to
             // that step too, so they are not applied to the head here.
-            const inline_pipe_arrow = blk: {
-                var i: usize = 0;
-                var paren_depth: i32 = 0;
-                var brace_depth: i32 = 0;
-                var in_string = false;
-                while (i + 1 < invocation_str.len) : (i += 1) {
-                    const c = invocation_str[i];
-                    if (c == '"' and (i == 0 or invocation_str[i - 1] != '\\')) {
-                        in_string = !in_string;
-                        continue;
-                    }
-                    if (in_string) continue;
-                    if (c == '(') paren_depth += 1;
-                    if (c == ')') paren_depth -= 1;
-                    if (c == '{') brace_depth += 1;
-                    if (c == '}') brace_depth -= 1;
-                    if (paren_depth == 0 and brace_depth == 0 and c == '|' and invocation_str[i + 1] == '>') {
-                        break :blk i;
-                    }
-                }
-                break :blk null;
-            };
+            const inline_pipe_arrow = findTopLevelPipeArrow(invocation_str);
 
             if (inline_pipe_arrow) |pipe_idx| {
                 // Chain detected. Rebuild the tail with the file closure (path and
@@ -4872,28 +4877,7 @@ pub const Parser = struct {
             // invocation before the `{`; for chains, the source-block decision belongs to
             // the terminal event, not the head. Reuse parsePipelineContinuationBase, which
             // already handles multi-line source blocks for new-line `|>` continuations.
-            const inline_pipe_arrow = blk: {
-                var i: usize = 0;
-                var paren_depth: i32 = 0;
-                var brace_depth: i32 = 0;
-                var in_string = false;
-                while (i + 1 < invocation_str.len) : (i += 1) {
-                    const c = invocation_str[i];
-                    if (c == '"' and (i == 0 or invocation_str[i - 1] != '\\')) {
-                        in_string = !in_string;
-                        continue;
-                    }
-                    if (in_string) continue;
-                    if (c == '(') paren_depth += 1;
-                    if (c == ')') paren_depth -= 1;
-                    if (c == '{') brace_depth += 1;
-                    if (c == '}') brace_depth -= 1;
-                    if (paren_depth == 0 and brace_depth == 0 and c == '|' and invocation_str[i + 1] == '>') {
-                        break :blk i;
-                    }
-                }
-                break :blk null;
-            };
+            const inline_pipe_arrow = findTopLevelPipeArrow(invocation_str);
 
             if (inline_pipe_arrow) |pipe_idx| {
                 // Chain detected. Split head/tail and route tail through the same
@@ -6287,28 +6271,7 @@ pub const Parser = struct {
             // If body has an inline |> chain (e.g. `head() |> tail() | branch ...`),
             // parseEventInvocation only captured the head; route the tail through
             // parseInlineContinuation so the next step isn't silently dropped.
-            const has_inline_chain = blk: {
-                var i: usize = 0;
-                var paren_depth: i32 = 0;
-                var brace_depth: i32 = 0;
-                var in_string = false;
-                while (i + 1 < inv_str.len) : (i += 1) {
-                    const c = inv_str[i];
-                    if (c == '"' and (i == 0 or inv_str[i - 1] != '\\')) {
-                        in_string = !in_string;
-                        continue;
-                    }
-                    if (in_string) continue;
-                    if (c == '(') paren_depth += 1;
-                    if (c == ')') paren_depth -= 1;
-                    if (c == '{') brace_depth += 1;
-                    if (c == '}') brace_depth -= 1;
-                    if (paren_depth == 0 and brace_depth == 0 and c == '|' and inv_str[i + 1] == '>') {
-                        break :blk true;
-                    }
-                }
-                break :blk false;
-            };
+            const has_inline_chain = findTopLevelPipeArrow(inv_str) != null;
 
             // Same-line `=> construct` after a bare-return head bind
             // (`~run = head(): v => ok v`): the construct has no `| branch` wrapper
@@ -6652,28 +6615,7 @@ pub const Parser = struct {
         // days as `KORU100 unused binding 'd1'` — true of the tree the parser
         // built, false of the program written. Line-start `|>` lines are a
         // different shape and already handled by parseContinuations below.
-        const body_has_inline_chain = blk: {
-            var i: usize = 0;
-            var paren_depth: i32 = 0;
-            var brace_depth: i32 = 0;
-            var in_string = false;
-            while (i + 1 < inv_str.len) : (i += 1) {
-                const c = inv_str[i];
-                if (c == '"' and (i == 0 or inv_str[i - 1] != '\\')) {
-                    in_string = !in_string;
-                    continue;
-                }
-                if (in_string) continue;
-                if (c == '(') paren_depth += 1;
-                if (c == ')') paren_depth -= 1;
-                if (c == '{') brace_depth += 1;
-                if (c == '}') brace_depth -= 1;
-                if (paren_depth == 0 and brace_depth == 0 and c == '|' and inv_str[i + 1] == '>') {
-                    break :blk true;
-                }
-            }
-            break :blk false;
-        };
+        const body_has_inline_chain = findTopLevelPipeArrow(inv_str) != null;
 
         const body_line_idx = self.current;
         self.current += 1; // Move past the invocation line
