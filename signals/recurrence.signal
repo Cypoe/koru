@@ -1,0 +1,12 @@
+name: recurrence
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a failure pattern already recorded in a concept was measured
+  again on a new surface — same signature, new location. Fires when the
+  diff is a fresh instance of a belief the repo already holds (an
+  enumeration gap, a stale pin, an unwalked path) rather than a new
+  finding — the concept grows a dated sighting, it does not change its
+  claim. Sibling of addition: that one records a belief learned here;
+  this one records a belief proven again.
