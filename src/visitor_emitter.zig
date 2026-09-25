@@ -2318,6 +2318,31 @@ pub const VisitorEmitter = struct {
         return false;
     }
 
+    /// The full handler emission ctx — ambient module state plus the
+    /// self-loop, impl-tor, and bare-return flags derived from `event`.
+    /// Sites handing a subflow body to emitInlineBodyNode or
+    /// emitContinuationBody used to spell all thirteen fields inline.
+    fn handlerEmissionContext(self: *VisitorEmitter, event: *const ast.EventDecl, is_self_loop: bool, self_loop_canonical: ?[]const u8) emitter.EmissionContext {
+        return .{
+            .allocator = self.allocator,
+            .ast_items = self.all_items,
+            .tap_registry = self.tap_registry,
+            .type_registry = self.type_registry,
+            .main_module_name = self.main_module_name,
+            .current_source_event = null,
+            .label_contexts = null,
+            .is_sync = true,
+            .in_handler = true,
+            .self_loop_active = is_self_loop,
+            .self_loop_event_canonical = self_loop_canonical,
+            .impl_event_decl = event,
+            // Bare-return `-> T`: a produce arm inside transformed control
+            // flow carries the tor's payload expression, so expression steps
+            // must `return x;` not discard.
+            .bare_return_active = event.return_type != null,
+        };
+    }
+
     /// Emit the body of a handler for an event `entry` that belongs to a
     /// mutual-tail-recursion `group`. Lowers the whole cycle into ONE labeled
     /// switch: shared `var` input bindings, `__koru_self_loop: switch` seeded
@@ -3558,25 +3583,7 @@ pub const VisitorEmitter = struct {
 
                                         // Create an emission context for continuation emission
                                         // NOTE: is_sync = true prevents "try" from being emitted (handlers don't return errors)
-                                        var emitter_ctx = emitter.EmissionContext{
-                                            .allocator = self.allocator,
-                                            .ast_items = self.all_items,
-                                            .tap_registry = self.tap_registry,
-                                            .type_registry = self.type_registry,
-                                            .main_module_name = self.main_module_name,
-                                            .current_source_event = null,
-                                            .label_contexts = null,
-                                            .is_sync = true, // Handler context - no try needed
-                                            .in_handler = true,
-                                            .self_loop_active = is_self_loop,
-                                            .self_loop_event_canonical = self_loop_canonical,
-                                            .impl_event_decl = event,
-                                            // Bare-return `-> T`: a produce arm inside the transformed
-                                            // control flow (`if(...) | then -> x`) IS the event's return
-                                            // value, so expression steps must `return x;` not discard.
-                                            // Same signal as the label-fold ctx below.
-                                            .bare_return_active = event.return_type != null,
-                                        };
+                                        var emitter_ctx = self.handlerEmissionContext(event, is_self_loop, self_loop_canonical);
 
                                         // Emit continuation bodies directly - the continuations contain the control flow node
                                         var result_counter: usize = 0;
@@ -3616,24 +3623,7 @@ pub const VisitorEmitter = struct {
                                             // the markers raw and emit the `if` as statement-blocks. 320_096.
                                             const inline_stmt_marker = "//@koru:inline_stmt\n";
                                             if (std.mem.indexOf(u8, inline_code, inline_stmt_marker) != null) {
-                                                var inline_ctx = emitter.EmissionContext{
-                                                    .allocator = self.allocator,
-                                                    .ast_items = self.all_items,
-                                                    .tap_registry = self.tap_registry,
-                                                    .type_registry = self.type_registry,
-                                                    .main_module_name = self.main_module_name,
-                                                    .current_source_event = null,
-                                                    .label_contexts = null,
-                                                    .is_sync = true,
-                                                    .in_handler = true,
-                                                    .self_loop_active = is_self_loop,
-                                                    .self_loop_event_canonical = self_loop_canonical,
-                                                    .impl_event_decl = event,
-                                                    // Bare-return `-> T`: a produce arm spliced from an
-                                                    // inline-stmt template (`if(...) | then -> x`) IS the
-                                                    // event's return value — `return x;`, not a discard.
-                                                    .bare_return_active = event.return_type != null,
-                                                };
+                                                var inline_ctx = self.handlerEmissionContext(event, is_self_loop, self_loop_canonical);
                                                 var inline_result_counter: usize = 0;
                                                 try emitter.emitInlineBodyNode(self.code_emitter, &inline_ctx, inline_code, flow.body.continuations, &flow.inv().path, &inline_result_counter, flow.inv().return_binding);
                                             } else {
@@ -3694,21 +3684,7 @@ pub const VisitorEmitter = struct {
                                             // top-level inline body through this one helper for exactly
                                             // that reason; a subflow body is the same chain and takes the
                                             // same route. 210_176.
-                                            var bound_ctx = emitter.EmissionContext{
-                                                .allocator = self.allocator,
-                                                .ast_items = self.all_items,
-                                                .tap_registry = self.tap_registry,
-                                                .type_registry = self.type_registry,
-                                                .main_module_name = self.main_module_name,
-                                                .current_source_event = null,
-                                                .label_contexts = null,
-                                                .is_sync = true,
-                                                .in_handler = true,
-                                                .self_loop_active = is_self_loop,
-                                                .self_loop_event_canonical = self_loop_canonical,
-                                                .impl_event_decl = event,
-                                                .bare_return_active = event.return_type != null,
-                                            };
+                                            var bound_ctx = self.handlerEmissionContext(event, is_self_loop, self_loop_canonical);
                                             var bound_result_counter: usize = 0;
                                             try emitter.emitInlineBodyNode(self.code_emitter, &bound_ctx, inline_code, flow.body.continuations, &flow.inv().path, &bound_result_counter, flow.inv().return_binding);
                                         }
