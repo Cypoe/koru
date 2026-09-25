@@ -3585,6 +3585,31 @@ pub const AutoDischargeInserter = struct {
         };
     }
 
+    /// Rebuild `target` with `child` appended to its continuations — existing
+    /// children are cloned, arm metadata survives verbatim.
+    fn appendContinuationChild(
+        self: *AutoDischargeInserter,
+        target: *const ast.Continuation,
+        child: ast.Continuation,
+    ) !ast.Continuation {
+        var new_conts = try self.allocator.alloc(ast.Continuation, target.continuations.len + 1);
+        for (target.continuations, 0..) |c, i| {
+            new_conts[i] = try ast_functional.cloneContinuation(self.allocator, &c);
+        }
+        new_conts[target.continuations.len] = child;
+        return .{
+            .branch = try self.allocator.dupe(u8, target.branch),
+            .binding = if (target.binding) |b| try self.allocator.dupe(u8, b) else null,
+            .destructure = try ast.copyDestructure(self.allocator, target.destructure),
+            .binding_annotations = target.binding_annotations,
+            .condition = if (target.condition) |c| try self.allocator.dupe(u8, c) else null,
+            .node = target.node,
+            .indent = target.indent,
+            .continuations = new_conts,
+            .location = target.location,
+        };
+    }
+
     /// Create a new continuation with disposal call inserted at the end.
     /// Handles two cases:
     /// 1. Original node is a terminator → insert disposal before terminal
@@ -3825,23 +3850,7 @@ pub const AutoDischargeInserter = struct {
         };
 
         // Create new continuation with disposal appended to its continuations
-        var new_conts = try self.allocator.alloc(ast.Continuation, target_cont.continuations.len + 1);
-        for (target_cont.continuations, 0..) |c, i| {
-            new_conts[i] = try ast_functional.cloneContinuation(self.allocator, &c);
-        }
-        new_conts[target_cont.continuations.len] = disposal_cont;
-
-        const new_target_cont = ast.Continuation{
-            .branch = try self.allocator.dupe(u8, target_cont.branch),
-            .binding = if (target_cont.binding) |b| try self.allocator.dupe(u8, b) else null,
-            .destructure = try ast.copyDestructure(self.allocator, target_cont.destructure),
-            .binding_annotations = target_cont.binding_annotations,
-            .condition = if (target_cont.condition) |c| try self.allocator.dupe(u8, c) else null,
-            .node = target_cont.node,
-            .indent = target_cont.indent,
-            .continuations = new_conts,
-            .location = target_cont.location,
-        };
+        const new_target_cont = try self.appendContinuationChild(target_cont, disposal_cont);
 
         // Replace the continuation in the flow
         const new_flow = try self.replaceContinuationAnywhere(flow, target_cont, new_target_cont);
@@ -3935,23 +3944,7 @@ pub const AutoDischargeInserter = struct {
         };
 
         // Append disposal to target's continuations
-        var new_conts = try self.allocator.alloc(ast.Continuation, actual_target.continuations.len + 1);
-        for (actual_target.continuations, 0..) |c, i| {
-            new_conts[i] = try ast_functional.cloneContinuation(self.allocator, &c);
-        }
-        new_conts[actual_target.continuations.len] = disposal_cont;
-
-        const new_target_cont = ast.Continuation{
-            .branch = try self.allocator.dupe(u8, actual_target.branch),
-            .binding = if (actual_target.binding) |b| try self.allocator.dupe(u8, b) else null,
-            .destructure = try ast.copyDestructure(self.allocator, actual_target.destructure),
-            .binding_annotations = actual_target.binding_annotations,
-            .condition = if (actual_target.condition) |c| try self.allocator.dupe(u8, c) else null,
-            .node = actual_target.node,
-            .indent = actual_target.indent,
-            .continuations = new_conts,
-            .location = actual_target.location,
-        };
+        const new_target_cont = try self.appendContinuationChild(actual_target, disposal_cont);
 
         const new_flow = try self.replaceContinuationAnywhere(flow, actual_target, new_target_cont);
 
