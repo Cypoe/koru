@@ -1508,6 +1508,25 @@ pub const AutoDischargeInserter = struct {
         normalize_only,
     };
 
+    /// Shared tail for the flow rebuilds in checkAndTransformFlow: splice
+    /// `rebuilt` in for `flow`, wrap the program in a result pointer.
+    fn replacedFlowResult(
+        self: *AutoDischargeInserter,
+        program: *const ast.Program,
+        flow: *const ast.Flow,
+        rebuilt: ast.Flow,
+    ) !TransformResult {
+        const new_program = try ast_functional.replaceFlowRecursive(
+            self.allocator,
+            program,
+            flow,
+            .{ .flow = rebuilt },
+        ) orelse return .{ .transformed = false, .program = program };
+        const result_ptr = try self.allocator.create(ast.Program);
+        result_ptr.* = new_program;
+        return .{ .transformed = true, .program = result_ptr };
+    }
+
     /// Try to find and transform one flow that needs auto-discharge
     fn transformOneFlow(
         self: *AutoDischargeInserter,
@@ -1610,17 +1629,7 @@ pub const AutoDischargeInserter = struct {
                         resolved_flow.inline_body = rendered;
                     }
                 }
-                const new_program = try ast_functional.replaceFlowRecursive(
-                    self.allocator,
-                    program,
-                    flow,
-                    .{ .flow = resolved_flow.* },
-                ) orelse {
-                    return .{ .transformed = false, .program = program };
-                };
-                const result_ptr = try self.allocator.create(ast.Program);
-                result_ptr.* = new_program;
-                return .{ .transformed = true, .program = result_ptr };
+                return try self.replacedFlowResult(program, flow, resolved_flow.*);
             }
             // NESTED CALLS FIRST. synthesizeOptionalBranches below reads THIS
             // FLOW'S OWN continuations and never descends into them, so a call
@@ -1635,32 +1644,11 @@ pub const AutoDischargeInserter = struct {
                 const nested_flow = try self.allocator.create(ast.Flow);
                 nested_flow.* = flow.*;
                 nested_flow.body.continuations = new_conts;
-                const new_program = try ast_functional.replaceFlowRecursive(
-                    self.allocator,
-                    program,
-                    flow,
-                    .{ .flow = nested_flow.* },
-                ) orelse {
-                    return .{ .transformed = false, .program = program };
-                };
-                const result_ptr = try self.allocator.create(ast.Program);
-                result_ptr.* = new_program;
-                return .{ .transformed = true, .program = result_ptr };
+                return try self.replacedFlowResult(program, flow, nested_flow.*);
             }
             if (try self.synthesizeOptionalBranches(flow, event_info.decl, @constCast(program.items))) |new_flow| {
                 // Replace the flow in the program with the synthesized version
-                const new_program = try ast_functional.replaceFlowRecursive(
-                    self.allocator,
-                    program,
-                    flow,
-                    .{ .flow = new_flow.* },
-                ) orelse {
-                    return .{ .transformed = false, .program = program };
-                };
-
-                const result_ptr = try self.allocator.create(ast.Program);
-                result_ptr.* = new_program;
-                return .{ .transformed = true, .program = result_ptr };
+                return try self.replacedFlowResult(program, flow, new_flow.*);
             }
         }
 
@@ -1687,15 +1675,7 @@ pub const AutoDischargeInserter = struct {
             event_info.decl.return_phantom != null and headLabelBinding(flow) == null)
         {
             const rebuilt = try self.materializeHeadDiscardBind(flow);
-            const new_program = try ast_functional.replaceFlowRecursive(
-                self.allocator,
-                program,
-                flow,
-                .{ .flow = rebuilt },
-            ) orelse return .{ .transformed = false, .program = program };
-            const result_ptr = try self.allocator.create(ast.Program);
-            result_ptr.* = new_program;
-            return .{ .transformed = true, .program = result_ptr };
+            return try self.replacedFlowResult(program, flow, rebuilt);
         }
 
         // Flow-head `_` bind that carries a return obligation AND has
@@ -1710,15 +1690,7 @@ pub const AutoDischargeInserter = struct {
             if (flow.inv().return_binding) |rb| {
                 if (std.mem.eql(u8, rb, "_") and event_info.decl.return_phantom != null) {
                     const rebuilt = try self.renameHeadDiscardBinding(flow);
-                    const new_program = try ast_functional.replaceFlowRecursive(
-                        self.allocator,
-                        program,
-                        flow,
-                        .{ .flow = rebuilt },
-                    ) orelse return .{ .transformed = false, .program = program };
-                    const result_ptr = try self.allocator.create(ast.Program);
-                    result_ptr.* = new_program;
-                    return .{ .transformed = true, .program = result_ptr };
+                    return try self.replacedFlowResult(program, flow, rebuilt);
                 }
             }
         }
@@ -1869,15 +1841,7 @@ pub const AutoDischargeInserter = struct {
             flow.inv().return_binding != null and context.hasObligations())
         {
             const rebuilt = try self.giveContinuationlessHeadTerminal(flow);
-            const new_program = try ast_functional.replaceFlowRecursive(
-                self.allocator,
-                program,
-                flow,
-                .{ .flow = rebuilt },
-            ) orelse return .{ .transformed = false, .program = program };
-            const result_ptr = try self.allocator.create(ast.Program);
-            result_ptr.* = new_program;
-            return .{ .transformed = true, .program = result_ptr };
+            return try self.replacedFlowResult(program, flow, rebuilt);
         }
 
         // Observer-only flow (tap-wrapped terminus, 330_030/031): the tap weave
@@ -1948,15 +1912,7 @@ pub const AutoDischargeInserter = struct {
                     .impl_variant = if (flow.impl_variant) |v| try self.allocator.dupe(u8, v) else null,
                     .is_impl = flow.is_impl,
                 };
-                const new_program = try ast_functional.replaceFlowRecursive(
-                    self.allocator,
-                    program,
-                    flow,
-                    .{ .flow = rebuilt },
-                ) orelse return .{ .transformed = false, .program = program };
-                const result_ptr = try self.allocator.create(ast.Program);
-                result_ptr.* = new_program;
-                return .{ .transformed = true, .program = result_ptr };
+                return try self.replacedFlowResult(program, flow, rebuilt);
             }
         }
 
@@ -2024,20 +1980,7 @@ pub const AutoDischargeInserter = struct {
         const new_flow = try self.replaceContinuationAnywhere(flow, cont, new_cont.*);
 
         // Replace the flow in the program
-        const new_program = try ast_functional.replaceFlowRecursive(
-            self.allocator,
-            program,
-            flow,
-            .{ .flow = new_flow },
-        ) orelse {
-            return .{ .transformed = false, .program = program };
-        };
-
-        const result_ptr = try self.allocator.create(ast.Program);
-        result_ptr.* = new_program;
-
-        // Return transformed - the next iteration will process with the real binding
-        return .{ .transformed = true, .program = result_ptr };
+        return try self.replacedFlowResult(program, flow, new_flow);
     }
 
     /// Check a continuation for terminators with obligations
@@ -2969,19 +2912,7 @@ pub const AutoDischargeInserter = struct {
                 // This is tricky because it's nested inside a foreach
                 const new_flow = try self.replaceContinuationAnywhere(flow, cont, new_cont);
 
-                const new_program = try ast_functional.replaceFlowRecursive(
-                    self.allocator,
-                    program,
-                    flow,
-                    .{ .flow = new_flow },
-                ) orelse {
-                    return .{ .transformed = false, .program = program };
-                };
-
-                const result_ptr = try self.allocator.create(ast.Program);
-                result_ptr.* = new_program;
-
-                return .{ .transformed = true, .program = result_ptr };
+                return try self.replacedFlowResult(program, flow, new_flow);
             }
         }
 
@@ -3238,19 +3169,7 @@ pub const AutoDischargeInserter = struct {
             // Mark flow as processed
 
             // Replace in program
-            const new_program = try ast_functional.replaceFlowRecursive(
-                self.allocator,
-                program,
-                flow,
-                .{ .flow = new_flow },
-            ) orelse {
-                return .{ .transformed = false, .program = program };
-            };
-
-            const result_ptr = try self.allocator.create(ast.Program);
-            result_ptr.* = new_program;
-
-            return .{ .transformed = true, .program = result_ptr };
+            return try self.replacedFlowResult(program, flow, new_flow);
         }
 
         return .{ .transformed = false, .program = program };
@@ -3932,26 +3851,16 @@ pub const AutoDischargeInserter = struct {
         // Replace the continuation in the flow
         const new_flow = try self.replaceContinuationAnywhere(flow, target_cont, new_target_cont);
 
-        const new_program = try ast_functional.replaceFlowRecursive(
-            self.allocator,
-            program,
-            flow,
-            .{ .flow = new_flow },
-        ) orelse {
-            return .{ .transformed = false, .program = program };
-        };
+        const result = try self.replacedFlowResult(program, flow, new_flow);
 
-        const result_ptr = try self.allocator.create(ast.Program);
-        result_ptr.* = new_program;
-
-        if (self.warn_mode) {
+        if (self.warn_mode and result.transformed) {
             std.debug.print("warning[AUTO-DISCHARGE]: Inserting '{s}' at scope exit for '{s}'\n", .{
                 disposal.qualified_name,
                 binding_name,
             });
         }
 
-        return .{ .transformed = true, .program = result_ptr };
+        return result;
     }
 
     /// Insert disposal at scope exit for a binding within a continuation (for flow-level scopes)
@@ -4051,26 +3960,16 @@ pub const AutoDischargeInserter = struct {
 
         const new_flow = try self.replaceContinuationAnywhere(flow, actual_target, new_target_cont);
 
-        const new_program = try ast_functional.replaceFlowRecursive(
-            self.allocator,
-            program,
-            flow,
-            .{ .flow = new_flow },
-        ) orelse {
-            return .{ .transformed = false, .program = program };
-        };
+        const result = try self.replacedFlowResult(program, flow, new_flow);
 
-        const result_ptr = try self.allocator.create(ast.Program);
-        result_ptr.* = new_program;
-
-        if (self.warn_mode) {
+        if (self.warn_mode and result.transformed) {
             std.debug.print("warning[AUTO-DISCHARGE]: Inserting '{s}' at scope exit for '{s}'\n", .{
                 disposal.qualified_name,
                 binding_name,
             });
         }
 
-        return .{ .transformed = true, .program = result_ptr };
+        return result;
     }
 
     /// Find a continuation with a specific binding within a continuation tree
