@@ -291,6 +291,20 @@ pub fn findMatchingBrace(text: []const u8, start: usize) ?usize {
     return null; // Unmatched braces
 }
 
+/// Advance `pos` (already past the opening delimiter) counting `open`/`close`
+/// until the level-1 depth closes; leaves `pos` one past the closer and
+/// returns the closer's index, or null when the text ran out first. The
+/// naive counter — no quote awareness; callers whose text can carry
+/// literals use findMatchingBrace or a quote-aware scan.
+pub fn scanToCloser(text: []const u8, pos: *usize, open: u8, close: u8) ?usize {
+    var depth: usize = 1;
+    while (pos.* < text.len and depth > 0) : (pos.* += 1) {
+        if (text[pos.*] == open) depth += 1;
+        if (text[pos.*] == close) depth -= 1;
+    }
+    return if (depth == 0) pos.* - 1 else null;
+}
+
 /// Index at which a line comment begins, or null. `//` inside a string literal
 /// is string content, not a comment.
 ///

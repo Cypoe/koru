@@ -7368,17 +7368,8 @@ pub const Parser = struct {
             // Quoted branch name, bracket spelling: […] (depth-counted; the
             // content may itself contain brackets). EXACTLY equivalent to the
             // backtick spelling — the INNER content is the name.
-            var depth: usize = 1;
             var end_pos: usize = 1;
-            while (end_pos < trimmed_content.len and depth > 0) : (end_pos += 1) {
-                if (trimmed_content[end_pos] == '[') {
-                    depth += 1;
-                } else if (trimmed_content[end_pos] == ']') {
-                    depth -= 1;
-                }
-            }
-
-            if (depth != 0) {
+            if (lexer.scanToCloser(trimmed_content, &end_pos, '[', ']') == null) {
                 return self.fail(
                     .PARSE003,
                     self.current,
@@ -8841,12 +8832,8 @@ pub const Parser = struct {
                 const label_name = lexer.trim(after_at[0..p_idx]);
 
                 // Find the matching closing parenthesis
-                var depth: usize = 1;
                 var args_end = p_idx + 1;
-                while (args_end < after_at.len and depth > 0) : (args_end += 1) {
-                    if (after_at[args_end] == '(') depth += 1;
-                    if (after_at[args_end] == ')') depth -= 1;
-                }
+                _ = lexer.scanToCloser(after_at, &args_end, '(', ')');
 
                 // Parse the arguments
                 const args_str = after_at[p_idx..args_end];

@@ -30,6 +30,7 @@ const keyword_registry = @import("keyword_registry");
 const flow_checker = @import("flow_checker");
 const FlowChecker = flow_checker.FlowChecker;
 const codegen_utils = @import("codegen_utils");
+const lexer = @import("lexer");
 const struct_literal = @import("struct_literal");
 const emitter_helpers = @import("emitter_helpers");
 const site_hash = @import("site_hash");
@@ -4205,14 +4206,8 @@ fn parseSubcommands(allocator: std.mem.Allocator, json_text: []const u8) ![]Subc
             // Parse each object in the array
             while (std.mem.indexOf(u8, rest, "{")) |obj_start| {
                 // Find matching closing brace
-                var brace_depth: usize = 1;
                 var i: usize = obj_start + 1;
-                while (i < rest.len and brace_depth > 0) : (i += 1) {
-                    if (rest[i] == '{') brace_depth += 1;
-                    if (rest[i] == '}') brace_depth -= 1;
-                }
-
-                if (brace_depth == 0) {
+                if (lexer.scanToCloser(rest, &i, '{', '}')) |_| {
                     const obj_text = rest[obj_start..i];
 
                     // Extract name and description from this object

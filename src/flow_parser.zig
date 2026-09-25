@@ -751,17 +751,8 @@ fn parseBranchInfo(allocator: std.mem.Allocator, text: []const u8) ParseError!Br
                 if (i >= content.len) return ParseError.MalformedContinuation;
                 break :blk i;
             } else {
-                var depth: usize = 1;
                 var i: usize = 1;
-                while (i < content.len and depth > 0) : (i += 1) {
-                    if (content[i] == '[') {
-                        depth += 1;
-                    } else if (content[i] == ']') {
-                        depth -= 1;
-                    }
-                }
-                if (depth != 0) return ParseError.MalformedContinuation;
-                break :blk i - 1; // i is one past the closing ']'
+                break :blk lexer.scanToCloser(content, &i, '[', ']') orelse return ParseError.MalformedContinuation;
             }
         };
         const inner = content[1..close];

@@ -536,6 +536,7 @@ pub fn build(b: *std.Build) void {
 
     // Add module imports to koruc
     exe.root_module.addImport("parser", parser_module);
+    exe.root_module.addImport("lexer", lexer_module);
     exe.root_module.addImport("log", log_module);
     exe.root_module.addImport("shape_checker", shape_checker_module);
     exe.root_module.addImport("phantom_semantic_checker", phantom_semantic_checker_module);
