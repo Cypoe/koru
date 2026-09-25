@@ -2,6 +2,18 @@ const std = @import("std");
 const errors = @import("errors");
 const glob_pattern_matcher = @import("glob_pattern_matcher");
 
+/// Deinit every element of an owned slice, then free the slice — the
+/// teardown idiom every AST container shares (items, branches, args,
+/// fields). Elements arrive const while deinit mutates, so each is
+/// copied onto the stack first.
+fn deinitSliceItems(items: anytype, allocator: std.mem.Allocator) void {
+    for (items) |*item| {
+        var mutable_item = item.*;
+        mutable_item.deinit(allocator);
+    }
+    allocator.free(@constCast(items));
+}
+
 // Core AST node types
 
 // Expression types for when clauses and proc arguments
@@ -204,11 +216,7 @@ pub const Program = struct {
     type_registry: ?*anyopaque = null,
 
     pub fn deinit(self: *Program) void {
-        for (self.items) |*item| {
-            var mutable_item = item.*;
-            mutable_item.deinit(self.allocator);
-        }
-        self.allocator.free(@constCast(self.items));
+        deinitSliceItems(self.items, self.allocator);
         // Free module annotations
         for (self.module_annotations) |annotation| {
             self.allocator.free(annotation);
@@ -264,11 +272,7 @@ pub const ModuleDecl = struct {
     pub fn deinit(self: *ModuleDecl, allocator: std.mem.Allocator) void {
         allocator.free(self.logical_name);
         allocator.free(self.canonical_path);
-        for (self.items) |*item| {
-            var mutable_item = item.*;
-            mutable_item.deinit(allocator);
-        }
-        allocator.free(@constCast(self.items));
+        deinitSliceItems(self.items, allocator);
         // Free module annotations
         for (self.annotations) |annotation| {
             allocator.free(annotation);
@@ -512,11 +516,7 @@ pub const EventDecl = struct {
     pub fn deinit(self: *EventDecl, allocator: std.mem.Allocator) void {
         self.path.deinit(allocator);
         self.input.deinit(allocator);
-        for (self.branches) |*branch| {
-            var mutable_branch = branch.*;
-            mutable_branch.deinit(allocator);
-        }
-        allocator.free(@constCast(self.branches));
+        deinitSliceItems(self.branches, allocator);
         if (self.return_type) |rt| allocator.free(rt);
         if (self.return_phantom) |rp| allocator.free(rp);
         for (self.annotations) |ann| {
@@ -620,11 +620,7 @@ pub const FacetDecl = struct {
         allocator.free(self.name);
         if (self.module.len > 0) allocator.free(self.module);
         if (self.target) |t| allocator.free(t);
-        for (self.fields) |*field| {
-            var mutable_field = field.*;
-            mutable_field.deinit(allocator);
-        }
-        allocator.free(@constCast(self.fields));
+        deinitSliceItems(self.fields, allocator);
     }
 };
 
@@ -654,12 +650,8 @@ pub const ProcDecl = struct {
     pub fn deinit(self: *ProcDecl, allocator: std.mem.Allocator) void {
         self.path.deinit(allocator);
         self.body.deinit(allocator);
-        for (self.inline_flows) |*flow| {
-            var mutable_flow = flow.*;
-            mutable_flow.deinit(allocator);
-        }
         if (self.inline_flows.len > 0) {
-            allocator.free(@constCast(self.inline_flows));
+            deinitSliceItems(self.inline_flows, allocator);
         }
         for (self.annotations) |ann| {
             allocator.free(ann);
@@ -729,11 +721,7 @@ pub const CapturedScope = struct {
     bindings: []const ScopeBinding,
 
     pub fn deinit(self: *CapturedScope, allocator: std.mem.Allocator) void {
-        for (self.bindings) |*binding| {
-            var mutable_binding = binding.*;
-            mutable_binding.deinit(allocator);
-        }
-        allocator.free(@constCast(self.bindings));
+        deinitSliceItems(self.bindings, allocator);
     }
 };
 
@@ -1229,11 +1217,7 @@ pub const EventTap = struct {
             var mutable_d = d.*;
             mutable_d.deinit(allocator);
         }
-        for (self.continuations) |*cont| {
-            var mutable_cont = cont.*;
-            mutable_cont.deinit(allocator);
-        }
-        allocator.free(@constCast(self.continuations));
+        deinitSliceItems(self.continuations, allocator);
         for (self.annotations) |ann| {
             allocator.free(ann);
         }
@@ -1248,11 +1232,7 @@ pub const LabelDecl = struct {
 
     pub fn deinit(self: *LabelDecl, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
-        for (self.continuations) |*cont| {
-            var mutable_cont = cont.*;
-            mutable_cont.deinit(allocator);
-        }
-        allocator.free(@constCast(self.continuations));
+        deinitSliceItems(self.continuations, allocator);
     }
 };
 
@@ -1380,15 +1360,9 @@ pub const Shape = struct {
     is_wildcard: bool = false, // bare `*` - has bindable payload, shape unspecified
 
     pub fn deinit(self: *Shape, allocator: std.mem.Allocator) void {
-        // Deinit individual fields (they're heap-allocated even in const arrays)
-        for (self.fields) |*field| {
-            var mutable_field = field.*;
-            mutable_field.deinit(allocator);
-        }
-        // Free the fields array (cast away const - safe because we allocated it)
         // Note: For PROGRAM_AST, this will be called via ast_functional.maybeDeinit()
         // which checks if this is the stack-allocated AST before calling deinit
-        allocator.free(@constCast(self.fields));
+        deinitSliceItems(self.fields, allocator);
     }
 };
 
@@ -1472,11 +1446,7 @@ pub const Branch = struct {
         if (self.resume_type) |rt| allocator.free(rt);
         if (self.resume_phantom) |rp| allocator.free(rp);
         if (self.resume_arms) |arms| {
-            for (arms) |*arm| {
-                var mutable_arm = arm.*;
-                mutable_arm.deinit(allocator);
-            }
-            allocator.free(@constCast(arms));
+            deinitSliceItems(arms, allocator);
         }
         for (self.annotations) |annotation| {
             allocator.free(annotation);
@@ -1505,11 +1475,7 @@ pub const NamedBranch = struct {
 
     pub fn deinit(self: *NamedBranch, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
-        for (self.body) |*cont| {
-            var mutable_cont = cont.*;
-            mutable_cont.deinit(allocator);
-        }
-        allocator.free(@constCast(self.body));
+        deinitSliceItems(self.body, allocator);
         if (self.binding) |b| allocator.free(b);
         for (self.annotations) |ann| allocator.free(ann);
         if (self.annotations.len > 0) allocator.free(@constCast(self.annotations));
@@ -1578,11 +1544,7 @@ pub const Invocation = struct {
     pub fn deinit(self: *Invocation, allocator: std.mem.Allocator) void {
         var mutable_path = self.path;
         mutable_path.deinit(allocator);
-        for (self.args) |*arg| {
-            var mutable_arg = arg.*;
-            mutable_arg.deinit(allocator);
-        }
-        allocator.free(@constCast(self.args));
+        deinitSliceItems(self.args, allocator);
         for (self.annotations) |annotation| {
             allocator.free(@constCast(annotation));
         }
@@ -1717,11 +1679,7 @@ pub const Continuation = struct {
             var mutable_node = n.*;
             mutable_node.deinit(allocator);
         }
-        for (self.continuations) |*cont| {
-            var mutable_cont = cont.*;
-            mutable_cont.deinit(allocator);
-        }
-        allocator.free(@constCast(self.continuations));
+        deinitSliceItems(self.continuations, allocator);
     }
 };
 
@@ -1829,22 +1787,14 @@ pub const Node = union(enum) {
             },
             .label_jump => |*lj| {
                 allocator.free(lj.label);
-                for (lj.args) |*arg| {
-                    var mutable_arg = arg.*;
-                    mutable_arg.deinit(allocator);
-                }
-                allocator.free(@constCast(lj.args));
+                deinitSliceItems(lj.args, allocator);
             },
             .terminal => {}, // Nothing to free
             .branch_constructor => |*bc| bc.deinit(allocator),
             .conditional_block => |*cb| {
                 if (cb.condition) |c| allocator.free(c);
                 if (cb.condition_expr) |e| e.deinit(allocator);
-                for (cb.nodes) |*node| {
-                    var mutable_node = node.*;
-                    mutable_node.deinit(allocator);
-                }
-                allocator.free(@constCast(cb.nodes));
+                deinitSliceItems(cb.nodes, allocator);
             },
             .metatype_binding => |*mb| {
                 allocator.free(mb.metatype);
@@ -1858,36 +1808,20 @@ pub const Node = union(enum) {
             .foreach => |*fe| {
                 allocator.free(fe.iterable);
                 if (fe.element_type) |et| allocator.free(et);
-                for (fe.branches) |*branch| {
-                    var mutable_branch = branch.*;
-                    mutable_branch.deinit(allocator);
-                }
-                allocator.free(@constCast(fe.branches));
+                deinitSliceItems(fe.branches, allocator);
             },
             .conditional => |*cond| {
                 allocator.free(cond.condition);
                 if (cond.condition_expr) |e| e.deinit(allocator);
-                for (cond.branches) |*branch| {
-                    var mutable_branch = branch.*;
-                    mutable_branch.deinit(allocator);
-                }
-                allocator.free(@constCast(cond.branches));
+                deinitSliceItems(cond.branches, allocator);
             },
             .switch_result => |*sr| {
                 allocator.free(sr.expression);
-                for (sr.branches) |*branch| {
-                    var mutable_branch = branch.*;
-                    mutable_branch.deinit(allocator);
-                }
-                allocator.free(@constCast(sr.branches));
+                deinitSliceItems(sr.branches, allocator);
             },
             .assignment => |*asgn| {
                 allocator.free(asgn.target);
-                for (asgn.fields) |*field| {
-                    var mutable_field = field.*;
-                    mutable_field.deinit(allocator);
-                }
-                allocator.free(@constCast(asgn.fields));
+                deinitSliceItems(asgn.fields, allocator);
             },
         }
     }
@@ -1946,11 +1880,7 @@ pub const BranchConstructor = struct {
         if (self.plain_value) |pv| {
             allocator.free(pv);
         }
-        for (self.fields) |*field| {
-            var mutable_field = field.*;
-            mutable_field.deinit(allocator);
-        }
-        allocator.free(@constCast(self.fields));
+        deinitSliceItems(self.fields, allocator);
     }
 };
 
@@ -2027,11 +1957,7 @@ pub const NativeLoop = struct {
         // Free exit_branch_name
         allocator.free(self.exit_branch_name);
         // Free done_field_values
-        for (self.done_field_values) |*fv| {
-            var mutable_fv = fv.*;
-            mutable_fv.deinit(allocator);
-        }
-        allocator.free(@constCast(self.done_field_values));
+        deinitSliceItems(self.done_field_values, allocator);
         if (self.optimized_from) |*of| {
             var mutable_of = of.*;
             mutable_of.deinit(allocator);
@@ -2076,18 +2002,10 @@ pub const FusedEvent = struct {
 
     pub fn deinit(self: *FusedEvent, allocator: std.mem.Allocator) void {
         self.event_path.deinit(allocator);
-        for (self.source_events) |*se| {
-            var mutable_se = se.*;
-            mutable_se.deinit(allocator);
-        }
-        allocator.free(self.source_events);
+        deinitSliceItems(self.source_events, allocator);
         allocator.free(self.fused_body);
         self.input.deinit(allocator);
-        for (self.branches) |*branch| {
-            var mutable_branch = branch.*;
-            mutable_branch.deinit(allocator);
-        }
-        allocator.free(@constCast(self.branches));
+        deinitSliceItems(self.branches, allocator);
         allocator.free(self.provenance);
         allocator.free(self.module);
     }
