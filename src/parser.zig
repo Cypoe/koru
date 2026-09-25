@@ -4303,62 +4303,7 @@ pub const Parser = struct {
             return original;
         }
 
-        // Create new args array with the source argument
-        var new_args = try std.ArrayList(ast.Arg).initCapacity(self.allocator, original.args.len + 1);
-        defer new_args.deinit(self.allocator);
-
-        // Copy existing args
-        for (original.args) |arg| {
-            try new_args.append(self.allocator, arg);
-        }
-
-        // Capture continuation bindings from context stack
-        var bindings = try std.ArrayList(ast.ScopeBinding).initCapacity(self.allocator, 4);
-        defer bindings.deinit(self.allocator);
-
-        for (self.context_stack.items) |ctx| {
-            switch (ctx) {
-                .in_continuation => |cont| {
-                    if (cont.binding) |binding_name| {
-                        // Create scope binding for this continuation variable
-                        const scope_binding = ast.ScopeBinding{
-                            .name = try self.allocator.dupe(u8, binding_name),
-                            .type = try self.allocator.dupe(u8, "unknown"), // Type inference would go here
-                            .value_ref = try self.allocator.dupe(u8, binding_name),
-                        };
-                        try bindings.append(self.allocator, scope_binding);
-                    }
-                },
-                else => {},
-            }
-        }
-
-        const captured_scope = ast.CapturedScope{
-            .bindings = try bindings.toOwnedSlice(self.allocator),
-        };
-
-        const source_value = try self.allocator.create(ast.Source);
-        source_value.* = ast.Source{
-            .text = try self.allocator.dupe(u8, source_text),
-            .location = self.getCurrentLocation(),
-            .scope = captured_scope,
-            .phantom_type = if (phantom_type) |pt| try self.allocator.dupe(u8, pt) else null,
-        };
-
-        // Add the source argument with Source value
-        const source_arg = ast.Arg{
-            .name = try self.allocator.dupe(u8, source_field_name),
-            .value = try self.allocator.dupe(u8, source_text), // Keep string value for compatibility
-            .source_value = source_value, // Add Source struct with scope
-        };
-
-        try new_args.append(self.allocator, source_arg);
-
-        return ast.Invocation{
-            .path = original.path,
-            .args = try new_args.toOwnedSlice(self.allocator),
-            .variant = original.variant,
-        };
+        return self.withSourceArg(original, source_text, phantom_type, source_field_name);
     }
 
     /// Create implicit source invocation when event is not in registry
@@ -4370,16 +4315,12 @@ pub const Parser = struct {
         source_text: []const u8,
         phantom_type: ?[]const u8,
     ) !ast.Invocation {
-        // Create new args array with the source argument
-        var new_args = try std.ArrayList(ast.Arg).initCapacity(self.allocator, original.args.len + 1);
-        defer new_args.deinit(self.allocator);
+        return self.withSourceArg(original, source_text, phantom_type, "source");
+    }
 
-        // Copy existing args
-        for (original.args) |arg| {
-            try new_args.append(self.allocator, arg);
-        }
-
-        // Capture continuation bindings from context stack
+    /// The continuation bindings visible at this parse point, captured as a
+    /// scope for a tor's `{{ }}` source block or expression arg.
+    fn captureContextScope(self: *Parser) !ast.CapturedScope {
         var bindings = try std.ArrayList(ast.ScopeBinding).initCapacity(self.allocator, 4);
         defer bindings.deinit(self.allocator);
 
@@ -4387,38 +4328,49 @@ pub const Parser = struct {
             switch (ctx) {
                 .in_continuation => |cont| {
                     if (cont.binding) |binding_name| {
-                        const scope_binding = ast.ScopeBinding{
+                        try bindings.append(self.allocator, ast.ScopeBinding{
                             .name = try self.allocator.dupe(u8, binding_name),
-                            .type = try self.allocator.dupe(u8, "unknown"),
+                            .type = try self.allocator.dupe(u8, "unknown"), // Type inference would go here
                             .value_ref = try self.allocator.dupe(u8, binding_name),
-                        };
-                        try bindings.append(self.allocator, scope_binding);
+                        });
                     }
                 },
                 else => {},
             }
         }
+        return .{ .bindings = try bindings.toOwnedSlice(self.allocator) };
+    }
 
-        const captured_scope = ast.CapturedScope{
-            .bindings = try bindings.toOwnedSlice(self.allocator),
-        };
+    /// Rebuild `original` with a `field_name` arg carrying the tor's
+    /// implicit `{{ }}` block as a Source — text, location, captured
+    /// scope, phantom.
+    fn withSourceArg(
+        self: *Parser,
+        original: ast.Invocation,
+        source_text: []const u8,
+        phantom_type: ?[]const u8,
+        field_name: []const u8,
+    ) !ast.Invocation {
+        var new_args = try std.ArrayList(ast.Arg).initCapacity(self.allocator, original.args.len + 1);
+        defer new_args.deinit(self.allocator);
+
+        for (original.args) |arg| {
+            try new_args.append(self.allocator, arg);
+        }
 
         const source_value = try self.allocator.create(ast.Source);
         source_value.* = ast.Source{
             .text = try self.allocator.dupe(u8, source_text),
             .location = self.getCurrentLocation(),
-            .scope = captured_scope,
+            .scope = try self.captureContextScope(),
             .phantom_type = if (phantom_type) |pt| try self.allocator.dupe(u8, pt) else null,
         };
 
-        // Add the source argument with default name "source"
-        const source_arg = ast.Arg{
-            .name = try self.allocator.dupe(u8, "source"),
-            .value = try self.allocator.dupe(u8, source_text),
+        try new_args.append(self.allocator, ast.Arg{
+            .name = try self.allocator.dupe(u8, field_name),
+            .value = try self.allocator.dupe(u8, source_text), // Keep string value for compatibility
             .source_value = source_value,
-        };
-
-        try new_args.append(self.allocator, source_arg);
+        });
 
         return ast.Invocation{
             .path = original.path,
@@ -5698,28 +5650,7 @@ pub const Parser = struct {
                         for (input_shape.fields) |field| {
                             if (std.mem.eql(u8, field.name, arg.name) and field.is_expression) {
                                 // Capture scope bindings from context stack
-                                var bindings = try std.ArrayList(ast.ScopeBinding).initCapacity(self.allocator, 4);
-                                defer bindings.deinit(self.allocator);
-
-                                for (self.context_stack.items) |ctx| {
-                                    switch (ctx) {
-                                        .in_continuation => |cont| {
-                                            if (cont.binding) |binding_name| {
-                                                const scope_binding = ast.ScopeBinding{
-                                                    .name = try self.allocator.dupe(u8, binding_name),
-                                                    .type = try self.allocator.dupe(u8, "unknown"),
-                                                    .value_ref = try self.allocator.dupe(u8, binding_name),
-                                                };
-                                                try bindings.append(self.allocator, scope_binding);
-                                            }
-                                        },
-                                        else => {},
-                                    }
-                                }
-
-                                const captured_scope = ast.CapturedScope{
-                                    .bindings = try bindings.toOwnedSlice(self.allocator),
-                                };
+                                const captured_scope = try self.captureContextScope();
 
                                 const expression_value = try self.allocator.create(ast.CapturedExpression);
                                 expression_value.* = ast.CapturedExpression{
