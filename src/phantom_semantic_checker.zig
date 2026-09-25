@@ -1095,41 +1095,19 @@ pub const PhantomSemanticChecker = struct {
             self.bindings.deinit();
 
             // Free base-type-only bindings
-            var base_iter = self.base_types.iterator();
-            while (base_iter.next()) |entry| {
-                self.allocator.free(entry.key_ptr.*);
-                self.allocator.free(entry.value_ptr.*);
-            }
-            self.base_types.deinit();
+            ast_functional.freeStringMap(self.allocator, &self.base_types);
 
             // Free cleanup obligation keys
-            var cleanup_iter = self.cleanup_obligations.keyIterator();
-            while (cleanup_iter.next()) |key| {
-                self.allocator.free(key.*);
-            }
-            self.cleanup_obligations.deinit();
+            ast_functional.freeKeySet(self.allocator, &self.cleanup_obligations);
 
             // Free disposed binding keys and site values
-            var disposed_iter = self.disposed_bindings.iterator();
-            while (disposed_iter.next()) |entry| {
-                self.allocator.free(entry.key_ptr.*);
-                self.allocator.free(entry.value_ptr.*);
-            }
-            self.disposed_bindings.deinit();
+            ast_functional.freeStringMap(self.allocator, &self.disposed_bindings);
 
             // Free outer scope obligation keys
-            var outer_iter = self.outer_scope_obligations.keyIterator();
-            while (outer_iter.next()) |key| {
-                self.allocator.free(key.*);
-            }
-            self.outer_scope_obligations.deinit();
+            ast_functional.freeKeySet(self.allocator, &self.outer_scope_obligations);
 
             // Free join-live obligation keys
-            var join_iter = self.join_live_obligations.keyIterator();
-            while (join_iter.next()) |key| {
-                self.allocator.free(key.*);
-            }
-            self.join_live_obligations.deinit();
+            ast_functional.freeKeySet(self.allocator, &self.join_live_obligations);
         }
 
         /// Record a phantom-less binding's declared type. See base_types doc.
@@ -1216,59 +1194,45 @@ pub const PhantomSemanticChecker = struct {
             return null;
         }
 
+        /// Deep-copy `src`'s BindingInfo entries into `dst` (duped keys and
+        /// field strings owned by `allocator`).
+        fn dupeBindingsInto(
+            allocator: std.mem.Allocator,
+            src: std.StringHashMap(BindingInfo),
+            dst: *std.StringHashMap(BindingInfo),
+        ) !void {
+            var it = src.iterator();
+            while (it.next()) |entry| {
+                const key = try allocator.dupe(u8, entry.key_ptr.*);
+                try dst.put(key, .{
+                    .phantom_state = try allocator.dupe(u8, entry.value_ptr.phantom_state),
+                    .base_type = try allocator.dupe(u8, entry.value_ptr.base_type),
+                });
+            }
+        }
+
         /// Create a child context that inherits parent's state
         fn inherit(parent: *const BindingContext, allocator: std.mem.Allocator) !BindingContext {
             var child = BindingContext.init(allocator);
 
             // Inherit all bindings (copy full BindingInfo)
-            var bind_iter = parent.bindings.iterator();
-            while (bind_iter.next()) |entry| {
-                const key = try allocator.dupe(u8, entry.key_ptr.*);
-                const phantom_copy = try allocator.dupe(u8, entry.value_ptr.phantom_state);
-                const type_copy = try allocator.dupe(u8, entry.value_ptr.base_type);
-                try child.bindings.put(key, .{
-                    .phantom_state = phantom_copy,
-                    .base_type = type_copy,
-                });
-            }
+            try dupeBindingsInto(allocator, parent.bindings, &child.bindings);
 
             // Inherit base-type-only bindings (registry rung 1)
-            var base_iter = parent.base_types.iterator();
-            while (base_iter.next()) |entry| {
-                const key_copy = try allocator.dupe(u8, entry.key_ptr.*);
-                const type_copy = try allocator.dupe(u8, entry.value_ptr.*);
-                try child.base_types.put(key_copy, type_copy);
-            }
+            try ast_functional.dupeStringMapInto(allocator, parent.base_types, &child.base_types);
 
             // Inherit cleanup obligations
-            var clean_iter = parent.cleanup_obligations.keyIterator();
-            while (clean_iter.next()) |key| {
-                const key_copy = try allocator.dupe(u8, key.*);
-                try child.cleanup_obligations.put(key_copy, {});
-            }
+            try ast_functional.dupeKeySetInto(allocator, parent.cleanup_obligations, &child.cleanup_obligations);
 
             // Inherit disposed bindings (with their disposing sites)
-            var disposed_iter = parent.disposed_bindings.iterator();
-            while (disposed_iter.next()) |entry| {
-                const key_copy = try allocator.dupe(u8, entry.key_ptr.*);
-                const site_copy = try allocator.dupe(u8, entry.value_ptr.*);
-                try child.disposed_bindings.put(key_copy, site_copy);
-            }
+            try ast_functional.dupeStringMapInto(allocator, parent.disposed_bindings, &child.disposed_bindings);
 
             // Inherit outer scope obligations (already marked as outer)
-            var outer_iter = parent.outer_scope_obligations.keyIterator();
-            while (outer_iter.next()) |key| {
-                const key_copy = try allocator.dupe(u8, key.*);
-                try child.outer_scope_obligations.put(key_copy, {});
-            }
+            try ast_functional.dupeKeySetInto(allocator, parent.outer_scope_obligations, &child.outer_scope_obligations);
 
             // Inherit join-live markings — an obligation live-through an
             // enclosing arm's join stays live-through deeper in that arm.
-            var join_iter = parent.join_live_obligations.keyIterator();
-            while (join_iter.next()) |key| {
-                const key_copy = try allocator.dupe(u8, key.*);
-                try child.join_live_obligations.put(key_copy, {});
-            }
+            try ast_functional.dupeKeySetInto(allocator, parent.join_live_obligations, &child.join_live_obligations);
 
             return child;
         }
@@ -1279,42 +1243,18 @@ pub const PhantomSemanticChecker = struct {
             var child = BindingContext.init(allocator);
 
             // Inherit all bindings (copy full BindingInfo)
-            var bind_iter = parent.bindings.iterator();
-            while (bind_iter.next()) |entry| {
-                const key = try allocator.dupe(u8, entry.key_ptr.*);
-                const phantom_copy = try allocator.dupe(u8, entry.value_ptr.phantom_state);
-                const type_copy = try allocator.dupe(u8, entry.value_ptr.base_type);
-                try child.bindings.put(key, .{
-                    .phantom_state = phantom_copy,
-                    .base_type = type_copy,
-                });
-            }
+            try dupeBindingsInto(allocator, parent.bindings, &child.bindings);
 
             // Inherit base-type-only bindings (registry rung 1)
-            var base_iter = parent.base_types.iterator();
-            while (base_iter.next()) |entry| {
-                const key_copy = try allocator.dupe(u8, entry.key_ptr.*);
-                const type_copy = try allocator.dupe(u8, entry.value_ptr.*);
-                try child.base_types.put(key_copy, type_copy);
-            }
+            try ast_functional.dupeStringMapInto(allocator, parent.base_types, &child.base_types);
 
-            // Inherit cleanup obligations AND mark them as outer scope
-            var clean_iter = parent.cleanup_obligations.keyIterator();
-            while (clean_iter.next()) |key| {
-                const key_copy = try allocator.dupe(u8, key.*);
-                try child.cleanup_obligations.put(key_copy, {});
-                // Mark as outer scope - these cannot be satisfied inside @scope
-                const outer_key = try allocator.dupe(u8, key.*);
-                try child.outer_scope_obligations.put(outer_key, {});
-            }
+            // Inherit cleanup obligations AND mark them as outer scope -
+            // they cannot be satisfied inside @scope
+            try ast_functional.dupeKeySetInto(allocator, parent.cleanup_obligations, &child.cleanup_obligations);
+            try ast_functional.dupeKeySetInto(allocator, parent.cleanup_obligations, &child.outer_scope_obligations);
 
             // Inherit disposed bindings (with their disposing sites)
-            var disposed_iter = parent.disposed_bindings.iterator();
-            while (disposed_iter.next()) |entry| {
-                const key_copy = try allocator.dupe(u8, entry.key_ptr.*);
-                const site_copy = try allocator.dupe(u8, entry.value_ptr.*);
-                try child.disposed_bindings.put(key_copy, site_copy);
-            }
+            try ast_functional.dupeStringMapInto(allocator, parent.disposed_bindings, &child.disposed_bindings);
 
             // Also inherit any already-marked outer scope obligations from parent
             var outer_iter = parent.outer_scope_obligations.keyIterator();
@@ -1326,11 +1266,7 @@ pub const PhantomSemanticChecker = struct {
             }
 
             // Inherit join-live markings (as in `inherit`)
-            var join_iter = parent.join_live_obligations.keyIterator();
-            while (join_iter.next()) |key| {
-                const key_copy = try allocator.dupe(u8, key.*);
-                try child.join_live_obligations.put(key_copy, {});
-            }
+            try ast_functional.dupeKeySetInto(allocator, parent.join_live_obligations, &child.join_live_obligations);
 
             return child;
         }

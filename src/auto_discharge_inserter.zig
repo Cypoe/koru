@@ -695,12 +695,7 @@ pub const AutoDischargeInserter = struct {
         }
 
         fn deinit(self: *BindingContext) void {
-            var iter = self.bindings.iterator();
-            while (iter.next()) |entry| {
-                self.allocator.free(entry.key_ptr.*);
-                self.allocator.free(entry.value_ptr.*);
-            }
-            self.bindings.deinit();
+            ast_functional.freeStringMap(self.allocator, &self.bindings);
 
             var obl_iter = self.cleanup_obligations.iterator();
             while (obl_iter.next()) |entry| {
@@ -711,9 +706,7 @@ pub const AutoDischargeInserter = struct {
             }
             self.cleanup_obligations.deinit();
 
-            var disp_iter = self.disposed_fields.keyIterator();
-            while (disp_iter.next()) |key| self.allocator.free(key.*);
-            self.disposed_fields.deinit();
+            ast_functional.freeKeySet(self.allocator, &self.disposed_fields);
         }
 
         /// Add a binding with its phantom state and base type.
@@ -769,12 +762,7 @@ pub const AutoDischargeInserter = struct {
             new_ctx.in_sequential_prefix = self.in_sequential_prefix;
             new_ctx.join_watermark = self.join_watermark;
 
-            var bind_iter = self.bindings.iterator();
-            while (bind_iter.next()) |entry| {
-                const key = try allocator.dupe(u8, entry.key_ptr.*);
-                const val = try allocator.dupe(u8, entry.value_ptr.*);
-                try new_ctx.bindings.put(key, val);
-            }
+            try ast_functional.dupeStringMapInto(allocator, self.bindings, &new_ctx.bindings);
 
             var obl_iter = self.cleanup_obligations.iterator();
             while (obl_iter.next()) |entry| {
@@ -790,10 +778,7 @@ pub const AutoDischargeInserter = struct {
                 });
             }
 
-            var disp_iter = self.disposed_fields.keyIterator();
-            while (disp_iter.next()) |key| {
-                try new_ctx.disposed_fields.put(try allocator.dupe(u8, key.*), {});
-            }
+            try ast_functional.dupeKeySetInto(allocator, self.disposed_fields, &new_ctx.disposed_fields);
 
             return new_ctx;
         }

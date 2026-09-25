@@ -3025,6 +3025,53 @@ pub fn isIntScalar(name: []const u8) bool {
     return false;
 }
 
+/// Deep-copy a `[]const u8 → []const u8` map's entries into `dst` — duped
+/// keys and values owned by `allocator`. Shared by the scope-inherit loops
+/// in the checker/inserter.
+pub fn dupeStringMapInto(
+    allocator: std.mem.Allocator,
+    src: std.StringHashMap([]const u8),
+    dst: *std.StringHashMap([]const u8),
+) !void {
+    var it = src.iterator();
+    while (it.next()) |entry| {
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+        const value = try allocator.dupe(u8, entry.value_ptr.*);
+        try dst.put(key, value);
+    }
+}
+
+/// Deep-copy a `[]const u8` key-set's members into `dst`.
+pub fn dupeKeySetInto(
+    allocator: std.mem.Allocator,
+    src: std.StringHashMap(void),
+    dst: *std.StringHashMap(void),
+) !void {
+    var it = src.keyIterator();
+    while (it.next()) |key| {
+        try dst.put(try allocator.dupe(u8, key.*), {});
+    }
+}
+
+/// Free every key and value string `map` owns, then deinit it.
+pub fn freeStringMap(allocator: std.mem.Allocator, map: *std.StringHashMap([]const u8)) void {
+    var it = map.iterator();
+    while (it.next()) |entry| {
+        allocator.free(entry.key_ptr.*);
+        allocator.free(entry.value_ptr.*);
+    }
+    map.deinit();
+}
+
+/// Free every key a key-set map owns, then deinit it.
+pub fn freeKeySet(allocator: std.mem.Allocator, map: *std.StringHashMap(void)) void {
+    var it = map.keyIterator();
+    while (it.next()) |key| {
+        allocator.free(key.*);
+    }
+    map.deinit();
+}
+
 pub const facets = struct {
     /// Canonical branch names — the enforcement contract every consumer
     /// shares. `ok` is the sole non-panic terminal a bare `|>` rides;
