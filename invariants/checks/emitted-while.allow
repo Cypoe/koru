@@ -10,7 +10,7 @@
 # An exemption is a ruling that this while is NOT a counted loop. Everything
 # not listed here is a violation until converted to `for`.
 
-io.kz     | while (_v > 0)                    | digit-extraction loop; the trip count is the digit count of a runtime value, unknowable before the divisions run
+io.blk.kz | while (_v > 0)                    | digit-extraction loop; the trip count is the digit count of a runtime value, unknowable before the divisions run (moved with the print.blk family split out of io.kz)
 kernel.kz | while (i < nqf)                   | find-first search over queue families; breaks at the first compute-capable family
 kernel.kz | while (m < mp.memoryTypeCount)    | find-first search over memory types; breaks at the first host-visible+coherent type
 parser.kz | while (c.kids.len > 0)            | descent to the leaf of a parse tree; depth is a property of the parsed input
