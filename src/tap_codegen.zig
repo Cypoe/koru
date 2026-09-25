@@ -28,21 +28,9 @@ pub const TapCodegen = struct {
         input_taps: []const *const ast.EventTap,
         universal_taps: []const *const ast.EventTap,
     ) ![]const u8 {
-        self.buffer.clearRetainingCapacity();
-        
-        // Generate calls for specific input taps
-        for (input_taps) |tap| {
-            try self.generateSingleTapCall(tap, event_name, .input);
-        }
-        
-        // Generate calls for universal input taps
-        for (universal_taps) |tap| {
-            try self.generateUniversalTapCall(tap, event_name, .input);
-        }
-        
-        return try self.buffer.toOwnedSlice(self.allocator);
+        return self.generateTapCalls(event_name, input_taps, universal_taps, .input);
     }
-    
+
     /// Generate code to invoke output taps for an event
     pub fn generateOutputTapCalls(
         self: *TapCodegen,
@@ -50,18 +38,23 @@ pub const TapCodegen = struct {
         output_taps: []const *const ast.EventTap,
         universal_taps: []const *const ast.EventTap,
     ) ![]const u8 {
+        return self.generateTapCalls(event_name, output_taps, universal_taps, .output);
+    }
+
+    fn generateTapCalls(
+        self: *TapCodegen,
+        event_name: []const u8,
+        taps: []const *const ast.EventTap,
+        universal_taps: []const *const ast.EventTap,
+        tap_type: TapType,
+    ) ![]const u8 {
         self.buffer.clearRetainingCapacity();
-        
-        // Generate calls for specific output taps
-        for (output_taps) |tap| {
-            try self.generateSingleTapCall(tap, event_name, .output);
+        for (taps) |tap| {
+            try self.generateSingleTapCall(tap, event_name, tap_type);
         }
-        
-        // Generate calls for universal output taps
         for (universal_taps) |tap| {
-            try self.generateUniversalTapCall(tap, event_name, .output);
+            try self.generateUniversalTapCall(tap, event_name, tap_type);
         }
-        
         return try self.buffer.toOwnedSlice(self.allocator);
     }
     
