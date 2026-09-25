@@ -1,15 +1,15 @@
 # std/channel — channels as a first-class construct
 
 **Tree pinned:** `bd31d8f2d` on `main`, measured 2026-09-21; corrected
-2026-09-24 (surface spelling under redesign — see below).
-**Status:** design proposal. The mechanism analysis below is measured
-against the tree. The **surface spelling is not ruled** — an earlier
-version of this doc shipped `std/channel(inbox: Reading, 256)`, which is
-invented syntax: positional tails on `std/` heads are illegal (calls pun;
-only the first `expr: Expression` slot is positional), and
-`name: Proto` in arg position is a named arg, not a declaration pair.
-The implementable surface awaits a legal declaration shape — do not write
-code from this doc's spelling sections until that ruling lands.
+2026-09-24 (surface ruled — see below).
+**Status:** ruled surface, partial implementation. The mechanism analysis
+below is measured against the tree. The surface was ruled 2026-09-24: the
+declaration body is the proto-definition grammar (`{ name: Proto }`
+entries), ruled for rings and channels alike. `std/rings` is implemented
+and pinned (`320_090` migrated to pure Koru; `320_101`–`320_109` cover
+proto elements, `full`/`none` arms, and the refusals). `std/channel` is
+written against the same ruling (`koru_std/channel.kz`, `699_CHANNEL`
+pins) but has not yet compiled.
 
 ---
 
@@ -35,7 +35,7 @@ matter:
 
 | Mechanism | Where | What it gives the channel |
 |---|---|---|
-| Vyukov bounded MPMC ring | `koru_std/rings.kz` — `MpmcRing(T, cap)`, `enqueue \| ok \| full`, `dequeue \| some v \| none` | the buffered data plane; CAS fast path, `full`/`none` as branches |
+| Vyukov bounded MPMC ring | `koru_std/rings.kz` + `rings.new.kz`/`rings.ops.kz` — `std/rings:new(name, capacity: N) { value: Type }` decl, name-addressed `enqueue`/`dequeue` steps over the `MpmcRing(T, cap)` substrate | the buffered data plane; CAS fast path, `full`/`none` as branches, **now a real Koru surface** (320_090 + 320_101–109) |
 | Effect branches | `! ask i64 -> i64`, handler `! ask v -> expr` — `400_132`, `670_060` | the tor calls the consumer's code; the resume is the consumer's answer — the rendezvous *shape* |
 | Thread spawn ladder | `koru_std/threading.kz` — `worker.spawn` `.async`/`.await`/`.join` | the cross-thread plane |
 | Compile-time pump | `koru_std/pump.kz` — `create`/`default`/`run`; verbs `step()->i32`, `live()->i64`, `wait(i)->{fd,wait_ns}` | the scheduler: pass loop + **one union `poll()` per all-idle pass** |
@@ -77,34 +77,49 @@ execution — the channel calls the consumer's code when a value lands.
 Rendezvous (cap 0) is a *surface* question — a send whose ok-continuation
 fires on the consumer's take — not a compiler gap.
 
-## The surface (UNDER RULING — spelling not legal yet)
+## The surface (ruled 2026-09-24 — implemented for rings, pending for channel)
 
-What is settled in conversation with Lars:
+The ruled shape: **a `{ }` body on a `std/` decl declares a typed
+vocabulary — the proto-definition grammar — and the construct decides the
+algebra.** `name: Type` entries, parsed by `struct_literal.parseFields`
+(the same parser `std/store:new` uses); each entry resolves to a declared
+proto or a scalar.
 
-- **The element type is a proto name.** `std/proto` is the nominal-type
-  registry; `std/store` and `std/list:new` already drink from it. Channels
-  of `Reading` vs `Score` never interchange — nominal, compile-time.
-- **The consumer arm derives its name from the proto** — a channel of
-  `Reading` fires `! reading`. The proto is the channel's vocabulary, the
-  way a store's fields are its arms. `! closed` is channel state, not a
-  message, and stays a fixed word.
+```koru
+std/channel:new(inbox, capacity: 256) { reading: Reading, alert: Alert }
+
+std/rings:new(feed, capacity: 256) { value: u64 }
+```
+
+- **Arm names are declared, not derived.** `{ frame: Packet }` fires
+  `! frame`; `reading: Reading` fires `! reading` — the same-initial
+  coincidence is the common case, not a rule. The proto is the payload,
+  the word is the arm — exactly `! hp` under `std/store(game)`.
+- **Multi-kind is the field list.** Each entry is one kind: one lane,
+  one arm word, one payload proto.
+- **`closed` is reserved** — channel lifecycle state, not a kind; a body
+  entry named `closed` refuses.
+- **A ring is the degenerate case** — one entry, one lane, no arms:
+  `std/rings:new(feed, capacity: N) { value: u64 }`. The name still does
+  work: it labels the element in diagnostics and generated units.
+- **Entries are comma-separated** — `struct_literal` discipline; a
+  newline-separated second entry gets the missing-comma refusal.
+- **Scalars collapse the same way protos do** — `{ value: u64 }` is a
+  legal element; a proto is a struct; a scalar is the degenerate word.
+- **No `*`, arrays, or phantom-typed elements** — a slot holds plain
+  values by copy; borrows and `<live!>` elements refuse with teaching.
 - **`!` arms are competing consumers** — one value, one arm. Broadcast is
   a separate arm kind, deliberately not silently included.
-- **Chain steps are `std/channel:send/recv/close`-family** — the
-  `std/x:verb(subject, name: arg)` shape that `std/store:insert` already
-  uses — with status arms `| ok | full | closed` and
-  `| some | none | closed`.
+- **Chain steps are `std/channel:send/recv/close`-family** — with status
+  arms `| ok | full | closed` and `| some | none | closed`. Values ride
+  `v:`-labeled args (the `std/list` convention — a second bare positional
+  names no parameter and the pun law refuses it before transforms run:
+  `send(inbox, v: r)`, `enqueue(feed, v: 42)`).
 - **Capacity is a named arg** (`capacity:` — the store convention), never
   a positional tail.
 
-What is NOT settled — the questions that block a compilable surface:
+What is NOT settled:
 
-- The declaration head's legal shape. `std/store:new(name, capacity: N) { fields }`
-  is the existing pattern: bare name in the expr slot, `capacity:` named,
-  vocabulary declared in a `{ }` body. Whether a channel declares its
-  element as a body field (`{ reading: Reading }` — which would make
-  `! reading` a *field* name, consistent with store arms) or takes the
-  proto some other legal way is Lars's call.
 - Broadcast spelling (`! each` or otherwise) — deferred.
 - Per-flow select (one flow waiting on two channels) — a spelling
   question, not a mechanism gap.
