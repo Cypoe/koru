@@ -94,6 +94,17 @@ Widening the existing mechanism (`?ast.Node` param, `mark_transformed`
 flag) covered five more sites than building a new helper would have —
 find-it-before-you-build-it applies inside a single file.
 
+**A declared sole authority makes clones spec violations, not just slop.**
+`annotation_parser.zig` comments its block tokenizer "the ONLY place that
+[delimiter] knowledge lives… delimit through them, never with
+indexOf/split" — and three parser sites still hand-rolled bracket-depth
+scans plus `splitScalar('|')` for `[a|b]` blocks. The drift is not subtle:
+the naive scans mis-delimit `doc("a|b")` and `custom(foo[1])`. When a
+module declares exclusivity, a structural clone of its job is deficient by
+construction — the superset question answers itself, and the fix is
+routing through the declared mechanism (`collectBracketAnnotations` now
+wraps `findBlockClose`/`splitEntries`), never writing a second scan.
+
 **Open questions.** (1) Whether cluster ranking should prefer the superset
 member as canonical anchor rather than the first member — the census cannot
 yet order members by semantic coverage. (2) `copy count` is not `removal

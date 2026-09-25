@@ -2723,41 +2723,8 @@ pub const Parser = struct {
                 var branch_content = lexer.trim(trimmed_after_event[shape_end..]);
 
                 // Check for trailing annotations before branches
-                if (lexer.startsWith(branch_content, "[")) {
-                    // Find the matching closing bracket of the annotation block
-                    const close_bracket_idx = blk: {
-                        var depth: i32 = 0;
-                        var i: usize = 0;
-                        while (i < branch_content.len) : (i += 1) {
-                            if (branch_content[i] == '[') {
-                                depth += 1;
-                            } else if (branch_content[i] == ']') {
-                                depth -= 1;
-                                if (depth == 0) {
-                                    break :blk i;
-                                }
-                            }
-                        }
-                        break :blk null;
-                    } orelse {
-                        return self.fail(
-                            .PARSE003,
-                            event_line_index + 1,
-                            @intCast(shape_end + 1), // Column where the annotation block starts
-                            "tor annotation missing closing ']'",
-                            .{},
-                        );
-                    };
-
-                    const annotation_content = lexer.trim(branch_content[1..close_bracket_idx]);
-                    var iter = std.mem.splitScalar(u8, annotation_content, '|');
-                    while (iter.next()) |ann| {
-                        const trimmed_ann = lexer.trim(ann);
-                        if (trimmed_ann.len > 0) {
-                            try trailing_annotations.append(self.allocator, try self.allocator.dupe(u8, trimmed_ann));
-                        }
-                    }
-                    branch_content = lexer.trim(branch_content[close_bracket_idx + 1 ..]);
+                if (try self.collectBracketAnnotations(branch_content, event_line_index + 1, shape_end + 1, "tor", &trailing_annotations)) |rest| {
+                    branch_content = lexer.trim(rest);
                 }
 
                 // Parse all branches on this line (separated by |)
@@ -2936,42 +2903,8 @@ pub const Parser = struct {
             // Check for trailing annotations on the line containing the closing brace
             const last_shape_line = self.lines[self.current - 1];
             if (std.mem.lastIndexOf(u8, last_shape_line, "}")) |close_idx| {
-                var after_brace = lexer.trim(last_shape_line[close_idx + 1 ..]);
-                if (lexer.startsWith(after_brace, "[")) {
-                    // Find the matching closing bracket of the annotation block
-                    const close_bracket_idx = blk: {
-                        var depth: i32 = 0;
-                        var i: usize = 0;
-                        while (i < after_brace.len) : (i += 1) {
-                            if (after_brace[i] == '[') {
-                                depth += 1;
-                            } else if (after_brace[i] == ']') {
-                                depth -= 1;
-                                if (depth == 0) {
-                                    break :blk i;
-                                }
-                            }
-                        }
-                        break :blk null;
-                    } orelse {
-                        return self.fail(
-                            .PARSE003,
-                            self.current,
-                            @intCast(close_idx + 1),
-                            "tor annotation missing closing ']'",
-                            .{},
-                        );
-                    };
-
-                    const annotation_content = lexer.trim(after_brace[1..close_bracket_idx]);
-                    var iter = std.mem.splitScalar(u8, annotation_content, '|');
-                    while (iter.next()) |ann| {
-                        const trimmed_ann = lexer.trim(ann);
-                        if (trimmed_ann.len > 0) {
-                            try trailing_annotations.append(self.allocator, try self.allocator.dupe(u8, trimmed_ann));
-                        }
-                    }
-                }
+                const after_brace = lexer.trim(last_shape_line[close_idx + 1 ..]);
+                _ = try self.collectBracketAnnotations(after_brace, self.current, close_idx + 1, "tor", &trailing_annotations);
             }
         }
 
@@ -10178,6 +10111,31 @@ pub const Parser = struct {
         );
     }
 
+    /// Collect a leading `[a | b]` annotation block's entries into `out` —
+    /// delimiting through the block tokenizer (nesting- and string-aware per
+    /// annotation_parser's invariant), not a naive bracket scan. Returns the
+    /// text after the closing `]`, or null when `text` doesn't open with `[`.
+    /// `what` names the construct for the missing-`]` diagnostic.
+    fn collectBracketAnnotations(
+        self: *Parser,
+        text: []const u8,
+        err_line: usize,
+        err_col: usize,
+        comptime what: []const u8,
+        out: *std.ArrayList([]const u8),
+    ) !?[]const u8 {
+        if (!lexer.startsWith(text, "[")) return null;
+        const rel_close = annotation_parser.findBlockClose(text[1..]) orelse {
+            return self.fail(.PARSE003, err_line, err_col, what ++ " annotation missing closing ']'", .{});
+        };
+        const entries = try annotation_parser.splitEntries(self.allocator, text[1 .. rel_close + 1]);
+        defer self.allocator.free(entries);
+        for (entries) |entry| {
+            try out.append(self.allocator, try self.allocator.dupe(u8, entry));
+        }
+        return text[rel_close + 2 ..];
+    }
+
     /// Collect continuation-line branches (`|`/`!` rows) into `branches` until
     /// a non-continuation line: effect branches gather their indented
     /// resume-arm sum, `!` must precede `|`, effect-branch obligation markers
@@ -11075,42 +11033,7 @@ pub const Parser = struct {
         if (close_brace_idx) |close_idx| {
             // Single-line shape - check for annotations after }
             const after_brace = lexer.trim(branch_start[close_idx + 1 ..]);
-            if (lexer.startsWith(after_brace, "[")) {
-                // Find matching ] for the entire annotation block, respecting nested brackets
-                const close_bracket_idx = blk: {
-                    var depth: i32 = 0;
-                    var i: usize = 0;
-                    while (i < after_brace.len) : (i += 1) {
-                        if (after_brace[i] == '[') {
-                            depth += 1;
-                        } else if (after_brace[i] == ']') {
-                            depth -= 1;
-                            if (depth == 0) {
-                                break :blk i;
-                            }
-                        }
-                    }
-                    break :blk null;
-                } orelse {
-                    return self.fail(
-                        .PARSE003,
-                        self.current,
-                        @intCast(close_idx + 1),
-                        "branch annotation missing closing ']'",
-                        .{},
-                    );
-                };
-
-                const annotation_content = lexer.trim(after_brace[1..close_bracket_idx]);
-                // Split on | for multiple annotations
-                var iter = std.mem.splitScalar(u8, annotation_content, '|');
-                while (iter.next()) |ann| {
-                    const trimmed_ann = lexer.trim(ann);
-                    if (trimmed_ann.len > 0) {
-                        try annotations.append(self.allocator, try self.allocator.dupe(u8, trimmed_ann));
-                    }
-                }
-            }
+            _ = try self.collectBracketAnnotations(after_brace, self.current, close_idx + 1, "branch", &annotations);
         }
 
         return ast.Branch{
