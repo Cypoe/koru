@@ -2397,6 +2397,21 @@ pub const AstSerializer = struct {
         try self.write("}");
     }
 
+    /// Write `"branches": [ ... ]` — the shared tail of the for_each /
+    /// conditional / switch_result site arms.
+    fn writeBranchListJson(self: *AstSerializer, branches: []const ast.NamedBranch) SerializeError!void {
+        try self.write("\"branches\": [\n");
+        self.indent();
+        for (branches, 0..) |*branch, i| {
+            if (i > 0) try self.write(",\n");
+            try self.serializeNamedBranchJson(branch);
+        }
+        try self.write("\n");
+        self.dedent();
+        try self.writeIndent();
+        try self.write("]");
+    }
+
     fn serializeStepJson(self: *AstSerializer, step: *const ast.Step) SerializeError!void {
         try self.writeIndent();
         try self.write("{\n");
@@ -2528,16 +2543,7 @@ pub const AstSerializer = struct {
                 }
                 try self.write(",\n");
                 try self.writeIndent();
-                try self.write("\"branches\": [\n");
-                self.indent();
-                for (fe.branches, 0..) |*branch, i| {
-                    if (i > 0) try self.write(",\n");
-                    try self.serializeNamedBranchJson(branch);
-                }
-                try self.write("\n");
-                self.dedent();
-                try self.writeIndent();
-                try self.write("]");
+                try self.writeBranchListJson(fe.branches);
             },
             .conditional => |*cond| {
                 try self.writeString("conditional");
@@ -2547,16 +2553,7 @@ pub const AstSerializer = struct {
                 try self.writeString(cond.condition);
                 try self.write(",\n");
                 try self.writeIndent();
-                try self.write("\"branches\": [\n");
-                self.indent();
-                for (cond.branches, 0..) |*branch, i| {
-                    if (i > 0) try self.write(",\n");
-                    try self.serializeNamedBranchJson(branch);
-                }
-                try self.write("\n");
-                self.dedent();
-                try self.writeIndent();
-                try self.write("]");
+                try self.writeBranchListJson(cond.branches);
             },
             .switch_result => |*sr| {
                 try self.writeString("switch_result");
@@ -2566,16 +2563,7 @@ pub const AstSerializer = struct {
                 try self.writeString(sr.expression);
                 try self.write(",\n");
                 try self.writeIndent();
-                try self.write("\"branches\": [\n");
-                self.indent();
-                for (sr.branches, 0..) |*branch, i| {
-                    if (i > 0) try self.write(",\n");
-                    try self.serializeNamedBranchJson(branch);
-                }
-                try self.write("\n");
-                self.dedent();
-                try self.writeIndent();
-                try self.write("]");
+                try self.writeBranchListJson(sr.branches);
             },
             .assignment => |*asgn| {
                 try self.writeString("assignment");
