@@ -261,8 +261,9 @@ pub const TypeRegistry = struct {
         try self.procs.put(key, proc_sig);
     }
     
-    /// Register a subflow implementation for an event (from a Flow with impl_of set)
-    pub fn registerImplFlow(self: *TypeRegistry, event_path: []const u8, _: *const ast.Flow) !void {
+    /// Register a subflow keyed on the impl's event path — both impl spellings
+    /// (flow and immediate) record the same stub today.
+    fn registerImplSubflow(self: *TypeRegistry, event_path: []const u8) !void {
         const key = try self.allocator.dupe(u8, event_path);
         errdefer self.allocator.free(key);
 
@@ -281,24 +282,14 @@ pub const TypeRegistry = struct {
         try self.subflows.put(key, subflow_type);
     }
 
+    /// Register a subflow implementation for an event (from a Flow with impl_of set)
+    pub fn registerImplFlow(self: *TypeRegistry, event_path: []const u8, _: *const ast.Flow) !void {
+        return self.registerImplSubflow(event_path);
+    }
+
     /// Register an immediate impl for an event
     pub fn registerImmediateImpl(self: *TypeRegistry, event_path: []const u8, _: *const ast.ImmediateImpl) !void {
-        const key = try self.allocator.dupe(u8, event_path);
-        errdefer self.allocator.free(key);
-
-        // Look up the corresponding event to get types
-        const event_type = self.events.get(event_path);
-
-        var subflow_type = SubflowType{
-            .event_path = try self.allocator.dupe(u8, event_path),
-            .output_shape = null, // Will be set from event type if available
-        };
-        errdefer subflow_type.deinit(self.allocator);
-
-        // TODO: Set output_shape from event_type branches
-        _ = event_type;
-
-        try self.subflows.put(key, subflow_type);
+        return self.registerImplSubflow(event_path);
     }
     
     /// Register an import mapping
