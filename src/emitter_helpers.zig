@@ -8936,6 +8936,87 @@ fn emitEscapedString(emitter: *CodeEmitter, value: []const u8) !void {
     }
 }
 
+/// Emit a `__koru_ast.InvocationMeta` field block — `.path`, `.module`,
+/// `.event_name`, `.annotations`, `.location` — plus the closing `}`.
+/// The caller emits the `…InvocationMeta{\n` head and indent.
+fn emitInvocationMetaFields(
+    emitter: *CodeEmitter,
+    ctx: *EmissionContext,
+    invocation_path: *const ast.DottedPath,
+) !void {
+    // .path - full path like "std.build:variants"
+    try emitter.writeIndent();
+    try emitter.write(".path = \"");
+    if (invocation_path.module_qualifier) |mq| {
+        try emitter.write(mq);
+        try emitter.write(":");
+    }
+    for (invocation_path.segments, 0..) |seg, i| {
+        if (i > 0) try emitter.write(".");
+        try writeMangledSeg(emitter, seg);
+    }
+    try emitter.write("\",\n");
+
+    // .module - module qualifier or null
+    try emitter.writeIndent();
+    try emitter.write(".module = ");
+    if (invocation_path.module_qualifier) |mq| {
+        try emitter.write("\"");
+        try emitter.write(mq);
+        try emitter.write("\"");
+    } else {
+        try emitter.write("null");
+    }
+    try emitter.write(",\n");
+
+    // .event_name - just the tor name (last segment)
+    try emitter.writeIndent();
+    try emitter.write(".event_name = \"");
+    if (invocation_path.segments.len > 0) {
+        try emitter.write(invocation_path.segments[invocation_path.segments.len - 1]);
+    }
+    try emitter.write("\",\n");
+
+    // .annotations - from the flow
+    try emitter.writeIndent();
+    try emitter.write(".annotations = ");
+    if (ctx.current_flow_annotations) |anns| {
+        try emitter.write("&[_][]const u8{");
+        for (anns, 0..) |ann, i| {
+            if (i > 0) try emitter.write(", ");
+            try emitter.writeZigStringLiteral(ann);
+        }
+        try emitter.write("}");
+    } else {
+        try emitter.write("&[_][]const u8{}");
+    }
+    try emitter.write(",\n");
+
+    // .location - from the flow
+    try emitter.writeIndent();
+    try emitter.write(".location = ");
+    if (ctx.current_flow_location) |loc| {
+        try emitter.write(".{ .file = \"");
+        try emitter.write(loc.file);
+        try emitter.write("\", .line = ");
+        var line_buf: [16]u8 = undefined;
+        const line_str = std.fmt.bufPrint(&line_buf, "{d}", .{loc.line}) catch "0";
+        try emitter.write(line_str);
+        try emitter.write(", .column = ");
+        var col_buf: [16]u8 = undefined;
+        const col_str = std.fmt.bufPrint(&col_buf, "{d}", .{loc.column}) catch "0";
+        try emitter.write(col_str);
+        try emitter.write(" }");
+    } else {
+        try emitter.write(".{ .file = \"unknown\", .line = 0, .column = 0 }");
+    }
+    try emitter.write(",\n");
+
+    emitter.dedent();
+    try emitter.writeIndent();
+    try emitter.write("}");
+}
+
 /// Emit arguments for an invocation
 fn emitArgs(emitter: *CodeEmitter, ctx: *EmissionContext, args: []const ast.Arg, invocation_path: *const ast.DottedPath) !void {
     // Look up the event declaration to check for is_source fields
@@ -9096,78 +9177,7 @@ fn emitArgs(emitter: *CodeEmitter, ctx: *EmissionContext, args: []const ast.Arg,
             // Build the full path string
             try emitter.write("__koru_ast.InvocationMeta{\n");
             emitter.indent();
-
-            // .path - full path like "std.build:variants"
-            try emitter.writeIndent();
-            try emitter.write(".path = \"");
-            if (invocation_path.module_qualifier) |mq| {
-                try emitter.write(mq);
-                try emitter.write(":");
-            }
-            for (invocation_path.segments, 0..) |seg, i| {
-                if (i > 0) try emitter.write(".");
-                try writeMangledSeg(emitter, seg);
-            }
-            try emitter.write("\",\n");
-
-            // .module - module qualifier or null
-            try emitter.writeIndent();
-            try emitter.write(".module = ");
-            if (invocation_path.module_qualifier) |mq| {
-                try emitter.write("\"");
-                try emitter.write(mq);
-                try emitter.write("\"");
-            } else {
-                try emitter.write("null");
-            }
-            try emitter.write(",\n");
-
-            // .event_name - just the event name (last segment)
-            try emitter.writeIndent();
-            try emitter.write(".event_name = \"");
-            if (invocation_path.segments.len > 0) {
-                try emitter.write(invocation_path.segments[invocation_path.segments.len - 1]);
-            }
-            try emitter.write("\",\n");
-
-            // .annotations - from the flow
-            try emitter.writeIndent();
-            try emitter.write(".annotations = ");
-            if (ctx.current_flow_annotations) |anns| {
-                try emitter.write("&[_][]const u8{");
-                for (anns, 0..) |ann, i| {
-                    if (i > 0) try emitter.write(", ");
-                    try emitter.writeZigStringLiteral(ann);
-                }
-                try emitter.write("}");
-            } else {
-                try emitter.write("&[_][]const u8{}");
-            }
-            try emitter.write(",\n");
-
-            // .location - from the flow
-            try emitter.writeIndent();
-            try emitter.write(".location = ");
-            if (ctx.current_flow_location) |loc| {
-                try emitter.write(".{ .file = \"");
-                try emitter.write(loc.file);
-                try emitter.write("\", .line = ");
-                var line_buf: [16]u8 = undefined;
-                const line_str = std.fmt.bufPrint(&line_buf, "{d}", .{loc.line}) catch "0";
-                try emitter.write(line_str);
-                try emitter.write(", .column = ");
-                var col_buf: [16]u8 = undefined;
-                const col_str = std.fmt.bufPrint(&col_buf, "{d}", .{loc.column}) catch "0";
-                try emitter.write(col_str);
-                try emitter.write(" }");
-            } else {
-                try emitter.write(".{ .file = \"unknown\", .line = 0, .column = 0 }");
-            }
-            try emitter.write(",\n");
-
-            emitter.dedent();
-            try emitter.writeIndent();
-            try emitter.write("}");
+            try emitInvocationMetaFields(emitter, ctx, invocation_path);
         } else {
             // Check for Koru array literal syntax: [a, b, c]
             if (arg.value.len >= 2 and arg.value[0] == '[' and arg.value[arg.value.len - 1] == ']') {
@@ -9278,78 +9288,7 @@ fn emitArgs(emitter: *CodeEmitter, ctx: *EmissionContext, args: []const ast.Arg,
                         try writeBranchName(emitter, field.name);
                         try emitter.write(" = __koru_ast.InvocationMeta{\n");
                         emitter.indent();
-
-                        // .path
-                        try emitter.writeIndent();
-                        try emitter.write(".path = \"");
-                        if (invocation_path.module_qualifier) |mq| {
-                            try emitter.write(mq);
-                            try emitter.write(":");
-                        }
-                        for (invocation_path.segments, 0..) |seg, i| {
-                            if (i > 0) try emitter.write(".");
-                            try writeMangledSeg(emitter, seg);
-                        }
-                        try emitter.write("\",\n");
-
-                        // .module
-                        try emitter.writeIndent();
-                        try emitter.write(".module = ");
-                        if (invocation_path.module_qualifier) |mq| {
-                            try emitter.write("\"");
-                            try emitter.write(mq);
-                            try emitter.write("\"");
-                        } else {
-                            try emitter.write("null");
-                        }
-                        try emitter.write(",\n");
-
-                        // .event_name
-                        try emitter.writeIndent();
-                        try emitter.write(".event_name = \"");
-                        if (invocation_path.segments.len > 0) {
-                            try emitter.write(invocation_path.segments[invocation_path.segments.len - 1]);
-                        }
-                        try emitter.write("\",\n");
-
-                        // .annotations
-                        try emitter.writeIndent();
-                        try emitter.write(".annotations = ");
-                        if (ctx.current_flow_annotations) |anns| {
-                            try emitter.write("&[_][]const u8{");
-                            for (anns, 0..) |ann, i| {
-                                if (i > 0) try emitter.write(", ");
-                                try emitter.writeZigStringLiteral(ann);
-                            }
-                            try emitter.write("}");
-                        } else {
-                            try emitter.write("&[_][]const u8{}");
-                        }
-                        try emitter.write(",\n");
-
-                        // .location
-                        try emitter.writeIndent();
-                        try emitter.write(".location = ");
-                        if (ctx.current_flow_location) |loc| {
-                            try emitter.write(".{ .file = \"");
-                            try emitter.write(loc.file);
-                            try emitter.write("\", .line = ");
-                            var line_buf: [16]u8 = undefined;
-                            const line_str = std.fmt.bufPrint(&line_buf, "{d}", .{loc.line}) catch "0";
-                            try emitter.write(line_str);
-                            try emitter.write(", .column = ");
-                            var col_buf: [16]u8 = undefined;
-                            const col_str = std.fmt.bufPrint(&col_buf, "{d}", .{loc.column}) catch "0";
-                            try emitter.write(col_str);
-                            try emitter.write(" }");
-                        } else {
-                            try emitter.write(".{ .file = \"unknown\", .line = 0, .column = 0 }");
-                        }
-                        try emitter.write(",\n");
-
-                        emitter.dedent();
-                        try emitter.writeIndent();
-                        try emitter.write("}");
+                        try emitInvocationMetaFields(emitter, ctx, invocation_path);
                         injected_count += 1;
                     }
                 }
