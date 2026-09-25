@@ -159,19 +159,8 @@ pub const ShapeChecker = struct {
         // through the shared kind-aware rule (BranchChecker.firstDuplicateSibling),
         // same source of truth as checkDuplicateBranchHandlers.
         {
-            var handled = try std.ArrayList(branch_checker.BranchChecker.HandledBranch).initCapacity(
-                self.allocator,
-                continuations.len,
-            );
+            var handled = try branch_checker.BranchChecker.handledFromContinuations(self.allocator, continuations);
             defer handled.deinit(self.allocator);
-            for (continuations) |cont| {
-                try handled.append(self.allocator, .{
-                    .name = cont.branch,
-                    .has_when_guard = cont.condition != null,
-                    .is_catchall = cont.is_catchall,
-                    .kind = if (cont.kind == .effect) .effect else .terminal,
-                });
-            }
             if (branch_checker.BranchChecker.firstDuplicateSibling(handled.items)) |dup| {
                 const cont = continuations[dup.index];
                 if (dup.name.len == 0) {
@@ -2098,19 +2087,8 @@ pub const ShapeChecker = struct {
     /// short-circuit judgments that would re-describe the same defect.
     fn checkDuplicateBranchHandlers(self: *ShapeChecker, continuations: []const ast.Continuation) !bool {
         var found = false;
-        var handled = try std.ArrayList(branch_checker.BranchChecker.HandledBranch).initCapacity(
-            self.allocator,
-            continuations.len,
-        );
+        var handled = try branch_checker.BranchChecker.handledFromContinuations(self.allocator, continuations);
         defer handled.deinit(self.allocator);
-        for (continuations) |cont| {
-            try handled.append(self.allocator, .{
-                .name = cont.branch,
-                .has_when_guard = cont.condition != null,
-                .is_catchall = cont.is_catchall,
-                .kind = if (cont.kind == .effect) .effect else .terminal,
-            });
-        }
 
         if (branch_checker.BranchChecker.firstDuplicateSibling(handled.items)) |dup| {
             const cont = continuations[dup.index];

@@ -53,6 +53,23 @@ pub const BranchChecker = struct {
         prototype_undeclared_branches: []const []const u8 = &.{},
     };
 
+    /// Build the sibling-handled view of a continuation list — what
+    /// `firstDuplicateSibling` scans. Field-level, not AST-aware: any
+    /// type with .branch/.condition/.is_catchall/.kind works.
+    pub fn handledFromContinuations(allocator: std.mem.Allocator, continuations: anytype) !std.ArrayList(HandledBranch) {
+        var handled = try std.ArrayList(HandledBranch).initCapacity(allocator, continuations.len);
+        errdefer handled.deinit(allocator);
+        for (continuations) |cont| {
+            try handled.append(allocator, .{
+                .name = cont.branch,
+                .has_when_guard = cont.condition != null,
+                .is_catchall = cont.is_catchall,
+                .kind = if (cont.kind == .effect) .effect else .terminal,
+            });
+        }
+        return handled;
+    }
+
     /// Resolve a handled branch name to its declared branch (by index).
     /// Exact name match wins; failing that, a declared raw-name CLASS branch
     /// — a branch literally named `*` (spelled `| \`*\` *` in the event decl)
