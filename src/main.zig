@@ -2035,6 +2035,55 @@ const TransformEvent = struct {
     variant_targets: []const []const u8 = &[_][]const u8{},
 };
 
+/// The transform-contract flags a tor's declaration implies: a `transformed`
+/// arm carrying a Program/SiteResult field (old-style struct field or
+/// `__type_ref` identity) returns a program; a `failed` arm with a lone
+/// `__type_ref` is identity; a `compile_error` arm is declared. A bare
+/// `-> SiteResult`/`-> Program` on the decl head is the single-return form
+/// (210_131) — the return lives there, never as a lone `| transformed` arm.
+const TransformFlags = struct {
+    returns_program: bool = false,
+    has_failed: bool = false,
+    failed_is_identity: bool = false,
+    has_compile_error: bool = false,
+};
+
+fn scanTransformFlags(event_decl: ast.EventDecl) TransformFlags {
+    var flags = TransformFlags{};
+    for (event_decl.branches) |branch| {
+        if (std.mem.eql(u8, branch.name, "transformed")) {
+            for (branch.payload.fields) |field| {
+                // Old-style struct field or identity syntax (__type_ref)
+                if (std.mem.eql(u8, field.name, "program") or
+                    (std.mem.eql(u8, field.name, "__type_ref") and
+                        (std.mem.indexOf(u8, field.type, "Program") != null or std.mem.indexOf(u8, field.type, "SiteResult") != null)))
+                {
+                    flags.returns_program = true;
+                    break;
+                }
+            }
+        } else if (std.mem.eql(u8, branch.name, "failed")) {
+            flags.has_failed = true;
+            // Identity branch: single __type_ref field
+            if (branch.payload.fields.len == 1 and
+                std.mem.eql(u8, branch.payload.fields[0].name, "__type_ref"))
+            {
+                flags.failed_is_identity = true;
+            }
+        } else if (std.mem.eql(u8, branch.name, "compile_error")) {
+            flags.has_compile_error = true;
+        }
+    }
+    if (event_decl.return_type) |rt| {
+        if (std.mem.indexOf(u8, rt, "Program") != null or
+            std.mem.indexOf(u8, rt, "SiteResult") != null)
+        {
+            flags.returns_program = true;
+        }
+    }
+    return flags;
+}
+
 /// Walk items finding proc_decls whose path matches the given segments AND have a non-null,
 /// non-default-lang target. Used to collect variant procs for transform-event dispatch.
 /// `default_lang` is the variant tag that is considered the default (typically "zig",
@@ -2434,45 +2483,11 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                 }
 
                 // Detect what this event returns (check branches)
-                var returns_program = false;
-                var has_failed = false;
-                var failed_is_identity = false;
-                var has_compile_error = false;
-                for (event_decl.branches) |branch| {
-                    if (std.mem.eql(u8, branch.name, "transformed")) {
-                        for (branch.payload.fields) |field| {
-                            // Check for old-style struct field or identity syntax (__type_ref)
-                            if (std.mem.eql(u8, field.name, "program") or
-                                (std.mem.eql(u8, field.name, "__type_ref") and
-                                    (std.mem.indexOf(u8, field.type, "Program") != null or std.mem.indexOf(u8, field.type, "SiteResult") != null)))
-                            {
-                                returns_program = true;
-                                break;
-                            }
-                        }
-                    } else if (std.mem.eql(u8, branch.name, "failed")) {
-                        has_failed = true;
-                        // Check if it's an identity branch (single __type_ref field)
-                        if (branch.payload.fields.len == 1 and
-                            std.mem.eql(u8, branch.payload.fields[0].name, "__type_ref"))
-                        {
-                            failed_is_identity = true;
-                        }
-                    } else if (std.mem.eql(u8, branch.name, "compile_error")) {
-                        has_compile_error = true;
-                    }
-                }
-
-                // Single-return form (210_131): a bare-return transformer
-                // declares `-> SiteResult` / `-> Program` — the return lives
-                // on the decl head, never as a lone `| transformed` branch.
-                if (event_decl.return_type) |rt| {
-                    if (std.mem.indexOf(u8, rt, "Program") != null or
-                        std.mem.indexOf(u8, rt, "SiteResult") != null)
-                    {
-                        returns_program = true;
-                    }
-                }
+                const transform_flags = scanTransformFlags(event_decl);
+                const returns_program = transform_flags.returns_program;
+                const has_failed = transform_flags.has_failed;
+                const failed_is_identity = transform_flags.failed_is_identity;
+                const has_compile_error = transform_flags.has_compile_error;
 
                 const claims_descendants = annotation_parser.hasPart(event_decl.annotations, "claims_descendants");
                 const stage_name: []const u8 = if (annotation_parser.hasPart(event_decl.annotations, "pre")) "pre" else if (annotation_parser.hasPart(event_decl.annotations, "post")) "post" else "main";
@@ -2648,51 +2663,16 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                         }
 
                         // Detect return type
-                        var returns_program = false;
-                        var has_failed = false;
-                        var failed_is_identity = false;
-                        var has_compile_error = false;
-                        for (event_decl.branches) |branch| {
-                            if (std.mem.eql(u8, branch.name, "transformed")) {
-                                for (branch.payload.fields) |field| {
-                                    // Check for old-style struct field or identity syntax (__type_ref)
-                                    if (std.mem.eql(u8, field.name, "program") or
-                                        (std.mem.eql(u8, field.name, "__type_ref") and
-                                            (std.mem.indexOf(u8, field.type, "Program") != null or std.mem.indexOf(u8, field.type, "SiteResult") != null)))
-                                    {
-                                        returns_program = true;
-                                        break;
-                                    }
-                                }
-                            } else if (std.mem.eql(u8, branch.name, "failed")) {
-                                has_failed = true;
-                                // Check if it's an identity branch (single __type_ref field)
-                                if (branch.payload.fields.len == 1 and
-                                    std.mem.eql(u8, branch.payload.fields[0].name, "__type_ref"))
-                                {
-                                    failed_is_identity = true;
-                                }
-                            } else if (std.mem.eql(u8, branch.name, "compile_error")) {
-                                has_compile_error = true;
-                            }
-                        }
+                        const transform_flags = scanTransformFlags(event_decl);
+                        var returns_program = transform_flags.returns_program;
+                        const has_failed = transform_flags.has_failed;
+                        const failed_is_identity = transform_flags.failed_is_identity;
+                        const has_compile_error = transform_flags.has_compile_error;
 
                         if (has_transform_proc) {
                             // Proc-transforms return `transformed SiteResult` by
                             // convention; the event's branches are the user contract.
                             returns_program = true;
-                        }
-
-                        // Single-return form (210_131): a bare-return
-                        // transformer declares `-> SiteResult` / `-> Program`
-                        // on the decl head, never as a lone `| transformed`
-                        // branch.
-                        if (event_decl.return_type) |rt| {
-                            if (std.mem.indexOf(u8, rt, "Program") != null or
-                                std.mem.indexOf(u8, rt, "SiteResult") != null)
-                            {
-                                returns_program = true;
-                            }
                         }
 
                         const claims_descendants = annotation_parser.hasPart(event_decl.annotations, "claims_descendants");
