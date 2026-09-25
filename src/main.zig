@@ -2084,6 +2084,46 @@ fn scanTransformFlags(event_decl: ast.EventDecl) TransformFlags {
     return flags;
 }
 
+/// What a tor's Input declares about AST-consumption: source and expression
+/// params ride user args; `*const Invocation`/`Item`/`EventDecl` params mean
+/// the handler needs the backend-emitted machine interface.
+const TransformParamScan = struct {
+    has_source_param: bool = false,
+    source_optional_param: bool = false,
+    has_expression_param: bool = false,
+    has_optional_expression_param: bool = false,
+    expression_field_name_param: ?[]const u8 = null,
+    expression_field_names_list: std.ArrayList([]const u8) = .{},
+    has_invocation_param: bool = false,
+    has_item_param: bool = false,
+    has_event_decl_param: bool = false,
+};
+
+fn scanTransformParams(allocator: std.mem.Allocator, fields: []const ast.Field) !TransformParamScan {
+    var scan = TransformParamScan{};
+    for (fields) |field| {
+        if (field.is_source) {
+            scan.has_source_param = true;
+            if (std.mem.startsWith(u8, field.type, "?")) scan.source_optional_param = true;
+        } else if (field.is_expression) {
+            if (std.mem.startsWith(u8, field.type, "?")) {
+                scan.has_optional_expression_param = true;
+            } else {
+                scan.has_expression_param = true;
+                try scan.expression_field_names_list.append(allocator, field.name);
+            }
+            scan.expression_field_name_param = field.name;
+        } else if (std.mem.eql(u8, field.type, "*const Invocation")) {
+            scan.has_invocation_param = true;
+        } else if (std.mem.eql(u8, field.type, "*const Item")) {
+            scan.has_item_param = true;
+        } else if (std.mem.eql(u8, field.type, "*const EventDecl")) {
+            scan.has_event_decl_param = true;
+        }
+    }
+    return scan;
+}
+
 /// Walk items finding proc_decls whose path matches the given segments AND have a non-null,
 /// non-default-lang target. Used to collect variant procs for transform-event dispatch.
 /// `default_lang` is the variant tag that is considered the default (typically "zig",
@@ -2400,50 +2440,21 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
             // Events with *const Invocation or *const Item are transform handlers
             // Events with *const EventDecl are derive handlers (operate on declarations)
             // The frontend is agnostic to [transform]/[derive] annotations - that's backend dispatch
-            var has_source_param = false;
-            var source_optional_param = false;
-            var has_expression_param = false;
-            var has_optional_expression_param = false;
-            var expression_field_name_param: ?[]const u8 = null;
-            var expression_field_names_list = std.ArrayList([]const u8){};
-            var has_invocation_param = false;
-            var has_item_param = false;
-            var has_event_decl_param = false;
-
-            for (event_decl.input.fields) |field| {
-                if (field.is_source) {
-                    has_source_param = true;
-                    if (std.mem.startsWith(u8, field.type, "?")) source_optional_param = true;
-                } else if (field.is_expression) {
-                    if (std.mem.startsWith(u8, field.type, "?")) {
-                        has_optional_expression_param = true;
-                    } else {
-                        has_expression_param = true;
-                        try expression_field_names_list.append(allocator, field.name);
-                    }
-                    expression_field_name_param = field.name;
-                } else if (std.mem.eql(u8, field.type, "*const Invocation")) {
-                    has_invocation_param = true;
-                } else if (std.mem.eql(u8, field.type, "*const Item")) {
-                    has_item_param = true;
-                } else if (std.mem.eql(u8, field.type, "*const EventDecl")) {
-                    has_event_decl_param = true;
-                }
-            }
+            const scan = try scanTransformParams(allocator, event_decl.input.fields);
 
             // Events consuming AST types must be emitted to backend
             // *const Item also indicates a transform handler (needs to access flow from item)
-            const consumes_ast_types = has_invocation_param or has_item_param or has_event_decl_param;
+            const consumes_ast_types = scan.has_invocation_param or scan.has_item_param or scan.has_event_decl_param;
 
             // VALIDATION: AST-consuming handlers must be available at compile-time
-            if (consumes_ast_types and !has_source_param and !has_expression_param) {
+            if (consumes_ast_types and !scan.has_source_param and !scan.has_expression_param) {
                 const has_comptime = annotation_parser.hasPart(event_decl.annotations, "comptime");
                 if (!has_comptime) {
                     const event_name = try joinPathSegmentsWithDots(allocator, event_decl.path.segments);
                     defer allocator.free(event_name);
 
-                    const handler_type = if (has_event_decl_param) "derive" else "transform";
-                    log.err("\nERROR: Event '{s}' consumes *const {s} but won't be emitted to backend\n", .{ event_name, if (has_event_decl_param) "EventDecl" else "Invocation" });
+                    const handler_type = if (scan.has_event_decl_param) "derive" else "transform";
+                    log.err("\nERROR: Event '{s}' consumes *const {s} but won't be emitted to backend\n", .{ event_name, if (scan.has_event_decl_param) "EventDecl" else "Invocation" });
                     log.err("\n", .{});
                     log.err("AST-consuming handlers must be available at compile-time. Add [comptime]:\n", .{});
                     log.err("  ~[comptime] event {s} {{ ... }}\n", .{event_name});
@@ -2503,15 +2514,15 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                     .module_path = null, // Top-level events are in main_module
                     .claims_descendants = claims_descendants,
                     .stage = stage_name,
-                    .has_source = has_source_param,
-                    .source_optional = source_optional_param,
-                    .has_expression = has_expression_param,
-                    .has_optional_expression = has_optional_expression_param,
-                    .expression_field_name = expression_field_name_param,
-                    .expression_field_names = expression_field_names_list.items,
-                    .has_invocation = has_invocation_param,
-                    .has_event_decl = has_event_decl_param,
-                    .has_item = has_item_param,
+                    .has_source = scan.has_source_param,
+                    .source_optional = scan.source_optional_param,
+                    .has_expression = scan.has_expression_param,
+                    .has_optional_expression = scan.has_optional_expression_param,
+                    .expression_field_name = scan.expression_field_name_param,
+                    .expression_field_names = scan.expression_field_names_list.items,
+                    .has_invocation = scan.has_invocation_param,
+                    .has_event_decl = scan.has_event_decl_param,
+                    .has_item = scan.has_item_param,
                     .has_program_ast = has_program_ast,
                     .has_ctx = has_ctx,
                     .has_reporter = has_reporter,
@@ -2536,36 +2547,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                     const event_decl = mod_item.event_decl;
 
                     // TYPE-DRIVEN DETECTION: Check if this event consumes AST types
-                    var has_source_param = false;
-                    var source_optional_param = false;
-                    var has_expression_param = false;
-                    var has_optional_expression_param = false;
-                    var expression_field_name_param: ?[]const u8 = null;
-                    var expression_field_names_list = std.ArrayList([]const u8){};
-                    var has_invocation_param = false;
-                    var has_item_param = false;
-                    var has_event_decl_param = false;
-
-                    for (event_decl.input.fields) |field| {
-                        if (field.is_source) {
-                            has_source_param = true;
-                            if (std.mem.startsWith(u8, field.type, "?")) source_optional_param = true;
-                        } else if (field.is_expression) {
-                            if (std.mem.startsWith(u8, field.type, "?")) {
-                                has_optional_expression_param = true;
-                            } else {
-                                has_expression_param = true;
-                                try expression_field_names_list.append(allocator, field.name);
-                            }
-                            expression_field_name_param = field.name;
-                        } else if (std.mem.eql(u8, field.type, "*const Invocation")) {
-                            has_invocation_param = true;
-                        } else if (std.mem.eql(u8, field.type, "*const Item")) {
-                            has_item_param = true;
-                        } else if (std.mem.eql(u8, field.type, "*const EventDecl")) {
-                            has_event_decl_param = true;
-                        }
-                    }
+                    var scan = try scanTransformParams(allocator, event_decl.input.fields);
 
                     // PROC-TRANSFORM DETECTION: `~[transform]proc <event>` on an
                     // ordinary event. The event declares the USER surface (payload +
@@ -2581,22 +2563,22 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                     // module's same-named event.
                     const has_transform_proc = emitter_helpers.findTransformProc(module.items, event_decl.path.segments) != null;
                     if (has_transform_proc) {
-                        has_invocation_param = true;
-                        has_item_param = true;
+                        scan.has_invocation_param = true;
+                        scan.has_item_param = true;
                         // Machine convention is the WHOLE Input: user-surface
                         // fields (Source blocks, expressions) ride the
                         // invocation's args, never the handler Input struct
                         // (emitTransformProcEventStruct emits machine fields
                         // only — a wrapper passing .source would not compile).
-                        has_source_param = false;
-                        source_optional_param = false;
-                        has_expression_param = false;
-                        has_optional_expression_param = false;
-                        expression_field_names_list.clearRetainingCapacity();
+                        scan.has_source_param = false;
+                        scan.source_optional_param = false;
+                        scan.has_expression_param = false;
+                        scan.has_optional_expression_param = false;
+                        scan.expression_field_names_list.clearRetainingCapacity();
                     }
 
                     // Emit handlers for events that consume AST types
-                    const should_generate_handler = has_invocation_param or has_item_param or has_event_decl_param;
+                    const should_generate_handler = scan.has_invocation_param or scan.has_item_param or scan.has_event_decl_param;
 
                     if (should_generate_handler) {
                         const event_name = try joinPathSegments(allocator, event_decl.path.segments);
@@ -2700,15 +2682,15 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                             .module_path = module_path,
                             .claims_descendants = claims_descendants,
                             .stage = stage_name,
-                            .has_source = has_source_param,
-                            .source_optional = source_optional_param,
-                            .has_expression = has_expression_param,
-                            .has_optional_expression = has_optional_expression_param,
-                            .expression_field_name = expression_field_name_param,
-                            .expression_field_names = expression_field_names_list.items,
-                            .has_invocation = has_invocation_param,
-                            .has_event_decl = has_event_decl_param,
-                            .has_item = has_item_param,
+                            .has_source = scan.has_source_param,
+                            .source_optional = scan.source_optional_param,
+                            .has_expression = scan.has_expression_param,
+                            .has_optional_expression = scan.has_optional_expression_param,
+                            .expression_field_name = scan.expression_field_name_param,
+                            .expression_field_names = scan.expression_field_names_list.items,
+                            .has_invocation = scan.has_invocation_param,
+                            .has_event_decl = scan.has_event_decl_param,
+                            .has_item = scan.has_item_param,
                             .has_program_ast = has_program_ast,
                             .has_ctx = has_ctx,
                             .has_reporter = has_reporter,
