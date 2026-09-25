@@ -81,7 +81,7 @@ koru_std/invariants.kz	179
 koru_std/io_registry.kz	30
 koru_std/io.jsprec.kz	48
 koru_std/io.blk.kz	1117
-koru_std/io.kz	1434
+koru_std/io.kz	1024
 koru_std/json.kz	268
 koru_std/kernel.body.kz	69
 koru_std/kernel.fields.kz	108
