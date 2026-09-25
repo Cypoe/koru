@@ -1,0 +1,6 @@
+name: gate-load-failure-was-silent
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: gate.py parsed zero rows from a koruc listing that had failed to compile (a red backend empties the manifest output) and reported "no git-gate-tagged invariants declared", exit 0 — commits passed unjudged. Now the listing's rc and row count are checked; no listing is BROKEN, and the gate refuses. A gate that cannot read its manifest must not pass on silence.
