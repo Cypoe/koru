@@ -970,6 +970,33 @@ fn moduleDeclaresType(type_name: []const u8, mod: []const u8) bool {
     return type_registry_module.moduleNamesMatch(home, mod);
 }
 
+/// Emit a `{`-record type text as a Zig anon struct, each field type
+/// lowered through writeBareReturnType. parseShape refuses a malformed
+/// `{`-type at PARSE003 before emission, so a parseFields failure here is
+/// a broken parser contract — `panic_msg` names the caller's context.
+fn emitRecordShapeStruct(
+    emitter: *CodeEmitter,
+    trimmed: []const u8,
+    main_module_name: ?[]const u8,
+    declaring_module: ?[]const u8,
+    panic_msg: []const u8,
+) anyerror!void {
+    const a = emitter.allocator orelse std.heap.page_allocator;
+    if (struct_literal.parseFields(a, trimmed)) |fields| {
+        try emitter.write("struct { ");
+        for (fields, 0..) |f, i| {
+            if (i > 0) try emitter.write(", ");
+            try writeBranchName(emitter, f.name);
+            try emitter.write(": ");
+            try writeBareReturnType(emitter, f.value, main_module_name, declaring_module);
+        }
+        try emitter.write(" }");
+    } else |err| {
+        if (err == error.OutOfMemory) return err;
+        @panic(panic_msg);
+    }
+}
+
 /// Helper: Write field type with proper module path handling
 pub fn writeFieldType(emitter: *CodeEmitter, field: ast.Field, main_module_name: ?[]const u8) !void {
     // An inline record field type (`user: { x: i64 }`) shares the
@@ -981,24 +1008,8 @@ pub fn writeFieldType(emitter: *CodeEmitter, field: ast.Field, main_module_name:
     {
         const trimmed = std.mem.trim(u8, field.type, " \t");
         if (trimmed.len > 0 and trimmed[0] == '{') {
-            const a = emitter.allocator orelse std.heap.page_allocator;
-            if (struct_literal.parseFields(a, trimmed)) |fields| {
-                try emitter.write("struct { ");
-                for (fields, 0..) |f, i| {
-                    if (i > 0) try emitter.write(", ");
-                    try writeBranchName(emitter, f.name);
-                    try emitter.write(": ");
-                    try writeBareReturnType(emitter, f.value, main_module_name, null);
-                }
-                try emitter.write(" }");
-                return;
-            } else |err| {
-                if (err == error.OutOfMemory) return err;
-                // parseShape refuses a malformed `{`-field type at PARSE003
-                // before emission — a parseFields failure here is a broken
-                // parser contract, not a user error to paste through.
-                @panic("koru: inline record field type passed parseShape but failed parseFields");
-            }
+            try emitRecordShapeStruct(emitter, trimmed, main_module_name, null, "koru: inline record field type passed parseShape but failed parseFields");
+            return;
         }
     }
 
@@ -12742,24 +12753,8 @@ pub fn writeBareReturnType(
         // field type LOWERED (string → []const u8, module-qual → mangled path),
         // not pasted verbatim. Reuses the shared struct-literal splitter and
         // recurses, so nested records and qualified field types lower too.
-        const a = emitter.allocator orelse std.heap.page_allocator;
-        if (struct_literal.parseFields(a, trimmed)) |fields| {
-            try emitter.write("struct { ");
-            for (fields, 0..) |f, i| {
-                if (i > 0) try emitter.write(", ");
-                try writeBranchName(emitter, f.name);
-                try emitter.write(": ");
-                try writeBareReturnType(emitter, f.value, main_module_name, declaring_module);
-            }
-            try emitter.write(" }");
-            return;
-        } else |err| {
-            if (err == error.OutOfMemory) return err;
-            // parseShape refuses a malformed `{`-return at PARSE003 before
-            // emission — a parseFields failure here is a broken parser
-            // contract, not a user error to paste through.
-            @panic("koru: record return type passed the parser but failed parseFields");
-        }
+        try emitRecordShapeStruct(emitter, trimmed, main_module_name, declaring_module, "koru: record return type passed the parser but failed parseFields");
+        return;
     }
 
     // Nested spellings of the canonical text type lower at the element
