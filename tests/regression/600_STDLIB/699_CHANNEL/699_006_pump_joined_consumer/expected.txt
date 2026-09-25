@@ -1,0 +1,4 @@
+inbox closed
+sent+closed
+consumed 42
+pump drained

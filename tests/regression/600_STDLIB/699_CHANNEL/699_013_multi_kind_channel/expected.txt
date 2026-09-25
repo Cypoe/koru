@@ -1,0 +1,4 @@
+sealed
+reading 1
+alert 7
+pump drained
