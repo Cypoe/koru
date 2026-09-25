@@ -55,10 +55,12 @@ pub fn tryParseArgExpression(allocator: std.mem.Allocator, arg: *ast.Arg) void {
 /// Returns true if there's a `{` that's NOT inside parentheses AND no `=` before it.
 /// The `=` check distinguishes source blocks from subflow impls with branch constructors:
 /// Net paren balance of a line, QUOTE-AWARE: parens inside string ("...") or
+/// Net open-minus-close count for the `open`/`close` delimiter pair.
+/// Quote-aware: characters inside string ('...' and "...") and
 /// char ('...') literals are text, not structure. Backslash escapes honored.
 /// A quote-blind count mistakes `if(c == '(')` for an unbalanced line — the
 /// multiline joiner then swallows following branch lines (pinned by 210_122).
-fn netParens(s: []const u8) i32 {
+fn netDepth(s: []const u8, open: u8, close: u8) i32 {
     var depth: i32 = 0;
     var quote: u8 = 0; // 0 = not in a literal; otherwise the delimiter
     var i: usize = 0;
@@ -72,14 +74,19 @@ fn netParens(s: []const u8) i32 {
             }
             continue;
         }
-        switch (c) {
-            '"', '\'' => quote = c,
-            '(' => depth += 1,
-            ')' => depth -= 1,
-            else => {},
+        if (c == '"' or c == '\'') {
+            quote = c;
+        } else if (c == open) {
+            depth += 1;
+        } else if (c == close) {
+            depth -= 1;
         }
     }
     return depth;
+}
+
+fn netParens(s: []const u8) i32 {
+    return netDepth(s, '(', ')');
 }
 
 /// Index of the first `|>` at paren/brace depth 0 outside string literals,
@@ -153,27 +160,7 @@ fn indexOfBraceClose(text: []const u8, depth: *i32) ?usize {
 /// line whenever an inline block closed mid-line (`} |> self { … }`),
 /// silently discarding that branch's header (pinned by 210_139).
 fn netBraces(s: []const u8) i32 {
-    var depth: i32 = 0;
-    var quote: u8 = 0;
-    var i: usize = 0;
-    while (i < s.len) : (i += 1) {
-        const c = s[i];
-        if (quote != 0) {
-            if (c == '\\') {
-                i += 1;
-            } else if (c == quote) {
-                quote = 0;
-            }
-            continue;
-        }
-        switch (c) {
-            '"', '\'' => quote = c,
-            '{' => depth += 1,
-            '}' => depth -= 1,
-            else => {},
-        }
-    }
-    return depth;
+    return netDepth(s, '{', '}');
 }
 
 ///   - Source block:   `~event { content }`      - no = before {
