@@ -2064,14 +2064,7 @@ fn eventMatchesCanonical(
     var path_buf: [256]u8 = undefined;
     var path_len: usize = 0;
 
-    for (event.path.segments, 0..) |segment, i| {
-        if (i > 0) {
-            path_buf[path_len] = '.';
-            path_len += 1;
-        }
-        @memcpy(path_buf[path_len .. path_len + segment.len], segment);
-        path_len += segment.len;
-    }
+    path_len = event.path.writeSegments(&path_buf, path_len);
 
     return std.mem.eql(u8, path_buf[0..path_len], event_path);
 }

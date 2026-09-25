@@ -87,14 +87,7 @@ fn eventDeclToCanonicalName(allocator: std.mem.Allocator, event: *const ast.Even
     result[pos] = ':';
     pos += 1;
 
-    for (event.path.segments, 0..) |seg, i| {
-        if (i > 0) {
-            result[pos] = '.';
-            pos += 1;
-        }
-        @memcpy(result[pos..pos + seg.len], seg);
-        pos += seg.len;
-    }
+    pos = event.path.writeSegments(result, pos);
 
     return result;
 }

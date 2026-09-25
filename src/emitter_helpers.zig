@@ -3138,14 +3138,7 @@ fn emitSubflowContinuationsWithDepth(
                                     name_buf[pos] = ':';
                                     pos += 1;
                                 }
-                                for (inv.path.segments, 0..) |seg, seg_i| {
-                                    if (seg_i > 0) {
-                                        name_buf[pos] = '.';
-                                        pos += 1;
-                                    }
-                                    @memcpy(name_buf[pos .. pos + seg.len], seg);
-                                    pos += seg.len;
-                                }
+                                pos = inv.path.writeSegments(&name_buf, pos);
                                 if (type_registry.getEventType(name_buf[0..pos])) |et| {
                                     if (et.input_shape) |shape| {
                                         for (shape.fields) |*f| {
@@ -3796,14 +3789,7 @@ fn emitSubflowContinuationsWithDepth(
                                 event_name_buf[event_name_pos] = ':';
                                 event_name_pos += 1;
                             }
-                            for (inv.path.segments, 0..) |seg, seg_i| {
-                                if (seg_i > 0) {
-                                    event_name_buf[event_name_pos] = '.';
-                                    event_name_pos += 1;
-                                }
-                                @memcpy(event_name_buf[event_name_pos .. event_name_pos + seg.len], seg);
-                                event_name_pos += seg.len;
-                            }
+                            event_name_pos = inv.path.writeSegments(&event_name_buf, event_name_pos);
                             const event_canonical = event_name_buf[0..event_name_pos];
                             const event_type = type_registry.getEventType(event_canonical);
                             var value_ctx = EmissionContext{
@@ -8803,14 +8789,7 @@ fn emitInvocation(
             canonical_len += 1;
         }
 
-        for (invocation.path.segments, 0..) |segment, i| {
-            if (i > 0) {
-                canonical_buf[canonical_len] = '.';
-                canonical_len += 1;
-            }
-            @memcpy(canonical_buf[canonical_len .. canonical_len + segment.len], segment);
-            canonical_len += segment.len;
-        }
+        canonical_len = invocation.path.writeSegments(&canonical_buf, canonical_len);
 
         // Check variant registry (populated by build:variants at comptime)
         effective_variant = getVariant(canonical_buf[0..canonical_len]);

@@ -1333,6 +1333,22 @@ pub const DottedPath = struct {
             try writer.writeAll(seg);
         }
     }
+
+    /// Append `a.b.c` (segments only, no qualifier) into `buf` at `pos`;
+    /// returns the end position. For callers assembling a larger name in a
+    /// pre-sized buffer — `format` covers the writer path.
+    pub fn writeSegments(self: DottedPath, buf: []u8, pos: usize) usize {
+        var p = pos;
+        for (self.segments, 0..) |seg, i| {
+            if (i > 0) {
+                buf[p] = '.';
+                p += 1;
+            }
+            @memcpy(buf[p .. p + seg.len], seg);
+            p += seg.len;
+        }
+        return p;
+    }
 };
 
 pub const Shape = struct {
