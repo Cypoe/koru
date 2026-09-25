@@ -11,6 +11,76 @@ const errors = @import("errors");
 /// The beauty: Once injected, these become regular AST items that tap transformation handles!
 /// No special cases needed - the profiler tap `~koru:start -> * | Profile p |>` just works.
 
+fn metaLocation() errors.SourceLocation {
+    return .{ .file = "koru_meta_events", .line = 0, .column = 0 };
+}
+
+/// Build the `koru:<name> {} | done {}` decl — one of the two lifecycle
+/// tors the koru module injects.
+fn koruLifecycleDecl(allocator: std.mem.Allocator, name: []const u8) !ast.Item {
+    var branches = try allocator.alloc(ast.Branch, 1);
+    branches[0] = ast.Branch{
+        .name = try allocator.dupe(u8, "done"),
+        .payload = ast.Shape{ .fields = &.{} },
+    };
+
+    var segments = try allocator.alloc([]const u8, 1);
+    segments[0] = try allocator.dupe(u8, name);
+
+    return ast.Item{
+        .event_decl = ast.EventDecl{
+            .path = ast.DottedPath{
+                .module_qualifier = try allocator.dupe(u8, "koru"),
+                .segments = segments,
+            },
+            .input = ast.Shape{ .fields = &.{} },
+            .branches = branches,
+            .is_public = true,
+            .is_implicit_flow = true,
+            .annotations = &.{},
+            .location = metaLocation(),
+            .module = try allocator.dupe(u8, "koru"),
+        },
+    };
+}
+
+/// Build the `~koru:<name>() | done |> _` flow — one of the two lifecycle
+/// flows the pass injects.
+fn koruLifecycleFlow(allocator: std.mem.Allocator, name: []const u8) !ast.Item {
+    var continuations = try allocator.alloc(ast.Continuation, 1);
+    continuations[0] = ast.Continuation{
+        .branch = try allocator.dupe(u8, "done"),
+        .binding = null,  // Discard pattern (no binding)
+        .binding_type = .branch_payload,
+        .binding_annotations = &[_][]const u8{},
+        .is_catchall = false,
+        .catchall_metatype = null,
+        .condition = null,
+        .condition_expr = null,
+        .node = null,  // Empty (no node)
+        .indent = 0,
+        .continuations = &.{},
+        .location = metaLocation(),
+    };
+
+    var segments = try allocator.alloc([]const u8, 1);
+    segments[0] = try allocator.dupe(u8, name);
+
+    return ast.Item{
+        .flow = ast.Flow{
+            .body = ast.rootSite(ast.Invocation{
+                .path = ast.DottedPath{
+                    .module_qualifier = try allocator.dupe(u8, "koru"),
+                    .segments = segments,
+                },
+                .args = &.{},
+            }, continuations, metaLocation()),
+            .location = metaLocation(),
+            .module = try allocator.dupe(u8, "koru"),
+        },
+    };
+}
+
 /// Inject meta-event items into the program AST
 /// MUST be called AFTER canonicalization (so events get module qualifiers)
 /// MUST be called BEFORE tap transformation (so taps can observe these flows)
@@ -32,68 +102,10 @@ pub fn injectMetaEvents(allocator: std.mem.Allocator, program: *ast.Program) !vo
     // Don't free old items array - we're using an arena allocator that will clean up everything
     // when parse_arena.deinit() is called at the end of main()
 
-    // Create koru module with start and end event declarations
+    // Create koru module with start and end tors
     var koru_module_items = try allocator.alloc(ast.Item, 2);
-
-    // Event: koru:start {} | done {}
-    var start_event_branches = try allocator.alloc(ast.Branch, 1);
-    start_event_branches[0] = ast.Branch{
-        .name = try allocator.dupe(u8, "done"),
-        .payload = ast.Shape{ .fields = &.{} },
-    };
-
-    var start_event_segments = try allocator.alloc([]const u8, 1);
-    start_event_segments[0] = try allocator.dupe(u8, "start");
-
-    koru_module_items[0] = ast.Item{
-        .event_decl = ast.EventDecl{
-            .path = ast.DottedPath{
-                .module_qualifier = try allocator.dupe(u8, "koru"),
-                .segments = start_event_segments,
-            },
-            .input = ast.Shape{ .fields = &.{} },
-            .branches = start_event_branches,
-            .is_public = true,
-            .is_implicit_flow = true,
-            .annotations = &.{},
-            .location = errors.SourceLocation{
-                .file = "koru_meta_events",
-                .line = 0,
-                .column = 0,
-            },
-            .module = try allocator.dupe(u8, "koru"),
-        },
-    };
-
-    // Event: koru:end {} | done {}
-    var end_event_branches = try allocator.alloc(ast.Branch, 1);
-    end_event_branches[0] = ast.Branch{
-        .name = try allocator.dupe(u8, "done"),
-        .payload = ast.Shape{ .fields = &.{} },
-    };
-
-    var end_event_segments = try allocator.alloc([]const u8, 1);
-    end_event_segments[0] = try allocator.dupe(u8, "end");
-
-    koru_module_items[1] = ast.Item{
-        .event_decl = ast.EventDecl{
-            .path = ast.DottedPath{
-                .module_qualifier = try allocator.dupe(u8, "koru"),
-                .segments = end_event_segments,
-            },
-            .input = ast.Shape{ .fields = &.{} },
-            .branches = end_event_branches,
-            .is_public = true,
-            .is_implicit_flow = true,
-            .annotations = &.{},
-            .location = errors.SourceLocation{
-                .file = "koru_meta_events",
-                .line = 0,
-                .column = 0,
-            },
-            .module = try allocator.dupe(u8, "koru"),
-        },
-    };
+    koru_module_items[0] = try koruLifecycleDecl(allocator, "start");
+    koru_module_items[1] = try koruLifecycleDecl(allocator, "end");
 
     // Module declaration for 'koru'
     new_items[old_len] = ast.Item{
@@ -102,105 +114,13 @@ pub fn injectMetaEvents(allocator: std.mem.Allocator, program: *ast.Program) !vo
             .canonical_path = try allocator.dupe(u8, "koru_meta_events"),
             .items = koru_module_items,
             .is_system = false,  // NOT a system module - should be emitted in runtime backend only
-            .location = errors.SourceLocation{
-                .file = "koru_meta_events",
-                .line = 0,
-                .column = 0,
-            },
+            .location = metaLocation(),
         },
     };
 
-    // Flow: ~koru:start() | done |> _
-    var start_flow_continuations = try allocator.alloc(ast.Continuation, 1);
-    start_flow_continuations[0] = ast.Continuation{
-        .branch = try allocator.dupe(u8, "done"),
-        .binding = null,  // Discard pattern (no binding)
-        .binding_type = .branch_payload,
-        .binding_annotations = &[_][]const u8{},
-        .is_catchall = false,
-        .catchall_metatype = null,
-        .condition = null,
-        .condition_expr = null,
-        .node = null,  // Empty (no node)
-        .indent = 0,
-        .continuations = &.{},
-        .location = errors.SourceLocation{
-            .file = "koru_meta_events",
-            .line = 0,
-            .column = 0,
-        },
-    };
-
-    var start_flow_segments = try allocator.alloc([]const u8, 1);
-    start_flow_segments[0] = try allocator.dupe(u8, "start");
-
-    new_items[old_len + 1] = ast.Item{
-        .flow = ast.Flow{
-            .body = ast.rootSite(ast.Invocation{
-                .path = ast.DottedPath{
-                    .module_qualifier = try allocator.dupe(u8, "koru"),
-                    .segments = start_flow_segments,
-                },
-                .args = &.{},
-            }, start_flow_continuations, errors.SourceLocation{
-                .file = "koru_meta_events",
-                .line = 0,
-                .column = 0,
-            }),
-            .location = errors.SourceLocation{
-                .file = "koru_meta_events",
-                .line = 0,
-                .column = 0,
-            },
-            .module = try allocator.dupe(u8, "koru"),
-        },
-    };
-
-    // Flow: ~koru:end() | done |> _
-    var end_flow_continuations = try allocator.alloc(ast.Continuation, 1);
-    end_flow_continuations[0] = ast.Continuation{
-        .branch = try allocator.dupe(u8, "done"),
-        .binding = null,  // Discard pattern (no binding)
-        .binding_type = .branch_payload,
-        .binding_annotations = &[_][]const u8{},
-        .is_catchall = false,
-        .catchall_metatype = null,
-        .condition = null,
-        .condition_expr = null,
-        .node = null,  // Empty (no node)
-        .indent = 0,
-        .continuations = &.{},
-        .location = errors.SourceLocation{
-            .file = "koru_meta_events",
-            .line = 0,
-            .column = 0,
-        },
-    };
-
-    var end_flow_segments = try allocator.alloc([]const u8, 1);
-    end_flow_segments[0] = try allocator.dupe(u8, "end");
-
-    new_items[old_len + 2] = ast.Item{
-        .flow = ast.Flow{
-            .body = ast.rootSite(ast.Invocation{
-                .path = ast.DottedPath{
-                    .module_qualifier = try allocator.dupe(u8, "koru"),
-                    .segments = end_flow_segments,
-                },
-                .args = &.{},
-            }, end_flow_continuations, errors.SourceLocation{
-                .file = "koru_meta_events",
-                .line = 0,
-                .column = 0,
-            }),
-            .location = errors.SourceLocation{
-                .file = "koru_meta_events",
-                .line = 0,
-                .column = 0,
-            },
-            .module = try allocator.dupe(u8, "koru"),
-        },
-    };
+    // Flows: ~koru:start() | done |> _  and  ~koru:end() | done |> _
+    new_items[old_len + 1] = try koruLifecycleFlow(allocator, "start");
+    new_items[old_len + 2] = try koruLifecycleFlow(allocator, "end");
 
     // Update program items
     program.items = new_items;
