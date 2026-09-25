@@ -1915,6 +1915,35 @@ fn isIdentChar(c: u8) bool {
     return isIdentStartChar(c) or (c >= '0' and c <= '9');
 }
 
+/// Advance `i` to the next `,` at depth 0 (or to end) — parens, braces,
+/// brackets, and double-quoted strings all nest.
+fn scanPastTopLevelComma(text: []const u8, i: *usize) void {
+    var paren_depth: usize = 0;
+    var brace_depth: usize = 0;
+    var bracket_depth: usize = 0;
+    var in_string = false;
+    while (i.* < text.len) {
+        const c = text[i.*];
+        if (!in_string) {
+            if (c == '"') in_string = true else if (c == '(') paren_depth += 1 else if (c == ')' and paren_depth > 0) paren_depth -= 1 else if (c == '{') brace_depth += 1 else if (c == '}' and brace_depth > 0) brace_depth -= 1 else if (c == '[') bracket_depth += 1 else if (c == ']' and bracket_depth > 0) bracket_depth -= 1 else if (c == ',' and paren_depth == 0 and brace_depth == 0 and bracket_depth == 0) {
+                break;
+            }
+        } else {
+            if (c == '"' and (i.* == 0 or text[i.* - 1] != '\\')) in_string = false;
+        }
+        i.* += 1;
+    }
+}
+
+/// Index of the first trailing space/tab before `end`, clamped to `start`.
+fn trimRightBlank(text: []const u8, start: usize, end: usize) usize {
+    var e = end;
+    while (e > start and (text[e - 1] == ' ' or text[e - 1] == '\t')) {
+        e -= 1;
+    }
+    return e;
+}
+
 /// Extract element type from a slice type string
 /// Examples:
 ///   "[]const i32" -> "i32"
@@ -2075,30 +2104,8 @@ fn emitStructLiteral(emitter: *CodeEmitter, ctx: *EmissionContext, value: []cons
 
                 // Find end of value (comma or end of struct)
                 const value_start = i;
-                var paren_depth: usize = 0;
-                var brace_depth: usize = 0;
-                var bracket_depth: usize = 0;
-                var in_string = false;
-
-                while (i < inner.len) {
-                    const c = inner[i];
-                    if (!in_string) {
-                        if (c == '"') in_string = true else if (c == '(') paren_depth += 1 else if (c == ')' and paren_depth > 0) paren_depth -= 1 else if (c == '{') brace_depth += 1 else if (c == '}' and brace_depth > 0) brace_depth -= 1 else if (c == '[') bracket_depth += 1 else if (c == ']' and bracket_depth > 0) bracket_depth -= 1 else if (c == ',' and paren_depth == 0 and brace_depth == 0 and bracket_depth == 0) {
-                            break;
-                        }
-                    } else {
-                        if (c == '"' and (i == 0 or inner[i - 1] != '\\')) in_string = false;
-                    }
-                    i += 1;
-                }
-
-                // Trim trailing whitespace from value
-                var value_end = i;
-                while (value_end > value_start and (inner[value_end - 1] == ' ' or inner[value_end - 1] == '\t')) {
-                    value_end -= 1;
-                }
-
-                const field_value = inner[value_start..value_end];
+                scanPastTopLevelComma(inner, &i);
+                const field_value = inner[value_start..trimRightBlank(inner, value_start, i)];
 
                 // Emit .field = value
                 if (!first_field) {
@@ -2193,30 +2200,8 @@ pub fn emitArrayContents(emitter: *CodeEmitter, ctx: *EmissionContext, contents:
 
         // Find end of this element (next comma at depth 0)
         const elem_start = i;
-        var paren_depth: usize = 0;
-        var brace_depth: usize = 0;
-        var bracket_depth: usize = 0;
-        var in_string = false;
-
-        while (i < contents.len) {
-            const c = contents[i];
-            if (!in_string) {
-                if (c == '"') in_string = true else if (c == '(') paren_depth += 1 else if (c == ')' and paren_depth > 0) paren_depth -= 1 else if (c == '{') brace_depth += 1 else if (c == '}' and brace_depth > 0) brace_depth -= 1 else if (c == '[') bracket_depth += 1 else if (c == ']' and bracket_depth > 0) bracket_depth -= 1 else if (c == ',' and paren_depth == 0 and brace_depth == 0 and bracket_depth == 0) {
-                    break;
-                }
-            } else {
-                if (c == '"' and (i == 0 or contents[i - 1] != '\\')) in_string = false;
-            }
-            i += 1;
-        }
-
-        // Trim the element
-        var elem_end = i;
-        while (elem_end > elem_start and (contents[elem_end - 1] == ' ' or contents[elem_end - 1] == '\t')) {
-            elem_end -= 1;
-        }
-
-        const element = contents[elem_start..elem_end];
+        scanPastTopLevelComma(contents, &i);
+        const element = contents[elem_start..trimRightBlank(contents, elem_start, i)];
 
         if (element.len > 0) {
             if (!first_element) {
