@@ -162,11 +162,8 @@ pub fn parseQualifiedPath(allocator: std.mem.Allocator, path: []const u8, ast: a
     }
 }
 
-/// Find the position of a top-level variant pipe (`|`) at bracket depth 0.
-/// Used to split `event_name|variant` paths into the canonical name and variant tag.
-/// Returns null if no top-level pipe found (or if it would conflict with `|>` chain ops,
-/// though `|>` is not legal in a subflow declaration's event-path position).
-pub fn findTopLevelVariantPipe(path: []const u8) ?usize {
+/// First `needle` outside `[…]`, `(…)`, and `<…>` — the path-delimiter set.
+fn indexOfPathDepthZero(path: []const u8, needle: u8) ?usize {
     var bracket_depth: i32 = 0;
     var paren_depth: i32 = 0;
     var angle_depth: i32 = 0;
@@ -179,42 +176,28 @@ pub fn findTopLevelVariantPipe(path: []const u8) ?usize {
             ')' => paren_depth -= 1,
             '<' => angle_depth += 1,
             '>' => angle_depth -= 1,
-            '|' => {
-                if (bracket_depth == 0 and paren_depth == 0 and angle_depth == 0) {
+            else => {
+                if (c == needle and bracket_depth == 0 and paren_depth == 0 and angle_depth == 0) {
                     return i;
                 }
             },
-            else => {},
         }
     }
     return null;
 }
 
+/// Find the position of a top-level variant pipe (`|`) at bracket depth 0.
+/// Used to split `event_name|variant` paths into the canonical name and variant tag.
+/// Returns null if no top-level pipe found (or if it would conflict with `|>` chain ops,
+/// though `|>` is not legal in a subflow declaration's event-path position).
+pub fn findTopLevelVariantPipe(path: []const u8) ?usize {
+    return indexOfPathDepthZero(path, '|');
+}
+
 /// Find the position of a module qualifier colon (at bracket depth 0)
 /// Returns null if no qualifying colon found
 pub fn findModuleQualifierColon(path: []const u8) ?usize {
-    var bracket_depth: i32 = 0;  // []
-    var paren_depth: i32 = 0;    // ()
-    var angle_depth: i32 = 0;    // <>
-
-    for (path, 0..) |c, i| {
-        switch (c) {
-            '[' => bracket_depth += 1,
-            ']' => bracket_depth -= 1,
-            '(' => paren_depth += 1,
-            ')' => paren_depth -= 1,
-            '<' => angle_depth += 1,
-            '>' => angle_depth -= 1,
-            ':' => {
-                // Only a module qualifier if at depth 0 for all bracket types
-                if (bracket_depth == 0 and paren_depth == 0 and angle_depth == 0) {
-                    return i;
-                }
-            },
-            else => {},
-        }
-    }
-    return null;
+    return indexOfPathDepthZero(path, ':');
 }
 
 /// Extract balanced braces content

@@ -1636,6 +1636,15 @@ fn armPayloadType(info: EventInfo, branch_name: []const u8) ?[]const u8 {
     return null;
 }
 
+/// `path` spells `std.store:<name>` — one segment under the std.store
+/// qualifier.
+fn isStdStoreCall(path: ast.DottedPath, name: []const u8) bool {
+    const mq = path.module_qualifier orelse return false;
+    return std.mem.eql(u8, mq, "std.store") and
+        path.segments.len == 1 and
+        std.mem.eql(u8, path.segments[0], name);
+}
+
 /// The payload type of a STORE-SYNTHESIZED arm (690_107/109): the drain
 /// (`! discharge`) branch lives on the teardown event `create` synthesizes
 /// AFTER the Stage-A fill runs, so the event table cannot type it. The seed
@@ -1646,12 +1655,7 @@ fn armPayloadType(info: EventInfo, branch_name: []const u8) ?[]const u8 {
 /// teardown payload declares. Returns null for anything without a single
 /// by-type candidate (a record payload — the give-back's multi-field shape).
 fn storeSynthPayloadType(allocator: std.mem.Allocator, inv: *const ast.Invocation, branch: []const u8) ?[]const u8 {
-    const is_new = blk: {
-        if (inv.path.module_qualifier) |mq| {
-            if (std.mem.eql(u8, mq, "std.store") and inv.path.segments.len == 1 and std.mem.eql(u8, inv.path.segments[0], "new")) break :blk true;
-        }
-        break :blk false;
-    };
+    const is_new = isStdStoreCall(inv.path, "new");
     if (!is_new) return null;
     if (!std.mem.eql(u8, branch, "discharge")) return null;
     var seed: ?[]const u8 = null;
@@ -1707,12 +1711,7 @@ fn normalizeColumnType(allocator: std.mem.Allocator, ftype: []const u8) []const 
 /// their `<state!>` phantom. Resolved from the store declaration's seed, like
 /// the drain payload. Returns null for anything without named fields.
 fn storeSynthPayloadFields(allocator: std.mem.Allocator, items: []const ast.Item, inv: *const ast.Invocation, branch: []const u8) ?[]const PayloadField {
-    const is_insert = blk: {
-        if (inv.path.module_qualifier) |mq| {
-            if (std.mem.eql(u8, mq, "std.store") and inv.path.segments.len == 1 and std.mem.eql(u8, inv.path.segments[0], "insert")) break :blk true;
-        }
-        break :blk false;
-    };
+    const is_insert = isStdStoreCall(inv.path, "insert");
     if (!is_insert) return null;
     if (!std.mem.eql(u8, branch, "full")) return null;
     var store_name: ?[]const u8 = null;
@@ -1727,13 +1726,7 @@ fn storeSynthPayloadFields(allocator: std.mem.Allocator, items: []const ast.Item
         if (f.body.node == null) continue;
         if (f.body.node.? != .invocation) continue;
         const ninv = &f.body.node.?.invocation;
-        const is_new = blk: {
-            if (ninv.path.module_qualifier) |mq| {
-                if (std.mem.eql(u8, mq, "std.store") and ninv.path.segments.len == 1 and std.mem.eql(u8, ninv.path.segments[0], "new")) break :blk true;
-            }
-            break :blk false;
-        };
-        if (!is_new) continue;
+        if (!isStdStoreCall(ninv.path, "new")) continue;
         var nm: ?[]const u8 = null;
         var seed: ?[]const u8 = null;
         for (ninv.args) |a| {
