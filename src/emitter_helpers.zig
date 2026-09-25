@@ -6767,8 +6767,8 @@ fn rewriteEffectfulProcBody(
     mod_prefix: []const u8,
     site_suffix: []const u8,
 ) !RewrittenProcBody {
-    var out = try std.ArrayList(u8).initCapacity(allocator, body.len + 256);
-    errdefer out.deinit(allocator);
+    var scan = ProcBodyScan{ .out = try std.ArrayList(u8).initCapacity(allocator, body.len + 256) };
+    errdefer scan.out.deinit(allocator);
 
     // Effect branch → handled continuation index (or null = unhandled optional).
     const EffectSite = struct { lowered: []const u8, cont_idx: ?usize };
@@ -6829,126 +6829,172 @@ fn rewriteEffectfulProcBody(
     }
     const clean_body = stripped.items;
 
-    var has_break = false;
-    var i: usize = 0;
-    var q: u8 = 0;
-    while (i < clean_body.len) {
-        const c = clean_body[i];
-        if (q != 0) {
-            try out.append(allocator, c);
-            if (c == '\\') {
-                if (i + 1 < clean_body.len) try out.append(allocator, clean_body[i + 1]);
-                i += 2;
+    while (scan.i < clean_body.len) {
+        const c = clean_body[scan.i];
+        switch (try procBodyScanStep(&scan, allocator, clean_body, .{ .break_label = break_label, .mod_prefix = mod_prefix })) {
+            .consumed => continue,
+            .copy => {
+                try scan.out.append(allocator, c);
+                scan.i += 1;
                 continue;
-            }
-            if (c == q) q = 0;
-            i += 1;
+            },
+            .at_boundary => {},
+        }
+        const i = scan.i;
+        // `__x` → `__x_<site>`: proc-body internals get a per-splice
+        // suffix. The body lands in the caller's frame, where locals
+        // from other inlined bodies (and emitter helpers like print's
+        // `__kw`/`__f`) collide by natural name — nested `packets`
+        // inside `ticks` hit "shadows local" on `__i` (koru-libs
+        // asteroids-net). `__` is the author's internal namespace:
+        // Koru bindings can't spell it and `.`-access is boundary-
+        // excluded, so a uniform token rename is safe. `__koru_*` is
+        // the emitter's own namespace (markers, scaffolding) — leave it.
+        if (std.mem.startsWith(u8, clean_body[i..], "__") and
+            i + 2 < clean_body.len and
+            (std.ascii.isAlphabetic(clean_body[i + 2]) or clean_body[i + 2] == '_') and
+            !std.mem.startsWith(u8, clean_body[i..], "__koru"))
+        {
+            var j = i + 2;
+            while (j < clean_body.len and
+                (std.ascii.isAlphanumeric(clean_body[j]) or clean_body[j] == '_')) j += 1;
+            try scan.out.appendSlice(allocator, clean_body[i..j]);
+            try scan.out.appendSlice(allocator, site_suffix);
+            scan.i = j;
             continue;
         }
-        if (c == '"' or c == '\'') {
-            q = c;
-            try out.append(allocator, c);
-            i += 1;
-            continue;
-        }
-        if (c == '/' and i + 1 < clean_body.len and clean_body[i + 1] == '/') {
-            while (i < clean_body.len and clean_body[i] != '\n') : (i += 1) try out.append(allocator, clean_body[i]);
-            continue;
-        }
-
-        // A preceding '.' blocks the rewrite (member chains: `x.std.`) —
-        // UNLESS it is the second dot of the range operator (`[0..$mod.len]`,
-        // 400_179), which is a boundary, not member access.
-        const after_range_op = i >= 2 and clean_body[i - 1] == '.' and clean_body[i - 2] == '.';
-        const boundary_before = i == 0 or after_range_op or !(std.ascii.isAlphanumeric(clean_body[i - 1]) or clean_body[i - 1] == '_' or clean_body[i - 1] == '.');
-        if (boundary_before) {
-            // `return` → labeled break (any depth: every return is a proc exit).
-            if (std.mem.startsWith(u8, clean_body[i..], "return")) {
-                const after = i + "return".len;
-                if (after >= clean_body.len or !(std.ascii.isAlphanumeric(clean_body[after]) or clean_body[after] == '_')) {
-                    try out.appendSlice(allocator, "break :");
-                    try out.appendSlice(allocator, break_label);
-                    has_break = true;
-                    i = after;
-                    continue;
-                }
-            }
-            // `std.` → `@import("std").` (module scope does not travel).
-            if (std.mem.startsWith(u8, clean_body[i..], "std.")) {
-                try out.appendSlice(allocator, "@import(\"std\").");
-                i += "std.".len;
-                continue;
-            }
-            // `$mod.` → declaring module's namespace (module scope, spelled).
-            if (std.mem.startsWith(u8, clean_body[i..], "$mod.")) {
-                try out.appendSlice(allocator, mod_prefix);
-                i += "$mod.".len;
-                continue;
-            }
-            // `__x` → `__x_<site>`: proc-body internals get a per-splice
-            // suffix. The body lands in the caller's frame, where locals
-            // from other inlined bodies (and emitter helpers like print's
-            // `__kw`/`__f`) collide by natural name — nested `packets`
-            // inside `ticks` hit "shadows local" on `__i` (koru-libs
-            // asteroids-net). `__` is the author's internal namespace:
-            // Koru bindings can't spell it and `.`-access is boundary-
-            // excluded, so a uniform token rename is safe. `__koru_*` is
-            // the emitter's own namespace (markers, scaffolding) — leave it.
-            if (std.mem.startsWith(u8, clean_body[i..], "__") and
-                i + 2 < clean_body.len and
-                (std.ascii.isAlphabetic(clean_body[i + 2]) or clean_body[i + 2] == '_') and
-                !std.mem.startsWith(u8, clean_body[i..], "__koru"))
-            {
-                var j = i + 2;
-                while (j < clean_body.len and
-                    (std.ascii.isAlphanumeric(clean_body[j]) or clean_body[j] == '_')) j += 1;
-                try out.appendSlice(allocator, clean_body[i..j]);
-                try out.appendSlice(allocator, site_suffix);
-                i = j;
-                continue;
-            }
-            // Effect calls → splice markers / evaluate-and-discard.
-            var matched = false;
-            for (sites) |site| {
-                if (!std.mem.startsWith(u8, clean_body[i..], site.lowered)) continue;
-                var j = i + site.lowered.len;
-                while (j < clean_body.len and (clean_body[j] == ' ' or clean_body[j] == '\t')) j += 1;
-                if (j >= clean_body.len or clean_body[j] != '(') continue;
-                if (site.cont_idx) |ci| {
-                    try out.appendSlice(allocator, INLINE_SPLICE_PREFIX);
-                    var nb: [16]u8 = undefined;
-                    try out.appendSlice(allocator, std.fmt.bufPrint(&nb, "{d}", .{ci}) catch unreachable);
-                    i = j; // resume at '(' — the resolver reads the args
+        // Effect calls → splice markers / evaluate-and-discard.
+        var matched = false;
+        for (sites) |site| {
+            if (!std.mem.startsWith(u8, clean_body[i..], site.lowered)) continue;
+            var j = i + site.lowered.len;
+            while (j < clean_body.len and (clean_body[j] == ' ' or clean_body[j] == '\t')) j += 1;
+            if (j >= clean_body.len or clean_body[j] != '(') continue;
+            if (site.cont_idx) |ci| {
+                try scan.out.appendSlice(allocator, INLINE_SPLICE_PREFIX);
+                var nb: [16]u8 = undefined;
+                try scan.out.appendSlice(allocator, std.fmt.bufPrint(&nb, "{d}", .{ci}) catch unreachable);
+                scan.i = j; // resume at '(' — the resolver reads the args
+            } else {
+                // Unhandled optional effect: the fire folds away and the
+                // payload is NEVER evaluated (the 400_145 ruling). `@TypeOf`
+                // is the spelling: it marks the payload identifiers used
+                // without evaluating them — where the old `_ = (payload)`
+                // both evaluated it AND tripped Zig's pointless-discard on
+                // a payload also used elsewhere (400_178). A VOID arm
+                // (`focus_in()`) has no payload, and `@TypeOf()` is invalid
+                // Zig — discard a void block instead and consume the `()`.
+                var k = j + 1; // past '('
+                while (k < clean_body.len and (clean_body[k] == ' ' or clean_body[k] == '\t' or clean_body[k] == '\n' or clean_body[k] == '\r')) k += 1;
+                if (k < clean_body.len and clean_body[k] == ')') {
+                    try scan.out.appendSlice(allocator, "_ = {}");
+                    scan.i = k + 1; // resume past ')'
                 } else {
-                    // Unhandled optional effect: the fire folds away and the
-                    // payload is NEVER evaluated (the 400_145 ruling). `@TypeOf`
-                    // is the spelling: it marks the payload identifiers used
-                    // without evaluating them — where the old `_ = (payload)`
-                    // both evaluated it AND tripped Zig's pointless-discard on
-                    // a payload also used elsewhere (400_178). A VOID arm
-                    // (`focus_in()`) has no payload, and `@TypeOf()` is invalid
-                    // Zig — discard a void block instead and consume the `()`.
-                    var k = j + 1; // past '('
-                    while (k < clean_body.len and (clean_body[k] == ' ' or clean_body[k] == '\t' or clean_body[k] == '\n' or clean_body[k] == '\r')) k += 1;
-                    if (k < clean_body.len and clean_body[k] == ')') {
-                        try out.appendSlice(allocator, "_ = {}");
-                        i = k + 1; // resume past ')'
-                    } else {
-                        try out.appendSlice(allocator, "_ = @TypeOf");
-                        i = j; // resume at '(' — Zig reads the args
-                    }
+                    try scan.out.appendSlice(allocator, "_ = @TypeOf");
+                    scan.i = j; // resume at '(' — Zig reads the args
                 }
-                matched = true;
-                break;
             }
-            if (matched) continue;
+            matched = true;
+            break;
         }
+        if (matched) continue;
 
-        try out.append(allocator, c);
-        i += 1;
+        try scan.out.append(allocator, c);
+        scan.i += 1;
     }
 
-    return .{ .text = try out.toOwnedSlice(allocator), .has_break = has_break };
+    return .{ .text = try scan.out.toOwnedSlice(allocator), .has_break = scan.has_break };
+}
+
+/// Which boundary rewrites a proc-body scan applies: a non-null
+/// `break_label` turns `return` into `break :<label>`; `rewrite_std` maps
+/// `std.` → `@import("std").`; `mod_prefix` maps `$mod.` → the prefix
+/// (null strips it bare).
+const ProcScanRules = struct {
+    break_label: ?[]const u8 = null,
+    rewrite_std: bool = true,
+    mod_prefix: ?[]const u8 = null,
+};
+
+/// One position of the proc-body rewrite scan: quote state, `//` comments,
+/// and the boundary calc (a preceding '.' blocks the rewrite — UNLESS it is
+/// the second dot of the range operator, `[0..$mod.len]`, 400_179).
+/// `.at_boundary` tells the caller its own boundary rules may still fire at
+/// this position.
+const ProcScanStep = enum { consumed, at_boundary, copy };
+
+const ProcBodyScan = struct {
+    out: std.ArrayList(u8),
+    i: usize = 0,
+    q: u8 = 0,
+    has_break: bool = false,
+};
+
+fn procBodyScanStep(
+    scan: *ProcBodyScan,
+    allocator: std.mem.Allocator,
+    body: []const u8,
+    rules: ProcScanRules,
+) !ProcScanStep {
+    const c = body[scan.i];
+    if (scan.q != 0) {
+        try scan.out.append(allocator, c);
+        if (c == '\\') {
+            if (scan.i + 1 < body.len) try scan.out.append(allocator, body[scan.i + 1]);
+            scan.i += 2;
+            return .consumed;
+        }
+        if (c == scan.q) scan.q = 0;
+        scan.i += 1;
+        return .consumed;
+    }
+    if (c == '"' or c == '\'') {
+        scan.q = c;
+        try scan.out.append(allocator, c);
+        scan.i += 1;
+        return .consumed;
+    }
+    if (c == '/' and scan.i + 1 < body.len and body[scan.i + 1] == '/') {
+        while (scan.i < body.len and body[scan.i] != '\n') : (scan.i += 1) try scan.out.append(allocator, body[scan.i]);
+        return .consumed;
+    }
+
+    // A preceding '.' blocks the rewrite (member chains: `x.std.`) — UNLESS
+    // it is the second dot of the range operator (`[0..$mod.len]`, 400_179),
+    // which is a boundary, not member access.
+    const i = scan.i;
+    const after_range_op = i >= 2 and body[i - 1] == '.' and body[i - 2] == '.';
+    const boundary_before = i == 0 or after_range_op or !(std.ascii.isAlphanumeric(body[i - 1]) or body[i - 1] == '_' or body[i - 1] == '.');
+    if (boundary_before) {
+        // `return` → labeled break (any depth: every return is a proc exit).
+        if (rules.break_label) |label| {
+            if (std.mem.startsWith(u8, body[i..], "return")) {
+                const after = i + "return".len;
+                if (after >= body.len or !(std.ascii.isAlphanumeric(body[after]) or body[after] == '_')) {
+                    try scan.out.appendSlice(allocator, "break :");
+                    try scan.out.appendSlice(allocator, label);
+                    scan.has_break = true;
+                    scan.i = after;
+                    return .consumed;
+                }
+            }
+        }
+        // `std.` → `@import("std").` (module scope does not travel).
+        if (rules.rewrite_std and std.mem.startsWith(u8, body[i..], "std.")) {
+            try scan.out.appendSlice(allocator, "@import(\"std\").");
+            scan.i += "std.".len;
+            return .consumed;
+        }
+        // `$mod.` → declaring module's namespace (module scope, spelled);
+        // null prefix = the Handlers-fn path, where `$mod.` strips bare.
+        if (std.mem.startsWith(u8, body[i..], "$mod.")) {
+            if (rules.mod_prefix) |prefix| try scan.out.appendSlice(allocator, prefix);
+            scan.i += "$mod.".len;
+            return .consumed;
+        }
+        return .at_boundary;
+    }
+    return .copy;
 }
 
 /// Depth-any `return` → labeled break, `std.` → `@import("std").` — the
@@ -6963,71 +7009,17 @@ fn rewriteReturnsAndStd(
     break_label: []const u8,
     mod_prefix: []const u8,
 ) !RewrittenProcBody {
-    var out = try std.ArrayList(u8).initCapacity(allocator, body.len + 256);
-    errdefer out.deinit(allocator);
+    var scan = ProcBodyScan{ .out = try std.ArrayList(u8).initCapacity(allocator, body.len + 256) };
+    errdefer scan.out.deinit(allocator);
 
-    var has_break = false;
-    var i: usize = 0;
-    var q: u8 = 0;
-    while (i < body.len) {
-        const c = body[i];
-        if (q != 0) {
-            try out.append(allocator, c);
-            if (c == '\\') {
-                if (i + 1 < body.len) try out.append(allocator, body[i + 1]);
-                i += 2;
-                continue;
-            }
-            if (c == q) q = 0;
-            i += 1;
-            continue;
-        }
-        if (c == '"' or c == '\'') {
-            q = c;
-            try out.append(allocator, c);
-            i += 1;
-            continue;
-        }
-        if (c == '/' and i + 1 < body.len and body[i + 1] == '/') {
-            while (i < body.len and body[i] != '\n') : (i += 1) try out.append(allocator, body[i]);
-            continue;
-        }
-
-        // Second dot of a range operator is a boundary, not member access
-        // (`[0..$mod.len]`, 400_179) — same exception as the proc-body scan.
-        const after_range_op = i >= 2 and body[i - 1] == '.' and body[i - 2] == '.';
-        const boundary_before = i == 0 or after_range_op or !(std.ascii.isAlphanumeric(body[i - 1]) or body[i - 1] == '_' or body[i - 1] == '.');
-        if (boundary_before) {
-            // `return` → labeled break (any depth: every return is an exit).
-            if (std.mem.startsWith(u8, body[i..], "return")) {
-                const after = i + "return".len;
-                if (after >= body.len or !(std.ascii.isAlphanumeric(body[after]) or body[after] == '_')) {
-                    try out.appendSlice(allocator, "break :");
-                    try out.appendSlice(allocator, break_label);
-                    has_break = true;
-                    i = after;
-                    continue;
-                }
-            }
-            // `std.` → `@import("std").` (module scope does not travel).
-            if (std.mem.startsWith(u8, body[i..], "std.")) {
-                try out.appendSlice(allocator, "@import(\"std\").");
-                i += "std.".len;
-                continue;
-            }
-            // `$mod.` → declaring module's namespace (module scope, spelled).
-            if (std.mem.startsWith(u8, body[i..], "$mod.")) {
-                try out.appendSlice(allocator, mod_prefix);
-                i += "$mod.".len;
-                continue;
-            }
-        }
-
-        try out.append(allocator, c);
-        i += 1;
+    while (scan.i < body.len) {
+        const c = body[scan.i];
+        if (try procBodyScanStep(&scan, allocator, body, .{ .break_label = break_label, .mod_prefix = mod_prefix }) == .consumed) continue;
+        try scan.out.append(allocator, c);
+        scan.i += 1;
     }
 
-    return .{ .text = try out.toOwnedSlice(allocator), .has_break = has_break };
+    return .{ .text = try scan.out.toOwnedSlice(allocator), .has_break = scan.has_break };
 }
 
 /// Render a flow-bodied (subflow-implemented) effect event's impl body,
@@ -7087,44 +7079,15 @@ fn renderEffectfulFlowBody(
 /// spelling valid under both lowerings. Quote- and comment-aware, boundary-
 /// checked like the splice-path rewrites.
 pub fn rewriteModToBare(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
-    var out = try std.ArrayList(u8).initCapacity(allocator, body.len);
-    errdefer out.deinit(allocator);
-    var i: usize = 0;
-    var q: u8 = 0;
-    while (i < body.len) {
-        const c = body[i];
-        if (q != 0) {
-            try out.append(allocator, c);
-            if (c == '\\') {
-                if (i + 1 < body.len) try out.append(allocator, body[i + 1]);
-                i += 2;
-                continue;
-            }
-            if (c == q) q = 0;
-            i += 1;
-            continue;
-        }
-        if (c == '"' or c == '\'') {
-            q = c;
-            try out.append(allocator, c);
-            i += 1;
-            continue;
-        }
-        if (c == '/' and i + 1 < body.len and body[i + 1] == '/') {
-            while (i < body.len and body[i] != '\n') : (i += 1) try out.append(allocator, body[i]);
-            continue;
-        }
-        // Range-operator exception (`[0..$mod.len]`, 400_179), as above.
-        const after_range_op = i >= 2 and body[i - 1] == '.' and body[i - 2] == '.';
-        const boundary_before = i == 0 or after_range_op or !(std.ascii.isAlphanumeric(body[i - 1]) or body[i - 1] == '_' or body[i - 1] == '.');
-        if (boundary_before and std.mem.startsWith(u8, body[i..], "$mod.")) {
-            i += "$mod.".len;
-            continue;
-        }
-        try out.append(allocator, c);
-        i += 1;
+    var scan = ProcBodyScan{ .out = try std.ArrayList(u8).initCapacity(allocator, body.len) };
+    errdefer scan.out.deinit(allocator);
+    while (scan.i < body.len) {
+        const c = body[scan.i];
+        if (try procBodyScanStep(&scan, allocator, body, .{ .rewrite_std = false }) == .consumed) continue;
+        try scan.out.append(allocator, c);
+        scan.i += 1;
     }
-    return try out.toOwnedSlice(allocator);
+    return try scan.out.toOwnedSlice(allocator);
 }
 
 /// Replace template-baked `@hasDecl(__H, "<arm>")` with `true`/`false` from
