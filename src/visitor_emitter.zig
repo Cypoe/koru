@@ -2413,6 +2413,31 @@ pub const VisitorEmitter = struct {
         try self.code_emitter.write("unreachable;\n");
     }
 
+    /// Yielding-branch comptime aliases — `const X = __H.X` plus a discard.
+    /// Optional arms get a nullable-fn-ptr alias (comptime-known present/
+    /// absent) so presence guards fold and the omitted case never forces
+    /// `__H.X`. (400_146/147/148)
+    fn emitYieldingBranchAliases(self: *VisitorEmitter, event: *const ast.EventDecl, has_effect: bool) !void {
+        if (!has_effect) return;
+        for (event.branches) |*b| {
+            if (b.kind != .effect) continue;
+            if (b.is_optional) {
+                try emitter.emitOptionalArmNullableAlias(self.code_emitter, b, self.main_module_name);
+                continue;
+            }
+            try self.code_emitter.writeIndent();
+            try self.code_emitter.write("const ");
+            try emitter.writeBranchName(self.code_emitter, b.name);
+            try self.code_emitter.write(" = __H.");
+            try emitter.writeBranchName(self.code_emitter, b.name);
+            try self.code_emitter.write(";\n");
+            try self.code_emitter.writeIndent();
+            try self.code_emitter.write("_ = &");
+            try emitter.writeBranchName(self.code_emitter, b.name);
+            try self.code_emitter.write(";\n");
+        }
+    }
+
     /// Emit a complete event declaration with Input, Output, and handler
     fn emitEventDecl(self: *VisitorEmitter, event: *const ast.EventDecl, all_items: []const ast.Item) !void {
         const eql = std.mem.eql;
@@ -2984,28 +3009,7 @@ pub const VisitorEmitter = struct {
         }
 
         // Yielding-branch comptime aliases — must come before any user body code.
-        if (has_effect) {
-            for (event.branches) |*b| {
-                if (b.kind != .effect) continue;
-                // Optional arms → nullable-fn-ptr alias (comptime-known present/
-                // absent) so presence guards fold and the omitted case never
-                // forces `__H.X`. (400_146/147/148)
-                if (b.is_optional) {
-                    try emitter.emitOptionalArmNullableAlias(self.code_emitter, b, self.main_module_name);
-                    continue;
-                }
-                try self.code_emitter.writeIndent();
-                try self.code_emitter.write("const ");
-                try emitter.writeBranchName(self.code_emitter, b.name);
-                try self.code_emitter.write(" = __H.");
-                try emitter.writeBranchName(self.code_emitter, b.name);
-                try self.code_emitter.write(";\n");
-                try self.code_emitter.writeIndent();
-                try self.code_emitter.write("_ = &");
-                try emitter.writeBranchName(self.code_emitter, b.name);
-                try self.code_emitter.write(";\n");
-            }
-        }
+        try self.emitYieldingBranchAliases(event, has_effect);
 
         // Find implementation
         var found_impl = false;
@@ -4345,25 +4349,7 @@ pub const VisitorEmitter = struct {
                             try self.code_emitter.write(";\n");
                         }
                         // Yielding-branch aliases, identical to the bare handler's.
-                        if (has_effect) {
-                            for (event.branches) |*b| {
-                                if (b.kind != .effect) continue;
-                                if (b.is_optional) {
-                                    try emitter.emitOptionalArmNullableAlias(self.code_emitter, b, self.main_module_name);
-                                    continue;
-                                }
-                                try self.code_emitter.writeIndent();
-                                try self.code_emitter.write("const ");
-                                try emitter.writeBranchName(self.code_emitter, b.name);
-                                try self.code_emitter.write(" = __H.");
-                                try emitter.writeBranchName(self.code_emitter, b.name);
-                                try self.code_emitter.write(";\n");
-                                try self.code_emitter.writeIndent();
-                                try self.code_emitter.write("_ = &");
-                                try emitter.writeBranchName(self.code_emitter, b.name);
-                                try self.code_emitter.write(";\n");
-                            }
-                        }
+                        try self.emitYieldingBranchAliases(event, has_effect);
                         // Suppress unused variable warnings
                         for (event.input.fields) |field| {
                             try self.code_emitter.writeIndent();
