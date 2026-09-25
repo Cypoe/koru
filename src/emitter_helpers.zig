@@ -937,15 +937,32 @@ pub fn isScalarValueFields(fields: []const ast.Field) bool {
 ///     level (`[entity(store)]`'s `pub const Store` alias, 690_037) or another
 ///     module → the type is NOT the phantom module's; leave unqualified.
 ///   - not visible at all → the phantom names the only candidate home; qualify.
-fn phantomModuleIsTypeHome(type_name: []const u8, phantom_mod: []const u8) bool {
-    var base = type_name;
-    const prefixes = [_][]const u8{ "[]const ", "?*const ", "*const ", "[]", "?*", "?", "*" };
-    for (prefixes) |prefix| {
-        if (std.mem.startsWith(u8, base, prefix)) {
-            base = base[prefix.len..];
-            break;
+/// Leading type modifiers, ordered longest-first so `[]const ` and `?*const `
+/// win over their `[]`/`?`/`*` components.
+const type_prefixes = [_][]const u8{ "[]const ", "?*const ", "*const ", "[]", "?*", "?", "*" };
+
+/// Split a type spelling into its first leading modifier and the rest.
+fn splitTypePrefix(type_name: []const u8) struct { prefix: []const u8, base: []const u8 } {
+    for (type_prefixes) |prefix| {
+        if (std.mem.startsWith(u8, type_name, prefix)) {
+            return .{ .prefix = prefix, .base = type_name[prefix.len..] };
         }
     }
+    return .{ .prefix = "", .base = type_name };
+}
+
+/// The name with every leading modifier stripped (`?*const []Foo` → `Foo`).
+fn stripTypePrefixes(type_name: []const u8) []const u8 {
+    var base = type_name;
+    while (true) {
+        const split = splitTypePrefix(base);
+        if (split.prefix.len == 0) return base;
+        base = split.base;
+    }
+}
+
+fn phantomModuleIsTypeHome(type_name: []const u8, phantom_mod: []const u8) bool {
+    const base = splitTypePrefix(type_name).base;
     const homes = host_type_homes orelse return true;
     const home = homes.get(base) orelse return true;
     return type_registry_module.moduleNamesMatch(home, phantom_mod);
@@ -957,14 +974,7 @@ fn phantomModuleIsTypeHome(type_name: []const u8, phantom_mod: []const u8) bool 
 /// a registered host type whose home is this module. Used when a payload type
 /// written bare has to be resolved to the module that declared it.
 fn moduleDeclaresType(type_name: []const u8, mod: []const u8) bool {
-    var base = type_name;
-    const prefixes = [_][]const u8{ "[]const ", "?*const ", "*const ", "[]", "?*", "?", "*" };
-    for (prefixes) |prefix| {
-        if (std.mem.startsWith(u8, base, prefix)) {
-            base = base[prefix.len..];
-            break;
-        }
-    }
+    const base = splitTypePrefix(type_name).base;
     const homes = host_type_homes orelse return false;
     const home = homes.get(base) orelse return false;
     return type_registry_module.moduleNamesMatch(home, mod);
@@ -1095,14 +1105,9 @@ pub fn writeFieldType(emitter: *CodeEmitter, field: ast.Field, main_module_name:
         var type_name = field.type;
         var type_prefix: []const u8 = "";
 
-        const prefixes = [_][]const u8{ "[]const ", "?*const ", "*const ", "[]", "?*", "?", "*" };
-        for (prefixes) |prefix| {
-            if (std.mem.startsWith(u8, type_name, prefix)) {
-                type_prefix = prefix;
-                type_name = type_name[prefix.len..];
-                break;
-            }
-        }
+        const split = splitTypePrefix(type_name);
+        type_prefix = split.prefix;
+        type_name = split.base;
 
         // Write: prefix + module_path + . + base_type
         if (type_prefix.len > 0) {
@@ -1130,18 +1135,7 @@ pub fn writeFieldType(emitter: *CodeEmitter, field: ast.Field, main_module_name:
         // best-effort aid for positions the scope checker does not see (e.g.
         // proc payloads) and for registries a test armed without decl sites.
         {
-            var i: usize = 0;
-            const prefixes = [_][]const u8{ "[]const ", "?*const ", "*const ", "[]", "?*", "?", "*" };
-            strip: while (true) {
-                for (prefixes) |prefix| {
-                    if (std.mem.startsWith(u8, type_name[i..], prefix)) {
-                        i += prefix.len;
-                        continue :strip;
-                    }
-                }
-                break;
-            }
-            const base = type_name[i..];
+            const base = stripTypePrefixes(type_name);
             var base_ok = base.len > 0;
             for (base) |c| {
                 if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') {
@@ -1153,7 +1147,7 @@ pub fn writeFieldType(emitter: *CodeEmitter, field: ast.Field, main_module_name:
                 if (writerDeclaresType(base)) {
                     if (current_writer_module) |writer| {
                         if (writer.len > 0) {
-                            try emitter.write(type_name[0..i]);
+                            try emitter.write(type_name[0 .. type_name.len - base.len]);
                             try writeModulePath(emitter, writer, main_module_name);
                             try emitter.write(".");
                             try emitter.write(base);
@@ -1165,7 +1159,7 @@ pub fn writeFieldType(emitter: *CodeEmitter, field: ast.Field, main_module_name:
                 } else if (host_type_homes) |homes| {
                     if (homes.get(base)) |home| {
                         if (home.len > 0) {
-                            try emitter.write(type_name[0..i]);
+                            try emitter.write(type_name[0 .. type_name.len - base.len]);
                             try writeModulePath(emitter, home, main_module_name);
                             try emitter.write(".");
                             try emitter.write(base);
@@ -13189,18 +13183,7 @@ fn writeEventShapeFieldType(
             }
         }
         if (phantom_home == null) {
-            var i: usize = 0;
-            const prefixes = [_][]const u8{ "[]const ", "?*const ", "*const ", "[]", "?*", "?", "*" };
-            strip: while (true) {
-                for (prefixes) |prefix| {
-                    if (std.mem.startsWith(u8, field.type[i..], prefix)) {
-                        i += prefix.len;
-                        continue :strip;
-                    }
-                }
-                break;
-            }
-            if (isModuleLocalBareTypeBase(field.type[i..])) {
+            if (isModuleLocalBareTypeBase(stripTypePrefixes(field.type))) {
                 var patched = field;
                 patched.module_path = event_module;
                 try writeFieldType(code_emitter, patched, main_module_name);
