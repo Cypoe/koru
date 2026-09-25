@@ -11124,6 +11124,20 @@ pub const Parser = struct {
             const label_name = after_hash[0..idx];
             const event_part = lexer.trim(after_hash[idx + 1 ..]);
 
+            // The name must be one a jump can spell — extractLabel takes only
+            // identifier chars, so `#done(r: {…})` declaring `done(r:` would
+            // mint a label nothing can name, and the jump site eats the
+            // "unknown label" blame for the declaration's fault.
+            if (!isValidIdentifier(label_name)) {
+                return self.fail(
+                    .PARSE003,
+                    self.current + 1,
+                    1,
+                    "malformed label declaration '#{s}' — a label name is an identifier; arguments belong on the @jump, not the anchor",
+                    .{label_name},
+                );
+            }
+
             // Parse the event invocation
             const invocation = try self.parseEventInvocation(event_part);
 
@@ -11148,7 +11162,17 @@ pub const Parser = struct {
                 .module = try self.allocator.dupe(u8, self.module_name),
             } };
         } else {
-            // Standalone label: ~#name
+            // Standalone label: ~#name — same gate as the pre-invocation
+            // spelling: the name must be one a jump can spell.
+            if (!isValidIdentifier(after_hash)) {
+                return self.fail(
+                    .PARSE003,
+                    self.current + 1,
+                    1,
+                    "malformed label declaration '#{s}' — a label name is an identifier; arguments belong on the @jump, not the anchor",
+                    .{after_hash},
+                );
+            }
             self.current += 1;
             const continuations = try self.parseContinuations(lexer.getIndent(line));
 
@@ -11182,6 +11206,18 @@ pub const Parser = struct {
                 1,
                 "malformed label declaration",
                 .{},
+            );
+        }
+        // Same gate as `#`: the declared name must be one a `@name` jump can
+        // spell, or the declaration mints a label that is unreachable by
+        // construction (and the jump site takes the "unknown label" blame).
+        if (!isValidIdentifier(name)) {
+            return self.fail(
+                .PARSE003,
+                self.current,
+                1,
+                "malformed label declaration '@{s}' — a label name is an identifier; arguments belong on the @jump, not the declaration",
+                .{name},
             );
         }
         const continuations = try self.parseContinuations(lexer.getIndent(line));

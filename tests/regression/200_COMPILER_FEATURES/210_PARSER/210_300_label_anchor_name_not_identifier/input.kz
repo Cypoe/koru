@@ -1,0 +1,11 @@
+// PINS: the standalone `#name` anchor's name is an identifier, nothing else.
+// `~#done(r:{a:1})` has no space to split on, so the whole token is the name —
+// it is refused at the declaration, not reported later at the jump.
+const std = @import("std");
+
+~tor start {}
+~proc start|zig {}
+
+~#done(r:{a:1})
+
+~start() |> @done(r: 1)

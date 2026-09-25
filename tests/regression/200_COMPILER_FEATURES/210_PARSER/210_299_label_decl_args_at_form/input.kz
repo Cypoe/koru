@@ -1,0 +1,11 @@
+// PINS: same law at the `#` anchor — `~#done(r: {...})` has a space, so the
+// parser reads `done(r:` as a pre-invocation label name and refuses it as an
+// unspellable identifier rather than registering a label no jump can name.
+const std = @import("std");
+
+~tor start {}
+~proc start|zig {}
+
+~#done(r: {a: 1, a: 2})
+
+~start() |> @done(r: 1)
