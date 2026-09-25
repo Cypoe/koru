@@ -1844,65 +1844,17 @@ pub const AutoDischargeInserter = struct {
                         const ordered = try self.obligationsInLifoOrder(&scoped_context);
                         defer self.allocator.free(ordered);
                         for (ordered) |entry| {
-                            const binding_name = entry.binding_path;
-                            const info = entry.info;
-
-                            const disposals = if (info.not_auto_dischargeable)
-                                try self.allocator.alloc(DisposalEvent, 0)
-                            else
-                                try self.findDisposalEvents(info.phantom_state, info.base_type);
-                            defer self.allocator.free(disposals);
-
-                            const disposal = selectDisposal(disposals) orelse {
-                                const display_name = formatBindingForError(binding_name, info.field_name, info.base_type);
-                                const display_state = formatStateForError(info.phantom_state);
-                                if (disposals.len == 0) {
-                                    // Check for multi-branch events that could dispose this
-                                    const all_disposals = try self.findAllDisposalEvents(info.phantom_state, info.base_type);
-                                    defer self.allocator.free(all_disposals);
-                                    if (all_disposals.len > 0) {
-                                        var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-                                        defer options.deinit(self.allocator);
-                                        const n_candidates = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, all_disposals);
-                                        // Number agreement: one candidate is
-                                        // an instruction (`Call: finalize`),
-                                        // several are a choice set.
-                                        try self.reporter.addError(
-                                            .KORU030,
-                                            site_loc.line,
-                                            site_loc.column,
-                                            "Resource '{s}' obligation <{s}> was not discharged. Call{s}: {s}",
-                                            .{ display_name, display_state, errors.oneOfInfix(n_candidates), options.items },
-                                        );
-                                    } else {
-                                        try self.reporter.addError(
-                                            .KORU030,
-                                            site_loc.line,
-                                            site_loc.column,
-                                            "Resource '{s}' obligation <{s}> was not discharged at scope exit.",
-                                            .{ display_name, display_state },
-                                        );
-                                    }
-                                } else {
-                                    // Build list of discharge options
-                                    var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-                                    defer options.deinit(self.allocator);
-                                    _ = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, disposals);
-                                    try self.reporter.addError(
-                                        .KORU030,
-                                        site_loc.line,
-                                        site_loc.column,
-                                        "Resource '{s}' <{s}> has multiple discharge options: {s}. Discharge explicitly.",
-                                        .{ display_name, display_state, options.items },
-                                    );
-                                }
-                                return error.ValidationFailed;
-                            };
+                            const disposal = try self.resolveObligationDisposal(
+                                entry.binding_path,
+                                entry.info,
+                                site_loc,
+                                "Resource '{s}' obligation <{s}> was not discharged at scope exit.",
+                            );
 
                             // Find the continuation with this binding and insert disposal
                             const scope_exit_result = try self.insertScopeExitDisposalInCont(
                                 cont,
-                                binding_name,
+                                entry.binding_path,
                                 disposal,
                                 program,
                                 flow,
@@ -2718,65 +2670,17 @@ pub const AutoDischargeInserter = struct {
                         const ordered = try self.obligationsInLifoOrder(&branch_context);
                         defer self.allocator.free(ordered);
                         for (ordered) |entry| {
-                            const binding_name = entry.binding_path;
-                            const info = entry.info;
-
-                            // Find disposal event for this obligation
-                            const disposals = if (info.not_auto_dischargeable)
-                                try self.allocator.alloc(DisposalEvent, 0)
-                            else
-                                try self.findDisposalEvents(info.phantom_state, info.base_type);
-                            defer self.allocator.free(disposals);
-
-                            const disposal = selectDisposal(disposals) orelse {
-                                const display_name = formatBindingForError(binding_name, info.field_name, info.base_type);
-                                const display_state = formatStateForError(info.phantom_state);
-                                if (disposals.len == 0) {
-                                    // Check for multi-branch events that could dispose this
-                                    const all_disposals = try self.findAllDisposalEvents(info.phantom_state, info.base_type);
-                                    defer self.allocator.free(all_disposals);
-                                    if (all_disposals.len > 0) {
-                                        var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-                                        defer options.deinit(self.allocator);
-                                        const n_candidates = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, all_disposals);
-                                        // Number agreement: one candidate is
-                                        // an instruction (`Call: finalize`),
-                                        // several are a choice set.
-                                        try self.reporter.addError(
-                                            .KORU030,
-                                            site_loc.line,
-                                            site_loc.column,
-                                            "Resource '{s}' obligation <{s}> was not discharged. Call{s}: {s}",
-                                            .{ display_name, display_state, errors.oneOfInfix(n_candidates), options.items },
-                                        );
-                                    } else {
-                                        try self.reporter.addError(
-                                            .KORU030,
-                                            site_loc.line,
-                                            site_loc.column,
-                                            "Resource '{s}' obligation <{s}> was not discharged at scope exit.",
-                                            .{ display_name, display_state },
-                                        );
-                                    }
-                                } else {
-                                    var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-                                    defer options.deinit(self.allocator);
-                                    _ = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, disposals);
-                                    try self.reporter.addError(
-                                        .KORU030,
-                                        site_loc.line,
-                                        site_loc.column,
-                                        "Resource '{s}' <{s}> has multiple discharge options: {s}. Discharge explicitly.",
-                                        .{ display_name, display_state, options.items },
-                                    );
-                                }
-                                return error.ValidationFailed;
-                            };
+                            const disposal = try self.resolveObligationDisposal(
+                                entry.binding_path,
+                                entry.info,
+                                site_loc,
+                                "Resource '{s}' obligation <{s}> was not discharged at scope exit.",
+                            );
 
                             // Find the continuation that created this binding and insert disposal
                             const result = try self.insertScopeExitDisposal(
                                 branch,
-                                binding_name,
+                                entry.binding_path,
                                 disposal,
                                 program,
                                 flow,
@@ -3120,58 +3024,13 @@ pub const AutoDischargeInserter = struct {
                 const binding_path = entry.binding_path;
                 const info = entry.info;
 
-                const disposals = if (info.not_auto_dischargeable)
-                    try self.allocator.alloc(DisposalEvent, 0)
-                else
-                    try self.findDisposalEvents(info.phantom_state, info.base_type);
-                defer self.allocator.free(disposals);
-
                 // Use selectDisposal to handle [!] default annotation
-                const disposal = selectDisposal(disposals) orelse {
-                    // Ambiguous or no disposal found
-                    const display_name = formatBindingForError(binding_path, info.field_name, info.base_type);
-                    const display_state = formatStateForError(info.phantom_state);
-                    if (disposals.len == 0) {
-                        // Check for multi-branch events that could dispose this
-                        const all_disposals = try self.findAllDisposalEvents(info.phantom_state, info.base_type);
-                        defer self.allocator.free(all_disposals);
-                        if (all_disposals.len > 0) {
-                            var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-                            defer options.deinit(self.allocator);
-                            const n_candidates = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, all_disposals);
-                            // Number agreement: one candidate is an
-                            // instruction (`Call: finalize`), several are a
-                            // choice set.
-                            try self.reporter.addError(
-                                .KORU030,
-                                site_loc.line,
-                                site_loc.column,
-                                "Resource '{s}' obligation <{s}> was not discharged. Call{s}: {s}",
-                                .{ display_name, display_state, errors.oneOfInfix(n_candidates), options.items },
-                            );
-                        } else {
-                            try self.reporter.addError(
-                                .KORU030,
-                                site_loc.line,
-                                site_loc.column,
-                                "Resource '{s}' obligation <{s}> was not discharged.",
-                                .{ display_name, display_state },
-                            );
-                        }
-                    } else {
-                        var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-                        defer options.deinit(self.allocator);
-                        _ = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, disposals);
-                        try self.reporter.addError(
-                            .KORU030,
-                            site_loc.line,
-                            site_loc.column,
-                            "Resource '{s}' <{s}> has multiple discharge options: {s}. Discharge explicitly.",
-                            .{ display_name, display_state, options.items },
-                        );
-                    }
-                    return error.ValidationFailed;
-                };
+                const disposal = try self.resolveObligationDisposal(
+                    binding_path,
+                    info,
+                    site_loc,
+                    "Resource '{s}' obligation <{s}> was not discharged.",
+                );
 
                 // Emit warning about auto-discharge insertion (only in warn mode)
                 if (self.warn_mode) {
@@ -3527,6 +3386,71 @@ pub const AutoDischargeInserter = struct {
                 return d.event_decl;
             }
         }.declOf);
+    }
+
+    /// Resolve the disposal event for one outstanding obligation, or emit the
+    /// KORU030 diagnostic and return error.ValidationFailed: zero candidates
+    /// → the `Call:` list when multi-branch events could dispose it, else
+    /// `none_msg`; several candidates → the "multiple discharge options"
+    /// choice set. Shared by every scope-exit / terminator disposal walk.
+    fn resolveObligationDisposal(
+        self: *AutoDischargeInserter,
+        binding_name: []const u8,
+        info: BindingContext.BindingInfo,
+        site_loc: errors.SourceLocation,
+        comptime none_msg: []const u8,
+    ) !DisposalEvent {
+        const disposals = if (info.not_auto_dischargeable)
+            try self.allocator.alloc(DisposalEvent, 0)
+        else
+            try self.findDisposalEvents(info.phantom_state, info.base_type);
+        defer self.allocator.free(disposals);
+
+        return selectDisposal(disposals) orelse {
+            const display_name = formatBindingForError(binding_name, info.field_name, info.base_type);
+            const display_state = formatStateForError(info.phantom_state);
+            if (disposals.len == 0) {
+                // Check for multi-branch events that could dispose this
+                const all_disposals = try self.findAllDisposalEvents(info.phantom_state, info.base_type);
+                defer self.allocator.free(all_disposals);
+                if (all_disposals.len > 0) {
+                    var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+                    defer options.deinit(self.allocator);
+                    const n_candidates = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, all_disposals);
+                    // Number agreement: one candidate is
+                    // an instruction (`Call: finalize`),
+                    // several are a choice set.
+                    try self.reporter.addError(
+                        .KORU030,
+                        site_loc.line,
+                        site_loc.column,
+                        "Resource '{s}' obligation <{s}> was not discharged. Call{s}: {s}",
+                        .{ display_name, display_state, errors.oneOfInfix(n_candidates), options.items },
+                    );
+                } else {
+                    try self.reporter.addError(
+                        .KORU030,
+                        site_loc.line,
+                        site_loc.column,
+                        none_msg,
+                        .{ display_name, display_state },
+                    );
+                }
+            } else {
+                // Build list of discharge options
+                var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+                defer options.deinit(self.allocator);
+                _ = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, disposals);
+                try self.reporter.addError(
+                    .KORU030,
+                    site_loc.line,
+                    site_loc.column,
+                    "Resource '{s}' <{s}> has multiple discharge options: {s}. Discharge explicitly.",
+                    .{ display_name, display_state, options.items },
+                );
+            }
+            return error.ValidationFailed;
+        };
     }
 
     /// Find all events that can dispose a given phantom state for a given base type
