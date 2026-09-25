@@ -3232,28 +3232,9 @@ fn emitSubflowContinuationsWithDepth(
                         }
                         try emitter.write(";\n");
                     } else {
-                        try emitter.write("return .{ .");
-                        try writeBranchName(emitter, bc.branch_name);
-                        try emitter.write(" = ");
-                        // Check for plain value (identity branch constructor)
-                        if (bc.plain_value) |pv| {
-                            try emitter.write(lowerExprZig(emitter, &local_ctx, pv));
-                        } else {
-                            try emitter.write(".{");
-                            for (bc.fields, 0..) |field, i| {
-                                if (i > 0) try emitter.write(", ");
-                                try emitter.write(" .");
-                                try writeBranchName(emitter, field.name);
-                                try emitter.write(" = ");
-                                if (field.expression_str) |expr| {
-                                    try emitter.write(lowerExprZig(emitter, &local_ctx, expr));
-                                } else {
-                                    try emitter.write(field.type);
-                                }
-                            }
-                            try emitter.write(" }");
-                        }
-                        try emitter.write(" };\n");
+                        try emitter.write("return ");
+                        try emitBranchConstructor(emitter, &local_ctx, &bc, true);
+                        try emitter.write(";\n");
                     }
                 },
                 else => {},
@@ -4190,28 +4171,7 @@ fn emitSubflowContinuationsWithDepth(
                 if (cont.node) |step| {
                     switch (step) {
                         .branch_constructor => |bc| {
-                            try emitter.write(".{ .");
-                            try writeBranchName(emitter, bc.branch_name);
-                            try emitter.write(" = ");
-                            // Check for plain value (identity branch constructor)
-                            if (bc.plain_value) |pv| {
-                                try emitter.write(lowerExprZig(emitter, &local_ctx, pv));
-                            } else {
-                                try emitter.write(".{");
-                                for (bc.fields, 0..) |field, field_idx| {
-                                    if (field_idx > 0) try emitter.write(", ");
-                                    try emitter.write(" .");
-                                    try writeBranchName(emitter, field.name);
-                                    try emitter.write(" = ");
-                                    if (field.expression_str) |expr| {
-                                        try emitter.write(lowerExprZig(emitter, &local_ctx, expr));
-                                    } else {
-                                        try emitter.write(field.type);
-                                    }
-                                }
-                                try emitter.write(" }");
-                            }
-                            try emitter.write(" }");
+                            try emitBranchConstructor(emitter, &local_ctx, &bc, true);
                         },
                         else => {
                             // Fallback for other step types
