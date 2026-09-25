@@ -2152,6 +2152,37 @@ pub const VisitorEmitter = struct {
         try self.code_emitter.write("}\n");
     }
 
+    /// Emit the implicit `__koru_event_input` bindings for a field list plus
+    /// their `_ = &name` discards. `decl` is "var" at reentry sites (the
+    /// shared bindings are reassigned per member / self-loop tail args) and
+    /// "const" everywhere else. `skip` names fields already declared at
+    /// module level — proc bodies rewrite those to `__koru_event_input.<f>`
+    /// so rebinding them here would shadow the rewrite.
+    fn emitInputBindings(
+        self: *VisitorEmitter,
+        fields: []const ast.Field,
+        decl: []const u8,
+        skip: ?[]const []const u8,
+    ) !void {
+        for (fields) |field| {
+            if (skip != null and nameIsShadowed(field.name, skip.?)) continue;
+            try self.code_emitter.writeIndent();
+            try self.code_emitter.write(decl);
+            try self.code_emitter.write(" ");
+            try emitter.writeBranchName(self.code_emitter, field.name);
+            try self.code_emitter.write(" = __koru_event_input.");
+            try emitter.writeBranchName(self.code_emitter, field.name);
+            try self.code_emitter.write(";\n");
+        }
+        for (fields) |field| {
+            if (skip != null and nameIsShadowed(field.name, skip.?)) continue;
+            try self.code_emitter.writeIndent();
+            try self.code_emitter.write("_ = &");
+            try emitter.writeBranchName(self.code_emitter, field.name);
+            try self.code_emitter.write(";\n");
+        }
+    }
+
     /// Emit the body of a handler for an event `entry` that belongs to a
     /// mutual-tail-recursion `group`. Lowers the whole cycle into ONE labeled
     /// switch: shared `var` input bindings, `__koru_self_loop: switch` seeded
@@ -2179,20 +2210,7 @@ pub const VisitorEmitter = struct {
         try self.code_emitter.write("\n");
 
         // Shared `var` input bindings (mutated by the per-member reentries).
-        for (entry.input.fields) |field| {
-            try self.code_emitter.writeIndent();
-            try self.code_emitter.write("var ");
-            try emitter.writeBranchName(self.code_emitter, field.name);
-            try self.code_emitter.write(" = __koru_event_input.");
-            try emitter.writeBranchName(self.code_emitter, field.name);
-            try self.code_emitter.write(";\n");
-        }
-        for (entry.input.fields) |field| {
-            try self.code_emitter.writeIndent();
-            try self.code_emitter.write("_ = &");
-            try emitter.writeBranchName(self.code_emitter, field.name);
-            try self.code_emitter.write(";\n");
-        }
+        try self.emitInputBindings(entry.input.fields, "var", null);
         try self.code_emitter.writeIndent();
         try self.code_emitter.write("_ = &__koru_event_input;\n");
 
@@ -2562,20 +2580,7 @@ pub const VisitorEmitter = struct {
                             self.code_emitter.indent_level += 1;
 
                             // Generate implicit input bindings
-                            for (event.input.fields) |field| {
-                                try self.code_emitter.writeIndent();
-                                try self.code_emitter.write("const ");
-                                try emitter.writeBranchName(self.code_emitter, field.name);
-                                try self.code_emitter.write(" = __koru_event_input.");
-                                try emitter.writeBranchName(self.code_emitter, field.name);
-                                try self.code_emitter.write(";\n");
-                            }
-                            for (event.input.fields) |field| {
-                                try self.code_emitter.writeIndent();
-                                try self.code_emitter.write("_ = &");
-                                try emitter.writeBranchName(self.code_emitter, field.name);
-                                try self.code_emitter.write(";\n");
-                            }
+                            try self.emitInputBindings(event.input.fields, "const", null);
                             try self.code_emitter.writeIndent();
                             try self.code_emitter.write("_ = &__koru_event_input;\n");
 
@@ -2643,20 +2648,7 @@ pub const VisitorEmitter = struct {
                                     self.code_emitter.indent_level += 1;
 
                                     // Generate implicit input bindings
-                                    for (event.input.fields) |field| {
-                                        try self.code_emitter.writeIndent();
-                                        try self.code_emitter.write("const ");
-                                        try emitter.writeBranchName(self.code_emitter, field.name);
-                                        try self.code_emitter.write(" = __koru_event_input.");
-                                        try emitter.writeBranchName(self.code_emitter, field.name);
-                                        try self.code_emitter.write(";\n");
-                                    }
-                                    for (event.input.fields) |field| {
-                                        try self.code_emitter.writeIndent();
-                                        try self.code_emitter.write("_ = &");
-                                        try emitter.writeBranchName(self.code_emitter, field.name);
-                                        try self.code_emitter.write(";\n");
-                                    }
+                                    try self.emitInputBindings(event.input.fields, "const", null);
                                     try self.code_emitter.writeIndent();
                                     try self.code_emitter.write("_ = &__koru_event_input;\n");
 
@@ -2989,21 +2981,7 @@ pub const VisitorEmitter = struct {
                                             const bc = &ii.value;
                                             log.debug("  [emitEventDecl] Found cross-module immediate override for {s}:{s}\n", .{ event_module, event.path.segments[0] });
                                             // Generate implicit input bindings for immediate impls
-                                            for (event.input.fields) |field| {
-                                                try self.code_emitter.writeIndent();
-                                                try self.code_emitter.write("const ");
-                                                try emitter.writeBranchName(self.code_emitter, field.name);
-                                                try self.code_emitter.write(" = __koru_event_input.");
-                                                try emitter.writeBranchName(self.code_emitter, field.name);
-                                                try self.code_emitter.write(";\n");
-                                            }
-                                            // Suppress unused variable warnings
-                                            for (event.input.fields) |field| {
-                                                try self.code_emitter.writeIndent();
-                                                try self.code_emitter.write("_ = &");
-                                                try emitter.writeBranchName(self.code_emitter, field.name);
-                                                try self.code_emitter.write(";\n");
-                                            }
+                                            try self.emitInputBindings(event.input.fields, "const", null);
                                             if (event.input.fields.len == 0) {
                                                 try self.code_emitter.writeIndent();
                                                 try self.code_emitter.write("_ = &__koru_event_input;\n");
@@ -3090,21 +3068,7 @@ pub const VisitorEmitter = struct {
                                                 log.debug("  [emitEventDecl] Found cross-module flow override for {s}:{s}\n", .{ event_module, event.path.segments[0] });
                                                 // Cross-module override with flow body (delegation pattern)
                                                 // Generate implicit input bindings
-                                                for (event.input.fields) |field| {
-                                                    try self.code_emitter.writeIndent();
-                                                    try self.code_emitter.write("const ");
-                                                    try emitter.writeBranchName(self.code_emitter, field.name);
-                                                    try self.code_emitter.write(" = __koru_event_input.");
-                                                    try emitter.writeBranchName(self.code_emitter, field.name);
-                                                    try self.code_emitter.write(";\n");
-                                                }
-                                                // Suppress unused variable warnings
-                                                for (event.input.fields) |field| {
-                                                    try self.code_emitter.writeIndent();
-                                                    try self.code_emitter.write("_ = &");
-                                                    try emitter.writeBranchName(self.code_emitter, field.name);
-                                                    try self.code_emitter.write(";\n");
-                                                }
+                                                try self.emitInputBindings(event.input.fields, "const", null);
                                                 try self.code_emitter.writeIndent();
                                                 try self.code_emitter.write("_ = &__koru_event_input;\n");
 
@@ -3351,25 +3315,7 @@ pub const VisitorEmitter = struct {
                                 defer declared_names.deinit(self.allocator);
 
                                 // Generate implicit input bindings (skip shadowed fields)
-                                for (event.input.fields) |field| {
-                                    if (!nameIsShadowed(field.name, declared_names.items)) {
-                                        try self.code_emitter.writeIndent();
-                                        try self.code_emitter.write("const ");
-                                        try emitter.writeBranchName(self.code_emitter, field.name);
-                                        try self.code_emitter.write(" = __koru_event_input.");
-                                        try emitter.writeBranchName(self.code_emitter, field.name);
-                                        try self.code_emitter.write(";\n");
-                                    }
-                                }
-                                // Suppress unused variable warnings
-                                for (event.input.fields) |field| {
-                                    if (!nameIsShadowed(field.name, declared_names.items)) {
-                                        try self.code_emitter.writeIndent();
-                                        try self.code_emitter.write("_ = &");
-                                        try emitter.writeBranchName(self.code_emitter, field.name);
-                                        try self.code_emitter.write(";\n");
-                                    }
-                                }
+                                try self.emitInputBindings(event.input.fields, "const", declared_names.items);
 
                                 // Keep _ = &__koru_event_input for backwards compatibility
                                 try self.code_emitter.writeIndent();
@@ -3471,21 +3417,7 @@ pub const VisitorEmitter = struct {
                                 const bc = &ii.value;
                                 log.debug("    Found matching immediate_impl!\n", .{});
                                 // Generate implicit input bindings for immediate impls
-                                for (event.input.fields) |field| {
-                                    try self.code_emitter.writeIndent();
-                                    try self.code_emitter.write("const ");
-                                    try emitter.writeBranchName(self.code_emitter, field.name);
-                                    try self.code_emitter.write(" = __koru_event_input.");
-                                    try emitter.writeBranchName(self.code_emitter, field.name);
-                                    try self.code_emitter.write(";\n");
-                                }
-                                // Suppress unused variable warnings
-                                for (event.input.fields) |field| {
-                                    try self.code_emitter.writeIndent();
-                                    try self.code_emitter.write("_ = &");
-                                    try emitter.writeBranchName(self.code_emitter, field.name);
-                                    try self.code_emitter.write(";\n");
-                                }
+                                try self.emitInputBindings(event.input.fields, "const", null);
                                 // If no input fields, suppress unused '__koru_event_input' parameter
                                 if (event.input.fields.len == 0) {
                                     try self.code_emitter.writeIndent();
@@ -3621,23 +3553,9 @@ pub const VisitorEmitter = struct {
                                     // (skipped for flat: the segment call reads
                                     // __koru_event_input fields directly).
                                     if (!is_flat) {
-                                        for (event.input.fields) |field| {
-                                            try self.code_emitter.writeIndent();
-                                            // Self-loop handlers reassign these
-                                            // (tail-call args), so they must be `var`.
-                                            try self.code_emitter.write(if (is_self_loop) "var " else "const ");
-                                            try emitter.writeBranchName(self.code_emitter, field.name);
-                                            try self.code_emitter.write(" = __koru_event_input.");
-                                            try emitter.writeBranchName(self.code_emitter, field.name);
-                                            try self.code_emitter.write(";\n");
-                                        }
-                                        // Suppress unused variable warnings
-                                        for (event.input.fields) |field| {
-                                            try self.code_emitter.writeIndent();
-                                            try self.code_emitter.write("_ = &");
-                                            try emitter.writeBranchName(self.code_emitter, field.name);
-                                            try self.code_emitter.write(";\n");
-                                        }
+                                        // Self-loop handlers reassign these
+                                        // (tail-call args), so they must be `var`.
+                                        try self.emitInputBindings(event.input.fields, if (is_self_loop) "var" else "const", null);
                                     }
                                     try self.code_emitter.writeIndent();
                                     try self.code_emitter.write("_ = &__koru_event_input;\n");
@@ -4635,20 +4553,7 @@ pub const VisitorEmitter = struct {
                             }
 
                             // Implicit input bindings (mirrors the main handler)
-                            for (event.input.fields) |field| {
-                                try self.code_emitter.writeIndent();
-                                try self.code_emitter.write("const ");
-                                try emitter.writeBranchName(self.code_emitter, field.name);
-                                try self.code_emitter.write(" = __koru_event_input.");
-                                try emitter.writeBranchName(self.code_emitter, field.name);
-                                try self.code_emitter.write(";\n");
-                            }
-                            for (event.input.fields) |field| {
-                                try self.code_emitter.writeIndent();
-                                try self.code_emitter.write("_ = &");
-                                try emitter.writeBranchName(self.code_emitter, field.name);
-                                try self.code_emitter.write(";\n");
-                            }
+                            try self.emitInputBindings(event.input.fields, "const", null);
                             try self.code_emitter.writeIndent();
                             try self.code_emitter.write("_ = &__koru_event_input;\n");
 
