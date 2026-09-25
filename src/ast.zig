@@ -1362,6 +1362,17 @@ pub const DottedPath = struct {
         }
         return self.writeSegments(buf, p);
     }
+
+    /// Byte length `writeQualified` produces — callers pre-size with it.
+    pub fn qualifiedLen(self: DottedPath) usize {
+        var n: usize = 0;
+        if (self.module_qualifier) |mq| n += mq.len + 1;
+        for (self.segments, 0..) |seg, i| {
+            n += seg.len;
+            if (i > 0) n += 1;
+        }
+        return n;
+    }
 };
 
 pub const Shape = struct {

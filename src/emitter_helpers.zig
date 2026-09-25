@@ -9006,22 +9006,7 @@ fn emitArgs(emitter: *CodeEmitter, ctx: *EmissionContext, args: []const ast.Arg,
                 var event_name_buf: [256]u8 = undefined;
                 var event_name_len: usize = 0;
 
-                if (invocation_path.module_qualifier) |mq| {
-                    @memcpy(event_name_buf[event_name_len .. event_name_len + mq.len], mq);
-                    event_name_len += mq.len;
-                    event_name_buf[event_name_len] = ':';
-                    event_name_len += 1;
-                }
-
-                for (invocation_path.segments, 0..) |seg, i| {
-                    if (i > 0) {
-                        event_name_buf[event_name_len] = '.';
-                        event_name_len += 1;
-                    }
-                    @memcpy(event_name_buf[event_name_len .. event_name_len + seg.len], seg);
-                    event_name_len += seg.len;
-                }
-
+                event_name_len = invocation_path.writeQualified(&event_name_buf, event_name_len);
                 const event_name = event_name_buf[0..event_name_len];
 
                 log.debug("\n", .{});
@@ -9062,22 +9047,7 @@ fn emitArgs(emitter: *CodeEmitter, ctx: *EmissionContext, args: []const ast.Arg,
                 var event_name_buf: [256]u8 = undefined;
                 var event_name_len: usize = 0;
 
-                if (invocation_path.module_qualifier) |mq| {
-                    @memcpy(event_name_buf[event_name_len .. event_name_len + mq.len], mq);
-                    event_name_len += mq.len;
-                    event_name_buf[event_name_len] = ':';
-                    event_name_len += 1;
-                }
-
-                for (invocation_path.segments, 0..) |seg, i| {
-                    if (i > 0) {
-                        event_name_buf[event_name_len] = '.';
-                        event_name_len += 1;
-                    }
-                    @memcpy(event_name_buf[event_name_len .. event_name_len + seg.len], seg);
-                    event_name_len += seg.len;
-                }
-
+                event_name_len = invocation_path.writeQualified(&event_name_buf, event_name_len);
                 const event_name = event_name_buf[0..event_name_len];
 
                 // Print helpful error message to stderr

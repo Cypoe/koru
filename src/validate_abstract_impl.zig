@@ -237,37 +237,13 @@ pub const AbstractImplValidator = struct {
     /// Build canonical name from a DottedPath (after canonicalization)
     /// Format: "module:segment.segment.segment"
     fn buildCanonicalName(self: *AbstractImplValidator, path: *const ast.DottedPath) ![]const u8 {
-        const module = path.module_qualifier orelse {
+        if (path.module_qualifier == null) {
             @panic("validate_abstract_impl must be called AFTER canonicalization!");
-        };
-
-        // Calculate total length needed
-        var total_len: usize = module.len + 1; // module + ':'
-        for (path.segments, 0..) |seg, i| {
-            total_len += seg.len;
-            if (i > 0) total_len += 1; // for '.'
         }
 
-        // Build the canonical name
-        var buf = try self.allocator.alloc(u8, total_len);
-        var pos: usize = 0;
-
-        // Add module qualifier
-        @memcpy(buf[pos..pos + module.len], module);
-        pos += module.len;
-        buf[pos] = ':';
-        pos += 1;
-
-        // Add segments with dots
-        for (path.segments, 0..) |seg, i| {
-            if (i > 0) {
-                buf[pos] = '.';
-                pos += 1;
-            }
-            @memcpy(buf[pos..pos + seg.len], seg);
-            pos += seg.len;
-        }
-
+        // Build the canonical `module:a.b.c` name
+        const buf = try self.allocator.alloc(u8, path.qualifiedLen());
+        _ = path.writeQualified(buf, 0);
         return buf;
     }
 };
