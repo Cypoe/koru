@@ -210,6 +210,33 @@ fn describeTerm(buf: []u8, term: std.process.Child.Term) []const u8 {
     };
 }
 
+/// One `--install-packages` step: run a package manager inside `output_dir`
+/// and report the outcome. `action`/`done_msg` are the shown phrases
+/// ("Running npm install...", "✓ npm packages installed").
+fn runPackageStep(
+    allocator: std.mem.Allocator,
+    output_dir: []const u8,
+    argv: []const []const u8,
+    comptime action: []const u8,
+    comptime done_msg: []const u8,
+) !void {
+    try printStdout(allocator, "  Running " ++ action ++ "...\n", .{});
+    const result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = argv,
+        .cwd = output_dir,
+    });
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    if (!termIsClean(result.term)) {
+        var term_buf: [64]u8 = undefined;
+        try printStderr(allocator, "✗ " ++ action ++ " failed ({s}):\n{s}\n", .{ describeTerm(&term_buf, result.term), result.stderr });
+    } else {
+        try printStdout(allocator, "  ✓ " ++ done_msg ++ "\n", .{});
+    }
+}
+
 /// The teaching for a PIPELINE subprocess (backend build, backend run) that
 /// never got to exit. A signal here is a fact about the machine, not about
 /// the program being compiled — say which subprocess, what ended it, where
@@ -7932,72 +7959,21 @@ pub fn main() !void {
             try printStdout(allocator, "Installing packages...\n", .{});
 
             if (npm_reqs.len > 0) {
-                try printStdout(allocator, "  Running npm install...\n", .{});
-                const npm_result = try std.process.Child.run(.{
-                    .allocator = allocator,
-                    .argv = &[_][]const u8{ "npm", "install", "--prefix", output_dir },
-                });
-                defer allocator.free(npm_result.stdout);
-                defer allocator.free(npm_result.stderr);
-
-                if (!termIsClean(npm_result.term)) {
-                    var term_buf: [64]u8 = undefined;
-                    try printStderr(allocator, "✗ npm install failed ({s}):\n{s}\n", .{ describeTerm(&term_buf, npm_result.term), npm_result.stderr });
-                } else {
-                    try printStdout(allocator, "  ✓ npm packages installed\n", .{});
-                }
+                try runPackageStep(allocator, output_dir, &.{ "npm", "install", "--prefix", output_dir }, "npm install", "npm packages installed");
             }
 
             if (cargo_reqs.len > 0) {
-                try printStdout(allocator, "  Running cargo fetch...\n", .{});
-                const cargo_result = try std.process.Child.run(.{
-                    .allocator = allocator,
-                    .argv = &[_][]const u8{ "cargo", "fetch", "--manifest-path", try std.fs.path.join(allocator, &[_][]const u8{ output_dir, "Cargo.toml" }) },
-                });
-                defer allocator.free(cargo_result.stdout);
-                defer allocator.free(cargo_result.stderr);
-
-                if (!termIsClean(cargo_result.term)) {
-                    var term_buf: [64]u8 = undefined;
-                    try printStderr(allocator, "✗ cargo fetch failed ({s}):\n{s}\n", .{ describeTerm(&term_buf, cargo_result.term), cargo_result.stderr });
-                } else {
-                    try printStdout(allocator, "  ✓ cargo packages fetched\n", .{});
-                }
+                const manifest_path = try std.fs.path.join(allocator, &.{ output_dir, "Cargo.toml" });
+                try runPackageStep(allocator, output_dir, &.{ "cargo", "fetch", "--manifest-path", manifest_path }, "cargo fetch", "cargo packages fetched");
             }
 
             if (go_reqs.len > 0) {
-                try printStdout(allocator, "  Running go mod download...\n", .{});
-                const go_result = try std.process.Child.run(.{
-                    .allocator = allocator,
-                    .argv = &[_][]const u8{ "go", "mod", "download" },
-                    .cwd = output_dir,
-                });
-                defer allocator.free(go_result.stdout);
-                defer allocator.free(go_result.stderr);
-
-                if (!termIsClean(go_result.term)) {
-                    var term_buf: [64]u8 = undefined;
-                    try printStderr(allocator, "✗ go mod download failed ({s}):\n{s}\n", .{ describeTerm(&term_buf, go_result.term), go_result.stderr });
-                } else {
-                    try printStdout(allocator, "  ✓ go modules downloaded\n", .{});
-                }
+                try runPackageStep(allocator, output_dir, &.{ "go", "mod", "download" }, "go mod download", "go modules downloaded");
             }
 
             if (pip_reqs.len > 0) {
-                try printStdout(allocator, "  Running pip install...\n", .{});
-                const pip_result = try std.process.Child.run(.{
-                    .allocator = allocator,
-                    .argv = &[_][]const u8{ "pip", "install", "-r", try std.fs.path.join(allocator, &[_][]const u8{ output_dir, "requirements.txt" }) },
-                });
-                defer allocator.free(pip_result.stdout);
-                defer allocator.free(pip_result.stderr);
-
-                if (!termIsClean(pip_result.term)) {
-                    var term_buf: [64]u8 = undefined;
-                    try printStderr(allocator, "✗ pip install failed ({s}):\n{s}\n", .{ describeTerm(&term_buf, pip_result.term), pip_result.stderr });
-                } else {
-                    try printStdout(allocator, "  ✓ pip packages installed\n", .{});
-                }
+                const reqs_path = try std.fs.path.join(allocator, &.{ output_dir, "requirements.txt" });
+                try runPackageStep(allocator, output_dir, &.{ "pip", "install", "-r", reqs_path }, "pip install", "pip packages installed");
             }
         }
     }
