@@ -602,6 +602,28 @@ pub fn findNodeIndex(ctx: *TransformContext, target: *ast.Item) ?usize {
 // declaration lookup is what separates them — a producer with no declared
 // terminal branches has nothing to thread and is left alone.
 
+/// Stage-A desugar driver: build the symbol table, then walk every item
+/// with `walk` under a fresh threading counter.
+fn runDesugar(
+    allocator: std.mem.Allocator,
+    program: *ast.Program,
+    reporter: *errors_mod.ErrorReporter,
+    comptime walk: fn (
+        std.mem.Allocator,
+        *SymbolTable,
+        []const ast.Item,
+        *usize,
+        *errors_mod.ErrorReporter,
+    ) std.mem.Allocator.Error!void,
+) !void {
+    var table = try SymbolTable.init(allocator);
+    defer table.deinit();
+    try table.buildFrom(program);
+
+    var counter: usize = 0;
+    try walk(allocator, &table, program.items, &counter, reporter);
+}
+
 /// Entry point: desugar every point-free chain in the program, in place.
 /// `reporter` receives KORU031 when a choke claims a branch whose payload
 /// shape disagrees across stages (type-aware claim wall).
@@ -610,12 +632,7 @@ pub fn desugarPointfreeChains(
     program: *ast.Program,
     reporter: *errors_mod.ErrorReporter,
 ) !void {
-    var table = try SymbolTable.init(allocator);
-    defer table.deinit();
-    try table.buildFrom(program);
-
-    var counter: usize = 0;
-    try desugarItemsPointfree(allocator, &table, program.items, &counter, reporter);
+    try runDesugar(allocator, program, reporter, desugarItemsPointfree);
 }
 
 fn desugarItemsPointfree(
@@ -1823,11 +1840,7 @@ pub fn desugarFlowReturnTerminus(
     program: *ast.Program,
     reporter: *errors_mod.ErrorReporter,
 ) !void {
-    var table = try SymbolTable.init(allocator);
-    defer table.deinit();
-    try table.buildFrom(program);
-    var counter: usize = 0;
-    try terminusItems(allocator, &table, program.items, &counter, reporter);
+    try runDesugar(allocator, program, reporter, terminusItems);
 }
 
 fn terminusItems(
@@ -2244,11 +2257,7 @@ pub fn desugarChainPunThreading(
     program: *ast.Program,
     reporter: *errors_mod.ErrorReporter,
 ) !void {
-    var table = try SymbolTable.init(allocator);
-    defer table.deinit();
-    try table.buildFrom(program);
-    var counter: usize = 0;
-    try punThreadItems(allocator, &table, program.items, &counter, reporter);
+    try runDesugar(allocator, program, reporter, punThreadItems);
 }
 
 fn punThreadItems(
@@ -2519,11 +2528,7 @@ pub fn desugarHandleContinuation(
     program: *ast.Program,
     reporter: *errors_mod.ErrorReporter,
 ) !void {
-    var table = try SymbolTable.init(allocator);
-    defer table.deinit();
-    try table.buildFrom(program);
-    var counter: usize = 0;
-    try handleContinuationItems(allocator, &table, program.items, &counter, reporter);
+    try runDesugar(allocator, program, reporter, handleContinuationItems);
 }
 
 fn handleContinuationItems(
