@@ -227,6 +227,24 @@ fn writeMangledSegment(code_emitter: *emitter.CodeEmitter, segment: []const u8) 
     }
 }
 
+/// Emit the mangled handler-path prefix for `path`: sanitized module
+/// qualifier + '.', then segments joined by '_'. Callers append
+/// `_event.handler(`, `_event.`, or a variant name.
+fn writeMangledHandlerPrefix(
+    code_emitter: *emitter.CodeEmitter,
+    path: *const ast.DottedPath,
+    main_module_name: ?[]const u8,
+) !void {
+    if (path.module_qualifier) |mq| {
+        try emitter.writeModulePath(code_emitter, mq, main_module_name);
+        try code_emitter.write(".");
+    }
+    for (path.segments, 0..) |seg, idx| {
+        if (idx > 0) try code_emitter.write("_");
+        try writeMangledSegment(code_emitter, seg);
+    }
+}
+
 /// Emit inline statement code dedented and reindented to current emitter level.
 fn emitInlineStmtDedented(code_emitter: *emitter.CodeEmitter, inline_code: []const u8) !void {
     // Build current indent string (4 spaces per level).
@@ -2862,14 +2880,7 @@ pub const VisitorEmitter = struct {
                                         try self.code_emitter.write(" = ");
 
                                         // Emit the event call
-                                        if (flow.inv().path.module_qualifier) |mq| {
-                                            try emitter.writeModulePath(self.code_emitter, mq, self.main_module_name);
-                                            try self.code_emitter.write(".");
-                                        }
-                                        for (flow.inv().path.segments, 0..) |seg, idx| {
-                                            if (idx > 0) try self.code_emitter.write("_");
-                                            try writeMangledSegment(self.code_emitter, seg);
-                                        }
+                                        try writeMangledHandlerPrefix(self.code_emitter, &flow.inv().path, self.main_module_name);
                                         try self.code_emitter.write("_event.handler(.{");
 
                                         for (flow.inv().args, 0..) |arg, k| {
@@ -3175,14 +3186,7 @@ pub const VisitorEmitter = struct {
                                                     if (is_self_call) {
                                                         try self.code_emitter.write("_default_handler(.{");
                                                     } else {
-                                                        if (flow.inv().path.module_qualifier) |mq| {
-                                                            try emitter.writeModulePath(self.code_emitter, mq, self.main_module_name);
-                                                            try self.code_emitter.write(".");
-                                                        }
-                                                        for (flow.inv().path.segments, 0..) |seg, idx| {
-                                                            if (idx > 0) try self.code_emitter.write("_");
-                                                            try writeMangledSegment(self.code_emitter, seg);
-                                                        }
+                                                        try writeMangledHandlerPrefix(self.code_emitter, &flow.inv().path, self.main_module_name);
                                                         try self.code_emitter.write("_event.handler(.{");
                                                     }
 
@@ -3815,17 +3819,7 @@ pub const VisitorEmitter = struct {
                                         } else {
                                             // Regular call: use the event handler
                                             // Check if event is module-qualified
-                                            if (flow.inv().path.module_qualifier) |mq| {
-                                                // Use writeModulePath to properly sanitize module references
-                                                // (e.g., entry module -> "main_module", "logger" -> "koru_logger")
-                                                try emitter.writeModulePath(self.code_emitter, mq, self.main_module_name);
-                                                try self.code_emitter.write(".");
-                                            }
-                                            // Join all segments with underscores
-                                            for (flow.inv().path.segments, 0..) |seg, idx| {
-                                                if (idx > 0) try self.code_emitter.write("_");
-                                                try writeMangledSegment(self.code_emitter, seg);
-                                            }
+                                            try writeMangledHandlerPrefix(self.code_emitter, &flow.inv().path, self.main_module_name);
                                             // VARIANT SELECTION AT A SUBFLOW HEAD. Only the
                                             // top-level invocation path consulted the registry, so a
                                             // `~[build(x)]std/build:variants` selection was dropped on
@@ -4465,14 +4459,7 @@ pub const VisitorEmitter = struct {
                             } else if (flow.body.continuations.len == 0 and flow.preamble_code == null and flow.inline_body == null) {
                                 try self.code_emitter.writeIndent();
                                 try self.code_emitter.write("_ = ");
-                                if (flow.inv().path.module_qualifier) |mq| {
-                                    try emitter.writeModulePath(self.code_emitter, mq, self.main_module_name);
-                                    try self.code_emitter.write(".");
-                                }
-                                for (flow.inv().path.segments, 0..) |seg, idx| {
-                                    if (idx > 0) try self.code_emitter.write("_");
-                                    try writeMangledSegment(self.code_emitter, seg);
-                                }
+                                try writeMangledHandlerPrefix(self.code_emitter, &flow.inv().path, self.main_module_name);
                                 try self.code_emitter.write("_event.handler(.{");
                                 var value_ctx = emitter.EmissionContext{
                                     .allocator = self.allocator,
