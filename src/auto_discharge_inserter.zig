@@ -3101,23 +3101,7 @@ pub const AutoDischargeInserter = struct {
                 const display_state = formatStateForError(info.phantom_state);
                 if (disposals.len == 0) {
                     // No auto-dischargeable events - check if there are multi-branch events that accept this state
-                    const all_disposals = try self.findAllDisposalEvents(info.phantom_state, info.base_type);
-                    defer self.allocator.free(all_disposals);
-                    if (all_disposals.len > 0) {
-                        var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-                        defer options.deinit(self.allocator);
-                        const n_candidates = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, all_disposals);
-                        // Number agreement: one candidate is an
-                        // instruction (`Call: finalize`), several are a
-                        // choice set.
-                        try self.reporter.addError(
-                            .KORU030,
-                            site_loc.line,
-                            site_loc.column,
-                            "Resource '{s}' obligation <{s}> was not discharged. Call{s}: {s}",
-                            .{ display_name, display_state, errors.oneOfInfix(n_candidates), options.items },
-                        );
-                    } else {
+                    if (!try self.reportUndischargedCandidates(info, site_loc, display_name, display_state)) {
                         // Strip trailing `!` from the state literal for the consumer-form suggestion:
                         // the obligation is on `<unsanitized!>`; the discharger accepts `<!unsanitized>`.
                         const state_without_bang = if (std.mem.endsWith(u8, display_state, "!"))
@@ -3133,16 +3117,7 @@ pub const AutoDischargeInserter = struct {
                         );
                     }
                 } else {
-                    var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-                    defer options.deinit(self.allocator);
-                    _ = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, disposals);
-                    try self.reporter.addError(
-                        .KORU030,
-                        site_loc.line,
-                        site_loc.column,
-                        "Resource '{s}' <{s}> has multiple discharge options: {s}. Discharge explicitly.",
-                        .{ display_name, display_state, options.items },
-                    );
+                    try self.reportMultipleDischargeOptions(disposals, site_loc, display_name, display_state);
                 }
                 return error.ValidationFailed;
             };
@@ -3228,6 +3203,57 @@ pub const AutoDischargeInserter = struct {
         }.declOf);
     }
 
+    /// Zero single-state dischargers — widen to every multi-branch
+    /// discharger that accepts the state and report the `Call:` choice
+    /// set. Returns true when it reported; false leaves the caller to
+    /// word the empty case. (`DisposalEvent` is the existing internal
+    /// record name for a candidate discharger.)
+    fn reportUndischargedCandidates(
+        self: *AutoDischargeInserter,
+        info: BindingContext.BindingInfo,
+        site_loc: errors.SourceLocation,
+        display_name: []const u8,
+        display_state: []const u8,
+    ) !bool {
+        const all_disposals = try self.findAllDisposalEvents(info.phantom_state, info.base_type);
+        defer self.allocator.free(all_disposals);
+        if (all_disposals.len == 0) return false;
+        var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+        defer options.deinit(self.allocator);
+        // Number agreement: one candidate is an instruction
+        // (`Call: finalize`), several are a choice set.
+        const n_candidates = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, all_disposals);
+        try self.reporter.addError(
+            .KORU030,
+            site_loc.line,
+            site_loc.column,
+            "Resource '{s}' obligation <{s}> was not discharged. Call{s}: {s}",
+            .{ display_name, display_state, errors.oneOfInfix(n_candidates), options.items },
+        );
+        return true;
+    }
+
+    /// Report the "multiple discharge options" choice set for an obligation
+    /// with several single-state dischargers.
+    fn reportMultipleDischargeOptions(
+        self: *AutoDischargeInserter,
+        disposals: []const DisposalEvent,
+        site_loc: errors.SourceLocation,
+        display_name: []const u8,
+        display_state: []const u8,
+    ) !void {
+        var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+        defer options.deinit(self.allocator);
+        _ = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, disposals);
+        try self.reporter.addError(
+            .KORU030,
+            site_loc.line,
+            site_loc.column,
+            "Resource '{s}' <{s}> has multiple discharge options: {s}. Discharge explicitly.",
+            .{ display_name, display_state, options.items },
+        );
+    }
+
     /// Resolve the disposal event for one outstanding obligation, or emit the
     /// KORU030 diagnostic and return error.ValidationFailed: zero candidates
     /// → the `Call:` list when multi-branch events could dispose it, else
@@ -3251,23 +3277,7 @@ pub const AutoDischargeInserter = struct {
             const display_state = formatStateForError(info.phantom_state);
             if (disposals.len == 0) {
                 // Check for multi-branch events that could dispose this
-                const all_disposals = try self.findAllDisposalEvents(info.phantom_state, info.base_type);
-                defer self.allocator.free(all_disposals);
-                if (all_disposals.len > 0) {
-                    var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-                    defer options.deinit(self.allocator);
-                    const n_candidates = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, all_disposals);
-                    // Number agreement: one candidate is
-                    // an instruction (`Call: finalize`),
-                    // several are a choice set.
-                    try self.reporter.addError(
-                        .KORU030,
-                        site_loc.line,
-                        site_loc.column,
-                        "Resource '{s}' obligation <{s}> was not discharged. Call{s}: {s}",
-                        .{ display_name, display_state, errors.oneOfInfix(n_candidates), options.items },
-                    );
-                } else {
+                if (!try self.reportUndischargedCandidates(info, site_loc, display_name, display_state)) {
                     try self.reporter.addError(
                         .KORU030,
                         site_loc.line,
@@ -3278,16 +3288,7 @@ pub const AutoDischargeInserter = struct {
                 }
             } else {
                 // Build list of discharge options
-                var options = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-                defer options.deinit(self.allocator);
-                _ = try errors.writeCandidateNames(DisposalEvent, disposalCandidateName, null, "", self.allocator, &options, disposals);
-                try self.reporter.addError(
-                    .KORU030,
-                    site_loc.line,
-                    site_loc.column,
-                    "Resource '{s}' <{s}> has multiple discharge options: {s}. Discharge explicitly.",
-                    .{ display_name, display_state, options.items },
-                );
+                try self.reportMultipleDischargeOptions(disposals, site_loc, display_name, display_state);
             }
             return error.ValidationFailed;
         };
