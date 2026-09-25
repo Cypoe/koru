@@ -2339,19 +2339,22 @@ fn rewriteStepReferences(allocator: std.mem.Allocator, args: []const ast.Arg, na
         {
             arg.value = try allocator.dupe(u8, running);
         } else if (std.mem.indexOf(u8, arg.value, "{{") != null) {
-            const rewritten = try rewriteInterpolations(allocator, arg.value, name, running);
-            if (rewritten.ptr != arg.value.ptr) arg.value = rewritten;
-            // A comptime transform (std/io print) binds its Expression parameter
-            // from `expression_value.text`, not from `arg.value` — the value is
-            // the sanitized round-trip copy, the expression text is what the
-            // transform actually interpolates. Rewrite both, or the print still
-            // renders the stale `{{ name }}`.
-            if (arg.expression_value) |ev| {
-                const ev_mut = @constCast(ev);
-                const ev_rewritten = try rewriteInterpolations(allocator, ev_mut.text, name, running);
-                if (ev_rewritten.ptr != ev_mut.text.ptr) ev_mut.text = ev_rewritten;
-            }
+            try rewriteArgInterpolations(allocator, arg, name, running);
         }
+    }
+}
+
+/// Rewrite `{{ name }}` interpolations in `arg.value` — and in
+/// `expression_value.text`, the string a comptime transform (std/io print)
+/// actually binds its Expression parameter from. Rewrite both, or the print
+/// still renders the stale `{{ name }}`.
+fn rewriteArgInterpolations(allocator: std.mem.Allocator, arg: *ast.Arg, name: []const u8, replacement: []const u8) !void {
+    const rewritten = try rewriteInterpolations(allocator, arg.value, name, replacement);
+    if (rewritten.ptr != arg.value.ptr) arg.value = rewritten;
+    if (arg.expression_value) |ev| {
+        const ev_mut = @constCast(ev);
+        const ev_rewritten = try rewriteInterpolations(allocator, ev_mut.text, name, replacement);
+        if (ev_rewritten.ptr != ev_mut.text.ptr) ev_mut.text = ev_rewritten;
     }
 }
 
@@ -2783,15 +2786,7 @@ fn rewriteArgsName(
         if (std.mem.eql(u8, v, name)) {
             a.value = try allocator.dupe(u8, target);
         } else if (std.mem.indexOf(u8, a.value, "{{") != null) {
-            const rw = try rewriteInterpolations(allocator, a.value, name, target);
-            if (rw.ptr != a.value.ptr) a.value = rw;
-            // A comptime transform's Expression parameter interpolates
-            // `expression_value.text`, not `arg.value` (see rewriteStepReferences).
-            if (a.expression_value) |ev| {
-                const ev_mut = @constCast(ev);
-                const rw2 = try rewriteInterpolations(allocator, ev_mut.text, name, target);
-                if (rw2.ptr != ev_mut.text.ptr) ev_mut.text = rw2;
-            }
+            try rewriteArgInterpolations(allocator, a, name, target);
         }
     }
 }
