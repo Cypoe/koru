@@ -7684,6 +7684,36 @@ pub fn emitOptionalArmNullableAlias(emitter: *CodeEmitter, branch: *const ast.Br
     try emitter.write(";\n");
 }
 
+/// Yielding-branch comptime aliases — `const X = __H.X` plus a discard.
+/// Optional arms get a nullable-fn-ptr alias (comptime-known present/
+/// absent) so presence guards fold and the omitted case never forces
+/// `__H.X`. (400_146/147/148)
+pub fn emitYieldingBranchAliases(
+    emitter: *CodeEmitter,
+    event: *const ast.EventDecl,
+    has_effect: bool,
+    main_module_name: ?[]const u8,
+) !void {
+    if (!has_effect) return;
+    for (event.branches) |*b| {
+        if (b.kind != .effect) continue;
+        if (b.is_optional) {
+            try emitOptionalArmNullableAlias(emitter, b, main_module_name);
+            continue;
+        }
+        try emitter.writeIndent();
+        try emitter.write("const ");
+        try writeBranchName(emitter, b.name);
+        try emitter.write(" = __H.");
+        try writeBranchName(emitter, b.name);
+        try emitter.write(";\n");
+        try emitter.writeIndent();
+        try emitter.write("_ = &");
+        try writeBranchName(emitter, b.name);
+        try emitter.write(";\n");
+    }
+}
+
 /// Effect-branches phase 3b: synthesize the local Handlers struct that carries
 /// the consumer's `!` branch bodies as static fns. See docs/EFFECT_BRANCHES.md.
 ///
@@ -14805,28 +14835,7 @@ fn emitEventDeclForModule(
 
     // Yielding-branch aliases — `const X = __H.X;` so the body can call X(...)
     // directly without qualifying through __H. Zero runtime cost (comptime).
-    if (has_effect) {
-        for (event.branches) |*b| {
-            if (b.kind != .effect) continue;
-            // Optional arms get a nullable-fn-ptr alias (comptime-known present/
-            // absent), so a presence guard folds and the omitted-handler case
-            // never forces `__H.X` to exist. (400_146/147/148)
-            if (b.is_optional) {
-                try emitOptionalArmNullableAlias(code_emitter, b, ctx.main_module_name);
-                continue;
-            }
-            try code_emitter.writeIndent();
-            try code_emitter.write("const ");
-            try writeBranchName(code_emitter, b.name);
-            try code_emitter.write(" = __H.");
-            try writeBranchName(code_emitter, b.name);
-            try code_emitter.write(";\n");
-            try code_emitter.writeIndent();
-            try code_emitter.write("_ = &");
-            try writeBranchName(code_emitter, b.name);
-            try code_emitter.write(";\n");
-        }
-    }
+    try emitYieldingBranchAliases(code_emitter, event, has_effect, ctx.main_module_name);
 
     // Suppress unused variable warnings
     for (event.input.fields) |field| {
@@ -15031,25 +15040,7 @@ fn emitEventDeclForModule(
 
         // Same yielding-branch aliases the bare handler binds, so `tick(...)`
         // resolves identically in a variant body.
-        if (has_effect) {
-            for (event.branches) |*b| {
-                if (b.kind != .effect) continue;
-                if (b.is_optional) {
-                    try emitOptionalArmNullableAlias(code_emitter, b, ctx.main_module_name);
-                    continue;
-                }
-                try code_emitter.writeIndent();
-                try code_emitter.write("const ");
-                try writeBranchName(code_emitter, b.name);
-                try code_emitter.write(" = __H.");
-                try writeBranchName(code_emitter, b.name);
-                try code_emitter.write(";\n");
-                try code_emitter.writeIndent();
-                try code_emitter.write("_ = &");
-                try writeBranchName(code_emitter, b.name);
-                try code_emitter.write(";\n");
-            }
-        }
+        try emitYieldingBranchAliases(code_emitter, event, has_effect, ctx.main_module_name);
 
         for (event.input.fields) |field| {
             try code_emitter.writeIndent();

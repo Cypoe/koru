@@ -2461,24 +2461,7 @@ pub const VisitorEmitter = struct {
     /// absent) so presence guards fold and the omitted case never forces
     /// `__H.X`. (400_146/147/148)
     fn emitYieldingBranchAliases(self: *VisitorEmitter, event: *const ast.EventDecl, has_effect: bool) !void {
-        if (!has_effect) return;
-        for (event.branches) |*b| {
-            if (b.kind != .effect) continue;
-            if (b.is_optional) {
-                try emitter.emitOptionalArmNullableAlias(self.code_emitter, b, self.main_module_name);
-                continue;
-            }
-            try self.code_emitter.writeIndent();
-            try self.code_emitter.write("const ");
-            try emitter.writeBranchName(self.code_emitter, b.name);
-            try self.code_emitter.write(" = __H.");
-            try emitter.writeBranchName(self.code_emitter, b.name);
-            try self.code_emitter.write(";\n");
-            try self.code_emitter.writeIndent();
-            try self.code_emitter.write("_ = &");
-            try emitter.writeBranchName(self.code_emitter, b.name);
-            try self.code_emitter.write(";\n");
-        }
+        try emitter.emitYieldingBranchAliases(self.code_emitter, event, has_effect, self.main_module_name);
     }
 
     /// Emit a complete event declaration with Input, Output, and handler
