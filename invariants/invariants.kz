@@ -3,7 +3,9 @@
 //   koruc invariants/invariants.kz invariants          # list
 //   python3 invariants/gate.py                         # the gate consumer:
 //     per git-gate row — run `check:` if declared (deterministic, blocks);
-//     no `check:` → judge the staged diff via the gate binary (koru/odds).
+//     no `check:` → judge the staged diff via the gate binary (koru/odds);
+//     `odds-N` tag → deterministic roll of (name + staged diff) mod 100 —
+//     the row fires only below N: a sampled alarm, not a schedule.
 //
 // koruc emits its backend artifacts next to the entry file; this directory
 // exists so they land here (gitignored) and not in the repo root, which
@@ -74,6 +76,17 @@
     "name": "ref-provenance-every-consumer",
     "tags": ["review"],
     "rule": "Every consumer that materializes `ref(T)` fields enforces handle provenance — the value's brand must trace to a plural, handle-minting store whose expanded field set subsumes T, via the shared StoreRefHome.homesOf enumeration. std/store checks at every write path (insert, apply, envelope, bulk); std/list checks at push and refuses a homeless ref at new. Flag when a diff adds a consumer that materializes `ref(T)` fields (element structs, cell types, columns) without routing the field through the home check — a spelling that checks in one consumer and not another is a type that lies about its coverage. Whether ref-ness moves into the type environment so checking is unskippable remains undecided."
+}
+
+// The sampled alarm: odds-10 rolls the staged diff and fires the census
+// check on roughly one commit in ten. The pin is the board's state at the
+// close of the deslop campaign; regrowth blocks until the clones are
+// folded or the pin is re-set with a reason.
+~std/invariants:inferred {
+    "name": "deslop-board-does-not-regrow",
+    "tags": ["git-gate", "odds-10"],
+    "rule": "The structural clone census over src/ (tools/deslop.zig, --min-tokens=48) must not regrow past the pin in checks/deslop-census.baseline. This row is sampled — the odds-10 tag fires it on roughly one commit in ten, so slop accumulates only until a roll lands: an alarm driven by commit activity, not a schedule. When it fires above the pin, fold the clones the census names into their canonical form, or re-pin the baseline in the same commit with the reason the duplication is intentional — dialects, public adapters, and semantically distinct twins stay duplicated by design (concepts/frag-dedup-is-lift-then-delete.md). The census reads the working tree, so uncommitted work counts against the pin; a re-pin that hides avoidable slop is a silent weakening.",
+    "check": "python3 checks/check_deslop_census.py ../src ../tools/deslop.zig checks/deslop-census.baseline"
 }
 
 // The manifest guards itself: a git-gate-local row fires only when its

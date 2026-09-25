@@ -18,6 +18,14 @@ means a deterministic checker exists; its absence means the rule is
 judgment-class and goes to the reader (Jev). That is the designed split:
 the decidable get scripts, the readable get a model.
 
+An `odds-N` tag samples the row: it fires only when a deterministic roll
+of sha256(row name + staged diff) mod 100 lands below N — an alarm driven
+by commit activity, not a schedule. The roll is fixed for a given staged
+state, so re-running the gate on the same diff answers identically; it is
+unpredictable only until the diff exists. Sampling a judged row makes a
+flaky oracle — the tag's home is `check:` rows, where a firing alarm
+always has a concrete script output to point at.
+
 Usage:
   python3 gate.py [--checks-only] [--judge-only] [--repo PATH]
 
@@ -40,6 +48,7 @@ gate.k or a linked module (koru/odds) is newer than it — the stale-binary
 discipline applied to the gate itself.
 """
 
+import hashlib
 import os
 import re
 import shlex
@@ -242,6 +251,16 @@ def main():
     advisories = []
 
     for r in rows:
+        m = re.search(r'odds-(\d+)', r["tags"])
+        if m:
+            n = int(m.group(1))
+            roll = int.from_bytes(hashlib.sha256(
+                r["name"].encode() + b"\0" + diff.encode()).digest()[:8],
+                "big") % 100
+            if roll >= n:
+                print(f"odds miss  {r['name']} — rolled {roll}, fires below {n}")
+                continue
+            print(f"odds fire  {r['name']} — rolled {roll} < {n}")
         local = '"git-gate-local"' in r["tags"]
         state = diff
         if local:

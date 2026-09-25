@@ -1,0 +1,6 @@
+# Pin: tools/deslop.zig over src/ at --min-tokens=48, measured 2026-10-13
+# on the deslop campaign's close (110+ lift commits; residue is test
+# scaffolding and small idioms). Regrowth is the alarm — fold the clones
+# it names, or re-pin here with the reason the duplication is intentional.
+clusters=609
+members=747
