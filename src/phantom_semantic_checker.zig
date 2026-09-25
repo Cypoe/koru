@@ -1995,6 +1995,28 @@ pub const PhantomSemanticChecker = struct {
         return false;
     }
 
+    /// Validate each nested continuation in order, early-out on the first
+    /// failure — an arm followed by a join may not be bare-branchless.
+    fn validateNestedContinuations(
+        self: *PhantomSemanticChecker,
+        cont: *const ast.Continuation,
+        event_decl: *const ast.EventDecl,
+        event_module: ?[]const u8,
+        flow_module: []const u8,
+        event_map: *std.StringHashMap(EventInfo),
+        location: errors.SourceLocation,
+        context: ?*const BindingContext,
+        implementing_event: ?*const ast.EventDecl,
+    ) anyerror!bool {
+        for (cont.continuations, 0..) |*nested, nested_idx| {
+            const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
+            if (!nested_valid) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     fn validateContinuation(
         self: *PhantomSemanticChecker,
         cont: *const ast.Continuation,
@@ -2111,11 +2133,8 @@ pub const PhantomSemanticChecker = struct {
                         // obligation — the intermediate-step twin of the flow-head bind.
                         try self.recordBareReturnBind(inv, step_event_info.decl, step_module, step_qualified, &void_context);
                         // Validate nested continuations against the step's event
-                        for (cont.continuations, 0..) |*nested, nested_idx| {
-                            const nested_valid = try self.validateContinuation(nested, step_event_info.decl, step_module, flow_module, event_map, location, &void_context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
-                            if (!nested_valid) {
-                                return false;
-                            }
+                        if (!try self.validateNestedContinuations(cont, step_event_info.decl, step_module, flow_module, event_map, location, &void_context, implementing_event)) {
+                            return false;
                         }
                         // END OF CHAIN = A FLOW EXIT. With no nested continuation
                         // there is nothing further to discharge into, so this is a
@@ -2157,13 +2176,7 @@ pub const PhantomSemanticChecker = struct {
             }
 
             // Validate nested continuations recursively (fallback: against void event)
-            for (cont.continuations, 0..) |*nested, nested_idx| {
-                const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, &void_context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
-                if (!nested_valid) {
-                    return false;
-                }
-            }
-            return true;
+            return self.validateNestedContinuations(cont, event_decl, event_module, flow_module, event_map, location, &void_context, implementing_event);
         }
 
         // Catch-all continuations (|?) don't reference a specific branch
@@ -2171,13 +2184,7 @@ pub const PhantomSemanticChecker = struct {
         if (cont.is_catchall) {
             log.debug("[PHANTOM-FLOW]   (catch-all continuation - skipping branch validation)\n", .{});
             // Still validate nested continuations if present
-            for (cont.continuations, 0..) |*nested, nested_idx| {
-                const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, null, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
-                if (!nested_valid) {
-                    return false;
-                }
-            }
-            return true;
+            return self.validateNestedContinuations(cont, event_decl, event_module, flow_module, event_map, location, null, implementing_event);
         }
 
         // Empty-branch continuations (|> ...) are void chain continuations
@@ -2217,13 +2224,7 @@ pub const PhantomSemanticChecker = struct {
                             // of the flow-head bind).
                             try self.recordBareReturnBind(inv, step_event_info.decl, step_module, step_qualified, &void_chain_context);
                             // Validate nested continuations against the step's event
-                            for (cont.continuations, 0..) |*nested, nested_idx| {
-                                const nested_valid = try self.validateContinuation(nested, step_event_info.decl, step_module, flow_module, event_map, location, &void_chain_context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
-                                if (!nested_valid) {
-                                    return false;
-                                }
-                            }
-                            return true;
+                            return self.validateNestedContinuations(cont, step_event_info.decl, step_module, flow_module, event_map, location, &void_chain_context, implementing_event);
                         }
                     },
                     .inline_code => {
@@ -2232,26 +2233,14 @@ pub const PhantomSemanticChecker = struct {
                         // (not as a void chain) because they might be branch handlers for a previous invocation
                         // For example: |> work() |> print.ln("...") | done |> ...
                         // The | done |> is a branch of work(), not a void chain
-                        for (cont.continuations, 0..) |*nested, nested_idx| {
-                            const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, &void_chain_context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
-                            if (!nested_valid) {
-                                return false;
-                            }
-                        }
-                        return true;
+                        return self.validateNestedContinuations(cont, event_decl, event_module, flow_module, event_map, location, &void_chain_context, implementing_event);
                     },
                     else => {},
                 }
             }
 
             // Fallback: validate nested continuations (no step or unrecognized step)
-            for (cont.continuations, 0..) |*nested, nested_idx| {
-                const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, &void_chain_context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
-                if (!nested_valid) {
-                    return false;
-                }
-            }
-            return true;
+            return self.validateNestedContinuations(cont, event_decl, event_module, flow_module, event_map, location, &void_chain_context, implementing_event);
         }
 
         // Find the branch in the event declaration: exact name first, then a
