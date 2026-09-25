@@ -4312,81 +4312,79 @@ pub fn findEventModule(event_path: []const []const u8, items: []const ast.Item) 
     return null;
 }
 
-/// Find an event declaration by its path
-/// Handles both local events (no module_qualifier) and imported module events (with module_qualifier)
-pub fn findEventDeclByPath(items: []const ast.Item, path: *const ast.DottedPath) ?*const ast.EventDecl {
-    // If path has a module_qualifier (e.g., "vaxis" in "vaxis:poll"),
-    // we need to find the matching module first
+/// Path-segment equality for decl lookup (segments are strings, so
+/// std.mem.eql alone doesn't compare them).
+fn segmentsEqual(a: []const []const u8, b: []const []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, 0..) |segment, i| {
+        if (!std.mem.eql(u8, segment, b[i])) return false;
+    }
+    return true;
+}
+
+/// The find*DeclByPath walk, generic over the Item tag: a qualified path
+/// resolves inside the named module_decl first (falling back to top-level
+/// items, since the qualifier may name the main module — a source_file, not
+/// a module_decl); an unqualified path searches local items and recurses
+/// into module_decls.
+fn findDeclByPath(
+    comptime tag: std.meta.Tag(ast.Item),
+    comptime T: type,
+    items: []const ast.Item,
+    path: *const ast.DottedPath,
+) ?*const T {
     if (path.module_qualifier) |module_qual| {
         for (items) |*item| {
-            switch (item.*) {
-                .module_decl => |*module| {
-                    // Check if this module matches the qualifier
-                    if (std.mem.eql(u8, module.logical_name, module_qual)) {
-                        // Found the module - now search for the event inside it
-                        return findEventDeclByPathInModule(module.items, path.segments);
-                    }
-                },
-                else => {},
+            if (item.* == .module_decl and std.mem.eql(u8, item.module_decl.logical_name, module_qual)) {
+                return findDeclBySegments(tag, T, item.module_decl.items, path.segments);
             }
         }
-        // If no module_decl matches, the module_qualifier might refer to the main module
-        // which is the source_file itself (not a module_decl). Fall back to searching
-        // top-level items for the event.
-        return findEventDeclByPathInModule(items, path.segments);
+        return findDeclBySegments(tag, T, items, path.segments);
     }
 
-    // No module qualifier - search for local events
     for (items) |*item| {
         switch (item.*) {
-            .event_decl => |*event| {
-                // Compare paths
-                if (event.path.segments.len == path.segments.len) {
-                    var matches = true;
-                    for (event.path.segments, 0..) |segment, i| {
-                        if (!std.mem.eql(u8, segment, path.segments[i])) {
-                            matches = false;
-                            break;
-                        }
-                    }
-                    if (matches) {
-                        return event;
-                    }
-                }
-            },
             .module_decl => |*module| {
-                if (findEventDeclByPath(module.items, path)) |found| {
+                if (findDeclByPath(tag, T, module.items, path)) |found| {
                     return found;
                 }
             },
-            else => {},
+            else => {
+                if (item.* == tag) {
+                    const decl: *const T = &@field(item.*, @tagName(tag));
+                    if (segmentsEqual(decl.path.segments, path.segments)) {
+                        return decl;
+                    }
+                }
+            },
         }
     }
     return null;
 }
 
-/// Helper: Find event by segments within a specific module's items
-fn findEventDeclByPathInModule(items: []const ast.Item, segments: []const []const u8) ?*const ast.EventDecl {
+/// Find a decl by segments within one item list — the flat scan behind the
+/// qualified-path arm of findDeclByPath.
+fn findDeclBySegments(
+    comptime tag: std.meta.Tag(ast.Item),
+    comptime T: type,
+    items: []const ast.Item,
+    segments: []const []const u8,
+) ?*const T {
     for (items) |*item| {
-        switch (item.*) {
-            .event_decl => |*event| {
-                if (event.path.segments.len == segments.len) {
-                    var matches = true;
-                    for (event.path.segments, 0..) |segment, i| {
-                        if (!std.mem.eql(u8, segment, segments[i])) {
-                            matches = false;
-                            break;
-                        }
-                    }
-                    if (matches) {
-                        return event;
-                    }
-                }
-            },
-            else => {},
+        if (item.* == tag) {
+            const decl: *const T = &@field(item.*, @tagName(tag));
+            if (segmentsEqual(decl.path.segments, segments)) {
+                return decl;
+            }
         }
     }
     return null;
+}
+
+/// Find an event declaration by its path
+/// Handles both local events (no module_qualifier) and imported module events (with module_qualifier)
+pub fn findEventDeclByPath(items: []const ast.Item, path: *const ast.DottedPath) ?*const ast.EventDecl {
+    return findDeclByPath(.event_decl, ast.EventDecl, items, path);
 }
 
 /// The bindings visible at a nested transform site. `site` is a pointer into
@@ -4975,71 +4973,7 @@ pub fn storeAnnounceEachItems(
 /// Find a proc declaration by its path
 /// Used for checking purity of event implementations
 pub fn findProcDeclByPath(items: []const ast.Item, path: *const ast.DottedPath) ?*const ast.ProcDecl {
-    // Handle module qualifier
-    if (path.module_qualifier) |module_qual| {
-        for (items) |*item| {
-            switch (item.*) {
-                .module_decl => |*module| {
-                    if (std.mem.eql(u8, module.logical_name, module_qual)) {
-                        return findProcDeclByPathInModule(module.items, path.segments);
-                    }
-                },
-                else => {},
-            }
-        }
-        return findProcDeclByPathInModule(items, path.segments);
-    }
-
-    // No module qualifier - search for local procs
-    for (items) |*item| {
-        switch (item.*) {
-            .proc_decl => |*proc| {
-                if (proc.path.segments.len == path.segments.len) {
-                    var matches = true;
-                    for (proc.path.segments, 0..) |segment, i| {
-                        if (!std.mem.eql(u8, segment, path.segments[i])) {
-                            matches = false;
-                            break;
-                        }
-                    }
-                    if (matches) {
-                        return proc;
-                    }
-                }
-            },
-            .module_decl => |*module| {
-                if (findProcDeclByPath(module.items, path)) |found| {
-                    return found;
-                }
-            },
-            else => {},
-        }
-    }
-    return null;
-}
-
-/// Helper: Find proc by segments within a specific module's items
-fn findProcDeclByPathInModule(items: []const ast.Item, segments: []const []const u8) ?*const ast.ProcDecl {
-    for (items) |*item| {
-        switch (item.*) {
-            .proc_decl => |*proc| {
-                if (proc.path.segments.len == segments.len) {
-                    var matches = true;
-                    for (proc.path.segments, 0..) |segment, i| {
-                        if (!std.mem.eql(u8, segment, segments[i])) {
-                            matches = false;
-                            break;
-                        }
-                    }
-                    if (matches) {
-                        return proc;
-                    }
-                }
-            },
-            else => {},
-        }
-    }
-    return null;
+    return findDeclByPath(.proc_decl, ast.ProcDecl, items, path);
 }
 
 /// Find all variant proc_decls (proc.target != null) whose path matches the given path.
