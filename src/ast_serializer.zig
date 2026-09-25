@@ -62,6 +62,14 @@ pub const AstSerializer = struct {
         try self.buffer.appendSlice(self.allocator, text);
     }
 
+    /// Format into a scratch allocation and write it — the one-line form of
+    /// allocPrint + defer free + write.
+    fn writef(self: *AstSerializer, comptime fmt: []const u8, args: anytype) SerializeError!void {
+        const s = try std.fmt.allocPrint(self.allocator, fmt, args);
+        defer self.allocator.free(s);
+        try self.write(s);
+    }
+
     fn writeLine(self: *AstSerializer, text: []const u8) SerializeError!void {
         try self.writeIndent();
         try self.write(text);
@@ -386,38 +394,26 @@ pub const AstSerializer = struct {
             try self.write(", .type = ");
             try self.writeString(field.type);
             if (field.lo) |b| {
-                const s = try std.fmt.allocPrint(self.allocator, ", .lo = .{{ .value = {d}, .exclusive = {} }}", .{ b.value, b.exclusive });
-                defer self.allocator.free(s);
-                try self.write(s);
+                try self.writef(", .lo = .{{ .value = {d}, .exclusive = {} }}", .{ b.value, b.exclusive });
             }
             if (field.hi) |b| {
-                const s = try std.fmt.allocPrint(self.allocator, ", .hi = .{{ .value = {d}, .exclusive = {} }}", .{ b.value, b.exclusive });
-                defer self.allocator.free(s);
-                try self.write(s);
+                try self.writef(", .hi = .{{ .value = {d}, .exclusive = {} }}", .{ b.value, b.exclusive });
             }
             if (field.eq) |b| {
-                const s = try std.fmt.allocPrint(self.allocator, ", .eq = .{{ .value = {d}, .exclusive = {} }}", .{ b.value, b.exclusive });
-                defer self.allocator.free(s);
-                try self.write(s);
+                try self.writef(", .eq = .{{ .value = {d}, .exclusive = {} }}", .{ b.value, b.exclusive });
             }
             if (field.clamp) |c| {
-                const s = try std.fmt.allocPrint(self.allocator, ", .clamp = .{{ .lo = {d}, .hi = {d} }}", .{ c.lo, c.hi });
-                defer self.allocator.free(s);
-                try self.write(s);
+                try self.writef(", .clamp = .{{ .lo = {d}, .hi = {d} }}", .{ c.lo, c.hi });
             }
             if (field.alts) |set| {
                 try self.write(", .alts = &[_]i64{");
                 for (set) |v| {
-                    const s = try std.fmt.allocPrint(self.allocator, "{d}, ", .{v});
-                    defer self.allocator.free(s);
-                    try self.write(s);
+                    try self.writef("{d}, ", .{v});
                 }
                 try self.write("}");
             }
             if (field.alt_default) |d| {
-                const s = try std.fmt.allocPrint(self.allocator, ", .alt_default = {d}", .{d});
-                defer self.allocator.free(s);
-                try self.write(s);
+                try self.writef(", .alt_default = {d}", .{d});
             }
             try self.write(" }, ");
         }
@@ -1254,9 +1250,7 @@ pub const AstSerializer = struct {
         // Indent
         try self.writeIndent();
         try self.write(".indent = ");
-        const indent_str = try std.fmt.allocPrint(self.allocator, "{}", .{cont.indent});
-        defer self.allocator.free(indent_str);
-        try self.write(indent_str);
+        try self.writef("{}", .{cont.indent});
         try self.write(",\n");
 
         // Continuations
@@ -1861,13 +1855,9 @@ pub const AstSerializer = struct {
 
     fn serializeSourceLocation(self: *AstSerializer, location: anytype) !void {
         try self.write(".{ .line = ");
-        const line_str = try std.fmt.allocPrint(self.allocator, "{d}", .{location.line});
-        defer self.allocator.free(line_str);
-        try self.write(line_str);
+        try self.writef("{d}", .{location.line});
         try self.write(", .column = ");
-        const col_str = try std.fmt.allocPrint(self.allocator, "{d}", .{location.column});
-        defer self.allocator.free(col_str);
-        try self.write(col_str);
+        try self.writef("{d}", .{location.column});
         try self.write(", .file = ");
         try self.writeString(location.file);
         try self.write(" }");
@@ -2004,40 +1994,28 @@ pub const AstSerializer = struct {
             try self.write(", \"type\": ");
             try self.writeString(field.type);
             if (field.eq) |b| {
-                const s = try std.fmt.allocPrint(self.allocator, ", \"eq\": {d}", .{b.value});
-                defer self.allocator.free(s);
-                try self.write(s);
+                try self.writef(", \"eq\": {d}", .{b.value});
             } else {
                 if (field.lo) |b| {
-                    const s = try std.fmt.allocPrint(self.allocator, ", \"lo\": {{ \"value\": {d}, \"exclusive\": {} }}", .{ b.value, b.exclusive });
-                    defer self.allocator.free(s);
-                    try self.write(s);
+                    try self.writef(", \"lo\": {{ \"value\": {d}, \"exclusive\": {} }}", .{ b.value, b.exclusive });
                 }
                 if (field.hi) |b| {
-                    const s = try std.fmt.allocPrint(self.allocator, ", \"hi\": {{ \"value\": {d}, \"exclusive\": {} }}", .{ b.value, b.exclusive });
-                    defer self.allocator.free(s);
-                    try self.write(s);
+                    try self.writef(", \"hi\": {{ \"value\": {d}, \"exclusive\": {} }}", .{ b.value, b.exclusive });
                 }
             }
             if (field.clamp) |c| {
-                const s = try std.fmt.allocPrint(self.allocator, ", \"clamp\": {{ \"lo\": {d}, \"hi\": {d} }}", .{ c.lo, c.hi });
-                defer self.allocator.free(s);
-                try self.write(s);
+                try self.writef(", \"clamp\": {{ \"lo\": {d}, \"hi\": {d} }}", .{ c.lo, c.hi });
             }
             if (field.alts) |set| {
                 try self.write(", \"alts\": [");
                 for (set, 0..) |v, vi| {
                     if (vi > 0) try self.write(", ");
-                    const s = try std.fmt.allocPrint(self.allocator, "{d}", .{v});
-                    defer self.allocator.free(s);
-                    try self.write(s);
+                    try self.writef("{d}", .{v});
                 }
                 try self.write("]");
             }
             if (field.alt_default) |d| {
-                const s = try std.fmt.allocPrint(self.allocator, ", \"alt_default\": {d}", .{d});
-                defer self.allocator.free(s);
-                try self.write(s);
+                try self.writef(", \"alt_default\": {d}", .{d});
             }
             try self.write(" }");
         }
@@ -3116,16 +3094,12 @@ pub const AstSerializer = struct {
 
         try self.writeIndent();
         try self.write("\"line\": ");
-        const line_str = try std.fmt.allocPrint(self.allocator, "{d}", .{location.line});
-        defer self.allocator.free(line_str);
-        try self.write(line_str);
+        try self.writef("{d}", .{location.line});
         try self.write(",\n");
 
         try self.writeIndent();
         try self.write("\"col\": ");
-        const col_str = try std.fmt.allocPrint(self.allocator, "{d}", .{location.column});
-        defer self.allocator.free(col_str);
-        try self.write(col_str);
+        try self.writef("{d}", .{location.column});
 
         try self.write("\n");
         self.dedent();
