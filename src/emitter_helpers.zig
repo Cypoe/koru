@@ -2822,6 +2822,83 @@ fn collectBoundNames(allocator: std.mem.Allocator, continuations: []const ast.Co
     }
 }
 
+/// `_ = &<parent-result>;` for a void `|>` step: the parent step's result
+/// const is in scope but unconsumed, so it must be discarded or Zig rejects
+/// the emit. Named by caller override, `result` at depth 0, else
+/// `nested_result_{depth-1}`.
+fn emitParentResultDiscard(
+    emitter: *CodeEmitter,
+    indent: []const u8,
+    parent_result_name: ?[]const u8,
+    depth: usize,
+) !void {
+    try emitter.write(indent);
+    if (parent_result_name) |prn| {
+        try emitter.write("_ = &");
+        try writeBranchName(emitter, prn);
+        try emitter.write(";\n");
+    } else if (depth == 0) {
+        try emitter.write("_ = &result;\n");
+    } else {
+        var buf: [48]u8 = undefined;
+        const discard = try std.fmt.bufPrint(&buf, "_ = &nested_result_{d};\n", .{depth - 1});
+        try emitter.write(discard);
+    }
+}
+
+/// Route a void-chain step through emitContinuationBody when the simple
+/// step-switch can't lower it (`.label_with_invocation`, an `inline_body`
+/// invocation, …). Shared tail of the bail sites: discard the parent result,
+/// build a fresh sync ctx carrying this scope's bindings and label contexts,
+/// run the body emitter at indent 0.
+fn emitVoidStepViaContinuationBody(
+    emitter: *CodeEmitter,
+    cont: *const ast.Continuation,
+    indent: []const u8,
+    all_items: []const ast.Item,
+    depth: usize,
+    tap_registry: ?*tap_registry_module.TapRegistry,
+    type_registry: *type_registry_module.TypeRegistry,
+    main_module_name: ?[]const u8,
+    source_event_name: ?[]const u8,
+    enclosing_bare_return: bool,
+    enclosing_event: ?*const ast.EventDecl,
+    self_loop_canonical: ?[]const u8,
+    local_bindings: *const std.ArrayList([]const u8),
+    parent_result_name: ?[]const u8,
+) !void {
+    try emitParentResultDiscard(emitter, indent, parent_result_name, depth);
+    var ctx = EmissionContext{
+        .allocator = std.heap.page_allocator,
+        .indent_level = 0,
+        .ast_items = all_items,
+        .is_sync = true,
+        .tap_registry = tap_registry,
+        .type_registry = type_registry,
+        .main_module_name = main_module_name,
+        .current_source_event = source_event_name,
+        .bare_return_active = enclosing_bare_return,
+        .produce_event = enclosing_event,
+        .self_loop_active = self_loop_canonical != null,
+        .self_loop_event_canonical = self_loop_canonical,
+    };
+    ctx.zig_scope_bindings.items = local_bindings.items;
+    var label_contexts = std.StringHashMap(LabelContext).init(ctx.allocator);
+    ctx.label_contexts = &label_contexts;
+    defer {
+        var it = label_contexts.valueIterator();
+        while (it.next()) |label_ctx| {
+            ctx.allocator.free(label_ctx.result_var);
+        }
+        label_contexts.deinit();
+    }
+    var label_counter: usize = depth;
+    const old_indent = emitter.indent_level;
+    emitter.indent_level = 0;
+    try emitContinuationBody(emitter, &ctx, cont, &label_counter);
+    emitter.indent_level = old_indent;
+}
+
 fn emitSubflowContinuationsWithDepth(
     emitter: *CodeEmitter,
     continuations: []const ast.Continuation,
@@ -2907,52 +2984,7 @@ fn emitSubflowContinuationsWithDepth(
         // continuations (the `@loop`/terminal arms), so we must NOT recurse below.
         if (cont.node) |label_step| {
             if (label_step == .label_with_invocation) {
-                // The head's `result` was aliased to the bind (`const <bind> =
-                // result;`) at the call site; it is otherwise unused here, so
-                // discard it (parent var is `result` at depth 0, else
-                // `nested_result_{depth-1}`).
-                try emitter.write(indent);
-                if (parent_result_name) |prn| {
-                    try emitter.write("_ = &");
-                    try writeBranchName(emitter, prn);
-                    try emitter.write(";\n");
-                } else if (depth == 0) {
-                    try emitter.write("_ = &result;\n");
-                } else {
-                    var buf: [48]u8 = undefined;
-                    const discard = try std.fmt.bufPrint(&buf, "_ = &nested_result_{d};\n", .{depth - 1});
-                    try emitter.write(discard);
-                }
-
-                var ctx = EmissionContext{
-                    .allocator = std.heap.page_allocator,
-                    .indent_level = 0,
-                    .ast_items = all_items,
-                    .is_sync = true,
-                    .tap_registry = tap_registry,
-                    .type_registry = type_registry,
-                    .main_module_name = main_module_name,
-                    .current_source_event = source_event_name,
-                    .bare_return_active = enclosing_bare_return,
-                    .produce_event = enclosing_event,
-                    .self_loop_active = self_loop_canonical != null,
-                    .self_loop_event_canonical = self_loop_canonical,
-                };
-                ctx.zig_scope_bindings.items = local_bindings.items;
-                var label_contexts = std.StringHashMap(LabelContext).init(ctx.allocator);
-                ctx.label_contexts = &label_contexts;
-                defer {
-                    var it = label_contexts.valueIterator();
-                    while (it.next()) |label_ctx| {
-                        ctx.allocator.free(label_ctx.result_var);
-                    }
-                    label_contexts.deinit();
-                }
-                var label_counter: usize = depth;
-                const old_indent = emitter.indent_level;
-                emitter.indent_level = 0;
-                try emitContinuationBody(emitter, &ctx, cont, &label_counter);
-                emitter.indent_level = old_indent;
+                try emitVoidStepViaContinuationBody(emitter, cont, indent, all_items, depth, tap_registry, type_registry, main_module_name, source_event_name, enclosing_bare_return, enclosing_event, self_loop_canonical, &local_bindings, parent_result_name);
                 return;
             }
         }
@@ -2967,47 +2999,7 @@ fn emitSubflowContinuationsWithDepth(
         // query/watch handler body (690_060): the print was transformed and the
         // `__kw` interpolation attached, but the void-chain emitter never emitted it.
         if (continuationsHaveReturnSwitchUnemittable(remaining_conts)) {
-            try emitter.write(indent);
-            if (parent_result_name) |prn| {
-                try emitter.write("_ = &");
-                try writeBranchName(emitter, prn);
-                try emitter.write(";\n");
-            } else if (depth == 0) {
-                try emitter.write("_ = &result;\n");
-            } else {
-                var buf: [48]u8 = undefined;
-                const discard = try std.fmt.bufPrint(&buf, "_ = &nested_result_{d};\n", .{depth - 1});
-                try emitter.write(discard);
-            }
-            var ctx = EmissionContext{
-                .allocator = std.heap.page_allocator,
-                .indent_level = 0,
-                .ast_items = all_items,
-                .is_sync = true,
-                .tap_registry = tap_registry,
-                .type_registry = type_registry,
-                .main_module_name = main_module_name,
-                .current_source_event = source_event_name,
-                .bare_return_active = enclosing_bare_return,
-                .produce_event = enclosing_event,
-                .self_loop_active = self_loop_canonical != null,
-                .self_loop_event_canonical = self_loop_canonical,
-            };
-            ctx.zig_scope_bindings.items = local_bindings.items;
-            var label_contexts = std.StringHashMap(LabelContext).init(ctx.allocator);
-            ctx.label_contexts = &label_contexts;
-            defer {
-                var it = label_contexts.valueIterator();
-                while (it.next()) |label_ctx| {
-                    ctx.allocator.free(label_ctx.result_var);
-                }
-                label_contexts.deinit();
-            }
-            var label_counter: usize = depth;
-            const old_indent = emitter.indent_level;
-            emitter.indent_level = 0;
-            try emitContinuationBody(emitter, &ctx, cont, &label_counter);
-            emitter.indent_level = old_indent;
+            try emitVoidStepViaContinuationBody(emitter, cont, indent, all_items, depth, tap_registry, type_registry, main_module_name, source_event_name, enclosing_bare_return, enclosing_event, self_loop_canonical, &local_bindings, parent_result_name);
             return;
         }
 
@@ -3035,20 +3027,7 @@ fn emitSubflowContinuationsWithDepth(
         // increments via `next_needs_switch`, which emits `const nested_result_
         // {depth}` — so it can never name a nonexistent variable. `_ = &x;` is
         // idempotent, so re-discarding a parent a later step also uses is safe.
-        {
-            try emitter.write(indent);
-            if (parent_result_name) |prn| {
-                try emitter.write("_ = &");
-                try writeBranchName(emitter, prn);
-                try emitter.write(";\n");
-            } else if (depth == 0) {
-                try emitter.write("_ = &result;\n");
-            } else {
-                var buf: [48]u8 = undefined;
-                const discard = try std.fmt.bufPrint(&buf, "_ = &nested_result_{d};\n", .{depth - 1});
-                try emitter.write(discard);
-            }
-        }
+        try emitParentResultDiscard(emitter, indent, parent_result_name, depth);
 
         // Emit the step if present
         if (cont.node) |step| {
