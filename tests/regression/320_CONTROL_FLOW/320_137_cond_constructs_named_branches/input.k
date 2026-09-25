@@ -1,4 +1,4 @@
-// Pins: cond arms construct named event branches with `=>` (same glyph as
+// Pins: cond arms construct named tor branches with `=>` (same glyph as
 // `if | then => more` in 020_028 / 240). Value-produce `cond` + `->` is
 // 320_133; this pin is the branch-constructor twin for app routers
 // (page-route → | catalog | progress | …).

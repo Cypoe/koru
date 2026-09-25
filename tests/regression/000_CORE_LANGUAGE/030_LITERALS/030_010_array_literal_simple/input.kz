@@ -3,7 +3,7 @@
 // Koru should support clean array literal syntax: [a, b, c]
 // The compiler infers the element type from the parameter type.
 //
-// Expected: Compiles and runs, passing array to the event
+// Expected: Compiles and runs, passing array to the tor
 
 const std = @import("std");
 

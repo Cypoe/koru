@@ -3,7 +3,7 @@
 // Koru should support clean struct literal syntax: { field: value }
 // This matches existing Koru patterns in subflows and branch constructors.
 //
-// Expected: Compiles and runs, struct passed to event
+// Expected: Compiles and runs, struct passed to tor
 
 const std = @import("std");
 

@@ -1,12 +1,12 @@
 {
-  "timestamp": "2026-09-22T10:56:17.029Z",
+  "timestamp": "2026-09-25T12:22:37.302Z",
   "summary": {
-    "passed": 418,
+    "passed": 425,
     "failed": 0,
     "skipped": 12,
     "leaked": 0,
     "compileErrors": 0,
-    "total": 430,
+    "total": 437,
     "suiteCount": 44,
     "status": "success"
   },
@@ -29,10 +29,10 @@
     },
     {
       "name": "ast_json_tests",
-      "passed": 2,
+      "passed": 3,
       "failed": 0,
       "skipped": 0,
-      "total": 2,
+      "total": 3,
       "status": "success"
     },
     {
@@ -61,10 +61,10 @@
     },
     {
       "name": "codegen_utils_tests",
-      "passed": 38,
+      "passed": 40,
       "failed": 0,
       "skipped": 0,
-      "total": 38,
+      "total": 40,
       "status": "success"
     },
     {
@@ -165,10 +165,10 @@
     },
     {
       "name": "flow_parser_tests",
-      "passed": 24,
+      "passed": 27,
       "failed": 0,
       "skipped": 0,
-      "total": 24,
+      "total": 27,
       "status": "success"
     },
     {
@@ -277,10 +277,10 @@
     },
     {
       "name": "struct_literal_tests",
-      "passed": 5,
+      "passed": 6,
       "failed": 0,
       "skipped": 0,
-      "total": 5,
+      "total": 6,
       "status": "success"
     },
     {

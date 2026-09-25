@@ -7,7 +7,7 @@
 
 const std = @import("std");
 
-// Server events
+// Server tors
 ~tor listen { port: u16 }
 | ready u32
 | failed string

@@ -1,6 +1,6 @@
 // Test: Pure subflow implementation (no proc needed)
 // From the README example - this is idiomatic Koru
-// This is the default authoring model for ordinary event behavior.
+// This is the default authoring model for ordinary tor behavior.
 import std/io
 
 tor greet { name: string } -> string

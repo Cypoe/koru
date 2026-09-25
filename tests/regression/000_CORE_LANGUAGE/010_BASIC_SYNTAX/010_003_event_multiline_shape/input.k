@@ -1,4 +1,4 @@
-// Event input shape braces may open on the line after the event name.
+// Tor input shape braces may open on the line after the tor name.
 
 tor example.write
 {

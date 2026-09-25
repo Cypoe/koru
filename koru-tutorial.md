@@ -38,7 +38,7 @@ The answer is 42.
 ```koru
 // Test: Pure subflow implementation (no proc needed)
 // From the README example - this is idiomatic Koru
-// This is the default authoring model for ordinary event behavior.
+// This is the default authoring model for ordinary tor behavior.
 import std/io
 
 tor greet { name: string } -> string
@@ -73,7 +73,7 @@ Hello, World!
 
 import std/io
 
-// Lower-level event: arbitrary outcome names
+// Lower-level tor: arbitrary outcome names
 pub tor step {}
 | return
 | break
@@ -81,7 +81,7 @@ pub tor step {}
 
 step => continue
 
-// Outer event: its own outcome vocabulary
+// Outer tor: its own outcome vocabulary
 pub tor run {}
 | stopped
 | iterated
@@ -126,7 +126,7 @@ Closing file
 ```koru
 // PIN (part): `part impl` in the entry loads every `input.impl.k*` sibling —
 // the same join the stem-facet mechanism makes, but NAMED by the declaration
-// instead of derived from the directory. Events declared in a part are in
+// instead of derived from the directory. Tors declared in a part are in
 // scope for the primary's flows, referenced unqualified — the merge puts
 // primary and parts in one module (the 140_009 facet contract, through part).
 
