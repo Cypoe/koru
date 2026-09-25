@@ -42,6 +42,81 @@ pub fn guardNonKoruBuildZig(output_path: []const u8) RefuseOverwriteBuildZig!voi
     }
 }
 
+/// Append string to buffer
+fn append(buf: []u8, p: *usize, str: []const u8) void {
+    @memcpy(buf[p.*..p.* + str.len], str);
+    p.* += str.len;
+}
+
+/// Sanitize module name to valid Zig identifier.
+/// Converts slashes, dots, and dashes to underscores.
+fn sanitizeModuleName(module_name: []const u8) [256]u8 {
+    var result: [256]u8 = undefined;
+    var i: usize = 0;
+    for (module_name) |c| {
+        if (c == '/' or c == '.' or c == '-') {
+            result[i] = '_';
+        } else {
+            result[i] = c;
+        }
+        i += 1;
+        if (i >= 256) break;
+    }
+    return result;
+}
+
+/// Emit one requirement as a struct-wrapped `call` fn plus its invocation —
+/// the loop body both emitters below share.
+fn appendRequirementWrapper(
+    allocator: std.mem.Allocator,
+    buffer: []u8,
+    pos: *usize,
+    req: *const BuildRequirement,
+    i: usize,
+    rel_to_root: []const u8,
+    comment: []const u8,
+) !void {
+    const sanitized = sanitizeModuleName(req.module_name);
+    const sanitized_len = req.module_name.len;
+
+    var index_buf: [32]u8 = undefined;
+    const index_str = std.fmt.bufPrint(&index_buf, "{d}", .{i}) catch unreachable;
+
+    append(buffer, pos, "    // ");
+    append(buffer, pos, comment);
+    append(buffer, pos, req.module_name);
+    append(buffer, pos, "\n");
+
+    append(buffer, pos, "    const ");
+    append(buffer, pos, sanitized[0..sanitized_len]);
+    append(buffer, pos, "_build_");
+    append(buffer, pos, index_str);
+    append(buffer, pos,
+        \\ = struct {
+        \\        fn call(b: *std.Build, exe: *std.Build.Step.Compile, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
+        \\            _ = &b; _ = &exe; _ = &target; _ = &optimize; // Suppress unused warnings
+        \\
+    );
+
+    // Inject the user's build code (already properly indented from Source
+    // capture); replace ${REL_TO_ROOT} with the actual relative path.
+    const substituted_code = try std.mem.replaceOwned(u8, allocator, req.source_code, "${REL_TO_ROOT}", rel_to_root);
+    defer allocator.free(substituted_code);
+    append(buffer, pos, substituted_code);
+
+    append(buffer, pos,
+        \\
+        \\        }
+        \\    }.call;
+        \\
+    );
+
+    append(buffer, pos, sanitized[0..sanitized_len]);
+    append(buffer, pos, "_build_");
+    append(buffer, pos, index_str);
+    append(buffer, pos, "(__koru_b, __koru_exe, __koru_target, __koru_optimize);\n\n");
+}
+
 /// Generate a build.zig file from collected requirements
 ///
 /// Parameters:
@@ -62,33 +137,6 @@ pub fn emitBuildZig(
     // Use stack-allocated buffer for build.zig generation (64KB should be enough)
     var buffer: [64 * 1024]u8 = undefined;
     var pos: usize = 0;
-
-    // Helper: Append string to buffer
-    const append = struct {
-        fn call(buf: []u8, p: *usize, str: []const u8) void {
-            @memcpy(buf[p.*..p.* + str.len], str);
-            p.* += str.len;
-        }
-    }.call;
-
-    // Helper: Sanitize module name to valid Zig identifier
-    // Converts slashes, dots, and dashes to underscores
-    const sanitizeModuleName = struct {
-        fn call(module_name: []const u8) [256]u8 {
-            var result: [256]u8 = undefined;
-            var i: usize = 0;
-            for (module_name) |c| {
-                if (c == '/' or c == '.' or c == '-') {
-                    result[i] = '_';
-                } else {
-                    result[i] = c;
-                }
-                i += 1;
-                if (i >= 256) break;
-            }
-            return result;
-        }
-    }.call;
 
     // Generate build.zig header
     // Note: We use __koru_ prefix for outer scope to avoid shadowing the nice names
@@ -128,50 +176,8 @@ pub fn emitBuildZig(
     // names (b, exe) in their build code. No shadowing because different names!
     // Each requirement gets a unique index to prevent name collisions when multiple
     // requirements come from the same module.
-    for (requires, 0..) |req, i| {
-        const sanitized = sanitizeModuleName(req.module_name);
-        const sanitized_len = req.module_name.len;
-
-        // Format the index as a string
-        var index_buf: [32]u8 = undefined;
-        const index_str = std.fmt.bufPrint(&index_buf, "{d}", .{i}) catch unreachable;
-
-        // Comment showing original module name
-        append(&buffer, &pos, "    // Module: ");
-        append(&buffer, &pos, req.module_name);
-        append(&buffer, &pos, "\n");
-
-        // Start struct wrapper
-        append(&buffer, &pos, "    const ");
-        append(&buffer, &pos, sanitized[0..sanitized_len]);
-        append(&buffer, &pos, "_build_");
-        append(&buffer, &pos, index_str);
-        append(&buffer, &pos,
-            \\ = struct {
-            \\        fn call(b: *std.Build, exe: *std.Build.Step.Compile, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
-            \\            _ = &b; _ = &exe; _ = &target; _ = &optimize; // Suppress unused warnings
-            \\
-        );
-
-        // Inject the user's build code (already properly indented from Source capture)
-        // Replace ${REL_TO_ROOT} with the actual relative path
-        const substituted_code = try std.mem.replaceOwned(u8, allocator, req.source_code, "${REL_TO_ROOT}", rel_to_root);
-        defer allocator.free(substituted_code);
-        append(&buffer, &pos, substituted_code);
-
-        // Close struct wrapper
-        append(&buffer, &pos,
-            \\
-            \\        }
-            \\    }.call;
-            \\
-        );
-
-        // Call the wrapper (pass __koru_ prefixed names from outer scope)
-        append(&buffer, &pos, sanitized[0..sanitized_len]);
-        append(&buffer, &pos, "_build_");
-        append(&buffer, &pos, index_str);
-        append(&buffer, &pos, "(__koru_b, __koru_exe, __koru_target, __koru_optimize);\n\n");
+    for (requires, 0..) |*req, i| {
+        try appendRequirementWrapper(allocator, &buffer, &pos, req, i, rel_to_root, "Module: ");
     }
 
     // Add final installArtifact call
@@ -210,29 +216,6 @@ pub fn emitOutputBuildZig(
     var buffer: [64 * 1024]u8 = undefined;
     var pos: usize = 0;
 
-    const append = struct {
-        fn call(buf: []u8, p: *usize, str: []const u8) void {
-            @memcpy(buf[p.*..p.* + str.len], str);
-            p.* += str.len;
-        }
-    }.call;
-
-    const sanitizeModuleName = struct {
-        fn call(module_name: []const u8) [256]u8 {
-            var result: [256]u8 = undefined;
-            var i: usize = 0;
-            for (module_name) |c| {
-                if (c == '/' or c == '.' or c == '-') {
-                    result[i] = '_';
-                } else {
-                    result[i] = c;
-                }
-                i += 1;
-            }
-            return result;
-        }
-    }.call;
-
     // Header - note we target output_emitted.zig, not backend.zig
     append(&buffer, &pos,
         \\const std = @import("std");
@@ -262,44 +245,8 @@ pub fn emitOutputBuildZig(
     );
 
     // Add each build requirement
-    for (requires, 0..) |req, i| {
-        const sanitized = sanitizeModuleName(req.module_name);
-        const sanitized_len = req.module_name.len;
-
-        var index_buf: [32]u8 = undefined;
-        const index_str = std.fmt.bufPrint(&index_buf, "{d}", .{i}) catch unreachable;
-
-        append(&buffer, &pos, "    // User module: ");
-        append(&buffer, &pos, req.module_name);
-        append(&buffer, &pos, "\n");
-
-        append(&buffer, &pos, "    const ");
-        append(&buffer, &pos, sanitized[0..sanitized_len]);
-        append(&buffer, &pos, "_build_");
-        append(&buffer, &pos, index_str);
-        append(&buffer, &pos,
-            \\ = struct {
-            \\        fn call(b: *std.Build, exe: *std.Build.Step.Compile, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
-            \\            _ = &b; _ = &exe; _ = &target; _ = &optimize; // Suppress unused warnings
-            \\
-        );
-
-        // Replace ${REL_TO_ROOT} with the actual relative path (same as emitBuildZig)
-        const substituted_code = try std.mem.replaceOwned(u8, allocator, req.source_code, "${REL_TO_ROOT}", rel_to_root);
-        defer allocator.free(substituted_code);
-        append(&buffer, &pos, substituted_code);
-
-        append(&buffer, &pos,
-            \\
-            \\        }
-            \\    }.call;
-            \\
-        );
-
-        append(&buffer, &pos, sanitized[0..sanitized_len]);
-        append(&buffer, &pos, "_build_");
-        append(&buffer, &pos, index_str);
-        append(&buffer, &pos, "(__koru_b, __koru_exe, __koru_target, __koru_optimize);\n\n");
+    for (requires, 0..) |*req, i| {
+        try appendRequirementWrapper(allocator, &buffer, &pos, req, i, rel_to_root, "User module: ");
     }
 
     append(&buffer, &pos,
