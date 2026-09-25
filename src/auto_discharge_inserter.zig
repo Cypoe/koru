@@ -625,6 +625,30 @@ pub const AutoDischargeInserter = struct {
         return false;
     }
 
+    /// Obligations that ride out through a branch_constructor's return fields
+    /// transfer to the caller — remove them from the pending cleanup set so a
+    /// terminal doesn't dispose a binding the caller now owns.
+    fn removeEscapingObligations(context: *BindingContext, bc: *const ast.BranchConstructor) void {
+        // Collect escaping bindings (max 16 should be plenty)
+        var escaping_bindings: [16][]const u8 = undefined;
+        var escaping_count: usize = 0;
+
+        var obl_iter = context.obligations();
+        while (obl_iter.next()) |entry| {
+            if (bindingEscapesViaBranchConstructor(bc, entry.key_ptr.*)) {
+                if (escaping_count < 16) {
+                    escaping_bindings[escaping_count] = entry.key_ptr.*;
+                    escaping_count += 1;
+                }
+            }
+        }
+
+        // Remove escaping obligations (they transfer to the caller)
+        for (escaping_bindings[0..escaping_count]) |binding| {
+            _ = context.cleanup_obligations.remove(binding);
+        }
+    }
+
     /// Binding context tracks phantom states of variables in scope
     const BindingContext = struct {
         bindings: std.StringHashMap([]const u8), // variable name → phantom state
@@ -2137,25 +2161,7 @@ pub const AutoDischargeInserter = struct {
                 // IMPORTANT: For branch_constructor, check if obligations ESCAPE via the return fields
                 // If an obligation is returned (e.g., got_file { file: f.file }), it should NOT be disposed
                 if (node == .branch_constructor) {
-                    const bc = &node.branch_constructor;
-                    // Collect escaping bindings (max 16 should be plenty)
-                    var escaping_bindings: [16][]const u8 = undefined;
-                    var escaping_count: usize = 0;
-
-                    var obl_iter = context.obligations();
-                    while (obl_iter.next()) |entry| {
-                        if (bindingEscapesViaBranchConstructor(bc, entry.key_ptr.*)) {
-                            if (escaping_count < 16) {
-                                escaping_bindings[escaping_count] = entry.key_ptr.*;
-                                escaping_count += 1;
-                            }
-                        }
-                    }
-
-                    // Remove escaping obligations (they transfer to the caller)
-                    for (escaping_bindings[0..escaping_count]) |binding| {
-                        _ = context.cleanup_obligations.remove(binding);
-                    }
+                    removeEscapingObligations(&context, &node.branch_constructor);
                 }
 
                 if (context.hasObligations() and !context.in_sequential_prefix) {
@@ -2635,25 +2641,7 @@ pub const AutoDischargeInserter = struct {
                 // IMPORTANT: For branch_constructor, check if obligations ESCAPE via the return fields
                 // If an obligation is returned (e.g., got_file { file: f.file }), it should NOT be disposed
                 if (node == .branch_constructor) {
-                    const bc = &node.branch_constructor;
-                    // Collect escaping bindings (max 16 should be plenty)
-                    var escaping_bindings: [16][]const u8 = undefined;
-                    var escaping_count: usize = 0;
-
-                    var obl_iter = context.obligations();
-                    while (obl_iter.next()) |entry| {
-                        if (bindingEscapesViaBranchConstructor(bc, entry.key_ptr.*)) {
-                            if (escaping_count < 16) {
-                                escaping_bindings[escaping_count] = entry.key_ptr.*;
-                                escaping_count += 1;
-                            }
-                        }
-                    }
-
-                    // Remove escaping obligations (they transfer to the caller)
-                    for (escaping_bindings[0..escaping_count]) |binding| {
-                        _ = context.cleanup_obligations.remove(binding);
-                    }
+                    removeEscapingObligations(context, &node.branch_constructor);
                 }
 
                 // Check for current-scope obligations to dispose
