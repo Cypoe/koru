@@ -141,6 +141,27 @@ pub const Env = struct {
     }
 };
 
+/// Literal lowering shared by Evaluator and EntryEvaluator — same parse,
+/// different failure wording at the call site.
+fn evalLiteralValue(self: anytype, lit: ast.Literal, comptime invalid_fmt: []const u8) EvalError!Value {
+    switch (lit) {
+        .number => |text| {
+            if (std.fmt.parseInt(i64, text, 0)) |i| return .{ .int = i } else |_| {}
+            if (std.fmt.parseFloat(f64, text)) |f| return .{ .float = f } else |_| {}
+            return self.fail(error.InvalidLiteral, invalid_fmt, .{text});
+        },
+        .string => |text| {
+            // The parser may or may not keep the surrounding quotes; store bare.
+            const bare = if (text.len >= 2 and text[0] == '"' and text[text.len - 1] == '"')
+                text[1 .. text.len - 1]
+            else
+                text;
+            return .{ .string = bare };
+        },
+        .boolean => |b| return .{ .boolean = b },
+    }
+}
+
 pub const Evaluator = struct {
     allocator: std.mem.Allocator,
     /// Set on every error: names exactly what failed. The pipeline turns this
@@ -223,22 +244,7 @@ pub const Evaluator = struct {
     }
 
     fn evalLiteral(self: *Evaluator, lit: ast.Literal) EvalError!Value {
-        switch (lit) {
-            .number => |text| {
-                if (std.fmt.parseInt(i64, text, 0)) |i| return .{ .int = i } else |_| {}
-                if (std.fmt.parseFloat(f64, text)) |f| return .{ .float = f } else |_| {}
-                return self.fail(error.InvalidLiteral, "comptime evaluation: `{s}` is not a number the evaluator understands", .{text});
-            },
-            .string => |text| {
-                // The parser may or may not keep the surrounding quotes; store bare.
-                const bare = if (text.len >= 2 and text[0] == '"' and text[text.len - 1] == '"')
-                    text[1 .. text.len - 1]
-                else
-                    text;
-                return .{ .string = bare };
-            },
-            .boolean => |b| return .{ .boolean = b },
-        }
+        return evalLiteralValue(self, lit, "comptime evaluation: `{s}` is not a number the evaluator understands");
     }
 
     fn evalBinary(self: *Evaluator, env: *Env, bin: ast.BinaryOp) EvalError!Value {
@@ -1420,21 +1426,7 @@ const EntryEvaluator = struct {
     }
 
     fn evalLiteral(self: *EntryEvaluator, lit: ast.Literal) EvalError!Value {
-        switch (lit) {
-            .number => |text| {
-                if (std.fmt.parseInt(i64, text, 0)) |i| return .{ .int = i } else |_| {}
-                if (std.fmt.parseFloat(f64, text)) |f| return .{ .float = f } else |_| {}
-                return self.fail(error.InvalidLiteral, "`{s}` is not a number", .{text});
-            },
-            .string => |text| {
-                const bare = if (text.len >= 2 and text[0] == '"' and text[text.len - 1] == '"')
-                    text[1 .. text.len - 1]
-                else
-                    text;
-                return .{ .string = bare };
-            },
-            .boolean => |b| return .{ .boolean = b },
-        }
+        return evalLiteralValue(self, lit, "`{s}` is not a number");
     }
 
     fn isComparison(op: ast.BinaryOperator) bool {
