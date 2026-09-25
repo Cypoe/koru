@@ -1374,22 +1374,7 @@ pub const FlowChecker = struct {
     }
 
     fn isBindingUsed(self: *FlowChecker, cont: *const ast.Continuation, binding: []const u8) bool {
-        // Check if the binding is used in the continuation's condition (when-clause)
-        if (cont.condition) |cond| {
-            if (containsIdentifier(cond, binding)) return true;
-        }
-
-        // Check if the binding is used in the continuation's node
-        if (cont.node) |node| {
-            if (self.nodeUsesBinding(node, binding)) return true;
-        }
-
-        // Recursively check nested continuations
-        for (cont.continuations) |*nested| {
-            if (self.continuationUsesBindingRecursive(nested, binding)) return true;
-        }
-
-        return false;
+        return self.continuationUsesBindingRecursive(cont, binding);
     }
 
     fn continuationUsesBindingRecursive(self: *FlowChecker, cont: *const ast.Continuation, binding: []const u8) bool {
