@@ -5874,14 +5874,7 @@ pub const Parser = struct {
                     if (closing_idx != null and closing_idx.? > b_idx) {
                         // Single-line, complete branch constructor
                         const branch_constructor = try self.parseBranchConstructorWithContext(body_str);
-                        return ast.Item{ .immediate_impl = .{
-                            .event_path = event_path,
-                            .value = branch_constructor,
-                            .annotations = try self.dupeAnnotations(annotations),
-                            .location = self.getLineLocation(head_line_idx, lexer.getIndent(line)),
-                            .module = try self.allocator.dupe(u8, self.module_name),
-                            .is_impl = event_path.module_qualifier != null,
-                        } };
+                        return try self.immediateImplItem(event_path, branch_constructor, annotations, head_line_idx, line);
                     } else {
                         // Multi-line branch constructor starting on this line
                         var constructor_content = try std.ArrayList(u8).initCapacity(self.allocator, 256);
@@ -5894,33 +5887,11 @@ pub const Parser = struct {
                         // Track brace depth (already have one open brace)
                         var brace_depth: i32 = 1;
 
-                        while (self.current < self.lines.len and brace_depth > 0) {
-                            const curr_line = self.lines[self.current];
-                            self.current += 1;
-
-                            const trimmed_line = lexer.trim(curr_line);
-                            if (trimmed_line.len == 0) continue;
-
-                            // Count braces (skip braces in strings/comments)
-                            brace_depth += lexer.countBraceDepthChange(trimmed_line);
-
-                            // Add this line's content
-                            try constructor_content.appendSlice(self.allocator, trimmed_line);
-                            if (brace_depth > 0) {
-                                try constructor_content.append(self.allocator, ' ');
-                            }
-                        }
+                        try self.collectBracedLines(&constructor_content, &brace_depth);
 
                         // Parse the complete constructor
                         const branch_constructor = try self.parseBranchConstructorWithContext(constructor_content.items);
-                        return ast.Item{ .immediate_impl = .{
-                            .event_path = event_path,
-                            .value = branch_constructor,
-                            .annotations = try self.dupeAnnotations(annotations),
-                            .location = self.getLineLocation(head_line_idx, lexer.getIndent(line)),
-                            .module = try self.allocator.dupe(u8, self.module_name),
-                            .is_impl = event_path.module_qualifier != null,
-                        } };
+                        return try self.immediateImplItem(event_path, branch_constructor, annotations, head_line_idx, line);
                     }
                 }
             }
@@ -6283,14 +6254,7 @@ pub const Parser = struct {
                     // Single-line branch constructor
                     self.current += 1;
                     const branch_constructor = try self.parseBranchConstructorWithContext(trimmed_body);
-                    return ast.Item{ .immediate_impl = .{
-                        .event_path = event_path,
-                        .value = branch_constructor,
-                        .annotations = try self.dupeAnnotations(annotations),
-                        .location = self.getLineLocation(head_line_idx, lexer.getIndent(line)),
-                        .module = try self.allocator.dupe(u8, self.module_name),
-                        .is_impl = event_path.module_qualifier != null,
-                    } };
+                    return try self.immediateImplItem(event_path, branch_constructor, annotations, head_line_idx, line);
                 } else {
                     // Multi-line branch constructor - collect all lines
                     var constructor_content = try std.ArrayList(u8).initCapacity(self.allocator, 256);
@@ -6304,33 +6268,11 @@ pub const Parser = struct {
                     var brace_depth: i32 = 1;
                     self.current += 1; // Move to next line
 
-                    while (self.current < self.lines.len and brace_depth > 0) {
-                        const curr_line = self.lines[self.current];
-                        self.current += 1;
-
-                        const trimmed_line = lexer.trim(curr_line);
-                        if (trimmed_line.len == 0) continue;
-
-                        // Count braces (skip braces in strings/comments)
-                        brace_depth += lexer.countBraceDepthChange(trimmed_line);
-
-                        // Add this line's content
-                        try constructor_content.appendSlice(self.allocator, trimmed_line);
-                        if (brace_depth > 0) {
-                            try constructor_content.append(self.allocator, ' ');
-                        }
-                    }
+                    try self.collectBracedLines(&constructor_content, &brace_depth);
 
                     // Parse the complete constructor
                     const branch_constructor = try self.parseBranchConstructorWithContext(constructor_content.items);
-                    return ast.Item{ .immediate_impl = .{
-                        .event_path = event_path,
-                        .value = branch_constructor,
-                        .annotations = try self.dupeAnnotations(annotations),
-                        .location = self.getLineLocation(head_line_idx, lexer.getIndent(line)),
-                        .module = try self.allocator.dupe(u8, self.module_name),
-                        .is_impl = event_path.module_qualifier != null,
-                    } };
+                    return try self.immediateImplItem(event_path, branch_constructor, annotations, head_line_idx, line);
                 }
             }
         }
@@ -9354,6 +9296,44 @@ pub const Parser = struct {
             .plain_value = if (plain.len > 0) try self.allocator.dupe(u8, plain) else null,
             .has_expressions = plain.len > 0,
         };
+    }
+
+    /// Append lines to `content` until the open brace depth at `brace_depth`
+    /// closes; braces inside strings/comments don't count toward the depth.
+    fn collectBracedLines(self: *Parser, content: *std.ArrayList(u8), brace_depth: *i32) !void {
+        while (self.current < self.lines.len and brace_depth.* > 0) {
+            const curr_line = self.lines[self.current];
+            self.current += 1;
+
+            const trimmed_line = lexer.trim(curr_line);
+            if (trimmed_line.len == 0) continue;
+
+            brace_depth.* += lexer.countBraceDepthChange(trimmed_line);
+            try content.appendSlice(self.allocator, trimmed_line);
+            if (brace_depth.* > 0) {
+                try content.append(self.allocator, ' ');
+            }
+        }
+    }
+
+    /// Wrap one parsed constructor as an `.immediate_impl` item: annotations
+    /// duped, location off the head line, `is_impl` from the qualified path.
+    fn immediateImplItem(
+        self: *Parser,
+        event_path: ast.DottedPath,
+        branch_constructor: ast.BranchConstructor,
+        annotations: [][]const u8,
+        head_line_idx: usize,
+        line: []const u8,
+    ) !ast.Item {
+        return ast.Item{ .immediate_impl = .{
+            .event_path = event_path,
+            .value = branch_constructor,
+            .annotations = try self.dupeAnnotations(annotations),
+            .location = self.getLineLocation(head_line_idx, lexer.getIndent(line)),
+            .module = try self.allocator.dupe(u8, self.module_name),
+            .is_impl = event_path.module_qualifier != null,
+        } };
     }
 
     fn parseBranchConstructorWithContext(self: *Parser, content: []const u8) !ast.BranchConstructor {
