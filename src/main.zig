@@ -815,24 +815,7 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
 
                 // Build invoked event name
                 var inv_name_buf: [256]u8 = undefined;
-                var inv_name_len: usize = 0;
-
-                if (flow.inv().path.module_qualifier) |mq| {
-                    @memcpy(inv_name_buf[0..mq.len], mq);
-                    inv_name_len += mq.len;
-                    inv_name_buf[inv_name_len] = ':';
-                    inv_name_len += 1;
-                }
-
-                for (flow.inv().path.segments, 0..) |seg, i| {
-                    if (i > 0) {
-                        inv_name_buf[inv_name_len] = '.';
-                        inv_name_len += 1;
-                    }
-                    @memcpy(inv_name_buf[inv_name_len .. inv_name_len + seg.len], seg);
-                    inv_name_len += seg.len;
-                }
-
+                const inv_name_len = flow.inv().path.writeQualified(&inv_name_buf, 0);
                 const inv_name = inv_name_buf[0..inv_name_len];
 
                 for (comptime_event_names.items) |comptime_name| {
@@ -857,24 +840,7 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
 
                         // Build invoked event name
                         var inv_name_buf: [256]u8 = undefined;
-                        var inv_name_len: usize = 0;
-
-                        if (flow.inv().path.module_qualifier) |mq| {
-                            @memcpy(inv_name_buf[0..mq.len], mq);
-                            inv_name_len += mq.len;
-                            inv_name_buf[inv_name_len] = ':';
-                            inv_name_len += 1;
-                        }
-
-                        for (flow.inv().path.segments, 0..) |seg, i| {
-                            if (i > 0) {
-                                inv_name_buf[inv_name_len] = '.';
-                                inv_name_len += 1;
-                            }
-                            @memcpy(inv_name_buf[inv_name_len .. inv_name_len + seg.len], seg);
-                            inv_name_len += seg.len;
-                        }
-
+                        const inv_name_len = flow.inv().path.writeQualified(&inv_name_buf, 0);
                         const inv_name = inv_name_buf[0..inv_name_len];
 
                         for (comptime_event_names.items) |comptime_name| {
@@ -899,21 +865,7 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
                 const flow = flow_info.flow;
                 // Build invocation name for display
                 var inv_name_buf: [256]u8 = undefined;
-                var inv_name_len: usize = 0;
-                if (flow.inv().path.module_qualifier) |mq| {
-                    @memcpy(inv_name_buf[0..mq.len], mq);
-                    inv_name_len += mq.len;
-                    inv_name_buf[inv_name_len] = ':';
-                    inv_name_len += 1;
-                }
-                for (flow.inv().path.segments, 0..) |seg, i| {
-                    if (i > 0) {
-                        inv_name_buf[inv_name_len] = '.';
-                        inv_name_len += 1;
-                    }
-                    @memcpy(inv_name_buf[inv_name_len .. inv_name_len + seg.len], seg);
-                    inv_name_len += seg.len;
-                }
+                const inv_name_len = flow.inv().path.writeQualified(&inv_name_buf, 0);
                 const inv_name = inv_name_buf[0..inv_name_len];
                 log.debug("  Detected comptime flow: {s} (ast_index={})\n", .{ inv_name, flow_info.ast_index });
             }

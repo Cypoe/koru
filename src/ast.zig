@@ -1349,6 +1349,19 @@ pub const DottedPath = struct {
         }
         return p;
     }
+
+    /// Append `mod:a.b.c` (qualifier when present, then segments) into `buf`
+    /// at `pos` — the buffer form of `format`.
+    pub fn writeQualified(self: DottedPath, buf: []u8, pos: usize) usize {
+        var p = pos;
+        if (self.module_qualifier) |mq| {
+            @memcpy(buf[p .. p + mq.len], mq);
+            p += mq.len;
+            buf[p] = ':';
+            p += 1;
+        }
+        return self.writeSegments(buf, p);
+    }
 };
 
 pub const Shape = struct {

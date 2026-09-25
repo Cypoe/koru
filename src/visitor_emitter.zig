@@ -5307,22 +5307,7 @@ pub const VisitorEmitter = struct {
         var event_name_buf: [256]u8 = undefined;
         var pos: usize = 0;
 
-        if (flow.inv().path.module_qualifier) |mq| {
-            @memcpy(event_name_buf[pos .. pos + mq.len], mq);
-            pos += mq.len;
-            event_name_buf[pos] = ':';
-            pos += 1;
-        }
-
-        for (flow.inv().path.segments, 0..) |seg, i| {
-            if (i > 0) {
-                event_name_buf[pos] = '.';
-                pos += 1;
-            }
-            @memcpy(event_name_buf[pos .. pos + seg.len], seg);
-            pos += seg.len;
-        }
-
+        pos = flow.inv().path.writeQualified(&event_name_buf, pos);
         const event_name = event_name_buf[0..pos];
         log.debug("  Looking for event: '{s}' in mode={s}\n", .{ event_name, @tagName(self.emit_mode) });
 
