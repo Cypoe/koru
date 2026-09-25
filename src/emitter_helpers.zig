@@ -2811,6 +2811,29 @@ fn resolveTargetInputFields(
     return null;
 }
 
+/// Emit `, .name = null` for every `?T` input field the call site omitted —
+/// an optional parameter's default IS null, and the target's input struct
+/// would be missing the field entirely (400_180).
+fn emitMissingOptionalArgs(emitter: *CodeEmitter, fields: []const ast.Field, args: []const ast.Arg) !void {
+    var needs_sep = args.len > 0;
+    for (fields) |field| {
+        if (!(field.type.len > 0 and field.type[0] == '?')) continue;
+        var already_provided = false;
+        for (args) |arg| {
+            if (std.mem.eql(u8, arg.name, field.name)) {
+                already_provided = true;
+                break;
+            }
+        }
+        if (already_provided) continue;
+        if (needs_sep) try emitter.write(", ");
+        try emitter.write(".");
+        try writeBranchName(emitter, field.name);
+        try emitter.write(" = null");
+        needs_sep = true;
+    }
+}
+
 /// Collect every name a continuation tree binds — `: bind` return bindings and
 /// `| x` payload bindings — into `out`. The subflow-continuations path keeps
 /// no EmissionContext, so the set escapeBoundNames rewrites against has to be
@@ -3161,23 +3184,7 @@ fn emitSubflowContinuationsWithDepth(
                     // parameter fills with null here too, or the target's
                     // input struct is missing a field entirely.
                     if (resolveTargetInputFields(all_items, &inv, type_registry, main_module_name)) |target_fields| {
-                        var emitted_so_far = inv.args.len;
-                        for (target_fields) |field| {
-                            if (!(field.type.len > 0 and field.type[0] == '?')) continue;
-                            var already_provided = false;
-                            for (inv.args) |arg| {
-                                if (std.mem.eql(u8, arg.name, field.name)) {
-                                    already_provided = true;
-                                    break;
-                                }
-                            }
-                            if (already_provided) continue;
-                            if (emitted_so_far > 0) try emitter.write(", ");
-                            try emitter.write(".");
-                            try writeBranchName(emitter, field.name);
-                            try emitter.write(" = null");
-                            emitted_so_far += 1;
-                        }
+                        try emitMissingOptionalArgs(emitter, target_fields, inv.args);
                     }
                     // An effect-carrying target's handler takes `(Input,
                     // comptime __H)` — pass the empty Handlers type when this
@@ -3833,23 +3840,7 @@ fn emitSubflowContinuationsWithDepth(
                             // fill with null on the arm-step path too.
                             if (event_type) |et| {
                                 if (et.input_shape) |shape| {
-                                    var emitted_so_far = inv.args.len;
-                                    for (shape.fields) |field| {
-                                        if (!(field.type.len > 0 and field.type[0] == '?')) continue;
-                                        var already_provided = false;
-                                        for (inv.args) |arg| {
-                                            if (std.mem.eql(u8, arg.name, field.name)) {
-                                                already_provided = true;
-                                                break;
-                                            }
-                                        }
-                                        if (already_provided) continue;
-                                        if (emitted_so_far > 0) try emitter.write(",");
-                                        try emitter.write(" .");
-                                        try writeBranchName(emitter, field.name);
-                                        try emitter.write(" = null");
-                                        emitted_so_far += 1;
-                                    }
+                                    try emitMissingOptionalArgs(emitter, shape.fields, inv.args);
                                 }
                             }
                             // An effect-carrying target's handler takes
@@ -9202,29 +9193,7 @@ fn emitArgs(emitter: *CodeEmitter, ctx: *EmissionContext, args: []const ast.Arg,
     // OPTIONAL PARAMETER INJECTION: Emit null for optional parameters not provided
     // This handles cases like `allocator: ?std.mem.Allocator` where user doesn't pass a value
     if (event_decl) |event| {
-        var optional_injected: usize = 0;
-        for (event.input.fields) |field| {
-            // Check if this field has an optional type (starts with ?)
-            const is_optional = field.type.len > 0 and field.type[0] == '?';
-            if (!is_optional) continue;
-
-            // Check if this field was already explicitly provided
-            var already_provided = false;
-            for (args) |arg| {
-                if (std.mem.eql(u8, arg.name, field.name)) {
-                    already_provided = true;
-                    break;
-                }
-            }
-
-            if (!already_provided) {
-                if (args.len > 0 or optional_injected > 0) try emitter.write(", ");
-                try emitter.write(".");
-                try writeBranchName(emitter, field.name);
-                try emitter.write(" = null");
-                optional_injected += 1;
-            }
-        }
+        try emitMissingOptionalArgs(emitter, event.input.fields, args);
     }
 
     // COMPTIME INJECTION: If in comptime_only mode, inject program and allocator
