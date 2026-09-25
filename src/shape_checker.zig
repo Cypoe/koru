@@ -1620,16 +1620,7 @@ pub const ShapeChecker = struct {
                     if (step.label_with_invocation.is_declaration) {
                         // This is a label declaration (#label event(...))
                         // Register the label if not already registered
-                        const label_name = step.label_with_invocation.label;
-                        if (self.labels.get(label_name) == null) {
-                            try self.labels.put(try self.allocator.dupe(u8, label_name), LabelInfo{
-                                .decl = null,
-                                .expected_shape = null,
-                                .line = 0,
-                                .is_pre_invocation = true, // Continuation labels are pre-invocation style
-                                .jump_sites = try std.ArrayList(LabelInfo.JumpSite).initCapacity(self.allocator, 0),
-                            });
-                        }
+                        try self.registerPreInvocationLabel(step.label_with_invocation.label);
                     } else {
                         // This is a label jump (@label event(...)) - OLD STYLE, should not be generated anymore
                         try self.validateLabelJump(step.label_with_invocation.label, &step.label_with_invocation.invocation, &cont);
@@ -2172,20 +2163,25 @@ pub const ShapeChecker = struct {
         // (continuation is used above for location reporting)
     }
 
+    /// Register a label declaration site — continuation labels are
+    /// pre-invocation style, so the shape record starts empty.
+    fn registerPreInvocationLabel(self: *ShapeChecker, label_name: []const u8) !void {
+        if (self.labels.get(label_name) == null) {
+            try self.labels.put(try self.allocator.dupe(u8, label_name), LabelInfo{
+                .decl = null,
+                .expected_shape = null,
+                .line = 0,
+                .is_pre_invocation = true,
+                .jump_sites = try std.ArrayList(LabelInfo.JumpSite).initCapacity(self.allocator, 0),
+            });
+        }
+    }
+
     fn registerContinuationLabels(self: *ShapeChecker, cont: *const ast.Continuation) !void {
         // Recursively register all label declarations in this continuation tree
         if (cont.node) |step| {
             if (step == .label_with_invocation and step.label_with_invocation.is_declaration) {
-                const label_name = step.label_with_invocation.label;
-                if (self.labels.get(label_name) == null) {
-                    try self.labels.put(try self.allocator.dupe(u8, label_name), LabelInfo{
-                        .decl = null,
-                        .expected_shape = null,
-                        .line = 0,
-                        .is_pre_invocation = true,
-                        .jump_sites = try std.ArrayList(LabelInfo.JumpSite).initCapacity(self.allocator, 0),
-                    });
-                }
+                try self.registerPreInvocationLabel(step.label_with_invocation.label);
             }
         }
         // Recursively process nested continuations
