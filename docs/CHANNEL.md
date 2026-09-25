@@ -7,9 +7,12 @@ below is measured against the tree. The surface was ruled 2026-09-24: the
 declaration body is the proto-definition grammar (`{ name: Proto }`
 entries), ruled for rings and channels alike. `std/rings` is implemented
 and pinned (`320_090` migrated to pure Koru; `320_101`–`320_109` cover
-proto elements, `full`/`none` arms, and the refusals). `std/channel` is
-written against the same ruling (`koru_std/channel.kz`, `699_CHANNEL`
-pins) but has not yet compiled.
+proto elements, `full`/`none` arms, and the refusals). `std/channel`
+(`koru_std/channel.kz`) is implemented against the same ruling and
+green: all 18 `699_CHANNEL` pins pass (`run_regression.sh 699_*`,
+2026-09-25) — buffered roundtrip, `full`/`none` arms, send-after-close,
+close+drain, program-wide `!`-arm joins, competing consumers, multi-kind
+channels, pump participation (`step`/`live`/`wait`), and the refusal set.
 
 ---
 

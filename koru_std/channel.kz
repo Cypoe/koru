@@ -1228,6 +1228,7 @@ const CH = struct {
                     continue;
                 }
                 if (c == '"') in_str = false;
+                i += 1;
             }
         }
         fn checkIdent(ctx: *Ctx, text: []const u8, start: usize) usize {
