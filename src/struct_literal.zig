@@ -128,11 +128,12 @@ fn topLevelColon(field: []const u8) ?usize {
 /// value is `T\nb: U`, which downstream surfaces report as a bogus type.
 /// Returns the fused line's text (`b: U`) when found, null otherwise.
 ///
-/// Newline-anchored on purpose: `ident:` at depth 0 cannot appear in a value
-/// expression (Koru has no labels or ternaries in expression position), and
-/// the anchor keeps a legitimate `a +\n b` line-continuation out of scope —
-/// same-line `a: T b: U` fusions stay the old downstream error.
-fn fusedFieldLine(value: []const u8) ?[]const u8 {
+/// Whitespace-anchored: `ident:` at depth 0 cannot appear in a value
+/// expression (Koru has no labels or ternaries in expression position, and
+/// no attested literal carries `<value> <ident>:` mid-line — `std/io:print`
+/// is `/`-separated, `mod:Type` sits at value start), so whitespace followed
+/// by `ident:` at depth 0 is always a second field that lost its comma.
+pub fn fusedFieldLine(value: []const u8) ?[]const u8 {
     var depth: usize = 0;
     var i: usize = 0;
     while (i < value.len) : (i += 1) {
@@ -147,9 +148,9 @@ fn fusedFieldLine(value: []const u8) ?[]const u8 {
             '}', ')', ']' => if (depth > 0) {
                 depth -= 1;
             },
-            '\n' => if (depth == 0) {
+            ' ', '\t', '\r', '\n' => if (depth == 0) {
                 var j = i + 1;
-                while (j < value.len and (value[j] == ' ' or value[j] == '\t' or value[j] == '\r')) : (j += 1) {}
+                while (j < value.len and (value[j] == ' ' or value[j] == '\t' or value[j] == '\r' or value[j] == '\n')) : (j += 1) {}
                 if (j < value.len and isIdentStartChar(value[j])) {
                     var k = j + 1;
                     while (k < value.len and isIdentChar(value[k])) : (k += 1) {}

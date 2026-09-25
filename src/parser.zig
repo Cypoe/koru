@@ -3122,15 +3122,24 @@ pub const Parser = struct {
         // Single-field record RETURN (`-> { a: i64 }`) collapses to the scalar
         // `-> i64` — the produce-side sibling of the single-field branch payload
         // above; only a 2+-field record earns the braces. (210_149)
+        // The comma count is a guess — run the one parser so a malformed
+        // record (`{ a: i64 b: i64 }`, a dropped comma) names its real defect
+        // instead of reading as a single field.
         if (return_type) |rt| {
             if (isSingleFieldRecordType(rt)) {
-                return self.fail(
-                    .PARSE003,
-                    event_line_index + 1,
-                    1,
-                    "single field in record return `{s}` — collapse to the scalar `-> <type>`; a record return is for two or more fields",
-                    .{rt},
-                );
+                if (struct_literal.parseFields(self.allocator, rt)) |_| {
+                    return self.fail(
+                        .PARSE003,
+                        event_line_index + 1,
+                        1,
+                        "single field in record return `{s}` — collapse to the scalar `-> <type>`; a record return is for two or more fields",
+                        .{rt},
+                    );
+                } else |err| {
+                    if (err == error.OutOfMemory) return err;
+                    const detail = struct_literal.describeErrorIn(self.allocator, err, rt);
+                    return self.fail(.PARSE003, event_line_index + 1, 1, "malformed record return `{s}` — {s}", .{ rt, detail });
+                }
             }
         }
 
@@ -9848,6 +9857,20 @@ pub const Parser = struct {
                 else
                     trimmed; // The whole expression becomes the value
 
+                // Missing comma between fields on one line: `{ a: 1 b: 2 }`
+                // reads as one field `a` whose value is `1 b: 2`. The shared
+                // boundary detector lives in struct_literal — a whitespace +
+                // `ident:` at depth 0 inside a value is always a second field.
+                if (struct_literal.fusedFieldLine(field_value)) |fused| {
+                    return self.fail(
+                        .PARSE003,
+                        self.current,
+                        1,
+                        "missing comma — '{s}' began a new field but was read as part of the field above it; separate fields with commas",
+                        .{fused},
+                    );
+                }
+
                 // Reject redundant explicit labels: `{ x: x }` and `{ x: p.x }`
                 // both pun to `{ x }` / `{ p.x }`. Only fires when the user
                 // wrote an explicit separator and punning would produce the
@@ -10806,15 +10829,22 @@ pub const Parser = struct {
 
         // Single-field record resume (`! ask -> { a: i64 }`) collapses to the
         // scalar `! ask -> i64`; only a 2+-field record earns the braces. (210_150)
+        // Same malformed-record routing as the record-return check above.
         if (resume_type) |rt| {
             if (isSingleFieldRecordType(rt)) {
-                return self.fail(
-                    .PARSE003,
-                    self.current,
-                    1,
-                    "single field in record resume `{s}` — collapse to the scalar `-> <type>`; a record resume is for two or more fields",
-                    .{rt},
-                );
+                if (struct_literal.parseFields(self.allocator, rt)) |_| {
+                    return self.fail(
+                        .PARSE003,
+                        self.current,
+                        1,
+                        "single field in record resume `{s}` — collapse to the scalar `-> <type>`; a record resume is for two or more fields",
+                        .{rt},
+                    );
+                } else |err| {
+                    if (err == error.OutOfMemory) return err;
+                    const detail = struct_literal.describeErrorIn(self.allocator, err, rt);
+                    return self.fail(.PARSE003, self.current, 1, "malformed record resume `{s}` — {s}", .{ rt, detail });
+                }
             }
         }
 

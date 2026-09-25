@@ -267,3 +267,23 @@ this wall — the multiline decl reader comma-joins continuation lines
 (`{,x: i64,y: i64,}`) and `fusedFieldLine` is newline-anchored, so the
 refusal's reachable malformations are the ones `parseFields` itself
 catches on single text: DuplicateField, BareEntryNotPunnable, NotAStruct.
+
+The missing-comma boundary is whitespace + `ident:` at depth 0, not a
+newline (2026-09-25): `fusedFieldLine` was newline-anchored, so
+`{ a: 1 b: 2 }` fused silently on one line and every consumer inherited
+the hole — capture seeds and `store:new` died `expected ',' after
+argument` in emitted Zig, ctor payloads died `expected ',' after
+initializer`, and `-> { a: i64 b: i64 }` mis-reported as a "single
+field" because `isSingleFieldRecordType` is a third comma counter that
+never runs the real parser. Widening the detector to any depth-0
+whitespace boundary is safe because no attested value carries
+`<value> <ident>:` mid-line (`mod:Type` sits at value start,
+`std/io:print` is `/`-separated, strings are skipped, nested braces are
+depth). Two second parsers had to be routed through the shared
+detector: the ctor-payload field loop now calls `fusedFieldLine`, and
+the single-field-record verdict only fires when `parseFields` succeeds —
+a malformed record names MissingComma instead. Pin: `210_275`.
+Unrelated and left alone: the multiline `~tor {` reader comma-joins
+every line, so a missing comma inside a nested record type is repaired
+before `parseShape` sees it — it only ever accepts the correct-meaning
+spelling, never produces a wrong program.
