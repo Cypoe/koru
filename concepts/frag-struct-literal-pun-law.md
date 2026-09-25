@@ -231,3 +231,27 @@ leaf anywhere in the tree. `{ user: { x }, x }` emitted `const x` twice
 and died `redeclaration of local constant` (rung 3, pinned `210_273`);
 the sibling-level comparison the checker started with compared the wrong
 set. The unit of the law is the emitted decl, never the syntax level.
+
+## `{ name: T }` in field-TYPE position is the same record, and every splitter must know it (2026-09-25)
+
+The record literal is one shape in three positions — `-> { … }` returns,
+tor input fields, branch payload fields — but the field-type text had
+TWO more scanners beside `struct_literal.parseFields`, and only the
+record-return path ever learned to count braces. `parseShape`'s
+`splitFieldsRespectingBrackets` tracked `[]` and `()` but not `{}`, so
+`user: { x: i64 }, ok: i64` split at the record's inner comma; its
+`module:Type` colon scan then split `{ x: i64` at the inner colon,
+minting a `module_path` of `" { x"` that emission pasted as
+`user: @"koru_{ x". i64 }` (rung 3 — backend died on the mangled decl).
+The shape was supported all along — record returns emitted
+`struct { x: i64 }` correctly — so this was a bug fix, not a refusal:
+the comma splitter now counts braces, the colon scan only splits at
+depth 0, and `writeFieldType` lowers a `{`-led field type through the
+same `parseFields` + `writeBareReturnType` path record returns use.
+Pin: `020_064` — all three positions emit and run.
+
+The lesson generalizes the pun-law one: a record's braces are structure,
+not text. ANY new scanner over field text (`module:Type`, defaults,
+constraints) must skip `{…}` or it mints a third parse of the same
+shape — and the island this file documented comes back one splitter at
+a time.

@@ -972,6 +972,30 @@ fn moduleDeclaresType(type_name: []const u8, mod: []const u8) bool {
 
 /// Helper: Write field type with proper module path handling
 pub fn writeFieldType(emitter: *CodeEmitter, field: ast.Field, main_module_name: ?[]const u8) !void {
+    // An inline record field type (`user: { x: i64 }`) shares the
+    // record-return shape's syntax; emit it as a Zig anon struct with each
+    // inner field type lowered through writeBareReturnType — the same
+    // lowering `-> { user: { x: i64 } }` already gets, so nested records,
+    // `string`, and phantoms lower identically. Pasting the brace text
+    // verbatim reached Zig as `@"koru_{ x"` garbage.
+    {
+        const trimmed = std.mem.trim(u8, field.type, " \t");
+        if (trimmed.len > 0 and trimmed[0] == '{') {
+            const a = emitter.allocator orelse std.heap.page_allocator;
+            if (struct_literal.parseFields(a, trimmed)) |fields| {
+                try emitter.write("struct { ");
+                for (fields, 0..) |f, i| {
+                    if (i > 0) try emitter.write(", ");
+                    try writeBranchName(emitter, f.name);
+                    try emitter.write(": ");
+                    try writeBareReturnType(emitter, f.value, main_module_name, null);
+                }
+                try emitter.write(" }");
+                return;
+            } else |_| {}
+        }
+    }
+
     // `string` is the canonical surface text type. The AST carries it verbatim
     // so the printer / round-trip stay surface-faithful; it is lowered to the
     // Zig slice `[]const u8` HERE, at the emission boundary, and nowhere

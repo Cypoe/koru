@@ -1,0 +1,31 @@
+// PINS: an inline record field type `{ name: T }` is the same record shape a
+// bare-return record uses (020_063), spelled in field-type position. It emits
+// an anonymous Zig struct wherever parseShape reads field types: tor input
+// fields, branch payload fields, and record returns — including `string`
+// lowering and nested records.
+
+~import std/io
+
+~tor wrap { user: { x: i64 } }
+~proc wrap|zig {
+    const std = @import("std");
+    std.debug.print("{d}\n", .{user.x});
+}
+
+~tor fetch { id: i64 }
+| found { user: { x: i64 }, ok: i64 }
+| missing
+
+~proc fetch|zig {
+    if (id == 1) return .{ .found = .{ .user = .{ .x = 5 }, .ok = 1 } };
+    return .{ .missing = .{} };
+}
+
+~tor make { id: i64 } -> { user: { x: i64 }, ok: i64 }
+~proc make|zig { return .{ .user = .{ .x = id * 10 }, .ok = 1 }; }
+
+~wrap(user: { x: 5 })
+~fetch(id: 1)
+| found f |> std/io:print.ln("{{ f.user.x:d }}{{ f.ok:d }}")
+| missing |> std/io:print.ln("nope")
+~make(id: 2): m |> std/io:print.ln("{{ m.user.x:d }}{{ m.ok:d }}")

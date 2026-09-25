@@ -11247,13 +11247,21 @@ pub const Parser = struct {
 
         var bracket_depth: i32 = 0;
         var paren_depth: i32 = 0;
+        var brace_depth: i32 = 0;
         var field_start: usize = 0;
         var i: usize = 0;
 
         while (i < content.len) : (i += 1) {
             const ch = content[i];
 
-            if (ch == '[') {
+            // `{`/`}` nest too — an inline record field type (`user:
+            // { x: i64 }`, legal since record returns take the same shape)
+            // carries a top-level-looking comma that must not split.
+            if (ch == '{') {
+                brace_depth += 1;
+            } else if (ch == '}') {
+                brace_depth -= 1;
+            } else if (ch == '[') {
                 bracket_depth += 1;
             } else if (ch == ']') {
                 bracket_depth -= 1;
@@ -11284,7 +11292,7 @@ pub const Parser = struct {
                         .{},
                     );
                 }
-            } else if (ch == ',' and bracket_depth == 0 and paren_depth == 0) {
+            } else if (ch == ',' and bracket_depth == 0 and paren_depth == 0 and brace_depth == 0) {
                 // Found a field separator at top level (outside all brackets and parens)
                 const field = lexer.trim(content[field_start..i]);
                 if (field.len > 0) {
@@ -11507,8 +11515,23 @@ pub const Parser = struct {
                 }
             }
 
-            // Count colons - should be 0 (local type) or 1 (cross-module type)
-            const colon_count = std.mem.count(u8, field_type, ":");
+            // Count colons - should be 0 (local type) or 1 (cross-module type).
+            // Colons inside `{ ... }` are an inline record's field separators,
+            // not module qualifiers — only a depth-0 colon can split
+            // `module.path:Type`.
+            var colon_count: usize = 0;
+            var module_colon_idx: ?usize = null;
+            {
+                var depth: i32 = 0;
+                for (field_type, 0..) |c, i| {
+                    if (c == '{') depth += 1;
+                    if (c == '}') depth -= 1;
+                    if (c == ':' and depth == 0) {
+                        colon_count += 1;
+                        if (module_colon_idx == null) module_colon_idx = i;
+                    }
+                }
+            }
             if (colon_count > 1) {
                 // Multiple colons are ambiguous - which is the module boundary?
                 return self.fail(.PARSE003, self.current, 1, "Multiple colons in type reference '{s}' - expected format 'module.path:Type' or just 'Type'", .{field_type});
@@ -11516,10 +11539,10 @@ pub const Parser = struct {
 
             // Parse cross-module type reference and build owned type string
             const owned_type: []const u8 = blk: {
-                if (std.mem.indexOfScalar(u8, field_type, ':')) |module_colon_idx| {
-                    try self.rejectDottedModuleQualifier(field_type[0..module_colon_idx], field_type[module_colon_idx + 1 ..]);
-                    module_path = try self.allocator.dupe(u8, field_type[0..module_colon_idx]);
-                    const base_type = field_type[module_colon_idx + 1 ..];
+                if (module_colon_idx) |mc| {
+                    try self.rejectDottedModuleQualifier(field_type[0..mc], field_type[mc + 1 ..]);
+                    module_path = try self.allocator.dupe(u8, field_type[0..mc]);
+                    const base_type = field_type[mc + 1 ..];
                     if (type_prefix.len > 0) {
                         break :blk try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ type_prefix, base_type });
                     } else {
