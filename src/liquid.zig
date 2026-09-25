@@ -417,6 +417,35 @@ const BlockEnd = struct {
     end: usize,    // After %}
 };
 
+/// `{% … %}` opens a nested block — the depth scanners count it in.
+fn isTagOpener(tc: []const u8) bool {
+    return std.mem.startsWith(u8, tc, "if ") or
+        std.mem.startsWith(u8, tc, "for ") or
+        std.mem.startsWith(u8, tc, "unless ") or
+        std.mem.startsWith(u8, tc, "case ") or
+        std.mem.startsWith(u8, tc, "comp error");
+}
+
+/// `{% … %}` closes a nested block — the depth scanners count it out.
+fn isTagCloser(tc: []const u8) bool {
+    return std.mem.eql(u8, tc, "endif") or
+        std.mem.eql(u8, tc, "endfor") or
+        std.mem.eql(u8, tc, "endunless") or
+        std.mem.eql(u8, tc, "endcase") or
+        std.mem.eql(u8, tc, "endcomp");
+}
+
+/// The opening-tag prefix a closer pairs with, or null when `end_tag`
+/// names nothing we open.
+fn openerForCloser(end_tag: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, end_tag, "endif")) return "if ";
+    if (std.mem.eql(u8, end_tag, "endunless")) return "unless ";
+    if (std.mem.eql(u8, end_tag, "endfor")) return "for ";
+    if (std.mem.eql(u8, end_tag, "endcomp")) return "comp error";
+    if (std.mem.eql(u8, end_tag, "endcase")) return "case ";
+    return null;
+}
+
 /// Find a depth-0 `{% else %}` inside an if-block's inner text. Nested
 /// if/for/unless/comp blocks increment depth so we only match the else that
 /// belongs to THIS if. Returns null if there's no else at this level.
@@ -426,19 +455,9 @@ fn findElseTag(template: []const u8) ?BlockEnd {
     while (std.mem.indexOfPos(u8, template, pos, "{%")) |tag_start| {
         const tag_end = std.mem.indexOfPos(u8, template, tag_start + 2, "%}") orelse break;
         const tc = std.mem.trim(u8, template[tag_start + 2 .. tag_end], " \t");
-        if (std.mem.startsWith(u8, tc, "if ") or
-            std.mem.startsWith(u8, tc, "for ") or
-            std.mem.startsWith(u8, tc, "unless ") or
-            std.mem.startsWith(u8, tc, "case ") or
-            std.mem.startsWith(u8, tc, "comp error"))
-        {
+        if (isTagOpener(tc)) {
             depth += 1;
-        } else if (std.mem.eql(u8, tc, "endif") or
-            std.mem.eql(u8, tc, "endfor") or
-            std.mem.eql(u8, tc, "endunless") or
-            std.mem.eql(u8, tc, "endcase") or
-            std.mem.eql(u8, tc, "endcomp"))
-        {
+        } else if (isTagCloser(tc)) {
             if (depth > 0) depth -= 1;
         } else if (depth == 0 and std.mem.eql(u8, tc, "else")) {
             return .{ .start = tag_start, .end = tag_end + 2 };
@@ -453,18 +472,7 @@ fn findEndTag(template: []const u8, start_pos: usize, end_tag: []const u8) ?Bloc
     var depth: usize = 1;
 
     // Determine what tag type we're looking for
-    const start_tag = if (std.mem.eql(u8, end_tag, "endif"))
-        "if "
-    else if (std.mem.eql(u8, end_tag, "endunless"))
-        "unless "
-    else if (std.mem.eql(u8, end_tag, "endfor"))
-        "for "
-    else if (std.mem.eql(u8, end_tag, "endcomp"))
-        "comp error"
-    else if (std.mem.eql(u8, end_tag, "endcase"))
-        "case "
-    else
-        return null;
+    const start_tag = openerForCloser(end_tag) orelse return null;
 
     while (pos < template.len) {
         if (std.mem.indexOfPos(u8, template, pos, "{%")) |tag_start| {
@@ -598,19 +606,9 @@ fn findNextClause(inner: []const u8, from: usize) ?Clause {
     while (std.mem.indexOfPos(u8, inner, pos, "{%")) |tag_start| {
         const tag_end = std.mem.indexOfPos(u8, inner, tag_start + 2, "%}") orelse break;
         const tc = std.mem.trim(u8, inner[tag_start + 2 .. tag_end], " \t");
-        if (std.mem.startsWith(u8, tc, "if ") or
-            std.mem.startsWith(u8, tc, "for ") or
-            std.mem.startsWith(u8, tc, "unless ") or
-            std.mem.startsWith(u8, tc, "case ") or
-            std.mem.startsWith(u8, tc, "comp error"))
-        {
+        if (isTagOpener(tc)) {
             depth += 1;
-        } else if (std.mem.eql(u8, tc, "endif") or
-            std.mem.eql(u8, tc, "endfor") or
-            std.mem.eql(u8, tc, "endunless") or
-            std.mem.eql(u8, tc, "endcase") or
-            std.mem.eql(u8, tc, "endcomp"))
-        {
+        } else if (isTagCloser(tc)) {
             if (depth > 0) depth -= 1;
         } else if (depth == 0 and std.mem.startsWith(u8, tc, "when ")) {
             return .{
