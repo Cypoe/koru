@@ -1933,6 +1933,14 @@ fn trimRightBlank(text: []const u8, start: usize, end: usize) usize {
     return e;
 }
 
+/// `indent` + `extra` written into `buf` — nested continuation emission hands
+/// each level a longer whitespace run without allocating.
+fn indentDeeper(buf: *[128]u8, indent: []const u8, extra: []const u8) []const u8 {
+    @memcpy(buf[0..indent.len], indent);
+    @memcpy(buf[indent.len .. indent.len + extra.len], extra);
+    return buf[0 .. indent.len + extra.len];
+}
+
 /// Extract element type from a slice type string
 /// Examples:
 ///   "[]const i32" -> "i32"
@@ -3454,11 +3462,6 @@ fn emitSubflowContinuationsWithDepth(
                 }
 
                 // Use emitContinuationBody which handles labels!
-                var deeper_indent_buf: [128]u8 = undefined;
-                @memcpy(deeper_indent_buf[0..indent.len], indent);
-                const extra = "        ";
-                @memcpy(deeper_indent_buf[indent.len .. indent.len + extra.len], extra);
-
                 const old_indent = emitter.indent_level;
                 emitter.indent_level = 0; // Reset to use manual indenting
 
@@ -3531,11 +3534,6 @@ fn emitSubflowContinuationsWithDepth(
                     }
 
                     // Emit continuation body
-                    var deeper_indent_buf: [128]u8 = undefined;
-                    @memcpy(deeper_indent_buf[0..indent.len], indent);
-                    const extra = "            ";
-                    @memcpy(deeper_indent_buf[indent.len .. indent.len + extra.len], extra);
-
                     const old_indent = emitter.indent_level;
                     emitter.indent_level = 0; // Reset to use manual indenting
 
@@ -3958,10 +3956,7 @@ fn emitSubflowContinuationsWithDepth(
                             // Emit continuations inside the scope block
                             if (cont.continuations.len > 0) {
                                 var deeper_indent_buf: [128]u8 = undefined;
-                                @memcpy(deeper_indent_buf[0..indent.len], indent);
-                                const extra = "            ";
-                                @memcpy(deeper_indent_buf[indent.len .. indent.len + extra.len], extra);
-                                const deeper_indent = deeper_indent_buf[0 .. indent.len + extra.len];
+                                const deeper_indent = indentDeeper(&deeper_indent_buf, indent, "            ");
                                 try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical, null, &local_bindings);
                             }
 
@@ -4009,10 +4004,7 @@ fn emitSubflowContinuationsWithDepth(
                 const is_metatype_binding = if (cont.node) |step| step == .metatype_binding else false;
                 if (cont.continuations.len > 0 and !is_metatype_binding) {
                     var deeper_indent_buf: [128]u8 = undefined;
-                    @memcpy(deeper_indent_buf[0..indent.len], indent);
-                    const extra = "        ";
-                    @memcpy(deeper_indent_buf[indent.len .. indent.len + extra.len], extra);
-                    const deeper_indent = deeper_indent_buf[0 .. indent.len + extra.len];
+                    const deeper_indent = indentDeeper(&deeper_indent_buf, indent, "        ");
                     try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical, null, &local_bindings);
                 }
                 } // if (!self_reentry_emitted)
