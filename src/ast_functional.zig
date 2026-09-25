@@ -690,35 +690,16 @@ fn cloneContinuationWithReplacedInvocation(
     const new_node = ast.Node{ .invocation = try cloneInvocation(allocator, &inv) };
     const new_continuations = try cloneContinuationSlice(allocator, new_flow.body.continuations);
 
-    var binding_annotations = try allocator.alloc([]const u8, cont.binding_annotations.len);
-    errdefer allocator.free(binding_annotations);
-    for (cont.binding_annotations, 0..) |ann, i| {
-        binding_annotations[i] = try allocator.dupe(u8, ann);
-    }
-
-    return .{
-        .branch = try allocator.dupe(u8, cont.branch),
-        .binding = if (cont.binding) |b| try allocator.dupe(u8, b) else null,
-        .destructure = try ast.copyDestructure(allocator, cont.destructure),
-        .binding_annotations = binding_annotations,
-        .binding_type = cont.binding_type,
-        .kind = cont.kind,
-        .is_catchall = cont.is_catchall,
-        .catchall_metatype = if (cont.catchall_metatype) |m| try allocator.dupe(u8, m) else null,
-        .condition = if (cont.condition) |c| try allocator.dupe(u8, c) else null,
-        .condition_expr = cont.condition_expr,
-        .node = new_node,
-        .indent = cont.indent,
-        .continuations = new_continuations,
-        .is_transformed_subtree = cont.is_transformed_subtree,
-        .location = cont.location,
-    };
+    return cloneContinuationWithNodeAndContinuations(allocator, cont, new_node, new_continuations, false);
 }
 
+/// The shared clone tail for continuations: every field deep-cloned except
+/// `node`, `continuations`, and `is_transformed_subtree`, which the caller
+/// supplies (pass `mark_transformed = false` to inherit the original flag).
 fn cloneContinuationWithNodeAndContinuations(
     allocator: std.mem.Allocator,
     cont: *const ast.Continuation,
-    new_node: ast.Node,
+    new_node: ?ast.Node,
     new_continuations: []const ast.Continuation,
     mark_transformed: bool,
 ) CloneError!ast.Continuation {
@@ -762,29 +743,7 @@ fn cloneContinuationWithReplacedNode(
         new_continuations[i] = try cloneContinuation(allocator, n);
     }
 
-    var binding_annotations = try allocator.alloc([]const u8, cont.binding_annotations.len);
-    errdefer allocator.free(binding_annotations);
-    for (cont.binding_annotations, 0..) |ann, i| {
-        binding_annotations[i] = try allocator.dupe(u8, ann);
-    }
-
-    return .{
-        .branch = try allocator.dupe(u8, cont.branch),
-        .binding = if (cont.binding) |b| try allocator.dupe(u8, b) else null,
-        .destructure = try ast.copyDestructure(allocator, cont.destructure),
-        .binding_annotations = binding_annotations,
-        .binding_type = cont.binding_type,
-        .kind = cont.kind,
-        .is_catchall = cont.is_catchall,
-        .catchall_metatype = if (cont.catchall_metatype) |m| try allocator.dupe(u8, m) else null,
-        .condition = if (cont.condition) |c| try allocator.dupe(u8, c) else null,
-        .condition_expr = cont.condition_expr,
-        .node = new_node,
-        .indent = cont.indent,
-        .continuations = new_continuations,
-        .is_transformed_subtree = cont.is_transformed_subtree,
-        .location = cont.location,
-    };
+    return cloneContinuationWithNodeAndContinuations(allocator, cont, new_node, new_continuations, false);
 }
 
 fn cloneContinuationWithReplacedNested(
@@ -794,29 +753,7 @@ fn cloneContinuationWithReplacedNested(
 ) CloneError!ast.Continuation {
     const cloned_step = if (cont.node) |*step| try cloneStep(allocator, step) else null;
 
-    var binding_annotations = try allocator.alloc([]const u8, cont.binding_annotations.len);
-    errdefer allocator.free(binding_annotations);
-    for (cont.binding_annotations, 0..) |ann, i| {
-        binding_annotations[i] = try allocator.dupe(u8, ann);
-    }
-
-    return .{
-        .branch = try allocator.dupe(u8, cont.branch),
-        .binding = if (cont.binding) |b| try allocator.dupe(u8, b) else null,
-        .destructure = try ast.copyDestructure(allocator, cont.destructure),
-        .binding_annotations = binding_annotations,
-        .binding_type = cont.binding_type,
-        .kind = cont.kind,
-        .is_catchall = cont.is_catchall,
-        .catchall_metatype = if (cont.catchall_metatype) |m| try allocator.dupe(u8, m) else null,
-        .condition = if (cont.condition) |c| try allocator.dupe(u8, c) else null,
-        .condition_expr = cont.condition_expr,
-        .node = cloned_step,
-        .indent = cont.indent,
-        .continuations = new_nested,
-        .is_transformed_subtree = cont.is_transformed_subtree,
-        .location = cont.location,
-    };
+    return cloneContinuationWithNodeAndContinuations(allocator, cont, cloned_step, new_nested, false);
 }
 
 fn cloneContinuationSlice(
@@ -831,15 +768,18 @@ fn cloneContinuationSlice(
     return cloned_conts;
 }
 
-fn cloneFlowWithContinuations(
+/// The shared clone tail for flows: every field deep-cloned except `body`,
+/// which the caller supplies (already-cloned). `super_shape` is dropped on
+/// all clone paths — see the TODO below.
+fn cloneFlowWithBody(
     allocator: std.mem.Allocator,
     flow: *const ast.Flow,
-    continuations: []const ast.Continuation,
+    new_body: ast.Continuation,
 ) CloneError!ast.Flow {
     return .{
-        .body = ast.rootSite(try cloneInvocation(allocator, flow.inv()), continuations, flow.location),
+        .body = new_body,
         .pre_label = if (flow.pre_label) |l| try allocator.dupe(u8, l) else null,
-        .super_shape = null,
+        .super_shape = null, // TODO: clone super_shape if needed
         .inline_body = if (flow.inline_body) |body| try allocator.dupe(u8, body) else null,
         .preamble_code = if (flow.preamble_code) |preamble| try allocator.dupe(u8, preamble) else null,
         .is_pure = flow.is_pure,
@@ -851,6 +791,15 @@ fn cloneFlowWithContinuations(
         .impl_variant = if (flow.impl_variant) |v| try allocator.dupe(u8, v) else null,
         .is_impl = flow.is_impl,
     };
+}
+
+fn cloneFlowWithContinuations(
+    allocator: std.mem.Allocator,
+    flow: *const ast.Flow,
+    continuations: []const ast.Continuation,
+) CloneError!ast.Flow {
+    const body = ast.rootSite(try cloneInvocation(allocator, flow.inv()), continuations, flow.location);
+    return cloneFlowWithBody(allocator, flow, body);
 }
 
 fn invocationsEqual(a: *const ast.Invocation, b: *const ast.Invocation) bool {
@@ -1350,21 +1299,8 @@ fn cloneFlow(allocator: std.mem.Allocator, flow: *const ast.Flow) CloneError!ast
     // Clone the body continuation generically — its node may be an invocation
     // (the common case) OR a non-invocation (e.g. inline_code, after a root-site
     // transform lowered the flow's invocation in place). Don't assume invocation.
-    return .{
-        .body = try cloneContinuation(allocator, &flow.body),
-        .pre_label = if (flow.pre_label) |l| try allocator.dupe(u8, l) else null,
-        .super_shape = null, // TODO: clone super_shape if needed
-        .inline_body = if (flow.inline_body) |body| try allocator.dupe(u8, body) else null,
-        .preamble_code = if (flow.preamble_code) |preamble| try allocator.dupe(u8, preamble) else null,
-        .is_pure = flow.is_pure,
-        .is_transitively_pure = flow.is_transitively_pure,
-        .location = flow.location,
-        .module = try allocator.dupe(u8, flow.module),
-        .annotations = try cloneStringSlice(allocator, flow.annotations),
-        .impl_of = if (flow.impl_of) |io| try cloneDottedPath(allocator, &io) else null,
-        .impl_variant = if (flow.impl_variant) |v| try allocator.dupe(u8, v) else null,
-        .is_impl = flow.is_impl,
-    };
+    const body = try cloneContinuation(allocator, &flow.body);
+    return cloneFlowWithBody(allocator, flow, body);
 }
 
 fn cloneLabelDecl(allocator: std.mem.Allocator, label: *const ast.LabelDecl) !ast.LabelDecl {
@@ -1604,30 +1540,7 @@ pub fn cloneContinuation(allocator: std.mem.Allocator, cont: *const ast.Continua
         continuations[i] = try cloneContinuation(allocator, n);
     }
 
-    // Clone binding annotations
-    var binding_annotations = try allocator.alloc([]const u8, cont.binding_annotations.len);
-    errdefer allocator.free(binding_annotations);
-    for (cont.binding_annotations, 0..) |ann, i| {
-        binding_annotations[i] = try allocator.dupe(u8, ann);
-    }
-
-    return .{
-        .branch = try allocator.dupe(u8, cont.branch),
-        .binding = if (cont.binding) |b| try allocator.dupe(u8, b) else null,
-        .destructure = try ast.copyDestructure(allocator, cont.destructure),
-        .binding_annotations = binding_annotations,
-        .binding_type = cont.binding_type,
-        .kind = cont.kind,
-        .is_catchall = cont.is_catchall,
-        .catchall_metatype = if (cont.catchall_metatype) |m| try allocator.dupe(u8, m) else null,
-        .condition = if (cont.condition) |c| try allocator.dupe(u8, c) else null,
-        .condition_expr = cont.condition_expr, // Pointer copy for now
-        .node = cloned_step,
-        .indent = cont.indent,
-        .continuations = continuations,
-        .is_transformed_subtree = cont.is_transformed_subtree,
-        .location = cont.location,
-    };
+    return cloneContinuationWithNodeAndContinuations(allocator, cont, cloned_step, continuations, false);
 }
 
 fn cloneStep(allocator: std.mem.Allocator, step: *const ast.Step) CloneError!ast.Step {
@@ -1815,21 +1728,7 @@ pub fn replacePipelineStep(
     }
 
     // Clone the rest of the flow
-    return ast.Flow{
-        .body = ast.rootSite(try cloneInvocation(allocator, flow.inv()), new_continuations, flow.location),
-        .annotations = try cloneStringSlice(allocator, flow.annotations),
-        .pre_label = if (flow.pre_label) |l| try allocator.dupe(u8, l) else null,
-        .super_shape = null, // TODO: clone if needed
-        .inline_body = if (flow.inline_body) |body| try allocator.dupe(u8, body) else null,
-        .preamble_code = if (flow.preamble_code) |preamble| try allocator.dupe(u8, preamble) else null,
-        .is_pure = flow.is_pure,
-        .is_transitively_pure = flow.is_transitively_pure,
-        .location = flow.location,
-        .module = try allocator.dupe(u8, flow.module),
-        .impl_of = if (flow.impl_of) |io| try cloneDottedPath(allocator, &io) else null,
-        .impl_variant = if (flow.impl_variant) |v| try allocator.dupe(u8, v) else null,
-        .is_impl = flow.is_impl,
-    };
+    return cloneFlowWithContinuations(allocator, flow, new_continuations);
 }
 
 /// Clone a continuation with one step replaced
@@ -1850,28 +1749,7 @@ fn cloneContinuationWithReplacedStep(
         new_continuations[i] = try cloneContinuation(allocator, n);
     }
 
-    // Clone binding annotations
-    var binding_annotations = try allocator.alloc([]const u8, cont.binding_annotations.len);
-    errdefer allocator.free(binding_annotations);
-    for (cont.binding_annotations, 0..) |ann, i| {
-        binding_annotations[i] = try allocator.dupe(u8, ann);
-    }
-
-    return ast.Continuation{
-        .branch = try allocator.dupe(u8, cont.branch),
-        .binding = if (cont.binding) |b| try allocator.dupe(u8, b) else null,
-        .destructure = try ast.copyDestructure(allocator, cont.destructure),
-        .binding_annotations = binding_annotations,
-        .binding_type = cont.binding_type,
-        .kind = cont.kind,
-        .is_catchall = cont.is_catchall,
-        .catchall_metatype = if (cont.catchall_metatype) |m| try allocator.dupe(u8, m) else null,
-        .condition = if (cont.condition) |c| try allocator.dupe(u8, c) else null,
-        .condition_expr = cont.condition_expr, // Pointer copy for now
-        .node = replaced_step,
-        .indent = cont.indent,
-        .continuations = new_continuations,
-    };
+    return cloneContinuationWithNodeAndContinuations(allocator, cont, replaced_step, new_continuations, false);
 }
 
 /// Filter nested continuations in a flow's continuation, returning a new Flow.
@@ -1897,21 +1775,7 @@ pub fn filterNestedContinuations(
     }
 
     // Clone the rest of the flow
-    return ast.Flow{
-        .body = ast.rootSite(try cloneInvocation(allocator, flow.inv()), new_continuations, flow.location),
-        .annotations = try cloneStringSlice(allocator, flow.annotations),
-        .pre_label = if (flow.pre_label) |l| try allocator.dupe(u8, l) else null,
-        .super_shape = null,
-        .inline_body = if (flow.inline_body) |body| try allocator.dupe(u8, body) else null,
-        .preamble_code = if (flow.preamble_code) |preamble| try allocator.dupe(u8, preamble) else null,
-        .is_pure = flow.is_pure,
-        .is_transitively_pure = flow.is_transitively_pure,
-        .location = flow.location,
-        .module = try allocator.dupe(u8, flow.module),
-        .impl_of = if (flow.impl_of) |io| try cloneDottedPath(allocator, &io) else null,
-        .impl_variant = if (flow.impl_variant) |v| try allocator.dupe(u8, v) else null,
-        .is_impl = flow.is_impl,
-    };
+    return cloneFlowWithContinuations(allocator, flow, new_continuations);
 }
 
 /// Clone a continuation with filtered nested continuations
@@ -1943,28 +1807,7 @@ fn cloneContinuationWithFilteredNested(
         }
     }
 
-    // Clone binding annotations
-    var binding_annotations = try allocator.alloc([]const u8, cont.binding_annotations.len);
-    errdefer allocator.free(binding_annotations);
-    for (cont.binding_annotations, 0..) |ann, i| {
-        binding_annotations[i] = try allocator.dupe(u8, ann);
-    }
-
-    return ast.Continuation{
-        .branch = try allocator.dupe(u8, cont.branch),
-        .binding = if (cont.binding) |b| try allocator.dupe(u8, b) else null,
-        .destructure = try ast.copyDestructure(allocator, cont.destructure),
-        .binding_annotations = binding_annotations,
-        .binding_type = cont.binding_type,
-        .kind = cont.kind,
-        .is_catchall = cont.is_catchall,
-        .catchall_metatype = if (cont.catchall_metatype) |m| try allocator.dupe(u8, m) else null,
-        .condition = if (cont.condition) |c| try allocator.dupe(u8, c) else null,
-        .condition_expr = cont.condition_expr,
-        .node = cloned_step,
-        .indent = cont.indent,
-        .continuations = new_continuations,
-    };
+    return cloneContinuationWithNodeAndContinuations(allocator, cont, cloned_step, new_continuations, false);
 }
 
 /// Helper to clone a string slice
@@ -2020,21 +1863,7 @@ pub fn replacePipelineStepAtPath(
         }
     }
 
-    return ast.Flow{
-        .body = ast.rootSite(try cloneInvocation(allocator, flow.inv()), new_continuations, flow.location),
-        .annotations = try cloneStringSlice(allocator, flow.annotations),
-        .pre_label = if (flow.pre_label) |l| try allocator.dupe(u8, l) else null,
-        .super_shape = null,
-        .inline_body = if (flow.inline_body) |body| try allocator.dupe(u8, body) else null,
-        .preamble_code = if (flow.preamble_code) |preamble| try allocator.dupe(u8, preamble) else null,
-        .is_pure = flow.is_pure,
-        .is_transitively_pure = flow.is_transitively_pure,
-        .location = flow.location,
-        .module = try allocator.dupe(u8, flow.module),
-        .impl_of = if (flow.impl_of) |io| try cloneDottedPath(allocator, &io) else null,
-        .impl_variant = if (flow.impl_variant) |v| try allocator.dupe(u8, v) else null,
-        .is_impl = flow.is_impl,
-    };
+    return cloneFlowWithContinuations(allocator, flow, new_continuations);
 }
 
 /// Clone a continuation with a nested continuation modified (recursively)
@@ -2067,28 +1896,7 @@ fn cloneContinuationWithModifiedNested(
         }
     }
 
-    // Clone binding annotations
-    var binding_annotations = try allocator.alloc([]const u8, cont.binding_annotations.len);
-    errdefer allocator.free(binding_annotations);
-    for (cont.binding_annotations, 0..) |ann, i| {
-        binding_annotations[i] = try allocator.dupe(u8, ann);
-    }
-
-    return ast.Continuation{
-        .branch = try allocator.dupe(u8, cont.branch),
-        .binding = if (cont.binding) |b| try allocator.dupe(u8, b) else null,
-        .destructure = try ast.copyDestructure(allocator, cont.destructure),
-        .binding_annotations = binding_annotations,
-        .binding_type = cont.binding_type,
-        .kind = cont.kind,
-        .is_catchall = cont.is_catchall,
-        .catchall_metatype = if (cont.catchall_metatype) |m| try allocator.dupe(u8, m) else null,
-        .condition = if (cont.condition) |c| try allocator.dupe(u8, c) else null,
-        .condition_expr = cont.condition_expr,
-        .node = cloned_step,
-        .indent = cont.indent,
-        .continuations = new_continuations,
-    };
+    return cloneContinuationWithNodeAndContinuations(allocator, cont, cloned_step, new_continuations, false);
 }
 
 /// Filter nested continuations at a specific path in the continuation tree.
@@ -2119,21 +1927,7 @@ pub fn filterNestedContinuationsAtPath(
         }
     }
 
-    return ast.Flow{
-        .body = ast.rootSite(try cloneInvocation(allocator, flow.inv()), new_continuations, flow.location),
-        .annotations = try cloneStringSlice(allocator, flow.annotations),
-        .pre_label = if (flow.pre_label) |l| try allocator.dupe(u8, l) else null,
-        .super_shape = null,
-        .inline_body = if (flow.inline_body) |body| try allocator.dupe(u8, body) else null,
-        .preamble_code = if (flow.preamble_code) |preamble| try allocator.dupe(u8, preamble) else null,
-        .is_pure = flow.is_pure,
-        .is_transitively_pure = flow.is_transitively_pure,
-        .location = flow.location,
-        .module = try allocator.dupe(u8, flow.module),
-        .impl_of = if (flow.impl_of) |io| try cloneDottedPath(allocator, &io) else null,
-        .impl_variant = if (flow.impl_variant) |v| try allocator.dupe(u8, v) else null,
-        .is_impl = flow.is_impl,
-    };
+    return cloneFlowWithContinuations(allocator, flow, new_continuations);
 }
 
 /// Clone a continuation with filtering applied at a nested path
@@ -2164,28 +1958,7 @@ fn cloneContinuationWithFilterAtPath(
         }
     }
 
-    // Clone binding annotations
-    var binding_annotations = try allocator.alloc([]const u8, cont.binding_annotations.len);
-    errdefer allocator.free(binding_annotations);
-    for (cont.binding_annotations, 0..) |ann, i| {
-        binding_annotations[i] = try allocator.dupe(u8, ann);
-    }
-
-    return ast.Continuation{
-        .branch = try allocator.dupe(u8, cont.branch),
-        .binding = if (cont.binding) |b| try allocator.dupe(u8, b) else null,
-        .destructure = try ast.copyDestructure(allocator, cont.destructure),
-        .binding_annotations = binding_annotations,
-        .binding_type = cont.binding_type,
-        .kind = cont.kind,
-        .is_catchall = cont.is_catchall,
-        .catchall_metatype = if (cont.catchall_metatype) |m| try allocator.dupe(u8, m) else null,
-        .condition = if (cont.condition) |c| try allocator.dupe(u8, c) else null,
-        .condition_expr = cont.condition_expr,
-        .node = cloned_step,
-        .indent = cont.indent,
-        .continuations = new_continuations,
-    };
+    return cloneContinuationWithNodeAndContinuations(allocator, cont, cloned_step, new_continuations, false);
 }
 
 /// Visitor pattern for traversing the AST without mutation

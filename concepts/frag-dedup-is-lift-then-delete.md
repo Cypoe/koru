@@ -44,9 +44,35 @@ function"; it can be "lift the analysis prelude out of N target-specific
 emission bodies" (`analyzePrefixDfa`). In emitter-heavy code the cluster's
 removal unit is the part that is *not* strings.
 
+**Drift hides in omitted fields.** In struct-literal clone families the
+superset question has a second axis the fingerprint cannot measure. The
+`ast_functional.zig` continuation clones split into two clusters by field
+count: four `cloneContinuationWith*` sites spelled the same thirteen
+fields and *omitted* `location` and `is_transformed_subtree`, so the
+defaults took over — clones of a flagged graft lost their checker
+exemption and pointed at `generated:0:0`. Those four hashed together as
+one cluster; the complete fifteen-field version was a *different*
+cluster. A uniformly deficient family can therefore outrank the correct
+code it should delegate to, and the deficit is invisible in the present
+fields — it lives in the fields nobody wrote. Field-set diffing ("what
+does this literal leave to defaults?") belongs inside the superset
+judgment, and the consolidated helper now owns the full field set so
+future drift has no defaults to hide behind.
+
+**The helper already exists.** Half of this family's dedup was not
+extraction but *routing*: `cloneContinuationWithNodeAndContinuations` and
+`cloneFlowWithContinuations` were already the shared tails, and later
+authors re-inlined the literals at new sites instead of calling them.
+Widening the existing mechanism (`?ast.Node` param, `mark_transformed`
+flag) covered five more sites than building a new helper would have —
+find-it-before-you-build-it applies inside a single file.
+
 **Open questions.** (1) Whether cluster ranking should prefer the superset
 member as canonical anchor rather than the first member — the census cannot
 yet order members by semantic coverage. (2) `copy count` is not `removal
 payoff`: test-scaffolding clusters rank high while being better left
 duplicated. The weight function wants a structural discount, or that is the
-first honest job for the judgment layer behind the funnel.
+first honest job for the judgment layer behind the funnel. (3) The census
+groups on present structure only; a field-count or field-name axis on the
+fingerprint would surface deficient-literal clusters as one family instead
+of two.
