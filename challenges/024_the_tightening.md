@@ -200,6 +200,21 @@ the wall says (split into `~part` siblings), or stop and report.
 - Commit hooks require `## World Model` and `## Membrane` sections. Read a
   recent refusal commit (`458c0e54e`) for the shape. `--no-verify` is banned.
 
+## Parked leads — measured, awaiting a replay
+
+- **proto doors never check a name bound twice.** A `std/types:proto(Dup)`
+  block declaring `rpm: i32` on two lines, consumed by `std/list:new(Dup)`,
+  reaches Zig as `duplicate struct member name 'rpm'` (measured 2026-09-25).
+  Same hole in `proto.kz`'s loop; a fused same-line entry refuses with the
+  wrong reason ("unsupported type"). The fix is a seen-set + the fused-field
+  check in the existing loops — no shared scanner;
+  `concepts/frag-name-payload-blocks-share-one-entry-grammar.md` records the
+  coupling ruling (commas refuse in proto blocks).
+- **Unprobed `{ }` / field surfaces** (enumerated 2026-09-25, not compiled):
+  label-declaration argument records (`@done(r: {…})` — parsed as label name?),
+  optional/panic/effect branch payload forms, proc/host/extern signature
+  surfaces.
+
 ## What "done" looks like
 
 - 1–3 tightenings, each a commit: red-at-HEAD pin (with what the compiler did
