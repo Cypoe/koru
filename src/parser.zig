@@ -2976,46 +2976,7 @@ pub const Parser = struct {
         }
 
         // Then check for continuation lines (multi-line branch syntax)
-        var seen_terminal_branch: bool = false;
-        while (self.current < self.lines.len) {
-            const next_line = self.lines[self.current];
-            if (!lexer.isBranchContinuation(next_line)) break;
-
-            // Capture the branch's line BEFORE parseBranch advances self.current,
-            // so the KORU023 error points at the offending branch line.
-            const branch_line = self.current + 1;
-            var branch = try self.parseBranch();
-
-            // Indented `|` lines under a `!` are its resume-arm sum (210_092);
-            // base-indent `|` lines fall through as terminal siblings.
-            if (branch.kind == .effect) {
-                try self.collectIndentedResumeArms(&branch, lexer.getIndent(self.lines[branch_line - 1]));
-            }
-
-            // Ordering rule: effect `!` branches must precede terminal `|` branches.
-            if (branch.kind == .effect and seen_terminal_branch) {
-                try errors.terminalBeforeEffect(&self.reporter, branch_line, 1, branch.name, .decl);
-            }
-            if (branch.kind == .terminal) seen_terminal_branch = true;
-
-            // Reject incoherent obligation markers on effect-branch signatures.
-            try self.validateEffectBranchObligation(branch, branch_line);
-
-            // Check for duplicate branch names
-            for (branches.items) |existing| {
-                if (std.mem.eql(u8, existing.name, branch.name)) {
-                    return self.fail(
-                        .PARSE003,
-                        self.current,
-                        1,
-                        "duplicate branch name '{s}'",
-                        .{branch.name},
-                    );
-                }
-            }
-
-            try branches.append(self.allocator, branch);
-        }
+        try self.parseTrailingBranches(&branches);
 
         // Check if this is an implicit flow event
         const is_implicit_flow = self.checkImplicitFlowEvent(&input);
@@ -3332,45 +3293,8 @@ pub const Parser = struct {
             branches.deinit(self.allocator);
         }
 
-        var seen_terminal_branch_v2: bool = false;
-        while (self.current < self.lines.len) {
-            const next_line = self.lines[self.current];
-            if (!lexer.isBranchContinuation(next_line)) break;
-
-            const branch_line = self.current + 1;
-            var branch = try self.parseBranch();
-
-            // Indented `|` lines under a `!` are its resume-arm sum (210_092);
-            // base-indent `|` lines fall through as terminal siblings.
-            if (branch.kind == .effect) {
-                try self.collectIndentedResumeArms(&branch, lexer.getIndent(self.lines[branch_line - 1]));
-            }
-
-            // Ordering rule: effect `!` branches must precede terminal `|` branches.
-            if (branch.kind == .effect and seen_terminal_branch_v2) {
-                try errors.terminalBeforeEffect(&self.reporter, branch_line, 1, branch.name, .decl);
-            }
-            if (branch.kind == .terminal) seen_terminal_branch_v2 = true;
-
-            // Reject incoherent obligation markers on effect-branch signatures.
-            try self.validateEffectBranchObligation(branch, branch_line);
-
-            // Check for duplicate branch names
-            for (branches.items) |existing| {
-                if (std.mem.eql(u8, existing.name, branch.name)) {
-                    return self.fail(
-                        .PARSE003,
-                        self.current,
-                        1,
-                        "duplicate branch name '{s}'",
-                        .{branch.name},
-                    );
-                }
-            }
-
-            try branches.append(self.allocator, branch);
-            // parseBranch handles line advancement including multi-line payloads
-        }
+        try self.parseTrailingBranches(&branches);
+        // parseBranch handles line advancement including multi-line payloads
 
         // Check if this is an implicit flow event
         const is_implicit_flow = self.checkImplicitFlowEvent(&input);
@@ -7380,6 +7304,42 @@ pub const Parser = struct {
         return self.getLineLocation(link_lines[link_idx], base.column);
     }
 
+    /// Chain `steps[1..]` back-to-front as nested void continuations over
+    /// `base` — each link is a singleton empty-branch continuation whose
+    /// result is dropped (the void chain passes the head's result through).
+    /// `link_lines`/`location` give each link its own `|>` line stamp.
+    fn chainTrailingSteps(
+        self: *Parser,
+        steps: []const ast.Step,
+        base: []const ast.Continuation,
+        indent: usize,
+        location: errors.SourceLocation,
+        link_lines: []const usize,
+    ) ![]const ast.Continuation {
+        var current_nested = base;
+        var step_idx: usize = steps.len;
+        while (step_idx > 1) { // Skip steps[0], it's the head node
+            step_idx -= 1;
+
+            var cont_list = try std.ArrayList(ast.Continuation).initCapacity(self.allocator, 1);
+            try cont_list.append(self.allocator, ast.Continuation{
+                .branch = try self.allocator.dupe(u8, ""), // Empty branch for void chain step
+                .binding = null,
+                .binding_annotations = &[_][]const u8{},
+                .binding_type = .branch_payload,
+                .condition = null,
+                .condition_expr = null,
+                .node = steps[step_idx],
+                .indent = indent,
+                .continuations = current_nested,
+                .location = self.chainLinkLocation(location, link_lines, step_idx),
+            });
+
+            current_nested = try cont_list.toOwnedSlice(self.allocator);
+        }
+        return current_nested;
+    }
+
     fn parseContinuationInternal(self: *Parser, indent: usize, parent_indent: usize, location: errors.SourceLocation) !ast.Continuation {
         _ = parent_indent;
         const line = self.lines[self.current - 1]; // We already incremented
@@ -8365,26 +8325,7 @@ pub const Parser = struct {
                     }
 
                     if (steps_inner.len > 1) {
-                        var step_idx: usize = steps_inner.len;
-                        while (step_idx > 1) { // Skip steps_inner[0], it's the head node
-                            step_idx -= 1;
-
-                            var cont_list = try std.ArrayList(ast.Continuation).initCapacity(self.allocator, 1);
-                            try cont_list.append(self.allocator, ast.Continuation{
-                                .branch = try self.allocator.dupe(u8, ""), // Empty branch for void chain step
-                                .binding = null,
-                                .binding_annotations = &[_][]const u8{},
-                                .binding_type = .branch_payload,
-                                .condition = null,
-                                .condition_expr = null,
-                                .node = steps_inner[step_idx],
-                                .indent = indent,
-                                .continuations = current_nested,
-                                .location = self.chainLinkLocation(location, link_lines, step_idx),
-                            });
-
-                            current_nested = try cont_list.toOwnedSlice(self.allocator);
-                        }
+                        current_nested = try self.chainTrailingSteps(steps_inner, current_nested, indent, location, link_lines);
                     }
 
                     return ast.Continuation{
@@ -8572,28 +8513,7 @@ pub const Parser = struct {
                 if (steps.len > 1) {
                     // Build chain from back to front; a stripped `-> produce`
                     // sits innermost, attached to the final step.
-                    var current_nested: []const ast.Continuation = produce_conts;
-
-                    var step_idx: usize = steps.len;
-                    while (step_idx > 1) { // Skip steps[0], it's already in 'step'
-                        step_idx -= 1;
-
-                        var cont_list = try std.ArrayList(ast.Continuation).initCapacity(self.allocator, 1);
-                        try cont_list.append(self.allocator, ast.Continuation{
-                            .branch = try self.allocator.dupe(u8, ""), // Empty branch for void continuation
-                            .binding = null,
-                            .binding_annotations = &[_][]const u8{},
-                            .binding_type = .branch_payload,
-                            .condition = null,
-                            .condition_expr = null,
-                            .node = steps[step_idx],
-                            .indent = indent,
-                            .continuations = current_nested,
-                            .location = self.chainLinkLocation(location, link_lines, step_idx),
-                        });
-
-                        current_nested = try cont_list.toOwnedSlice(self.allocator);
-                    }
+                    const current_nested: []const ast.Continuation = try self.chainTrailingSteps(steps, produce_conts, indent, location, link_lines);
 
                     // Return continuation with first step and chained nested continuations
                     return ast.Continuation{
@@ -9008,28 +8928,7 @@ pub const Parser = struct {
         // FIX: Chain additional steps as nested continuations (same as parseBranchContinuationBase)
         if (steps.len > 1) {
             // Build chain from back to front
-            var current_nested: []const ast.Continuation = &[_]ast.Continuation{};
-
-            var step_idx: usize = steps.len;
-            while (step_idx > 1) { // Skip steps[0], it's already in 'step'
-                step_idx -= 1;
-
-                var cont_list = try std.ArrayList(ast.Continuation).initCapacity(self.allocator, 1);
-                try cont_list.append(self.allocator, ast.Continuation{
-                    .branch = try self.allocator.dupe(u8, ""), // Empty branch for void continuation
-                    .binding = null,
-                    .binding_annotations = &[_][]const u8{},
-                    .binding_type = .branch_payload,
-                    .condition = null,
-                    .condition_expr = null,
-                    .node = steps[step_idx],
-                    .indent = indent,
-                    .continuations = current_nested,
-                    .location = self.chainLinkLocation(location, link_lines, step_idx),
-                });
-
-                current_nested = try cont_list.toOwnedSlice(self.allocator);
-            }
+            const current_nested: []const ast.Continuation = try self.chainTrailingSteps(steps, &[_]ast.Continuation{}, indent, location, link_lines);
 
             return ast.Continuation{
                 .branch = try self.allocator.dupe(u8, ""), // Empty branch for pipeline continuation
@@ -10277,6 +10176,53 @@ pub const Parser = struct {
             "'.' is not a namespace separator in '{s}' — use '/' (e.g. 'std/io:Type', not 'std.io:Type'). '.' is member access after ':'.",
             .{module_path},
         );
+    }
+
+    /// Collect continuation-line branches (`|`/`!` rows) into `branches` until
+    /// a non-continuation line: effect branches gather their indented
+    /// resume-arm sum, `!` must precede `|`, effect-branch obligation markers
+    /// are validated, and duplicate branch names are a PARSE003.
+    fn parseTrailingBranches(self: *Parser, branches: *std.ArrayList(ast.Branch)) !void {
+        var seen_terminal_branch: bool = false;
+        while (self.current < self.lines.len) {
+            const next_line = self.lines[self.current];
+            if (!lexer.isBranchContinuation(next_line)) break;
+
+            // Capture the branch's line BEFORE parseBranch advances self.current,
+            // so the KORU023 error points at the offending branch line.
+            const branch_line = self.current + 1;
+            var branch = try self.parseBranch();
+
+            // Indented `|` lines under a `!` are its resume-arm sum (210_092);
+            // base-indent `|` lines fall through as terminal siblings.
+            if (branch.kind == .effect) {
+                try self.collectIndentedResumeArms(&branch, lexer.getIndent(self.lines[branch_line - 1]));
+            }
+
+            // Ordering rule: effect `!` branches must precede terminal `|` branches.
+            if (branch.kind == .effect and seen_terminal_branch) {
+                try errors.terminalBeforeEffect(&self.reporter, branch_line, 1, branch.name, .decl);
+            }
+            if (branch.kind == .terminal) seen_terminal_branch = true;
+
+            // Reject incoherent obligation markers on effect-branch signatures.
+            try self.validateEffectBranchObligation(branch, branch_line);
+
+            // Check for duplicate branch names
+            for (branches.items) |existing| {
+                if (std.mem.eql(u8, existing.name, branch.name)) {
+                    return self.fail(
+                        .PARSE003,
+                        self.current,
+                        1,
+                        "duplicate branch name '{s}'",
+                        .{branch.name},
+                    );
+                }
+            }
+
+            try branches.append(self.allocator, branch);
+        }
     }
 
     /// Effect branches fire 0-to-N times, so obligation markers on their
