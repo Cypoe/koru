@@ -2455,59 +2455,70 @@ fn continuationsMightHaveTaps(
     return true;
 }
 
+/// Does a continuation's step node reference this binding — invocation args
+/// (and grafted inline_body), label_with_invocation args, branch-constructor
+/// plain value and fields, assignment fields. The direct-step check shared by
+/// bindingIsUsedInContinuations and the group-level needs_binding scans.
+fn stepReferencesBinding(step: ast.Node, binding_name: []const u8) bool {
+    switch (step) {
+        .invocation => |inv| {
+            // Check if any arg references this binding (e.g., "s.sun" references "s")
+            for (inv.args) |arg| {
+                if (valueReferencesBinding(arg.value, binding_name)) {
+                    return true;
+                }
+            }
+            // Transform-grafted generated code on the invocation
+            // (Invocation.inline_body) — scan it like inline code.
+            if (inv.inline_body) |ib| {
+                if (valueReferencesBinding(ib, binding_name)) {
+                    return true;
+                }
+            }
+        },
+        .label_with_invocation => |lwi| {
+            for (lwi.invocation.args) |arg| {
+                if (valueReferencesBinding(arg.value, binding_name)) {
+                    return true;
+                }
+            }
+        },
+        .branch_constructor => |bc| {
+            // Check plain value first (identity branch constructor)
+            if (bc.plain_value) |pv| {
+                if (valueReferencesBinding(pv, binding_name)) {
+                    return true;
+                }
+            }
+            for (bc.fields) |field| {
+                const value = if (field.expression_str) |expr| expr else field.type;
+                if (valueReferencesBinding(value, binding_name)) {
+                    return true;
+                }
+            }
+        },
+        .assignment => |asgn| {
+            for (asgn.fields) |field| {
+                if (field.expression_str) |expr| {
+                    if (valueReferencesBinding(expr, binding_name)) {
+                        return true;
+                    }
+                }
+            }
+        },
+        else => {},
+    }
+    return false;
+}
+
 /// Helper to check if a binding variable is used in nested continuations
 /// This is CRITICAL for deeply nested subflows where outer bindings must stay in scope
 fn bindingIsUsedInContinuations(binding_name: []const u8, continuations: []const ast.Continuation) bool {
     for (continuations) |cont| {
         // Check the step
         if (cont.node) |step| {
-            switch (step) {
-                .invocation => |inv| {
-                    // Check if any arg references this binding (e.g., "s.sun" references "s")
-                    for (inv.args) |arg| {
-                        if (valueReferencesBinding(arg.value, binding_name)) {
-                            return true;
-                        }
-                    }
-                    // Transform-grafted generated code on the invocation
-                    // (Invocation.inline_body) — scan it like inline code.
-                    if (inv.inline_body) |ib| {
-                        if (valueReferencesBinding(ib, binding_name)) {
-                            return true;
-                        }
-                    }
-                },
-                .label_with_invocation => |lwi| {
-                    for (lwi.invocation.args) |arg| {
-                        if (valueReferencesBinding(arg.value, binding_name)) {
-                            return true;
-                        }
-                    }
-                },
-                .branch_constructor => |bc| {
-                    // Check plain value first (identity branch constructor)
-                    if (bc.plain_value) |pv| {
-                        if (valueReferencesBinding(pv, binding_name)) {
-                            return true;
-                        }
-                    }
-                    for (bc.fields) |field| {
-                        const value = if (field.expression_str) |expr| expr else field.type;
-                        if (valueReferencesBinding(value, binding_name)) {
-                            return true;
-                        }
-                    }
-                },
-                .assignment => |asgn| {
-                    for (asgn.fields) |field| {
-                        if (field.expression_str) |expr| {
-                            if (valueReferencesBinding(expr, binding_name)) {
-                                return true;
-                            }
-                        }
-                    }
-                },
-                else => {},
+            if (stepReferencesBinding(step, binding_name)) {
+                return true;
             }
         }
         // Recursively check nested continuations
@@ -3483,34 +3494,7 @@ fn emitSubflowContinuationsWithDepth(
                 for (group.continuations) |cont_ptr| {
                     const cont = cont_ptr.*;
                     if (cont.node) |step| {
-                        switch (step) {
-                            .invocation => |inv| {
-                                for (inv.args) |arg| {
-                                    if (valueReferencesBinding(arg.value, binding_name)) {
-                                        needs_binding = true;
-                                        break;
-                                    }
-                                }
-                            },
-                            .branch_constructor => |bc| {
-                                // Check plain value first (identity branch constructor)
-                                if (bc.plain_value) |pv| {
-                                    if (valueReferencesBinding(pv, binding_name)) {
-                                        needs_binding = true;
-                                    }
-                                }
-                                if (!needs_binding) {
-                                    for (bc.fields) |field| {
-                                        const value = if (field.expression_str) |expr| expr else field.type;
-                                        if (valueReferencesBinding(value, binding_name)) {
-                                            needs_binding = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                            },
-                            else => {},
-                        }
+                        needs_binding = stepReferencesBinding(step, binding_name);
                     }
                     // Also check nested continuations
                     if (!needs_binding) {
@@ -3687,34 +3671,7 @@ fn emitSubflowContinuationsWithDepth(
 
             // Check the step - but only if it references THIS binding
             if (cont.node) |step| {
-                switch (step) {
-                    .invocation => |inv| {
-                        for (inv.args) |arg| {
-                            if (valueReferencesBinding(arg.value, actual_binding)) {
-                                needs_binding = true;
-                                break;
-                            }
-                        }
-                    },
-                    .branch_constructor => |bc| {
-                        // Check plain value first (identity branch constructor)
-                        if (bc.plain_value) |pv| {
-                            if (valueReferencesBinding(pv, actual_binding)) {
-                                needs_binding = true;
-                            }
-                        }
-                        if (!needs_binding) {
-                            for (bc.fields) |field| {
-                                const value = if (field.expression_str) |expr| expr else field.type;
-                                if (valueReferencesBinding(value, actual_binding)) {
-                                    needs_binding = true;
-                                    break;
-                                }
-                            }
-                        }
-                    },
-                    else => {},
-                }
+                needs_binding = stepReferencesBinding(step, actual_binding);
             }
 
             // CRITICAL: Also check if binding is used in nested continuations!
@@ -4147,34 +4104,7 @@ fn emitSubflowContinuationsWithDepth(
             for (group.continuations) |cont_ptr| {
                 const cont = cont_ptr.*;
                 if (cont.node) |step| {
-                    switch (step) {
-                        .invocation => |inv| {
-                            for (inv.args) |arg| {
-                                if (valueReferencesBinding(arg.value, actual_binding)) {
-                                    needs_binding = true;
-                                    break;
-                                }
-                            }
-                        },
-                        .branch_constructor => |bc| {
-                            // Check plain value first (identity branch constructor)
-                            if (bc.plain_value) |pv| {
-                                if (valueReferencesBinding(pv, actual_binding)) {
-                                    needs_binding = true;
-                                }
-                            }
-                            if (!needs_binding) {
-                                for (bc.fields) |field| {
-                                    const value = if (field.expression_str) |expr| expr else field.type;
-                                    if (valueReferencesBinding(value, actual_binding)) {
-                                        needs_binding = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        },
-                        else => {},
-                    }
+                    needs_binding = stepReferencesBinding(step, actual_binding);
                 }
                 if (!needs_binding and cont.continuations.len > 0) {
                     needs_binding = bindingIsUsedInContinuations(actual_binding, cont.continuations);

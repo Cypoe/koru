@@ -59,6 +59,20 @@ does this literal leave to defaults?") belongs inside the superset
 judgment, and the consolidated helper now owns the full field set so
 future drift has no defaults to hide behind.
 
+**Drift also hides in omitted switch cases, and a recursive fallback can
+mask it.** The three `needs_binding` scans in
+`emitSubflowContinuationsWithDepth` re-spelled a *subset* of
+`bindingIsUsedInContinuations`'s node switch — `invocation` and
+`branch_constructor`, but no `label_with_invocation`, `inline_body`, or
+`assignment`. The gap was invisible because every site immediately fell
+back to the full recursive check on *nested* continuations: the
+deficiency only ever applied to the current level, and a binding
+referenced one level down still resolved. The correct move was not a new
+helper but extracting `stepReferencesBinding` from the existing
+superset's own switch and routing all four sites through it. When a
+clone site sits next to a recursive call into the fuller version, the
+recursion is evidence the subset is wrong, not that it suffices.
+
 **Vocabulary tables extend the ruling.** The "prelude, not function" case
 had a next step it did not name: when the differing payload is *entirely*
 string literals under identical control flow, a comptime vocabulary table
