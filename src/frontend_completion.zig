@@ -93,28 +93,7 @@ fn eventDisplayName(module_logical: []const u8, event_name: []const u8, buf: []u
     return written;
 }
 
-fn formatSignature(ed: *const ast.EventDecl, buf: []u8) []const u8 {
-    var fbs = std.io.fixedBufferStream(buf);
-    const w = fbs.writer();
-    if (ed.path.segments.len > 0) {
-        for (ed.path.segments, 0..) |seg, i| {
-            if (i > 0) w.writeAll(".") catch {};
-            w.writeAll(seg) catch {};
-        }
-    }
-    w.writeAll("(") catch {};
-    if (ed.input.is_wildcard) {
-        w.writeAll("*") catch {};
-    } else {
-        for (ed.input.fields, 0..) |f, i| {
-            if (i > 0) w.writeAll(", ") catch {};
-            w.print("{s}: {s}", .{ f.name, f.type }) catch {};
-        }
-    }
-    w.writeAll(")") catch {};
-    if (ed.return_type) |rt| w.print(" -> {s}", .{rt}) catch {};
-    return fbs.getWritten();
-}
+const formatSignature = frontend_hover.formatSignature;
 
 fn startsWithPrefix(hay: []const u8, prefix: []const u8) bool {
     return std.mem.startsWith(u8, hay, prefix);

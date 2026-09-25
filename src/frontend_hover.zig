@@ -178,7 +178,9 @@ fn findEvent(program: *const ast.Program, ref: []const u8) ?struct {
     return null;
 }
 
-fn formatSignature(ed: *const ast.EventDecl, buf: []u8) []const u8 {
+/// "name.path(field: T, ...) -> ret" into `buf` — the event signature
+/// spelling shared by hover and completion detail text.
+pub fn formatSignature(ed: *const ast.EventDecl, buf: []u8) []const u8 {
     var fbs = std.io.fixedBufferStream(buf);
     const w = fbs.writer();
     if (ed.path.segments.len > 0) {
