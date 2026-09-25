@@ -992,7 +992,13 @@ pub fn writeFieldType(emitter: *CodeEmitter, field: ast.Field, main_module_name:
                 }
                 try emitter.write(" }");
                 return;
-            } else |_| {}
+            } else |err| {
+                if (err == error.OutOfMemory) return err;
+                // parseShape refuses a malformed `{`-field type at PARSE003
+                // before emission — a parseFields failure here is a broken
+                // parser contract, not a user error to paste through.
+                @panic("koru: inline record field type passed parseShape but failed parseFields");
+            }
         }
     }
 

@@ -11395,6 +11395,19 @@ pub const Parser = struct {
             if (split.default) |d| field_default = try self.allocator.dupe(u8, d);
             field_type = split.type;
 
+            // An inline record field type (`user: { x: i64 }`) is the one
+            // type surface whose interior the emitter re-parses — writeFieldType
+            // lowers it through struct_literal.parseFields. Refuse a malformed
+            // record here, at the field's line, so emission can treat a
+            // parseFields failure on a `{`-type as a broken parser contract.
+            if (std.mem.startsWith(u8, field_type, "{")) {
+                _ = struct_literal.parseFields(self.allocator, field_type) catch |err| {
+                    if (err == error.OutOfMemory) return err;
+                    const detail = struct_literal.describeErrorIn(self.allocator, err, field_type);
+                    return self.fail(.PARSE003, self.current, 1, "malformed inline record field type '{s}' — {s}", .{ field_type, detail });
+                };
+            }
+
             // Check for special types: Source, File, EmbedFile, Expression, and InvocationMeta
             // Source can have scope type: Source<HTML>, Source<SQL>, etc.
             // Expression captures Zig expressions verbatim as strings

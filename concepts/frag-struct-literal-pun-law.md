@@ -255,3 +255,15 @@ not text. ANY new scanner over field text (`module:Type`, defaults,
 constraints) must skip `{…}` or it mints a third parse of the same
 shape — and the island this file documented comes back one splitter at
 a time.
+
+A `{`-led field type is parsed exactly once, at `parseShape` (2026-09-25):
+the emitter's re-parse is a contract check, not a second parser — a
+`parseFields` failure there is `@panic`, never a paste-through. Malformed
+records (`{ x: i64, x: i64 }` binds `x` twice) refuse PARSE003 at the
+field's line with `describeErrorIn`'s named detail; at baseline they fell
+through to the verbatim paste and died in Zig (`expected type
+expression`). Pin: `210_274`. The missing-comma malformation cannot reach
+this wall — the multiline decl reader comma-joins continuation lines
+(`{,x: i64,y: i64,}`) and `fusedFieldLine` is newline-anchored, so the
+refusal's reachable malformations are the ones `parseFields` itself
+catches on single text: DuplicateField, BareEntryNotPunnable, NotAStruct.

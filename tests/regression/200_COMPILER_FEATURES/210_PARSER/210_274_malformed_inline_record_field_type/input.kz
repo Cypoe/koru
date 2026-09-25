@@ -1,0 +1,13 @@
+// PINS: a malformed inline record field type (`{ x: i64, x: i64 }` binds
+// `x` twice) refuses PARSE003 in parseShape, at the field's line, before
+// emission — the emitter treats a parseFields failure on a `{`-type as a
+// broken parser contract rather than pasting the text verbatim into Zig.
+~import std/io
+
+~tor wrap { user: { x: i64, x: i64 } }
+~proc wrap|zig {
+    const std = @import("std");
+    std.debug.print("{d}\n", .{user.x});
+}
+
+~wrap(user: { x: 5 })
