@@ -153,14 +153,13 @@ pub const EffectAnalyzer = struct {
         return metadata;
     }
     
-    fn analyzeProcEffects(self: *EffectAnalyzer, proc: *const ast.ProcDecl) !EffectSet {
+    /// Collect declared effects from an annotations list: `effects(a|b)`
+    /// lists plus the `extern_c` shortcut.
+    fn effectsFromAnnotations(annotations: []const []const u8) EffectSet {
         var effects = EffectSet.init();
-        
-        // Parse effects from annotations
-        for (proc.annotations) |ann| {
-            // Look for effects(...) annotation
+        for (annotations) |ann| {
             if (std.mem.startsWith(u8, ann, "effects(") and std.mem.endsWith(u8, ann, ")")) {
-                const effects_str = ann[8..ann.len - 1]; // Extract content between effects()
+                const effects_str = ann[8..ann.len - 1];
                 var iter = std.mem.splitScalar(u8, effects_str, '|');
                 while (iter.next()) |effect_str| {
                     const trimmed = std.mem.trim(u8, effect_str, " \t");
@@ -169,16 +168,21 @@ pub const EffectAnalyzer = struct {
                     }
                 }
             }
-            
+
             // extern_c implies extern_c effect
             if (std.mem.eql(u8, ann, "extern_c")) {
                 effects.add(.extern_c);
             }
         }
-        
+        return effects;
+    }
+
+    fn analyzeProcEffects(self: *EffectAnalyzer, proc: *const ast.ProcDecl) !EffectSet {
+        const effects = effectsFromAnnotations(proc.annotations);
+
         // TODO: Analyze body for actual effects (stdlib calls, etc.)
         // For now, just trust annotations
-        
+
         const name = try purity_helpers.pathToString(self.allocator, proc.path);
         defer self.allocator.free(name);
         
@@ -198,27 +202,7 @@ pub const EffectAnalyzer = struct {
     
     fn analyzeEventEffects(self: *EffectAnalyzer, event: *const ast.EventDecl) !EffectSet {
         _ = self;
-        var effects = EffectSet.init();
-        
-        // Parse effects from annotations (same as procs)
-        for (event.annotations) |ann| {
-            if (std.mem.startsWith(u8, ann, "effects(") and std.mem.endsWith(u8, ann, ")")) {
-                const effects_str = ann[8..ann.len - 1];
-                var iter = std.mem.splitScalar(u8, effects_str, '|');
-                while (iter.next()) |effect_str| {
-                    const trimmed = std.mem.trim(u8, effect_str, " \t");
-                    if (Effect.fromString(trimmed)) |effect| {
-                        effects.add(effect);
-                    }
-                }
-            }
-            
-            if (std.mem.eql(u8, ann, "extern_c")) {
-                effects.add(.extern_c);
-            }
-        }
-        
-        return effects;
+        return effectsFromAnnotations(event.annotations);
     }
 };
 
