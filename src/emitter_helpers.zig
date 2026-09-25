@@ -1569,6 +1569,20 @@ pub fn emitTapRegistryPlaceholder(emitter: *CodeEmitter) !void {
     try emitter.write("    };\n");
 }
 
+/// Append each name not already in `list` — set-build via linear scan.
+fn appendUniqueStrings(list: *std.array_list.Managed([]const u8), names: []const []const u8) !void {
+    for (names) |name| {
+        var found = false;
+        for (list.items) |existing| {
+            if (std.mem.eql(u8, existing, name)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) try list.append(name);
+    }
+}
+
 /// Emit taps namespace with selective enums for events/branches
 /// Now includes metatypes (Transition/Profile/Audit) INSIDE the namespace
 /// Events/branches can come from tap_registry (old style) OR AST metatype_binding (new ~tap() style)
@@ -1592,51 +1606,15 @@ pub fn emitTapsNamespace(
     const allocator = tap_registry.allocator;
     var all_events = std.array_list.Managed([]const u8).init(allocator);
     defer all_events.deinit();
-    for (registry_events) |e| {
-        var found = false;
-        for (all_events.items) |existing| {
-            if (std.mem.eql(u8, existing, e)) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) try all_events.append(e);
-    }
-    for (ast_events) |e| {
-        var found = false;
-        for (all_events.items) |existing| {
-            if (std.mem.eql(u8, existing, e)) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) try all_events.append(e);
-    }
+    try appendUniqueStrings(&all_events, registry_events);
+    try appendUniqueStrings(&all_events, ast_events);
     const events = all_events.items;
 
     // Merge registry branches with AST branches (deduplicated)
     var all_branches = std.array_list.Managed([]const u8).init(allocator);
     defer all_branches.deinit();
-    for (registry_branches) |b| {
-        var found = false;
-        for (all_branches.items) |existing| {
-            if (std.mem.eql(u8, existing, b)) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) try all_branches.append(b);
-    }
-    for (ast_branches) |b| {
-        var found = false;
-        for (all_branches.items) |existing| {
-            if (std.mem.eql(u8, existing, b)) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) try all_branches.append(b);
-    }
+    try appendUniqueStrings(&all_branches, registry_branches);
+    try appendUniqueStrings(&all_branches, ast_branches);
     const branches = all_branches.items;
 
     // Only emit if there are taps OR metatypes needed
