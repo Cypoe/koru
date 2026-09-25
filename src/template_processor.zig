@@ -1001,14 +1001,10 @@ fn tagScopeFromRenderedBody(
     var pos: usize = 0;
     while (std.mem.indexOfPos(u8, rendered, pos, SCOPED_SPLICE_MARKER)) |m| {
         var i = m + SCOPED_SPLICE_MARKER.len;
-        var idx: usize = 0;
-        var saw_digit = false;
-        while (i < rendered.len and rendered[i] >= '0' and rendered[i] <= '9') : (i += 1) {
-            idx = idx * 10 + (rendered[i] - '0');
-            saw_digit = true;
-        }
-        if (saw_digit and idx < continuations.len) {
-            try stampScope(&continuations[idx], allocator);
+        if (codegen_utils.scanDecimalIndex(rendered, &i)) |idx| {
+            if (idx < continuations.len) {
+                try stampScope(&continuations[idx], allocator);
+            }
         }
         pos = i;
     }

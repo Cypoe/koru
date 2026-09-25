@@ -205,6 +205,19 @@ pub fn appendEscapedIdentifier(list: *std.ArrayList(u8), allocator: std.mem.Allo
     }
 }
 
+/// Decimal index scan for the `__koru_*_N` splice markers — returns the
+/// digits' value and advances `pos` past them, or null when no digit is
+/// there (`pos` untouched past the first non-digit).
+pub fn scanDecimalIndex(text: []const u8, pos: *usize) ?usize {
+    var idx: usize = 0;
+    var saw_digit = false;
+    while (pos.* < text.len and text[pos.*] >= '0' and text[pos.*] <= '9') : (pos.* += 1) {
+        idx = idx * 10 + (text[pos.*] - '0');
+        saw_digit = true;
+    }
+    return if (saw_digit) idx else null;
+}
+
 // ============================================================================
 // STRUCT LITERAL CONVERSION
 // ============================================================================

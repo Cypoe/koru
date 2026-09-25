@@ -1589,17 +1589,11 @@ const Emitter = struct {
                 var i = m + CONTINUE_PREFIX.len;
                 const is_bare = std.mem.startsWith(u8, trimmed[i..], BARE_INFIX);
                 if (is_bare) i += BARE_INFIX.len;
-                var idx: usize = 0;
-                var saw_digit = false;
-                while (i < trimmed.len and trimmed[i] >= '0' and trimmed[i] <= '9') : (i += 1) {
-                    idx = idx * 10 + (trimmed[i] - '0');
-                    saw_digit = true;
-                }
-                if (!saw_digit) {
+                const idx = codegen_utils.scanDecimalIndex(trimmed, &i) orelse {
                     // Malformed marker — fail loudly rather than leak it into JS.
                     log.err("[js_emitter] malformed __koru_continue marker\n", .{});
                     return JsEmitError.UnsupportedConstruct;
-                }
+                };
                 if (idx >= continuations.len) {
                     log.err("[js_emitter] __koru_continue_{d} has no matching continuation (have {d})\n", .{ idx, continuations.len });
                     return JsEmitError.UnsupportedConstruct;
@@ -1629,16 +1623,11 @@ const Emitter = struct {
             // skip past it to the digits — same as the Zig reference.
             var i = m + SPLICE_PREFIX.len;
             if (std.mem.startsWith(u8, trimmed[i..], SCOPED_INFIX)) i += SCOPED_INFIX.len;
-            var idx: usize = 0;
-            var saw_digit = false;
-            while (i < trimmed.len and trimmed[i] >= '0' and trimmed[i] <= '9') : (i += 1) {
-                idx = idx * 10 + (trimmed[i] - '0');
-                saw_digit = true;
-            }
+            const maybe_idx = codegen_utils.scanDecimalIndex(trimmed, &i);
 
             // Read the `(arg)` immediately following (balanced parens).
             var arg: []const u8 = "";
-            if (saw_digit and i < trimmed.len and trimmed[i] == '(') {
+            if (maybe_idx != null and i < trimmed.len and trimmed[i] == '(') {
                 const arg_start = i + 1;
                 var depth: usize = 1;
                 var j = arg_start;
@@ -1656,10 +1645,10 @@ const Emitter = struct {
                 if (i < trimmed.len and trimmed[i] == ';') i += 1;
             }
 
-            if (!saw_digit) {
+            const idx = maybe_idx orelse {
                 log.err("[js_emitter] malformed __koru_inline marker\n", .{});
                 return JsEmitError.UnsupportedConstruct;
-            }
+            };
             if (idx >= continuations.len) {
                 log.err("[js_emitter] __koru_inline_{d} has no matching continuation (have {d})\n", .{ idx, continuations.len });
                 return JsEmitError.UnsupportedConstruct;

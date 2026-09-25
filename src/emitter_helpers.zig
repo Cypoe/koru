@@ -5247,13 +5247,8 @@ fn emitInlineCodeResolvingSplices(
             // puts it in an `if / else if` cascade's condition position.
             const unguarded = std.mem.startsWith(u8, inline_code[i..], "bare_");
             if (unguarded) i += "bare_".len;
-            var idx: usize = 0;
-            var saw_digit = false;
-            while (i < inline_code.len and inline_code[i] >= '0' and inline_code[i] <= '9') : (i += 1) {
-                idx = idx * 10 + (inline_code[i] - '0');
-                saw_digit = true;
-            }
-            if (saw_digit and idx < continuations.len) {
+            const idx = codegen_utils.scanDecimalIndex(inline_code, &i) orelse continuations.len; // out of range → loud verbatim below
+            if (idx < continuations.len) {
                 const cont = &continuations[idx];
                 try emitter.write("{ ");
                 const guarded = cont.condition != null and !unguarded;
@@ -5305,16 +5300,11 @@ fn emitInlineCodeResolvingSplices(
         var i = m + INLINE_SPLICE_PREFIX.len;
         const SCOPED_INFIX = "scoped_";
         if (std.mem.startsWith(u8, inline_code[i..], SCOPED_INFIX)) i += SCOPED_INFIX.len;
-        var idx: usize = 0;
-        var saw_digit = false;
-        while (i < inline_code.len and inline_code[i] >= '0' and inline_code[i] <= '9') : (i += 1) {
-            idx = idx * 10 + (inline_code[i] - '0');
-            saw_digit = true;
-        }
+        const maybe_idx = codegen_utils.scanDecimalIndex(inline_code, &i);
 
         // Read the `(arg)` immediately following (balanced parens).
         var arg: []const u8 = "";
-        if (saw_digit and i < inline_code.len and inline_code[i] == '(') {
+        if (maybe_idx != null and i < inline_code.len and inline_code[i] == '(') {
             const arg_start = i + 1;
             var depth: usize = 1;
             var j = arg_start;
@@ -5346,7 +5336,8 @@ fn emitInlineCodeResolvingSplices(
             if (i < inline_code.len and inline_code[i] == ';') i += 1;
         }
 
-        if (saw_digit and idx < continuations.len) {
+        const idx = maybe_idx orelse continuations.len; // out of range → verbatim fallback below
+        if (idx < continuations.len) {
             const cont = &continuations[idx];
             const binding = cont.binding orelse "_";
             // Cross-boundary splice hygiene (400_151): the spliced body shares
