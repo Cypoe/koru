@@ -1553,6 +1553,43 @@ pub fn compileSearchToZig(out: std.mem.Allocator, pattern: []const u8, name: []c
     return compileWithEmitter(out, pattern, name, emitSearchMatcher);
 }
 
+/// Emit-time analysis shared by the three `emitPrefixMatcher*` targets. Finds
+/// the dead sink — a non-accepting state whose every byte transition loops back
+/// to itself — and whether the DFA is suffix-terminal: every accepting state
+/// transitions ONLY to the dead sink, so accept is reached at most once,
+/// immediately before the dead break, and the per-byte accept test/write is
+/// pure overhead the emitter can hoist out (rung 3). Numbers (digit -> digit
+/// re-accepts) are NOT suffix-terminal and keep the per-byte last_end write.
+const PrefixAnalysis = struct { dead: ?usize, suffix_terminal: bool };
+
+fn analyzePrefixDfa(dfa: *const Dfa) PrefixAnalysis {
+    // Detect the dead sink: non-accepting, every byte loops back to itself.
+    var dead: ?usize = null;
+    st: for (0..dfa.n_states) |s| {
+        if (dfa.accept[s]) continue;
+        for (0..256) |b| {
+            if (dfa.trans[s * 256 + b] != s) continue :st;
+        }
+        dead = s;
+        break;
+    }
+
+    var suffix_terminal = dead != null;
+    if (dead) |d| {
+        for (0..dfa.n_states) |q| {
+            if (!dfa.accept[q]) continue;
+            for (0..256) |b| {
+                if (dfa.trans[q * 256 + b] != d) {
+                    suffix_terminal = false;
+                    break;
+                }
+            }
+            if (!suffix_terminal) break;
+        }
+    }
+    return .{ .dead = dead, .suffix_terminal = suffix_terminal };
+}
+
 /// Emit `fn <name>(input: []const u8, from: usize) ?usize { … }` — the ANCHORED
 /// longest-prefix matcher at a fixed offset: returns the END of the longest
 /// prefix of input[from..] the DFA accepts (span is [from, end)), or null if
@@ -1569,18 +1606,8 @@ pub fn compileSearchToZig(out: std.mem.Allocator, pattern: []const u8, name: []c
 /// at emit time (non-accepting, all 256 transitions self-looping); patterns
 /// whose DFA has none simply omit the check.
 pub fn emitPrefixMatcher(w: anytype, dfa: *const Dfa, name: []const u8) !void {
-    // Detect the dead sink: non-accepting, every byte loops back to itself.
-    var dead: ?usize = null;
-    var st: usize = 0;
-    outer: while (st < dfa.n_states) : (st += 1) {
-        if (dfa.accept[st]) continue;
-        var b: usize = 0;
-        while (b < 256) : (b += 1) {
-            if (dfa.trans[st * 256 + b] != st) continue :outer;
-        }
-        dead = st;
-        break;
-    }
+    const analysis = analyzePrefixDfa(dfa);
+    const dead = analysis.dead;
 
     try w.print("fn {s}(input: []const u8, from: usize) ?usize {{\n", .{name});
     try w.writeAll("    const T = [_]u32{ ");
@@ -1595,29 +1622,9 @@ pub fn emitPrefixMatcher(w: anytype, dfa: *const Dfa, name: []const u8) !void {
         try w.writeAll(if (acc) "true" else "false");
     }
     try w.writeAll(" };\n");
-    // Suffix-terminal DFA: every accepting state transitions ONLY to the dead
-    // sink (accepting is a dead-end — string, keyword). Then an accept is
-    // reached at most once, immediately before the dead break, so the per-byte
-    // accept test/write is pure overhead: hoist it out and read the accept off
-    // the state we broke on. Numbers (digit -> digit keeps accepting) are NOT
-    // suffix-terminal and keep the per-byte last_end write.
-    var suffix_terminal = dead != null;
-    if (dead) |d| {
-        for (0..dfa.n_states) |q| {
-            if (!dfa.accept[q]) continue;
-            var b: usize = 0;
-            while (b < 256) : (b += 1) {
-                if (dfa.trans[q * 256 + b] != d) {
-                    suffix_terminal = false;
-                    break;
-                }
-            }
-            if (!suffix_terminal) break;
-        }
-    }
 
     try w.print("    var s: u32 = {d};\n", .{dfa.start});
-    if (suffix_terminal) {
+    if (analysis.suffix_terminal) {
         // No per-byte accept work: walk transitions until dead/end, then the
         // state we stopped on decides the (single) match end — `i` at the dead
         // break is exactly the accepting end, `input.len` at a clean run-out.
@@ -1660,18 +1667,8 @@ pub fn compilePrefixToZig(out: std.mem.Allocator, pattern: []const u8, name: []c
 /// accept-write hoist (rung 3) carries over unchanged. Emitted functions assume
 /// <stdint.h>/<stddef.h>/<stdbool.h> are included by the enclosing file.
 pub fn emitPrefixMatcherC(w: anytype, dfa: *const Dfa, name: []const u8) !void {
-    // Detect the dead sink: non-accepting, every byte loops back to itself.
-    var dead: ?usize = null;
-    var st: usize = 0;
-    outer: while (st < dfa.n_states) : (st += 1) {
-        if (dfa.accept[st]) continue;
-        var b: usize = 0;
-        while (b < 256) : (b += 1) {
-            if (dfa.trans[st * 256 + b] != st) continue :outer;
-        }
-        dead = st;
-        break;
-    }
+    const analysis = analyzePrefixDfa(dfa);
+    const dead = analysis.dead;
 
     try w.print("static size_t {s}(const uint8_t* input, size_t len, size_t from) {{\n", .{name});
     try w.writeAll("    static const uint32_t T[] = { ");
@@ -1687,25 +1684,6 @@ pub fn emitPrefixMatcherC(w: anytype, dfa: *const Dfa, name: []const u8) !void {
     }
     try w.writeAll(" };\n");
 
-    // Suffix-terminal DFA: every accepting state transitions ONLY to the dead
-    // sink — accept reached at most once, immediately before break, so the
-    // per-byte accept test is pure overhead (rung 3). Numbers (digit -> digit
-    // re-accepts) are NOT suffix-terminal and keep the per-byte write.
-    var suffix_terminal = dead != null;
-    if (dead) |d| {
-        for (0..dfa.n_states) |q| {
-            if (!dfa.accept[q]) continue;
-            var b: usize = 0;
-            while (b < 256) : (b += 1) {
-                if (dfa.trans[q * 256 + b] != d) {
-                    suffix_terminal = false;
-                    break;
-                }
-            }
-            if (!suffix_terminal) break;
-        }
-    }
-
     try w.print("    uint32_t s = {d};\n", .{dfa.start});
     // The byte-scan is a `for` over a KNOWN SPAN, never a manual-index `while`:
     // `for (i = from; i < len; i++)` hands the C compiler a canonical monotonic
@@ -1714,7 +1692,7 @@ pub fn emitPrefixMatcherC(w: anytype, dfa: *const Dfa, name: []const u8) !void {
     // with a bottom `i++` emits weaker IR for the same logic (the standing
     // for-over-while rule — measured up to ~20% on hot loops). This IS the
     // recognizer's inner loop, so it is exactly where the span form pays.
-    if (suffix_terminal) {
+    if (analysis.suffix_terminal) {
         try w.writeAll("    if (A[s]) return from;\n");
         try w.writeAll("    size_t i = from;\n");
         try w.writeAll("    for (i = from; i < len; i++) {\n");
@@ -1750,17 +1728,8 @@ pub fn compilePrefixToC(out: std.mem.Allocator, pattern: []const u8, name: []con
 /// inside the loop instead of a labeled break — this matcher never needs to
 /// jump past its own loop, only return from the function.
 pub fn emitPrefixMatcherJs(w: anytype, dfa: *const Dfa, name: []const u8) !void {
-    var dead: ?usize = null;
-    var st: usize = 0;
-    outer: while (st < dfa.n_states) : (st += 1) {
-        if (dfa.accept[st]) continue;
-        var b: usize = 0;
-        while (b < 256) : (b += 1) {
-            if (dfa.trans[st * 256 + b] != st) continue :outer;
-        }
-        dead = st;
-        break;
-    }
+    const analysis = analyzePrefixDfa(dfa);
+    const dead = analysis.dead;
 
     try w.print("function {s}(input, len, from) {{\n", .{name});
     try w.writeAll("    const T = [");
@@ -1776,23 +1745,8 @@ pub fn emitPrefixMatcherJs(w: anytype, dfa: *const Dfa, name: []const u8) !void 
     }
     try w.writeAll("];\n");
 
-    var suffix_terminal = dead != null;
-    if (dead) |d| {
-        for (0..dfa.n_states) |q| {
-            if (!dfa.accept[q]) continue;
-            var b: usize = 0;
-            while (b < 256) : (b += 1) {
-                if (dfa.trans[q * 256 + b] != d) {
-                    suffix_terminal = false;
-                    break;
-                }
-            }
-            if (!suffix_terminal) break;
-        }
-    }
-
     try w.print("    let s = {d};\n", .{dfa.start});
-    if (suffix_terminal) {
+    if (analysis.suffix_terminal) {
         try w.writeAll("    if (A[s]) return from;\n");
         try w.writeAll("    let i = from;\n");
         try w.writeAll("    for (i = from; i < len; i++) {\n");

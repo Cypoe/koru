@@ -32,6 +32,18 @@ cluster; the name collision is its own slop class — the fix is a rename, not
 a merge. Dedup tooling that groups by name would have proposed a false
 merge.
 
+**The liftable unit can be a prelude, not a function.** The second removal
+(the `emitPrefixMatcher{Zig,C,Js}` triplet in `regex_engine.zig`) showed the
+other half of the ruling: all three copies were *identical* — no laggard
+canonical — yet the functions could not merge because their payloads are
+target-vocabulary string literals. The census still hashes them equal
+because literals fold to `STR`: the fingerprint measures the *skeleton*, and
+in an emitter family the skeleton is the shared emit-time analysis (dead-sink
++ suffix-terminal scans). So the dedup boundary is not always "pick a
+function"; it can be "lift the analysis prelude out of N target-specific
+emission bodies" (`analyzePrefixDfa`). In emitter-heavy code the cluster's
+removal unit is the part that is *not* strings.
+
 **Open questions.** (1) Whether cluster ranking should prefer the superset
 member as canonical anchor rather than the first member — the census cannot
 yet order members by semantic coverage. (2) `copy count` is not `removal
