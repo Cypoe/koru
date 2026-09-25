@@ -801,104 +801,26 @@ pub const ModuleResolver = struct {
         log.debug("  [2] Trying relative to importing file...\n", .{});
         if (base_file) |base| {
             const base_dir = std.fs.path.dirname(base) orelse ".";
-
-            // Try as directory first
-            const dir_candidate = try std.fs.path.join(
-                self.allocator,
-                &[_][]const u8{ base_dir, import_path }
-            );
-            defer self.allocator.free(dir_candidate);
-
-            log.debug("    Checking directory: {s}\n", .{dir_candidate});
-            if (isDirectory(dir_candidate)) {
-                const resolved = try std.fs.path.resolve(
-                    self.allocator,
-                    &[_][]const u8{dir_candidate}
-                );
-                log.debug("    ✓ FOUND directory: {s}\n", .{resolved});
+            if (try self.probeImportIn(base_dir, import_path, "    ", "")) |resolved|
                 return resolved;
-            } else {
-                log.debug("    ✗ Not a directory\n", .{});
-            }
-
-            // Try as file (probe all Koru extensions if import doesn't carry one)
-            log.debug("    Checking file in: {s}\n", .{base_dir});
-            if (try resolveKoruFileIn(self.allocator, base_dir, import_path)) |resolved| {
-                log.debug("    ✓ FOUND file: {s}\n", .{resolved});
-                return resolved;
-            } else {
-                log.debug("    ✗ Not found\n", .{});
-            }
         } else {
             log.debug("    (skipped - no base file)\n", .{});
         }
-        
+
         // 3. Try each search path from KORU_PATH
         log.debug("  [3] Trying KORU_PATH search paths ({} paths)...\n", .{self.search_paths.items.len});
         for (self.search_paths.items) |search_path| {
             log.debug("    Searching in: {s}\n", .{search_path});
-
-            // Try directory
-            const dir_candidate = try std.fs.path.join(
-                self.allocator,
-                &[_][]const u8{ search_path, import_path }
-            );
-            defer self.allocator.free(dir_candidate);
-
-            log.debug("      Checking directory: {s}\n", .{dir_candidate});
-            if (isDirectory(dir_candidate)) {
-                const resolved = try std.fs.path.resolve(
-                    self.allocator,
-                    &[_][]const u8{dir_candidate}
-                );
-                log.debug("      ✓ FOUND directory: {s}\n", .{resolved});
+            if (try self.probeImportIn(search_path, import_path, "      ", "")) |resolved|
                 return resolved;
-            } else {
-                log.debug("      ✗ Not a directory\n", .{});
-            }
-
-            // Try file (probe all Koru extensions if import doesn't carry one)
-            log.debug("      Checking file in: {s}\n", .{search_path});
-            if (try resolveKoruFileIn(self.allocator, search_path, import_path)) |resolved| {
-                log.debug("      ✓ FOUND file: {s}\n", .{resolved});
-                return resolved;
-            } else {
-                log.debug("      ✗ Not found\n", .{});
-            }
         }
 
         // 4. Try the standard library
         log.debug("  [4] Trying standard library...\n", .{});
         if (self.stdlib_path) |stdlib| {
             log.debug("    Stdlib path: {s}\n", .{stdlib});
-
-            // Try directory
-            const dir_candidate = try std.fs.path.join(
-                self.allocator,
-                &[_][]const u8{ stdlib, import_path }
-            );
-            defer self.allocator.free(dir_candidate);
-
-            log.debug("    Checking directory: {s}\n", .{dir_candidate});
-            if (isDirectory(dir_candidate)) {
-                const resolved = try std.fs.path.resolve(
-                    self.allocator,
-                    &[_][]const u8{dir_candidate}
-                );
-                log.debug("    ✓ FOUND directory: {s}\n", .{resolved});
+            if (try self.probeImportIn(stdlib, import_path, "    ", " stdlib")) |resolved|
                 return resolved;
-            } else {
-                log.debug("    ✗ Not a directory\n", .{});
-            }
-
-            // Try file (probe all Koru extensions if import doesn't carry one)
-            log.debug("    Checking file in stdlib: {s}\n", .{stdlib});
-            if (try resolveKoruFileIn(self.allocator, stdlib, import_path)) |resolved| {
-                log.debug("    ✓ FOUND file: {s}\n", .{resolved});
-                return resolved;
-            } else {
-                log.debug("    ✗ Not found\n", .{});
-            }
         } else {
             log.debug("    (no stdlib path configured)\n", .{});
         }
@@ -915,6 +837,43 @@ pub const ModuleResolver = struct {
         return error.ModuleNotFound;
     }
     
+    /// Probe one root for `import_path`: `<root>/<import_path>` as a
+    /// directory first, then `import_path` as a file under `root` (all
+    /// Koru extensions). `pad` indents the debug log for the probe site;
+    /// `file_in` names the root kind in the file-check line ("", " stdlib").
+    fn probeImportIn(
+        self: *ModuleResolver,
+        root: []const u8,
+        import_path: []const u8,
+        comptime pad: []const u8,
+        comptime file_in: []const u8,
+    ) !?[]u8 {
+        const dir_candidate = try std.fs.path.join(
+            self.allocator,
+            &[_][]const u8{ root, import_path },
+        );
+        defer self.allocator.free(dir_candidate);
+
+        log.debug(pad ++ "Checking directory: {s}\n", .{dir_candidate});
+        if (isDirectory(dir_candidate)) {
+            const resolved = try std.fs.path.resolve(
+                self.allocator,
+                &[_][]const u8{dir_candidate},
+            );
+            log.debug(pad ++ "✓ FOUND directory: {s}\n", .{resolved});
+            return resolved;
+        }
+        log.debug(pad ++ "✗ Not a directory\n", .{});
+
+        log.debug(pad ++ "Checking file in" ++ file_in ++ ": {s}\n", .{root});
+        if (try resolveKoruFileIn(self.allocator, root, import_path)) |resolved| {
+            log.debug(pad ++ "✓ FOUND file: {s}\n", .{resolved});
+            return resolved;
+        }
+        log.debug(pad ++ "✗ Not found\n", .{});
+        return null;
+    }
+
     /// Check if a resolved path is a system/stdlib module
     pub fn isSystemModule(self: *ModuleResolver, canonical_path: []const u8) bool {
         // Check if the path is within the stdlib directory
