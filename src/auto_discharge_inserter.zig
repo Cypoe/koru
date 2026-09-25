@@ -4361,13 +4361,45 @@ pub const AutoDischargeInserter = struct {
         return self.rebuildFlowWithBody(flow, new_body);
     }
 
+    /// Clone `branches` while recursively replacing `old_cont` inside each
+    /// body continuation — the branch-level half of replaceContinuationInTree,
+    /// shared by the foreach and conditional node arms. Annotations are
+    /// re-duped (@scope lives there) and name/binding copied.
+    fn cloneNamedBranchesReplacing(
+        self: *AutoDischargeInserter,
+        branches: []const ast.NamedBranch,
+        old_cont: *const ast.Continuation,
+        new_cont: ast.Continuation,
+    ) std.mem.Allocator.Error![]ast.NamedBranch {
+        var new_branches = try self.allocator.alloc(ast.NamedBranch, branches.len);
+        for (branches, 0..) |*branch, bi| {
+            var new_body = try self.allocator.alloc(ast.Continuation, branch.body.len);
+            for (branch.body, 0..) |*body_cont, bci| {
+                new_body[bci] = try self.replaceContinuationInTree(body_cont, old_cont, new_cont);
+            }
+            // Clone annotations (critical for @scope)
+            var cloned_anns = try self.allocator.alloc([]const u8, branch.annotations.len);
+            for (branch.annotations, 0..) |ann, ai| {
+                cloned_anns[ai] = try self.allocator.dupe(u8, ann);
+            }
+            new_branches[bi] = .{
+                .name = try self.allocator.dupe(u8, branch.name),
+                .body = new_body,
+                .binding = if (branch.binding) |b| try self.allocator.dupe(u8, b) else null,
+                .is_optional = branch.is_optional,
+                .annotations = cloned_anns,
+            };
+        }
+        return new_branches;
+    }
+
     /// Recursively replace a continuation in the tree
     fn replaceContinuationInTree(
         self: *AutoDischargeInserter,
         cont: *const ast.Continuation,
         old_cont: *const ast.Continuation,
         new_cont: ast.Continuation,
-    ) !ast.Continuation {
+    ) std.mem.Allocator.Error!ast.Continuation {
         // Check if this is the continuation we're looking for
         if (@intFromPtr(cont) == @intFromPtr(old_cont)) {
             return new_cont;
@@ -4380,56 +4412,18 @@ pub const AutoDischargeInserter = struct {
         if (cont.node) |node| {
             if (node == .foreach) {
                 const foreach = &node.foreach;
-                var new_branches = try self.allocator.alloc(ast.NamedBranch, foreach.branches.len);
-                for (foreach.branches, 0..) |*branch, bi| {
-                    var new_body = try self.allocator.alloc(ast.Continuation, branch.body.len);
-                    for (branch.body, 0..) |*body_cont, bci| {
-                        new_body[bci] = try self.replaceContinuationInTree(body_cont, old_cont, new_cont);
-                    }
-                    // Clone annotations (critical for @scope)
-                    var cloned_anns = try self.allocator.alloc([]const u8, branch.annotations.len);
-                    for (branch.annotations, 0..) |ann, ai| {
-                        cloned_anns[ai] = try self.allocator.dupe(u8, ann);
-                    }
-                    new_branches[bi] = .{
-                        .name = try self.allocator.dupe(u8, branch.name),
-                        .body = new_body,
-                        .binding = if (branch.binding) |b| try self.allocator.dupe(u8, b) else null,
-                        .is_optional = branch.is_optional,
-                        .annotations = cloned_anns,
-                    };
-                }
                 cloned.node = .{ .foreach = .{
                     .iterable = try self.allocator.dupe(u8, foreach.iterable),
                     .element_type = if (foreach.element_type) |t| try self.allocator.dupe(u8, t) else null,
-                    .branches = new_branches,
+                    .branches = try self.cloneNamedBranchesReplacing(foreach.branches, old_cont, new_cont),
                 } };
             } else if (node == .conditional) {
                 const cond = &node.conditional;
-                var new_branches = try self.allocator.alloc(ast.NamedBranch, cond.branches.len);
-                for (cond.branches, 0..) |*branch, bi| {
-                    var new_body = try self.allocator.alloc(ast.Continuation, branch.body.len);
-                    for (branch.body, 0..) |*body_cont, bci| {
-                        new_body[bci] = try self.replaceContinuationInTree(body_cont, old_cont, new_cont);
-                    }
-                    // Clone annotations (critical for @scope)
-                    var cloned_anns = try self.allocator.alloc([]const u8, branch.annotations.len);
-                    for (branch.annotations, 0..) |ann, ai| {
-                        cloned_anns[ai] = try self.allocator.dupe(u8, ann);
-                    }
-                    new_branches[bi] = .{
-                        .name = try self.allocator.dupe(u8, branch.name),
-                        .body = new_body,
-                        .binding = if (branch.binding) |b| try self.allocator.dupe(u8, b) else null,
-                        .is_optional = branch.is_optional,
-                        .annotations = cloned_anns,
-                    };
-                }
                 cloned.node = .{
                     .conditional = .{
                         .condition = try self.allocator.dupe(u8, cond.condition),
                         .condition_expr = cond.condition_expr, // TODO: clone if needed
-                        .branches = new_branches,
+                        .branches = try self.cloneNamedBranchesReplacing(cond.branches, old_cont, new_cont),
                     },
                 };
             }
