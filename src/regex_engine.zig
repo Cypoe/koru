@@ -1927,13 +1927,18 @@ pub fn prefixFirstBytes(out: std.mem.Allocator, pattern: []const u8) ![256]bool 
     return result;
 }
 
-/// Compile a pattern WITH named groups straight to an emitted Zig captures
-/// matcher: `fn <name>(input: []const u8) ?[<2N>]u32` — null on no match,
-/// else the tag vector (2 byte-offsets per group, group-open order). The
-/// emitted code is the same Pike VM as `captures`, specialized: NFA tables
-/// baked as consts, fixed-size thread arrays, zero allocation. Caller is
-/// expected to have run `analyze` (this re-validates and errors identically).
-pub fn compileCapturesToZig(out: std.mem.Allocator, pattern: []const u8, name: []const u8) ![]const u8 {
+/// Compile a pattern WITH named groups straight to an emitted captures
+/// matcher, parameterized by the target's two emitters: the tagged-DFA fast
+/// path (O(1)/byte) and the Pike VM fallback (correct for every tagged NFA,
+/// O(states)/byte). Caller is expected to have run `analyze` (this
+/// re-validates and errors identically).
+fn compileCapturesImpl(
+    out: std.mem.Allocator,
+    pattern: []const u8,
+    name: []const u8,
+    emit_tagged: anytype,
+    emit_vm: anytype,
+) ![]const u8 {
     var arena = std.heap.ArenaAllocator.init(out);
     defer arena.deinit();
     const a = arena.allocator();
@@ -1941,17 +1946,23 @@ pub fn compileCapturesToZig(out: std.mem.Allocator, pattern: []const u8, name: [
     var nfa = try buildNfa(a, analysis.root);
     std.debug.assert(nfa.n_tags > 0); // groupless patterns take the DFA path
     var buf = std.ArrayList(u8){};
-    // Fast path: one-pass tagged DFA (O(1)/byte). Any pattern that isn't
-    // one-pass — or whose DFA blows the state cap — falls back to the Pike VM,
-    // which is correct for every tagged NFA, just O(states)/byte.
     if (buildTaggedDfa(a, &nfa)) |tdfa| {
         var td = tdfa;
-        try emitTaggedCapturesMatcher(buf.writer(out), &td, name);
+        try emit_tagged(buf.writer(out), &td, name);
     } else |err| switch (err) {
-        error.NotOnePass, error.DfaTooLarge => try emitCapturesMatcher(buf.writer(out), &nfa, name),
+        error.NotOnePass, error.DfaTooLarge => try emit_vm(buf.writer(out), &nfa, name),
         error.OutOfMemory => return error.OutOfMemory,
     }
     return buf.toOwnedSlice(out);
+}
+
+/// Compile a pattern WITH named groups straight to an emitted Zig captures
+/// matcher: `fn <name>(input: []const u8) ?[<2N>]u32` — null on no match,
+/// else the tag vector (2 byte-offsets per group, group-open order). The
+/// emitted code is the same Pike VM as `captures`, specialized: NFA tables
+/// baked as consts, fixed-size thread arrays, zero allocation.
+pub fn compileCapturesToZig(out: std.mem.Allocator, pattern: []const u8, name: []const u8) ![]const u8 {
+    return compileCapturesImpl(out, pattern, name, emitTaggedCapturesMatcher, emitCapturesMatcher);
 }
 
 /// Emit the one-pass tagged DFA as `fn <name>(input) ?[<2N>]u32` — the table
@@ -2129,21 +2140,7 @@ pub fn emitCapturesMatcher(w: anytype, nfa: *const Nfa, name: []const u8) !void 
 /// JS sibling of `compileCapturesToZig` — same two-path choice, same tag layout,
 /// so `match`/`scan` read the result identically on both targets.
 pub fn compileCapturesToJs(out: std.mem.Allocator, pattern: []const u8, name: []const u8) ![]const u8 {
-    var arena = std.heap.ArenaAllocator.init(out);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const analysis = try analyze(a, pattern);
-    var nfa = try buildNfa(a, analysis.root);
-    std.debug.assert(nfa.n_tags > 0); // groupless patterns take the DFA path
-    var buf = std.ArrayList(u8){};
-    if (buildTaggedDfa(a, &nfa)) |tdfa| {
-        var td = tdfa;
-        try emitTaggedCapturesMatcherJs(buf.writer(out), &td, name);
-    } else |err| switch (err) {
-        error.NotOnePass, error.DfaTooLarge => try emitCapturesMatcherJs(buf.writer(out), &nfa, name),
-        error.OutOfMemory => return error.OutOfMemory,
-    }
-    return buf.toOwnedSlice(out);
+    return compileCapturesImpl(out, pattern, name, emitTaggedCapturesMatcherJs, emitCapturesMatcherJs);
 }
 
 /// JS sibling of `emitTaggedCapturesMatcher` — `function <name>(input)` returning
