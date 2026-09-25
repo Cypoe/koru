@@ -305,10 +305,7 @@ pub fn koruStructToZig(allocator: std.mem.Allocator, koru_struct: []const u8) Ex
             try result.append(allocator, '{');
             i += 1;
             // Skip whitespace after {
-            while (i < input.len and (input[i] == ' ' or input[i] == '\t' or input[i] == '\n')) {
-                try result.append(allocator, input[i]);
-                i += 1;
-            }
+            try skipWhitespaceEcho(allocator, input, &i, &result);
             // Now we're at field position - read field name
             if (i < input.len and input[i] != '}') {
                 const field_result = try parseFieldAndValue(allocator, input, i, &result);
@@ -319,10 +316,7 @@ pub fn koruStructToZig(allocator: std.mem.Allocator, koru_struct: []const u8) Ex
             try result.append(allocator, ',');
             i += 1;
             // Skip whitespace after comma
-            while (i < input.len and (input[i] == ' ' or input[i] == '\t' or input[i] == '\n')) {
-                try result.append(allocator, input[i]);
-                i += 1;
-            }
+            try skipWhitespaceEcho(allocator, input, &i, &result);
             // Now at next field position
             if (i < input.len and input[i] != '}') {
                 const field_result = try parseFieldAndValue(allocator, input, i, &result);
@@ -350,6 +344,15 @@ pub fn koruStructToZig(allocator: std.mem.Allocator, koru_struct: []const u8) Ex
 // over the `parse_fields` filter (koru_std/declarations.kz + template_processor.zig),
 // so field parsing lives in one place both targets call — see
 // [[project_const_as_type_system_checkpoint]].
+
+/// Advance past whitespace, echoing it into `result` — the round-trip
+/// copy keeps the author's spacing.
+fn skipWhitespaceEcho(allocator: std.mem.Allocator, input: []const u8, i: *usize, result: *std.ArrayList(u8)) ExprParseError!void {
+    while (i.* < input.len and (input[i.*] == ' ' or input[i.*] == '\t' or input[i.*] == '\n')) {
+        try result.append(allocator, input[i.*]);
+        i.* += 1;
+    }
+}
 
 /// Parse a field name, colon, and value. Output as ".fieldname = value"
 /// Returns the new position after the value.
@@ -467,10 +470,7 @@ fn parseValue(
             try result.append(allocator, '{');
             i += 1;
             // Skip whitespace
-            while (i < input.len and (input[i] == ' ' or input[i] == '\t' or input[i] == '\n')) {
-                try result.append(allocator, input[i]);
-                i += 1;
-            }
+            try skipWhitespaceEcho(allocator, input, &i, result);
             // Parse nested fields for struct literals (typed or anonymous), NOT for array initializers
             if (!is_array_init and i < input.len and input[i] != '}') {
                 i = try parseFieldAndValue(allocator, input, i, result);
@@ -503,10 +503,7 @@ fn parseValue(
             try result.append(allocator, ',');
             i += 1;
             // Skip whitespace
-            while (i < input.len and (input[i] == ' ' or input[i] == '\t' or input[i] == '\n')) {
-                try result.append(allocator, input[i]);
-                i += 1;
-            }
+            try skipWhitespaceEcho(allocator, input, &i, result);
             // Parse next field in nested struct
             if (i < input.len and input[i] != '}') {
                 i = try parseFieldAndValue(allocator, input, i, result);
