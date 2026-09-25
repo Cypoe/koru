@@ -1999,6 +1999,47 @@ pub const AutoDischargeInserter = struct {
         return .{ .transformed = false, .program = program };
     }
 
+    /// Discard-binding rewrite: `| tag _` (or `call: _`) names nothing, so an
+    /// obligation on the bound value would be unreachable — synthesize a real
+    /// binding, rebuild the flow, and signal the caller to re-walk. Returns
+    /// null when the rewrite does not apply.
+    fn rewriteDiscardBinding(
+        self: *AutoDischargeInserter,
+        cont: *const ast.Continuation,
+        program: *const ast.Program,
+        flow: *const ast.Flow,
+        mode: TransformMode,
+    ) RecursiveError!?TransformResult {
+        if (mode != .full) return null;
+        const binding_name = cont.binding orelse return null;
+        if (!std.mem.eql(u8, binding_name, "_")) return null;
+
+        // Generate synthetic binding to replace _
+        const synthetic_name = try self.generateSyntheticBinding();
+
+        // Clone the continuation with the new binding (preserves all metadata)
+        const new_cont = try self.cloneContinuationWithBinding(cont, synthetic_name);
+
+        // Replace this continuation in the flow
+        const new_flow = try self.replaceContinuationAnywhere(flow, cont, new_cont.*);
+
+        // Replace the flow in the program
+        const new_program = try ast_functional.replaceFlowRecursive(
+            self.allocator,
+            program,
+            flow,
+            .{ .flow = new_flow },
+        ) orelse {
+            return .{ .transformed = false, .program = program };
+        };
+
+        const result_ptr = try self.allocator.create(ast.Program);
+        result_ptr.* = new_program;
+
+        // Return transformed - the next iteration will process with the real binding
+        return .{ .transformed = true, .program = result_ptr };
+    }
+
     /// Check a continuation for terminators with obligations
     fn checkContinuation(
         self: *AutoDischargeInserter,
@@ -2028,36 +2069,7 @@ pub const AutoDischargeInserter = struct {
 
         // Handle discard binding (_) - synthesize a real binding name
         // This must happen BEFORE we process the continuation so the binding can be used
-        if (mode == .full) {
-            if (cont.binding) |binding_name| {
-                if (std.mem.eql(u8, binding_name, "_")) {
-                    // Generate synthetic binding to replace _
-                    const synthetic_name = try self.generateSyntheticBinding();
-
-                    // Clone the continuation with the new binding (preserves all metadata)
-                    const new_cont = try self.cloneContinuationWithBinding(cont, synthetic_name);
-
-                    // Replace this continuation in the flow
-                    const new_flow = try self.replaceContinuationAnywhere(flow, cont, new_cont.*);
-
-                    // Replace the flow in the program
-                    const new_program = try ast_functional.replaceFlowRecursive(
-                        self.allocator,
-                        program,
-                        flow,
-                        .{ .flow = new_flow },
-                    ) orelse {
-                        return .{ .transformed = false, .program = program };
-                    };
-
-                    const result_ptr = try self.allocator.create(ast.Program);
-                    result_ptr.* = new_program;
-
-                    // Return transformed - the next iteration will process with the real binding
-                    return .{ .transformed = true, .program = result_ptr };
-                }
-            }
-        }
+        if (try self.rewriteDiscardBinding(cont, program, flow, mode)) |result| return result;
 
         // Handle discard on a bare-return bind (`call(...): _`) — the flat-form
         // twin of the `| tag _ |>` branch discard above. A bind that carries an
@@ -2663,36 +2675,7 @@ pub const AutoDischargeInserter = struct {
 
         // Handle discard binding (_) - synthesize a real binding name
         // This must happen BEFORE we process the continuation so the binding can be used
-        if (mode == .full) {
-            if (cont.binding) |binding_name| {
-                if (std.mem.eql(u8, binding_name, "_")) {
-                    // Generate synthetic binding to replace _
-                    const synthetic_name = try self.generateSyntheticBinding();
-
-                    // Clone the continuation with the new binding (preserves all metadata)
-                    const new_cont = try self.cloneContinuationWithBinding(cont, synthetic_name);
-
-                    // Replace this continuation in the flow
-                    const new_flow = try self.replaceContinuationAnywhere(flow, cont, new_cont.*);
-
-                    // Replace the flow in the program
-                    const new_program = try ast_functional.replaceFlowRecursive(
-                        self.allocator,
-                        program,
-                        flow,
-                        .{ .flow = new_flow },
-                    ) orelse {
-                        return .{ .transformed = false, .program = program };
-                    };
-
-                    const result_ptr = try self.allocator.create(ast.Program);
-                    result_ptr.* = new_program;
-
-                    // Return transformed - the next iteration will process with the real binding
-                    return .{ .transformed = true, .program = result_ptr };
-                }
-            }
-        }
+        if (try self.rewriteDiscardBinding(cont, program, flow, mode)) |result| return result;
 
         // Check if this continuation has a node
         if (cont.node) |node| {
