@@ -1772,6 +1772,28 @@ pub fn emitTapsNamespace(
     try emitter.write("\n");
 }
 
+/// Emit `<prefix>.<EnumTag>,` for transitions (enum literal) or
+/// `<prefix>"<value>",` otherwise (string literal) — the metatype fork
+/// that decides whether a field names a compile-time enum or data.
+fn emitEnumOrStringField(
+    emitter: *CodeEmitter,
+    prefix: []const u8,
+    enum_fn: fn (*CodeEmitter, []const u8) anyerror!void,
+    value: []const u8,
+    is_transition: bool,
+) !void {
+    try emitter.write(prefix);
+    if (is_transition) {
+        try emitter.write(".");
+        try enum_fn(emitter, value);
+        try emitter.write(",\n");
+    } else {
+        try emitter.write("\"");
+        try emitter.write(value);
+        try emitter.write("\",\n");
+    }
+}
+
 /// Emit an event enum value (mangles canonical name: dots/colons → underscores)
 /// Example: "module:event.sub" → "module_event_sub"
 fn emitEventEnumValue(emitter: *CodeEmitter, canonical: []const u8) !void {
@@ -3887,17 +3909,9 @@ fn emitSubflowContinuationsWithDepth(
 
                             // .source field - enum literal for Transition, string for Profile
                             try emitter.write(indent);
-                            if (is_transition) {
-                                // Transition: .source = .compiler_context_create (enum literal)
-                                try emitter.write("            .source = .");
-                                try canonicalNameToEnumTag(emitter, mb.source_event);
-                                try emitter.write(",\n");
-                            } else {
-                                // Profile/Audit: .source = "main:http.request" (string literal)
-                                try emitter.write("            .source = \"");
-                                try emitter.write(mb.source_event);
-                                try emitter.write("\",\n");
-                            }
+                            // Transition: .source = .compiler_context_create (enum literal)
+                            // Profile/Audit: .source = "main:http.request" (string literal)
+                            try emitEnumOrStringField(emitter, "            .source = ", canonicalNameToEnumTag, mb.source_event, is_transition);
 
                             // .destination field (null for terminal)
                             try emitter.write(indent);
@@ -10025,15 +10039,7 @@ fn emitContinuationList(
 
                             // .branch — enum literal for Transition, string otherwise
                             try emitter.writeIndent();
-                            if (is_transition) {
-                                try emitter.write(".branch = .");
-                                try emitBranchEnumValue(emitter, branch.name);
-                                try emitter.write(",\n");
-                            } else {
-                                try emitter.write(".branch = \"");
-                                try emitter.write(branch.name);
-                                try emitter.write("\",\n");
-                            }
+                            try emitEnumOrStringField(emitter, ".branch = ", emitBranchEnumValue, branch.name, is_transition);
 
                             // .timestamp_ns (Profile/Audit only)
                             if (!is_transition) {
@@ -11604,17 +11610,7 @@ fn emitStep(
 
             // .source field - enum literal for Transition, string for Profile
             try emitter.writeIndent();
-            if (is_transition) {
-                // Transition: .source = .compiler_context_create (enum literal)
-                try emitter.write(".source = .");
-                try canonicalNameToEnumTag(emitter, mb.source_event);
-                try emitter.write(",\n");
-            } else {
-                // Profile/Audit: .source = "main:http.request" (string literal)
-                try emitter.write(".source = \"");
-                try emitter.write(mb.source_event);
-                try emitter.write("\",\n");
-            }
+            try emitEnumOrStringField(emitter, ".source = ", canonicalNameToEnumTag, mb.source_event, is_transition);
 
             // .destination field (null for terminal)
             try emitter.writeIndent();
