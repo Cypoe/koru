@@ -1490,21 +1490,51 @@ pub fn compileToZig(out: std.mem.Allocator, pattern: []const u8, name: []const u
     return compileWithEmitter(out, pattern, name, emitMatcher);
 }
 
+/// The array-literal vocabulary for a baked DFA table pair: openers carry
+/// the target's type/keyword spellings; PrefixVocab satisfies this shape too.
+const TableVocab = struct {
+    trans_open: []const u8,
+    sep: []const u8,
+    table_close: []const u8,
+    accept_open: []const u8,
+};
+
+const table_vocab_zig: TableVocab = .{
+    .trans_open = "    const T = [_]u32{ ",
+    .sep = ", ",
+    .table_close = " };\n",
+    .accept_open = "    const A = [_]bool{ ",
+};
+
+const table_vocab_js: TableVocab = .{
+    .trans_open = "    const T = [",
+    .sep = ",",
+    .table_close = "];\n",
+    .accept_open = "    const A = [",
+};
+
+/// Emit the baked DFA tables — `const T = <trans>; const A = <accept>;` —
+/// in the target's array-literal vocabulary. `dfa` is a Dfa or TaggedDfa
+/// (both carry `trans`/`accept`).
+fn emitDfaTables(w: anytype, dfa: anytype, comptime vocab: anytype) !void {
+    try w.writeAll(vocab.trans_open);
+    for (dfa.trans, 0..) |t, i| {
+        if (i != 0) try w.writeAll(vocab.sep);
+        try w.print("{d}", .{t});
+    }
+    try w.writeAll(vocab.table_close);
+    try w.writeAll(vocab.accept_open);
+    for (dfa.accept, 0..) |acc, i| {
+        if (i != 0) try w.writeAll(vocab.sep);
+        try w.writeAll(if (acc) "true" else "false");
+    }
+    try w.writeAll(vocab.table_close);
+}
+
 /// Emit `fn <name>(input: []const u8) bool { … }` for the given DFA.
 pub fn emitMatcher(w: anytype, dfa: *const Dfa, name: []const u8) !void {
     try w.print("fn {s}(input: []const u8) bool {{\n", .{name});
-    try w.writeAll("    const T = [_]u32{ ");
-    for (dfa.trans, 0..) |t, i| {
-        if (i != 0) try w.writeAll(", ");
-        try w.print("{d}", .{t});
-    }
-    try w.writeAll(" };\n");
-    try w.writeAll("    const A = [_]bool{ ");
-    for (dfa.accept, 0..) |acc, i| {
-        if (i != 0) try w.writeAll(", ");
-        try w.writeAll(if (acc) "true" else "false");
-    }
-    try w.writeAll(" };\n");
+    try emitDfaTables(w, dfa, table_vocab_zig);
     try w.print("    var s: u32 = {d};\n", .{dfa.start});
     try w.writeAll("    for (input) |c| s = T[@as(usize, s) * 256 + @as(usize, c)];\n");
     try w.writeAll("    return A[s];\n");
@@ -1519,18 +1549,7 @@ pub fn emitMatcher(w: anytype, dfa: *const Dfa, name: []const u8) !void {
 /// (try-each-start); the dead-state early-exit is a later speed cut.
 pub fn emitSearchMatcher(w: anytype, dfa: *const Dfa, name: []const u8) !void {
     try w.print("fn {s}(input: []const u8, from: usize) ?[2]usize {{\n", .{name});
-    try w.writeAll("    const T = [_]u32{ ");
-    for (dfa.trans, 0..) |t, i| {
-        if (i != 0) try w.writeAll(", ");
-        try w.print("{d}", .{t});
-    }
-    try w.writeAll(" };\n");
-    try w.writeAll("    const A = [_]bool{ ");
-    for (dfa.accept, 0..) |acc, i| {
-        if (i != 0) try w.writeAll(", ");
-        try w.writeAll(if (acc) "true" else "false");
-    }
-    try w.writeAll(" };\n");
+    try emitDfaTables(w, dfa, table_vocab_zig);
     try w.writeAll("    var start: usize = from;\n");
     try w.writeAll("    while (start <= input.len) : (start += 1) {\n");
     try w.print("        var s: u32 = {d};\n", .{dfa.start});
@@ -1610,18 +1629,7 @@ pub fn emitPrefixMatcher(w: anytype, dfa: *const Dfa, name: []const u8) !void {
     const dead = analysis.dead;
 
     try w.print("fn {s}(input: []const u8, from: usize) ?usize {{\n", .{name});
-    try w.writeAll("    const T = [_]u32{ ");
-    for (dfa.trans, 0..) |t, i| {
-        if (i != 0) try w.writeAll(", ");
-        try w.print("{d}", .{t});
-    }
-    try w.writeAll(" };\n");
-    try w.writeAll("    const A = [_]bool{ ");
-    for (dfa.accept, 0..) |acc, i| {
-        if (i != 0) try w.writeAll(", ");
-        try w.writeAll(if (acc) "true" else "false");
-    }
-    try w.writeAll(" };\n");
+    try emitDfaTables(w, dfa, table_vocab_zig);
 
     try w.print("    var s: u32 = {d};\n", .{dfa.start});
     if (analysis.suffix_terminal) {
@@ -1753,18 +1761,7 @@ fn emitPrefixMatcherVocab(w: anytype, dfa: *const Dfa, name: []const u8, comptim
     const dead = analysis.dead;
 
     try w.print(vocab.sig_fmt, .{name});
-    try w.writeAll(vocab.trans_open);
-    for (dfa.trans, 0..) |t, i| {
-        if (i != 0) try w.writeAll(vocab.sep);
-        try w.print("{d}", .{t});
-    }
-    try w.writeAll(vocab.table_close);
-    try w.writeAll(vocab.accept_open);
-    for (dfa.accept, 0..) |acc, i| {
-        if (i != 0) try w.writeAll(vocab.sep);
-        try w.writeAll(if (acc) "true" else "false");
-    }
-    try w.writeAll(vocab.table_close);
+    try emitDfaTables(w, dfa, vocab);
 
     try w.print(vocab.start_fmt, .{dfa.start});
     // The byte-scan is a `for` over a KNOWN SPAN, never a manual-index `while`:
@@ -1812,18 +1809,7 @@ pub fn compilePrefixToJs(out: std.mem.Allocator, pattern: []const u8, name: []co
 /// silently diverge from Zig on the first multi-byte character.
 pub fn emitMatcherJs(w: anytype, dfa: *const Dfa, name: []const u8) !void {
     try w.print("function {s}(input) {{\n", .{name});
-    try w.writeAll("    const T = [");
-    for (dfa.trans, 0..) |t, i| {
-        if (i != 0) try w.writeAll(",");
-        try w.print("{d}", .{t});
-    }
-    try w.writeAll("];\n");
-    try w.writeAll("    const A = [");
-    for (dfa.accept, 0..) |acc, i| {
-        if (i != 0) try w.writeAll(",");
-        try w.writeAll(if (acc) "true" else "false");
-    }
-    try w.writeAll("];\n");
+    try emitDfaTables(w, dfa, table_vocab_js);
     try w.print("    let s = {d};\n", .{dfa.start});
     try w.writeAll("    for (let i = 0; i < input.length; i++) s = T[s * 256 + input[i]];\n");
     try w.writeAll("    return A[s];\n");
@@ -1844,18 +1830,7 @@ pub fn compileToJs(out: std.mem.Allocator, pattern: []const u8, name: []const u8
 /// object reads the same on both targets.
 pub fn emitSearchMatcherJs(w: anytype, dfa: *const Dfa, name: []const u8) !void {
     try w.print("function {s}(input, from) {{\n", .{name});
-    try w.writeAll("    const T = [");
-    for (dfa.trans, 0..) |t, i| {
-        if (i != 0) try w.writeAll(",");
-        try w.print("{d}", .{t});
-    }
-    try w.writeAll("];\n");
-    try w.writeAll("    const A = [");
-    for (dfa.accept, 0..) |acc, i| {
-        if (i != 0) try w.writeAll(",");
-        try w.writeAll(if (acc) "true" else "false");
-    }
-    try w.writeAll("];\n");
+    try emitDfaTables(w, dfa, table_vocab_js);
     try w.writeAll("    for (let start = from; start <= input.length; start++) {\n");
     try w.print("        let s = {d};\n", .{dfa.start});
     try w.writeAll("        let last_end = A[s] ? start : -1;\n");
@@ -1974,19 +1949,7 @@ pub fn emitTaggedCapturesMatcher(w: anytype, tdfa: *const TaggedDfa, name: []con
     const nt = tdfa.n_tags;
     try w.print("fn {s}(input: []const u8) ?[{d}]u32 {{\n", .{ name, nt });
 
-    try w.writeAll("    const T = [_]u32{ ");
-    for (tdfa.trans, 0..) |t, i| {
-        if (i != 0) try w.writeAll(", ");
-        try w.print("{d}", .{t});
-    }
-    try w.writeAll(" };\n");
-
-    try w.writeAll("    const A = [_]bool{ ");
-    for (tdfa.accept, 0..) |acc, i| {
-        if (i != 0) try w.writeAll(", ");
-        try w.writeAll(if (acc) "true" else "false");
-    }
-    try w.writeAll(" };\n");
+    try emitDfaTables(w, tdfa, table_vocab_zig);
 
     try w.writeAll("    const TAG_OFF = [_]u32{ ");
     for (tdfa.tag_off, 0..) |o, i| {
@@ -2153,19 +2116,7 @@ pub fn emitTaggedCapturesMatcherJs(w: anytype, tdfa: *const TaggedDfa, name: []c
     const nt = tdfa.n_tags;
     try w.print("function {s}(input) {{\n", .{name});
 
-    try w.writeAll("    const T = [");
-    for (tdfa.trans, 0..) |t, i| {
-        if (i != 0) try w.writeAll(",");
-        try w.print("{d}", .{t});
-    }
-    try w.writeAll("];\n");
-
-    try w.writeAll("    const A = [");
-    for (tdfa.accept, 0..) |acc, i| {
-        if (i != 0) try w.writeAll(",");
-        try w.writeAll(if (acc) "true" else "false");
-    }
-    try w.writeAll("];\n");
+    try emitDfaTables(w, tdfa, table_vocab_js);
 
     try w.writeAll("    const TAG_OFF = [");
     for (tdfa.tag_off, 0..) |o, i| {
