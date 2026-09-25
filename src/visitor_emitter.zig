@@ -9,6 +9,7 @@ const annotation_parser = @import("annotation_parser");
 const codegen_utils = @import("codegen_utils");
 const file_types = @import("file_types");
 const comptime_eval = @import("comptime_eval");
+const struct_literal = @import("struct_literal");
 
 /// Variant-tag string this emitter targets — same namespace as `--lang`,
 /// `proc.target`, and `file_types.hostLangOfFile`. Selects both `|zig` proc
@@ -544,6 +545,24 @@ pub const VisitorEmitter = struct {
     ) !void {
         const noteType = struct {
             fn go(s: *VisitorEmitter, set_: *std.StringHashMap(void), qual_set: *std.StringHashMap(void), ty: []const u8, module_path: ?[]const u8, scanning: ?[]const u8) !void {
+                // A record return `-> { t: *app/holder:Token, n: i64 }` and an
+                // inline record field type reach this scan as raw brace text;
+                // neither helper below decomposes it, so a qualifier inside
+                // the braces was invisible and the module's namespace never
+                // emitted (`koru_app` undeclared in output_emitted.zig).
+                // Parse the field list once and scan each field's type.
+                {
+                    var t0 = std.mem.trim(u8, ty, " \t");
+                    if (t0.len > 0 and t0[0] == '!') t0 = std.mem.trim(u8, t0[1..], " \t");
+                    if (t0.len > 0 and t0[0] == '{') {
+                        const fields = struct_literal.parseFields(s.allocator, t0) catch |e| {
+                            if (e == error.OutOfMemory) return e;
+                            return; // malformed — the parser already refused it
+                        };
+                        for (fields) |f| try go(s, set_, qual_set, f.value, null, scanning);
+                        return;
+                    }
+                }
                 // A field's split-out module path names its home directly —
                 // resolved/canonicalized fields carry `*Item` bare in .type
                 // with the qualifier in .module_path. Feeding that bare base

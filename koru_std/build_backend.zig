@@ -427,6 +427,7 @@ visitor_emitter_module.addImport("annotation_parser", annotation_parser_module);
 visitor_emitter_module.addImport("codegen_utils", codegen_utils_module);
 visitor_emitter_module.addImport("file_types", file_types_module);
 visitor_emitter_module.addImport("comptime_eval", comptime_eval_module);
+visitor_emitter_module.addImport("struct_literal", struct_literal_module);
 
 // JS-target emitter (spike): minimal AST→JS for pump.kz. Gated behind
 // --lang=js in emit-zig; the default Zig path never references it.

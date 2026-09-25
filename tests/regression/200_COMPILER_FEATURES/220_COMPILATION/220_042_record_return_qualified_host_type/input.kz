@@ -1,0 +1,27 @@
+// PINS: a record return carrying a qualified cross-module host type emits the
+// declaring module's namespace — the same `*app/holder:Token` spelling 220_034
+// attests in an input field, in pointer, slice, and optional forms. The field
+// list is raw brace text to the emitter's signature scan, so the qualifier
+// must be decomposed the same way the parser did, or the emitted Output names
+// a namespace nothing declared.
+
+~import app/holder
+~import std/io
+
+~tor mint2 { id: i64 } -> { t: *app/holder:Token, n: i64 }
+~proc mint2|zig {
+    const std = @import("std");
+    const t = std.heap.page_allocator.create(koru_app.koru_holder.Token) catch unreachable;
+    t.* = .{ .id = @intCast(id) };
+    return .{ .t = t, .n = id };
+}
+
+~tor list { id: i64 } -> { ts: []const app/holder:Token, n: i64 }
+~proc list|zig { return .{ .ts = &.{}, .n = id }; }
+
+~tor maybe { id: i64 } -> { t: ?app/holder:Token, n: i64 }
+~proc maybe|zig { return .{ .t = null, .n = id }; }
+
+~mint2(id: 7): m |> std/io:print.ln("{{ m.t.id:d }}{{ m.n:d }}")
+~list(id: 3): l |> std/io:print.ln("{{ l.n:d }}")
+~maybe(id: 4): q |> std/io:print.ln("{{ q.n:d }}")

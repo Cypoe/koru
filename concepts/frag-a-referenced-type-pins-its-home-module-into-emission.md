@@ -100,3 +100,15 @@ The lesson sharpens: passthrough is where references go to die — but a
 host surface becomes an AST surface only when it holds a reference,
 because the emitter treats every AST field as its own to respell.
 Pinned at 220_041 (the three shapes) beside 220_040 (the lift).
+
+The scan's signature-position list was right; its notion of a TYPE was
+wrong (2026-09-25): `noteType` treated each signature slot's type as one
+string, but `-> { t: *app/holder:Token, n: i64 }` and an inline record
+field type are a whole FIELD LIST inside one string — the qualifier
+inside the braces never reached the qualifier branch, so the home module
+was collected only when a second reference in a flat position pinned it.
+`collectSignatureBaseTypes` now decomposes `{`-led type text through
+`struct_literal.parseFields` — the one parser, not a new splitter — and
+recurses, so the closure's edges follow the same field grammar the
+parser accepted. A record return on an otherwise-unused module now emits
+its namespace; pin `220_042` (pointer, slice, optional spellings).
