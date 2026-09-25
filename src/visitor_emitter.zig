@@ -2183,6 +2183,141 @@ pub const VisitorEmitter = struct {
         }
     }
 
+    /// Emit the handler body for a matched immediate_impl: implicit input
+    /// bindings, then `return <value>;` (bare `-> T` return, no tag) or
+    /// `return .{ .<branch> = <payload> };`. Used by both the cross-module
+    /// override arm and the module-local immediate_impl match.
+    fn emitImmediateImplBody(
+        self: *VisitorEmitter,
+        event: *const ast.EventDecl,
+        bc: *const ast.BranchConstructor,
+    ) !void {
+        // Generate implicit input bindings for immediate impls
+        try self.emitInputBindings(event.input.fields, "const", null);
+        // If no input fields, suppress unused '__koru_event_input' parameter
+        if (event.input.fields.len == 0) {
+            try self.code_emitter.writeIndent();
+            try self.code_emitter.write("_ = &__koru_event_input;\n");
+        }
+
+        var value_ctx = emitter.EmissionContext{
+            .allocator = self.allocator,
+            .main_module_name = self.main_module_name,
+        };
+        if (bc.is_bare_return) {
+            // `-> T` bare return: `return <value>;`, no tag.
+            try self.code_emitter.writeIndent();
+            try self.code_emitter.write("return ");
+            if (bc.plain_value) |pv| {
+                try emitter.emitValue(self.code_emitter, &value_ctx, pv);
+            } else {
+                try self.code_emitter.write("undefined");
+            }
+            try self.code_emitter.write(";\n");
+            return;
+        }
+
+        try self.code_emitter.writeIndent();
+        try self.code_emitter.write("return .{ .");
+        try emitter.writeBranchName(self.code_emitter, bc.branch_name);
+        try self.code_emitter.write(" = ");
+        if (bc.plain_value) |pv| {
+            const trimmed = std.mem.trim(u8, pv, " \t");
+            if (trimmed.len >= 2 and trimmed[0] == '[' and trimmed[trimmed.len - 1] == ']') {
+                if (self.findBranchField(event, bc.branch_name, null)) |field| {
+                    try emitter.emitArrayLiteralForField(self.code_emitter, &value_ctx, field, pv);
+                } else {
+                    try emitter.emitValue(self.code_emitter, &value_ctx, pv);
+                }
+            } else {
+                try emitter.emitValue(self.code_emitter, &value_ctx, pv);
+            }
+        } else {
+            try self.code_emitter.write(".{");
+            for (bc.fields, 0..) |field, k| {
+                if (k > 0) try self.code_emitter.write(", ");
+                try self.code_emitter.write(" .");
+                try emitter.writeBranchName(self.code_emitter, field.name);
+                try self.code_emitter.write(" = ");
+                const value = if (field.expression_str) |expr| expr else field.type;
+                const trimmed = std.mem.trim(u8, value, " \t");
+                if (trimmed.len >= 2 and trimmed[0] == '[' and trimmed[trimmed.len - 1] == ']') {
+                    if (self.findBranchField(event, bc.branch_name, field.name)) |branch_field| {
+                        try emitter.emitArrayLiteralForField(self.code_emitter, &value_ctx, branch_field, value);
+                    } else {
+                        try emitter.emitValue(self.code_emitter, &value_ctx, value);
+                    }
+                } else {
+                    try emitter.emitValue(self.code_emitter, &value_ctx, value);
+                }
+            }
+            try self.code_emitter.write(" }");
+        }
+        try self.code_emitter.write(" };\n");
+    }
+
+    /// Emit a transform's `inline_body` as the handler result: `//@koru:
+    /// inline_stmt` bodies emit dedented (or a compileError when the flow
+    /// still has named continuations); everything else becomes
+    /// `const result = <code>;` with `__KORU_INLINE__` lowered to a labeled
+    /// block. Returns true when inline_stmt consumed the statement — the
+    /// caller clears `head_bound_root` in that case.
+    fn emitInlineBodyCode(
+        self: *VisitorEmitter,
+        flow: *const ast.Flow,
+        inline_code_raw: []const u8,
+    ) !bool {
+        const inline_stmt_marker = "//@koru:inline_stmt\n";
+        var inline_code = inline_code_raw;
+        var is_inline_stmt = false;
+        if (std.mem.indexOf(u8, inline_code, inline_stmt_marker)) |marker_idx| {
+            is_inline_stmt = true;
+            inline_code = inline_code[marker_idx + inline_stmt_marker.len ..];
+        }
+
+        if (is_inline_stmt) {
+            const has_named_branches = blk: {
+                for (flow.body.continuations) |cont| {
+                    if (cont.branch.len > 0) break :blk true;
+                }
+                break :blk false;
+            };
+            if (has_named_branches) {
+                try self.code_emitter.writeIndent();
+                try self.code_emitter.write("@compileError(\"inline_stmt cannot be used with named continuations\");\n");
+            } else {
+                try emitInlineStmtDedented(self.code_emitter, inline_code);
+            }
+            return true;
+        }
+
+        try self.code_emitter.writeIndent();
+        try self.code_emitter.write("const result = ");
+
+        // If inline code uses __KORU_INLINE__ placeholder,
+        // wrap in a labeled block and replace the placeholder.
+        const placeholder = "__KORU_INLINE__";
+        if (std.mem.indexOf(u8, inline_code, placeholder) != null) {
+            try self.code_emitter.write("__koru_inline__: ");
+            var scan_pos: usize = 0;
+            while (scan_pos < inline_code.len) {
+                if (scan_pos + placeholder.len <= inline_code.len and
+                    std.mem.eql(u8, inline_code[scan_pos .. scan_pos + placeholder.len], placeholder))
+                {
+                    try self.code_emitter.write("__koru_inline__");
+                    scan_pos += placeholder.len;
+                } else {
+                    try self.code_emitter.write(inline_code[scan_pos .. scan_pos + 1]);
+                    scan_pos += 1;
+                }
+            }
+        } else {
+            try self.code_emitter.write(inline_code);
+        }
+        try self.code_emitter.write(";\n");
+        return false;
+    }
+
     /// Emit the body of a handler for an event `entry` that belongs to a
     /// mutual-tail-recursion `group`. Lowers the whole cycle into ONE labeled
     /// switch: shared `var` input bindings, `__koru_self_loop: switch` seeded
@@ -2660,54 +2795,8 @@ pub const VisitorEmitter = struct {
                                     // Generate the flow invocation and continuations
                                     if (flow.inline_body) |inline_code_raw| {
                                         // Transform set inline_body -- emit inline instead of handler call
-                                        const inline_stmt_marker = "//@koru:inline_stmt\n";
-                                        var inline_code = inline_code_raw;
-                                        var is_inline_stmt = false;
-                                        if (std.mem.indexOf(u8, inline_code, inline_stmt_marker)) |marker_idx| {
-                                            is_inline_stmt = true;
-                                            inline_code = inline_code[marker_idx + inline_stmt_marker.len ..];
-                                        }
-
-                                        if (is_inline_stmt) {
+                                        if (try self.emitInlineBodyCode(&flow, inline_code_raw)) {
                                             head_bound_root = false;
-                                            const has_named_branches = blk: {
-                                                for (flow.body.continuations) |cont| {
-                                                    if (cont.branch.len > 0) break :blk true;
-                                                }
-                                                break :blk false;
-                                            };
-                                            if (has_named_branches) {
-                                                try self.code_emitter.writeIndent();
-                                                try self.code_emitter.write("@compileError(\"inline_stmt cannot be used with named continuations\");\n");
-                                            } else {
-                                                try emitInlineStmtDedented(self.code_emitter, inline_code);
-                                            }
-                                        } else {
-                                            try self.code_emitter.writeIndent();
-                                            try self.code_emitter.write("const result = ");
-
-                                            // If inline code uses __KORU_INLINE__ placeholder,
-                                            // wrap in a labeled block and replace the placeholder.
-                                            const placeholder = "__KORU_INLINE__";
-                                            if (std.mem.indexOf(u8, inline_code, placeholder) != null) {
-                                                try self.code_emitter.write("__koru_inline__: ");
-                                                // Replace all occurrences of placeholder with label
-                                                var scan_pos: usize = 0;
-                                                while (scan_pos < inline_code.len) {
-                                                    if (scan_pos + placeholder.len <= inline_code.len and
-                                                        std.mem.eql(u8, inline_code[scan_pos .. scan_pos + placeholder.len], placeholder))
-                                                    {
-                                                        try self.code_emitter.write("__koru_inline__");
-                                                        scan_pos += placeholder.len;
-                                                    } else {
-                                                        try self.code_emitter.write(inline_code[scan_pos .. scan_pos + 1]);
-                                                        scan_pos += 1;
-                                                    }
-                                                }
-                                            } else {
-                                                try self.code_emitter.write(inline_code);
-                                            }
-                                            try self.code_emitter.write(";\n");
                                         }
                                     } else {
                                         try self.code_emitter.writeIndent();
@@ -2980,66 +3069,9 @@ pub const VisitorEmitter = struct {
                                         if (matches) {
                                             const bc = &ii.value;
                                             log.debug("  [emitEventDecl] Found cross-module immediate override for {s}:{s}\n", .{ event_module, event.path.segments[0] });
-                                            // Generate implicit input bindings for immediate impls
-                                            try self.emitInputBindings(event.input.fields, "const", null);
-                                            if (event.input.fields.len == 0) {
-                                                try self.code_emitter.writeIndent();
-                                                try self.code_emitter.write("_ = &__koru_event_input;\n");
-                                            }
-                                            var value_ctx = emitter.EmissionContext{
-                                                .allocator = self.allocator,
-                                                .main_module_name = self.main_module_name,
-                                            };
-                                            if (bc.is_bare_return) {
-                                                try self.code_emitter.writeIndent();
-                                                try self.code_emitter.write("return ");
-                                                if (bc.plain_value) |pv| {
-                                                    try emitter.emitValue(self.code_emitter, &value_ctx, pv);
-                                                } else {
-                                                    try self.code_emitter.write("undefined");
-                                                }
-                                                try self.code_emitter.write(";\n");
-                                                found_impl = true;
-                                                break;
-                                            }
-                                            try self.code_emitter.writeIndent();
-                                            try self.code_emitter.write("return .{ .");
-                                            try emitter.writeBranchName(self.code_emitter, bc.branch_name);
-                                            try self.code_emitter.write(" = ");
-                                            if (bc.plain_value) |pv| {
-                                                const trimmed = std.mem.trim(u8, pv, " \t");
-                                                if (trimmed.len >= 2 and trimmed[0] == '[' and trimmed[trimmed.len - 1] == ']') {
-                                                    if (self.findBranchField(event, bc.branch_name, null)) |field| {
-                                                        try emitter.emitArrayLiteralForField(self.code_emitter, &value_ctx, field, pv);
-                                                    } else {
-                                                        try emitter.emitValue(self.code_emitter, &value_ctx, pv);
-                                                    }
-                                                } else {
-                                                    try emitter.emitValue(self.code_emitter, &value_ctx, pv);
-                                                }
-                                            } else {
-                                                try self.code_emitter.write(".{");
-                                                for (bc.fields, 0..) |field, k| {
-                                                    if (k > 0) try self.code_emitter.write(", ");
-                                                    try self.code_emitter.write(" .");
-                                                    try emitter.writeBranchName(self.code_emitter, field.name);
-                                                    try self.code_emitter.write(" = ");
-                                                    const value = if (field.expression_str) |expr| expr else field.type;
-                                                    const trimmed = std.mem.trim(u8, value, " \t");
-                                                    if (trimmed.len >= 2 and trimmed[0] == '[' and trimmed[trimmed.len - 1] == ']') {
-                                                        if (self.findBranchField(event, bc.branch_name, field.name)) |branch_field| {
-                                                            try emitter.emitArrayLiteralForField(self.code_emitter, &value_ctx, branch_field, value);
-                                                        } else {
-                                                            try emitter.emitValue(self.code_emitter, &value_ctx, value);
-                                                        }
-                                                    } else {
-                                                        try emitter.emitValue(self.code_emitter, &value_ctx, value);
-                                                    }
-                                                }
-                                                try self.code_emitter.write(" }");
-                                            }
-                                            try self.code_emitter.write(" };\n");
+                                            try self.emitImmediateImplBody(event, bc);
                                             found_impl = true;
+                                            if (bc.is_bare_return) break;
                                         }
                                     }
                                 }
@@ -3080,53 +3112,8 @@ pub const VisitorEmitter = struct {
                                                 // Generate the invocation (or inline_body if transform set it)
                                                 if (flow.inline_body) |inline_code_raw| {
                                                     // Transform set inline_body -- emit inline instead of handler call
-                                                    const inline_stmt_marker = "//@koru:inline_stmt\n";
-                                                    var inline_code = inline_code_raw;
-                                                    var is_inline_stmt = false;
-                                                    if (std.mem.indexOf(u8, inline_code, inline_stmt_marker)) |marker_idx| {
-                                                        is_inline_stmt = true;
-                                                        inline_code = inline_code[marker_idx + inline_stmt_marker.len ..];
-                                                    }
-
-                                                    if (is_inline_stmt) {
+                                                    if (try self.emitInlineBodyCode(&flow, inline_code_raw)) {
                                                         head_bound_root = false;
-                                                        const has_named_branches = blk: {
-                                                            for (flow.body.continuations) |cont| {
-                                                                if (cont.branch.len > 0) break :blk true;
-                                                            }
-                                                            break :blk false;
-                                                        };
-                                                        if (has_named_branches) {
-                                                            try self.code_emitter.writeIndent();
-                                                            try self.code_emitter.write("@compileError(\"inline_stmt cannot be used with named continuations\");\n");
-                                                        } else {
-                                                            try emitInlineStmtDedented(self.code_emitter, inline_code);
-                                                        }
-                                                    } else {
-                                                        try self.code_emitter.writeIndent();
-                                                        try self.code_emitter.write("const result = ");
-
-                                                        // If inline code uses __KORU_INLINE__ placeholder,
-                                                        // wrap in a labeled block and replace the placeholder.
-                                                        const placeholder2 = "__KORU_INLINE__";
-                                                        if (std.mem.indexOf(u8, inline_code, placeholder2) != null) {
-                                                            try self.code_emitter.write("__koru_inline__: ");
-                                                            var scan_pos2: usize = 0;
-                                                            while (scan_pos2 < inline_code.len) {
-                                                                if (scan_pos2 + placeholder2.len <= inline_code.len and
-                                                                    std.mem.eql(u8, inline_code[scan_pos2 .. scan_pos2 + placeholder2.len], placeholder2))
-                                                                {
-                                                                    try self.code_emitter.write("__koru_inline__");
-                                                                    scan_pos2 += placeholder2.len;
-                                                                } else {
-                                                                    try self.code_emitter.write(inline_code[scan_pos2 .. scan_pos2 + 1]);
-                                                                    scan_pos2 += 1;
-                                                                }
-                                                            }
-                                                        } else {
-                                                            try self.code_emitter.write(inline_code);
-                                                        }
-                                                        try self.code_emitter.write(";\n");
                                                     }
                                                 } else {
                                                     try self.code_emitter.writeIndent();
@@ -3416,69 +3403,7 @@ pub const VisitorEmitter = struct {
                             if (matches) {
                                 const bc = &ii.value;
                                 log.debug("    Found matching immediate_impl!\n", .{});
-                                // Generate implicit input bindings for immediate impls
-                                try self.emitInputBindings(event.input.fields, "const", null);
-                                // If no input fields, suppress unused '__koru_event_input' parameter
-                                if (event.input.fields.len == 0) {
-                                    try self.code_emitter.writeIndent();
-                                    try self.code_emitter.write("_ = &__koru_event_input;\n");
-                                }
-                                var value_ctx = emitter.EmissionContext{
-                                    .allocator = self.allocator,
-                                    .main_module_name = self.main_module_name,
-                                };
-                                if (bc.is_bare_return) {
-                                    // `-> T` bare return: `return <value>;`, no tag.
-                                    try self.code_emitter.writeIndent();
-                                    try self.code_emitter.write("return ");
-                                    if (bc.plain_value) |pv| {
-                                        try emitter.emitValue(self.code_emitter, &value_ctx, pv);
-                                    } else {
-                                        try self.code_emitter.write("undefined");
-                                    }
-                                    try self.code_emitter.write(";\n");
-                                    found_impl = true;
-                                    break;
-                                }
-                                try self.code_emitter.writeIndent();
-                                try self.code_emitter.write("return .{ .");
-                                try emitter.writeBranchName(self.code_emitter, bc.branch_name);
-                                try self.code_emitter.write(" = ");
-                                // Check for plain value (non-struct branch)
-                                if (bc.plain_value) |pv| {
-                                    const trimmed = std.mem.trim(u8, pv, " \t");
-                                    if (trimmed.len >= 2 and trimmed[0] == '[' and trimmed[trimmed.len - 1] == ']') {
-                                        if (self.findBranchField(event, bc.branch_name, null)) |field| {
-                                            try emitter.emitArrayLiteralForField(self.code_emitter, &value_ctx, field, pv);
-                                        } else {
-                                            try emitter.emitValue(self.code_emitter, &value_ctx, pv);
-                                        }
-                                    } else {
-                                        try emitter.emitValue(self.code_emitter, &value_ctx, pv);
-                                    }
-                                } else {
-                                    try self.code_emitter.write(".{");
-                                    for (bc.fields, 0..) |field, k| {
-                                        if (k > 0) try self.code_emitter.write(", ");
-                                        try self.code_emitter.write(" .");
-                                        try emitter.writeBranchName(self.code_emitter, field.name);
-                                        try self.code_emitter.write(" = ");
-                                        // Use expression_str if present (for expressions), otherwise use type
-                                        const value = if (field.expression_str) |expr| expr else field.type;
-                                        const trimmed = std.mem.trim(u8, value, " \t");
-                                        if (trimmed.len >= 2 and trimmed[0] == '[' and trimmed[trimmed.len - 1] == ']') {
-                                            if (self.findBranchField(event, bc.branch_name, field.name)) |branch_field| {
-                                                try emitter.emitArrayLiteralForField(self.code_emitter, &value_ctx, branch_field, value);
-                                            } else {
-                                                try emitter.emitValue(self.code_emitter, &value_ctx, value);
-                                            }
-                                        } else {
-                                            try emitter.emitValue(self.code_emitter, &value_ctx, value);
-                                        }
-                                    }
-                                    try self.code_emitter.write(" }");
-                                }
-                                try self.code_emitter.write(" };\n");
+                                try self.emitImmediateImplBody(event, bc);
                                 found_impl = true;
                                 break;
                             }
