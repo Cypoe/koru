@@ -1,0 +1,1 @@
+OWED: supervise a std/rings verb directly — v1 supervises same-module children only; cross-module fold re-entry (and transform-tor re-entry inside generated steps) is the owed machinery.
