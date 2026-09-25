@@ -1597,29 +1597,26 @@ fn lowerBuiltin(
         try out.append(allocator, ')');
         return j;
     }
-    // A bool IS 0/1 once it is a number, and JS `+true` is 1. `Number(...)` is
-    // the spelling that cannot be misread as string concatenation when the
-    // operand is spliced next to a `+`.
-    if (eql(u8, name, "intFromBool")) {
-        try out.appendSlice(allocator, "Number(");
-        try lowerJsInto(out, allocator, first, .koru_expr, diag);
-        try out.append(allocator, ')');
-        return j;
-    }
-    if (eql(u8, name, "intFromFloat")) {
-        try out.appendSlice(allocator, "Math.trunc(");
-        try lowerJsInto(out, allocator, first, .koru_expr, diag);
-        try out.append(allocator, ')');
-        return j;
-    }
-    // JS bitwise operators coerce to 32 bits, so the population count is done on
-    // the value itself rather than through `>>`/`&`, which would silently answer
-    // for the low 32 bits of a 53-bit-safe integer.
-    if (eql(u8, name, "popCount")) {
-        try out.appendSlice(allocator, "((v) => { let n = 0; let x = v; while (x > 0) { n += x % 2; x = Math.floor(x / 2); } return n; })(");
-        try lowerJsInto(out, allocator, first, .koru_expr, diag);
-        try out.append(allocator, ')');
-        return j;
+    // Single-arg builtins that differ only in their JS wrapper prefix.
+    const unary_wrapped = [_]struct { name: []const u8, prefix: []const u8 }{
+        // A bool IS 0/1 once it is a number, and JS `+true` is 1. `Number(...)`
+        // is the spelling that cannot be misread as string concatenation when
+        // the operand is spliced next to a `+`.
+        .{ .name = "intFromBool", .prefix = "Number(" },
+        .{ .name = "intFromFloat", .prefix = "Math.trunc(" },
+        // JS bitwise operators coerce to 32 bits, so the population count is
+        // done on the value itself rather than through `>>`/`&`, which would
+        // silently answer for the low 32 bits of a 53-bit-safe integer.
+        .{ .name = "popCount", .prefix = "((v) => { let n = 0; let x = v; while (x > 0) { n += x % 2; x = Math.floor(x / 2); } return n; })(" },
+        .{ .name = "exp2", .prefix = "Math.pow(2, " },
+    };
+    for (unary_wrapped) |uw| {
+        if (eql(u8, name, uw.name)) {
+            try out.appendSlice(allocator, uw.prefix);
+            try lowerJsInto(out, allocator, first, .koru_expr, diag);
+            try out.append(allocator, ')');
+            return j;
+        }
     }
     if (eql(u8, name, "divTrunc") or eql(u8, name, "divFloor") or eql(u8, name, "divExact")) {
         try out.appendSlice(allocator, if (eql(u8, name, "divTrunc")) "Math.trunc((" else if (eql(u8, name, "divFloor")) "Math.floor((" else "((");
@@ -1649,12 +1646,6 @@ fn lowerBuiltin(
         try out.appendSlice(allocator, ")) % (");
         try lowerJsInto(out, allocator, second, .koru_expr, diag);
         try out.appendSlice(allocator, "))");
-        return j;
-    }
-    if (eql(u8, name, "exp2")) {
-        try out.appendSlice(allocator, "Math.pow(2, ");
-        try lowerJsInto(out, allocator, first, .koru_expr, diag);
-        try out.append(allocator, ')');
         return j;
     }
     if (eql(u8, name, "min") or eql(u8, name, "max") or
