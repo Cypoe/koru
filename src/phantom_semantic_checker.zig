@@ -3307,33 +3307,7 @@ pub const PhantomSemanticChecker = struct {
 
             // Validate the step if present - handle recursively for nested structures
             if (cont.node) |step| {
-                switch (step) {
-                    .foreach => |fe| {
-                        for (fe.branches) |*inner_branch| {
-                            const valid = try self.validateNamedBranchRecursive(inner_branch, &branch_context, event_map, current_module, location);
-                            if (!valid) has_errors = true;
-                        }
-                    },
-                    .conditional => |cond| {
-                        for (cond.branches) |*inner_branch| {
-                            const valid = try self.validateNamedBranchRecursive(inner_branch, &branch_context, event_map, current_module, location);
-                            if (!valid) has_errors = true;
-                        }
-                    },
-                    .switch_result => |sr| {
-                        for (sr.branches) |*inner_branch| {
-                            const valid = try self.validateNamedBranchRecursive(inner_branch, &branch_context, event_map, current_module, location);
-                            if (!valid) has_errors = true;
-                        }
-                    },
-                    .invocation => |inv| {
-                        const valid = try self.validateSingleInvocation(&inv, &branch_context, event_map, current_module, location);
-                        if (!valid) has_errors = true;
-                    },
-                    else => {
-                        // Other step types (terminal, inline_code, etc.) don't need recursive validation
-                    },
-                }
+                if (!try self.validateStepBranches(step, &branch_context, event_map, current_module, location)) has_errors = true;
             }
 
             // Resolve the event whose branches the nested continuations represent.
@@ -3390,36 +3364,42 @@ pub const PhantomSemanticChecker = struct {
                 // Fallback: parent step isn't an invocation we can resolve. Validate
                 // recursively for nested structures (best effort, no binding tracking).
                 if (nested.node) |step| {
-                    switch (step) {
-                        .foreach => |fe| {
-                            for (fe.branches) |*inner_branch| {
-                                const valid = try self.validateNamedBranchRecursive(inner_branch, &branch_context, event_map, current_module, nested_location);
-                                if (!valid) has_errors = true;
-                            }
-                        },
-                        .conditional => |cond| {
-                            for (cond.branches) |*inner_branch| {
-                                const valid = try self.validateNamedBranchRecursive(inner_branch, &branch_context, event_map, current_module, nested_location);
-                                if (!valid) has_errors = true;
-                            }
-                        },
-                        .switch_result => |sr| {
-                            for (sr.branches) |*inner_branch| {
-                                const valid = try self.validateNamedBranchRecursive(inner_branch, &branch_context, event_map, current_module, nested_location);
-                                if (!valid) has_errors = true;
-                            }
-                        },
-                        .invocation => |inv| {
-                            const valid = try self.validateSingleInvocation(&inv, &branch_context, event_map, current_module, nested_location);
-                            if (!valid) has_errors = true;
-                        },
-                        else => {},
-                    }
+                    if (!try self.validateStepBranches(step, &branch_context, event_map, current_module, nested_location)) has_errors = true;
                 }
             }
         }
 
         return !has_errors;
+    }
+
+    /// Validate a step's nested branch structures: foreach/conditional/
+    /// switch_result recurse into validateNamedBranchRecursive per branch; a
+    /// bare invocation validates standalone. Other step types have no nested
+    /// structure and pass.
+    fn validateStepBranches(self: *PhantomSemanticChecker, step: ast.Node, context: *BindingContext, event_map: *std.StringHashMap(EventInfo), current_module: ?[]const u8, location: errors.SourceLocation) anyerror!bool {
+        var valid = true;
+        switch (step) {
+            .foreach => |fe| {
+                for (fe.branches) |*inner_branch| {
+                    if (!try self.validateNamedBranchRecursive(inner_branch, context, event_map, current_module, location)) valid = false;
+                }
+            },
+            .conditional => |cond| {
+                for (cond.branches) |*inner_branch| {
+                    if (!try self.validateNamedBranchRecursive(inner_branch, context, event_map, current_module, location)) valid = false;
+                }
+            },
+            .switch_result => |sr| {
+                for (sr.branches) |*inner_branch| {
+                    if (!try self.validateNamedBranchRecursive(inner_branch, context, event_map, current_module, location)) valid = false;
+                }
+            },
+            .invocation => |inv| {
+                if (!try self.validateSingleInvocation(&inv, context, event_map, current_module, location)) valid = false;
+            },
+            else => {},
+        }
+        return valid;
     }
 
     fn validateSingleInvocation(self: *PhantomSemanticChecker, inv: *const ast.Invocation, context: *BindingContext, event_map: *std.StringHashMap(EventInfo), current_module: ?[]const u8, location: errors.SourceLocation) !bool {
