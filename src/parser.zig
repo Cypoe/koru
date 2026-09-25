@@ -5584,6 +5584,33 @@ pub const Parser = struct {
         return out;
     }
 
+    /// The shared flow-item tail: every path that ends "invocation + parsed
+    /// continuations → ast.Item.flow" builds the same record — rootSite body,
+    /// pre-label, impl path/variant, duped annotations, line location, module.
+    fn flowItem(
+        self: *Parser,
+        invocation: ast.Invocation,
+        continuations: []const ast.Continuation,
+        pre_label: ?[]const u8,
+        event_path: ast.DottedPath,
+        impl_variant: ?[]const u8,
+        annotations: [][]const u8,
+        line_idx: usize,
+        indent: usize,
+    ) !ast.Item {
+        const loc = self.getLineLocation(line_idx, indent);
+        return ast.Item{ .flow = .{
+            .body = ast.rootSite(invocation, continuations, loc),
+            .pre_label = pre_label,
+            .impl_of = event_path,
+            .impl_variant = impl_variant,
+            .annotations = try self.dupeAnnotations(annotations),
+            .is_impl = event_path.module_qualifier != null,
+            .location = loc,
+            .module = try self.allocator.dupe(u8, self.module_name),
+        } };
+    }
+
     fn parseSubflowImpl(self: *Parser, annotations: [][]const u8) !ast.Item {
         // Indent of the definition line, captured before the body consumes it.
         // In a `.k` the top-level loop has already rewritten this line as
@@ -5725,6 +5752,23 @@ pub const Parser = struct {
         const is_arrow = eq_idx + 1 < after_tilde.len and after_tilde[eq_idx + 1] == '>';
         const body_start = if (is_arrow) eq_idx + 2 else eq_idx + 1;
         const body_str = lexer.trim(after_tilde[body_start..]);
+
+        // A `[` opening the body is an annotation written in the wrong seat:
+        // it falls into the head path and glues onto the callee name
+        // (`route = [with]m:f()` compiles a tor literally named "[with]m:f").
+        // Annotations on a subflow impl go before the name.
+        if (body_str.len > 0 and body_str[0] == '[') {
+            const close = std.mem.indexOfScalar(u8, body_str, ']') orelse body_str.len;
+            return self.failWithHint(
+                .PARSE003,
+                head_line_idx + 1,
+                lexer.getIndent(line) + eq_idx + 3,
+                "annotation '[{s}]' after '=' attaches to nothing — annotations on a subflow impl go before the name",
+                .{body_str[1..close]},
+                "write '[{s}]{s} = …' — the impl carries the annotation and the head call it names supplies the open vocabulary",
+                .{ body_str[1..close], event_path_str },
+            );
+        }
 
         // Check if it's a branch constructor (immediate return syntax)
         if (body_str.len > 0) {
@@ -6015,16 +6059,7 @@ pub const Parser = struct {
             else
                 try self.parseContinuations(lexer.getIndent(line));
 
-            return ast.Item{ .flow = .{
-                .body = ast.rootSite(invocation, continuations, self.getLineLocation(head_line_idx, lexer.getIndent(line))),
-                .pre_label = sub_pre_label,
-                .impl_of = event_path,
-                .impl_variant = impl_variant,
-                .annotations = try self.dupeAnnotations(annotations),
-                .is_impl = event_path.module_qualifier != null,
-                .location = self.getLineLocation(head_line_idx, lexer.getIndent(line)),
-                .module = try self.allocator.dupe(u8, self.module_name),
-            } };
+            return self.flowItem(invocation, continuations, sub_pre_label, event_path, impl_variant, annotations, head_line_idx, lexer.getIndent(line));
         }
 
         // Flow body on next line(s) - handle multi-line flows
@@ -6134,15 +6169,7 @@ pub const Parser = struct {
             // Now parse all the continuations starting from current line
             const continuations = try self.parseContinuations(lexer.getIndent(line));
 
-            return ast.Item{ .flow = .{
-                .body = ast.rootSite(invocation, continuations, self.getLineLocation(head_line_idx, lexer.getIndent(line))),
-                .impl_of = event_path,
-                .impl_variant = impl_variant,
-                .annotations = try self.dupeAnnotations(annotations),
-                .is_impl = event_path.module_qualifier != null,
-                .location = self.getLineLocation(head_line_idx, lexer.getIndent(line)),
-                .module = try self.allocator.dupe(u8, self.module_name),
-            } };
+            return self.flowItem(invocation, continuations, null, event_path, impl_variant, annotations, head_line_idx, lexer.getIndent(line));
         }
 
         // Otherwise parse as normal flow starting with an invocation
@@ -6188,16 +6215,7 @@ pub const Parser = struct {
         else
             try self.parseContinuations(lexer.getIndent(body_line));
 
-        return ast.Item{ .flow = .{
-            .body = ast.rootSite(invocation, continuations, self.getLineLocation(body_line_idx, lexer.getIndent(body_line))),
-            .pre_label = sub_pre_label,
-            .impl_of = event_path,
-            .impl_variant = impl_variant,
-            .annotations = try self.dupeAnnotations(annotations),
-            .is_impl = event_path.module_qualifier != null,
-            .location = self.getLineLocation(body_line_idx, lexer.getIndent(body_line)),
-            .module = try self.allocator.dupe(u8, self.module_name),
-        } };
+        return self.flowItem(invocation, continuations, sub_pre_label, event_path, impl_variant, annotations, body_line_idx, lexer.getIndent(body_line));
     }
 
     fn parseImplicitFlowBlock(self: *Parser, base_indent: usize) ![]ast.Continuation {
@@ -8692,8 +8710,18 @@ pub const Parser = struct {
                     .invocation => |*inv| inv.annotations = owned,
                     .label_with_invocation => |*lwi| lwi.invocation.annotations = owned,
                     else => {
+                        // Only invocations carry step annotations. Freeing them
+                        // here swallows text the author wrote — refuse instead.
+                        const err = self.fail(
+                            .PARSE003,
+                            self.current + 1,
+                            1,
+                            "annotation '[{s}]' has nothing to attach to — a step annotation only applies to an invocation",
+                            .{owned[0]},
+                        );
                         for (owned) |a| self.allocator.free(a);
                         self.allocator.free(owned);
+                        return err;
                     },
                 }
                 return inner;
