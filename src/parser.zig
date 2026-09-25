@@ -7078,8 +7078,19 @@ pub const Parser = struct {
         return current_nested;
     }
 
-    fn parseContinuationInternal(self: *Parser, indent: usize, parent_indent: usize, location: errors.SourceLocation) !ast.Continuation {
-        _ = parent_indent;
+    /// Parse the head of a `|`/`!` continuation line: stitch chained `|>`
+    /// lines, detect the branch kind, and dispatch on the first glyph —
+    /// `>` routes to the pipeline-step parser (a FINISHED continuation the
+    /// caller returns as-is; the branch post-processing would clobber its
+    /// chained-step continuations), `*` refuses the retired deref form,
+    /// anything else parses a branch base for the caller to finish.
+    const ContinuationHead = struct {
+        cont: ast.Continuation,
+        branch_kind: ast.BranchKind,
+        pipeline_step: bool = false,
+    };
+
+    fn parseContinuationHead(self: *Parser, indent: usize, location: errors.SourceLocation) !ContinuationHead {
         const line = self.lines[self.current - 1]; // We already incremented
         const stitched = try self.stitchPipeChainLines(lexer.trim(line), indent);
         // link_lines is provenance for the wrap functions only — every stamp
@@ -7094,19 +7105,17 @@ pub const Parser = struct {
         // Skip the | or ! prefix
         const after_bar = lexer.trim(trimmed[1..]);
 
-        var cont: ast.Continuation = undefined;
-
         if (lexer.startsWith(after_bar, ">")) {
             // Line-start `|>` continues the preceding flow as a pipeline step
             // (point-free chain). Route to the pipeline-continuation parser —
             // its own step validation still rejects `|> _` and bare-value junk
-            // (KORU103). Return directly: the branch post-processing below would
-            // clobber the pipeline parser's chained-step continuations.
+            // (KORU103).
             const step_content = lexer.trim(after_bar[1..]);
             var pcont = try self.parsePipelineContinuationBase(step_content, indent, location, stitched.link_lines);
             pcont.kind = branch_kind;
-            return pcont;
-        } else if (lexer.startsWith(after_bar, "*")) {
+            return .{ .cont = pcont, .branch_kind = branch_kind, .pipeline_step = true };
+        }
+        if (lexer.startsWith(after_bar, "*")) {
             // Deref continuation (`| *<binding>`) — REMOVED. The deferred/deref
             // mechanism for first-class events is retired (repudiated 2026-07-15):
             // an event cannot travel as a runtime pointer. A required
@@ -7120,62 +7129,31 @@ pub const Parser = struct {
                 "deref continuation `| *<binding>` was removed — the deferred/deref mechanism is retired. Declare the call site with a required effect-branch instead.",
                 .{},
             );
-        } else {
-            // Branch continuation
-            cont = try self.parseBranchContinuationBase(after_bar, indent, location, stitched.link_lines);
         }
+        return .{
+            .cont = try self.parseBranchContinuationBase(after_bar, indent, location, stitched.link_lines),
+            .branch_kind = branch_kind,
+        };
+    }
 
+    fn parseContinuationInternal(self: *Parser, indent: usize, parent_indent: usize, location: errors.SourceLocation) !ast.Continuation {
+        _ = parent_indent;
+        const head = try self.parseContinuationHead(indent, location);
+        if (head.pipeline_step) return head.cont;
+
+        var cont = head.cont;
         // Initialize continuations as empty, will be filled by caller if needed
         cont.continuations = &[_]ast.Continuation{};
-        cont.kind = branch_kind;
+        cont.kind = head.branch_kind;
 
         return cont;
     }
 
     fn parseContinuationWithNested(self: *Parser, indent: usize, location: errors.SourceLocation) anyerror!ast.Continuation {
-        const line = self.lines[self.current - 1]; // We already incremented in parseContinuations
-        // Multi-line `|>` chain: stitch following line-start `|>` lines onto
-        // this continuation's text so the chain parses exactly like its inline
-        // spelling (see stitchPipeChainLines).
-        const stitched = try self.stitchPipeChainLines(lexer.trim(line), indent);
-        defer self.allocator.free(stitched.link_lines);
-        const trimmed = stitched.text;
+        const head = try self.parseContinuationHead(indent, location);
+        if (head.pipeline_step) return head.cont;
 
-        // Detect kind from prefix: `|` = terminal, `!` = effect.
-        const branch_kind: ast.BranchKind = if (trimmed.len > 0 and trimmed[0] == '!') .effect else .terminal;
-        // Skip the | or ! prefix
-        const after_bar = lexer.trim(trimmed[1..]);
-
-        var cont: ast.Continuation = undefined;
-
-        if (lexer.startsWith(after_bar, ">")) {
-            // Line-start `|>` continues the preceding flow as a pipeline step
-            // (point-free chain). Route to the pipeline-continuation parser,
-            // which handles its own chained tail; its step validation still
-            // rejects `|> _` and bare-value junk (KORU103).
-            const step_content = lexer.trim(after_bar[1..]);
-            var pcont = try self.parsePipelineContinuationBase(step_content, indent, location, stitched.link_lines);
-            pcont.kind = branch_kind;
-            return pcont;
-        } else if (lexer.startsWith(after_bar, "*")) {
-            // Deref continuation (`| *<binding>`) — REMOVED. The deferred/deref
-            // mechanism for first-class events is retired (repudiated 2026-07-15):
-            // an event cannot travel as a runtime pointer. A required
-            // effect-branch expresses "I need something to call here",
-            // monomorphized and with no indirection. See
-            // frag-deferred-deref-repudiated.
-            return self.fail(
-                .PARSE003,
-                location.line,
-                1,
-                "deref continuation `| *<binding>` was removed — the deferred/deref mechanism is retired. Declare the call site with a required effect-branch instead.",
-                .{},
-            );
-        } else {
-            // Branch continuation
-            cont = try self.parseBranchContinuationBase(after_bar, indent, location, stitched.link_lines);
-        }
-
+        var cont = head.cont;
         // Parse nested continuations - ONLY greater indentation means nesting
         // Same-indent continuations are siblings, period. No magic auto-nesting.
         const multi_line_continuations = try self.parseNestedContinuationsForLevel(indent);
@@ -7183,7 +7161,7 @@ pub const Parser = struct {
         // FIX: If we have inline chained continuations, attach multi-line ones to the deepest
         attachToDeepestChainTail(&cont, multi_line_continuations);
 
-        cont.kind = branch_kind;
+        cont.kind = head.branch_kind;
         return cont;
     }
 
