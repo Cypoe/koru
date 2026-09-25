@@ -33,6 +33,14 @@ fn defaultHandlerRootBind(inv: *const ast.Invocation) []const u8 {
     return rb;
 }
 
+/// `level * 4` spaces into `buf`, returned as the filled slice — the
+/// stack-buffer indent string sites below all build the same way.
+fn stackIndentSlice(buf: []u8, level: usize) []const u8 {
+    const n = level * 4;
+    @memset(buf[0..n], ' ');
+    return buf[0..n];
+}
+
 /// A named label on a bare-return head is binding sugar for `: r`. The shape
 /// checker already treats it that way — it skips tag rules for a bare-return
 /// head because there are no tags to check — and 210_195 pins the lowering at a
@@ -249,13 +257,7 @@ fn writeMangledHandlerPrefix(
 fn emitInlineStmtDedented(code_emitter: *emitter.CodeEmitter, inline_code: []const u8) !void {
     // Build current indent string (4 spaces per level).
     var indent_buf: [64]u8 = undefined;
-    var indent_pos: usize = 0;
-    var idx: usize = 0;
-    while (idx < code_emitter.indent_level) : (idx += 1) {
-        @memcpy(indent_buf[indent_pos .. indent_pos + 4], "    ");
-        indent_pos += 4;
-    }
-    const indent_str = indent_buf[0..indent_pos];
+    const indent_str = stackIndentSlice(&indent_buf, code_emitter.indent_level);
 
     // Find minimum indentation across non-empty lines.
     var min_indent: usize = std.math.maxInt(usize);
@@ -2773,13 +2775,7 @@ pub const VisitorEmitter = struct {
                             }
 
                             var indent_buf: [64]u8 = undefined;
-                            var indent_pos: usize = 0;
-                            var idx: usize = 0;
-                            while (idx < self.code_emitter.indent_level) : (idx += 1) {
-                                @memcpy(indent_buf[indent_pos .. indent_pos + 4], "    ");
-                                indent_pos += 4;
-                            }
-                            const indent_str = indent_buf[0..indent_pos];
+                            const indent_str = stackIndentSlice(&indent_buf, self.code_emitter.indent_level);
 
                             try self.code_emitter.emitReindentedText(default_proc_body, indent_str);
                             try self.code_emitter.write("\n");
@@ -2885,13 +2881,7 @@ pub const VisitorEmitter = struct {
 
                                     // Emit continuations
                                     var indent_buf: [64]u8 = undefined;
-                                    var indent_pos: usize = 0;
-                                    var idx: usize = 0;
-                                    while (idx < self.code_emitter.indent_level) : (idx += 1) {
-                                        @memcpy(indent_buf[indent_pos .. indent_pos + 4], "    ");
-                                        indent_pos += 4;
-                                    }
-                                    const indent_str = indent_buf[0..indent_pos];
+                                    const indent_str = stackIndentSlice(&indent_buf, self.code_emitter.indent_level);
 
                                     const source_event_name = try emitter.buildCanonicalEventName(&flow.inv().path, self.allocator, self.main_module_name);
                                     const compiler_module_name = try codegen_utils.buildKoruModulePath(self.allocator, "std.compiler");
@@ -3191,13 +3181,7 @@ pub const VisitorEmitter = struct {
 
                                                 // Generate switch on result with continuations
                                                 var indent_buf: [64]u8 = undefined;
-                                                var indent_pos: usize = 0;
-                                                var idx: usize = 0;
-                                                while (idx < self.code_emitter.indent_level) : (idx += 1) {
-                                                    @memcpy(indent_buf[indent_pos .. indent_pos + 4], "    ");
-                                                    indent_pos += 4;
-                                                }
-                                                const indent_str = indent_buf[0..indent_pos];
+                                                const indent_str = stackIndentSlice(&indent_buf, self.code_emitter.indent_level);
 
                                                 // Emit source marker for subflow impl
                                                 try self.emitSubflowMarker(&flow);
@@ -3370,13 +3354,7 @@ pub const VisitorEmitter = struct {
                                 // Emit proc body with proper indentation
                                 // Calculate indent string based on current indent_level
                                 var indent_buf: [64]u8 = undefined;
-                                var indent_pos: usize = 0;
-                                var i: usize = 0;
-                                while (i < self.code_emitter.indent_level) : (i += 1) {
-                                    @memcpy(indent_buf[indent_pos .. indent_pos + 4], "    ");
-                                    indent_pos += 4;
-                                }
-                                const indent_str = indent_buf[0..indent_pos];
+                                const indent_str = stackIndentSlice(&indent_buf, self.code_emitter.indent_level);
 
                                 try self.code_emitter.emitReindentedText(proc_body, indent_str);
                                 try self.code_emitter.write("\n");
@@ -3598,13 +3576,7 @@ pub const VisitorEmitter = struct {
                                                 try self.code_emitter.write(";\n");
 
                                                 var indent_buf: [64]u8 = undefined;
-                                                var indent_pos: usize = 0;
-                                                var idx: usize = 0;
-                                                while (idx < self.code_emitter.indent_level) : (idx += 1) {
-                                                    @memcpy(indent_buf[indent_pos .. indent_pos + 4], "    ");
-                                                    indent_pos += 4;
-                                                }
-                                                const indent_str = indent_buf[0..indent_pos];
+                                                const indent_str = stackIndentSlice(&indent_buf, self.code_emitter.indent_level);
 
                                                 const source_event_name = try emitter.buildCanonicalEventName(&flow.inv().path, self.allocator, self.main_module_name);
                                                 try emitter.emitSubflowContinuations(self.code_emitter, flow.body.continuations, 0, indent_str, items_to_search, self.tap_registry, self.type_registry, self.main_module_name, source_event_name, "main_module", event.return_type != null, event, if (is_self_loop and !is_flat) self_loop_canonical else null, flow.inv().return_binding);
@@ -3907,13 +3879,7 @@ pub const VisitorEmitter = struct {
                                         // Generate switch on result
                                         // Calculate indent string for emitSubflowContinuations
                                         var indent_buf: [64]u8 = undefined;
-                                        var indent_pos: usize = 0;
-                                        var idx: usize = 0;
-                                        while (idx < self.code_emitter.indent_level) : (idx += 1) {
-                                            @memcpy(indent_buf[indent_pos .. indent_pos + 4], "    ");
-                                            indent_pos += 4;
-                                        }
-                                        const indent_str = indent_buf[0..indent_pos];
+                                        const indent_str = stackIndentSlice(&indent_buf, self.code_emitter.indent_level);
 
                                         // Build canonical source event name for tap emission
                                         const source_event_name = try emitter.buildCanonicalEventName(&flow.inv().path, self.allocator, self.main_module_name);
@@ -4314,13 +4280,7 @@ pub const VisitorEmitter = struct {
 
                             // Emit proc body
                             var indent_buf: [64]u8 = undefined;
-                            var indent_pos: usize = 0;
-                            var k: usize = 0;
-                            while (k < self.code_emitter.indent_level) : (k += 1) {
-                                @memcpy(indent_buf[indent_pos .. indent_pos + 4], "    ");
-                                indent_pos += 4;
-                            }
-                            const indent_str = indent_buf[0..indent_pos];
+                            const indent_str = stackIndentSlice(&indent_buf, self.code_emitter.indent_level);
                             try self.code_emitter.emitReindentedText(variant_proc_body, indent_str);
                             try self.code_emitter.write("\n");
                         }
@@ -4388,13 +4348,7 @@ pub const VisitorEmitter = struct {
                                 // host code directly, same as the main handler's
                                 // transformed-flow path.
                                 var vindent_buf: [64]u8 = undefined;
-                                var vindent_pos: usize = 0;
-                                var vidx: usize = 0;
-                                while (vidx < self.code_emitter.indent_level) : (vidx += 1) {
-                                    @memcpy(vindent_buf[vindent_pos .. vindent_pos + 4], "    ");
-                                    vindent_pos += 4;
-                                }
-                                try self.code_emitter.emitReindentedText(flow.inline_body.?, vindent_buf[0..vindent_pos]);
+                                try self.code_emitter.emitReindentedText(flow.inline_body.?, stackIndentSlice(&vindent_buf, self.code_emitter.indent_level));
                                 try self.code_emitter.write("\n");
                             } else if (flow.body.continuations.len == 0 and flow.preamble_code == null and flow.inline_body == null) {
                                 try self.code_emitter.writeIndent();
