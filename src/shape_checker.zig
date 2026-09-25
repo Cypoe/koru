@@ -519,6 +519,48 @@ pub const ShapeChecker = struct {
         return try buf.toOwnedSlice(self.allocator);
     }
 
+    /// Does a tap endpoint path resolve to an observable tor? A `ns.*`
+    /// wildcard counts when at least one declared tor matches its prefix
+    /// (and warns otherwise — observing optional modules is legal); a
+    /// concrete path must name a declared tor. `meta_ok` admits the
+    /// koru:start/end meta-tors, which only the source side may name.
+    fn tapEndpointExists(self: *ShapeChecker, path: ast.DottedPath, meta_ok: bool) !bool {
+        if (isNamespaceWildcard(path)) {
+            const prefix = try self.getNamespacePrefix(path);
+            defer self.allocator.free(prefix);
+
+            // Validate that at least one tor matches this namespace prefix
+            var found_match = false;
+            var event_it = self.events.iterator();
+            while (event_it.next()) |entry| {
+                const event_name = entry.key_ptr.*;
+                if (std.mem.startsWith(u8, event_name, prefix) and
+                    (event_name.len == prefix.len or event_name[prefix.len] == '.'))
+                {
+                    found_match = true;
+                    break;
+                }
+            }
+
+            if (!found_match) {
+                const path_str = try self.pathToString(path);
+                defer self.allocator.free(path_str);
+                log.debug("WARNING: Namespace wildcard '{s}' matches no tors\n", .{path_str});
+                // Don't fail - it might be intentional (observing optional modules)
+            }
+            return true;
+        }
+
+        // Meta-tors have module_qualifier="koru" and segments=["start"|"end"]
+        const is_meta_event = meta_ok and path.module_qualifier != null and
+            std.mem.eql(u8, path.module_qualifier.?, "koru") and
+            path.segments.len == 1 and
+            (std.mem.eql(u8, path.segments[0], "start") or
+                std.mem.eql(u8, path.segments[0], "end"));
+
+        return is_meta_event or (try self.lookupEventInfo(path)) != null;
+    }
+
     fn validateFlow(self: *ShapeChecker, flow: *const ast.Flow, location: errors.SourceLocation, _: *const ast.Program) !void {
         // @shape_valid is an EXPLICIT, rare exemption from shape checking.
         // A transform must consciously stamp it on output the checker cannot
@@ -794,89 +836,26 @@ pub const ShapeChecker = struct {
         var matched_events = try std.ArrayList(EventInfo).initCapacity(self.allocator, 0);
         defer matched_events.deinit(self.allocator);
 
-        // If source is specified (not wildcard), validate it exists
+        // If source is specified (not wildcard), validate it exists —
+        // the source side may also name the koru:start/end meta-tors.
         if (tap.source) |source| {
-            // Check if this is a namespace wildcard (e.g., "http.*")
-            if (isNamespaceWildcard(source)) {
-                const prefix = try self.getNamespacePrefix(source);
-                defer self.allocator.free(prefix);
-
-                // Validate that at least one event matches this namespace prefix
-                var found_match = false;
-                var event_it = self.events.iterator();
-                while (event_it.next()) |entry| {
-                    const event_name = entry.key_ptr.*;
-                    if (std.mem.startsWith(u8, event_name, prefix) and
-                        (event_name.len == prefix.len or event_name[prefix.len] == '.'))
-                    {
-                        found_match = true;
-                        break;
-                    }
-                }
-
-                if (!found_match) {
-                    const source_path = try self.pathToString(source);
-                    defer self.allocator.free(source_path);
-                    log.debug("WARNING: Namespace wildcard '{s}' matches no events\n", .{source_path});
-                    // Don't fail - it might be intentional (observing optional modules)
-                }
-            } else {
-                // Regular event path - must exist (unless it's a meta-event)
+            if (!try self.tapEndpointExists(source, true)) {
                 const source_path = try self.pathToString(source);
                 defer self.allocator.free(source_path);
-
-                // Check if this is a meta-event (koru:start, koru:end)
-                // Meta-events have module_qualifier="koru" and segments=["start"|"end"]
-                const is_meta_event = (source.module_qualifier != null and
-                    std.mem.eql(u8, source.module_qualifier.?, "koru") and
-                    source.segments.len == 1 and
-                    (std.mem.eql(u8, source.segments[0], "start") or
-                        std.mem.eql(u8, source.segments[0], "end")));
-
-                if (!is_meta_event and (try self.lookupEventInfo(source)) == null) {
-                    log.debug("ERROR: Unknown source event '{s}' in tap\n", .{source_path});
-                    try self.reporter.addErrorAtLocation(.KORU040, location, "unknown source tor '{s}' in tap", .{source_path});
-                    // Continue checking for more errors
-                }
+                log.debug("ERROR: Unknown source tor '{s}' in tap\n", .{source_path});
+                try self.reporter.addErrorAtLocation(.KORU040, location, "unknown source tor '{s}' in tap", .{source_path});
+                // Continue checking for more errors
             }
         }
 
         // If destination is specified (not wildcard), validate it exists
         if (tap.destination) |dest| {
-            // Check if this is a namespace wildcard (e.g., "http.*")
-            if (isNamespaceWildcard(dest)) {
-                const prefix = try self.getNamespacePrefix(dest);
-                defer self.allocator.free(prefix);
-
-                // Validate that at least one event matches this namespace prefix
-                var found_match = false;
-                var event_it = self.events.iterator();
-                while (event_it.next()) |entry| {
-                    const event_name = entry.key_ptr.*;
-                    if (std.mem.startsWith(u8, event_name, prefix) and
-                        (event_name.len == prefix.len or event_name[prefix.len] == '.'))
-                    {
-                        found_match = true;
-                        break;
-                    }
-                }
-
-                if (!found_match) {
-                    const dest_path = try self.pathToString(dest);
-                    defer self.allocator.free(dest_path);
-                    log.debug("WARNING: Namespace wildcard '{s}' matches no events\n", .{dest_path});
-                    // Don't fail - it might be intentional
-                }
-            } else {
-                // Regular event path - must exist
+            if (!try self.tapEndpointExists(dest, false)) {
                 const dest_path = try self.pathToString(dest);
                 defer self.allocator.free(dest_path);
-
-                if ((try self.lookupEventInfo(dest)) == null) {
-                    log.debug("ERROR: Unknown destination event '{s}' in tap\n", .{dest_path});
-                    try self.reporter.addErrorAtLocation(.KORU040, location, "unknown destination event '{s}' in tap", .{dest_path});
-                    // Continue checking for more errors
-                }
+                log.debug("ERROR: Unknown destination tor '{s}' in tap\n", .{dest_path});
+                try self.reporter.addErrorAtLocation(.KORU040, location, "unknown destination tor '{s}' in tap", .{dest_path});
+                // Continue checking for more errors
             }
         }
 
