@@ -748,6 +748,18 @@ pub const PhantomSemanticChecker = struct {
         return !has_errors;
     }
 
+    /// Parse a signature field's phantom and report whether it carries a
+    /// cleanup-requiring concrete state ([!]) — every escape walk asks
+    /// exactly this of the field it lands on.
+    fn phantomRequiresCleanup(self: *PhantomSemanticChecker, phantom_str: []const u8) !bool {
+        var phantom = try phantom_parser.PhantomState.parse(self.allocator, phantom_str);
+        defer phantom.deinit(self.allocator);
+        return switch (phantom) {
+            .concrete => |concrete| concrete.requires_cleanup,
+            .variable, .state_union => false,
+        };
+    }
+
     fn validatePhantom(self: *PhantomSemanticChecker, phantom_str: []const u8, event_name: []const u8, location: errors.SourceLocation, is_input: bool) !bool {
         var phantom = try phantom_parser.PhantomState.parse(self.allocator, phantom_str);
         defer phantom.deinit(self.allocator);
@@ -2542,17 +2554,9 @@ pub const PhantomSemanticChecker = struct {
                                         if (return_branch_fields) |sig_fields| {
                                             for (sig_fields) |sig_field| {
                                                 if (sig_field.phantom) |phantom_str| {
-                                                    var phantom = try phantom_parser.PhantomState.parse(self.allocator, phantom_str);
-                                                    defer phantom.deinit(self.allocator);
-                                                    switch (phantom) {
-                                                        .concrete => |concrete| {
-                                                            if (concrete.requires_cleanup) {
-                                                                documented_escape = true;
-                                                                log.debug("[CLEANUP]   '{s}' escapes through identity branch constructor with [!]\n", .{resource});
-                                                            }
-                                                        },
-                                                        .variable => {},
-                                                        .state_union => {},
+                                                    if (try self.phantomRequiresCleanup(phantom_str)) {
+                                                        documented_escape = true;
+                                                        log.debug("[CLEANUP]   '{s}' escapes through identity branch constructor with [!]\n", .{resource});
                                                     }
                                                 }
                                                 break;
@@ -2570,17 +2574,9 @@ pub const PhantomSemanticChecker = struct {
                                                     for (sig_fields) |sig_field| {
                                                         if (std.mem.eql(u8, sig_field.name, bc_field.name)) {
                                                             if (sig_field.phantom) |phantom_str| {
-                                                                var phantom = try phantom_parser.PhantomState.parse(self.allocator, phantom_str);
-                                                                defer phantom.deinit(self.allocator);
-                                                                switch (phantom) {
-                                                                    .concrete => |concrete| {
-                                                                        if (concrete.requires_cleanup) {
-                                                                            documented_escape = true;
-                                                                            log.debug("[CLEANUP]   '{s}' escapes through branch constructor field '{s}' with [!]\n", .{ resource, bc_field.name });
-                                                                        }
-                                                                    },
-                                                                    .variable => {},
-                                                                    .state_union => {},
+                                                                if (try self.phantomRequiresCleanup(phantom_str)) {
+                                                                    documented_escape = true;
+                                                                    log.debug("[CLEANUP]   '{s}' escapes through branch constructor field '{s}' with [!]\n", .{ resource, bc_field.name });
                                                                 }
                                                             }
                                                             break;
@@ -2599,23 +2595,15 @@ pub const PhantomSemanticChecker = struct {
                             if (fields_to_check) |fields| {
                                 for (fields) |field| {
                                     if (field.phantom) |phantom_str| {
-                                        var phantom = try phantom_parser.PhantomState.parse(self.allocator, phantom_str);
-                                        defer phantom.deinit(self.allocator);
-                                        switch (phantom) {
-                                            .concrete => |concrete| {
-                                                if (concrete.requires_cleanup) {
-                                                    if (std.mem.lastIndexOf(u8, resource, ".")) |dot_idx| {
-                                                        const resource_field = resource[dot_idx + 1 ..];
-                                                        if (std.mem.eql(u8, resource_field, field.name)) {
-                                                            documented_escape = true;
-                                                            log.debug("[CLEANUP]   '{s}' escapes through signature field '{s}' with [!]\n", .{ resource, field.name });
-                                                            break;
-                                                        }
-                                                    }
+                                        if (try self.phantomRequiresCleanup(phantom_str)) {
+                                            if (std.mem.lastIndexOf(u8, resource, ".")) |dot_idx| {
+                                                const resource_field = resource[dot_idx + 1 ..];
+                                                if (std.mem.eql(u8, resource_field, field.name)) {
+                                                    documented_escape = true;
+                                                    log.debug("[CLEANUP]   '{s}' escapes through signature field '{s}' with [!]\n", .{ resource, field.name });
+                                                    break;
                                                 }
-                                            },
-                                            .variable => {},
-                                            .state_union => {},
+                                            }
                                         }
                                     }
                                 }
@@ -2658,16 +2646,8 @@ pub const PhantomSemanticChecker = struct {
                                             if (return_branch_fields) |sig_fields| {
                                                 for (sig_fields) |sig_field| {
                                                     if (sig_field.phantom) |phantom_str| {
-                                                        var phantom = try phantom_parser.PhantomState.parse(self.allocator, phantom_str);
-                                                        defer phantom.deinit(self.allocator);
-                                                        switch (phantom) {
-                                                            .concrete => |concrete| {
-                                                                if (concrete.requires_cleanup) {
-                                                                    escapes = true;
-                                                                }
-                                                            },
-                                                            .variable => {},
-                                                            .state_union => {},
+                                                        if (try self.phantomRequiresCleanup(phantom_str)) {
+                                                            escapes = true;
                                                         }
                                                     }
                                                     break;
@@ -2682,16 +2662,8 @@ pub const PhantomSemanticChecker = struct {
                                                         for (sig_fields) |sig_field| {
                                                             if (std.mem.eql(u8, sig_field.name, bc_field.name)) {
                                                                 if (sig_field.phantom) |phantom_str| {
-                                                                    var phantom = try phantom_parser.PhantomState.parse(self.allocator, phantom_str);
-                                                                    defer phantom.deinit(self.allocator);
-                                                                    switch (phantom) {
-                                                                        .concrete => |concrete| {
-                                                                            if (concrete.requires_cleanup) {
-                                                                                escapes = true;
-                                                                            }
-                                                                        },
-                                                                        .variable => {},
-                                                                        .state_union => {},
+                                                                    if (try self.phantomRequiresCleanup(phantom_str)) {
+                                                                        escapes = true;
                                                                     }
                                                                 }
                                                                 break;
@@ -2708,21 +2680,13 @@ pub const PhantomSemanticChecker = struct {
                                 if (fields_for_error) |fields| {
                                     for (fields) |field| {
                                         if (field.phantom) |phantom_str| {
-                                            var phantom = try phantom_parser.PhantomState.parse(self.allocator, phantom_str);
-                                            defer phantom.deinit(self.allocator);
-                                            switch (phantom) {
-                                                .concrete => |concrete| {
-                                                    if (concrete.requires_cleanup) {
-                                                        if (std.mem.lastIndexOf(u8, resource, ".")) |dot_idx| {
-                                                            if (std.mem.eql(u8, resource[dot_idx + 1 ..], field.name)) {
-                                                                escapes = true;
-                                                                break;
-                                                            }
-                                                        }
+                                            if (try self.phantomRequiresCleanup(phantom_str)) {
+                                                if (std.mem.lastIndexOf(u8, resource, ".")) |dot_idx| {
+                                                    if (std.mem.eql(u8, resource[dot_idx + 1 ..], field.name)) {
+                                                        escapes = true;
+                                                        break;
                                                     }
-                                                },
-                                                .variable => {},
-                                                .state_union => {},
+                                                }
                                             }
                                         }
                                     }
