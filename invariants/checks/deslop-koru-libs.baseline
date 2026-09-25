@@ -1,5 +1,10 @@
 # Pin: tools/deslop_kz.py over koru-libs at --min-nodes=32, first census
-# ever run on that corpus, 2026-10-13. 344 files parsed, 22 skipped —
-# koruc cannot canon them, so they escape the count entirely.
+# ever run on that corpus, 2026-10-13. Every key is a ceiling: clusters
+# and members are the slop pin; skipped is the parser-coverage pin (a
+# file koruc cannot canon escapes the count entirely — growth there is
+# a toolchain regression seen from the consumer); spellings pins the
+# vocabulary in use — growth means a new surface entered the corpus.
 clusters=629
 members=327
+skipped=22
+spellings=583

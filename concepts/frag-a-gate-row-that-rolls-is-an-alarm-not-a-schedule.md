@@ -57,6 +57,11 @@ usually already emits the surface.
 
 Whether a firing alarm should emit a durable signal beyond the gate's stdout
 (a WMFX event, a board entry) — currently the only record is the commit log
-it fires inside. Whether the pin-and-compare shape generalizes past the
-deslop census to other regrow-able measurements (test-fixture counts, doc
-staleness) is unmeasured.
+it fires inside. The pin did generalize past cluster counts: a baseline is
+now a set of ceilings over every metric a walk emits — clusters and members
+for slop, skipped for parser coverage (a toolchain regression seen from the
+consumer's tree), spellings for the vocabulary in use (the corpus-level
+counterpart of the ruled-spellings row). The next generalization is
+direction: every key is currently a ceiling, and a metric that must not
+*shrink* (files parsed, tests counted) needs a floor pin the shape does not
+yet express.

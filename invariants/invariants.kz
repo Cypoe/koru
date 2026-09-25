@@ -111,6 +111,16 @@
     "check": "python3 checks/check_deslop_census.py checks/deslop-koru-libs.baseline -- python3 ../tools/deslop_kz.py ../zig-out/bin/koruc ../../koru-libs --top=8 --min-nodes=32"
 }
 
+// The stdlib corpus, same instrument: the pin also guards skipped
+// (files koruc cannot canon — a toolchain regression seen from inside)
+// and spellings (the vocabulary in use — growth means new surface).
+~std/invariants:inferred {
+    "name": "deslop-stdlib-board",
+    "tags": ["git-gate", "odds-10"],
+    "rule": "The clone census over koru_std's .kz corpus (tools/deslop_kz.py driving koruc --ast-canon, --min-nodes=32) must not regrow past the pin in checks/deslop-stdlib.baseline — clusters and members are the slop pin, skipped is the parser-coverage pin (a file koruc cannot canon escapes the count entirely), spellings pins the vocabulary in use. Same contract: odds-10 sampled firing, regrowth blocks until folded or the pin is re-set in the same commit with reason.",
+    "check": "python3 checks/check_deslop_census.py checks/deslop-stdlib.baseline -- python3 ../tools/deslop_kz.py ../zig-out/bin/koruc ../koru_std --top=8 --min-nodes=32"
+}
+
 // The manifest guards itself: a git-gate-local row fires only when its
 // declaring file is in the staged diff, and is judged against that
 // file's hunks alone. This row is where weakening the discipline would

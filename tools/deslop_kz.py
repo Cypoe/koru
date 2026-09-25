@@ -90,9 +90,10 @@ def hash_tree(node, key, memo):
     return res
 
 
-def collect(node, memo, file_idx, parents, out):
+def collect(node, memo, file_idx, parents, out, spellings):
     """Top-down pass: every node big enough is a member carrying its
-    ancestor-hash set for the shadowing rule."""
+    ancestor-hash set for the shadowing rule; invocation paths feed the
+    corpus's spelling histogram."""
     h, size, label = memo.get(id(node), (None, 0, ""))
     if h is None:
         return
@@ -100,11 +101,17 @@ def collect(node, memo, file_idx, parents, out):
         out.append((h, file_idx, size, label, parents))
     mine = parents | {h}
     if isinstance(node, dict):
+        inv = node.get("invocation")
+        if isinstance(inv, dict) and isinstance(inv.get("path"), dict):
+            seg = inv["path"]
+            mq = seg.get("module_qualifier")
+            spellings.add(((mq + ":") if mq else "")
+                          + ".".join(seg.get("segments") or []))
         for k in node:
-            collect(node[k], memo, file_idx, mine, out)
+            collect(node[k], memo, file_idx, mine, out, spellings)
     elif isinstance(node, list):
         for item in node:
-            collect(item, memo, file_idx, mine, out)
+            collect(item, memo, file_idx, mine, out, spellings)
 
 
 def collect_files(roots):
@@ -157,10 +164,11 @@ def main():
 
     files = sorted(asts)
     members = []
+    spellings = set()
     for fidx, path in enumerate(files):
         memo = {}
         hash_tree(asts[path], None, memo)
-        collect(asts[path], memo, fidx, frozenset(), members)
+        collect(asts[path], memo, fidx, frozenset(), members, spellings)
 
     clusters = {}
     for m in members:
@@ -187,7 +195,8 @@ def main():
     skipped = len(paths) - len(asts)
     print(f"files: {len(asts)} parsed, {skipped} skipped   "
           f"nodes hashed >= {MIN_NODES}: {len(members)}")
-    print(f"clusters: {n_clusters}   maximal members: {dup_members}\n")
+    print(f"clusters: {n_clusters}   maximal members: {dup_members}")
+    print(f"skipped: {skipped}   spellings: {len(spellings)}\n")
     for i, (w, size, tag, ms, cross) in enumerate(rows[:TOP]):
         print(f"#{i + 1:2} w={w:7.0f}  {len(ms)}x {tag or '?'}  "
               f"{size} leaves{'  [cross-file]' if cross else ''}")

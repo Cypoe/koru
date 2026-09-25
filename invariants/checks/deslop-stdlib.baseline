@@ -1,0 +1,7 @@
+# Pin: tools/deslop_kz.py over koru_std at --min-nodes=32, measured
+# 2026-10-13. The stdlib is the definitional layer — 45 spellings in
+# use, a tight corpus. Keys are ceilings; see the sibling baselines.
+clusters=69
+members=109
+skipped=2
+spellings=45

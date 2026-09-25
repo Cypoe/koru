@@ -40,27 +40,39 @@ def main():
         return 2
 
     proc = subprocess.run(cmd, capture_output=True, text=True)
-    m = re.search(r"clusters: (\d+)\s+maximal members: (\d+)",
-                  proc.stdout + proc.stderr)
-    if proc.returncode != 0 or not m:
+    out = proc.stdout + proc.stderr
+    if proc.returncode != 0:
         print("BROKEN deslop-census: census did not run clean\n"
-              + (proc.stdout + proc.stderr).strip()[-2000:])
+              + out.strip()[-2000:])
         return 2
 
-    clusters, members = int(m.group(1)), int(m.group(2))
-    if clusters <= baseline["clusters"] and members <= baseline["members"]:
-        print(f"deslop-census: {clusters} clusters / {members} members — "
-              f"at or under pin ({baseline['clusters']}/{baseline['members']})")
+    # every pinned key is a ceiling: measured value must not exceed it
+    KEY_RE = {"clusters": r"clusters: (\d+)",
+              "members": r"maximal members: (\d+)"}
+    measured = {}
+    for key in baseline:
+        pat = KEY_RE.get(key, key + r": (\d+)")
+        m = re.search(pat, out)
+        if not m:
+            print(f"BROKEN deslop-census: pinned key '{key}' not in "
+                  "census output\n" + out.strip()[-2000:])
+            return 2
+        measured[key] = int(m.group(1))
+
+    over = {k: (measured[k], baseline[k]) for k in baseline
+            if measured[k] > baseline[k]}
+    if not over:
+        print("deslop-census: at or under pin — " + ", ".join(
+            f"{k}={measured[k]}/{baseline[k]}" for k in sorted(baseline)))
         return 0
 
-    top = (proc.stdout + proc.stderr).split("\n\n", 1)[-1].strip()
-    print(f"deslop-census REGREW: {clusters} clusters / {members} members "
-          f"vs pin {baseline['clusters']}/{baseline['members']} "
-          f"(+{clusters - baseline['clusters']}/"
-          f"+{members - baseline['members']})\n\n{top}\n\n"
-          "Fold the clones the census names, or re-pin "
-          f"{baseline_path} in this commit with the reason the "
-          "duplication is intentional.")
+    top = out.split("\n\n", 1)[-1].strip()
+    print("deslop-census REGREW: " + ", ".join(
+        f"{k} {measured[k]} > pin {baseline[k]}"
+        for k in sorted(over)) + f"\n\n{top}\n\n"
+        "Fold what the census names, or re-pin "
+        f"{baseline_path} in this commit with the reason the "
+        "growth is intentional.")
     return 1
 
 
