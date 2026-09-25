@@ -1353,6 +1353,14 @@ pub const DottedPath = struct {
         }
         return n;
     }
+
+    /// `mod:a.b.c` (or `a.b.c` when unqualified) as an owned slice — the
+    /// allocating form of `writeQualified`. Caller frees.
+    pub fn qualifiedAlloc(self: DottedPath, allocator: std.mem.Allocator) ![]u8 {
+        const buf = try allocator.alloc(u8, self.qualifiedLen());
+        _ = self.writeQualified(buf, 0);
+        return buf;
+    }
 };
 
 pub const Shape = struct {

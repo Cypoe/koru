@@ -218,23 +218,9 @@ pub const TapCollector = struct {
     }
     
     fn pathToString(self: *TapCollector, path: ast.DottedPath) ![]const u8 {
-        var buf = try std.ArrayList(u8).initCapacity(self.allocator, 64);
-        defer buf.deinit(self.allocator);
-
         // Include module qualifier with colon separator (matches canonical event names)
         // e.g., "main:compute" instead of just "compute"
-        if (path.module_qualifier) |mq| {
-            try buf.appendSlice(self.allocator, mq);
-            try buf.append(self.allocator, ':');
-        }
-
-        // Add event path segments with dot separators
-        for (path.segments, 0..) |segment, i| {
-            if (i > 0) try buf.append(self.allocator, '.');
-            try buf.appendSlice(self.allocator, segment);
-        }
-
-        return try buf.toOwnedSlice(self.allocator);
+        return path.qualifiedAlloc(self.allocator);
     }
     
     /// Get all taps that observe a specific event's output

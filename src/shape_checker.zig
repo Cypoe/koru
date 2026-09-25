@@ -415,22 +415,9 @@ pub const ShapeChecker = struct {
     }
 
     fn pathToString(self: *ShapeChecker, path: ast.DottedPath) ![]const u8 {
-        var buf = try std.ArrayList(u8).initCapacity(self.allocator, 64);
-        errdefer buf.deinit(self.allocator);
-
-        // Include module qualifier if present (e.g., "std.io:println")
-        // This is critical for validating module-qualified event references
-        if (path.module_qualifier) |mq| {
-            try buf.appendSlice(self.allocator, mq);
-            try buf.append(self.allocator, ':');
-        }
-
-        for (path.segments, 0..) |segment, i| {
-            if (i > 0) try buf.append(self.allocator, '.');
-            try buf.appendSlice(self.allocator, segment);
-        }
-
-        return try buf.toOwnedSlice(self.allocator);
+        // Include module qualifier (e.g., "std.io:println") — critical for
+        // validating module-qualified references
+        return path.qualifiedAlloc(self.allocator);
     }
 
     /// Look up a registered event by path, trying module qualification and globs.

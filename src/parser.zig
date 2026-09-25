@@ -3909,21 +3909,7 @@ pub const Parser = struct {
     }
 
     fn pathToString(self: *Parser, path: ast.DottedPath) ![]const u8 {
-        var buf = try std.ArrayList(u8).initCapacity(self.allocator, 64);
-        errdefer buf.deinit(self.allocator);
-
-        // Add module qualifier if present (e.g., "build" in "build:requires")
-        if (path.module_qualifier) |mq| {
-            try buf.appendSlice(self.allocator, mq);
-            try buf.append(self.allocator, ':');
-        }
-
-        for (path.segments, 0..) |segment, i| {
-            if (i > 0) try buf.append(self.allocator, '.');
-            try buf.appendSlice(self.allocator, segment);
-        }
-
-        return buf.toOwnedSlice(self.allocator);
+        return path.qualifiedAlloc(self.allocator);
     }
 
     /// `~` for a host-embedding file, nothing for pure `.k`. A hint that shows a

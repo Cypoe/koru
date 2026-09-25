@@ -445,20 +445,6 @@ fn collectTapsRecursive(
 
 /// Convert DottedPath to string representation
 fn dottedPathToString(path: ast.DottedPath, allocator: std.mem.Allocator) ![]const u8 {
-    var result = try std.ArrayList(u8).initCapacity(allocator, 0);
-    defer result.deinit(allocator);
-
-    // Add module qualifier if present (e.g., "std.io:")
-    if (path.module_qualifier) |mq| {
-        try result.appendSlice(allocator, mq);
-        try result.append(allocator, ':');
-    }
-
-    // Add segments joined by dots (e.g., "file.write")
-    for (path.segments, 0..) |seg, i| {
-        if (i > 0) try result.append(allocator, '.');
-        try result.appendSlice(allocator, seg);
-    }
-
-    return try result.toOwnedSlice(allocator);
+    // "mod:seg.seg" — qualifier when present, then dot-joined segments
+    return path.qualifiedAlloc(allocator);
 }
