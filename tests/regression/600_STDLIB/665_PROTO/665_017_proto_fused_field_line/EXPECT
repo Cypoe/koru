@@ -1,0 +1,4 @@
+MUST_ERROR
+CONTAINS error[KORU173]
+CONTAINS 'serial: string'
+ERROR_AT 6

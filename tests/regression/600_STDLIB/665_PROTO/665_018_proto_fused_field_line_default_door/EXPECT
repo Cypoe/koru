@@ -1,0 +1,4 @@
+MUST_ERROR
+CONTAINS error[KORU173]
+CONTAINS 'heal: string'
+ERROR_AT 5

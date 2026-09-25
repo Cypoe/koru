@@ -456,16 +456,15 @@ const TerminalRef = struct {
                 if (found.parents) |pspec| {
                     if (expandParents(alloc, prog, pspec, found.scope, entry, stack, merged)) |m| return m;
                 }
-                var flines = std.mem.tokenizeAny(u8, found.fields_text, "\n,");
-                while (flines.next()) |fraw| {
-                    const fline = std.mem.trim(u8, fraw, " \t\r,");
-                    if (fline.len == 0) continue;
-                    const colon = std.mem.indexOfScalar(u8, fline, ':') orelse
-                        return std.fmt.allocPrint(alloc, "std/proto({s}): parent {s} carries field line '{s}' with no ':'", .{ entry, w.name, fline }) catch unreachable;
-                    const fname = std.mem.trim(u8, fline[0..colon], " \t");
-                    const ftype = std.mem.trim(u8, fline[colon + 1 ..], " \t,");
-                    if (fname.len == 0 or ftype.len == 0) continue;
-                    if (appendMerged(alloc, merged, .{ .name = fname, .ftype = ftype, .home = found.scope, .origin = w.name }, entry)) |m| return m;
+                // Parent text may still be LIVE, so this re-parses author
+                // text through the same block gate the doors hold.
+                switch (protoFieldBlock(alloc, found.fields_text, true)) {
+                    .entries => |es| {
+                        for (es) |e| {
+                            if (appendMerged(alloc, merged, .{ .name = e.fname, .ftype = e.ftype, .home = found.scope, .origin = w.name }, entry)) |m| return m;
+                        }
+                    },
+                    .fault => |m| return std.fmt.allocPrint(alloc, "std/proto({s}): parent '{s}': {s}", .{ entry, w.name, m }) catch unreachable,
                 }
                 _ = stack.pop();
             }

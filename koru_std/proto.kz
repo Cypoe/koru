@@ -122,19 +122,15 @@ const af = @import("ast_functional");
     // containment walk). Local fields merge into the inherited set: same name
     // + same concept dedups, same name + different concept refuses.
     // `?Source`: a blockless decl (`Cat <: Animal`) arrives with source null.
-    var lines1 = std.mem.splitScalar(u8, if (source) |s| s.text else "", '\n');
-    while (lines1.next()) |line_raw| {
-        const line = std.mem.trim(u8, line_raw, " \t\r,");
-        if (line.len == 0) continue;
-        const colon = std.mem.indexOfScalar(u8, line, ':') orelse {
-            return .{ .replacement = ast.refusal(allocator, reporter, .KORU173, flow.location, flow.module, "std/proto({s}): field line '{s}' has no ':' — each field must be `name: type`", .{ name, line }) };
-        };
-        const fname = std.mem.trim(u8, line[0..colon], " \t");
-        const ftype = std.mem.trim(u8, line[colon + 1 ..], " \t,");
-        if (fname.len == 0 or ftype.len == 0) {
-            return .{ .replacement = ast.refusal(allocator, reporter, .KORU173, flow.location, flow.module, "std/proto({s}): field line '{s}' is missing a name or a type", .{ name, line }) };
-        }
-        if (TerminalRef.appendMerged(allocator, &merged, .{ .name = fname, .ftype = ftype, .home = scope_home, .origin = name }, name)) |msg| {
+    // The entry grammar is gated once over the whole block before a single
+    // field merges — one `name: type` per line, each name bound once
+    // (proto.fields.kz). The walk below is the consumer, not the checker.
+    const fields = switch (protoFieldBlock(allocator, if (source) |s| s.text else "", false)) {
+        .entries => |es| es,
+        .fault => |msg| return .{ .replacement = ast.refusal(allocator, reporter, .KORU173, flow.location, flow.module, "std/proto({s}): {s}", .{ name, msg }) },
+    };
+    for (fields) |e| {
+        if (TerminalRef.appendMerged(allocator, &merged, .{ .name = e.fname, .ftype = e.ftype, .home = scope_home, .origin = name }, name)) |msg| {
             return .{ .replacement = ast.refusal(allocator, reporter, .KORU173, flow.location, flow.module, "{s}", .{msg}) };
         }
     }
@@ -380,3 +376,4 @@ fn mintTerminal(allocator: std.mem.Allocator, item: *const astz.Item, expr: []co
     return mintTerminal(allocator, item, expr, "string");
 }
 ~part resolve
+~part fields

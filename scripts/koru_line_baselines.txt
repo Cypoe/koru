@@ -111,8 +111,9 @@ koru_std/optimizer.kz	31
 koru_std/package.kz	163
 koru_std/parser.kz	2060
 koru_std/profiler.kz	283
-koru_std/proto.kz	382
-koru_std/proto.resolve.kz	474
+koru_std/proto.fields.kz	58
+koru_std/proto.kz	379
+koru_std/proto.resolve.kz	473
 koru_std/pump.explain.kz	301
 koru_std/pump.kz	833
 koru_std/pump.messages.kz	37
@@ -198,6 +199,7 @@ koru_std/time.kz	102
 koru_std/time.waits.kz	56
 koru_std/todo.kz	356
 koru_std/trellis.kz	435
-koru_std/types.kz	377
+koru_std/types.fields.kz	55
+koru_std/types.kz	374
 koru_std/vendor.kz	1145
 koru_std/void.kz	20

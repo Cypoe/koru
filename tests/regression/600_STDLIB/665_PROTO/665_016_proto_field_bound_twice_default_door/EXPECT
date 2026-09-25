@@ -1,0 +1,4 @@
+MUST_ERROR
+CONTAINS error[KORU173]
+CONTAINS field 'hp' is bound twice
+ERROR_AT 9

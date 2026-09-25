@@ -34,12 +34,21 @@ Coupling the block languages is wanted, and two constraints bound it:
   re-scan) plus the `parse_fields` template filter — a fourth honest copy beats
   a premature shared scanner; the census decides what deserves sharing.
 
-## Measured hole the ruling leaves open
+## The measured hole is closed (2026-10)
 
-The proto doors' line loops refuse a fused same-line entry with the wrong
-reason (`unsupported type 'i32 serial: string'` — the fused tail misreads as
-part of the type) and never check a name bound twice:
-`proto(Dup) { rpm: i32 / rpm: i32 }` + `std/list:new(Dup)` reaches Zig as
+The proto doors' line loops used to refuse a fused same-line entry with the
+wrong reason (`unsupported type 'i32 serial: string'` — the fused tail
+misread as part of the type) and never checked a name bound twice:
+`proto(Dup) { rpm: i32 / rpm: i32 }` + `std/list:new(Dup)` reached Zig as
 `duplicate struct member name 'rpm'` (measured 2026-09-25 at ab5ec044d).
-Tightening that hole does not require the shared scanner — a seen-set and the
-fused-field check in the existing loops is enough.
+
+Each of the three loops now keeps a seen-set and runs
+`struct_literal.fusedFieldLine` on the payload before interpreting it —
+exactly the fix the hole note prescribed, no shared scanner. Duplicate names
+refuse `KORU173` ("field 'rpm' is bound twice — a proto entry takes each
+field name once") at `std/types:proto`, `std/proto`, and the `<:` parent
+re-parse; fused lines name the second field's fragment ("'serial: string'
+began a new field on the same line"). Inherited-field merge semantics are
+unchanged — the seen-set scopes to one block's text, so a child re-binding a
+parent field still deduplicates rather than refusing. Pinned by
+665_015–019.
