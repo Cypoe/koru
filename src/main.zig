@@ -4090,42 +4090,9 @@ const FlagDeclaration = struct {
 /// Expects: { "name": "...", "description": "...", "type": "..." }
 fn parseFlagDeclaration(allocator: std.mem.Allocator, json_text: []const u8) !FlagDeclaration {
     // Simple string extraction - look for "name": "value" patterns
-    var name: ?[]const u8 = null;
-    var description: ?[]const u8 = null;
-    var flag_type: ?[]const u8 = null;
-
-    // Extract name
-    if (std.mem.indexOf(u8, json_text, "\"name\"")) |name_start| {
-        const after_name = json_text[name_start + 6 ..]; // Skip "name"
-        if (std.mem.indexOf(u8, after_name, "\"")) |open_quote| {
-            const value_start = after_name[open_quote + 1 ..];
-            if (std.mem.indexOf(u8, value_start, "\"")) |close_quote| {
-                name = try allocator.dupe(u8, value_start[0..close_quote]);
-            }
-        }
-    }
-
-    // Extract description
-    if (std.mem.indexOf(u8, json_text, "\"description\"")) |desc_start| {
-        const after_desc = json_text[desc_start + 13 ..]; // Skip "description"
-        if (std.mem.indexOf(u8, after_desc, "\"")) |open_quote| {
-            const value_start = after_desc[open_quote + 1 ..];
-            if (std.mem.indexOf(u8, value_start, "\"")) |close_quote| {
-                description = try allocator.dupe(u8, value_start[0..close_quote]);
-            }
-        }
-    }
-
-    // Extract type
-    if (std.mem.indexOf(u8, json_text, "\"type\"")) |type_start| {
-        const after_type = json_text[type_start + 6 ..]; // Skip "type"
-        if (std.mem.indexOf(u8, after_type, "\"")) |open_quote| {
-            const value_start = after_type[open_quote + 1 ..];
-            if (std.mem.indexOf(u8, value_start, "\"")) |close_quote| {
-                flag_type = try allocator.dupe(u8, value_start[0..close_quote]);
-            }
-        }
-    }
+    const name = try extractJsonStringFieldOwned(allocator, json_text, "name");
+    const description = try extractJsonStringFieldOwned(allocator, json_text, "description");
+    const flag_type = try extractJsonStringFieldOwned(allocator, json_text, "type");
 
     return FlagDeclaration{
         .name = name orelse try allocator.dupe(u8, "unknown"),
@@ -4265,6 +4232,12 @@ fn extractJsonStringField(json_text: []const u8, field: []const u8) ?[]const u8 
         return after_field[value_start..i];
     }
     return null;
+}
+
+/// Owned variant — dupes the extracted slice for a caller-held field.
+fn extractJsonStringFieldOwned(allocator: std.mem.Allocator, json_text: []const u8, field: []const u8) !?[]const u8 {
+    const slice = extractJsonStringField(json_text, field) orelse return null;
+    return try allocator.dupe(u8, slice);
 }
 
 /// Parse subcommands array from JSON
