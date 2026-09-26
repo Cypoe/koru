@@ -1,0 +1,3 @@
+sealed
+disposed 1
+drained

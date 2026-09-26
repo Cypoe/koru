@@ -1,0 +1,1 @@
+OWED: enclosing-arm claim — inner send's unhandled `closed` resolves outward to the outer send's `| closed` arm (skipping the close level, which declares no such arm). Needs the post-transform claim pass; sibling of 320_120 / 320_170.

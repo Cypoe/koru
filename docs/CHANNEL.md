@@ -41,15 +41,17 @@ matter:
 | Vyukov bounded MPMC ring | `koru_std/rings.kz` + `rings.new.kz`/`rings.ops.kz` — `std/rings:new(name, capacity: N) { value: Type }` decl, name-addressed `enqueue`/`dequeue` steps over the `MpmcRing(T, cap)` substrate | the buffered data plane; CAS fast path, `full`/`none` as branches, **now a real Koru surface** (320_090 + 320_101–109) |
 | Effect branches | `! ask i64 -> i64`, handler `! ask v -> expr` — `400_132`, `670_060` | the tor calls the consumer's code; the resume is the consumer's answer — the rendezvous *shape* |
 | Thread spawn ladder | `koru_std/threading.kz` — `worker.spawn` `.async`/`.await`/`.join` | the cross-thread plane |
-| Compile-time pump | `koru_std/pump.kz` — `create`/`default`/`run`; verbs `step()->i32`, `live()->i64`, `wait(i)->{fd,wait_ns}` | the scheduler: pass loop + **one union `poll()` per all-idle pass** |
+| Compile-time pump | `koru_std/pump.kz` — `create`/`default`/`run`; verbs `step()->i32`, `live()->i64`, `wait(i)` → `i32` fd / `i128` re-poll ns / `{fd,wait_ns}` | the scheduler: pass loop + **one union `poll()` per all-idle pass** |
 | `default`-tor join site | `store.default.kz` (`std/store(name) ! field` → watch), `pump.kz` `default` (`std/pump(name) ! step`) | the grammar this surface reuses |
 
 Two measured facts about `pump`'s `run` worth the design's weight
 (`pump.kz:740-801`): progress is counted per pass (`Σ step()`), and an
 all-idle pass composes a *single* `poll()` over every participant's `wait`
-interests — `fd = -1` is deadline-only, `wait_ns` caps the wait. A participant
-with thread-arriving work can hand the pump an **eventfd** and cross-thread
-wakes land in the same union poll. That closes the threads↔pump bridge.
+interests — the return type is the vocabulary: `i32` answers a descriptor,
+`i128` a re-poll duration, `{ fd, wait_ns }` both; no sentinels. A participant
+with thread-arriving work returns `-> i32` naming an **eventfd** and
+cross-thread wakes land in the same union poll. That closes the
+threads↔pump bridge.
 
 ## The execution model (corrected 2026-09-24)
 
@@ -125,7 +127,34 @@ What is NOT settled:
 
 - Broadcast spelling (`! each` or otherwise) — deferred.
 - Per-flow select (one flow waiting on two channels) — a spelling
-  question, not a mechanism gap.
+  question, not a mechanism gap; the pump-join answer is pinned
+  (`699_010` — two channels stepped on one pump).
+- `std/supervisor` on a `std/channel:` verb — same-module wrapper
+  composition is measured (`699_019`: supervised bounded send, retry →
+  `full` in kind); supervising the std verb directly refuses
+  (`699_020` OWED — the `320_113` boundary).
+- Enclosing-arm fold — an unhandled `closed` claiming the nearest
+  enclosing `| closed` arm (`699_021` OWED — the `320_120`/`320_170`
+  fold family, needs the post-transform claim pass).
+- The eventfd bridge — the generated `<n>-wait` answers `-> i128` with a
+  1ms re-poll (deadline-only interest); nothing yet hands the pump a real
+  fd or writes it on send, so a `worker.spawn`ed producer cannot wake a
+  parked pump. Grounded mechanism, unbuilt wiring (`699_030` OWED-probe:
+  whether a spawned fn can reach a generated send unit at all).
+- **Obligation transit — the designed, unpinned rung.** Custody is a
+  per-edge contract (custody class × delivery semantics × substrate), not
+  a per-type trait: owned obligations transit where delivery is
+  exactly-once — competition included, since exactly-once pop mints to
+  exactly one statically-checked arm — while borrows refuse everywhere
+  and broadcast refuses obligated kinds (never built). `send` consumes
+  the binding's `<live!>` on `| ok` only; `| full`/`| closed` retain
+  producer custody; `| some v` mints the obligation fresh at the arm.
+  Measured today: send copies bytes in plain and custody stays
+  producer-side under auto-discharge ("copy-in, dispose-at-source") —
+  safe for dead data, a poisoned-resource launderer for protos owning
+  real handles. Pin family `699_022`–`699_029` holds the intended
+  contract open; `320_171` pins today's proto-element refusal;
+  `frag-custody-transit-is-an-edge-contract` carries the ruling.
 
 ## The three "block" tiers
 

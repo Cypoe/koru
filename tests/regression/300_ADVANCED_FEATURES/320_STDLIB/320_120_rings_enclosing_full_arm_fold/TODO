@@ -1,0 +1,1 @@
+OWED: enclosing-arm claim — an unhandled branch resolves outward to the nearest compatible same-named arm. Needs a post-transform coverage-time pass (transform-minted `__ring_*` decls are invisible to the frontend desugar — compiler.kz:1259).

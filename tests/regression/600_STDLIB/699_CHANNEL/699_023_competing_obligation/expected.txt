@@ -1,0 +1,4 @@
+sealed
+c0 disposed 1
+c1 disposed 2
+drained

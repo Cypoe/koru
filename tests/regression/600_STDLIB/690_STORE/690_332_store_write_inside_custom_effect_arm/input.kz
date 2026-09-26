@@ -1,0 +1,35 @@
+// PINS (aspirational): a std/store write inside a USER-DEFINED `!`-pulse arm
+// is a real site — the same accumulation shape the suite already proves inside
+// std-provided pulses (`std/grid:sweep`'s `! sweep` arm in 2105_prime_sieve).
+//
+// Today the store transform's site fold does not see sites inside custom
+// effect-branch arms: `std/store:stored` here emits a `SL.ColProv` reference
+// the synthesized SL struct lacks, plus an `ast_find.__koru_ast` path that
+// does not exist — BACKEND_COMPILE_ERROR instead of a working write. Same
+// transform-blindness family as 400_098 (capture over a custom pulse).
+//
+// Expected once fixed: evens pulses 2,4,6,8,10; the arm accumulates into the
+// store; `| done` reads `acc.sum` = 30.
+
+~import std/io
+~import std/store
+
+const std = @import("std");
+
+std/store:new(acc) { sum: 0[i64] }
+
+~pub tor evens { n: usize }
+! item i64
+| done i64
+
+~proc evens|zig {
+    var i: usize = 2;
+    while (i <= n) : (i += 2) {
+        item(@as(i64, @intCast(i)));
+    }
+    return .{ .done = @intCast(n / 2) };
+}
+
+~evens(n: 10)
+! item v |> std/store:stored { acc.sum: acc.sum + v }
+| done _ |> std/io:print.ln("sum {{ acc.sum:d }}")

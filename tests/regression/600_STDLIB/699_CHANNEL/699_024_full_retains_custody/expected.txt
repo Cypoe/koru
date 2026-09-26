@@ -1,0 +1,5 @@
+full, kept 3
+sealed
+disposed 1
+disposed 2
+drained

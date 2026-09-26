@@ -1,0 +1,11 @@
+std/store sites inside user-defined `!`-pulse arms — parked pending the
+site-fold widening to custom effect-branch continuations.
+
+Measured 2026-09-19 (this checkout): `std/store:stored` inside `evens`'s
+`! item` arm emits `koru_store.SL.ColProv` (no such member on the
+synthesized SL) and `ast_find.__koru_ast` (no such member) —
+BACKEND_COMPILE_ERROR. The identical shape inside a std-provided pulse
+(`std/grid:sweep`'s `! sweep` arm, 2105_prime_sieve) is green, so the
+blind spot is the fold's reach into custom effect-branch continuations,
+not the write itself. Same family as 400_098 (capture over a custom
+pulse) — un-park both when the fold covers the general case.

@@ -1,0 +1,1 @@
+OWED: obligation relay — consumer arm re-sends minted v into a second channel; custody chains. TODAY: relay of plain data works; the obligation leg is owed (same transit rung). NOTE: consumer arms piping into send is the pipeline idiom this pins — each hop consumes at send, mints at receive.
