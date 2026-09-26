@@ -1598,7 +1598,19 @@ pub const Parser = struct {
                     continue;
                 };
                 try self.appendKeptItem(&items, item, start_line);
-            } else if (lexer.startsWith(line, "|")) {
+            } else if (lexer.startsWith(line, "|") or
+                (trimmed.len > 0 and trimmed[0] == '!' and
+                    (self.is_k or (trimmed.len > 1 and
+                        (trimmed[1] == ' ' or trimmed[1] == '\t' or trimmed[1] == '?')))))
+            {
+                // A `!` continuation glyph at top level continues nothing —
+                // the same stray the `|` arm above it is. A pure `.k` has no
+                // host lines, so every `!` there is stray; in `.kz`/`.kjs`
+                // the Koru arm is `!` + space/tab/`?` (`! name`, `!?name`),
+                // which `!=`/`!x()` host text never matches. Unclaimed, the
+                // line passes through as host text and the author meets
+                // `error: expected type expression, found '!'` in emitted
+                // code for a line they wrote as Koru.
                 try self.reporter.addError(
                     .KORU010,
                     self.current + 1,

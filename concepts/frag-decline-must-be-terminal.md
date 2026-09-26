@@ -64,6 +64,19 @@ root path had; here, the non-top-level path *re-implemented* it and re-implement
 it incompletely. Same root cause — two code paths for one construct — and the same
 remedy, one route for both.
 
+## The same absorption, one glyph over (2026 replay)
+
+The top-level stray-continuation wall named `|` and stopped there. Its `!`
+sibling — the effect-arm glyph — declined everywhere and was absorbed by the
+same two rehomers this belief already describes: a `.k` file's stray `!` arm
+fell through to the host-line passthrough (there are no host lines in `.k`),
+and a `.kz` file's `!`-shaped arm took the same route, so the author met
+`error: expected type expression, found '!'` in emitted code for a line they
+wrote as Koru. The wall is the same KORU010; what changed is the glyph set it
+recognises — `!` + space/tab/`?` in host-embedded files, every `!` in `.k`
+(210_301, 210_302). A stray wall that covers one marker kind and not its
+sibling is the decline-not-terminal failure wearing a different costume.
+
 ## Open
 
 Whether listing statements in a subflow body should stay refused or become legal

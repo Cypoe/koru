@@ -1,0 +1,11 @@
+// PINS: in a host-embedded file a `! name …` line is still a Koru
+// continuation glyph — at top level it continues nothing, so it is the
+// stray continuation KORU010 names (same wall as a top-level `|` arm).
+const std = @import("std");
+
+~tor start {}
+~proc start|zig {}
+
+! whatever b |> std/io:print.ln("x")
+
+~start()
