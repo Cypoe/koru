@@ -2550,6 +2550,71 @@ pub const Parser = struct {
         }
     }
 
+    /// A declaration's name must be one its use sites can spell. The decl head
+    /// hands the parser raw text up to `{`/`=`/`->`, so `evil(x)` or
+    /// `has space` reach the path parser AS the name — registering a
+    /// tor/proc/impl under a name no call, override, or jump can write. The
+    /// mismatch surfaces later and sideways: 'unknown tor' lands on a caller
+    /// that spelled the name correctly, or 'proc without matching event'
+    /// names the wrong side. Each `.`-separated segment is an identifier (with
+    /// an optional `[…]` marker tail), or the transform-glob `*`; the `m:name`
+    /// qualifier is legal only on the impl side (`~proc m:name` serves a
+    /// contract where it lives), and each of its `.`-separated pieces is an
+    /// identifier too.
+    /// One `.`-separated piece of a declaration name: an identifier, the
+    /// transform-glob `*`, or an identifier carrying a bracketed tail —
+    /// `close[!]` (the auto-discharge marker) and `name[T:u32]` (generic
+    /// params) are name spellings a call site can write back.
+    fn isSpellableNameSegment(seg: []const u8) bool {
+        if (std.mem.eql(u8, seg, "*")) return true;
+        const base = if (std.mem.indexOfScalar(u8, seg, '[')) |b| seg[0..b] else seg;
+        if (!isValidIdentifier(base)) return false;
+        // A bracket tail must be nonempty, closed, and run to the segment end.
+        if (std.mem.indexOfScalar(u8, seg, '[')) |b| {
+            if (seg.len < b + 3 or seg[seg.len - 1] != ']') return false;
+        }
+        return true;
+    }
+
+    fn rejectUnspellableDeclName(self: *Parser, line_index: usize, path: ast.DottedPath, kind: []const u8, qualifier_ok: bool) !void {
+        const decl_line = self.lines[line_index];
+        for (path.segments) |seg| {
+            if (isSpellableNameSegment(seg)) continue;
+            const col = if (std.mem.indexOf(u8, decl_line, seg)) |i| i + 1 else lexer.getIndent(decl_line) + 1;
+            return self.fail(
+                .PARSE003,
+                line_index + 1,
+                col,
+                "{s} name '{s}' is not one a call site can spell — each '.'-separated piece is an identifier (or '*' for a transform glob)",
+                .{ kind, seg },
+            );
+        }
+        if (path.module_qualifier) |q| {
+            if (!qualifier_ok) {
+                const col = if (std.mem.indexOf(u8, decl_line, q)) |i| i + 1 else lexer.getIndent(decl_line) + 1;
+                return self.fail(
+                    .PARSE003,
+                    line_index + 1,
+                    col,
+                    "a {s} is declared in its own module — '{s}:name' is the impl side's spelling ('~proc {s}:name' serves a contract where it lives)",
+                    .{ kind, q, q },
+                );
+            }
+            var it = std.mem.splitScalar(u8, q, '.');
+            while (it.next()) |piece| {
+                if (isValidIdentifier(piece)) continue;
+                const col = if (std.mem.indexOf(u8, decl_line, piece)) |i| i + 1 else lexer.getIndent(decl_line) + 1;
+                return self.fail(
+                    .PARSE003,
+                    line_index + 1,
+                    col,
+                    "module qualifier '{s}' on a {s} name is not one a call site can spell — each '.'-separated piece is an identifier",
+                    .{ q, kind },
+                );
+            }
+        }
+    }
+
     /// Reject `.` used as a NAMESPACE separator. `/` is the sole namespace
     /// separator (matching the import string + filesystem); `.` is member access
     /// AFTER the `:` pivot. So a `.` in the module-qualifier (the part before the
@@ -2651,6 +2716,7 @@ pub const Parser = struct {
         try self.rejectSnakeName(parsed_path_str, event_line_index, "tor");
         var path = try lexer.parseQualifiedPath(self.allocator, parsed_path_str, ast);
         errdefer path.deinit(self.allocator);
+        try self.rejectUnspellableDeclName(event_line_index, path, "tor", false);
         log_debug("PARSER parseEventDeclWithAnnotations: Just parsed event path: module={s} segments=", .{if (path.module_qualifier) |m| m else "null"});
         for (path.segments) |s| log_debug("{s}.", .{s});
         log_debug("\n", .{});
@@ -3172,6 +3238,7 @@ pub const Parser = struct {
         try self.rejectSnakeName(parsed_path_str, event_line_index, "tor");
         var path = try lexer.parseQualifiedPath(self.allocator, parsed_path_str, ast);
         errdefer path.deinit(self.allocator);
+        try self.rejectUnspellableDeclName(event_line_index, path, "tor", false);
 
         const shape_source = if (brace_idx_opt) |idx|
             trimmed_path_start[idx..]
@@ -3318,6 +3385,7 @@ pub const Parser = struct {
         try self.rejectSnakeName(path_for_parsing, self.current - 1, "proc");
         var path = try lexer.parseQualifiedPath(self.allocator, path_for_parsing, ast);
         errdefer path.deinit(self.allocator);
+        try self.rejectUnspellableDeclName(decl_line_index, path, "proc", true);
 
         // Proc bodies are always host language in braces
         // Capture the body's start line BEFORE extractProcBody advances self.current,
@@ -3436,6 +3504,7 @@ pub const Parser = struct {
         try self.rejectSnakeName(path_for_parsing, self.current - 1, "proc");
         var path = try lexer.parseQualifiedPath(self.allocator, path_for_parsing, ast);
         errdefer path.deinit(self.allocator);
+        try self.rejectUnspellableDeclName(decl_line_index, path, "proc", true);
 
         // Extract the body (balanced braces).
         // Capture the body's start line BEFORE extractProcBody advances self.current,
@@ -5714,6 +5783,7 @@ pub const Parser = struct {
                 }
                 var ep = try lexer.parseQualifiedPath(self.allocator, ep_str, ast);
                 errdefer ep.deinit(self.allocator);
+                try self.rejectUnspellableDeclName(head_line_idx, ep, "impl", true);
                 return ast.Item{ .immediate_impl = .{
                     .event_path = ep,
                     .value = .{
@@ -5758,6 +5828,7 @@ pub const Parser = struct {
             null;
 
         const event_path = try lexer.parseQualifiedPath(self.allocator, event_path_str, ast);
+        try self.rejectUnspellableDeclName(head_line_idx, event_path, "impl", true);
 
         // `=>` (construct glyph) introduces an immediate branch construction;
         // a plain `=` opens an implementation flow. The glyph is authoritative.

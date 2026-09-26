@@ -32,11 +32,22 @@ the declaration is not a payload-bearing site. This is the declaration-side
 sibling of the rule that a jump's argument must be a spelled `name: value`
 pair — both ends now refuse the other's syntax.
 
+## The generalisation the Open section predicted (landed)
+
+The census this file's Open section asked for ran on the other free-text
+declaration names, and the hole was the same shape everywhere it was measured:
+`tor evil(x)`, `~proc evil(x)|zig`, `~sub(x) = …`, and `tor m:speech` all
+registered names no caller could spell, and the use sites ate "unknown tor"
+/ "proc without matching event" for text they never wrote. The rule is now
+one wall — `rejectUnspellableDeclName` gates every decl path the tor, proc,
+and subflow-impl parsers produce (210_303–306). The legal names it must
+never refuse: kebab segments, the transform glob `*`, an `[…]` marker tail
+(`close[!]`, `name[T:u32]`), and the `m:name` qualifier on the impl side
+(`~proc m:name` serves a contract where it lives — on a `tor` decl it is the
+unspellable mirror, since a tor is declared in its own module).
+
 ## Open
 
-- The same "declared name must be spellable at every use site" question
-  applies wherever a declaration takes a free-text tail; labels were the
-  measured hole, but the enumeration that found them (a jump can only spell
-  identifiers) generalises — event names, tor names, and the `#name` on
-  pre-invocation anchors all take name text from a line tail and are worth
-  the same census.
+- The declaration sites are now all gated (label, tor, proc, subflow impl).
+  What remains unmeasured is the same question on non-declaration name mints —
+  names a transform or a `Source` block registers on the author's behalf.

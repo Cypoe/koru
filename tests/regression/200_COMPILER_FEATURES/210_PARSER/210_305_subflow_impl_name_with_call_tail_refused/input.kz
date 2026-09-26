@@ -1,0 +1,10 @@
+// PINS: a subflow impl's name must be one a call site can spell. The
+// parenthesised tail reads into the name — registering the impl under
+// "sub(x)" while the event it means to implement is `sub` — so `sub`
+// keeps no impl and the writer's intent evaporates silently.
+const std = @import("std");
+
+~tor sub { x: i64 } -> i64
+~tor delegate { x: i64 } -> i64
+
+~sub(x) = delegate(x)

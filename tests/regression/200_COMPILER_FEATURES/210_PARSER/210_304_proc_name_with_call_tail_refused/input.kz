@@ -1,0 +1,8 @@
+// PINS: a proc's declared name must be one a call site can spell. The
+// parenthesised tail reads into the name — registering the impl under
+// "evil(x)" while the tor it means to serve is `evil` — so the tor is
+// left without a proc and the mismatch lands on whoever calls it.
+const std = @import("std");
+
+~tor evil { x: i64 } -> i64
+~proc evil(x)|zig { return x; }
