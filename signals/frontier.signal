@@ -1,0 +1,11 @@
+name: frontier
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: investigation reached the measured ceiling of a mechanism — further
+  progress wants a different design, not more tuning. Declares where the
+  edge IS (with the measurement that placed it) so the next session does
+  not re-mine it. Sibling of confirmation: the belief held, and the work
+  is done at this layer.
+route: surface
