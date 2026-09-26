@@ -26,5 +26,9 @@
 # regrowth from the parser session's in-flight work in the shared
 # checkout — same consciously-retained test-scaffolding class. The census
 # reads the working tree; the pin records it as measured.
-clusters=611
-members=754
+# Re-pinned 611/754 -> 613/758 (2026-09-26): the roll fired on foreign
+# src/ drift — this commit is test-marker triage (pin re-pin + dir
+# renames), zero src/ files. Same consciously-retained test-scaffolding
+# class the pin documents.
+clusters=613
+members=758

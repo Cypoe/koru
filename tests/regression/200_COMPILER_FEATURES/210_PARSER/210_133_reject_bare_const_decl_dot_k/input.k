@@ -19,10 +19,12 @@
 // actually fires below — KORU114, naming a tor spelled
 // `const SIEVE_BITS: usize` that the author never wrote.
 //
-// So the diagnostic is well-formed and points into this file; it is the
-// SENTENCE that is nonsense, because the item it describes is a mis-parse.
-// That is the wall this pin holds: the day the parser rejects a bare `const`
-// at the `.k` boundary, this stops being an abstract/impl error at all.
+// 2026-09-26: 8aee85104 (impl-name spellability) moved the refusal earlier
+// — the same mis-parse now dies at PARSE003 (`impl name ' usize' is not one a
+// call site can spell`) instead of reaching abstract/impl pairing. The
+// diagnostic is still impl-flavored for a `const` the author never spelled
+// that way; the clean refusal this pin ultimately wants is a `.k`-boundary
+// rejection, not a better impl complaint. EXPECT re-pinned to PARSE003.
 //
 // Found 2026-06-30 while fixing the prime-sieve drag-race `faithful.k` entry
 // (forcing a runtime-sized `std/field:new` allocation rather than a

@@ -1,0 +1,6 @@
+name: instrumentation
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `mechanism` — declare that name. (orphan drained 2026-09-26; the firing was a hand-maintained read-the-transcript convention acquiring a mechanical float, which is mechanism not instrument-sharpened — delivery, not discrimination)
