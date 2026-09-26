@@ -3,4 +3,4 @@ kind: inferred
 shape: categorical
 face: in
 membrane: false
-note: auto-registered orphan — declared before it was defined; refine me
+note: protocol token misdeclared as a signal — the opt-out is `Signals:` plural. Never a Signal: name.

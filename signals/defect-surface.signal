@@ -1,0 +1,6 @@
+name: defect-surface
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a defect surfaced — newly observed, not yet classified.

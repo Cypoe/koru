@@ -5,6 +5,7 @@ status: standing
 yields: the JavaScript target's stdlib surface, module by module, against a total oracle
 family: js-target
 created: 2026-08-06
+renumbered: 010 → 026 on 2026-09-26 (collision — 010_the_refusal_audit was first)
 ---
 
 *(Walker context, not part of the sealed brief. Written at the end of the session

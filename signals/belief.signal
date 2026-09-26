@@ -1,0 +1,6 @@
+name: belief
+kind: inferred
+shape: categorical
+face: in
+membrane: true
+note: umbrella belief signal — a belief about the system changed; prefer the precise name (new-belief, belief-flip, extension, correction) when the change kind is known.

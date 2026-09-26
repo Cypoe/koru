@@ -3,4 +3,4 @@ kind: inferred
 shape: categorical
 face: in
 membrane: false
-note: auto-registered orphan — declared before it was defined; refine me
+note: orphan token with no canonical — context-free declaration; see observation.

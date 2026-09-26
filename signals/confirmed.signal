@@ -1,4 +1,4 @@
-name: prediction-confirmed
+name: confirmed
 kind: inferred
 shape: categorical
 face: in

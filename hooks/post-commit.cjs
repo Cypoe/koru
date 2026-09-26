@@ -1,16 +1,19 @@
 #!/usr/bin/env node
-// membrane + worldmodel — post-commit faucet (the cross-repo link).
+// membrane + worldmodel — post-commit signal surface (the live-bus bridge).
 //
-// After a commit lands in a CONSUMER repo (koru, koru-libs, …), if its
-// `## World Model` section declared a BELIEF-CLASS signal — contradiction,
-// regime-change, or correction — then a belief about Koru just changed and it
-// must reach the shared corpus. This faucet does NOT silently write the corpus
-// (no magic daemon mutating another repo behind your back). It QUEUES the
-// obligation durably into the corpus inbox and surfaces it, so an AGENT closes
-// the loop by recording the belief. A human is never in this loop.
+// After a commit lands, every `Signal:` line the gate sealed into its
+// `## World Model` section — measured AND inferred — slides onto the NATS
+// bus as a live card: what the commit body carries becomes something you
+// WATCH arrive. Best-effort and non-blocking — the surface may be down; a
+// commit never waits on it — but a drop is LOUD, not silent.
 //
-// Routine commits (mechanical signals, or `Signals: acknowledged-none`) produce
-// nothing here — the link only fires when YOU declared a belief changed.
+// There used to be a second leg: belief-class signals were QUEUED to a
+// corpus `inbox/pending.jsonl` for an agent to drain. Dead by design
+// evolution — commit-msg now forces a belief-class signal to stage its
+// concept file in the same commit (garden-in-place), and the queue leg
+// skipped exactly those commits, so it could never fire. The parked
+// archive lives at docs/inbox/ (moved by 78196e61c, 2026-08-31); the
+// leg was removed 2026-09-26.
 
 // A Signal: entry runs until the NEXT Signal: line — not until the next newline.
 // FIXED 2026-08-08: both readers below used /^Signal:\s*(.+)$/gim, and `.` does not
@@ -29,14 +32,6 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const git = (a) => execFileSync("git", a, { encoding: "utf8" }).trim();
-
-// Routing is registry-driven, NOT a hardcoded list: a signal reaches the corpus
-// iff its interface file declares `membrane: true`. The interface decides what is
-// a belief worth recording — never a value-judgment baked into this hook.
-function isMembrane(name) {
-  try { return /^membrane:\s*true\b/im.test(fs.readFileSync(`signals/${name}.signal`, "utf8")); }
-  catch { return false; }
-}
 
 function sectionBody(text, name) {
   let cur = null, buf = [];
@@ -139,55 +134,3 @@ function surfaceSignals() {
   }
 }
 surfaceSignals();
-
-// A recording (a commit that writes concept files) is a belief LANDING in the
-// corpus, not a source belief needing routing. Skip it — this is what lets the
-// faucet be installed uniformly everywhere (even on a self-contained repo that is
-// its own corpus) without the recording re-queuing itself into an endless loop.
-const touched = git(["show", "--name-only", "--format=", "HEAD"]).split("\n").filter(Boolean);
-if (touched.some((f) => /(^|\/)concepts\/[^/]+\.md$/.test(f))) process.exit(0);
-
-const wm = sectionBody(msg, "world model");
-const signals = signalEntries(wm)
-  .map((entry) => ({ type: ((entry.match(/^(\S+)/) || [])[1] || "").toLowerCase(), line: entry }))
-  .filter((s) => isMembrane(s.type));
-if (!signals.length) process.exit(0); // routine commit — nothing to route
-
-// THE STORE POINTER, resolved the one documented way. This used to read a bare
-// `.membrane` file and, failing to find one, print a note and exit 0 — so a
-// belief-class signal silently stopped reaching the inbox, and the advice it
-// printed named a store repo that has since been retired.
-//
-// `.membrane` was the FOURTH site of a mechanism the skill, `snap.mjs`,
-// `install.sh` and this file each read differently. The first three were
-// converged on 2026-08-04; this one would have been left resolving a file the
-// installer no longer writes. Absence is not an error — no pointer means the
-// corpus is IN-REPO, which is the documented default.
-const top = git(["rev-parse", "--show-toplevel"]);
-const ptr = path.join(top, ".claude", "membrane.json");
-let store = top;
-if (fs.existsSync(ptr)) {
-  try {
-    const declared = JSON.parse(fs.readFileSync(ptr, "utf8")).store;
-    if (declared) store = path.resolve(top, declared);
-  } catch (e) {
-    console.error(`\n● ${ptr} is not valid JSON — routing this signal in-repo instead.`);
-    console.error(`  ${String(e.message).trim()}\n`);
-  }
-}
-const repo = path.basename(top);
-const inbox = path.join(store, "inbox");
-fs.mkdirSync(inbox, { recursive: true });
-const pendingFile = path.join(inbox, "pending.jsonl");
-
-for (const s of signals) {
-  const rec = { ts: new Date().toISOString(), repo, sha, subject: msg.split("\n")[0], type: s.type, signal: s.line };
-  fs.appendFileSync(pendingFile, JSON.stringify(rec) + "\n");
-}
-const n = fs.readFileSync(pendingFile, "utf8").trim().split("\n").filter(Boolean).length;
-
-console.error(`\n● belief signal fired — a Koru belief changed and must reach the corpus.`);
-console.error(`    repo:   ${repo} @ ${sha}`);
-for (const s of signals) console.error(`    signal: ${s.line}`);
-console.error(`    queued → ${pendingFile}  (${n} pending)`);
-console.error(`  An agent drains the inbox into the corpus. You never run anything.\n`);

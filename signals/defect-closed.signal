@@ -1,0 +1,6 @@
+name: defect-closed
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a defect resolved — the lifecycle terminus.

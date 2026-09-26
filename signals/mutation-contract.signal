@@ -1,4 +1,4 @@
-name: architecture
+name: mutation-contract
 kind: inferred
 shape: categorical
 face: in

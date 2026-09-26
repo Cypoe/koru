@@ -2,5 +2,5 @@ name: belief-change
 kind: inferred
 shape: categorical
 face: in
-membrane: false
-note: auto-registered orphan — declared before it was defined; refine me
+membrane: true
+note: an existing belief was revised — see correction (it was wrong), extension (it grew), belief-flip (it reversed).

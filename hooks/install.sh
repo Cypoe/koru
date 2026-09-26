@@ -2,12 +2,12 @@
 # Install the membrane + worldmodel git discipline into ANY repo. Ubiquitous by
 # design — a no-brainer to drop on any repo:
 #   commit-msg   — the gate (universal World Model signal + OKF-aware lineage)
-#   post-commit  — the faucet (routes belief-class signals to the corpus inbox)
-#   .membrane    — store pointer (which corpus this repo's beliefs flow into)
+#   post-commit  — the surface (posts each Signal: card to the NATS bus)
+#   .membrane    — corpus pointer (declares which corpus this repo belongs to)
 #   concepts/    — the OKF store, scaffolded so the corpus is ready immediately
 #
 # By default a repo is its OWN self-contained corpus (zero config). Pass a shared
-# corpus path to make it a consumer that routes its beliefs into a family store.
+# corpus path to declare this repo a member of a family store (membrane.json).
 #
 # Usage:
 #   hooks/install.sh                       # install into THIS repo (self corpus)

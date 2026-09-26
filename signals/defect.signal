@@ -3,4 +3,4 @@ kind: inferred
 shape: categorical
 face: in
 membrane: false
-note: auto-registered orphan — declared before it was defined; refine me
+note: a defect event in the toolchain — umbrella; see defect-surface (emerged), defect-closed (resolved), defect-class (a family identified), defect-fix/bug-fix (the commit class).
