@@ -607,3 +607,15 @@ quietly fixed:
   thing I touched" to "everything that shared the code", and the verification
   has to widen with it. Running the affected cluster is right for a fix and
   wrong for a merge.
+
+## Second instance — divergence is not only cost, it is behavior (2026-09-26)
+
+The belief predicted silent *cost* divergence between sibling lowerings.
+`400_198` showed the same shape for *correctness*: 400_076 had fixed
+effect-branch chained invocations at dispatch top level, and the arm-body
+path (`emitSubflowContinuationsWithDepth`) kept the old absence — it emitted
+`handler(input, struct {})` and dropped the `!` arm into a result switch
+whose Output union has no such tag. Same construct, two lowering paths, fix
+landed in the one being looked at. The widened claim: anything a lowering
+path *does* — a transform, a diagnostic, a fix — exists only in the path it
+was written in; sibling paths share the surface and none of the substance.

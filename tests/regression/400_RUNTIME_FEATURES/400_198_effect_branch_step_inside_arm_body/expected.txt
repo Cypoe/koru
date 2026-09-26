@@ -1,0 +1,4 @@
+hit 0
+hit 1
+hit 2
+ok 42

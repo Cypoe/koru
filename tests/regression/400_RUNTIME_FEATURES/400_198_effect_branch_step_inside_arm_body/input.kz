@@ -1,0 +1,68 @@
+// Test: an effect-bearing tor invoked as a NON-HEAD chain step inside a
+// terminal arm's body.
+//
+//   src() | ok _ |> mks(): n |> scan(n)
+//       ! hit i |> ...
+//       | done => ...
+//       | err _ => ...
+//
+// 400_076 installed the synthesized Handlers struct for a chained invocation
+// at dispatch top level (`setup() |> emitter(...)`). A step in the same
+// position nested inside an arm body went through the void-chain emitter
+// (emitSubflowContinuationsWithDepth), which has no Handlers synthesis or
+// inline splice: it emitted `handler(input, struct {})` and dropped the
+// `!` continuation into the result switch, where the tor's Output union
+// has no `match`/`hit` tag — `no field named 'hit'` in the emitted Zig.
+//
+// Surfaced by koru-libs/winnow: `collect-matches` scans pcre2 `find.all`
+// inside a `from-page | ok acc` arm, accumulating into a String builder —
+// the effect call cannot sit at flow head because the builder must be bound
+// first.
+
+~import std/io
+
+~pub tor src { }
+| ok usize
+| err string
+
+~proc src|zig {
+    return .{ .ok = 3 };
+}
+
+// A preceding `|>` step inside the arm body — the discriminator. With scan
+// as the arm body's FIRST step the same program already compiled (the head
+// path installs Handlers); with mks() before it, the chained invocation was
+// emitted with `struct {}` handlers.
+~pub tor mks { } -> usize
+
+~proc mks|zig {
+    return 3;
+}
+
+~pub tor scan { n: usize }
+! hit usize
+| done
+| err string
+
+~proc scan|zig {
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        hit(i);
+    }
+    return .{ .done = .{} };
+}
+
+~pub tor consumer { }
+| ok usize
+| err string
+
+~consumer = src()
+| ok _ |> mks(): n |> scan(n)
+    ! hit i |> std/io:print.ln("hit {{ i:d }}")
+    | done => ok 42
+    | err _ => err "scan failed"
+| err e => err e
+
+~consumer()
+| ok v |> std/io:print.ln("ok {{ v:d }}")
+| err e |> std/io:print.ln("err {{ e:s }}")

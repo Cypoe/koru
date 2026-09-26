@@ -277,6 +277,11 @@ pub const EmissionContext = struct {
     input_var: ?[]const u8 = null, // "e" for handlers, null for top-level
     input_fields: ?[]const ast.Field = null,
     ast_items: ?[]const ast.Item = null, // Full AST for module resolution
+    // Full program item list, used as a fallback when `ast_items` is the
+    // module-scoped slice (the subflow-continuation path threads
+    // `module.items` for deliberate shadowing, which cannot see cross-module
+    // targets like `koru/pcre2:find.all` — 400_198).
+    program_items: ?[]const ast.Item = null,
     depth: usize = 0, // Recursion depth for continuation nesting
     flow_pre_label: ?[]const u8 = null, // Label to break for flow termination
     current_label: ?[]const u8 = null, // Current label for continuation-level breaks
@@ -2350,8 +2355,12 @@ pub fn emitSubflowContinuations(
     // escapeBoundNames must see it even though it lives on `flow.inv()`,
     // outside this slice.
     head_binding: ?[]const u8,
+    // The full program item list — `all_items` is the enclosing module's
+    // items slice, which leaves cross-module targets invisible to decl
+    // lookups on this path (400_198).
+    program_items: []const ast.Item,
 ) !void {
-    try emitSubflowContinuationsWithDepth(emitter, continuations, start_idx, indent, all_items, 0, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, null, self_loop_canonical, head_binding, null);
+    try emitSubflowContinuationsWithDepth(emitter, continuations, start_idx, indent, all_items, program_items, 0, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, null, self_loop_canonical, head_binding, null);
 }
 
 /// Same as emitSubflowContinuations, but names the ROOT result const the
@@ -2374,10 +2383,12 @@ pub fn emitSubflowContinuationsRooted(
     enclosing_event: ?*const ast.EventDecl,
     root_result_name: ?[]const u8,
     self_loop_canonical: ?[]const u8,
+    // The full program item list — see emitSubflowContinuations.
+    program_items: []const ast.Item,
 ) !void {
     // The root result name doubles as the head binding for scope collection
     // — both name the same caller-emitted const.
-    try emitSubflowContinuationsWithDepth(emitter, continuations, start_idx, indent, all_items, 0, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, root_result_name, self_loop_canonical, null, null);
+    try emitSubflowContinuationsWithDepth(emitter, continuations, start_idx, indent, all_items, program_items, 0, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, root_result_name, self_loop_canonical, null, null);
 }
 
 /// Helper to check if any continuation in a list has a label
@@ -2949,6 +2960,7 @@ fn emitParentResultDiscard(
 /// paths and emitVoidStepViaContinuationBody.
 fn detachedEmissionContext(
     all_items: []const ast.Item,
+    program_items: []const ast.Item,
     tap_registry: ?*tap_registry_module.TapRegistry,
     type_registry: *type_registry_module.TypeRegistry,
     main_module_name: ?[]const u8,
@@ -2961,6 +2973,7 @@ fn detachedEmissionContext(
         .allocator = std.heap.page_allocator, // temp allocator for result vars
         .indent_level = 0, // Will use emitter's indent
         .ast_items = all_items,
+        .program_items = program_items,
         .is_sync = true,
         .tap_registry = tap_registry,
         .type_registry = type_registry,
@@ -2987,6 +3000,7 @@ fn emitVoidStepViaContinuationBody(
     cont: *const ast.Continuation,
     indent: []const u8,
     all_items: []const ast.Item,
+    program_items: []const ast.Item,
     depth: usize,
     tap_registry: ?*tap_registry_module.TapRegistry,
     type_registry: *type_registry_module.TypeRegistry,
@@ -3001,6 +3015,7 @@ fn emitVoidStepViaContinuationBody(
     try emitParentResultDiscard(emitter, indent, parent_result_name, depth);
     var ctx = detachedEmissionContext(
         all_items,
+        program_items,
         tap_registry,
         type_registry,
         main_module_name,
@@ -3032,6 +3047,10 @@ fn emitSubflowContinuationsWithDepth(
     start_idx: usize,
     indent: []const u8,
     all_items: []const ast.Item,
+    // The full program item list — `all_items` is the enclosing module's
+    // items slice (deliberate shadowing), which leaves cross-module targets
+    // invisible to decl lookups on this path (400_198).
+    program_items: []const ast.Item,
     depth: usize,
     tap_registry: ?*tap_registry_module.TapRegistry,
     type_registry: *type_registry_module.TypeRegistry,
@@ -3111,7 +3130,7 @@ fn emitSubflowContinuationsWithDepth(
         // continuations (the `@loop`/terminal arms), so we must NOT recurse below.
         if (cont.node) |label_step| {
             if (label_step == .label_with_invocation) {
-                try emitVoidStepViaContinuationBody(emitter, cont, indent, all_items, depth, tap_registry, type_registry, main_module_name, source_event_name, enclosing_bare_return, enclosing_event, self_loop_canonical, &local_bindings, parent_result_name);
+                try emitVoidStepViaContinuationBody(emitter, cont, indent, all_items, program_items, depth, tap_registry, type_registry, main_module_name, source_event_name, enclosing_bare_return, enclosing_event, self_loop_canonical, &local_bindings, parent_result_name);
                 return;
             }
         }
@@ -3126,8 +3145,46 @@ fn emitSubflowContinuationsWithDepth(
         // query/watch handler body (690_060): the print was transformed and the
         // `__kw` interpolation attached, but the void-chain emitter never emitted it.
         if (continuationsHaveReturnSwitchUnemittable(remaining_conts)) {
-            try emitVoidStepViaContinuationBody(emitter, cont, indent, all_items, depth, tap_registry, type_registry, main_module_name, source_event_name, enclosing_bare_return, enclosing_event, self_loop_canonical, &local_bindings, parent_result_name);
+            try emitVoidStepViaContinuationBody(emitter, cont, indent, all_items, program_items, depth, tap_registry, type_registry, main_module_name, source_event_name, enclosing_bare_return, enclosing_event, self_loop_canonical, &local_bindings, parent_result_name);
             return;
+        }
+
+        // An invocation step targeting a tor with `!` effect branches —
+        // e.g. `| ok acc |> take(): buf |> find.all(...) ! match m … | done …`
+        // — cannot lower here. The simple step-switch below has no Handlers
+        // synthesis or inline splice: with `!` arms it emits
+        // `handler(input, struct {})` and drops the effect arm into the result
+        // switch, where the tor's Output union has no such tag; with no `!`
+        // arms it emits a 1-arg `handler(input)` against a 2-arg signature
+        // (400_198). emitContinuationBody partitions the effect conts into the
+        // synthesized Handlers struct / inline splice and leaves the terminal
+        // conts for the result switch — the same treatment emitFlow gives the
+        // head invocation.
+        if (cont.node) |effect_step| {
+            if (effect_step == .invocation) {
+                const target_declares_effect = blk: {
+                    for (cont.continuations) |c| {
+                        if (c.kind == .effect) break :blk true;
+                    }
+                    if (findEventDeclByPath(all_items, &effect_step.invocation.path)) |td| {
+                        for (td.branches) |*b| {
+                            if (b.kind == .effect) break :blk true;
+                        }
+                        break :blk false;
+                    }
+                    // Module-scoped `all_items` can't see cross-module
+                    // targets — the type registry (program-wide) answers the
+                    // same question.
+                    const key = buildCanonicalEventName(&effect_step.invocation.path, std.heap.page_allocator, main_module_name) catch break :blk false;
+                    defer std.heap.page_allocator.free(key);
+                    if (type_registry.getEventType(key)) |et| break :blk et.has_effect_branches;
+                    break :blk false;
+                };
+                if (target_declares_effect) {
+                    try emitVoidStepViaContinuationBody(emitter, cont, indent, all_items, program_items, depth, tap_registry, type_registry, main_module_name, source_event_name, enclosing_bare_return, enclosing_event, self_loop_canonical, &local_bindings, parent_result_name);
+                    return;
+                }
+            }
         }
 
         // If the next continuation needs to switch on a result (has a non-empty
@@ -3319,6 +3376,7 @@ fn emitSubflowContinuationsWithDepth(
                 0,
                 indent,
                 all_items,
+                program_items,
                 if (next_needs_switch) depth + 1 else depth,
                 tap_registry,
                 type_registry,
@@ -3357,6 +3415,7 @@ fn emitSubflowContinuationsWithDepth(
         // Use normal continuation emission which handles labels via emitContinuationBody
         var ctx = detachedEmissionContext(
             all_items,
+            program_items,
             tap_registry,
             type_registry,
             main_module_name,
@@ -3665,6 +3724,7 @@ fn emitSubflowContinuationsWithDepth(
         try emitter.write(";\n");
         var ctx_sole = detachedEmissionContext(
             all_items,
+            program_items,
             tap_registry,
             type_registry,
             main_module_name,
@@ -4004,7 +4064,7 @@ fn emitSubflowContinuationsWithDepth(
                             if (cont.continuations.len > 0) {
                                 var deeper_indent_buf: [128]u8 = undefined;
                                 const deeper_indent = indentDeeper(&deeper_indent_buf, indent, "            ");
-                                try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical, null, &local_bindings);
+                                try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, program_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical, null, &local_bindings);
                             }
 
                             try emitter.write(indent);
@@ -4052,7 +4112,7 @@ fn emitSubflowContinuationsWithDepth(
                 if (cont.continuations.len > 0 and !is_metatype_binding) {
                     var deeper_indent_buf: [128]u8 = undefined;
                     const deeper_indent = indentDeeper(&deeper_indent_buf, indent, "        ");
-                    try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical, null, &local_bindings);
+                    try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, program_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical, null, &local_bindings);
                 }
                 } // if (!self_reentry_emitted)
 
@@ -4182,6 +4242,7 @@ fn emitSubflowContinuationsWithDepth(
     if (catchall_cont_ret) |catchall| {
         var ctx_ca = detachedEmissionContext(
             all_items,
+            program_items,
             tap_registry,
             type_registry,
             main_module_name,
@@ -4347,6 +4408,20 @@ fn findDeclBySegments(
 /// Handles both local events (no module_qualifier) and imported module events (with module_qualifier)
 pub fn findEventDeclByPath(items: []const ast.Item, path: *const ast.DottedPath) ?*const ast.EventDecl {
     return findDeclByPath(.event_decl, ast.EventDecl, items, path);
+}
+
+/// Decl lookup with the module-scope → program-scope fallback. The emitting
+/// scope's items win when both contain the name (deliberate shadowing), but
+/// the subflow-continuation path threads `module.items`, which cannot see a
+/// cross-module target like `koru/pcre2:find.all` (400_198).
+fn findEventDeclForEmission(ctx: *const EmissionContext, path: *const ast.DottedPath) ?*const ast.EventDecl {
+    if (ctx.ast_items) |items| {
+        if (findEventDeclByPath(items, path)) |ed| return ed;
+    }
+    if (ctx.program_items) |items| {
+        return findEventDeclByPath(items, path);
+    }
+    return null;
 }
 
 /// The bindings visible at a nested transform site. `site` is a pointer into
@@ -6488,9 +6563,15 @@ fn registeredVariantProcExists(
 /// Decide whether this flow's invocation takes the inline lowering.
 /// Returning null means: legacy call path, exactly today's behavior.
 fn inlineEffectfulEligibility(ctx: *EmissionContext, inv: *const ast.Invocation, conts: []const ast.Continuation) ?InlineEligibility {
-    const items = ctx.ast_items orelse return null;
+    const event_decl = findEventDeclForEmission(ctx, &inv.path) orelse return null;
+    // Every lookup below must search the list that actually contains the
+    // decl — module-scoped `ast_items` does not see cross-module targets
+    // (400_198).
+    const items: []const ast.Item = if (ctx.ast_items) |ai|
+        (if (findEventDeclByPath(ai, &inv.path) != null) ai else (ctx.program_items orelse ai))
+    else
+        (ctx.program_items orelse return null);
     if (inv.variant != null) return null;
-    const event_decl = findEventDeclByPath(items, &inv.path) orelse return null;
 
     var has_effect = false;
     var has_terminal_branch = false;
@@ -8822,8 +8903,7 @@ fn emitInvocation(
     // backend rejects it: "expected 1 argument(s), found 2". See test 400_109.
     if (ctx.pending_handlers_name) |hname| {
         const target_has_effect = blk: {
-            const items = ctx.ast_items orelse break :blk false;
-            const ed = findEventDeclByPath(items, &invocation.path) orelse break :blk false;
+            const ed = findEventDeclForEmission(ctx, &invocation.path) orelse break :blk false;
             for (ed.branches) |b| {
                 if (b.kind == .effect) break :blk true;
             }
@@ -11052,8 +11132,7 @@ pub fn emitContinuationBody(
         // seed call takes the synthesized Handlers struct as its 2nd arg.
         if (ctx.pending_handlers_name) |hname| {
             const target_has_effect = blk: {
-                const items = ctx.ast_items orelse break :blk false;
-                const ed = findEventDeclByPath(items, &lwi.invocation.path) orelse break :blk false;
+                const ed = findEventDeclForEmission(ctx, &lwi.invocation.path) orelse break :blk false;
                 for (ed.branches) |b| {
                     if (b.kind == .effect) break :blk true;
                 }
@@ -11334,10 +11413,10 @@ pub fn emitContinuationBody(
         var nested_inline_elig: ?InlineEligibility = null;
         if (cont.node) |maybe_step| {
             if (maybe_step == .invocation) {
-                const event_decl_nested = if (ctx.ast_items) |items|
-                    findEventDeclByPath(items, &maybe_step.invocation.path)
-                else
-                    null;
+                // Module-scope first, program-scope fallback — this path is
+                // reached through detached contexts whose ast_items is the
+                // emitting module's own slice (400_198).
+                const event_decl_nested = findEventDeclForEmission(ctx, &maybe_step.invocation.path);
                 if (event_decl_nested) |ed| {
                     for (ed.branches) |b| {
                         if (b.kind == .effect) {
