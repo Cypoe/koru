@@ -218,6 +218,7 @@ koru_std/store.csemit.kz	116
 koru_std/store.cursor.kz	38
 koru_std/store.default.kz	79
 koru_std/store.drain.kz	69
+koru_std/store.emitnames.kz	53
 koru_std/store.expand.kz	130
 koru_std/store.explain.kz	104
 koru_std/store.gate.kz	523
@@ -230,9 +231,9 @@ koru_std/store.insert.kz	418
 koru_std/store.ixrefs.kz	103
 koru_std/store.keyed.kz	43
 koru_std/store.kinds.kz	704
-koru_std/store.kz	817
+koru_std/store.kz	812
 koru_std/store.leaf.kz	207
-koru_std/store.new.kz	6238
+koru_std/store.new.kz	6226
 koru_std/store.plan.kz	236
 koru_std/store.preorder.kz	103
 koru_std/store.prewrite.kz	445

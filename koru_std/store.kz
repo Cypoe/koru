@@ -116,14 +116,8 @@ fn storeEventQualifier(alloc: std.mem.Allocator, home: []const u8, main_module_n
 /// The CELL, on the other hand, is a module-scope `let` written above
 /// `main_module` (the `.inline_code` path), so it is reachable BARE from every
 /// handler and any qualifier at all is wrong. On Zig the cell lives inside the
-/// declaring module's emitted struct and needs the full namespace.
-fn storeCellQualifier(alloc: std.mem.Allocator, home: []const u8, main_module_name: []const u8) []const u8 {
-    // The cs cell is a `static class` nested inside `main_module` via
-    // `.inline_code` — reachable bare from every handler, same as the JS
-    // module-scope `let`.
-    if (std.mem.eql(u8, CompilerEnv.lang, "js") or std.mem.eql(u8, CompilerEnv.lang, "cs")) return "";
-    return storeEmitQualifier(alloc, home, main_module_name);
-}
+/// declaring module's emitted struct and needs the full namespace. Its
+/// qualifier helper `storeCellQualifier` lives in the `emitnames` part.
 /// THE BUILD'S TARGET, readable from anywhere in this module. A transform's
 /// nested helper structs cannot capture a local, and `SRewrite.refs` recurses
 /// through thirteen call sites — threading a parameter down that chain to reach
@@ -767,6 +761,7 @@ fn storeLowerText(
     return storeIndexedRefsIn(alloc, prog, t, .{ .names = live_n.items, .prefixes = live_p.items });
 }
 ~part new
+~part emitnames
 ~part hstruct
 ~part view
 ~part stored
