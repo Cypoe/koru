@@ -1,0 +1,12 @@
+name: blind-spot
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: an instrument's zero was a sightline limit, not a measurement —
+  the surface it flattened through dropped the layer where the mass
+  lived. Declares where the boundary WAS and the count the new view
+  produced, so the next session does not read a quiet board as clean.
+  Sibling of frontier: not "done at this layer" but "was never looking
+  at this layer".
+route: surface
