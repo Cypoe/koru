@@ -227,7 +227,7 @@
         if (std.mem.eql(u8, arg.name, "kind")) kind_name = H.stripQuotes(std.mem.trim(u8, arg.value, " "));
     }
     if (store_name.len == 0 or block_text == null) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert requires a store name and a row block: insert(name) {{ field: value }}", .{}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert requires a store name and a row block: insert(name) {{ field: value }}", .{}) };
     }
 
     // Kind channel: `insert(s, kind: member)` writes the demanded tag.
@@ -238,10 +238,10 @@
     if (kind_name) |kn_raw| {
         const kn = std.mem.trim(u8, kn_raw, " \t");
         const members = storeKindMembers(allocator, program, store_name) orelse {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): kind: '{s}' names no members — store '{s}' declares no union members (a kind needs members: player: Player, ...)", .{ store_name, kn, store_name }) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): kind: '{s}' names no members — store '{s}' declares no union members (a kind needs members: player: Player, ...)", .{ store_name, kn, store_name }) };
         };
         if (members.len == 0) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): kind: '{s}' names no members — store '{s}' declares no union members (a kind needs members: player: Player, ...)", .{ store_name, kn, store_name }) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): kind: '{s}' names no members — store '{s}' declares no union members (a kind needs members: player: Player, ...)", .{ store_name, kn, store_name }) };
         }
         var found: ?usize = null;
         for (members, 0..) |m, mi| {
@@ -253,7 +253,7 @@
                 if (mi > 0) ml.appendSlice(allocator, ", ") catch unreachable;
                 ml.appendSlice(allocator, m) catch unreachable;
             }
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): unknown kind '{s}' — members are {s}", .{ store_name, kn, ml.items }) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): unknown kind '{s}' — members are {s}", .{ store_name, kn, ml.items }) };
         }
         kind_ordinal = found;
     } else {
@@ -265,7 +265,7 @@
                 ml.appendSlice(allocator, m) catch unreachable;
             }
             const first: []const u8 = if (members.len > 0) members[0] else "member";
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): this store holds kinds ({s}) — name one: insert({s}, kind: {s})", .{ store_name, ml.items, store_name, first }) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): this store holds kinds ({s}) — name one: insert({s}, kind: {s})", .{ store_name, ml.items, store_name, first }) };
         }
     }
 
@@ -279,7 +279,7 @@
         // true one and this lookup can only ever fail. Staying silent here is what
         // keeps one mistake to one error.
         if (ast.declarationRefused(allocator, program, flow.module, "std/store:new({s}):", .{store_name})) return .{ .transformed = .{} };
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert: unknown store '{s}' - no std/store:new({s}) found", .{ store_name, store_name }) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert: unknown store '{s}' - no std/store:new({s}) found", .{ store_name, store_name }) };
     };
     const braced = std.fmt.allocPrint(allocator, "{{{s}}}", .{block_text.?}) catch unreachable;
     // A ONE-column store names no column, so its row block IS the value
@@ -293,7 +293,7 @@
         one[0] = .{ .name = ast.STORE_IDENTITY_COLUMN, .value = std.mem.trim(u8, block_text.?, " \t\n\r") };
         break :blk one;
     } else struct_literal.parseFields(allocator, braced) catch |err| {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): {s}", .{ store_name, struct_literal.describeErrorIn(allocator, err, braced) }) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): {s}", .{ store_name, struct_literal.describeErrorIn(allocator, err, braced) }) };
     };
     if (KeyedAddressing.inFields(allocator, reporter, flow, "std/store:insert", row_fields)) |r| return .{ .transformed = .{ .replacement = r } };
     // Kinded union: the row names this member's leaves only. Columns the
@@ -309,7 +309,7 @@
         break :blk_own null;
     };
     if (kinded_own == null and row_fields.len != order.len) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): a row block names every column exactly once ({d} given, {d} declared)", .{ store_name, row_fields.len, order.len }) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): a row block names every column exactly once ({d} given, {d} declared)", .{ store_name, row_fields.len, order.len }) };
     }
     if (kinded_own) |own| {
         for (row_fields) |rf| {
@@ -319,7 +319,7 @@
                     if (li > 0) have.appendSlice(allocator, ", ") catch unreachable;
                     have.appendSlice(allocator, lf.name) catch unreachable;
                 }
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): column '{s}' is not a leaf of kind '{s}' — {s} holds {s}", .{ store_name, rf.name, own.name, own.name, have.items }) } };
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): column '{s}' is not a leaf of kind '{s}' — {s} holds {s}", .{ store_name, rf.name, own.name, own.name, have.items }) };
             }
         }
     }
@@ -341,12 +341,12 @@
                     const typ = if (schemas_for_fill) |ss| leafTypeInSchemas(ss, col) else null;
                     if (typ) |t| {
                         if (zeroFillForType(t)) |z| break :blk z;
-                        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): column '{s}' is owned by another kind and cannot be zero-filled — name it only on the kind that holds it", .{ store_name, col }) } };
+                        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): column '{s}' is owned by another kind and cannot be zero-filled — name it only on the kind that holds it", .{ store_name, col }) };
                     }
                     break :blk "0";
                 }
             }
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): row block is missing column '{s}'", .{ store_name, col }) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): row block is missing column '{s}'", .{ store_name, col }) };
         };
         // Cell reads in the seed lower to the SoA cell (690_192) — the same
         // rewrite the stored RHS gets. The insert site is a std.store
@@ -362,7 +362,7 @@
             if (v.len >= 2 and v[0] == '"' and v[v.len - 1] == '"') {
                 const blen = H.literalByteLen(v[1 .. v.len - 1]);
                 if (blen > ncap) {
-                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): string literal ({d} bytes) overflows char[{d}] column '{s}' - a fixed-char column holds at most its declared byte length", .{ store_name, blen, ncap, col }) } };
+                    return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): string literal ({d} bytes) overflows char[{d}] column '{s}' - a fixed-char column holds at most its declared byte length", .{ store_name, blen, ncap, col }) };
                 }
             }
         }
@@ -392,7 +392,7 @@
                 break :blk saw_dot;
             };
             if (is_sweep_proj or is_cell_read or is_dotted_proj) {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): column '{s}' is owned - its value must be an instance the caller gives up (single ownership, 690_053); a row projection is a borrow the source store still owns, and accepting it would put one pointer under two teardowns. Take or build a fresh instance for this row instead.", .{ store_name, col }) } };
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): column '{s}' is owned - its value must be an instance the caller gives up (single ownership, 690_053); a row projection is a borrow the source store still owns, and accepting it would put one pointer under two teardowns. Take or build a fresh instance for this row instead.", .{ store_name, col }) };
             }
         }
         call_args[i] = ast.Arg{
@@ -429,7 +429,7 @@
                 // Supervised branches ride the site's continuations into
                 // the generated call unchanged.
             } else {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): branch '{s}' - insert answers `| row <binding>`, `| full`, `| ok`, and `| violated <field>` (inserted/removed lifecycle is pinned at 690_016)", .{ store_name, c.branch }) } };
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): branch '{s}' - insert answers `| row <binding>`, `| full`, `| ok`, and `| violated <field>` (inserted/removed lifecycle is pinned at 690_016)", .{ store_name, c.branch }) };
             }
         }
     }

@@ -146,6 +146,19 @@ and the dominant cross-file idiom is the refusal envelope `.{ .
 transformed = .{ .replacement = ast.refusal(...) } }` spelled longhand
 at 19+ sites — fold material for a dedicated pass.
 
+**The lift's home is where the produced type lives, and the ceiling of
+what folds is the smallest *nameable* unit.** The refusal-envelope pass
+(122 sites folded the next day) first reached for `emitter_helpers` plus
+a module-scope alias in each `~part` joiner — until the line wall
+refused the joiners' +6/+4. The actual liftable unit turned out to be
+one level smaller than the visible clone: `.transformed`'s payload type
+is a proc-local anonymous union that cannot be named, but the
+`SiteResult` inside it can — so `ast.refuse` landed beside
+`ast.refusal`/`ast.SiteResult` where the type already lived, the call
+sites' spelling barely changed (`ast.refusal(` → `ast.refuse(`), and no
+joiner line moved. When the fold's home seems to need an alias, that is
+the smell that says the helper is filed one shelf over from its type.
+
 **Open questions.** (1) Whether cluster ranking should prefer the superset
 member as canonical anchor rather than the first member — the census cannot
 yet order members by semantic coverage. (2) `copy count` is not `removal

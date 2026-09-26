@@ -183,15 +183,15 @@
         if (std.mem.eql(u8, arg.name, "source")) block_text = arg.value;
     }
     if (block_text == null) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored requires a write block: stored {{ store.field: expr }}", .{}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored requires a write block: stored {{ store.field: expr }}", .{}) };
     }
 
     const braced = std.fmt.allocPrint(allocator, "{{{s}}}", .{block_text.?}) catch unreachable;
     const writes = struct_literal.parseFields(allocator, braced) catch |err| {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: {s}", .{struct_literal.describeErrorIn(allocator, err, braced)}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: {s}", .{struct_literal.describeErrorIn(allocator, err, braced)}) };
     };
     if (writes.len == 0) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: write block is empty", .{}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: write block is empty", .{}) };
     }
     if (KeyedAddressing.inFields(allocator, reporter, flow, "std/store:stored", writes)) |r| return .{ .transformed = .{ .replacement = r } };
     // THE CHAIN IS THE ENVELOPE ((i) lean, 690_009): a multi-field block
@@ -213,17 +213,17 @@
             var wrow: ?[]const u8 = null;
             if (std.mem.indexOfScalar(u8, wm.name, '[')) |lb| {
                 const rb = std.mem.lastIndexOfScalar(u8, wm.name, ']') orelse {
-                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: malformed addressing head '{s}'", .{wm.name}) } };
+                    return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: malformed addressing head '{s}'", .{wm.name}) };
                 };
                 if (rb + 1 >= wm.name.len or wm.name[rb + 1] != '.') {
-                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: addressing head '{s}' needs a field: store[handle].field", .{wm.name}) } };
+                    return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: addressing head '{s}' needs a field: store[handle].field", .{wm.name}) };
                 }
                 st = std.mem.trim(u8, wm.name[0..lb], " ");
                 wrow = std.mem.trim(u8, wm.name[lb + 1 .. rb], " ");
                 fld = wm.name[rb + 2 ..];
             } else {
                 const dotm = std.mem.indexOfScalar(u8, wm.name, '.') orelse {
-                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: envelope target '{s}' must be store.field", .{wm.name}) } };
+                    return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: envelope target '{s}' must be store.field", .{wm.name}) };
                 };
                 st = wm.name[0..dotm];
                 fld = wm.name[dotm + 1 ..];
@@ -233,14 +233,14 @@
                 env_row = wrow;
             } else {
                 if (!std.mem.eql(u8, env_store, st)) {
-                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: a multi-field envelope writes ONE store this rung ('{s}' vs '{s}')", .{ env_store, st }) } };
+                    return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: a multi-field envelope writes ONE store this rung ('{s}' vs '{s}')", .{ env_store, st }) };
                 }
                 const rows_agree = if (env_row) |er|
                     (if (wrow) |wr| std.mem.eql(u8, er, wr) else false)
                 else
                     wrow == null;
                 if (!rows_agree) {
-                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: a multi-field envelope addresses ONE row this rung - every target must spell the same row ('{s}')", .{wm.name}) } };
+                    return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: a multi-field envelope addresses ONE row this rung - every target must spell the same row ('{s}')", .{wm.name}) };
                 }
             }
             env_fields[wi] = fld;
@@ -258,10 +258,10 @@
             break :blk false;
         };
         if (env_row == null and env_is_plural) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: '{s}' is a container store (capacity > 1) - address the row ({s}[handle].{s}, or write through a query branch)", .{ env_store, env_store, env_fields[0] }) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: '{s}' is a container store (capacity > 1) - address the row ({s}[handle].{s}, or write through a query branch)", .{ env_store, env_store, env_fields[0] }) };
         }
         if (env_row != null and !env_is_plural) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: '{s}' is a capacity-1 value store - write it as {s}.{s}", .{ env_store, env_store, env_fields[0] }) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: '{s}' is a capacity-1 value store - write it as {s}.{s}", .{ env_store, env_store, env_fields[0] }) };
         }
         // A DRAIN store's write surface is gated off entirely (690_057/058) —
         // name the real rung before fieldOrder can leak "unknown store".
@@ -278,7 +278,7 @@
                 if (std.mem.eql(u8, ed.path.segments[0], apply_probe)) has_apply = true;
             }
             if (has_teardown and !has_apply) {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: store '{s}' is a DRAIN store (ambiguous discharger) - a stored write must evict the old value through the canonical discharger, which its owned column does not have; declare exactly one void discharger for the column type (690_062 pins the write; 690_057/058 pin the drain)", .{env_store}) } };
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: store '{s}' is a DRAIN store (ambiguous discharger) - a stored write must evict the old value through the canonical discharger, which its owned column does not have; declare exactly one void discharger for the column type (690_062 pins the write; 690_057/058 pin the drain)", .{env_store}) };
             }
         }
         const order_env = H.fieldOrder(allocator, program, env_store) orelse {
@@ -286,7 +286,7 @@
             // true one and this lookup can only ever fail. Staying silent here is what
             // keeps one mistake to one error.
             if (ast.declarationRefused(allocator, program, flow.module, "std/store:new({s}):", .{env_store})) return .{ .transformed = .{} };
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: unknown store '{s}'", .{env_store}) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: unknown store '{s}'", .{env_store}) };
         };
         const env_idx = allocator.alloc(usize, writes.len) catch unreachable;
         for (env_fields, 0..) |ef, wi| {
@@ -294,7 +294,7 @@
                 for (order_env, 0..) |fname, i| {
                     if (std.mem.eql(u8, fname, ef)) break :blk i;
                 }
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: '{s}' is not a field of store '{s}'", .{ ef, env_store }) } };
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: '{s}' is not a field of store '{s}'", .{ ef, env_store }) };
             };
         }
         // The plural envelope rides typed per-column slots (the bundled-write
@@ -311,7 +311,7 @@
                     const types = allocator.alloc([]const u8, ed.branches.len) catch unreachable;
                     for (ed.branches, 0..) |b, bi| {
                         if (b.payload.fields.len > 0 and b.payload.fields[0].phantom != null) {
-                            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: store '{s}' holds an owned column - a multi-field envelope has no typed zero for its slot (690_064); chain single-field writes instead ({s}[handle].{s}: ... |> stored {{ ... }})", .{ env_store, env_store, env_fields[0] }) } };
+                            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: store '{s}' holds an owned column - a multi-field envelope has no typed zero for its slot (690_064); chain single-field writes instead ({s}[handle].{s}: ... |> stored {{ ... }})", .{ env_store, env_store, env_fields[0] }) };
                         }
                         types[bi] = if (b.payload.fields.len > 0) b.payload.fields[0].type else "i64";
                     }
@@ -381,7 +381,7 @@
             // than quietly dropping the high columns.
             for (env_idx) |ix| {
                 if (ix >= 64) {
-                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: a multi-field block addresses columns by a 64-bit mask, and '{s}' has more than 64 columns - write this as chained single-field writes", .{env_store}) } };
+                    return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: a multi-field block addresses columns by a 64-bit mask, and '{s}' has more than 64 columns - write this as chained single-field writes", .{env_store}) };
                 }
             }
             var mask: u64 = 0;
@@ -520,10 +520,10 @@
     var row_expr: ?[]const u8 = null;
     if (std.mem.indexOfScalar(u8, w.name, '[')) |lb| {
         const rb = std.mem.lastIndexOfScalar(u8, w.name, ']') orelse {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: malformed addressing head '{s}'", .{w.name}) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: malformed addressing head '{s}'", .{w.name}) };
         };
         if (rb + 1 >= w.name.len or w.name[rb + 1] != '.') {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: addressing head '{s}' needs a field: store[handle].field", .{w.name}) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: addressing head '{s}' needs a field: store[handle].field", .{w.name}) };
         }
         target_store = std.mem.trim(u8, w.name[0..lb], " ");
         row_expr = std.mem.trim(u8, w.name[lb + 1 .. rb], " ");
@@ -539,7 +539,7 @@
             target_store = w.name;
             target_field = ast.STORE_IDENTITY_COLUMN;
         } else {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored target '{s}' must be a dotted store path (store.field)", .{w.name}) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored target '{s}' must be a dotted store path (store.field)", .{w.name}) };
         }
     }
 
@@ -555,10 +555,10 @@
         break :blk false;
     };
     if (row_expr == null and is_plural_store) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: '{s}' is a container store (capacity > 1) - address the row ({s}[handle].{s}, or write through a query branch)", .{ target_store, target_store, target_field }) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: '{s}' is a container store (capacity > 1) - address the row ({s}[handle].{s}, or write through a query branch)", .{ target_store, target_store, target_field }) };
     }
     if (row_expr != null and !is_plural_store) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: '{s}' is a capacity-1 value store - write it as {s}.{s}", .{ target_store, target_store, target_field }) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: '{s}' is a capacity-1 value store - write it as {s}.{s}", .{ target_store, target_store, target_field }) };
     }
 
     // Owned-column stores now generate the write surface (the WRITE rung,
@@ -580,7 +580,7 @@
             if (std.mem.eql(u8, ed.path.segments[0], apply_probe)) has_apply = true;
         }
         if (has_teardown and !has_apply) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: store '{s}' is a DRAIN store (ambiguous discharger) - a stored write must evict the old value through the canonical discharger, which its owned column does not have; declare exactly one void discharger for the column type (690_062 pins the write; 690_057/058 pin the drain)", .{target_store}) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: store '{s}' is a DRAIN store (ambiguous discharger) - a stored write must evict the old value through the canonical discharger, which its owned column does not have; declare exactly one void discharger for the column type (690_062 pins the write; 690_057/058 pin the drain)", .{target_store}) };
         }
     }
 
@@ -589,13 +589,13 @@
         // true one and this lookup can only ever fail. Staying silent here is what
         // keeps one mistake to one error.
         if (ast.declarationRefused(allocator, program, flow.module, "std/store:new({s}):", .{target_store})) return .{ .transformed = .{} };
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: unknown store '{s}' - no std/store:new({s}) found", .{ target_store, target_store }) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: unknown store '{s}' - no std/store:new({s}) found", .{ target_store, target_store }) };
     };
     const field_idx: usize = blk: {
         for (order, 0..) |fname, i| {
             if (std.mem.eql(u8, fname, target_field)) break :blk i;
         }
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: '{s}' is not a field of store '{s}'", .{ target_field, target_store }) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: '{s}' is not a field of store '{s}'", .{ target_field, target_store }) };
     };
 
     // SELF-FK traversal head: `store[handle.reffield]` addresses the row whose
@@ -665,13 +665,13 @@
             break :blk false;
         };
         if (!store_is_tree) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: `| cycle` guards the synthesized parent write of a [tree] store - '{s}' is not a [tree] store", .{target_store}) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: `| cycle` guards the synthesized parent write of a [tree] store - '{s}' is not a [tree] store", .{target_store}) };
         }
         if (!std.mem.eql(u8, target_field, "parent")) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: `| cycle` attaches to the [tree]-synthesized parent write - '{s}.{s}' is not the parent column", .{ target_store, target_field }) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: `| cycle` attaches to the [tree]-synthesized parent write - '{s}.{s}' is not the parent column", .{ target_store, target_field }) };
         }
         const re = row_expr orelse {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: `| cycle` needs a row-addressed parent write ({s}[handle].parent)", .{target_store}) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: `| cycle` needs a row-addressed parent write ({s}[handle].parent)", .{target_store}) };
         };
         var cyc_conts = std.ArrayList(ast.Continuation).initCapacity(allocator, flow.body.continuations.len + 1) catch unreachable;
         var has_ok_cont = false;
@@ -683,7 +683,7 @@
                 cl.branch = allocator.dupe(u8, "ok") catch unreachable;
                 has_ok_cont = true;
             } else if (!std.mem.eql(u8, bname, "cycle")) {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: branch '{s}' - a guarded parent write answers `|>` (ok) and `| cycle` only", .{c.branch}) } };
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: branch '{s}' - a guarded parent write answers `|>` (ok) and `| cycle` only", .{c.branch}) };
             }
             cyc_conts.append(allocator, cl) catch unreachable;
         }
@@ -760,7 +760,7 @@
                     break :types_blk types;
                 }
             }
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: internal - plural store '{s}' has no generated apply event (create must have run: inserth exists without apply)", .{target_store}) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: internal - plural store '{s}' has no generated apply event (create must have run: inserth exists without apply)", .{target_store}) };
         };
         // A write rides ONE typed value slot per column; a slot no arm reads
         // is a typed zero (690_049). An OWNED column has no typed zero — a

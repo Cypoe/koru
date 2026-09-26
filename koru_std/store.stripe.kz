@@ -27,7 +27,7 @@
         if (std.mem.eql(u8, arg.name, "expr")) store_name = H.stripQuotes(arg.value);
     }
     if (store_name.len == 0) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stripe requires a store name: stripe(name)", .{}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stripe requires a store name: stripe(name)", .{}) };
     }
 
     // The generated units live in the STORE's home namespace, which is the
@@ -49,7 +49,7 @@
         // true one and this lookup can only ever fail. Staying silent here is what
         // keeps one mistake to one error.
         if (ast.declarationRefused(allocator, program, flow.module, "std/store:new({s}):", .{store_name})) return .{ .transformed = .{} };
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stripe({s}): unknown store, or a store shape without a stripe unit this rung (plural / {{old,new}}-mode stripe is a later slice)", .{store_name}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stripe({s}): unknown store, or a store shape without a stripe unit this rung (plural / {{old,new}}-mode stripe is a later slice)", .{store_name}) };
     }
 
     const stripe_inv = ast.Invocation{

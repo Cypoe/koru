@@ -26,18 +26,18 @@
         if (std.mem.eql(u8, arg.name, "source")) block = arg.value;
     }
     const btext = block orelse {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:stored requires a write block: stored {{ grid[index].field: expr }}", .{}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:stored requires a write block: stored {{ grid[index].field: expr }}", .{}) };
     };
 
     var names = std.ArrayList(grid_read.GridRef).initCapacity(allocator, 4) catch unreachable;
     grid_read.collect(allocator, program, &names);
     if (names.items.len == 0) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:stored: no grid is declared in this program - declare one with `std/grid:new(name, size: N) {{ ... }}`", .{}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:stored: no grid is declared in this program - declare one with `std/grid:new(name, size: N) {{ ... }}`", .{}) };
     }
 
     const braced = std.fmt.allocPrint(allocator, "{{{s}}}", .{btext}) catch unreachable;
     const pairs = struct_literal.parseFields(allocator, braced) catch |err| {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:stored: {s}", .{struct_literal.describeErrorIn(allocator, err, braced)}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:stored: {s}", .{struct_literal.describeErrorIn(allocator, err, braced)}) };
     };
 
     // THE OPERANDS ARE EVALUATED AT THE SITE, not pasted into the unit.
@@ -60,10 +60,10 @@
     for (pairs, 0..) |pr, n| {
         const raw_target = std.mem.trim(u8, pr.name, " ");
         const t = grid_read.parseTarget(raw_target, names.items) orelse {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:stored: '{s}' does not address a grid cell - the target is `<grid>[<index>].<field>`, and a store row is written with std/store:stored instead", .{pr.name}) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:stored: '{s}' does not address a grid cell - the target is `<grid>[<index>].<field>`, and a store row is written with std/store:stored instead", .{pr.name}) };
         };
         const col_ty = grid_read.columnType(allocator, program.items, t.grid, t.field) orelse {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:stored: grid '{s}' has no column '{s}'", .{ t.grid, t.field }) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:stored: grid '{s}' has no column '{s}'", .{ t.grid, t.field }) };
         };
 
         const xn = std.fmt.allocPrint(allocator, "__koru_gwx{d}", .{n}) catch unreachable;

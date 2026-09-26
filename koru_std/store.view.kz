@@ -34,10 +34,10 @@
         if (std.mem.eql(u8, a.name, "source")) source_text = if (a.source_value) |sv| sv.text else a.value;
     }
     if (view_name.len == 0) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:view requires a view name: view(name)", .{}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:view requires a view name: view(name)", .{}) };
     }
     if (source_text == null) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:view requires a member block: view(name) {{ Member1, Member2 }}", .{}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:view requires a member block: view(name) {{ Member1, Member2 }}", .{}) };
     }
 
     var members = std.ArrayList([]const u8).initCapacity(allocator, 4) catch unreachable;
@@ -48,13 +48,13 @@
         members.append(allocator, allocator.dupe(u8, trimmed) catch unreachable) catch unreachable;
     }
     if (members.items.len == 0) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:view({s}): a store view must name at least one member store", .{view_name}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:view({s}): a store view must name at least one member store", .{view_name}) };
     }
 
     for (members.items) |mem| {
         const fo = storeFieldOrder(allocator, program, mem);
         if (fo == null) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:view({s}): unknown member store '{s}' — no std/store:new({s}) found", .{ view_name, mem, mem }) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:view({s}): unknown member store '{s}' — no std/store:new({s}) found", .{ view_name, mem, mem }) };
         }
     }
 

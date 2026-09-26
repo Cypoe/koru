@@ -58,16 +58,16 @@
             const trimmed = std.mem.trim(u8, ann, " \t");
             if (!std.mem.startsWith(u8, trimmed, "unsafe")) continue;
             const call = annotation_parser.parseCall(allocator, trimmed) catch {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new: malformed annotation '[{s}]' - the form is `[unsafe(bounds)]`", .{trimmed}) } };
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new: malformed annotation '[{s}]' - the form is `[unsafe(bounds)]`", .{trimmed}) };
             } orelse {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new: `[unsafe]` must name what it waives - write `[unsafe(bounds)]`. A bare `[unsafe]` would widen silently the day this construct grows a second check", .{}) } };
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new: `[unsafe]` must name what it waives - write `[unsafe(bounds)]`. A bare `[unsafe]` would widen silently the day this construct grows a second check", .{}) };
             };
             if (call.args.len != 1) {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new: `[unsafe(...)]` waives exactly one facet at a time (got {d}) - a grid offers `bounds`", .{call.args.len}) } };
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new: `[unsafe(...)]` waives exactly one facet at a time (got {d}) - a grid offers `bounds`", .{call.args.len}) };
             }
             const facet = std.mem.trim(u8, call.args[0], " \t\"");
             if (!std.mem.eql(u8, facet, "bounds")) {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new: a grid has no `{s}` check to waive - it offers `bounds` (the per-access index floor). A facet it does not implement is refused rather than ignored, because an annotation that waives nothing still reads as one that did", .{facet}) } };
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new: a grid has no `{s}` check to waive - it offers `bounds` (the per-access index floor). A facet it does not implement is refused rather than ignored, because an annotation that waives nothing still reads as one that did", .{facet}) };
             }
             unchecked = true;
         }
@@ -98,12 +98,12 @@
             const trimmed = std.mem.trim(u8, ann, " \t");
             if (!std.mem.startsWith(u8, trimmed, "layout")) continue;
             const call = annotation_parser.parseCall(allocator, trimmed) catch {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new: malformed annotation '[{s}]' - the form is `[layout(row)]`", .{trimmed}) } };
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new: malformed annotation '[{s}]' - the form is `[layout(row)]`", .{trimmed}) };
             } orelse {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new: `[layout]` must name the layout - write `[layout(row)]` or `[layout(column)]`. A bare `[layout]` says nothing about which one was wanted", .{}) } };
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new: `[layout]` must name the layout - write `[layout(row)]` or `[layout(column)]`. A bare `[layout]` says nothing about which one was wanted", .{}) };
             };
             if (call.args.len != 1) {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new: `[layout(...)]` names exactly one layout (got {d}) - a grid offers `row` and `column`", .{call.args.len}) } };
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new: `[layout(...)]` names exactly one layout (got {d}) - a grid offers `row` and `column`", .{call.args.len}) };
             }
             const which = std.mem.trim(u8, call.args[0], " \t\"");
             if (std.mem.eql(u8, which, "row")) {
@@ -111,7 +111,7 @@
             } else if (std.mem.eql(u8, which, "column")) {
                 row_layout = false;
             } else {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new: `{s}` is not a layout this grid offers - it has `row` (one record per cell, for scatter) and `column` (one array per field, the default, for sweeps). A layout it does not implement is refused rather than ignored, because a misspelling would silently keep the layout you were trying to change", .{which}) } };
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new: `{s}` is not a layout this grid offers - it has `row` (one record per cell, for scatter) and `column` (one array per field, the default, for sweeps). A layout it does not implement is refused rather than ignored, because a misspelling would silently keep the layout you were trying to change", .{which}) };
             }
         }
     }
@@ -132,7 +132,7 @@
         }
     }
     if (grid_name.len == 0 or seed_text == null) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new requires a name and a cell block: new(name, size: N) {{ field: default[type] }}", .{}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new requires a name and a cell block: new(name, size: N) {{ field: default[type] }}", .{}) };
     }
     // TWO DECLARATION FORMS, one construct.
     //
@@ -154,28 +154,28 @@
     var ROWS: usize = 0;
     if (dims_text) |dt| {
         if (size_text != null) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): `size:` and `dimensions:` are two spellings of the same thing - give one", .{grid_name}) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): `size:` and `dimensions:` are two spellings of the same thing - give one", .{grid_name}) };
         }
         const xat = std.mem.indexOfScalar(u8, dt, 'x') orelse {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): dimensions are `RxC` (got '{s}')", .{ grid_name, dt }) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): dimensions are `RxC` (got '{s}')", .{ grid_name, dt }) };
         };
         ROWS = std.fmt.parseInt(usize, std.mem.trim(u8, dt[0..xat], " "), 10) catch {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): dimensions are `RxC` with integer literals (got '{s}')", .{ grid_name, dt }) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): dimensions are `RxC` with integer literals (got '{s}')", .{ grid_name, dt }) };
         };
         COLS = std.fmt.parseInt(usize, std.mem.trim(u8, dt[xat + 1 ..], " "), 10) catch {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): dimensions are `RxC` with integer literals (got '{s}')", .{ grid_name, dt }) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): dimensions are `RxC` with integer literals (got '{s}')", .{ grid_name, dt }) };
         };
         SIZE = ROWS * COLS;
     } else {
         const st = size_text orelse {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): a grid needs `size: N` or `dimensions: RxC` - every cell exists from declaration, so the count is not a capacity to grow into", .{grid_name}) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): a grid needs `size: N` or `dimensions: RxC` - every cell exists from declaration, so the count is not a capacity to grow into", .{grid_name}) };
         };
         SIZE = std.fmt.parseInt(usize, st, 10) catch {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): size must be an integer literal (got '{s}')", .{ grid_name, st }) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): size must be an integer literal (got '{s}')", .{ grid_name, st }) };
         };
     }
     if (SIZE == 0) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): a grid needs at least one cell", .{grid_name}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): a grid needs at least one cell", .{grid_name}) };
     }
 
     // Cells are declared `field: default[type]` — SEEDED, always. A store
@@ -184,10 +184,10 @@
     // live from declaration, so every column must say what it starts as.
     const braced = std.fmt.allocPrint(allocator, "{{{s}}}", .{seed_text.?}) catch unreachable;
     const cells = struct_literal.parseFields(allocator, braced) catch {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): malformed cell block", .{grid_name}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): malformed cell block", .{grid_name}) };
     };
     if (cells.len == 0) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): a grid needs at least one column", .{grid_name}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): a grid needs at least one column", .{grid_name}) };
     }
 
     var g = std.ArrayList(u8).initCapacity(allocator, 512) catch unreachable;
@@ -213,10 +213,10 @@
         // brackets, exactly as a seeded store column spells it.
         const v = std.mem.trim(u8, c.value, " ");
         const lb = std.mem.indexOfScalar(u8, v, '[') orelse {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): column '{s}' needs a default and a type - `{s}: 0[i64]`. A grid has no insert, so every cell is live from declaration and must say what it starts as", .{ grid_name, c.name, c.name }) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): column '{s}' needs a default and a type - `{s}: 0[i64]`. A grid has no insert, so every cell is live from declaration and must say what it starts as", .{ grid_name, c.name, c.name }) };
         };
         if (v.len == 0 or v[v.len - 1] != ']') {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): column '{s}' has a malformed type - `{s}: 0[i64]`", .{ grid_name, c.name, c.name }) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): column '{s}' has a malformed type - `{s}: 0[i64]`", .{ grid_name, c.name, c.name }) };
         }
         fields.append(allocator, .{
             .name = c.name,

@@ -9,5 +9,10 @@
 # (eval/table/types/control/declarations/io — dormant proc bodies carry
 # Zig that never reached a compiler, e.g. `.{ .error = ... }`); they are
 # named on stderr and escape the count until they parse.
-clusters=1061
-members=932
+# Tightened 2026-10-14 same-day: the refusal-envelope fold (122 sites,
+# `.replacement = ast.refusal(...)` longhand -> ast.refuse) collapsed the
+# board's largest cross-file idiom. Net -19 clusters/-43 members vs the
+# first pin; the +2/+2 over the fold's own measurement is concurrent
+# pump/channel churn in the working tree, not the fold.
+clusters=1042
+members=889

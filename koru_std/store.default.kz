@@ -36,7 +36,7 @@
     // `:verb(arg)` forms — so pull the store name and hand watch a proper
     // `expr` arg.
     if (invocation.args.len == 0) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store(name): the reference form needs a store name", .{}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store(name): the reference form needs a store name", .{}) };
     }
     const store_name = invocation.args[0].value;
 
@@ -46,7 +46,7 @@
     // level rather than mis-rewriting to watch (which reads the branch name as a
     // field: the misleading "'store' is not a field" leak).
     if (flow.body.continuations.len > 0 and flow.body.continuations[0].kind != .effect) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store({s}): only the reactive-attach form of the reference is built — `std/store({s}) ! <field> <bind> |> ...`. The operation form (`| store s |> ...`) is a later rung; for now operate by name (std/store:insert({s}), std/store:stored).", .{ store_name, store_name, store_name }) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store({s}): only the reactive-attach form of the reference is built — `std/store({s}) ! <field> <bind> |> ...`. The operation form (`| store s |> ...`) is a later rung; for now operate by name (std/store:insert({s}), std/store:stored).", .{ store_name, store_name, store_name }) };
     }
 
     // Rename the invocation default → watch, carrying the store name as `expr`

@@ -106,14 +106,14 @@
         }
     }
     if (grid_name.len == 0) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:sweep requires a grid name: sweep(name)", .{}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:sweep requires a grid name: sweep(name)", .{}) };
     }
     if (flow.body.continuations.len != 1) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:sweep({s}): exactly one `! sweep <cell>` branch per site", .{grid_name}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:sweep({s}): exactly one `! sweep <cell>` branch per site", .{grid_name}) };
     }
     const arm = &flow.body.continuations[0];
     if (!std.mem.eql(u8, std.mem.trim(u8, arm.branch, " "), "sweep")) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:sweep({s}): the cell branch is spelled `! sweep <cell>`", .{grid_name}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:sweep({s}): the cell branch is spelled `! sweep <cell>`", .{grid_name}) };
     }
     // THE CELL BINDING IS AN ADDRESS, so it is a write target as well as a
     // read. `! sweep c |> std/grid:stored { c.avg: c.sum / c.n }` updates the
@@ -131,7 +131,7 @@
     // — DOTS' BoidSystem reads only a boid's own hash bucket — so the
     // vocabulary waits for one that does. (Ruled with Lars 2026-08-03.)
     const bind = arm.binding orelse {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:sweep({s}): the sweep arm needs a cell binding: `! sweep <cell> |> ...`", .{grid_name}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:sweep({s}): the sweep arm needs a cell binding: `! sweep <cell> |> ...`", .{grid_name}) };
     };
 
     // WHERE THE SWEPT GRID'S CELLS LIVE. A sweep site and the declaration it
@@ -144,7 +144,7 @@
     var swept = std.ArrayList(grid_read.GridRef).initCapacity(allocator, 4) catch unreachable;
     grid_read.collect(allocator, program, &swept);
     const grid_ns = if (grid_read.find(swept.items, grid_name)) |r| r.ns else {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:sweep({s}): no grid named '{s}' is declared in this program", .{ grid_name, grid_name }) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:sweep({s}): no grid named '{s}' is declared in this program", .{ grid_name, grid_name }) };
     };
 
     // The grid's size is comptime-known, and the declaration already emitted it
@@ -212,10 +212,10 @@
     };
 
     const body_node = mutable_body.node orelse {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:sweep({s}): the sweep arm needs a body (`|> ...`)", .{grid_name}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:sweep({s}): the sweep arm needs a body (`|> ...`)", .{grid_name}) };
     };
     if (body_node != .invocation) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:sweep({s}): the sweep body must start with an invocation this rung", .{grid_name}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:sweep({s}): the sweep body must start with an invocation this rung", .{grid_name}) };
     }
 
     // The loop proc calls the body tor from RAW ZIG, which dead_strip's

@@ -52,7 +52,7 @@
         if (std.mem.eql(u8, arg.name, "expr")) store_name = H.stripQuotes(arg.value);
     }
     if (store_name.len == 0) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query requires a store name: query(name)", .{}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query requires a store name: query(name)", .{}) };
     }
 
     // The generated units live in the STORE's home namespace, which is the
@@ -79,7 +79,7 @@
 
         for (view_members.?) |mem| {
             const mem_cols = storeMemberColumns(allocator, program, mem) orelse {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): view member '{s}' has no schema — no std/store:new({s}) found", .{ store_name, mem, mem }) } };
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): view member '{s}' has no schema — no std/store:new({s}) found", .{ store_name, mem, mem }) };
             };
             for (mem_cols) |mc| {
                 var found = false;
@@ -87,7 +87,7 @@
                     if (std.mem.eql(u8, prev_n, mc.name)) {
                         found = true;
                         if (!std.mem.eql(u8, prev_t, mc.type)) {
-                            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:view({s}): member '{s}': leaf '{s}' as '{s}' collides with '{s}' — one bare name, one identity; type-divergent same-name leaves across a view are refused", .{ store_name, mem, mc.name, mc.type, prev_t }) } };
+                            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:view({s}): member '{s}': leaf '{s}' as '{s}' collides with '{s}' — one bare name, one identity; type-divergent same-name leaves across a view are refused", .{ store_name, mem, mc.name, mc.type, prev_t }) };
                         }
                         break;
                     }
@@ -139,7 +139,7 @@
             // true one and this lookup can only ever fail. Staying silent here is what
             // keeps one mistake to one error.
             if (ast.declarationRefused(allocator, program, flow.module, "std/store:new({s}):", .{store_name})) return .{ .transformed = .{} };
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): unknown plural store - no std/store:new({s}, capacity: N) found (query reads a plural container's live rows)", .{ store_name, store_name }) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): unknown plural store - no std/store:new({s}, capacity: N) found (query reads a plural container's live rows)", .{ store_name, store_name }) };
         }
     }
 
@@ -161,14 +161,14 @@
     const sc_first = SPlan.findArm(flow.body.continuations, "first");
     const none_arm = SPlan.findArm(flow.body.continuations, "none");
     if (sc_query != null and sc_first != null) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, SPlan.MSG_both_arms, .{store_name}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, SPlan.MSG_both_arms, .{store_name}) };
     }
     const is_first = sc_first != null;
     if (none_arm != null and !is_first) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, SPlan.MSG_none_pairs, .{store_name}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, SPlan.MSG_none_pairs, .{store_name}) };
     }
     const sc = sc_query orelse sc_first orelse {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, SPlan.MSG_no_arm, .{store_name}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, SPlan.MSG_no_arm, .{store_name}) };
     };
     // A destructure block on the query arm is a REQUEST. Each entry carries a
     // PREFIX annotation naming what the visit should synthesize for it, and the
@@ -200,7 +200,7 @@
             // name someone reached for now that braces parse again. One
             // message covers both: what replaced the projection, and what a
             // request block is actually for.
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, SPlan.MSG_unannotated, .{ store_name, df.name }) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, SPlan.MSG_unannotated, .{ store_name, df.name }) };
         }
         for (df.annotations) |a| {
             if (std.mem.eql(u8, a, "row")) {
@@ -210,15 +210,15 @@
             } else if (std.mem.eql(u8, a, "id")) {
                 req_id = df.name;
             } else {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, SPlan.MSG_unknown_req, .{ store_name, a, df.name }) } };
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, SPlan.MSG_unknown_req, .{ store_name, a, df.name }) };
             }
         }
     }
     if (sc.destructure.len > 0 and req_row == null) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, SPlan.MSG_need_row, .{store_name}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, SPlan.MSG_need_row, .{store_name}) };
     }
     const row_bind = req_row orelse sc.binding orelse {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, SPlan.MSG_row_binding, .{store_name}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, SPlan.MSG_row_binding, .{store_name}) };
     };
 
     // The row's projected fields and its cursor are keyed on the ARM — binding
@@ -250,10 +250,10 @@
     // `var`: walkCont mutates this — `@constCast` on a const drops it (690_312).
     var body_clone = ast_functional.cloneContinuation(allocator, peel_src) catch unreachable;
     const body_node = body_clone.node orelse {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): the sweep branch needs a body (`|> ...`)", .{store_name}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): the sweep branch needs a body (`|> ...`)", .{store_name}) };
     };
     if (body_node != .invocation and body_node != .label_with_invocation) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): the sweep body must start with an invocation this rung", .{store_name}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): the sweep body must start with an invocation this rung", .{store_name}) };
     }
 
     // A sweep arm READS and WRITES the row it stands on (690_083), both
@@ -291,14 +291,14 @@
     // but it reads the same `<srf_prefix><f>` consts the loop binds above it.
     var is_refusal: ?[]const u8 = null;
     const guard_is = if (sc.condition) |c| rewriteIsGuard(allocator, program, "query", store_name, row_bind, c, &is_refusal) else null;
-    if (is_refusal) |m| return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "{s}", .{m}) } };
+    if (is_refusal) |m| return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "{s}", .{m}) };
     const guard_z: ?[]const u8 = if (sc.condition) |c|
         SRewrite.refs(allocator, guard_is orelse c, row_bind, store_name, col_names, srf_prefix, srow_name, .input, used_cols, &unknown_field, is_view)
     else
         null;
 
     if (unknown_field) |uf| {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, SPlan.MSG_unknown_field, .{ store_name, row_bind, uf, uf, store_name }) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, SPlan.MSG_unknown_field, .{ store_name, row_bind, uf, uf, store_name }) };
     }
     {
         var read_names = std.ArrayList([]const u8).initCapacity(allocator, col_names.len) catch unreachable;
@@ -306,7 +306,7 @@
             if (u) read_names.append(allocator, cn) catch unreachable;
         }
         if (privateReadRefusal(allocator, program, "query", store_name, row_bind, sc.condition, guard_is, read_names.items)) |m| {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "{s}", .{m}) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "{s}", .{m}) };
         }
     }
 
@@ -317,7 +317,7 @@
     var q_index_icol: []const u8 = ""; var q_index_rhs: ?[]const u8 = null; var q_bucket_stable = false;
     switch (StoreIndexWalk.planQueryRoute(allocator, program, is_first, is_view, store_name, guard_z, srf_prefix, &body_clone, row_bind)) { .scan => {},
         .first => |r| { index_icol = r.icol; index_rhs = r.key; }, .query => |r| { q_index_icol = r.icol; q_index_rhs = r.key; q_bucket_stable = r.stable; },
-        .refuse => |op| return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, StoreIndex.MSG_unlowered_key, .{ store_name, op }) } }, }
+        .refuse => |op| return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, StoreIndex.MSG_unlowered_key, .{ store_name, op }) }, }
     if (index_rhs != null or q_index_rhs != null) @memcpy(used_cols, body_cols);
     const scan_guard: ?[]const u8 = if (index_rhs == null and q_index_rhs == null) guard_z else null;
 
@@ -555,7 +555,7 @@
     var none_lexical: usize = 0;
     if (none_arm) |na| switch (QueryNone.emit(allocator, na, avail.items, home_ns, store_name, flow, retain_ann, host_target, &appended)) {
         .ok => |nb| { nbody_name = nb.name; nargb_text = nb.args; none_lexical = nb.lexical; },
-        .refuse => |msg| return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "{s}", .{msg}) } },
+        .refuse => |msg| return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "{s}", .{msg}) },
     };
 
     // The argument record, assembled as pairs and then wrapped once, because
@@ -666,7 +666,7 @@
             if (guard_z) |cond| {
                 var unknown_op: []const u8 = "";
                 const lowered_c = storeLowerExpr(allocator, cond, &unknown_op) orelse
-                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): the sweep guard names `@{s}`, and that operation has no lowering for this target - a store guard is a Koru expression, and the operations Koru names with `@` are the shared table in codegen_utils.lowerBuiltin", .{ store_name, unknown_op }) } };
+                    return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): the sweep guard names `@{s}`, and that operation has no lowering for this target - a store guard is a Koru expression, and the operations Koru names with `@` are the shared table in codegen_utils.lowerBuiltin", .{ store_name, unknown_op }) };
                 const gz = std.fmt.allocPrint(allocator, "if (!({s})) continue;\n", .{lowered_c}) catch unreachable;
                 loop.appendSlice(allocator, gz) catch unreachable;
             }
@@ -707,7 +707,7 @@
         }
         var bad_op: []const u8 = "";
         if (!StoreIndexWalk.fireRow(allocator, &loop, host_target, proj_names, proj_cols, col_names, cellq, store_name, scan_guard, q_may_remove, is_first and none_arm != null, home_ns, sbody_name, program.main_module_name, argb.items, &bad_op))
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): the sweep guard names `@{s}`, and that operation has no lowering for this target - a store guard is a Koru expression, and the operations Koru names with `@` are the shared table in codegen_utils.lowerBuiltin", .{ store_name, bad_op }) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): the sweep guard names `@{s}`, and that operation has no lowering for this target - a store guard is a Koru expression, and the operations Koru names with `@` are the shared table in codegen_utils.lowerBuiltin", .{ store_name, bad_op }) };
         if (index_rhs != null)
             loop.appendSlice(allocator, StoreIndex.firstClose(allocator, host_is_js, none_call)) catch unreachable
         else if (q_index_rhs != null)

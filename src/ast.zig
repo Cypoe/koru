@@ -873,6 +873,38 @@ pub fn refusalWithHint(
     return Item{ .inline_code = InlineCode{ .code = msg, .location = loc, .module = module } };
 }
 
+/// The refusal envelope's payload: report the diagnostic and produce the
+/// SiteResult a transform returns as `.transformed = ast.refuse(...)`.
+/// Was `.{ .transformed = .{ .replacement = ast.refusal(...) } }` spelled
+/// longhand at ~480 sites across koru_std — the `.transformed` variant is
+/// the proc-local `Output` union, so the liftable unit is the payload.
+pub fn refuse(
+    alloc: std.mem.Allocator,
+    rep: anytype,
+    code: errors.ErrorCode,
+    loc: errors.SourceLocation,
+    module: []const u8,
+    comptime fmt: []const u8,
+    args: anytype,
+) SiteResult {
+    return .{ .replacement = refusal(alloc, rep, code, loc, module, fmt, args) };
+}
+
+/// `refuse` with the teaching half — the `refusalWithHint` envelope.
+pub fn refuseWithHint(
+    alloc: std.mem.Allocator,
+    rep: anytype,
+    code: errors.ErrorCode,
+    loc: errors.SourceLocation,
+    module: []const u8,
+    comptime fmt: []const u8,
+    args: anytype,
+    comptime hint_fmt: []const u8,
+    hint_args: anytype,
+) SiteResult {
+    return .{ .replacement = refusalWithHint(alloc, rep, code, loc, module, fmt, args, hint_fmt, hint_args) };
+}
+
 /// Which byte positions of `text` are EXPRESSION context rather than literal
 /// prose. Inside a string, only a `{{ … }}` interpolation is an expression.
 ///

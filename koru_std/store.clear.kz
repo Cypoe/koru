@@ -41,7 +41,7 @@
         if (std.mem.eql(u8, arg.name, "expr")) store_name = H.stripQuotes(arg.value);
     }
     if (store_name.len == 0) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:clear requires a store name: clear(name)", .{}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:clear requires a store name: clear(name)", .{}) };
     }
 
     const home_ns = storeHome(allocator, program, store_name) orelse flow.module;
@@ -69,12 +69,12 @@
         // the two reasons are different enough that one message for both would
         // send the author looking in the wrong place.
         if (store_owned) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:clear({s}): this store has an OWNED column, and an owned row carries an obligation that discharges one at a time - emptying in bulk would drop them on the floor with nothing to report it. Remove rows with `std/store:take`, which hands each row's obligation back through `| item`", .{store_name}) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:clear({s}): this store has an OWNED column, and an owned row carries an obligation that discharges one at a time - emptying in bulk would drop them on the floor with nothing to report it. Remove rows with `std/store:take`, which hands each row's obligation back through `| item`", .{store_name}) };
         }
         if (store_exists) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:clear({s}): this store carries a `! removed` arm and no `! cleared` arm. `clear` does NOT fire `! removed` - firing it once per row is exactly the cost `clear` exists to remove - so declare `! cleared <count>` to say what emptying means for this store's observers, or remove rows with `std/store:take`", .{store_name}) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:clear({s}): this store carries a `! removed` arm and no `! cleared` arm. `clear` does NOT fire `! removed` - firing it once per row is exactly the cost `clear` exists to remove - so declare `! cleared <count>` to say what emptying means for this store's observers, or remove rows with `std/store:take`", .{store_name}) };
         }
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:clear({s}): unknown store, or a store shape without a clear unit this rung (singleton stores hold one row and are written with `std/store:stored`)", .{store_name}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:clear({s}): unknown store, or a store shape without a clear unit this rung (singleton stores hold one row and are written with `std/store:stored`)", .{store_name}) };
     }
 
     const clr_inv = ast.Invocation{

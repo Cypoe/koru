@@ -41,7 +41,7 @@
         if (std.mem.eql(u8, arg.name, "expr")) store_name = H.stripQuotes(arg.value);
     }
     if (store_name.len == 0) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:preorder requires a store name: preorder(name)", .{}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:preorder requires a store name: preorder(name)", .{}) };
     }
 
     // The generated units live in the STORE's home namespace, which is the
@@ -74,13 +74,13 @@
             }
         }
         if (create_exists) {
-            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:preorder({s}): the preorder precedes its store's create in source - declare the store first", .{store_name}) } };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:preorder({s}): the preorder precedes its store's create in source - declare the store first", .{store_name}) };
         }
         // The store's OWN declaration was already refused; that diagnostic is the
         // true one and this lookup can only ever fail. Staying silent here is what
         // keeps one mistake to one error.
         if (ast.declarationRefused(allocator, program, flow.module, "std/store:new({s}):", .{store_name})) return .{ .transformed = .{} };
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:preorder({s}): unknown store - no std/store:new({s}) found (preorder walks a [tree] container store)", .{ store_name, store_name }) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:preorder({s}): unknown store - no std/store:new({s}) found (preorder walks a [tree] container store)", .{ store_name, store_name }) };
     }
 
     const sweep_inv = ast.Invocation{

@@ -68,17 +68,17 @@
         if (std.mem.eql(u8, arg.name, "expr")) target_text = H.stripQuotes(arg.value);
     }
     const lb = std.mem.indexOfScalar(u8, target_text, '[') orelse {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:take addresses a row: take(store[handle]) - '{s}' has no addressing head", .{target_text}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:take addresses a row: take(store[handle]) - '{s}' has no addressing head", .{target_text}) };
     };
     if (target_text.len == 0 or target_text[target_text.len - 1] != ']') {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:take: malformed addressing head '{s}'", .{target_text}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:take: malformed addressing head '{s}'", .{target_text}) };
     }
     const store_name = std.mem.trim(u8, target_text[0..lb], " ");
     if (KeyedAddressing.in(allocator, reporter, flow, "std/store:take", target_text)) |r| return .{ .transformed = .{ .replacement = r } };
     // Cross-store cell index (`todos[ui.sel]`) must lower like stored (690_075).
     const row_expr = H.storeRefsAll(allocator, program, std.mem.trim(u8, target_text[lb + 1 .. target_text.len - 1], " "));
     if (store_name.len == 0 or row_expr.len == 0) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:take: malformed addressing head '{s}' - take(store[handle])", .{target_text}) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:take: malformed addressing head '{s}' - take(store[handle])", .{target_text}) };
     }
 
     // The generated units live in the STORE's home namespace, which is the
@@ -96,7 +96,7 @@
         }
     }
     if (!unit_exists) {
-        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:take({s}[...]): unknown or not-yet-created container store '{s}'", .{ store_name, store_name }) } };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:take({s}[...]): unknown or not-yet-created container store '{s}'", .{ store_name, store_name }) };
     }
 
     const call_args = allocator.alloc(ast.Arg, 1) catch unreachable;
