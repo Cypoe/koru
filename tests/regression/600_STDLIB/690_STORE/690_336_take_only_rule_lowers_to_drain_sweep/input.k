@@ -3,11 +3,12 @@
 // The per-row take reads every column into the item payload and swap-writes
 // every column of the last row into the freed slot — work that exists for
 // the payload's sake and to keep survivors live. A drain has neither, so
-// the invoked sweep lowers to take's bookkeeping alone: freelist push,
-// generation bump, hslot/row_hslot fixup, len decrement — no column
-// traffic. Slot-reuse order after a refill IS observable (handles are
-// i64s), so the lowering reproduces sequential take's freelist order
-// rather than `clear`'s canonical reset.
+// the invoked sweep lowers to the clear unit's canonical reset: a
+// generation bump over every issued slot (`0..hslot_next`), then len,
+// freelist and the fresh cursor drop to zero and `ident` re-arms — no
+// column traffic. Refilled rows take slots in fresh order rather than
+// sequential take's LIFO pop order — observable only in handle bit
+// values; the slot SET reissued is identical.
 //
 // `pool` qualifies: bare take on the bound row, discard item arm, no
 // guard, no owned columns, no `! removed` observer.

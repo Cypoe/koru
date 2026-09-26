@@ -146,7 +146,7 @@ koru_std/store.bulkjoin.kz	62
 koru_std/store.clear.kz	105
 koru_std/store.cursor.kz	38
 koru_std/store.default.kz	79
-koru_std/store.drain.kz	114
+koru_std/store.drain.kz	100
 koru_std/store.expand.kz	130
 koru_std/store.explain.kz	104
 koru_std/store.gate.kz	525

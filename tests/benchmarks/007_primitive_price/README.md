@@ -29,7 +29,7 @@ Medians of 7 interleaved reps, both binaries ReleaseFast.
 | `event_call` | `ping(v: scratch[i].v)` → one write | `ping(gi[i])` | 911µs | 919µs | 1.01x | tor call — free; arg-promoted and inlined |
 | `insert` | counted-for fill, unindexed store | array fill | 60µs | 65µs | 1.08x | column stores + mint — near parity |
 | `insert_idx` | counted-for fill, indexed store | same array fill | 58µs | 417µs | **7.19x** | index join ≈ **3.6ns/row** — see frontier note below |
-| `drain` | `rule(bodies) ! row e \|> take` | swap-remove sweep | 30µs | 223µs | **7.42x** | take ≈ **1.9ns/row** (gen bump + freelist + event) |
+| `drain` | `rule(bodies) ! row e \|> take` | swap-remove sweep | 30µs | 57µs | **1.9x** | gen-bump reset; residual is one-time `hslot_gen` page faults — see drain note below |
 | `routed` | `! query e when e.act == 1` (indexed) | `for(active)` | 465µs | 578µs | 1.24x | bucket walk + resolve ≈ 1.1ns/member residual |
 | `guarded` | `! query e when e.on == 1` (unindexed) | `if(on[i]==1)` | 2695µs | 2683µs | 1.00x | sweep + guard — parity |
 | `watch` | write a watched column per row | write + counter | 1381µs | 1382µs | 1.00x | announce — free at this arity |
@@ -37,10 +37,11 @@ Medians of 7 interleaved reps, both binaries ReleaseFast.
 
 ## What the prices say
 
-**The three expensive primitives:** index join (~3.8ns/row), take/drain
-(~1.9ns/row), and handle resolve (~0.73ns/op, paid twice on `write_handle`).
-Everything else — sweep, capture fold, singleton write-through, event call,
-watch announce, grid — is at or under parity in the straight-line case.
+**The two expensive primitives:** index join (~3.6ns/row) and handle resolve
+(~0.73ns/op, paid twice on `write_handle`). Drain left the list — see the
+note below. Everything else — sweep, capture fold, singleton write-through,
+event call, watch announce, grid — is at or under parity in the
+straight-line case.
 
 **The machinery is free when LLVM can see it.** `write_sink` writes a store
 cell through the full `stored` event path at *parity* — a singleton column
@@ -55,11 +56,24 @@ just shift/mask/range — the residual is decode + checks vs a bare index.
 That is the handle tax, and it multiplies wherever a port respells an
 indexed expression (003's fanout pays it ~3x per event).
 
-**Lifecycle ops carry the widest ratio.** `insert_idx` 7.19x and `drain`
-7.09x are the spawn/despawn gap at op granularity: index maintenance and
-teardown bookkeeping the bare-array baseline never pays. Part of `insert_idx`
-is semantic surplus — the index joins `bucket[0]` for keys the workload
-never queries.
+**`insert_idx` is now the widest ratio** (7.19x) — index maintenance the
+bare-array baseline never pays, and part of it is semantic surplus: the
+index joins `bucket[0]` for keys the workload never queries.
+
+**`drain` repriced (measured 2026-09-26):** the sweep now emits the `clear`
+unit's canonical reset — one gen bump over `0..hslot_next`, then `len`,
+`free_len`, `hslot_next` drop to zero and `ident` re-arms — instead of
+materializing take's freelist order per row. The old shape's measured cost
+was mostly *cold demand-zero page faults* on `hslot_free`/`hslot_gen` (~1.2MB
+of bookkeeping arrays the deferred fill never touched), not loop cost: a
+verbatim replica of the old emitted loop ran 0.19ns/row warm. The new shape
+pays only the `gen` fault pass (store-only under `gen0`, where `@memset`
+replaces the RMW since every gen is provably 0→1), and re-arming `ident`
+means drain *stays* fast — the old shape flipped `ident` false forever, so
+every drain-after-refill took the scalar slot-mapping path (~2.2ns/row
+measured). Warm steady-state drain is ~0.1ns/row (≈10µs at 100k). The one
+observable change: refill issues slots in fresh order rather than take's
+LIFO pop order — same slot set, different handle bit values.
 
 **`insert_idx` frontier (measured 2026-09-25):** the bulk join now keeps the
 join key, the previous key, and the bucket tail (`len`/`ptr`/`capacity`) in
@@ -96,4 +110,5 @@ write-through; the sweep-read arm is the pinned gap itself.
 The price list ranks; a challenge is what makes the current worst entry bend
 in a realistic program. Loop: price → challenge (protagonist = the worst
 primitive) → fix or frontier → reprice. Current protagonists, in order:
-`insert_idx`'s join, `drain`'s teardown, `read_handle`'s resolve.
+`insert_idx`'s join (at the representation frontier), `read_handle`'s
+resolve.

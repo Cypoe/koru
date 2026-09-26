@@ -19,8 +19,8 @@ const HStruct = struct {
             \\    __koru_hslot_next: usize = 0,
             \\    // `__koru_ident` — no removal has run, so slot == dense row
             \\    // for every live row; mint/resolve skip both table loads, the
-            \\    // first take materialises and flips it, drain leaves it false
-            \\    // (freelist refills), clear re-arms. `__koru_gen0` — no gen
+            \\    // first take materialises and flips it, drain and clear
+            \\    // re-arm it by resetting the slot space. `__koru_gen0` — no gen
             \\    // bump has ever run; it implies slot == row for every minted
             \\    // slot, so resolve sheds the gen load entirely.
             \\    __koru_ident: bool = true, __koru_gen0: bool = true,

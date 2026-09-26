@@ -1,12 +1,14 @@
 #!/bin/bash
 # Emitted-shape oracle for the drain lowering. `pool`'s rule body is a
-# bare `take(pool[e])` with a discard `| item`, so its invoked sweep is a
-# read-only bookkeeping traversal — sequential take's freelist push order
-# is provably `row_hslot[0]` then `row_hslot[n-1]` down to `row_hslot[1]`,
-# so the lowering reads the original mapping in that order: generation
-# bump, hslot_row tombstone, freelist push — no per-row resolve, no
-# column reads, no swap-writes. `guarded` carries a `when` clause, so its
-# sweep keeps the removal-tolerant `while` that re-checks the index
+# bare `take(pool[e])` with a discard `| item`, so its invoked sweep is
+# the clear unit's canonical reset: every issued slot's generation
+# bumps once (`0..hslot_next` covers live rows and slots freed by
+# earlier takes), then len, the freelist and the fresh cursor drop to
+# zero and `ident` re-arms — no per-row resolve, no column reads, no
+# freelist materialization. The observable difference vs a per-row
+# take walk is refill pop order: reset reissues slots in fresh order,
+# the same slot SET either way. `guarded` carries a `when` clause, so
+# its sweep keeps the removal-tolerant `while` that re-checks the index
 # swap-remove just refilled.
 set -u
 if [ ! -f output_emitted.zig ]; then
@@ -14,22 +16,26 @@ if [ ! -f output_emitted.zig ]; then
     exit 1
 fi
 
-# --- pool lowered to the drain traversal ---
+# --- pool lowered to the drain reset ---
 if ! grep -q 'const __koru_dn = __koru_store_pool\.len' output_emitted.zig; then
-    echo "FAIL: pool's sweep did not lower to the drain traversal"
-    exit 1
-fi
-if ! grep -q 'for (1\.\.__koru_dn)' output_emitted.zig; then
-    echo "FAIL: drain lost the removal-ordered freelist walk"
+    echo "FAIL: pool's sweep did not lower to the drain reset"
     exit 1
 fi
 POOL_SWEEP=$(awk '/qsweep_pool/,/^    };$/' output_emitted.zig)
-if ! printf '%s' "$POOL_SWEEP" | grep -q '__koru_hslot_gen\[__koru_slot\] +%= 1'; then
-    echo "FAIL: drain lost the generation bump"
+if ! printf '%s' "$POOL_SWEEP" | grep -q '__koru_hslot_gen\[__koru_i\] +%= 1'; then
+    echo "FAIL: drain lost the issued-slot generation bump"
     exit 1
 fi
-if ! printf '%s' "$POOL_SWEEP" | grep -q '__koru_hslot_free_len += 1'; then
-    echo "FAIL: drain lost the freelist push"
+if ! printf '%s' "$POOL_SWEEP" | grep -q '__koru_hslot_next = 0'; then
+    echo "FAIL: drain did not reset the fresh-slot cursor"
+    exit 1
+fi
+if ! printf '%s' "$POOL_SWEEP" | grep -q '__koru_hslot_free_len = 0'; then
+    echo "FAIL: drain did not drop the freelist"
+    exit 1
+fi
+if ! printf '%s' "$POOL_SWEEP" | grep -q '__koru_ident = true'; then
+    echo "FAIL: drain did not re-arm the identity map"
     exit 1
 fi
 if printf '%s' "$POOL_SWEEP" | grep -q '__koru_store_pool\.hp\['; then
@@ -44,7 +50,7 @@ fi
 # --- ipool lowered too: an index decl does not disqualify ---
 IPOOL_SWEEP=$(awk '/qsweep_ipool/,/^    };$/' output_emitted.zig)
 if ! printf '%s' "$IPOOL_SWEEP" | grep -q 'const __koru_dn = __koru_store_ipool\.len'; then
-    echo "FAIL: indexed store's take-only rule did not lower to the drain traversal"
+    echo "FAIL: indexed store's take-only rule did not lower to the drain reset"
     exit 1
 fi
 if printf '%s' "$IPOOL_SWEEP" | grep -q '__koru_store_ipool\.\(tag\|hp\)\['; then
@@ -69,7 +75,11 @@ if [ -f output_emitted.js ]; then
         echo "FAIL: JS drain lost the 2^21-wrapping generation bump"
         exit 1
     fi
+    if ! grep -q '__koru_hslot_next = 0' output_emitted.js; then
+        echo "FAIL: JS drain did not reset the fresh-slot cursor"
+        exit 1
+    fi
 fi
 
-echo "PASS: take-only rule lowers to bookkeeping drain; guarded rule keeps tolerant sweep"
+echo "PASS: take-only rule lowers to the reset drain; guarded rule keeps tolerant sweep"
 exit 0

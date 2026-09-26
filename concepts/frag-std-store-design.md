@@ -1000,19 +1000,31 @@ slot == dense index for every live handle, so `hslot_row`/`row_hslot`
 carry undefined bytes no reader may consult. Mint and the bulk fill
 skip both table writes, `row_of`/`handle_of` skip the table load, and
 the first take pays one `t[i] = i` materialise pass before flipping the
-flag. Drain cannot re-arm it — the freelist it fills is exactly what
-makes slots ≠ rows — but under identity the freelist sequence is known
-arithmetically (`0, n-1 .. 1`), so drain's teardown is three streaming
-passes with no tombstone writes: dead table bytes are unreachable
-behind the bumped generations. `clear` re-arms because its canonical
-reset empties every handle structure. Measured on 003_ecs_reactive
-(ReleaseFast, 100k×100f): sparse ~4.05→~3.5ms — the resolve fast path
-sheds the per-member table load; the drain is ~185µs vs ~350. What the
-flag did NOT move is init: the skipped table writes were never the
-cold cost — the ~0.5ms cold/warm delta is column pages and bucket
-heap, which no flag removes. An earlier per-row `if (ident)` select in
-the drain loop measured ~110µs worse than splitting the variants —
-hoist the branch, never fold it into the row computation.
+flag. The drain sweep now IS the clear unit's canonical reset
+(2026-09-26): an earlier design materialized sequential take's
+freelist push order into `hslot_free` on the belief that refill pop
+order was observable enough to pin — it is, in handle bit values, but
+the slot SET reissued is identical either way and `clear` already
+blesses reset order. The materialization cost three things measured on
+007_primitive_price's drain arm (ReleaseFast, 100k rows): a freelist
+fill loop, ~200µs of cold demand-zero page faults on `hslot_free` +
+`hslot_gen` (the deferred fill never touches them — the fault storm
+landed inside the timed drain, which a verbatim replica proved by
+running the same loop warm at 0.19ns/row), and `ident` flipping false
+FOREVER — every drain-after-refill paid the scalar slot-mapping path
+(~2.2ns/row measured). The reset bumps gen over `0..hslot_next` —
+covering live rows and slots freed by earlier takes — then zeroes
+`len`, `free_len`, `hslot_next` and re-arms `ident` (vacuously true at
+len 0; dead `row_hslot`/`hslot_row`/freelist bytes stay unreachable
+behind `slot < hslot_next` and the gen check). Under `gen0` the bump
+is a `@memset(gen, 1)` — store-only, no read-for-ownership on the
+faulted pages. Measured: drain 219→~57µs cold (7.4x→~1.9x vs the twin;
+the residual IS the one-time gen fault pass) and ~10µs steady-state
+where drain2+ used to cost 221µs. `corral` (800_007) holds drift 0
+through drain+refill and 690_336's oracle now pins the reset shape.
+(The superseded split-variant drain earned its own measurement on
+003_ecs_reactive — ~185µs vs ~350 — and the lesson survives: hoist the
+variant branch, never fold it into the row computation.)
 
 The bulk bucket join is memoized twice over (2026-09-24): the probed
 bucket rides `__koru_im` while the key repeats, and a one-entry cache

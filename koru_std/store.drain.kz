@@ -8,15 +8,20 @@
 // columns into the freed slot — work for the payload's sake and for
 // survivor liveness. A drain has neither.
 //
-// What stays observable: every live slot's generation bumps once, the
-// freelist grows in sequential-take push order — `row_hslot[0]`, then
-// `row_hslot[n-1]` down to `row_hslot[1]` (take removes index 0 each
-// iteration, so the tail row drops into the hole and dies next) — and
-// every freed slot's hslot_row is tombstoned. That is a READ-ONLY
-// traversal of the mapping: no swap, no fixup, no column traffic; the
-// post-state equals sequential take's modulo dead bytes insert
-// overwrites. Slot-reuse order after a refill IS observable, so this
-// reproduces take's bookkeeping rather than calling the clear unit.
+// The teardown is the clear unit's canonical reset, not a walk of
+// take's freelist pushes: every issued slot's generation bumps once
+// (`0..hslot_next` covers live rows AND slots freed by earlier takes),
+// then `hslot_next`, `free_len` and `len` drop to zero and `ident`
+// re-arms. Materializing the freelist paid three costs for one
+// observable difference — refilled rows take slots in fresh order
+// rather than take's LIFO pop order: the fill loop itself, a cold
+// page-fault pass over `hslot_free`, and `ident` flipping false
+// FOREVER, which degraded every later drain/refill to the scalar
+// slot-mapping path. `clear` already blesses reset order, and the slot
+// SET reissued is identical either way. Dead slot bytes (`row_hslot`,
+// `hslot_row`, stale freelist entries) stay unreachable post-reset:
+// resolve's `slot < hslot_next` rejects them, and the next
+// materialize() rebuilds the mapping for live rows only.
 // Every doubt declines the site: `when` makes the walk selective, a
 // `| item` read makes materialisation load-bearing, an owned column
 // discharges one obligation at a time, a `! removed` arm fires per row.
@@ -60,55 +65,36 @@ const DrainScan = struct {
         return true;
     }
 
-    // The body a drain-lowered site emits — the freelist order and
-    // bookkeeping of sequential take, read off the original mapping.
+    // The body a drain-lowered site emits — the clear unit's reset:
+    // bump every issued slot's generation, then drop len, the freelist
+    // and the fresh cursor; ident re-arms (vacuous at len 0). Refill
+    // issues slots in fresh order rather than take's LIFO pop order —
+    // the observable difference is handle bit values only.
     fn sweepBody(alloc: std.mem.Allocator, host_is_js: bool, store: []const u8) []const u8 {
         if (host_is_js) return std.fmt.allocPrint(alloc,
             \\const __koru_dn = __koru_store_{s}.len;
             \\if (__koru_dn > 0) {{
-            \\  let __koru_slot = __koru_store_{s}.__koru_row_hslot[0];
-            \\  __koru_store_{s}.__koru_hslot_gen[__koru_slot] = (__koru_store_{s}.__koru_hslot_gen[__koru_slot] + 1) % 2097152;
-            \\  __koru_store_{s}.__koru_hslot_row[__koru_slot] = -1;
-            \\  __koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_slot;
-            \\  __koru_store_{s}.__koru_hslot_free_len += 1;
-            \\  for (let __koru_k = 1; __koru_k < __koru_dn; __koru_k++) {{
-            \\    __koru_slot = __koru_store_{s}.__koru_row_hslot[__koru_dn - __koru_k];
-            \\    __koru_store_{s}.__koru_hslot_gen[__koru_slot] = (__koru_store_{s}.__koru_hslot_gen[__koru_slot] + 1) % 2097152;
-            \\    __koru_store_{s}.__koru_hslot_row[__koru_slot] = -1;
-            \\    __koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_slot;
-            \\    __koru_store_{s}.__koru_hslot_free_len += 1;
+            \\  for (let __koru_i = 0; __koru_i < __koru_store_{s}.__koru_hslot_next; __koru_i++) {{
+            \\    __koru_store_{s}.__koru_hslot_gen[__koru_i] = (__koru_store_{s}.__koru_hslot_gen[__koru_i] + 1) % 2097152;
             \\  }}
             \\  __koru_store_{s}.len = 0;
+            \\  __koru_store_{s}.__koru_hslot_free_len = 0;
+            \\  __koru_store_{s}.__koru_hslot_next = 0;
             \\}}
             \\return;
-        , .{ store, store, store, store, store, store, store, store, store, store, store, store, store, store, store, store }) catch unreachable;
+        , .{ store, store, store, store, store, store, store }) catch unreachable;
         return std.fmt.allocPrint(alloc,
             \\const __koru_dn = __koru_store_{s}.len;
-            \\if (__koru_dn > 0) {{ __koru_store_{s}.__koru_gen0 = false;
-            \\    if (__koru_store_{s}.__koru_ident) {{
-            \\        __koru_store_{s}.__koru_ident = false;
-            \\        // Identity: freelist 0, n-1 .. 1, free_len 0; tombstones are dead bytes.
-            \\        for (0..__koru_dn) |__koru_i| __koru_store_{s}.__koru_hslot_gen[__koru_i] +%= 1;
-            \\        __koru_store_{s}.__koru_hslot_free[0] = 0;
-            \\        for (1..__koru_dn) |__koru_k| __koru_store_{s}.__koru_hslot_free[__koru_k] = __koru_dn - __koru_k;
-            \\        __koru_store_{s}.__koru_hslot_free_len = __koru_dn;
-            \\    }} else {{
-            \\        const __koru_slot0 = __koru_store_{s}.__koru_row_hslot[0];
-            \\        __koru_store_{s}.__koru_hslot_gen[__koru_slot0] +%= 1;
-            \\        __koru_store_{s}.__koru_hslot_row[__koru_slot0] = @import("std").math.maxInt(usize);
-            \\        __koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_slot0;
-            \\        __koru_store_{s}.__koru_hslot_free_len += 1;
-            \\        for (1..__koru_dn) |__koru_k| {{
-            \\            const __koru_slot = __koru_store_{s}.__koru_row_hslot[__koru_dn - __koru_k];
-            \\            __koru_store_{s}.__koru_hslot_gen[__koru_slot] +%= 1;
-            \\            __koru_store_{s}.__koru_hslot_row[__koru_slot] = @import("std").math.maxInt(usize);
-            \\            __koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_slot;
-            \\            __koru_store_{s}.__koru_hslot_free_len += 1;
-            \\        }}
-            \\    }}
+            \\if (__koru_dn > 0) {{
+            \\    if (__koru_store_{s}.__koru_gen0) @memset(__koru_store_{s}.__koru_hslot_gen[0..__koru_store_{s}.__koru_hslot_next], 1)
+            \\    else for (0..__koru_store_{s}.__koru_hslot_next) |__koru_i| __koru_store_{s}.__koru_hslot_gen[__koru_i] +%= 1;
+            \\    __koru_store_{s}.__koru_gen0 = false;
             \\    __koru_store_{s}.len = 0;
+            \\    __koru_store_{s}.__koru_hslot_free_len = 0;
+            \\    __koru_store_{s}.__koru_hslot_next = 0;
+            \\    __koru_store_{s}.__koru_ident = true;
             \\}}
             \\return;
-        , .{ store, store, store, store, store, store, store, store, store, store, store, store, store, store, store, store, store, store, store, store, store }) catch unreachable;
+        , .{ store, store, store, store, store, store, store, store, store, store, store }) catch unreachable;
     }
 };
