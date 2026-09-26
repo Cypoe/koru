@@ -13,9 +13,9 @@ var ticked: i64 = 0;
     return @intFromBool(ticked < 3);
 }
 
-~pub tor wait { i: i64 } -> { fd: i32, wait_ns: i128 }
+~pub tor wait { i: i64 } -> i128
 
 ~proc wait|zig {
     _ = i;
-    return .{ .fd = -1, .wait_ns = 1_000_000 };
+    return 1_000_000;
 }

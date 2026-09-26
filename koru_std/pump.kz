@@ -17,10 +17,10 @@
 //                    progress this pass. Required.
 //   live() -> i64    how many instances are live; 0 = retired. Absent = the
 //                    participant is immortal — it never drains the pump.
-//   wait(i) -> { fd: i32, wait_ns: i128 }   instance i's blocking interest:
-//                    fd = -1 for none, wait_ns a relative re-poll duration
-//                    (maxInt = never). Optional; unarmed participants
-//                    contribute nothing to the union wait.
+//   wait(i) -> interest    instance i's blocking interest — the RETURN TYPE
+//                    is the vocabulary: `-> i32` fd, `-> i128` re-poll ns,
+//                    `{ fd, wait_ns }` both; presence, never sentinels.
+//                    Optional; unarmed participants add nothing to the wait.
 //
 // The join site `std/pump(name)` carries the verbs as `!` arms — the same
 // reference form `std/store(name) ! field` uses for standing watches. Pass
@@ -41,6 +41,7 @@ const ast = @import("ast");
 ~part messages
 ~part synth
 ~part wit
+~part wait
 
 const PH = struct {
     const codegen_utils = @import("codegen_utils");
@@ -506,7 +507,8 @@ fn siteName(invocation: *const ast.Invocation) []const u8 {
 //   std/pump(main)
 //   ! step |> <call>          — required, `-> i32` progress count
 //   ! live |> <call>          — optional, `-> i64` live-instance count
-//   ! wait i |> <call(i)>     — optional, `-> { fd, wait_ns }` interest
+//   ! wait i |> <call(i)>     — optional, interest by return type:
+//                               `i32` (fd) / `i128` (re-poll ns) / `{ fd, wait_ns }`
 //
 // Each arm compiles into `__pump_<name>_{step,live,wait}_<idx>`; run
 // enumerates them. The verbs are ordinary calls — the pump never learns what
@@ -577,8 +579,9 @@ fn siteName(invocation: *const ast.Invocation) []const u8 {
     const checks = [_]Verbs{
         .{ .arm = step_arm, .want = "i32", .verb = "step" },
         .{ .arm = live_arm, .want = "i64", .verb = "live" },
-        .{ .arm = wait_arm, .want = "fd", .verb = "wait" },
+        .{ .arm = wait_arm, .want = "the interest contract: `i32` (fd), `i128` (re-poll ns), or `{ fd, wait_ns }`", .verb = "wait" },
     };
+    var wait_interest: PWait.Interest = .{};
     for (checks) |ck| {
         const arm = ck.arm orelse continue;
         const cd = PH.calleeDecl(program, arm, flow.module) orelse {
@@ -587,7 +590,10 @@ fn siteName(invocation: *const ast.Invocation) []const u8 {
         const rt = cd.return_type orelse {
             return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.join_verb_no_return, .{ pump_name, ck.verb, ck.want }) } };
         };
-        if (std.mem.indexOf(u8, rt, ck.want) == null or (std.mem.eql(u8, ck.verb, "wait") and std.mem.indexOf(u8, rt, "wait_ns") == null)) {
+        if (std.mem.eql(u8, ck.verb, "wait")) {
+            wait_interest = PWait.classify(rt) orelse
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.join_wait_no_interest, .{ pump_name, rt }) } };
+        } else if (std.mem.indexOf(u8, rt, ck.want) == null) {
             return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.join_verb_wrong_return, .{ pump_name, ck.verb, rt, ck.want }) } };
         }
     }
@@ -607,14 +613,7 @@ fn siteName(invocation: *const ast.Invocation) []const u8 {
         const wbind = wa.binding orelse {
             return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, PM.join_wait_binds_index, .{pump_name}) } };
         };
-        const wf = allocator.alloc(ast.Field, 1) catch unreachable;
-        wf[0] = ast.Field{
-            .name = allocator.dupe(u8, wbind) catch unreachable,
-            .type = allocator.dupe(u8, "i64") catch unreachable,
-        };
-        // The interest record is nominal per tor — rebuild the fields
-        // rather than returning the callee's `Output` type wholesale.
-        emitVerbUnit(allocator, &appended_items, program, flow, std.fmt.allocPrint(allocator, "__pump_{s}_wait_{d}", .{ pump_name, join_idx }) catch unreachable, wa, wf, "{ fd: i32, wait_ns: i128 }", "__koru_w", ".{ .fd = __koru_w.fd, .wait_ns = __koru_w.wait_ns }");
+        PWait.emitWait(allocator, &appended_items, program, flow, pump_name, join_idx, wa, wbind, wait_interest);
     }
 
     const pconsumed = std.fmt.allocPrint(allocator, "// std/pump: '{s}' joins pump '{s}' (participant {d})", .{ pump_name, pump_name, join_idx }) catch unreachable;
@@ -752,9 +751,9 @@ fn siteName(invocation: *const ast.Invocation) []const u8 {
         rb.appendSlice(allocator, "    if (__koru_worked == 0) { if (@hasDecl(__H, \"idle\")) { idle(); } else {\n") catch unreachable;
         if (any_wait) {
             // The union wait: one poll over every joined `wait` unit's live
-            // instances, capped by the nearest `wait_ns`. fd = -1 means
-            // deadline interest only; wait_ns = maxInt means none. A pass
-            // with no declared interests at all breathes 1ms.
+            // instances, capped by the nearest `wait_ns`. Units normalize
+            // absent fields to sentinels (fd = -1, wait_ns = maxInt = none);
+            // a pass with no declared interests breathes 1ms.
             rb.appendSlice(allocator, std.fmt.allocPrint(allocator,
                 \\        var __koru_wait_ns: i128 = @import("std").math.maxInt(i128);
                 \\        const __koru_pfds = @import("std").heap.page_allocator.alloc(@import("std").posix.pollfd, @as(usize, @intCast(@max(__koru_live + {d}, 1)))) catch unreachable;

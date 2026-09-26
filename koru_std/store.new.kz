@@ -1159,7 +1159,7 @@
         // collection and emission live in PVerbs (store.pverbs.kz).
         var step_arm: ?ast.Continuation = null;
         var step_terminal_branches = std.ArrayList(ast.Branch).initCapacity(allocator, 2) catch unreachable;
-        var wait_arm: ?ast.Continuation = null;
+        var wait_arm: ?ast.Continuation = null; var wait_src: [2][]const u8 = .{ "", "" };
         for (flow.body.continuations) |*ic| {
             const bname = std.mem.trim(u8, ic.branch, " ");
             // Profiler taps splice void-branch continuations here — not store interceptors.
@@ -1223,7 +1223,7 @@
                 }) catch unreachable;
                 continue;
             }
-            switch (PVerbs.collectArm(allocator, program, flow, reporter, store_name, field_names, field_owned_info, bname, ic, &step_arm, &step_terminal_branches, &wait_arm)) {
+            switch (PVerbs.collectArm(allocator, program, flow, reporter, store_name, field_names, field_owned_info, bname, ic, &step_arm, &step_terminal_branches, &wait_arm, &wait_src)) {
                 .ok => continue,
                 .refuse => |ritem| return .{ .transformed = .{ .replacement = ritem } },
                 .not_mine => {},
@@ -4706,7 +4706,7 @@
             }
         }
 
-        PVerbs.emit(allocator, program, flow, store_name, home_ns, field_names, field_types, field_owned_info, pstore_names.items, pstore_identity.items, discharge_arm, removed_arms.items, step_arm, step_terminal_branches.items, wait_arm, &appended_items, H, HS, host_is_js, host_target, proc_target);
+        PVerbs.emit(allocator, program, flow, store_name, home_ns, field_names, field_types, field_owned_info, pstore_names.items, pstore_identity.items, discharge_arm, removed_arms.items, step_arm, step_terminal_branches.items, wait_arm, wait_src, &appended_items, H, HS, host_is_js, host_target, proc_target);
 
         // Rung 0 (per-store disposal contract): the store provides NO disposal
         // verb. A BARE store's `take` carries no obligation (frictionless). When

@@ -79,8 +79,8 @@ koru_std/interpreter.select.kz	42
 koru_std/interpreter.validate.kz	59
 koru_std/invariants.kz	179
 koru_std/io_registry.kz	30
-koru_std/io.jsprec.kz	48
 koru_std/io.blk.kz	1117
+koru_std/io.jsprec.kz	48
 koru_std/io.kz	1024
 koru_std/json.kz	268
 koru_std/kernel.body.kz	69
@@ -115,9 +115,10 @@ koru_std/proto.fields.kz	58
 koru_std/proto.kz	379
 koru_std/proto.resolve.kz	473
 koru_std/pump.explain.kz	301
-koru_std/pump.kz	833
+koru_std/pump.kz	832
 koru_std/pump.messages.kz	37
 koru_std/pump.synth.kz	59
+koru_std/pump.wait.kz	65
 koru_std/pump.wit.kz	25
 koru_std/refine.alts.kz	183
 koru_std/refine.body.kz	176
@@ -146,7 +147,7 @@ koru_std/store.bulkjoin.kz	62
 koru_std/store.clear.kz	98
 koru_std/store.cursor.kz	38
 koru_std/store.default.kz	79
-koru_std/store.drain.kz	100
+koru_std/store.drain.kz	99
 koru_std/store.expand.kz	130
 koru_std/store.explain.kz	104
 koru_std/store.gate.kz	523
@@ -162,7 +163,7 @@ koru_std/store.leaf.kz	207
 koru_std/store.new.kz	6305
 koru_std/store.plan.kz	236
 koru_std/store.preorder.kz	103
-koru_std/store.pverbs.kz	781
+koru_std/store.pverbs.kz	713
 koru_std/store.qcaps.kz	370
 koru_std/store.qnone.kz	129
 koru_std/store.qrewrite.kz	229
@@ -177,6 +178,7 @@ koru_std/store.stored.kz	862
 koru_std/store.stripe.kz	74
 koru_std/store.take.kz	151
 koru_std/store.view.kz	77
+koru_std/store.wait.kz	133
 koru_std/store.watch.kz	291
 koru_std/string-map.kz	126
 koru_std/string.kjs	147

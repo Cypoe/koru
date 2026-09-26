@@ -21,9 +21,9 @@ pub const Task = struct { work: i32, state: u8 };
     return w;
 }
 
-~pub tor poll { t: *Task<live> } -> { fd: i32, wait_ns: i128 }
+~pub tor poll { t: *Task<live> } -> i128
 
 ~proc poll|zig {
     _ = t;
-    return .{ .fd = -1, .wait_ns = 1_000_000 };
+    return 1_000_000;
 }

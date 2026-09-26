@@ -52,8 +52,8 @@
 //   step: one drain pass — for each kind, each of that kind's consumer units
 //   attempts one dequeue in join order (competing: first pop wins the value);
 //   returns items moved. live: 0 once closed AND every kind's ring is drained.
-//   wait: `{ fd: -1, wait_ns: 1ms }` — a same-thread re-poll interest; the
-//   cross-thread eventfd rung is deliberately unbuilt.
+//   wait: `-> i128`, 1ms — a same-thread re-poll interest (a scalar IS a
+//   deadline); the cross-thread eventfd rung is deliberately unbuilt.
 //
 // `closed`-arm timing: the units fire inside `std/channel:close` — the
 // transition point — so a channel never joined to a pump still runs them.
@@ -1035,7 +1035,7 @@ const CH = struct {
             .type = allocator.dupe(u8, "i64") catch unreachable,
             .phantom = null,
         };
-        CH.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "{s}-wait", .{chan_name}) catch unreachable, wf, &.{}, "{ fd: i32, wait_ns: i128 }", "_ = i;\nreturn .{ .fd = -1, .wait_ns = 1_000_000 };", &appended);
+        CH.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "{s}-wait", .{chan_name}) catch unreachable, wf, &.{}, "i128", "_ = i;\nreturn 1_000_000;", &appended);
     }
 
     const marker = std.fmt.allocPrint(allocator, "// std/channel: '{s}' declared ({d} kinds, cap {d}; {d} consumers, {d} close arms)", .{ chan_name, kinds.items.len, capacity, kind_arms.items.len, closed_arms.items.len }) catch unreachable;

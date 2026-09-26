@@ -14,7 +14,6 @@
 
 const PX = struct {
     const site_hash = @import("site_hash");
-
     // One answered verb: the callee the arm ends in, or its refusal row.
     // `site` is the arm's call invocation; `gen` is the `std/store:new` site
     // that synthesized the callee — both land as `at` witnesses on the row.
@@ -77,14 +76,15 @@ const PX = struct {
         };
         const rt = cd.return_type orelse
             return .{ .callee = callee, .status = refused(alloc, PM.join_verb_no_return, .{ name, verb, want }), .site = site };
-        if (std.mem.indexOf(u8, rt, want) == null or
-            (std.mem.eql(u8, verb, "wait") and std.mem.indexOf(u8, rt, "wait_ns") == null))
+        if (std.mem.eql(u8, verb, "wait")) {
+            if (PWait.classify(rt) == null)
+                return .{ .callee = callee, .status = refused(alloc, PM.join_wait_no_interest, .{ name, rt }), .site = site };
+        } else if (std.mem.indexOf(u8, rt, want) == null)
             return .{ .callee = callee, .status = refused(alloc, PM.join_verb_wrong_return, .{ name, verb, rt, want }), .site = site };
         return .{ .callee = callee, .site = site };
     }
 
     // emitVerb lives in the `wit` part (PW.emitVerb).
-
     fn find(pumps: *std.ArrayList(Pump), name: []const u8) ?*Pump {
         for (pumps.items) |*p| {
             if (std.mem.eql(u8, p.name, name)) return p;
@@ -153,7 +153,7 @@ const PX = struct {
             } else if (std.mem.eql(u8, cb, "wait")) {
                 if (j.wait != null) { j.status = refused(alloc, PM.join_one_wait, .{name}); continue; }
                 if (c.binding) |b| j.wait_bind = b else j.status = refused(alloc, PM.join_wait_binds_index, .{name});
-                j.wait = checkVerb(alloc, prog, c, fl.module, "wait", "fd", name);
+                j.wait = checkVerb(alloc, prog, c, fl.module, "wait", "the interest contract: `i32` (fd), `i128` (re-poll ns), or `{ fd, wait_ns }`", name);
             } else {
                 j.status = refused(alloc, PM.join_unknown_verb, .{ name, cb });
             }

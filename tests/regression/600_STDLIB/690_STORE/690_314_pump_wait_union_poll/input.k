@@ -1,7 +1,7 @@
 // `! wait` on `std/store:new` — the interest contract. Where `! step` asks
 // "advance this row once", `! wait` answers "what would you block on": the
-// callee returns `{ fd: i32, wait_ns: i128 }` — fd = -1 for none, wait_ns a
-// relative re-poll duration (maxInt = never).
+// callee's return type IS the vocabulary — `i32` answers a descriptor to
+// poll, `i128` a relative re-poll duration, `{ fd, wait_ns }` both.
 //
 // A `pump:run` with no `! idle` arm composes the wait itself: when a pass
 // steps every live row and nobody progresses (no `| running` or `| complete`

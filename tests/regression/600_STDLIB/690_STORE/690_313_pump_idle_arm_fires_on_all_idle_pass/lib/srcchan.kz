@@ -53,16 +53,17 @@ pub const Tick = struct { id: i64, w1: i32, w2: i32, left: i64 };
     return .{ .running = .{} };
 }
 
-// `! wait` interest contract — `{ fd: i32, wait_ns: i128 }`: fd = -1 is no
-// descriptor; wait_ns is a RELATIVE duration (how soon to re-poll), maxInt =
-// never. A source answers its read fd; a tick answers a re-poll duration.
-// The pump polls the union of these once per all-idle pass.
-~pub tor interest-src { s: *Src<live> } -> { fd: i32, wait_ns: i128 }
+// `! wait` interest contract — the return type IS the vocabulary: `-> i32`
+// answers a descriptor to poll, `-> i128` a RELATIVE re-poll duration,
+// `-> { fd: i32, wait_ns: i128 }` both. A source answers its read fd; a
+// tick answers a re-poll duration. The pump polls the union of these once
+// per all-idle pass.
+~pub tor interest-src { s: *Src<live> } -> i32
 ! ?polled i32
 
 ~proc interest-src|zig {
     polled(s.rfd);
-    return .{ .fd = s.rfd, .wait_ns = std.math.maxInt(i128) };
+    return s.rfd;
 }
 
 ~pub tor close-src { s: *Src<!live> } -> i64
@@ -101,15 +102,15 @@ pub const Tick = struct { id: i64, w1: i32, w2: i32, left: i64 };
     return .{ .running = .{} };
 }
 
-~pub tor interest-tick { t: *Tick<live> } -> { fd: i32, wait_ns: i128 }
+~pub tor interest-tick { t: *Tick<live> } -> i128
 ! ?polled i32
 
-// A tick has no fd — its interest is a duration: "re-poll me in ~5ms". The
-// pump's union wait turns that into the poll timeout, so the tick paces the
-// whole dead pass.
+// A tick's interest is a duration: "re-poll me in ~5ms". The pump's union
+// wait turns that into the poll timeout, so the tick paces the whole dead
+// pass.
 ~proc interest-tick|zig {
     polled(-1);
-    return .{ .fd = -1, .wait_ns = 5_000_000 };
+    return 5_000_000;
 }
 
 ~pub tor close-tick { t: *Tick<!live> } -> i64

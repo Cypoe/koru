@@ -703,7 +703,6 @@ fn storeMemberColumns(alloc: std.mem.Allocator, prog: *const ast_find.Program, s
     }
     return null;
 }
-
 /// A store's COLUMNS, in declaration order — every column the SoA cell holds,
 /// including a `[tree]`-synthesized `parent`. Answers under any transform
 /// order: the generated apply tor's branches when the coordinator has run,
@@ -1009,3 +1008,4 @@ fn storeLowerText(
 ~part refhome
 ~part refhomeapi
 ~part keyed
+~part wait
