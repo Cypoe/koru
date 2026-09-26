@@ -26,10 +26,7 @@
     const flow = &item.flow;
 
     const H = struct {
-        fn stripQuotes(n: []const u8) []const u8 {
-            if (n.len >= 2 and n[0] == '"') return n[1 .. n.len - 1];
-            return n;
-        }
+        const stripQuotes = @import("emitter_helpers").stripQuotes;
     };
 
     var store_name: []const u8 = "";
@@ -66,9 +63,7 @@
         fn isIdentStart(ch: u8) bool {
             return (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or ch == '_';
         }
-        fn isIdent(ch: u8) bool {
-            return isIdentStart(ch) or (ch >= '0' and ch <= '9') or ch == '-';
-        }
+        const isIdent = @import("emitter_helpers").isKebabIdentChar;
         fn rootAllowed(ctx: *const Ctx, root: []const u8) bool {
             if (std.mem.startsWith(u8, root, "__koru_")) return true;
             const keywords = [_][]const u8{ "and", "or", "not", "true", "false", "_" };

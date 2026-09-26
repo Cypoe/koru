@@ -44,9 +44,7 @@ const Cap = struct {
     fn isIdentStart(ch: u8) bool {
         return (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or ch == '_';
     }
-    fn isIdent(ch: u8) bool {
-        return isIdentStart(ch) or (ch >= '0' and ch <= '9') or ch == '-';
-    }
+    const isIdent = @import("emitter_helpers").isKebabIdentChar;
     fn textRefs(alloc: std.mem.Allocator, text: []const u8, out: *std.ArrayList([]const u8)) void {
         var i: usize = 0;
         while (i < text.len) {

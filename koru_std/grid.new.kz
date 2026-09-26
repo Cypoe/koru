@@ -23,10 +23,7 @@
     const flow = &item.flow;
 
     const H = struct {
-        fn stripQuotes(n: []const u8) []const u8 {
-            if (n.len >= 2 and n[0] == '"') return n[1 .. n.len - 1];
-            return n;
-        }
+        const stripQuotes = @import("emitter_helpers").stripQuotes;
     };
 
     // `[unsafe(bounds)]std/grid:new(...)` — WAIVE THE BOUNDS FLOOR, by name.

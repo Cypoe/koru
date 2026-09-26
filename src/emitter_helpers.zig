@@ -14957,3 +14957,41 @@ fn pathsEqual(a: *const ast.DottedPath, b: *const ast.DottedPath) bool {
     }
     return true;
 }
+
+// ── Shared text/AST helpers, lifted from the store parts ─────────────
+// The `~part` files of `std/store` (and `std/grid`) each carried these
+// verbatim inside private `H` structs — folded here on the 2026-10-13
+// deslop census. Parts alias them (`const stripQuotes =
+// @import("emitter_helpers").stripQuotes;`) so call sites stay put.
+
+/// Kebab-inclusive identifier char — Koru names carry '-'. NOT the
+/// Zig-spelling `isIdentChar` above; store field/column names are kebab.
+pub fn isKebabIdentChar(c: u8) bool {
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c == '-';
+}
+
+/// Strip one pair of surrounding double quotes when present.
+pub fn stripQuotes(s: []const u8) []const u8 {
+    if (s.len >= 2 and s[0] == '"') return s[1 .. s.len - 1];
+    return s;
+}
+
+/// One-segment dotted path `module:name` — was `mkPathH`/`mkPathH2`.
+pub fn mkPathH(alloc: std.mem.Allocator, module: []const u8, name: []const u8) ast.DottedPath {
+    const segs = alloc.alloc([]const u8, 1) catch unreachable;
+    segs[0] = alloc.dupe(u8, name) catch unreachable;
+    return ast.DottedPath{ .module_qualifier = alloc.dupe(u8, module) catch unreachable, .segments = segs };
+}
+
+/// `mod:!state` → `mod:state` — strip a consuming borrow's `!` to the
+/// bare borrow, for views that must read without owning.
+pub fn bareBorrow(alloc: std.mem.Allocator, ph: []const u8) []const u8 {
+    const colon = std.mem.indexOfScalar(u8, ph, ':') orelse return alloc.dupe(u8, ph) catch unreachable;
+    if (colon + 1 < ph.len and ph[colon + 1] == '!') {
+        const out = alloc.alloc(u8, ph.len - 1) catch unreachable;
+        @memcpy(out[0 .. colon + 1], ph[0 .. colon + 1]);
+        @memcpy(out[colon + 1 ..], ph[colon + 2 ..]);
+        return out;
+    }
+    return alloc.dupe(u8, ph) catch unreachable;
+}

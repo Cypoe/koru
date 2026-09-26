@@ -131,9 +131,7 @@ const TakeScan = struct {
 // does not exist.
 const Gate = struct {
     const ast = @import("ast");
-    fn isIdentCh(ch: u8) bool {
-        return (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_' or ch == '-';
-    }
+    const isIdentCh = @import("emitter_helpers").isKebabIdentChar;
 
     /// `<s>[` at an identifier boundary, in expression context — an
     /// index expression on this store in ANY position: read, write,

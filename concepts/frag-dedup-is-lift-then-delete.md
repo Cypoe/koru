@@ -105,6 +105,27 @@ construction — the superset question answers itself, and the fix is
 routing through the declared mechanism (`collectBracketAnnotations` now
 wraps `findBlockClose`/`splitEntries`), never writing a second scan.
 
+**The .kz lane's removal unit is the alias, not the call site.** The
+stdlib-slice fold (29 clones: `stripQuotes` ×11, `mkPathH` ×9,
+`bareBorrow` ×2, kebab `isIdent*` ×7 across fifteen `store.*`/`grid.*`
+parts) could not move call sites — the host fns live inside each part's
+`H` struct and every call reads unqualified. The fold was a one-line
+alias per site (`const stripQuotes =
+@import("emitter_helpers").stripQuotes;`), preserving local names —
+including `mkPathH2`, which kept its name while pointing at the
+canonical body. In this lane "delete the clone" means "delete the body,
+keep the spelling"; the alias IS the removal, and a census keyed on
+bodies counts it clean while one keyed on names never will. The same
+pass found a same-name decoy: `fieldOrder` in `store.insert.kz` calls
+`storeInsertOrder`, in `store.stored.kz` calls `storeFieldOrder` —
+skeleton-identical, contract-divergent. That decoy quarantined the whole
+`storeRefs`/`storeRefsAll` family, since every member routes through
+`fieldOrder`; a fold that started from the top-level clones would have
+silently merged two different orderings. And the pre-existing canonical
+`isIdentChar` was *not* the superset — it lacks `-`, the kebab
+predicate's whole reason to exist — so the fold minted
+`isKebabIdentChar` rather than routing into a deficient home.
+
 **Open questions.** (1) Whether cluster ranking should prefer the superset
 member as canonical anchor rather than the first member — the census cannot
 yet order members by semantic coverage. (2) `copy count` is not `removal

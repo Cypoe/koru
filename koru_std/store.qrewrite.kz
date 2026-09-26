@@ -7,9 +7,7 @@
 const SRewrite = struct {
     const ast = @import("ast");
     const Form = enum { target, live, input };
-    fn isIdentCh(ch: u8) bool {
-        return (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_' or ch == '-';
-    }
+    const isIdentCh = @import("emitter_helpers").isKebabIdentChar;
     fn refs(alloc: std.mem.Allocator, text: []const u8, bind: []const u8, store: []const u8, fields: []const []const u8, srf: []const u8, cursor: []const u8, form: Form, used: []bool, unknown: *?[]const u8, view_mode: bool) []const u8 {
         const prefix = std.fmt.allocPrint(alloc, "{s}.", .{bind}) catch unreachable;
         const expr_ctx = ast.expressionMask(alloc, text);

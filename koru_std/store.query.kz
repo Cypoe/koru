@@ -36,30 +36,14 @@
     const flow = &item.flow;
 
     const H = struct {
-        fn stripQuotes(n: []const u8) []const u8 {
-            if (n.len >= 2 and n[0] == '"') return n[1 .. n.len - 1];
-            return n;
-        }
-        fn mkPathH(alloc: std.mem.Allocator, module: []const u8, name: []const u8) ast.DottedPath {
-            const segs = alloc.alloc([]const u8, 1) catch unreachable;
-            segs[0] = alloc.dupe(u8, name) catch unreachable;
-            return ast.DottedPath{ .module_qualifier = alloc.dupe(u8, module) catch unreachable, .segments = segs };
-        }
+        const stripQuotes = @import("emitter_helpers").stripQuotes;
+        const mkPathH = @import("emitter_helpers").mkPathH;
         // An owned column's __store_insert phantom is the CONSUMING form
         // `mod:!state` (ownership moves IN). A sweep projects it as a BARE BORROW
         // `mod:state` (no `!`) — read accepts it and consumes nothing, so the
         // store keeps the live `<state!>` it frees at teardown (query's qbody does
         // the same, store.kz:2261). Strip the `!` right after the `:`.
-        fn bareBorrow(alloc: std.mem.Allocator, ph: []const u8) []const u8 {
-            const colon = std.mem.indexOfScalar(u8, ph, ':') orelse return alloc.dupe(u8, ph) catch unreachable;
-            if (colon + 1 < ph.len and ph[colon + 1] == '!') {
-                const out = alloc.alloc(u8, ph.len - 1) catch unreachable;
-                @memcpy(out[0 .. colon + 1], ph[0 .. colon + 1]);
-                @memcpy(out[colon + 1 ..], ph[colon + 2 ..]);
-                return out;
-            }
-            return alloc.dupe(u8, ph) catch unreachable;
-        }
+        const bareBorrow = @import("emitter_helpers").bareBorrow;
     };
 
     // --- store name from the invocation (arg named "expr") ---

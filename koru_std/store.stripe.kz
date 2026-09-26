@@ -18,15 +18,8 @@
     const flow = &item.flow;
 
     const H = struct {
-        fn stripQuotes(n: []const u8) []const u8 {
-            if (n.len >= 2 and n[0] == '"') return n[1 .. n.len - 1];
-            return n;
-        }
-        fn mkPathH(alloc: std.mem.Allocator, module: []const u8, name: []const u8) ast.DottedPath {
-            const segs = alloc.alloc([]const u8, 1) catch unreachable;
-            segs[0] = alloc.dupe(u8, name) catch unreachable;
-            return ast.DottedPath{ .module_qualifier = alloc.dupe(u8, module) catch unreachable, .segments = segs };
-        }
+        const stripQuotes = @import("emitter_helpers").stripQuotes;
+        const mkPathH = @import("emitter_helpers").mkPathH;
     };
 
     var store_name: []const u8 = "";

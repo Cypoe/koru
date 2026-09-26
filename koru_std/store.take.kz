@@ -29,18 +29,9 @@
     const flow = &item.flow;
 
     const H = struct {
-        fn stripQuotes(n: []const u8) []const u8 {
-            if (n.len >= 2 and n[0] == '"') return n[1 .. n.len - 1];
-            return n;
-        }
-        fn mkPathH(alloc: std.mem.Allocator, module: []const u8, name: []const u8) ast.DottedPath {
-            const segs = alloc.alloc([]const u8, 1) catch unreachable;
-            segs[0] = alloc.dupe(u8, name) catch unreachable;
-            return ast.DottedPath{ .module_qualifier = alloc.dupe(u8, module) catch unreachable, .segments = segs };
-        }
-        fn isIdent(ch: u8) bool {
-            return (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_' or ch == '-';
-        }
+        const stripQuotes = @import("emitter_helpers").stripQuotes;
+        const mkPathH = @import("emitter_helpers").mkPathH;
+        const isIdent = @import("emitter_helpers").isKebabIdentChar;
         fn storeRefs(alloc: std.mem.Allocator, text: []const u8, name: []const u8) []const u8 {
             var out = std.ArrayList(u8).initCapacity(alloc, text.len + 32) catch unreachable;
             var i: usize = 0;

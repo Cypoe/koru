@@ -22,9 +22,7 @@
     const flow = &item.flow;
 
     const S = struct {
-        fn isIdentCh(ch: u8) bool {
-            return (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_' or ch == '-';
-        }
+        const isIdentCh = @import("emitter_helpers").isKebabIdentChar;
         // `c.field` -> `<grid>[<cursor>].field`, the SOURCE-LEVEL address.
         //
         // The first cut rewrote straight to host text — a direct indexed load

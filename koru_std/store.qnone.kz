@@ -22,24 +22,11 @@ const QueryNone = struct {
     const Emit = struct { name: []const u8, args: []const u8, lexical: usize };
 
     const H = struct {
-        fn mkPathH(alloc: std.mem.Allocator, module: []const u8, name: []const u8) ast_find.DottedPath {
-            const segs = alloc.alloc([]const u8, 1) catch unreachable;
-            segs[0] = alloc.dupe(u8, name) catch unreachable;
-            return ast_find.DottedPath{ .module_qualifier = alloc.dupe(u8, module) catch unreachable, .segments = segs };
-        }
+        const mkPathH = @import("emitter_helpers").mkPathH;
         // An owned column's phantom arrives in the CONSUMING form `mod:!state`
         // (ownership moves IN); the none arm's captures project it as a BARE
         // BORROW `mod:state` — read accepts it and consumes nothing.
-        fn bareBorrow(alloc: std.mem.Allocator, ph: []const u8) []const u8 {
-            const colon = std.mem.indexOfScalar(u8, ph, ':') orelse return alloc.dupe(u8, ph) catch unreachable;
-            if (colon + 1 < ph.len and ph[colon + 1] == '!') {
-                const out = alloc.alloc(u8, ph.len - 1) catch unreachable;
-                @memcpy(out[0 .. colon + 1], ph[0 .. colon + 1]);
-                @memcpy(out[colon + 1 ..], ph[colon + 2 ..]);
-                return out;
-            }
-            return alloc.dupe(u8, ph) catch unreachable;
-        }
+        const bareBorrow = @import("emitter_helpers").bareBorrow;
     };
 
     /// Mint the `__store_nonebody_*` event + impl flow for `none_arm` into
