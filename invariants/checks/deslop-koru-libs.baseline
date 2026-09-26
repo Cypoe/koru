@@ -4,7 +4,12 @@
 # file koruc cannot canon escapes the count entirely — growth there is
 # a toolchain regression seen from the consumer); spellings pins the
 # vocabulary in use — growth means a new surface entered the corpus.
-clusters=629
-members=327
-skipped=22
-spellings=583
+# Re-pinned 2026-10-13: sampled roll fired on foreign drift — new clusters
+# are games/ponkatris, games/asteroids, unikraft boot-test, and pq exec
+# boilerplate from other sessions' commits; the spelling growth is winnow's
+# new public tors (intentional API surface) plus foreign additions.
+# skipped improved 22→21 (one more file canons).
+clusters=634
+members=331
+skipped=21
+spellings=605
