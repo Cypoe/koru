@@ -155,6 +155,19 @@
     "check": "python3 checks/check_hook_drift.py"
 }
 
+// The vocabulary pin: register-on-miss mints a stub for any undeclared
+// Signal: name (membrane: false — so a new belief-class name would bypass
+// the garden-in-place interlock until someone refines it). The drain at
+// 4411a4d2d took 50 stubs to zero; this row holds zero — a fresh orphan
+// blocks the next commit until the name is defined, tombstoned onto a
+// canonical, or marked never-a-signal.
+~std/invariants:inferred {
+    "name": "signal-vocabulary-stays-defined",
+    "tags": ["git-gate"],
+    "rule": "No file under signals/ may carry 'auto-registered orphan' — a name the gate minted and nobody defined. Register-on-miss writes the stub unstaged during commit-msg, so this check fires on the commit AFTER a mint; the one-commit lag is named here rather than mistaken for a hole. The remedy is the drain convention, not deletion: promote the name if usage earned it, tombstone it onto the canonical if it is a duplicate (membrane mirrors so the alias still hits the interlock), mark it never-a-signal if it is a protocol token.",
+    "check": "python3 checks/check_signal_orphans.py ../signals"
+}
+
 ~tor main {}
 
 ~proc main|zig {

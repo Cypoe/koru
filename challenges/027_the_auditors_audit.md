@@ -148,11 +148,6 @@ or `017` — file it under the right frame.
 
 ## Parked leads — measured 2026-09-26, awaiting a replay
 
-- **The orphan vocabulary re-grows.** Register-on-miss still mints
-  `membrane: false` stubs for any undeclared `Signal:` name; the tombstone
-  convention (file stays, note points at the canonical, membrane mirrors it)
-  was invented in the 2026-09-26 drain and has no enforcer — a `check:` row on
-  orphan rate, or a near-miss-gate widening, would hold the line.
 - **`membrane.json` is now declarative.** Nothing routes through it since the
   queue leg was cut; `install.sh` still writes it and the membrane skill still
   documents it. Whether the pointer should be retired cross-repo is a ruling
