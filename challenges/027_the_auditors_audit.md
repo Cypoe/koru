@@ -148,10 +148,6 @@ or `017` — file it under the right frame.
 
 ## Parked leads — measured 2026-09-26, awaiting a replay
 
-- **Installed-copy drift check has no home.** Today `hooks/` and `.git/hooks/`
-  matched, but nothing enforces it — a `diff`-or-warn step in `pre-commit` or
-  a `check:` row is the natural landing, and the design question (which side
-  wins on mismatch) is open.
 - **The orphan vocabulary re-grows.** Register-on-miss still mints
   `membrane: false` stubs for any undeclared `Signal:` name; the tombstone
   convention (file stays, note points at the canonical, membrane mirrors it)

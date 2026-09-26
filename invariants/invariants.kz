@@ -141,6 +141,20 @@
     "rule": "Does this diff add prose — a comment, a doc, or a string a user reads — that names the language's declared unit 'event' or 'events'? The unit is a tor: `pub tor` declares it, `|` arms end it, `!` effect arms hang off it, `|>` continues it. Flag added text like 'the event's branches', 'pub event foo', 'events are tappable'. Do NOT flag: internal identifiers and generated names (EventDecl, event_decl, *_event, created_by_event, event-denied, or a test's own names like void-event); domain events — DOM, terminal, socket, input, key/mouse events, an event loop, emitted log records such as 'transition events'; verbatim quotes of older behavior; and meta-discussion of this rename itself. Answer yes ONLY if the added prose would teach a reader that the construct's name is 'event'."
 }
 
+// The drift rule: hooks/ is tracked and canonical, .git/hooks/ is what
+// actually enforces — a diff means an edit landed without reaching the
+// enforcement that reads it, so the commit record says the new rule while
+// the hook enforces the old one. Fires on every commit: cheap, and drift
+// persists silently until something checks. Reachable only where
+// pre-commit is installed — a missing pre-commit is invisible by
+// construction, so the check flags every other drift loudly.
+~std/invariants:inferred {
+    "name": "installed-hooks-match-source",
+    "tags": ["git-gate"],
+    "rule": "Every file in hooks/ (except install.sh, the installer) must have a byte-identical, executable copy under .git/hooks/ — resolved through git rev-parse --git-common-dir so worktrees audit the shared hooks dir. Drift is an edit that landed without install: the tracked file is canonical and the installed copy is stale, or the installed copy lost its exec bit and silently never fires. Fix is always resync — bash hooks/install.sh. The check cannot see a missing pre-commit (it runs inside the gate pre-commit invokes); that blind spot is accepted and named, everything else fails loud.",
+    "check": "python3 checks/check_hook_drift.py"
+}
+
 ~tor main {}
 
 ~proc main|zig {
