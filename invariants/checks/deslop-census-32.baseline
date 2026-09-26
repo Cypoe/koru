@@ -16,5 +16,11 @@
 # the roll fired on a +1 member drift in the same documented residual
 # (emitter_test/visitor_emitter_test field-literal clones) — no src/
 # files in this commit; clusters sit under pin at 1509.
-clusters=1510
-members=2065
+# Re-pinned in "float regression signals to sidetrack, auto-diff the
+# board": the roll fired on +4 clusters / +6 members of foreign src/
+# drift accumulated since the last re-pin — this commit touches only
+# harness shell (run_regression.sh, run_single_test.sh) and a concept
+# frag; zero src/ files. The residual named is the same documented
+# emitter_test/visitor_emitter_test field-literal idiom.
+clusters=1514
+members=2071

@@ -65,6 +65,49 @@ publish_board_to_site() {
     fi
 }
 
+# Float one event to sidetrack. Fire-and-forget — the sink is passive, and a
+# dead endpoint must never stall or fail a run. Empty KORU_SIDETRACK_URL
+# disables floating entirely.
+board_float() {
+    [ -n "${KORU_SIDETRACK_URL:-}" ] || return 0
+    curl -s -m 1 -X POST "$KORU_SIDETRACK_URL" \
+        -H 'Content-Type: application/json' -d "$1" >/dev/null 2>&1 || true
+}
+
+# Float the board delta: diff the just-written test markers against the
+# PREVIOUS latest.json — must run before save-snapshot overwrites it. --diff
+# existed as an opt-in flag, which meant a regression only surfaced when
+# someone thought to ask; measured 2026-09-26: a foreign parser commit
+# reddened 210_133 mid-board and nothing floated it past the transcript.
+# Full boards only — a filtered run leaves stale markers on unridden tests
+# and would fabricate deltas out of them.
+board_delta() {
+    [ ${#TEST_FILTERS[@]} -eq 0 ] && [ "$SMOKE_MODE" = false ] || return 0
+    [ -f test-results/latest.json ] || return 0
+    command -v node >/dev/null 2>&1 || return 0
+    echo ""
+    echo -e "${BLUE}Board delta vs previous snapshot:${NC}"
+    local delta_out
+    delta_out=$(node scripts/diff-snapshots.js 2>&1) || true
+    echo "$delta_out"
+    local payload
+    payload=$(node -e '
+        const t = require("fs").readFileSync(0, "utf8");
+        const grab = (mark) => t.split("\n").map(l => l.trim())
+            .filter(l => l.startsWith(mark))
+            .map(l => l.slice(mark.length).trim())
+            .filter(s => /^\d{3}_\d{3}_/.test(s))
+            .map(s => s.replace(/\s*\(.*$/, ""));
+        console.log(JSON.stringify({
+            _type: "koru.regression.delta",
+            head: process.env.KORU_BOARD_HEAD || "unknown",
+            regressed: grab("❌"),
+            fixed: grab("✅")
+        }));' <<< "$delta_out" 2>/dev/null)
+    [ -n "$payload" ] && board_float "$payload"
+    return 0
+}
+
 run_coherence_watchers() {
     # prose-check's check A reads live test markers, so it has to tell OUR lock
     # from a foreign suite's. Without this it would see the lock we ourselves
@@ -820,6 +863,15 @@ elif [ ${#TEST_FILTERS[@]} -gt 0 ]; then
     echo ""
 fi
 
+# Sidetrack float — run-level events land here and run_single_test.sh posts
+# each red as it falls, so a failure surfaces while the suite is live instead
+# of sitting in a transcript until someone greps. Fire-and-forget: a dead sink
+# must never move a run. KORU_SIDETRACK_URL= (empty) disables floating.
+export KORU_SIDETRACK_URL="${KORU_SIDETRACK_URL-http://localhost:6274/t/koru/events}"
+export KORU_BOARD_HEAD="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+export KORU_RUN_SCOPE=board
+{ [ "$SMOKE_MODE" = true ] || [ ${#TEST_FILTERS[@]} -gt 0 ]; } && export KORU_RUN_SCOPE=filtered
+
 # ════════════════════════════════════════
 # COMPILER BUILD - Ensure tests run against current code
 # ════════════════════════════════════════
@@ -993,6 +1045,8 @@ if [ "$RUN_UNIT_TESTS" = true ]; then
     echo "════════════════════════════════════════"
     echo ""
 fi
+
+board_float "{\"_type\":\"koru.regression.start\",\"head\":\"$KORU_BOARD_HEAD\",\"scope\":\"$KORU_RUN_SCOPE\",\"jobs\":$PARALLEL_JOBS}"
 
 # ════════════════════════════════════════
 # PARALLEL MODE - Fast execution with helper script
@@ -1180,6 +1234,10 @@ PY
         fi
     fi
 
+    # Float the delta BEFORE the snapshot — diff needs the previous
+    # latest.json still in place.
+    board_delta
+
     # Save snapshot after full run (not for filtered runs)
     if [ ${#TEST_FILTERS[@]} -eq 0 ] && [ "$SMOKE_MODE" = false ]; then
         if command -v node >/dev/null 2>&1; then
@@ -1243,6 +1301,12 @@ PY
         echo "   a list in \$VAR arrives as ONE filter. Use \"\${ARR[@]}\" or literal names."
         exit 1
     fi
+
+    # Parallel path exits here and never reaches the script tail — the done
+    # float has to live inside this block, and stays AFTER the no-match guard
+    # so a start with no done still means "the suite died mid-run." (Parallel
+    # counts into FAILED_COUNT; the tail's FAILED_TESTS string stays empty.)
+    board_float "{\"_type\":\"koru.regression.done\",\"head\":\"$KORU_BOARD_HEAD\",\"scope\":\"$KORU_RUN_SCOPE\",\"passed\":${PASSED_TESTS:-0},\"failed\":${FAILED_COUNT:-0},\"todo\":${TODO_TESTS:-0},\"skipped\":${SKIPPED_TESTS:-0}}"
 
     if [ "$FAILED_COUNT" -gt 0 ] || [ "$BROKEN_TESTS" -gt 0 ] || [ "$NO_MARKER_COUNT" -gt 0 ] || [ -n "$FAILED_TESTS" ]; then
         echo -e "${RED}❌ Some tests failed${NC}"
@@ -1444,6 +1508,10 @@ fi
 
 # Save snapshot after full run (not for filtered runs)
 # Only save if Node.js is available and this was a full run
+# Float the delta BEFORE the snapshot — diff needs the previous latest.json
+# still in place. (Sequential path; parallel calls it above.)
+board_delta
+
 if [ ${#TEST_FILTERS[@]} -eq 0 ] && [ "$SMOKE_MODE" = false ]; then
     if command -v node >/dev/null 2>&1; then
         # Get git commit hash
@@ -1492,6 +1560,9 @@ fi
 if [ ${#TEST_FILTERS[@]} -eq 0 ] && [ "$SMOKE_MODE" = false ]; then
     publish_board_to_site
 fi
+
+FAILED_N=$(echo $FAILED_TESTS | wc -w | tr -d ' ')
+board_float "{\"_type\":\"koru.regression.done\",\"head\":\"$KORU_BOARD_HEAD\",\"scope\":\"$KORU_RUN_SCOPE\",\"passed\":${PASSED_TESTS:-0},\"failed\":${FAILED_N:-0},\"todo\":${TODO_TESTS:-0},\"skipped\":${SKIPPED_TESTS:-0}}"
 
 # Exit with appropriate code
 # Success = all regression tests passed AND (unit tests passed OR skipped)

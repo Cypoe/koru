@@ -90,6 +90,19 @@ NC='\033[0m'
 CURRENT_CATEGORY=""
 
 TEST_NAME=$(basename "$test_dir")
+
+# Float each red to sidetrack the moment it lands — a failure buried in a
+# 2168-line transcript is a signal nobody sees until someone greps, and the
+# ceremony's value is conditional on the observer reading the tail. Passive
+# sink, fire-and-forget: a dead endpoint must never stall a worker or fail a
+# test. KORU_SIDETRACK_URL= (empty) disables.
+float_fail() {
+    [ -n "${KORU_SIDETRACK_URL:-}" ] || return 0
+    curl -s -m 1 -X POST "$KORU_SIDETRACK_URL" \
+        -H 'Content-Type: application/json' \
+        -d "{\"_type\":\"koru.regression.fail\",\"test\":\"$TEST_NAME\",\"stage\":\"$1\",\"head\":\"${KORU_BOARD_HEAD:-unknown}\",\"scope\":\"${KORU_RUN_SCOPE:-board}\"}" \
+        >/dev/null 2>&1 || true
+}
 CATEGORY_DIR="$(dirname "$test_dir")"
 
 # Cache mode is opt-in via KORU_CACHE_MODE=on (set by run_regression.sh --cache).
@@ -197,6 +210,7 @@ if [ -f "$test_dir/BROKEN" ]; then
 fi
 if [ -f "$test_dir/FAILURE" ]; then
     reason=$(head -1 "$test_dir/FAILURE" 2>/dev/null)
+    float_fail "${reason:-failure}"
     if [ -n "$reason" ]; then
         echo -e "${RED}❌ FAIL ${NC}  $TEST_NAME ${DIM}($reason)${NC}"
     else
@@ -209,5 +223,6 @@ if [ -f "$test_dir/SUCCESS" ]; then
     exit 0
 fi
 
+float_fail "unknown"
 echo -e "${RED}❌ FAIL ${NC}  $TEST_NAME ${DIM}(unknown)${NC}"
 exit 1
