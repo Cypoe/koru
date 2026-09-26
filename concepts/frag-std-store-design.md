@@ -1054,3 +1054,13 @@ fails. The standing prices are resolve ≈ 0.73ns/op (paid twice on an
 indexed write), index join ≈ 3.8ns/row, take/drain ≈ 1.9ns/row; sweep,
 guard, and capture fold are all ≈ 1.0x. The expensive primitives are
 lifecycle and resolve, not dispatch.
+
+The index join is expensive but proven honest (800_007 corral): a `mir`
+shadow column audits `when`-routed membership against full-sweep truth
+and reports drift 0 across bulk arrival, an indexed-field write mid-
+walk (reshoe), take under swap-remove (the moved tail row's bucket
+follows it), and refill into recycled slots past `| full`. The 3.8ns/row
+price is therefore a speed problem, not a correctness debt — the
+challenge is the substrate any join fix must keep green. Field watches
+announce `stored` writes only; insert seeds do not announce (46 brand-
+writes observed = the reshoe count, not the 496 inserts).
