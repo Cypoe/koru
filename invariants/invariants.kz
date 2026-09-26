@@ -155,6 +155,21 @@
     "check": "python3 checks/check_hook_drift.py"
 }
 
+// The drift rule aimed at the consumer: the same check in --payloads-only
+// mode. A consumer's shell hooks legitimately vary (its pre-commit calls
+// this gate with --repo; it may run its own dispatcher), but the .cjs
+// payloads carry the shared law — the membrane gate and the signal surface
+// — and those must match koru's canonical copies. Measured 2026-09-26:
+// koru-libs and kopium both ran stale payloads — missing the merge-commit
+// exemption, still carrying the dead inbox-queue leg — for weeks while
+// nothing checked.
+~std/invariants:inferred {
+    "name": "consumer-hooks-match-source",
+    "tags": ["git-gate", "repo-koru-libs"],
+    "rule": "Every .cjs payload in this repo's hooks/ must be byte-identical to the installed copy in the gated repo's .git/hooks/ — payloads carry the shared law (the membrane gate, the signal surface) while shell shims legitimately vary downstream. A diff means the consumer runs rules koru already fixed or retired. Fix is resync: bash /Users/larsde/src/koru/hooks/install.sh <repo>, or copy the drifted .cjs. Only reachable where the consumer's pre-commit calls this gate — koru-libs' does; repos with their own dispatcher (6digit-world) are a different lineage and out of this row's scope.",
+    "check": "python3 checks/check_hook_drift.py ../../koru-libs --payloads-only"
+}
+
 // The vocabulary pin: register-on-miss mints a stub for any undeclared
 // Signal: name (membrane: false — so a new belief-class name would bypass
 // the garden-in-place interlock until someone refines it). The drain at
