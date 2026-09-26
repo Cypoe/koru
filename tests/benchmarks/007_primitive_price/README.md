@@ -50,11 +50,21 @@ on `003`'s fanout was not the write primitive; it was writes behind a call
 boundary inside an observer dispatch, where promotion can't reach. Per-op
 price ≈ 0; *placement* price is where the money goes.
 
-**Resolve is the workhorse cost.** `read_handle`/`write_handle`/`routed` all
-pay ~0.7–1.1ns per handle→row. Under `__koru_gen0` the resolve is already
-just shift/mask/range — the residual is decode + checks vs a bare index.
-That is the handle tax, and it multiplies wherever a port respells an
-indexed expression (003's fanout pays it ~3x per event).
+**Resolve is the workhorse cost — and it is at the emit floor.** `read_handle`/
+`write_handle`/`routed` all pay ~0.7–1.1ns per handle→row. Under
+`__koru_gen0` the resolve is already just shift/mask/range — the residual
+is decode + checks vs a bare index, i.e. the stale-handle guarantee the
+zig twin simply does not provide. Measured 2026-09-26 (replica +
+interleaved A/B): the emitted `resolve` calls `row_of` after a pre-check,
+which looks like double validation but keeps the function under LLVM's
+inline threshold — every call site inlines both bodies and CSE merges the
+repeated checks into a single machine-code pass. A "flattened" single-pass
+resolve crossed the threshold, became a real call, and regressed
+read_handle +57% / write_handle +2.6x. Likewise `write_handle`'s two
+textual resolves (target + value) already CSE into one. **The handle tax
+is semantic, not emission.** Levers left are representation: pack gen bits
+the twin can skip, or drop the validation under a declared unsafe mode —
+both are language decisions, not emitter bugs.
 
 **`insert_idx` is now the widest ratio** (7.19x) — index maintenance the
 bare-array baseline never pays, and part of it is semantic surplus: the
@@ -111,6 +121,10 @@ write-through; the sweep-read arm is the pinned gap itself.
 
 The price list ranks; a challenge is what makes the current worst entry bend
 in a realistic program. Loop: price → challenge (protagonist = the worst
-primitive) → fix or frontier → reprice. Current protagonists, in order:
-`insert_idx`'s join (at the representation frontier), `read_handle`'s
-resolve.
+primitive) → fix or frontier → reprice. Current state of the list:
+`insert_idx`'s join sits at the representation frontier (dense bucket
+arrays or key-domain specialization are the levers); `read_handle`/
+`write_handle`'s resolve is at the *emit* floor — the residual is the
+stale-handle validation itself, a semantic the twin does not pay for.
+Nothing on this board is a codegen deficit left; the open questions are
+representation and semantics.

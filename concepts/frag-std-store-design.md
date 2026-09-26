@@ -1084,6 +1084,18 @@ indexed write), index join ≈ 3.8ns/row, take/drain ≈ 1.9ns/row; sweep,
 guard, and capture fold are all ≈ 1.0x. The expensive primitives are
 lifecycle and resolve, not dispatch.
 
+Resolve's emit is AT ITS FLOOR (measured 2026-09-26, replica +
+interleaved A/B): the `pre-check then row_of` shape reads as double
+validation, but it keeps resolve under LLVM's inline threshold — every
+call site inlines both bodies and CSE folds the repeated checks into
+one machine-code pass; `write_handle`'s two textual resolves likewise
+merge. Flattening resolve to a single pass crossed the threshold,
+became an out-of-line call, and cost read_handle +57% / write_handle
++2.6x. The ~0.73ns residual IS the stale-handle guarantee — brand,
+range, and (off gen0) generation — a semantic the bare-array twin
+does not provide. The levers left are representation (bit packing,
+declared-unsafe elision), not emission.
+
 The index join is expensive but proven honest (800_007 corral): a `mir`
 shadow column audits `when`-routed membership against full-sweep truth
 and reports drift 0 across bulk arrival, an indexed-field write mid-

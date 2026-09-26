@@ -44,12 +44,12 @@ const HStruct = struct {
             \\        if (__koru_r >= self.len) return null;
             \\        return __koru_r;
             \\    }}
-            \\    // MEASURED NEUTRAL 2026-08-03, left alone deliberately — the
-            \\    // inline brand/gen pre-check duplicates `__koru_row_of`'s, but
-            \\    // a flat single pass measured IDENTICAL (13533 vs 13526
-            \\    // ns/iter, rf_stripe_1) and nesting the happy path three `if`s
-            \\    // deep measured 3.7x WORSE (50.7M vs 13.7M ns). SHAPE MATTERS
-            \\    // FAR MORE THAN BRANCH COUNT — don't restructure unmeasured.
+            \\    // DO NOT "simplify" into one pass — pre-check + row_of tail
+            \\    // call keeps resolve under the inline threshold; callers
+            \\    // inline BOTH and LLVM CSEs the duplicate checks into one
+            \\    // validation in machine code. A flat single pass crossed
+            \\    // the threshold: +57% read_handle, +2.6x write_handle
+            \\    // (007 board, 2026-09-26). Shape, not count.
             \\    fn __koru_resolve(self: *const @This(), h: i64) usize {{
             \\        if (h >= 0) {{
             \\            const u = @as(u64, @bitCast(h));
