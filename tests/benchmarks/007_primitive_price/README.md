@@ -28,7 +28,7 @@ Medians of 7 interleaved reps, both binaries ReleaseFast.
 | `write_sink` | `stored{acc.sink += scratch[i].v}` | `sink += gi[i]` | 939µs | 914µs | 0.97x | singleton write-through — LLVM promotes the cell |
 | `event_call` | `ping(v: scratch[i].v)` → one write | `ping(gi[i])` | 911µs | 919µs | 1.01x | tor call — free; arg-promoted and inlined |
 | `insert` | counted-for fill, unindexed store | array fill | 60µs | 65µs | 1.08x | column stores + mint — near parity |
-| `insert_idx` | counted-for fill, indexed store | same array fill | 55µs | 438µs | **7.97x** | index join ≈ **3.8ns/row** (hash probe + bucket append) |
+| `insert_idx` | counted-for fill, indexed store | same array fill | 58µs | 417µs | **7.19x** | index join ≈ **3.6ns/row** — see frontier note below |
 | `drain` | `rule(bodies) ! row e \|> take` | swap-remove sweep | 30µs | 223µs | **7.42x** | take ≈ **1.9ns/row** (gen bump + freelist + event) |
 | `routed` | `! query e when e.act == 1` (indexed) | `for(active)` | 465µs | 578µs | 1.24x | bucket walk + resolve ≈ 1.1ns/member residual |
 | `guarded` | `! query e when e.on == 1` (unindexed) | `if(on[i]==1)` | 2695µs | 2683µs | 1.00x | sweep + guard — parity |
@@ -55,11 +55,23 @@ just shift/mask/range — the residual is decode + checks vs a bare index.
 That is the handle tax, and it multiplies wherever a port respells an
 indexed expression (003's fanout pays it ~3x per event).
 
-**Lifecycle ops carry the widest ratio.** `insert_idx` 7.97x and `drain`
-7.42x are the spawn/despawn gap at op granularity: index maintenance and
+**Lifecycle ops carry the widest ratio.** `insert_idx` 7.19x and `drain`
+7.09x are the spawn/despawn gap at op granularity: index maintenance and
 teardown bookkeeping the bare-array baseline never pays. Part of `insert_idx`
 is semantic surplus — the index joins `bucket[0]` for keys the workload
 never queries.
+
+**`insert_idx` frontier (measured 2026-09-25):** the bulk join now keeps the
+join key, the previous key, and the bucket tail (`len`/`ptr`/`capacity`) in
+registers, commits `items.len` on a key switch and at loop end, and mints
+the handle from the register slot instead of re-reading `row_hslot` — three
+store→load forwarding chains removed. A hand-written Zig replica of both the
+old and new emitted loops measures **3.07 vs 2.94 ns/row** — the emitted
+code is at parity for this data structure. The residual is the join design
+itself (`AutoHashMapUnmanaged(i32, ArrayListUnmanaged(i64))` + per-row
+handle pack), not codegen waste: beating it wants a different index
+representation (dense bucket arrays, key-domain specialization, or rows
+instead of handles when `__koru_ident`), not another emission tweak.
 
 **Missing arm, by design:** `captured` inside `! query` does not lower —
 query bodies are transplanted into generated per-row functions where the

@@ -28,13 +28,17 @@ if ! grep -q '__index_key.getOrPut(koru_allocator(), __koru_ik)' output_emitted.
     echo "FAIL: the bulk loop does not maintain the bucket"
     exit 1
 fi
-if ! grep -q '__koru_ib.items.ptr\[__koru_ib.items.len\] = ' output_emitted.zig; then
-    echo "FAIL: the bulk loop lost the inline member store"
+if ! grep -q '__koru_bp\[__koru_bl\] = ' output_emitted.zig; then
+    echo "FAIL: the bulk loop lost the inline member store (register tail)"
+    exit 1
+fi
+if ! grep -q '__koru_op.items.len = __koru_bl' output_emitted.zig; then
+    echo "FAIL: the bucket-length commit on key switch is missing"
     exit 1
 fi
 if ! grep -q '__koru_mp != null and __koru_mk == __koru_ik' output_emitted.zig; then
     echo "FAIL: the just-left bucket cache is missing"
     exit 1
 fi
-echo "PASS: indexed store bulk-lowers with per-row bucket maintenance — memo, just-left cache, inline store"
+echo "PASS: indexed store bulk-lowers with per-row bucket maintenance — memo, just-left cache, register-tail store"
 exit 0

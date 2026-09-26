@@ -899,7 +899,6 @@ fn isPrecededByIs(text: []const u8, idx: usize) bool {
     }
     return false;
 }
-
 /// `<store>.<field>` → the cell path, boundary-aware, for ONE store.
 ///
 /// `prefix` is the emitted-namespace qualifier the reader needs (`""` when the
@@ -1001,6 +1000,7 @@ fn storeLowerText(
 ~part gate
 ~part bulk
 ~part bulkemit
+~part bulkjoin
 ~part plan
 ~part drain
 ~part expand

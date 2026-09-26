@@ -958,6 +958,21 @@ baseline never pays (bucket appends + handle mint) and ~1ns/member of
 generational handle resolve in the walk — the price of take-safety the
 baseline's bare usize index does not carry.
 
+The bulk join's residual is the DATA STRUCTURE, not the codegen
+(2026-09-25, 007 repriced): the fill loop now carries join key, previous
+key, and bucket tail (`len`/`ptr`/`capacity`) in registers — `items.len`
+commits on key switch and loop end only — and mints the handle from the
+register slot rather than re-reading `row_hslot`. Three store→load
+forwarding chains died, yet a hand-written Zig replica of the OLD loop
+vs the new one measured 3.07 vs 2.94 ns/row: the emitted code was
+already near the ceiling of what `AutoHashMapUnmanaged(i32,
+ArrayListUnmanaged(i64))` + per-row handle packing can do. To beat ~3ns
+per joined row the index representation must change (dense bucket
+arrays, key-domain specialization, rows-instead-of-handles under
+`__koru_ident`) — no emission tweak closes it. Correctness held under
+800_007's audit throughout: drift zero through bulk fill, mid-walk
+re-bucketing writes, swap-remove churn, and refill past `| full`.
+
 A query guard is not body text (2026-09-22): walking the arm's own `when`
 into the body's column-usage marks projected the guard's column into
 every event payload — a dead read per member on routed queries. The fix
