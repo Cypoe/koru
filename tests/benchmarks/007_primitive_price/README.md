@@ -29,7 +29,7 @@ Medians of 7 interleaved reps, both binaries ReleaseFast.
 | `event_call` | `ping(v: scratch[i].v)` → one write | `ping(gi[i])` | 911µs | 919µs | 1.01x | tor call — free; arg-promoted and inlined |
 | `insert` | counted-for fill, unindexed store | array fill | 60µs | 65µs | 1.08x | column stores + mint — near parity |
 | `insert_idx` | counted-for fill, indexed store | same array fill | 58µs | 417µs | **7.19x** | index join ≈ **3.6ns/row** — see frontier note below |
-| `drain` | `rule(bodies) ! row e \|> take` | swap-remove sweep | 30µs | 57µs | **1.9x** | gen-bump reset; residual is one-time `hslot_gen` page faults — see drain note below |
+| `drain` | `rule(bodies) ! row e \|> take` | swap-remove sweep | 32µs | 104µs | **3.2x** | gen-bump reset; residual is one-time `hslot_gen` page faults — see drain note below |
 | `routed` | `! query e when e.act == 1` (indexed) | `for(active)` | 465µs | 578µs | 1.24x | bucket walk + resolve ≈ 1.1ns/member residual |
 | `guarded` | `! query e when e.on == 1` (unindexed) | `if(on[i]==1)` | 2695µs | 2683µs | 1.00x | sweep + guard — parity |
 | `watch` | write a watched column per row | write + counter | 1381µs | 1382µs | 1.00x | announce — free at this arity |
@@ -67,13 +67,15 @@ materializing take's freelist order per row. The old shape's measured cost
 was mostly *cold demand-zero page faults* on `hslot_free`/`hslot_gen` (~1.2MB
 of bookkeeping arrays the deferred fill never touched), not loop cost: a
 verbatim replica of the old emitted loop ran 0.19ns/row warm. The new shape
-pays only the `gen` fault pass (store-only under `gen0`, where `@memset`
-replaces the RMW since every gen is provably 0→1), and re-arming `ident`
-means drain *stays* fast — the old shape flipped `ident` false forever, so
-every drain-after-refill took the scalar slot-mapping path (~2.2ns/row
-measured). Warm steady-state drain is ~0.1ns/row (≈10µs at 100k). The one
-observable change: refill issues slots in fresh order rather than take's
-LIFO pop order — same slot set, different handle bit values.
+pays only the `gen` fault pass, and re-arming `ident` means drain *stays*
+fast — the old shape flipped `ident` false forever, so every
+drain-after-refill took the scalar slot-mapping path (~2.2ns/row measured).
+Warm steady-state drain is ~0.1ns/row (≈10µs at 100k). A `gen0`-gated
+`@memset` halved the cold fault pass (store-only, ~50µs) but its extra
+branch perturbed codegen layout enough to cost unrelated arms ~40% — the
+unconditional bump is the robust shape. The one observable change: refill
+issues slots in fresh order rather than take's LIFO pop order — same slot
+set, different handle bit values.
 
 **`insert_idx` frontier (measured 2026-09-25):** the bulk join now keeps the
 join key, the previous key, and the bucket tail (`len`/`ptr`/`capacity`) in

@@ -86,8 +86,7 @@ const DrainScan = struct {
         return std.fmt.allocPrint(alloc,
             \\const __koru_dn = __koru_store_{s}.len;
             \\if (__koru_dn > 0) {{
-            \\    if (__koru_store_{s}.__koru_gen0) @memset(__koru_store_{s}.__koru_hslot_gen[0..__koru_store_{s}.__koru_hslot_next], 1)
-            \\    else for (0..__koru_store_{s}.__koru_hslot_next) |__koru_i| __koru_store_{s}.__koru_hslot_gen[__koru_i] +%= 1;
+            \\    for (0..__koru_store_{s}.__koru_hslot_next) |__koru_i| __koru_store_{s}.__koru_hslot_gen[__koru_i] +%= 1;
             \\    __koru_store_{s}.__koru_gen0 = false;
             \\    __koru_store_{s}.len = 0;
             \\    __koru_store_{s}.__koru_hslot_free_len = 0;
@@ -95,6 +94,6 @@ const DrainScan = struct {
             \\    __koru_store_{s}.__koru_ident = true;
             \\}}
             \\return;
-        , .{ store, store, store, store, store, store, store, store, store, store, store }) catch unreachable;
+        , .{ store, store, store, store, store, store, store, store }) catch unreachable;
     }
 };

@@ -1016,12 +1016,14 @@ FOREVER — every drain-after-refill paid the scalar slot-mapping path
 covering live rows and slots freed by earlier takes — then zeroes
 `len`, `free_len`, `hslot_next` and re-arms `ident` (vacuously true at
 len 0; dead `row_hslot`/`hslot_row`/freelist bytes stay unreachable
-behind `slot < hslot_next` and the gen check). Under `gen0` the bump
-is a `@memset(gen, 1)` — store-only, no read-for-ownership on the
-faulted pages. Measured: drain 219→~57µs cold (7.4x→~1.9x vs the twin;
-the residual IS the one-time gen fault pass) and ~10µs steady-state
-where drain2+ used to cost 221µs. `corral` (800_007) holds drift 0
-through drain+refill and 690_336's oracle now pins the reset shape.
+behind `slot < hslot_next` and the gen check). A `gen0`-gated
+`@memset(gen,1)` halved the cold fault pass (~50µs, store-only pages)
+but the extra branch perturbed codegen layout enough to cost the
+unrelated watch/grid arms ~40% — the unconditional bump is the shipped
+shape. Measured: drain 219→~104µs cold (7.4x→~3.2x vs the twin; the
+residual IS the one-time gen fault pass) and ~10µs steady-state where
+drain2+ used to cost 221µs. `corral` (800_007) holds drift 0 through
+drain+refill and 690_336's oracle now pins the reset shape.
 (The superseded split-variant drain earned its own measurement on
 003_ecs_reactive — ~185µs vs ~350 — and the lesson survives: hoist the
 variant branch, never fold it into the row computation.)
