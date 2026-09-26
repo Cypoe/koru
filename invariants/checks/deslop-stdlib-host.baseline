@@ -1,0 +1,13 @@
+# Pin: tools/deslop_kz.py --host over koru_std at --min-tokens=48,
+# measured 2026-10-14. The OTHER census: the .kz layer is Zig host text —
+# canon's host_line/proc-body strings are opaque to the decl census, so
+# this mode reassembles each file's Zig as a synthetic .zig and runs the
+# SAME token-normalized fingerprint (tools/deslop.zig) over it. First
+# measured baseline: the layer holds ~15x the clone mass the decl census
+# ever saw (1061 clusters vs 70). Keys are ceilings; see the sibling
+# baselines. Six files' host text does not parse standalone
+# (eval/table/types/control/declarations/io — dormant proc bodies carry
+# Zig that never reached a compiler, e.g. `.{ .error = ... }`); they are
+# named on stderr and escape the count until they parse.
+clusters=1061
+members=932

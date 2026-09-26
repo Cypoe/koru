@@ -126,6 +126,26 @@ silently merged two different orderings. And the pre-existing canonical
 predicate's whole reason to exist — so the fold minted
 `isKebabIdentChar` rather than routing into a deficient home.
 
+**The instrument's sightline ends at the serialization boundary.** The
+.kz census fingerprinted whatever `koruc --ast-canon` emits as
+*structure* — decl nodes — while every `host_line` and proc body arrived
+as an opaque string: one leaf per blob, invisible to clustering. The
+stdlib's actual mass lived exactly there. The board read 70/111 and
+calm; the same corpus under a host-text reassembly (`--host`: verbatim
+extraction, proc bodies wrapped as fns, handed to the same deslop.zig
+fingerprint) measured **1061 clusters / 932 maximal members** at the
+48-token floor — roughly 15× the slop the decl census ever saw. "The
+corpus is clean" always means "the layer the instrument can see is
+clean"; before trusting a quiet board, name the serialization it was
+flattened through and what that drops. The fix is reuse, not a second
+metric: same token-normalized fingerprint, new surface to point it at.
+Two bonus findings the layer made visible: six files' host text does not
+parse standalone at all (dormant proc bodies carrying `.{ .error = ... }`
+keyword-field Zig that never reached a compiler — latent rot, now named),
+and the dominant cross-file idiom is the refusal envelope `.{ .
+transformed = .{ .replacement = ast.refusal(...) } }` spelled longhand
+at 19+ sites — fold material for a dedicated pass.
+
 **Open questions.** (1) Whether cluster ranking should prefer the superset
 member as canonical anchor rather than the first member — the census cannot
 yet order members by semantic coverage. (2) `copy count` is not `removal

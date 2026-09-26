@@ -110,13 +110,15 @@ pub fn main() !void {
     var files: std.ArrayList(FileInfo) = .empty;
     var skipped: usize = 0;
     for (paths.items) |p| {
-        const src = std.fs.cwd().readFileAllocOptions(alloc, p, 64 << 20, null, .of(u8), 0) catch {
+        const src = std.fs.cwd().readFileAllocOptions(alloc, p, 64 << 20, null, .of(u8), 0) catch |e| {
             skipped += 1;
+            std.debug.print("deslop: skipped {s} ({s})\n", .{ p, @errorName(e) });
             continue;
         };
         const tree = try Ast.parse(alloc, src, .zig);
         if (tree.errors.len > 0) {
             skipped += 1;
+            std.debug.print("deslop: skipped {s} ({d} parse errors)\n", .{ p, tree.errors.len });
             continue;
         }
         try files.append(alloc, .{ .path = p, .tree = tree, .source = src });

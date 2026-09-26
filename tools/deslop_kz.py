@@ -12,14 +12,28 @@ Zig census's maximal-member rule.
 
 Usage:
   deslop_kz.py <koruc> <root>... [--min-nodes=N] [--top=N] [--jobs=N]
+  deslop_kz.py <koruc> <root>... --host [--min-tokens=N] [--top=N] [--jobs=N]
+
+--host runs the OTHER census: the Zig the .kz layer is made of. Canon
+renders that layer opaque — bare Zig arrives as `host_line` content
+strings and `~proc|zig` bodies as `body.text`, neither fingerprinted
+above. This mode extracts every fragment verbatim (content scan gives
+true source lines), reassembles each file as a synthetic .zig —
+proc bodies wrapped in `fn __kz_host_N() void {}` — and hands the
+set to tools/deslop.zig, so both censuses share ONE token-normalized
+fingerprint. Member locations are remapped back through the per-file
+line map, so clusters name `file.kz:line` ranges, not synthetic ones.
 """
 
+import bisect
 import concurrent.futures
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 
 # Fields whose values are names or literal payloads — folded to markers.
 # Discriminant fields (kind, variant, booleans, counts) stay literal:
@@ -141,21 +155,194 @@ def ast_of(path):
         return None
 
 
+# --- --host: the Zig layer -------------------------------------------------
+
+def find_line(src, content, pos):
+    """Byte offset of `content` occurring as a WHOLE line at or after
+    `pos`, or -1. host_line content is verbatim source text; the
+    whole-line test keeps short lines from matching inside longer ones."""
+    p = src.find(content, pos)
+    while p >= 0:
+        bol = p == 0 or src[p - 1] == "\n"
+        eol = p + len(content) == len(src) or src[p + len(content)] == "\n"
+        if bol and eol:
+            return p
+        p = src.find(content, p + 1)
+    return -1
+
+
+def synth_file(path, tree):
+    """Extract a .kz file's Zig layer into a synthetic .zig.
+
+    Returns (text, smap, unmatched): smap[i] is the 1-based source line of
+    synthetic line i (0 = glue we injected); unmatched lists fragments the
+    content scan could not place, so misses are loud rather than silent."""
+    src = open(path, encoding="utf-8").read()
+    starts = [0]
+    for i, ch in enumerate(src):
+        if ch == "\n":
+            starts.append(i + 1)
+    line_of = lambda p: bisect.bisect_right(starts, p)
+
+    out, smap, unmatched = [], [], []
+    pos, seq = 0, 0
+    for it in tree.get("items", []):
+        if not isinstance(it, dict) or len(it) != 1:
+            continue
+        kind, v = next(iter(it.items()))
+        if kind == "host_line" and isinstance(v, dict):
+            c = v.get("content")
+            if not isinstance(c, str) or not c.strip():
+                continue
+            p = find_line(src, c, pos)
+            if p < 0:  # tolerate trailing-whitespace divergence
+                stripped = c.strip()
+                q = pos
+                while True:
+                    q = src.find(stripped, q)
+                    if q < 0:
+                        break
+                    ls = src.rfind("\n", 0, q) + 1
+                    tail = src[q + len(stripped):].split("\n", 1)[0]
+                    if src[ls:q].strip() == "" and tail.strip() == "":
+                        p = q
+                        break
+                    q += 1
+            if p < 0:
+                unmatched.append(("host_line", c[:60]))
+                continue
+            nl = src.find("\n", p)
+            pos = nl + 1 if nl >= 0 else len(src)
+            out.append(c)
+            smap.append(line_of(p))
+            continue
+        if not isinstance(v, dict):
+            continue
+        b = v.get("body")
+        if not (isinstance(b, dict) and isinstance(b.get("text"), str)
+                and "scope" in b and v.get("target", "zig") == "zig"):
+            continue
+        t = b["text"]
+        if not t.strip():
+            continue
+        p = src.find(t, pos)
+        tt = t
+        if p < 0:
+            tt = t.strip()
+            p = src.find(tt, pos)
+        if p < 0:
+            unmatched.append(("body", str(v.get("path", "?"))[:60]))
+            continue
+        l0 = line_of(p)
+        out.append(f"fn __kz_host_{seq}() void {{")
+        smap.append(l0)
+        for j, bl in enumerate(tt.split("\n")):
+            out.append(bl)
+            smap.append(l0 + j)
+        out.append("}")
+        smap.append(l0 + tt.count("\n"))
+        seq += 1
+        pos = p + len(tt)
+    return "\n".join(out) + "\n", smap, unmatched
+
+
+def host_census(paths):
+    """Extract every file's Zig layer, run tools/deslop.zig over the
+    synthetics, and remap member locations back to .kz coordinates."""
+    import re
+    asts = {}
+    with concurrent.futures.ThreadPoolExecutor(JOBS) as ex:
+        for path, tree in zip(paths, ex.map(ast_of, paths)):
+            if tree is not None:
+                asts[path] = tree
+
+    tmpdir = tempfile.mkdtemp(prefix="deslop_host_") + os.sep
+    smaps, unmatched = {}, []
+    for path in sorted(asts):
+        text, smap, un = synth_file(path, asts[path])
+        unmatched.extend((path, k, s) for k, s in un)
+        if not text.strip():
+            continue
+        # `path` may be `../koru_std/x.kz` — sanitize before joining or the
+        # synthetic lands outside tmpdir
+        safe = os.sep.join(p for p in os.path.normpath(path).split(os.sep)
+                           if p not in ("..", ""))
+        rel = safe + ".zig"
+        sp = os.path.join(tmpdir, rel)
+        os.makedirs(os.path.dirname(sp), exist_ok=True)
+        with open(sp, "w", encoding="utf-8") as f:
+            f.write(text)
+        smaps[rel] = smap
+    skipped = len(paths) - len(asts)
+
+    deslop_zig = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "deslop.zig")
+    cmd = ["zig", "run", "-O", "ReleaseFast", deslop_zig,
+           "--", tmpdir, f"--min-tokens={MIN_TOKENS}", f"--top={TOP}"]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        print("BROKEN deslop-host: fingerprint run failed\n"
+              + (proc.stdout + proc.stderr).strip()[-2000:])
+        sys.exit(2)
+
+    member_re = re.compile(
+        r"^(\s+)" + re.escape(tmpdir) + r"(.+?):(\d+)-(\d+)\s*$")
+
+    def remap(line):
+        m = member_re.match(line)
+        if not m:
+            return line
+        indent, rel, l0, l1 = m.groups()
+        smap = smaps.get(rel)
+        if smap is None:
+            return line
+        a = smap[int(l0) - 1] if 0 < int(l0) <= len(smap) else 0
+        z = smap[int(l1) - 1] if 0 < int(l1) <= len(smap) else 0
+        lo, hi = (a or z), (z or a)
+        return f"{indent}{rel[:-4]}:{lo}-{hi}"
+
+    print(f"host layer: {len(smaps)} synthetics from {len(asts)} parsed "
+          f"files ({skipped} skipped canon, {len(unmatched)} unmatched "
+          f"fragments)")
+    for pth, k, frag in unmatched[:10]:
+        print(f"      UNMAPPED {k} {pth}: {frag}")
+    for line in proc.stdout.splitlines():
+        print(remap(line))
+
+    # loud parse check: deslop names skipped synthetics on stderr
+    for line in proc.stderr.splitlines():
+        m = re.match(r"deslop: skipped " + re.escape(tmpdir) + r"(.*?) "
+                     r"\((\d+) parse errors\)", line)
+        if m:
+            print(f"  UNPARSEABLE synthetic {m.group(1)[:-4]}: "
+                  f"{m.group(2)} parse errors")
+        elif line.startswith("deslop: skipped"):
+            print(" ", line)
+    shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    global KORUC, MIN_NODES
+    global KORUC, MIN_NODES, MIN_TOKENS, TOP, JOBS
     KORUC = os.path.abspath(args[0])
     roots = args[1:]
-    MIN_NODES, TOP, JOBS = 32, 20, 8
+    MIN_NODES, MIN_TOKENS, TOP, JOBS = 32, 48, 20, 8
+    host = "--host" in sys.argv[1:]
     for a in sys.argv[1:]:
         if a.startswith("--min-nodes="):
             MIN_NODES = int(a[12:])
+        elif a.startswith("--min-tokens="):
+            MIN_TOKENS = int(a[13:])
         elif a.startswith("--top="):
             TOP = int(a[6:])
         elif a.startswith("--jobs="):
             JOBS = int(a[7:])
 
     paths = collect_files(roots)
+    if host:
+        host_census(paths)
+        return
     asts = {}
     with concurrent.futures.ThreadPoolExecutor(JOBS) as ex:
         for path, tree in zip(paths, ex.map(ast_of, paths)):

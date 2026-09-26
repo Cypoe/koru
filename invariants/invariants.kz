@@ -121,6 +121,19 @@
     "check": "python3 checks/check_deslop_census.py checks/deslop-stdlib.baseline -- python3 ../tools/deslop_kz.py ../zig-out/bin/koruc ../koru_std --top=8 --min-nodes=32"
 }
 
+// The decl census's blind spot: --ast-canon renders .kz host code opaque
+// (host_line contents, proc bodies — the layer where the stdlib's mass
+// actually lives), so the sibling row above counted decl twins and missed
+// the Zig. --host reassembles each file's Zig into a synthetic and runs
+// the same deslop.zig fingerprint, attributing clones back to .kz lines.
+// First pin measured the layer at ~15x the decl census's mass.
+~std/invariants:inferred {
+    "name": "deslop-stdlib-host-board",
+    "tags": ["git-gate", "odds-10"],
+    "rule": "The host-code clone census over koru_std's .kz corpus (tools/deslop_kz.py --host: canon-extracted Zig reassembled per file, fingerprinted by tools/deslop.zig at --min-tokens=48) must not regrow past the pin in checks/deslop-stdlib-host.baseline. Same contract as its sibling rows: odds-10 sampled firing, regrowth blocks until the named clones are folded or the pin is re-set in the same commit with reason. Files whose host text cannot parse standalone are named on stderr and escape the count until they parse again — dormant proc bodies are the known offenders.",
+    "check": "python3 checks/check_deslop_census.py checks/deslop-stdlib-host.baseline -- python3 ../tools/deslop_kz.py ../zig-out/bin/koruc ../koru_std --host --top=8 --min-tokens=48"
+}
+
 // The manifest guards itself: a git-gate-local row fires only when its
 // declaring file is in the staged diff, and is judged against that
 // file's hunks alone. This row is where weakening the discipline would
