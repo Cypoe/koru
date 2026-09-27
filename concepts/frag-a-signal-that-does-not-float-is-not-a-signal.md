@@ -30,6 +30,25 @@ one tree, the global invariants (duplicate pin ids, a foreign commit moving a
 diagnostic out from under a pin) are only visible to the board — so the
 board's failures are the ones that most need to float.
 
+## Second instance — a floated instrument can still measure nothing (2026-09-27)
+
+The board delta added the same day *did* float — it printed a section and
+posted an event — and it reported "No changes detected" on a board where a
+test had flipped red→green and a new pin had landed. The cause:
+`diff-snapshots.js` computed "current" through `generate-status.js`, which
+prefers `test-results/latest.json` — the previous snapshot — when it exists.
+The instrument compared the old board to itself; the delta was structurally
+incapable of seeing a change. (A second wound beneath it: the filesystem
+fallback only recognized `input.kz`, so even a real scan saw a 947-test
+shadow of the 2,191-input corpus.)
+
+The widened claim: delivery is necessary but not sufficient — **the reading
+has to be of the world, not of the instrument's own memory.** A comparator
+wired so its two inputs are the same source is a gauge whose needle is
+pinned to zero; it will print "no change" on every board and look like the
+instrument working. Verified means a fixture with a *known nonzero delta*,
+not a self-comparison that cannot fail.
+
 ## Falsification / open edge
 
 If floats become noise — every filtered run spamming the sink — the signal

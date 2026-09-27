@@ -22,6 +22,11 @@ const OUTPUT_JSON_PATH = join(__dirname, '../status.json');
 // Parse command line args
 const args = process.argv.slice(2);
 const format = args.find(arg => arg.startsWith('--format='))?.split('=')[1] || 'json';
+// --filesystem forces the live marker scan even when latest.json exists.
+// The snapshot path answers "what did the last board publish"; the scan
+// answers "what is on disk right now" — diff-snapshots needs the latter,
+// otherwise it compares latest.json to itself and can never see a delta.
+const forceFilesystem = args.includes('--filesystem');
 
 async function fileExists(path) {
 	try {
@@ -91,18 +96,23 @@ async function getTestCases(categoryPath, categorySlugPath, categorySkipped = fa
 		const stats = await stat(testPath);
 
 		if (stats.isDirectory() && /^\d+[a-z]?_/.test(entry)) {
-			const hasInput = await fileExists(join(testPath, 'input.kz'));
+			// The runner's test-dir predicate (run_regression.sh): input.kz OR
+			// input.k OR a marker file. A bare input.kz check renders every .k
+			// test invisible — over half the corpus.
+			const hasInput = await fileExists(join(testPath, 'input.kz'))
+				|| await fileExists(join(testPath, 'input.k'));
 			const mustRun = await fileExists(join(testPath, 'MUST_RUN'));
 			const success = await fileExists(join(testPath, 'SUCCESS'));
 			const failure = await fileExists(join(testPath, 'FAILURE'));
 			const todo = await fileExists(join(testPath, 'TODO'));
 			const skip = await fileExists(join(testPath, 'SKIP'));
 			const broken = await fileExists(join(testPath, 'BROKEN'));
+			const benchmark = await fileExists(join(testPath, 'BENCHMARK'));
 
-			// A dir with no input.kz is a sub-category — recurse and let
-			// category-level markers (TODO/SKIP) propagate to its children.
-			// (Per-test TODO/SKIP/BROKEN markers always sit next to an input.kz.)
-			if (!hasInput) {
+			// A dir carrying neither input nor a status marker is a
+			// sub-category — recurse and let category-level markers
+			// (TODO/SKIP) propagate to its children.
+			if (!hasInput && !todo && !skip && !broken && !benchmark) {
 				const subCategorySkipped = categorySkipped || skip;
 				const subCategorySlugPath = categorySlugPath ? `${categorySlugPath}/${entry}` : entry;
 				const subTests = await getTestCases(testPath, subCategorySlugPath, subCategorySkipped, effectiveCategoryTodo, effectiveCategoryTodoDesc);
@@ -205,7 +215,7 @@ async function loadFromFilesystem() {
 async function generateStatus() {
 	try {
 		let data;
-		if (await fileExists(SNAPSHOT_PATH)) {
+		if (!forceFilesystem && await fileExists(SNAPSHOT_PATH)) {
 			data = await loadFromSnapshot();
 		} else {
 			data = await loadFromFilesystem();

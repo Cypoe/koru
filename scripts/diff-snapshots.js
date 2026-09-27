@@ -44,7 +44,7 @@ async function getCurrentState() {
 	// Load current state by reading generate-status.js output
 	// This is a bit hacky but avoids duplicating the scanning logic
 	const { execSync } = await import('child_process');
-	const statusJson = execSync('node scripts/generate-status.js --format=json 2>&1', {
+	const statusJson = execSync('node scripts/generate-status.js --format=json --filesystem 2>&1', {
 		cwd: join(__dirname, '..'),
 		encoding: 'utf-8'
 	});
