@@ -176,7 +176,15 @@ alone.** Lead with the concrete subject — the feature or concept, by name.
   Catch Up". (Lars-ruled 2026-07-15 after a title that never named its
   feature.)
 - **Present tense, describe the feature — not the journey.** "A grammar is two
-  glyphs" not "Today I added a parser." No changelog narration, no "we then…".
+  glyphs" not "Today I added a parser." No changelog narration, no "we then…" —
+  and no *design* journey either. The seductive form is the ruled-out road:
+  "what I built first", "the road that got ruled out", objection arcs where
+  each wrong version gets a section. The rejected shapes are not content the
+  reader needs — justify the contract inside the design sections; the
+  graveyard lives in commit messages and `concepts/`, not on the page.
+  (Lars-ruled 2026-09-27: pump-verdicts shipped a three-subsection ruled-out
+  appendix "because the journey is half of what these posts are for" — it
+  isn't. None of them care about our journey; they care about the result.)
 - **Short and synthesized.** State the idea and let the tests carry the proof.
 - Match the register of the recent posts; don't invent a new house style.
 - **Numbers worth seeing are a HyperFrame.** `~/.claude/skills/hyperframe/SKILL.md`
@@ -192,6 +200,10 @@ alone.** Lead with the concrete subject — the feature or concept, by name.
 - Never write `draft: false` on your own authority. That flag is Lars's to
   flip — when he directs the flip, the husky gate's `LARS_HAS_READ_IT=1` is his
   explicit say-so, not a workaround.
+- Never keep a "road that got ruled out" / "what I built first" / "how it
+  went wrong" section because it explains why the design has its shape —
+  that justification belongs inside the sections describing the result.
+  The reader needs the destination, not the detour.
 - Never cite a test you haven't read/run this session, and never invent a
   `directory`/`categorySlug` — a wrong one renders a dead link on the live site.
   Verify each pair resolves in `src/lib/data/status.json` under the key

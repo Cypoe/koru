@@ -22,5 +22,9 @@
 # harness shell (run_regression.sh, run_single_test.sh) and a concept
 # frag; zero src/ files. The residual named is the same documented
 # emitter_test/visitor_emitter_test field-literal idiom.
-clusters=1514
-members=2071
+# Re-pinned in "blogpost skill: the design journey does not survive
+# publication": the roll fired on +1 cluster / +1 member of foreign src/
+# drift — this commit touches only a .claude skill doc; zero src/ files.
+# The residual named is the same documented field-literal idiom.
+clusters=1515
+members=2072
