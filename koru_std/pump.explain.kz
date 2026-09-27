@@ -166,13 +166,13 @@ const PX = struct {
     fn foldRun(alloc: std.mem.Allocator, fl: *const ast.Flow, inv: *const ast.Invocation, pumps: *std.ArrayList(Pump)) void {
         const name = siteName(inv);
         const p = find(pumps, name) orelse {
-            var s = stub(alloc, name, refused(alloc, PM.run_no_pump, .{ name, name, name, name }));
+            var s = stub(alloc, name, refused(alloc, PMRun.run_no_pump, .{ name, name, name, name }));
             s.ran = true;
             pumps.append(alloc, s) catch unreachable;
             return;
         };
         if (p.ran) {
-            p.status = refused(alloc, PM.run_already_ran, .{ name, name });
+            p.status = refused(alloc, PMRun.run_already_ran, .{ name, name });
             return;
         }
         p.ran = true;

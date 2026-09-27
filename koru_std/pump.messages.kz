@@ -31,7 +31,6 @@ const PM = struct {
     const join_wait_no_interest = "std/pump({s}): `! wait`'s callee returns `{s}` - the interest contract is `-> i32` (a descriptor to poll), `-> i128` (a re-poll duration in ns), or `-> {{ fd: i32, wait_ns: i128 }}` (both)";
     const join_wait_binds_index = "std/pump({s}): `! wait` binds the interest index - spell it `! wait i |> <call>(i)`; instance i's interest is `-> i32` (fd), `-> i128` (re-poll ns), or `{{ fd, wait_ns }}`";
 
-    const run_needs_name = "std/pump:run needs the pump's name - `std/pump:run(main)`";
-    const run_no_pump = "std/pump:run({s}): no pump named '{s}' - `std/pump:create({s})` declares it, joins attach via `std/pump({s})`, and the drive follows both";
-    const run_already_ran = "std/pump:run({s}): '{s}' already ran - a pump drives once";
+    // `run`'s refusals live in the `run-msgs` part (PMRun) — this file's
+    // pin went over when the retire contract landed.
 };

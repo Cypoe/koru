@@ -115,8 +115,10 @@ koru_std/proto.fields.kz	58
 koru_std/proto.kz	379
 koru_std/proto.resolve.kz	473
 koru_std/pump.explain.kz	301
-koru_std/pump.kz	832
-koru_std/pump.messages.kz	37
+koru_std/pump.kz	635
+koru_std/pump.messages.kz	36
+koru_std/pump.run-msgs.kz	12
+koru_std/pump.run.kz	238
 koru_std/pump.synth.kz	59
 koru_std/pump.wait.kz	65
 koru_std/pump.wit.kz	25

@@ -29,6 +29,7 @@ comment, another pass parses it. Everything below is the second kind.
 | `// store-kinds …` | `store.new.kz:3133` | `store.kz:563` | store kind arms |
 | `// store-member-types …` | `store.new.kz:3146` | `store.kz:721` | store member types |
 | `// store-view …` | `store.view.kz:62` | `store.kz:1183,1316,1341` | store view decl |
+| `// __pump_decl_<name>` / `// __pump_ran_<name>` | `pump.kz` (`create`/`run`) | `pump.kz` (`run` join discovery), **`orisha/lib/pump.kz`**, **`koru-libs/vaxis/index.kz`** | open-pump regions: the pump's name parsed from the comment tail; `decl`−`ran` = "a pump is open" — library `run` transforms read it to emit join units instead of a driver |
 | ~~`// refine home:Name: …`~~ | ~~`refine.k`~~ | ~~`refine.k`~~ | **MIGRATED** — first namespace off the wire: now `Item.facet_decl` (typed node: `name`/`module`/`fields` with structured `lo`/`hi`/`eq` bounds). The emitter still *renders* `// refine …` into generated Zig — write-only debug output, never parsed back. |
 
 ## Family B — sentinel flags: a comment marks a generated block
@@ -124,6 +125,16 @@ context field + ABI reachability is already proven by `reporter`).
   concept (the `host_type_decl` precedent: `kernel.kz` already scans
   `program.items` for typed nodes). `refine` is done (`facet_decl`);
   proto/foreign/store-* remain on the wire.
+- The `__pump_*` markers (2026-10 pump capture work) are the wire's first
+  **cross-repo** edge: koru_std writes, orisha and koru-libs read. That
+  makes the convention part of `std/pump`'s published contract to
+  participant libraries — and it already paid for its own lesson: prose
+  mentioning `__pump_decl_<name>` in pump.kz's own comments was read as
+  a planted pump until the scan tightened to exact-line + identifier
+  validation. The migration target is a typed open-pump item the way
+  `facet_decl` is a typed decl; the consumer surface (`create`/natural
+  `run`/`run`) does not depend on which substrate answers "a pump is
+  open".
 - `src/type_registry.zig`'s `// foreign` read needs its own fix either
   way — the compiler parsing stdlib comments is an inversion regardless
   of what convention the stdlib uses internally.

@@ -1,0 +1,22 @@
+// Two countdown participants — module-level burn counters behind the
+// step/live surface. `a` burns out after `a` steps, `b` after `b` — enough to
+// make one join cross to live() == 0 while the pump is still driven by the
+// other.
+const std = @import("std");
+var a_left: i64 = 0;
+var b_left: i64 = 0;
+
+~pub tor light { a: i64, b: i64 }
+~proc light|zig { a_left = a; b_left = b; }
+
+~pub tor a-step {} -> i32
+~proc a-step|zig { if (a_left > 0) { a_left -= 1; return 1; } return 0; }
+
+~pub tor a-live {} -> i64
+~proc a-live|zig { return a_left; }
+
+~pub tor b-step {} -> i32
+~proc b-step|zig { if (b_left > 0) { b_left -= 1; return 1; } return 0; }
+
+~pub tor b-live {} -> i64
+~proc b-live|zig { return b_left; }
