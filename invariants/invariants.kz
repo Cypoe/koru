@@ -64,6 +64,20 @@
     "rule": "Does this diff weaken a std/rules claim silently? Declarations carry claim stamps — proven, measured, inferred, aspirational — visible inline in the source this diff touches. Flag when the diff edits the body of a declaration stamped proven or measured without the diff also touching the evidence the stamp rests on (a test, benchmark, or proof artifact), or when it removes or downgrades a stamp without saying so. Editing a claimed declaration together with its evidence, or strengthening a stamp, is NOT a violation. Answer yes ONLY if the diff leaves a stamp asserting something the edit has made untrue."
 }
 
+// The deterministic twin of the row above: the judge asks whether a diff
+// weakened a claim's evidence; this check asks whether the evidence EXISTS.
+// A stamp above `aspirational` is a standing instrument — it must name what
+// keeps discharging it and the pointer must resolve (a repo path, a pin dir
+// under tests/, a manifest row name). Unsampled on purpose: the check reads
+// the working tree, so a dead instrument fails the NEXT commit regardless of
+// which diff killed it — sampling would let rot pass nine commits in ten.
+~std/invariants:inferred {
+    "name": "instrumented-stamps-resolve",
+    "tags": ["git-gate"],
+    "rule": "Every std/rules claim stamp above `aspirational` — `inferred`, `measured`, `proven` — must name a running instrument in its entry (`- measured <pointer>`), and the pointer must resolve: a repo-relative path that exists (a pin dir, a benchmark, a proof artifact), a directory name under tests/ (a bare pin name), or a \"name\" row in this manifest (a gate row re-discharges the claim on every commit). A stamp whose pointer resolves to nothing is prose claiming to be discharged — the content class this row exists to delete. `aspirational` entries carry no pointer and are exempt: undischarged is the honest state. The check scans the WORKING tree so dead instruments fail whoever's commit comes next; it self-tests its entry parser before scanning and reports BROKEN, never clean, if the claim grammar stops matching. Concept: concepts/frag-claim-stamps-are-standing-instruments.md.",
+    "check": "zig run ../tools/check_claim_instruments.zig -- .. --allow checks/claim-instruments.allow ../koru_std ../tests ../examples"
+}
+
 // The semantic half of the ref gap — narrowed, not closed. Both
 // consumers that exist check at their own boundary through one shared
 // authority (StoreRefHome.homesOf): stores at column writes

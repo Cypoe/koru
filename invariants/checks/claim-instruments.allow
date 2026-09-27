@@ -1,0 +1,18 @@
+# Declared exemptions for the instrumented-stamps-resolve check.
+#
+# Format: <repo-relative path> | <entry text> | <reason>
+#   path   — the file carrying the stamp, relative to the repo root
+#   entry  — the full `- <stamp> <pointer>` line, trimmed
+#   reason — why this stamp asserts no real claim. Mandatory. An entry
+#            matching no violation is STALE and fails the check.
+#
+# The sites below are claims-registry fixtures: the stamps exercise the
+# `claims`/`assumes` collectors and the key-collision rules — they are the
+# vocabulary's own test corpus, not assertions about shipped behavior.
+
+tests/regression/300_ADVANCED_FEATURES/310_COMPTIME/310_112_claims_key_crash/input.k | - measured no-alloc | claims-registry fixture — exercises duplicate-key detection
+tests/regression/300_ADVANCED_FEATURES/310_COMPTIME/310_111_claims_variant_keys/input.k | - measured sorted-output | claims-registry fixture — exercises variant-keyed claims
+tests/regression/300_ADVANCED_FEATURES/310_COMPTIME/310_111_claims_variant_keys/input.k | - proven sorted-output | claims-registry fixture — exercises variant-keyed claims
+tests/regression/300_ADVANCED_FEATURES/310_COMPTIME/310_111_claims_variant_keys/input.k | - measured sorted-output | claims-registry fixture — exercises variant-keyed claims
+tests/regression/600_STDLIB/676_ASSUMES/676_005_assumes_transitive_closure/input.kz | - proven contract-honest | assumes fixture — exercises transitive-closure reporting
+tests/regression/600_STDLIB/676_ASSUMES/676_006_assumes_effective_grade/input.kz | - proven bought-with-debt | assumes fixture — exercises effective-grade weakening

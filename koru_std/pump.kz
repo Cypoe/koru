@@ -143,17 +143,10 @@ const PH = struct {
         };
         return W.scan(prog.items, want_name, want_qual);
     }
-    // The decl markers are host_line comments — zero emission surface, found
-    // by content scan: `__pump_decl_<name>` (create ran), `__pump_ran_<name>`
-    // (run already emitted — a join after it would never be driven).
-    //
-    // ASPIRATIONAL — this protocol is three transforms restating one string
-    // convention on the comment wire (here, orisha/lib/pump.kz,
-    // koru-libs/vaxis/index.kz — the wire's first cross-repo edge). The
-    // resolved migration is a typed program item — the facet_decl
-    // precedent — queried by structure, not by scan. See
-    // concepts/frag-comment-markers-are-the-inter-transform-wire.
-    // Deferred, not waived: the consumer surface does not depend on it.
+    // Decl markers are host_line comments — zero emission surface:
+    // `__pump_decl_<name>` (create ran), `__pump_ran_<name>` (run emitted;
+    // a join after it would never be driven). The convention itself is a
+    // stamped claim on `create` — `- aspirational open-pump-marker-wire`.
     fn markerExists(prog: *const ast.Program, marker: []const u8) bool {
         const W = struct {
             fn scan(its: []const ast.Item, w: []const u8) bool {
@@ -411,7 +404,12 @@ fn siteName(invocation: *const ast.Invocation) []const u8 {
 // Emits the `__pump_decl_<name>` marker and the drained unit. Declarations
 // precede joins, joins precede run — transforms run in source order.
 
-~[keyword|comptime|transform]pub tor create {
+~[
+- keyword|comptime|transform
+- aspirational open-pump-marker-wire
+  Comment-wire markers restated per participant transform; the typed
+  program-item migration is resolved — concepts/frag-comment-markers-are-the-inter-transform-wire.
+]pub tor create {
     expr: Expression,
     invocation: *const Invocation,
     item: *const std/compiler:Item,
