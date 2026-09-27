@@ -68,6 +68,7 @@ const ast = @import("ast");
 // The Vyukov ring is the data plane — imported at module scope so it rides
 // this module's own import graph into every program that channels.
 ~import std/rings
+~part custody
 
 // ============================================================================
 // Helpers — pump.kz's PH and list.protos' field reader, restated: a module
@@ -77,6 +78,8 @@ const ast = @import("ast");
 const CH = struct {
     const FieldPair = struct { name: []const u8, ftype: []const u8 };
     const KindEntry = struct { name: []const u8, proto: []const u8 };
+    // One collected `!` arm — kind name, the arm continuation, its join flow.
+    const Arm = struct { kind: []const u8, cont: *const ast.Continuation, at: *const ast.Flow };
 
     fn mkPath(alloc: std.mem.Allocator, module: []const u8, name: []const u8) ast.DottedPath {
         const segs = alloc.alloc([]const u8, 1) catch unreachable;
@@ -476,64 +479,6 @@ const CH = struct {
     // Emission helpers.
     // ------------------------------------------------------------------
 
-    // A `!`-arm compiled into a callable void unit: event_decl + impl.
-    // pump.kz's drained-unit convention — no return contract, the arm's
-    // `|>` chain IS the body. An inline_code body lands as a proc_decl.
-    fn emitVoidUnit(
-        allocator: std.mem.Allocator,
-        appended: *std.ArrayList(ast.Item),
-        program: *const ast.Program,
-        flow: *const ast.Flow,
-        unit_name: []const u8,
-        arm: *const ast.Continuation,
-        input_fields: []const ast.Field,
-    ) void {
-        const ast_functional = @import("ast_functional");
-        const host_is_js = std.mem.eql(u8, CompilerEnv.lang, "js");
-        const retain_ann = blk_ra: {
-            const anns = allocator.alloc([]const u8, 1) catch unreachable;
-            anns[0] = allocator.dupe(u8, "retain") catch unreachable;
-            break :blk_ra anns;
-        };
-        appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-            .path = mkPath(allocator, flow.module, unit_name),
-            .input = ast.Shape{ .fields = input_fields },
-            .branches = &[_]ast.Branch{},
-            .return_type = null,
-            .is_public = false,
-            .is_implicit_flow = false,
-            .annotations = retain_ann,
-            .location = flow.location,
-            .module = allocator.dupe(u8, flow.module) catch unreachable,
-        } }) catch unreachable;
-        var aclone = ast_functional.cloneContinuation(allocator, arm) catch unreachable;
-        rewriteCont(allocator, &aclone, storeHomes(allocator, program));
-        const anode = aclone.node.?;
-        if (anode == .inline_code) {
-            appended.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                .path = mkPath(allocator, flow.module, unit_name),
-                .body = ast.Source{ .text = anode.inline_code, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
-                .annotations = &[_][]const u8{},
-                .target = allocator.dupe(u8, if (host_is_js) "js" else "zig") catch unreachable,
-                .location = flow.location,
-                .module = allocator.dupe(u8, flow.module) catch unreachable,
-            } }) catch unreachable;
-            return;
-        }
-        appended.append(allocator, ast.Item{ .flow = ast.Flow{
-            .body = ast.rootSite(anode.invocation, aclone.continuations, flow.location),
-            .pre_label = null,
-            .impl_of = mkPath(allocator, flow.module, unit_name),
-            .super_shape = null,
-            .inline_body = anode.invocation.inline_body,
-            .preamble_code = anode.invocation.preamble_code,
-            .is_pure = false,
-            .is_transitively_pure = false,
-            .location = flow.location,
-            .module = allocator.dupe(u8, flow.module) catch unreachable,
-        } }) catch unreachable;
-    }
-
     // A generated tor + `|zig` proc — list.free.kz's synthOp, restated.
     fn synthOp(
         allocator: std.mem.Allocator,
@@ -542,6 +487,7 @@ const CH = struct {
         input_fields: []const ast.Field,
         branches: []const ast.Branch,
         return_type: ?[]const u8,
+        return_phantom: ?[]const u8,
         proc_body: []const u8,
         appended: *std.ArrayList(ast.Item),
     ) void {
@@ -556,6 +502,7 @@ const CH = struct {
             .input = ast.Shape{ .fields = input_fields },
             .branches = branches,
             .return_type = if (return_type) |rt| allocator.dupe(u8, rt) catch unreachable else null,
+            .return_phantom = if (return_phantom) |rp| allocator.dupe(u8, rp) catch unreachable else null,
             .is_public = false,
             .is_implicit_flow = false,
             .annotations = retain_ann,
@@ -581,12 +528,12 @@ const CH = struct {
         };
     }
 
-    fn identityBranch(allocator: std.mem.Allocator, name: []const u8, t: []const u8) ast.Branch {
+    fn identityBranch(allocator: std.mem.Allocator, name: []const u8, t: []const u8, phantom: ?[]const u8) ast.Branch {
         const f = allocator.alloc(ast.Field, 1) catch unreachable;
         f[0] = ast.Field{
             .name = allocator.dupe(u8, "__type_ref") catch unreachable,
             .type = allocator.dupe(u8, t) catch unreachable,
-            .phantom = null,
+            .phantom = if (phantom) |p| allocator.dupe(u8, p) catch unreachable else null,
         };
         return ast.Branch{
             .name = allocator.dupe(u8, name) catch unreachable,
@@ -821,12 +768,18 @@ const CH = struct {
         kinds.append(allocator, .{ .name = kname, .proto = kproto }) catch unreachable;
     }
 
+    // ---- Custody scan — which kinds transit obligations? Lives in
+    // channel.custody.kz (CC); a conflict comes back as a ready refusal. ----
+    const custody = switch (CC.scanCustody(allocator, program, reporter, flow, chan_name, kinds.items)) {
+        .ok => |c| c,
+        .refuse => |r| return .{ .transformed = .{ .replacement = r } },
+    };
+
     // ---- Collect the program-wide joins: every `std/channel:consume(<name>)`
     // flow's `!` arms, validated against the vocabulary. The [pre] rewrite
     // already ran, so position never hides one. ----
-    const Arm = struct { kind: []const u8, cont: *const ast.Continuation, at: *const ast.Flow };
-    var kind_arms = std.ArrayList(Arm).initCapacity(allocator, 8) catch unreachable;
-    var closed_arms = std.ArrayList(Arm).initCapacity(allocator, 2) catch unreachable;
+    var kind_arms = std.ArrayList(CH.Arm).initCapacity(allocator, 8) catch unreachable;
+    var closed_arms = std.ArrayList(CH.Arm).initCapacity(allocator, 2) catch unreachable;
     for (CH.consumeFlows(allocator, program, chan_name)) |cf| {
         for (cf.body.continuations) |*c| {
             const cb = std.mem.trim(u8, c.branch, " ");
@@ -938,8 +891,12 @@ const CH = struct {
             "if ({s}.load(.acquire)) return .closed;\nif ({s}.tryEnqueue(value)) return .ok;\nreturn .full;",
             .{ closed_flag, ring },
         ) catch unreachable;
-        CH.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "__channel_send_{s}_{s}", .{ chan_name, k.name }) catch unreachable, in, brs, null, body, &appended);
+        CH.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "__channel_send_{s}_{s}", .{ chan_name, k.name }) catch unreachable, in, brs, null, null, body, &appended);
     }
+
+    // ---- Custody transit ops per custodial kind (channel.custody.kz):
+    // `take` consumes under `| ok`; `obligate` mints at the consumer arm. ----
+    CC.emitCustodyOps(allocator, flow, chan_name, kinds.items, custody, &appended);
 
     // ---- `__channel_recv_<n>` {} | some Proto | none | closed — the
     // imperative take; single-kind only (a multi-kind channel can't spell
@@ -947,7 +904,11 @@ const CH = struct {
     if (kinds.items.len == 1) {
         const k = kinds.items[0];
         const brs = allocator.alloc(ast.Branch, 3) catch unreachable;
-        brs[0] = CH.identityBranch(allocator, "some", k.proto);
+        const some_phantom = if (custody[0]) |st|
+            std.fmt.allocPrint(allocator, "{s}!", .{st}) catch unreachable
+        else
+            null;
+        brs[0] = CH.identityBranch(allocator, "some", k.proto, some_phantom);
         brs[1] = CH.emptyBranch(allocator, "none");
         brs[2] = CH.emptyBranch(allocator, "closed");
         const ring = std.fmt.allocPrint(allocator, "__koru_chan_{s}_{s}_ring", .{ chan_name, k.name }) catch unreachable;
@@ -955,7 +916,7 @@ const CH = struct {
             "if ({s}.tryDequeue()) |__v| return .{{ .some = __v }};\nif ({s}.load(.acquire)) return .closed;\nreturn .none;",
             .{ ring, closed_flag },
         ) catch unreachable;
-        CH.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "__channel_recv_{s}", .{chan_name}) catch unreachable, &.{}, brs, null, body, &appended);
+        CH.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "__channel_recv_{s}", .{chan_name}) catch unreachable, &.{}, brs, null, null, body, &appended);
     }
 
     // ---- `__channel_close_<n>` {} | ok — sets the bit, then fires every
@@ -969,27 +930,13 @@ const CH = struct {
             cb.appendSlice(allocator, std.fmt.allocPrint(allocator, "__channel_{s}_closed_{d}_event.handler(.{{}});\n", .{ chan_name, ci }) catch unreachable) catch unreachable;
         }
         cb.appendSlice(allocator, "return .ok;") catch unreachable;
-        CH.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "__channel_close_{s}", .{chan_name}) catch unreachable, &.{}, brs, null, cb.toOwnedSlice(allocator) catch unreachable, &appended);
+        CH.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "__channel_close_{s}", .{chan_name}) catch unreachable, &.{}, brs, null, null, cb.toOwnedSlice(allocator) catch unreachable, &appended);
     }
 
     // ---- The `!` arms as generated units — kind arms carry the message,
-    // closed arms carry nothing. ----
-    for (kind_arms.items, 0..) |arm, ai| {
-        var proto: []const u8 = "";
-        for (kinds.items) |k| {
-            if (std.mem.eql(u8, k.name, arm.kind)) proto = k.proto;
-        }
-        const uf = allocator.alloc(ast.Field, 1) catch unreachable;
-        uf[0] = ast.Field{
-            .name = allocator.dupe(u8, arm.cont.binding.?) catch unreachable,
-            .type = allocator.dupe(u8, proto) catch unreachable,
-            .phantom = null,
-        };
-        CH.emitVoidUnit(allocator, &appended, program, flow, std.fmt.allocPrint(allocator, "__channel_{s}_{s}_{d}", .{ chan_name, arm.kind, ai }) catch unreachable, arm.cont, uf);
-    }
-    for (closed_arms.items, 0..) |arm, ci| {
-        CH.emitVoidUnit(allocator, &appended, program, flow, std.fmt.allocPrint(allocator, "__channel_{s}_closed_{d}", .{ chan_name, ci }) catch unreachable, arm.cont, &.{});
-    }
+    // closed arms carry nothing. Custodial units mint the obligation at the
+    // arm head (channel.custody.kz). ----
+    CC.emitConsumerUnits(allocator, &appended, program, flow, chan_name, kind_arms.items, closed_arms.items, kinds.items, custody);
 
     // ---- The pump verbs: `<n>-step` / `<n>-live` / `<n>-wait` ----
     {
@@ -1003,13 +950,14 @@ const CH = struct {
         // one dequeue in join order — first pop wins the value.
         for (kind_arms.items, 0..) |arm, ai| {
             const ring = std.fmt.allocPrint(allocator, "__koru_chan_{s}_{s}_ring", .{ chan_name, arm.kind }) catch unreachable;
+            const field_name = CC.stepFieldName(kinds.items, custody, arm.kind, arm.cont.binding.?);
             sb.appendSlice(allocator, std.fmt.allocPrint(allocator,
                 "if ({s}.tryDequeue()) |__v| {{\n    __channel_{s}_{s}_{d}_event.handler(.{{ .{s} = __v }});\n    __moved += 1;\n}}\n",
-                .{ ring, chan_name, arm.kind, ai, arm.cont.binding.? },
+                .{ ring, chan_name, arm.kind, ai, field_name },
             ) catch unreachable) catch unreachable;
         }
         sb.appendSlice(allocator, "return __moved;") catch unreachable;
-        CH.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "{s}-step", .{chan_name}) catch unreachable, &.{}, &.{}, "i32", sb.toOwnedSlice(allocator) catch unreachable, &appended);
+        CH.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "{s}-step", .{chan_name}) catch unreachable, &.{}, &.{}, "i32", null, sb.toOwnedSlice(allocator) catch unreachable, &appended);
     }
     {
         var sb = std.ArrayList(u8).initCapacity(allocator, 96 + kinds.items.len * 80) catch unreachable;
@@ -1026,7 +974,7 @@ const CH = struct {
             sb.appendSlice(allocator, std.fmt.allocPrint(allocator, " and __drained_{d}", .{i}) catch unreachable) catch unreachable;
         }
         sb.appendSlice(allocator, ") 0 else 1;") catch unreachable;
-        CH.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "{s}-live", .{chan_name}) catch unreachable, &.{}, &.{}, "i64", sb.toOwnedSlice(allocator) catch unreachable, &appended);
+        CH.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "{s}-live", .{chan_name}) catch unreachable, &.{}, &.{}, "i64", null, sb.toOwnedSlice(allocator) catch unreachable, &appended);
     }
     {
         const wf = allocator.alloc(ast.Field, 1) catch unreachable;
@@ -1035,7 +983,7 @@ const CH = struct {
             .type = allocator.dupe(u8, "i64") catch unreachable,
             .phantom = null,
         };
-        CH.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "{s}-wait", .{chan_name}) catch unreachable, wf, &.{}, "i128", "_ = i;\nreturn 1_000_000;", &appended);
+        CH.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "{s}-wait", .{chan_name}) catch unreachable, wf, &.{}, "i128", null, "_ = i;\nreturn 1_000_000;", &appended);
     }
 
     const marker = std.fmt.allocPrint(allocator, "// std/channel: '{s}' declared ({d} kinds, cap {d}; {d} consumers, {d} close arms)", .{ chan_name, kinds.items.len, capacity, kind_arms.items.len, closed_arms.items.len }) catch unreachable;
@@ -1482,16 +1430,46 @@ fn chanStep(
         .args = call_args,
     };
 
-    // Mid-chain site: swap this continuation's node for the generated call;
-    // the site's `|` arms ride untouched.
-    if (invocation != flow.inv()) {
-        return .{ .replacement_node = .{ .node = ast.Node{ .invocation = call_inv } } };
+    // CUSTODY TRANSIT (concepts/frag-custody-transit-is-an-edge-contract): a
+    // send of an issued-obligation value moves custody on `| ok` only — the
+    // generated `__channel_take` consumes the binding there; `full`/`closed`
+    // retain it. The consumer-side mint is the declaration's job — `new`
+    // emitted the take/obligate pair when it saw this edge is custodial.
+    var take_node: ?ast.Node = null;
+    if (std.mem.eql(u8, verb, "send")) {
+        var sent_value: ?[]const u8 = null;
+        if (bare_value) |bv| sent_value = bv;
+        if (sent_value == null and kind_label.len != 0) sent_value = kind_value;
+        if (sent_value) |sv| {
+            take_node = CC.takeNode(allocator, program, flow, chan_name, kind.?.name, sv);
+        }
     }
 
-    const conts = allocator.alloc(ast.Continuation, flow.body.continuations.len) catch unreachable;
-    for (flow.body.continuations, 0..) |*c, i| {
-        conts[i] = ast_functional.cloneContinuation(allocator, c) catch unreachable;
+    // The site's `|` arms: under a site view `flow.body` IS the holding
+    // continuation, so its continuations are the arms. `holdingCont` covers
+    // the hypothetical of a real containing flow being handed over instead.
+    const site_arms = if (CC.holdingCont(flow, invocation)) |hc| hc.continuations else flow.body.continuations;
+
+    // Mid-chain site: swap this continuation's node for the generated call;
+    // the site's `|` arms ride untouched — except the custodial `| ok`,
+    // which gains the take step as its head.
+    if (invocation != flow.inv()) {
+        var children: ?[]const ast.Continuation = null;
+        if (take_node) |tn| {
+            children = CC.injectTake(allocator, site_arms, tn);
+        }
+        return .{ .replacement_node = .{ .node = ast.Node{ .invocation = call_inv }, .children = children } };
     }
+
+    const conts = if (take_node) |tn|
+        CC.injectTake(allocator, site_arms, tn)
+    else blk: {
+        const c2 = allocator.alloc(ast.Continuation, flow.body.continuations.len) catch unreachable;
+        for (flow.body.continuations, 0..) |*c, i| {
+            c2[i] = ast_functional.cloneContinuation(allocator, c) catch unreachable;
+        }
+        break :blk c2;
+    };
     return .{ .replacement = ast.Item{ .flow = ast.Flow{
         .body = ast.rootSite(call_inv, conts, flow.location),
         .pre_label = null,

@@ -40,14 +40,21 @@ binding's obligation into the vessel; `full`/`closed` leave it with the
 producer, who still must discharge. `| some v` mints the obligation fresh
 at the winning arm. Pin family: 699_022–029.
 
-## Measured current state (the gap the pins hold open)
+## Measured current state (2026-10, pins 699_022–028 green)
 
-Channels today do **copy-in, dispose-at-source**: `send` moves the plain
-bytes, the producer's binding keeps the obligation, and auto-discharge
-fires at the producer's scope — so a proto carrying a real handle would
-compile into a poisoned-resource bug (the ring's copy holds a dead fd).
-The obligation ledger catches misuse at the consumer arm (KORU030), which
-means the failure is loud but the diagnostic blames the wrong site.
+The edge contract is implemented in `koru_std/channel.kz` — transform
+composition, no new checker rules: `new` forward-scans send sites,
+resolves each sent binding's producer `-> T<state!>` phantom, and emits a
+`__channel_take_<n>_<k>` (`value: Proto<!state>` — consumes) plus
+`__channel_obligate_<n>_<k>` (`-> Proto<state!>` — mints) per custodial
+kind. `send` rewrites the site's children so `| ok` alone heads with
+`take(value)`; `full`/`closed` ride untouched, retaining producer
+custody. Consumer units mint via `obligate` before the arm body.
+Use-after-discharge now refuses reuse in `| ok` (699_026). Two edges
+measured open: a minted-but-undisposed consumer binding is silently
+settled by auto-discharge — transit mints have no `not_auto_dischargeable`
+class yet (699_027) — and 699_029's pin input itself reads `v.id` inside
+`| ok` after consuming `v`, contradicting the poison law it documents.
 
 ## Constraints that keep this honest
 

@@ -141,19 +141,24 @@ What is NOT settled:
   fd or writes it on send, so a `worker.spawn`ed producer cannot wake a
   parked pump. Grounded mechanism, unbuilt wiring (`699_030` OWED-probe:
   whether a spawned fn can reach a generated send unit at all).
-- **Obligation transit — the designed, unpinned rung.** Custody is a
-  per-edge contract (custody class × delivery semantics × substrate), not
-  a per-type trait: owned obligations transit where delivery is
-  exactly-once — competition included, since exactly-once pop mints to
-  exactly one statically-checked arm — while borrows refuse everywhere
-  and broadcast refuses obligated kinds (never built). `send` consumes
-  the binding's `<live!>` on `| ok` only; `| full`/`| closed` retain
-  producer custody; `| some v` mints the obligation fresh at the arm.
-  Measured today: send copies bytes in plain and custody stays
-  producer-side under auto-discharge ("copy-in, dispose-at-source") —
-  safe for dead data, a poisoned-resource launderer for protos owning
-  real handles. Pin family `699_022`–`699_029` holds the intended
-  contract open; `320_171` pins today's proto-element refusal;
+- **Obligation transit — landed for sole/competing/relay-adjacent edges.**
+  Custody is a per-edge contract (custody class × delivery semantics ×
+  substrate), not a per-type trait: owned obligations transit where
+  delivery is exactly-once — competition included, since exactly-once
+  pop mints to exactly one statically-checked arm — while borrows refuse
+  everywhere and broadcast refuses obligated kinds (never built).
+  `send` consumes the binding's `<live!>` on `| ok` only;
+  `| full`/`| closed` retain producer custody; `| some v` / `! kind v`
+  mint the obligation fresh at the arm — implemented as transform
+  composition: `new` detects custodial kinds per send site
+  (`-> T<state!>` on the producer) and emits `__channel_take` (consumes)
+  / `__channel_obligate` (mints) pairs; `send` injects the take under
+  `| ok` alone. Pins `699_022`–`699_026`, `699_028` green. Open:
+  `699_027` (a minted-but-undisposed consumer binding is silently
+  settled by auto-discharge — transit mints have no
+  `not_auto_dischargeable` class yet) and `699_029` (the pin's own
+  `| ok` arm reads `v.id` after `v` was consumed — the input contradicts
+  the poison law it documents; needs a doctrine ruling).
   `frag-custody-transit-is-an-edge-contract` carries the ruling.
 
 ## The three "block" tiers

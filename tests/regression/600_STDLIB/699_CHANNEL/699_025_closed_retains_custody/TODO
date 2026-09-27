@@ -1,1 +1,0 @@
-OWED: `closed` retains producer custody — same verdict-gated law as `full` (699_024). TODAY: send never consumes, so this accidentally holds; under real transit semantics this pins that a closed ring cannot eat an obligation — the producer walks away still owning it.

@@ -26,7 +26,8 @@ koru_std/build_image.kz	357
 koru_std/build.kz	586
 koru_std/ccp_aspirational.kz	108
 koru_std/ccp.kz	109
-koru_std/channel.kz	1549
+koru_std/channel.custody.kz	467
+koru_std/channel.kz	1527
 koru_std/compiler_context.kz	253
 koru_std/compiler_types.kz	53
 koru_std/compiler_visitor.kz	505
