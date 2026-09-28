@@ -14,33 +14,6 @@
 // and the vocabulary render are minted from — and a scope with nothing
 // provably chainable gets the rule with no fabricated example.
 
-// `{s}` is the worked example `scope-grammar` derives from the scope's own
-// verbs; the binding it narrates is the `v` the derivation always uses.
-const WIRE_CHAIN_RULE_EXAMPLE =
-    \\- Chain fresh outcomes with arms: `{s}` — the arm's binding `v` is what the call just issued. Never invent one, never predict one: bind it.
-;
-
-const WIRE_CHAIN_RULE_NO_EXAMPLE =
-    \\- Chain fresh outcomes with arms — a `| branch name |>` arm binds `name` to what the call just issued. Never invent one, never predict one: bind it.
-;
-
-// The grammar's rules block as one scope-true render: the fixed shape
-// rules plus the chain rule carrying THIS scope's worked example.
-// `scope-grammar` emits it above the vocabulary lines.
-fn wireGrammarRules(allocator: std.mem.Allocator, m: ?*const ScopeManifest) []const u8 {
-    var out = std.ArrayList(u8).initCapacity(allocator, 768) catch unreachable;
-    out.appendSlice(allocator, WIRE_GRAMMAR_TEXT) catch unreachable;
-    out.append(allocator, '\n') catch unreachable;
-    if (m) |manifest| {
-        if (scopeChainExample(allocator, manifest)) |example| {
-            const line = std.fmt.allocPrint(allocator, WIRE_CHAIN_RULE_EXAMPLE, .{example}) catch unreachable;
-            out.appendSlice(allocator, line) catch unreachable;
-            return out.toOwnedSlice(allocator) catch unreachable;
-        }
-    }
-    out.appendSlice(allocator, WIRE_CHAIN_RULE_NO_EXAMPLE) catch unreachable;
-    return out.toOwnedSlice(allocator) catch unreachable;
-}
 
 // The chain rule's worked example, synthesized from the scope's own
 // manifest — the only cast that cannot drift from what the wall enforces.
@@ -84,7 +57,29 @@ fn scopeChainExample(allocator: std.mem.Allocator, m: *const ScopeManifest) ?[]c
 
     var target: ?*const ManifestEvent = null;
     var bound_arg: []const u8 = "";
+    // Borrow edge first — a `T<state>` arg names the minted obligation
+    // without spending it, so `search | ok v |> select(flights: v)` teaches
+    // the produce→use path, not just produce→release.
     for (h.creates) |c| {
+        if (c.branch != null and !std.mem.eql(u8, c.branch.?, arm)) continue;
+        for (m.events) |*ev| {
+            if (ev == h) continue;
+            for (ev.args) |a| {
+                const p = a.phantom orelse continue;
+                if (p.len == 0 or p[0] == '!' or p[p.len - 1] == '!') continue;
+                const pname = if (std.mem.lastIndexOfScalar(u8, p, ':')) |ci| p[ci + 1 ..] else p;
+                if (std.mem.eql(u8, pname, c.obligation)) {
+                    target = ev;
+                    bound_arg = a.name;
+                    break;
+                }
+            }
+            if (target != null) break;
+        }
+        if (target != null) break;
+    }
+    for (h.creates) |c| {
+        if (target != null) break;
         if (c.branch != null and !std.mem.eql(u8, c.branch.?, arm)) continue;
         for (m.events) |*ev| {
             if (ev == h) continue;
@@ -97,7 +92,6 @@ fn scopeChainExample(allocator: std.mem.Allocator, m: *const ScopeManifest) ?[]c
             }
             if (target != null) break;
         }
-        if (target != null) break;
     }
     if (target == null) {
         for ([2]bool{ true, false }) |want_sink| {

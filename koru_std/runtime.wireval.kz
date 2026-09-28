@@ -9,6 +9,7 @@ const WIRE_GRAMMAR_TEXT =
     \\A wire turn is one flow: verb(field: value, field: value) with `|` arms chaining what each call issues.
     \\- The verb is a bare name from your vocabulary — letters, digits, '-', '_' — immediately followed by '('.
     \\- A value is a double-quoted string (escape \" and \\ inside) or a bare literal: a number, true/false, or a name a `|` arm already bound.
+    \\- A field typed `name<x>` takes only a bound name the session minted `<x!>` — an `rN` from an earlier verb or an arm binding, never literal text. `name<!x>` spends it.
     \\- A second invocation starts a second item: one invocation per line runs each in order with one line of report per step.
     \\- Prose is not wire — it binds as residue: "residue bound: rN — your reply was not wire; nothing reached the user" keeps YOUR reply at rN; nothing hears it until a verb takes it as an argument.
 ;
@@ -129,14 +130,3 @@ fn wireValidate(s: []const u8) ?WireRejection {
     return wireReject("one flow per turn: nothing follows the closing ')' except arms", .{}, i);
 }
 
-fn wireLineColumn(s: []const u8, byte: usize) struct { line: u32, column: u32 } {
-    var line: u32 = 1;
-    var line_start: usize = 0;
-    for (s[0..@min(byte, s.len)], 0..) |c, j| {
-        if (c == '\n') {
-            line += 1;
-            line_start = j + 1;
-        }
-    }
-    return .{ .line = line, .column = @intCast(byte - line_start + 1) };
-}

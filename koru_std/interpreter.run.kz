@@ -168,6 +168,7 @@
         .handle_pool = active_pool,
         .scope_name = scope_name,
         .defined = defined,
+        .input_fn = input_fn,
         .host_dispatch = host_dispatch,
         .session_env = session_env,
         .unhandled_outcome = null,
@@ -288,7 +289,7 @@ fn renderHeldHandles(pool: *HandlePool) []const u8 {
 /// `error.HandleNotHeld` surfaces as `dispatch-error` carrying that name, the
 /// same channel `EventDenied` uses for a verb the scope refuses.
 fn assertHandlesHeld(
-    ctx: *const InterpreterContext,
+    ctx: *InterpreterContext,
     pool: *HandlePool,
     event_name: []const u8,
     args: []const ast.Arg,
@@ -303,13 +304,40 @@ fn assertHandlesHeld(
                 break;
             }
         }
-        return;
-    }
-    if (ctx.discharges_obligations_fn) |discharges_fn| {
-        if (discharges_fn(event_name).len == 0) return;
-        if (args.len == 0) return;
-        if (pool.findByHandleIdAnyScope(args[0].value) == null) {
+    } else if (ctx.discharges_obligations_fn) |discharges_fn| {
+        if (discharges_fn(event_name).len != 0 and args.len > 0 and
+            pool.findByHandleIdAnyScope(args[0].value) == null)
+        {
             return error.HandleNotHeld;
+        }
+    }
+
+    // BORROW possession — `field: T<state>` (no `!`) must name a live handle
+    // carrying that obligation. Consumes are covered by the spec pass above;
+    // a borrow proves the session holds the value without spending it — the
+    // arg IS the capability either way. A literal in this position is a
+    // forgery the wire cannot express any other way.
+    const input_fn = ctx.input_fn orelse return;
+    const fields = input_fn(event_name) orelse return;
+    for (fields) |field| {
+        const p = field.phantom orelse continue;
+        if (p.len == 0 or p[0] == '!' or p[p.len - 1] == '!') continue;
+        const state = if (std.mem.lastIndexOfScalar(u8, p, ':')) |c| p[c + 1 ..] else p;
+        for (args) |arg| {
+            if (!std.mem.eql(u8, arg.name, field.name)) continue;
+            const h = pool.findByHandleId(arg.value, ctx.scope_name) orelse {
+                ctx.error_detail = std.fmt.allocPrint(ctx.allocator,
+                    "'{s}' wants a live <{s}> — '{s}' names nothing the session holds. Mint one through a verb whose signature ends '-> <{s}!>'",
+                    .{ field.name, state, arg.value, state }) catch null;
+                return error.HandleNotHeld;
+            };
+            if (!std.mem.eql(u8, h.obligation_name, state)) {
+                ctx.error_detail = std.fmt.allocPrint(ctx.allocator,
+                    "'{s}' wants a live <{s}> — '{s}' is a <{s}>. Mint one through a verb whose signature ends '-> <{s}!>'",
+                    .{ field.name, state, arg.value, h.obligation_name, state }) catch null;
+                return error.HandleNotHeld;
+            }
+            break;
         }
     }
 }
@@ -492,59 +520,6 @@ fn buildDischargeInvocation(
         },
         .args = args_storage,
     };
-}
-
-// Evaluate a simple expression against the environment
-// Handles: literals ("hello"), bindings (r), field access (r.message)
-fn evaluateExpr(expr_str: []const u8, ctx: *InterpreterContext) ![]const u8 {
-    const env = ctx.env;
-    const allocator = ctx.allocator;
-    const trimmed = std.mem.trim(u8, expr_str, " \t");
-
-    // String literal - return without quotes, honoring escapes
-    if (trimmed.len >= 2 and trimmed[0] == '"' and trimmed[trimmed.len - 1] == '"') {
-        return try unescapeStringLiteral(trimmed[1..trimmed.len - 1], allocator);
-    }
-
-    // Check for field access (binding.field) — only when the base is an
-    // identifier; a leading digit or '-' makes `3.5`/`-0.25` a float literal,
-    // not a reference (the same judgment argref's unboundRefName makes).
-    if (std.mem.indexOf(u8, trimmed, ".")) |dot_pos| {
-        const binding_name = trimmed[0..dot_pos];
-        const field_name = trimmed[dot_pos + 1..];
-        if (!isWireIdent(binding_name)) return try allocator.dupe(u8, trimmed);
-
-        if (env.get(binding_name)) |bound_value| {
-            // Look up field in bound value
-            for (bound_value.fields) |fv| {
-                if (std.mem.eql(u8, fv.name, field_name)) {
-                    return try fieldValueToString(fv.value, allocator);
-                }
-            }
-            // Field not found — refuse loudly. A placeholder string passed
-            // off as data is the dishonest version of this error.
-            ctx.error_detail = std.fmt.allocPrint(allocator,
-                "'{s}.{s}' — the bound value '{s}' carries no field '{s}'",
-                .{ binding_name, field_name, binding_name, field_name }) catch null;
-            return error.FieldNotOnBoundValue;
-        }
-        ctx.error_detail = std.fmt.allocPrint(allocator,
-            "'{s}' is not bound — no earlier arm issued that name",
-            .{binding_name}) catch null;
-        return error.UnboundName;
-    }
-
-    // Simple binding reference
-    if (env.get(trimmed)) |bound_value| {
-        // Return the branch name or first field value
-        if (bound_value.fields.len > 0) {
-            return try fieldValueToString(bound_value.fields[0].value, allocator);
-        }
-        return bound_value.branch;
-    }
-
-    // Return as-is (number, boolean, etc.)
-    return try allocator.dupe(u8, trimmed);
 }
 
 /// Dispatcher results are borrowed memory: |zig procs hand back slices into
@@ -1503,6 +1478,7 @@ fn executeFlow(
         .handle_pool = active_pool,
         .scope_name = scope_name,
         .defined = defined,
+        .input_fn = input_fn,
         .host_dispatch = host_dispatch,
         .session_env = session_env,
         .unhandled_outcome = null,

@@ -1,0 +1,44 @@
+// Koru Standard Library: the `wiretext` part of runtime — wire grammar
+// text helpers: the chain-rule wording, the per-scope rules render, and
+// the line/column diagnostic the wire validator reports with. Joined via
+// `~part wiretext` in runtime.kz; merged into the runtime module at load.
+
+// `{s}` is the worked example `scope-grammar` derives from the scope's own
+// verbs; the binding it narrates is the `v` the derivation always uses.
+const WIRE_CHAIN_RULE_EXAMPLE =
+    \\- Chain fresh outcomes with arms: `{s}` — the arm's binding `v` is what the call just issued. Never invent one, never predict one: bind it.
+;
+
+const WIRE_CHAIN_RULE_NO_EXAMPLE =
+    \\- Chain fresh outcomes with arms — a `| branch name |>` arm binds `name` to what the call just issued. Never invent one, never predict one: bind it.
+;
+
+// The grammar's rules block as one scope-true render: the fixed shape
+// rules plus the chain rule carrying THIS scope's worked example.
+// `scope-grammar` emits it above the vocabulary lines.
+fn wireGrammarRules(allocator: std.mem.Allocator, m: ?*const ScopeManifest) []const u8 {
+    var out = std.ArrayList(u8).initCapacity(allocator, 768) catch unreachable;
+    out.appendSlice(allocator, WIRE_GRAMMAR_TEXT) catch unreachable;
+    out.append(allocator, '\n') catch unreachable;
+    if (m) |manifest| {
+        if (scopeChainExample(allocator, manifest)) |example| {
+            const line = std.fmt.allocPrint(allocator, WIRE_CHAIN_RULE_EXAMPLE, .{example}) catch unreachable;
+            out.appendSlice(allocator, line) catch unreachable;
+            return out.toOwnedSlice(allocator) catch unreachable;
+        }
+    }
+    out.appendSlice(allocator, WIRE_CHAIN_RULE_NO_EXAMPLE) catch unreachable;
+    return out.toOwnedSlice(allocator) catch unreachable;
+}
+
+fn wireLineColumn(s: []const u8, byte: usize) struct { line: u32, column: u32 } {
+    var line: u32 = 1;
+    var line_start: usize = 0;
+    for (s[0..@min(byte, s.len)], 0..) |c, j| {
+        if (c == '\n') {
+            line += 1;
+            line_start = j + 1;
+        }
+    }
+    return .{ .line = line, .column = @intCast(byte - line_start + 1) };
+}

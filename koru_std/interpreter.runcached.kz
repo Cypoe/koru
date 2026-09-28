@@ -5,7 +5,6 @@
 // `run-cached` reuses a parsed flow for identical source input — the same
 // contract as `run`, minus the parse.
 
-// Cached parse + execute (reuses parsed flow for identical source input)
 ~[retain]pub tor run-cached {
     source: string,
     dispatcher: DispatchFn,
@@ -123,6 +122,7 @@
         .handle_pool = active_pool,
         .scope_name = scope_name,
         .defined = defined,
+        .input_fn = input_fn,
         .host_dispatch = host_dispatch,
         .session_env = session_env,
         .unhandled_outcome = null,

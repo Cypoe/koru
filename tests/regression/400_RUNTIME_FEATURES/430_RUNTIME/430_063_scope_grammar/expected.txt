@@ -1,13 +1,14 @@
 A wire turn is one flow: verb(field: value, field: value) with `|` arms chaining what each call issues.
 - The verb is a bare name from your vocabulary — letters, digits, '-', '_' — immediately followed by '('.
 - A value is a double-quoted string (escape \" and \\ inside) or a bare literal: a number, true/false, or a name a `|` arm already bound.
+- A field typed `name<x>` takes only a bound name the session minted `<x!>` — an `rN` from an earlier verb or an arm binding, never literal text. `name<!x>` spends it.
 - A second invocation starts a second item: one invocation per line runs each in order with one line of report per step.
 - Prose is not wire — it binds as residue: "residue bound: rN — your reply was not wire; nothing reached the user" keeps YOUR reply at rN; nothing hears it until a verb takes it as an argument.
 - Chain fresh outcomes with arms: `open(path: "1") | ok v |> append(handle: v, text: "2")` — the arm's binding `v` is what the call just issued. Never invent one, never predict one: bind it.
 
 Your vocabulary:
-open(path: string)
-append(handle: string<!open>, text: string)
+open(path: string) -> <open!>
+append(handle: string<!open>, text: string) -> <open!>
 close(handle: string<!open>)
 say(text: string)
 NOT FOUND
