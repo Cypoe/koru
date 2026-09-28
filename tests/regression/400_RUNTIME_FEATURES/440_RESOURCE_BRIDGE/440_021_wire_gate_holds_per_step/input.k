@@ -1,13 +1,18 @@
 // Pins: the wire gate holds PER ITEM inside a multi-item turn — the same
-// shape rules a one-item turn is judged by. A bare value or a `when`
-// clause mid-turn is a `step N/M parse-error` line, never a silent run.
+// shape rules a one-item turn is judged by. An unknown field or a `when`
+// clause mid-turn is a `step N/M` refusal line, never a silent run.
 //
 // Before this pin the sequencing loop sent each item straight to
-// run_event and only single-item turns passed parse_wire: a bare
+// run_event and only single-item turns passed parse_wire: a bad
 // `count: 3` mid-turn dispatched, an unquoted unbound name became the
 // literal string of itself, and `when false` ran the verb with a mangled
 // argument. (kopium bridge-mirror rows: 2026-09-12-wire-gate-scope,
 // 2026-09-12-when-guards)
+//
+// `count: 3` is itself legal wire now — bare literals parse (430_066) —
+// so step 2's refusal is dispatch's: `echo` has no `count` field
+// (440_025). The refusal still lands per step; the layer that names it
+// moved from shape to membership.
 import std/io
 import std/bridge
 import std/runtime
@@ -31,6 +36,7 @@ gated = std/bridge:run(br, source: "echo(text: \"a\")\necho(count: 3)\necho(text
 | result r |> std/io:print.ln("FAIL result — a three-item turn is not a single result")
 | unhandled-branch ub |> std/io:print.ln("FAIL unhandled {{ ub.branch:s }}")
 | event-denied ev |> std/io:print.ln("FAIL denied {{ ev:s }}")
+| residue _ |> std/io:print.ln("FAIL: residue outcome")
 | parse-error p |> std/io:print.ln("FAIL turn-level parse {{ p.message:s }} — items refuse per step")
 | validation-error v |> std/io:print.ln("FAIL invalid {{ v:s }}")
 | shape-error sh |> std/io:print.ln("FAIL shape {{ sh.message:s }}")

@@ -1,0 +1,3 @@
+DISPATCH field 'a' expected i64, got 'five'
+DISPATCH field 'a' expected i64, got ''
+RESULT

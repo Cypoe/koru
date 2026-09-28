@@ -1,0 +1,14 @@
+RESIDUE residue bound: r1 — your reply was not wire; nothing reached the user
+I cannot delete files for you.
+RESULT bound=r2
+a
+step 1/2 result: {"branch":""} bound: r3
+step 2/2 residue bound: r4 — your reply was not wire; nothing reached the user
+
+let me apologize properly
+RESULT bound=r5
+PARSE after the value of 'text' comes ',' or ')' — text must be "double-quoted"; a bare word reads as a bound name
+RESIDUE residue bound: r6 — your reply was not wire; nothing reached the user
+first apology
+second apology
+RESULT bound=r7

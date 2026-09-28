@@ -4,12 +4,11 @@
 // `| ok h |>` puts `h` in scope inside that arm's subtree only — not
 // in a second item, not in a sibling arm.
 //
-// Two surfaces, one law. A top-level wire item's bare value is refused
-// by the wire parser itself ("no bare values" — item heads admit only
-// quoted literals); an arm body's bare identifier parses (arm bodies
-// are Koru fragments) and the flow's validation judges it: bound on
-// this arm path it resolves, unbound it is `validation-error` naming
-// the name.
+// Two surfaces, one law. Bare literals are legal wire everywhere
+// (430_066 — `count: 42` is a value, not a refusal), so an unbound
+// identifier reaches the flow's own judgment whether it stands at an
+// item head or inside an arm body: bound on this arm path it resolves,
+// unbound it is `validation-error` naming the name.
 //
 // The wire's own lesson — "Never invent one, never predict one: bind
 // it" — only teaches if inventing one is refused. An unbound `h`
@@ -49,6 +48,7 @@ turn1 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found t |> echo(text
 | result r |> std/io:print.ln("t1 result")
 | validation-error v |> std/io:print.ln("FAIL t1 invalid {{ v:s }}")
 | event-denied ev |> std/io:print.ln("FAIL t1 denied {{ ev:s }}")
+| residue _ |> std/io:print.ln("FAIL: residue outcome")
 | parse-error p |> std/io:print.ln("FAIL t1 parse {{ p.message:s }}")
 | unhandled-branch ub |> std/io:print.ln("FAIL t1 unhandled {{ ub.branch:s }}")
 | shape-error sh |> std/io:print.ln("FAIL t1 shape {{ sh.message:s }}")
@@ -66,6 +66,7 @@ turn2 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found h |> echo(text
 | result r |> std/io:print.ln("FAIL t2 result")
 | validation-error v |> std/io:print.ln("FAIL t2 invalid {{ v:s }}")
 | event-denied ev |> std/io:print.ln("FAIL t2 denied {{ ev:s }}")
+| residue _ |> std/io:print.ln("FAIL: residue outcome")
 | parse-error p |> std/io:print.ln("FAIL t2 parse {{ p.message:s }}")
 | unhandled-branch ub |> std/io:print.ln("FAIL t2 unhandled {{ ub.branch:s }}")
 | shape-error sh |> std/io:print.ln("FAIL t2 shape {{ sh.message:s }}")
@@ -82,6 +83,7 @@ turn3 = std/bridge:run(br, source: "echo(text: nope)")
 | result r |> std/io:print.ln("FAIL t3 result")
 | validation-error v |> std/io:print.ln("t3 refused {{ v:s }}")
 | event-denied ev |> std/io:print.ln("FAIL t3 denied {{ ev:s }}")
+| residue _ |> std/io:print.ln("FAIL: residue outcome")
 | parse-error p |> std/io:print.ln("t3 refused-parse {{ p.message:s }}")
 | unhandled-branch ub |> std/io:print.ln("FAIL t3 unhandled {{ ub.branch:s }}")
 | shape-error sh |> std/io:print.ln("FAIL t3 shape {{ sh.message:s }}")
@@ -98,6 +100,7 @@ turn4 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found t |> echo(text
 | result r |> std/io:print.ln("FAIL t4 result")
 | validation-error v |> std/io:print.ln("t4 refused {{ v:s }}")
 | event-denied ev |> std/io:print.ln("FAIL t4 denied {{ ev:s }}")
+| residue _ |> std/io:print.ln("FAIL: residue outcome")
 | parse-error p |> std/io:print.ln("FAIL t4 parse {{ p.message:s }}")
 | unhandled-branch ub |> std/io:print.ln("FAIL t4 unhandled {{ ub.branch:s }}")
 | shape-error sh |> std/io:print.ln("FAIL t4 shape {{ sh.message:s }}")
@@ -114,6 +117,7 @@ turn5 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found t |> echo(text
 | result r |> std/io:print.ln("FAIL t5 result")
 | validation-error v |> std/io:print.ln("t5 refused {{ v:s }}")
 | event-denied ev |> std/io:print.ln("FAIL t5 denied {{ ev:s }}")
+| residue _ |> std/io:print.ln("FAIL: residue outcome")
 | parse-error p |> std/io:print.ln("FAIL t5 parse {{ p.message:s }}")
 | unhandled-branch ub |> std/io:print.ln("FAIL t5 unhandled {{ ub.branch:s }}")
 | shape-error sh |> std/io:print.ln("FAIL t5 shape {{ sh.message:s }}")

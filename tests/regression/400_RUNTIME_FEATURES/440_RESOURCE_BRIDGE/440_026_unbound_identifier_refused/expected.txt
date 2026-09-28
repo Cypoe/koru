@@ -1,9 +1,9 @@
 echo: hit
 t1 result
 echo: one
-t2 partial step 1/2 result: {"branch":""}
-step 2/2 parse-error: the value of 'text' must be a double-quoted string — the wire has no bare values
+t2 partial step 1/2 result: {"branch":""} bound: r2
+step 2/2 validation-error: unbound 'h' on 'echo' — bind it with an arm (`| <branch> h |>`) or quote it for a literal
 
-t3 refused-parse the value of 'text' must be a double-quoted string — the wire has no bare values
+t3 refused unbound 'nope' on 'echo' — bind it with an arm (`| <branch> nope |>`) or quote it for a literal
 t4 refused unbound 't' on 'echo' — bind it with an arm (`| <branch> t |>`) or quote it for a literal
 t5 refused unbound 'h' on 'echo' — bind it with an arm (`| <branch> h |>`) or quote it for a literal

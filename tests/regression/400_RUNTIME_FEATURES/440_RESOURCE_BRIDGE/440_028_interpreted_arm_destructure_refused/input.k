@@ -29,6 +29,7 @@ std/runtime:register(scope: "api") {
 tor turn1 { br: *std/bridge:Bridge }
 turn1 = std/bridge:run(br, source: "risky()\n| missing v |> echo(text: v)")
 | result r |> std/io:print.ln("t1 result")
+| residue _ |> std/io:print.ln("FAIL: residue outcome")
 | parse-error p |> std/io:print.ln("FAIL t1 parse {{ p.message:s }}")
 | validation-error v |> std/io:print.ln("FAIL t1 invalid {{ v:s }}")
 | unhandled-branch ub |> std/io:print.ln("FAIL t1 unhandled {{ ub.branch:s }}")
@@ -45,6 +46,7 @@ turn1 = std/bridge:run(br, source: "risky()\n| missing v |> echo(text: v)")
 tor turn2 { br: *std/bridge:Bridge }
 turn2 = std/bridge:run(br, source: "risky()\n| missing { [row]v } |> echo(text: v)")
 | result r |> std/io:print.ln("FAIL t2 result")
+| residue _ |> std/io:print.ln("FAIL: residue outcome")
 | parse-error p |> std/io:print.ln("t2 refused {{ p.message:s }}")
 | validation-error v |> std/io:print.ln("t2 refused-invalid {{ v:s }}")
 | unhandled-branch ub |> std/io:print.ln("FAIL t2 unhandled {{ ub.branch:s }}")

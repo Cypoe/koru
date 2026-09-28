@@ -1,0 +1,20 @@
+RESULT bound=r1
+payload-7
+RESULT bound=r2
+7
+RESULT bound=r3
+RESULT bound=r4
+sara_doe_496
+RESULT bound=r5
+REFUSED unbound 'r9' on 'echo' — bind it with an arm (`| <branch> r9 |>`) or quote it for a literal
+produce()
+echo(text: string)
+vocabulary()
+grammar()
+bind(name:, value:)
+r1 {text, count}
+r5
+r3
+r2
+user {uid}
+r4
