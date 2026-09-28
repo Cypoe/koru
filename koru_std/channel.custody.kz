@@ -28,34 +28,6 @@ const CC = struct {
         return base;
     }
 
-    fn pathMatch(p: ast.DottedPath, mq: ?[]const u8, segs: []const []const u8) bool {
-        if (p.segments.len != segs.len) return false;
-        for (p.segments, segs) |a, b| {
-            if (!std.mem.eql(u8, a, b)) return false;
-        }
-        return std.mem.eql(u8, p.module_qualifier orelse "", mq orelse "");
-    }
-
-    fn findEventDecl(prog: *const ast.Program, mq: ?[]const u8, segs: []const []const u8) ?*const ast.EventDecl {
-        const W = struct {
-            fn scan(its: []const ast.Item, w_mq: ?[]const u8, w_segs: []const []const u8) ?*const ast.EventDecl {
-                for (its) |*pi| {
-                    switch (pi.*) {
-                        .event_decl => |*ed| {
-                            if (pathMatch(ed.path, w_mq, w_segs)) return ed;
-                        },
-                        .module_decl => |*md| {
-                            if (scan(md.items, w_mq, w_segs)) |hit| return hit;
-                        },
-                        else => {},
-                    }
-                }
-                return null;
-            }
-        };
-        return W.scan(prog.items, mq, segs);
-    }
-
     // The invocation in `flow`'s tree whose `return_binding` is `ident` —
     // `producer(...): ident |> ...`. The root node counts too.
     fn producerInv(flow: *const ast.Flow, ident: []const u8) ?*const ast.Invocation {
@@ -91,7 +63,7 @@ const CC = struct {
         if (!CH.identOk(ident)) return null;
         const prod = producerInv(flow, ident) orelse return null;
         if (prod.path.segments.len == 0) return null;
-        const decl = findEventDecl(prog, prod.path.module_qualifier orelse flow.module, prod.path.segments) orelse return null;
+        const decl = ast_functional.findEventDecl(prog, prod.path.module_qualifier orelse (ast_functional.moduleHome(prog, flow) orelse flow.module), prod.path.segments) orelse return null;
         const rp = decl.return_phantom orelse return null;
         return phantomStateName(rp);
     }
@@ -113,44 +85,12 @@ const CC = struct {
         return W.scan(flow.body.continuations, inv);
     }
 
-    // The REAL flow whose continuation tree holds `target` — the nested-site
-    // counterpart of siteView: the runner hands a transform a synthetic flow
-    // whose body IS the site, so a sent binding's producer (upstream in the
-    // containing flow) is only reachable by walking back out. `flow.site_of`
-    // is the back-pointer the view stamps; null on a root site.
-    fn flowContaining(prog: *const ast.Program, target: *const ast.Continuation) ?*const ast.Flow {
-        const W = struct {
-            fn holds(conts: []const ast.Continuation, t: *const ast.Continuation) bool {
-                for (conts) |*c| {
-                    if (c == t) return true;
-                    if (holds(c.continuations, t)) return true;
-                }
-                return false;
-            }
-            fn scan(its: []const ast.Item, t: *const ast.Continuation) ?*const ast.Flow {
-                for (its) |*pi| {
-                    switch (pi.*) {
-                        .flow => |*f| {
-                            if (holds(f.body.continuations, t)) return f;
-                        },
-                        .module_decl => |*md| {
-                            if (scan(md.items, t)) |hit| return hit;
-                        },
-                        else => {},
-                    }
-                }
-                return null;
-            }
-        };
-        return W.scan(prog.items, target);
-    }
-
     // Every `std/channel:send(<name>, ...)` site in the program, paired with
     // the flow holding it so the value's producer resolves in-scope.
     fn sendSites(alloc: std.mem.Allocator, prog: *const ast.Program, chan_name: []const u8) []const SendSite {
         const W = struct {
             fn hit(n: *const ast.Node, f: *const ast.Flow, name: []const u8, out: *std.ArrayList(SendSite), al: std.mem.Allocator) void {
-                if (n.* == .invocation and CH.isChannelInv(&n.invocation, "send") and CH.declSubject(&n.invocation, name)) {
+                if (n.* == .invocation and CHM.isChannelInv(&n.invocation, "send") and CH.declSubject(&n.invocation, name)) {
                     out.append(al, .{ .flow = f, .inv = &n.invocation }) catch unreachable;
                 }
             }
@@ -271,7 +211,7 @@ const CC = struct {
     // producer's `<!state>` under `| ok` (injected by the send transform);
     // `obligate` mints `<state!>` fresh at the consumer arm's head. The ring
     // carries bytes; these carry custody.
-    fn emitCustodyOps(alloc: std.mem.Allocator, flow: *const ast.Flow, chan_name: []const u8, kinds: []const CH.KindEntry, custody: []const ?[]const u8, appended: *std.ArrayList(ast.Item)) void {
+    fn emitCustodyOps(alloc: std.mem.Allocator, prog: *const ast.Program, flow: *const ast.Flow, chan_name: []const u8, kinds: []const CH.KindEntry, custody: []const ?[]const u8, appended: *std.ArrayList(ast.Item)) void {
         for (kinds, 0..) |k, ki| {
             const state = custody[ki] orelse continue;
             {
@@ -281,7 +221,7 @@ const CC = struct {
                     .type = alloc.dupe(u8, k.proto) catch unreachable,
                     .phantom = std.fmt.allocPrint(alloc, "!{s}", .{state}) catch unreachable,
                 };
-                CH.synthOp(alloc, flow, std.fmt.allocPrint(alloc, "__channel_take_{s}_{s}", .{ chan_name, k.name }) catch unreachable, tf, &.{}, null, null, "_ = value;", appended);
+                CH.synthOp(alloc, prog, flow, std.fmt.allocPrint(alloc, "__channel_take_{s}_{s}", .{ chan_name, k.name }) catch unreachable, tf, &.{}, null, null, "_ = value;", appended);
             }
             {
                 const of = alloc.alloc(ast.Field, 1) catch unreachable;
@@ -290,7 +230,7 @@ const CC = struct {
                     .type = alloc.dupe(u8, k.proto) catch unreachable,
                     .phantom = null,
                 };
-                CH.synthOp(alloc, flow, std.fmt.allocPrint(alloc, "__channel_obligate_{s}_{s}", .{ chan_name, k.name }) catch unreachable, of, &.{}, k.proto, std.fmt.allocPrint(alloc, "{s}!", .{state}) catch unreachable, "return p;", appended);
+                CH.synthOp(alloc, prog, flow, std.fmt.allocPrint(alloc, "__channel_obligate_{s}_{s}", .{ chan_name, k.name }) catch unreachable, of, &.{}, k.proto, std.fmt.allocPrint(alloc, "{s}!", .{state}) catch unreachable, "return p;", appended);
             }
         }
     }
@@ -326,7 +266,7 @@ const CC = struct {
                 obl_segs[0] = std.fmt.allocPrint(alloc, "__channel_obligate_{s}_{s}", .{ chan_name, arm.kind }) catch unreachable;
                 const obl_inv = ast.Invocation{
                     .path = ast.DottedPath{
-                        .module_qualifier = alloc.dupe(u8, flow.module) catch unreachable,
+                        .module_qualifier = alloc.dupe(u8, ast_functional.moduleHome(prog, flow) orelse flow.module) catch unreachable,
                         .segments = obl_segs,
                     },
                     .args = obl_args,
@@ -382,14 +322,15 @@ const CC = struct {
     // sent binding's producer lives upstream in the containing flow.
     fn takeNode(alloc: std.mem.Allocator, prog: *const ast.Program, flow: *const ast.Flow, chan_name: []const u8, kind_name: []const u8, sent_value: []const u8) ?ast.Node {
         const home: *const ast.Flow = if (flow.site_of) |h|
-            (flowContaining(prog, h) orelse flow)
+            (ast_functional.containingFlow(prog, h) orelse flow)
         else
             flow;
         _ = custodyOf(prog, home, sent_value) orelse return null;
         const take_name = std.fmt.allocPrint(alloc, "__channel_take_{s}_{s}", .{ chan_name, kind_name }) catch unreachable;
         const take_segs = alloc.alloc([]const u8, 1) catch unreachable;
         take_segs[0] = take_name;
-        if (findEventDecl(prog, flow.module, take_segs) == null) return null;
+        const take_home = CHM.chanHome(alloc, prog, chan_name) orelse flow.module;
+        if (ast_functional.findEventDecl(prog, take_home, take_segs) == null) return null;
         const ta = alloc.alloc(ast.Arg, 1) catch unreachable;
         ta[0] = ast.Arg{
             .name = alloc.dupe(u8, "value") catch unreachable,
@@ -398,7 +339,7 @@ const CC = struct {
         };
         return ast.Node{ .invocation = ast.Invocation{
             .path = ast.DottedPath{
-                .module_qualifier = alloc.dupe(u8, flow.module) catch unreachable,
+                .module_qualifier = alloc.dupe(u8, take_home) catch unreachable,
                 .segments = take_segs,
             },
             .args = ta,
@@ -419,7 +360,6 @@ const CC = struct {
         arm: *const ast.Continuation,
         input_fields: []const ast.Field,
     ) void {
-        const ast_functional = @import("ast_functional");
         const host_is_js = std.mem.eql(u8, CompilerEnv.lang, "js");
         const retain_ann = blk_ra: {
             const anns = allocator.alloc([]const u8, 1) catch unreachable;
@@ -427,7 +367,7 @@ const CC = struct {
             break :blk_ra anns;
         };
         appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-            .path = CH.mkPath(allocator, flow.module, unit_name),
+            .path = CH.mkPath(allocator, ast_functional.moduleHome(program, flow) orelse flow.module, unit_name),
             .input = ast.Shape{ .fields = input_fields },
             .branches = &[_]ast.Branch{},
             .return_type = null,
@@ -442,7 +382,7 @@ const CC = struct {
         const anode = aclone.node.?;
         if (anode == .inline_code) {
             appended.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                .path = CH.mkPath(allocator, flow.module, unit_name),
+                .path = CH.mkPath(allocator, ast_functional.moduleHome(program, flow) orelse flow.module, unit_name),
                 .body = ast.Source{ .text = anode.inline_code, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                 .annotations = &[_][]const u8{},
                 .target = allocator.dupe(u8, if (host_is_js) "js" else "zig") catch unreachable,
@@ -454,7 +394,7 @@ const CC = struct {
         appended.append(allocator, ast.Item{ .flow = ast.Flow{
             .body = ast.rootSite(anode.invocation, aclone.continuations, flow.location),
             .pre_label = null,
-            .impl_of = CH.mkPath(allocator, flow.module, unit_name),
+            .impl_of = CH.mkPath(allocator, ast_functional.moduleHome(program, flow) orelse flow.module, unit_name),
             .super_shape = null,
             .inline_body = anode.invocation.inline_body,
             .preamble_code = anode.invocation.preamble_code,

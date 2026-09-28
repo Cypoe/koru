@@ -30,6 +30,7 @@ koru_std/build.kz	586
 koru_std/ccp_aspirational.kz	108
 koru_std/ccp.kz	109
 koru_std/channel.custody.kz	467
+koru_std/channel.home.kz	54
 koru_std/channel.kz	1527
 koru_std/compiler_context.kz	253
 koru_std/compiler_types.kz	53
@@ -140,6 +141,7 @@ koru_std/refine.terminal.kz	85
 koru_std/regex.kz	471
 koru_std/regex.scan.kz	421
 koru_std/rings.kz	161
+koru_std/rings.home.kz	62
 koru_std/rings.new.kz	587
 koru_std/rings.ops.kz	148
 koru_std/rules.kz	691

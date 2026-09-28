@@ -2,7 +2,7 @@
 // itself: the `supervised` transform decl+proc and the generated-AST
 // constructors it builds the step tor and `#`/`@` fold from. Joined via
 // `~part fold` in supervisor.kz; merged into the supervisor module at load.
-// `std`/`ast`/`H` arrive at module scope from the other parts — local
+// `std`/`ast`/`H`/`functional` arrive at module scope from the other parts — local
 // imports here would shadow them.
 
 const F = struct {
@@ -271,25 +271,25 @@ const F = struct {
     }
     const child_inv = parent.node.?.invocation;
     const child_name = child_inv.path.segments[child_inv.path.segments.len - 1];
-    const child_module = child_inv.path.module_qualifier orelse flow.module;
+    // Parsed paths qualify through the import-derived logical name
+    // (`app.lib`); `flow.module` is the file-derived name (`lib`). Compare
+    // like spellings — the site's home resolved the same way, through the
+    // real containing flow (a nested site's `flow` is a view the tree scan
+    // cannot find; `site` points at the real continuation).
+    const real_flow = functional.containingFlow(program, site) orelse flow;
+    const site_home = functional.moduleHome(program, real_flow) orelse flow.module;
+    const child_module = child_inv.path.module_qualifier orelse site_home;
 
     // v1 scope: the child must live in the same module as the site.
-    if (!std.mem.eql(u8, child_module, flow.module)) {
+    if (!std.mem.eql(u8, child_module, site_home)) {
         return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: '{s}' lives in '{s}' — v1 supervises same-module children only", .{ child_name, child_module }) } };
     }
 
     // ---- 3. The child's declared outcome vocabulary ------------------------
-    var child_decl: ?*const ast.EventDecl = null;
-    for (program.items) |*pi| {
-        if (pi.* != .event_decl) continue;
-        const ed = &pi.event_decl;
-        if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], child_name) and
-            std.mem.eql(u8, ed.path.module_qualifier orelse "", child_module))
-        {
-            child_decl = ed;
-            break;
-        }
-    }
+    // Decls inside a module_decl qualify by the module's logical name, so
+    // the scan must descend — `app.lib:attempt` is invisible to a
+    // top-level-only walk (115_052).
+    const child_decl = functional.findEventDecl(program, child_module, &.{child_name});
     const decl = child_decl orelse {
         return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/supervisor:supervised: no event declaration found for '{s}'", .{child_name}) } };
     };
@@ -784,7 +784,7 @@ const F = struct {
             .binding = step_bind,
             .condition = null,
             .node = ast.Node{ .invocation = ast.Invocation{
-                .path = H.mkPath(allocator, flow.module, policy_name.?),
+                .path = H.mkPath(allocator, site_home, policy_name.?),
                 .args = policy_args.toOwnedSlice(allocator) catch unreachable,
                 .source_module = allocator.dupe(u8, flow.module) catch unreachable,
             } },
@@ -945,7 +945,7 @@ const F = struct {
         }
     }
     appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-        .path = H.mkPath(allocator, flow.module, step_name),
+        .path = H.mkPath(allocator, site_home, step_name),
         .input = ast.Shape{ .fields = step_inputs, .is_wildcard = decl.input.is_wildcard },
         .branches = step_branches,
         .is_public = false,
@@ -956,7 +956,7 @@ const F = struct {
     } }) catch unreachable;
     appended.append(allocator, ast.Item{ .flow = ast.Flow{
         .body = step_body,
-        .impl_of = H.mkPath(allocator, flow.module, step_name),
+        .impl_of = H.mkPath(allocator, site_home, step_name),
         .location = flow.location,
         .module = allocator.dupe(u8, flow.module) catch unreachable,
     } }) catch unreachable;
@@ -1071,7 +1071,7 @@ const F = struct {
             .node = ast.Node{ .label_with_invocation = .{
                 .label = label_name,
                 .invocation = ast.Invocation{
-                    .path = H.mkPath(allocator, flow.module, step_name),
+                    .path = H.mkPath(allocator, site_home, step_name),
                     .args = head_args.toOwnedSlice(allocator) catch unreachable,
                     .source_module = allocator.dupe(u8, flow.module) catch unreachable,
                 },

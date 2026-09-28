@@ -25,7 +25,6 @@ fn ringStep(
     reporter: anytype,
     verb: []const u8,
 ) ast.SiteResult {
-    const ast_functional = @import("ast_functional");
     // Args: the ring name is positional; the value is `v:`-labeled (the
     // std/list convention — a second bare positional names no parameter and
     // the pun law refuses it before transforms run).
@@ -89,7 +88,7 @@ fn ringStep(
     segs[0] = target;
     const call_inv = ast.Invocation{
         .path = ast.DottedPath{
-            .module_qualifier = allocator.dupe(u8, flow.module) catch unreachable,
+            .module_qualifier = allocator.dupe(u8, RH.ringHome(allocator, program, ring_name) orelse flow.module) catch unreachable,
             .segments = segs,
         },
         .args = call_args,

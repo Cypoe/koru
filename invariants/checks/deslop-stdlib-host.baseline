@@ -18,5 +18,8 @@
 # interpreter/bridge/runtime edits in the shared checkout — clean HEAD
 # measures exactly 1042. Re-pinned to measured per the uncommitted-work
 # clause; re-settles when that work commits.
-clusters=1045
-members=889
+clusters=1027
+members=891
+# 1027/891: module-home dedupe deleted five private copies of the
+# moduleHome/containingFlow walks (-18 clusters, the copies WERE clones);
+# +2 members are the new home parts' fns twinning existing shells.

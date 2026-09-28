@@ -804,6 +804,98 @@ pub fn removeAt(
     return rebuildProgram(allocator, source, new_items, new_annotations);
 }
 
+/// The logical name of the module_decl containing `flow`, or null when the
+/// flow sits at the program's top level. `flow.module` is the FILE-derived
+/// name (`lib`); cross-module paths resolve through the import-derived
+/// logical name (`app.lib`) — parsed decls carry it, so synthesized paths
+/// minted off `flow.module` land in a namespace nothing looks up
+/// (115_018/115_045 measured this for store and grid, 115_050–052 for
+/// channel, rings, pump and supervisor).
+pub fn moduleHome(prog: *const ast.Program, flow: *const ast.Flow) ?[]const u8 {
+    const W = struct {
+        fn scan(its: []const ast.Item, want: *const ast.Flow, enclosing: ?[]const u8) ?[]const u8 {
+            for (its) |*pi| {
+                switch (pi.*) {
+                    .flow => |*f| {
+                        if (f == want) return enclosing;
+                    },
+                    .module_decl => |*md| {
+                        if (scan(md.items, want, md.logical_name)) |hit| return hit;
+                    },
+                    else => {},
+                }
+            }
+            return null;
+        }
+    };
+    return W.scan(prog.items, flow, null);
+}
+
+/// The real flow whose continuation tree holds `target`. A nested transform
+/// site arrives as a view — `flow.body` is a copy, `site_of` the real
+/// continuation — so the view itself is never found by a tree scan;
+/// resolve through the continuation it mirrors.
+pub fn containingFlow(prog: *const ast.Program, target: *const ast.Continuation) ?*const ast.Flow {
+    const W = struct {
+        fn holds(conts: []const ast.Continuation, t: *const ast.Continuation) bool {
+            for (conts) |*c| {
+                if (c == t) return true;
+                if (holds(c.continuations, t)) return true;
+            }
+            return false;
+        }
+        fn scan(its: []const ast.Item, t: *const ast.Continuation) ?*const ast.Flow {
+            for (its) |*pi| {
+                switch (pi.*) {
+                    .flow => |*f| {
+                        if (&f.body == t or holds(f.body.continuations, t)) return f;
+                    },
+                    .module_decl => |*md| {
+                        if (scan(md.items, t)) |hit| return hit;
+                    },
+                    else => {},
+                }
+            }
+            return null;
+        }
+    };
+    return W.scan(prog.items, target);
+}
+
+/// Program-wide scan for an event_decl whose path matches qualifier +
+/// segments exactly (`null` qualifier matches a bare path). Recurses into
+/// module_decl items — generated units and module-side decls both count.
+pub fn findEventDecl(
+    prog: *const ast.Program,
+    qualifier: ?[]const u8,
+    segments: []const []const u8,
+) ?*const ast.EventDecl {
+    const W = struct {
+        fn match(p: ast.DottedPath, mq: ?[]const u8, segs: []const []const u8) bool {
+            if (p.segments.len != segs.len) return false;
+            for (p.segments, segs) |a, b| {
+                if (!std.mem.eql(u8, a, b)) return false;
+            }
+            return std.mem.eql(u8, p.module_qualifier orelse "", mq orelse "");
+        }
+        fn scan(its: []const ast.Item, mq: ?[]const u8, segs: []const []const u8) ?*const ast.EventDecl {
+            for (its) |*pi| {
+                switch (pi.*) {
+                    .event_decl => |*ed| {
+                        if (match(ed.path, mq, segs)) return ed;
+                    },
+                    .module_decl => |*md| {
+                        if (scan(md.items, mq, segs)) |hit| return hit;
+                    },
+                    else => {},
+                }
+            }
+            return null;
+        }
+    };
+    return W.scan(prog.items, qualifier, segments);
+}
+
 /// Find all items matching a predicate
 pub fn findAll(
     allocator: std.mem.Allocator,

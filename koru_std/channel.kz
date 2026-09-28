@@ -69,6 +69,7 @@ const ast = @import("ast");
 // this module's own import graph into every program that channels.
 ~import std/rings
 ~part custody
+~part home
 
 // ============================================================================
 // Helpers — pump.kz's PH and list.protos' field reader, restated: a module
@@ -177,7 +178,7 @@ const CH = struct {
                             if (f.body.node) |*n| {
                                 if (n.* == .invocation) {
                                     const inv = &n.invocation;
-                                    if (isChannelInv(inv, "new") and declSubject(inv, want)) return f;
+                                    if (CHM.isChannelInv(inv, "new") and declSubject(inv, want)) return f;
                                 }
                             }
                         },
@@ -191,17 +192,6 @@ const CH = struct {
             }
         };
         return W.scan(prog.items, name);
-    }
-
-    fn isChannelModule(mq: []const u8) bool {
-        return std.mem.eql(u8, mq, "std.channel") or std.mem.eql(u8, mq, "std/channel");
-    }
-
-    fn isChannelInv(inv: *const ast.Invocation, verb: []const u8) bool {
-        if (inv.path.segments.len != 1) return false;
-        if (!std.mem.eql(u8, inv.path.segments[0], verb)) return false;
-        const mq = inv.path.module_qualifier orelse return false;
-        return isChannelModule(mq);
     }
 
     // The channel name a `new`/`consume` invocation declares — the `expr`
@@ -482,6 +472,7 @@ const CH = struct {
     // A generated tor + `|zig` proc — list.free.kz's synthOp, restated.
     fn synthOp(
         allocator: std.mem.Allocator,
+        prog: *const ast.Program,
         flow: *const ast.Flow,
         name: []const u8,
         input_fields: []const ast.Field,
@@ -496,7 +487,7 @@ const CH = struct {
             anns[0] = allocator.dupe(u8, "retain") catch unreachable;
             break :blk_ra anns;
         };
-        const path = mkPath(allocator, flow.module, name);
+        const path = mkPath(allocator, ast_functional.moduleHome(prog, flow) orelse flow.module, name);
         appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
             .path = path,
             .input = ast.Shape{ .fields = input_fields },
@@ -614,7 +605,7 @@ const CH = struct {
                             if (f.body.node) |*n| {
                                 if (n.* == .invocation) {
                                     const inv = &n.invocation;
-                                    if (isChannelInv(inv, "consume") and declSubject(inv, want)) {
+                                    if (CHM.isChannelInv(inv, "consume") and declSubject(inv, want)) {
                                         out_.append(al, f) catch unreachable;
                                     }
                                 }
@@ -891,12 +882,12 @@ const CH = struct {
             "if ({s}.load(.acquire)) return .closed;\nif ({s}.tryEnqueue(value)) return .ok;\nreturn .full;",
             .{ closed_flag, ring },
         ) catch unreachable;
-        CH.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "__channel_send_{s}_{s}", .{ chan_name, k.name }) catch unreachable, in, brs, null, null, body, &appended);
+        CH.synthOp(allocator, program, flow, std.fmt.allocPrint(allocator, "__channel_send_{s}_{s}", .{ chan_name, k.name }) catch unreachable, in, brs, null, null, body, &appended);
     }
 
     // ---- Custody transit ops per custodial kind (channel.custody.kz):
     // `take` consumes under `| ok`; `obligate` mints at the consumer arm. ----
-    CC.emitCustodyOps(allocator, flow, chan_name, kinds.items, custody, &appended);
+    CC.emitCustodyOps(allocator, program, flow, chan_name, kinds.items, custody, &appended);
 
     // ---- `__channel_recv_<n>` {} | some Proto | none | closed — the
     // imperative take; single-kind only (a multi-kind channel can't spell
@@ -916,7 +907,7 @@ const CH = struct {
             "if ({s}.tryDequeue()) |__v| return .{{ .some = __v }};\nif ({s}.load(.acquire)) return .closed;\nreturn .none;",
             .{ ring, closed_flag },
         ) catch unreachable;
-        CH.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "__channel_recv_{s}", .{chan_name}) catch unreachable, &.{}, brs, null, null, body, &appended);
+        CH.synthOp(allocator, program, flow, std.fmt.allocPrint(allocator, "__channel_recv_{s}", .{chan_name}) catch unreachable, &.{}, brs, null, null, body, &appended);
     }
 
     // ---- `__channel_close_<n>` {} | ok — sets the bit, then fires every
@@ -930,7 +921,7 @@ const CH = struct {
             cb.appendSlice(allocator, std.fmt.allocPrint(allocator, "__channel_{s}_closed_{d}_event.handler(.{{}});\n", .{ chan_name, ci }) catch unreachable) catch unreachable;
         }
         cb.appendSlice(allocator, "return .ok;") catch unreachable;
-        CH.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "__channel_close_{s}", .{chan_name}) catch unreachable, &.{}, brs, null, null, cb.toOwnedSlice(allocator) catch unreachable, &appended);
+        CH.synthOp(allocator, program, flow, std.fmt.allocPrint(allocator, "__channel_close_{s}", .{chan_name}) catch unreachable, &.{}, brs, null, null, cb.toOwnedSlice(allocator) catch unreachable, &appended);
     }
 
     // ---- The `!` arms as generated units — kind arms carry the message,
@@ -957,7 +948,7 @@ const CH = struct {
             ) catch unreachable) catch unreachable;
         }
         sb.appendSlice(allocator, "return __moved;") catch unreachable;
-        CH.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "{s}-step", .{chan_name}) catch unreachable, &.{}, &.{}, "i32", null, sb.toOwnedSlice(allocator) catch unreachable, &appended);
+        CH.synthOp(allocator, program, flow, std.fmt.allocPrint(allocator, "{s}-step", .{chan_name}) catch unreachable, &.{}, &.{}, "i32", null, sb.toOwnedSlice(allocator) catch unreachable, &appended);
     }
     {
         var sb = std.ArrayList(u8).initCapacity(allocator, 96 + kinds.items.len * 80) catch unreachable;
@@ -974,7 +965,7 @@ const CH = struct {
             sb.appendSlice(allocator, std.fmt.allocPrint(allocator, " and __drained_{d}", .{i}) catch unreachable) catch unreachable;
         }
         sb.appendSlice(allocator, ") 0 else 1;") catch unreachable;
-        CH.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "{s}-live", .{chan_name}) catch unreachable, &.{}, &.{}, "i64", null, sb.toOwnedSlice(allocator) catch unreachable, &appended);
+        CH.synthOp(allocator, program, flow, std.fmt.allocPrint(allocator, "{s}-live", .{chan_name}) catch unreachable, &.{}, &.{}, "i64", null, sb.toOwnedSlice(allocator) catch unreachable, &appended);
     }
     {
         const wf = allocator.alloc(ast.Field, 1) catch unreachable;
@@ -983,7 +974,7 @@ const CH = struct {
             .type = allocator.dupe(u8, "i64") catch unreachable,
             .phantom = null,
         };
-        CH.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "{s}-wait", .{chan_name}) catch unreachable, wf, &.{}, "i128", null, "_ = i;\nreturn 1_000_000;", &appended);
+        CH.synthOp(allocator, program, flow, std.fmt.allocPrint(allocator, "{s}-wait", .{chan_name}) catch unreachable, wf, &.{}, "i128", null, "_ = i;\nreturn 1_000_000;", &appended);
     }
 
     const marker = std.fmt.allocPrint(allocator, "// std/channel: '{s}' declared ({d} kinds, cap {d}; {d} consumers, {d} close arms)", .{ chan_name, kinds.items.len, capacity, kind_arms.items.len, closed_arms.items.len }) catch unreachable;
@@ -1011,7 +1002,7 @@ const CH = struct {
 } -> SiteResult
 
 ~[transform]proc default|zig {
-    const ast_functional = @import("ast_functional");
+
     if (item.* != .flow) @panic("channel:default transform: containing item is not a flow - walker dispatch contract broken");
     const flow = &item.flow;
 
@@ -1237,7 +1228,7 @@ const CH = struct {
                     switch (pi.*) {
                         .flow => |*f| {
                             if (f.body.node) |*n| {
-                                if (n.* == .invocation and CH.isChannelInv(&n.invocation, "new")) {
+                                if (n.* == .invocation and CHM.isChannelInv(&n.invocation, "new")) {
                                     for (n.invocation.args) |a| {
                                         if (std.mem.eql(u8, a.name, "expr")) {
                                             out.append(al, CH.stripQuotes(a.value)) catch unreachable;
@@ -1321,7 +1312,7 @@ fn chanStep(
     reporter: anytype,
     verb: []const u8,
 ) ast.SiteResult {
-    const ast_functional = @import("ast_functional");
+
     // Positional args in order: the channel name, then (send only, single
     // kind) the bare value. Labeled args name a kind: `send(inbox, kind: v)`.
     var chan_name: []const u8 = "";
@@ -1424,7 +1415,7 @@ fn chanStep(
     segs[0] = target;
     const call_inv = ast.Invocation{
         .path = ast.DottedPath{
-            .module_qualifier = allocator.dupe(u8, flow.module) catch unreachable,
+            .module_qualifier = allocator.dupe(u8, CHM.chanHome(allocator, program, chan_name) orelse flow.module) catch unreachable,
             .segments = segs,
         },
         .args = call_args,

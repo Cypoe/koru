@@ -117,3 +117,18 @@ switch is a placement decision, not a no-op.
   again; the flow already knows the file it came from. The `330_134` fix grew
   the count — `impl_module` is yet another parameter threaded where the found
   key already knew the answer.
+
+Measured again, 2026-10-09 — same anchor, new organ, five more sites.
+`std/channel`, `std/rings`, `std/pump` and `std/supervisor` each minted
+synthesized `module_qualifier`s off `flow.module` (the file-derived name)
+while every parsed decl carries the import-derived logical name — 115_050
+through 115_053 read `unknown tor 'lib:__channel_recv_inbox'` /
+`'lib:__ring_feed_enqueue'` / `'lib:__pump_run_main'`, the kernel-init fault
+verbatim, one stdlib organ over. And each module had grown its own private
+copy of the walk that derives the logical name, plus the containing-flow
+walk a site *view* needs (the runner hands a transform a synthetic flow;
+`site_of` is the only path back to the real tree). Five copies of one
+belief is the parameter-threaded shape this frag already flags — the walks
+now live once in `src/ast_functional.zig` (`moduleHome`, `containingFlow`,
+`findEventDecl`), and `.module` fields keep `flow.module` because that is
+the emitter's routing key, not a name anybody resolves.

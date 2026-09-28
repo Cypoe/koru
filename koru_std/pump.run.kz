@@ -94,7 +94,7 @@
         .kind = .effect,
     };
     appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-        .path = PH.mkPath(allocator, flow.module, run_name),
+        .path = PH.mkPath(allocator, ast_functional.moduleHome(program, flow) orelse flow.module, run_name),
         .input = ast.Shape{ .fields = &[_]ast.Field{} },
         .branches = run_branches,
         .is_public = false,
@@ -104,7 +104,7 @@
         .module = allocator.dupe(u8, flow.module) catch unreachable,
     } }) catch unreachable;
 
-    const q = PH.eventQual(allocator, flow.module, program.main_module_name);
+    const q = PH.eventQual(allocator, ast_functional.moduleHome(program, flow) orelse flow.module, program.main_module_name);
     var rb = std.ArrayList(u8).initCapacity(allocator, 256 + joins.items.len * 128) catch unreachable;
     if (host_is_js) {
         if (any_retire) {
@@ -206,7 +206,7 @@
         rb.appendSlice(allocator, "return;\n") catch unreachable;
     }
     appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-        .path = PH.mkPath(allocator, flow.module, run_name),
+        .path = PH.mkPath(allocator, ast_functional.moduleHome(program, flow) orelse flow.module, run_name),
         .body = ast.Source{ .text = rb.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
         .annotations = retain_ann,
         .target = allocator.dupe(u8, proc_target) catch unreachable,
@@ -215,7 +215,7 @@
     } }) catch unreachable;
 
     // Rewrite the site to the generated loop call, carrying the `! idle` arm.
-    const call_inv = ast.Invocation{ .path = PH.mkPath(allocator, flow.module, run_name), .args = &[_]ast.Arg{} };
+    const call_inv = ast.Invocation{ .path = PH.mkPath(allocator, ast_functional.moduleHome(program, flow) orelse flow.module, run_name), .args = &[_]ast.Arg{} };
     const conts: []ast.Continuation = blk: {
         const cloned = allocator.alloc(ast.Continuation, flow.body.continuations.len) catch unreachable;
         for (flow.body.continuations, 0..) |*c, i| {

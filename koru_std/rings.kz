@@ -39,7 +39,6 @@
 
 const std = @import("std");
 const ast = @import("ast");
-
 // ============================================================================
 // RING BUFFER IMPLEMENTATION (Vyukov's bounded MPMC queue)
 // ============================================================================
@@ -159,3 +158,4 @@ pub fn MpmcRing(comptime T: type, comptime capacity: usize) type {
 
 ~part new
 ~part ops
+~part home

@@ -1,8 +1,8 @@
 # Pin: tools/deslop_kz.py over koru_std at --min-nodes=32, measured
 # 2026-10-13. The stdlib is the definitional layer — 45 spellings in
 # use, a tight corpus. Keys are ceilings; see the sibling baselines.
-clusters=73
-members=118
+clusters=75
+members=123
 skipped=2
 spellings=45
 # 70/111: store.keyed.kz joined io.blk-style import preamble clone w/ interpreter.select.kz (3 shared compiler-module imports, boilerplate)
@@ -18,3 +18,7 @@ spellings=45
 # parts' decl shells — interpreter.runcached's tor decl twins run's by
 # contract, bridge.session's import preamble joins kernel.fpga's cluster.
 # Same category as the pump shells: decl-pair protocols, not folded slop.
+# 75/123: module-home dedupe split channel.home/rings.home out of
+# channel.kz/rings.new.kz; their import preambles join the existing
+# preamble clusters (interpreter.arms, supervisor.decl) and the
+# channel/rings event_decl shells twin by transform protocol.

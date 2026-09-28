@@ -135,18 +135,6 @@ const R = struct {
     // The live `std/proto(Name)`/`std/types:proto(Name)` decl flow (source
     // arg text) or the erased `// proto Name: f: t, g: u` marker.
 
-    fn declEntryName(inv: *const ast.Invocation) []const u8 {
-        if (inv.args.len == 0) return "";
-        const a0 = inv.args[0];
-        if (isLabelled(a0)) {
-            const label = std.mem.trim(u8, a0.name, " \t");
-            if (std.mem.endsWith(u8, label, "<"))
-                return std.mem.trim(u8, label[0 .. label.len - 1], " \t");
-            return label;
-        }
-        return stripQuotes(a0.value);
-    }
-
     fn isProtoDoor(inv: *const ast.Invocation) bool {
         if (inv.path.segments.len != 1) return false;
         const verb = inv.path.segments[0];
@@ -167,7 +155,7 @@ const R = struct {
                             if (f.body.node) |*n| {
                                 if (n.* == .invocation and isProtoDoor(&n.invocation)) {
                                     const inv = &n.invocation;
-                                    if (std.mem.eql(u8, declEntryName(inv), want)) {
+                                    if (std.mem.eql(u8, RH.declEntryName(inv), want)) {
                                         for (inv.args) |a| {
                                             if (a.source_value) |sv| return sv.text;
                                         }
@@ -296,6 +284,7 @@ const R = struct {
 
     fn synthOp(
         allocator: std.mem.Allocator,
+        prog: *const ast.Program,
         flow: *const ast.Flow,
         name: []const u8,
         input_fields: []const ast.Field,
@@ -309,7 +298,7 @@ const R = struct {
             anns[0] = allocator.dupe(u8, "retain") catch unreachable;
             break :blk_ra anns;
         };
-        const path = mkPath(allocator, flow.module, name);
+        const path = mkPath(allocator, ast_functional.moduleHome(prog, flow) orelse flow.module, name);
         appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
             .path = path,
             .input = ast.Shape{ .fields = input_fields },
@@ -401,7 +390,6 @@ const R = struct {
     if (item.* != .flow) @panic("rings:new transform: containing item is not a flow - walker dispatch contract broken");
     const flow = &item.flow;
     const struct_literal = @import("struct_literal");
-    const ast_functional = @import("ast_functional");
 
     if (std.mem.eql(u8, CompilerEnv.lang, "js")) {
         return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/rings: rings are a native-runtime construct this rung — the Vyukov ring and its atomics have no JS lowering yet", .{}) } };
@@ -563,7 +551,7 @@ const R = struct {
             "if (__koru_ring_{s}.tryEnqueue(value)) return .ok;\nreturn .full;",
             .{ring_name},
         ) catch unreachable;
-        R.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "__ring_{s}_enqueue", .{ring_name}) catch unreachable, in, brs, null, body, &appended);
+        R.synthOp(allocator, program, flow, std.fmt.allocPrint(allocator, "__ring_{s}_enqueue", .{ring_name}) catch unreachable, in, brs, null, body, &appended);
     }
 
     // ---- `__ring_<n>_dequeue` {} | some Elem | none ----
@@ -575,7 +563,7 @@ const R = struct {
             "if (__koru_ring_{s}.tryDequeue()) |__v| return .{{ .some = __v }};\nreturn .none;",
             .{ring_name},
         ) catch unreachable;
-        R.synthOp(allocator, flow, std.fmt.allocPrint(allocator, "__ring_{s}_dequeue", .{ring_name}) catch unreachable, &.{}, brs, null, body, &appended);
+        R.synthOp(allocator, program, flow, std.fmt.allocPrint(allocator, "__ring_{s}_dequeue", .{ring_name}) catch unreachable, &.{}, brs, null, body, &appended);
     }
 
     const marker = std.fmt.allocPrint(allocator, "// std/rings: '{s}' declared ({s}: {s}, cap {d})", .{ ring_name, elem_label, elem_type, capacity }) catch unreachable;
