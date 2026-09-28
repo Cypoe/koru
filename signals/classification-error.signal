@@ -1,0 +1,13 @@
+name: classification-error
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a triage ranking was applied to the wrong axis — the corpus's top
+  codes by raw rows included pin-authoring probes (agents *writing* refusal
+  tests) counted as organic pain, and a high-firing umbrella contract code
+  (KORU161) ranked as "message fails to teach" while most of its sites
+  already taught. Declares that intent and kind must split a family before
+  the fix-vs-teach ranking runs. First measured instance: KORU161, ~30 of
+  ~128 systemic rows kind:pin; teach-miss, not count, decided DIAG vs DOC.
+route: surface
