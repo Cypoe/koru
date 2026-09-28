@@ -1,12 +1,10 @@
 // Koru Standard Library: Reactive Stores — query miss classification.
 // Joined via `~part qmiss` in store.kz; merged into the store module at load.
 //
-// "Unknown plural store" was one refusal conflating three distinct misses —
-// a name nobody declared, a query that precedes its store's create in
-// source, and a capacity-1 value store (not plural: a different shape with
-// a different read spelling). Measured systemic corpus rows put query() on
-// a value store among KORU161's top sub-families, each told the store was
-// "unknown" when it was declared one tier down. The markers mirror
+// "Unknown plural store" was one refusal conflating distinct misses — a name
+// nobody declared, a query that precedes its store's create in source, a
+// capacity-1 value store, and declared-as-another-kind names (a tor, a store
+// view) — the last family lives in the `qmisskind` part. The markers mirror
 // stored.kz/watch.kz: `__store_write_<s>` is the value tier's coordinated
 // write tor, and a still-untransformed `std/store:new` flow is a create
 // sitting BELOW this query — a create that already ran lowered to
@@ -43,6 +41,6 @@ const QueryMiss = struct {
             }
         }
         if (later_create) return ast.refuse(alloc, rep, .KORU161, flow.location, flow.module, "std/store:query({s}): the query precedes its store's create in source - declare the store first (rung-one ordering)", .{store_name});
-        return ast.refuse(alloc, rep, .KORU161, flow.location, flow.module, "std/store:query({s}): unknown plural store - no std/store:new({s}, capacity: N) found (query reads a plural container's live rows)", .{ store_name, store_name });
+        return QueryMissKind.refuseTail(alloc, rep, prog, flow, store_name);
     }
 };

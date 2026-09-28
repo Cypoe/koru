@@ -942,11 +942,10 @@ fn storeRefsText(alloc: std.mem.Allocator, text: []const u8, name: []const u8, p
     return out.toOwnedSlice(alloc) catch unreachable;
 }
 /// A text slot, FULLY lowered: cell paths first, then indexed reads — the order
-/// `stored`'s value pass has always used, so a cross-store index inside an
-/// indexed read is already a cell path by the time the indexed pass reads it.
+/// `stored`'s value pass uses, so a cross-store index inside an indexed read is a cell path already.
 /// `bound` are names an enclosing binding shadows (a row binding makes
-/// `<store>.<field>` mean THE ROW); they are skipped by BOTH passes, which is
-/// why the indexed pass takes a filtered scope rather than the whole program.
+/// `<store>.<field>` mean THE ROW); BOTH passes skip them — the indexed
+/// pass takes a filtered scope.
 /// The one function a walk calls per text slot. Every position an expression
 /// may stand in — guard, arg, captured expression, frozen template body,
 /// inline_code node, produce arm, branch payload — is the same lowering, and
@@ -996,6 +995,7 @@ fn storeLowerText(
 ~part idecls
 ~part qnone
 ~part qmiss
+~part qmisskind
 ~part gate
 ~part bulk
 ~part bulkemit

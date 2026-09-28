@@ -1,0 +1,5 @@
+CONTAINS error[KORU161]
+CONTAINS 'phase' is a tor, not a store
+CONTAINS Call 'phase' for its value
+CONTAINS capacity: N
+NOT_CONTAINS unknown plural store

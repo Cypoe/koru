@@ -182,7 +182,8 @@ koru_std/store.plan.kz	236
 koru_std/store.preorder.kz	103
 koru_std/store.pverbs.kz	713
 koru_std/store.qcaps.kz	370
-koru_std/store.qmiss.kz	48
+koru_std/store.qmiss.kz	46
+koru_std/store.qmisskind.kz	58
 koru_std/store.qnone.kz	129
 koru_std/store.qrewrite.kz	229
 koru_std/store.query.kz	857

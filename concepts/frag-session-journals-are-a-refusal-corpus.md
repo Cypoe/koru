@@ -1,7 +1,7 @@
 ---
 type: belief
 id: frag-session-journals-are-a-refusal-corpus
-provenance: 2026-09-28 side session mined sessions.db while a parallel session built wartrain in koru; corpus-first triage produced two verified bug pins the same day; evolved same day — corpus rescoped to invocation and provenance-tagged; evolved again — KORU010's 345 rows proved ~95% cascade, teaching that bursts not rows rank a family; evolved again — KORU161 triage showed a high-firing contract code can be teaching already, and a `kind` axis separates pin-authoring probes from organic pain
+provenance: 2026-09-28 side session mined sessions.db while a parallel session built wartrain in koru; corpus-first triage produced two verified bug pins the same day; evolved same day — corpus rescoped to invocation and provenance-tagged; evolved again — KORU010's 345 rows proved ~95% cascade, teaching that bursts not rows rank a family; evolved again — KORU161 triage showed a high-firing contract code can be teaching already, and a `kind` axis separates pin-authoring probes from organic pain; evolved again — the tier-conflation gap the corpus named closed (qmisskind part, 690_355): a refusal's noun is a claim, and 'unknown' said of a declared name manufactures a wrong model
 ts: 2026-09-28
 ---
 
@@ -46,6 +46,15 @@ an "unknown plural store." Intent matters as much as count: `kind` separates
 probes from pain, and a code that fires because the contract is *being
 enforced* is the system working — the teach-miss axis, not the row count,
 decides whether the fix is DIAG or DOC.
+
+The same conflation ran one layer up, and closed the same day: the classifier
+called *any* name without a `std/store:new` "unknown" — including names that
+were declared as a tor or a store view. **A refusal's noun is a claim**: when
+the message says "unknown plural store," the agent learns the name is wrong;
+when the name was a tor all along, the refusal manufactures a wrong model.
+The fix names the kind (`qmisskind` part, pinned 690_355): a tor is called,
+a view is a projection, a value store reads field-wise — each miss now teaches
+its own tier's spelling. The corpus predicted the split before it was written.
 
 The belief that replaces: "we learn what the language gets wrong by thinking
 about it." No — the telemetry exists and was never read back. A transcript's
