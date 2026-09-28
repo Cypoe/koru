@@ -12,14 +12,14 @@ koru has been quietly logging its own compiler refusals, verbatim, with the
 offending source line attached. One query turned it into a corpus:*
 
 ```
-1,843 diagnostics · 48 sessions · 4 repos
-KORU010 stray continuation        337  (69 teach-miss — the agent guessed)
-PARSE006 label required           235  ( 0 teach-miss — taught, fought anyway)
-KORU161 store semantics           207  (33 teach-miss — invented wrong models)
-PARSE003 chain grammar            135
-KORU022/021 branch coverage       166
-KORU030 phantom state             116
-PARSE005 label forbidden (pun)     60
+2,081 diagnostics · 52 sessions · 5 repos (systemic view: 1,523 · 50)
+KORU010 stray continuation        369  (71 teach-miss — the agent guessed)
+PARSE006 label required           280  ( 0 teach-miss — taught, fought anyway)
+KORU161 store semantics           232  (33 teach-miss — invented wrong models)
+PARSE003 chain grammar            172
+KORU022/021 branch coverage       177
+KORU030 phantom state             119
+PARSE005 label forbidden (pun)     85
 ```
 
 *Two grammar decisions — line-oriented chains and the label↔pun seesaw — carry
@@ -42,19 +42,30 @@ The corpus lives at `friction/` in this repo. Start there:
 ```
 python3 friction/friction.py scan          # rebuild from sessions.db
 python3 friction/friction.py hist          # code × frequency × teach-miss
+python3 friction/friction.py hist --without org:COCPORN,repo:ogun  # systemic view
 python3 friction/friction.py lookup KORU161  # every occurrence + the fix that followed
 python3 friction/friction.py pitfalls      # ranked digest
+python3 friction/friction.py report        # regenerate corpus.md
 python3 friction/timing.py               # refusal episodes → time-to-green per code
 ```
 
+Corpus membership is **invocation-scoped** — a row counts when the call ran
+`koruc`/`run_regression` or the cwd is koru-family, so compiles fired from
+`the-man`, `/tmp`, or `korulang_org` all land. Every row carries `repo`,
+`org`, `via`, `session`, `cwd` — filter, don't delete. **Work the systemic
+view** (`--without org:COCPORN,repo:ogun`): a greenfield game's refusals
+measure a confused newcomer, not the language. Under it, KORU010 is still #1
+(345, 71 teach-miss) but KORU161 is 126 not 207 and PARSE006 55 not 235 —
+half the old headline numbers were one game session.
+
 `corpus.json` holds every row: diagnostic, `file:line`, the offending source,
 the agent's next action, and a teach-miss flag (the agent's follow-up was a
-guess or a wrong model rather than a rule). `corpus-timing.json` holds 179
+guess or a wrong model rather than a rule). `corpus-timing.json` holds 213
 resolved refusal **episodes** (a run of erroring `koruc` calls ended by a
 clean compile) with wall-clock dwell: overall median 0.5 min, but the tail is
 the finding — one KORU010/KORU030 episode burned 42.5 min, KORU161's worst was
 9.4 min across 5 failed compiles, KORU104's median episode is 4.3 min with a
-12-fail single episode. Episode dwell attributes the whole burst's duration to
+12-fail single episode, KORU037's mean is 17.3 min on 3 episodes. Episode dwell attributes the whole burst's duration to
 each code in it — co-occurring codes share credit, so read per-code dwell as
 directional and episode rows as the truth.
 
@@ -95,11 +106,16 @@ sections — not a hand-edited markdown file that will rot.
 
 ## Known-open items (measured 2026-09-28, re-verify first)
 
-- `PARSE006` hint always names the first parameter (pinned red `100_087`).
-- `// comment` inside a `std/store:new` schema block corrupts emission
-  (pinned red `690_353`).
+- ~~`PARSE006` hint always names the first parameter~~ — **fixed** (`2b996acb7`,
+  pin `100_087` green). Kept as the frame's proof it works.
+- ~~`// comment` inside a `std/store:new` schema block corrupts emission~~ —
+  **fixed** (same commit, `struct_literal.zig::splitFields` strips line
+  comments; pin `690_353` green).
+- `KORU010` "stray continuation" — the systemic #1: 345 rows, 71 teach-miss,
+  ≥3 distinct causes under one message; worst episode 42.5 min.
 - `KORU161` never says what the queried name *is* or which spelling applies —
   `std/store(name) ! field` (watch) vs `query` (plural sweep) vs `first`.
+  126 systemic rows, median dwell 1.3 min — the slowest common refusal.
 - `KORU021` leaks `std.io:print.impl` internals into user-facing errors.
 - DESIGN questions raised and not ruled: guarded multi-arm `! query` sweeps;
   calls in argument position (could be a lowering); the label↔pun seesaw;

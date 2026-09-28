@@ -5,27 +5,48 @@ An episode = a run of consecutive koruc calls whose output contains error[
 terminated by a clean compile (or session end). Duration is wall-clock from
 the first refusal to the terminating success — includes agent think time and
 human idle, so report medians and compile counts alongside.
+
+Scope: every session whose tool calls invoked koru tooling (`koruc`,
+`run_regression`) — any cwd. Filters match friction.py: `--without tok,...`
+drops episodes whose repo/org/cwd/session matches (org:NAME repo:NAME
+sess:NAME cwd:SUBSTR; bare token = repo substring).
 """
-import sqlite3, json, re, collections, statistics
+import sqlite3, json, re, collections, statistics, sys, os
 from datetime import datetime
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from friction import call_cmd, repo_of, org_of, _match
+
 DB = "/Users/larsde/.local/share/devin/cli/sessions.db"
-FAM = ("%koru%", "%kodot%", "%ogun%", "%orisha%", "%armored%", "%wartrain%", "%kopium%")
+
+without, only = [], []
+args = sys.argv[1:]
+i = 0
+while i < len(args):
+    if args[i] == "--without": without += args[i + 1].split(","); i += 2
+    elif args[i] == "--only": only += args[i + 1].split(","); i += 2
+    else: i += 1
+
+def keep_episode(ep):
+    row = {"repo": ep["repo"], "org": ep["org"],
+           "session": ep["session"], "cwd": ep["cwd"]}
+    if only and not any(_match(row, t) for t in only): return False
+    if without and any(_match(row, t) for t in without): return False
+    return True
 
 con = sqlite3.connect(DB)
 sessions = con.execute(
-    "SELECT id, working_directory FROM sessions WHERE " +
-    " OR ".join(f"working_directory LIKE '{f}'" for f in FAM)).fetchall()
+    "SELECT id, working_directory FROM sessions").fetchall()
 
 CALLID = re.compile(r'"(call_[a-zA-Z0-9#]+)"')
-KORUC = re.compile(r'\bkoruc\b')
+KORUC = re.compile(r'\bkoruc\b')  # episodes are edit-compile loops; board runs aren't
 CODES = re.compile(r'error\[([A-Z]+\d+)\]')
 
 def parse_t(s):
     try: return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
     except Exception: return None
 
-episodes = []          # {session, cwd, codes, t0, t1, fails, resolved}
+episodes = []          # {session, cwd, repo, org, codes, t0, t1, fails, resolved}
 per_code_dwell = collections.defaultdict(list)
 per_code_fails = collections.defaultdict(list)
 all_dwell, unresolved = [], 0
@@ -39,8 +60,7 @@ for si, (sid, cwd) in enumerate(sessions):
         if tj is None: continue
         try: j = json.loads(tj)
         except Exception: continue
-        title = j.get("title", "")
-        if not KORUC.search(title): continue
+        if not KORUC.search(call_cmd(j) or ""): continue
         upd = ""
         if tuj:
             try:
@@ -82,19 +102,22 @@ for si, (sid, cwd) in enumerate(sessions):
         if resolved:
             dur = ev[j][0] - t
             if 0 <= dur <= 7200:   # drop cross-day idle gaps
-                eps_codes = sorted(set(bag))
                 episodes.append({"session": sid, "cwd": cwd.split("/")[-1],
-                                 "codes": eps_codes, "t0": ev[i][0],
+                                 "repo": repo_of(cwd), "org": org_of(cwd),
+                                 "codes": sorted(set(bag)), "t0": ev[i][0],
                                  "dur_s": round(dur), "fails": fails})
-                all_dwell.append(dur)
-                for cd in eps_codes:
-                    per_code_dwell[cd].append(dur)
-                    per_code_fails[cd].append(fails)
             else:
                 unresolved += 1
         else:
             unresolved += 1
         i = j + (1 if resolved else 0)
+
+episodes = [e for e in episodes if keep_episode(e)]
+for e in episodes:
+    all_dwell.append(e["dur_s"])
+    for cd in e["codes"]:
+        per_code_dwell[cd].append(e["dur_s"])
+        per_code_fails[cd].append(e["fails"])
 
 print(f"{timed_sessions} sessions with timed koruc calls, "
       f"{len(episodes)} resolved episodes, {unresolved} unresolved/>2h\n")
@@ -114,6 +137,10 @@ for cd, n, md, mf, mn in rows[:20]:
 
 print(f"\noverall: {len(all_dwell)} episodes, median dwell {med(all_dwell)/60:.1f} min, "
       f"mean {sum(all_dwell)/len(all_dwell)/60:.1f} min" if all_dwell else "none")
+
+repos = collections.Counter(e["repo"] for e in episodes)
+if repos:
+    print("episode repos: " + "  ".join(f"{k}={v}" for k, v in repos.most_common()))
 
 json.dump({"episodes": episodes,
            "per_code": {c: {"n": len(per_code_dwell[c]),

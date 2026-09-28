@@ -1,19 +1,31 @@
 ---
 type: belief
 id: frag-session-journals-are-a-refusal-corpus
-provenance: 2026-09-28 side session mined sessions.db while a parallel session built wartrain in koru; corpus-first triage produced two verified bug pins the same day
+provenance: 2026-09-28 side session mined sessions.db while a parallel session built wartrain in koru; corpus-first triage produced two verified bug pins the same day; evolved same day — corpus rescoped to invocation and provenance-tagged
 ts: 2026-09-28
 ---
 
 # Session journals are a refusal corpus — the compiler's negative space is already measured
 
-Every agent session against koru logs each `koruc` refusal verbatim — the
+Every agent session that runs `koruc` logs each refusal verbatim — the
 diagnostic, the offending line, the fix that followed — in `sessions.db`. The
 language's negative space is therefore not an open question: it is *recorded*,
 ranked by frequency, and (via `taught`-miss flags) ranked by whether the message
 taught anything. Guessing which grammar rule hurts most is obsolete; the corpus
-answers it (chains ~29%, label↔pun seesaw ~16%, stores ~12% of all recorded
-refusals).
+answers it.
+
+**Membership is by invocation, not by address.** The first cut scoped the corpus
+to a cwd allowlist and silently missed 218 `koruc`/`run_regression` calls fired
+from outside the family tree (`the-man` alone held 65 rows across 14 refusal
+episodes). A row counts because the call compiled Koru — the compile is the
+event; where the agent was standing is provenance, not membership.
+
+**Provenance is a filter axis, not a deletion.** Every row carries `repo`, `org`,
+`session`, `cwd`, `via`. A greenfield game's refusals measure a confused
+newcomer, not the language — the working backlog is the systemic view
+(`--without org:COCPORN,repo:ogun`), and re-ranking under it is not cosmetic:
+KORU161 is 232 rows unfiltered but 126 systemic; PARSE006 was 280 but 55. Half
+the first day's headline numbers were one game session.
 
 The belief that replaces: "we learn what the language gets wrong by thinking
 about it." No — the telemetry exists and was never read back. A transcript's
@@ -23,12 +35,15 @@ struct-literal schema fusing into the next field's name) and debunked a
 confidently-stated wrong one (comments between `|>` steps break chains — they
 compile; only comments *inside* blocks were reaching the scanner).
 
-The instrument lives at `friction/` (`friction.py` scan/hist/lookup/pitfalls,
-`timing.py` for refusal-episode dwell), the standing generator is
+**The loop is the point — this is the improvement flywheel, not a snapshot.**
+Sessions produce refusals → `scan` mines them → triage ranks by frequency ×
+teach-miss × dwell → fixes land in the compiler → the next sessions' refusals
+measure whether the teaching worked. The instrument lives at `friction/`
+(`friction.py` scan/hist/lookup/pitfalls/report, `timing.py` for
+refusal-episode dwell), the standing generator is
 `challenges/028_the_friction_corpus`, and the discipline is: **after any
 koru-touching session, re-run the scan; before believing any transcript claim,
-re-measure it.** Every future session's refusals append to the corpus for free —
-the loop measures itself.
+re-measure it.**
 
 Sibling instruments of the same shape (scons compiling a copy-tree, build
 variants emitting empty artifacts) live outside `src/` but are the same genus —
