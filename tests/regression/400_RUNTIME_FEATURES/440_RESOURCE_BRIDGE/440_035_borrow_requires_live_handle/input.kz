@@ -1,0 +1,138 @@
+// Test: a borrow param (`field: T<state>`, no `!`) requires a live handle
+// carrying that obligation — and does not spend it.
+//
+// The manifest has always recorded bare-state phantoms on input fields, but
+// nothing enforced them: the pool check (`assertHandlesHeld`) only looked at
+// the discharge specs a `T<!state>` produces. A `use(h: "result_99")` — a
+// literal naming nothing the session holds — ran the proc. This pins the
+// borrow half of possession: the arg IS the capability either way, so a
+// borrow must prove the session holds it, exactly as a consume must.
+//
+// Three refusals pinned: a literal that mints nothing (forgery), a live
+// handle of the WRONG obligation (`other_1` is <known>, `use` wants
+// <found>), and the positive — an honest borrow leaves the handle live for
+// a second borrow and then for the `T<!state>` consume that spends it.
+
+~import std/runtime
+~import std/io
+
+const std = @import("std");
+const HandlePool = @import("root").koru_std.koru_interpreter.HandlePool;
+
+var bridge_pool = HandlePool.init(std.heap.page_allocator);
+
+~pub tor search { q: string } -> string<found!>
+
+~proc search|zig {
+    _ = q;
+    return "result_1";
+}
+
+~pub tor other { q: string } -> string<known!>
+
+~proc other|zig {
+    _ = q;
+    return "other_1";
+}
+
+~pub tor use { h: string<found> }
+
+~proc use|zig {
+    std.debug.print("use() ran for '{s}'\n", .{h});
+}
+
+~pub tor drop { h: string<!found> }
+
+~proc drop|zig {
+    std.debug.print("drop() ran for '{s}'\n", .{h});
+}
+
+~std/runtime:register(scope: "demo") {
+    search(1)
+    other(1)
+    use(1)
+    drop(1)
+}
+
+~std/runtime:run(source: "search(q: \"x\")", scope: "demo", budget: 100, handle_pool: &bridge_pool, auto_discharge: false)
+| result r |> probe(after_mints: r.handles)
+| unhandled-branch _ |> std/io:print.ln("FAIL: search unhandled")
+| exhausted _ |> std/io:print.ln("FAIL: search exhausted")
+| parse-error _ |> std/io:print.ln("FAIL: search parse")
+| validation-error _ |> std/io:print.ln("FAIL: search validation")
+| shape-error _ |> std/io:print.ln("FAIL: search shape")
+| event-denied _ |> std/io:print.ln("FAIL: search denied")
+| dispatch-error _ |> std/io:print.ln("FAIL: search dispatch")
+| scope-not-found _ |> std/io:print.ln("FAIL: search scope")
+
+// Void, not done/fail: a tor called as an arm body's last step is refused by
+// KORU022's pipeline check, so the probe reports internally (it already
+// printed both verdicts) and the caller chains it without a switch.
+~tor probe { after_mints: u32 }
+
+~proc probe|zig {
+    const rt = @import("root").koru_std.koru_runtime;
+
+    // Second minter — a <known> handle for the wrong-tag case.
+    const m2 = rt.run_event.handler(.{
+        .source = "other(q: \"x\")", .scope = "demo", .budget = 100,
+        .handle_pool = &bridge_pool, .auto_discharge = false,
+    });
+    switch (m2) {
+        .result => {},
+        else => |tag| std.debug.print("FAIL: other mint: {s}\n", .{@tagName(tag)}),
+    }
+
+    // Honest borrow: the minted value names itself.
+    const honest = rt.run_event.handler(.{
+        .source = "use(h: \"result_1\")", .scope = "demo", .budget = 100,
+        .handle_pool = &bridge_pool, .auto_discharge = false,
+    });
+    switch (honest) {
+        .result => |r| std.debug.print("honest borrow ok, held={d}\n", .{r.handles}),
+        .dispatch_error => |e| std.debug.print("FAIL: honest borrow refused: {s}\n", .{e.message}),
+        else => |tag| std.debug.print("FAIL: honest borrow: {s}\n", .{@tagName(tag)}),
+    }
+
+    // Forged literal: names nothing the pool holds.
+    const forged = rt.run_event.handler(.{
+        .source = "use(h: \"result_99\")", .scope = "demo", .budget = 100,
+        .handle_pool = &bridge_pool, .auto_discharge = false,
+    });
+    switch (forged) {
+        .result => std.debug.print("FAIL: forged borrow accepted\n", .{}),
+        .dispatch_error => |e| std.debug.print("forged refused: {s}\n", .{e.message}),
+        else => |tag| std.debug.print("forged refused ({s})\n", .{@tagName(tag)}),
+    }
+
+    // Wrong tag: a live <known> handle into a <found> param.
+    const wrong = rt.run_event.handler(.{
+        .source = "use(h: \"other_1\")", .scope = "demo", .budget = 100,
+        .handle_pool = &bridge_pool, .auto_discharge = false,
+    });
+    switch (wrong) {
+        .result => std.debug.print("FAIL: wrong-tag borrow accepted\n", .{}),
+        .dispatch_error => |e| std.debug.print("wrong-tag refused: {s}\n", .{e.message}),
+        else => |tag| std.debug.print("wrong-tag refused ({s})\n", .{@tagName(tag)}),
+    }
+
+    // Borrow must not discharge: use again, then drop spends it.
+    const reuse = rt.run_event.handler(.{
+        .source = "use(h: \"result_1\")", .scope = "demo", .budget = 100,
+        .handle_pool = &bridge_pool, .auto_discharge = false,
+    });
+    switch (reuse) {
+        .result => |r| std.debug.print("reuse ok, held={d}\n", .{r.handles}),
+        .dispatch_error => |e| std.debug.print("FAIL: reuse refused: {s}\n", .{e.message}),
+        else => |tag| std.debug.print("FAIL: reuse: {s}\n", .{@tagName(tag)}),
+    }
+
+    const dropped = rt.run_event.handler(.{
+        .source = "drop(h: \"result_1\")", .scope = "demo", .budget = 100,
+        .handle_pool = &bridge_pool, .auto_discharge = false,
+    });
+    switch (dropped) {
+        .result => |r| std.debug.print("drop ok, held={d}\n", .{r.handles}),
+        else => |tag| std.debug.print("FAIL: drop: {s}\n", .{@tagName(tag)}),
+    }
+}

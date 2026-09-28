@@ -1,4 +1,4 @@
-open(path: string)
-append(handle: string<!open>, text: string)
+open(path: string) -> <open!>
+append(handle: string<!open>, text: string) -> <open!>
 close(handle: string<!open>)
 say(text: string)

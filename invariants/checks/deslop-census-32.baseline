@@ -26,5 +26,10 @@
 # publication": the roll fired on +1 cluster / +1 member of foreign src/
 # drift — this commit touches only a .claude skill doc; zero src/ files.
 # The residual named is the same documented field-literal idiom.
-clusters=1515
-members=2072
+clusters=1524
+members=2076
+# Re-pinned in "module home: synthesized qualifiers spell the logical
+# name": +9 clusters / +4 members are ast_functional's three new
+# item-tree walks (moduleHome / containingFlow / findEventDecl) sharing
+# the for/switch/descend idiom every AST traversal in src/ wears — the
+# same shape that already folds five .kz copies into one Zig copy.

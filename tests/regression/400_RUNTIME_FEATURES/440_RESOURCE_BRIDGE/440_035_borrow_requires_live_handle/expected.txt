@@ -1,0 +1,8 @@
+use() ran for 'result_1'
+honest borrow ok, held=2
+forged refused: 'h' wants a live <found> — 'result_99' names nothing the session holds. Mint one through a verb whose signature ends '-> <found!>'
+wrong-tag refused: 'h' wants a live <found> — 'other_1' is a <known>. Mint one through a verb whose signature ends '-> <found!>'
+use() ran for 'result_1'
+reuse ok, held=2
+drop() ran for 'result_1'
+drop ok, held=1

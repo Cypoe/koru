@@ -166,14 +166,17 @@ for line in manifest.read_text().splitlines():
         print(f"MALFORMED-ROW\t{key}\t{val}")
 
 # The declaration form is `~[...comptime|transform...]pub KIND NAME`, with an
-# optional space before `pub`. Commented-out declarations do not count.
+# optional space before `pub`. The annotation block is allowed to span lines
+# (`~[\n- keyword|comptime|transform\n- other\n]pub tor` — pump:create is
+# spelled that way), so the scan runs over file text, not per line.
+# Commented-out declarations do not count.
 #
 # KIND is tor, event or proc: a wall that only reads `pub tor` sees exactly the
 # forms already written, so it can never notice the first transform someone
 # spells another way. Same reason the source glob is recursive and covers every
 # Koru file form — a transform under `koru_std/optimizations/` or in a `.k`
 # would otherwise ship with no row and no complaint.
-decl = re.compile(r'^~\[([^\]]*\bcomptime\|transform\b[^\]]*)\]\s*pub\s+(?:tor|event|proc)\s+([A-Za-z0-9_.-]+)')
+decl = re.compile(r'^\s*~\[([^\]]*\bcomptime\|transform\b[^\]]*)\]\s*pub\s+(?:tor|event|proc)\s+([A-Za-z0-9_.-]+)', re.M)
 SRC = sorted(
     p for pat in ('**/*.kz', '**/*.k', '**/*.kjs')
     for p in (root / 'koru_std').glob(pat)
@@ -186,12 +189,13 @@ for f in SRC:
     # The file stem carries the part suffix; the module name is the stem before
     # the first dot — otherwise the mirror keys diverge from the rows.
     lib = f.stem.split('.')[0]
-    for line in f.read_text(errors='replace').splitlines():
-        m = decl.match(line.strip())
-        if m:
-            declared.add(f"{lib}:{m.group(2)}")
-            if 'keyword' in m.group(1).split('|'):
-                keyworded.add(f"{lib}:{m.group(2)}")
+    text = f.read_text(errors='replace')
+    # `~[` must still open at line start — a `// ~[...` comment line fails
+    # the anchor the same way the old per-line scan excluded it.
+    for m in decl.finditer(text):
+        declared.add(f"{lib}:{m.group(2)}")
+        if 'keyword' in m.group(1).split('|'):
+            keyworded.add(f"{lib}:{m.group(2)}")
 
 for t in sorted(declared - rows.keys()):
     print(f"UNDECLARED\t{t}")
