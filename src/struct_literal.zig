@@ -51,23 +51,63 @@ pub const ParseOptions = struct {
     allow_singleton_expression: bool = false,
 };
 
+/// `//`-to-EOL comments are transparent inside a struct literal — a trailing
+/// comment must never reach the field scanner, where it fuses with the next
+/// field's name (`score: i64, // note` then `lives:` parses one field named
+/// `note\nlives` and the emitted Zig eats the comma). A `//` inside a string
+/// literal is content, so the strip honors `"` … `"` with `\` escapes.
+/// Comment bytes collapse to a single space so tokens never fuse across the
+/// removal.
+fn stripLineComments(allocator: Allocator, text: []const u8) ParseError![]const u8 {
+    var out = try std.ArrayList(u8).initCapacity(allocator, text.len);
+    var i: usize = 0;
+    while (i < text.len) {
+        const c = text[i];
+        if (c == '"') {
+            try out.append(allocator, c);
+            i += 1;
+            while (i < text.len and text[i] != '"') : (i += 1) {
+                try out.append(allocator, text[i]);
+                if (text[i] == '\\' and i + 1 < text.len) {
+                    i += 1;
+                    try out.append(allocator, text[i]);
+                }
+            }
+            if (i < text.len) {
+                try out.append(allocator, text[i]);
+                i += 1;
+            }
+            continue;
+        }
+        if (c == '/' and i + 1 < text.len and text[i + 1] == '/') {
+            try out.append(allocator, ' ');
+            while (i < text.len and text[i] != '\n') : (i += 1) {}
+            continue;
+        }
+        try out.append(allocator, c);
+        i += 1;
+    }
+    return out.toOwnedSlice(allocator);
+}
+
 /// Split a struct-literal body on TOP-LEVEL commas, honoring `{}`/`()`/`[]`
 /// nesting and skipping string-literal contents. Returns the raw (untrimmed)
 /// field slices. `body` is the text strictly between the outer `{` and `}`.
 fn splitFields(allocator: Allocator, body: []const u8) ParseError![]const []const u8 {
+    const clean = try stripLineComments(allocator, body);
     var fields = try std.ArrayList([]const u8).initCapacity(allocator, 0);
     var depth: usize = 0;
     var field_start: usize = 0;
     var i: usize = 0;
 
-    while (i < body.len) : (i += 1) {
-        const c = body[i];
+    while (i < clean.len) : (i += 1) {
+        const c = clean[i];
         switch (c) {
             '"' => {
                 // Skip a string literal whole (escapes preserved).
                 i += 1;
-                while (i < body.len and body[i] != '"') : (i += 1) {
-                    if (body[i] == '\\' and i + 1 < body.len) i += 1;
+                while (i < clean.len and clean[i] != '"') : (i += 1) {
+                    if (clean[i] == '\\' and i + 1 < clean.len) i += 1;
                 }
             },
             '{', '(', '[' => depth += 1,
@@ -77,7 +117,7 @@ fn splitFields(allocator: Allocator, body: []const u8) ParseError![]const []cons
             },
             ',' => {
                 if (depth == 0) {
-                    try fields.append(allocator, body[field_start..i]);
+                    try fields.append(allocator, clean[field_start..i]);
                     field_start = i + 1;
                     continue;
                 }
@@ -92,7 +132,7 @@ fn splitFields(allocator: Allocator, body: []const u8) ParseError![]const []cons
     // Appending the empty slice made projectRawFields refuse BareEntryNotPunnable,
     // so writeBareReturnType fell back to pasting the record verbatim and `string`
     // never lowered (020_063, Ward's info tor).
-    const tail = body[field_start..];
+    const tail = clean[field_start..];
     if (std.mem.trim(u8, tail, " \t\n\r").len > 0) {
         try fields.append(allocator, tail);
     }

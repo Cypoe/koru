@@ -1,8 +1,8 @@
 ---
 type: belief
 id: frag-a-diagnostics-hint-is-a-claim-not-a-tested-path
-provenance: KORU103 rejects `|> finished d` and hints "produce a value with `->` (e.g. `-> finished d`)". Writing exactly that emitted `_ = finished d;`, invalid Zig. Found 2026-08-07 restructuring orisha's server loop; fixed and pinned as 350_017
-ts: 2026-08-07
+provenance: KORU103 rejects `|> finished d` and hints "produce a value with `->` (e.g. `-> finished d`)". Writing exactly that emitted `_ = finished d;`, invalid Zig. Found 2026-08-07 restructuring orisha's server loop; fixed and pinned as 350_017. Second instance 2026-09-28: PARSE006's hint named `fields[0]` for EVERY bare arg — `mm-of(1,2,3)` against `{kind,a,b}` hinted `kind: 2`, `kind: 3`; in-session it fabricated a name the callee never declared. Fixed to name the parameter at the argument's position; pinned 100_087
+ts: 2026-09-28
 ---
 
 # A diagnostic's hint is a claim about the language, not a tested path through the compiler

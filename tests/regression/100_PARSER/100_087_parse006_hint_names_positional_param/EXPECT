@@ -1,0 +1,4 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS does not name a parameter of 'mm-of'
+CONTAINS 'a: 2'
+CONTAINS 'b: 3'

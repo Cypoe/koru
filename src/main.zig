@@ -5936,6 +5936,15 @@ fn checkBareArgPunning(
         // (implicit `expr`/`source` binding included) — not raw puns to check.
         if (arg.expression_value != null or arg.source_value != null) continue;
 
+        // The hint names the parameter at this argument's own position —
+        // `mm-of(1, 2, 3)` against `mm-of { kind, a, b }` must hint
+        // `kind: 1`, `a: 2`, `b: 3`, not `kind:` on all three. Out-of-range
+        // positions fall back to the first field.
+        const positional_field = if (arg_index < fields.len)
+            fields[arg_index].name
+        else
+            suggest_field;
+
         if (!arg.had_explicit_label and free_form_callee) {
             // On a free-form callee a bare arg carries no parameter name to
             // match — its spelling IS the contract. args[0] is the positional
@@ -5967,7 +5976,7 @@ fn checkBareArgPunning(
                     "bare argument '{s}' does not name a parameter of '{s}' — an explicit label is required",
                     .{ arg.value, event_display },
                     "write it with an explicit label: '{s}: {s}'",
-                    .{ suggest_field, arg.value },
+                    .{ positional_field, arg.value },
                 );
             }
             continue;
@@ -6000,7 +6009,7 @@ fn checkBareArgPunning(
                 "unknown parameter '{s}' — '{s}' has no parameter named '{s}'",
                 .{ arg.name, event_display, arg.name },
                 "remove the argument, or label it with a real parameter (e.g. '{s}:')",
-                .{suggest_field},
+                .{positional_field},
             );
         } else {
             // A bare argument whose punned name matches nothing — needs a label.
@@ -6011,7 +6020,7 @@ fn checkBareArgPunning(
                 "bare argument '{s}' does not name a parameter of '{s}' — an explicit label is required",
                 .{ arg.value, event_display },
                 "write it with an explicit label: '{s}: {s}'",
-                .{ suggest_field, arg.value },
+                .{ positional_field, arg.value },
             );
         }
     }
