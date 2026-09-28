@@ -10,11 +10,11 @@
 // convention the wire ruling retired — the unit of enforcement is the
 // item. (440_021; kopium bridge-mirror 2026-09-12-wire-gate-scope)
 
-fn wireGate(source: []const u8) ?struct { message: []const u8, line: u32, column: u32 } {
+fn wireGate(source: []const u8) ?struct { message: []const u8, line: u32, column: u32, not_invocation: bool } {
     const rt = @import("root").koru_std.koru_runtime;
     return switch (rt.parse_wire_event.handler(.{ .source = source })) {
         .parsed => null,
-        .parse_error => |e| .{ .message = e.message, .line = e.line, .column = e.column },
+        .parse_error => |e| .{ .message = e.message, .line = e.line, .column = e.column, .not_invocation = e.not_invocation },
     };
 }
 
@@ -128,17 +128,3 @@ fn scanLineChars(raw: []const u8, paren: *i32, brace: *i32, bracket: *i32, in_st
     }
 }
 
-/// The declared name of a `tor NAME ...` line (token after `tor`).
-fn defineName(decl_line: []const u8) []const u8 {
-    var toks = std.mem.tokenizeAny(u8, decl_line, " \t");
-    _ = toks.next();
-    return toks.next() orelse "";
-}
-
-/// An impl head opens `<name> = ...` (name then space/tab/`=`).
-fn isImplHead(line: []const u8, name: []const u8) bool {
-    if (name.len == 0 or line.len <= name.len) return false;
-    if (!std.mem.startsWith(u8, line, name)) return false;
-    const after = line[name.len..];
-    return after[0] == ' ' or after[0] == '\t' or after[0] == '=';
-}

@@ -1,0 +1,196 @@
+// Koru Standard Library: the `run-exec` part of bridge — the `run` verb's
+// Zig impl. Joined via `~part run-exec` in bridge.kz; merged into the
+// bridge module at load. The tor decl rides in the `run` part.
+
+~proc run|zig {
+    const rt = @import("root").koru_std.koru_runtime;
+    const interp = @import("root").koru_std.koru_interpreter;
+
+    br.touch();
+
+    // SEQUENCING (frag-partial-programs): a turn is a run of items, each
+    // routed by the same rules below. One item takes the exact historical
+    // path (discrimination, wire gate, single dispatch) — every current
+    // caller is a one-item turn and observes zero change. Several items
+    // each run through their existing single path in order and the turn
+    // reports one structured line per step under `partial`, continuing
+    // past refusal: a partial program RUNS, and the model learns every
+    // step's outcome in one observation instead of discovering failures
+    // one turn at a time. Mis-segmentation below can only fail LOUD —
+    // every slice still passes the single paths' validators.
+    const items = segmentTurn(br.allocator, source) catch {
+        return .{ .parse_error = .{ .message = "OOM segmenting turn", .line = 0, .column = 0 } };
+    };
+    defer br.allocator.free(items);
+    if (items.len < 2) {
+        // RUN DISCRIMINATION (the REPL rule): a declaration is not a dispatch.
+        // If the source is a subflow definition (`tor name { args }` +
+        // `name = <body>`, identifiable by its leading `tor`), install it into
+        // the session's durable defined-flows table and report `defined <name>`
+        // instead of routing it into the dispatcher where it would parse-error
+        // as an invocation. One verb, two meanings — exactly as a REPL's def.
+        // This is the R1 rung of KOPIUM_RUNTIME.md: the bridge run loop is a REPL.
+        {
+            const trimmed = std.mem.trim(u8, source, " \t\r\n");
+            if (std.mem.startsWith(u8, trimmed, "tor ")) {
+                return switch (interp.define_event.handler(.{
+                    .source = source,
+                    .defined = br.defined,
+                })) {
+                    .defined => |d| .{ .defined = d },
+                    .parse_error => |e| .{ .parse_error = .{
+                        .message = e.message,
+                        .line = e.line,
+                        .column = e.column,
+                    } },
+                };
+            }
+        }
+
+        // THE SINGLE-ITEM WIRE GATE: a one-item turn is ONE invocation and
+        // nothing else. `std/runtime:parse.wire` is the strict grammar —
+        // prose, chains, trailing text and truncated strings are refused
+        // here as parse-error ("that was not Koru"), before the dispatcher
+        // ever sees them. What passes still runs the full path below: scope
+        // membership (event-denied), field shapes (validation-error),
+        // possession, budget.
+        if (wireGate(source)) |e| {
+            // RESIDUE: prose is not an invocation, but it is not garbage
+            // either — bind the refused text and hand the turn back to the
+            // agent as `residue`, so the model can re-emit it through a real
+            // verb. Nothing strands: the value, the handle, and the outcome
+            // all survive.
+            if (e.not_invocation) {
+                const rn = bindResidue(br, std.mem.trim(u8, source, " \t\r\n"));
+                if (rn.len > 0) return .{ .residue = std.fmt.allocPrint(std.heap.page_allocator,
+                        "residue bound: {s} — your reply was not wire; nothing reached the user", .{rn})
+                        catch @panic("bridge: OOM building residue report") };
+            }
+            return .{ .parse_error = .{
+                .message = e.message, .line = e.line, .column = e.column,
+            } };
+        }
+
+        const result = rt.run_event.handler(.{
+            .source = source,
+            .scope = br.scope,
+            .handle_pool = &br.pool,
+            .auto_discharge = false,
+            .defined = br.defined,
+            .lenient = true,
+            .host_dispatch = if (br.introspection) @as(?interp.HostDispatchFn, hostDispatch) else null,
+            .session_env = br.session_env,
+        });
+
+        return switch (result) {
+            .result => |r| .{ .result = .{
+                .value = r.value, .used = r.used, .handles = r.handles,
+                .bound = bindResult(br, r.value),
+            } },
+            .unhandled_branch => |u| .{ .unhandled_branch = .{ .branch = u.branch, .payload = u.payload, .handles = u.handles } },
+            .exhausted => |e| .{ .exhausted = .{ .used = e.used, .last_event = e.last_event, .handles = e.handles } },
+            .parse_error => |e| .{ .parse_error = .{ .message = e.message, .line = e.line, .column = e.column } },
+            .validation_error => |e| .{ .validation_error = e },
+            .shape_error => |e| .{ .shape_error = .{ .branch = e.branch, .field = e.field, .message = e.message } },
+            .event_denied => |e| .{ .event_denied = e },
+            .dispatch_error => |e| .{ .dispatch_error = .{ .event_name = e.event_name, .message = e.message } },
+            .scope_not_found => |e| .{ .scope_not_found = e },
+        };
+    }
+
+    // ALL-PROSE FAST PATH: a turn of pure prose is ONE message, not N items —
+    // the model meant one utterance. Scan first: if every item refuses as
+    // not_invocation, bind the whole reply as a single residue value and
+    // hand the turn back as `residue`. Per-item splintering (r8, r9, r10…)
+    // would demand N say() calls to redeliver one message.
+    var all_prose = true;
+    for (items) |it| {
+        const item = std.mem.trim(u8, source[it.start..it.end], " \t\r\n");
+        if (isDefineItem(item)) { all_prose = false; break; }
+        const e = wireGate(item) orelse { all_prose = false; break; };
+        if (!e.not_invocation) { all_prose = false; break; }
+    }
+    if (all_prose) {
+        const rn = bindResidue(br, std.mem.trim(u8, source, " \t\r\n"));
+        if (rn.len > 0) return .{ .residue = std.fmt.allocPrint(std.heap.page_allocator,
+            "residue bound: {s} — your reply was not wire; nothing reached the user", .{rn})
+            catch @panic("bridge: OOM building residue report") };
+        // Bind failed — fall through to the per-item loop, which reports
+        // per-step refusals instead of lying about a single binding.
+    }
+
+    var report = std.ArrayList(u8){};
+    defer report.deinit(br.allocator);
+    const writer = report.writer(br.allocator);
+    var used_total: u64 = 0;
+    const total: u32 = @intCast(items.len);
+    // A turn whose EVERY item bound residue is not `partial` — nothing ran —
+    // it is the single `residue` outcome. Reached only when the all-prose
+    // fast path's bind failed; normally all-prose returns above.
+    var all_residue = true;
+    for (items, 0..) |it, idx| {
+        const step: u32 = @intCast(idx + 1);
+        const item = std.mem.trim(u8, source[it.start..it.end], " \t\r\n");
+        if (isDefineItem(item)) {
+            all_residue = false;
+            switch (interp.define_event.handler(.{ .source = item, .defined = br.defined })) {
+                .defined => |d| writer.print("step {d}/{d} defined: {s}\n", .{ step, total, d }) catch {},
+                .parse_error => |e| writer.print("step {d}/{d} parse-error: {s}\n", .{ step, total, e.message }) catch {},
+            }
+            continue;
+        }
+        // The wire gate holds per item; a refused slice is a step line.
+        if (wireGate(item)) |e| {
+            if (e.not_invocation) {
+                const rn = bindResidue(br, item);
+                if (rn.len > 0) {
+                    writer.print("step {d}/{d} residue bound: {s} — your reply was not wire; nothing reached the user\n", .{ step, total, rn }) catch {};
+                    continue;
+                }
+            }
+            all_residue = false;
+            writer.print("step {d}/{d} parse-error: {s}\n", .{ step, total, e.message }) catch {};
+            continue;
+        }
+        all_residue = false;
+        const result = rt.run_event.handler(.{
+            .source = item,
+            .scope = br.scope,
+            .handle_pool = &br.pool,
+            .auto_discharge = false,
+            .defined = br.defined,
+            .lenient = true,
+            .host_dispatch = if (br.introspection) @as(?interp.HostDispatchFn, hostDispatch) else null,
+            .session_env = br.session_env,
+        });
+        switch (result) {
+            .result => |r| {
+                used_total += r.used;
+                const bound = bindResult(br, r.value);
+                writer.print("step {d}/{d} result: {s} bound: {s}\n", .{ step, total, r.value.toJsonBuf(), bound }) catch {};
+            },
+            .unhandled_branch => |u| {
+                writer.print("step {d}/{d} unhandled-branch: {s} — {s} (held {s})\n", .{ step, total, u.branch, u.payload, u.handles }) catch {};
+            },
+            .exhausted => |e| {
+                used_total += e.used;
+                writer.print("step {d}/{d} exhausted: used={d} last={s}\n", .{ step, total, e.used, e.last_event }) catch {};
+            },
+            .parse_error => |e| writer.print("step {d}/{d} parse-error: {s}\n", .{ step, total, e.message }) catch {},
+            .validation_error => |e| writer.print("step {d}/{d} validation-error: {s}\n", .{ step, total, e }) catch {},
+            .shape_error => |e| writer.print("step {d}/{d} shape-error {s}: {s}\n", .{ step, total, e.branch, e.message }) catch {},
+            .event_denied => |e| writer.print("step {d}/{d} event-denied: {s}\n", .{ step, total, e }) catch {},
+            .dispatch_error => |e| writer.print("step {d}/{d} dispatch-error {s}: {s}\n", .{ step, total, e.event_name, e.message }) catch {},
+            .scope_not_found => |e| writer.print("step {d}/{d} scope-not-found: {s}\n", .{ step, total, e }) catch {},
+        }
+    }
+    const report_owned = std.heap.page_allocator.dupe(u8, report.items) catch "";
+    if (all_residue) return .{ .residue = report_owned };
+    return .{ .partial = .{
+        .ran = total,
+        .total = total,
+        .used = used_total,
+        .handles = br.getHandleCount(),
+        .report = report_owned,
+    } };
+}
