@@ -123,9 +123,21 @@ sections — not a hand-edited markdown file that will rot.
   a `|>` chain be legal? (bursts = ~95% of this family's volume; the cascade
   fix measurably teaches the rule in the meantime — re-run `hist` to check
   teach-miss delta.)
-- `KORU161` never says what the queried name *is* or which spelling applies —
-  `std/store(name) ! field` (watch) vs `query` (plural sweep) vs `first`.
-  126 systemic rows, median dwell 1.3 min — the slowest common refusal.
+- `KORU161` — the stdlib contract-refusal umbrella: ~421 refusal sites across
+  46 contracts (`store`, `supervisor`, `pump`, `channel`…). 128 systemic rows,
+  ~30 of them pin-authoring probes (`kind:pin`), not organic friction.
+  The "never teaches" claim measured half-wrong — most sites teach already.
+  One real DIAG gap, **fixed**: `std/store:query` collapsed three states into
+  "unknown plural store" — genuinely unknown name, query-before-declaration,
+  and capacity-1 *value* store. The value tier is detected via the
+  `__store_write_<name>` marker (same idiom `store.stored.kz` uses) plus an
+  untransformed-`new` ordering probe; the new message names the tier and the
+  two right spellings (`game.<field>`, `std/store:watch(game)`;
+  pin `690_354`). DOC shipped: `docs/refusal-matrix.md` —
+  `friction/contracts.py` walks every `koru_std` refusal site, groups by
+  contract, ranks by corpus volume.
+  Open DESIGN ruling: keep one umbrella code, or split per contract so codes
+  rank families directly in `hist`?
 - `KORU021` leaks `std.io:print.impl` internals into user-facing errors.
 - DESIGN questions raised and not ruled: guarded multi-arm `! query` sweeps;
   calls in argument position (could be a lowering); the label↔pun seesaw;
@@ -144,7 +156,8 @@ sections — not a hand-edited markdown file that will rot.
 - DESIGN items are written ruling questions carrying their corpus numbers —
   the deliverable, not a failure.
 - At least one generated doc surface exists where `hist` says teaching fails
-  most (today: `KORU161`, then `KORU010`).
+  most — shipped: `docs/refusal-matrix.md` (contract × refusal site × corpus
+  volume). Next candidate: code catalog for the top `hist` family.
 - `friction.py scan` re-run; the frame's own refusals are in the corpus.
 - A count of how many families shared a mechanism — today ~29% of everything
   is the line-oriented chain; if your count finds one mechanism dominant,

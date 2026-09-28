@@ -13,7 +13,8 @@ Verbs:
 Every read verb takes filters:
   --without tok,tok    drop matching rows
   --only tok,tok       keep only matching rows
-Tokens: org:NAME, repo:NAME, sess:NAME, cwd:SUBSTR — a bare token is a repo
+Tokens: org:NAME, repo:NAME, sess:NAME, cwd:SUBSTR, via:NAME, kind:pin|organic —
+a bare token is a repo
 substring. Example: `hist --without org:COCPORN,repo:ogun` is the systemic
 view (compiler + mature consumers, no game-jam or site noise).
 """
@@ -78,6 +79,15 @@ def org_of(cwd):
             org = "unknown"
     _org_cache[cwd] = org
     return org
+
+
+def kind_of(file):
+    """'pin' when the refusing file is under a test tree — those refusals are
+    pin-authors deliberately probing a contract, not users stumbling on it.
+    'unknown' when the row names no file; 'organic' otherwise."""
+    if not file:
+        return "unknown"
+    return "pin" if "/tests/" in f"/{file}" or file.startswith("tests/") else "organic"
 
 
 def repo_of(cwd):
@@ -151,7 +161,8 @@ def scan():
                                  "msg": msg.strip(), "file": f, "line": ln,
                                  "src": src.strip()[:140], "after": after,
                                  "taught": taught, "via": call["via"],
-                                 "repo": repo_of(cwd), "org": org_of(cwd)})
+                                 "repo": repo_of(cwd), "org": org_of(cwd),
+                                 "kind": kind_of(f)})
     json.dump(all_rows, open(CORPUS, "w"), indent=1)
     print(f"{len(all_rows)} diagnostics across {len(set(r['session'] for r in all_rows))} sessions -> {CORPUS}")
     by_repo = collections.Counter(r["repo"] for r in all_rows)
@@ -178,7 +189,8 @@ def _match(row, tok):
     if key == "sess": return val.lower() in row["session"].lower()
     if key == "cwd":  return val.lower() in row["cwd"].lower()
     if key == "via":  return val == row.get("via")
-    sys.exit(f"unknown filter key '{key}' — use org:/repo:/sess:/cwd:/via:")
+    if key == "kind": return val == row.get("kind")
+    sys.exit(f"unknown filter key '{key}' — use org:/repo:/sess:/cwd:/via:/kind:")
 
 
 def filtered(rows, args):

@@ -282,8 +282,7 @@ fn storeFlowTargets(inv: ast_find.Invocation, store: []const u8) bool {
     return false;
 }
 
-fn storeWriteColumnSets(
-    alloc: std.mem.Allocator,
+fn storeWriteColumnSets(alloc: std.mem.Allocator,
     prog: *const ast_find.Program,
     store: []const u8,
     order: []const []const u8,
@@ -996,6 +995,7 @@ fn storeLowerText(
 ~part indexwalk
 ~part idecls
 ~part qnone
+~part qmiss
 ~part gate
 ~part bulk
 ~part bulkemit

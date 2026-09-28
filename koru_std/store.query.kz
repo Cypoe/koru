@@ -135,11 +135,11 @@
             }
         }
         if (col_names.len == 0) {
-            // The store's OWN declaration was already refused; that diagnostic is the
-            // true one and this lookup can only ever fail. Staying silent here is what
-            // keeps one mistake to one error.
-            if (ast.declarationRefused(allocator, program, flow.module, "std/store:new({s}):", .{store_name})) return .{ .transformed = .{} };
-            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): unknown plural store - no std/store:new({s}, capacity: N) found (query reads a plural container's live rows)", .{ store_name, store_name }) };
+            // The store's own decl already refused → qmiss returns null and we
+            // stay silent (the true diagnostic lives there); otherwise it names
+            // which miss this is — unknown name, later create, or value tier.
+            const miss = QueryMiss.refuse(allocator, reporter, program, flow, store_name) orelse return .{ .transformed = .{} };
+            return .{ .transformed = miss };
         }
     }
 

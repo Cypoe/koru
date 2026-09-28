@@ -1,0 +1,5 @@
+CONTAINS error[KORU161]
+CONTAINS 'game' is a capacity-1 value store
+CONTAINS std/store:watch(game)
+CONTAINS capacity: N
+NOT_CONTAINS unknown plural store

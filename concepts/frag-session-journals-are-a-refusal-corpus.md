@@ -1,7 +1,7 @@
 ---
 type: belief
 id: frag-session-journals-are-a-refusal-corpus
-provenance: 2026-09-28 side session mined sessions.db while a parallel session built wartrain in koru; corpus-first triage produced two verified bug pins the same day; evolved same day — corpus rescoped to invocation and provenance-tagged; evolved again — KORU010's 345 rows proved ~95% cascade, teaching that bursts not rows rank a family
+provenance: 2026-09-28 side session mined sessions.db while a parallel session built wartrain in koru; corpus-first triage produced two verified bug pins the same day; evolved same day — corpus rescoped to invocation and provenance-tagged; evolved again — KORU010's 345 rows proved ~95% cascade, teaching that bursts not rows rank a family; evolved again — KORU161 triage showed a high-firing contract code can be teaching already, and a `kind` axis separates pin-authoring probes from organic pain
 ts: 2026-09-28
 ---
 
@@ -34,6 +34,18 @@ line below it, each line logging its own identical refusal. Split a family by
 burst size and source shape before ranking it; a dominant cascade is a
 diagnostic-amplification finding, not a count of distinct confusions. (Fixed
 by collapsing the orphan run into one diagnostic that names the separator.)
+
+**A high-firing code can be teaching already — split by `kind` and read the
+messages before assigning work.** KORU161 ranked #3 with 33 teach-miss rows
+and looked like a message failure. Measured: it is the stdlib's umbrella
+contract-refusal code (~421 sites, 46 contracts), ~30 of its systemic rows
+were pin-authoring probes (`kind:pin` — an agent *writing* a refusal test is
+not stumbling), and most organic sites already name the fix. The one real
+gap was tier-conflation — `std/store:query` called a capacity-1 value store
+an "unknown plural store." Intent matters as much as count: `kind` separates
+probes from pain, and a code that fires because the contract is *being
+enforced* is the system working — the teach-miss axis, not the row count,
+decides whether the fix is DIAG or DOC.
 
 The belief that replaces: "we learn what the language gets wrong by thinking
 about it." No — the telemetry exists and was never read back. A transcript's
