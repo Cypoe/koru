@@ -1701,6 +1701,16 @@ pub const ShapeChecker = struct {
                                 // the event-branch constructor validation.
                                 continue;
                             }
+                            // Void effect: no `-> T` resume and no named arms —
+                            // `=>` has nothing to construct. Without this wall
+                            // the construct reaches emitted Zig and dies there
+                            // ("type 'void' does not support struct
+                            // initialization syntax" inside the synthesized
+                            // handler), exactly the leak 400_122/400_126's
+                            // siblings already refuse.
+                            try self.reporter.addErrorAtLocation(.KORU102, cont.location, "`=>` inside `! {s}` resumes the effect `{s}`, but it declares no resume value or arms — there is nothing to construct. Branches of the enclosing flow come from the call's own branches (e.g. `| done => ...`); a value the handler hands back needs resume arms on the effect (`! {s} T | a | b`)", .{ cont.branch, cont.branch, cont.branch });
+                            has_errors = true;
+                            continue;
                         }
                     }
                     // Ordinary OUTCOME branches: the constructed name must be

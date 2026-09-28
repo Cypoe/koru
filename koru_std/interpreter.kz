@@ -233,19 +233,21 @@ pub const Value = struct {
         };
     }
 
-    /// Serialize to JSON into a caller-provided buffer.
-    /// Returns the written slice, or empty string on overflow.
-    pub fn toJson(self: Value, buf: []u8) []const u8 {
-        var stream = std.io.fixedBufferStream(buf);
-        const w = stream.writer();
-        self.writeJson(w) catch return "";
-        return stream.getWritten();
+    /// Serialize to JSON into `allocator` memory, sized to the output — there
+    /// is no ceiling. A render that cannot be produced is a panic, never an
+    /// empty string: the 4KB `catch return ""` this replaces silently emptied
+    /// every payload past the scratch buffer.
+    pub fn toJsonAlloc(self: Value, allocator: std.mem.Allocator) []const u8 {
+        var out = std.ArrayListUnmanaged(u8){};
+        self.writeJson(out.writer(allocator)) catch @panic("koru: OOM serializing value");
+        return out.toOwnedSlice(allocator) catch @panic("koru: OOM serializing value");
     }
 
-    /// Convenience: serialize to a thread-local buffer (no allocation needed).
+    /// Serialize into durable page-backed memory for report payloads that
+    /// outlive the call (unhandled-branch / dispatch-error / debug prints).
+    /// Page-backed like the neighboring renderHeldHandles/persistentEventName.
     pub fn toJsonBuf(self: Value) []const u8 {
-        const S = struct { threadlocal var buf: [4096]u8 = undefined; };
-        return self.toJson(&S.buf);
+        return self.toJsonAlloc(std.heap.page_allocator);
     }
 
     fn writeJson(self: Value, w: anytype) !void {
@@ -294,28 +296,27 @@ pub const Value = struct {
     }
 
     /// Clone value into a persistent copy that survives arena teardown.
-    /// Uses a thread-local fixed buffer — valid until the next clonePersistent call.
-    /// Caller must consume (e.g. serialize) before the next interpreter call.
+    /// Uses a thread-local arena that GROWS with the value — no ceiling;
+    /// valid until the next clonePersistent call. Caller must consume (e.g.
+    /// serialize) before the next interpreter call. OOM panics — the old
+    /// fixed-buffer version silently returned un-cloned slices on overflow.
     pub fn clonePersistent(self: Value) Value {
         const S = struct {
-            threadlocal var buf: [4096]u8 = undefined;
             threadlocal var inited: bool = false;
-            threadlocal var fba: std.heap.FixedBufferAllocator = undefined;
+            threadlocal var arena: std.heap.ArenaAllocator = undefined;
         };
         if (!S.inited) {
-            S.fba = std.heap.FixedBufferAllocator.init(&S.buf);
+            S.arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             S.inited = true;
         }
-        S.fba.reset();
-        const allocator = S.fba.allocator();
-        const branch_copy = allocator.dupe(u8, self.branch) catch self.branch;
-        var field_copy = allocator.alloc(NamedField, self.fields.len) catch {
-            return self;
-        };
+        _ = S.arena.reset(.retain_capacity);
+        const allocator = S.arena.allocator();
+        const branch_copy = allocator.dupe(u8, self.branch) catch @panic("koru: OOM cloning value");
+        const field_copy = allocator.alloc(NamedField, self.fields.len) catch @panic("koru: OOM cloning value");
         for (self.fields, 0..) |f, i| {
-            const name_copy = allocator.dupe(u8, f.name) catch f.name;
+            const name_copy = allocator.dupe(u8, f.name) catch @panic("koru: OOM cloning value");
             const value_copy = switch (f.value) {
-                .string_val => |s| FieldValue{ .string_val = allocator.dupe(u8, s) catch s },
+                .string_val => |s| FieldValue{ .string_val = allocator.dupe(u8, s) catch @panic("koru: OOM cloning value") },
                 .bool_val => |b| FieldValue{ .bool_val = b },
                 .int_val => |n| FieldValue{ .int_val = n },
                 .float_val => |fl| FieldValue{ .float_val = fl },
@@ -330,10 +331,10 @@ pub const Value = struct {
 // VALUE SERIALIZATION - Convert interpreter Value to JSON
 // ============================================================================
 
-~[retain]pub tor value.stringify { value: Value } -> string
+~[retain]pub tor value.stringify { value: Value } -> string<std.io:allocated!>
 
 ~proc value.stringify|zig {
-    return value.toJsonBuf();
+    return value.toJsonAlloc(koru_allocator());
 }
 
 // ============================================================================
@@ -753,9 +754,21 @@ pub const InterpreterContext = struct {
     scope_name: []const u8,
     // Runtime-defined flows (the REPL define) — consulted before the scope
     defined: ?*DefinedFlows,
+    // Host verbs consulted AFTER the scope denies (the defined table and the
+    // scope's own verbs both outrank them). null = the session grants none.
+    host_dispatch: ?HostDispatchFn = null,
+    // Durable session bindings (the bridge's env): seeded into the per-run
+    // env at start, and the write target for a host verb that persists a
+    // value across turns. null = no session behind this run; every binding
+    // dies with it.
+    session_env: ?*Environment = null,
     // Set when the fragment ended because a branch had no handler (430_056):
     // the outcome that fired, handed back for the host to act on.
     unhandled_outcome: ?Value = null,
+    // Set by a failing eval before it throws — a sentence naming what the
+    // fragment actually asked for, so dispatch-error can teach instead of
+    // reporting a bare @errorName.
+    error_detail: ?[]const u8 = null,
 };
 
 pub const InterpreterThreadState = struct {
@@ -774,6 +787,7 @@ pub const InterpreterThreadState = struct {
         _ = arena.reset(.retain_capacity);
         if (env.bindings.count() != 0) env.clear();
         if (expr_bindings.values.count() != 0) expr_bindings.clear();
+        __dispatch_detail = null;
         return arena.allocator();
     }
 };
@@ -820,43 +834,6 @@ pub const InterpreterFlowCache = struct {
     }
 };
 
-// DISPATCHER TYPE - Function signature for scope dispatchers
-// ============================================================================
-
-pub const DispatchFn = *const fn(*const ast.Invocation, *DispatchResult) anyerror!void;
-pub const CostFn = *const fn([]const u8) u64;
-// Obligation functions - tors can create/discharge multiple obligations
-pub const ObligationsArrayFn = *const fn([]const u8) []const []const u8;  // tor -> []obligations
-pub const DischargeEventFn = *const fn([]const u8) ?[]const u8;  // obligation -> tor name
-
-// CreateSpec describes an obligation created by an tor's output field
-pub const CreateSpec = struct {
-    obligation_module: []const u8,  // e.g., "sqlite3"
-    obligation_name: []const u8,    // e.g., "opened"
-    field_name: []const u8,         // which output field holds the handle ID
-    resource_type: []const u8,      // e.g., "Connection"
-    // Outcome branch carrying this create, in source spelling — null = bare
-    // return. A branched tor books only the spec whose branch FIRED.
-    branch: ?[]const u8 = null,
-};
-
-// DischargeSpec describes an obligation discharged by an tor's input arg
-pub const DischargeSpec = struct {
-    obligation_module: []const u8,  // e.g., "sqlite3"
-    obligation_name: []const u8,    // e.g., "opened"
-    arg_name: []const u8,           // which input arg carries the handle ID
-};
-
-// Spec lookup functions - return full specs with field/arg names
-pub const CreatesSpecFn = *const fn([]const u8) []const CreateSpec;    // tor -> []CreateSpec
-pub const DischargesSpecFn = *const fn([]const u8) []const DischargeSpec;  // tor -> []DischargeSpec
-
-// Input-field lookup - an tor's declared argument vocabulary. Null means
-// the name is not this scope's verb at all (vocabulary membership answers
-// first); an empty list means the verb takes no fields, so ANY named field
-// is foreign.
-pub const InputFieldSpec = @import("root").koru_std.koru_runtime.InputFieldSpec;
-pub const InputLookupFn = *const fn([]const u8) ?[]const InputFieldSpec;
 
 // HOST-TILDE WALL - interpreter source is pure Koru
 
@@ -1121,11 +1098,14 @@ const ExprArithOp = enum { add, sub, mul, div, mod };
 ~part argref
 ~part arith
 ~part arms
+~part checks
+~part contracts
 ~part define
 ~part guards
 ~part names
 ~part parse
 ~part run
+~part runcached
 ~part select
 ~part literal
 ~part validate

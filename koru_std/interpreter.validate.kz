@@ -23,37 +23,12 @@ pub fn validateFlow(
     allocator: std.mem.Allocator,
     input_fn: ?InputLookupFn,
     defined: ?*DefinedFlows,
+    session_env: ?*Environment,
 ) ?ValidationError {
     var seen_bindings = std.StringHashMap(void).init(allocator);
     defer seen_bindings.deinit();
     if (validateFlowRecursive(flow, &seen_bindings)) |e| return e;
     if (checkShadowedArms(flow.body.continuations, allocator)) |e| return e;
-    return checkFlowArgs(flow, input_fn, defined, allocator);
+    return checkFlowArgs(flow, input_fn, defined, allocator, session_env);
 }
 
-fn validateFlowRecursive(flow: *const ast.Flow, seen: *std.StringHashMap(void)) ?ValidationError {
-    // Check each continuation for bindings
-    for (flow.body.continuations) |cont| {
-        if (cont.binding) |binding_name| {
-            // Check for shadowing
-            if (seen.contains(binding_name)) {
-                return .{
-                    .message = "Shadowing not allowed: binding already exists",
-                    .binding_name = binding_name,
-                };
-            }
-            // Record this binding
-            seen.put(binding_name, {}) catch {
-                return .{
-                    .message = "Validation internal error",
-                    .binding_name = binding_name,
-                };
-            };
-        }
-
-        // Note: AST structure changed - cont.node is now ?Node not *Flow
-        // Nested continuations are in cont.continuations, handled in the outer loop
-    }
-
-    return null; // Valid!
-}
