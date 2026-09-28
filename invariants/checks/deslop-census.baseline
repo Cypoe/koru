@@ -30,5 +30,10 @@
 # src/ drift — this commit is test-marker triage (pin re-pin + dir
 # renames), zero src/ files. Same consciously-retained test-scaffolding
 # class the pin documents.
-clusters=613
-members=758
+# Re-pinned 613/758 -> 619/762 (2026-10-14): the roll fired on a signals/
+# definition commit — zero src/ files staged. The named offenders are all
+# test_decl/simple_var_decl scaffolding in *_test.zig plus the requires
+# fixture ASTs, the consciously-retained class the pin documents; the
+# growth landed between re-pins, not here.
+clusters=619
+members=762

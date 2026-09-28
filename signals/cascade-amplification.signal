@@ -1,0 +1,11 @@
+name: cascade-amplification
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a measured count was one cause amplified, not many causes — one
+  severed chain, one dead head, or one repeated misread fired N identical
+  diagnostics and each logged its own row. Declares that frequency-rank
+  over raw rows misranks; split by burst/episode before triage. First
+  measured instance: KORU010, 308 of 326 systemic rows in bursts ≥3.
+route: surface
