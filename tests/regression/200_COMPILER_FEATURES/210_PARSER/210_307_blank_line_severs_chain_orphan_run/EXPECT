@@ -1,0 +1,6 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS error[KORU010]
+CONTAINS 2 stray continuation lines without a Koru construct (lines 11-12)
+CONTAINS blank lines end a chain
+ERROR_AT 11
+NOT_CONTAINS output_emitted.zig

@@ -1598,11 +1598,7 @@ pub const Parser = struct {
                     continue;
                 };
                 try self.appendKeptItem(&items, item, start_line);
-            } else if (lexer.startsWith(line, "|") or
-                (trimmed.len > 0 and trimmed[0] == '!' and
-                    (self.is_k or (trimmed.len > 1 and
-                        (trimmed[1] == ' ' or trimmed[1] == '\t' or trimmed[1] == '?')))))
-            {
+            } else if (self.isStrayContinuationLine(line)) {
                 // A `!` continuation glyph at top level continues nothing —
                 // the same stray the `|` arm above it is. A pure `.k` has no
                 // host lines, so every `!` there is stray; in `.kz`/`.kjs`
@@ -1611,14 +1607,94 @@ pub const Parser = struct {
                 // line passes through as host text and the author meets
                 // `error: expected type expression, found '!'` in emitted
                 // code for a line they wrote as Koru.
-                try self.reporter.addError(
-                    .KORU010,
-                    self.current + 1,
-                    lexer.getIndent(line) + 1,
-                    "stray continuation line without Koru construct",
-                    .{},
-                );
-                self.current += 1;
+                //
+                // Strays travel in runs: whatever severed the chain above
+                // (usually a blank line — blank lines close a chain where a
+                // comment does not) orphans every continuation line that
+                // follows it, and each used to fire its own identical error
+                // (measured: 308 of 326 corpus rows arrived in bursts ≥3).
+                // One refusal names the whole orphan run; the hint says what
+                // separated it from its head.
+                const first_idx = self.current;
+                // The run ends at the last stray-glyph line — trailing blanks
+                // and comments don't extend the range (a file ending in a
+                // newline leaves a phantom empty tail in self.lines).
+                var scan = first_idx;
+                var last_stray = first_idx;
+                var strays: usize = 1;
+                while (scan + 1 < self.lines.len) {
+                    const nl = self.lines[scan + 1];
+                    const nt = lexer.trim(nl);
+                    if (nt.len == 0 or lexer.isCommentLine(nl)) {
+                        scan += 1;
+                        continue;
+                    }
+                    if (self.isStrayContinuationLine(nl)) {
+                        scan += 1;
+                        last_stray = scan;
+                        strays += 1;
+                        continue;
+                    }
+                    break;
+                }
+                // Walk back past blanks and comments for the line this run
+                // could have continued, and whether a blank severed it.
+                var prev_meaningful: ?usize = null;
+                var saw_blank = false;
+                var p = first_idx;
+                while (p > 0) {
+                    p -= 1;
+                    const pl = self.lines[p];
+                    const pt = lexer.trim(pl);
+                    if (pt.len == 0) {
+                        saw_blank = true;
+                        continue;
+                    }
+                    if (lexer.isCommentLine(pl)) continue;
+                    prev_meaningful = p;
+                    break;
+                }
+                const glyph_hint: []const u8 = if (trimmed.len >= 2 and trimmed[0] == '|' and trimmed[1] == '>')
+                    "a `|>` line chains onto the step directly above it"
+                else if (trimmed[0] == '|')
+                    "a `| name` line is a branch arm — it attaches to the call whose result it dispatches on"
+                else
+                    "a `! name` line is an obligation arm — it attaches to the construct directly above it";
+                // self.lines is parser coordinates (injected prelude included) —
+                // every number named in prose goes through userLine like the
+                // caret does, or they disagree by the prelude's height.
+                const prev_user: ?usize = if (prev_meaningful) |pm| blk: {
+                    const u = self.reporter.userLine(pm + 1);
+                    break :blk if (u == 0) null else u;
+                } else null;
+                const hint = if (prev_user == null)
+                    try std.fmt.allocPrint(self.allocator, "{s} — there is no construct above to continue", .{glyph_hint})
+                else if (saw_blank)
+                    try std.fmt.allocPrint(self.allocator, "blank lines end a chain — the construct at line {d} cannot be continued across one. Remove the blank line, or start a new flow here. ({s})", .{ prev_user.?, glyph_hint })
+                else
+                    try std.fmt.allocPrint(self.allocator, "the construct at line {d} ended before this line — {s}. Only comments may sit between a step and its continuation.", .{ prev_user.?, glyph_hint });
+                if (strays > 1) {
+                    try self.reporter.addErrorWithHint(
+                        .KORU010,
+                        first_idx + 1,
+                        lexer.getIndent(line) + 1,
+                        "{d} stray continuation lines without a Koru construct (lines {d}-{d})",
+                        .{ strays, self.reporter.userLine(first_idx + 1), self.reporter.userLine(last_stray + 1) },
+                        "{s}",
+                        .{hint},
+                    );
+                } else {
+                    try self.reporter.addErrorWithHint(
+                        .KORU010,
+                        first_idx + 1,
+                        lexer.getIndent(line) + 1,
+                        "stray continuation line without Koru construct",
+                        .{},
+                        "{s}",
+                        .{hint},
+                    );
+                }
+                self.current = scan + 1;
             } else {
                 // Host-embedded `.k*` files: Koru module constructs require `~`.
                 // Pure `.k` synthesizes it above; this catches bare Koru keywords
@@ -5707,6 +5783,19 @@ pub const Parser = struct {
             return err;
         };
         return item;
+    }
+
+    /// A line whose glyph only makes sense as a continuation: `|` (arm or
+    /// `|>` step) or `!` (obligation arm — `! name`, `! ?name`, `!?`; `!=`/
+    /// `!x()` host text never matches outside pure `.k`, where every `!` line
+    /// is Koru). Reaching the top-level loop on one of these means nothing
+    /// claimed it — the stray KORU010 names.
+    fn isStrayContinuationLine(self: *Parser, line: []const u8) bool {
+        const t = lexer.trim(line);
+        if (t.len == 0) return false;
+        if (t[0] == '|') return true;
+        return t[0] == '!' and
+            (self.is_k or (t.len > 1 and (t[1] == ' ' or t[1] == '\t' or t[1] == '?')));
     }
 
     /// The line sitting where a continuation would sit — indented under a

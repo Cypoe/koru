@@ -111,8 +111,18 @@ sections — not a hand-edited markdown file that will rot.
 - ~~`// comment` inside a `std/store:new` schema block corrupts emission~~ —
   **fixed** (same commit, `struct_literal.zig::splitFields` strips line
   comments; pin `690_353` green).
-- `KORU010` "stray continuation" — the systemic #1: 345 rows, 71 teach-miss,
-  ≥3 distinct causes under one message; worst episode 42.5 min.
+- `KORU010` "stray continuation" — split by shape (345 systemic rows):
+  **308 of 326 stray-continuation rows arrived in bursts ≥3** — one severed
+  chain orphans every continuation line below it, each firing an identical
+  unteaching error. DIAG fixed: orphan runs now collapse to one diagnostic
+  naming the run's span and the separator (`blank lines end a chain — the
+  construct at line N cannot be continued across one`; pin `210_307`).
+  Open DESIGN ruling: comments between chain steps are trivia (210_239) but
+  blank lines end the chain — agents write blanks to organize long flows and
+  the corpus says they never learn the asymmetry. Should blank lines inside
+  a `|>` chain be legal? (bursts = ~95% of this family's volume; the cascade
+  fix measurably teaches the rule in the meantime — re-run `hist` to check
+  teach-miss delta.)
 - `KORU161` never says what the queried name *is* or which spelling applies —
   `std/store(name) ! field` (watch) vs `query` (plural sweep) vs `first`.
   126 systemic rows, median dwell 1.3 min — the slowest common refusal.

@@ -1,7 +1,7 @@
 ---
 type: belief
 id: frag-session-journals-are-a-refusal-corpus
-provenance: 2026-09-28 side session mined sessions.db while a parallel session built wartrain in koru; corpus-first triage produced two verified bug pins the same day; evolved same day — corpus rescoped to invocation and provenance-tagged
+provenance: 2026-09-28 side session mined sessions.db while a parallel session built wartrain in koru; corpus-first triage produced two verified bug pins the same day; evolved same day — corpus rescoped to invocation and provenance-tagged; evolved again — KORU010's 345 rows proved ~95% cascade, teaching that bursts not rows rank a family
 ts: 2026-09-28
 ---
 
@@ -26,6 +26,14 @@ newcomer, not the language — the working backlog is the systemic view
 (`--without org:COCPORN,repo:ogun`), and re-ranking under it is not cosmetic:
 KORU161 is 232 rows unfiltered but 126 systemic; PARSE006 was 280 but 55. Half
 the first day's headline numbers were one game session.
+
+**Row count overstates cause count — count bursts, not rows.** A refusal
+family measured in runs is one cause amplified: KORU010's 345 systemic rows
+decomposed to ~95% cascade — one severed chain orphaning every continuation
+line below it, each line logging its own identical refusal. Split a family by
+burst size and source shape before ranking it; a dominant cascade is a
+diagnostic-amplification finding, not a count of distinct confusions. (Fixed
+by collapsing the orphan run into one diagnostic that names the separator.)
 
 The belief that replaces: "we learn what the language gets wrong by thinking
 about it." No — the telemetry exists and was never read back. A transcript's
