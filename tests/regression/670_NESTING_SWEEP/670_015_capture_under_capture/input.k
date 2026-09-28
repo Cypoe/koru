@@ -8,4 +8,3 @@ capture { k: 0[i64] }
 ! as acc |> capture { n: 0[i64] }
     ! as inner |> captured { n: inner.n + 1 }
     | captured r |> std/io:print.ln("n={{ r.n:d }}")
-| captured _ |> _

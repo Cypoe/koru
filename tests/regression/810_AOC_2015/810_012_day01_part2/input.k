@@ -15,7 +15,6 @@ basement-pos = capture { floor: 0[i64], idx: 0[i64], pos: 0[i64] }
         | then |> captured { floor: acc.floor + 1 }
         | else |> captured { floor: acc.floor - 1 } |> if(acc.floor == -1 and acc.pos == 0)
             | then |> captured { pos: acc.idx }
-            | else |> _
 | captured r -> r.pos
 
 std/fs:read-lines(path: "tests/regression/810_AOC_2015/810_012_day01_part2/input.txt")

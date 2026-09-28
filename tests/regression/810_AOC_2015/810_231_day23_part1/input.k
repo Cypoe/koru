@@ -28,7 +28,5 @@ capture { op: [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 }, reg: [8]i64{ 0, 0, 0, 0, 0, 0, 0
         | `jmp (?<o>[+-][0-9]+)` { o: i64 } |> captured { op[@as(usize, @intCast(acc.idx))]: 3, reg[@as(usize, @intCast(acc.idx))]: 0, off[@as(usize, @intCast(acc.idx))]: o, idx: acc.idx + 1 }
         | `jie (?<r>a|b), (?<o>[+-][0-9]+)` { r: string, o: i64 } |> captured { op[@as(usize, @intCast(acc.idx))]: 4, reg[@as(usize, @intCast(acc.idx))]: @as(i64, r[0]) - 97, off[@as(usize, @intCast(acc.idx))]: o, idx: acc.idx + 1 }
         | `jio (?<r>a|b), (?<o>[+-][0-9]+)` { r: string, o: i64 } |> captured { op[@as(usize, @intCast(acc.idx))]: 5, reg[@as(usize, @intCast(acc.idx))]: @as(i64, r[0]) - 97, off[@as(usize, @intCast(acc.idx))]: o, idx: acc.idx + 1 }
-        | no-match |> _
     | done _ |> run(pc: 0, a: 0, b: 0, ops: acc.op, regs: acc.reg, offs: acc.off, n: acc.idx): res |> std/io:print.ln("a={{ res.a:d }} b={{ res.b:d }}")
     | failed e |> std/io:print.ln("FAILED {{ e:s }}")
-| captured _ |> _

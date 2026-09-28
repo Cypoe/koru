@@ -13,7 +13,6 @@ capture { code: 20151125[i64] }
     ! line l |> std/regex:match(l)
         | `(?<r>[0-9]+) (?<c>[0-9]+)` { r: i64, c: i64 } |> for(0..(@as(usize, @intCast(@divTrunc((r + c - 1) * (r + c - 2), 2) + c - 1))))
             ! each _ |> captured { code: @mod(acc.code * 252533, 33554393) }
-            | done |> _
         | no-match |> std/io:print.ln("BAD LINE {{ l:s }}")
     | done _ |> _
     | failed e |> std/io:print.ln("FAILED {{ e:s }}")

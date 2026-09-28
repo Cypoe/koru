@@ -1,0 +1,29 @@
+// PINS: a SUBFLOW impl whose head calls a tor that DECLARES effect
+// branches while arming NONE of them must still emit the 2-arg call.
+//
+// `beats` declares `! ?beat`. The `drive` impl arms no `!` arm at all — the
+// comptime `__H` parameter is part of the handler signature because the DECL
+// has effect branches, so the call must go out as
+//
+//     beats_event.handler(.{ .k = k }, Handlers_sf)
+//
+// with an empty synthesized struct, not `handler(.{ .k = k })` ("expected 2
+// argument(s), found 1"). 400_175 covers the armed case; this is the cell the
+// `sf_effect_conts.items.len > 0` gate dropped: zero arms, same signature.
+const std = @import("std");
+~import std/io
+
+~tor beats { k: i64 }
+! ?beat i64
+| done
+~proc beats|zig {
+    var i: i64 = 0;
+    while (i < k) : (i += 1) beat(i);
+    return .{ .done = .{} };
+}
+
+~tor drive { k: i64 }
+~drive = beats(k)
+| done |> std/io:print.ln("wrapped")
+
+~drive(k: 2)

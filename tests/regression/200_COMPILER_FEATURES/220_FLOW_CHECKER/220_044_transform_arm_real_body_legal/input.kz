@@ -1,0 +1,24 @@
+// The legal sibling of 220_043/220_045: under a transform head, an optional
+// branch arm whose body does REAL work stays legal — `! tick _ |>` discards
+// the payload but actually acts. Compile-only pin (no markers): the shape
+// must not be refused.
+
+~import std/io
+
+~pub tor step {}
+! ?tick i64
+| ?done
+
+~proc step|zig { return .{ .done = .{} }; }
+
+~[comptime|transform]pub tor run { expr: Expression, item: *const std/compiler:Item, program: *const std/compiler:Program } -> SiteResult
+
+~proc run|zig {
+    const ast = @import("ast");
+    const allocator = @import("std").heap.page_allocator;
+    const flow = if (item.* == .flow) &item.flow else return .{};
+    return .{ .replacement = ast.Item{ .inline_code = .{ .code = "// run ran", .location = flow.location, .module = allocator.dupe(u8, flow.module) catch return .{} } } };
+}
+
+~run()
+! tick _ |> std/io:print.ln("tick")

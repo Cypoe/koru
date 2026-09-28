@@ -1,0 +1,23 @@
+// RULING 1 (KORU054) under a transform head — the terminal half of 220_043.
+//
+// A no-op `_` body on an OPTIONAL terminal branch is illegal even when the
+// arm rides a comptime transform: `run` borrows `step`'s arm vocabulary, so
+// `done`'s optionality is declared on the sibling decl in the same module.
+
+~pub tor step {}
+! ?tick i64
+| ?done
+
+~proc step|zig { return .{ .done = .{} }; }
+
+~[comptime|transform]pub tor run { expr: Expression, item: *const std/compiler:Item, program: *const std/compiler:Program } -> SiteResult
+
+~proc run|zig {
+    const ast = @import("ast");
+    const allocator = @import("std").heap.page_allocator;
+    const flow = if (item.* == .flow) &item.flow else return .{};
+    return .{ .replacement = ast.Item{ .inline_code = .{ .code = "// run ran", .location = flow.location, .module = allocator.dupe(u8, flow.module) catch return .{} } } };
+}
+
+~run()
+| done _ |> _

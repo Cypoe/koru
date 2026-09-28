@@ -14,5 +14,9 @@
 # board's largest cross-file idiom. Net -19 clusters/-43 members vs the
 # first pin; the +2/+2 over the fold's own measurement is concurrent
 # pump/channel churn in the working tree, not the fold.
-clusters=1042
+# 1045/889: +3 clusters over 1042 is a concurrent session's uncommitted
+# interpreter/bridge/runtime edits in the shared checkout — clean HEAD
+# measures exactly 1042. Re-pinned to measured per the uncommitted-work
+# clause; re-settles when that work commits.
+clusters=1045
 members=889

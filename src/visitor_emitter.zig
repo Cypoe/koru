@@ -3673,21 +3673,24 @@ pub const VisitorEmitter = struct {
                                                         try sf_terminal_conts.append(self.allocator, c);
                                                     }
                                                 }
-                                                if (sf_effect_conts.items.len > 0) {
-                                                    const hname = try std.fmt.allocPrint(self.allocator, "Handlers_sf", .{});
-                                                    sf_handlers_name = hname;
-                                                    var h_ctx = emitter.EmissionContext{
-                                                        .allocator = self.allocator,
-                                                        .ast_items = self.all_items,
-                                                        .tap_registry = self.tap_registry,
-                                                        .type_registry = self.type_registry,
-                                                        .main_module_name = self.main_module_name,
-                                                        .is_sync = true,
-                                                        .in_handler = true,
-                                                        .impl_event_decl = event,
-                                                    };
-                                                    try emitter.emitHandlersStruct(self.code_emitter, &h_ctx, hname, sf_effect_conts.items, inv_ed);
-                                                }
+                                                // The handler signature carries `comptime __H`
+                                                // whenever the DECL has `!` branches — even when
+                                                // the consumer arms none of them (all optional).
+                                                // Synthesize the (empty) struct anyway or the call
+                                                // below goes out with 1 arg against a 2-arg handler.
+                                                const hname = try std.fmt.allocPrint(self.allocator, "Handlers_sf", .{});
+                                                sf_handlers_name = hname;
+                                                var h_ctx = emitter.EmissionContext{
+                                                    .allocator = self.allocator,
+                                                    .ast_items = self.all_items,
+                                                    .tap_registry = self.tap_registry,
+                                                    .type_registry = self.type_registry,
+                                                    .main_module_name = self.main_module_name,
+                                                    .is_sync = true,
+                                                    .in_handler = true,
+                                                    .impl_event_decl = event,
+                                                };
+                                                try emitter.emitHandlersStruct(self.code_emitter, &h_ctx, hname, sf_effect_conts.items, inv_ed);
                                             }
                                         }
 

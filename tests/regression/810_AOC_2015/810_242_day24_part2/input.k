@@ -14,7 +14,6 @@ std/list:new(i64)
 | list xs |> std/fs:read-lines(path: "tests/regression/810_AOC_2015/810_242_day24_part2/input.txt")
     ! line l |> std/regex:match(l)
         | `(?<n>[0-9]+)` { n: i64 } |> std/list:push(xs, v: n)
-        | no-match |> _
     | done _ |> std/list:len(xs): n |> capture { sm: 0[i64] }
             ! as sa |> for(0..n)
                 ! each i |> std/list:get(xs, i)

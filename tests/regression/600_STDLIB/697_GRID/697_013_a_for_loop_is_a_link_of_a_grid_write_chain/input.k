@@ -32,12 +32,10 @@ std/grid:new(g, size: 4) { n: 0[i64], sum: 0[i64] }
 // HEAD: the write lands and the loop after it runs.
 std/grid:stored { g[0].n: g[0].n + 1 } |> for(0..3)
 ! each _ |> std/grid:stored { g[1].sum: g[1].sum + 1 }
-| done |> _
 
 // SAME COLUMN: 10 seeded by the write, then three increments observing it.
 std/grid:stored { g[2].sum: 10 } |> for(0..3)
 ! each _ |> std/grid:stored { g[2].sum: g[2].sum + 1 }
-| done |> _
 
 // IN AN ARM: two outer iterations, each writing then running its own loop.
 for(0..2)

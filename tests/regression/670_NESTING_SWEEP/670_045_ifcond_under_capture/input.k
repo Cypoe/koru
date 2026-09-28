@@ -7,4 +7,3 @@ capture { k: 0[i64] }
 ! as acc |> if(1 == 1)
     | then |> std/io:print.ln("then") |> captured { k: acc.k + 1 }
     | else |> captured { acc.k }
-| captured _ |> _

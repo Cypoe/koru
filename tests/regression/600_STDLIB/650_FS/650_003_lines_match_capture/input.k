@@ -10,6 +10,5 @@ import std/regex
 std/fs:read-lines(path: "tests/regression/600_STDLIB/650_FS/650_003_lines_match_capture/input.txt")
 ! line l |> std/regex:match(l)
     | `[0-9]+` m |> std/io:print.ln("number: {{ m:s }}")
-    | no-match |> _
 | done n |> std/io:print.ln("{{ n:d }} lines scanned")
 | failed e |> std/io:print.ln("FAILED: {{ e:s }}")

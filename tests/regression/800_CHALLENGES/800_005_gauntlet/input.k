@@ -95,7 +95,6 @@ cull = std/store:rule(arena)
     | item i |> if(i.opp != -1)
         | then |> std/store:stored { arena[i.opp].opp: -1 }
             |> std/store:stored { arena[i.opp].hp: arena[i.opp].hp + 5 }
-        | else |> _
 
 tor rounds { left: i64 } -> i64
 rounds = strike() |> cull() |> if(left <= 1)

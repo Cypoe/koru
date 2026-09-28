@@ -22,4 +22,3 @@ std/store:rule(rows)
     | then |> if(e.id == 7)
         | then |> std/io:print.ln("deep hit {{ e.id:d }}")
         | else |> std/io:print.ln("deep miss")
-    | else |> _

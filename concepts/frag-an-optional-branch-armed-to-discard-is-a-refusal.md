@@ -42,3 +42,25 @@ sweep changes no emitted program (the omission path is pinned by 400_145).
 The same spread is how the wart hid the `inline_body` arm-list freeze —
 every consumer spelled the arm, so the synthesized path never ran
 (frag-template-expand-freezes-before-create, second axis).
+
+## The refusal reaches through transforms (evolved 2026-10-02)
+
+The check used to skip `is_transform_flow` heads entirely — fan-out transforms
+were presumed to carry arms as data. But a transform like `vaxis:run` forwards
+its `!` arms verbatim onto a sibling decl (`step`), and those arms are
+consumer-authored spelling subject to the same law. The check now runs on
+transform flows, resolved against the invoked decl's MODULE vocabulary — the
+arm's optionality lives on whichever sibling declares it. A data arm (regex
+pattern, parser alternative) matches no declared branch and never fires.
+KORU039 (sibling-discard) stays exempt: fan-out legitimately repeats names.
+
+The sweep found the wart's true reach: 38 more sites inside transform
+subtrees (capture, store:rule, regex:match, if-under-rule) that had never been
+judged. Same repair — omission is identical semantics.
+
+It also flushed out the honest case the rule was protecting against:
+`vaxis`'s `! tick _ |> _` was a PRESENCE CLAIM — `@hasDecl(__H, "tick")` armed
+a 16ms heartbeat. The body was `_` because the work was in the presence. The
+banned spelling forced the real API: `run(tick_ms: 16)` configures the clock
+directly. When a no-op arm turns out to be load-bearing, the load belongs in
+the signature, not in a handler-shaped lie.

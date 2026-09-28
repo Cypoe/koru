@@ -14,7 +14,6 @@ capture { hits: 0[i64] }
 ! as acc |> std/fs:read-lines(path: "tests/regression/600_STDLIB/650_FS/650_004_capture_across_handler_boundary/input.txt")
     ! line l |> std/regex:match(l)
         | `[0-9]+` _ |> captured { hits: acc.hits + 1 }
-        | no-match |> _
     | done _ |> _
     | failed e |> std/io:print.ln("FAILED: {{ e:s }}")
 | captured total |> std/io:print.ln("{{ total.hits:d }} number lines")

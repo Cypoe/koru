@@ -190,15 +190,24 @@ pub const FlowChecker = struct {
         // rule judges consumer spelling, and the frontend AST is the only tree
         // where every arm is user-authored — `.all` mode sees the discharge
         // inserter's minted optional-arm padding, which is structurally
-        // identical to the banned spelling.
-        if (self.mode == .frontend and !is_transform_flow) {
+        // identical to the banned spelling. Transform flows take the check too,
+        // resolved against the invoked decl's MODULE vocabulary: transforms
+        // forward arms to sibling decls (`vaxis:run` transplants `!` arms onto
+        // a generated `step` call), so `tick`'s optionality lives on `step`,
+        // not `run`. A transform's DATA arms (regex patterns, parser
+        // alternatives) match no declared branch and never fire.
+        if (self.mode == .frontend) {
             const head_decl = self.findEventDecl(&flow.inv().path);
-            const head_branches: []const ast.Branch = if (head_decl) |d| d.branches else &.{};
-            if (try self.checkOptionalNoopDiscard(flow.body.continuations, head_branches)) return;
+            const arm_branches: []const ast.Branch = if (is_transform_flow)
+                try self.moduleArmVocabulary(head_decl)
+            else if (head_decl) |d| d.branches else &.{};
+            if (try self.checkOptionalNoopDiscard(flow.body.continuations, arm_branches)) return;
             // KORU039 (RULING 3): a no-op `_` effect handler whose branch is
-            // already handled by a sibling. Same structural shape, both modes;
-            // recurses the whole continuation tree so nested sites are covered.
-            if (try self.checkEffectDiscardSibling(flow.body.continuations)) return;
+            // already handled by a sibling. Stays exempt on transform
+            // invocations — fan-out transforms legitimately repeat arm names.
+            if (!is_transform_flow) {
+                if (try self.checkEffectDiscardSibling(flow.body.continuations)) return;
+            }
         }
 
         // The declared branches of the event this flow invokes — threaded into
@@ -1602,6 +1611,9 @@ pub const FlowChecker = struct {
                     );
                 }
                 found = true;
+                // One diagnostic per arm — a module-wide vocabulary can carry
+                // the same branch name on two sibling decls.
+                break;
             }
         }
         // Recurse one level down everywhere: children of an invocation cont
@@ -1616,8 +1628,10 @@ pub const FlowChecker = struct {
                 const node = cont.node orelse break :blk &.{};
                 if (node != .invocation) break :blk &.{};
                 const d = self.findEventDecl(&node.invocation.path) orelse break :blk &.{};
-                // Transform nodes' branches are transform DATA, not handlers.
-                if (annotation_parser.hasPart(d.annotations, "transform")) break :blk &.{};
+                // A transform invocation's arms are judged against its whole
+                // module's vocabulary — it forwards them to sibling decls.
+                if (annotation_parser.hasPart(d.annotations, "transform"))
+                    break :blk try self.moduleArmVocabulary(d);
                 break :blk d.branches;
             };
             if (try self.checkOptionalNoopDiscard(cont.continuations, child_branches)) found = true;
@@ -1992,6 +2006,42 @@ pub const FlowChecker = struct {
         }
 
         return null;
+    }
+
+    fn sameModule(a: ?[]const u8, b: ?[]const u8) bool {
+        if (a == null or b == null) return a == null and b == null;
+        return std.mem.eql(u8, a.?, b.?);
+    }
+
+    /// Arm vocabulary for a TRANSFORM invocation: every branch declared by any
+    /// tor sharing the invoked decl's module — its own plus siblings'.
+    /// A transform's `!`/`|` arms are forwarded to decls the transform owns
+    /// (`vaxis:run` transplants `!` arms onto a generated `step` call), so the
+    /// optionality an arm name carries lives on a sibling, not the invoked
+    /// decl. The callers' rules only fire on OPTIONAL matches, so widening the
+    /// set is safe: a data arm (a regex pattern, a parser alternative) names
+    /// no declared branch and can never match.
+    fn moduleArmVocabulary(self: *FlowChecker, invoked: ?*const ast.EventDecl) ![]const ast.Branch {
+        const decl = invoked orelse return &.{};
+        const module = decl.path.module_qualifier;
+        const items = self.ast_items orelse return decl.branches;
+        var out: std.ArrayList(ast.Branch) = .empty;
+        for (items) |*item| {
+            switch (item.*) {
+                .event_decl => |*ev| {
+                    if (sameModule(ev.path.module_qualifier, module))
+                        try out.appendSlice(self.allocator, ev.branches);
+                },
+                .module_decl => |*m| {
+                    for (m.items) |*mi| {
+                        if (mi.* == .event_decl and sameModule(mi.event_decl.path.module_qualifier, module))
+                            try out.appendSlice(self.allocator, mi.event_decl.branches);
+                    }
+                },
+                else => {},
+            }
+        }
+        return out.items;
     }
 
     /// Check for duplicate branch handlers at the same level. The RULE lives in

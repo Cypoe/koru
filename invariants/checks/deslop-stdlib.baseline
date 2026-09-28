@@ -2,10 +2,14 @@
 # 2026-10-13. The stdlib is the definitional layer — 45 spellings in
 # use, a tight corpus. Keys are ceilings; see the sibling baselines.
 clusters=71
-members=113
+members=115
 skipped=2
 spellings=45
 # 70/111: store.keyed.kz joined io.blk-style import preamble clone w/ interpreter.select.kz (3 shared compiler-module imports, boilerplate)
 # 71/113: bulkjoin's import-preamble clone (joined 2026-10-14) + in-flight
 # pump/channel work in the shared checkout; re-pinning records the working
 # tree as measured, per the row's uncommitted-work clause.
+# 71/115: channel-custody decls + pump split shells (pump.run/pump.wait/
+# pump.run-msgs) joined existing channel/io/pump event_decl twins. Measured
+# identical against a clean HEAD worktree — committed growth, not
+# working-tree drift; the pump shells sharing shape is the protocol.

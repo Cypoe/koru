@@ -18,6 +18,5 @@ capture { c0: 0[i64], d0: 0[i64], f0: 0[i64], t0: 0[i64], c1: 0[i64], d1: 0[i64]
         | no-match |> std/io:print.ln("BAD LINE {{ l:s }}")
     | done _ |> for(0..101)
         ! each a |> captured { best: @max(acc.best, @max(@as(i64, 0), acc.c0 * @as(i64, @intCast(a)) + acc.c1 * (100 - @as(i64, @intCast(a)))) * @max(@as(i64, 0), acc.d0 * @as(i64, @intCast(a)) + acc.d1 * (100 - @as(i64, @intCast(a)))) * @max(@as(i64, 0), acc.f0 * @as(i64, @intCast(a)) + acc.f1 * (100 - @as(i64, @intCast(a)))) * @max(@as(i64, 0), acc.t0 * @as(i64, @intCast(a)) + acc.t1 * (100 - @as(i64, @intCast(a))))) }
-        | done |> _
     | failed e |> std/io:print.ln("FAILED {{ e:s }}")
 | captured total |> std/io:print.ln("{{ total.best:d }}")

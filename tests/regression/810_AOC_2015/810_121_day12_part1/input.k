@@ -16,7 +16,6 @@ sum-numbers = capture { sum: 0[i64], num: 0[i64], sign: 1[i64], in: 0[i64] }
         | else |> if(a.in == 1)
             | then |> captured { sum: a.sum + a.sign * a.num, num: 0, sign: 1, in: 0 } |> if(ch == '-')
                 | then |> captured { sign: -1 }
-                | else |> _
             | else |> if(ch == '-')
                 | then |> captured { sign: -1 }
                 | else |> captured { sign: 1 }

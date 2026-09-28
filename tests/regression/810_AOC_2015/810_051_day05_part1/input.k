@@ -22,8 +22,6 @@ capture { nice: 0[i64] }
             | `[a-z]*(aa|bb|cc|dd|ee|ff|gg|hh|ii|jj|kk|ll|mm|nn|oo|pp|qq|rr|ss|tt|uu|vv|ww|xx|yy|zz)[a-z]*` _ |> std/regex:match(s)
                 | `[a-z]*(ab|cd|pq|xy)[a-z]*` _ |> _
                 | no-match |> captured { nice: acc.nice + 1 }
-            | no-match |> _
-        | no-match |> _
     | done _ |> _
     | failed e |> std/io:print.ln("FAILED {{ e:s }}")
 | captured total |> std/io:print.ln("{{ total.nice:d }}")

@@ -15,8 +15,6 @@ life-step = capture { h: [8][8]i64{ .{ 0, 0, 0, 0, 0, 0, 0, 0 }, .{ 0, 0, 0, 0, 
 ! as a |> for(1..7)
     ! each r |> for(1..7)
         ! each c |> captured { h[r][c]: @as(i64, @intFromBool((g[r][c] == 1 and ((g[r - 1][c - 1] + g[r - 1][c] + g[r - 1][c + 1] + g[r][c - 1] + g[r][c + 1] + g[r + 1][c - 1] + g[r + 1][c] + g[r + 1][c + 1]) == 2 or (g[r - 1][c - 1] + g[r - 1][c] + g[r - 1][c + 1] + g[r][c - 1] + g[r][c + 1] + g[r + 1][c - 1] + g[r + 1][c] + g[r + 1][c + 1]) == 3)) or (g[r][c] == 0 and (g[r - 1][c - 1] + g[r - 1][c] + g[r - 1][c + 1] + g[r][c - 1] + g[r][c + 1] + g[r + 1][c - 1] + g[r + 1][c] + g[r + 1][c + 1]) == 3))) }
-      | done |> _
-  | done |> _
 | captured result -> result.h
 
 pub tor run-steps { g: [8][8]i64, k: i64 } -> [8][8]i64
@@ -34,8 +32,5 @@ capture { g: [8][8]i64{ .{ 0, 0, 0, 0, 0, 0, 0, 0 }, .{ 0, 0, 0, 0, 0, 0, 0, 0 }
             ! as b |> for(0..8)
                 ! each rr |> for(0..8)
                     ! each cc |> captured { lit: b.lit + gf[rr][cc] }
-                  | done |> _
-              | done |> _
             | captured cres |> std/io:print.ln("{{ cres.lit:d }}")
     | failed e |> std/io:print.ln("FAILED {{ e:s }}")
-| captured _ |> _
