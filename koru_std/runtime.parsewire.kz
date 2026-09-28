@@ -24,121 +24,13 @@
 // interpreter's own parser, so the wire can never accept a shape that eval
 // would execute differently.
 
-// The wire's shape rules, as prompt bytes. These are the sentences
-// `wireValidate` below enforces — the two must move together or the prompt
-// starts lying about the parser (the drift this rung exists to kill).
-// `scope-grammar` renders this text above the scope's own verb lines; the
-// chain rule's worked example is derived per-scope in `runtime.example.kz`.
-const WIRE_GRAMMAR_TEXT =
-    \\A wire turn is one flow: verb(field: "value", field: "value") with `|` arms chaining what each call issues.
-    \\- The verb is a bare name from your vocabulary — letters, digits, '-', '_' — immediately followed by '('.
-    \\- Every value is a double-quoted string; escape quotes and backslashes inside (\", \\). No bare values.
-    \\- A second invocation starts a second item: one invocation per line runs each in order with one line of report per step.
-    \\- Prose is not wire. To speak, call the vocabulary's voice verb; to act, call its verb. Nothing else parses.
-;
-
-const WireRejection = struct { message: []const u8, byte: usize };
-
-fn wireIdentStart(c: u8) bool {
-    return std.ascii.isAlphabetic(c) or c == '_';
-}
-
-fn wireIdentChar(c: u8) bool {
-    return std.ascii.isAlphanumeric(c) or c == '_' or c == '-';
-}
-
-fn wireReject(comptime fmt: []const u8, args: anytype, byte: usize) WireRejection {
-    // Rejection messages are page-backed and intentionally never freed — the
-    // same tolerance the interpreter's own parse-error messages carry.
-    const message = std.fmt.allocPrint(std.heap.page_allocator, fmt, args) catch @panic("wire: OOM building rejection");
-    return .{ .message = message, .byte = byte };
-}
-
-fn wireValidate(s: []const u8) ?WireRejection {
-    if (s.len == 0) return wireReject("the wire carries exactly one invocation per turn — the reply was empty", .{}, 0);
-
-    var i: usize = 0;
-    if (!wireIdentStart(s[0])) return wireReject("not an invocation: a wire line is verb(field: \"value\") and starts with a verb name, not '{c}'", .{s[0]}, 0);
-    while (i < s.len and wireIdentChar(s[i])) i += 1;
-    const verb = s[0..i];
-    while (i < s.len and (s[i] == ' ' or s[i] == '\t')) i += 1;
-    if (i >= s.len or s[i] != '(') return wireReject("not an invocation: after the verb '{s}' comes '(' — prose is not wire", .{verb}, i);
-    i += 1;
-
-    while (true) {
-        while (i < s.len and (s[i] == ' ' or s[i] == '\t')) i += 1;
-        if (i < s.len and s[i] == ')') {
-            i += 1;
-            break;
-        }
-        if (i >= s.len or !wireIdentStart(s[i])) return wireReject("arguments are name: \"value\" pairs — expected a field name here", .{}, i);
-        const field_start = i;
-        while (i < s.len and wireIdentChar(s[i])) i += 1;
-        const field = s[field_start..i];
-        while (i < s.len and (s[i] == ' ' or s[i] == '\t')) i += 1;
-        if (i >= s.len or s[i] != ':') return wireReject("expected ':' after the field '{s}'", .{field}, i);
-        i += 1;
-        while (i < s.len and (s[i] == ' ' or s[i] == '\t')) i += 1;
-        if (i >= s.len or s[i] != '"') return wireReject("the value of '{s}' must be a double-quoted string — the wire has no bare values", .{field}, i);
-        i += 1;
-        var closed = false;
-        while (i < s.len) {
-            const c = s[i];
-            if (c == '\\') {
-                i = if (i + 1 < s.len) i + 2 else s.len;
-                continue;
-            }
-            if (c == '"') {
-                closed = true;
-                i += 1;
-                break;
-            }
-            i += 1;
-        }
-        if (!closed) return wireReject("unterminated string for the field '{s}' — the reply looks truncated", .{field}, i);
-        while (i < s.len and (s[i] == ' ' or s[i] == '\t')) i += 1;
-        if (i < s.len and s[i] == ',') {
-            i += 1;
-            continue;
-        }
-        if (i < s.len and s[i] == ')') {
-            i += 1;
-            break;
-        }
-        return wireReject("after a value comes ',' or ')'", .{}, i);
-    }
-
-    while (i < s.len and (s[i] == ' ' or s[i] == '\t')) i += 1;
-    if (i == s.len) return null;
-    // Arms: the invocation may carry `|` continuations on its line and the
-    // lines after it (`| ok h |> verb(...)` binds the fresh outcome for the
-    // chained call — the fragment's load-bearing shape). The wire shapes
-    // only the head above; the arms' grammar is the interpreter's own
-    // parser, which validates below in parse.wire's parse_event step, so
-    // the wire can never accept a chain eval would execute differently.
-    if (s[i] == '|') return null;
-    var j = i;
-    while (j < s.len and (s[j] == ' ' or s[j] == '\t' or s[j] == '\r' or s[j] == '\n')) j += 1;
-    if (j < s.len and s[j] == '|') return null;
-    if (s[i] == '\r' or s[i] == '\n') return wireReject("one flow per turn: a second invocation is a second turn", .{}, i);
-    return wireReject("one flow per turn: nothing follows the closing ')' except arms", .{}, i);
-}
-
-fn wireLineColumn(s: []const u8, byte: usize) struct { line: u32, column: u32 } {
-    var line: u32 = 1;
-    var line_start: usize = 0;
-    for (s[0..@min(byte, s.len)], 0..) |c, j| {
-        if (c == '\n') {
-            line += 1;
-            line_start = j + 1;
-        }
-    }
-    return .{ .line = line, .column = @intCast(byte - line_start + 1) };
-}
+// The wire's shape rules and the validator that enforces them —
+// WIRE_GRAMMAR_TEXT and wireValidate — live in the `wireval` part; the
+// two must move together or the prompt starts lying about the parser.
 
 ~[retain]pub tor parse.wire { source: string }
 | parsed *const ast.Flow
-| parse-error { message: string, line: u32, column: u32 }
+| parse-error { message: string, line: u32, column: u32, not_invocation: bool }
 
 ~proc parse.wire|zig {
     const interpreter_mod = @import("root").koru_std.koru_interpreter;
@@ -150,6 +42,7 @@ fn wireLineColumn(s: []const u8, byte: usize) struct { line: u32, column: u32 } 
             .message = rejection.message,
             .line = pos.line,
             .column = pos.column,
+            .not_invocation = rejection.not_invocation,
         } };
     }
 
@@ -168,6 +61,7 @@ fn wireLineColumn(s: []const u8, byte: usize) struct { line: u32, column: u32 } 
             .message = e.message,
             .line = e.line,
             .column = e.column,
+            .not_invocation = false,
         } },
     };
 }

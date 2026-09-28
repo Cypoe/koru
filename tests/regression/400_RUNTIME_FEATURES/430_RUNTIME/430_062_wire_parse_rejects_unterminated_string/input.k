@@ -1,7 +1,9 @@
-// Pins the wire grammar's string discipline: a value opens with a double
-// quote and must close with one. An unterminated string is a truncated model
-// reply — the refusal says so, rather than letting a partial line dispatch
-// with a silently shortened argument.
+// Pins the wire grammar's string discipline: a value that opens with a
+// double quote must close with one. An unterminated string is a truncated
+// model reply — the refusal says so, rather than letting a partial line
+// dispatch with a silently shortened argument. An unquoted bare token is
+// legal shape (a bound name or literal, 430_066) — `greet(name: kopium)`
+// parses the gate and is refused downstream as an unbound name.
 import std/runtime
 import std/io
 

@@ -1,0 +1,142 @@
+// Koru Standard Library: the `wireval` part of runtime — the wire-grammar
+// validator and the prose it teaches. Joined via `~part wireval` in
+// runtime.kz; merged into the runtime module at load.
+//
+// WIRE_GRAMMAR_TEXT and wireValidate are the pair that must move
+// together: the text describes exactly what the validator enforces.
+
+const WIRE_GRAMMAR_TEXT =
+    \\A wire turn is one flow: verb(field: value, field: value) with `|` arms chaining what each call issues.
+    \\- The verb is a bare name from your vocabulary — letters, digits, '-', '_' — immediately followed by '('.
+    \\- A value is a double-quoted string (escape \" and \\ inside) or a bare literal: a number, true/false, or a name a `|` arm already bound.
+    \\- A second invocation starts a second item: one invocation per line runs each in order with one line of report per step.
+    \\- Prose is not wire — it binds as residue: "residue bound: rN — your reply was not wire; nothing reached the user" keeps YOUR reply at rN; nothing hears it until a verb takes it as an argument.
+;
+
+// `not_invocation` marks the refusals where nothing ever lexed as `verb(` —
+// prose, markdown fences, a lone arm — as opposed to a malformed invocation.
+// The bridge binds those items as residue so the model's own words become a
+// session value it can re-emit through a real verb.
+const WireRejection = struct { message: []const u8, byte: usize, not_invocation: bool };
+
+fn wireIdentStart(c: u8) bool {
+    return std.ascii.isAlphabetic(c) or c == '_';
+}
+
+fn wireIdentChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_' or c == '-';
+}
+
+/// A bare literal token: digits, letters, and the `.`/`+`/`-`/`_` that carry
+/// numbers (`42`, `-0.25`), bool/null words, and bound references (`h`,
+/// `r.user_id`). `,` `)` whitespace terminate it.
+fn wireBareValueChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_' or c == '-' or c == '.' or c == '+';
+}
+
+fn wireReject(comptime fmt: []const u8, args: anytype, byte: usize) WireRejection {
+    // Rejection messages are page-backed and intentionally never freed — the
+    // same tolerance the interpreter's own parse-error messages carry.
+    const message = std.fmt.allocPrint(std.heap.page_allocator, fmt, args) catch @panic("wire: OOM building rejection");
+    return .{ .message = message, .byte = byte, .not_invocation = false };
+}
+
+fn wireRejectResidue(comptime fmt: []const u8, args: anytype, byte: usize) WireRejection {
+    var r = wireReject(fmt, args, byte);
+    r.not_invocation = true;
+    return r;
+}
+
+fn wireValidate(s: []const u8) ?WireRejection {
+    if (s.len == 0) return wireReject("the wire carries exactly one invocation per turn — the reply was empty", .{}, 0);
+
+    var i: usize = 0;
+    if (!wireIdentStart(s[0])) return wireRejectResidue("not an invocation: a wire line is verb(field: \"value\") and starts with a verb name, not '{c}'", .{s[0]}, 0);
+    while (i < s.len and wireIdentChar(s[i])) i += 1;
+    const verb = s[0..i];
+    while (i < s.len and (s[i] == ' ' or s[i] == '\t')) i += 1;
+    if (i >= s.len or s[i] != '(') return wireRejectResidue("not an invocation: after the verb '{s}' comes '(' — prose is not wire", .{verb}, i);
+    i += 1;
+
+    while (true) {
+        while (i < s.len and (s[i] == ' ' or s[i] == '\t')) i += 1;
+        if (i < s.len and s[i] == ')') {
+            i += 1;
+            break;
+        }
+        if (i >= s.len or !wireIdentStart(s[i])) return wireReject("arguments are name: \"value\" pairs — expected a field name here", .{}, i);
+        const field_start = i;
+        while (i < s.len and wireIdentChar(s[i])) i += 1;
+        const field = s[field_start..i];
+        while (i < s.len and (s[i] == ' ' or s[i] == '\t')) i += 1;
+        if (i >= s.len or s[i] != ':') return wireReject("expected ':' after the field '{s}'", .{field}, i);
+        i += 1;
+        while (i < s.len and (s[i] == ' ' or s[i] == '\t')) i += 1;
+        if (i < s.len and s[i] == '"') {
+            i += 1;
+            var closed = false;
+            while (i < s.len) {
+                const c = s[i];
+                if (c == '\\') {
+                    i = if (i + 1 < s.len) i + 2 else s.len;
+                    continue;
+                }
+                if (c == '"') {
+                    closed = true;
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            if (!closed) return wireReject("unterminated string for the field '{s}' — the reply looks truncated", .{field}, i);
+        } else {
+            // Bare literal — number, true/false, or a bound name (`h`,
+            // `r.user_id`): the same token the interpreter's own parser
+            // accepts in this position, judged by it, not re-parsed here.
+            const value_start = i;
+            while (i < s.len and wireBareValueChar(s[i])) i += 1;
+            if (i == value_start) return wireReject("the value of '{s}' must be a double-quoted string or a bare literal — a number, true/false, or a bound name", .{field}, i);
+        }
+        while (i < s.len and (s[i] == ' ' or s[i] == '\t')) i += 1;
+        if (i < s.len and s[i] == ',') {
+            i += 1;
+            continue;
+        }
+        if (i < s.len and s[i] == ')') {
+            i += 1;
+            break;
+        }
+        // The dominant agent failure is unquoted prose in a string field —
+        // `say(text: I'm sorry)` parses `I` as a bare value then trips here.
+        // Name the field and the remedy; the bare-word reading (bound name,
+        // literal) is honest for the missing-comma case too.
+        return wireReject("after the value of '{s}' comes ',' or ')' — text must be \"double-quoted\"; a bare word reads as a bound name", .{field}, i);
+    }
+
+    while (i < s.len and (s[i] == ' ' or s[i] == '\t')) i += 1;
+    if (i == s.len) return null;
+    // Arms: the invocation may carry `|` continuations on its line and the
+    // lines after it (`| ok h |> verb(...)` binds the fresh outcome for the
+    // chained call — the fragment's load-bearing shape). The wire shapes
+    // only the head above; the arms' grammar is the interpreter's own
+    // parser, which validates below in parse.wire's parse_event step, so
+    // the wire can never accept a chain eval would execute differently.
+    if (s[i] == '|') return null;
+    var j = i;
+    while (j < s.len and (s[j] == ' ' or s[j] == '\t' or s[j] == '\r' or s[j] == '\n')) j += 1;
+    if (j < s.len and s[j] == '|') return null;
+    if (s[i] == '\r' or s[i] == '\n') return wireReject("one flow per turn: a second invocation is a second turn", .{}, i);
+    return wireReject("one flow per turn: nothing follows the closing ')' except arms", .{}, i);
+}
+
+fn wireLineColumn(s: []const u8, byte: usize) struct { line: u32, column: u32 } {
+    var line: u32 = 1;
+    var line_start: usize = 0;
+    for (s[0..@min(byte, s.len)], 0..) |c, j| {
+        if (c == '\n') {
+            line += 1;
+            line_start = j + 1;
+        }
+    }
+    return .{ .line = line, .column = @intCast(byte - line_start + 1) };
+}
