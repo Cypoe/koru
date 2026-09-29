@@ -11,6 +11,7 @@
 ~part paths
 ~part context
 ~part dump
+~part directives
 // Compiler system dependencies
 ~std/deps:requires.system {
     "name": "zig",
@@ -45,10 +46,7 @@ const Allocator = std.mem.Allocator;
 //     exe.linkSystemLibrary("sqlite3");
 //   }
 //
-// [norun] annotation prevents auto-execution - frontend reads from AST instead.
-// This makes build.zig generation metacircular - discovered by parsing, not hardcoded!
-
-~[comptime|norun]pub tor requires { source: Source }
+// The declarations themselves live in compiler.directives.kz.
 
 // Core compiler modules needed for backend compilation
 // This replaces the manual temp_build.zig generation in run_regression.sh

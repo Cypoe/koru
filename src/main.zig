@@ -369,6 +369,444 @@ fn backendCacheDir(allocator: std.mem.Allocator) []const u8 {
     return allocator.dupe(u8, ".koru-backend-cache") catch ".koru-backend-cache";
 }
 
+// ============================================================
+// COMPILER MINTS — named, durable backend binaries.
+//
+// `koruc <file> mint <name>` builds this program's backend and stores the
+// binary + a manifest in the mint store ($KORU_MINT_DIR, else
+// ~/.koru/mints/<name>/). `std/compiler:use("name", hash: "…")` in a program
+// pins the compile to a mint: the frontend writes program.ast.json +
+// compiler_env.json and runs the minted binary directly — backend.zig,
+// backend_output_emitted.zig and the zig build are all skipped.
+// `koruc <file> mint check <name>` recomputes the closure over the live tree
+// and diffs it against the manifest — the audit verb `use` skips.
+//
+// The COVERAGE predicate is the hash of backend_output_emitted.zig: it is the
+// only program-derived input compiled into the backend (comptime modules,
+// transform handlers, the baked command dispatch). Emitting it is codegen
+// over the already-parsed AST — cheap next to the zig build it replaces.
+// ============================================================
+
+const CompilerUse = struct {
+    name: []const u8,
+    hash: ?[]const u8,
+};
+
+/// Per-component content hashes of everything compiled into a backend binary.
+/// `use` verifies `emitted` + `iface`; `mint check` diffs all of them.
+const BackendHashComponents = struct {
+    src: u64,
+    stdlib: u64,
+    emitted: u64,
+    iface: u64,
+    combined: u64,
+};
+
+fn fnvHex(allocator: std.mem.Allocator, v: u64) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{x}", .{v});
+}
+
+/// Content-hash every file under root_path (relative paths + bytes). Same
+/// fail-loud rule as backendCacheKey: unreadable means null, never a mismatch.
+fn hashTree(allocator: std.mem.Allocator, root_path: []const u8, label: []const u8) ?u64 {
+    var h = std.hash.Fnv1a_64.init();
+    var count: usize = 0;
+    var dir = std.fs.cwd().openDir(root_path, .{ .iterate = true }) catch return null;
+    defer dir.close();
+    var wlk = dir.walk(allocator) catch return null;
+    defer wlk.deinit();
+    h.update(label);
+    while (wlk.next() catch return null) |entry| {
+        if (entry.kind != .file) continue;
+        const contents = entry.dir.readFileAlloc(allocator, entry.basename, 64 * 1024 * 1024) catch return null;
+        h.update(entry.path);
+        h.update(contents);
+        allocator.free(contents);
+        count += 1;
+    }
+    if (count == 0) return null;
+    return h.final();
+}
+
+/// The frontend/backend runtime contract: program.ast.json is written by this
+/// koruc (ast_json.zig) and read by the minted backend's baked deserializer;
+/// compiler_env.json likewise (compiler_env.zig). If any of these files moved
+/// since the mint, the mint speaks a different wire protocol — refuse.
+fn hashIfaceFiles(allocator: std.mem.Allocator, koru_home: []const u8) ?u64 {
+    const files = [_][]const u8{ "src/ast_json.zig", "src/compiler_env.zig" };
+    var h = std.hash.Fnv1a_64.init();
+    for (files) |rel| {
+        const p = std.fs.path.join(allocator, &[_][]const u8{ koru_home, rel }) catch return null;
+        defer allocator.free(p);
+        const contents = std.fs.cwd().readFileAlloc(allocator, p, 64 * 1024 * 1024) catch return null;
+        defer allocator.free(contents);
+        h.update(rel);
+        h.update(contents);
+    }
+    return h.final();
+}
+
+/// Hash the emitted backend minus `//` comments. Provenance comments carry
+/// `[file:line]` markers — the program's own filename and absolute stdlib
+/// paths — that are not part of the comptime/command closure; without
+/// normalization the coverage hash would pin a mint to one filename and one
+/// checkout location.
+fn hashEmittedNormalized(contents: []const u8) u64 {
+    var h = std.hash.Fnv1a_64.init();
+    h.update("backend_output_emitted.zig");
+    var in_string = false;
+    var in_comment = false;
+    var span_start: usize = 0;
+    var i: usize = 0;
+    while (i < contents.len) {
+        const c = contents[i];
+        if (in_comment) {
+            i += 1;
+            if (c == '\n') {
+                in_comment = false;
+                span_start = i;
+            }
+            continue;
+        }
+        if (in_string) {
+            i += 1;
+            if (c == '\\' and i < contents.len) {
+                i += 1;
+            } else if (c == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (c == '"') {
+            in_string = true;
+            i += 1;
+            continue;
+        }
+        if (c == '/' and i + 1 < contents.len and contents[i + 1] == '/') {
+            h.update(contents[span_start..i]);
+            in_comment = true;
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    h.update(contents[span_start..]);
+    return h.final();
+}
+
+fn backendHashComponents(allocator: std.mem.Allocator, koru_home: []const u8, emitted_contents: []const u8) ?BackendHashComponents {
+    const src_path = std.fs.path.join(allocator, &[_][]const u8{ koru_home, "src" }) catch return null;
+    defer allocator.free(src_path);
+    const std_path = std.fs.path.join(allocator, &[_][]const u8{ koru_home, "koru_std" }) catch return null;
+    defer allocator.free(std_path);
+    const src = hashTree(allocator, src_path, "src") orelse return null;
+    const stdlib = hashTree(allocator, std_path, "koru_std") orelse return null;
+    const iface = hashIfaceFiles(allocator, koru_home) orelse return null;
+    const emitted = hashEmittedNormalized(emitted_contents);
+    var ch = std.hash.Fnv1a_64.init();
+    ch.update(std.mem.asBytes(&src));
+    ch.update(std.mem.asBytes(&stdlib));
+    ch.update(std.mem.asBytes(&emitted));
+    return .{ .src = src, .stdlib = stdlib, .emitted = emitted, .iface = iface, .combined = ch.final() };
+}
+
+fn sha256FileHex(allocator: std.mem.Allocator, path: []const u8) ?[]const u8 {
+    const contents = std.fs.cwd().readFileAlloc(allocator, path, 512 * 1024 * 1024) catch return null;
+    defer allocator.free(contents);
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(contents, &digest, .{});
+    const hex = "0123456789abcdef";
+    var out = allocator.alloc(u8, 64) catch return null;
+    for (digest, 0..) |b, i| {
+        out[i * 2] = hex[b >> 4];
+        out[i * 2 + 1] = hex[b & 0xf];
+    }
+    return out;
+}
+
+/// Mint names are store keys — a name that escapes the store directory is a
+/// path traversal, so anything outside [A-Za-z0-9._-] (and bare dots) refuses.
+fn mintNameValid(name: []const u8) bool {
+    if (name.len == 0 or name.len > 128) return false;
+    if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return false;
+    for (name) |c| {
+        const ok = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or
+            (c >= '0' and c <= '9') or c == '.' or c == '_' or c == '-';
+        if (!ok) return false;
+    }
+    return true;
+}
+
+fn mintDir(allocator: std.mem.Allocator, name: []const u8) !?[]const u8 {
+    if (!mintNameValid(name)) {
+        try printStderr(allocator, "error: invalid mint name '{s}'\n\n  Mint names are store keys — letters, digits, '.', '_', '-' only.\n", .{name});
+        return null;
+    }
+    const root = if (std.process.getEnvVarOwned(allocator, "KORU_MINT_DIR")) |d|
+        d
+    else |_| blk: {
+        const home = std.process.getEnvVarOwned(allocator, "HOME") catch return null;
+        defer allocator.free(home);
+        break :blk std.fs.path.join(allocator, &[_][]const u8{ home, ".koru", "mints" }) catch return null;
+    };
+    defer allocator.free(root);
+    return try std.fs.path.join(allocator, &[_][]const u8{ root, name });
+}
+
+/// Scan the merged program for `compiler:use(name, hash: "…")` directives.
+/// Frontend-only — collected textually like compiler:requires. More than one
+/// is a refusal: a program cannot pin two backends.
+fn collectCompilerUse(allocator: std.mem.Allocator, items: []const ast.Item, found: *?CompilerUse) !void {
+    for (items) |*item| {
+        switch (item.*) {
+            .flow => |*flow| {
+                const inv = flow.inv();
+                const mq = inv.path.module_qualifier orelse continue;
+                const is_compiler = std.mem.eql(u8, mq, "compiler") or std.mem.endsWith(u8, mq, ".compiler");
+                if (!is_compiler or inv.path.segments.len != 1) continue;
+                if (!std.mem.eql(u8, inv.path.segments[0], "use")) continue;
+                if (found.* != null) {
+                    try printStderr(allocator, "error: more than one compiler:use directive\n\n  A program pins one minted backend — delete the extra use.\n", .{});
+                    std.process.exit(1);
+                }
+                var name: ?[]const u8 = null;
+                var pin: ?[]const u8 = null;
+                for (inv.args) |arg| {
+                    const v = stripQuotes(arg.value);
+                    if (std.mem.eql(u8, arg.name, "hash")) {
+                        pin = v;
+                    } else if (std.mem.eql(u8, arg.name, "name") or
+                        std.mem.eql(u8, arg.name, "expr") or
+                        arg.name.len == 0 or std.mem.eql(u8, arg.name, arg.value))
+                    {
+                        // Positional/expr arg — the mint name.
+                        if (name == null) name = v;
+                    }
+                }
+                if (name == null) {
+                    try printStderr(allocator, "error: compiler:use needs a mint name\n\n  Spell it compiler:use(\"my-compiler\") or compiler:use(my-compiler).\n", .{});
+                    std.process.exit(1);
+                }
+                found.* = .{ .name = name.?, .hash = pin };
+            },
+            .module_decl => |*module| try collectCompilerUse(allocator, module.items, found),
+            else => {},
+        }
+    }
+}
+
+fn isCompilerUseFlow(flow: *const ast.Flow) bool {
+    const inv = flow.inv();
+    const mq = inv.path.module_qualifier orelse return false;
+    const is_compiler = std.mem.eql(u8, mq, "compiler") or std.mem.endsWith(u8, mq, ".compiler");
+    return is_compiler and inv.path.segments.len == 1 and
+        std.mem.eql(u8, inv.path.segments[0], "use");
+}
+
+/// Remove compiler:use directive flows after collection. The directive is
+/// frontend-only; left in the AST it lands in the emitted comptime backend as
+/// a comptime flow call, so the mint name itself would join the coverage hash —
+/// `use(A)` and `use(B)` would read as different closures.
+fn stripCompilerUseFlows(allocator: std.mem.Allocator, items: []const ast.Item) ![]const ast.Item {
+    var out = try std.ArrayList(ast.Item).initCapacity(allocator, items.len);
+    for (items) |*item| {
+        switch (item.*) {
+            .flow => |*f| {
+                if (isCompilerUseFlow(f)) continue;
+                try out.append(allocator, item.*);
+            },
+            .module_decl => |*m| {
+                var module_copy = m.*;
+                module_copy.items = try stripCompilerUseFlows(allocator, m.items);
+                try out.append(allocator, .{ .module_decl = module_copy });
+            },
+            else => try out.append(allocator, item.*),
+        }
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn stripQuotes(v: []const u8) []const u8 {
+    if (v.len >= 2 and v[0] == '"' and v[v.len - 1] == '"') return v[1 .. v.len - 1];
+    return v;
+}
+
+fn loadMintManifest(allocator: std.mem.Allocator, mint_dir: []const u8) ?std.json.Parsed(std.json.Value) {
+    const path = std.fs.path.join(allocator, &[_][]const u8{ mint_dir, "mint.json" }) catch return null;
+    defer allocator.free(path);
+    const text = std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024) catch return null;
+    // alloc_always: parsed strings are copies, so the buffer dies at parse end.
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, text, .{ .allocate = .alloc_always }) catch {
+        allocator.free(text);
+        return null;
+    };
+    allocator.free(text);
+    return parsed;
+}
+
+fn manifestStr(m: std.json.Value, key: []const u8) []const u8 {
+    if (m != .object) return "";
+    const v = m.object.get(key) orelse return "";
+    return if (v == .string) v.string else "";
+}
+
+/// Verify a mint against this program and return the backend binary path.
+/// Two hard gates: emitted coverage (the mint's comptime/command closure
+/// matches THIS program's) and iface (the mint's AST/env wire protocol matches
+/// THIS koruc's). Optional `hash:` additionally pins the binary's sha256.
+fn resolveMintedBackend(allocator: std.mem.Allocator, koru_home: []const u8, ud: CompilerUse, emitted_code: []const u8) ![]const u8 {
+    const dir = (try mintDir(allocator, ud.name)) orelse std.process.exit(1);
+    defer allocator.free(dir);
+    const manifest_parsed = loadMintManifest(allocator, dir) orelse {
+        try printStderr(allocator, "error: no mint named '{s}'\n\n  Mint one first:\n      koruc <file.k> mint {s}\n", .{ ud.name, ud.name });
+        std.process.exit(1);
+    };
+    const manifest = manifest_parsed.value;
+    defer manifest_parsed.deinit();
+    if (manifest != .object) {
+        try printStderr(allocator, "error: mint '{s}' manifest is corrupt — delete {s} and re-mint\n", .{ ud.name, dir });
+        std.process.exit(1);
+    }
+
+    const now = backendHashComponents(allocator, koru_home, emitted_code) orelse {
+        try printStderr(allocator, "error: cannot verify mint '{s}' — compiler sources unreadable\n", .{ud.name});
+        std.process.exit(1);
+    };
+    const emitted_now = try fnvHex(allocator, now.emitted);
+    defer allocator.free(emitted_now);
+    if (!std.mem.eql(u8, emitted_now, manifestStr(manifest, "emitted_key"))) {
+        try printStderr(allocator, "error: mint '{s}' does not cover this program\n\n  The mint's comptime/command closure differs from what this program needs\n  (a transform or command import changed since the mint). Re-mint:\n      koruc <file.k> mint {s}\n", .{ ud.name, ud.name });
+        std.process.exit(1);
+    }
+    const iface_now = try fnvHex(allocator, now.iface);
+    defer allocator.free(iface_now);
+    if (!std.mem.eql(u8, iface_now, manifestStr(manifest, "iface_key"))) {
+        try printStderr(allocator, "error: mint '{s}' speaks an older AST/env protocol\n\n  src/ast_json.zig or src/compiler_env.zig moved since the mint — the\n  minted backend cannot read this frontend's program.ast.json. Re-mint:\n      koruc <file.k> mint {s}\n", .{ ud.name, ud.name });
+        std.process.exit(1);
+    }
+
+    const bin = try std.fs.path.join(allocator, &[_][]const u8{ dir, "backend" });
+    std.fs.cwd().access(bin, .{}) catch {
+        try printStderr(allocator, "error: mint '{s}' has no backend binary at {s}\n", .{ ud.name, bin });
+        std.process.exit(1);
+    };
+    if (ud.hash) |pin| {
+        const actual = sha256FileHex(allocator, bin) orelse {
+            try printStderr(allocator, "error: cannot hash minted backend at {s}\n", .{bin});
+            std.process.exit(1);
+        };
+        defer allocator.free(actual);
+        if (!std.mem.eql(u8, actual, pin)) {
+            try printStderr(allocator, "error: mint '{s}' binary does not match pinned hash\n\n  pinned: {s}\n  actual: {s}\n\n  The mint was re-created or modified since the pin. Re-mint and update\n  the hash, or drop `hash:` to follow the name.\n", .{ ud.name, pin, actual });
+            std.process.exit(1);
+        }
+    }
+    try printStdout(allocator, "✓ Minted backend '{s}' verified (closure match)\n", .{ud.name});
+    return bin;
+}
+
+/// `koruc <file> mint <name>` — after the backend build: store the binary and
+/// a manifest recording the closure it was minted from.
+fn storeMint(allocator: std.mem.Allocator, koru_home: []const u8, name: []const u8, built_backend: []const u8, emitted_code: []const u8, source: []const u8) !void {
+    const dir = (try mintDir(allocator, name)) orelse std.process.exit(1);
+    defer allocator.free(dir);
+    std.fs.cwd().makePath(dir) catch |err| {
+        try printStderr(allocator, "error: cannot create mint store {s}: {s}\n", .{ dir, @errorName(err) });
+        std.process.exit(1);
+    };
+    const dest = try std.fs.path.join(allocator, &[_][]const u8{ dir, "backend" });
+    defer allocator.free(dest);
+    std.fs.cwd().copyFile(built_backend, std.fs.cwd(), dest, .{}) catch |err| {
+        try printStderr(allocator, "error: cannot store minted backend: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    const c = backendHashComponents(allocator, koru_home, emitted_code) orelse {
+        try printStderr(allocator, "error: mint stored but manifest failed — compiler sources unreadable\n", .{});
+        std.process.exit(1);
+    };
+    const sha = sha256FileHex(allocator, dest) orelse {
+        try printStderr(allocator, "error: mint stored but sha256 failed\n", .{});
+        std.process.exit(1);
+    };
+    defer allocator.free(sha);
+    const manifest_path = try std.fs.path.join(allocator, &[_][]const u8{ dir, "mint.json" });
+    defer allocator.free(manifest_path);
+    const mf = std.fs.cwd().createFile(manifest_path, .{}) catch |err| {
+        try printStderr(allocator, "error: cannot write manifest: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    defer mf.close();
+    const json = try std.fmt.allocPrint(allocator,
+        \\{{"name":"{s}","sha256":"{s}","closure_key":"{x}","src_key":"{x}","stdlib_key":"{x}","emitted_key":"{x}","iface_key":"{x}","koruc":"{s}","source":"{s}","minted":{d}}}
+        \\
+    , .{ name, sha, c.combined, c.src, c.stdlib, c.emitted, c.iface, version, source, std.time.timestamp() });
+    defer allocator.free(json);
+    try mf.writeAll(json);
+    try printStdout(allocator, "✓ Minted '{s}' → {s}\n  sha256 {s}\n  pin it: std/compiler:use(\"{s}\", hash: \"{s}\")\n", .{ name, dest, sha, name, sha });
+}
+
+/// `koruc <file> mint check <name>` — the audit verb. Recomputes the closure
+/// over the live tree and diffs every component against the manifest. Exit 1
+/// on any drift or mismatch so `mint check || mint` composes in scripts.
+fn runMintCheck(allocator: std.mem.Allocator, koru_home: []const u8, name: []const u8, emitted_code: []const u8) !void {
+    const dir = (try mintDir(allocator, name)) orelse std.process.exit(1);
+    defer allocator.free(dir);
+    const manifest_parsed = loadMintManifest(allocator, dir) orelse {
+        try printStderr(allocator, "error: no mint named '{s}'\n", .{name});
+        std.process.exit(1);
+    };
+    const manifest = manifest_parsed.value;
+    defer manifest_parsed.deinit();
+    if (manifest != .object) {
+        try printStderr(allocator, "error: mint '{s}' manifest is corrupt — delete {s} and re-mint\n", .{ name, dir });
+        std.process.exit(1);
+    }
+
+    const minted_ts: i64 = if (manifest.object.get("minted")) |v| switch (v) {
+        .integer => |i| i,
+        else => 0,
+    } else 0;
+    try printStdout(allocator, "mint {s} (minted {d}, koruc {s}, source {s})\n", .{ name, minted_ts, manifestStr(manifest, "koruc"), manifestStr(manifest, "source") });
+
+    var drift = false;
+    const now = backendHashComponents(allocator, koru_home, emitted_code);
+
+    const bin = try std.fs.path.join(allocator, &[_][]const u8{ dir, "backend" });
+    defer allocator.free(bin);
+    if (sha256FileHex(allocator, bin)) |actual| {
+        defer allocator.free(actual);
+        const ok = std.mem.eql(u8, actual, manifestStr(manifest, "sha256"));
+        if (!ok) drift = true;
+        try printStdout(allocator, "  binary integrity   {s}\n", .{if (ok) "sha256 match" else "MISMATCH — binary moved since mint"});
+    } else {
+        drift = true;
+        try printStdout(allocator, "  binary integrity   MISSING — {s}\n", .{bin});
+    }
+
+    if (now) |c| {
+        const rows = [_]struct { label: []const u8, key: []const u8, cur: u64 }{
+            .{ .label = "ast/env protocol", .key = "iface_key", .cur = c.iface },
+            .{ .label = "core (src/)", .key = "src_key", .cur = c.src },
+            .{ .label = "stdlib (koru_std/)", .key = "stdlib_key", .cur = c.stdlib },
+            .{ .label = "program closure", .key = "emitted_key", .cur = c.emitted },
+        };
+        for (rows) |row| {
+            const cur_hex = try fnvHex(allocator, row.cur);
+            defer allocator.free(cur_hex);
+            const ok = std.mem.eql(u8, cur_hex, manifestStr(manifest, row.key));
+            if (!ok) drift = true;
+            try printStdout(allocator, "  {s: <19}{s}\n", .{ row.label, if (ok) "clean" else "DRIFT — tree moved since mint" });
+        }
+    } else {
+        try printStdout(allocator, "  closure            unmeasurable — compiler sources unreadable\n", .{});
+        drift = true;
+    }
+
+    try printStdout(allocator, "  verdict            {s}\n", .{if (drift) "stale — re-mint to absorb the drift" else "fresh — mint still represents this tree"});
+    if (drift) std.process.exit(1);
+}
+
+
 /// that usually comes from, and what to do. Not for running the USER's own
 /// binary: a SIGSEGV there is the program's own crash and must not be
 /// blamed on the machine.
@@ -6994,6 +7432,10 @@ pub fn main() !void {
     var detected_comptime_command: ?[]const u8 = null;
     var potential_command_arg: ?[]const u8 = null;
     var command_trailing_args: []const []const u8 = &.{};
+    // `koruc <file> mint …` — a FRONTEND verb, never a comptime command. The
+    // args after `mint` are the subcommand: `mint <name>` stores, `mint check
+    // [name]` audits. Intercepted in the command scan below.
+    var mint_args: ?[]const []const u8 = null;
 
     // Check if there's a potential command name in args
     // Args pattern: koruc input.kz <command> <...args for command>
@@ -7007,6 +7449,14 @@ pub fn main() !void {
             // Check if there's a next arg that might be a command
             if (arg_idx + 1 < args.len) {
                 const potential_command = args[arg_idx + 1];
+
+                // `mint` is a frontend verb — it must never fall through to
+                // the shell/zig/koru command matchers or the comptime-command
+                // resolution below. Everything after it is subcommand args.
+                if (std.mem.eql(u8, potential_command, "mint")) {
+                    mint_args = args[@min(arg_idx + 2, args.len)..];
+                    break;
+                }
 
                 // Handle "help" command - list all available commands
                 if (std.mem.eql(u8, potential_command, "help")) {
@@ -7309,6 +7759,39 @@ pub fn main() !void {
         }
     }
 
+    // compiler:use — the mint directive. Frontend-collected textually like
+    // compiler:requires; it never reaches a backend's dispatch table.
+    var use_directive: ?CompilerUse = null;
+    try collectCompilerUse(allocator, source_file.items, &use_directive);
+    if (use_directive != null) {
+        source_file.items = try stripCompilerUseFlows(parse_allocator, source_file.items);
+    }
+
+    // `koruc <file> mint …` subcommand resolution. `mint <name>` stores the
+    // backend once built; `mint check [name]` audits against the live tree
+    // (falling back to the program's use directive for the name). Under mint
+    // the use directive is INERT — minting always builds the current backend.
+    var mint_create: ?[]const u8 = null;
+    var mint_check_name: ?[]const u8 = null;
+    if (mint_args) |margs| {
+        if (margs.len == 0) {
+            try printStderr(allocator, "error: mint needs a name or 'check'\n\n      koruc {s} mint <name>       — store this program's backend as a named mint\n      koruc {s} mint check [name] — audit a mint against the live tree\n", .{ input, input });
+            std.process.exit(1);
+        }
+        if (std.mem.eql(u8, margs[0], "check")) {
+            mint_check_name = if (margs.len > 1) margs[1] else if (use_directive) |ud| ud.name else null;
+            if (mint_check_name == null) {
+                try printStderr(allocator, "error: mint check needs a mint name\n\n      koruc {s} mint check <name>\n  (or a compiler:use(\"name\") directive in the program)\n", .{input});
+                std.process.exit(1);
+            }
+        } else {
+            mint_create = margs[0];
+        }
+    }
+    // A mint pin is honored only on a normal compile — `mint` itself always
+    // builds fresh, and check-only never reaches the backend at all.
+    const minted_use = use_directive != null and mint_create == null and !check_only;
+
     // Canonicalize all DottedPaths - set module_qualifier on everything
     // This enables reliable name resolution for all downstream passes
     const canonicalize_names = @import("canonicalize_names");
@@ -7524,16 +8007,21 @@ pub fn main() !void {
     const has_transforms = comptime_result.transform_count > 0;
     // No defer needed - compile_arena handles cleanup automatically
 
-    // Generate the backend code (now a thin driver; PROGRAM_AST lives in program_ast.zig
-    // for Zig's content-addressed cache to hit across user programs)
-    const backend_code = try generateBackendCode(compile_allocator, input, final_ast, use_visitor, &compiler_config, has_transforms);
-    // No defer needed - compile_arena handles cleanup automatically
+    // compiler:use — the minted backend already exists; emitting backend.zig
+    // would produce a file nothing builds. The emitted code above still ran:
+    // its hash is the coverage check against the mint manifest.
+    if (!minted_use) {
+        // Generate the backend code (now a thin driver; PROGRAM_AST lives in program_ast.zig
+        // for Zig's content-addressed cache to hit across user programs)
+        const backend_code = try generateBackendCode(compile_allocator, input, final_ast, use_visitor, &compiler_config, has_transforms);
+        // No defer needed - compile_arena handles cleanup automatically
 
-    // Write the backend to the output file
-    const out_file = try std.fs.cwd().createFile(output, .{});
-    defer out_file.close();
+        // Write the backend to the output file
+        const out_file = try std.fs.cwd().createFile(output, .{});
+        defer out_file.close();
 
-    try out_file.writeAll(backend_code);
+        try out_file.writeAll(backend_code);
+    }
 
     const output_dir = std.fs.path.dirname(output) orelse ".";
 
@@ -7558,15 +8046,20 @@ pub fn main() !void {
     defer compiler_env_file.close();
     try compiler_env_file.writeAll(compiler_env_json);
 
-    // Write backend_output_emitted.zig for comptime handlers to same directory as backend.zig
-    const backend_output_path = try std.fs.path.join(allocator, &[_][]const u8{ output_dir, "backend_output_emitted.zig" });
-    defer allocator.free(backend_output_path);
-    const backend_output_file = try std.fs.cwd().createFile(backend_output_path, .{});
-    defer backend_output_file.close();
-    try backend_output_file.writeAll(comptime_backend_code);
-
-    try printStdout(allocator, "✓ Compiled {s} → {s}\n", .{ input, output });
-    try printStdout(allocator, "✓ Generated {s} ({d} bytes)\n", .{ backend_output_path, comptime_backend_code.len });
+    // Write backend_output_emitted.zig for comptime handlers to same directory as backend.zig.
+    // Under compiler:use nothing builds it — its hash already served as the
+    // mint coverage check; writing it would just litter a stale build input.
+    if (!minted_use) {
+        const backend_output_path = try std.fs.path.join(allocator, &[_][]const u8{ output_dir, "backend_output_emitted.zig" });
+        defer allocator.free(backend_output_path);
+        const backend_output_file = try std.fs.cwd().createFile(backend_output_path, .{});
+        defer backend_output_file.close();
+        try backend_output_file.writeAll(comptime_backend_code);
+        try printStdout(allocator, "✓ Compiled {s} → {s}\n", .{ input, output });
+        try printStdout(allocator, "✓ Generated {s} ({d} bytes)\n", .{ backend_output_path, comptime_backend_code.len });
+    } else {
+        try printStdout(allocator, "✓ Compiled {s} → minted backend '{s}'\n", .{ input, use_directive.?.name });
+    }
 
     // Collect requirements from AST
     // - compiler:requires → for BACKEND compilation (backend.zig)
@@ -7581,8 +8074,9 @@ pub fn main() !void {
     // Use koru_home from resolver (computed from executable path)
     const koru_lib_path = resolver.koru_home;
 
-    // Generate build.zig for BACKEND (compiler:requires)
-    if (compiler_requirements_raw.len > 0) {
+    // Generate build.zig for BACKEND (compiler:requires).
+    // Under compiler:use no backend is built here — the mint already is one.
+    if (!minted_use and compiler_requirements_raw.len > 0) {
         try printStdout(allocator, "✓ Found {d} compiler requirement(s) for backend\n", .{compiler_requirements_raw.len});
 
         var backend_build_reqs = try std.ArrayList(emit_build_zig.BuildRequirement).initCapacity(allocator, compiler_requirements_raw.len);
@@ -8016,6 +8510,23 @@ pub fn main() !void {
         // This ensures all module dependencies are properly linked
         const output_dir_for_build = std.fs.path.dirname(output) orelse ".";
 
+        // `mint check` — the audit verb. Recomputes the closure over the live
+        // tree and diffs it against the manifest. Runs AFTER emission (the
+        // emitted hash is a component) but never reaches a zig build.
+        if (mint_check_name) |mcn| {
+            try runMintCheck(allocator, koru_lib_path, mcn, comptime_backend_code);
+            return;
+        }
+
+        // compiler:use — resolve the pinned mint. Verification lives in
+        // resolveMintedBackend: emitted-closure coverage, AST/env protocol
+        // compat, and the optional sha256 pin. A mint that fails any gate
+        // exits there with the teaching — there is no degraded path.
+        var minted_backend_path: ?[]const u8 = null;
+        if (minted_use) {
+            minted_backend_path = try resolveMintedBackend(allocator, koru_lib_path, use_directive.?, comptime_backend_code);
+        }
+
         // BACKEND BINARY CACHE: the backend is reusable across programs (its
         // own design note says so), and rebuilding it measured ~11.6s of every
         // compile at scale — the passes themselves are sub-second. On a cache
@@ -8023,7 +8534,8 @@ pub fn main() !void {
         // skipped; on any doubt (IO error, missing inputs) we fall through to
         // the full build. The key covers every compiler-side input file.
         var backend_cached = false;
-        if (backendCacheKey(allocator, koru_lib_path, output_dir_for_build)) |bkey| {
+        if (minted_backend_path == null) {
+            if (backendCacheKey(allocator, koru_lib_path, output_dir_for_build)) |bkey| {
             defer allocator.free(bkey);
             const cache_dir_path = backendCacheDir(allocator);
             defer allocator.free(cache_dir_path);
@@ -8100,8 +8612,21 @@ pub fn main() !void {
                 }
             }
         }
+        }
 
-        // Backend is now at zig-out/bin/backend (from zig build)
+        // `koruc <file> mint <name>` — the backend just built (or was served
+        // from the cache — same binary either way). Store it under the name
+        // with its manifest and stop: a mint records the compiler, it does
+        // not compile the program.
+        if (mint_create) |mname| {
+            const built_backend = try std.fs.path.join(allocator, &[_][]const u8{ output_dir_for_build, "zig-out", "bin", "backend" });
+            defer allocator.free(built_backend);
+            try storeMint(allocator, koru_lib_path, mname, built_backend, comptime_backend_code, input);
+            return;
+        }
+
+        // Backend is at zig-out/bin/backend (from zig build) — or at the mint
+        // store path when compiler:use pinned one.
         const backend_exe = "zig-out/bin/backend";
 
         // Now run the backend, which generates output_emitted.zig and compiles it
@@ -8109,7 +8634,10 @@ pub fn main() !void {
         var backend_args_list = try std.ArrayList([]const u8).initCapacity(allocator, 4);
         defer backend_args_list.deinit(allocator);
 
-        const backend_path = std.fs.path.join(allocator, &.{ ".", backend_exe }) catch backend_exe;
+        const backend_path = if (minted_backend_path) |mb|
+            mb // absolute path into the mint store
+        else
+            std.fs.path.join(allocator, &.{ ".", backend_exe }) catch backend_exe;
         try backend_args_list.append(allocator, backend_path);
 
         if (detected_comptime_command) |cmd| {

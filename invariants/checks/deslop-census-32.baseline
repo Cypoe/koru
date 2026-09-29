@@ -26,10 +26,17 @@
 # publication": the roll fired on +1 cluster / +1 member of foreign src/
 # drift — this commit touches only a .claude skill doc; zero src/ files.
 # The residual named is the same documented field-literal idiom.
-clusters=1524
-members=2076
+clusters=1531
+members=2084
 # Re-pinned in "module home: synthesized qualifiers spell the logical
 # name": +9 clusters / +4 members are ast_functional's three new
 # item-tree walks (moduleHome / containingFlow / findEventDecl) sharing
 # the for/switch/descend idiom every AST traversal in src/ wears — the
 # same shape that already folds five .kz copies into one Zig copy.
+# Re-pinned in "add compiler mints: mint/use/check over the
+# compiler:requires seam": the roll fired on +7 clusters / +8 members of
+# foreign drift in the same documented emitter_test/visitor_emitter_test
+# field-literal residual — this commit's own src/ delta contributes no
+# members at this tier (the mint refusal blocks are below 32 tokens or
+# message-divergent); the only main.zig/parser.zig sites the census
+# names predate it.
