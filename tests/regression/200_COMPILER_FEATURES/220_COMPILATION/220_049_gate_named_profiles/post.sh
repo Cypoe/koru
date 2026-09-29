@@ -21,9 +21,9 @@ DEV=$(koruc "$KORU_INPUT" gate dev 2>&1)
 echo "$DEV"
 echo "$DEV" | grep -q "check ok    shape-is-named"              || fail "check row did not pass"
 echo "$DEV" | grep -qE "judge (skip|UNJUDGED) +prose-rule"      || fail "judged row not reported"
-echo "$DEV" | grep -qE "odds miss  never-fires"                 || fail "odds-0 row fired"
-echo "$DEV" | grep -qE "odds fire  always-fires"                || fail "odds-100 row missed"
-echo "$DEV" | grep -qE "odds fire  always-fires.*check ok  always-fires|check ok    always-fires" || fail "always-fires did not run"
+echo "$DEV" | grep -qE "odds miss +never-fires"                 || fail "odds-0 row fired"
+echo "$DEV" | grep -qE "odds fire +always-fires"                || fail "odds-100 row missed"
+echo "$DEV" | grep -qE "check ok +always-fires"                 || fail "always-fires did not run"
 
 # 3. json verdicts — the machine-readable block.
 JSON=$(koruc "$KORU_INPUT" gate dev json 2>&1)

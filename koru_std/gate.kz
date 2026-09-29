@@ -499,11 +499,11 @@
             const diff = staged orelse "";
             const roll = helpers.oddsRoll(r.name, diff);
             if (roll >= n) {
-                if (!want_json) std.debug.print("odds miss  {s} — rolled {d}, fires below {d}\n", .{ r.name, roll, n });
+                if (!want_json) std.debug.print("odds miss   {s} — rolled {d}, needed < {d}\n", .{ r.name, roll, n });
                 verdicts.append(alloc, .{ .name = r.name, .verdict = "skip", .detail = "odds miss" }) catch {};
                 continue;
             }
-            if (!want_json) std.debug.print("odds fire  {s} — rolled {d} < {d}\n", .{ r.name, roll, n });
+            if (!want_json) std.debug.print("odds fire   {s} — rolled {d} < {d}\n", .{ r.name, roll, n });
         }
 
         const is_local = helpers.tagged(r.tags, local_tag);
@@ -660,15 +660,16 @@
         }
         std.debug.print("],\"failures\":{d}}}\n", .{failures.items.len});
     } else {
+        const plural = if (members.items.len == 1) "row" else "rows";
         for (advisories.items) |a| std.debug.print("{s}\n", .{a});
         for (failures.items) |f| std.debug.print("{s}\n", .{f});
         if (failures.items.len > 0) {
-            std.debug.print("\ngate: {d} blocking violation(s)\n", .{failures.items.len});
+            std.debug.print("\ngate {s}: {d} blocking violation(s)\n", .{ prof.name, failures.items.len });
         } else {
             if (advisories.items.len == 0) {
-                std.debug.print("gate: {d} row(s), {s} — clean\n", .{ members.items.len, if (block) "enforcing" else "advisory" });
+                std.debug.print("gate {s}: {d} {s}, {s} — clean\n", .{ prof.name, members.items.len, plural, if (block) "enforcing" else "advisory" });
             } else {
-                std.debug.print("gate: {d} row(s), {s} — {d} flag(s) above\n", .{ members.items.len, if (block) "enforcing" else "advisory", advisories.items.len });
+                std.debug.print("gate {s}: {d} {s}, {s} — {d} flag(s) above\n", .{ prof.name, members.items.len, plural, if (block) "enforcing" else "advisory", advisories.items.len });
             }
         }
     }
