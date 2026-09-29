@@ -1,0 +1,6 @@
+name: feature
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `capability` — declare that name. (orphan drained 2026-09-29)
