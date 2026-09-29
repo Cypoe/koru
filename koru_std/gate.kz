@@ -11,11 +11,15 @@
 //
 // SURFACE:
 //
-//   std/gate:profile {
-//     "name": "dev",
+//   std/gate:profile(dev) {
 //     "block": true,
 //     "description": "the local commit gate"
 //   }
+//
+// The name is positional — `expr` is made for this: a profile's whole job is
+// being a name, so the name rides the call and the block carries only the
+// policy fields (`block`, `description`). A `"name"` key in the block is a
+// refusal — it would let the name and the field disagree.
 //
 // A rule joins a profile by tag: `tags: ["dev"]` on the invariant row makes
 // it a member of `gate dev`. `"dev-local"` marks the row file-scoped — it
@@ -50,7 +54,7 @@
 // data in the AST, harvested after the parse — a consumer discovers gates
 // by parsing the program, never from a hardcoded list.
 
-~[comptime|norun]pub tor profile { source: Source }
+~[comptime|norun]pub tor profile { expr: Expression, source: Source }
 
 ~import std/compiler
 
@@ -289,26 +293,38 @@
         const is_row = std.mem.eql(u8, mq, "std.invariants") and
             (std.mem.eql(u8, seg, "inferred") or std.mem.eql(u8, seg, "aspirational"));
         if (!is_profile and !is_row) continue;
+
+        var expr_text: []const u8 = "";
+        var block_src: []const u8 = "";
         for (flow.inv().args) |arg| {
-            if (!std.mem.eql(u8, arg.name, "source")) continue;
-            const src = arg.value;
-            if (is_profile) {
-                profiles.append(alloc, .{
-                    .name = helpers.jsonField(src, "name"),
-                    .description = helpers.jsonField(src, "description"),
-                    .block = std.mem.eql(u8, helpers.jsonField(src, "block"), "true"),
-                    .dir = std.fs.path.dirname(flow.location.file) orelse ".",
-                }) catch {};
-            } else {
-                rows.append(alloc, .{
-                    .name = helpers.jsonField(src, "name"),
-                    .kind = seg,
-                    .tags = helpers.jsonField(src, "tags"),
-                    .rule = helpers.jsonField(src, "rule"),
-                    .check = helpers.jsonField(src, "check"),
-                    .file = flow.location.file,
-                }) catch {};
+            if (std.mem.eql(u8, arg.name, "expr")) expr_text = arg.value;
+            if (std.mem.eql(u8, arg.name, "source")) block_src = arg.value;
+        }
+        if (is_profile) {
+            var pname = std.mem.trim(u8, expr_text, " \t");
+            if (pname.len >= 2 and pname[0] == '"' and pname[pname.len - 1] == '"') {
+                pname = pname[1 .. pname.len - 1];
             }
+            if (helpers.jsonField(block_src, "name").len > 0) {
+                std.debug.print("gate: profile '{s}' also carries a \"name\" field — the name is positional: `std/gate:profile(<name>) {{ ... }}`\n", .{pname});
+                std.process.exit(1);
+            }
+            profiles.append(alloc, .{
+                .name = pname,
+                .description = helpers.jsonField(block_src, "description"),
+                .block = std.mem.eql(u8, helpers.jsonField(block_src, "block"), "true"),
+                .dir = std.fs.path.dirname(flow.location.file) orelse ".",
+            }) catch {};
+        } else {
+            const src = block_src;
+            rows.append(alloc, .{
+                .name = helpers.jsonField(src, "name"),
+                .kind = seg,
+                .tags = helpers.jsonField(src, "tags"),
+                .rule = helpers.jsonField(src, "rule"),
+                .check = helpers.jsonField(src, "check"),
+                .file = flow.location.file,
+            }) catch {};
         }
     }
 
@@ -316,7 +332,7 @@
     if (argv.len == 0) {
         std.debug.print("\nprofiles\n", .{});
         if (profiles.items.len == 0) {
-            std.debug.print("  none declared — a profile is a `std/gate:profile {{ ... }}` block\n", .{});
+            std.debug.print("  none declared — a profile is a `std/gate:profile(<name>) {{ ... }}` block\n", .{});
             return;
         }
         for (profiles.items) |p| {

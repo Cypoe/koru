@@ -15,20 +15,17 @@ import std/io
 import std/invariants
 import std/gate
 
-std/gate:profile {
-    "name": "dev",
+std/gate:profile(dev) {
     "block": false,
     "description": "the dev commit gate — advisory"
 }
 
-std/gate:profile {
-    "name": "broken",
+std/gate:profile(broken) {
     "block": true,
     "description": "a profile whose instrument fails"
 }
 
-std/gate:profile {
-    "name": "strict",
+std/gate:profile(strict) {
     "block": true,
     "description": "enforcement over a judgment-class row"
 }
