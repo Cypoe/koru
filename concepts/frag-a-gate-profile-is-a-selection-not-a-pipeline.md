@@ -49,9 +49,15 @@ gone for the rows it covers. Deterministic `check:` rows exec from the
 profile-declaring directory; `odds-N` rolls `sha256(name ++ \0 ++ staged
 diff)` byte-for-byte as before; `<profile>-local` scopes to the row's own
 file's staged diff; `repo-X` scopes to a consumer repo. Judgment-class rows
-report UNJUDGED with the cause named — the Jev delegation rung still lives in
-`invariants/gate.py` until it moves in-language, and UNJUDGED under an
-enforcing profile blocks.
+delegate: the profile's `judge` field names the verdict binary — argv is
+(rule, staged state), the first stdout line is the verdict
+(VIOLATION / CLEAN / anything else reads UNJUDGED), `judge_src` names the
+source a stale binary rebuilds from through `koruc build`, the key
+provisions from `~/.config/koru/openrouter.env` when the env lacks it, and
+the ~96KB state bound is kept. A profile with no `judge` UNJUDGEs every
+judged row with the cause named — delegation is a declared property of the
+profile, not an ambient capability. UNJUDGED under an enforcing profile
+blocks.
 
 ## Open
 

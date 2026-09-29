@@ -13,13 +13,16 @@
 //
 //   std/gate:profile(dev) {
 //     "block": true,
-//     "description": "the local commit gate"
+//     "description": "the local commit gate",
+//     "judge": "invariants/gate",        // optional — verdict delegator
+//     "judge_src": "invariants/gate.k"   // optional — staleness oracle
 //   }
 //
 // The name is positional — `expr` is made for this: a profile's whole job is
 // being a name, so the name rides the call and the block carries only the
-// policy fields (`block`, `description`). A `"name"` key in the block is a
-// refusal — it would let the name and the field disagree.
+// policy fields (`block`, `description`, `judge`, `judge_src`). A `"name"`
+// key in the block is a refusal — it would let the name and the field
+// disagree.
 //
 // A rule joins a profile by tag: `tags: ["dev"]` on the invariant row makes
 // it a member of `gate dev`. `"dev-local"` marks the row file-scoped — it
@@ -34,17 +37,24 @@
 //   koruc <file> gate dev        — run the `dev` profile
 //   koruc <file> gate dev json   — machine-readable verdicts
 //   koruc <file> gate dev --advisory   — soften a blocking profile locally
+//   koruc <file> gate dev --checks-only  — instruments only, no judged rows
+//   koruc <file> gate dev --judge-only   — judged rows only, no instruments
 //   koruc <file> gate dev --repo PATH  — gate another repo's staged diff
 //
 // EXECUTION. The row's `check:` field decides its strategy, as it always
 // has: a `check:` command is a deterministic instrument — exec'd in the
 // directory of the file that declared the profile, non-zero is a
-// VIOLATION. A row without `check:` is judgment-class: this command reports
-// UNJUDGED with the cause named (the Jev delegation rung still lives in
-// invariants/gate.py; moving judgment in-language is a separate step).
-// Deterministic check failures always block; judgment verdicts block only
-// when the profile's `block` stands — the profile declares the default and
-// `--advisory` is the only tightening direction.
+// VIOLATION. A row without `check:` is judgment-class: the profile's
+// `judge` names the binary the verdict delegates to (argv: rule, staged
+// state; first stdout line is the verdict — VIOLATION / CLEAN / anything
+// else reads UNJUDGED). A stale or missing binary rebuilds through
+// `koruc build <judge_src>` when the profile names one. Judgment has a
+// measured input window (~96KB of staged state — gate.py's bound, kept);
+// beyond it the row is UNJUDGED, and a profile with no `judge` UNJUDGEs
+// every judged row with the cause named. Deterministic check failures
+// always block; judgment verdicts block only when the profile's `block`
+// stands — the profile declares the default and `--advisory` is the only
+// tightening direction.
 //
 // Two honesty rules ported from gate.py: a profile name that matches no
 // declaration is a refusal, not an empty run — `gate typoname` exits 1 and
@@ -156,11 +166,12 @@
 
         const RunOut = struct { code: u8, out: []const u8 };
 
-        fn runOut(a: std.mem.Allocator, cmd_argv: []const []const u8, cwd: ?[]const u8) ?RunOut {
+        fn runOut(a: std.mem.Allocator, cmd_argv: []const []const u8, cwd: ?[]const u8, env_map: ?*const std.process.EnvMap) ?RunOut {
             const res = std.process.Child.run(.{
                 .allocator = a,
                 .argv = cmd_argv,
                 .cwd = cwd,
+                .env_map = env_map,
             }) catch return null;
             a.free(res.stderr);
             const code: u8 = switch (res.term) {
@@ -170,8 +181,30 @@
             return .{ .code = code, .out = res.stdout };
         }
 
+        // gate.py's provision: OPENROUTER_API_KEY from env, else the one
+        // canonical credential file outside every repo. Returns an env map
+        // only when provisioning changed anything — null means "inherit".
+        fn provisionKey(a: std.mem.Allocator) ?std.process.EnvMap {
+            if (std.posix.getenv("OPENROUTER_API_KEY") != null) return null;
+            const home = std.posix.getenv("HOME") orelse return null;
+            const path = std.fs.path.join(a, &.{ home, ".config", "koru", "openrouter.env" }) catch return null;
+            const text = std.fs.cwd().readFileAlloc(a, path, 1 << 16) catch return null;
+            var it = std.mem.splitScalar(u8, text, '\n');
+            while (it.next()) |line| {
+                const prefix = "OPENROUTER_API_KEY=";
+                if (std.mem.startsWith(u8, line, prefix)) {
+                    const v = std.mem.trim(u8, line[prefix.len..], " \t\r\n\"'");
+                    if (v.len == 0) continue;
+                    var map = std.process.getEnvMap(a) catch return null;
+                    map.put("OPENROUTER_API_KEY", v) catch {};
+                    return map;
+                }
+            }
+            return null;
+        }
+
         fn gitToplevel(a: std.mem.Allocator, dir: []const u8) ?[]const u8 {
-            const r = runOut(a, &.{ "git", "-C", dir, "rev-parse", "--show-toplevel" }, null) orelse return null;
+            const r = runOut(a, &.{ "git", "-C", dir, "rev-parse", "--show-toplevel" }, null, null) orelse return null;
             defer a.free(r.out);
             const t = std.mem.trim(u8, r.out, " \n\t");
             if (r.code != 0 or t.len == 0) return null;
@@ -200,7 +233,7 @@
             }
             const top = gitToplevel(a, d) orelse return null;
             const rel = std.fs.path.relative(a, top, abspath) catch return null;
-            const r = runOut(a, &.{ "git", "-C", top, "diff", "--staged", "--", rel }, null) orelse return null;
+            const r = runOut(a, &.{ "git", "-C", top, "diff", "--staged", "--", rel }, null, null) orelse return null;
             if (std.mem.trim(u8, r.out, " \n\t").len == 0) return null;
             return r.out;
         }
@@ -270,6 +303,8 @@
         description: []const u8,
         block: bool,
         dir: []const u8, // declaring file's directory — the exec anchor
+        judge: []const u8, // judge binary, relative to `dir` unless absolute
+        judge_src: []const u8, // optional source — staleness rebuild oracle
     };
     const Row = struct {
         name: []const u8,
@@ -314,6 +349,8 @@
                 .description = helpers.jsonField(block_src, "description"),
                 .block = std.mem.eql(u8, helpers.jsonField(block_src, "block"), "true"),
                 .dir = std.fs.path.dirname(flow.location.file) orelse ".",
+                .judge = helpers.jsonField(block_src, "judge"),
+                .judge_src = helpers.jsonField(block_src, "judge_src"),
             }) catch {};
         } else {
             const src = block_src;
@@ -359,6 +396,7 @@
     var want_json = false;
     var advisory = false;
     var checks_only = false;
+    var judge_only = false;
     var repo_arg: ?[]const u8 = null;
     var ai: usize = 1;
     while (ai < argv.len) : (ai += 1) {
@@ -369,6 +407,8 @@
             advisory = true;
         } else if (std.mem.eql(u8, a, "--checks-only")) {
             checks_only = true;
+        } else if (std.mem.eql(u8, a, "--judge-only")) {
+            judge_only = true;
         } else if (std.mem.eql(u8, a, "--repo")) {
             ai += 1;
             if (ai >= argv.len) {
@@ -377,7 +417,7 @@
             }
             repo_arg = argv[ai];
         } else {
-            std.debug.print("gate: unknown argument '{s}' — usage: gate <profile> [json] [--advisory] [--checks-only] [--repo PATH]\n", .{a});
+            std.debug.print("gate: unknown argument '{s}' — usage: gate <profile> [json] [--advisory] [--checks-only] [--judge-only] [--repo PATH]\n", .{a});
             std.process.exit(1);
         }
     }
@@ -424,6 +464,23 @@
     var staged: ?[]const u8 = null;
     var staged_done = false;
 
+    // The judge resolves lazily on the first judgment-class row: the
+    // profile's `judge` field names the binary (relative to the profile's
+    // declaring directory), `judge_src` names the source the binary builds
+    // from — a stale or missing binary is rebuilt via `koruc build`, the
+    // same stale-binary discipline gate.py applies to gate.k. A profile
+    // with no `judge` field cannot judge — every judged row reports
+    // UNJUDGED with that cause.
+    var judge_checked = false;
+    var judge_path: ?[]const u8 = null;
+    var judge_reason: []const u8 = "";
+    var judge_env: ?std.process.EnvMap = null;
+
+    // The judge's input window, measured 2026-09-21 against
+    // typesafe/jev-1.13-20260917 via OpenRouter: 100KB judged fine, 147KB
+    // refused max_tokens_exceeded. Bytes are the proxy the gate can see.
+    const JUDGE_STATE_MAX_BYTES: usize = 96_000;
+
     var failures = std.ArrayList([]const u8){};
     var advisories = std.ArrayList([]const u8){};
 
@@ -435,7 +492,7 @@
         if (helpers.oddsN(r.tags)) |n| {
             if (!staged_done) {
                 staged_done = true;
-                if (helpers.runOut(alloc, &.{ "git", "-C", gated_repo, "diff", "--staged" }, null)) |res| {
+                if (helpers.runOut(alloc, &.{ "git", "-C", gated_repo, "diff", "--staged" }, null, null)) |res| {
                     if (res.code == 0) staged = res.out;
                 }
             }
@@ -450,9 +507,10 @@
         }
 
         const is_local = helpers.tagged(r.tags, local_tag);
+        var local_state: ?[]const u8 = null;
         if (is_local) {
             if (helpers.fileStagedDiff(alloc, r.file)) |fdiff| {
-                _ = fdiff; // local state would feed the judge; v1 only scopes firing
+                local_state = fdiff; // the judged state for a -local row
             } else {
                 if (!want_json) std.debug.print("local skip  {s} — {s} not in a staged diff\n", .{ r.name, r.file });
                 verdicts.append(alloc, .{ .name = r.name, .verdict = "skip", .detail = "file not staged" }) catch {};
@@ -461,6 +519,7 @@
         }
 
         if (r.check.len > 0) {
+            if (judge_only) continue;
             if (helpers.repoScope(r.tags)) |scope| {
                 if (!std.mem.eql(u8, scope, gated_base)) {
                     if (!want_json) std.debug.print("check skip  {s} — instruments {s}\n", .{ r.name, scope });
@@ -473,7 +532,7 @@
                 continue;
             }
             const cmd = helpers.splitCmd(alloc, r.check);
-            const res = helpers.runOut(alloc, cmd, prof.dir);
+            const res = helpers.runOut(alloc, cmd, prof.dir, null);
             if (res == null or res.?.code != 0) {
                 const code: u8 = if (res) |x| x.code else 255;
                 const tail = if (res) |x| std.mem.trim(u8, x.out, " \n\t") else "";
@@ -493,26 +552,99 @@
             verdicts.append(alloc, .{ .name = r.name, .verdict = "skip", .detail = "checks-only" }) catch {};
             continue;
         }
-        if (!is_local and !staged_done) {
-            staged_done = true;
-            if (helpers.runOut(alloc, &.{ "git", "-C", gated_repo, "diff", "--staged" }, null)) |res| {
-                if (res.code == 0) staged = res.out;
+        var state: []const u8 = "";
+        if (is_local) {
+            state = local_state orelse "";
+        } else {
+            if (!staged_done) {
+                staged_done = true;
+                if (helpers.runOut(alloc, &.{ "git", "-C", gated_repo, "diff", "--staged" }, null, null)) |res| {
+                    if (res.code == 0) staged = res.out;
+                }
             }
+            state = staged orelse "";
         }
-        if (!is_local and std.mem.trim(u8, staged orelse "", " \n\t").len == 0) {
+        if (!is_local and std.mem.trim(u8, state, " \n\t").len == 0) {
             if (!want_json) std.debug.print("judge skip  {s} — no staged changes\n", .{r.name});
             verdicts.append(alloc, .{ .name = r.name, .verdict = "skip", .detail = "no staged changes" }) catch {};
             continue;
         }
-        const detail = "judgment-class row — the Jev delegation rung still lives in invariants/gate.py";
-        if (block) {
-            const line = std.fmt.allocPrint(alloc, "judge UNJUDGED {s} — {s}", .{ r.name, detail }) catch "judge UNJUDGED";
-            failures.append(alloc, line) catch {};
-            verdicts.append(alloc, .{ .name = r.name, .verdict = "unjudged", .detail = detail }) catch {};
+
+        // Resolve the judge once: profile-declared binary, rebuilt through
+        // `koruc build` when judge_src is newer — the stale-binary
+        // discipline gate.py applies to gate.k.
+        if (!judge_checked) {
+            judge_checked = true;
+            if (prof.judge.len == 0) {
+                judge_reason = "the profile declares no \"judge\" binary — add `\"judge\": \"<path>\"` to its block";
+            } else {
+                const jpath = if (std.fs.path.isAbsolute(prof.judge))
+                    prof.judge
+                else
+                    std.fs.path.join(alloc, &.{ prof.dir, prof.judge }) catch prof.judge;
+                var build_ok = true;
+                if (prof.judge_src.len > 0) {
+                    const spath = if (std.fs.path.isAbsolute(prof.judge_src))
+                        prof.judge_src
+                    else
+                        std.fs.path.join(alloc, &.{ prof.dir, prof.judge_src }) catch prof.judge_src;
+                    const bst = std.fs.cwd().statFile(jpath) catch null;
+                    const sst = std.fs.cwd().statFile(spath) catch null;
+                    if (bst == null or (sst != null and sst.?.mtime > bst.?.mtime)) {
+                        const br = helpers.runOut(alloc, &.{ "koruc", "build", prof.judge_src }, prof.dir, null);
+                        if (br == null or br.?.code != 0) {
+                            build_ok = false;
+                            judge_reason = std.fmt.allocPrint(alloc, "judge build failed — `koruc build {s}` from {s}", .{ prof.judge_src, prof.dir }) catch "judge build failed";
+                        }
+                    }
+                }
+                if (build_ok) {
+                    if (std.fs.cwd().statFile(jpath)) |_| {
+                        judge_path = jpath;
+                        if (helpers.provisionKey(alloc)) |m| judge_env = m;
+                    } else |_| {
+                        judge_reason = std.fmt.allocPrint(alloc, "judge binary not found at {s}", .{jpath}) catch "judge binary not found";
+                    }
+                }
+            }
+        }
+
+        var verdict: []const u8 = "";
+        if (judge_path == null) {
+            verdict = std.fmt.allocPrint(alloc, "UNJUDGED {s}", .{judge_reason}) catch "UNJUDGED";
+        } else if (state.len > JUDGE_STATE_MAX_BYTES) {
+            verdict = std.fmt.allocPrint(alloc, "UNJUDGED state {d}B exceeds the judge's context (~{d}B measured — split the commit or scope the row narrower)", .{ state.len, JUDGE_STATE_MAX_BYTES }) catch "UNJUDGED oversized state";
         } else {
-            const line = std.fmt.allocPrint(alloc, "judge UNJUDGED {s} — {s}", .{ r.name, detail }) catch "judge UNJUDGED";
-            advisories.append(alloc, line) catch {};
-            verdicts.append(alloc, .{ .name = r.name, .verdict = "unjudged", .detail = detail }) catch {};
+            const jr = helpers.runOut(alloc, &.{ judge_path.?, r.rule, state }, prof.dir, if (judge_env) |*m| m else null);
+            if (jr) |res| {
+                var it = std.mem.splitScalar(u8, res.out, '\n');
+                verdict = std.mem.trim(u8, it.next() orelse "", " \r\t");
+                if (verdict.len == 0) verdict = "UNJUDGED judge produced no output";
+            } else {
+                verdict = "UNJUDGED judge failed to exec";
+            }
+        }
+
+        if (std.mem.startsWith(u8, verdict, "VIOLATION")) {
+            const line = std.fmt.allocPrint(alloc, "judge VIOLATION {s}  {s}", .{ r.name, verdict }) catch "judge VIOLATION";
+            if (block) {
+                failures.append(alloc, line) catch {};
+            } else {
+                const adv = std.fmt.allocPrint(alloc, "{s}  (advisory; the profile's block stands down)", .{line}) catch line;
+                advisories.append(alloc, adv) catch {};
+            }
+            verdicts.append(alloc, .{ .name = r.name, .verdict = "violation", .detail = verdict }) catch {};
+        } else if (std.mem.startsWith(u8, verdict, "CLEAN")) {
+            if (!want_json) std.debug.print("judge ok    {s}  {s}\n", .{ r.name, verdict });
+            verdicts.append(alloc, .{ .name = r.name, .verdict = "pass", .detail = verdict }) catch {};
+        } else {
+            const line = std.fmt.allocPrint(alloc, "judge UNJUDGED {s}  {s}", .{ r.name, verdict }) catch "judge UNJUDGED";
+            if (block) {
+                failures.append(alloc, line) catch {};
+            } else {
+                advisories.append(alloc, line) catch {};
+            }
+            verdicts.append(alloc, .{ .name = r.name, .verdict = "unjudged", .detail = verdict }) catch {};
         }
     }
 

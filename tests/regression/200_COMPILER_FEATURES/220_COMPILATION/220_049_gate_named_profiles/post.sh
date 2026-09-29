@@ -12,6 +12,7 @@ echo "$LIST"
 echo "$LIST" | grep -qE "dev.*\[advisory\].*4 rows"     || fail "dev profile not listed with 4 rows"
 echo "$LIST" | grep -qE "broken.*\[blocking\].*1 row"  || fail "broken profile not listed blocking"
 echo "$LIST" | grep -qE "strict.*\[blocking\].*1 row"  || fail "strict profile not listed blocking"
+echo "$LIST" | grep -qE "clean.*\[blocking\].*1 row"   || fail "clean profile not listed blocking"
 
 # 2. `gate dev` — advisory profile: the instrument runs, the judged row is
 #    reported (skip without a staged diff, UNJUDGED with one — both honest),
@@ -47,8 +48,11 @@ cat nosuch.log
 grep -q "no profile named 'nosuch'" nosuch.log                  || fail "unknown-profile refusal missing"
 grep -q "declared:" nosuch.log                                  || fail "declared set not named"
 
-# 6. `gate strict` over a scratch repo — a real staged diff makes the
-#    judgment row UNJUDGED: enforcing → exit 1; --advisory → exit 0.
+# 6. `gate strict` over a scratch repo — the judgment row delegates to the
+#    profile's judge. The judge is an executable contract: argv is
+#    (rule, staged-state), the verdict is the first stdout line —
+#    VIOLATION / CLEAN / anything else reads UNJUDGED. These stubs speak
+#    the protocol; koru/odds is the real judge.
 rm -rf scratch
 mkdir -p scratch
 git -C scratch init -q .
@@ -57,24 +61,44 @@ git -C scratch config user.name gate-test
 git -C scratch commit -qm init --allow-empty
 
 # empty repo: no staged diff → the judged row skips, gate is clean
-CLEAN=$(koruc "$KORU_INPUT" gate strict --repo "$PWD/scratch" 2>&1) || fail "empty staged diff did not skip"
-echo "$CLEAN"
-echo "$CLEAN" | grep -q "judge skip  strict-rule — no staged changes" || fail "judge-skip missing"
+CLEAN0=$(koruc "$KORU_INPUT" gate strict --repo "$PWD/scratch" 2>&1) || fail "empty staged diff did not skip"
+echo "$CLEAN0"
+echo "$CLEAN0" | grep -q "judge skip  strict-rule — no staged changes" || fail "judge-skip missing"
+
+printf '#!/bin/sh\necho "VIOLATION p=0.87"\n' > scratch/strict-judge
+printf '#!/bin/sh\necho "CLEAN p=0.91"\n' > scratch/clean-judge
+chmod +x scratch/strict-judge scratch/clean-judge
 
 echo x > scratch/f.txt
 git -C scratch add f.txt
 
+# enforcing profile + a VIOLATION verdict → exit 1
 if koruc "$KORU_INPUT" gate strict --repo "$PWD/scratch" > strict.log 2>&1; then
-    cat strict.log; fail "enforcing profile exited 0 on UNJUDGED"
+    cat strict.log; fail "enforcing profile exited 0 on a judge VIOLATION"
 fi
 cat strict.log
-grep -q "judge UNJUDGED strict-rule" strict.log                 || fail "UNJUDGED missing"
-grep -q "blocking violation" strict.log                         || fail "enforcement did not block"
+grep -q "judge VIOLATION strict-rule  VIOLATION p=0.87" strict.log || fail "judge VIOLATION missing"
+grep -q "blocking violation" strict.log                            || fail "enforcement did not block"
 
+# the same verdict, softened by --advisory → exit 0
 SOFT=$(koruc "$KORU_INPUT" gate strict --repo "$PWD/scratch" --advisory 2>&1) || fail "--advisory still blocked"
 echo "$SOFT"
 echo "$SOFT" | grep -q "advisory" || fail "advisory mode not reported"
 
+# a CLEAN verdict passes an enforcing profile
+CLEAN=$(koruc "$KORU_INPUT" gate clean --repo "$PWD/scratch" 2>&1) || fail "clean profile exited nonzero on CLEAN"
+echo "$CLEAN"
+echo "$CLEAN" | grep -q "judge ok    clean-rule  CLEAN p=0.91" || fail "judge CLEAN missing"
+echo "$CLEAN" | grep -q "enforcing — clean" || fail "clean verdict summary missing"
+
+# a profile with no judge declared is honest about it — UNJUDGED with the
+# cause, never a silent pass; --judge-only skips check rows entirely
+DEVJ=$(koruc "$KORU_INPUT" gate dev --repo "$PWD/scratch" --judge-only 2>&1)
+echo "$DEVJ"
+echo "$DEVJ" | grep -q "UNJUDGED prose-rule"                      || fail "no-judge UNJUDGED missing"
+echo "$DEVJ" | grep -q 'declares no "judge"'                      || fail "no-judge cause not named"
+echo "$DEVJ" | grep -q "check ok" && fail "--judge-only ran a check row"
+
 rm -rf scratch broken.log nosuch.log strict.log
 
-echo "=== PASS: named gates select rows and enforce ==="
+echo "=== PASS: named gates select rows, delegate judgment, and enforce ==="

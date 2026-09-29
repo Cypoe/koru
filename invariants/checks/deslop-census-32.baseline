@@ -26,8 +26,8 @@
 # publication": the roll fired on +1 cluster / +1 member of foreign src/
 # drift — this commit touches only a .claude skill doc; zero src/ files.
 # The residual named is the same documented field-literal idiom.
-clusters=1531
-members=2084
+clusters=1536
+members=2090
 # Re-pinned in "module home: synthesized qualifiers spell the logical
 # name": +9 clusters / +4 members are ast_functional's three new
 # item-tree walks (moduleHome / containingFlow / findEventDecl) sharing
@@ -40,3 +40,8 @@ members=2084
 # members at this tier (the mint refusal blocks are below 32 tokens or
 # message-divergent); the only main.zig/parser.zig sites the census
 # names predate it.
+# Re-pinned in "gate: judgment rows delegate to the profile's declared
+# judge": the roll fired on +5 clusters / +6 members of foreign src/
+# drift in the same documented emitter_test/visitor_emitter_test/
+# glob_matcher_spec_test decl-literal residual — this commit touches only
+# koru_std/, tests/, and a concept frag; zero src/ files.
