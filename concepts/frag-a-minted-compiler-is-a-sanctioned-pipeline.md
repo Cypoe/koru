@@ -41,6 +41,20 @@ Two discipline rules the implementation surfaced:
   carries `file:line` comments; hashing raw bytes pinned each mint to the
   literal filename it was minted from. Comment-stripped hashing is what makes
   a mint reusable across programs at all.
+- **The library closure is the resolution environment, hashed over the
+  loaded set — not a privileged stdlib tree.** The first manifest hashed
+  `koru_std/` whole and called it `stdlib_key`, but koru_std is only the
+  default entry on the resolver's path list: KORU_PATH, KORU_STDLIB,
+  koru.json `paths`, and `std/compiler:paths` aliases are all first-class
+  roots too, and a program importing through any of them minted a manifest
+  that claimed "stdlib clean" while never measuring its real library
+  surface. `mint check` now diffs every configured root per-root, hashing
+  only the files the compilation actually loaded under each — hashing whole
+  root directories was both unusably slow (a 130MB `examples` alias through
+  a debug allocator) and wrong (a rebuilt but unimported binary would stale
+  every mint). Root paths must be normalized for the same reason emitted
+  provenance was stripped: resolution emits canonical spellings, so an
+  unnormalized `a/../b` root can never prefix-match its own files.
 
 Honest limits, kept on purpose: `use` pins backend stages only — the invoked
 `koruc` still runs Stage A, so a fully pinned toolchain wants a versioned

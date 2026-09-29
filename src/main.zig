@@ -392,14 +392,31 @@ const CompilerUse = struct {
     hash: ?[]const u8,
 };
 
+/// One library root the resolver would consult — usually a directory, but an
+/// alias path can name a .kz file directly. key null = configured but absent
+/// at measurement time; a present root hashes the files this compilation
+/// loaded under it (path-seeded — a root that contributed nothing still has
+/// a deterministic key), so a root appearing or vanishing is drift.
+const LibRoot = struct {
+    path: []const u8,
+    key: ?u64,
+};
+
 /// Per-component content hashes of everything compiled into a backend binary.
-/// `use` verifies `emitted` + `iface`; `mint check` diffs all of them.
+/// `use` verifies `emitted` + `iface`; `mint check` diffs all of them. `libs`
+/// is the resolver's full root set — the stdlib is just one root among them,
+/// not a privileged component.
 const BackendHashComponents = struct {
     src: u64,
-    stdlib: u64,
+    libs: []LibRoot,
     emitted: u64,
     iface: u64,
     combined: u64,
+
+    pub fn deinit(self: *BackendHashComponents, allocator: std.mem.Allocator) void {
+        for (self.libs) |lib| allocator.free(lib.path);
+        allocator.free(self.libs);
+    }
 };
 
 fn fnvHex(allocator: std.mem.Allocator, v: u64) ![]u8 {
@@ -494,20 +511,102 @@ fn hashEmittedNormalized(contents: []const u8) u64 {
     return h.final();
 }
 
-fn backendHashComponents(allocator: std.mem.Allocator, koru_home: []const u8, emitted_contents: []const u8) ?BackendHashComponents {
+/// Does this configured root exist at all — dir or file?
+fn libRootExists(path: []const u8) bool {
+    if (ModuleResolver.isDirectory(path)) return true;
+    std.fs.cwd().access(path, .{}) catch return false;
+    return true;
+}
+
+/// Content-hash one library root over the files the compilation actually
+/// loaded under it — the closure is what the program READ, not everything
+/// sitting in the directory. Path-seeded so a renamed identical tree is a
+/// different root; a root that exists but contributed no loaded file still
+/// hashes deterministically (its bare path).
+fn hashLibRoot(allocator: std.mem.Allocator, root: []const u8, files: []const []const u8) ?u64 {
+    var h = std.hash.Fnv1a_64.init();
+    h.update(root);
+    for (files) |f| {
+        const rel = f[root.len..];
+        const contents = std.fs.cwd().readFileAlloc(allocator, f, 64 * 1024 * 1024) catch return null;
+        defer allocator.free(contents);
+        h.update(rel);
+        h.update(contents);
+    }
+    return h.final();
+}
+
+fn backendHashComponents(allocator: std.mem.Allocator, koru_home: []const u8, resolver: *ModuleResolver, emitted_contents: []const u8) ?BackendHashComponents {
     const src_path = std.fs.path.join(allocator, &[_][]const u8{ koru_home, "src" }) catch return null;
     defer allocator.free(src_path);
-    const std_path = std.fs.path.join(allocator, &[_][]const u8{ koru_home, "koru_std" }) catch return null;
-    defer allocator.free(std_path);
     const src = hashTree(allocator, src_path, "src") orelse return null;
-    const stdlib = hashTree(allocator, std_path, "koru_std") orelse return null;
     const iface = hashIfaceFiles(allocator, koru_home) orelse return null;
     const emitted = hashEmittedNormalized(emitted_contents);
+    // Path ownership moves element-wise into libs; only the slice is freed here.
+    const root_paths = resolver.libraryRoots(allocator) catch return null;
+    defer allocator.free(root_paths);
+    const libs = allocator.alloc(LibRoot, root_paths.len) catch {
+        for (root_paths) |p| allocator.free(p);
+        return null;
+    };
+
+    // Bucket the loaded set by containing root — longest prefix wins, so a
+    // root nested under another (vaxis under examples) claims its own files.
+    const buckets = allocator.alloc(std.ArrayList([]const u8), root_paths.len) catch return null;
+    for (buckets) |*b| b.* = .{};
+    defer {
+        for (buckets) |*b| b.deinit(allocator);
+        allocator.free(buckets);
+    }
+    var fiter = resolver.resolved_files.keyIterator();
+    while (fiter.next()) |fp| {
+        const f = fp.*;
+        var best: ?usize = null;
+        for (root_paths, 0..) |r, i| {
+            const under = f.len == r.len or (f.len > r.len and f[r.len] == '/');
+            if (under and std.mem.eql(u8, f[0..r.len], r)) {
+                if (best == null or r.len > root_paths[best.?].len) best = i;
+            }
+        }
+        if (best) |i| buckets[i].append(allocator, f) catch return null;
+    }
+    for (root_paths, 0..) |p, i| {
+        if (!libRootExists(p)) {
+            libs[i] = .{ .path = p, .key = null };
+            continue;
+        }
+        std.mem.sort([]const u8, buckets[i].items, {}, struct {
+            fn lt(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.lessThan(u8, a, b);
+            }
+        }.lt);
+        libs[i] = .{ .path = p, .key = hashLibRoot(allocator, p, buckets[i].items) orelse return null };
+    }
     var ch = std.hash.Fnv1a_64.init();
     ch.update(std.mem.asBytes(&src));
-    ch.update(std.mem.asBytes(&stdlib));
+    for (libs) |lib| {
+        ch.update(lib.path);
+        const k: u64 = lib.key orelse 0;
+        ch.update(std.mem.asBytes(&k));
+    }
     ch.update(std.mem.asBytes(&emitted));
-    return .{ .src = src, .stdlib = stdlib, .emitted = emitted, .iface = iface, .combined = ch.final() };
+    return .{ .src = src, .libs = libs, .emitted = emitted, .iface = iface, .combined = ch.final() };
+}
+
+/// JSON-escape a raw byte string into a writer — filesystem paths are not
+/// guaranteed clean, so quotes, backslashes, and control bytes all escape.
+fn writeJsonEscaped(w: anytype, s: []const u8) !void {
+    for (s) |b| {
+        switch (b) {
+            '"' => try w.writeAll("\\\""),
+            '\\' => try w.writeAll("\\\\"),
+            '\n' => try w.writeAll("\\n"),
+            '\r' => try w.writeAll("\\r"),
+            '\t' => try w.writeAll("\\t"),
+            0...8, 11, 12, 14...31 => try w.print("\\u{x:0>4}", .{b}),
+            else => try w.writeByte(b),
+        }
+    }
 }
 
 fn sha256FileHex(allocator: std.mem.Allocator, path: []const u8) ?[]const u8 {
@@ -654,7 +753,7 @@ fn manifestStr(m: std.json.Value, key: []const u8) []const u8 {
 /// Two hard gates: emitted coverage (the mint's comptime/command closure
 /// matches THIS program's) and iface (the mint's AST/env wire protocol matches
 /// THIS koruc's). Optional `hash:` additionally pins the binary's sha256.
-fn resolveMintedBackend(allocator: std.mem.Allocator, koru_home: []const u8, ud: CompilerUse, emitted_code: []const u8) ![]const u8 {
+fn resolveMintedBackend(allocator: std.mem.Allocator, koru_home: []const u8, resolver: *ModuleResolver, ud: CompilerUse, emitted_code: []const u8) ![]const u8 {
     const dir = (try mintDir(allocator, ud.name)) orelse std.process.exit(1);
     defer allocator.free(dir);
     const manifest_parsed = loadMintManifest(allocator, dir) orelse {
@@ -668,10 +767,11 @@ fn resolveMintedBackend(allocator: std.mem.Allocator, koru_home: []const u8, ud:
         std.process.exit(1);
     }
 
-    const now = backendHashComponents(allocator, koru_home, emitted_code) orelse {
+    var now = backendHashComponents(allocator, koru_home, resolver, emitted_code) orelse {
         try printStderr(allocator, "error: cannot verify mint '{s}' — compiler sources unreadable\n", .{ud.name});
         std.process.exit(1);
     };
+    defer now.deinit(allocator);
     const emitted_now = try fnvHex(allocator, now.emitted);
     defer allocator.free(emitted_now);
     if (!std.mem.eql(u8, emitted_now, manifestStr(manifest, "emitted_key"))) {
@@ -707,7 +807,7 @@ fn resolveMintedBackend(allocator: std.mem.Allocator, koru_home: []const u8, ud:
 
 /// `koruc <file> mint <name>` — after the backend build: store the binary and
 /// a manifest recording the closure it was minted from.
-fn storeMint(allocator: std.mem.Allocator, koru_home: []const u8, name: []const u8, built_backend: []const u8, emitted_code: []const u8, source: []const u8) !void {
+fn storeMint(allocator: std.mem.Allocator, koru_home: []const u8, resolver: *ModuleResolver, name: []const u8, built_backend: []const u8, emitted_code: []const u8, source: []const u8) !void {
     const dir = (try mintDir(allocator, name)) orelse std.process.exit(1);
     defer allocator.free(dir);
     std.fs.cwd().makePath(dir) catch |err| {
@@ -720,10 +820,11 @@ fn storeMint(allocator: std.mem.Allocator, koru_home: []const u8, name: []const 
         try printStderr(allocator, "error: cannot store minted backend: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
-    const c = backendHashComponents(allocator, koru_home, emitted_code) orelse {
+    var c = backendHashComponents(allocator, koru_home, resolver, emitted_code) orelse {
         try printStderr(allocator, "error: mint stored but manifest failed — compiler sources unreadable\n", .{});
         std.process.exit(1);
     };
+    defer c.deinit(allocator);
     const sha = sha256FileHex(allocator, dest) orelse {
         try printStderr(allocator, "error: mint stored but sha256 failed\n", .{});
         std.process.exit(1);
@@ -736,10 +837,26 @@ fn storeMint(allocator: std.mem.Allocator, koru_home: []const u8, name: []const 
         std.process.exit(1);
     };
     defer mf.close();
+    var libs_json = std.ArrayList(u8){};
+    defer libs_json.deinit(allocator);
+    const lw = libs_json.writer(allocator);
+    try lw.writeAll("{");
+    for (c.libs, 0..) |lib, i| {
+        if (i > 0) try lw.writeAll(",");
+        try lw.writeByte('"');
+        try writeJsonEscaped(lw, lib.path);
+        try lw.writeAll("\":");
+        if (lib.key) |k| {
+            try lw.print("\"{x}\"", .{k});
+        } else {
+            try lw.writeAll("\"absent\"");
+        }
+    }
+    try lw.writeAll("}");
     const json = try std.fmt.allocPrint(allocator,
-        \\{{"name":"{s}","sha256":"{s}","closure_key":"{x}","src_key":"{x}","stdlib_key":"{x}","emitted_key":"{x}","iface_key":"{x}","koruc":"{s}","source":"{s}","minted":{d}}}
+        \\{{"name":"{s}","sha256":"{s}","closure_key":"{x}","src_key":"{x}","libs":{s},"emitted_key":"{x}","iface_key":"{x}","koruc":"{s}","source":"{s}","minted":{d}}}
         \\
-    , .{ name, sha, c.combined, c.src, c.stdlib, c.emitted, c.iface, version, source, std.time.timestamp() });
+    , .{ name, sha, c.combined, c.src, libs_json.items, c.emitted, c.iface, version, source, std.time.timestamp() });
     defer allocator.free(json);
     try mf.writeAll(json);
     try printStdout(allocator, "✓ Minted '{s}' → {s}\n  sha256 {s}\n  pin it: std/compiler:use(\"{s}\", hash: \"{s}\")\n", .{ name, dest, sha, name, sha });
@@ -748,7 +865,7 @@ fn storeMint(allocator: std.mem.Allocator, koru_home: []const u8, name: []const 
 /// `koruc <file> mint check <name>` — the audit verb. Recomputes the closure
 /// over the live tree and diffs every component against the manifest. Exit 1
 /// on any drift or mismatch so `mint check || mint` composes in scripts.
-fn runMintCheck(allocator: std.mem.Allocator, koru_home: []const u8, name: []const u8, emitted_code: []const u8) !void {
+fn runMintCheck(allocator: std.mem.Allocator, koru_home: []const u8, resolver: *ModuleResolver, name: []const u8, emitted_code: []const u8) !void {
     const dir = (try mintDir(allocator, name)) orelse std.process.exit(1);
     defer allocator.free(dir);
     const manifest_parsed = loadMintManifest(allocator, dir) orelse {
@@ -769,7 +886,8 @@ fn runMintCheck(allocator: std.mem.Allocator, koru_home: []const u8, name: []con
     try printStdout(allocator, "mint {s} (minted {d}, koruc {s}, source {s})\n", .{ name, minted_ts, manifestStr(manifest, "koruc"), manifestStr(manifest, "source") });
 
     var drift = false;
-    const now = backendHashComponents(allocator, koru_home, emitted_code);
+    var now = backendHashComponents(allocator, koru_home, resolver, emitted_code);
+    defer if (now) |*c| c.deinit(allocator);
 
     const bin = try std.fs.path.join(allocator, &[_][]const u8{ dir, "backend" });
     defer allocator.free(bin);
@@ -787,7 +905,6 @@ fn runMintCheck(allocator: std.mem.Allocator, koru_home: []const u8, name: []con
         const rows = [_]struct { label: []const u8, key: []const u8, cur: u64 }{
             .{ .label = "ast/env protocol", .key = "iface_key", .cur = c.iface },
             .{ .label = "core (src/)", .key = "src_key", .cur = c.src },
-            .{ .label = "stdlib (koru_std/)", .key = "stdlib_key", .cur = c.stdlib },
             .{ .label = "program closure", .key = "emitted_key", .cur = c.emitted },
         };
         for (rows) |row| {
@@ -796,6 +913,49 @@ fn runMintCheck(allocator: std.mem.Allocator, koru_home: []const u8, name: []con
             const ok = std.mem.eql(u8, cur_hex, manifestStr(manifest, row.key));
             if (!ok) drift = true;
             try printStdout(allocator, "  {s: <19}{s}\n", .{ row.label, if (ok) "clean" else "DRIFT — tree moved since mint" });
+        }
+
+        // Library roots: the union of what the manifest recorded and what the
+        // resolver consults now. A root new since the mint, gone since the
+        // mint, or flipped between present/absent is drift like any other.
+        const libs_val = manifest.object.get("libs");
+        if (libs_val == null or libs_val.? != .object) {
+            drift = true;
+            try printStdout(allocator, "  libraries          manifest predates root enumeration — re-mint\n", .{});
+        } else {
+            const mlibs = libs_val.?.object;
+            for (c.libs) |lib| {
+                const cur = if (lib.key) |k|
+                    try fnvHex(allocator, k)
+                else
+                    try allocator.dupe(u8, "absent");
+                defer allocator.free(cur);
+                const recorded = mlibs.get(lib.path);
+                const recorded_str = if (recorded) |v| (if (v == .string) v.string else "") else "";
+                if (recorded == null) {
+                    drift = true;
+                    try printStdout(allocator, "  lib {s}  DRIFT — new root since mint\n", .{lib.path});
+                } else if (std.mem.eql(u8, recorded_str, cur)) {
+                    try printStdout(allocator, "  lib {s}  clean\n", .{lib.path});
+                } else {
+                    drift = true;
+                    try printStdout(allocator, "  lib {s}  DRIFT — tree moved since mint\n", .{lib.path});
+                }
+            }
+            var miter = mlibs.iterator();
+            while (miter.next()) |e| {
+                var still_configured = false;
+                for (c.libs) |lib| {
+                    if (std.mem.eql(u8, lib.path, e.key_ptr.*)) {
+                        still_configured = true;
+                        break;
+                    }
+                }
+                if (!still_configured) {
+                    drift = true;
+                    try printStdout(allocator, "  lib {s}  DRIFT — root no longer configured\n", .{e.key_ptr.*});
+                }
+            }
         }
     } else {
         try printStdout(allocator, "  closure            unmeasurable — compiler sources unreadable\n", .{});
@@ -8514,7 +8674,7 @@ pub fn main() !void {
         // tree and diffs it against the manifest. Runs AFTER emission (the
         // emitted hash is a component) but never reaches a zig build.
         if (mint_check_name) |mcn| {
-            try runMintCheck(allocator, koru_lib_path, mcn, comptime_backend_code);
+            try runMintCheck(allocator, koru_lib_path, &resolver, mcn, comptime_backend_code);
             return;
         }
 
@@ -8524,7 +8684,7 @@ pub fn main() !void {
         // exits there with the teaching — there is no degraded path.
         var minted_backend_path: ?[]const u8 = null;
         if (minted_use) {
-            minted_backend_path = try resolveMintedBackend(allocator, koru_lib_path, use_directive.?, comptime_backend_code);
+            minted_backend_path = try resolveMintedBackend(allocator, koru_lib_path, &resolver, use_directive.?, comptime_backend_code);
         }
 
         // BACKEND BINARY CACHE: the backend is reusable across programs (its
@@ -8621,7 +8781,7 @@ pub fn main() !void {
         if (mint_create) |mname| {
             const built_backend = try std.fs.path.join(allocator, &[_][]const u8{ output_dir_for_build, "zig-out", "bin", "backend" });
             defer allocator.free(built_backend);
-            try storeMint(allocator, koru_lib_path, mname, built_backend, comptime_backend_code, input);
+            try storeMint(allocator, koru_lib_path, &resolver, mname, built_backend, comptime_backend_code, input);
             return;
         }
 

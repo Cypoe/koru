@@ -75,6 +75,40 @@ grep -q "does not cover this program" other.log || { cat other.log; fail "covera
 koruc "../$KORU_INPUT" mint check testmint > check.log 2>&1 || { cat check.log; fail "mint check reported drift"; }
 grep -q "fresh" check.log || { cat check.log; fail "mint check verdict not fresh"; }
 
+# 6. The library surface is the resolver's real root set, not just koru_std:
+#    a std/compiler:paths alias root joins the manifest, reports as its own
+#    row, and a drift in a file the program loaded flags that root — while an
+#    unused root stays clean.
+mkdir -p vendor/mylib
+cat > vendor/mylib/greet.k <<'KORU'
+pub tor greet {}
+greet = std/io:print.ln("from mylib")
+KORU
+cat > prog_lib.k <<'KORU'
+import std/io
+
+std/compiler:paths {
+    mylib: {{ ENTRY }}/vendor/mylib
+}
+
+import mylib/greet
+
+mylib/greet:greet()
+KORU
+koruc prog_lib.k mint libmint > libmint.log 2>&1 || { cat libmint.log; fail "alias-lib mint failed"; }
+grep -q "vendor/mylib" store/libmint/mint.json || fail "alias root missing from manifest"
+koruc prog_lib.k mint check libmint > libcheck.log 2>&1 || { cat libcheck.log; fail "alias-lib mint check not fresh"; }
+grep -q "lib .*vendor/mylib" libcheck.log || fail "per-root lib row missing"
+cat > vendor/mylib/greet.k <<'KORU'
+pub tor greet {}
+greet = std/io:print.ln("changed")
+KORU
+if koruc prog_lib.k mint check libmint > libdrift.log 2>&1; then
+    fail "drifted loaded lib still reported fresh"
+fi
+grep -q "vendor/mylib  DRIFT" libdrift.log || { cat libdrift.log; fail "per-root drift row missing"; }
+grep -q "koru_std  clean" libdrift.log || fail "untouched root falsely flagged"
+
 # Consumer .k files are not gitignored (`!**/*.k` reaches them) — clean the
 # workdir on success so a green run leaves no untracked sources behind.
 # On failure it stays put: the logs are the evidence.

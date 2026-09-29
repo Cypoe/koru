@@ -161,6 +161,7 @@ pub const ModuleResolver = struct {
     koru_home: []const u8,     // Directory where koruc is installed (for {{ KORU_HOME }} interpolation)
     compiler_flags: []const []const u8,  // For {{ flag:name }} interpolation
     parsing_files: std.StringHashMap(void),  // Track files currently being parsed (for cycle detection)
+    resolved_files: std.StringHashMap(void),  // Every file ever marked — the loaded set, retained after unmark
 
     fn detectKoruHomeFromExe(allocator: std.mem.Allocator) ![]const u8 {
         // Development: <project>/zig-out/bin/koruc → koru_home = <project>
@@ -212,6 +213,7 @@ pub const ModuleResolver = struct {
             .koru_home = koru_home,
             .compiler_flags = compiler_flags,
             .parsing_files = std.StringHashMap(void).init(allocator),
+            .resolved_files = std.StringHashMap(void).init(allocator),
         };
 
         // Initialize with default search paths
@@ -239,6 +241,12 @@ pub const ModuleResolver = struct {
             self.allocator.free(key.*);
         }
         self.parsing_files.deinit();
+
+        var rfit = self.resolved_files.keyIterator();
+        while (rfit.next()) |key| {
+            self.allocator.free(key.*);
+        }
+        self.resolved_files.deinit();
     }
 
     /// Check if a file is currently being parsed (cycle detection)
@@ -246,10 +254,18 @@ pub const ModuleResolver = struct {
         return self.parsing_files.contains(file_path);
     }
 
-    /// Mark a file as being parsed
+    /// Mark a file as being parsed — also records it in the persistent
+    /// loaded set (resolved_files), which survives unmark so callers minting
+    /// or auditing a compiler artifact can ask what this compilation read.
     pub fn markParsing(self: *ModuleResolver, file_path: []const u8) !void {
         const key = try self.allocator.dupe(u8, file_path);
-        try self.parsing_files.put(key, {});
+        self.parsing_files.put(key, {}) catch |err| {
+            self.allocator.free(key);
+            return err;
+        };
+        if (!self.resolved_files.contains(file_path)) {
+            try self.resolved_files.put(try self.allocator.dupe(u8, file_path), {});
+        }
     }
 
     /// Unmark a file as being parsed
@@ -453,6 +469,61 @@ pub const ModuleResolver = struct {
         return null;
     }
     
+    /// Every library root this resolver consults, as absolute paths, sorted
+    /// and deduped: KORU_PATH search paths, the stdlib root, and every alias
+    /// path declared by koru.json / `std/compiler:paths` — interpolated and
+    /// resolved against project_root exactly the way resolveBoth resolves
+    /// them. Callers minting or auditing a compiler artifact hash this set;
+    /// the standard library is just another root on it, not a privileged one.
+    /// Caller owns the returned slice and each element.
+    pub fn libraryRoots(self: *ModuleResolver, allocator: std.mem.Allocator) ![][]const u8 {
+        var roots = std.ArrayList([]const u8){};
+
+        // KORU_PATH entries and the stdlib root are env-shaped bases —
+        // resolveBoth joins the import under them relative to cwd.
+        for (self.search_paths.items) |p| {
+            try roots.append(allocator, try std.fs.path.resolve(allocator, &[_][]const u8{p}));
+        }
+        if (self.stdlib_path) |p| {
+            try roots.append(allocator, try std.fs.path.resolve(allocator, &[_][]const u8{p}));
+        }
+
+        // Alias paths: interpolate, then absolute stays and relative lands
+        // on project_root — the same rule resolveBoth applies.
+        var iter = self.config.paths.iterator();
+        while (iter.next()) |entry| {
+            for (entry.value_ptr.*) |raw| {
+                const interpolated = try self.interpolate(raw);
+                defer if (interpolated) |i| self.allocator.free(i);
+                const candidate = interpolated orelse raw;
+                // resolve() normalizes '..' lexically even for absolute
+                // inputs — loaded files come back normalized, so roots must
+                // be too or a prefix match can never fire.
+                const abs = if (std.fs.path.isAbsolute(candidate))
+                    try std.fs.path.resolve(allocator, &[_][]const u8{candidate})
+                else
+                    try std.fs.path.resolve(allocator, &[_][]const u8{ self.project_root, candidate });
+                try roots.append(allocator, abs);
+            }
+        }
+
+        std.mem.sort([]const u8, roots.items, {}, struct {
+            fn lt(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.lessThan(u8, a, b);
+            }
+        }.lt);
+        var out = std.ArrayList([]const u8){};
+        for (roots.items) |p| {
+            if (out.items.len > 0 and std.mem.eql(u8, out.items[out.items.len - 1], p)) {
+                allocator.free(p);
+                continue;
+            }
+            try out.append(allocator, p);
+        }
+        roots.deinit(allocator);
+        return out.toOwnedSlice(allocator);
+    }
+
     /// Check if a path is a directory
     pub fn isDirectory(path: []const u8) bool {
         const dir = std.fs.cwd().openDir(path, .{}) catch return false;
