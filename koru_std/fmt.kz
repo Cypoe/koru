@@ -64,7 +64,7 @@ pub const FormattedText = struct {
 
 ~[norun]pub tor fmt.blk.impl {
     text: string,
-} -> string<std.io:allocated!>
+} -> string<std/io:allocated!>
 
 ~proc fmt.blk|zig {
     const ast = @import("ast");

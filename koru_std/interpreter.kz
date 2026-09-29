@@ -331,7 +331,7 @@ pub const Value = struct {
 // VALUE SERIALIZATION - Convert interpreter Value to JSON
 // ============================================================================
 
-~[retain]pub tor value.stringify { value: Value } -> string<std.io:allocated!>
+~[retain]pub tor value.stringify { value: Value } -> string<std/io:allocated!>
 
 ~proc value.stringify|zig {
     return value.toJsonAlloc(koru_allocator());

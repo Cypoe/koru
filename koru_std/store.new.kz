@@ -4337,7 +4337,7 @@
                     .name = allocator.dupe(u8, "__type_ref") catch unreachable,
                     .type = if (entity_type) |et| allocator.dupe(u8, et) catch unreachable else std.fmt.allocPrint(allocator, "__KoruStoreRow_{s}", .{store_name}) catch unreachable,
                     .module_path = if (entity_type != null) allocator.dupe(u8, flow.module) catch unreachable else null,
-                    .phantom = if (entity_type != null) allocator.dupe(u8, "std/store:taken!") catch unreachable else null,
+                    .phantom = if (entity_type != null) allocator.dupe(u8, "std.store:taken!") catch unreachable else null,
                 };
                 break :blk pf;
             };

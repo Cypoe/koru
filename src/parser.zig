@@ -3458,6 +3458,7 @@ pub const Parser = struct {
             }
         }
 
+        try self.rejectDotNamespace(path_for_parsing, self.current - 1);
         try self.rejectSnakeName(path_for_parsing, self.current - 1, "proc");
         var path = try lexer.parseQualifiedPath(self.allocator, path_for_parsing, ast);
         errdefer path.deinit(self.allocator);
@@ -3577,6 +3578,7 @@ pub const Parser = struct {
             }
         }
 
+        try self.rejectDotNamespace(path_for_parsing, self.current - 1);
         try self.rejectSnakeName(path_for_parsing, self.current - 1, "proc");
         var path = try lexer.parseQualifiedPath(self.allocator, path_for_parsing, ast);
         errdefer path.deinit(self.allocator);
@@ -5373,6 +5375,7 @@ pub const Parser = struct {
                 if (std.mem.indexOf(u8, before_angle_head, "(")) |paren_idx| {
                     // Has args - extract path and parse args
                     const event_name = lexer.trim(before_angle_head[0..paren_idx]);
+                    try self.rejectDotNamespace(event_name, self.current - 1);
                     parsed_path = try lexer.parseQualifiedPath(self.allocator, event_name, ast);
 
                     // Parse arguments from (...)
@@ -5400,6 +5403,7 @@ pub const Parser = struct {
                     existing_args = try args_list.toOwnedSlice(self.allocator);
                 } else {
                     // No args - just parse the path
+                    try self.rejectDotNamespace(before_angle_head, self.current - 1);
                     parsed_path = try lexer.parseQualifiedPath(self.allocator, before_angle_head, ast);
                 }
 
@@ -5567,6 +5571,7 @@ pub const Parser = struct {
             lexer.trim(invocation_head);
         const path_str = raw_path_str;
 
+        try self.rejectDotNamespace(path_str, self.current - 1);
         var parsed_path = try lexer.parseQualifiedPath(self.allocator, path_str, ast);
         errdefer parsed_path.deinit(self.allocator);
 
@@ -5870,6 +5875,7 @@ pub const Parser = struct {
                     );
                     return error.InvalidSyntax;
                 }
+                try self.rejectDotNamespace(ep_str, head_line_idx);
                 var ep = try lexer.parseQualifiedPath(self.allocator, ep_str, ast);
                 errdefer ep.deinit(self.allocator);
                 try self.rejectUnspellableDeclName(head_line_idx, ep, "impl", true);
@@ -5916,6 +5922,7 @@ pub const Parser = struct {
         else
             null;
 
+        try self.rejectDotNamespace(event_path_str, head_line_idx);
         const event_path = try lexer.parseQualifiedPath(self.allocator, event_path_str, ast);
         try self.rejectUnspellableDeclName(head_line_idx, event_path, "impl", true);
 
@@ -10164,7 +10171,35 @@ pub const Parser = struct {
     fn splitTrailingPhantomOwned(self: *Parser, type_str: []const u8, phantom_out: *?[]const u8) ![]const u8 {
         var phantom_src: ?[]const u8 = null;
         const base = splitTrailingPhantom(type_str, &phantom_src);
-        phantom_out.* = if (phantom_src) |p| try self.allocator.dupe(u8, p) else null;
+        if (phantom_src) |p| {
+            // A qualified phantom tag (`string<std.io:allocated!>`) is a module
+            // reference — `.` is member access, `/` the namespace separator.
+            // Same KORU035 rule as type refs, one more position.
+            var pieces = std.mem.splitScalar(u8, p, ',');
+            while (pieces.next()) |piece| {
+                const tag = std.mem.trim(u8, std.mem.trimRight(u8, piece, "!?"), " ");
+                if (std.mem.indexOfScalar(u8, tag, ':')) |mc| {
+                    try self.rejectDottedModuleQualifier(tag[0..mc], tag[mc + 1 ..]);
+                }
+            }
+            const dup = try self.allocator.dupe(u8, p);
+            // Canonicalize the qualifier `/`->`.`, same rule parseQualifiedPath
+            // applies to call sites — downstream resolution keys on the
+            // dotted form (`app/lib:live` resolves as `app.lib:live`).
+            var in_qualifier = true;
+            for (dup) |*c| {
+                if (c.* == ',') {
+                    in_qualifier = true;
+                } else if (c.* == ':') {
+                    in_qualifier = false;
+                } else if (in_qualifier and c.* == '/') {
+                    c.* = '.';
+                }
+            }
+            phantom_out.* = dup;
+        } else {
+            phantom_out.* = null;
+        }
         return base;
     }
 
