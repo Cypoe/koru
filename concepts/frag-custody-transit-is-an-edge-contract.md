@@ -50,11 +50,16 @@ resolves each sent binding's producer `-> T<state!>` phantom, and emits a
 kind. `send` rewrites the site's children so `| ok` alone heads with
 `take(value)`; `full`/`closed` ride untouched, retaining producer
 custody. Consumer units mint via `obligate` before the arm body.
-Use-after-discharge now refuses reuse in `| ok` (699_026). Two edges
-measured open: a minted-but-undisposed consumer binding is silently
-settled by auto-discharge — transit mints have no `not_auto_dischargeable`
-class yet (699_027) — and 699_029's pin input itself reads `v.id` inside
-`| ok` after consuming `v`, contradicting the poison law it documents.
+Use-after-discharge now refuses reuse in `| ok` (699_026), and the
+silent-settle hole is closed (699_027, measured 2026-10): the obligate
+decl carries `~[custody]`, and the inserter flags any obligation seeded
+from a custody decl's `-> T<state!>` return as `not_auto_dischargeable` —
+a consumer arm that drops `v` refuses with KORU030 naming the disposers
+(`dispose`, `__channel_take_*`). The marker rides the decl, not the kind,
+so any future transit mechanism (store watch, ring custody) gets the same
+rule by stamping the annotation. One edge remains measured open:
+699_029's pin input itself reads `v.id` inside `| ok` after consuming
+`v`, contradicting the poison law it documents.
 
 ## Constraints that keep this honest
 

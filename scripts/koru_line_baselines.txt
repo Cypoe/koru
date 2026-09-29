@@ -31,6 +31,7 @@ koru_std/ccp_aspirational.kz	108
 koru_std/ccp.kz	109
 koru_std/channel.custody.kz	407
 koru_std/channel.home.kz	54
+koru_std/channel.transit.kz	222
 koru_std/channel.kz	1518
 koru_std/compiler_context.kz	253
 koru_std/compiler_types.kz	53

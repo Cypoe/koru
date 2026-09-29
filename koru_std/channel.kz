@@ -69,6 +69,7 @@ const ast = @import("ast");
 // this module's own import graph into every program that channels.
 ~import std/rings
 ~part custody
+~part transit
 ~part home
 
 // ============================================================================
@@ -211,7 +212,6 @@ const CH = struct {
     // Proto entry lookup — list.protos.kz's two-form read, restated
     // smaller: the live `std/proto(Name)`/`std/types:proto(Name)` decl flow
     // (source arg text) or the erased `// proto Name: f: t, g: u` marker.
-    // ------------------------------------------------------------------
 
     // `had_explicit_label` does not survive the ast_json round-trip into the
     // backend where transform procs run — the serializer writes it, the
@@ -885,9 +885,9 @@ const CH = struct {
         CH.synthOp(allocator, program, flow, std.fmt.allocPrint(allocator, "__channel_send_{s}_{s}", .{ chan_name, k.name }) catch unreachable, in, brs, null, null, body, &appended);
     }
 
-    // ---- Custody transit ops per custodial kind (channel.custody.kz):
+    // ---- Custody transit ops per custodial kind (channel.transit.kz):
     // `take` consumes under `| ok`; `obligate` mints at the consumer arm. ----
-    CC.emitCustodyOps(allocator, program, flow, chan_name, kinds.items, custody, &appended);
+    CT.emitCustodyOps(allocator, program, flow, chan_name, kinds.items, custody, &appended);
 
     // ---- `__channel_recv_<n>` {} | some Proto | none | closed — the
     // imperative take; single-kind only (a multi-kind channel can't spell
@@ -926,8 +926,8 @@ const CH = struct {
 
     // ---- The `!` arms as generated units — kind arms carry the message,
     // closed arms carry nothing. Custodial units mint the obligation at the
-    // arm head (channel.custody.kz). ----
-    CC.emitConsumerUnits(allocator, &appended, program, flow, chan_name, kind_arms.items, closed_arms.items, kinds.items, custody);
+    // arm head (channel.transit.kz). ----
+    CT.emitConsumerUnits(allocator, &appended, program, flow, chan_name, kind_arms.items, closed_arms.items, kinds.items, custody);
 
     // ---- The pump verbs: `<n>-step` / `<n>-live` / `<n>-wait` ----
     {
@@ -941,7 +941,7 @@ const CH = struct {
         // one dequeue in join order — first pop wins the value.
         for (kind_arms.items, 0..) |arm, ai| {
             const ring = std.fmt.allocPrint(allocator, "__koru_chan_{s}_{s}_ring", .{ chan_name, arm.kind }) catch unreachable;
-            const field_name = CC.stepFieldName(kinds.items, custody, arm.kind, arm.cont.binding.?);
+            const field_name = CT.stepFieldName(kinds.items, custody, arm.kind, arm.cont.binding.?);
             sb.appendSlice(allocator, std.fmt.allocPrint(allocator,
                 "if ({s}.tryDequeue()) |__v| {{\n    __channel_{s}_{s}_{d}_event.handler(.{{ .{s} = __v }});\n    __moved += 1;\n}}\n",
                 .{ ring, chan_name, arm.kind, ai, field_name },
@@ -1432,7 +1432,7 @@ fn chanStep(
         if (bare_value) |bv| sent_value = bv;
         if (sent_value == null and kind_label.len != 0) sent_value = kind_value;
         if (sent_value) |sv| {
-            take_node = CC.takeNode(allocator, program, flow, chan_name, kind.?.name, sv);
+            take_node = CT.takeNode(allocator, program, flow, chan_name, kind.?.name, sv);
         }
     }
 

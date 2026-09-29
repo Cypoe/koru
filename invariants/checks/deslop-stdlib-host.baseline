@@ -18,8 +18,12 @@
 # interpreter/bridge/runtime edits in the shared checkout — clean HEAD
 # measures exactly 1042. Re-pinned to measured per the uncommitted-work
 # clause; re-settles when that work commits.
-clusters=1027
-members=891
+clusters=1033
+members=897
 # 1027/891: module-home dedupe deleted five private copies of the
 # moduleHome/containingFlow walks (-18 clusters, the copies WERE clones);
 # +2 members are the new home parts' fns twinning existing shells.
+# 1033/897: custody.kz's emission half moved to channel.transit.kz — the
+# same host text re-fingerprinted across a new file boundary shifts the
+# clone clusters it sat in (+6/+6); the rest is the same concurrent
+# interpreter/runtime drift the pin above names.

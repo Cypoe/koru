@@ -450,6 +450,20 @@ pub const AutoDischargeInserter = struct {
         return false;
     }
 
+    /// `~[custody]` on a decl marks its `-> T<state!>` return as TRANSIT
+    /// custody — minted at a vessel boundary (std/channel's obligate pair,
+    /// stamped in channel.custody.kz). A transit mint is never
+    /// auto-dischargeable: the consumer arm received ownership across the
+    /// ring and must settle the obligation by name — an inserted disposer
+    /// at the leaf would legalize the drop the edge contract exists to
+    /// refuse (699_027).
+    fn declMintsCustody(event_decl: *const ast.EventDecl) bool {
+        for (event_decl.annotations) |ann| {
+            if (std.mem.eql(u8, ann, "custody")) return true;
+        }
+        return false;
+    }
+
     /// Is `conts[i]` a sequential-prefix step? An unnamed (`branch=''`) continuation
     /// followed by at least one more unnamed sibling is one of several SEQUENTIAL
     /// steps under a single site (the emitter concatenates them; the capture
@@ -1755,6 +1769,9 @@ pub const AutoDischargeInserter = struct {
                 const canonical = try self.canonicalizePhantom(rp, module_name, typeModuleOf(event_info.decl.return_type orelse ""));
                 defer self.allocator.free(canonical);
                 try context.addBinding(rb, canonical, "__type_ref", event_info.decl.return_type orelse "", self.nextAcqSeq());
+                if (declMintsCustody(event_info.decl)) {
+                    if (context.cleanup_obligations.getPtr(rb)) |oblig| oblig.not_auto_dischargeable = true;
+                }
             } else if (event_info.decl.return_type) |rt| {
                 // No whole-value phantom, but a record return may carry per-field
                 // obligations (`-> { h: *Handle<owned!>, n }`). Descend and seed.
@@ -2127,6 +2144,9 @@ pub const AutoDischargeInserter = struct {
                     const canonical = try self.canonicalizePhantom(rp, module_name, typeModuleOf(event_decl.return_type orelse ""));
                     defer self.allocator.free(canonical);
                     try context.addBinding(binding_name, canonical, "__type_ref", event_decl.return_type orelse "", self.nextAcqSeq());
+                    if (declMintsCustody(event_decl)) {
+                        if (context.cleanup_obligations.getPtr(binding_name)) |oblig| oblig.not_auto_dischargeable = true;
+                    }
                 }
             }
             // Find the branch in the event declaration
@@ -2297,6 +2317,9 @@ pub const AutoDischargeInserter = struct {
                             const canonical = try self.canonicalizePhantom(rp, rb_module, typeModuleOf(info.decl.return_type orelse ""));
                             defer self.allocator.free(canonical);
                             try context.addBinding(rb, canonical, "__type_ref", info.decl.return_type orelse "", self.nextAcqSeq());
+                            if (declMintsCustody(info.decl)) {
+                                if (context.cleanup_obligations.getPtr(rb)) |oblig| oblig.not_auto_dischargeable = true;
+                            }
                         } else if (info.decl.return_type) |rt| {
                             // No whole-value phantom, but a MID-CHAIN record return
                             // may carry per-field obligations (`make(id): r` where

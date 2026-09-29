@@ -27,7 +27,11 @@
 # drift — this commit touches only a .claude skill doc; zero src/ files.
 # The residual named is the same documented field-literal idiom.
 clusters=1536
-members=2090
+members=2091
+# Re-pinned in "channel: transit mints refuse auto-discharge": +1 member
+# is the three `getPtr → not_auto_dischargeable` flag sets at the
+# custody-decl seed sites joining the existing flag-set idiom cluster;
+# the named emitter_test/visitor_emitter_test residual is unchanged.
 # Re-pinned in "module home: synthesized qualifiers spell the logical
 # name": +9 clusters / +4 members are ast_functional's three new
 # item-tree walks (moduleHome / containingFlow / findEventDecl) sharing
