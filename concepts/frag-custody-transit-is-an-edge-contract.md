@@ -61,6 +61,20 @@ rule by stamping the annotation. One edge remains measured open:
 699_029's pin input itself reads `v.id` inside `| ok` after consuming
 `v`, contradicting the poison law it documents.
 
+**Evolved 2026-10 — the unit of transit is a path, not a value.** The
+edge contract originally enumerated whole-value custody: does *this
+binding* carry a state. With owned-leaf protos
+(frag-a-proto-is-a-leaf-bundle-not-a-struct) a kind can carry a *bundle*
+of debts — `Env { r1: *Res<owned!>, r2: *Res<owned!> }` — and the
+contract applies per leaf: `| ok` consumes `e.r1` and `e.r2` at the
+send edge, `obligate` mints `v.r1`/`v.r2` at the winning arm, and a
+partial settle refuses KORU030 naming the standing path. Nothing about
+the three-fact matrix changed — custody class, delivery semantics,
+substrate are computed per edge as before — but "the value" is now
+"every obligated path in the value," and transports without a custody
+edge (rings, lists, `| some v` recv) refuse composite kinds loudly
+(320_176, 698_019, 699_033). Pins 699_031–034.
+
 ## Constraints that keep this honest
 
 - Channel kind vocabularies accept proto *registry names* only — pointer
