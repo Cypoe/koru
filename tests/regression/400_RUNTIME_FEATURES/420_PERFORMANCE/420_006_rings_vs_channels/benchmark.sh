@@ -9,12 +9,16 @@
 # - Koru: MPMC ring fed by a spawned host thread, flow consumer
 #
 # All send/receive 10M messages between producer/consumer threads.
-# Koru is the reference column; the guard is Koru/Zig < 1.10.
+# Koru is the reference column; the guard is Koru/Zig < THRESHOLD.
 #
 # (The bchan MPSC leg referenced by the original script was never committed —
 # vendor_bchan is an empty gitlink and baseline_bchan.zig never existed.
-# The old "Koru taps" leg measured a single-threaded count loop — a
-# different workload with no transport, not a comparable channel.)
+# Taps and effect-branch watches are excluded by design, not omission: both
+# fuse the listener into the producer's continuation tree at compile time —
+# the same mechanism, emitting the same static-call shape (measured identical
+# at 4.3ms/10M). That is a language-native layer BELOW transports, valid only
+# while both sides share a stack. A ring is what the fusion becomes when it
+# cannot fuse. There is no transport here to benchmark.)
 
 set -e
 

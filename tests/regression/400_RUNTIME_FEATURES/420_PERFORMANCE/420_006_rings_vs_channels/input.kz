@@ -15,6 +15,14 @@
 // confirms it. The perf table exists to detect weight added around
 // the null — when it jitters ±20% both directions, the measurement
 // IS the finding: nothing there to tax.
+//
+// Below the transports sits a layer this benchmark cannot see: taps
+// and effect-branch watches fuse the listener into the producer's
+// continuation tree at compile time — the same mechanism either way,
+// emitting the same static-call shape (measured identical at equal
+// workload). Fusion is only valid while both sides share a stack;
+// a ring is what the fusion becomes when it cannot fuse. Go has no
+// equivalent layer — its channel is always transport.
 // ============================================================================
 
 const std = @import("std");
