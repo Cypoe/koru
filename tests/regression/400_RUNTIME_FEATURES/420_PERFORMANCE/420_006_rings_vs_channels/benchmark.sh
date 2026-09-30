@@ -1,6 +1,6 @@
 #!/bin/bash
 # Benchmark: Concurrent Message Passing
-# Compare Go channels vs Zig MPMC rings vs Rust channels vs Koru events vs Koru taps
+# Compare Go channels vs Zig MPMC rings vs Rust channels vs Koru ring flow vs Koru taps
 #
 # Tests:
 # - Go: Buffered channels (idiomatic Go)
@@ -65,7 +65,7 @@ hyperfine --warmup 3 --runs 10 --shell=none \
     --command-name "Go (channels)" './go_baseline' \
     --command-name "Zig (MPMC)" './zig_baseline' \
     --command-name "Rust (crossbeam)" './rust_baseline' \
-    --command-name "Koru (events)" './koru_output' \
+    --command-name "Koru (ring flow)" './koru_output' \
     --command-name "Koru (taps)" './koru_taps_output'
 
 echo ""
