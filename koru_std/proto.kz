@@ -119,7 +119,10 @@ const af = @import("ast_functional");
     // compound of its own home (`pos: Position`) — nesting expands to scalar
     // leaves, each keeping its identity — or `ref(X)`, a typed row reference
     // to a declared compound (lowers to the handle material, exempt from the
-    // containment walk). Local fields merge into the inherited set: same name
+    // containment walk) — or an OWNED leaf `*mod:Type<state!>`, an obligation-
+    // bearing pointer whose debt transits the value (exempt like ref, but the
+    // receiver owes a settle per path). Local fields merge into the inherited
+    // set: same name
     // + same concept dedups, same name + different concept refuses.
     // `?Source`: a blockless decl (`Cat <: Animal`) arrives with source null.
     // The entry grammar is gated once over the whole block before a single
@@ -151,6 +154,15 @@ const af = @import("ast_functional");
                 return .{ .replacement = ast.refusal(allocator, reporter, .KORU173, flow.location, flow.module, "std/proto({s}): field '{s}' names unknown ref target '{s}' — ref() takes a declared compound of its home, or a qualified name from another home", .{ name, p.name, inner }) };
             }
             continue;
+        }
+        // Owned leaf — `*mod:Type<state!>`: the field names an obligation-
+        // bearing pointer (store.new.kz's owned-column shape, lifted into the
+        // registry). It is a reference leaf — no expansion, no cycle edge —
+        // and the pinned state declares what the value owes at that path.
+        switch (parseOwnedLeaf(allocator, p.name, name, p.ftype)) {
+            .owned => continue,
+            .malformed => |m| return .{ .replacement = ast.refusal(allocator, reporter, .KORU173, flow.location, flow.module, "{s}", .{m}) },
+            .none => {},
         }
         const known = TerminalRef.isScalarWord(p.ftype);
         if (!known and !TerminalRef.isDeclared(program, allocator, p.ftype, p.home)) {
@@ -212,49 +224,8 @@ const af = @import("ast_functional");
 
     return .{ .replacement = inline_code_item };
 }
-// Declare a nominal scalar type through the proto door. The verb IS the
-// host scalar — `std/proto:i64(Port)` mints `const Port = i64` — one tor
-// per scalar in the field vocabulary (af.scalars). The marker ahead of the
-// alias records the identity so compounds and consumers resolve `Port`
-// without repeating the declaration. Keyword absent: terminal identity is
-// module-spaced (`std/proto:i64`), not a bare global.
-fn mintTerminal(allocator: std.mem.Allocator, item: *const astz.Item, expr: []const u8, scalar: []const u8) SiteResult {
-    const flow = if (item.* == .flow)
-        &item.flow
-    else
-        return .{};
-
-    var type_name = expr;
-    if (type_name.len >= 2 and type_name[0] == '"' and type_name[type_name.len - 1] == '"') {
-        type_name = type_name[1 .. type_name.len - 1];
-    }
-
-    var is_pub = false;
-    for (flow.annotations) |ann| {
-        if (std.mem.eql(u8, ann, "pub")) {
-            is_pub = true;
-            break;
-        }
-    }
-    const pub_prefix = if (is_pub) "pub " else "";
-
-    // The marker records the vocabulary scalar the user spelled; the const
-    // lowers to the host type — `string` is a scalar name, not a Zig type.
-    // On JS the alias has no runtime content, so the marker alone lands.
-    const host = if (std.mem.eql(u8, scalar, "string")) "[]const u8" else scalar;
-    const code = if (std.mem.eql(u8, CompilerEnv.lang, "js"))
-        std.fmt.allocPrint(allocator, "// proto-terminal {s}: {s}", .{ type_name, scalar }) catch unreachable
-    else
-        std.fmt.allocPrint(allocator, "// proto-terminal {s}: {s}\n{s}const {s} = {s};", .{ type_name, scalar, pub_prefix, type_name, host }) catch unreachable;
-
-    return .{ .replacement = astz.Item{
-        .inline_code = .{
-            .code = code,
-            .location = flow.location,
-            .module = allocator.dupe(u8, flow.module) catch unreachable,
-        },
-    } };
-}
+// `mintTerminal` — the scalar-terminal minter — lives in
+// proto.terminal.kz (the `terminal` part).
 
 ~[comptime|transform]pub tor i8 {
     expr: Expression,
@@ -377,3 +348,6 @@ fn mintTerminal(allocator: std.mem.Allocator, item: *const astz.Item, expr: []co
 }
 ~part resolve
 ~part fields
+~part ownedleaf
+~part markers
+~part terminal

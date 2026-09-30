@@ -862,6 +862,93 @@ pub fn containingFlow(prog: *const ast.Program, target: *const ast.Continuation)
     return W.scan(prog.items, target);
 }
 
+/// A proto entry's flat leaf list as record text (`{ f: t, f2: t2 }`), or
+/// null when `name` is not a registered compound. Two forms answer: the
+/// erased `// proto Name: f: t, ...` marker (post-transform, already merged
+/// across `<:` parents) and a live `std/proto(Name)`/`std/types:proto(Name)`
+/// declaration flow (pre-transform, raw block — the marker is the merged
+/// form and wins when both are present). Callers that need only the leaf
+/// types split on top-level commas; the `{`/`}` wrapper makes it a drop-in
+/// for record return-type parsers (seedRecordFieldObligations).
+pub fn protoRecordText(
+    allocator: std.mem.Allocator,
+    prog: *const ast.Program,
+    name: []const u8,
+) !?[]const u8 {
+    const W = struct {
+        fn isCompoundDoor(inv: *const ast.Invocation) bool {
+            if (inv.path.segments.len != 1) return false;
+            const verb = inv.path.segments[0];
+            const mq = inv.path.module_qualifier orelse return false;
+            const types_door = std.mem.eql(u8, verb, "proto") and
+                (std.mem.eql(u8, mq, "std.types") or std.mem.eql(u8, mq, "std/types"));
+            const default_door = std.mem.eql(u8, verb, "default") and
+                (std.mem.eql(u8, mq, "std.proto") or std.mem.eql(u8, mq, "std/proto"));
+            return types_door or default_door;
+        }
+
+        fn entryName(inv: *const ast.Invocation) []const u8 {
+            if (inv.args.len == 0) return "";
+            const a0 = inv.args[0];
+            var n = if (a0.had_explicit_label) blk: {
+                const label = std.mem.trim(u8, a0.name, " \t");
+                break :blk if (std.mem.endsWith(u8, label, "<"))
+                    std.mem.trim(u8, label[0 .. label.len - 1], " \t")
+                else
+                    label;
+            } else std.mem.trim(u8, a0.value, " \t");
+            if (n.len >= 2 and n[0] == '"' and n[n.len - 1] == '"') n = n[1 .. n.len - 1];
+            return n;
+        }
+
+        // The marker's field list — `// proto Env: r1: *T<o!>, n: i64` —
+        // arrives comma-joined; wrap it back into record text.
+        fn wrapFields(alloc: std.mem.Allocator, flat: []const u8) ?[]const u8 {
+            const t = std.mem.trim(u8, flat, " \t");
+            if (t.len == 0) return null;
+            return std.fmt.allocPrint(alloc, "{{ {s} }}", .{t}) catch unreachable;
+        }
+
+        fn scan(alloc: std.mem.Allocator, its: []const ast.Item, want: []const u8) ?[]const u8 {
+            for (its) |*pi| {
+                switch (pi.*) {
+                    .flow => |*f| {
+                        if (f.body.node) |*node| {
+                            if (node.* == .invocation and isCompoundDoor(&node.invocation)) {
+                                if (std.mem.eql(u8, entryName(&node.invocation), want)) {
+                                    for (node.invocation.args) |a| {
+                                        if (a.source_value) |sv| {
+                                            return wrapFields(alloc, sv.text);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    .inline_code => |*ic| {
+                        var lines = std.mem.splitScalar(u8, ic.code, '\n');
+                        while (lines.next()) |raw| {
+                            const line = std.mem.trimLeft(u8, raw, " \t");
+                            const prefix = "// proto ";
+                            if (!std.mem.startsWith(u8, line, prefix)) continue;
+                            const colon = std.mem.indexOfScalar(u8, line[prefix.len..], ':') orelse continue;
+                            const nm = std.mem.trim(u8, line[prefix.len .. prefix.len + colon], " \t");
+                            if (!std.mem.eql(u8, nm, want)) continue;
+                            return wrapFields(alloc, line[prefix.len + colon + 1 ..]);
+                        }
+                    },
+                    .module_decl => |*md| {
+                        if (scan(alloc, md.items, want)) |hit| return hit;
+                    },
+                    else => {},
+                }
+            }
+            return null;
+        }
+    };
+    return W.scan(allocator, prog.items, name);
+}
+
 /// Program-wide scan for an event_decl whose path matches qualifier +
 /// segments exactly (`null` qualifier matches a bare path). Recurses into
 /// module_decl items — generated units and module-side decls both count.

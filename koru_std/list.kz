@@ -47,7 +47,6 @@ pub const List_i64 = struct {
 // ============================================
 // Construction
 // ============================================
-
 // Generic constructor. `new(i64)` reads the element-type expression at comptime
 // and rewrites its call site to the concrete `new-<type>` runtime constructor
 // (e.g. `new-i64`). This is generic-by-name: when `new-f64` exists, `new(f64)`
@@ -69,5 +68,6 @@ pub const List_i64 = struct {
 ~part pop
 ~part protos
 ~part synth
+~part fieldkit
 ~part free
 ~part explain

@@ -173,6 +173,11 @@ pub const AutoDischargeInserter = struct {
     /// The emission target's language — synthesized host text (the unhandled
     /// `?!` arm) is born in it. `CompilerEnv.lang`, plumbing through init.
     lang: []const u8 = "zig",
+    /// The program this run transforms — `// proto` markers live here, so a
+    /// bare compound return type (`-> Env`) resolves to its leaf list and a
+    /// proto carrying owned `*mod:Type<state!>` fields seeds per-path debts
+    /// in seedRecordFieldObligations (the phantom checker's twin, 699_031).
+    prog: ?*const ast.Program = null,
     prototype_mode: bool = false, // When true (~[prototype]), an unhandled required TERMINAL branch is synthesized as a @panic hole instead of a KORU022 error — same body as an unhandled | ?! panic branch (400_160)
 
     /// Error set for recursive functions that need explicit error types
@@ -1404,6 +1409,7 @@ pub const AutoDischargeInserter = struct {
         // For #label flows, add @scope to continuations that jump back (@label).
         // This must happen before auto-discharge so it sees the correct scope boundaries.
         const annotated_program = try self.annotateLabelLoopScopes(program);
+        self.prog = annotated_program;
 
         // Step 1: Build event map
         try self.buildEventMap(annotated_program);
@@ -1463,6 +1469,7 @@ pub const AutoDischargeInserter = struct {
     /// leak. Deliberately skips label-loop @scope annotation and every insertion
     /// path — nothing here adds a disposal call.
     pub fn runNormalizeOnly(self: *AutoDischargeInserter, program: *const ast.Program) !*const ast.Program {
+        self.prog = program;
         try self.buildEventMap(program);
 
         if (self.reporter.hasErrors()) {
@@ -4283,7 +4290,23 @@ pub const AutoDischargeInserter = struct {
         destructure: []const ast.DestructureField,
         context: *BindingContext,
     ) !void {
-        const trimmed = std.mem.trim(u8, return_type, " \t");
+        var trimmed = std.mem.trim(u8, return_type, " \t");
+        // A bare compound name (`-> Env`) stands for its registered leaf
+        // list — the proto IS the record's declared shape. Resolve it so a
+        // proto carrying owned `*mod:Type<state!>` leaves seeds per-path
+        // debts (`binding.fd`) exactly like an inline record return (699_031).
+        var owned_shape: ?[]const u8 = null;
+        defer if (owned_shape) |s| self.allocator.free(s);
+        if (!(trimmed.len >= 2 and trimmed[0] == '{' and trimmed[trimmed.len - 1] == '}')) {
+            var name = trimmed;
+            if (std.mem.indexOfScalar(u8, name, '<')) |lt| name = std.mem.trimRight(u8, name[0..lt], " \t");
+            if (self.prog) |prog| {
+                if (try ast_functional.protoRecordText(self.allocator, prog, name)) |shape| {
+                    owned_shape = shape;
+                    trimmed = shape;
+                }
+            }
+        }
         if (trimmed.len < 2 or trimmed[0] != '{' or trimmed[trimmed.len - 1] != '}') return;
         const inner = trimmed[1 .. trimmed.len - 1];
         // Split the record into top-level `name: value` fields — commas nested in

@@ -60,6 +60,13 @@ pub const PhantomSemanticChecker = struct {
     /// types and differ does the checker refuse (030_132/133, 340_006) —
     /// a literal into a nominal wrapper (`string` -> Username) stays legal.
     declared_types: std.StringHashMap(void),
+    /// The program(s) this run checks — [0] is the transformed AST (`// proto`
+    /// markers live there), [1] the pre-transform twin (live `std/proto`
+    /// declaration flows) when the caller keeps one. seedRecordFieldObligations
+    /// resolves a bare compound return type (`-> Env`) to its leaf list so a
+    /// proto with owned `*mod:Type<state!>` fields seeds `binding.field` debts
+    /// exactly like an inline record return (699_031).
+    src_asts: [2]?*const ast.Program = .{ null, null },
 
     pub const CheckMode = enum { full, args_only };
 
@@ -308,6 +315,7 @@ pub const PhantomSemanticChecker = struct {
         log.debug("\n[PHANTOM-CHECK] Starting phantom semantic check for program with {d} items\n", .{source_ast.items.len});
         // Track if we found any errors (but continue checking to find all of them)
         var has_errors = false;
+        self.src_asts = .{ source_ast, declared_types_ast };
 
         // Pass 1: Build module resolution map from imports
         try self.buildModuleMap(source_ast);
@@ -362,6 +370,7 @@ pub const PhantomSemanticChecker = struct {
     /// declaration error stays dormant (pin 330_110).
     pub fn checkSignatures(self: *PhantomSemanticChecker, source_ast: *const ast.Program) !void {
         log.debug("\n[PHANTOM-CHECK] Starting phantom signature check for program with {d} items\n", .{source_ast.items.len});
+        self.src_asts = .{ source_ast, null };
         try self.buildModuleMap(source_ast);
         const annotations_valid = try self.validatePhantomAnnotations(source_ast);
         if (!annotations_valid) {
@@ -385,6 +394,7 @@ pub const PhantomSemanticChecker = struct {
     /// inserted disposal calls exist to be credited.
     pub fn checkArguments(self: *PhantomSemanticChecker, source_ast: *const ast.Program, declared_types_ast: *const ast.Program) !void {
         log.debug("\n[PHANTOM-CHECK] Starting phantom argument check for program with {d} items\n", .{source_ast.items.len});
+        self.src_asts = .{ source_ast, declared_types_ast };
         self.check_mode = .args_only;
         defer self.check_mode = .full;
         try self.buildModuleMap(source_ast);
@@ -1829,7 +1839,25 @@ pub const PhantomSemanticChecker = struct {
         destructure: []const ast.DestructureField,
         context: *BindingContext,
     ) !void {
-        const trimmed = std.mem.trim(u8, return_type, " \t");
+        var trimmed = std.mem.trim(u8, return_type, " \t");
+        // A bare compound name (`-> Env`) stands for its registered leaf
+        // list — the proto IS the record's declared shape. Resolve it so a
+        // proto carrying owned `*mod:Type<state!>` leaves seeds per-path
+        // debts (`binding.fd`) exactly like an inline record return (699_031).
+        var owned_shape: ?[]const u8 = null;
+        defer if (owned_shape) |s| self.allocator.free(s);
+        if (!(trimmed.len >= 2 and trimmed[0] == '{' and trimmed[trimmed.len - 1] == '}')) {
+            var name = trimmed;
+            if (std.mem.indexOfScalar(u8, name, '<')) |lt| name = std.mem.trimRight(u8, name[0..lt], " \t");
+            for (self.src_asts) |mprog| {
+                const prog = mprog orelse continue;
+                if (try ast_functional.protoRecordText(self.allocator, prog, name)) |shape| {
+                    owned_shape = shape;
+                    trimmed = shape;
+                    break;
+                }
+            }
+        }
         if (trimmed.len < 2 or trimmed[0] != '{' or trimmed[trimmed.len - 1] != '}') return;
         const inner = trimmed[1 .. trimmed.len - 1];
         var seg_start: usize = 0;

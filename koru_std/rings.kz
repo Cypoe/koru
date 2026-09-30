@@ -156,5 +156,6 @@ pub fn MpmcRing(comptime T: type, comptime capacity: usize) type {
 // directly, but the Koru surface is the named one.
 
 ~part new
+~part leafgate
 ~part ops
 ~part home

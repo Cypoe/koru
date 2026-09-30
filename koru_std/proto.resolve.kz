@@ -68,6 +68,10 @@ const TerminalRef = struct {
             return std.mem.trim(u8, t[4 .. t.len - 1], " \t");
         }
 
+        // Owned leaves — `*mod:Type<state!>` — are gated in
+        // proto.ownedleaf.kz (`parseOwnedLeaf`, `isOwnedLeaf`); a pointer is
+        // a reference, not containment, and its debt is the receiver's.
+
         fn liveDeclarationIsCompound(inv: *const ast.Invocation, want: []const u8) bool {
             if (!isCompoundDoor(inv)) return false;
             if (inv.args.len == 0) return false;
@@ -96,39 +100,8 @@ const TerminalRef = struct {
             return std.mem.eql(u8, bareName(inv.args[0].value), want);
         }
 
-        fn markerDeclaresTerminalLine(line: []const u8, want: []const u8) bool {
-            const marker = std.mem.trimLeft(u8, line, " \t");
-            const prefix = "// proto-terminal ";
-            if (!std.mem.startsWith(u8, marker, prefix)) return false;
-            const colon = std.mem.indexOfScalar(u8, marker[prefix.len..], ':') orelse return false;
-            const declared = std.mem.trim(u8, marker[prefix.len .. prefix.len + colon], " \t");
-            return std.mem.eql(u8, declared, want);
-        }
-
-        fn markerDeclaresTerminal(code: []const u8, want: []const u8) bool {
-            var lines = std.mem.splitScalar(u8, code, '\n');
-            while (lines.next()) |line| {
-                if (markerDeclaresTerminalLine(line, want)) return true;
-            }
-            return false;
-        }
-
-        fn markerDeclaresCompoundLine(line: []const u8, want: []const u8) bool {
-            const marker = std.mem.trimLeft(u8, line, " \t");
-            const prefix = "// proto ";
-            if (!std.mem.startsWith(u8, marker, prefix)) return false;
-            const colon = std.mem.indexOfScalar(u8, marker[prefix.len..], ':') orelse return false;
-            const declared = std.mem.trim(u8, marker[prefix.len .. prefix.len + colon], " \t");
-            return std.mem.eql(u8, declared, want);
-        }
-
-        fn markerDeclaresCompound(code: []const u8, want: []const u8) bool {
-            var lines = std.mem.splitScalar(u8, code, '\n');
-            while (lines.next()) |line| {
-                if (markerDeclaresCompoundLine(line, want)) return true;
-            }
-            return false;
-        }
+        // `// proto`/`// proto-terminal` marker scanning lives in
+        // proto.markers.kz (markerDeclaresTerminal/Compound(+Line)).
 
         fn scanItems(items: []const ast.Item, scope_home: []const u8, want: []const u8, want_home: []const u8, compounds: bool) bool {
             for (items) |entry| {
@@ -293,6 +266,7 @@ const TerminalRef = struct {
             for (nd.ftypes) |ftype| {
                 if (isScalarWord(ftype)) continue;
                 if (isRefType(ftype)) continue;
+                if (isOwnedLeaf(ftype)) continue; // a pointer is a reference, not containment
                 if (isDeclared(prog, alloc, ftype, home)) continue;
                 const w = splitWant(alloc, ftype, home);
                 for (stack.items, 0..) |s, si| {
@@ -345,6 +319,10 @@ const TerminalRef = struct {
                 const w = splitWant(alloc, refInner(t), home);
                 return std.fmt.allocPrint(alloc, "ref:{s}:{s}", .{ w.home, w.name }) catch unreachable;
             }
+            // Owned leaves key on the whole spelling — `*mod:Type<open!>` and
+            // `*mod:Type<closed!>` under one field name are different concepts
+            // and refuse to merge, not dedup.
+            if (isOwnedLeaf(t)) return alloc.dupe(u8, t) catch unreachable;
             if (isScalarWord(t)) return alloc.dupe(u8, t) catch unreachable;
             const w = splitWant(alloc, t, home);
             return std.fmt.allocPrint(alloc, "{s}:{s}", .{ w.home, w.name }) catch unreachable;
