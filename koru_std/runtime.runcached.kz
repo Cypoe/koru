@@ -1,32 +1,7 @@
 // Koru Standard Library: the `runcached` part of runtime — the cached
-// run variant. Joined via `~part runcached` in runtime.kz; merged into
-// the runtime module at load.
-//
-// `run-cached` is `run` with parse reuse — identical contract, cached
-// parsing for repeated source.
-
-// RUN_CACHED - Parse and execute Koru source against a named scope with cached parsing
-~pub tor run-cached {
-    source: string,
-    scope: string,
-    budget: ?u64 = null,
-    handle_pool: ?*@import("root").koru_std.koru_interpreter.HandlePool = null,
-    fail_fast: bool = true,
-    auto_discharge: bool = true,
-    shape: ?string = null,
-    lenient: bool = false,
-    host_dispatch: ?@import("root").koru_std.koru_interpreter.HostDispatchFn = null,
-    session_env: ?*@import("root").koru_std.koru_interpreter.Environment = null
-}
-| result { value: @import("root").koru_std.koru_interpreter.Value, used: u64, handles: u32 }
-| unhandled-branch { branch: string, payload: string, handles: string }
-| exhausted { used: u64, last_event: string, handles: u32 }
-| parse-error { message: string, line: u32, column: u32 }
-| validation-error string
-| shape-error { branch: string, field: ?string, message: string }
-| event-denied string
-| dispatch-error { event_name: string, message: string }
-| scope-not-found string
+// run variant's Zig impl. Joined via `~part runcached` in runtime.kz;
+// merged into the runtime module at load. The tor decl rides in the
+// `run` part, which owns both scoped-run signatures.
 
 ~proc run-cached|zig {
     const interpreter_mod = @import("root").koru_std.koru_interpreter;
@@ -51,6 +26,9 @@
                 .lenient = lenient, .input_fn = s.input_fn,
                 .host_dispatch = host_dispatch,
                 .session_env = session_env,
+                .session_bind_fn = session_bind_fn,
+                .session_bind_env = session_bind_env,
+                .session_bind_counter = session_bind_counter,
             });
             switch (result) {
                 .unhandled_branch => |u| return .{ .unhandled_branch = .{ .branch = u.branch, .payload = u.payload, .handles = u.handles } },
@@ -58,6 +36,8 @@
                     .value = r.value,
                     .used = r.used,
                     .handles = r.handles,
+                    .bound = r.bound,
+                    .trace = r.trace,
                 } },
                 .exhausted => |e| return .{ .exhausted = .{
                     .used = e.used,
@@ -77,6 +57,7 @@
                     return .{ .dispatch_error = .{
                         .event_name = e.event_name,
                         .message = e.message,
+                        .trace = e.trace,
                     } };
                 },
             }

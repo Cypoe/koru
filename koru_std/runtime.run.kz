@@ -11,16 +11,46 @@
     defined: ?*@import("root").koru_std.koru_interpreter.DefinedFlows = null,
     lenient: bool = false,  // 430_056: under-handling hands back `unhandled-branch` instead of refusing
     host_dispatch: ?@import("root").koru_std.koru_interpreter.HostDispatchFn = null,
-    session_env: ?*@import("root").koru_std.koru_interpreter.Environment = null
+    session_env: ?*@import("root").koru_std.koru_interpreter.Environment = null,
+    session_bind_fn: ?@import("root").koru_std.koru_interpreter.SessionBindFn = null,
+    session_bind_env: ?*@import("root").koru_std.koru_interpreter.Environment = null,
+    session_bind_counter: ?*u64 = null
 }
-| result { value: @import("root").koru_std.koru_interpreter.Value, used: u64, handles: u32 }
+| result { value: @import("root").koru_std.koru_interpreter.Value, used: u64, handles: u32, bound: string, trace: string }
 | unhandled-branch { branch: string, payload: string, handles: string }
 | exhausted { used: u64, last_event: string, handles: u32 }
 | parse-error { message: string, line: u32, column: u32 }
 | validation-error string
 | shape-error { branch: string, field: ?string, message: string }
 | event-denied string
-| dispatch-error { event_name: string, message: string }
+| dispatch-error { event_name: string, message: string, trace: string }
+| scope-not-found string
+
+// `run-cached` is `run` with parse reuse — identical contract, cached
+// parsing for repeated source. Its proc rides in the `runcached` part.
+~pub tor run-cached {
+    source: string,
+    scope: string,
+    budget: ?u64 = null,
+    handle_pool: ?*@import("root").koru_std.koru_interpreter.HandlePool = null,
+    fail_fast: bool = true,
+    auto_discharge: bool = true,
+    shape: ?string = null,
+    lenient: bool = false,
+    host_dispatch: ?@import("root").koru_std.koru_interpreter.HostDispatchFn = null,
+    session_env: ?*@import("root").koru_std.koru_interpreter.Environment = null,
+    session_bind_fn: ?@import("root").koru_std.koru_interpreter.SessionBindFn = null,
+    session_bind_env: ?*@import("root").koru_std.koru_interpreter.Environment = null,
+    session_bind_counter: ?*u64 = null
+}
+| result { value: @import("root").koru_std.koru_interpreter.Value, used: u64, handles: u32, bound: string, trace: string }
+| unhandled-branch { branch: string, payload: string, handles: string }
+| exhausted { used: u64, last_event: string, handles: u32 }
+| parse-error { message: string, line: u32, column: u32 }
+| validation-error string
+| shape-error { branch: string, field: ?string, message: string }
+| event-denied string
+| dispatch-error { event_name: string, message: string, trace: string }
 | scope-not-found string
 
 ~proc run|zig {
@@ -47,84 +77,11 @@
                 .lenient = lenient,
                 .host_dispatch = host_dispatch,
                 .session_env = session_env,
+                .session_bind_fn = session_bind_fn,
+                .session_bind_env = session_bind_env,
+                .session_bind_counter = session_bind_counter,
             });
-            switch (result) {
-                .unhandled_branch => |u| return .{ .unhandled_branch = .{ .branch = u.branch, .payload = u.payload, .handles = u.handles } },
-                .result => |r| {
-                    // Shape validation: if shape is specified, validate the result
-                    if (shape) |shape_event_name| {
-                        const shape_branches = lookupEventBranches(scope, shape_event_name);
-                        if (shape_branches.len > 0) {
-                            // Check if the result branch matches any of the shape's branches
-                            var branch_valid = false;
-                            var matching_branch: ?BranchSpec = null;
-                            for (shape_branches) |branch_spec| {
-                                if (std.mem.eql(u8, r.value.branch, branch_spec.name)) {
-                                    branch_valid = true;
-                                    matching_branch = branch_spec;
-                                    break;
-                                }
-                            }
-
-                            if (!branch_valid) {
-                                return .{ .shape_error = .{
-                                    .branch = r.value.branch,
-                                    .field = null,
-                                    .message = "unknown branch - not in shape contract",
-                                } };
-                            }
-
-                            // Check required fields if we have a matching branch
-                            if (matching_branch) |mb| {
-                                for (mb.fields) |field_spec| {
-                                    if (field_spec.is_optional) continue;
-                                    // Check if the required field exists in the result
-                                    var field_found = false;
-                                    for (r.value.fields) |result_field| {
-                                        if (std.mem.eql(u8, result_field.name, field_spec.name)) {
-                                            field_found = true;
-                                            break;
-                                        }
-                                    }
-                                    if (!field_found) {
-                                        return .{ .shape_error = .{
-                                            .branch = r.value.branch,
-                                            .field = field_spec.name,
-                                            .message = "missing required field",
-                                        } };
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    return .{ .result = .{
-                        .value = r.value,
-                        .used = r.used,
-                        .handles = r.handles,
-                    } };
-                },
-                .exhausted => |e| return .{ .exhausted = .{
-                    .used = e.used,
-                    .last_event = e.last_event,
-                    .handles = e.handles,
-                } },
-                .parse_error => |e| return .{ .parse_error = .{
-                    .message = e.message,
-                    .line = e.line,
-                    .column = e.column,
-                } },
-                .validation_error => |e| return .{ .validation_error = e },
-                .dispatch_error => |e| {
-                    if (std.mem.eql(u8, e.message, "EventDenied")) {
-                        return .{ .event_denied = e.event_name };
-                    }
-                    return .{ .dispatch_error = .{
-                        .event_name = e.event_name,
-                        .message = e.message,
-                    } };
-                },
-            }
+            return relayRunOutcome(result, scope, shape);
         },
         .not_found => return .{ .scope_not_found = scope },
     }

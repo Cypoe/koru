@@ -2018,10 +2018,7 @@ fn lookupEventBranches(scope_name: []const u8, event_name: []const u8) []const B
         }},
     };
 }
-
-// ============================================================================
 // RUN - Parse and execute Koru source against a named scope
-
 // shape: Optional tor name to validate response shape against
 // @retain: run_event is referenced from generated Zig code in user pipelines (std/runtime:run invocations in continuations compile to run_event.handler(...))
 ~part eval
@@ -2029,8 +2026,11 @@ fn lookupEventBranches(scope_name: []const u8, event_name: []const u8) []const B
 ~part example
 ~part run
 ~part runcached
+~part outcome
 ~part specs
 ~part wireval
+~part wirelex
+~part obtainvia
 ~part affordances
 ~part manifest
 ~part wiretext

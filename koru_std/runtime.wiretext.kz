@@ -13,6 +13,9 @@ const WIRE_CHAIN_RULE_NO_EXAMPLE =
     \\- Chain fresh outcomes with arms — a `| branch name |>` arm binds `name` to what the call just issued. Never invent one, never predict one: bind it.
 ;
 
+// `wireObligationLines` — the obtain-via render — lives in
+// runtime.obtainvia.kz (the `obtainvia` part).
+
 // The grammar's rules block as one scope-true render: the fixed shape
 // rules plus the chain rule carrying THIS scope's worked example.
 // `scope-grammar` emits it above the vocabulary lines.
@@ -21,6 +24,7 @@ fn wireGrammarRules(allocator: std.mem.Allocator, m: ?*const ScopeManifest) []co
     out.appendSlice(allocator, WIRE_GRAMMAR_TEXT) catch unreachable;
     out.append(allocator, '\n') catch unreachable;
     if (m) |manifest| {
+        out.appendSlice(allocator, wireObligationLines(allocator, manifest)) catch unreachable;
         if (scopeChainExample(allocator, manifest)) |example| {
             const line = std.fmt.allocPrint(allocator, WIRE_CHAIN_RULE_EXAMPLE, .{example}) catch unreachable;
             out.appendSlice(allocator, line) catch unreachable;
@@ -31,14 +35,4 @@ fn wireGrammarRules(allocator: std.mem.Allocator, m: ?*const ScopeManifest) []co
     return out.toOwnedSlice(allocator) catch unreachable;
 }
 
-fn wireLineColumn(s: []const u8, byte: usize) struct { line: u32, column: u32 } {
-    var line: u32 = 1;
-    var line_start: usize = 0;
-    for (s[0..@min(byte, s.len)], 0..) |c, j| {
-        if (c == '\n') {
-            line += 1;
-            line_start = j + 1;
-        }
-    }
-    return .{ .line = line, .column = @intCast(byte - line_start + 1) };
-}
+// `wireLineColumn` lives in runtime.wirelex.kz (the `wirelex` part).
