@@ -1,0 +1,11 @@
+name: framing
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a measurement artifact's reference frame changed — the
+  denominator, baseline, or ordering a report is expressed in. Fires
+  when the same numbers would read differently only because the
+  yardstick's orientation flipped (e.g. ratios re-denominated from
+  Koru-versus-Zig to other-versus-Koru). The measured value is
+  unchanged; what changed is who the table treats as normal.
