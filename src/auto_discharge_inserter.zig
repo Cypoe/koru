@@ -4440,6 +4440,9 @@ pub const AutoDischargeInserter = struct {
         else
             qualified_name;
         if (std.mem.startsWith(u8, tail, "__store_giveback_")) return "give-back";
+        // Same class: `__channel_take_<chan>_<kind>` is the custody consume
+        // the generated send calls internally — the user's verb is `send`.
+        if (std.mem.startsWith(u8, tail, "__channel_take_")) return "send";
         return tail;
     }
 
