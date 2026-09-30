@@ -2,14 +2,19 @@
 // Koru Implementation: Producer/Consumer with MPMC Ring
 // ============================================================================
 // Tests idiomatic Koru concurrent programming:
-// - MPMC ring (Vyukov's lock-free algorithm — the same implementation
-//   koru_std.koru_rings.MpmcRing carries and std/rings lowers to)
+// - MPMC ring (Vyukov's lock-free algorithm — byte-identical to
+//   koru_std.koru_rings.MpmcRing, the impl std/rings lowers to)
 // - Producer spawned via std.Thread inside a ~proc host step, sharing the
 //   ring through a *Ring passed tor-to-tor — no generated-name reach
 // - Consumer loop expressed as a #loop/@label jump pair
 // - All control flow visible as event transitions
 //
-// Goal: Prove Koru's abstractions are zero-cost (match Zig baseline)
+// The ring impl is byte-identical to the Zig baseline's — this is a
+// null test, not a listening test. What it proves: the same work is
+// emitted from tors, |> chains, and label jumps, and the checksum
+// confirms it. The perf table exists to detect weight added around
+// the null — when it jitters ±20% both directions, the measurement
+// IS the finding: nothing there to tax.
 // ============================================================================
 
 const std = @import("std");
