@@ -143,13 +143,22 @@ measured per construct — for `@intCast` it did not.
 Measured 2026-09-30 (420_006 objdump diff, after the same law was violated in
 the confidence direction): the `#loop` continuation dispatch materializes the
 `.some`/`.none` union tag as a flag byte — `strb` store + `tbz` branch +
-global `ldrb`, ~4-8 instructions per message that the hand-written loop does
-not run. LLVM erased the branch structure but not the flag traffic: another
-cost the optimizer could not delete, this time in the *flow* machinery — and
-it hid for a full measurement cycle behind timing noise and a component-level
-"byte-identical" claim that never extended to the program. The added rule:
-a claim of equivalence at source level is not evidence at machine level, and
-the disasm diff is cheap enough that skipping it is a choice.
+global `ldrb`, ~14 extra instructions per message that the hand-written loop
+does not run. LLVM erased the branch structure but not the flag traffic:
+another cost the optimizer could not delete, this time in the *flow*
+machinery.
+
+Same day, second measurement, the law inverts again: the flags were real but
+**measured ~free** — a hand-fused consumer (4 flag instrs vs Zig's 3) ran the
+same wall time. The ~25-30% deficit the flags had been blamed for turned out
+to be neither union traffic nor machine noise: it was ring *placement* —
+the test's `create-ring` page-allocates while the baseline stack-allocated,
+and stack placement is ~25% faster on this machine for BOTH languages
+(zig+heap ≈ koru ≈ 120ms; zig+stack ≈ 92ms). At equal allocation the
+programs measure parity. The rules this adds: **emitted noise is not
+measured cost** — attribute the delta before optimizing the emission, and a
+benchmark that doesn't normalize allocation sites is comparing placements,
+not programs.
 
 
 ## Open

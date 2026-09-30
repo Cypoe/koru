@@ -59,12 +59,13 @@ echo "  Rust/Zig:     ${RUST_VS_ZIG}x"
 echo "  Zig/Go:       ${ZIG_VS_GO}x"
 echo ""
 
-# Interpret: Zig vs Koru. The programs are NOT instruction-identical —
-# the flow's union-tag dispatch costs ~4-8 insns/message (verified by
-# objdump diff 2026-09-30). A Koru deficit is EXPECTED; only its
-# magnitude is in question, and this machine's noise exceeds the
-# per-message cost, so a single run cannot resolve it.
-echo "Zig vs Koru (known overhead — magnitude unproven):"
+# Interpret: Zig vs Koru — parity at equal allocation. The old
+# stack-vs-heap asymmetry was normalized 2026-09-30 after it was
+# measured as the dominant gap driver (~25%: placement, not codegen).
+# The residual union-tag flag traffic in the emitted loop measured
+# ~free (fused-consumer variant gained ~0), so a deficit here means
+# NEW weight, not the known noise.
+echo "Zig vs Koru (parity at equal allocation):"
 if (( $(echo "$ZIG_VS_KORU > 1.05" | bc -l) )); then
     MARGIN=$(echo "scale=1; ($ZIG_VS_KORU - 1) * 100" | bc -l)
     echo "  Koru is ${MARGIN}% faster this run (Zig slower)"
@@ -77,12 +78,10 @@ fi
 
 echo ""
 
-# Regression guard: Koru must stay within THRESHOLD of Zig.
-# The overhead this bounds is REAL, not hypothetical: the union-tag
-# dispatch costs ~4-8 insns/message (objdump-verified 2026-09-30).
-# THRESHOLD is 1.30 because measured inter-run noise on this workload
-# is ~±20% — a tighter bound fires on jitter; 1.30 still catches
-# growth beyond the known dispatch cost.
+# Regression guard: Koru must stay within THRESHOLD of Zig at equal
+# allocation. THRESHOLD is 1.30 because measured inter-run noise on
+# this workload is ~±20% — a tighter bound fires on jitter; 1.30
+# still catches real new weight around the identical ring.
 THRESHOLD=$(cat THRESHOLD)
 echo "Regression guard (Koru/Zig, noise-adjusted):"
 if (( $(echo "$KORU_VS_ZIG < $THRESHOLD" | bc -l) )); then

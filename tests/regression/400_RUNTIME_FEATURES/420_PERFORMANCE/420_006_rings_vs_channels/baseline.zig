@@ -116,7 +116,15 @@ fn MpmcRing(comptime T: type, comptime capacity: usize) type {
 }
 
 pub fn main() !void {
-    var ring = MpmcRing(u64, BUFFER_SIZE).init();
+    // Heap-allocated to match the Koru program's create-ring — a stack
+    // ring here measured ~25% faster than the same ring on a fresh
+    // mmap page (verified 2026-09-30: stack ~92ms vs heap ~121ms min),
+    // which silently taxed the Koru side of this comparison. Both
+    // programs now pay the same allocation cost so the table measures
+    // emitted code, not placement luck.
+    const ring_storage = std.heap.page_allocator.create(MpmcRing(u64, BUFFER_SIZE)) catch unreachable;
+    ring_storage.* = MpmcRing(u64, BUFFER_SIZE).init();
+    const ring = ring_storage;
 
     var sum: u64 = 0;
 
@@ -130,7 +138,7 @@ pub fn main() !void {
                 }
             }
         }
-    }.run, .{&ring});
+    }.run, .{ring});
 
     // Consumer runs on MAIN THREAD (same as Koru!)
     var received: u64 = 0;

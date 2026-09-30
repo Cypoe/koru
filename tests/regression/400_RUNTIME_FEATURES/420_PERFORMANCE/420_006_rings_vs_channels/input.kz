@@ -9,17 +9,20 @@
 // - Consumer loop expressed as a #loop/@label jump pair
 // - All control flow visible as event transitions
 //
-// The ring impl is byte-identical to the Zig baseline's, and verified
+// The ring impl is byte-identical to the Zig baseline's and verified
 // instruction-identical in the binary (objdump diff 2026-09-30: same
-// ldapr/cas/stlr sequence both sides). The PROGRAM is not identical:
-// the #loop continuation dispatch materializes the .some/.none union
-// tag as a flag byte (strb + tbz + global ldrb, ~4-8 insns/message)
-// that LLVM does not erase — a real per-message cost Zig's loop does
-// not pay. So this is a null test for the ring ONLY; the deficit it
-// measures around it is real at instruction level, magnitude not yet
-// pinned (contention amplifies: a slower consumer yields more, and
-// sched_yield is a syscall). The perf table exists to bound that
-// known-real overhead — not to rank two identical programs.
+// ldapr/cas/stlr sequence both sides). The emitted flow machinery
+// adds residual flag traffic (~14 extra insns/msg: union-tag strb +
+// tbz + a global ldrb) — real but measured ~FREE: a hand-fused
+// consumer loop (4 flag instrs vs Zig's 3) ran the same wall time.
+// The ~25-30% deficit this test once measured was neither: it was
+// ring PLACEMENT — create-ring heap-allocates (a tor's frame cannot
+// host a cross-thread ring) while the baseline stack-allocated.
+// Stack placement is ~25% faster on this machine for BOTH languages
+// (zig+heap measured ~121ms ≈ koru ~120ms; zig+stack ~92ms).
+// baseline.zig now page_allocator-allocates to match — at equal
+// allocation the programs measure parity (104.6 vs 107.5 min).
+// The perf table's job: bound drift around this normalized floor.
 //
 // Below the transports sits a layer this benchmark cannot see: taps
 // and effect-branch watches fuse the listener into the producer's
