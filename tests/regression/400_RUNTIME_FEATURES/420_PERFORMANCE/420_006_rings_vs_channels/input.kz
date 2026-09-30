@@ -9,12 +9,17 @@
 // - Consumer loop expressed as a #loop/@label jump pair
 // - All control flow visible as event transitions
 //
-// The ring impl is byte-identical to the Zig baseline's — this is a
-// null test, not a listening test. What it proves: the same work is
-// emitted from tors, |> chains, and label jumps, and the checksum
-// confirms it. The perf table exists to detect weight added around
-// the null — when it jitters ±20% both directions, the measurement
-// IS the finding: nothing there to tax.
+// The ring impl is byte-identical to the Zig baseline's, and verified
+// instruction-identical in the binary (objdump diff 2026-09-30: same
+// ldapr/cas/stlr sequence both sides). The PROGRAM is not identical:
+// the #loop continuation dispatch materializes the .some/.none union
+// tag as a flag byte (strb + tbz + global ldrb, ~4-8 insns/message)
+// that LLVM does not erase — a real per-message cost Zig's loop does
+// not pay. So this is a null test for the ring ONLY; the deficit it
+// measures around it is real at instruction level, magnitude not yet
+// pinned (contention amplifies: a slower consumer yields more, and
+// sched_yield is a syscall). The perf table exists to bound that
+// known-real overhead — not to rank two identical programs.
 //
 // Below the transports sits a layer this benchmark cannot see: taps
 // and effect-branch watches fuse the listener into the producer's

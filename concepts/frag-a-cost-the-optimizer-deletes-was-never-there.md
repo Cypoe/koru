@@ -140,6 +140,17 @@ on (230_022 pins the spelling). The rule this adds: a cast the source never
 wrote is the emitter's cost, and "the optimizer will remove it" has to be
 measured per construct — for `@intCast` it did not.
 
+Measured 2026-09-30 (420_006 objdump diff, after the same law was violated in
+the confidence direction): the `#loop` continuation dispatch materializes the
+`.some`/`.none` union tag as a flag byte — `strb` store + `tbz` branch +
+global `ldrb`, ~4-8 instructions per message that the hand-written loop does
+not run. LLVM erased the branch structure but not the flag traffic: another
+cost the optimizer could not delete, this time in the *flow* machinery — and
+it hid for a full measurement cycle behind timing noise and a component-level
+"byte-identical" claim that never extended to the program. The added rule:
+a claim of equivalence at source level is not evidence at machine level, and
+the disasm diff is cheap enough that skipping it is a choice.
+
 
 ## Open
 

@@ -59,27 +59,30 @@ echo "  Rust/Zig:     ${RUST_VS_ZIG}x"
 echo "  Zig/Go:       ${ZIG_VS_GO}x"
 echo ""
 
-# Interpret: Zig vs Koru — the parity verdict. Koru is the
-# reference; this answers "what does hand-written Zig cost to beat us?"
-echo "Zig vs Koru (PARITY):"
+# Interpret: Zig vs Koru. The programs are NOT instruction-identical —
+# the flow's union-tag dispatch costs ~4-8 insns/message (verified by
+# objdump diff 2026-09-30). A Koru deficit is EXPECTED; only its
+# magnitude is in question, and this machine's noise exceeds the
+# per-message cost, so a single run cannot resolve it.
+echo "Zig vs Koru (known overhead — magnitude unproven):"
 if (( $(echo "$ZIG_VS_KORU > 1.05" | bc -l) )); then
     MARGIN=$(echo "scale=1; ($ZIG_VS_KORU - 1) * 100" | bc -l)
-    echo "  🚀 Koru is ${MARGIN}% faster than hand-written Zig"
-    echo "  The abstraction is not just free — it is ahead"
+    echo "  Koru is ${MARGIN}% faster this run (Zig slower)"
 elif (( $(echo "$ZIG_VS_KORU < 0.95" | bc -l) )); then
     MARGIN=$(echo "scale=1; (1 - $ZIG_VS_KORU) * 100" | bc -l)
-    echo "  ⚠️  Zig is ${MARGIN}% faster than Koru"
+    echo "  Zig is ${MARGIN}% faster this run"
 else
-    echo "  🎉 ZERO-COST ABSTRACTION — Koru matches Zig within noise"
+    echo "  Within ±5% — union-tag overhead below this run's noise floor"
 fi
 
 echo ""
 
 # Regression guard: Koru must stay within THRESHOLD of Zig.
+# The overhead this bounds is REAL, not hypothetical: the union-tag
+# dispatch costs ~4-8 insns/message (objdump-verified 2026-09-30).
 # THRESHOLD is 1.30 because measured inter-run noise on this workload
-# is ~±20% (same binary, same machine: Zig has ranged 94–176ms) — a
-# 1.10 bound would fire on jitter and train the red text to mean
-# nothing; 1.30 still catches a real abstraction cost.
+# is ~±20% — a tighter bound fires on jitter; 1.30 still catches
+# growth beyond the known dispatch cost.
 THRESHOLD=$(cat THRESHOLD)
 echo "Regression guard (Koru/Zig, noise-adjusted):"
 if (( $(echo "$KORU_VS_ZIG < $THRESHOLD" | bc -l) )); then
@@ -97,12 +100,12 @@ echo ""
 echo "Rust (crossbeam) vs Koru:"
 if (( $(echo "$RUST_VS_KORU > 1.05" | bc -l) )); then
     MARGIN=$(echo "scale=1; ($RUST_VS_KORU - 1) * 100" | bc -l)
-    echo "  ✅ Koru is ${MARGIN}% faster than crossbeam"
+    echo "  Koru is ${MARGIN}% faster than crossbeam this run"
 elif (( $(echo "$RUST_VS_KORU < 0.95" | bc -l) )); then
     MARGIN=$(echo "scale=1; (1 - $RUST_VS_KORU) * 100" | bc -l)
-    echo "  ⚠️  Crossbeam is ${MARGIN}% faster than Koru"
+    echo "  Crossbeam is ${MARGIN}% faster than Koru this run"
 else
-    echo "  ✅ Roughly equal (within 5%)"
+    echo "  Roughly equal (within 5%)"
 fi
 
 echo ""
@@ -111,12 +114,12 @@ echo ""
 echo "Go (channels) vs Koru:"
 if (( $(echo "$GO_VS_KORU > 1.05" | bc -l) )); then
     MARGIN=$(echo "scale=1; ($GO_VS_KORU - 1) * 100" | bc -l)
-    echo "  🚀 Koru is ${MARGIN}% faster than Go channels"
+    echo "  Koru is ${MARGIN}% faster than Go channels this run"
 elif (( $(echo "$GO_VS_KORU < 0.95" | bc -l) )); then
     MARGIN=$(echo "scale=1; (1 - $GO_VS_KORU) * 100" | bc -l)
-    echo "  ⚠️  Go is ${MARGIN}% faster than Koru"
+    echo "  Go is ${MARGIN}% faster than Koru this run"
 else
-    echo "  ✅ Roughly equal (within 5%)"
+    echo "  Roughly equal (within 5%)"
 fi
 
 echo ""
