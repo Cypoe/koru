@@ -35,17 +35,22 @@
 //
 // Commands:
 //   koruc main.kz vendor add <pkg>  # acquire through npm into your tree, and pin it
+//   koruc main.kz vendor copy [name] # rsync/git refresh: both sides = live tree
 //   koruc main.kz vendor            # status of every binding (default: check)
 //   koruc main.kz vendor check      # same, explicit
-//   koruc main.kz vendor sync       # accept what is on disk as the tree you compile
+//   koruc main.kz vendor sync       # accept on-disk as as-compiled (keeps as-copied)
 //   koruc main.kz vendor diff       # drift against the pin, AND your patch vs upstream
 //
-// `sync` is the one command that makes drift go away, and it is the one command
-// you should read a real diff before running. `diff` is what you read.
+// `sync` is the one command that makes compiled-side drift go away, and it is
+// the one command you should read a real diff before running. `diff` is what
+// you read. `copy` is what you run after rsyncing upstream, so as-copied moves
+// with the new upstream instead of looking like a patch.
 //
-// `add` acquires through npm and does not reimplement it: no registry client, no
-// version-range resolution, no transitive dependency walk. npm fetches; Koru
-// keeps, pins, and diffs — which is the part npm has no answer for.
+// `add` acquires through npm. `copy` pins a tree that arrived some other way
+// (git clone, rsync). npm is not the only origin.
+//
+// `step` (vendor.k) is the closed protocol: every (state, command) is `pin`
+// or `refuse`. Hashing stays here. The table does not.
 
 ~import std/compiler
 
@@ -160,9 +165,10 @@ pub const VendorLock = struct {
         return .{ .files = owned, .tree = hexDigest(tree.finalResult()) };
     }
 
-    /// Where a vendored tree came from. Present only when `vendor add` placed it,
-    /// because only then does anyone know the answer. Hand-copied trees record
-    /// nothing rather than record a guess.
+    /// Where a vendored tree came from. `vendor add` writes an npm origin.
+    /// `vendor copy` writes a git/tree origin from `.vendor-rev` when present
+    /// (rsync of an upstream lib). No `.vendor-rev` still records `source=tree`
+    /// so as-copied is a fact, not a guess.
     pub const Origin = struct {
         source: []const u8,
         package: []const u8,
@@ -399,6 +405,36 @@ pub const VendorLock = struct {
         }
     }
 
+    /// Labels for a live tree against a lock entry. Same words as `step`'s
+    /// `state`. `conflict` is two declarations, not a hash.
+    pub const State = enum { unpinned, unpatched, patched, drifted, not_recorded, corrupt, conflict };
+
+    pub fn label(st: State) []const u8 {
+        return switch (st) {
+            .unpinned => "unpinned",
+            .unpatched => "unpatched",
+            .patched => "patched",
+            .drifted => "drifted",
+            .not_recorded => "not-recorded",
+            .corrupt => "corrupt",
+            .conflict => "conflict",
+        };
+    }
+
+    pub fn classify(alloc: std.mem.Allocator, manifest: Manifest, locked: ?Locked) State {
+        const was = locked orelse return .unpinned;
+        const recorded = bareHash(was.gate().tree);
+        if (!std.mem.eql(u8, recorded, &manifest.tree)) {
+            const changes = drift(alloc, manifest, was) catch return .corrupt;
+            if (changes.len == 0) return .corrupt;
+            return .drifted;
+        }
+        const copied = was.as_copied orelse return .not_recorded;
+        const patch = patchSet(alloc, copied, was.as_compiled) catch return .corrupt;
+        if (patch.len == 0) return .unpatched;
+        return .patched;
+    }
+
     pub const AcquireError = error{ NpmMissing, NpmFailed, NoTarball, IntegrityMismatch, ExtractFailed };
 
     /// Ask npm what it would resolve a spec to, WITHOUT installing anything.
@@ -596,8 +632,9 @@ pub const VendorLock = struct {
     }
 
     /// Write a binding that has just been acquired: both sides identical, plus the
-    /// origin. This is the ONLY path that writes `as-copied`, because acquiring is
-    /// the only moment anyone knows what upstream actually sent.
+    /// origin. `vendor add` (npm) and `vendor copy` (git/rsync tree) are the two
+    /// writers of `as-copied`. `sync` must not call this — it would destroy the
+    /// patch evidence.
     pub fn writeAcquired(
         alloc: std.mem.Allocator,
         lock_path: []const u8,
@@ -666,6 +703,22 @@ pub const VendorLock = struct {
         try file.writeAll(buf.items);
     }
 
+    /// Origin for a tree that arrived by git pull rather than npm.
+    /// `VENDOR_ORIGIN_REV` (short hash) marks a git snapshot; otherwise `tree@local`.
+    pub fn originFromTree(alloc: std.mem.Allocator, package: []const u8, tree_hex: []const u8) Origin {
+        const integrity = std.fmt.allocPrint(alloc, "sha256:{s}", .{tree_hex}) catch tree_hex;
+        const rev = std.posix.getenv("VENDOR_ORIGIN_REV") orelse
+            return .{ .source = "tree", .package = package, .version = "local", .integrity = integrity };
+        if (rev.len == 0)
+            return .{ .source = "tree", .package = package, .version = "local", .integrity = integrity };
+        return .{
+            .source = "git",
+            .package = package,
+            .version = rev,
+            .integrity = integrity,
+        };
+    }
+
     /// Everything vendor resolves — `vendor.lock` and every binding path — is
     /// relative to the COMPILATION ROOT, which is the process CWD here.
     ///
@@ -689,7 +742,7 @@ pub const VendorLock = struct {
 // The event declares the USER surface: a source block of `name: path` lines.
 // The `[transform]` annotation on the PROC is what makes the check happen during
 // compilation rather than in a command the user has to remember to invoke.
-~[comptime|transform]pub tor bindings { source: Source, reporter: *std/compiler:ErrorReporter }
+// The pub tor lives in vendor.k.
 
 ~[transform]proc bindings|zig {
     const ast = @import("ast");
@@ -772,17 +825,14 @@ pub const VendorLock = struct {
     "description": "Manage vendored dependencies",
     "subcommands": [
         { "name": "add", "description": "Acquire a package through npm into your source tree and pin what arrived" },
+        { "name": "copy", "description": "Record the on-disk tree as both as-copied and as-compiled (git/rsync refresh)" },
         { "name": "check", "description": "Report each binding against its pin (default)" },
-        { "name": "sync", "description": "Accept what is on disk as the tree you compile" },
+        { "name": "sync", "description": "Accept what is on disk as the tree you compile (keeps as-copied)" },
         { "name": "diff", "description": "Show drift against the pin, and your patch against upstream" }
     ]
 }
 
-~[comptime|command]pub tor vendor {
-    program: *const Program,
-    allocator: __koru_std.mem.Allocator,
-    argv: []const []const u8,
-}
+// The pub tor lives in vendor.k.
 
 ~proc vendor|zig {
     // The command allocator is leak-checked. Everything here is scratch that
@@ -792,11 +842,12 @@ pub const VendorLock = struct {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const Sub = enum { check, sync, diff, add };
+    const Sub = enum { check, sync, diff, add, copy };
     var sub: Sub = .check;
     var add_spec: ?[]const u8 = null;
     var add_as: ?[]const u8 = null;
     var add_into: ?[]const u8 = null;
+    var copy_only: ?[]const u8 = null;
 
     var ai: usize = 0;
     while (ai < argv.len) : (ai += 1) {
@@ -804,6 +855,14 @@ pub const VendorLock = struct {
         if (std.mem.eql(u8, a, "sync")) sub = .sync;
         if (std.mem.eql(u8, a, "diff")) sub = .diff;
         if (std.mem.eql(u8, a, "check")) sub = .check;
+        if (std.mem.eql(u8, a, "copy")) {
+            sub = .copy;
+            if (ai + 1 < argv.len and !std.mem.startsWith(u8, argv[ai + 1], "-")) {
+                copy_only = argv[ai + 1];
+                ai += 1;
+            }
+            continue;
+        }
         if (std.mem.eql(u8, a, "add")) {
             sub = .add;
             if (ai + 1 < argv.len and !std.mem.startsWith(u8, argv[ai + 1], "-")) {
@@ -1060,19 +1119,57 @@ pub const VendorLock = struct {
 
     var manifests = std.ArrayListUnmanaged(VendorLock.Manifest){};
     for (paths.items, names.items) |p, n| {
-        const tree_path = std.fs.path.join(alloc, &[_][]const u8{ VendorLock.anchor, p }) catch return;
+        const tree_path = std.fs.path.join(alloc, &[_][]const u8{ VendorLock.anchor, p }) catch {
+            std.debug.print("✗ cannot join path for `{s}`\n", .{n});
+            std.process.exit(1);
+        };
         const m = VendorLock.hashTree(alloc, tree_path) catch |err| {
             std.debug.print("✗ {s}: cannot read vendored tree `{s}` ({s})\n", .{ n, p, @errorName(err) });
-            return;
+            std.process.exit(1);
         };
-        manifests.append(alloc, m) catch return;
+        manifests.append(alloc, m) catch {
+            std.debug.print("✗ out of memory hashing `{s}`\n", .{n});
+            std.process.exit(1);
+        };
     }
 
     const lock = VendorLock.readLock(alloc, lock_path) catch |err| {
         std.debug.print("✗ {s} is unreadable ({s})\n", .{ lock_path, @errorName(err) });
-        return;
+        std.process.exit(1);
     };
 
+    if (sub == .copy) {
+        // Git-pull refresh: both sides of the pin become the live tree.
+        // `VENDOR_ORIGIN_REV` sets origin to git@<rev>; otherwise tree@local.
+        // `patched` refuses: copy would overwrite as-copied. `sync` accepts a patch.
+        var copied: usize = 0;
+        for (names.items, paths.items, manifests.items) |n, p, m| {
+            if (copy_only) |only| {
+                if (!std.mem.eql(u8, n, only)) continue;
+            }
+            const was = if (lock) |l| l.get(n) else null;
+            switch (step_event.handler(.{ .state = VendorLock.label(VendorLock.classify(alloc, m, was)), .command = "copy" })) {
+                .pin => {},
+                .refuse => |why| {
+                    std.debug.print("✗ {s}: {s}\n", .{ n, why });
+                    std.process.exit(1);
+                },
+            }
+            const origin = VendorLock.originFromTree(alloc, p, &m.tree);
+            VendorLock.writeAcquired(alloc, lock_path, n, p, m, origin) catch |err| {
+                std.debug.print("✗ Failed to write {s}: {s}\n", .{ lock_path, @errorName(err) });
+                std.process.exit(1);
+            };
+            copied += 1;
+            std.debug.print("✓ copied {s} → {s}  sha256:{s}  ({d} files)  {s}@{s}\n", .{ n, p, m.tree[0..12], m.files.len, origin.source, origin.version });
+        }
+        if (copy_only != null and copied == 0) {
+            std.debug.print("✗ no binding named `{s}`\n", .{copy_only.?});
+            std.process.exit(1);
+        }
+        std.debug.print("✓ Recorded as-copied for {d} binding(s) in {s}\n", .{ copied, lock_path });
+        return;
+    }
     if (sub == .sync) {
         // The lock as it stands is handed to the writer so the copied side and the
         // origin ride across. `sync` accepts what is on disk as the new compiled
@@ -1080,7 +1177,7 @@ pub const VendorLock = struct {
         // to claim it.
         VendorLock.writeLock(alloc, lock_path, names.items, paths.items, manifests.items, lock) catch |err| {
             std.debug.print("✗ Failed to write {s}: {s}\n", .{ lock_path, @errorName(err) });
-            return;
+            std.process.exit(1);
         };
         std.debug.print("✓ Pinned {d} binding(s) in {s}\n", .{ names.items.len, lock_path });
         for (names.items, paths.items, manifests.items) |n, p, m| {
@@ -1118,7 +1215,10 @@ pub const VendorLock = struct {
         }
 
         drifted += 1;
-        const changes = VendorLock.drift(alloc, m, locked.?) catch return;
+        const changes = VendorLock.drift(alloc, m, locked.?) catch {
+            std.debug.print("✗ {s}: cannot compute drift\n", .{n});
+            std.process.exit(1);
+        };
         std.debug.print("✗ {s} → {s}  DRIFTED ({d} file(s))\n", .{ n, p, changes.len });
         if (sub == .diff) {
             for (changes) |c| {

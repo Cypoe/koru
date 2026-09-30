@@ -1,0 +1,42 @@
+unpinned gate refuse unpinned
+unpinned add pin
+unpinned copy pin
+unpinned sync pin
+unpinned check refuse unpinned
+unpinned diff refuse unpinned
+unpatched gate pin
+unpatched add pin
+unpatched copy pin
+unpatched sync pin
+unpatched check pin
+unpatched diff pin
+patched gate pin
+patched add refuse as-copied is never overwritten
+patched copy refuse as-copied is never overwritten
+patched sync pin
+patched check pin
+patched diff pin
+drifted gate refuse drifted
+drifted add refuse as-copied is never overwritten
+drifted copy refuse as-copied is never overwritten
+drifted sync pin
+drifted check refuse drifted
+drifted diff refuse drifted
+not-recorded gate pin
+not-recorded add pin
+not-recorded copy pin
+not-recorded sync pin
+not-recorded check pin
+not-recorded diff pin
+corrupt gate refuse corrupt
+corrupt add refuse corrupt
+corrupt copy refuse corrupt
+corrupt sync pin
+corrupt check refuse corrupt
+corrupt diff refuse corrupt
+conflict gate refuse conflict
+conflict add refuse conflict
+conflict copy refuse conflict
+conflict sync refuse conflict
+conflict check refuse conflict
+conflict diff refuse conflict

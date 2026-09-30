@@ -1,0 +1,55 @@
+// Pins `std/vendor:step`: every (state, command) is `pin` or `refuse`.
+// Omitting a handler here is KORU021. This output IS the protocol.
+
+import std/io
+import std/vendor
+
+tor cell { state: string, command: string }
+
+cell =
+    std/vendor:step(state, command)
+    | pin |> std/io:print.ln("{{ state:s }} {{ command:s }} pin")
+    | refuse why |> std/io:print.ln("{{ state:s }} {{ command:s }} refuse {{ why:s }}")
+
+cell(state: "unpinned", command: "gate")
+cell(state: "unpinned", command: "add")
+cell(state: "unpinned", command: "copy")
+cell(state: "unpinned", command: "sync")
+cell(state: "unpinned", command: "check")
+cell(state: "unpinned", command: "diff")
+cell(state: "unpatched", command: "gate")
+cell(state: "unpatched", command: "add")
+cell(state: "unpatched", command: "copy")
+cell(state: "unpatched", command: "sync")
+cell(state: "unpatched", command: "check")
+cell(state: "unpatched", command: "diff")
+cell(state: "patched", command: "gate")
+cell(state: "patched", command: "add")
+cell(state: "patched", command: "copy")
+cell(state: "patched", command: "sync")
+cell(state: "patched", command: "check")
+cell(state: "patched", command: "diff")
+cell(state: "drifted", command: "gate")
+cell(state: "drifted", command: "add")
+cell(state: "drifted", command: "copy")
+cell(state: "drifted", command: "sync")
+cell(state: "drifted", command: "check")
+cell(state: "drifted", command: "diff")
+cell(state: "not-recorded", command: "gate")
+cell(state: "not-recorded", command: "add")
+cell(state: "not-recorded", command: "copy")
+cell(state: "not-recorded", command: "sync")
+cell(state: "not-recorded", command: "check")
+cell(state: "not-recorded", command: "diff")
+cell(state: "corrupt", command: "gate")
+cell(state: "corrupt", command: "add")
+cell(state: "corrupt", command: "copy")
+cell(state: "corrupt", command: "sync")
+cell(state: "corrupt", command: "check")
+cell(state: "corrupt", command: "diff")
+cell(state: "conflict", command: "gate")
+cell(state: "conflict", command: "add")
+cell(state: "conflict", command: "copy")
+cell(state: "conflict", command: "sync")
+cell(state: "conflict", command: "check")
+cell(state: "conflict", command: "diff")
