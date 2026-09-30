@@ -45,8 +45,6 @@ const ast = @import("ast");
 //
 // Zig generic - instantiate with your type:
 //   const MyRing = MpmcRing(u64, 1024);
-//
-// Compiles to fully specialized code - zero abstraction cost.
 
 const CacheLine = 64;
 
@@ -72,6 +70,7 @@ pub fn MpmcRing(comptime T: type, comptime capacity: usize) type {
         slots: [capacity]Slot align(CacheLine),
 
         pub fn init() Self {
+            @setEvalBranchQuota(capacity * 8);
             var self = Self{
                 .head = std.atomic.Value(usize).init(0),
                 .tail = std.atomic.Value(usize).init(0),
