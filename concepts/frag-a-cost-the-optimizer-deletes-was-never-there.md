@@ -198,6 +198,15 @@ by 3.6 ms at the minimum — more than Koru and Zig differ. Binomial noise
 alone spans roughly 31–49 of 80 at two standard deviations; a win rate inside
 that band is the instrument, not the programs. Run the A/A arm first.
 
+Dedicated hardware removes the noise and exposes the next confound, which is
+bigger. On a c-2 (Xeon 8168) the A/A arm sat at 55/100 and Koru beat Zig
+81/100, replicated at 88/120 — a real, stable result, and still not a Koru
+win. The same Koru instructions shifted 16 bytes lost to themselves 75/80
+(~1% median); across a handful of placements the Koru–Zig head-to-head ran
+from 65/80 to 13/80 with no instruction changed. **A stable win rate is a
+claim about two binaries' layouts, not two compilers, until the placement is
+swept.** On x86 the sweep is the falsifier; the A/A arm only calibrates noise.
+
 
 ## Open
 
