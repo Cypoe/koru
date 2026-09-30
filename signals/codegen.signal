@@ -1,0 +1,9 @@
+name: codegen
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: what the compiler emits changed at instruction level — an emitted
+  shape removed, added, or re-attributed (emitter vs backend optimizer),
+  verified by disassembly of the produced binary rather than by timing
+  or by reading output_emitted.zig.
