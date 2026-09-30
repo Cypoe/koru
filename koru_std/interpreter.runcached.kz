@@ -22,21 +22,21 @@
     defined: ?*DefinedFlows = null, input_fn: ?InputLookupFn = null,  // REPL define; tor -> declared input fields
     lenient: bool = false,  // 430_056: under-handling hands back `unhandled-branch`
     host_dispatch: ?HostDispatchFn = null,
-    session_env: ?*Environment = null
+    session_env: ?*Environment = null,
+    session_bind_fn: ?SessionBindFn = null,
+    session_bind_env: ?*Environment = null,
+    session_bind_counter: ?*u64 = null
 }
-| result { value: Value, used: u64, handles: u32 }
+| result { value: Value, used: u64, handles: u32, bound: string, trace: string }
 | unhandled-branch { branch: string, payload: string, handles: string }
 | exhausted { used: u64, last_event: string, handles: u32 }
 | parse-error { message: string, line: u32, column: u32 }
 | validation-error string
-| dispatch-error { event_name: string, message: string }
+| dispatch-error { event_name: string, message: string, trace: string }
 
 // Cached fast path: reuse parsed flow when the source string matches.
 // Falls back to the full parser if parsing fails.
 ~proc run-cached|zig {
-    const koru_errors = @import("koru_errors");
-    const koru_ast = @import("koru_ast");
-
     if (findHostTilde(source)) |t| {
         return .{ .parse_error = .{
             .message = "`~` is not legal in interpreter source. It switches a host-embedded file (.kz/.kjs) from the host language into Koru; interpreter source is already pure Koru, so it marks nothing. Drop it: write `open(path: \"x\")`, not `~open(path: \"x\")`.",
@@ -46,42 +46,11 @@
     }
 
     const allocator = InterpreterThreadState.prepare();
-    const cached_flow = InterpreterFlowCache.getOrParse(source) orelse blk: {
-        // Fallback: full parser for complex inputs
-        var reporter = koru_errors.ErrorReporter.init(allocator, "interpreter", source) catch {
-            return .{ .parse_error = .{
-                .message = "Failed to initialize error reporter",
-                .line = 0,
-                .column = 0,
-            }};
-        };
-        defer reporter.deinit();
-        var parser = koru_parser.Parser.init(allocator, source, "runtime_input", &[_][]const u8{}, null) catch {
-            return .{ .parse_error = .{
-                .message = "Failed to initialize parser",
-                .line = 0,
-                .column = 0,
-            }};
-        };
-        defer parser.deinit();
-        parser.fail_fast = fail_fast;
-        const parse_result = parser.parse() catch {
-            if (parser.reporter.hasErrors()) {
-                const err = parser.reporter.errors.items[0];
-                return .{ .parse_error = .{
-                    .message = std.heap.page_allocator.dupe(u8, err.message) catch "parse error",
-                    .line = @intCast(err.location.line),
-                    .column = @intCast(err.location.column),
-                }};
-            }
-            return .{ .parse_error = .{ .message = "Parse failed", .line = 0, .column = 0 }};
-        };
-        var found: ?*const koru_ast.Flow = null;
-        for (parse_result.source_file.items) |*item| {
-            if (item.* == .flow) { found = &item.flow; break; }
-        }
-        if (found) |f| break :blk f;
-        return .{ .parse_error = .{ .message = "No flow found in source", .line = 0, .column = 0 }};
+    const cached_flow = InterpreterFlowCache.getOrParse(source) orelse switch (freshFlow(allocator, source, fail_fast)) {
+        .flow => |f| f,
+        .err => |e| return .{ .parse_error = .{
+            .message = e.message, .line = e.line, .column = e.column,
+        } },
     };
 
     if (validateFlow(cached_flow, allocator, input_fn, defined, session_env)) |validation_err| {
@@ -125,6 +94,9 @@
         .input_fn = input_fn,
         .host_dispatch = host_dispatch,
         .session_env = session_env,
+        .session_bind_fn = session_bind_fn,
+        .session_bind_env = session_bind_env,
+        .session_bind_counter = session_bind_counter,
         .unhandled_outcome = null,
     };
 
@@ -146,8 +118,9 @@
             }};
         }
         return .{ .dispatch_error = .{
-            .event_name = persistentEventName(cached_flow.inv()),
+            .event_name = ctx.failing_event_name orelse persistentEventName(cached_flow.inv()),
             .message = ctx.error_detail orelse @errorName(err),
+            .trace = renderTrace(&ctx.trace, allocator),
         }};
     };
 
@@ -155,8 +128,9 @@
     if (ctx.unhandled_outcome) |u| {
         if (!lenient) {
             return .{ .dispatch_error = .{
-                .event_name = persistentEventName(cached_flow.inv()),
+                .event_name = ctx.failing_event_name orelse persistentEventName(cached_flow.inv()),
                 .message = "NoBranchMatch",
+                .trace = renderTrace(&ctx.trace, allocator),
             } };
         }
         return .{ .unhandled_branch = .{
@@ -171,6 +145,8 @@
         .value = stable_value,
         .used = budget_state.used,
         .handles = @intCast(active_pool.countUndischarged()),
+        .bound = lastBound(&ctx.trace),
+        .trace = renderTrace(&ctx.trace, allocator),
     }};
 }
 

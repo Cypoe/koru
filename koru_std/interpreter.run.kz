@@ -25,14 +25,17 @@
     defined: ?*DefinedFlows = null, input_fn: ?InputLookupFn = null,  // REPL define; tor -> declared input fields
     lenient: bool = false,  // 430_056: under-handling hands back `unhandled-branch` instead of refusing
     host_dispatch: ?HostDispatchFn = null,  // session verbs consulted after the scope denies
-    session_env: ?*Environment = null
+    session_env: ?*Environment = null,
+    session_bind_fn: ?SessionBindFn = null,  // binds every dispatched result into the session (rN)
+    session_bind_env: ?*Environment = null,
+    session_bind_counter: ?*u64 = null
 }
-| result { value: Value, used: u64, handles: u32 }
+| result { value: Value, used: u64, handles: u32, bound: string, trace: string }
 | unhandled-branch { branch: string, payload: string, handles: string }
 | exhausted { used: u64, last_event: string, handles: u32 }
 | parse-error { message: string, line: u32, column: u32 }
 | validation-error string
-| dispatch-error { event_name: string, message: string }
+| dispatch-error { event_name: string, message: string, trace: string }
 
 
 // Execute pre-parsed AST - for benchmarks and advanced use
@@ -53,18 +56,18 @@
     defined: ?*DefinedFlows = null, input_fn: ?InputLookupFn = null,  // REPL define; tor -> declared input fields
     lenient: bool = false,  // 430_056: under-handling hands back `unhandled-branch`
     host_dispatch: ?HostDispatchFn = null,
-    session_env: ?*Environment = null
+    session_env: ?*Environment = null,
+    session_bind_fn: ?SessionBindFn = null,
+    session_bind_env: ?*Environment = null,
+    session_bind_counter: ?*u64 = null
 }
-| result { value: Value, used: u64, handles: u32 }
+| result { value: Value, used: u64, handles: u32, bound: string, trace: string }
 | unhandled-branch { branch: string, payload: string, handles: string }
 | exhausted { used: u64, last_event: string, handles: u32 }
 | validation-error string
-| dispatch-error { event_name: string, message: string }
+| dispatch-error { event_name: string, message: string, trace: string }
 
 ~proc run|zig {
-    const koru_errors = @import("koru_errors");
-    const koru_ast = @import("koru_ast");
-
     if (findHostTilde(source)) |t| {
         return .{ .parse_error = .{
             .message = "`~` is not legal in interpreter source. It switches a host-embedded file (.kz/.kjs) from the host language into Koru; interpreter source is already pure Koru, so it marks nothing. Drop it: write `open(path: \"x\")`, not `~open(path: \"x\")`.",
@@ -80,35 +83,11 @@
     var flow_result = flow_parser.parseFlow(allocator, source);
     const flow: *const ast.Flow = switch (flow_result) {
         .flow => |*f| f,
-        .err => blk: {
-            // Fallback: try full parser for complex inputs
-            var reporter = koru_errors.ErrorReporter.init(allocator, "interpreter", source) catch {
-                break :blk @as(*const ast.Flow, undefined);
-            };
-            defer reporter.deinit();
-            var parser = koru_parser.Parser.init(allocator, source, "runtime_input", &[_][]const u8{}, null) catch {
-                break :blk @as(*const ast.Flow, undefined);
-            };
-            defer parser.deinit();
-            parser.fail_fast = fail_fast;
-            const parse_result = parser.parse() catch {
-                if (parser.reporter.hasErrors()) {
-                    const err = parser.reporter.errors.items[0];
-                    return .{ .parse_error = .{
-                        .message = std.heap.page_allocator.dupe(u8, err.message) catch "parse error",
-                        .line = @intCast(err.location.line),
-                        .column = @intCast(err.location.column),
-                    }};
-                }
-                return .{ .parse_error = .{ .message = "Parse failed", .line = 0, .column = 0 }};
-            };
-            // Find first flow in parse result
-            var found: ?*const koru_ast.Flow = null;
-            for (parse_result.source_file.items) |*item| {
-                if (item.* == .flow) { found = &item.flow; break; }
-            }
-            if (found) |f| break :blk f;
-            return .{ .parse_error = .{ .message = "No flow found in source", .line = 0, .column = 0 }};
+        .err => switch (freshFlow(allocator, source, fail_fast)) {
+            .flow => |f| f,
+            .err => |e| return .{ .parse_error = .{
+                .message = e.message, .line = e.line, .column = e.column,
+            } },
         },
     };
 
@@ -171,6 +150,9 @@
         .input_fn = input_fn,
         .host_dispatch = host_dispatch,
         .session_env = session_env,
+        .session_bind_fn = session_bind_fn,
+        .session_bind_env = session_bind_env,
+        .session_bind_counter = session_bind_counter,
         .unhandled_outcome = null,
     };
 
@@ -206,8 +188,9 @@
         );
 
         return .{ .dispatch_error = .{
-            .event_name = stable_event_name,
+            .event_name = ctx.failing_event_name orelse stable_event_name,
             .message = ctx.error_detail orelse @errorName(err),
+            .trace = renderTrace(&ctx.trace, allocator),
         }};
     };
 
@@ -223,8 +206,9 @@
             // The mode is the caller's policy call (430_056 ruling): strict
             // callers keep today's refusal, named honestly.
             return .{ .dispatch_error = .{
-                .event_name = persistentEventName(flow.inv()),
+                .event_name = ctx.failing_event_name orelse persistentEventName(flow.inv()),
                 .message = "NoBranchMatch",
+                .trace = renderTrace(&ctx.trace, allocator),
             } };
         }
         return .{ .unhandled_branch = .{
@@ -249,278 +233,18 @@
         .value = stable_value,
         .used = budget_state.used,
         .handles = @intCast(active_pool.countUndischarged()),
+        // The terminal's durable name came from the trace's bind, not a
+        // second mint — the last dispatch and the result are the same value.
+        .bound = lastBound(&ctx.trace),
+        .trace = renderTrace(&ctx.trace, allocator),
     }};
 }
 
 
-/// The NAMED handles an under-handled turn leaves on the bridge, as a JSON
-/// list — "not the count `run` returns today" (430_056 ruling): a host or
-/// shell line addresses them by name. Page-backed like the other durable
-/// strings; the reporter for the hand-back may never die beneath the host.
-fn renderHeldHandles(pool: *HandlePool) []const u8 {
-    var buf = std.ArrayList(u8){};
-    defer buf.deinit(std.heap.page_allocator);
-    const w = buf.writer(std.heap.page_allocator);
-    w.writeByte('[') catch return "[]";
-    var first = true;
-    for (pool.handles.items) |h| {
-        if (h.discharged) continue;
-        if (!first) w.writeByte(',') catch return "[]";
-        first = false;
-        w.writeByte('"') catch return "[]";
-        w.writeAll(h.handle_id) catch return "[]";
-        w.writeByte('"') catch return "[]";
-    }
-    w.writeByte(']') catch return "[]";
-    return std.heap.page_allocator.dupe(u8, buf.items) catch "[]";
-}
 
 // ============================================================================
 // FLOW EXECUTION - The core interpreter loop
 // ============================================================================
-
-/// Refuse a discharge tor that names a handle the pool does not hold.
-///
-/// The handle name IS the capability: a run may act on what it was handed and
-/// on nothing else. Called BEFORE the dispatcher, because the discharge proc is
-/// the irreversible half — releasing a resource you were never given cannot be
-/// walked back by observing afterwards that no obligation was retired.
-///
-/// `error.HandleNotHeld` surfaces as `dispatch-error` carrying that name, the
-/// same channel `EventDenied` uses for a verb the scope refuses.
-fn assertHandlesHeld(
-    ctx: *InterpreterContext,
-    pool: *HandlePool,
-    event_name: []const u8,
-    args: []const ast.Arg,
-) !void {
-    if (ctx.discharges_spec_fn) |spec_fn| {
-        for (spec_fn(event_name)) |spec| {
-            for (args) |arg| {
-                if (!std.mem.eql(u8, arg.name, spec.arg_name)) continue;
-                if (pool.findByHandleId(arg.value, ctx.scope_name) == null) {
-                    return error.HandleNotHeld;
-                }
-                break;
-            }
-        }
-    } else if (ctx.discharges_obligations_fn) |discharges_fn| {
-        if (discharges_fn(event_name).len != 0 and args.len > 0 and
-            pool.findByHandleIdAnyScope(args[0].value) == null)
-        {
-            return error.HandleNotHeld;
-        }
-    }
-
-    // BORROW possession — `field: T<state>` (no `!`) must name a live handle
-    // carrying that obligation. Consumes are covered by the spec pass above;
-    // a borrow proves the session holds the value without spending it — the
-    // arg IS the capability either way. A literal in this position is a
-    // forgery the wire cannot express any other way.
-    const input_fn = ctx.input_fn orelse return;
-    const fields = input_fn(event_name) orelse return;
-    for (fields) |field| {
-        const p = field.phantom orelse continue;
-        if (p.len == 0 or p[0] == '!' or p[p.len - 1] == '!') continue;
-        const state = if (std.mem.lastIndexOfScalar(u8, p, ':')) |c| p[c + 1 ..] else p;
-        for (args) |arg| {
-            if (!std.mem.eql(u8, arg.name, field.name)) continue;
-            const h = pool.findByHandleId(arg.value, ctx.scope_name) orelse {
-                ctx.error_detail = std.fmt.allocPrint(ctx.allocator,
-                    "'{s}' wants a live <{s}> — '{s}' names nothing the session holds. Mint one through a verb whose signature ends '-> <{s}!>'",
-                    .{ field.name, state, arg.value, state }) catch null;
-                return error.HandleNotHeld;
-            };
-            if (!std.mem.eql(u8, h.obligation_name, state)) {
-                ctx.error_detail = std.fmt.allocPrint(ctx.allocator,
-                    "'{s}' wants a live <{s}> — '{s}' is a <{s}>. Mint one through a verb whose signature ends '-> <{s}!>'",
-                    .{ field.name, state, arg.value, h.obligation_name, state }) catch null;
-                return error.HandleNotHeld;
-            }
-            break;
-        }
-    }
-}
-
-/// The invocation's fully qualified tor name, on memory that OUTLIVES the run.
-///
-/// Every dispatch-error site used to build this into a `[256]u8` stack local and
-/// return a slice of it, so the name a caller read was a dead frame. It printed
-/// as garbage, which is why `dispatch-error` has been unreadable for as long as
-/// it has been firing — the failure that hid the resource bridge for six days
-/// reported itself as four replacement characters.
-fn persistentEventName(inv: *const ast.Invocation) []const u8 {
-    const alloc = std.heap.page_allocator;
-    var name = std.ArrayList(u8){ .items = &.{}, .capacity = 0 };
-    if (inv.path.module_qualifier) |mq| {
-        name.appendSlice(alloc, mq) catch return "unknown";
-        name.append(alloc, ':') catch return "unknown";
-    }
-    for (inv.path.segments, 0..) |seg, i| {
-        if (i > 0) name.append(alloc, '.') catch return "unknown";
-        name.appendSlice(alloc, seg) catch return "unknown";
-    }
-    return name.toOwnedSlice(alloc) catch "unknown";
-}
-
-fn autoDischargeHandles(
-    auto_discharge: bool,
-    using_external_pool: bool,
-    active_pool: *HandlePool,
-    discharges_spec_fn: ?DischargesSpecFn,
-    dispatcher: DispatchFn,
-    allocator: std.mem.Allocator,
-) void {
-    if (!auto_discharge) return;
-
-    // Auto-discharge only for LOCAL pools. A bridge-managed pool outlives the
-    // run by design, so its handles are released when the SESSION ends — see
-    // `std/bridge:close`, which calls the same loop below.
-    if (using_external_pool) return;
-
-    dischargeAllHandles("AUTO-DISCHARGE", active_pool, discharges_spec_fn, dispatcher, allocator);
-}
-
-/// Release every handle still held on `pool` by invoking its recorded discharge
-/// tor through `dispatcher`.
-///
-/// The ONE implementation of "release what is still held". A run ending and a
-/// session hanging up are the same act at two lifetime scales, and they were
-/// written twice — once here, honestly, and once in `std/bridge.dischargeAll`
-/// as a print and a boolean that released nothing while satisfying the counter.
-///
-/// `label` names the caller in the trace, so a bridge hang-up does not report
-/// itself as an auto-discharge.
-///
-/// The synthesized discharge invocations are SCRATCH — nothing here escapes the
-/// loop — so this owns an arena over the caller's allocator rather than leaving
-/// litter in it. A run's arena is reset anyway; a bridge's allocator is the
-/// produced program's leak-checked one, and it noticed.
-pub fn dischargeAllHandles(
-    label: []const u8,
-    pool: *HandlePool,
-    discharges_spec_fn: ?DischargesSpecFn,
-    dispatcher: DispatchFn,
-    allocator: std.mem.Allocator,
-) void {
-    if (pool.countUndischarged() == 0) return;
-
-    var scratch = std.heap.ArenaAllocator.init(allocator);
-    defer scratch.deinit();
-    const scratch_alloc = scratch.allocator();
-
-
-    // Guarded release loop (Cordis Theorem 63 + Theorem 16 ordering, mirror
-    // side): a handle may be released only when no undischarged handle
-    // depends on it, and among independent handles the pool is walked in
-    // REVERSE acquisition order — LIFO, exactly as Cordis's accumulator does
-    // (`disposables.splice(0).reverse()`, the paper's Theorem 16: effects
-    // revert in the reverse of the order they were applied). Dependents go
-    // first, providers last; the provider outlives its consumers. The pass
-    // is repeated because releasing a dependent may unblock its provider;
-    // each pass scans the pool, so a handle blocked by a dependent is
-    // simply skipped until that dependent is gone.
-    var progressed = true;
-    while (progressed) {
-        progressed = false;
-        var i = pool.handles.items.len;
-        while (i > 0) {
-            i -= 1;
-            const handle = pool.handles.items[i];
-            if (handle.discharged) continue;
-            if (pool.hasUndischargedDependents(handle.id)) continue;
-
-            // Find the arg_name for this discharge tor by looking up DischargeSpec
-            var arg_name: ?[]const u8 = null;
-            if (discharges_spec_fn) |spec_fn| {
-                const specs = spec_fn(handle.discharge_event);
-                // Match on obligation_module/name (don't assume first item)
-                for (specs) |spec| {
-                    if (std.mem.eql(u8, spec.obligation_module, handle.obligation_module) and
-                        std.mem.eql(u8, spec.obligation_name, handle.obligation_name)) {
-                        arg_name = spec.arg_name;
-                        break;
-                    }
-                }
-            }
-
-            if (arg_name == null) {
-                std.debug.print("[{s}] No spec for '{s}' [{s}:{s}], skipping\n",
-                    .{label, handle.handle_id, handle.obligation_module, handle.obligation_name});
-                continue;
-            }
-
-            var discharge_inv = buildDischargeInvocation(
-                handle.discharge_event,
-                handle.handle_id,
-                arg_name.?,
-                scratch_alloc,
-            );
-
-            var discharge_result: DispatchResult = undefined;
-            dispatcher(&discharge_inv, &discharge_result) catch |err| {
-                std.debug.print("[{s}] Failed '{s}': {s}\n",
-                    .{label, handle.discharge_event, @errorName(err)});
-                continue;  // Don't mark as discharged if dispatch failed
-            };
-            std.debug.print("[{s}] Invoked '{s}' for handle '{s}' [{s}:{s}]\n",
-                .{label, handle.discharge_event, handle.handle_id, handle.obligation_module, handle.obligation_name});
-
-            // Mark discharged after successful dispatch
-            pool.dischargeById(handle.id);
-            progressed = true;
-        }
-    }
-}
-
-/// Build an AST invocation for a discharge tor
-/// Used by auto-discharge to invoke cleanup tors
-fn buildDischargeInvocation(
-    discharge_event: []const u8,
-    handle_id: []const u8,
-    arg_name: []const u8,
-    allocator: std.mem.Allocator,
-) ast.Invocation {
-    // Parse the tor name (e.g., "sqlite3:close" -> module="sqlite3", segments=["close"])
-    var module_qualifier: ?[]const u8 = null;
-    var event_name: []const u8 = discharge_event;
-
-    if (std.mem.indexOf(u8, discharge_event, ":")) |colon_idx| {
-        module_qualifier = allocator.dupe(u8, discharge_event[0..colon_idx]) catch null;
-        event_name = discharge_event[colon_idx + 1 ..];
-    }
-
-    // Build path segments - use static array for fallback
-    const segment_copy = allocator.dupe(u8, event_name) catch event_name;
-    const segments_storage = allocator.alloc([]const u8, 1) catch {
-        // Fallback to empty segments
-        return .{
-            .path = .{ .module_qualifier = module_qualifier, .segments = &[_][]const u8{} },
-            .args = &[_]ast.Arg{},
-        };
-    };
-    segments_storage[0] = segment_copy;
-
-    // Build single argument with handle_id
-    const args_storage = allocator.alloc(ast.Arg, 1) catch {
-        return .{
-            .path = .{ .module_qualifier = module_qualifier, .segments = segments_storage },
-            .args = &[_]ast.Arg{},
-        };
-    };
-    args_storage[0] = .{
-        .name = allocator.dupe(u8, arg_name) catch arg_name,
-        .value = allocator.dupe(u8, handle_id) catch handle_id,
-    };
-
-    return .{
-        .path = .{
-            .module_qualifier = module_qualifier,
-            .segments = segments_storage,
-        },
-        .args = args_storage,
-    };
-}
 
 /// Dispatcher results are borrowed memory: |zig procs hand back slices into
 /// their own stack frames, and generated dispatchers point `fields` at
@@ -567,6 +291,11 @@ fn executeFlow(
     ctx: *InterpreterContext,
 ) !Value {
     const inv = flow.inv();
+    // This flow's own dispatch trace slot — set when the invocation below
+    // really dispatched; a matched `|` arm then writes its binding name onto
+    // it. Control-flow spellings (if/for/while) never set it, so their arm
+    // bindings can't be misattributed onto a sibling's call.
+    var this_trace_idx: ?usize = null;
 
     // Build invocation for dispatcher
     var dispatch_result: DispatchResult = undefined;
@@ -1120,6 +849,7 @@ fn executeFlow(
                 // proc, because the proc is the irreversible half — close(fd) on an
                 // fd you were never handed cannot be undone by noticing afterwards
                 // that the counter did not move.
+                ctx.failing_event_name = persistentEventName(&evaluated_inv);
                 if (ctx.handle_pool) |pool| {
                     try assertHandlesHeld(ctx, pool, event_name, evaluated_inv.args);
                 }
@@ -1151,6 +881,31 @@ fn executeFlow(
             // continuations), obligation field extraction below, and the
             // value handed back all keep it past the dispatcher's frame.
             try ownDispatchResult(&dispatch_result, ctx.allocator);
+
+            // TRACE: what each call issued is a datum the model reads from
+            // the turn's report — a chain's middle is invisible otherwise
+            // (task18 looped get-user-details ten times on a record it had
+            // fetched and never seen). The host's binder gives it a durable
+            // rN so next turn can name it; the arm name patches on below.
+            {
+                var bound_name: []const u8 = "";
+                if (ctx.session_bind_fn) |sbf| {
+                    if (ctx.session_bind_env) |sbe| {
+                        if (ctx.session_bind_counter) |sbc| {
+                            bound_name = sbf(sbe, sbc, Value.fromDispatch(
+                                dispatch_result.branch, dispatch_result.fields));
+                        }
+                    }
+                }
+                this_trace_idx = ctx.trace.items.len;
+                ctx.trace.append(ctx.allocator, .{
+                    .event = event_name,
+                    .bound = bound_name,
+                    .arm = null,
+                    .json = Value.fromDispatch(dispatch_result.branch, dispatch_result.fields)
+                        .toJsonAlloc(ctx.allocator),
+                }) catch {};
+            }
 
             // Track obligations for the handle pool — prefer the spec API.
             if (ctx.handle_pool) |pool| {
@@ -1300,6 +1055,11 @@ fn executeFlow(
                     dispatch_result.fields,
                 );
                 try ctx.env.bind(binding_name, bound_value);
+                // The arm's name belongs on this dispatch's trace line —
+                // `get-user-details -> {...} bound: r4 as u`.
+                if (this_trace_idx) |ti| {
+                    ctx.trace.items[ti].arm = binding_name;
+                }
 
                 // expr_bindings for `if`/`when` conditions — same scope the
                 // guard judged in (interpreter.guards).
@@ -1481,6 +1241,9 @@ fn executeFlow(
         .input_fn = input_fn,
         .host_dispatch = host_dispatch,
         .session_env = session_env,
+        .session_bind_fn = session_bind_fn,
+        .session_bind_env = session_bind_env,
+        .session_bind_counter = session_bind_counter,
         .unhandled_outcome = null,
     };
 
@@ -1516,8 +1279,9 @@ fn executeFlow(
         );
 
         return .{ .dispatch_error = .{
-            .event_name = stable_event_name,
+            .event_name = ctx.failing_event_name orelse stable_event_name,
             .message = ctx.error_detail orelse @errorName(err),
+            .trace = renderTrace(&ctx.trace, allocator),
         }};
     };
 
@@ -1533,8 +1297,9 @@ fn executeFlow(
             // The mode is the caller's policy call (430_056 ruling): strict
             // callers keep today's refusal, named honestly.
             return .{ .dispatch_error = .{
-                .event_name = persistentEventName(flow.inv()),
+                .event_name = ctx.failing_event_name orelse persistentEventName(flow.inv()),
                 .message = "NoBranchMatch",
+                .trace = renderTrace(&ctx.trace, allocator),
             } };
         }
         return .{ .unhandled_branch = .{
@@ -1559,5 +1324,10 @@ fn executeFlow(
         .value = stable_value,
         .used = budget_state.used,
         .handles = @intCast(active_pool.countUndischarged()),
+        // The terminal's durable name came from the trace's bind, not a
+        // second mint — the last dispatch and the result are the same value.
+        .bound = lastBound(&ctx.trace),
+        .trace = renderTrace(&ctx.trace, allocator),
     }};
 }
+

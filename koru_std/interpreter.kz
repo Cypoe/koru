@@ -774,6 +774,21 @@ pub const InterpreterContext = struct {
     // fragment actually asked for, so dispatch-error can teach instead of
     // reporting a bare @errorName.
     error_detail: ?[]const u8 = null,
+    // The invocation about to dispatch, recorded per step — a mid-chain
+    // refusal names ITS step, not the flow's head (`flow.inv()`), which is
+    // what dispatch-error used to report: `confirm(held: h)` failing four
+    // steps into a chain reported itself as `select`.
+    failing_event_name: ?[]const u8 = null,
+    // The run's dispatch trace — one entry per real call, in dispatch
+    // order. Rendered onto run's `result`/`dispatch-error`; empty when the
+    // turn never reached the dispatcher.
+    trace: std.ArrayListUnmanaged(TraceEntry) = .{},
+    // Host binder + its state — when set, every dispatched result binds a
+    // durable session name, so `hold`'s <held> minted mid-chain is
+    // addressable next turn, not only the arm name that dies at turn end.
+    session_bind_fn: ?SessionBindFn = null,
+    session_bind_env: ?*Environment = null,
+    session_bind_counter: ?*u64 = null,
 };
 
 pub const InterpreterThreadState = struct {
@@ -796,49 +811,6 @@ pub const InterpreterThreadState = struct {
         return arena.allocator();
     }
 };
-
-pub const InterpreterFlowCache = struct {
-    threadlocal var inited: bool = false;
-    threadlocal var arena: std.heap.ArenaAllocator = undefined;
-    threadlocal var source_hash: u64 = 0;
-    threadlocal var source_len: usize = 0;
-    threadlocal var source_copy: []const u8 = &[_]u8{};
-    threadlocal var flow: ast.Flow = undefined;
-    threadlocal var has_flow: bool = false;
-
-    pub fn getOrParse(source: []const u8) ?*const ast.Flow {
-        if (!inited) {
-            arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-            inited = true;
-        }
-        const hash = std.hash.Wyhash.hash(0, source);
-        if (has_flow and source_len == source.len and source_hash == hash and std.mem.eql(u8, source, source_copy)) {
-            return &flow;
-        }
-
-        _ = arena.reset(.retain_capacity);
-        const allocator = arena.allocator();
-        source_copy = allocator.dupe(u8, source) catch {
-            has_flow = false;
-            return null;
-        };
-        const parse_result = flow_parser.parseFlow(allocator, source_copy);
-        switch (parse_result) {
-            .flow => |f| {
-                flow = f;
-                has_flow = true;
-                source_len = source.len;
-                source_hash = hash;
-                return &flow;
-            },
-            .err => {
-                has_flow = false;
-                return null;
-            },
-        }
-    }
-};
-
 
 // HOST-TILDE WALL - interpreter source is pure Koru
 
@@ -897,3 +869,6 @@ pub fn findHostTilde(source: []const u8) ?HostTilde {
 ~part select
 ~part literal
 ~part validate
+~part trace
+~part handles
+~part flowsrc
