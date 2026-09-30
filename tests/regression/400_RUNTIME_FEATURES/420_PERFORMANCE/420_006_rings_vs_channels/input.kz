@@ -11,10 +11,10 @@
 //
 // The ring impl is byte-identical to the Zig baseline's and verified
 // instruction-identical in the binary (objdump diff 2026-09-30: same
-// ldapr/cas/stlr sequence both sides). The emitted flow machinery
-// adds residual flag traffic (~14 extra insns/msg: union-tag strb +
-// tbz + a global ldrb) — real but measured ~FREE: a hand-fused
-// consumer loop (4 flag instrs vs Zig's 3) ran the same wall time.
+// ldapr/cas/stlr sequence both sides). The #loop driver switches on an
+// in-loop `const` handler result, so the consumer loop carries no
+// union-tag stores or tests: success path is Zig's plus one branch
+// (loop-exit ordering), 0 strb/tbz/cset in the loop body.
 // The ~25-30% deficit this test once measured was neither: it was
 // ring PLACEMENT — create-ring heap-allocates (a tor's frame cannot
 // host a cross-thread ring) while the baseline stack-allocated.

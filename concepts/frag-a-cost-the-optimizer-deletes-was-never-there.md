@@ -160,6 +160,28 @@ measured cost** — attribute the delta before optimizing the emission, and a
 benchmark that doesn't normalize allocation sites is comparing placements,
 not programs.
 
+Same day, third reading: "~free" was the wrong question to stop at. The flag
+traffic had one cause and it was the emitter's, not LLVM's: the `#label` driver
+kept the handler result in a **mutable union variable** — `var result_N`, a
+`while (result_N == .b)` guard, a switch inside, a second switch after — and a
+union that lives across a loop back-edge keeps its tag in a stack slot LLVM
+writes and never reads. Emitting `label: while (true) { const r = call; switch
+(r) {…} break :label; }` instead — one exhaustive switch, jumps reduced to
+state-var assignment plus `continue` — leaves the consumer loop with zero tag
+stores or tests, one branch over the hand-written Zig loop. Zig's own loop had
+none; the "Zig's 3" above was a miscount. The instrument was the artifact
+method below, run against the native target: rebuild the emitted file
+unchanged (control: instruction-identical to the shipped binary), hand-edit
+only the driver, diff `_main`; then the compiler change had to reproduce the
+hand-edit's `_main` exactly, and did.
+
+The rule this adds: **a cost that measures ~free on one workload is still the
+emitter's to delete when the emitter is the only thing that put it there.**
+"Free here" is a property of this loop's memory-bound body; the stack store
+and the tag test run in every `#label` loop in every program. Whether a
+cost matters is decided by timing; whether it *exists* is decided by the
+disassembly, and existence is enough reason to remove emission nothing needed.
+
 
 ## Open
 

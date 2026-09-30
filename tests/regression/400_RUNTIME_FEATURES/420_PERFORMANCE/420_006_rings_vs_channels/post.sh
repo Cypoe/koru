@@ -62,9 +62,8 @@ echo ""
 # Interpret: Zig vs Koru — parity at equal allocation. The old
 # stack-vs-heap asymmetry was normalized 2026-09-30 after it was
 # measured as the dominant gap driver (~25%: placement, not codegen).
-# The residual union-tag flag traffic in the emitted loop measured
-# ~free (fused-consumer variant gained ~0), so a deficit here means
-# NEW weight, not the known noise.
+# The emitted consumer loop carries no union-tag traffic, so a
+# deficit here means NEW weight, not the known noise.
 echo "Zig vs Koru (parity at equal allocation):"
 if (( $(echo "$ZIG_VS_KORU > 1.05" | bc -l) )); then
     MARGIN=$(echo "scale=1; ($ZIG_VS_KORU - 1) * 100" | bc -l)

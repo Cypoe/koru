@@ -2331,7 +2331,6 @@ pub const VisitorEmitter = struct {
             .type_registry = self.type_registry,
             .main_module_name = self.main_module_name,
             .current_source_event = null,
-            .label_contexts = null,
             .is_sync = true,
             .in_handler = true,
             .self_loop_active = is_self_loop,

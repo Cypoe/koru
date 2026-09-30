@@ -489,9 +489,9 @@ const Emitter = struct {
     impl_event: ?*const ast.EventDecl = null,
     /// The `#label` fold currently being emitted, or null outside one. A `@label(…)`
     /// jump re-seeds the fold's state variables and re-runs its head, and only the
-    /// frame that opened the loop knows their names — the twin of
-    /// EmissionContext.label_handler_invocation / .label_result_var
-    /// (emitter_helpers.zig:5203).
+    /// frame that opened the loop knows their names. (The Zig emitter once kept
+    /// the twin in EmissionContext.label_handler_invocation / .label_result_var;
+    /// there the jump is now just reassign + `continue :label`.)
     ///
     /// A POINTER into the emitting stack, not a value: folds nest, and a jump
     /// names a label rather than a depth. Each `emitLabelFoldAt` links its frame
@@ -3173,7 +3173,8 @@ fn continuationForBranch(continuations: []const ast.Continuation, op: []const u8
 /// separates a fold's LOOPING arms — which belong inside the `while` and in its
 /// condition — from its EXIT arms, which run after it. Recursive because the jump
 /// may sit under a nested dispatch (`| more s |> check(s) | ok |> @L(…)`).
-/// Predicate twin of emitter_helpers.findLoopingBranches (:9062), which allocates
+/// Predicate twin of emitter_helpers's former findLoopingBranches (deleted
+/// when the Zig side switched to `while (true)` + in-loop call), which allocated
 /// the branch-name list it only ever asks membership questions of.
 fn contLoopsTo(cont: *const ast.Continuation, label: []const u8) bool {
     if (cont.node) |node| switch (node) {

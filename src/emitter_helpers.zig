@@ -218,18 +218,6 @@ pub fn shouldFilter(item_annotations: []const []const u8, module_annotations: []
     }
 }
 
-/// Emission context - tracks state during code generation
-/// Context for a labeled loop - tracks handler and result variable for label jumps
-pub const LabelContext = struct {
-    handler_invocation: *const ast.Invocation,
-    result_var: []const u8,
-    // Effect-branches phase 3b: the Handlers struct synthesized for the
-    // labeled invocation, if the target event declares `!` branches. Used
-    // by `@label(...)` re-entry emission to pass the comptime 2nd arg so
-    // the call still matches the proc's handler signature.
-    handlers_name: ?[]const u8 = null,
-};
-
 /// One member of a mutual-tail-recursion group: the event's canonical name and
 /// the Zig enum tag (mangled event path) used as the combined labeled switch's
 /// case for this member.
@@ -269,6 +257,7 @@ pub const MutualGroup = struct {
     }
 };
 
+/// Emission context - tracks state during code generation
 pub const EmissionContext = struct {
     allocator: std.mem.Allocator,
     indent_level: usize = 0,
@@ -290,9 +279,6 @@ pub const EmissionContext = struct {
     type_registry: ?*type_registry_module.TypeRegistry = null, // Type registry for array literal type hints
     current_source_event: ?[]const u8 = null, // Canonical name of current source event for tap matching
     current_branch: ?[]const u8 = null, // Current branch name for tap matching
-    label_handler_invocation: ?*const ast.Invocation = null, // Invocation for current label's handler (for re-calling in label_jump)
-    label_result_var: ?[]const u8 = null, // Result variable name for current label (for updating in label_jump)
-    label_contexts: ?*std.StringHashMap(LabelContext) = null, // Map of label names to their contexts (for cross-level jumps)
     main_module_name: ?[]const u8 = null, // Main module name for qualifying unqualified events
     module_prefix: []const u8 = "main_module", // Prefix for local event references (e.g., "main_module" or "test_0_module")
     emit_mode: ?EmitMode = null, // Emission mode for filtering taps by phase annotations
@@ -2848,22 +2834,6 @@ fn argProvided(args: []const ast.Arg, name: []const u8) bool {
     return false;
 }
 
-/// Resolve a label jump's target context: the label_contexts map first,
-/// then the enclosing label's own handler as the same-level fallback.
-fn resolveLabelTargetCtx(ctx: *const EmissionContext, label_name: []const u8) ?LabelContext {
-    if (ctx.label_contexts) |label_map| {
-        if (label_map.get(label_name)) |tctx| return tctx;
-    }
-    if (ctx.label_handler_invocation != null and ctx.label_result_var != null) {
-        return .{
-            .handler_invocation = ctx.label_handler_invocation.?,
-            .result_var = ctx.label_result_var.?,
-            .handlers_name = null,
-        };
-    }
-    return null;
-}
-
 /// `_ = &name;` — discard a step result the pipeline doesn't read, emitted
 /// identically after every bare-invocation step in loop/branch bodies.
 fn emitDiscardedResultRef(emitter: *CodeEmitter, result_name: []const u8) !void {
@@ -3025,15 +2995,6 @@ fn emitVoidStepViaContinuationBody(
         self_loop_canonical,
     );
     ctx.zig_scope_bindings.items = local_bindings.items;
-    var label_contexts = std.StringHashMap(LabelContext).init(ctx.allocator);
-    ctx.label_contexts = &label_contexts;
-    defer {
-        var it = label_contexts.valueIterator();
-        while (it.next()) |label_ctx| {
-            ctx.allocator.free(label_ctx.result_var);
-        }
-        label_contexts.deinit();
-    }
     var label_counter: usize = depth;
     const old_indent = emitter.indent_level;
     emitter.indent_level = 0;
@@ -3425,25 +3386,6 @@ fn emitSubflowContinuationsWithDepth(
             self_loop_canonical,
         );
         ctx.zig_scope_bindings.items = local_bindings.items;
-        // A label-fold emitted through this subflow path (visitor emitter) still
-        // runs `emitContinuationBody`'s `label_with_invocation` arm, which
-        // registers each `#label` in `ctx.label_contexts` so a cross-level
-        // `@label` jump (e.g. an outer loop fired from inside an inner fold) can
-        // resolve its target handler/result-var and re-invoke it. Without this
-        // map the registration is skipped (guard is `if (ctx.label_contexts)`),
-        // the jump finds neither map entry nor current slot, and the outer loop's
-        // result var is never reassigned -> Zig "never mutated" + infinite loop.
-        // (emitFlow initializes the same map for the top-level flow path; this
-        // is the equivalent for the subflow/visitor path.)
-        var label_contexts = std.StringHashMap(LabelContext).init(ctx.allocator);
-        ctx.label_contexts = &label_contexts;
-        defer {
-            var it = label_contexts.valueIterator();
-            while (it.next()) |label_ctx| {
-                ctx.allocator.free(label_ctx.result_var);
-            }
-            label_contexts.deinit();
-        }
         var result_counter: usize = depth;
         const result_var = if (depth == 0) "result" else blk: {
             var buf: [32]u8 = undefined;
@@ -6064,19 +6006,6 @@ pub fn emitFlow(
 
     var result_counter: usize = 0;
 
-    // Initialize label contexts map for this flow
-    var label_contexts = std.StringHashMap(LabelContext).init(ctx.allocator);
-    defer {
-        // Free all duplicated result_var strings before deinit
-        var it = label_contexts.valueIterator();
-        while (it.next()) |label_ctx| {
-            ctx.allocator.free(label_ctx.result_var);
-        }
-        label_contexts.deinit();
-    }
-    ctx.label_contexts = &label_contexts;
-    defer ctx.label_contexts = null;
-
     // Set current source event for tap matching
     const source_event = try buildCanonicalEventName(&flow.inv().path, ctx.allocator, ctx.main_module_name);
     defer ctx.allocator.free(source_event);
@@ -6227,15 +6156,18 @@ pub fn emitFlow(
 
         defer if (!is_void_event) ctx.allocator.free(first_result);
 
-        // If we have a pre_label, emit first invocation BEFORE the while loop
+        // If we have a pre_label, the invocation is the loop's head: the state
+        // vars emitted above feed an in-loop `const` call each turn, and the
+        // continuation switch over ALL arms decides `continue :label` vs
+        // fall-through to `break :label`.
         if (flow.pre_label) |label| {
-            // Analyze which branches loop back to this label
-            const looping_branches = try findLoopingBranches(label, conts, ctx.allocator);
-            defer ctx.allocator.free(looping_branches);
-
-            // Emit FIRST invocation before the loop (to get initial result)
             try emitter.writeIndent();
-            try emitter.write("var "); // var, not const - we'll update it in the loop!
+            try emitter.write(label);
+            try emitter.write(": while (true) {\n");
+            emitter.indent();
+
+            try emitter.writeIndent();
+            try emitter.write("const ");
             try emitter.write(first_result);
             try emitter.write(" = ");
             if (!ctx.is_sync) {
@@ -6243,7 +6175,7 @@ pub fn emitFlow(
             }
             try emitInvocationTarget(emitter, ctx, &flow.inv().path);
             try emitter.write(".handler(.{ ");
-            // Use state variables for initial call
+            // Use state variables for the call
             for (flow.inv().args, 0..) |arg, idx| {
                 if (idx > 0) {
                     try emitter.write(", ");
@@ -6262,36 +6194,6 @@ pub fn emitFlow(
                 try emitter.write(hname);
             }
             try emitter.write(");\n");
-
-            // Register this label in the context map (for cross-level jumps)
-            if (ctx.label_contexts) |label_map| {
-                // Need to duplicate the result string since first_result will be freed
-                const result_copy = try ctx.allocator.dupe(u8, first_result);
-                try label_map.put(label, .{
-                    .handler_invocation = flow.inv(),
-                    .result_var = result_copy,
-                    .handlers_name = ctx.pending_handlers_name,
-                });
-            }
-
-            // NOW emit the while loop with explicit condition based on looping branches
-            try emitter.writeIndent();
-
-            // ALWAYS emit the Zig label (needed for continue :label statements)
-            try emitter.write(label);
-            try emitter.write(": ");
-
-            try emitter.write("while (");
-
-            // Emit explicit loop condition
-            try emitLoopCondition(emitter, first_result, looping_branches);
-
-            try emitter.write(") {\n");
-            emitter.indent();
-
-            // Store label context so label_jump can re-call the handler
-            ctx.label_handler_invocation = flow.inv();
-            ctx.label_result_var = first_result;
         } else {
             if (inline_elig) |elig| {
                 try emitInlineEffectfulCall(emitter, ctx, flow.inv(), flow.body.continuations, elig, first_result);
@@ -6325,99 +6227,28 @@ pub fn emitFlow(
 
         result_counter += 1;
 
-        // If we have a pre_label, we need to split continuations into looping and non-looping
+        // If we have a pre_label, ONE exhaustive switch over ALL continuations
+        // runs inside the loop: looping arms end in `continue :label`, every
+        // other path falls through to `break :label` — uniform for 0, 1, or
+        // many looping branches.
         if (flow.pre_label) |label| {
-            const looping_branches = try findLoopingBranches(label, conts, ctx.allocator);
-            defer ctx.allocator.free(looping_branches);
+            // Track the loop label so nested terminal steps emit `break :label`.
+            const saved_label = ctx.current_label;
+            ctx.current_label = label;
+            defer ctx.current_label = saved_label;
 
-            // If NO branches loop, the label is unused - just emit all continuations normally
-            if (looping_branches.len == 0) {
-                // Clear the label context since we won't use it
-                ctx.label_handler_invocation = null;
-                ctx.label_result_var = null;
+            // suppress_tag_guard=false: with the while-guard gone, a sparse
+            // single arm needs its `if (result == .b)` tag test to preserve the
+            // old loop-exit semantics on unhandled branches.
+            try emitContinuationList(emitter, ctx, conts, first_result, &result_counter, false, &flow.inv().path, false);
 
-                // Emit all continuations as a regular switch (no loop)
-                try emitContinuationList(emitter, ctx, conts, first_result, &result_counter, false, &flow.inv().path, true);
-            } else {
-                // ONLY emit looping branches inside the while loop
-                // Build list of looping continuations
-                var looping_conts = try std.ArrayList(ast.Continuation).initCapacity(ctx.allocator, looping_branches.len);
-                defer looping_conts.deinit(ctx.allocator);
-
-                for (conts) |cont| {
-                    // Check if this continuation is in the looping branches list
-                    for (looping_branches) |loop_branch| {
-                        if (std.mem.eql(u8, cont.branch, loop_branch)) {
-                            try looping_conts.append(ctx.allocator, cont);
-                            break;
-                        }
-                    }
-                }
-
-                // Emit switch with only looping branches
-                // Looping switches don't need else (they're inside the while condition)
-                if (looping_conts.items.len > 0) {
-                    try emitContinuationList(emitter, ctx, looping_conts.items, first_result, &result_counter, false, &flow.inv().path, true);
-                }
-
-                // Clear label context after looping continuations
-                ctx.label_handler_invocation = null;
-                ctx.label_result_var = null;
-
-                // Close the while loop
-                emitter.dedent();
-                try emitter.writeIndent();
-                try emitter.write("}\n");
-
-                // NOW emit switch for NON-LOOPING branches (after the while)
-                if (looping_branches.len < conts.len) {
-                    // Build list of non-looping continuations
-                    var non_looping_conts = try std.ArrayList(ast.Continuation).initCapacity(ctx.allocator, conts.len - looping_branches.len);
-                    defer non_looping_conts.deinit(ctx.allocator);
-
-                    for (conts) |cont| {
-                        // Check if this continuation is NOT in the looping branches list
-                        var is_looping = false;
-                        for (looping_branches) |loop_branch| {
-                            if (std.mem.eql(u8, cont.branch, loop_branch)) {
-                                is_looping = true;
-                                break;
-                            }
-                        }
-
-                        if (!is_looping) {
-                            try non_looping_conts.append(ctx.allocator, cont);
-                        }
-                    }
-
-                    // Emit switch with only non-looping branches
-                    // NOTE: After the while loop guard, looping branches are IMPOSSIBLE at
-                    // runtime, but Zig does NOT narrow union(enum) through the loop
-                    // condition — an unmarked switch is non-exhaustive
-                    // ("switch must handle all possibilities"). Pure back-edge
-                    // branches take `.branch => unreachable`; a looping branch
-                    // that can also exit via `break :label` stays reachable and
-                    // gets a no-op arm. Mirror of the mid-chain label path
-                    // below (the "unreachable else" concern is handled there by
-                    // naming branches explicitly rather than `else`).
-                    if (non_looping_conts.items.len > 0) {
-                        var purely_looping = try std.ArrayList([]const u8).initCapacity(ctx.allocator, looping_branches.len);
-                        defer purely_looping.deinit(ctx.allocator);
-                        var break_path = try std.ArrayList([]const u8).initCapacity(ctx.allocator, looping_branches.len);
-                        defer break_path.deinit(ctx.allocator);
-
-                        for (looping_branches) |branch| {
-                            if (branchHasBreakPath(branch, label, conts)) {
-                                try break_path.append(ctx.allocator, branch);
-                            } else {
-                                try purely_looping.append(ctx.allocator, branch);
-                            }
-                        }
-
-                        try emitContinuationListWithUnreachableBranches(emitter, ctx, non_looping_conts.items, first_result, &result_counter, purely_looping.items, break_path.items);
-                    }
-                }
-            }
+            try emitter.writeIndent();
+            try emitter.write("break :");
+            try emitter.write(label);
+            try emitter.write(";\n");
+            emitter.dedent();
+            try emitter.writeIndent();
+            try emitter.write("}\n");
         } else {
             // No pre_label - emit all continuations normally.
             // A head step that declares NO terminal branches (a branchless
@@ -9797,24 +9628,19 @@ fn emitContinuationList(
     result_counter: *usize,
     is_partial_switch: bool,
     callee_path: ?*const ast.DottedPath,
-    /// True when the sparse-dispatch tag guard below must NOT fire. Two cases,
-    /// both FLOW-HEAD emission (every emitFlow site passes true):
-    ///
-    /// 1. The pre-label LOOP SPLIT: looping arms inside the while / non-looping
-    ///    arms after it each arrive as a single-continuation list even though
-    ///    the flow handles every branch. The while condition already
-    ///    discriminates, and for a `-> T` subflow the post-loop terminal read
-    ///    must stay unconditional or Zig sees an implicit return
-    ///    (330_073/074/083, 810_041-family).
-    /// 2. Plain head dispatch: heads have always emitted the unguarded union
-    ///    read, and the test framework's unexpected-branch wall is BUILT on the
-    ///    panic that read produces — a mock returning an unhandled branch must
-    ///    fail the test, not no-op (395_010). Guarding a head converts that
-    ///    failure into silence.
+    /// True when the sparse-dispatch tag guard below must NOT fire — plain
+    /// FLOW-HEAD dispatch (non-label emitFlow sites pass true): heads have
+    /// always emitted the unguarded union read, and the test framework's
+    /// unexpected-branch wall is BUILT on the panic that read produces — a
+    /// mock returning an unhandled branch must fail the test, not no-op
+    /// (395_010). Guarding a head converts that failure into silence.
     ///
     /// Nested chain sites pass false and keep the guard: sparse dispatch there
     /// is a normal program shape and the unguarded read is a runtime panic on
-    /// the common path (690_085/095).
+    /// the common path (690_085/095). Label-loop sites (flow-head pre_label
+    /// and mid-chain folds) also pass false — inside `label: while (true)`
+    /// there is no loop-condition discrimination left, so a sparse single arm
+    /// needs its `if (result == .b)` test to exit the loop on other branches.
     suppress_tag_guard: bool,
 ) anyerror!void {
     const callee_bare_return = blk: {
@@ -10216,116 +10042,6 @@ fn emitContinuationList(
     try emitter.write("}\n");
 }
 
-/// Emit continuations with explicit unreachable cases for specific branches
-/// Used when a while loop guards certain branches - we can't use `else => unreachable`
-/// because Zig might determine all cases are handled via control flow analysis,
-/// but we also can't omit the guarded branches because Zig's exhaustiveness check
-/// doesn't always track the while condition.
-fn emitContinuationListWithUnreachableBranches(
-    emitter: *CodeEmitter,
-    ctx: *EmissionContext,
-    continuations: []const ast.Continuation,
-    prev_result: []const u8,
-    result_counter: *usize,
-    unreachable_branches: []const []const u8,
-    noop_branches: []const []const u8,
-) anyerror!void {
-    if (continuations.len == 0 and unreachable_branches.len == 0 and noop_branches.len == 0) {
-        return;
-    }
-
-    try emitter.writeIndent();
-    try emitter.write("switch (");
-    try emitter.write(prev_result);
-    try emitter.write(") {\n");
-    emitter.indent();
-
-    // Group continuations by branch name (for when-clause merging)
-    const branch_groups = try groupContinuationsByBranch(std.heap.page_allocator, continuations);
-    defer {
-        for (branch_groups) |group| {
-            std.heap.page_allocator.free(group.continuations);
-        }
-        std.heap.page_allocator.free(branch_groups);
-    }
-
-    // Emit continuation cases, grouped by branch
-    for (branch_groups) |group| {
-        if (group.continuations.len == 1) {
-            // Single continuation - emit directly
-            try emitContinuationCase(emitter, ctx, group.continuations[0], result_counter);
-        } else {
-            // Multiple when-clauses for same branch - emit as if/else chain in one switch arm
-            const first_cont = group.continuations[0];
-            const binding_name = first_cont.binding orelse first_cont.branch;
-
-            try emitter.writeIndent();
-            try emitter.write(".");
-            try writeBranchName(emitter, group.branch_name);
-            try emitter.write(" => |");
-            try writeBranchName(emitter, binding_name);
-            try emitter.write("| {\n");
-            emitter.indent();
-
-            // Emit if/else chain for when-clauses
-            for (group.continuations, 0..) |cont_ptr, idx| {
-                try emitter.writeIndent();
-                if (cont_ptr.condition) |condition| {
-                    if (idx == 0) {
-                        try emitter.write("if (");
-                    } else {
-                        try emitter.write("else if (");
-                    }
-                    try emitter.write(lowerExprZig(emitter, ctx, condition));
-                    try emitter.write(") {\n");
-                } else {
-                    if (idx > 0) {
-                        try emitter.write("else {\n");
-                    }
-                }
-
-                emitter.indent();
-                try emitContinuationBody(emitter, ctx, cont_ptr, result_counter);
-                emitter.dedent();
-
-                try emitter.writeIndent();
-                try emitter.write("}\n");
-            }
-
-            emitter.dedent();
-            try emitter.writeIndent();
-            try emitter.write("},\n");
-        }
-    }
-
-    // Emit explicit unreachable cases for guarded branches
-    for (unreachable_branches) |branch| {
-        try emitter.writeIndent();
-        try emitter.write(".");
-        try writeBranchName(emitter, branch);
-        try emitter.write(" => unreachable,\n");
-    }
-
-    // Emit no-op cases for branches that can break out of the loop
-    // (looping branches with terminal when-clause sub-paths)
-    for (noop_branches) |branch| {
-        try emitter.writeIndent();
-        try emitter.write(".");
-        if (CodeEmitter.isZigKeyword(branch)) {
-            try emitter.write("@\"");
-            try emitter.write(branch);
-            try emitter.write("\"");
-        } else {
-            try emitter.write(branch);
-        }
-        try emitter.write(" => {},\n");
-    }
-
-    emitter.dedent();
-    try emitter.writeIndent();
-    try emitter.write("}\n");
-}
-
 /// Emit a single continuation case (.branch => |binding| { ... })
 fn emitContinuationCase(
     emitter: *CodeEmitter,
@@ -10633,144 +10349,6 @@ fn labelWillBeMutated(label: []const u8, continuations: []const ast.Continuation
         }
     }
 
-    return false;
-}
-
-/// Find which branches loop back to a given label
-/// Returns a list of branch names that contain @label jumps to this label
-/// This is used to emit explicit while conditions like: while (result == .branch1 || result == .branch2)
-/// Find which branches loop back to a given label
-/// Returns a list of branch names that contain @label jumps to this label
-fn findLoopingBranches(
-    label: []const u8,
-    continuations: []const ast.Continuation,
-    allocator: std.mem.Allocator,
-) ![]const []const u8 {
-    var looping_branches = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-    defer looping_branches.deinit(allocator);
-
-    for (continuations) |cont| {
-        // Check if this continuation's step contains a jump to our label
-        var has_label_jump = false;
-        if (cont.node) |step| {
-            if (step == .label_jump) {
-                if (std.mem.eql(u8, step.label_jump.label, label)) {
-                    has_label_jump = true;
-                }
-            } else if (step == .label_apply) {
-                if (std.mem.eql(u8, step.label_apply, label)) {
-                    has_label_jump = true;
-                }
-            }
-        }
-
-        // If this branch jumps to the label, add it to the list
-        if (has_label_jump) {
-            try looping_branches.append(allocator, cont.branch);
-        }
-
-        // Also check nested continuations recursively
-        const nested_looping = try findLoopingBranches(label, cont.continuations, allocator);
-        defer allocator.free(nested_looping);
-
-        // If nested branches loop, this branch effectively loops too
-        if (nested_looping.len > 0) {
-            // Only add if not already in the list
-            var already_added = false;
-            for (looping_branches.items) |existing| {
-                if (std.mem.eql(u8, existing, cont.branch)) {
-                    already_added = true;
-                    break;
-                }
-            }
-            if (!already_added) {
-                try looping_branches.append(allocator, cont.branch);
-            }
-        }
-    }
-
-    return looping_branches.toOwnedSlice(allocator);
-}
-
-/// Emit the while condition for a label loop: `true` when no arm loops
-/// back, `result == .b` for one, `(result == .a) or (result == .b)` for
-/// several.
-fn emitLoopCondition(emitter: *CodeEmitter, result_var: []const u8, looping_branches: []const []const u8) !void {
-    if (looping_branches.len == 0) {
-        // No branches loop - fallback to while(true)
-        try emitter.write("true");
-    } else if (looping_branches.len == 1) {
-        // Single branch loops - emit: while (result == .branch)
-        try emitter.write(result_var);
-        try emitter.write(" == .");
-        try writeBranchName(emitter, looping_branches[0]);
-    } else {
-        // Multiple branches loop - emit: while ((result == .branch1) or (result == .branch2))
-        for (looping_branches, 0..) |branch, idx| {
-            if (idx > 0) {
-                try emitter.write(" or ");
-            }
-            try emitter.write("(");
-            try emitter.write(result_var);
-            try emitter.write(" == .");
-            try writeBranchName(emitter, branch);
-            try emitter.write(")");
-        }
-    }
-}
-
-/// Check if a continuation (or its nested sub-tree) loops back to a label
-fn continuationLoopsToLabel(cont: ast.Continuation, label: []const u8) bool {
-    if (cont.node) |step| {
-        if (step == .label_jump) {
-            if (std.mem.eql(u8, step.label_jump.label, label)) return true;
-        } else if (step == .label_apply) {
-            if (std.mem.eql(u8, step.label_apply, label)) return true;
-        }
-    }
-    for (cont.continuations) |nested| {
-        if (continuationLoopsToLabel(nested, label)) return true;
-    }
-    return false;
-}
-
-/// Check if a looping branch also has when-clause paths that break out of the loop.
-/// Returns true if the branch has at least one continuation that doesn't loop back.
-fn branchHasBreakPath(
-    branch_name: []const u8,
-    label: []const u8,
-    all_continuations: []const ast.Continuation,
-) bool {
-    for (all_continuations) |cont| {
-        if (!std.mem.eql(u8, cont.branch, branch_name)) continue;
-        if (!continuationLoopsToLabel(cont, label)) return true;
-    }
-    return false;
-}
-
-/// Check if any continuation (recursively) contains a terminal step
-/// This is used to detect when taps wrap terminal branches with void continuations,
-/// which can break out of loops even though the top-level branch looks like it loops.
-fn hasNestedTerminalInContinuations(continuations: []const ast.Continuation) bool {
-    for (continuations) |cont| {
-        // Check if this continuation's node is a terminal
-        if (cont.node) |step| {
-            if (step == .terminal) {
-                return true;
-            }
-        }
-
-        // Check if this is a void continuation with no node and no nested continuations
-        // (another form of terminal)
-        if (cont.node == null and cont.continuations.len == 0) {
-            return true;
-        }
-
-        // Recursively check nested continuations
-        if (hasNestedTerminalInContinuations(cont.continuations)) {
-            return true;
-        }
-    }
     return false;
 }
 
@@ -11125,12 +10703,20 @@ pub fn emitContinuationBody(
         }
         const fold_conts: []const ast.Continuation = if (fold_event_has_effect) fold_terminal_buf.items else cont.continuations;
 
-        // Emit the FIRST invocation BEFORE the loop (to get initial result)
+        // The fold's invocation is the loop's head: state vars feed an
+        // in-loop `const` call each turn, and ONE exhaustive switch over ALL
+        // continuations decides `continue :label` vs fall-through to
+        // `break :label` — uniform for 0, 1, or many looping branches.
         const result_var = try std.fmt.allocPrint(ctx.allocator, "result_{}", .{result_counter.*});
         defer ctx.allocator.free(result_var);
 
         try emitter.writeIndent();
-        try emitter.write("var "); // var, not const - we'll update it in the loop!
+        try emitter.write(lwi.label);
+        try emitter.write(": while (true) {\n");
+        emitter.indent();
+
+        try emitter.writeIndent();
+        try emitter.write("const ");
         try emitter.write(result_var);
         try emitter.write(" = ");
         if (!ctx.is_sync) {
@@ -11138,7 +10724,7 @@ pub fn emitContinuationBody(
         }
         try emitInvocationTarget(emitter, ctx, &lwi.invocation.path);
         try emitter.write(".handler(.{ ");
-        // Use state variables for initial call
+        // Use state variables for the call
         for (lwi.invocation.args, 0..) |arg, idx| {
             if (idx > 0) {
                 try emitter.write(", ");
@@ -11152,7 +10738,7 @@ pub fn emitContinuationBody(
         }
         try emitter.write(" }");
         // Effect-branches phase 3b: the fold target carries `!` arms, so the
-        // seed call takes the synthesized Handlers struct as its 2nd arg.
+        // in-loop call takes the synthesized Handlers struct as its 2nd arg.
         if (ctx.pending_handlers_name) |hname| {
             const target_has_effect = blk: {
                 const ed = findEventDeclForEmission(ctx, &lwi.invocation.path) orelse break :blk false;
@@ -11169,44 +10755,8 @@ pub fn emitContinuationBody(
         try emitter.write(");\n");
         result_counter.* += 1;
 
-        // Register this label in the context map (for cross-level jumps)
-        if (ctx.label_contexts) |label_map| {
-            // Need to duplicate the result string since result_var will be freed
-            const result_copy = try ctx.allocator.dupe(u8, result_var);
-            try label_map.put(lwi.label, .{
-                .handler_invocation = &lwi.invocation,
-                .result_var = result_copy,
-                // Handlers struct for the same reason as above: a back-edge
-                // `@label(...)` re-invocation must pass the same comptime 2nd
-                // arg (the loop's re-entry is a fresh call, not an update).
-                .handlers_name = if (fold_event_has_effect) ctx.pending_handlers_name else null,
-            });
-        }
-
-        // Find which branches loop back to this label for explicit condition
-        const looping_branches = try findLoopingBranches(lwi.label, fold_conts, ctx.allocator);
-        defer ctx.allocator.free(looping_branches);
-
-        // NOW emit the while loop with explicit condition based on looping branches
-        try emitter.writeIndent();
-
-        // ALWAYS emit the Zig label (needed for continue :label statements)
-        try emitter.write(lwi.label);
-        try emitter.write(": ");
-
-        try emitter.write("while (");
-
-        // Emit explicit loop condition
-        try emitLoopCondition(emitter, result_var, looping_branches);
-
-        try emitter.write(") {\n");
-        emitter.indent();
-
-        // Store label context so label_jump can re-call the handler
-        ctx.label_handler_invocation = &lwi.invocation;
-        ctx.label_result_var = result_var;
-
-        // Track current loop label for break statements in terminal branches
+        // Track current loop label for the whole switch — every arm is inside
+        // the loop now, so `.terminal` -> `break :label` is correct for each.
         const saved_label = ctx.current_label;
         ctx.current_label = lwi.label;
         defer ctx.current_label = saved_label;
@@ -11224,130 +10774,16 @@ pub fn emitContinuationBody(
                 ctx.current_source_event = saved_source;
             }
 
-            // ONLY emit looping branches inside the while loop
-            if (looping_branches.len > 0) {
-                // Build list of looping continuations
-                var looping_conts = try std.ArrayList(ast.Continuation).initCapacity(ctx.allocator, looping_branches.len);
-                defer looping_conts.deinit(ctx.allocator);
-
-                for (fold_conts) |nested_cont| {
-                    // Check if this continuation is in the looping branches list
-                    for (looping_branches) |loop_branch| {
-                        if (std.mem.eql(u8, nested_cont.branch, loop_branch)) {
-                            try looping_conts.append(ctx.allocator, nested_cont);
-                            break;
-                        }
-                    }
-                }
-
-                // Emit switch with only looping branches
-                // NOTE: Zig doesn't track exhaustiveness via while loop condition control flow.
-                // The switch still needs to handle ALL enum variants.
-                // We must mark non-looping branches as unreachable explicitly.
-                if (looping_conts.items.len > 0) {
-                    // Build list of non-looping branch names
-                    var non_looping_branch_names = try std.ArrayList([]const u8).initCapacity(ctx.allocator, fold_conts.len);
-                    defer non_looping_branch_names.deinit(ctx.allocator);
-
-                    for (fold_conts) |nested_cont| {
-                        var is_looping = false;
-                        for (looping_branches) |loop_branch| {
-                            if (std.mem.eql(u8, nested_cont.branch, loop_branch)) {
-                                is_looping = true;
-                                break;
-                            }
-                        }
-                        if (!is_looping) {
-                            try non_looping_branch_names.append(ctx.allocator, nested_cont.branch);
-                        }
-                    }
-
-                    // Emit with non-looping branches marked as unreachable
-                    try emitContinuationListWithUnreachableBranches(emitter, ctx, looping_conts.items, result_var, result_counter, non_looping_branch_names.items, &.{});
-                }
-            }
+            try emitContinuationList(emitter, ctx, fold_conts, result_var, result_counter, false, &lwi.invocation.path, false);
         }
 
-        // Clear label context after continuations
-        ctx.label_handler_invocation = null;
-        ctx.label_result_var = null;
-
-        // Close the while loop
+        try emitter.writeIndent();
+        try emitter.write("break :");
+        try emitter.write(lwi.label);
+        try emitter.write(";\n");
         emitter.dedent();
         try emitter.writeIndent();
         try emitter.write("}\n");
-
-        // CRITICAL: Clear current_label AFTER closing the loop!
-        // Non-looping branches are emitted OUTSIDE the loop, so they can't use break :label
-        ctx.current_label = null;
-
-        // NOW emit switch for NON-LOOPING branches (after the while)
-        const has_non_looping_branches = fold_conts.len > 0 and looping_branches.len < fold_conts.len;
-        if (has_non_looping_branches) {
-            // Build list of non-looping continuations
-            var non_looping_conts = try std.ArrayList(ast.Continuation).initCapacity(ctx.allocator, fold_conts.len - looping_branches.len);
-            defer non_looping_conts.deinit(ctx.allocator);
-
-            for (fold_conts) |nested_cont| {
-                // Check if this continuation is NOT in the looping branches list
-                var is_looping = false;
-                for (looping_branches) |loop_branch| {
-                    if (std.mem.eql(u8, nested_cont.branch, loop_branch)) {
-                        is_looping = true;
-                        break;
-                    }
-                }
-
-                if (!is_looping) {
-                    try non_looping_conts.append(ctx.allocator, nested_cont);
-                }
-            }
-
-            // Emit switch with only non-looping branches
-            // NOTE: After the while loop guard, looping branches are IMPOSSIBLE at runtime.
-            // However, Zig's exhaustiveness checker doesn't track this via control flow.
-            // We must emit explicit `.branch => unreachable` for each looping branch
-            // instead of `else => unreachable` (which Zig 0.15 rejects when it CAN track exhaustiveness).
-            if (non_looping_conts.items.len > 0) {
-                // Need to restore source event context for the non-looping switch
-                const saved_source_2 = ctx.current_source_event;
-                const new_source_2 = try buildCanonicalEventName(&lwi.invocation.path, ctx.allocator, ctx.main_module_name);
-                ctx.current_source_event = new_source_2;
-                defer {
-                    if (ctx.current_source_event) |src| {
-                        ctx.allocator.free(src);
-                    }
-                    ctx.current_source_event = saved_source_2;
-                }
-
-                // Split looping branches: purely-looping → unreachable, has-break-path → noop
-                var purely_looping = try std.ArrayList([]const u8).initCapacity(ctx.allocator, looping_branches.len);
-                defer purely_looping.deinit(ctx.allocator);
-                var break_path = try std.ArrayList([]const u8).initCapacity(ctx.allocator, looping_branches.len);
-                defer break_path.deinit(ctx.allocator);
-
-                for (looping_branches) |branch| {
-                    if (branchHasBreakPath(branch, lwi.label, fold_conts)) {
-                        try break_path.append(ctx.allocator, branch);
-                    } else {
-                        try purely_looping.append(ctx.allocator, branch);
-                    }
-                }
-
-                try emitContinuationListWithUnreachableBranches(emitter, ctx, non_looping_conts.items, result_var, result_counter, purely_looping.items, break_path.items);
-            }
-        } else if (fold_conts.len > 0 and looping_branches.len == fold_conts.len) {
-            // ALL top-level branches are looping - but check for nested terminals
-            // (e.g., from taps that wrap terminal branches with void continuations)
-            const has_nested_terminal = hasNestedTerminalInContinuations(fold_conts);
-            if (!has_nested_terminal) {
-                // No nested terminals - the while loop only exits via return statements
-                // Tell Zig this code path is unreachable
-                try emitter.writeIndent();
-                try emitter.write("unreachable;\n");
-            }
-            // If there ARE nested terminals, the loop can break normally - no unreachable
-        }
 
         // Label case is done - no remaining steps to process
     } else {
@@ -11769,50 +11205,16 @@ fn emitStep(
             try emitter.write(" });\n");
         },
         .label_apply => |label_name| {
-            // Simple label jump without arguments (e.g., @label)
-            // Look up the target label's context (same as label_jump, but no args to update)
-            const target_ctx = resolveLabelTargetCtx(ctx, label_name);
-
-            // If we have a target context (from map OR current), call the handler
-            if (target_ctx) |tctx| {
-                // Call the TARGET label's handler using label's state variables
-                try emitter.writeIndent();
-                try emitter.write(tctx.result_var);
-                try emitter.write(" = ");
-                if (!ctx.is_sync) {
-                    try emitter.write("try ");
-                }
-                try emitInvocationTarget(emitter, ctx, &tctx.handler_invocation.path);
-                try emitter.write(".handler(.{ ");
-                // Pass state variables: label_name + "_" + arg_name
-                for (tctx.handler_invocation.args, 0..) |arg, idx| {
-                    if (idx > 0) {
-                        try emitter.write(", ");
-                    }
-                    try emitter.write(".");
-                    try writeBranchName(emitter, arg.name);
-                    try emitter.write(" = ");
-                    try emitter.write(label_name);
-                    try emitter.write("_");
-                    try writeBranchName(emitter, arg.name);
-                }
-                try emitter.write(" }");
-                // Effect-branches phase 3b: re-entry preserves Handlers arg.
-                if (tctx.handlers_name) |hname| {
-                    try emitter.write(", ");
-                    try emitter.write(hname);
-                }
-                try emitter.write(");\n");
-            }
-
-            // ALWAYS emit continue :label
+            // Simple label jump without arguments (e.g., @label) — the loop's
+            // in-head call re-runs the handler from current state vars.
             try emitter.writeIndent();
             try emitter.write("continue :");
             try emitter.write(label_name);
             try emitter.write(";\n");
         },
         .label_jump => |*lj| {
-            // Update state variables for the next iteration
+            // Update state variables for the next iteration — the loop's
+            // in-head call re-runs the handler from them.
             for (lj.args) |arg| {
                 try emitter.writeIndent();
                 try emitter.write(lj.label);
@@ -11821,48 +11223,6 @@ fn emitStep(
                 try emitter.write(" = ");
                 try emitValue(emitter, ctx, arg.value);
                 try emitter.write(";\n");
-            }
-
-            // Look up the target label's context
-            // First try the map (for cross-level jumps within a flow)
-            const target_ctx = resolveLabelTargetCtx(ctx, lj.label);
-
-            // If we have a target context (from map OR current), call the handler
-            if (target_ctx) |tctx| {
-                // Call the TARGET label's handler with updated state variables
-                try emitter.writeIndent();
-                try emitter.write(tctx.result_var);
-                try emitter.write(" = ");
-                if (!ctx.is_sync) {
-                    try emitter.write("try ");
-                }
-                try emitInvocationTarget(emitter, ctx, &tctx.handler_invocation.path);
-                try emitter.write(".handler(.{ ");
-                // The re-call fills EVERY param from its state var — a jump
-                // arg only re-seeds the vars it names; the rest carry over,
-                // which is what the vars are `var` for. Emitting only lj.args
-                // dropped the unfilled fields: `missing struct field` at the
-                // backend (measured: @loop(j) on a {j, draft} target).
-                for (tctx.handler_invocation.args, 0..) |arg, idx| {
-                    if (idx > 0) {
-                        try emitter.write(", ");
-                    }
-                    try emitter.write(".");
-                    try writeBranchName(emitter, arg.name);
-                    try emitter.write(" = ");
-                    try emitter.write(lj.label);
-                    try emitter.write("_");
-                    try writeBranchName(emitter, arg.name);
-                }
-                try emitter.write(" }");
-                // Effect-branches phase 3b: if the labeled target carries a
-                // synthesized Handlers struct (event declares `!` branches),
-                // the re-entry call must pass the same comptime 2nd arg.
-                if (tctx.handlers_name) |hname| {
-                    try emitter.write(", ");
-                    try emitter.write(hname);
-                }
-                try emitter.write(");\n");
             }
 
             // ALWAYS emit continue :label (works for same-level and cross-level jumps)
@@ -12336,44 +11696,8 @@ fn emitStepWithBindingSubstitution(
             try emitter.write(" });\n");
         },
         .label_apply => |label_name| {
-            // Simple label jump without arguments (e.g., @label)
-            // Look up the target label's context
-            const target_ctx = resolveLabelTargetCtx(ctx, label_name);
-
-            // If we have a target context (from map OR current), call the handler
-            if (target_ctx) |tctx| {
-                // Call the TARGET label's handler using label's state variables
-                try emitter.writeIndent();
-                try emitter.write(tctx.result_var);
-                try emitter.write(" = ");
-                if (!ctx.is_sync) {
-                    try emitter.write("try ");
-                }
-                try emitInvocationTarget(emitter, ctx, &tctx.handler_invocation.path);
-                try emitter.write(".handler(.{ ");
-                // Pass state variables: label_name + "_" + arg_name (with binding substitution)
-                for (tctx.handler_invocation.args, 0..) |arg, idx| {
-                    if (idx > 0) {
-                        try emitter.write(", ");
-                    }
-                    try emitter.write(".");
-                    try writeBranchName(emitter, arg.name);
-                    try emitter.write(" = ");
-                    // Build state variable name and apply substitution if needed
-                    const state_var = try std.fmt.allocPrint(ctx.allocator, "{s}_{s}", .{ label_name, arg.name });
-                    defer ctx.allocator.free(state_var);
-                    try emitValueWithBindingSubstitution(emitter, ctx, state_var, substitution);
-                }
-                try emitter.write(" }");
-                // Effect-branches phase 3b: re-entry preserves Handlers arg.
-                if (tctx.handlers_name) |hname| {
-                    try emitter.write(", ");
-                    try emitter.write(hname);
-                }
-                try emitter.write(");\n");
-            }
-
-            // ALWAYS emit continue :label
+            // Simple label jump without arguments (e.g., @label) — the loop's
+            // in-head call re-runs the handler from current state vars.
             try emitter.writeIndent();
             try emitter.write("continue :");
             try emitter.write(label_name);
