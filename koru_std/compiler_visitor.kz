@@ -150,9 +150,9 @@ const CodeEmitter = struct {
         try self.writeLine("}");
     }
     
-    pub fn emitUnionStart(self: *CodeEmitter, is_tagged: bool) !void {
+    pub fn emitUnionStart(self: *CodeEmitter, is_tagged: bool, variant_count: usize) !void {
         if (is_tagged) {
-            try self.writeLine("union(enum) {");
+            try self.writeLine(if (variant_count <= 256) "union(enum(u8)) {" else "union(enum) {");
         } else {
             try self.writeLine("union {");
         }
@@ -272,7 +272,7 @@ const VisitorContext = struct {
             // Emit Output union
             try self.emitter.writeIndent();
             try self.emitter.write("pub const Output = ");
-            try self.emitter.emitUnionStart(true);
+            try self.emitter.emitUnionStart(true, event.branches.len);
             for (event.branches) |branch| {
                 try self.visitBranch(branch);
             }

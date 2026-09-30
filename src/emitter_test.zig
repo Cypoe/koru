@@ -40,7 +40,7 @@ test "emit simple event with one branch" {
     // Verify output contains key structures
     try testing.expect(std.mem.indexOf(u8, output, "pub const hello_event = struct {") != null);
     try testing.expect(std.mem.indexOf(u8, output, "pub const Input = struct {") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "pub const Output = union(enum) {") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "pub const Output = union(enum(u8)) {") != null);
     try testing.expect(std.mem.indexOf(u8, output, "done: struct {") != null);
     try testing.expect(std.mem.indexOf(u8, output, "pub fn handler(__koru_event_input: Input) Output {") != null);
 }

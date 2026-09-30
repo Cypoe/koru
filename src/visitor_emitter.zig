@@ -2059,7 +2059,7 @@ pub const VisitorEmitter = struct {
         try self.code_emitter.write("};\n");
 
         try self.code_emitter.writeIndent();
-        try self.code_emitter.write("pub const Output = union(enum) {\n");
+        try self.code_emitter.write("pub const Output = union(enum(u8)) {\n");
         self.code_emitter.indent_level += 1;
         try self.code_emitter.writeIndent();
         try self.code_emitter.write("transformed: __koru_ast.SiteResult,\n");
@@ -2559,7 +2559,7 @@ pub const VisitorEmitter = struct {
         } else if (terminal_count == 0) {
             try self.code_emitter.write("pub const Output = void;\n");
         } else {
-            try self.code_emitter.write("pub const Output = union(enum) {\n");
+            try self.code_emitter.write(if (terminal_count <= 256) "pub const Output = union(enum(u8)) {\n" else "pub const Output = union(enum) {\n");
             self.code_emitter.indent_level += 1;
 
             for (event.branches) |branch| {

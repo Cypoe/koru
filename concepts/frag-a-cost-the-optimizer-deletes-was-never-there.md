@@ -182,6 +182,22 @@ and the tag test run in every `#label` loop in every program. Whether a
 cost matters is decided by timing; whether it *exists* is decided by the
 disassembly, and existence is enough reason to remove emission nothing needed.
 
+The last residue in that loop was a TYPE's spelling, not a statement's. A
+two-arm `union(enum)` gets an `i1` tag; LLVM stores a constant arm such as
+`.none` as `{ [8 x i8] undef, i1 true, [7 x i8] undef }`, and a byte load from
+it cannot fold because seven of its bits are undefined — so the binary loads a
+constant from memory and branches on bit 0. `union(enum(u8))`, same layout,
+folds. The emitter now spells every event sum with an explicit byte tag. The
+rule this adds: **what the optimizer can prove depends on how the emitted type
+is written, not only on what the emitted code does** — an auto-chosen width is
+a choice the emitter made without looking.
+
+The same afternoon's control sets the scale for all of it: on the laptop, a
+binary raced against a byte-identical copy of itself wins 39 of 80 and differs
+by 3.6 ms at the minimum — more than Koru and Zig differ. Binomial noise
+alone spans roughly 31–49 of 80 at two standard deviations; a win rate inside
+that band is the instrument, not the programs. Run the A/A arm first.
+
 
 ## Open
 

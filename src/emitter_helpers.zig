@@ -7532,7 +7532,7 @@ pub fn lowerZigType(t: []const u8) []const u8 {
 
 fn writeEffectResumeType(emitter: *CodeEmitter, branch: *const ast.Branch) !void {
     if (branch.resume_arms) |arms| {
-        try emitter.write("union(enum) { ");
+        try emitter.write(if (arms.len <= 256) "union(enum(u8)) { " else "union(enum) { ");
         for (arms, 0..) |*arm, i| {
             if (i > 0) try emitter.write(", ");
             try writeBranchName(emitter, arm.name);
@@ -12595,7 +12595,7 @@ fn emitEventDeclForModuleFromType(
     } else if (event_type.branches.len == 0) {
         try code_emitter.write("pub const Output = void;\n");
     } else {
-        try code_emitter.write("pub const Output = union(enum) {\n");
+        try code_emitter.write(if (event_type.branches.len <= 256) "pub const Output = union(enum(u8)) {\n" else "pub const Output = union(enum) {\n");
         code_emitter.indent_level += 1;
         for (event_type.branches) |branch| {
             try code_emitter.writeIndent();
@@ -14010,7 +14010,7 @@ fn emitEventDeclForModule(
     } else if (terminal_count == 0) {
         try code_emitter.write("pub const Output = void;\n");
     } else {
-        try code_emitter.write("pub const Output = union(enum) {\n");
+        try code_emitter.write(if (terminal_count <= 256) "pub const Output = union(enum(u8)) {\n" else "pub const Output = union(enum) {\n");
         code_emitter.indent_level += 1;
         for (event.branches) |branch| {
             if (branch.kind == .effect) continue;
