@@ -71,6 +71,8 @@ const ast = @import("ast");
 ~part custody
 ~part transit
 ~part home
+~part leaves
+~part units
 
 // ============================================================================
 // Helpers — pump.kz's PH and list.protos' field reader, restated: a module
@@ -78,7 +80,6 @@ const ast = @import("ast");
 // ============================================================================
 
 const CH = struct {
-    const FieldPair = struct { name: []const u8, ftype: []const u8 };
     const KindEntry = struct { name: []const u8, proto: []const u8 };
     // One collected `!` arm — kind name, the arm continuation, its join flow.
     const Arm = struct { kind: []const u8, cont: *const ast.Continuation, at: *const ast.Flow };
@@ -247,93 +248,6 @@ const CH = struct {
         const default_door = (std.mem.eql(u8, verb, "default") or std.mem.eql(u8, verb, "proto")) and
             (std.mem.eql(u8, mq, "std.proto") or std.mem.eql(u8, mq, "std/proto"));
         return types_door or default_door;
-    }
-
-    fn protoSourceText(prog: *const ast.Program, name: []const u8) ?[]const u8 {
-        const W = struct {
-            fn find(its: []const ast.Item, want: []const u8) ?[]const u8 {
-                for (its) |*pi| {
-                    switch (pi.*) {
-                        .flow => |*f| {
-                            if (f.body.node) |*n| {
-                                if (n.* == .invocation and isProtoDoor(&n.invocation)) {
-                                    const inv = &n.invocation;
-                                    if (std.mem.eql(u8, declEntryName(inv), want)) {
-                                        for (inv.args) |a| {
-                                            if (a.source_value) |sv| return sv.text;
-                                        }
-                                        return "";
-                                    }
-                                }
-                            }
-                        },
-                        .inline_code => |*ic| {
-                            var lines = std.mem.splitScalar(u8, ic.code, '\n');
-                            while (lines.next()) |raw| {
-                                const line = std.mem.trimLeft(u8, raw, " \t");
-                                const prefix = "// proto ";
-                                if (!std.mem.startsWith(u8, line, prefix)) continue;
-                                const colon = std.mem.indexOfScalar(u8, line[prefix.len..], ':') orelse continue;
-                                const nm = std.mem.trim(u8, line[prefix.len .. prefix.len + colon], " \t");
-                                if (std.mem.eql(u8, nm, want)) return line[prefix.len + colon + 1 ..];
-                            }
-                        },
-                        .module_decl => |*md| {
-                            if (find(md.items, want)) |hit| return hit;
-                        },
-                        else => {},
-                    }
-                }
-                return null;
-            }
-        };
-        return W.find(prog.items, name);
-    }
-
-    // The entry's fields, nested compounds flattened to `a_b` leaf pairs —
-    // the marker form is already flat. A ftype that is itself a registered
-    // compound expands; scalars/terminals pass through. Depth-capped: the
-    // declaration gate owns cycle refusal; this walk just never hangs.
-    fn protoFields(alloc: std.mem.Allocator, prog: *const ast.Program, name: []const u8) ?[]const FieldPair {
-        var out = std.ArrayList(FieldPair).initCapacity(alloc, 8) catch unreachable;
-        if (!expandInto(alloc, prog, "", name, &out, 0)) return null;
-        return out.toOwnedSlice(alloc) catch unreachable;
-    }
-
-    fn expandInto(alloc: std.mem.Allocator, prog: *const ast.Program, prefix: []const u8, name: []const u8, out: *std.ArrayList(FieldPair), depth: usize) bool {
-        if (depth > 8) return false;
-        const text = protoSourceText(prog, name) orelse return false;
-        var lines = std.mem.tokenizeAny(u8, text, "\n,");
-        while (lines.next()) |raw| {
-            const line = std.mem.trim(u8, raw, " \t\r,");
-            if (line.len == 0) continue;
-            const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
-            const fname = std.mem.trim(u8, line[0..colon], " \t");
-            const ftype = std.mem.trim(u8, line[colon + 1 ..], " \t,");
-            if (fname.len == 0 or ftype.len == 0) continue;
-            const full = if (prefix.len == 0)
-                alloc.dupe(u8, fname) catch unreachable
-            else
-                std.fmt.allocPrint(alloc, "{s}_{s}", .{ prefix, fname }) catch unreachable;
-            // A field naming a declared compound expands to its leaves.
-            if (protoSourceText(prog, ftype) != null) {
-                if (!expandInto(alloc, prog, full, ftype, out, depth + 1)) return false;
-            } else {
-                out.append(alloc, .{ .name = full, .ftype = alloc.dupe(u8, ftype) catch unreachable }) catch unreachable;
-            }
-        }
-        return true;
-    }
-
-    // The Zig material for a proto field type — list.protos' elementZigType,
-    // restated: `string` lowers at the emission boundary, `ref(X)` carries
-    // the row handle.
-    fn zigFieldType(alloc: std.mem.Allocator, ftype: []const u8) []const u8 {
-        const t = std.mem.trim(u8, ftype, " \t");
-        if (std.mem.eql(u8, t, "string")) return alloc.dupe(u8, "[]const u8") catch unreachable;
-        if (t.len > 5 and std.mem.startsWith(u8, t, "ref(") and t[t.len - 1] == ')')
-            return alloc.dupe(u8, "i64") catch unreachable;
-        return alloc.dupe(u8, t) catch unreachable;
     }
 
     // True when some emitted item already derives `<Name>`'s layout —
@@ -753,7 +667,7 @@ const CH = struct {
         }
         // The proto must be in the registry — the ring's element layout is
         // derived from its fields.
-        _ = CH.protoFields(allocator, program, kproto) orelse {
+        _ = CL.protoFields(allocator, program, kproto) orelse {
             return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/channel:new({s}): '{s}' names no proto entry — the payload type is a registry name (std/proto({s}) {{ ... }})", .{ chan_name, kproto, kproto }) } };
         };
         kinds.append(allocator, .{ .name = kname, .proto = kproto }) catch unreachable;
@@ -765,6 +679,14 @@ const CH = struct {
         .ok => |c| c,
         .refuse => |r| return .{ .transformed = .{ .replacement = r } },
     };
+
+    // Composite custody (699_031): a kind whose proto declares owned leaves
+    // (`r1: *mod:Type<state!>`) transits one obligation per leaf — no send-
+    // site scan needed, the debt lives in the registered shape itself.
+    const kind_leaves = allocator.alloc([]const CL.OwnedLeaf, kinds.items.len) catch unreachable;
+    for (kinds.items, 0..) |k, ki| {
+        kind_leaves[ki] = CL.ownedLeavesOf(allocator, program, k.proto);
+    }
 
     // ---- Collect the program-wide joins: every `std/channel:consume(<name>)`
     // flow's `!` arms, validated against the vocabulary. The [pre] rewrite
@@ -837,12 +759,12 @@ const CH = struct {
         var sb = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
         for (kinds.items) |k| {
             if (CH.structAlreadyEmitted(allocator, program, k.proto)) continue;
-            const fields = CH.protoFields(allocator, program, k.proto).?;
+            const fields = CL.protoFields(allocator, program, k.proto).?;
             sb.appendSlice(allocator, "pub const ") catch unreachable;
             sb.appendSlice(allocator, k.proto) catch unreachable;
             sb.appendSlice(allocator, " = struct {\n") catch unreachable;
             for (fields) |p| {
-                sb.appendSlice(allocator, std.fmt.allocPrint(allocator, "    {s}: {s},\n", .{ p.name, CH.zigFieldType(allocator, p.ftype) }) catch unreachable) catch unreachable;
+                sb.appendSlice(allocator, std.fmt.allocPrint(allocator, "    {s}: {s},\n", .{ p.name, CL.zigFieldType(allocator, p.ftype) }) catch unreachable) catch unreachable;
             }
             sb.appendSlice(allocator, "};\n") catch unreachable;
         }
@@ -887,7 +809,7 @@ const CH = struct {
 
     // ---- Custody transit ops per custodial kind (channel.transit.kz):
     // `take` consumes under `| ok`; `obligate` mints at the consumer arm. ----
-    CT.emitCustodyOps(allocator, program, flow, chan_name, kinds.items, custody, &appended);
+    CT.emitCustodyOps(allocator, program, flow, chan_name, kinds.items, custody, kind_leaves, &appended);
 
     // ---- `__channel_recv_<n>` {} | some Proto | none | closed — the
     // imperative take; single-kind only (a multi-kind channel can't spell
@@ -927,7 +849,7 @@ const CH = struct {
     // ---- The `!` arms as generated units — kind arms carry the message,
     // closed arms carry nothing. Custodial units mint the obligation at the
     // arm head (channel.transit.kz). ----
-    CT.emitConsumerUnits(allocator, &appended, program, flow, chan_name, kind_arms.items, closed_arms.items, kinds.items, custody);
+    CU.emitConsumerUnits(allocator, &appended, program, flow, chan_name, kind_arms.items, closed_arms.items, kinds.items, custody, kind_leaves);
 
     // ---- The pump verbs: `<n>-step` / `<n>-live` / `<n>-wait` ----
     {
@@ -941,7 +863,7 @@ const CH = struct {
         // one dequeue in join order — first pop wins the value.
         for (kind_arms.items, 0..) |arm, ai| {
             const ring = std.fmt.allocPrint(allocator, "__koru_chan_{s}_{s}_ring", .{ chan_name, arm.kind }) catch unreachable;
-            const field_name = CT.stepFieldName(kinds.items, custody, arm.kind, arm.cont.binding.?);
+            const field_name = CT.stepFieldName(kinds.items, custody, kind_leaves, arm.kind, arm.cont.binding.?);
             sb.appendSlice(allocator, std.fmt.allocPrint(allocator,
                 "if ({s}.tryDequeue()) |__v| {{\n    __channel_{s}_{s}_{d}_event.handler(.{{ .{s} = __v }});\n    __moved += 1;\n}}\n",
                 .{ ring, chan_name, arm.kind, ai, field_name },
@@ -1400,6 +1322,13 @@ fn chanStep(
         if (vocab.len != 1) {
             return .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/channel:recv({s}): recv can't spell one payload type on a multi-kind channel — consume by `!` arms: `std/channel({s}) ! {s} v |> ...`", .{ chan_name, chan_name, vocab[0].name }) };
         }
+        // A composite kind (owned leaves in the proto) mints one debt PER
+        // PATH at delivery — the mint lives in the `!` arm's obligate step;
+        // `| some v` binds the bare payload with nothing minted, a custody
+        // hole. Refuse recv; arms are the composite spelling.
+        if (CL.ownedLeavesOf(allocator, program, vocab[0].proto).len > 0) {
+            return .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/channel:recv({s}): kind '{s}' carries owned leaves ('{s}' fields carry obligations) — `| some v` can't mint per-path debts; consume by `!` arms: `std/channel({s}) ! {s} v |> ...`", .{ chan_name, vocab[0].name, vocab[0].proto, chan_name, vocab[0].name }) };
+        }
         if (kind_label.len != 0 or bare_value != null) {
             return .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/channel:recv({s}) takes no value — `recv({s}) | some v |> ...`", .{ chan_name, chan_name }) };
         }
@@ -1432,7 +1361,7 @@ fn chanStep(
         if (bare_value) |bv| sent_value = bv;
         if (sent_value == null and kind_label.len != 0) sent_value = kind_value;
         if (sent_value) |sv| {
-            take_node = CT.takeNode(allocator, program, flow, chan_name, kind.?.name, sv);
+            take_node = CT.takeNode(allocator, program, flow, chan_name, kind.?, sv);
         }
     }
 

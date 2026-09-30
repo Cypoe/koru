@@ -35,5 +35,10 @@
 # test_decl/simple_var_decl scaffolding in *_test.zig plus the requires
 # fixture ASTs, the consciously-retained class the pin documents; the
 # growth landed between re-pins, not here.
-clusters=619
-members=762
+# Re-pinned 619/762 -> 623/768 (2026-10): the roll fired on the
+# composite-custody landing — zero *_test.zig staged. The named offenders
+# are emitter_test/visitor_emitter_test/comptime_eval_test test_decl and
+# simple_var_decl twins, the consciously-retained test-scaffolding class
+# the pin documents; the growth landed between re-pins, not here.
+clusters=623
+members=768

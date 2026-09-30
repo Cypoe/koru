@@ -160,6 +160,23 @@ What is NOT settled:
   `| ok` arm reads `v.id` after `v` was consumed — the input contradicts
   the poison law it documents; needs a doctrine ruling).
   `frag-custody-transit-is-an-edge-contract` carries the ruling.
+- **Composite custody — a proto may declare owned leaves.**
+  `r1: *app/lib/res:Resource<owned!>` inside a `std/proto` lifts the
+  store's owned-column spelling into the registry: the leaf is a
+  reference like `ref(X)` (no expansion, no cycle edge) but carries a
+  debt the receiver settles per path. A kind over that proto transits
+  one obligation PER LEAF — `send | ok` consumes `e.r1` and `e.r2` at
+  the producer, the `!` arm's obligate mints `v.r1`/`v.r2` at the
+  consumer, and a partial settle refuses KORU030 naming the standing
+  path. `<:` extension unions owned leaves like any field (699_034).
+  `recv` refuses composite kinds — `| some v` can't mint per-path;
+  arms are the spelling (699_033). Bare containers refuse the leaf:
+  rings (320_176) and lists (698_019) have no custody edge.
+  Pins `699_031`–`699_034` green. Store rows already parse the leaf
+  spelling (`{ env: Env }` columns pass phantom checks) but compound
+  column emission writes dotted idents into Zig (`__koru_out_env.r1`)
+  — a pre-existing emission gap for ALL compound columns, scalar or
+  owned; unbuilt rung, measured this session.
 
 ## The three "block" tiers
 

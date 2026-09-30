@@ -18,8 +18,13 @@
 # interpreter/bridge/runtime edits in the shared checkout — clean HEAD
 # measures exactly 1042. Re-pinned to measured per the uncommitted-work
 # clause; re-settles when that work commits.
-clusters=1033
-members=897
+# 1043/908: the roll fired on the composite-custody + wall-split landing —
+# fourteen ~part files carry the moved clusters' host text (the moved code
+# is counted at its new file, twinning the shapes it left), and the
+# owned-leaf machinery adds genuine new host code in proto/channel/src.
+# Re-pinned to measured; the category is the split parts' shells.
+clusters=1043
+members=908
 # 1027/891: module-home dedupe deleted five private copies of the
 # moduleHome/containingFlow walks (-18 clusters, the copies WERE clones);
 # +2 members are the new home parts' fns twinning existing shells.
