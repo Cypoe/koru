@@ -1,0 +1,10 @@
+name: benchmark
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a measurement artifact's protocol or guard changed — what is
+  being timed, which rows are comparable, or where the alarm bound
+  sits relative to the measured noise band. Fires when the harness
+  itself moves (legs added or removed, threshold re-set against a
+  measured jitter floor), not when the numbers merely drift.
