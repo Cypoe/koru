@@ -170,5 +170,10 @@ values in negative tests map to where the failure is expected:
   happens here, in Koru. `BACKEND_RUNTIME_ERROR`
 - **D — `zig build` output:** compile the final user binary.
 
+For capability probing — "does this grammar compile" — `koruc -c input.k`
+checks only (measured 0.18s vs ~60-90s for a full `-o` emit+build chain).
+Default to `-c` when iterating on diagnostics; pay the build only when you
+need `output_emitted.zig` or a run.
+
 Most semantic passes are wired in from Koru code in `koru_std/`, not `src/` —
 grep both when hunting where a check lives.

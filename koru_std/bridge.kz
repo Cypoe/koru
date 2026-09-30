@@ -204,7 +204,6 @@ pub const Bridge = struct {
     };
 }
 
-
 // ============================================================================
 // CLOSE - Hang up: release everything the session still holds
 // ============================================================================
@@ -230,5 +229,6 @@ pub const Bridge = struct {
 ~part run-exec
 ~part hostverbs
 ~part session
+~part bind
 ~part affordances
 ~part turn

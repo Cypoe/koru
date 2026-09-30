@@ -3,7 +3,6 @@
 // bridge module at load. The tor decl rides in the `run` part.
 
 ~proc run|zig {
-    const rt = @import("root").koru_std.koru_runtime;
     const interp = @import("root").koru_std.koru_interpreter;
 
     br.touch();
@@ -62,30 +61,22 @@
             // all survive.
             if (e.not_invocation) {
                 const rn = bindResidue(br, std.mem.trim(u8, source, " \t\r\n"));
-                if (rn.len > 0) return .{ .residue = std.fmt.allocPrint(std.heap.page_allocator,
-                        "residue bound: {s} — your reply was not wire; nothing reached the user", .{rn})
-                        catch @panic("bridge: OOM building residue report") };
+                if (rn.len > 0) return .{ .residue = residueNote(rn) };
             }
             return .{ .parse_error = .{
                 .message = e.message, .line = e.line, .column = e.column,
             } };
         }
 
-        const result = rt.run_event.handler(.{
-            .source = source,
-            .scope = br.scope,
-            .handle_pool = &br.pool,
-            .auto_discharge = false,
-            .defined = br.defined,
-            .lenient = true,
-            .host_dispatch = if (br.introspection) @as(?interp.HostDispatchFn, hostDispatch) else null,
-            .session_env = br.session_env,
-        });
+        const result = dispatchThroughScope(br, source);
 
         return switch (result) {
             .result => |r| .{ .result = .{
                 .value = r.value, .used = r.used, .handles = r.handles,
-                .bound = bindResult(br, r.value),
+                // The terminal dispatch bound itself via the trace; a turn
+                // that dispatched nothing (pure flow) still needs a name.
+                .bound = if (r.bound.len > 0) r.bound else bindResult(br, r.value),
+                .trace = r.trace,
             } },
             .unhandled_branch => |u| .{ .unhandled_branch = .{ .branch = u.branch, .payload = u.payload, .handles = u.handles } },
             .exhausted => |e| .{ .exhausted = .{ .used = e.used, .last_event = e.last_event, .handles = e.handles } },
@@ -93,7 +84,7 @@
             .validation_error => |e| .{ .validation_error = e },
             .shape_error => |e| .{ .shape_error = .{ .branch = e.branch, .field = e.field, .message = e.message } },
             .event_denied => |e| .{ .event_denied = e },
-            .dispatch_error => |e| .{ .dispatch_error = .{ .event_name = e.event_name, .message = e.message } },
+            .dispatch_error => |e| .{ .dispatch_error = .{ .event_name = e.event_name, .message = e.message, .trace = e.trace } },
             .scope_not_found => |e| .{ .scope_not_found = e },
         };
     }
@@ -112,9 +103,7 @@
     }
     if (all_prose) {
         const rn = bindResidue(br, std.mem.trim(u8, source, " \t\r\n"));
-        if (rn.len > 0) return .{ .residue = std.fmt.allocPrint(std.heap.page_allocator,
-            "residue bound: {s} — your reply was not wire; nothing reached the user", .{rn})
-            catch @panic("bridge: OOM building residue report") };
+        if (rn.len > 0) return .{ .residue = residueNote(rn) };
         // Bind failed — fall through to the per-item loop, which reports
         // per-step refusals instead of lying about a single binding.
     }
@@ -144,7 +133,7 @@
             if (e.not_invocation) {
                 const rn = bindResidue(br, item);
                 if (rn.len > 0) {
-                    writer.print("step {d}/{d} residue bound: {s} — your reply was not wire; nothing reached the user\n", .{ step, total, rn }) catch {};
+                    writer.print("step {d}/{d} residue bound: {s} — your reply was not wire; nothing reached the user. To deliver it, call say(text: {s})\n", .{ step, total, rn, rn }) catch {};
                     continue;
                 }
             }
@@ -153,24 +142,22 @@
             continue;
         }
         all_residue = false;
-        const result = rt.run_event.handler(.{
-            .source = item,
-            .scope = br.scope,
-            .handle_pool = &br.pool,
-            .auto_discharge = false,
-            .defined = br.defined,
-            .lenient = true,
-            .host_dispatch = if (br.introspection) @as(?interp.HostDispatchFn, hostDispatch) else null,
-            .session_env = br.session_env,
-        });
+        const result = dispatchThroughScope(br, item);
         switch (result) {
             .result => |r| {
                 used_total += r.used;
-                const bound = bindResult(br, r.value);
+                const bound = if (r.bound.len > 0) r.bound else bindResult(br, r.value);
+                // A chain's inner links surface above its result line — each
+                // dispatch's issued value, durable name, and arm binding.
+                if (r.trace.len > 0) writer.print("step {d}/{d} trace:\n{s}", .{ step, total, r.trace }) catch {};
                 writer.print("step {d}/{d} result: {s} bound: {s}\n", .{ step, total, r.value.toJsonBuf(), bound }) catch {};
             },
             .unhandled_branch => |u| {
-                writer.print("step {d}/{d} unhandled-branch: {s} — {s} (held {s})\n", .{ step, total, u.branch, u.payload, u.handles }) catch {};
+                if (u.branch.len == 0) {
+                    writer.print("step {d}/{d} unhandled-branch: the call issued its ordinary result but no arm bound it — an ordinary result binds with `| ok name |>`; other arm words match nothing (held {s})\n", .{ step, total, u.handles }) catch {};
+                } else {
+                    writer.print("step {d}/{d} unhandled-branch: {s} — {s} (held {s}); to keep going, arm it `| {s} name |>` — the arm word is the branch name, nothing else matches\n", .{ step, total, u.branch, u.payload, u.handles, u.branch }) catch {};
+                }
             },
             .exhausted => |e| {
                 used_total += e.used;
@@ -180,7 +167,12 @@
             .validation_error => |e| writer.print("step {d}/{d} validation-error: {s}\n", .{ step, total, e }) catch {},
             .shape_error => |e| writer.print("step {d}/{d} shape-error {s}: {s}\n", .{ step, total, e.branch, e.message }) catch {},
             .event_denied => |e| writer.print("step {d}/{d} event-denied: {s}\n", .{ step, total, e }) catch {},
-            .dispatch_error => |e| writer.print("step {d}/{d} dispatch-error {s}: {s}\n", .{ step, total, e.event_name, e.message }) catch {},
+            .dispatch_error => |e| {
+                // Links that did dispatch before the refusal still report —
+                // the model sees what it got before it hit the wall.
+                if (e.trace.len > 0) writer.print("step {d}/{d} trace:\n{s}", .{ step, total, e.trace }) catch {};
+                writer.print("step {d}/{d} dispatch-error {s}: {s}\n", .{ step, total, e.event_name, e.message }) catch {};
+            },
             .scope_not_found => |e| writer.print("step {d}/{d} scope-not-found: {s}\n", .{ step, total, e }) catch {},
         }
     }

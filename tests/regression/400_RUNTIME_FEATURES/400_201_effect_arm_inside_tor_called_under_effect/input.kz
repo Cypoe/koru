@@ -1,0 +1,41 @@
+// PINS: a `!` effect arm inside a `|` arm-continuation body keeps its
+// effect-handler status even when the `!` arm's own continuation is an
+// ordinary tor call.
+//
+//   trigger() | go |> source()
+//       ! data d |> mid(n: d)
+//
+// `source` fires `! data`; the `! data` arm's continuation is the event
+// tor `mid`. The `!` arm must emit a Handlers entry, not an Output-union
+// switch case — `source`'s Output is void and carries no `data` variant.
+// This is the shape a streaming consumer hits when an SSE `! data`
+// handler inside a `| started` arm calls into a tor that itself arms
+// effects (e.g. `array.each`'s `! item`).
+
+~import std/io
+
+~pub tor source {}
+! data usize
+
+~proc source|zig {
+    data(2);
+}
+
+~pub tor trigger {}
+| go
+| stop
+
+~proc trigger|zig {
+    return .{ .go = .{} };
+}
+
+~tor mid { n: usize }
+~mid = std/io:print.ln("mid {{ n:d }}")
+
+~tor driver {}
+~driver = trigger()
+| go |> source()
+    ! data d |> mid(n: d)
+| stop |> _
+
+~driver()

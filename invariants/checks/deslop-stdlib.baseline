@@ -1,8 +1,8 @@
 # Pin: tools/deslop_kz.py over koru_std at --min-nodes=32, measured
 # 2026-10-13. The stdlib is the definitional layer — 45 spellings in
 # use, a tight corpus. Keys are ceilings; see the sibling baselines.
-clusters=75
-members=123
+clusters=83
+members=131
 skipped=2
 spellings=45
 # 70/111: store.keyed.kz joined io.blk-style import preamble clone w/ interpreter.select.kz (3 shared compiler-module imports, boilerplate)
@@ -22,3 +22,10 @@ spellings=45
 # channel.kz/rings.new.kz; their import preambles join the existing
 # preamble clusters (interpreter.arms, supervisor.decl) and the
 # channel/rings event_decl shells twin by transform protocol.
+# 83/131: the owned-leaf + wall-split landings added fourteen ~part files
+# (interpreter.trace/handles/flowsrc, runtime.outcome/obtainvia/wirelex,
+# bridge.bind, channel.leaves/units, proto.markers/ownedleaf/terminal,
+# rings.leafgate, list.fieldkit); their import preambles join the
+# fmt.jsprec/interpreter.arith/store.bulkjoin cluster and the proto
+# event_decl shells twin by vocabulary protocol — the same category the
+# 73/118 wire/bridge split pinned: decl shells, not folded slop.

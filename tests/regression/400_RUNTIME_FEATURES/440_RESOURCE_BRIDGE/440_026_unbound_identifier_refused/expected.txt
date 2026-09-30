@@ -1,7 +1,10 @@
 echo: hit
 t1 result
 echo: one
-t2 partial step 1/2 result: {"branch":""} bound: r2
+t2 partial step 1/2 trace:
+probe -> {"branch":"found","value":"hit"} bound: r3 as h
+echo -> {"branch":""} bound: r4
+step 1/2 result: {"branch":""} bound: r4
 step 2/2 validation-error: unbound 'h' on 'echo' — bind it with an arm (`| <branch> h |>`) or quote it for a literal
 
 t3 refused unbound 'nope' on 'echo' — bind it with an arm (`| <branch> nope |>`) or quote it for a literal

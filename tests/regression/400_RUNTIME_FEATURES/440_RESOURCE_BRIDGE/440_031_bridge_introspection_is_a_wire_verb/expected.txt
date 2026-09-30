@@ -3,7 +3,7 @@
   chained -> {"branch":"","value":"echo(text: string)\nvocabulary()\ngrammar()\nbind(name:, value:)\nr1"}
   args dispatch-error: 'vocabulary' takes no fields — call it bare: vocabulary()
   defined shout
-  vocab+def -> {"branch":"","value":"echo(text: string)\nvocabulary()\ngrammar()\nbind(name:, value:)\nshout(text: string)\nr1\nr2"}
+  vocab+def -> {"branch":"","value":"echo(text: string)\nvocabulary()\ngrammar()\nbind(name:, value:)\nshout(text: string)\nr1\nr3\nr2"}
 --- ungranted session
   denied: event-denied vocabulary
 --- done

@@ -1,0 +1,11 @@
+done
+probe -> {"branch":"","value":"payload-9"} bound: r1 as h
+echo -> {"branch":""} bound: r2
+RESULT bound=r2
+payload-9
+RESULT bound=r3
+FAIL denied bogus
+alive
+RESULT bound=r5
+payload-9
+RESULT bound=r6

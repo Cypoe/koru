@@ -3828,6 +3828,29 @@ fn emitSubflowContinuationsWithDepth(
                     try emitter.write(";\n");
                 }
 
+                // An arm whose step invokes a `!`-carrying event and arms one
+                // of those effects — `| go |> source() ! data d |> …` — cannot
+                // take the raw call+switch below: the call goes out as
+                // `handler(input, struct {})` and the `!` arm lands in the
+                // result switch on a variant the event's Output does not
+                // carry. emitContinuationBody partitions the effect arms into
+                // the synthesized Handlers struct and leaves terminal arms for
+                // the result switch — the same treatment the void-chain check
+                // gives a `!`-armed non-head step (400_198) and emitFlow gives
+                // the head invocation (400_175).
+                var step_effect_routed = false;
+                if (cont.node) |arm_step| {
+                    if (arm_step == .invocation) {
+                        for (cont.continuations) |c| {
+                            if (c.kind == .effect) {
+                                try emitVoidStepViaContinuationBody(emitter, &cont, indent, all_items, program_items, depth, tap_registry, type_registry, main_module_name, source_event_name, enclosing_bare_return, enclosing_event, self_loop_canonical, &local_bindings, parent_result_name);
+                                step_effect_routed = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
                 // Self-tail reentry inside a call-result arm: `| boom f |>
                 // self(args)` whose children forward the result. Detection
                 // (flowContainsSelfTailForward) counts this site and the
@@ -3854,7 +3877,7 @@ fn emitSubflowContinuationsWithDepth(
                     }
                 }
 
-                if (!self_reentry_emitted) {
+                if (!self_reentry_emitted and !step_effect_routed) {
                 // Track the index of the last invocation result for nested continuation switching
                 var last_result_idx: usize = depth;
 

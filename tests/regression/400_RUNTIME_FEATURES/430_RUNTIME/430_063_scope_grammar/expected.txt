@@ -1,9 +1,12 @@
 A wire turn is one flow: verb(field: value, field: value) with `|` arms chaining what each call issues.
+- An arm binds what a call issued to a name for the next call: `| ok u |>` for an ordinary result, `| chosen c |>` for a named branch — the arm word is the branch name in the signature.
 - The verb is a bare name from your vocabulary — letters, digits, '-', '_' — immediately followed by '('.
 - A value is a double-quoted string (escape \" and \\ inside) or a bare literal: a number, true/false, or a name a `|` arm already bound.
 - A field typed `name<x>` takes only a bound name the session minted `<x!>` — an `rN` from an earlier verb or an arm binding, never literal text. `name<!x>` spends it.
+- A bound name keeps its fields: `r3.user_id` reads that field out of the value r3 bound — the whole result stays readable in the session, not just its name.
 - A second invocation starts a second item: one invocation per line runs each in order with one line of report per step.
 - Prose is not wire — it binds as residue: "residue bound: rN — your reply was not wire; nothing reached the user" keeps YOUR reply at rN; nothing hears it until a verb takes it as an argument.
+- `<open>` — minted by open(...) | ok, append(...) | ok; spent by append(handle:), close(handle:)
 - Chain fresh outcomes with arms: `open(path: "1") | ok v |> append(handle: v, text: "2")` — the arm's binding `v` is what the call just issued. Never invent one, never predict one: bind it.
 
 Your vocabulary:
