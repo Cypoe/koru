@@ -6232,11 +6232,6 @@ pub fn emitFlow(
         // other path falls through to `break :label` — uniform for 0, 1, or
         // many looping branches.
         if (flow.pre_label) |label| {
-            // Track the loop label so nested terminal steps emit `break :label`.
-            const saved_label = ctx.current_label;
-            ctx.current_label = label;
-            defer ctx.current_label = saved_label;
-
             // suppress_tag_guard=false: with the while-guard gone, a sparse
             // single arm needs its `if (result == .b)` tag test to preserve the
             // old loop-exit semantics on unhandled branches.
