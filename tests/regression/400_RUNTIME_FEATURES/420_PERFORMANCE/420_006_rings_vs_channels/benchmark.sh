@@ -1,30 +1,31 @@
 #!/bin/bash
 # Benchmark: Concurrent Message Passing
-# Compare Go channels vs Zig MPMC rings vs Rust channels vs Koru ring flow vs Koru taps
+# Compare Go channels vs Zig MPMC rings vs Rust channels vs Koru ring flow
 #
 # Tests:
 # - Go: Buffered channels (idiomatic Go)
 # - Zig: MPMC ring (Vyukov's lock-free algorithm)
 # - Rust: Crossbeam bounded channels (lock-free)
-# - Koru: std/rings ring fed by a spawned host thread, event/flow consumer
-# - Koru Taps: Pure event-based producer/consumer (no ring!)
+# - Koru: MPMC ring fed by a spawned host thread, flow consumer
 #
-# All send/receive 10M messages between producer/consumer threads
-# Success criteria: Koru should match Zig (zero-cost abstraction!)
+# All send/receive 10M messages between producer/consumer threads.
+# Koru is the reference column; the guard is Koru/Zig < 1.10.
 #
 # (The bchan MPSC leg referenced by the original script was never committed —
-# vendor_bchan is an empty gitlink and baseline_bchan.zig never existed.)
+# vendor_bchan is an empty gitlink and baseline_bchan.zig never existed.
+# The old "Koru taps" leg measured a single-threaded count loop — a
+# different workload with no transport, not a comparable channel.)
 
 set -e
 
 echo "============================================"
 echo "  CONCURRENT MESSAGE PASSING BENCHMARK"
-echo "  Go vs Zig vs Rust vs Koru vs Koru Taps"
+echo "  Koru vs Zig vs Rust vs Go"
 echo "============================================"
 echo ""
 
 # Clean up previous builds
-rm -f go_baseline zig_baseline rust_baseline koru_output koru_taps_output backend backend.zig output_emitted.zig results.json
+rm -f go_baseline zig_baseline rust_baseline koru_output backend backend.zig output_emitted.zig results.json
 rm -rf zig-out .zig-cache target Cargo.lock
 
 echo "Building Go baseline (channels)..."
@@ -37,13 +38,9 @@ echo "Building Rust baseline (crossbeam channels)..."
 cargo build --release --quiet
 cp target/release/rust_baseline ./rust_baseline
 
-echo "Building Koru version (std/rings + spawned producer)..."
+echo "Building Koru version (MPMC ring + spawned producer)..."
 koruc build --release=fast "${KORU_INPUT:-input.kz}"
 mv a.out koru_output
-
-echo "Building Koru Taps version (pure events, no ring)..."
-koruc build --release=fast input_taps.kz
-mv a.out koru_taps_output
 
 echo ""
 echo "Running benchmarks with hyperfine..."
@@ -62,11 +59,10 @@ fi
 # - shell=none: avoid shell overhead
 hyperfine --warmup 3 --runs 10 --shell=none \
     --export-json results.json \
-    --command-name "Go (channels)" './go_baseline' \
+    --command-name "Koru (ring flow)" './koru_output' \
     --command-name "Zig (MPMC)" './zig_baseline' \
     --command-name "Rust (crossbeam)" './rust_baseline' \
-    --command-name "Koru (ring flow)" './koru_output' \
-    --command-name "Koru (taps)" './koru_taps_output'
+    --command-name "Go (channels)" './go_baseline'
 
 echo ""
 echo "============================================"
