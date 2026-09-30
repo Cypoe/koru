@@ -270,6 +270,16 @@
             return out.toOwnedSlice(a) catch &.{};
         }
 
+        // One line per row: glyph, name padded to the member column, then
+        // the detail. ✓ passed · ✗ blocking violation · ! advisory flag ·
+        // – didn't run (skipped, scoped out, sampled away).
+        fn row(glyph: []const u8, name: []const u8, width: usize, detail: []const u8) void {
+            std.debug.print("  {s} {s}", .{ glyph, name });
+            var i: usize = name.len;
+            while (i < width) : (i += 1) std.debug.print(" ", .{});
+            std.debug.print("  {s}\n", .{detail});
+        }
+
         // The trailing lines of a failed check's output — gate.py's 8.
         fn tailLines(text: []const u8, n: usize) []const u8 {
             var count: usize = 0;
@@ -367,11 +377,13 @@
 
     // `gate` with no profile lists what this program declares.
     if (argv.len == 0) {
-        std.debug.print("\nprofiles\n", .{});
         if (profiles.items.len == 0) {
-            std.debug.print("  none declared — a profile is a `std/gate:profile(<name>) {{ ... }}` block\n", .{});
+            std.debug.print("\ngate — none declared (a profile is a `std/gate:profile(<name>) {{ ... }}` block)\n", .{});
             return;
         }
+        var namew: usize = 0;
+        for (profiles.items) |p| namew = @max(namew, p.name.len);
+        std.debug.print("\ngate — {d} profile{s} declared\n\n", .{ profiles.items.len, if (profiles.items.len == 1) "" else "s" });
         for (profiles.items) |p| {
             var local_buf: [128]u8 = undefined;
             const local_tag = std.fmt.bufPrint(&local_buf, "{s}-local", .{p.name}) catch p.name;
@@ -379,13 +391,14 @@
             for (rows.items) |r| {
                 if (helpers.tagged(r.tags, p.name) or helpers.tagged(r.tags, local_tag)) members += 1;
             }
-            std.debug.print("  {s}  [{s}]  {d} row{s}", .{
-                p.name,
-                if (p.block) "blocking" else "advisory",
-                members,
-                if (members == 1) "" else "s",
-            });
-            if (p.description.len > 0) std.debug.print("  — {s}", .{p.description});
+            std.debug.print("  {s}", .{p.name});
+            var i: usize = p.name.len;
+            while (i < namew) : (i += 1) std.debug.print(" ", .{});
+            const count = std.fmt.allocPrint(alloc, "{d} row{s}", .{ members, if (members == 1) "" else "s" }) catch "?";
+            std.debug.print("  {s}  {s}", .{ if (p.block) "blocking" else "advisory", count });
+            var j: usize = count.len;
+            while (j < 7) : (j += 1) std.debug.print(" ", .{});
+            if (p.description.len > 0) std.debug.print(" {s}", .{p.description});
             std.debug.print("\n", .{});
         }
         return;
@@ -481,14 +494,23 @@
     // refused max_tokens_exceeded. Bytes are the proxy the gate can see.
     const JUDGE_STATE_MAX_BYTES: usize = 96_000;
 
-    var failures = std.ArrayList([]const u8){};
-    var advisories = std.ArrayList([]const u8){};
+    var n_fail: usize = 0;
+    var n_flag: usize = 0;
 
     const Verdict = struct { name: []const u8, verdict: []const u8, detail: []const u8 };
     var verdicts = std.ArrayList(Verdict){};
 
+    // The name column rides the widest member.
+    var namew: usize = 0;
+    for (members.items) |r| namew = @max(namew, r.name.len);
+
+    const plural = if (members.items.len == 1) "row" else "rows";
+    if (!want_json) std.debug.print("gate {s} — {s} · {d} {s} · {s}\n\n", .{ prof.name, if (block) "enforcing" else "advisory", members.items.len, plural, gated_base });
+
     for (members.items) |r| {
-        // odds-N first: a miss dismisses the row before anything runs.
+        // odds-N first: a miss dismisses the row before anything runs; a
+        // fire annotates the row's own line with the roll.
+        var fired: []const u8 = "";
         if (helpers.oddsN(r.tags)) |n| {
             if (!staged_done) {
                 staged_done = true;
@@ -499,11 +521,12 @@
             const diff = staged orelse "";
             const roll = helpers.oddsRoll(r.name, diff);
             if (roll >= n) {
-                if (!want_json) std.debug.print("odds miss   {s} — rolled {d}, needed < {d}\n", .{ r.name, roll, n });
+                const det = std.fmt.allocPrint(alloc, "rolled {d}, needed < {d}", .{ roll, n }) catch "rolled away";
+                if (!want_json) helpers.row("–", r.name, namew, det);
                 verdicts.append(alloc, .{ .name = r.name, .verdict = "skip", .detail = "odds miss" }) catch {};
                 continue;
             }
-            if (!want_json) std.debug.print("odds fire   {s} — rolled {d} < {d}\n", .{ r.name, roll, n });
+            fired = std.fmt.allocPrint(alloc, " · rolled {d} < {d}", .{ roll, n }) catch "";
         }
 
         const is_local = helpers.tagged(r.tags, local_tag);
@@ -512,36 +535,60 @@
             if (helpers.fileStagedDiff(alloc, r.file)) |fdiff| {
                 local_state = fdiff; // the judged state for a -local row
             } else {
-                if (!want_json) std.debug.print("local skip  {s} — {s} not in a staged diff\n", .{ r.name, r.file });
+                const det = std.fmt.allocPrint(alloc, "{s} not staged", .{std.fs.path.basename(r.file)}) catch "not staged";
+                if (!want_json) helpers.row("–", r.name, namew, det);
                 verdicts.append(alloc, .{ .name = r.name, .verdict = "skip", .detail = "file not staged" }) catch {};
                 continue;
             }
         }
 
         if (r.check.len > 0) {
-            if (judge_only) continue;
-            if (helpers.repoScope(r.tags)) |scope| {
-                if (!std.mem.eql(u8, scope, gated_base)) {
-                    if (!want_json) std.debug.print("check skip  {s} — instruments {s}\n", .{ r.name, scope });
-                    verdicts.append(alloc, .{ .name = r.name, .verdict = "skip", .detail = "other repo" }) catch {};
-                    continue;
+            var glyph: []const u8 = "–";
+            var det: []const u8 = "skipped";
+            var vdet: []const u8 = "skipped";
+            var tail: []const u8 = "";
+            var ran = false;
+            if (judge_only) {
+                det = "skipped — --judge-only";
+                vdet = "judge-only";
+            } else if (helpers.repoScope(r.tags)) |scope| {
+                if (std.mem.eql(u8, scope, gated_base)) {
+                    ran = true;
+                } else {
+                    det = std.fmt.allocPrint(alloc, "instruments {s}", .{scope}) catch "other repo";
+                    vdet = "other repo";
                 }
             } else if (!manifest_repo) {
-                if (!want_json) std.debug.print("check skip  {s} — repo-scoped to {s}\n", .{ r.name, std.fs.path.basename(prof_repo) });
-                verdicts.append(alloc, .{ .name = r.name, .verdict = "skip", .detail = "manifest repo only" }) catch {};
-                continue;
-            }
-            const cmd = helpers.splitCmd(alloc, r.check);
-            const res = helpers.runOut(alloc, cmd, prof.dir, null);
-            if (res == null or res.?.code != 0) {
-                const code: u8 = if (res) |x| x.code else 255;
-                const tail = if (res) |x| std.mem.trim(u8, x.out, " \n\t") else "";
-                const line = std.fmt.allocPrint(alloc, "check FAIL  {s} (exit {d})\n{s}", .{ r.name, code, helpers.tailLines(tail, 8) }) catch "check FAIL";
-                failures.append(alloc, line) catch {};
-                verdicts.append(alloc, .{ .name = r.name, .verdict = "violation", .detail = "check failed" }) catch {};
+                det = "runs on the manifest repo only";
+                vdet = "manifest repo only";
             } else {
-                if (!want_json) std.debug.print("check ok    {s}\n", .{r.name});
-                verdicts.append(alloc, .{ .name = r.name, .verdict = "pass", .detail = "check ok" }) catch {};
+                ran = true;
+            }
+            if (ran) {
+                const cmd = helpers.splitCmd(alloc, r.check);
+                const res = helpers.runOut(alloc, cmd, prof.dir, null);
+                if (res == null or res.?.code != 0) {
+                    const code: u8 = if (res) |x| x.code else 255;
+                    glyph = "✗";
+                    det = std.fmt.allocPrint(alloc, "check failed (exit {d})", .{code}) catch "check failed";
+                    tail = helpers.tailLines(if (res) |x| std.mem.trim(u8, x.out, " \n\t") else "", 8);
+                    n_fail += 1;
+                    verdicts.append(alloc, .{ .name = r.name, .verdict = "violation", .detail = "check failed" }) catch {};
+                } else {
+                    glyph = "✓";
+                    det = "check ok";
+                    verdicts.append(alloc, .{ .name = r.name, .verdict = "pass", .detail = "check ok" }) catch {};
+                }
+            } else {
+                verdicts.append(alloc, .{ .name = r.name, .verdict = "skip", .detail = vdet }) catch {};
+            }
+            if (!want_json) {
+                const disp = if (fired.len > 0) std.fmt.allocPrint(alloc, "{s}{s}", .{ det, fired }) catch det else det;
+                helpers.row(glyph, r.name, namew, disp);
+                var lit = std.mem.splitScalar(u8, tail, '\n');
+                while (lit.next()) |tl| {
+                    if (tl.len > 0) std.debug.print("      {s}\n", .{tl});
+                }
             }
             continue;
         }
@@ -549,6 +596,7 @@
         // Judgment-class row. Deterministic checks run under --checks-only;
         // judged rows need a staged state to judge at all.
         if (checks_only) {
+            if (!want_json) helpers.row("–", r.name, namew, "skipped — --checks-only");
             verdicts.append(alloc, .{ .name = r.name, .verdict = "skip", .detail = "checks-only" }) catch {};
             continue;
         }
@@ -565,7 +613,7 @@
             state = staged orelse "";
         }
         if (!is_local and std.mem.trim(u8, state, " \n\t").len == 0) {
-            if (!want_json) std.debug.print("judge skip  {s} — no staged changes\n", .{r.name});
+            if (!want_json) helpers.row("–", r.name, namew, "no staged changes");
             verdicts.append(alloc, .{ .name = r.name, .verdict = "skip", .detail = "no staged changes" }) catch {};
             continue;
         }
@@ -625,26 +673,32 @@
             }
         }
 
+        var glyph: []const u8 = "";
         if (std.mem.startsWith(u8, verdict, "VIOLATION")) {
-            const line = std.fmt.allocPrint(alloc, "judge VIOLATION {s}  {s}", .{ r.name, verdict }) catch "judge VIOLATION";
             if (block) {
-                failures.append(alloc, line) catch {};
+                glyph = "✗";
+                n_fail += 1;
             } else {
-                const adv = std.fmt.allocPrint(alloc, "{s}  (advisory; the profile's block stands down)", .{line}) catch line;
-                advisories.append(alloc, adv) catch {};
+                glyph = "!";
+                n_flag += 1;
             }
             verdicts.append(alloc, .{ .name = r.name, .verdict = "violation", .detail = verdict }) catch {};
         } else if (std.mem.startsWith(u8, verdict, "CLEAN")) {
-            if (!want_json) std.debug.print("judge ok    {s}  {s}\n", .{ r.name, verdict });
+            glyph = "✓";
             verdicts.append(alloc, .{ .name = r.name, .verdict = "pass", .detail = verdict }) catch {};
         } else {
-            const line = std.fmt.allocPrint(alloc, "judge UNJUDGED {s}  {s}", .{ r.name, verdict }) catch "judge UNJUDGED";
             if (block) {
-                failures.append(alloc, line) catch {};
+                glyph = "✗";
+                n_fail += 1;
             } else {
-                advisories.append(alloc, line) catch {};
+                glyph = "!";
+                n_flag += 1;
             }
             verdicts.append(alloc, .{ .name = r.name, .verdict = "unjudged", .detail = verdict }) catch {};
+        }
+        if (!want_json) {
+            const disp = if (fired.len > 0) std.fmt.allocPrint(alloc, "{s}{s}", .{ verdict, fired }) catch verdict else verdict;
+            helpers.row(glyph, r.name, namew, disp);
         }
     }
 
@@ -658,21 +712,16 @@
             helpers.jsonEscape(v.detail);
             std.debug.print("\"}}", .{});
         }
-        std.debug.print("],\"failures\":{d}}}\n", .{failures.items.len});
+        std.debug.print("],\"failures\":{d}}}\n", .{n_fail});
     } else {
-        const plural = if (members.items.len == 1) "row" else "rows";
-        for (advisories.items) |a| std.debug.print("{s}\n", .{a});
-        for (failures.items) |f| std.debug.print("{s}\n", .{f});
-        if (failures.items.len > 0) {
-            std.debug.print("\ngate {s}: {d} blocking violation(s)\n", .{ prof.name, failures.items.len });
+        if (n_fail > 0) {
+            std.debug.print("\ngate {s} — {d} blocking violation{s}\n", .{ prof.name, n_fail, if (n_fail == 1) "" else "s" });
+        } else if (n_flag > 0) {
+            std.debug.print("\ngate {s} — clean · {d} flagged\n", .{ prof.name, n_flag });
         } else {
-            if (advisories.items.len == 0) {
-                std.debug.print("gate {s}: {d} {s}, {s} — clean\n", .{ prof.name, members.items.len, plural, if (block) "enforcing" else "advisory" });
-            } else {
-                std.debug.print("gate {s}: {d} {s}, {s} — {d} flag(s) above\n", .{ prof.name, members.items.len, plural, if (block) "enforcing" else "advisory", advisories.items.len });
-            }
+            std.debug.print("\ngate {s} — clean\n", .{prof.name});
         }
     }
 
-    if (failures.items.len > 0) std.process.exit(1);
+    if (n_fail > 0) std.process.exit(1);
 }

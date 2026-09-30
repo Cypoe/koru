@@ -9,21 +9,20 @@ fail() { echo "FAIL: $1"; exit 1; }
 # 1. Bare `gate` lists declared profiles and their membership.
 LIST=$(koruc "$KORU_INPUT" gate 2>&1)
 echo "$LIST"
-echo "$LIST" | grep -qE "dev.*\[advisory\].*4 rows"     || fail "dev profile not listed with 4 rows"
-echo "$LIST" | grep -qE "broken.*\[blocking\].*1 row"  || fail "broken profile not listed blocking"
-echo "$LIST" | grep -qE "strict.*\[blocking\].*1 row"  || fail "strict profile not listed blocking"
-echo "$LIST" | grep -qE "clean.*\[blocking\].*1 row"   || fail "clean profile not listed blocking"
+echo "$LIST" | grep -qE "dev +advisory +4 rows"      || fail "dev profile not listed with 4 rows"
+echo "$LIST" | grep -qE "broken +blocking +1 row"    || fail "broken profile not listed blocking"
+echo "$LIST" | grep -qE "strict +blocking +1 row"    || fail "strict profile not listed blocking"
+echo "$LIST" | grep -qE "clean +blocking +1 row"     || fail "clean profile not listed blocking"
 
 # 2. `gate dev` — advisory profile: the instrument runs, the judged row is
 #    reported (skip without a staged diff, UNJUDGED with one — both honest),
 #    and the odds modifiers roll deterministically.
 DEV=$(koruc "$KORU_INPUT" gate dev 2>&1)
 echo "$DEV"
-echo "$DEV" | grep -q "check ok    shape-is-named"              || fail "check row did not pass"
-echo "$DEV" | grep -qE "judge (skip|UNJUDGED) +prose-rule"      || fail "judged row not reported"
-echo "$DEV" | grep -qE "odds miss +never-fires"                 || fail "odds-0 row fired"
-echo "$DEV" | grep -qE "odds fire +always-fires"                || fail "odds-100 row missed"
-echo "$DEV" | grep -qE "check ok +always-fires"                 || fail "always-fires did not run"
+echo "$DEV" | grep -qE "shape-is-named +check ok"               || fail "check row did not pass"
+echo "$DEV" | grep -qE "prose-rule +(no staged changes|UNJUDGED)" || fail "judged row not reported"
+echo "$DEV" | grep -qE "never-fires +rolled [0-9]+, needed < 0" || fail "odds-0 row fired"
+echo "$DEV" | grep -qE "always-fires +check ok · rolled [0-9]+ < 100" || fail "odds-100 row missed"
 
 # 3. json verdicts — the machine-readable block.
 JSON=$(koruc "$KORU_INPUT" gate dev json 2>&1)
@@ -37,7 +36,7 @@ if koruc "$KORU_INPUT" gate broken > broken.log 2>&1; then
     cat broken.log; fail "gate broken exited 0 on a failing check"
 fi
 cat broken.log
-grep -q "check FAIL  always-fails" broken.log                   || fail "check FAIL not reported"
+grep -qE "✗ always-fails +check failed" broken.log              || fail "check failure not reported"
 grep -q "blocking violation" broken.log                         || fail "blocking summary missing"
 
 # 5. `gate nosuch` refuses and names the declared set.
@@ -63,7 +62,7 @@ git -C scratch commit -qm init --allow-empty
 # empty repo: no staged diff → the judged row skips, gate is clean
 CLEAN0=$(koruc "$KORU_INPUT" gate strict --repo "$PWD/scratch" 2>&1) || fail "empty staged diff did not skip"
 echo "$CLEAN0"
-echo "$CLEAN0" | grep -q "judge skip  strict-rule — no staged changes" || fail "judge-skip missing"
+echo "$CLEAN0" | grep -qE "strict-rule +no staged changes" || fail "judge-skip missing"
 
 printf '#!/bin/sh\necho "VIOLATION p=0.87"\n' > scratch/strict-judge
 printf '#!/bin/sh\necho "CLEAN p=0.91"\n' > scratch/clean-judge
@@ -77,8 +76,8 @@ if koruc "$KORU_INPUT" gate strict --repo "$PWD/scratch" > strict.log 2>&1; then
     cat strict.log; fail "enforcing profile exited 0 on a judge VIOLATION"
 fi
 cat strict.log
-grep -q "judge VIOLATION strict-rule  VIOLATION p=0.87" strict.log || fail "judge VIOLATION missing"
-grep -q "blocking violation" strict.log                            || fail "enforcement did not block"
+grep -qE "✗ strict-rule +VIOLATION p=0.87" strict.log            || fail "judge VIOLATION missing"
+grep -q "blocking violation" strict.log                          || fail "enforcement did not block"
 
 # the same verdict, softened by --advisory → exit 0
 SOFT=$(koruc "$KORU_INPUT" gate strict --repo "$PWD/scratch" --advisory 2>&1) || fail "--advisory still blocked"
@@ -88,14 +87,14 @@ echo "$SOFT" | grep -q "advisory" || fail "advisory mode not reported"
 # a CLEAN verdict passes an enforcing profile
 CLEAN=$(koruc "$KORU_INPUT" gate clean --repo "$PWD/scratch" 2>&1) || fail "clean profile exited nonzero on CLEAN"
 echo "$CLEAN"
-echo "$CLEAN" | grep -q "judge ok    clean-rule  CLEAN p=0.91" || fail "judge CLEAN missing"
-echo "$CLEAN" | grep -q "enforcing — clean" || fail "clean verdict summary missing"
+echo "$CLEAN" | grep -qE "✓ clean-rule +CLEAN p=0.91" || fail "judge CLEAN missing"
+echo "$CLEAN" | grep -q "gate clean — clean" || fail "clean verdict summary missing"
 
 # a profile with no judge declared is honest about it — UNJUDGED with the
 # cause, never a silent pass; --judge-only skips check rows entirely
 DEVJ=$(koruc "$KORU_INPUT" gate dev --repo "$PWD/scratch" --judge-only 2>&1)
 echo "$DEVJ"
-echo "$DEVJ" | grep -q "UNJUDGED prose-rule"                      || fail "no-judge UNJUDGED missing"
+echo "$DEVJ" | grep -qE "prose-rule +UNJUDGED"                    || fail "no-judge UNJUDGED missing"
 echo "$DEVJ" | grep -q 'declares no "judge"'                      || fail "no-judge cause not named"
 echo "$DEVJ" | grep -q "check ok" && fail "--judge-only ran a check row"
 
