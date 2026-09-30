@@ -79,6 +79,7 @@
 !**/baseline.go
 !**/*.go
 !**/baseline.rs
+!**/Cargo.toml
 !**/COMPILER_FLAGS
 !**/*.c
 !**/koru.json

@@ -10,6 +10,8 @@
 // Just events and taps proving zero-cost observation.
 // ============================================================================
 
+~import std/taps
+
 const std = @import("std");
 
 const MESSAGES: u64 = 10_000_000;
@@ -23,9 +25,11 @@ var sum: u64 = 0;
 
 ~tor count { i: u64 }
 | next u64
+| done
 
 ~proc count|zig {
     if (i >= MESSAGES) {
+        return .done;
     }
     return .{ .next = i };
 }
@@ -62,14 +66,17 @@ var sum: u64 = 0;
 // ============================================================================
 
 // TAP: Observe count, accumulate on "next"
-~count -> * | next v |> accumulate(v.value)
+~tap(count -> *)
+| next n |> accumulate(value: n)
 
 // TAP: Observe count completion, validate
-~count -> * | done |> validate()
+~tap(count -> *)
+| done |> validate()
 
 // ============================================================================
 // Main Flow - Just a simple loop
 // ============================================================================
 
 ~start() |> #loop count(i: 0)
-    | next n |> @loop(i: n.value + 1)
+    | next n |> @loop(i: n + 1)
+    | done |> _

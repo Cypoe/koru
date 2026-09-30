@@ -25,18 +25,15 @@ if ! command -v jq &> /dev/null; then
     exit 0
 fi
 
-# Parse results
+# Parse results (order matches benchmark.sh command-name order)
 GO_TIME=$(jq -r '.results[0].mean' results.json)
 ZIG_TIME=$(jq -r '.results[1].mean' results.json)
-BCHAN_TIME=$(jq -r '.results[2].mean' results.json)
-RUST_TIME=$(jq -r '.results[3].mean' results.json)
-KORU_TIME=$(jq -r '.results[4].mean' results.json)
-TAPS_TIME=$(jq -r '.results[5].mean' results.json)
+RUST_TIME=$(jq -r '.results[2].mean' results.json)
+KORU_TIME=$(jq -r '.results[3].mean' results.json)
+TAPS_TIME=$(jq -r '.results[4].mean' results.json)
 
 # Calculate ratios
 ZIG_VS_GO=$(echo "scale=4; $ZIG_TIME / $GO_TIME" | bc -l)
-BCHAN_VS_GO=$(echo "scale=4; $BCHAN_TIME / $GO_TIME" | bc -l)
-BCHAN_VS_ZIG=$(echo "scale=4; $BCHAN_TIME / $ZIG_TIME" | bc -l)
 RUST_VS_GO=$(echo "scale=4; $RUST_TIME / $GO_TIME" | bc -l)
 RUST_VS_ZIG=$(echo "scale=4; $RUST_TIME / $ZIG_TIME" | bc -l)
 KORU_VS_ZIG=$(echo "scale=4; $KORU_TIME / $ZIG_TIME" | bc -l)
@@ -53,15 +50,12 @@ echo "=========================================="
 echo ""
 echo "Go (channels):        ${GO_TIME}s"
 echo "Zig (MPMC ring):      ${ZIG_TIME}s"
-echo "bchan (MPSC):         ${BCHAN_TIME}s"
 echo "Rust (crossbeam):     ${RUST_TIME}s"
 echo "Koru (events):        ${KORU_TIME}s"
 echo "Koru (taps):          ${TAPS_TIME}s"
 echo ""
 echo "Ratios:"
 echo "  Zig/Go:       ${ZIG_VS_GO}x"
-echo "  bchan/Go:     ${BCHAN_VS_GO}x"
-echo "  bchan/Zig:    ${BCHAN_VS_ZIG}x"
 echo "  Rust/Go:      ${RUST_VS_GO}x"
 echo "  Rust/Zig:     ${RUST_VS_ZIG}x"
 echo "  Koru/Zig:     ${KORU_VS_ZIG}x"
@@ -108,21 +102,6 @@ if (( $(echo "$RUST_VS_ZIG < 0.95" | bc -l) )); then
 elif (( $(echo "$RUST_VS_ZIG > 1.05" | bc -l) )); then
     SLOWDOWN=$(echo "scale=1; ($RUST_VS_ZIG - 1) * 100" | bc -l)
     echo "  ⚠️  Zig is ${SLOWDOWN}% faster than Rust"
-else
-    echo "  ✅ Roughly equal (within 5%)"
-fi
-
-echo ""
-
-# Interpret: bchan vs Zig (MPSC vs MPMC comparison)
-echo "bchan (MPSC) vs Zig (MPMC):"
-if (( $(echo "$BCHAN_VS_ZIG < 0.95" | bc -l) )); then
-    IMPROVEMENT=$(echo "scale=1; (1 - $BCHAN_VS_ZIG) * 100" | bc -l)
-    echo "  🚀 bchan is ${IMPROVEMENT}% FASTER than Zig!"
-    echo "  MPSC pattern shows measurable advantage over MPMC"
-elif (( $(echo "$BCHAN_VS_ZIG > 1.05" | bc -l) )); then
-    SLOWDOWN=$(echo "scale=1; ($BCHAN_VS_ZIG - 1) * 100" | bc -l)
-    echo "  ⚠️  Zig MPMC is ${SLOWDOWN}% faster than bchan MPSC"
 else
     echo "  ✅ Roughly equal (within 5%)"
 fi

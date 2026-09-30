@@ -27,7 +27,11 @@
 # drift — this commit touches only a .claude skill doc; zero src/ files.
 # The residual named is the same documented field-literal idiom.
 clusters=1536
-members=2091
+members=2096
+# Re-pinned in "420_006: MPMC rings-vs-channels green": +5 members of
+# foreign drift in the same documented emitter_test/visitor_emitter_test
+# field-literal residual — this commit touches only test sources, harness
+# scripts, and .gitignore; zero src/ files.
 # Re-pinned in "channel: transit mints refuse auto-discharge": +1 member
 # is the three `getPtr → not_auto_dischargeable` flag sets at the
 # custody-decl seed sites joining the existing flag-set idiom cluster;

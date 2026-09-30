@@ -2,9 +2,11 @@
 // Koru Implementation: Producer/Consumer with MPMC Ring
 // ============================================================================
 // Tests idiomatic Koru concurrent programming:
-// - MPMC ring created in Koru events
-// - Producer spawned via events
-// - Consumer loop expressed as #label/@label jumps
+// - MPMC ring (Vyukov's lock-free algorithm — the same implementation
+//   koru_std.koru_rings.MpmcRing carries and std/rings lowers to)
+// - Producer spawned via std.Thread inside a ~proc host step, sharing the
+//   ring through a *Ring passed tor-to-tor — no generated-name reach
+// - Consumer loop expressed as a #loop/@label jump pair
 // - All control flow visible as event transitions
 //
 // Goal: Prove Koru's abstractions are zero-cost (match Zig baseline)
@@ -13,7 +15,7 @@
 const std = @import("std");
 
 // ============================================================================
-// MPMC Ring Implementation (vendored from beist-rings)
+// MPMC Ring Implementation (vendored — same Vyukov algorithm std/rings emits)
 // ============================================================================
 
 const atomic = std.atomic;
@@ -150,27 +152,28 @@ const MESSAGES: u64 = 10_000_000;
 
     // Detach - we don't need to join
     producer.detach();
-
 }
 
-~tor dequeue { ring: *Ring } -> u64
+~tor dequeue { ring: *Ring }
+| some u64
+| none
 
 ~proc dequeue|zig {
     if (ring.tryDequeue()) |value| {
-        return value;
-    } else {
+        return .{ .some = value };
     }
+    return .none;
 }
 
 ~tor consume-loop { ring: *Ring, sum: u64, received: u64 }
 | continue { sum: u64, received: u64 }
 | done u64
 
-~consume-loop = dequeue(ring): msg |> check-if-done(sum: sum + msg.value, received: received + 1)
+~consume-loop = dequeue(ring)
+| some msg |> check-if-done(sum: sum + msg, received: received + 1)
     | continue s => continue { s.sum, s.received }
-    | done s => done { s.sum }
-| none |> yield-then-continue(sum, received)
-    | continue s => continue { s.sum, s.received }
+    | done s => done s
+| none |> yield-then-continue(sum, received): s => continue { s.sum, s.received }
 
 ~tor check-if-done { sum: u64, received: u64 }
 | continue { sum: u64, received: u64 }
@@ -184,12 +187,11 @@ const MESSAGES: u64 = 10_000_000;
     }
 }
 
-~tor yield-then-continue { sum: u64, received: u64 }
-| continue { sum: u64, received: u64 }
+~tor yield-then-continue { sum: u64, received: u64 } -> { sum: u64, received: u64 }
 
 ~proc yield-then-continue|zig {
     std.Thread.yield() catch {};
-    return .{ .continue = .{ .sum = sum, .received = received } };
+    return .{ .sum = sum, .received = received };
 }
 
 ~tor validate { sum: u64 }
@@ -207,8 +209,6 @@ const MESSAGES: u64 = 10_000_000;
 // Main Flow - Idiomatic Koru Consumer Loop
 // ============================================================================
 
-~create-ring(): r |> spawn-producer(r.ring) |> #loop consume-loop(r.ring, sum: 0, received: 0)
-    | continue s |> @loop(r.ring, s.sum, s.received)
-    | done s |> validate(s.sum)
-        | valid |> _
-        | invalid |> _
+~create-ring(): r |> spawn-producer(ring: r) |> #loop consume-loop(ring: r, sum: 0, received: 0)
+    | continue s |> @loop(ring: r, s.sum, s.received)
+    | done s |> validate(sum: s)
