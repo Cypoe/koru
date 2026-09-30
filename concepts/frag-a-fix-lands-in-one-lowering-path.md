@@ -619,3 +619,57 @@ whose Output union has no such tag. Same construct, two lowering paths, fix
 landed in the one being looked at. The widened claim: anything a lowering
 path *does* — a transform, a diagnostic, a fix — exists only in the path it
 was written in; sibling paths share the surface and none of the substance.
+
+## Third instance — the SAME fix, one driver position over (2026-09-30)
+
+The sharpest instance yet, because it is not a sibling feature that missed
+a fix — it is the *same bug*, fixed hours earlier on the sibling path, with
+the fix commit itself naming the untouched path.
+
+`#label` loops have two driver positions: flow-head (`run = #L tick(...)`)
+and mid-chain fold (`seed(): s |> #loop step(n: s)`). Both share
+`ctx.current_label` as the ambient "what does `.terminal` break" state in
+`emitter_helpers.zig`. 548aae02b set it on the flow-head switch, which made
+a *nested* `.terminal` — the implicit continue of an omitted `| ?else`
+inside a `for` `! each` body — lower to `break :L` and exit the whole loop.
+43d9a380f removed it from the flow-head path and said, in the commit
+message: "the mid-chain fold path keeps its current_label, as before." The
+justification written beside it — "every arm is inside the loop now, so
+`.terminal` -> `break :label` is correct for each" — is true of arm
+TOP-LEVEL terminals and false of terminals one nesting level down, where
+"end this nested chain" is not "exit the fold."
+
+320_171 pins the hole: identical program in both positions, `if` with no
+`else` inside `for ! each` inside the looping arm. Flow-head prints
+`hit 1:2 / hit 2:2 / hit 3:2 / done 3`; mid-chain prints nothing — the
+first `i=1` iteration takes the absent else's `break :loop` and leaves the
+fold before `| done` ever runs. Controls confirm the width: the each-body
+without the `if` is green, and the same `if` *with* an `| else` is green —
+the divergence is keyed on the optional arm's absence, exactly the
+`.terminal`-mints-where-nothing-was-written mechanism the flow-head fix
+described.
+
+What this adds that the earlier instances did not have:
+
+- **The memorial was written in the fix commit itself.** "The mid-chain
+  fold path keeps its current_label, as before" is a past-tense sibling
+  named at the moment of fix — the "suspect a memorial" bullet above, fired
+  from inside the commit message, twenty-four hours before the pin landed.
+  The invariant this belief has been asking for — *when a construct has two
+  lowerings the pair is the unit of work* — was one grep away: `|` a label
+  loop's two drivers into the same nested-terminal probe.
+- **The ambient-state carrier is the boundary.** Neither path calls a
+  "break the loop" function at the nested site; both consult
+  `ctx.current_label`, and each path chooses whether to install it. The
+  drift lives in the install decision, not the `.terminal` arm — two
+  lowering paths that share a mutable context field are two lowerings in
+  the sense this belief means, even though the code they share is five
+  lines of `save/set/defer-restore`.
+- **The fix is depth-shaped, not position-shaped.** Flow-head emits nothing
+  for nested terminals because its arms never need `break :label` — exit is
+  `-> T` return or `continue`. Mid-chain DOES need it at arm top level (an
+  arm ending without `@loop` leaves the fold) and does NOT need it inside
+  spliced sub-constructs. The correct rule is "`.terminal -> break :label`
+  only at fold-arm depth 0", which neither path currently states — one side
+  over-suppresses nothing (correct by accident), the other under-scopes the
+  label (the pin).

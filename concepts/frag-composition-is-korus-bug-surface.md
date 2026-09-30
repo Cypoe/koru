@@ -40,17 +40,28 @@ standing invitation for composition to expose the drift.
 The two failure directions this surface produces:
 - **False reject** — a legal composition rejected (often with a *swallowed* or
   host-level diagnostic, never surfaced at the koru level). The multi-line-`|>`
-  misparse above was this kind, now closed.
+  misparse above was this kind, now closed. Live exemplar (measured 2026-09-30):
+  `330_135` — a record-field obligation *discharged* inside a `for ! each` body
+  is refused `KORU030 'never acquired'`: the auto-discharge inserter's ledger
+  seeds the field debt while the phantom checker's mid-chain continuation block
+  lacks the `seedRecordFieldObligations` twin — one ledger knows the debt, the
+  other walls the consume. The same implemented-twice mechanism as SHAPE002,
+  one layer down in the same file family.
 - **False accept** — a composition silently miscompiled: an invariant each
   component enforces alone goes unchecked once the two are nested, and the bad
-  state leaks silently. This is the more dangerous kind, and the **live**
-  exemplar: `330_098` — an obligation carried in a record field, dropped inside a
-  `for ! each` body, leaks with no KORU030, though both components
-  (`330_096` field-level, `330_053` for-loop escape) catch it alone.
+  state leaks silently. `330_098` was this kind and is now closed (it correctly
+  raises KORU030; measured 2026-09-30). Live exemplar: `320_171` — an omitted
+  `| else` inside a `for ! each` body inside a mid-chain `#loop` fold arm
+  lowers the absent arm's chain-end to `break :loop` and exits the fold with
+  no diagnostic at all. The `43d9a380f` repair fixed the flow-head driver's
+  copy of the ambient `ctx.current_label`; the mid-chain `label_with_invocation`
+  path kept it — the fix was position-shaped where the invariant is
+  depth-shaped.
 
 Evidence lives as runnable pins, referenced by name (never restated here — they
 move): the `670_NESTING_SWEEP` grid; the `220_017/220_020/220_024` multi-line-`|>`
-fix-lock trio (green); the `330_098` false-accept (live). The standing generator
+fix-lock trio (green); the `330_135` false-reject and `320_171` false-accept
+(both live, landed by a challenge-007 replay 2026-09-30). The standing generator
 that farms this surface is `challenges/007_combinatorial_composition.md`; its
 oracle is **compositionality** — if A is legal and B is legal, A∘B is legal and
 means the obvious thing unless a *stated rule* forbids it, in which case the

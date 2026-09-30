@@ -1,0 +1,6 @@
+disposed 0
+n=0
+disposed 1
+n=10
+disposed 2
+n=20

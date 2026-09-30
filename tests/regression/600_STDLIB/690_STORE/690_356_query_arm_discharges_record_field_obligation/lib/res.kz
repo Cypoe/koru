@@ -1,0 +1,20 @@
+// Owned-ptr resource issued as a RECORD FIELD (`{ h: *Handle<owned!>, n }`) —
+// the field-obligation shape 330_096 pins, produced inside a query arm.
+const std = @import("std");
+
+const Handle = struct { n: i32 };
+
+~pub tor make { id: i64 } -> { h: *Handle<owned!>, n: i64 }
+
+~proc make|zig {
+    const h = std.heap.page_allocator.create(Handle) catch unreachable;
+    h.* = .{ .n = @intCast(id) };
+    return .{ .h = h, .n = id * 10 };
+}
+
+~pub tor dispose { h: *Handle<!owned> }
+
+~proc dispose|zig {
+    std.debug.print("disposed {}\n", .{h.n});
+    std.heap.page_allocator.destroy(h);
+}

@@ -1,0 +1,46 @@
+// PIN: an omitted `| else` inside a `for` `! each` body inside a MID-CHAIN
+// `#loop` fold arm must render empty — it must not exit the fold.
+//
+// THE SHAPE: `seed(): s |> #loop step(n: s)` puts the fold in mid-chain
+// position (the spot 210_167 rules legal and holds green for outer
+// bindings), and the `| more` arm carries the 2111 nesting — `for(...)`
+// `! each i |> if(i == 2) | then |> ...` with the optional `| ?else` arm
+// omitted. Every piece is green alone: `| ?else` is optional by
+// declaration and 330_047 pins `! each _ |> if(c) | then |> _`.
+//
+// THE INVARIANT: a `.terminal` step that ends a chain INSIDE a spliced
+// sub-construct (here, the absent else's continue inside an each-handler
+// body) means "end this nested chain", never "exit the fold". Only a
+// `.terminal` at the fold arm's own top level may lower to `break :label`
+// — that one is the designed "arm ends without @loop" exit. The
+// flow-head `#L` driver was repaired for exactly this (43d9a380f — nested
+// terminals emit nothing); this pin holds the sibling driver to the same
+// rule. The indicted machinery is the `ctx.current_label` the mid-chain
+// `label_with_invocation` path in emitter_helpers.zig keeps set across the
+// whole arm switch: a nested `.terminal` reaching it lowers to
+// `break :label`, so the absent else exits the loop on the first
+// non-matching iteration instead of rendering empty.
+//
+// Expected: the else-less `if` skips silently for i=1, prints once per
+// round for i=2, and the fold runs to its `| done` exit.
+~import std/io
+~import std/control
+
+~tor seed {} -> i64
+~proc seed|zig { return 0; }
+
+~tor step { n: i64 }
+| more i64
+| done i64
+
+~proc step|zig {
+    if (n < 3) return .{ .more = n + 1 };
+    return .{ .done = n };
+}
+
+~seed(): s |> #loop step(n: s)
+| more m |> for(1..3)
+    ! each i |> if(i == 2)
+        | then |> std/io:print.ln("hit {{ m:d }}:{{ i:d }}")
+    | done |> @loop(n: m)
+| done d |> std/io:print.ln("done {{ d:d }}")

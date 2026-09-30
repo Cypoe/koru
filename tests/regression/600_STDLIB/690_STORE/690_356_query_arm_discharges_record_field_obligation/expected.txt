@@ -1,0 +1,4 @@
+disposed 7
+n=70
+disposed 8
+n=80

@@ -1,0 +1,7 @@
+a
+b
+hp 5
+mana 2
+a
+b
+hp 7

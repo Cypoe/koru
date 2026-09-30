@@ -1,0 +1,27 @@
+// Record-field obligation DISCHARGED inside a `for ! each` body — the positive
+// sibling of 330_098 (same program with `dispose(r.h)` in place of the drop).
+// 330_082 clause 2: inside a scope you MAY issue obligations and discharge them
+// locally. Each lap issues `{ h: *Handle<owned!>, n }` fresh via `make` and pays
+// `r.h` off through `dispose(r.h)` — legal at flow-head (330_101), and the
+// whole-value form of the same in-loop discharge is already legal (220_021).
+// The store-query sweep arm accepts the identical composition (`dispose(r.h)`
+// under `std/store:query`'s `! query`), so iteration kind is not the obstacle.
+//
+// PINS the two ledgers agreeing inside the each body: the drop sibling 330_098
+// proves the leak scan sees `r.h`'s `<owned!>` there, so the consume path must
+// see it too — `dispose(r.h)` credits the field debt instead of reporting it as
+// never acquired. The seam is phantom_semantic_checker's return-binding
+// recording for a branch arm's chained step: it seeds the whole-value
+// `return_phantom` but not the record-field twin (`seedRecordFieldObligations`)
+// that the flow head, `recordReturnObligationAs`, and auto_discharge_inserter's
+// own continuation-level seeding all run.
+~import std/io
+const std = @import("std");
+const Handle = struct { n: i32 };
+~tor make { id: usize } -> { h: *Handle<owned!>, n: i64 }
+~proc make|zig { const h = std.heap.page_allocator.create(Handle) catch unreachable; h.* = .{ .n = @intCast(id) }; return .{ .h = h, .n = @as(i64, @intCast(id)) * 10 }; }
+~tor dispose { h: *Handle<!owned> }
+~proc dispose|zig { std.debug.print("disposed {}\n", .{h.n}); std.heap.page_allocator.destroy(h); }
+
+~for(0..3)
+! each i |> make(id: i): r |> dispose(r.h) |> std/io:print.ln("n={{ r.n:d }}")
