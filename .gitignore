@@ -91,6 +91,12 @@ koru_std/koru_out
 # `git add -A`.
 /.shell-probe/
 
+# Fuzzer scratch — generated mutants, populations, findings and their build
+# output. Same whitelist hole as .shell-probe: a root dotdir is re-included by
+# `!.*` unless named. The scripts that produce it are tracked; the corpus is
+# per-run and regenerable.
+/.kfuzz/
+
 # Node.js dependencies (tooling only)
 node_modules/
 

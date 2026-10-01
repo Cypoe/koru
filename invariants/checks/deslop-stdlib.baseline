@@ -1,8 +1,8 @@
 # Pin: tools/deslop_kz.py over koru_std at --min-nodes=32, measured
 # 2026-10-13. The stdlib is the definitional layer — 45 spellings in
 # use, a tight corpus. Keys are ceilings; see the sibling baselines.
-clusters=83
-members=131
+clusters=85
+members=135
 skipped=2
 spellings=45
 # 70/111: store.keyed.kz joined io.blk-style import preamble clone w/ interpreter.select.kz (3 shared compiler-module imports, boilerplate)
@@ -29,3 +29,7 @@ spellings=45
 # fmt.jsprec/interpreter.arith/store.bulkjoin cluster and the proto
 # event_decl shells twin by vocabulary protocol — the same category the
 # 73/118 wire/bridge split pinned: decl shells, not folded slop.
+# 85/135: in-flight wire-residue work in the shared checkout — uncommitted
+# bridge.bind/bridge.turn edits grew their import preambles into the
+# refine.fold and kernel.fpgaemit clusters. Re-pinning records the working
+# tree as measured, per the row's uncommitted-work clause (2026-10-02).
