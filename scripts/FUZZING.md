@@ -116,6 +116,26 @@ Measured: gen0 seeds → offspring through g5+; cells hit in-run included
 cells. Diagnostics observed on refused offspring are genuine (KORU002
 missing module, KORU010 mis-indented subflow body).
 
+## Repros — fuzz/repros/
+
+Checked-in findings (the `.kfuzz` originals are gitignored). All measured at
+HEAD: `koruc -c` GREEN on every file; the full pipeline refuses each at
+backend coordination — the layered-acceptance boundary is the finding.
+
+| file | cell | full-build verdict |
+|---|---|---|
+| `branch_arm__obligation__c2511…` | obligation under branch_arm | KORU022 branch 'full' unhandled |
+| `branch_arm__obligation__c3528…` | obligation under branch_arm | KORU022 (variant) |
+| `branch_arm__obligation__c35559…` | obligation under branch_arm | KORU022 (variant) |
+| `if_cond__phantom__c11299…` | phantom under if_cond | KORU021 regex-branch unhandled |
+| `store__phantom__c37258…` | phantom under store | KORU022 |
+| `store__read_lines__c16201…` | read_lines under store | KORU022 |
+| `hit1.k` | obligation under branch_arm (earlier run) | KORU022 |
+
+Open adjudication: correct refusal at the wrong layer, or checker accepting
+what coordination can't cover? The `if_cond__phantom` file pins that the
+disagreement is not one diagnostic — the seam is per-branch coverage.
+
 ## Yield
 TL;DR
 Three corpus-driven fuzzers + a GA driver written in Koru itself. Zero compiler miscompiles found. The real output is four boundary observations + one frontend/backend disagreement — the honest kind of yield for a differential run: mostly "the seams hold," plus places where the checker's acceptance and the backend's acceptance disagree about what a composition means.
