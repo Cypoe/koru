@@ -130,7 +130,7 @@ backend coordination — the layered-acceptance boundary is the finding.
 | `if_cond__phantom__c11299…` | phantom under if_cond | KORU021 regex-branch unhandled |
 | `store__phantom__c37258…` | phantom under store | KORU022 |
 | `store__read_lines__c16201…` | read_lines under store | KORU022 |
-| `hit1.k` | obligation under branch_arm (earlier run) | KORU022 |
+| `branch_arm__obligation__c45793…` | obligation under branch_arm (earlier run) | KORU022 |
 
 Open adjudication: correct refusal at the wrong layer, or checker accepting
 what coordination can't cover? The `if_cond__phantom` file pins that the
