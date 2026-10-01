@@ -412,3 +412,16 @@ test-results/js-scan-slice.json
 friction/corpus.json
 friction/corpus-timing.json
 friction/corpus.md
+
+# sibling-fuzz scratch
+.kfuzz/
+
+# fuzz/ga.k — koruc emits the backend bundle beside the source file
+fuzz/backend.zig
+fuzz/backend_output_emitted.zig
+fuzz/build.zig
+fuzz/build_backend.zig
+fuzz/compiler_env.json
+fuzz/output_emitted.zig
+fuzz/program.ast.json
+fuzz/zig-out/
