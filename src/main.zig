@@ -2031,6 +2031,13 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\    // no a.out. Gated on CompilerEnv.lang so the Zig path below is untouched.
             \\    if (__koru_std.mem.eql(u8, CompilerEnv.lang, "js")) return;
             \\
+            \\    // --deep-check: the koruc-level verdict is already final — every
+            \\    // pass ran, emission succeeded, output_emitted.zig is on disk.
+            \\    // Stage D is native codegen, not a verdict input; a fuzzer
+            \\    // scoring on -c cannot see the refusals that live above this
+            \\    // line (check-flow runs post-transform, backend-only).
+            \\    if (CompilerEnv.hasFlag("deep-check")) return;
+            \\
             \\    // Now compile the emitted code
             \\    // Check for cross-compilation target from build:config
             \\    const build_target = emitter_helpers.getBuildConfig("target");
@@ -4539,6 +4546,11 @@ const usage_header =
     \\Options:
     \\  -o, --output <file>   Output file (default: <input>.zig)
     \\  -c, --check          Check only, don't emit code
+    \\  --deep-check         Full pipeline verdict without native codegen: parse,
+    \\                       transforms, backend passes, and emission all run;
+    \\                       only the final zig build of the emitted program is
+    \\                       skipped. The oracle a fuzzer wants — -c stops at the
+    \\                       frontend and cannot see post-transform refusals.
     \\  --ast-json           Output AST as JSON (for parser tests)
     \\  --ast-canon          Output complete post-parse AST as JSON, trivia-stripped
     \\                       (tree-equality surface for the printer round-trip)
@@ -7050,6 +7062,7 @@ pub fn main() !void {
     var output_file: ?[]const u8 = null;
     var exe_output_name: ?[]const u8 = null;
     var check_only = false;
+    var deep_check = false;
     var use_visitor = false; // Visitor pattern needs more work before becoming default
     var ast_json_mode = false; // Output AST as JSON
     var ast_canon_mode = false; // Output COMPLETE post-parse AST as JSON, trivia-stripped (roundtrip tree-equality surface)
@@ -7082,6 +7095,13 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--check")) {
             check_only = true;
             build_executable = false;
+        } else if (std.mem.eql(u8, arg, "--deep-check")) {
+            // Run the entire compiler pipeline — transforms, backend check-flow,
+            // emission — but skip the final `zig build` of the emitted program.
+            // The flag reaches the backend through compiler_env.json, so cached
+            // and minted backends honour it without a rebuild.
+            deep_check = true;
+            try compiler_config.addFlag("deep-check");
         } else if (std.mem.eql(u8, arg, "--ccp")) {
             ccp_mode = true;
             try compiler_config.addFlag("ccp");
@@ -8876,6 +8896,8 @@ pub fn main() !void {
         const is_js_target = std.mem.eql(u8, compiler_config.lang, "js");
         if (is_js_target) {
             try printStdout(allocator, "✓ Generated output_emitted.js (run with: node output_emitted.js)\n", .{});
+        } else if (deep_check) {
+            try printStdout(allocator, "✓ Deep check passed (emission written; native build skipped)\n", .{});
         } else if (detected_comptime_command) |cmd| {
             // A command run ends with the command, not with Stage D. Report the
             // command that ran.
@@ -8889,7 +8911,7 @@ pub fn main() !void {
         } else |_| {}
 
         // If run command, execute the binary
-        if (run_after_build and !is_js_target) {
+        if (run_after_build and !is_js_target and !deep_check) {
             try printStdout(allocator, "Running {s}...\n\n", .{exe_name});
 
             const exe_path = try std.fs.path.join(allocator, &.{ ".", exe_name });
