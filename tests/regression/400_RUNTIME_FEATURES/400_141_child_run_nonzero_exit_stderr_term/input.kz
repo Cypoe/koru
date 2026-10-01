@@ -1,12 +1,9 @@
-// PINNED BUG (2026-07-02, surfaced by koru-libs docker lift): a koru-compiled
-// proc that runs std.process.Child.run and reads result.term.Exited PANICS
-// ("access of union field 'Exited' while field 'Signal' is active") when the
-// child exits NONZERO with STDERR CONTENT. The identical Zig compiled directly
-// with `zig run` (same Zig 0.15.2) returns term = .{ .Exited = 3 } correctly.
-// Nonzero-exit-with-empty-output and zero-exit-with-content both work through
-// koru; only the nonzero+stderr combination corrupts the Term union tag.
-// Expected (correct) behavior: the failed branch fires and prints the stderr
-// text. Today: runtime panic — this test is an honest red pinning the defect.
+// Pins that a child run with nonzero exit surfaces stderr through the
+// | failed arm: the proc returns result.term.Exited as code and a duped copy
+// of stderr as msg. (The 2026-07-02 pin was a Term union-tag corruption that
+// no longer reproduces; the residual crash was this proc returning a slice
+// its own defer freed — a source-level use-after-free, identical in raw Zig.
+// msg must be duped because the defers below release Child.run's buffers.)
 
 ~import std/io
 const std = @import("std");
@@ -27,7 +24,10 @@ const std = @import("std");
     defer allocator.free(result.stderr);
 
     if (result.term.Exited != 0) {
-        return .{ .failed = .{ .code = @intCast(result.term.Exited), .msg = result.stderr } };
+        const msg = allocator.dupe(u8, result.stderr) catch {
+            return .{ .failed = .{ .code = @intCast(result.term.Exited), .msg = "stderr dupe failed" } };
+        };
+        return .{ .failed = .{ .code = @intCast(result.term.Exited), .msg = msg } };
     }
     return .{ .ok = 0 };
 }

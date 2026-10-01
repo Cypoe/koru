@@ -45,6 +45,15 @@ of the other for a given program. A check with perfect reach still gets its
 later stages hidden by an earlier crash, and widening coverage does nothing
 about it.
 
+Second instance, `400_141` (2026-10-01): the pin named a `Child.run` `Term`
+union-tag corruption, fixed silently upstream between July and October. Behind
+that lid stood a second fault at the same input — the proc returned
+`result.stderr` while its own `defer` freed the page first, a use-after-free
+the compiler never caused (the identical Zig twin segfaults at the same
+`writeAll` site). The pin kept reading "compiler defect" while the live
+failure was test-source UAF — a red's attribution needs re-measuring on every
+visit, not just its pass/fail.
+
 ## Open
 
 Whether anything mechanical helps. A stage that continued past a defect to
