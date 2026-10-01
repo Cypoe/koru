@@ -156,6 +156,7 @@ pub const ErrorCode = enum(u16) {
     KORU203, // Invalid part tag ('.' / '/' / whitespace — tags are single kebab names) or the tag names a directory (module namespace collision, 140_026)
     KORU204, // part declared inside a part file — parts are flat; promote to a directory module when a part outgrows its file (140_028)
     KORU205, // std/refine refusal — malformed field line, non-int bound, or a meet that lands empty (671_*)
+    KORU206, // A `#L` fold where every terminal arm re-dispatches `@L` can never exit — statically infinite (an external fuzzer watched `| done` re-fire 14.5M times; the corpus exit is `->` produce or a `|>` continuation)
 };
 
 pub const SourceLocation = struct {

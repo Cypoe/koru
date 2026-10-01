@@ -295,6 +295,7 @@ pub const FlowChecker = struct {
             for (flow.body.continuations) |*cont| {
                 try self.validateChainCoverage(cont);
             }
+            try self.validateFoldExits(flow);
 
             // Report every offending call site, then fail once.
             if (self.reporter.hasErrors()) {
@@ -1946,6 +1947,164 @@ pub const FlowChecker = struct {
 
         // The head/chain sweep reports every call site before failing, so the
         // bail-out lives with the caller rather than here.
+    }
+
+    /// KORU206 — a `#L` fold whose every terminal arm ends in a `@L`
+    /// self-jump can never exit: the handler is re-dispatched forever.
+    /// (An external fuzzer drove exactly this — an exit arm whose
+    /// continuation was the jump — and watched `| done` re-fire 14.5M
+    /// times.) Effect (`!`) arms are resume callbacks that never reach the
+    /// dispatch switch, so they cannot be the exit. The analysis
+    /// over-approximates "can exit" — anything it cannot prove loops is
+    /// treated as an exit, so it only refuses folds that are statically
+    /// infinite.
+    fn validateFoldExits(self: *FlowChecker, flow: *const ast.Flow) !void {
+        if (flow.pre_label) |label| {
+            try self.checkFoldArmsExit(label, flow.body.continuations, flow.location);
+        }
+        try self.checkNestedFoldAnchors(flow.body.continuations);
+    }
+
+    const FoldPathOutcome = struct {
+        escapes: bool, // a path leaves the fold entirely (jump to an outer label)
+        completes: bool, // a path reaches the position after the fold (arm end / next step / produce)
+    };
+
+    fn checkFoldArmsExit(self: *FlowChecker, label: []const u8, arms: []const ast.Continuation, location: errors.SourceLocation) !void {
+        var saw_terminal_arm = false;
+        var can_exit = false;
+        var inners = std.StringHashMap(void).init(self.allocator);
+        defer inners.deinit();
+        for (arms) |*arm| {
+            if (arm.kind == .effect) continue; // resume callbacks never reach the dispatch switch
+            saw_terminal_arm = true;
+            const r = self.foldContOutcome(arm, label, &inners);
+            if (r.escapes or r.completes) {
+                can_exit = true;
+                break;
+            }
+        }
+        if (saw_terminal_arm and !can_exit) {
+            try self.reporter.addErrorAtLocationWithHint(
+                .KORU206,
+                location,
+                "fold '#{s}' can never exit — every arm jumps back with '@{s}'",
+                .{ label, label },
+                "an arm exits the fold by NOT jumping: end it with `|>` (continue to a step), `->` (produce a value), or `_` (terminate)",
+                .{},
+            );
+        }
+    }
+
+    fn checkNestedFoldAnchors(self: *FlowChecker, conts: []const ast.Continuation) !void {
+        for (conts) |*cont| {
+            if (cont.is_transformed_subtree) continue;
+            if (cont.node) |*n| {
+                switch (n.*) {
+                    .label_with_invocation => |*lwi| {
+                        if (lwi.is_declaration) {
+                            try self.checkFoldArmsExit(lwi.label, cont.continuations, cont.location);
+                        }
+                    },
+                    .conditional => |*cd| for (cd.branches) |*br| {
+                        try self.checkNestedFoldAnchors(br.body);
+                    },
+                    .foreach => |*fe| for (fe.branches) |*br| {
+                        try self.checkNestedFoldAnchors(br.body);
+                    },
+                    .switch_result => |*sr| for (sr.branches) |*br| {
+                        try self.checkNestedFoldAnchors(br.body);
+                    },
+                    else => {},
+                }
+            }
+            try self.checkNestedFoldAnchors(cont.continuations);
+        }
+    }
+
+    fn isFoldJumpTarget(name: []const u8, label: []const u8, inners: *std.StringHashMap(void)) bool {
+        return std.mem.eql(u8, name, label) or inners.contains(name);
+    }
+
+    fn foldContsOutcome(self: *FlowChecker, conts: []const ast.Continuation, label: []const u8, inners: *std.StringHashMap(void)) FoldPathOutcome {
+        var out = FoldPathOutcome{ .escapes = false, .completes = false };
+        for (conts) |*c| {
+            if (c.is_transformed_subtree) {
+                // A grafted subtree is opaque to this walk — assume it can exit
+                // rather than risk refusing a working program.
+                out.escapes = true;
+                out.completes = true;
+                continue;
+            }
+            const r = self.foldContOutcome(c, label, inners);
+            out.escapes = out.escapes or r.escapes;
+            out.completes = out.completes or r.completes;
+        }
+        return out;
+    }
+
+    /// Whether control flowing through `cont` can leave the `#label` fold.
+    /// A jump to `label` (or to an inner fold declared below this point)
+    /// re-dispatches and never exits; a jump to any other label jumps out of
+    /// the fold entirely; anything else — a step, a produce, a terminal —
+    /// either completes the arm (exits) or falls through to the
+    /// continuation's own dispatch.
+    fn foldContOutcome(self: *FlowChecker, cont: *const ast.Continuation, label: []const u8, inners: *std.StringHashMap(void)) FoldPathOutcome {
+        var esc = false;
+        var comp = false;
+        if (cont.node) |*n| {
+            switch (n.*) {
+                .label_jump => |*lj| esc = !isFoldJumpTarget(lj.label, label, inners),
+                .label_apply => |l| esc = !isFoldJumpTarget(l, label, inners),
+                .label_with_invocation => |*lwi| {
+                    if (!lwi.is_declaration) {
+                        esc = !isFoldJumpTarget(lwi.label, label, inners);
+                    } else {
+                        // Nested `#M` anchor: its arms are an inner fold. A jump
+                        // to M loops internally; an M arm that completes exits
+                        // M and continues this arm — an exit of the outer fold.
+                        inners.put(lwi.label, {}) catch {};
+                        defer _ = inners.remove(lwi.label);
+                        const inner = self.foldContsOutcome(cont.continuations, label, inners);
+                        return .{ .escapes = inner.escapes, .completes = inner.escapes or inner.completes };
+                    }
+                },
+                .conditional => |*cd| {
+                    var has_else = false;
+                    for (cd.branches) |*br| {
+                        if (std.mem.eql(u8, br.name, "else")) has_else = true;
+                        const r = self.foldContsOutcome(br.body, label, inners);
+                        esc = esc or r.escapes;
+                        comp = comp or r.completes;
+                    }
+                    if (!has_else) comp = true; // implicit else falls through
+                },
+                .foreach => |*fe| {
+                    // `each` and `done` are not alternatives for exit: `each`
+                    // ending falls into `done` when iteration finishes, so the
+                    // arm exits the fold only if `done` can complete (or there
+                    // is no `done` and the loop end falls through). Either
+                    // body can still JUMP OUT to an outer label — an escape.
+                    var has_done = false;
+                    for (fe.branches) |*br| {
+                        const r = self.foldContsOutcome(br.body, label, inners);
+                        esc = esc or r.escapes;
+                        if (std.mem.eql(u8, br.name, "done")) {
+                            has_done = true;
+                            comp = comp or r.completes;
+                        }
+                    }
+                    if (!has_done) comp = true;
+                },
+                else => comp = true, // leaf step, produce, opaque construct — completes
+            }
+        } else {
+            comp = true;
+        }
+        if (!comp) return .{ .escapes = esc, .completes = false };
+        if (cont.continuations.len == 0) return .{ .escapes = esc, .completes = true };
+        const after = self.foldContsOutcome(cont.continuations, label, inners);
+        return .{ .escapes = esc or after.escapes, .completes = after.completes };
     }
 
     /// Find an event declaration by path
