@@ -1,8 +1,8 @@
 ---
 type: belief
 id: frag-a-compile-only-test-cannot-see-the-artifact
-provenance: cross-compilation stopped working somewhere between 2026-02-13 and 2026-05-04; the only two tests covering std/build:config were COMPILE_ONLY, so nothing in 1,565 tests could move, and three separate artifacts recorded the silence as a compiler gap
-ts: 2026-08-05
+provenance: cross-compilation stopped working somewhere between 2026-02-13 and 2026-05-04; the only two tests covering std/build:config were COMPILE_ONLY, so nothing in 1,565 tests could move, and three separate artifacts recorded the silence as a compiler gap. Evolved 2026-10-01: corpus fuzzing measured a second blindness axis (host-body regions are opaque to `-c`) and a layered-acceptance disagreement (`-c` green, backend coordination red).
+ts: 2026-10-01
 ---
 
 # A COMPILE_ONLY test asserts acceptance, not output — a property living only in the produced artifact is unwitnessed by construction (belief)
@@ -59,6 +59,23 @@ published claim quietly became unreproducible, and the board never flickered.
 - **Suspect this wherever the compiler's output is the product.** Target,
   optimisation mode, stripping, section layout, linked libraries, emitted symbol
   names — all of them live past the boundary `COMPILE_ONLY` draws.
+
+## The blindness is not only downstream — it is also inside the file (2026-10-01)
+
+This fragment's boundary is drawn at the pipeline: `COMPILE_ONLY` stops before
+the artifact. Fuzzing measured a second boundary, perpendicular to it, **inside
+the source file itself**: host-body regions (`proc … |zig`, `|fpga`, `|mlir`)
+are opaque text to the frontend. Koru spliced into them parses nothing, so a
+`-c` verdict over such a splice is vacuous by construction — the first native
+GA run "hit" uncovered composition cells that were all this artifact.
+
+And "acceptance" itself is not one bit at one place. A `-c`-green composition
+— corpus-uncovered, real Koru, no host body — died later at backend
+coordination (`KORU022`). The pipeline has at least two acceptance points and
+they disagree about the same program. Which one is wrong about that program is
+a separate question; the belief-level point is that "it compiles" needs the
+same interrogation as "it is tested": compiles *where in the pipeline, and
+which bytes of the file did that stage read?*
 
 ## Open
 

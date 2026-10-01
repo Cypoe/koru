@@ -1,8 +1,8 @@
 ---
 type: belief
 id: frag-an-oracle-that-samples-cannot-disagree
-provenance: 2026-08-03 — the ECS harness validated cross-implementation equivalence by summing the first sixteen rows in iteration order; widening it to the full corpus took agreeing scenarios from three of ten to nine of ten and exposed three defects in the same run
-ts: 2026-08-03
+provenance: 2026-08-03 — the ECS harness validated cross-implementation equivalence by summing the first sixteen rows in iteration order; widening it to the full corpus took agreeing scenarios from three of ten to nine of ten and exposed three defects in the same run. Evolved 2026-10-01: the fuzzing session found the endpoint case — an emit-diff over a program-independent artifact that cannot disagree by construction.
+ts: 2026-10-01
 ---
 
 # An oracle that samples cannot disagree, and an oracle that cannot disagree is not evidence (belief)
@@ -65,6 +65,24 @@ commutative — integer accumulation, not float, since float addition is not
 associative. Truncating floats into that accumulation is a deliberate trade: it
 tolerates last-bit differences between languages while still catching a missed
 row, a wrong row, or a wrong count.
+
+## The endpoint case — the artifact contains no variable (2026-10-01)
+
+Sampling is one way an oracle loses the ability to disagree; there is a
+stronger one. An oracle built on an artifact that does not contain the quantity
+under test cannot disagree *by construction* — sample size zero, not small.
+
+The sibling-fuzzer's emit-diff was exactly this: `koruc -o` writes a
+program-independent backend driver to the `-o` path, byte-identical for every
+input, so diffing it "verified" nothing for any program ever run through it. It
+reported clean on a changed string literal, which is the bisect frag's sabotage
+check turned inward on the oracle itself: a change that must be visible was
+not, so the artifact under comparison was the wrong one. The real payload
+(`program.ast.json`) landed beside the input file, not at the flag.
+
+The generalization worth carrying: before trusting any differential oracle,
+diff it against a deliberate perturbation and require a diff. An oracle that
+cannot fire is worse than no oracle — it reads as coverage.
 
 ## Open
 
