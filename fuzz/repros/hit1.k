@@ -1,0 +1,21 @@
+// ga-cell: branch_arm__obligation
+// Pins the enclosing-arm claim on plain declared tors — the fold is a
+// language rule, not a std/rings trick. `try-inner` nested under `| ok`
+// produces a void `full` with no arm at its level; the level-1 `| full`
+// is the nearest enclosing same-named arm and must claim it. OWED:
+// today coverage is sibling-level only (KORU022).
+import std/io
+
+pub tor try-inner { n: i64 }
+| ok i64
+| full
+
+try-inner = if(n > 0)
+| then => ok n
+| else => full
+
+try-inner(n: 5)
+| ok v |> try-inner(n: v - 6)
+    | ok w |> std/io:print.ln("inner ok {{ w:d }}")
+     std/store:new(fast, capacity: 2) { *lib/srclib:Src<live!> }
+| full |> std/io:print.ln("outer full")
