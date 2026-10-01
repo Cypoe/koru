@@ -1,0 +1,8 @@
+name: diagnostic-refusal
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a diagnostic appeared or changed what it refuses — a program shape
+  that used to compile is now rejected (or vice versa), on purpose. Not a
+  defect fix underneath an unchanged surface; the refusal IS the change.
