@@ -9,22 +9,40 @@ Regression corpus for all of it: `fuzz/repros/` (seven `-c`-green /
 coordination-red findings + two obligation probes). Runtime scratch stays in
 gitignored `.kfuzz/`.
 
-## 1. Holonomic recurrence gate — ACTIONABLE NOW
+## 1. Holonomic recurrence gate — V0 LANDED
 
-Koru `#L`/`@L` folds whose step is P-recursive get *decidable equality*:
-extract the recurrence, form the difference via the proven closure ops
-(sum/product/integral — Lean-checked in `isar-proofs`, `ISAR.Holonomic*`),
-then check an initial segment bounded by the difference order.
+`scripts/holonomic_gate.py` + fixtures `fuzz/holonomic/`. Koru `#L`/`@L`
+folds whose step is polynomial-in-state get *decidable equality*:
 
-- A certificate names an m-dimensional solution space, not a point —
-  the bounded initial-terms check is the required base case, not a
-  shortcut. Refusal (non-P-recursive step) is first-class output, matching
-  `holonomic_not_closed_under_compose`.
-- Reuses `isar-proofs/scratch/isar_holonomic_closure_algebra.py` (Python
-  kernel) with the Lean modules as the meta-justification. Does **not**
-  need the koru dialect — its encode target is certificates, not ITerms.
-- Missing piece (Lean, ideally): uniqueness-from-initial-conditions for
-  P-recursive sequences — the theorem that justifies the bounded check.
+- Extract: `tor step` params → state tuple; continue-arm `{f: e, …}` →
+  transition map F; guard → loop bound; `#L step(init)` → initial state.
+  Updates restricted to an arithmetic subset (+, -, *, @divTrunc, @mod,
+  @as/@intCast/@intFromBool no-ops); anything else → `REFUSED: <why>`.
+- Certify: undetermined-coefficients fit of `Σ p_i(n)·a_{n+i} = 0`
+  (nullspace of the sample matrix — bounded order/degree search), then
+  verified exactly by one of two paths:
+  - closed form: all updates affine in state → `s_n = Tⁿ·s₀` via sympy
+    symbolic matrix power → certificate residual is an identity in n;
+  - generic-state residual: F^i over a generic state with affine
+    counters pinned to `init + c·n` (catches factorial-style folds
+    where the observed field is multiplicative).
+- Gate: `A ≡ B` iff both sides certify (orders m_A, m_B) AND the exact
+  difference trajectory vanishes on the first `m_A+m_B` iterates plus
+  every index where a leading coefficient is singular. Sum-closure
+  bound — the certificate names an m-dimensional solution space, so the
+  initial-terms check is the required base case, not a shortcut.
+- Verdicts: `CERTIFIED` / `EQUAL` / `NOT-EQUAL` (with concrete iterate
+  witness) / `CANDIDATE` (fitted, unverifiable) /
+  `NOT-FOUND-WITHIN-BOUNDS` / `REFUSED`. `python scripts/holonomic_gate.py
+  selftest` pins 10 verdicts across the fixture corpus — including
+  `sq_incr ≡ sq_direct` (sum-of-odds == squares, proven) and
+  `tri_builtin` (honest CANDIDATE: `@divTrunc` is non-affine).
+- Does **not** need the koru dialect — its encode target is
+  certificates, not ITerms.
+- Still missing (Lean, ideally): uniqueness-from-initial-conditions for
+  P-recursive sequences stated as a theorem — the gate *implements* it;
+  the Lean side would discharge the meta-justification the runtime
+  currently asserts.
 - Fuzzer tie-in: GA-synthesized folds feed the gate → certified
   program synthesis (program + equality certificate, not program + hope).
 
