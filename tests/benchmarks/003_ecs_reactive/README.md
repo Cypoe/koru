@@ -118,6 +118,11 @@ intentionally plain: each binary emits one JSON line per run.
   100k×100 `boids_kaigen` emits sink 597924524 vs native 596765624, and
   ~35.9ms/frame vs 2.9 wasm-simd / 1.58 native — the JS target is a
   correctness surface today, not the float-performance arm.
+  `boids_kaigen_dump` is not a benchmark row — `run.sh` never names it.
+  It runs the same ladder and, after each frame, prints `# f` plus the
+  frame actors (obstacle, both targets) then one `px py pz fx fy fz` line
+  per boid to stdout: a trajectory for visualizations, with the sink still
+  emitted at the end so a replay can prove it drew the real run.
 
 The Zig baseline is not the final Koru implementation. It is the straight-line
 shape Koru should generate for static storage, indexed sparse work, lifecycle

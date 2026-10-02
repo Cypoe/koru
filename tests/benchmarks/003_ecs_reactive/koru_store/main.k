@@ -150,6 +150,7 @@ set-scenario = std/regex:match(a)
 | `boids_fold` _ |> std/store:stored { cfg.scenario: 24, cfg.which: 0 }
 | `boids_kaigen` _ |> std/store:stored { cfg.scenario: 17, cfg.which: 0 }
 | `boids_kaigen_fused` _ |> std/store:stored { cfg.scenario: 18, cfg.which: 0 }
+| `boids_kaigen_dump` _ |> std/store:stored { cfg.scenario: 19, cfg.which: 0 }
 | `boids_phase` _ |> std/store:stored { cfg.scenario: 16, cfg.which: 0 }
 | no-match |> std/store:stored { cfg.scenario: 0, cfg.which: 0 }
 
@@ -781,6 +782,35 @@ tor name-boids-kaigen-fused {}
 name-boids-kaigen-fused = if(cfg.scenario == 18)
 | then |> std/io:print("boids_kaigen_fused")
 
+// --- boids_kaigen_dump -------------------------------------------------------
+//
+// Not a benchmark row — a trajectory emitter. Same ladder, same sink; after
+// each frame it writes `# <frame>` plus the frame actors (obstacle, targets),
+// then one `px py pz fx fy fz` line per boid to stdout. Visualization runs
+// parse this stream; `run.sh` never names the scenario, so the print pass
+// never enters a timed result.
+std/store:new(dumpst) { f: 0[i64] }
+
+tor kdump-positions {}
+kdump-positions = std/store:query(flock)
+! query b |> std/io:print.ln("{{ b.px:f }} {{ b.py:f }} {{ b.pz:f }} {{ b.fx:f }} {{ b.fy:f }} {{ b.fz:f }}")
+
+tor kdump-frame {}
+kdump-frame = std/io:print.ln("# {{ dumpst.f:d }} {{ fr.obx:f }} {{ fr.oby:f }} {{ fr.obz:f }} {{ fr.t0x:f }} {{ fr.t0y:f }} {{ fr.t0z:f }} {{ fr.t1x:f }} {{ fr.t1y:f }} {{ fr.t1z:f }}") |> kdump-positions()
+    |> std/store:stored { dumpst.f: dumpst.f + 1 }
+
+tor s-boids-kaigen-dump {}
+s-boids-kaigen-dump = for(0..@as(usize, @intCast(cfg.frames)))
+    ! each _ |> kboid-frame() |> kdump-frame()
+
+tor run-boids-kaigen-dump {}
+run-boids-kaigen-dump = if(cfg.scenario == 19)
+| then |> s-boids-kaigen-dump()
+
+tor name-boids-kaigen-dump {}
+name-boids-kaigen-dump = if(cfg.scenario == 19)
+| then |> std/io:print("boids_kaigen_dump")
+
 // --- archetype_churn_world --------------------------------------------------
 //
 // One sweep per bevy system, in bevy's chained order. Every sweep MUTATES THE
@@ -1135,7 +1165,7 @@ run-combat = if(cfg.scenario == 26)
 tor run {}
 run = run-dense() |> run-sparse() |> run-query-get() |> run-schedule-empty()
     |> run-spawn() |> run-spawn-batch() |> run-despawn() |> run-add-remove()
-    |> run-fanout() |> run-bevy-strength() |> run-boids() |> run-boids-fused() |> run-boids-f2() |> run-boids-f4() |> run-boids-split() |> run-boids-helpers() |> run-boids-fold() |> run-boids-phase() |> run-churn() |> run-combat() |> run-boids-kaigen() |> run-boids-kaigen-fused()
+    |> run-fanout() |> run-bevy-strength() |> run-boids() |> run-boids-fused() |> run-boids-f2() |> run-boids-f4() |> run-boids-split() |> run-boids-helpers() |> run-boids-fold() |> run-boids-phase() |> run-churn() |> run-combat() |> run-boids-kaigen() |> run-boids-kaigen-fused() |> run-boids-kaigen-dump()
 
 // -------------------------------------------------------------- the checksum
 //
@@ -1297,7 +1327,7 @@ tor emit { ns: i64 }
 emit = std/io:print("{\"impl\":\"koru_store\",\"scenario\":\"")
     |> name-dense() |> name-sparse() |> name-query-get() |> name-schedule-empty()
     |> name-spawn() |> name-spawn-batch() |> name-despawn() |> name-add-remove()
-    |> name-fanout() |> name-bevy-strength() |> name-boids() |> name-boids-fused() |> name-boids-f2() |> name-boids-f4() |> name-boids-split() |> name-boids-helpers() |> name-boids-fold() |> name-boids-phase() |> name-churn() |> name-combat() |> name-boids-kaigen() |> name-boids-kaigen-fused()
+    |> name-fanout() |> name-bevy-strength() |> name-boids() |> name-boids-fused() |> name-boids-f2() |> name-boids-f4() |> name-boids-split() |> name-boids-helpers() |> name-boids-fold() |> name-boids-phase() |> name-churn() |> name-combat() |> name-boids-kaigen() |> name-boids-kaigen-fused() |> name-boids-kaigen-dump()
     |> std/io:print.ln("\",\"entities\":{{ cfg.entities:d }},\"frames\":{{ cfg.frames:d }},\"observers\":{{ cfg.observers:d }},\"elapsed_ns\":{{ ns:d }},\"sink\":{{ acc.sink:d }}}")
 
 // -------------------------------------------------------------------- driver
