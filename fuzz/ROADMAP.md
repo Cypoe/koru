@@ -34,9 +34,19 @@ folds whose step is polynomial-in-state get *decidable equality*:
 - Verdicts: `CERTIFIED` / `EQUAL` / `NOT-EQUAL` (with concrete iterate
   witness) / `CANDIDATE` (fitted, unverifiable) /
   `NOT-FOUND-WITHIN-BOUNDS` / `REFUSED`. `python scripts/holonomic_gate.py
-  selftest` pins 10 verdicts across the fixture corpus — including
-  `sq_incr ≡ sq_direct` (sum-of-odds == squares, proven) and
-  `tri_builtin` (honest CANDIDATE: `@divTrunc` is non-affine).
+  selftest` pins 12 verdicts — including `sq_incr ≡ sq_direct`
+  (sum-of-odds == squares), `sum_desc ≡ sum_desc_commuted` (the 020_028
+  corpus fold vs a commuted twin — GA-style mutation proven identical,
+  bound 2 + singular point n=10), and `tri_builtin` (honest CANDIDATE:
+  `@divTrunc` is non-affine).
+- **Measured coverage (2026-10-02): 1/111 corpus `#`-fold files in-
+  fragment.** The extractor accepts one shape — `=> br {f: e, …}` update
+  records, literal-or-callsite-resolvable init, single comparison guard.
+  The corpus's other folds refuse on arm shape, `for()`-library loops,
+  or parametric init. Widening coverage means more extractor shapes;
+  certified synthesis means a fold-*targeted* expression genome
+  (mutate update arithmetic, gate supplies fitness), not an adapter
+  over the construct-splice GA.
 - Does **not** need the koru dialect — its encode target is
   certificates, not ITerms.
 - Still missing (Lean, ideally): uniqueness-from-initial-conditions for
