@@ -26,6 +26,9 @@ const Scenario = enum {
     // Baseline heap slices, but normalizesafe as selects: isolates the shape
     // from the memory model.
     boids_nsel,
+    // The kaigen-engine variant: flat 8192-bucket spatial hash, first-arrival
+    // merge, unclamped positions. Two arms only (zig + koru_store).
+    boids_kaigen,
 };
 
 const Config = struct {
@@ -1004,6 +1007,321 @@ fn boids(allocator: std.mem.Allocator, entities: usize, frames: usize, elapsed_n
     return world.checksum();
 }
 
+// ----------------------------------------------------------------------------
+// `boids_kaigen` — the Kaigen engine's port of the SAME Unity ECS Boids sample
+// the `boids` scenario carries (kaigen-boids, src/boids/boids.c). Different
+// SHAPE, same constants (cell 8, weights 1/1/2, aversion 30, speed 25):
+//
+//   * the bucket is a FLAT SPATIAL HASH — quantized position mixed into 8192
+//     slots, so distinct cells collide — instead of the exact 32^3 grid;
+//   * the merge resolves nearest target/obstacle from the FIRST-ARRIVING
+//     boid's position in the bucket, not the cell average;
+//   * the heading fallback is the boid's CURRENT forward, not zero; and
+//   * positions are NEVER clamped to the cube.
+//
+// Their engine is closed and the insert is a multithreaded atomic append, so
+// this arm is the sequential canonicalization: sums accumulate at insert in
+// boid order — bit-identical to their merge summing the bounded entry array in
+// arrival order — and `entries[0]` survives as the f0 fields captured when the
+// bucket is empty. The hash is ours (`spatial_hash_3f` is engine-private, not
+// vendored); the oracle is cross-arm agreement, same as combat_world.
+const kg_cells: usize = 8192;
+const kg_cap: i64 = 256;
+
+fn khash(x: f32, y: f32, z: f32) usize {
+    const qx: i64 = @intFromFloat(x / 8.0);
+    const qy: i64 = @intFromFloat(y / 8.0);
+    const qz: i64 = @intFromFloat(z / 8.0);
+    return @intCast(@mod(qx * 73856093 + qy * 19349663 + qz * 83492791, @as(i64, @intCast(kg_cells))));
+}
+
+const KaigenBoids = struct {
+    pos_x: []f32,
+    pos_y: []f32,
+    pos_z: []f32,
+    fwd_x: []f32,
+    fwd_y: []f32,
+    fwd_z: []f32,
+    cell: []usize,
+    bk_count: []i64,
+    bk_ax: []f32,
+    bk_ay: []f32,
+    bk_az: []f32,
+    bk_sx: []f32,
+    bk_sy: []f32,
+    bk_sz: []f32,
+    bk_f0x: []f32,
+    bk_f0y: []f32,
+    bk_f0z: []f32,
+    bk_ti: []i64,
+    bk_od: []f32,
+
+    const dt: f32 = 1.0 / 60.0;
+    const move_dist: f32 = 25.0 * dt;
+    const n_targets = 2;
+    const n_obstacles = 1;
+
+    fn init(allocator: std.mem.Allocator, entities: usize) !KaigenBoids {
+        var world = KaigenBoids{
+            .pos_x = try allocator.alloc(f32, entities),
+            .pos_y = try allocator.alloc(f32, entities),
+            .pos_z = try allocator.alloc(f32, entities),
+            .fwd_x = try allocator.alloc(f32, entities),
+            .fwd_y = try allocator.alloc(f32, entities),
+            .fwd_z = try allocator.alloc(f32, entities),
+            .cell = try allocator.alloc(usize, entities),
+            .bk_count = try allocator.alloc(i64, kg_cells),
+            .bk_ax = try allocator.alloc(f32, kg_cells),
+            .bk_ay = try allocator.alloc(f32, kg_cells),
+            .bk_az = try allocator.alloc(f32, kg_cells),
+            .bk_sx = try allocator.alloc(f32, kg_cells),
+            .bk_sy = try allocator.alloc(f32, kg_cells),
+            .bk_sz = try allocator.alloc(f32, kg_cells),
+            .bk_f0x = try allocator.alloc(f32, kg_cells),
+            .bk_f0y = try allocator.alloc(f32, kg_cells),
+            .bk_f0z = try allocator.alloc(f32, kg_cells),
+            .bk_ti = try allocator.alloc(i64, kg_cells),
+            .bk_od = try allocator.alloc(f32, kg_cells),
+        };
+        for (0..entities) |i| {
+            world.pos_x[i] = @floatFromInt(i % 256);
+            world.pos_y[i] = @floatFromInt((i / 256) % 256);
+            world.pos_z[i] = @floatFromInt((i / 65536) % 256);
+            const forward = normalizesafe(
+                @as(f32, @floatFromInt(i % 13)) - 6.0,
+                @as(f32, @floatFromInt(i % 17)) - 8.0,
+                @as(f32, @floatFromInt(i % 7)) - 3.0,
+            );
+            world.fwd_x[i] = forward.x;
+            world.fwd_y[i] = forward.y;
+            world.fwd_z[i] = forward.z;
+            world.cell[i] = 0;
+        }
+        return world;
+    }
+
+    fn deinit(self: *KaigenBoids, allocator: std.mem.Allocator) void {
+        allocator.free(self.pos_x);
+        allocator.free(self.pos_y);
+        allocator.free(self.pos_z);
+        allocator.free(self.fwd_x);
+        allocator.free(self.fwd_y);
+        allocator.free(self.fwd_z);
+        allocator.free(self.cell);
+        allocator.free(self.bk_count);
+        allocator.free(self.bk_ax);
+        allocator.free(self.bk_ay);
+        allocator.free(self.bk_az);
+        allocator.free(self.bk_sx);
+        allocator.free(self.bk_sy);
+        allocator.free(self.bk_sz);
+        allocator.free(self.bk_f0x);
+        allocator.free(self.bk_f0y);
+        allocator.free(self.bk_f0z);
+        allocator.free(self.bk_ti);
+        allocator.free(self.bk_od);
+    }
+
+    fn run(self: *KaigenBoids, frames: usize) void {
+        for (0..frames) |frame| {
+            const targets = [n_targets]Vec3{
+                .{ .x = @floatFromInt((frame * 3) % 256), .y = 128.0, .z = @floatFromInt((frame * 5) % 256) },
+                .{ .x = @floatFromInt((frame * 7) % 256), .y = 160.0, .z = @floatFromInt((frame * 11) % 256) },
+            };
+            const obstacles = [n_obstacles]Vec3{
+                .{ .x = @floatFromInt((frame * 13) % 256), .y = 128.0, .z = @floatFromInt((frame * 17) % 256) },
+            };
+
+            // Phase 1: clear. Every bucket, unconditionally — same contract
+            // shape as the DOTS arm's cell clear.
+            for (0..kg_cells) |c| {
+                self.bk_count[c] = 0;
+                self.bk_ax[c] = 0;
+                self.bk_ay[c] = 0;
+                self.bk_az[c] = 0;
+                self.bk_sx[c] = 0;
+                self.bk_sy[c] = 0;
+                self.bk_sz[c] = 0;
+                self.bk_f0x[c] = 0;
+                self.bk_f0y[c] = 0;
+                self.bk_f0z[c] = 0;
+                self.bk_ti[c] = 0;
+                self.bk_od[c] = 0;
+            }
+
+            // Phase 2: hash + insert, in boid insertion order. Their engine
+            // atomic-appends entries and sums them in a second pass; sequential
+            // accumulation in arrival order is bit-identical, so this folds
+            // both. count grows past the cap (theirs does — the atomic claim
+            // is unconditional); sums and f0 are capped like the entry array.
+            for (0..self.pos_x.len) |i| {
+                const idx = khash(self.pos_x[i], self.pos_y[i], self.pos_z[i]);
+                self.cell[i] = idx;
+                const slot = self.bk_count[idx];
+                if (slot < kg_cap) {
+                    if (slot == 0) {
+                        self.bk_f0x[idx] = self.pos_x[i];
+                        self.bk_f0y[idx] = self.pos_y[i];
+                        self.bk_f0z[idx] = self.pos_z[i];
+                    }
+                    self.bk_ax[idx] += self.fwd_x[i];
+                    self.bk_ay[idx] += self.fwd_y[i];
+                    self.bk_az[idx] += self.fwd_z[i];
+                    self.bk_sx[idx] += self.pos_x[i];
+                    self.bk_sy[idx] += self.pos_y[i];
+                    self.bk_sz[idx] += self.pos_z[i];
+                }
+                self.bk_count[idx] = slot + 1;
+            }
+
+            // Phase 3: merge, per occupied bucket. Their MergeCells-equivalent
+            // takes entries[0] — the first-arriving boid — as the bucket's
+            // representative position, not the cell average. argmin ties go
+            // to the lower index.
+            for (0..kg_cells) |c| {
+                const count = self.bk_count[c];
+                if (count <= 0) continue;
+                const fx = self.bk_f0x[c];
+                const fy = self.bk_f0y[c];
+                const fz = self.bk_f0z[c];
+
+                var nearest_target: i64 = 0;
+                var nearest_target_dist = lengthsq(targets[0].x - fx, targets[0].y - fy, targets[0].z - fz);
+                for (1..n_targets) |t| {
+                    const dist = lengthsq(targets[t].x - fx, targets[t].y - fy, targets[t].z - fz);
+                    if (dist < nearest_target_dist) {
+                        nearest_target_dist = dist;
+                        nearest_target = @intCast(t);
+                    }
+                }
+
+                var nearest_obstacle_dist = lengthsq(obstacles[0].x - fx, obstacles[0].y - fy, obstacles[0].z - fz);
+                for (1..n_obstacles) |o| {
+                    const dist = lengthsq(obstacles[o].x - fx, obstacles[o].y - fy, obstacles[o].z - fz);
+                    if (dist < nearest_obstacle_dist) nearest_obstacle_dist = dist;
+                }
+
+                self.bk_ti[c] = nearest_target;
+                self.bk_od[c] = @sqrt(nearest_obstacle_dist);
+            }
+
+            // Phase 4: steer, in boid insertion order. Kaigen's math, not
+            // DOTS': threshold on the LENGTH at 1e-4 (not lengthsq at
+            // flt_min_normal), means via inv_count multiply, the aggregate
+            // normalize falls back to the current forward, and no position
+            // clamp.
+            for (0..self.pos_x.len) |i| {
+                const idx = self.cell[i];
+                const px = self.pos_x[i];
+                const py = self.pos_y[i];
+                const pz = self.pos_z[i];
+                const fx = self.fwd_x[i];
+                const fy = self.fwd_y[i];
+                const fz = self.fwd_z[i];
+
+                const raw_count = self.bk_count[idx];
+                const n: i64 = if (raw_count > kg_cap) kg_cap else raw_count;
+                const ncount: i64 = if (n > 0) n else 1;
+                // count == 0 cannot happen here (the boid inserted itself),
+                // but the kaigen arithmetic still picks self as its own
+                // neighborhood in that case — ax=fx, sx=px — which leaves
+                // both deltas zero; the guardless form agrees.
+                const inv_count: f32 = 1.0 / @as(f32, @floatFromInt(ncount));
+                const nf: f32 = @floatFromInt(ncount);
+
+                const a_dx = self.bk_ax[idx] * inv_count - fx;
+                const a_dy = self.bk_ay[idx] * inv_count - fy;
+                const a_dz = self.bk_az[idx] * inv_count - fz;
+                const a_len = @sqrt(a_dx * a_dx + a_dy * a_dy + a_dz * a_dz);
+                const ar_x = if (a_len > 0.0001) a_dx * (1.0 / a_len) else 0;
+                const ar_y = if (a_len > 0.0001) a_dy * (1.0 / a_len) else 0;
+                const ar_z = if (a_len > 0.0001) a_dz * (1.0 / a_len) else 0;
+
+                const s_dx = px * nf - self.bk_sx[idx];
+                const s_dy = py * nf - self.bk_sy[idx];
+                const s_dz = pz * nf - self.bk_sz[idx];
+                const s_len = @sqrt(s_dx * s_dx + s_dy * s_dy + s_dz * s_dz);
+                const sr_x = if (s_len > 0.0001) s_dx * (1.0 / s_len) else 0;
+                const sr_y = if (s_len > 0.0001) s_dy * (1.0 / s_len) else 0;
+                const sr_z = if (s_len > 0.0001) s_dz * (1.0 / s_len) else 0;
+
+                const tgt = targets[@as(usize, @intCast(self.bk_ti[idx]))];
+                const t_dx = tgt.x - px;
+                const t_dy = tgt.y - py;
+                const t_dz = tgt.z - pz;
+                const t_len = @sqrt(t_dx * t_dx + t_dy * t_dy + t_dz * t_dz);
+                const tr_x = if (t_len > 0.0001) t_dx * (2.0 / t_len) else 0;
+                const tr_y = if (t_len > 0.0001) t_dy * (2.0 / t_len) else 0;
+                const tr_z = if (t_len > 0.0001) t_dz * (2.0 / t_len) else 0;
+
+                const ob = obstacles[0];
+                const o_dx = px - ob.x;
+                const o_dy = py - ob.y;
+                const o_dz = pz - ob.z;
+                const o_len = @sqrt(o_dx * o_dx + o_dy * o_dy + o_dz * o_dz);
+                const av_x = if (o_len > 0.0001) (ob.x + o_dx * (1.0 / o_len) * 30.0) - px else 0;
+                const av_y = if (o_len > 0.0001) (ob.y + o_dy * (1.0 / o_len) * 30.0) - py else 0;
+                const av_z = if (o_len > 0.0001) (ob.z + o_dz * (1.0 / o_len) * 30.0) - pz else 0;
+
+                var nx = ar_x + sr_x + tr_x;
+                var ny = ar_y + sr_y + tr_y;
+                var nz = ar_z + sr_z + tr_z;
+                const n_len = @sqrt(nx * nx + ny * ny + nz * nz);
+                if (n_len > 0.0001) {
+                    nx /= n_len;
+                    ny /= n_len;
+                    nz /= n_len;
+                } else {
+                    nx = fx;
+                    ny = fy;
+                    nz = fz;
+                }
+
+                const avoid = (self.bk_od[idx] - 30.0) < 0.0;
+                const tf_x = if (avoid) av_x else nx;
+                const tf_y = if (avoid) av_y else ny;
+                const tf_z = if (avoid) av_z else nz;
+
+                var hx = fx + dt * (tf_x - fx);
+                var hy = fy + dt * (tf_y - fy);
+                var hz = fz + dt * (tf_z - fz);
+                const h_len = @sqrt(hx * hx + hy * hy + hz * hz);
+                if (h_len > 0.0001) {
+                    hx /= h_len;
+                    hy /= h_len;
+                    hz /= h_len;
+                }
+
+                self.fwd_x[i] = hx;
+                self.fwd_y[i] = hy;
+                self.fwd_z[i] = hz;
+                self.pos_x[i] = px + hx * move_dist;
+                self.pos_y[i] = py + hy * move_dist;
+                self.pos_z[i] = pz + hz * move_dist;
+            }
+        }
+    }
+
+    fn checksum(self: *const KaigenBoids) u64 {
+        var sink: u64 = 0;
+        for (0..self.pos_x.len) |i| {
+            sink +%= @as(u64, @intFromFloat(@abs(self.pos_x[i]))) *% 31;
+            sink +%= @as(u64, @intFromFloat(@abs(self.pos_y[i]))) *% 17;
+            sink +%= @as(u64, @intFromFloat(@abs(self.pos_z[i]))) *% 13;
+        }
+        return sink;
+    }
+};
+
+fn boidsKaigen(allocator: std.mem.Allocator, entities: usize, frames: usize, elapsed_ns: *u64) !u64 {
+    var world = try KaigenBoids.init(allocator, entities);
+    defer world.deinit(allocator);
+    const start = std.time.nanoTimestamp();
+    world.run(frames);
+    elapsed_ns.* = @intCast(std.time.nanoTimestamp() - start);
+    return world.checksum();
+}
+
 fn parseArgs(allocator: std.mem.Allocator) !Config {
     var config = Config{};
     var args = try std.process.argsWithAllocator(allocator);
@@ -1024,6 +1342,10 @@ fn parseArgs(allocator: std.mem.Allocator) !Config {
             }
             if (std.mem.eql(u8, value, "boids_nsel")) {
                 config.scenario = .boids_nsel;
+                continue;
+            }
+            if (std.mem.eql(u8, value, "boids_kaigen")) {
+                config.scenario = .boids_kaigen;
                 continue;
             }
             if (std.mem.eql(u8, value, "boids_static_nsel")) {
@@ -1083,9 +1405,10 @@ pub fn main() !void {
         .boids_nsel => try boids(allocator, config.entities, config.frames, &boids_elapsed_ns, true, false, true),
         .boids_static => try boidsStatic(config.entities, config.frames, &boids_elapsed_ns, false),
         .boids_static_nsel => try boidsStatic(config.entities, config.frames, &boids_elapsed_ns, true),
+        .boids_kaigen => try boidsKaigen(allocator, config.entities, config.frames, &boids_elapsed_ns),
     };
     const elapsed: u64 = switch (config.scenario) {
-        .boids, .boids_phase, .boids_split_hs, .boids_static, .boids_static_nsel, .boids_nsel => boids_elapsed_ns,
+        .boids, .boids_phase, .boids_split_hs, .boids_static, .boids_static_nsel, .boids_nsel, .boids_kaigen => boids_elapsed_ns,
         else => @intCast(std.time.nanoTimestamp() - start),
     };
 
@@ -1107,6 +1430,7 @@ pub fn main() !void {
         .boids_static => "boids_static",
         .boids_static_nsel => "boids_static_nsel",
         .boids_nsel => "boids_nsel",
+        .boids_kaigen => "boids_kaigen",
     };
     var stdout_buffer: [1024]u8 = undefined;
     var stdout_file = std.fs.File.stdout().writerStreaming(&stdout_buffer);

@@ -9,3 +9,4 @@ build_backend.zig
 compiler_env.zig
 output_emitted.zig
 program.ast.json
+output_emitted.js

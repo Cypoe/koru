@@ -90,6 +90,34 @@ intentionally plain: each binary emits one JSON line per run.
   each occupied cell's nearest target and obstacle, then steer every boid from
   its cell's aggregate. DOTS' own constants, unscaled. This is the first
   scenario in the harness that needs a SPATIAL INDEX.
+- `boids_kaigen`: the Kaigen engine's port of the SAME Unity sample
+  (kaigen-boids, `src/boids/boids.c`). Same constants, different shape — a
+  flat 8192-bucket spatial hash (distinct cells collide) instead of the exact
+  32³ grid, a bounded 256-entry cap per bucket, nearest target/obstacle
+  resolved from the FIRST-ARRIVING boid in the bucket rather than the cell
+  average, and positions never clamped. Their insert is a multithreaded
+  atomic append; both arms here canonicalize it as sequential insertion in
+  boid order (bit-identical aggregate sums), and the hash function is ours —
+  `spatial_hash_3f` is engine-private. Two arms (zig_striped + koru_store):
+  the engine is closed beta, so there is no third-party source to anchor
+  against and no claim about their renderer or runtime.
+  `boids_kaigen_fused` is the same ladder with the steer blocks CHAINED in
+  one query body (the `boids_fused` mechanism — a single emitted sweep),
+  plus `flock` capacity raised to the kaigen demo's 1M ceiling so
+  `--entities` can reach it. The emitted program also builds for
+  `wasm32-wasi` (`zig build-exe output_emitted.zig -target wasm32-wasi
+  -mcpu=generic+simd128 -O ReleaseFast -lc`) and runs under node:wasi with
+  identical sinks — the same algorithm on the same wasm tier a browser
+  would run it on.
+  The `--lang=js` emit also runs (`node output_emitted.js`): integer and
+  control-flow scenarios are bit-identical to native (spawn, add_remove,
+  fanout, dense, sparse, combat_world, bevy_strength_world, query_get,
+  despawn, spawn_batch), but the float scenarios DRIFT — JS numbers are
+  doubles while the koru fields are f32, and the emitter's expression
+  lowering is not type-directed (no `Math.fround` discipline). At
+  100k×100 `boids_kaigen` emits sink 597924524 vs native 596765624, and
+  ~35.9ms/frame vs 2.9 wasm-simd / 1.58 native — the JS target is a
+  correctness surface today, not the float-performance arm.
 
 The Zig baseline is not the final Koru implementation. It is the straight-line
 shape Koru should generate for static storage, indexed sparse work, lifecycle

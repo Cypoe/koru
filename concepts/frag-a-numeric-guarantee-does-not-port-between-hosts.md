@@ -66,3 +66,17 @@ Relates to [[frag-a-fix-lands-in-one-lowering-path]] and
 arithmetic rather than control flow, and the reason it hid longer is that the
 two lowerings here were not merely both present, they were accompanied by prose
 asserting they were equivalent.
+
+**Second measured instance (2026-10-02), and the porting surface is wider than
+the first instance implied.** The handle case lived inside a deliberate
+encoding — packed fields, a multiplication, a boundary someone had to think
+about. The new instance needs no packing at all: an `f32` store column on the
+JS lane is a double, so every float workload drifts where every integer
+workload is bit-exact. Measured on the 003_ecs_reactive board under
+`--lang=js`: all ten integer/control-flow scenarios reproduce the native sink
+exactly; both f32 scenarios diverge (`boids_kaigen` 100k×100: 597924524 vs
+596765624). The porting question "what does the arithmetic promise" now
+includes *storage width*, and on JS the promise silently upgrades. The honest
+fix is type-directed `Math.fround` discipline in the lowerer — unbuilt — so
+the JS lane is a correctness surface for integer programs only, and float
+sinks across targets remain a named gap, not a bug report.

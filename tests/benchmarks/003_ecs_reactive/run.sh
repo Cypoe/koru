@@ -13,7 +13,12 @@ zig build-exe "$ROOT/zig_striped/src/main.zig" -O ReleaseFast -femit-bin="$ZIG_B
 
 SCENARIOS="spawn spawn_batch despawn add_remove query_get dense sparse schedule_empty fanout combat_world bevy_strength_world boids"
 
-for scenario in $SCENARIOS; do
+# Two-arm scenarios (zig_striped + koru_store only): kaigen's engine is closed
+# beta, so `boids_kaigen` has no bevy/legion/flecs/unity source to anchor
+# against — the koru arm oracles against the zig extraction.
+SCENARIOS_TWO_ARM="boids_kaigen"
+
+for scenario in $SCENARIOS $SCENARIOS_TWO_ARM; do
   frames=100
   if [ "$scenario" = "schedule_empty" ]; then
     frames=100000
@@ -49,7 +54,7 @@ if [ -x "$KORUC" ]; then
     || { printf '%s\n' "$build_log" >&2; exit 1; }
   printf '%s\n' "$build_log" | grep -q '(ReleaseFast)' \
     || { printf '%s\n' "$build_log" >&2; echo "koruc did not report ReleaseFast — refusing to time" >&2; exit 1; }
-  for scenario in $SCENARIOS; do
+  for scenario in $SCENARIOS $SCENARIOS_TWO_ARM; do
     frames=100
     if [ "$scenario" = "schedule_empty" ]; then
       frames=100000

@@ -70,7 +70,8 @@ std/store:new(orbs, capacity: 25000) { px: f32, py: f32, phase: f32, radius: f32
 // expression-local binding, so an intermediate that Zig and Rust hold in a
 // register lives in a column here and the stages chain through it. The
 // arithmetic is identical, so the checksum still has to match bit-for-bit.
-std/store:new(flock, capacity: 100000) { px: f32, py: f32, pz: f32, fx: f32, fy: f32, fz: f32, cell: 0[i64], tfx: 0.0[f32], tfy: 0.0[f32], tfz: 0.0[f32], nhx: 0.0[f32], nhy: 0.0[f32], nhz: 0.0[f32] }
+// capacity 1_000_000 is the kaigen demo's ceiling — the scale ladder needs it.
+std/store:new(flock, capacity: 1000000) { px: f32, py: f32, pz: f32, fx: f32, fy: f32, fz: f32, cell: 0[i64], tfx: 0.0[f32], tfy: 0.0[f32], tfz: 0.0[f32], nhx: 0.0[f32], nhy: 0.0[f32], nhz: 0.0[f32] }
 
 // The two target fish and the one shark, moved on a sawtooth. DOTS key-frames
 // them; a benchmark needs them deterministic, and a sawtooth avoids libm
@@ -147,6 +148,8 @@ set-scenario = std/regex:match(a)
 | `boids_split` _ |> std/store:stored { cfg.scenario: 15, cfg.which: 0 }
 | `boids_helpers` _ |> std/store:stored { cfg.scenario: 23, cfg.which: 0 }
 | `boids_fold` _ |> std/store:stored { cfg.scenario: 24, cfg.which: 0 }
+| `boids_kaigen` _ |> std/store:stored { cfg.scenario: 17, cfg.which: 0 }
+| `boids_kaigen_fused` _ |> std/store:stored { cfg.scenario: 18, cfg.which: 0 }
 | `boids_phase` _ |> std/store:stored { cfg.scenario: 16, cfg.which: 0 }
 | no-match |> std/store:stored { cfg.scenario: 0, cfg.which: 0 }
 
@@ -641,6 +644,143 @@ tor read-flock {}
 read-flock = std/store:query(flock)
 ! query b |> std/store:stored { acc.sink: acc.sink + @as(i64, @intFromFloat(@abs(b.px))) * 31 + @as(i64, @intFromFloat(@abs(b.py))) * 17 + @as(i64, @intFromFloat(@abs(b.pz))) * 13 }
 
+// --- boids_kaigen ----------------------------------------------------------
+//
+// The Kaigen engine's port of the SAME Unity ECS Boids sample `boids` carries
+// (kaigen-boids, src/boids/boids.c — the engine itself is closed beta, so this
+// is the sequential canonicalization of their published sim, not their binary).
+// Different SHAPE, same constants (cell 8, weights 1/1/2, aversion 30, speed 25):
+//
+//   * buckets are a FLAT SPATIAL HASH — quantized position mixed mod 8192, so
+//     distinct cells COLLIDE — instead of the exact 32^3 grid;
+//   * the merge resolves nearest target/obstacle from the FIRST-ARRIVING boid
+//     in the bucket (their `entries[0]`), not the cell average — f0* captures it;
+//   * the aggregate-normalize fallback is the boid's CURRENT forward, not 0;
+//   * positions are NEVER clamped to the cube.
+//
+// Their insert is a multithreaded atomic append into a bounded 256-entry array
+// per bucket, summed in a second pass; sequential accumulate-at-insert in boid
+// order is bit-identical, so the caps here guard `count < 256` exactly like
+// their `slot < MAX_PER_BUCKET`. count grows past the cap, as theirs does.
+// The hash is ours (their `spatial_hash_3f` is engine-private); the oracle is
+// cross-arm agreement with zig_striped's `boids_kaigen`, same as combat_world.
+//
+// TWO STORE-SHAPED WINS the DOTS port could not take: the merge pass writes
+// `iv`/`nf` (1/n and n) ONCE per occupied bucket instead of respelling them
+// per boid per component — free per-cell hoisting, because the sweep writes
+// the cell it stands on — and the flat hash needs no per-axis clamp, so the
+// hash pass is one store write instead of three.
+[unsafe(bounds)]std/grid:new(kcells, size: 8192) { count: 0[i64], ax: 0.0[f32], ay: 0.0[f32], az: 0.0[f32], sx: 0.0[f32], sy: 0.0[f32], sz: 0.0[f32], f0x: 0.0[f32], f0y: 0.0[f32], f0z: 0.0[f32], ti: 0[i64], od: 0.0[f32], iv: 0.0[f32], nf: 0.0[f32] }
+
+tor kgrid-clear {}
+kgrid-clear = std/grid:sweep(kcells)
+! sweep c |> std/grid:stored { c.count: 0, c.ax: 0.0, c.ay: 0.0, c.az: 0.0, c.sx: 0.0, c.sy: 0.0, c.sz: 0.0, c.f0x: 0.0, c.f0y: 0.0, c.f0z: 0.0, c.ti: 0, c.od: 0.0, c.iv: 0.0, c.nf: 0.0 }
+
+// Flat hash, ours: quantize by cell size, multiply-mix, mod the bucket count.
+// Positions are unclamped here — @mod on a negative mix still lands in-range.
+tor khash {}
+khash = std/store:query(flock)
+! query b |> std/store:stored { b.cell: @mod(@as(i64, @intFromFloat(b.px / 8.0)) * 73856093 + @as(i64, @intFromFloat(b.py / 8.0)) * 19349663 + @as(i64, @intFromFloat(b.pz / 8.0)) * 83492791, 8192) }
+
+// Scatter in insertion order. The `count` write is LAST so every guard reads
+// the pre-block count (entries land in written order, 690_126): f0 captures
+// the first arrival, the sums cap at 256 exactly like the entry array.
+tor kscatter {}
+kscatter = std/store:query(flock)
+! query b |> std/grid:stored { kcells[b.cell].f0x: if (kcells[b.cell].count == 0) b.px else kcells[b.cell].f0x, kcells[b.cell].f0y: if (kcells[b.cell].count == 0) b.py else kcells[b.cell].f0y, kcells[b.cell].f0z: if (kcells[b.cell].count == 0) b.pz else kcells[b.cell].f0z, kcells[b.cell].ax: if (kcells[b.cell].count < 256) kcells[b.cell].ax + b.fx else kcells[b.cell].ax, kcells[b.cell].ay: if (kcells[b.cell].count < 256) kcells[b.cell].ay + b.fy else kcells[b.cell].ay, kcells[b.cell].az: if (kcells[b.cell].count < 256) kcells[b.cell].az + b.fz else kcells[b.cell].az, kcells[b.cell].sx: if (kcells[b.cell].count < 256) kcells[b.cell].sx + b.px else kcells[b.cell].sx, kcells[b.cell].sy: if (kcells[b.cell].count < 256) kcells[b.cell].sy + b.py else kcells[b.cell].sy, kcells[b.cell].sz: if (kcells[b.cell].count < 256) kcells[b.cell].sz + b.pz else kcells[b.cell].sz, kcells[b.cell].count: kcells[b.cell].count + 1 }
+
+// Merge, per occupied bucket: nearest target and obstacle distance from the
+// FIRST arrival (f0), plus the iv/nf pair the steer reads back for free.
+tor kmerge {}
+kmerge = std/grid:sweep(kcells)
+! sweep c when c.count > 0 |> std/grid:stored { c.ti: if (((fr.t1x - c.f0x) * (fr.t1x - c.f0x) + (fr.t1y - c.f0y) * (fr.t1y - c.f0y) + (fr.t1z - c.f0z) * (fr.t1z - c.f0z)) < ((fr.t0x - c.f0x) * (fr.t0x - c.f0x) + (fr.t0y - c.f0y) * (fr.t0y - c.f0y) + (fr.t0z - c.f0z) * (fr.t0z - c.f0z))) 1 else 0, c.od: @sqrt((fr.obx - c.f0x) * (fr.obx - c.f0x) + (fr.oby - c.f0y) * (fr.oby - c.f0y) + (fr.obz - c.f0z) * (fr.obz - c.f0z)), c.iv: 1.0 / @as(f32, @floatFromInt(@min(c.count, 256))), c.nf: @as(f32, @floatFromInt(@min(c.count, 256))) }
+
+// Steer, in the same stage ladder the DOTS port is forced into. Kaigen's
+// guards threshold the LENGTH at 1e-4 (not lengthsq at flt_min_normal).
+tor ksteer-align {}
+ksteer-align = std/store:query(flock)
+! query b |> std/store:stored { b.tfx: if (@sqrt((kcells[b.cell].ax * kcells[b.cell].iv - b.fx) * (kcells[b.cell].ax * kcells[b.cell].iv - b.fx) + (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) * (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) + (kcells[b.cell].az * kcells[b.cell].iv - b.fz) * (kcells[b.cell].az * kcells[b.cell].iv - b.fz)) > 0.0001) (kcells[b.cell].ax * kcells[b.cell].iv - b.fx) * (1.0 / @sqrt((kcells[b.cell].ax * kcells[b.cell].iv - b.fx) * (kcells[b.cell].ax * kcells[b.cell].iv - b.fx) + (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) * (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) + (kcells[b.cell].az * kcells[b.cell].iv - b.fz) * (kcells[b.cell].az * kcells[b.cell].iv - b.fz))) else 0.0, b.tfy: if (@sqrt((kcells[b.cell].ax * kcells[b.cell].iv - b.fx) * (kcells[b.cell].ax * kcells[b.cell].iv - b.fx) + (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) * (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) + (kcells[b.cell].az * kcells[b.cell].iv - b.fz) * (kcells[b.cell].az * kcells[b.cell].iv - b.fz)) > 0.0001) (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) * (1.0 / @sqrt((kcells[b.cell].ax * kcells[b.cell].iv - b.fx) * (kcells[b.cell].ax * kcells[b.cell].iv - b.fx) + (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) * (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) + (kcells[b.cell].az * kcells[b.cell].iv - b.fz) * (kcells[b.cell].az * kcells[b.cell].iv - b.fz))) else 0.0, b.tfz: if (@sqrt((kcells[b.cell].ax * kcells[b.cell].iv - b.fx) * (kcells[b.cell].ax * kcells[b.cell].iv - b.fx) + (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) * (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) + (kcells[b.cell].az * kcells[b.cell].iv - b.fz) * (kcells[b.cell].az * kcells[b.cell].iv - b.fz)) > 0.0001) (kcells[b.cell].az * kcells[b.cell].iv - b.fz) * (1.0 / @sqrt((kcells[b.cell].ax * kcells[b.cell].iv - b.fx) * (kcells[b.cell].ax * kcells[b.cell].iv - b.fx) + (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) * (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) + (kcells[b.cell].az * kcells[b.cell].iv - b.fz) * (kcells[b.cell].az * kcells[b.cell].iv - b.fz))) else 0.0 }
+
+tor ksteer-sep {}
+ksteer-sep = std/store:query(flock)
+! query b |> std/store:stored { b.tfx: b.tfx + if (@sqrt((b.px * kcells[b.cell].nf - kcells[b.cell].sx) * (b.px * kcells[b.cell].nf - kcells[b.cell].sx) + (b.py * kcells[b.cell].nf - kcells[b.cell].sy) * (b.py * kcells[b.cell].nf - kcells[b.cell].sy) + (b.pz * kcells[b.cell].nf - kcells[b.cell].sz) * (b.pz * kcells[b.cell].nf - kcells[b.cell].sz)) > 0.0001) (b.px * kcells[b.cell].nf - kcells[b.cell].sx) * (1.0 / @sqrt((b.px * kcells[b.cell].nf - kcells[b.cell].sx) * (b.px * kcells[b.cell].nf - kcells[b.cell].sx) + (b.py * kcells[b.cell].nf - kcells[b.cell].sy) * (b.py * kcells[b.cell].nf - kcells[b.cell].sy) + (b.pz * kcells[b.cell].nf - kcells[b.cell].sz) * (b.pz * kcells[b.cell].nf - kcells[b.cell].sz))) else 0.0, b.tfy: b.tfy + if (@sqrt((b.px * kcells[b.cell].nf - kcells[b.cell].sx) * (b.px * kcells[b.cell].nf - kcells[b.cell].sx) + (b.py * kcells[b.cell].nf - kcells[b.cell].sy) * (b.py * kcells[b.cell].nf - kcells[b.cell].sy) + (b.pz * kcells[b.cell].nf - kcells[b.cell].sz) * (b.pz * kcells[b.cell].nf - kcells[b.cell].sz)) > 0.0001) (b.py * kcells[b.cell].nf - kcells[b.cell].sy) * (1.0 / @sqrt((b.px * kcells[b.cell].nf - kcells[b.cell].sx) * (b.px * kcells[b.cell].nf - kcells[b.cell].sx) + (b.py * kcells[b.cell].nf - kcells[b.cell].sy) * (b.py * kcells[b.cell].nf - kcells[b.cell].sy) + (b.pz * kcells[b.cell].nf - kcells[b.cell].sz) * (b.pz * kcells[b.cell].nf - kcells[b.cell].sz))) else 0.0, b.tfz: b.tfz + if (@sqrt((b.px * kcells[b.cell].nf - kcells[b.cell].sx) * (b.px * kcells[b.cell].nf - kcells[b.cell].sx) + (b.py * kcells[b.cell].nf - kcells[b.cell].sy) * (b.py * kcells[b.cell].nf - kcells[b.cell].sy) + (b.pz * kcells[b.cell].nf - kcells[b.cell].sz) * (b.pz * kcells[b.cell].nf - kcells[b.cell].sz)) > 0.0001) (b.pz * kcells[b.cell].nf - kcells[b.cell].sz) * (1.0 / @sqrt((b.px * kcells[b.cell].nf - kcells[b.cell].sx) * (b.px * kcells[b.cell].nf - kcells[b.cell].sx) + (b.py * kcells[b.cell].nf - kcells[b.cell].sy) * (b.py * kcells[b.cell].nf - kcells[b.cell].sy) + (b.pz * kcells[b.cell].nf - kcells[b.cell].sz) * (b.pz * kcells[b.cell].nf - kcells[b.cell].sz))) else 0.0 }
+
+tor ksteer-tgt {}
+ksteer-tgt = std/store:query(flock)
+! query b |> std/store:stored { b.tfx: b.tfx + if (@sqrt(((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) * ((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) + ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) * ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) + ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz) * ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz)) > 0.0001) ((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) * (2.0 / @sqrt(((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) * ((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) + ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) * ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) + ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz) * ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz))) else 0.0, b.tfy: b.tfy + if (@sqrt(((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) * ((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) + ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) * ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) + ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz) * ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz)) > 0.0001) ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) * (2.0 / @sqrt(((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) * ((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) + ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) * ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) + ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz) * ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz))) else 0.0, b.tfz: b.tfz + if (@sqrt(((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) * ((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) + ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) * ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) + ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz) * ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz)) > 0.0001) ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz) * (2.0 / @sqrt(((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) * ((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) + ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) * ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) + ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz) * ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz))) else 0.0 }
+
+// Aggregate normalize — DIVIDE, not multiply-by-inverse, and the fallback is
+// the current forward (kaigen's `nx = fx`), not zero. Reads tf*/f*, writes nh*.
+tor ksteer-norm {}
+ksteer-norm = std/store:query(flock)
+! query b |> std/store:stored { b.nhx: if (@sqrt((b.tfx) * (b.tfx) + (b.tfy) * (b.tfy) + (b.tfz) * (b.tfz)) > 0.0001) b.tfx / @sqrt((b.tfx) * (b.tfx) + (b.tfy) * (b.tfy) + (b.tfz) * (b.tfz)) else b.fx, b.nhy: if (@sqrt((b.tfx) * (b.tfx) + (b.tfy) * (b.tfy) + (b.tfz) * (b.tfz)) > 0.0001) b.tfy / @sqrt((b.tfx) * (b.tfx) + (b.tfy) * (b.tfy) + (b.tfz) * (b.tfz)) else b.fy, b.nhz: if (@sqrt((b.tfx) * (b.tfx) + (b.tfy) * (b.tfy) + (b.tfz) * (b.tfz)) > 0.0001) b.tfz / @sqrt((b.tfx) * (b.tfx) + (b.tfy) * (b.tfy) + (b.tfz) * (b.tfz)) else b.fz }
+
+// Obstacle override: the bucket's distance decides, the vector is per-boid.
+tor ksteer-avoid {}
+ksteer-avoid = std/store:query(flock)
+! query b |> std/store:stored { b.nhx: if ((kcells[b.cell].od - 30.0) < 0.0) if (@sqrt((b.px - fr.obx) * (b.px - fr.obx) + (b.py - fr.oby) * (b.py - fr.oby) + (b.pz - fr.obz) * (b.pz - fr.obz)) > 0.0001) ((fr.obx + (b.px - fr.obx) * (1.0 / @sqrt((b.px - fr.obx) * (b.px - fr.obx) + (b.py - fr.oby) * (b.py - fr.oby) + (b.pz - fr.obz) * (b.pz - fr.obz))) * 30.0) - b.px) else 0.0 else b.nhx, b.nhy: if ((kcells[b.cell].od - 30.0) < 0.0) if (@sqrt((b.px - fr.obx) * (b.px - fr.obx) + (b.py - fr.oby) * (b.py - fr.oby) + (b.pz - fr.obz) * (b.pz - fr.obz)) > 0.0001) ((fr.oby + (b.py - fr.oby) * (1.0 / @sqrt((b.px - fr.obx) * (b.px - fr.obx) + (b.py - fr.oby) * (b.py - fr.oby) + (b.pz - fr.obz) * (b.pz - fr.obz))) * 30.0) - b.py) else 0.0 else b.nhy, b.nhz: if ((kcells[b.cell].od - 30.0) < 0.0) if (@sqrt((b.px - fr.obx) * (b.px - fr.obx) + (b.py - fr.oby) * (b.py - fr.oby) + (b.pz - fr.obz) * (b.pz - fr.obz)) > 0.0001) ((fr.obz + (b.pz - fr.obz) * (1.0 / @sqrt((b.px - fr.obx) * (b.px - fr.obx) + (b.py - fr.oby) * (b.py - fr.oby) + (b.pz - fr.obz) * (b.pz - fr.obz))) * 30.0) - b.pz) else 0.0 else b.nhz }
+
+// Heading integrate + normalize — with NO else: h stays as computed when it
+// is too small to normalize (kaigen normalizes only under the same guard).
+tor ksteer-head {}
+ksteer-head = std/store:query(flock)
+! query b |> std/store:stored { b.tfx: if (@sqrt((b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) * (b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) + (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) * (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) + (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz)) * (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz))) > 0.0001) (b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) / @sqrt((b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) * (b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) + (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) * (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) + (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz)) * (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz))) else (b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)), b.tfy: if (@sqrt((b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) * (b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) + (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) * (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) + (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz)) * (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz))) > 0.0001) (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) / @sqrt((b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) * (b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) + (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) * (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) + (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz)) * (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz))) else (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)), b.tfz: if (@sqrt((b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) * (b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) + (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) * (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) + (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz)) * (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz))) > 0.0001) (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz)) / @sqrt((b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) * (b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) + (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) * (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) + (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz)) * (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz))) else (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz)) }
+
+tor ksteer-move {}
+ksteer-move = std/store:query(flock)
+! query b |> std/store:stored { b.fx: b.tfx, b.fy: b.tfy, b.fz: b.tfz, b.px: b.px + b.tfx * (25.0 * @as(f32, 1.0 / 60.0)), b.py: b.py + b.tfy * (25.0 * @as(f32, 1.0 / 60.0)), b.pz: b.pz + b.tfz * (25.0 * @as(f32, 1.0 / 60.0)) }
+
+tor kboid-frame {}
+kboid-frame = frame-actors() |> kgrid-clear() |> khash() |> kscatter() |> kmerge()
+    |> ksteer-align() |> ksteer-sep() |> ksteer-tgt() |> ksteer-norm()
+    |> ksteer-avoid() |> ksteer-head() |> ksteer-move()
+
+tor s-boids-kaigen {}
+s-boids-kaigen = for(0..@as(usize, @intCast(cfg.frames)))
+    ! each _ |> kboid-frame()
+
+tor run-boids-kaigen {}
+run-boids-kaigen = if(cfg.scenario == 17)
+| then |> s-boids-kaigen()
+
+tor name-boids-kaigen {}
+name-boids-kaigen = if(cfg.scenario == 17)
+| then |> std/io:print("boids_kaigen")
+
+
+// --- boids_kaigen_fused ------------------------------------------------------
+//
+// The same ladder, expressed the way `boids_fused` expresses it: the stored
+// blocks CHAIN inside one `! query b |>` body, which the emitter lowers to a
+// single sweep (each row takes the blocks in order, written-order semantics —
+// so nh* sees the summed tf*, tf* sees the post-avoid nh*). One flock pass for
+// the whole steer instead of seven. Same expressions, same sink.
+tor ksteer-fused {}
+ksteer-fused = std/store:query(flock)
+! query b |> std/store:stored { b.tfx: if (@sqrt((kcells[b.cell].ax * kcells[b.cell].iv - b.fx) * (kcells[b.cell].ax * kcells[b.cell].iv - b.fx) + (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) * (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) + (kcells[b.cell].az * kcells[b.cell].iv - b.fz) * (kcells[b.cell].az * kcells[b.cell].iv - b.fz)) > 0.0001) (kcells[b.cell].ax * kcells[b.cell].iv - b.fx) * (1.0 / @sqrt((kcells[b.cell].ax * kcells[b.cell].iv - b.fx) * (kcells[b.cell].ax * kcells[b.cell].iv - b.fx) + (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) * (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) + (kcells[b.cell].az * kcells[b.cell].iv - b.fz) * (kcells[b.cell].az * kcells[b.cell].iv - b.fz))) else 0.0, b.tfy: if (@sqrt((kcells[b.cell].ax * kcells[b.cell].iv - b.fx) * (kcells[b.cell].ax * kcells[b.cell].iv - b.fx) + (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) * (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) + (kcells[b.cell].az * kcells[b.cell].iv - b.fz) * (kcells[b.cell].az * kcells[b.cell].iv - b.fz)) > 0.0001) (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) * (1.0 / @sqrt((kcells[b.cell].ax * kcells[b.cell].iv - b.fx) * (kcells[b.cell].ax * kcells[b.cell].iv - b.fx) + (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) * (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) + (kcells[b.cell].az * kcells[b.cell].iv - b.fz) * (kcells[b.cell].az * kcells[b.cell].iv - b.fz))) else 0.0, b.tfz: if (@sqrt((kcells[b.cell].ax * kcells[b.cell].iv - b.fx) * (kcells[b.cell].ax * kcells[b.cell].iv - b.fx) + (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) * (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) + (kcells[b.cell].az * kcells[b.cell].iv - b.fz) * (kcells[b.cell].az * kcells[b.cell].iv - b.fz)) > 0.0001) (kcells[b.cell].az * kcells[b.cell].iv - b.fz) * (1.0 / @sqrt((kcells[b.cell].ax * kcells[b.cell].iv - b.fx) * (kcells[b.cell].ax * kcells[b.cell].iv - b.fx) + (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) * (kcells[b.cell].ay * kcells[b.cell].iv - b.fy) + (kcells[b.cell].az * kcells[b.cell].iv - b.fz) * (kcells[b.cell].az * kcells[b.cell].iv - b.fz))) else 0.0 }
+    |> std/store:stored { b.tfx: b.tfx + if (@sqrt((b.px * kcells[b.cell].nf - kcells[b.cell].sx) * (b.px * kcells[b.cell].nf - kcells[b.cell].sx) + (b.py * kcells[b.cell].nf - kcells[b.cell].sy) * (b.py * kcells[b.cell].nf - kcells[b.cell].sy) + (b.pz * kcells[b.cell].nf - kcells[b.cell].sz) * (b.pz * kcells[b.cell].nf - kcells[b.cell].sz)) > 0.0001) (b.px * kcells[b.cell].nf - kcells[b.cell].sx) * (1.0 / @sqrt((b.px * kcells[b.cell].nf - kcells[b.cell].sx) * (b.px * kcells[b.cell].nf - kcells[b.cell].sx) + (b.py * kcells[b.cell].nf - kcells[b.cell].sy) * (b.py * kcells[b.cell].nf - kcells[b.cell].sy) + (b.pz * kcells[b.cell].nf - kcells[b.cell].sz) * (b.pz * kcells[b.cell].nf - kcells[b.cell].sz))) else 0.0, b.tfy: b.tfy + if (@sqrt((b.px * kcells[b.cell].nf - kcells[b.cell].sx) * (b.px * kcells[b.cell].nf - kcells[b.cell].sx) + (b.py * kcells[b.cell].nf - kcells[b.cell].sy) * (b.py * kcells[b.cell].nf - kcells[b.cell].sy) + (b.pz * kcells[b.cell].nf - kcells[b.cell].sz) * (b.pz * kcells[b.cell].nf - kcells[b.cell].sz)) > 0.0001) (b.py * kcells[b.cell].nf - kcells[b.cell].sy) * (1.0 / @sqrt((b.px * kcells[b.cell].nf - kcells[b.cell].sx) * (b.px * kcells[b.cell].nf - kcells[b.cell].sx) + (b.py * kcells[b.cell].nf - kcells[b.cell].sy) * (b.py * kcells[b.cell].nf - kcells[b.cell].sy) + (b.pz * kcells[b.cell].nf - kcells[b.cell].sz) * (b.pz * kcells[b.cell].nf - kcells[b.cell].sz))) else 0.0, b.tfz: b.tfz + if (@sqrt((b.px * kcells[b.cell].nf - kcells[b.cell].sx) * (b.px * kcells[b.cell].nf - kcells[b.cell].sx) + (b.py * kcells[b.cell].nf - kcells[b.cell].sy) * (b.py * kcells[b.cell].nf - kcells[b.cell].sy) + (b.pz * kcells[b.cell].nf - kcells[b.cell].sz) * (b.pz * kcells[b.cell].nf - kcells[b.cell].sz)) > 0.0001) (b.pz * kcells[b.cell].nf - kcells[b.cell].sz) * (1.0 / @sqrt((b.px * kcells[b.cell].nf - kcells[b.cell].sx) * (b.px * kcells[b.cell].nf - kcells[b.cell].sx) + (b.py * kcells[b.cell].nf - kcells[b.cell].sy) * (b.py * kcells[b.cell].nf - kcells[b.cell].sy) + (b.pz * kcells[b.cell].nf - kcells[b.cell].sz) * (b.pz * kcells[b.cell].nf - kcells[b.cell].sz))) else 0.0 }
+    |> std/store:stored { b.tfx: b.tfx + if (@sqrt(((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) * ((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) + ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) * ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) + ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz) * ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz)) > 0.0001) ((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) * (2.0 / @sqrt(((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) * ((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) + ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) * ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) + ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz) * ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz))) else 0.0, b.tfy: b.tfy + if (@sqrt(((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) * ((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) + ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) * ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) + ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz) * ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz)) > 0.0001) ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) * (2.0 / @sqrt(((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) * ((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) + ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) * ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) + ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz) * ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz))) else 0.0, b.tfz: b.tfz + if (@sqrt(((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) * ((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) + ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) * ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) + ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz) * ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz)) > 0.0001) ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz) * (2.0 / @sqrt(((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) * ((if (kcells[b.cell].ti == 0) fr.t0x else fr.t1x) - b.px) + ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) * ((if (kcells[b.cell].ti == 0) fr.t0y else fr.t1y) - b.py) + ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz) * ((if (kcells[b.cell].ti == 0) fr.t0z else fr.t1z) - b.pz))) else 0.0 }
+    |> std/store:stored { b.nhx: if (@sqrt((b.tfx) * (b.tfx) + (b.tfy) * (b.tfy) + (b.tfz) * (b.tfz)) > 0.0001) b.tfx / @sqrt((b.tfx) * (b.tfx) + (b.tfy) * (b.tfy) + (b.tfz) * (b.tfz)) else b.fx, b.nhy: if (@sqrt((b.tfx) * (b.tfx) + (b.tfy) * (b.tfy) + (b.tfz) * (b.tfz)) > 0.0001) b.tfy / @sqrt((b.tfx) * (b.tfx) + (b.tfy) * (b.tfy) + (b.tfz) * (b.tfz)) else b.fy, b.nhz: if (@sqrt((b.tfx) * (b.tfx) + (b.tfy) * (b.tfy) + (b.tfz) * (b.tfz)) > 0.0001) b.tfz / @sqrt((b.tfx) * (b.tfx) + (b.tfy) * (b.tfy) + (b.tfz) * (b.tfz)) else b.fz }
+    |> std/store:stored { b.nhx: if ((kcells[b.cell].od - 30.0) < 0.0) if (@sqrt((b.px - fr.obx) * (b.px - fr.obx) + (b.py - fr.oby) * (b.py - fr.oby) + (b.pz - fr.obz) * (b.pz - fr.obz)) > 0.0001) ((fr.obx + (b.px - fr.obx) * (1.0 / @sqrt((b.px - fr.obx) * (b.px - fr.obx) + (b.py - fr.oby) * (b.py - fr.oby) + (b.pz - fr.obz) * (b.pz - fr.obz))) * 30.0) - b.px) else 0.0 else b.nhx, b.nhy: if ((kcells[b.cell].od - 30.0) < 0.0) if (@sqrt((b.px - fr.obx) * (b.px - fr.obx) + (b.py - fr.oby) * (b.py - fr.oby) + (b.pz - fr.obz) * (b.pz - fr.obz)) > 0.0001) ((fr.oby + (b.py - fr.oby) * (1.0 / @sqrt((b.px - fr.obx) * (b.px - fr.obx) + (b.py - fr.oby) * (b.py - fr.oby) + (b.pz - fr.obz) * (b.pz - fr.obz))) * 30.0) - b.py) else 0.0 else b.nhy, b.nhz: if ((kcells[b.cell].od - 30.0) < 0.0) if (@sqrt((b.px - fr.obx) * (b.px - fr.obx) + (b.py - fr.oby) * (b.py - fr.oby) + (b.pz - fr.obz) * (b.pz - fr.obz)) > 0.0001) ((fr.obz + (b.pz - fr.obz) * (1.0 / @sqrt((b.px - fr.obx) * (b.px - fr.obx) + (b.py - fr.oby) * (b.py - fr.oby) + (b.pz - fr.obz) * (b.pz - fr.obz))) * 30.0) - b.pz) else 0.0 else b.nhz }
+    |> std/store:stored { b.tfx: if (@sqrt((b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) * (b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) + (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) * (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) + (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz)) * (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz))) > 0.0001) (b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) / @sqrt((b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) * (b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) + (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) * (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) + (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz)) * (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz))) else (b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)), b.tfy: if (@sqrt((b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) * (b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) + (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) * (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) + (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz)) * (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz))) > 0.0001) (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) / @sqrt((b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) * (b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) + (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) * (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) + (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz)) * (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz))) else (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)), b.tfz: if (@sqrt((b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) * (b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) + (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) * (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) + (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz)) * (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz))) > 0.0001) (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz)) / @sqrt((b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) * (b.fx + @as(f32, 1.0 / 60.0) * (b.nhx - b.fx)) + (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) * (b.fy + @as(f32, 1.0 / 60.0) * (b.nhy - b.fy)) + (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz)) * (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz))) else (b.fz + @as(f32, 1.0 / 60.0) * (b.nhz - b.fz)) }
+    |> std/store:stored { b.fx: b.tfx, b.fy: b.tfy, b.fz: b.tfz, b.px: b.px + b.tfx * (25.0 * @as(f32, 1.0 / 60.0)), b.py: b.py + b.tfy * (25.0 * @as(f32, 1.0 / 60.0)), b.pz: b.pz + b.tfz * (25.0 * @as(f32, 1.0 / 60.0)) }
+
+tor kboid-frame-fused {}
+kboid-frame-fused = frame-actors() |> kgrid-clear() |> khash() |> kscatter() |> kmerge()
+    |> ksteer-fused()
+
+tor s-boids-kaigen-fused {}
+s-boids-kaigen-fused = for(0..@as(usize, @intCast(cfg.frames)))
+    ! each _ |> kboid-frame-fused()
+
+tor run-boids-kaigen-fused {}
+run-boids-kaigen-fused = if(cfg.scenario == 18)
+| then |> s-boids-kaigen-fused()
+
+tor name-boids-kaigen-fused {}
+name-boids-kaigen-fused = if(cfg.scenario == 18)
+| then |> std/io:print("boids_kaigen_fused")
+
 // --- archetype_churn_world --------------------------------------------------
 //
 // One sweep per bevy system, in bevy's chained order. Every sweep MUTATES THE
@@ -995,7 +1135,7 @@ run-combat = if(cfg.scenario == 26)
 tor run {}
 run = run-dense() |> run-sparse() |> run-query-get() |> run-schedule-empty()
     |> run-spawn() |> run-spawn-batch() |> run-despawn() |> run-add-remove()
-    |> run-fanout() |> run-bevy-strength() |> run-boids() |> run-boids-fused() |> run-boids-f2() |> run-boids-f4() |> run-boids-split() |> run-boids-helpers() |> run-boids-fold() |> run-boids-phase() |> run-churn() |> run-combat()
+    |> run-fanout() |> run-bevy-strength() |> run-boids() |> run-boids-fused() |> run-boids-f2() |> run-boids-f4() |> run-boids-split() |> run-boids-helpers() |> run-boids-fold() |> run-boids-phase() |> run-churn() |> run-combat() |> run-boids-kaigen() |> run-boids-kaigen-fused()
 
 // -------------------------------------------------------------- the checksum
 //
@@ -1157,7 +1297,7 @@ tor emit { ns: i64 }
 emit = std/io:print("{\"impl\":\"koru_store\",\"scenario\":\"")
     |> name-dense() |> name-sparse() |> name-query-get() |> name-schedule-empty()
     |> name-spawn() |> name-spawn-batch() |> name-despawn() |> name-add-remove()
-    |> name-fanout() |> name-bevy-strength() |> name-boids() |> name-boids-fused() |> name-boids-f2() |> name-boids-f4() |> name-boids-split() |> name-boids-helpers() |> name-boids-fold() |> name-boids-phase() |> name-churn() |> name-combat()
+    |> name-fanout() |> name-bevy-strength() |> name-boids() |> name-boids-fused() |> name-boids-f2() |> name-boids-f4() |> name-boids-split() |> name-boids-helpers() |> name-boids-fold() |> name-boids-phase() |> name-churn() |> name-combat() |> name-boids-kaigen() |> name-boids-kaigen-fused()
     |> std/io:print.ln("\",\"entities\":{{ cfg.entities:d }},\"frames\":{{ cfg.frames:d }},\"observers\":{{ cfg.observers:d }},\"elapsed_ns\":{{ ns:d }},\"sink\":{{ acc.sink:d }}}")
 
 // -------------------------------------------------------------------- driver
