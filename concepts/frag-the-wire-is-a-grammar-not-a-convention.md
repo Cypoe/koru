@@ -138,10 +138,18 @@ no-example bullet — honest, and visible if it ever matters.
 2026-09-30 — the gate still refuses, but refusal is now classified, not
 flat. Live smoke against the airline scope showed models spell the
 observer channel's argument as bare prose every time — `note(text: I see
-my mistake...)`, `note: <prose>` — and the strict gate was right to
-refuse and wrong to count it: the item was prose wearing the channel's
-costume, so it binds as observer residue (captured, teachable, no strike)
-rather than a wire failure. The same measurement surfaced the boundary
+my mistake...)`, `note: <prose>` — and the gate was wrong to count it:
+the item was prose wearing the channel's costume, so it binds as observer
+residue (captured, teachable, no strike) rather than a wire failure.
+Re-read on 2026-10-02: those spellings were not failed quoting — the
+models were inferring `text:` is a text-typed position. The wire's value
+grammar is meant to be directed by the declared field type (`name<x>`
+already proves a declared type changes what a position admits), so
+`text: Source`/`Expression`-style decls — plain `name: Type` spellings
+like `var: string` — are the mechanism the misspellings were voting for;
+the flat head-arg validator is bootstrap scaffolding, not the design.
+
+The same measurement surfaced the boundary
 case the item-as-unit rule missed: `note(...)say(...)` on one line is
 one item, and the malformed note was swallowing a well-formed call into
 its residue string — the model's "my say() was treated as residue" was
