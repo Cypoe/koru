@@ -136,6 +136,23 @@ Open adjudication: correct refusal at the wrong layer, or checker accepting
 what coordination can't cover? The `if_cond__phantom` file pins that the
 disagreement is not one diagnostic — the seam is per-branch coverage.
 
+### Obligation-through-loops probes (hand-authored, `LIMITATION 1` shape)
+
+`phantom_semantic_checker.zig` admits per-loop obligation ownership is not
+SCC-scoped: nested label-folds carrying an outer obligation through an inner
+back-edge are unpinned. These probes measure it:
+
+| file | shape | verdict |
+|---|---|---|
+| `probe_nested_obligation.kz` | inner fold back-edges while outer `<owned!>` is live-ambient | compiles + runs correct (`n=2`, no leak) |
+| `probe_nested_consume.kz` | inner fold *consumes* the outer obligation, both back-edges re-feed it | **KORU030** use-after-discharge at coordination, both `@` sites |
+
+The hostile variant is caught per-binding even without SCC ownership — the
+residual hole candidates are conditional-consume (join-point discharge state)
+and borrow escape into a store. These are the baseline seeds for an
+obligation-scoped fuzzer (mutations: move discharge across an `! each` /
+`@`-edge / `[@scope]` boundary).
+
 ## Yield
 TL;DR
 Three corpus-driven fuzzers + a GA driver written in Koru itself. Zero compiler miscompiles found. The real output is four boundary observations + one frontend/backend disagreement — the honest kind of yield for a differential run: mostly "the seams hold," plus places where the checker's acceptance and the backend's acceptance disagree about what a composition means.

@@ -1,0 +1,53 @@
+// PROBE: LIMITATION 1, hostile variant — the inner fold CONSUMES the outer
+// loop's carried obligation. `inner` takes h as <!owned> and destroys it;
+// the outer back-edge then re-feeds the same binding on iteration 2 — a
+// textbook use-after-discharge. Sound check requires rejecting this.
+const std = @import("std");
+const Handle = struct { n: i32 };
+
+~tor make {} -> *Handle<owned!>
+~proc make|zig {
+    const h = std.heap.page_allocator.create(Handle) catch unreachable;
+    h.* = .{ .n = 0 };
+    return h;
+}
+
+// Inner step: consumes the outer obligation outright.
+~tor inner { i: i64, h: *Handle<!owned> }
+| more i64
+| fin i64
+~proc inner|zig {
+    if (i < 2) {
+        return .{ .more = i + 1 };
+    }
+    std.heap.page_allocator.destroy(h);
+    return .{ .fin = i };
+}
+
+~tor report { n: i64 }
+~proc report|zig {
+    std.debug.print("n={}\n", .{n});
+}
+
+~tor step-outer { h: *Handle<!owned> }
+| again *Handle<owned!>
+| done i64
+~proc step-outer|zig {
+    h.n += 1;
+    if (h.n < 2) {
+        return .{ .again = h };
+    }
+    const n = h.n;
+    std.heap.page_allocator.destroy(h);
+    return .{ .done = n };
+}
+
+~tor spin { h: *Handle<!owned> } -> i64
+
+~spin = #outer step-outer(h)
+| again hh |> #inner inner(i: 0, h: hh)
+    | more m |> @inner(i: m, h: hh)   // hh already consumed by inner — re-feeds dead handle
+    | fin _ |> @outer(h: hh)          // outer back-edge re-feeds the SAME (dead) hh
+| done r -> r
+
+~make(): h0 |> spin(h: h0): f |> report(n: f)

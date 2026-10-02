@@ -1,0 +1,62 @@
+// PROBE: LIMITATION 1 — nested label-fold, outer-issued obligation, inner
+// back-edge. The per-jump conservation check requires every live non-outer
+// obligation to route into THIS loop's head; an obligation belonging to the
+// OUTER loop is live at the inner back-edge but is not the inner head's to
+// consume. Without SCC-scoped ownership this is admitted-unsound: accept and
+// it can double-discharge or leak; refuse and it's a false positive.
+const std = @import("std");
+const Handle = struct { n: i32 };
+
+~tor make {} -> *Handle<owned!>
+~proc make|zig {
+    const h = std.heap.page_allocator.create(Handle) catch unreachable;
+    h.* = .{ .n = 0 };
+    return h;
+}
+
+~tor freee { h: *Handle<!owned> }
+~proc freee|zig {
+    std.heap.page_allocator.destroy(h);
+}
+
+// Inner step: does NOT touch h, just counts; back-edges on i.
+~tor inner { i: i64 }
+| more i64
+| fin i64
+~proc inner|zig {
+    if (i < 2) {
+        return .{ .more = i + 1 };
+    }
+    return .{ .fin = i };
+}
+
+~tor report { n: i64 }
+~proc report|zig {
+    std.debug.print("n={}\n", .{n});
+}
+
+// Outer fold carries the owned obligation h through its back-edge; the inner
+// fold runs INSIDE the outer body and back-edges while h is live — the inner
+// @inner jump does not route h (it's not inner's to consume).
+~tor spin { h: *Handle<!owned> } -> i64
+
+~spin = #outer step-outer(h)
+| again hh |> #inner inner(i: 0)
+    | more m |> @inner(i: m)          // inner back-edge: h live, not routed
+    | fin _ |> @outer(h: hh)          // outer back-edge: re-feeds h correctly
+| done r -> r
+
+~tor step-outer { h: *Handle<!owned> }
+| again *Handle<owned!>
+| done i64
+~proc step-outer|zig {
+    h.n += 1;
+    if (h.n < 2) {
+        return .{ .again = h };
+    }
+    const n = h.n;
+    std.heap.page_allocator.destroy(h);
+    return .{ .done = n };
+}
+
+~make(): h0 |> spin(h: h0): f |> report(n: f)
