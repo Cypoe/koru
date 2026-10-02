@@ -115,3 +115,26 @@ perturbation added per boid per frame, which is exactly what Vicsek varies to
 move the system between ordered and disordered. Obstacles or a predator do the
 same job with more structure. Not added here; the demo exists to show the three
 rules working, and it does.
+
+## Second instance, 2026-10-02 — the render is also the only oracle that can see a shared infidelity
+
+The kaigen boids arm of `003_ecs_reactive` was checksum-clean: koru and the
+zig twin agreed bit-for-bit at every scale, so the *agreement* question was
+closed. Then the trajectory was rendered for a blog clip and Lars's eye fired
+again: "the boids seem extremely unorganic." The alignment statistic said the
+model worked — nearest-neighbour heading cosine converged 0.003 → 0.966 —
+but the divergence was real anyway, and it lived where no agreement oracle
+can reach: **both arms shared it.** The spawn was a flat modular lattice and
+the actors teleported on a sawtooth, where the source spawns on a shell and
+drives actors from animation clips. Identical sinks proved the two ports
+agree; they could never have disagreed, because the infidelity was in the
+specification both were handed.
+
+That refines the open question above. The clustering statistic — heading
+cosine, the fragment's own suggested instrument — did fire and did exonerate
+the *algorithm*. What no in-band instrument could settle was fidelity to the
+source, because the source of truth for the benchmark was a hand-written
+canonicalization, not the reference's output. When every arm is drawn from
+the same spec, agreement is necessary and worthless for fidelity; only an
+oracle that reads the spec's *intent* — here, a human watching the render —
+gets a vote.

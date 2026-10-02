@@ -115,8 +115,8 @@ intentionally plain: each binary emits one JSON line per run.
   despawn, spawn_batch), but the float scenarios DRIFT — JS numbers are
   doubles while the koru fields are f32, and the emitter's expression
   lowering is not type-directed (no `Math.fround` discipline). At
-  100k×100 `boids_kaigen` emits sink 597924524 vs native 596765624, and
-  ~35.9ms/frame vs 2.9 wasm-simd / 1.58 native — the JS target is a
+  100k×100 `boids_kaigen` emits sink 795359237 vs native 795075014, and
+  ~36.2ms/frame vs 2.3 wasm-simd / 1.8 native — the JS target is a
   correctness surface today, not the float-performance arm.
   `boids_kaigen_dump` is not a benchmark row — `run.sh` never names it.
   It runs the same ladder and, after each frame, prints `# f` plus the

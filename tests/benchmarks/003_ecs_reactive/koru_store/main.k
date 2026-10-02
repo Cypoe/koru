@@ -388,8 +388,36 @@ flock-normalize = std/store:query(flock)
 ! query b |> std/store:stored { b.nhx: (if ((b.fx * b.fx + b.fy * b.fy + b.fz * b.fz) > 1.1754944e-38) b.fx * (1.0 / @sqrt((b.fx * b.fx + b.fy * b.fy + b.fz * b.fz))) else 0.0), b.nhy: (if ((b.fx * b.fx + b.fy * b.fy + b.fz * b.fz) > 1.1754944e-38) b.fy * (1.0 / @sqrt((b.fx * b.fx + b.fy * b.fy + b.fz * b.fz))) else 0.0), b.nhz: (if ((b.fx * b.fx + b.fy * b.fy + b.fz * b.fz) > 1.1754944e-38) b.fz * (1.0 / @sqrt((b.fx * b.fx + b.fy * b.fy + b.fz * b.fz))) else 0.0) }
     |> std/store:stored { b.fx: b.nhx, b.fy: b.nhy, b.fz: b.nhz }
 
+// The kaigen arm's spawn, mirroring `boids_spawn` in their boids.c: each fish
+// gets a random direction, normalized, scaled by the school radius — a SHELL,
+// heading = dir. `spawn_rng` is theirs; the modular hash stands in for it
+// deterministically (the zig twin carries the same constants). The flat
+// lattice the DOTS arms start from is a degenerate 2D sheet under 65536
+// entities — i/65536 never leaves z=0 — which also reads wrong on film.
+// Insert seeds heading at the center; flock-normalize then unitizes it (their
+// normalize IS this normalize), and kflock-shell places center + dir*90.
+tor kflock-init {}
+kflock-init = for(0..@as(usize, @intCast(cfg.entities)))
+    ! each i |> std/store:insert(flock) { px: 128.0, py: 128.0, pz: 128.0, fx: @as(f32, @floatFromInt(@as(i64, @intCast(@mod(i * 73 + 29, 255))) - 127)), fy: @as(f32, @floatFromInt(@as(i64, @intCast(@mod(i * 149 + 61, 255))) - 127)), fz: @as(f32, @floatFromInt(@as(i64, @intCast(@mod(i * 211 + 97, 255))) - 127)), cell: 0, tfx: 0.0, tfy: 0.0, tfz: 0.0, nhx: 0.0, nhy: 0.0, nhz: 0.0 }
+
+tor kflock-shell {}
+kflock-shell = std/store:query(flock)
+! query b |> std/store:stored { b.px: 128.0 + b.fx * 90.0, b.py: 128.0 + b.fy * 90.0, b.pz: 128.0 + b.fz * 90.0 }
+
 tor frame-actors {}
 frame-actors = std/store:stored { fr.t0x: @as(f32, @floatFromInt(@mod(frn.n * 3, 256))), fr.t0y: 128.0, fr.t0z: @as(f32, @floatFromInt(@mod(frn.n * 5, 256))), fr.t1x: @as(f32, @floatFromInt(@mod(frn.n * 7, 256))), fr.t1y: 160.0, fr.t1z: @as(f32, @floatFromInt(@mod(frn.n * 11, 256))), fr.obx: @as(f32, @floatFromInt(@mod(frn.n * 13, 256))), fr.oby: 128.0, fr.obz: @as(f32, @floatFromInt(@mod(frn.n * 17, 256))) }
+    |> std/store:stored { frn.n: frn.n + 1 }
+
+// The kaigen arm's actor choreography. Kaigen's boids.c drives targets and
+// the obstacle from SAMPLED ANIMATION CLIPS — smooth curves. The sawtooth
+// teleports 255 units on every wrap and moves actors at up to 30x fish speed,
+// which reads as the swarm being kicked, not herded. Orbits stand in for the
+// clips: deterministic, continuous, ~2x fish speed, different periods so they
+// never sync. The libm worry that motivated the sawtooth is moot — the `orbs`
+// tor already runs @sin/@cos in this timed program, and every measured lane
+// is zig-emitted, so identical spellings share zig's bundled libm bit-for-bit.
+tor kframe-actors {}
+kframe-actors = std/store:stored { fr.t0x: 128.0 + 80.0 * @cos(@as(f32, @floatFromInt(frn.n)) * 0.011), fr.t0y: 128.0, fr.t0z: 128.0 + 80.0 * @sin(@as(f32, @floatFromInt(frn.n)) * 0.011), fr.t1x: 128.0 + 55.0 * @cos(@as(f32, @floatFromInt(frn.n)) * 0.019 + 2.4), fr.t1y: 160.0, fr.t1z: 128.0 + 55.0 * @sin(@as(f32, @floatFromInt(frn.n)) * 0.019 + 2.4), fr.obx: 128.0 + 95.0 * @cos(@as(f32, @floatFromInt(frn.n)) * 0.0087 + 4.0), fr.oby: 128.0, fr.obz: 128.0 + 95.0 * @sin(@as(f32, @floatFromInt(frn.n)) * 0.0087 + 4.0) }
     |> std/store:stored { frn.n: frn.n + 1 }
 
 // Phase 1. Every cell, no guard: a cell that was occupied last frame and is
@@ -732,7 +760,7 @@ ksteer-move = std/store:query(flock)
 ! query b |> std/store:stored { b.fx: b.tfx, b.fy: b.tfy, b.fz: b.tfz, b.px: b.px + b.tfx * (25.0 * @as(f32, 1.0 / 60.0)), b.py: b.py + b.tfy * (25.0 * @as(f32, 1.0 / 60.0)), b.pz: b.pz + b.tfz * (25.0 * @as(f32, 1.0 / 60.0)) }
 
 tor kboid-frame {}
-kboid-frame = frame-actors() |> kgrid-clear() |> khash() |> kscatter() |> kmerge()
+kboid-frame = kframe-actors() |> kgrid-clear() |> khash() |> kscatter() |> kmerge()
     |> ksteer-align() |> ksteer-sep() |> ksteer-tgt() |> ksteer-norm()
     |> ksteer-avoid() |> ksteer-head() |> ksteer-move()
 
@@ -767,7 +795,7 @@ ksteer-fused = std/store:query(flock)
     |> std/store:stored { b.fx: b.tfx, b.fy: b.tfy, b.fz: b.tfz, b.px: b.px + b.tfx * (25.0 * @as(f32, 1.0 / 60.0)), b.py: b.py + b.tfy * (25.0 * @as(f32, 1.0 / 60.0)), b.pz: b.pz + b.tfz * (25.0 * @as(f32, 1.0 / 60.0)) }
 
 tor kboid-frame-fused {}
-kboid-frame-fused = frame-actors() |> kgrid-clear() |> khash() |> kscatter() |> kmerge()
+kboid-frame-fused = kframe-actors() |> kgrid-clear() |> khash() |> kscatter() |> kmerge()
     |> ksteer-fused()
 
 tor s-boids-kaigen-fused {}
@@ -1176,11 +1204,15 @@ run = run-dense() |> run-sparse() |> run-query-get() |> run-schedule-empty()
 // it; the older rows deliberately keep their construction inside the timed
 // region and the README says so.
 tor prep {}
-prep = prep-boids() |> prep-churn() |> prep-combat()
+prep = prep-boids() |> prep-boids-kaigen() |> prep-churn() |> prep-combat()
 
 tor prep-boids {}
-prep-boids = if(cfg.scenario >= 11 and cfg.scenario <= 24)
+prep-boids = if(cfg.scenario >= 11 and cfg.scenario <= 24 and (cfg.scenario < 17 or cfg.scenario > 19))
 | then |> flock-init() |> flock-normalize()
+
+tor prep-boids-kaigen {}
+prep-boids-kaigen = if(cfg.scenario >= 17 and cfg.scenario <= 19)
+| then |> kflock-init() |> flock-normalize() |> kflock-shell()
 
 // The churn world builds AND runs one untimed warmup frame here, then zeroes
 // all four counters. The warmup is load-bearing on bevy's side — a

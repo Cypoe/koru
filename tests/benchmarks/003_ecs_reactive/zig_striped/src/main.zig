@@ -1083,18 +1083,21 @@ const KaigenBoids = struct {
             .bk_ti = try allocator.alloc(i64, kg_cells),
             .bk_od = try allocator.alloc(f32, kg_cells),
         };
+        // Shell spawn, mirroring boids_spawn: a hashed direction normalized
+        // and scaled by the school radius, heading = dir — not the DOTS arm's
+        // flat lattice, which stays a degenerate z=0 sheet under 65536 fish.
         for (0..entities) |i| {
-            world.pos_x[i] = @floatFromInt(i % 256);
-            world.pos_y[i] = @floatFromInt((i / 256) % 256);
-            world.pos_z[i] = @floatFromInt((i / 65536) % 256);
-            const forward = normalizesafe(
-                @as(f32, @floatFromInt(i % 13)) - 6.0,
-                @as(f32, @floatFromInt(i % 17)) - 8.0,
-                @as(f32, @floatFromInt(i % 7)) - 3.0,
+            const dir = normalizesafe(
+                @as(f32, @floatFromInt(@as(i64, @intCast(@mod(i * 73 + 29, 255))) - 127)),
+                @as(f32, @floatFromInt(@as(i64, @intCast(@mod(i * 149 + 61, 255))) - 127)),
+                @as(f32, @floatFromInt(@as(i64, @intCast(@mod(i * 211 + 97, 255))) - 127)),
             );
-            world.fwd_x[i] = forward.x;
-            world.fwd_y[i] = forward.y;
-            world.fwd_z[i] = forward.z;
+            world.fwd_x[i] = dir.x;
+            world.fwd_y[i] = dir.y;
+            world.fwd_z[i] = dir.z;
+            world.pos_x[i] = 128.0 + dir.x * 90.0;
+            world.pos_y[i] = 128.0 + dir.y * 90.0;
+            world.pos_z[i] = 128.0 + dir.z * 90.0;
             world.cell[i] = 0;
         }
         return world;
@@ -1124,12 +1127,16 @@ const KaigenBoids = struct {
 
     fn run(self: *KaigenBoids, frames: usize) void {
         for (0..frames) |frame| {
+            // Actors orbit — deterministic stand-ins for the sampled
+            // animation clips kaigen drives them with; the sawtooth teleported
+            // 255 units on wrap and read as the swarm being kicked.
+            const frame_f: f32 = @floatFromInt(frame);
             const targets = [n_targets]Vec3{
-                .{ .x = @floatFromInt((frame * 3) % 256), .y = 128.0, .z = @floatFromInt((frame * 5) % 256) },
-                .{ .x = @floatFromInt((frame * 7) % 256), .y = 160.0, .z = @floatFromInt((frame * 11) % 256) },
+                .{ .x = 128.0 + 80.0 * @cos(frame_f * 0.011), .y = 128.0, .z = 128.0 + 80.0 * @sin(frame_f * 0.011) },
+                .{ .x = 128.0 + 55.0 * @cos(frame_f * 0.019 + 2.4), .y = 160.0, .z = 128.0 + 55.0 * @sin(frame_f * 0.019 + 2.4) },
             };
             const obstacles = [n_obstacles]Vec3{
-                .{ .x = @floatFromInt((frame * 13) % 256), .y = 128.0, .z = @floatFromInt((frame * 17) % 256) },
+                .{ .x = 128.0 + 95.0 * @cos(frame_f * 0.0087 + 4.0), .y = 128.0, .z = 128.0 + 95.0 * @sin(frame_f * 0.0087 + 4.0) },
             };
 
             // Phase 1: clear. Every bucket, unconditionally — same contract
