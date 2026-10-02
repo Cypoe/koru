@@ -19,13 +19,17 @@ koru_std/array.kz	23
 koru_std/ast_dump.kz	29
 koru_std/benchmarking.kz	24
 koru_std/bridge.affordances.kz	99
-koru_std/bridge.bind.kz	207
-koru_std/bridge.hostverbs.kz	221
-koru_std/bridge.kz	234
-koru_std/bridge.run-exec.kz	188
+koru_std/bridge.bind.kz	199
+koru_std/bridge.grants.kz	64
+koru_std/bridge.hostverbs.kz	190
+koru_std/bridge.items.kz	59
+koru_std/bridge.kz	207
+koru_std/bridge.residue.kz	22
+koru_std/bridge.run-exec.kz	134
 koru_std/bridge.run.kz	39
 koru_std/bridge.session.kz	20
-koru_std/bridge.turn.kz	130
+koru_std/bridge.steps.kz	132
+koru_std/bridge.turn.kz	125
 koru_std/build_image.kz	357
 koru_std/build.kz	586
 koru_std/ccp_aspirational.kz	108
@@ -33,7 +37,9 @@ koru_std/ccp.kz	109
 koru_std/channel.custody.kz	210
 koru_std/channel.home.kz	54
 koru_std/channel.kz	1447
+koru_std/channel.leaves.kz	233
 koru_std/channel.transit.kz	107
+koru_std/channel.units.kz	140
 koru_std/compiler_context.kz	253
 koru_std/compiler_types.kz	53
 koru_std/compiler_visitor.kz	505
@@ -109,6 +115,7 @@ koru_std/kernel.scan.kz	109
 koru_std/koru.kz	211
 koru_std/liquid_template.kz	146
 koru_std/list.explain.kz	113
+koru_std/list.fieldkit.kz	71
 koru_std/list.free.kz	487
 koru_std/list.get.kz	29
 koru_std/list.kjs	85
@@ -129,7 +136,10 @@ koru_std/parser.kz	2060
 koru_std/profiler.kz	283
 koru_std/proto.fields.kz	58
 koru_std/proto.kz	353
+koru_std/proto.markers.kz	42
+koru_std/proto.ownedleaf.kz	63
 koru_std/proto.resolve.kz	451
+koru_std/proto.terminal.kz	47
 koru_std/pump.explain.kz	301
 koru_std/pump.kz	633
 koru_std/pump.messages.kz	36
@@ -149,6 +159,7 @@ koru_std/regex.kz	471
 koru_std/regex.scan.kz	421
 koru_std/rings.home.kz	62
 koru_std/rings.kz	161
+koru_std/rings.leafgate.kz	136
 koru_std/rings.new.kz	466
 koru_std/rings.ops.kz	147
 koru_std/rules.kz	691
@@ -227,6 +238,7 @@ koru_std/testing.assert.kz	92
 koru_std/testing.compare.kz	131
 koru_std/testing.kz	919
 koru_std/threading.kz	141
+koru_std/time.kjs	24
 koru_std/time.kz	102
 koru_std/time.waits.kz	56
 koru_std/todo.kz	356

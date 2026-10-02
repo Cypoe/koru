@@ -46,7 +46,7 @@ fn renderVocabulary(allocator: std.mem.Allocator, scope: []const u8, defined: ?*
 
     if (introspection) {
         if (out.items.len > 0) out.append(allocator, '\n') catch unreachable;
-        out.appendSlice(allocator, "vocabulary()\ngrammar()\nbind(name:, value:)") catch unreachable;
+        out.appendSlice(allocator, introspection_verbs) catch unreachable;
     }
     appendDefinedLines(&out, allocator, defined);
     appendBoundLines(&out, allocator, session_env);
@@ -133,7 +133,8 @@ fn renderGrammar(allocator: std.mem.Allocator, scope: []const u8, defined: ?*Def
     }
 
     if (introspection) {
-        out.appendSlice(allocator, "\nvocabulary()\ngrammar()\nbind(name:, value:)") catch unreachable;
+        out.append(allocator, '\n') catch unreachable;
+        out.appendSlice(allocator, introspection_verbs) catch unreachable;
     }
     // The session's inventions, same as `vocabulary` renders them.
     appendDefinedLines(&out, allocator, defined);
@@ -166,8 +167,10 @@ pub fn hostDispatch(
     const is_vocab = std.mem.eql(u8, name, "vocabulary");
     const is_grammar = std.mem.eql(u8, name, "grammar");
     const is_bind = std.mem.eql(u8, name, "bind");
-    if (!is_vocab and !is_grammar and !is_bind) return error.EventDenied;
+    const is_note = std.mem.eql(u8, name, "note");
+    if (!is_vocab and !is_grammar and !is_bind and !is_note) return error.EventDenied;
     if (is_bind) return hostBind(view, inv, out);
+    if (is_note) return hostNote(view, inv, out);
     if (inv.args.len != 0) {
         view.error_detail.* = std.fmt.allocPrint(view.allocator,
             "'{s}' takes no fields — call it bare: {s}()", .{ name, name })
@@ -183,39 +186,5 @@ pub fn hostDispatch(
         };
     const S = struct { threadlocal var field_buf: [1]Interp.NamedField = undefined; };
     S.field_buf[0] = .{ .name = "__type_ref", .value = .{ .string_val = text } };
-    out.* = .{ .branch = "", .fields = S.field_buf[0..1] };
-}
-
-// `bind(name: "x", value: <datum>)` — the session's injection verb. The
-// harness hands the real world back through it: a tool result that arrived
-// out-of-band becomes a named Koru value the next turn can dereference.
-// `value:` is the datum rendered — a JSON object exposes its members as
-// fields (`r3.user_id`), a scalar binds as-is. The name it reports back is
-// the name it was given; auto-bound results report `r{N}` instead.
-fn hostBind(view: *const Interp.HostView, inv: *const Interp.Invocation, out: *Interp.DispatchResult) anyerror!void {
-    const se = view.session_env orelse {
-        view.error_detail.* = "'bind' has nowhere to write — this run carries no session env";
-        return error.DispatchFailed;
-    };
-    var bname: ?[]const u8 = null;
-    var bval: ?[]const u8 = null;
-    for (inv.args) |a| {
-        if (std.mem.eql(u8, a.name, "name")) bname = a.value;
-        if (std.mem.eql(u8, a.name, "value")) bval = a.value;
-    }
-    const bn = bname orelse {
-        view.error_detail.* = "'bind' needs a `name:` field — bind(name: \"x\", value: ...)";
-        return error.DispatchFailed;
-    };
-    const bv = bval orelse {
-        view.error_detail.* = "'bind' needs a `value:` field — bind(name: \"x\", value: ...)";
-        return error.DispatchFailed;
-    };
-    const tmp_fields = [_]Interp.NamedField{
-        .{ .name = "__type_ref", .value = .{ .string_val = bv } },
-    };
-    bindSessionValue(se, bn, .{ .branch = "", .fields = &tmp_fields });
-    const S = struct { threadlocal var field_buf: [1]Interp.NamedField = undefined; };
-    S.field_buf[0] = .{ .name = "__type_ref", .value = .{ .string_val = bn } };
     out.* = .{ .branch = "", .fields = S.field_buf[0..1] };
 }

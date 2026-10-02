@@ -21,12 +21,6 @@ fn wireGate(source: []const u8) ?struct { message: []const u8, line: u32, column
 /// A turn slice: byte offsets into the turn source.
 const TurnItem = struct { start: usize, end: usize };
 
-/// `tor ...` items route to define_event, everything else dispatches.
-fn isDefineItem(item: []const u8) bool {
-    const trimmed = std.mem.trim(u8, item, " \t\r\n");
-    return std.mem.startsWith(u8, trimmed, "tor ");
-}
-
 /// Split a turn into items. A new item opens at a non-blank line that is
 /// not a `|` arm, not inside an open string or unbalanced delimiter, and
 /// not the impl head/arms of a `tor ` define (matched by declared name).
@@ -127,4 +121,5 @@ fn scanLineChars(raw: []const u8, paren: *i32, brace: *i32, bracket: *i32, in_st
         k += 1;
     }
 }
+
 

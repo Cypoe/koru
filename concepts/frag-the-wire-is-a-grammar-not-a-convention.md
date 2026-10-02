@@ -134,3 +134,19 @@ with nothing provably chainable gets the rule with no fabricated example.
 The limit that remains: a bare `-> string` with no phantom leaves no
 manifest trace, so a scope of nothing-but-plain-returns renders the
 no-example bullet — honest, and visible if it ever matters.
+
+2026-09-30 — the gate still refuses, but refusal is now classified, not
+flat. Live smoke against the airline scope showed models spell the
+observer channel's argument as bare prose every time — `note(text: I see
+my mistake...)`, `note: <prose>` — and the strict gate was right to
+refuse and wrong to count it: the item was prose wearing the channel's
+costume, so it binds as observer residue (captured, teachable, no strike)
+rather than a wire failure. The same measurement surfaced the boundary
+case the item-as-unit rule missed: `note(...)say(...)` on one line is
+one item, and the malformed note was swallowing a well-formed call into
+its residue string — the model's "my say() was treated as residue" was
+literally true. The tail now splits at the first `)` whose suffix passes
+the gate: note prefix to residue or dispatch, tail gets its own step.
+`partial` counts `wire_failures` separately so a malformed-plus-working
+pair still strikes — the bound's liveness guarantee survives the
+generosity. Pinned by 440_037.

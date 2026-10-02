@@ -173,38 +173,6 @@ pub const Bridge = struct {
 }
 
 // ============================================================================
-// DEFINE - install a subflow declaration as a session verb (the REPL define)
-// ============================================================================
-//
-// The vocabulary grows at runtime: `tor name { args }` + `name = <body>`
-// becomes a verb callable on subsequent runs, held in the session's durable
-// defined-flows table. The body's calls run through the same possession
-// machinery as any dispatch, so a defined flow cannot reach beyond what the
-// session holds. The agent hears "defined name" — or the parse error — fed
-// back into the transcript (the honest-diagnostics rule applies here most of
-// all: a wrong declaration needs a truthful error).
-
-~pub tor define { br: *Bridge, source: string }
-| defined string
-| parse-error { message: string, line: u32, column: u32 }
-
-~proc define|zig {
-    const interp = @import("root").koru_std.koru_interpreter;
-    br.touch();
-    return switch (interp.define_event.handler(.{
-        .source = source,
-        .defined = br.defined,
-    })) {
-        .defined => |d| .{ .defined = d },
-        .parse_error => |e| .{ .parse_error = .{
-            .message = e.message,
-            .line = e.line,
-            .column = e.column,
-        } },
-    };
-}
-
-// ============================================================================
 // CLOSE - Hang up: release everything the session still holds
 // ============================================================================
 //
@@ -227,8 +195,13 @@ pub const Bridge = struct {
 }
 ~part run
 ~part run-exec
+~part steps
 ~part hostverbs
+~part grants
 ~part session
 ~part bind
+~part residue
 ~part affordances
 ~part turn
+~part items
+~part define

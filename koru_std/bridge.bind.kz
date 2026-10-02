@@ -178,15 +178,6 @@ fn bindResidue(br: *Bridge, text: []const u8) []const u8 {
     return bindResult(br, .{ .branch = "residue", .fields = &fields });
 }
 
-/// The report a bound residue hands back: the `rN` name twice — the model
-/// needs the name to re-emit the text through `say`, so the message carries
-/// it in both the report slot and the teaching clause.
-fn residueNote(rn: []const u8) []const u8 {
-    return std.fmt.allocPrint(std.heap.page_allocator,
-        "residue bound: {s} — your reply was not wire; nothing reached the user. To deliver it, call say(text: {s})", .{ rn, rn })
-        catch @panic("bridge: OOM building residue report");
-}
-
 /// One wire item dispatched through the session: the runtime run with the
 /// bridge's pool, defined-flows table, and — when the model has introspection —
 /// the host verbs, plus the session binder so every link gets its `rN`.
@@ -205,3 +196,4 @@ fn dispatchThroughScope(br: *Bridge, src: []const u8) Runtime.run_event.Output {
         .session_bind_counter = &br.bound_count,
     });
 }
+
