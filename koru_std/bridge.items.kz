@@ -15,7 +15,7 @@ fn isDefineItem(item: []const u8) bool {
 /// unseen. Find the first `)` whose trimmed suffix passes the wire gate and
 /// return the source index just past it: the prefix still takes the
 /// residue/dispatch path, the suffix becomes its own step.
-fn noteTailSplitAt(source: []const u8, it: TurnItem) ?usize {
+fn noteTailSplitAt(br: *Bridge, source: []const u8, it: TurnItem) ?usize {
     const item = std.mem.trim(u8, source[it.start..it.end], " \t\r\n");
     if (!std.mem.startsWith(u8, item, "note(")) return null;
     const base = @intFromPtr(item.ptr) - @intFromPtr(source.ptr);
@@ -24,7 +24,7 @@ fn noteTailSplitAt(source: []const u8, it: TurnItem) ?usize {
         if (item[i] != ')') continue;
         const suffix = std.mem.trim(u8, item[i + 1 ..], " \t\r\n");
         if (suffix.len == 0) continue;
-        if (wireGate(suffix) == null) return base + i + 1;
+        if (wireGate(br, suffix) == null) return base + i + 1;
     }
     return null;
 }
@@ -38,7 +38,7 @@ fn splitNoteTails(br: *Bridge, source: []const u8, items: []TurnItem) ?[]TurnIte
     var split_any = false;
     for (items) |it| {
         var start = it.start;
-        while (noteTailSplitAt(source, .{ .start = start, .end = it.end })) |at| {
+        while (noteTailSplitAt(br, source, .{ .start = start, .end = it.end })) |at| {
             out.append(br.allocator, .{ .start = start, .end = at }) catch {
                 out.deinit(br.allocator);
                 return null;

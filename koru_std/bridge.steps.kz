@@ -49,7 +49,7 @@ fn runSteps(br: *Bridge, source: []const u8, items: []const TurnItem) StepRun {
             continue;
         }
         // The wire gate holds per item; a refused slice is a step line.
-        if (wireGate(item)) |e| {
+        if (wireGate(br, item)) |e| {
             if (e.not_invocation) {
                 const rn = bindResidue(br, item);
                 if (rn.len > 0) {

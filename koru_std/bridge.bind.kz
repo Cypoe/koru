@@ -178,22 +178,6 @@ fn bindResidue(br: *Bridge, text: []const u8) []const u8 {
     return bindResult(br, .{ .branch = "residue", .fields = &fields });
 }
 
-/// One wire item dispatched through the session: the runtime run with the
-/// bridge's pool, defined-flows table, and — when the model has introspection —
-/// the host verbs, plus the session binder so every link gets its `rN`.
-fn dispatchThroughScope(br: *Bridge, src: []const u8) Runtime.run_event.Output {
-    return Runtime.run_event.handler(.{
-        .source = src,
-        .scope = br.scope,
-        .handle_pool = &br.pool,
-        .auto_discharge = false,
-        .defined = br.defined,
-        .lenient = true,
-        .host_dispatch = if (br.introspection) @as(?Interp.HostDispatchFn, hostDispatch) else null,
-        .session_env = br.session_env,
-        .session_bind_fn = @as(?Interp.SessionBindFn, sessionBindAdapter),
-        .session_bind_env = br.session_env,
-        .session_bind_counter = &br.bound_count,
-    });
-}
+/// dispatchThroughScope lives in the `wiregate` part, with the gate whose
+/// admitted spellings it normalizes.
 

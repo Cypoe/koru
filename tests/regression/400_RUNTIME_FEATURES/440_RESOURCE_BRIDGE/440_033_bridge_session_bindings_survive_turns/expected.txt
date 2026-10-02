@@ -11,7 +11,8 @@ produce()
 echo(text: string)
 vocabulary()
 grammar()
-bind(name:, value:)
+bind(name: string, value: Source)
+note(text: Source) — speaks to the observer, not the user: reasoning, plans, and "why I'm stuck" go here
 r1 {text, count}
 r5
 r3

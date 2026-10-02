@@ -27,41 +27,11 @@
 // The wire's shape rules and the validator that enforces them —
 // WIRE_GRAMMAR_TEXT and wireValidate — live in the `wireval` part; the
 // two must move together or the prompt starts lying about the parser.
+// The type-directed scanner (wireScan) and this tor's proc live in the
+// `wirescan` part — declared field types decide what a value position
+// admits, and admitted captured text is normalized to canonical quoted
+// wire before parse_event sees it.
 
-~[retain]pub tor parse.wire { source: string }
-| parsed *const ast.Flow
+~[retain]pub tor parse.wire { source: string, input_fn: ?InputLookupFn, host_input_fn: ?InputLookupFn }
+| parsed { flow: *const ast.Flow, wire: string }
 | parse-error { message: string, line: u32, column: u32, not_invocation: bool }
-
-~proc parse.wire|zig {
-    const interpreter_mod = @import("root").koru_std.koru_interpreter;
-
-    const s = std.mem.trim(u8, source, " \t\r\n");
-    if (wireValidate(s)) |rejection| {
-        const pos = wireLineColumn(s, rejection.byte);
-        return .{ .parse_error = .{
-            .message = rejection.message,
-            .line = pos.line,
-            .column = pos.column,
-            .not_invocation = rejection.not_invocation,
-        } };
-    }
-
-    // A page-backed arena, intentionally never freed: the returned Flow must
-    // outlive this call, and a few pages per parse are tolerated exactly like
-    // the interpreter's own parse-error messages (and scope-vocabulary's
-    // render above).
-    var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const allocator = arena_state.allocator();
-    return switch (interpreter_mod.parse_event.handler(.{
-        .source = s,
-        .allocator = allocator,
-    })) {
-        .flow => |f| .{ .parsed = f },
-        .parse_error => |e| .{ .parse_error = .{
-            .message = e.message,
-            .line = e.line,
-            .column = e.column,
-            .not_invocation = false,
-        } },
-    };
-}

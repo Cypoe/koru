@@ -55,7 +55,7 @@
         // ever sees them. What passes still runs the full path below: scope
         // membership (event-denied), field shapes (validation-error),
         // possession, budget.
-        if (wireGate(source)) |e| {
+        if (wireGate(br, source)) |e| {
             // RESIDUE: prose is not an invocation, but it is not garbage
             // either — bind the refused text and hand the turn back to the
             // agent as `residue`, so the model can re-emit it through a real
@@ -103,7 +103,7 @@
     for (items) |it| {
         const item = std.mem.trim(u8, source[it.start..it.end], " \t\r\n");
         if (isDefineItem(item)) { all_prose = false; break; }
-        const e = wireGate(item) orelse { all_prose = false; break; };
+        const e = wireGate(br, item) orelse { all_prose = false; break; };
         if (!e.not_invocation) { all_prose = false; break; }
     }
     if (all_prose) {

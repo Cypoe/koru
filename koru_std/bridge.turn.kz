@@ -2,21 +2,10 @@
 // the multi-item turn machinery. Joined via `~part turn` in bridge.kz;
 // merged into the bridge module at load.
 //
-// `wireGate` is the wire grammar check, shared by the single-item gate and
-// the per-item gate a sequenced turn runs on every slice: one predicate,
-// two surfaces — a one-item turn returns the refusal as the turn's
-// verdict; a multi-item turn reports it as a `step N/M parse-error` line
-// and runs on. A grammar that only held on the first item of a turn is the
-// convention the wire ruling retired — the unit of enforcement is the
-// item. (440_021; kopium bridge-mirror 2026-09-12-wire-gate-scope)
-
-fn wireGate(source: []const u8) ?struct { message: []const u8, line: u32, column: u32, not_invocation: bool } {
-    const rt = @import("root").koru_std.koru_runtime;
-    return switch (rt.parse_wire_event.handler(.{ .source = source })) {
-        .parsed => null,
-        .parse_error => |e| .{ .message = e.message, .line = e.line, .column = e.column, .not_invocation = e.not_invocation },
-    };
-}
+// `wireGate` — the wire grammar check shared by the single-item gate and
+// the per-item gate a sequenced turn runs on every slice — lives in the
+// `wiregate` part: one predicate, two surfaces, the item is the unit of
+// enforcement. (440_021; kopium bridge-mirror 2026-09-12-wire-gate-scope)
 
 /// A turn slice: byte offsets into the turn source.
 const TurnItem = struct { start: usize, end: usize };

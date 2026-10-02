@@ -2,12 +2,11 @@
 // introspection-granted verbs' impls. Joined via `~part grants` in
 // bridge.kz; merged into the bridge module at load.
 
-/// The verbs introspection grants, rendered in `vocabulary`/`grammar` and
-/// exported for the agent's prompt doc — one source so the three can't drift.
-/// `note` is the observer channel: reasoning kept out of residue and out of
-/// the user's ear, bound `rN` like any result.
-pub const introspection_verbs: []const u8 =
-    "vocabulary()\ngrammar()\nbind(name:, value:)\nnote(text:) — speaks to the observer, not the user: reasoning, plans, and \"why I'm stuck\" go here";
+/// `introspection_verbs` — the render `vocabulary`/`grammar` append and the
+/// prompt doc exports — lives in the `wiregate` part beside the host_verbs
+/// table it renders at comptime, so prompt, parser, and dispatch share one
+/// source. `note` is the observer channel: reasoning kept out of residue
+/// and out of the user's ear, bound `rN` like any result.
 
 // `bind(name: "x", value: <datum>)` — the session's injection verb. The
 // harness hands the real world back through it: a tool result that arrived

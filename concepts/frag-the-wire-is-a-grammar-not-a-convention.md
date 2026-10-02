@@ -158,3 +158,21 @@ the gate: note prefix to residue or dispatch, tail gets its own step.
 `partial` counts `wire_failures` separately so a malformed-plus-working
 pair still strikes — the bound's liveness guarantee survives the
 generosity. Pinned by 440_037.
+
+2026-10-02 — the vote is counted: the wire is now type-directed. The
+scanner reads the scope's `input_fn` (and the bridge's host-verb table)
+while it scans, so a value position's *declared* type decides its
+spelling: `Expression` admits balanced expression text, `Source` admits
+raw prose — including the colon form `verb: <rest>` for a verb whose lone
+field is Source — and every admitted spelling normalizes to canonical
+quoted wire before the interpreter's own parser sees it. One scanner,
+two duties, same lookups: `wireGate` admits, `dispatchThroughScope`
+canonicalizes, and what the gate admits is exactly what dispatch
+executes. The `note(text: <prose>)` misspellings that residue-taught
+through September now dispatch as real notes; `say(text: bare prose)`
+still refuses, because `string` is not a captured-text type — the
+distinction is the declaration, not the surface. The prompt half closed
+with it: `introspection_verbs` renders at comptime from the same
+`host_verbs` table the gate and `hostDispatch` enforce — prompt, parser,
+and dispatch are one declaration read three ways. Pinned by 440_038
+(marshal) and 440_039 (admission).

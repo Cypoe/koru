@@ -31,6 +31,7 @@ koru_std/bridge.run.kz	39
 koru_std/bridge.session.kz	20
 koru_std/bridge.steps.kz	132
 koru_std/bridge.turn.kz	125
+koru_std/bridge.wiregate.kz	106
 koru_std/build_image.kz	357
 koru_std/build.kz	586
 koru_std/ccp_aspirational.kz	108
@@ -176,6 +177,7 @@ koru_std/runtime.run.kz	89
 koru_std/runtime.runcached.kz	69
 koru_std/runtime.specs.kz	53
 koru_std/runtime.wirelex.kz	44
+koru_std/runtime.wirescan.kz	266
 koru_std/runtime.wiretext.kz	38
 koru_std/runtime.wireval.kz	110
 koru_std/set.kz	96

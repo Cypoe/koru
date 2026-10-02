@@ -189,9 +189,7 @@ pub const Bridge = struct {
 ~pub tor close { br: *Bridge<!session> }
 
 ~proc close|zig {
-    br.dischargeAll();
-    br.deinit();
-    koru_allocator().destroy(br);
+    br.dischargeAll(); br.deinit(); koru_allocator().destroy(br);
 }
 ~part run
 ~part run-exec
@@ -203,5 +201,6 @@ pub const Bridge = struct {
 ~part residue
 ~part affordances
 ~part turn
+~part wiregate
 ~part items
 ~part define
