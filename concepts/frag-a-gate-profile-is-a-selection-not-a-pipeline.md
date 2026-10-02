@@ -59,6 +59,16 @@ judged row with the cause named — delegation is a declared property of the
 profile, not an ambient capability. UNJUDGED under an enforcing profile
 blocks.
 
+Evolved 2026-10-02: the profile is no longer a design about future
+enforcement — it IS the enforcement. `hooks/pre-commit`'s second wall runs
+`koruc invariants/invariants.kz gate git-gate`: the manifest declares
+`std/gate:profile("git-gate")` with `judge: a.out` / `judge_src: gate.k`,
+and the toolchain executes its own rules — checks, odds, `-local`, judged
+delegation to live Jev — with no interpreter koruc didn't build. gate.py
+remains in-tree as the read-only reference oracle (challenge 030's first
+catalog row). The belief that graduated: a declared profile is executable
+policy, not documentation of it.
+
 ## Open
 
 - The in-language check *tor* — a `[gate]`-annotated member returning a
