@@ -20,6 +20,7 @@ koru_std/ast_dump.kz	29
 koru_std/benchmarking.kz	24
 koru_std/bridge.affordances.kz	99
 koru_std/bridge.bind.kz	199
+koru_std/bridge.define.kz	31
 koru_std/bridge.grants.kz	64
 koru_std/bridge.hostverbs.kz	190
 koru_std/bridge.items.kz	59
@@ -69,7 +70,7 @@ koru_std/fmt.kz	816
 koru_std/foreign.kz	125
 koru_std/fs.kjs	76
 koru_std/fs.kz	113
-koru_std/gate.kz	727
+koru_std/gate.kz	525
 koru_std/gpu.kz	228
 koru_std/grid.kz	471
 koru_std/grid.new.kz	431

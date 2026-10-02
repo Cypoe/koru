@@ -13,9 +13,20 @@
 // root — this directory — as cwd, so repo paths start with `..`.
 
 ~import std/invariants
+// The profile that selects the git-gate-tagged rows below. Judgment rows
+// delegate to the compiled gate.k binary (koru/odds → Jev); judge_src is
+// the staleness oracle the runner rebuilds through.
+~import std/gate
 // Pulled in for its colocated git-gate-local declarations — the listing
 // walks imports, so a module's own invariants surface only through one.
 ~import koru/odds
+
+~std/gate:profile("git-gate") {
+    "block": true,
+    "description": "the repo's pre-commit enforcement — check: instruments always block; judgment rows delegate to the Jev verdict binary",
+    "judge": "a.out",
+    "judge_src": "gate.k"
+}
 
 ~std/invariants:inferred {
     "name": "emit-for-not-while",
