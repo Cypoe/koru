@@ -1,0 +1,11 @@
+name: prompt-derived
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: |
+  The model-facing text is rendered from the same declaration the
+  enforcement reads — not a hand-maintained paraphrase. Fires when a
+  commit closes a drift path between prompt and parser (vocabulary
+  lines, grammar text, field tables rendered from the registry that
+  also judges the wire).
