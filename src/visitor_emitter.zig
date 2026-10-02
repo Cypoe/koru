@@ -1444,6 +1444,22 @@ pub const VisitorEmitter = struct {
 
             // Test discovery block - enables zig test to find tests nested in main_module
             try self.code_emitter.write("\ntest {\n    @import(\"std\").testing.refAllDeclsRecursive(@This());\n}\n");
+
+            // `emitMainModuleStart` writes `const __koru_ast = @import("ast");`
+            // into the runtime file unconditionally — load-bearing only when
+            // the text below it actually references `__koru_ast.` (a Source
+            // field type or captured-source literal). With none, the import is
+            // a corpse: the user program gains the compiler's own AST module
+            // for nothing, which 010_000's post-validation pins. Same text gate
+            // the build-exe fallback applies to its module cluster.
+            const text = self.code_emitter.buffer[0..self.code_emitter.pos];
+            if (std.mem.indexOf(u8, text, "__koru_ast.") == null) {
+                const alias = "const __koru_ast = @import(\"ast\");\n";
+                if (std.mem.indexOf(u8, text, alias)) |at| {
+                    std.mem.copyForwards(u8, self.code_emitter.buffer[at..], text[at + alias.len ..]);
+                    self.code_emitter.pos -= alias.len;
+                }
+            }
         }
     }
 

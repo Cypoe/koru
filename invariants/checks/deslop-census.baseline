@@ -40,5 +40,9 @@
 # are emitter_test/visitor_emitter_test/comptime_eval_test test_decl and
 # simple_var_decl twins, the consciously-retained test-scaffolding class
 # the pin documents; the growth landed between re-pins, not here.
-clusters=623
-members=768
+# Re-pinned 623/768 -> 625/761 (2026-10): the roll fired on the
+# void-graft wall landing — measured identical on HEAD's src/ alone and on
+# this commit's working tree, so the +2 clusters are committed drift from
+# between-roll sessions, not this diff. Members fell 768 -> 761.
+clusters=625
+members=761

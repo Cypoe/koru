@@ -1,0 +1,92 @@
+// Koru Standard Library: the `uncrossable` part of store — joined via
+// `~part uncrossable` in store.kz; members land in koru_store.
+//
+// The void-graft boundary, both halves of it. Graft mints the synthesized
+// VOID units store transforms lower arm bodies into — the `asVoidStep`
+// sequential step every interceptor/watch body becomes and the
+// `atEnds` splice that hangs grafted continuations on a chain's leaves.
+// Post-graft such a body sits under `is_transformed_subtree`, which every
+// checker skips by ruling (transformed subtrees are compiler-owned and
+// pre-validated) — so the other half, refuseUncrossable, is the pre-graft
+// wall: a `=>`/`->` inside a void-grafted arm names a branch of nothing
+// and must be refused while the user-authored body is still visible.
+// (kopium wired/holes/10: `=>` in a `! query` arm sailed through checking
+// and died in emitted Zig, undiagnosed.)
+
+const Graft = struct {
+    fn atEnds(alloc: std.mem.Allocator, cont: *ast_find.Continuation, next: *const ast_find.Continuation) void {
+        const ast_functional = @import("ast_functional");
+        if (cont.continuations.len == 0) {
+            const kids = alloc.alloc(ast_find.Continuation, 1) catch unreachable;
+            kids[0] = ast_functional.cloneContinuation(alloc, next) catch unreachable;
+            cont.continuations = kids;
+            return;
+        }
+        for (cont.continuations) |*c| atEnds(alloc, @constCast(c), next);
+    }
+    // A body continuation re-shaped as a sequential void step.
+    fn asVoidStep(alloc: std.mem.Allocator, body: *const ast_find.Continuation) ast_find.Continuation {
+        const ast_functional = @import("ast_functional");
+        const cloned = ast_functional.cloneContinuation(alloc, body) catch unreachable;
+        return ast_find.Continuation{
+            .branch = alloc.dupe(u8, "") catch unreachable,
+            .binding = null,
+            .kind = .terminal,
+            .condition = null,
+            .node = cloned.node,
+            .indent = cloned.indent,
+            .continuations = cloned.continuations,
+            .is_transformed_subtree = true,
+            .location = cloned.location,
+        };
+    }
+};
+
+// A `=>`/`->` step inside a void-grafted arm's body can never be satisfied:
+// the body becomes a synthesized void unit (sweepbody / qbody / interceptor),
+// so the construct has no resume sum or outcome set to construct into.
+// `site` is the invoking verb (`query`/`rule`/`preorder`/`new`/`watch`),
+// `arm` the arm's own name (`query`/`first`/`row`/`preorder`/an interceptor
+// or watch branch). Returns the refusal, or null when clean.
+fn refuseUncrossable(alloc: std.mem.Allocator, rep: anytype, site: []const u8, store_name: []const u8, arm: []const u8, c: *const ast_find.Continuation, module: []const u8) ?ast_find.SiteResult {
+    // `new`'s pump arms are the standing exception: a `step`/`wait`
+    // participant's `=>` constructs its own declared verdicts, which is how
+    // it answers the pump (690_309).
+    if (std.mem.eql(u8, site, "new") and !isVoidNewArm(arm)) return null;
+    const bad = findUncrossable(c) orelse return null;
+    const bc = bad.node.?.branch_constructor;
+    const glyph: []const u8 = if (bc.is_bare_return) "->" else "=>";
+    return ast_find.refuse(alloc, rep, .KORU102, bad.location, module, "std/store:{s}({s}): `{s}` inside a `! {s}` arm has nothing to construct — the arm body grafts into a void synthesized unit, so a branch of the enclosing tor cannot be produced from in there. Hand the verdict out through the store (or module state) and branch after the call returns.", .{ site, store_name, glyph, arm });
+}
+
+fn isVoidNewArm(arm: []const u8) bool {
+    return std.mem.eql(u8, arm, "discharge") or std.mem.eql(u8, arm, "cleared") or
+        std.mem.eql(u8, arm, "inserted") or std.mem.eql(u8, arm, "removed") or
+        std.mem.eql(u8, arm, "updated");
+}
+
+fn findUncrossable(c: *const ast_find.Continuation) ?*const ast_find.Continuation {
+    if (c.node) |*n| {
+        if (n.* == .branch_constructor) return c;
+        switch (n.*) {
+            .conditional => |cb| for (cb.branches) |*b| {
+                if (findUncrossableSlice(b.body)) |hit| return hit;
+            },
+            .foreach => |fb| for (fb.branches) |*b| {
+                if (findUncrossableSlice(b.body)) |hit| return hit;
+            },
+            .switch_result => |sb| for (sb.branches) |*b| {
+                if (findUncrossableSlice(b.body)) |hit| return hit;
+            },
+            else => {},
+        }
+    }
+    return findUncrossableSlice(c.continuations);
+}
+
+fn findUncrossableSlice(conts: []const ast_find.Continuation) ?*const ast_find.Continuation {
+    for (conts) |*c| {
+        if (findUncrossable(c)) |h| return h;
+    }
+    return null;
+}

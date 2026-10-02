@@ -891,9 +891,7 @@ fn isPrecededByIs(text: []const u8, idx: usize) bool {
     }
     if (p >= 2 and std.mem.eql(u8, text[p - 2 .. p], "is")) {
         const is_pos = p - 2;
-        if (is_pos == 0 or !storeIdentChar(text[is_pos - 1])) {
-            return true;
-        }
+        if (is_pos == 0 or !storeIdentChar(text[is_pos - 1])) return true;
     }
     return false;
 }
@@ -1009,3 +1007,4 @@ fn storeLowerText(
 ~part refhomeapi
 ~part keyed
 ~part wait
+~part uncrossable

@@ -136,3 +136,46 @@ The new part is a defect class rather than an enforcement gap:
   are the first instance found, not the only one available — every place Koru
   splices user text into generated host source is the same question, and each
   one answers it separately today.
+
+## The borrowed coverage can be a SKIP, not a diagnostic (2026-10-03)
+
+Two more instances of the same shape surfaced in one sweep, and neither
+arrived as a missing *check* — both arrived as a wall that existed in one
+place and was silently borrowed everywhere else.
+
+`=>` inside a `! query` sweep arm died in emitted Zig
+(`type 'void' does not support struct initialization syntax` inside a
+synthesized unit the author never wrote) — kopium wired/holes/10. The
+glyph wall existed and worked: `shape_checker` walls `=>` on a void effect
+correctly, pinned by 400_199. But the query transform grafts the user's
+arm body into a synthesized void callback and marks the graft
+`is_transformed_subtree` — a flag that means "transform-owned data, already
+validated" — and every checker walk skips marked subtrees. **The skip is
+correct for what the transform wrote and wrong for what the transform
+grafted**: the user's text crossed the checker boundary carrying a flag
+that was never meant for it. The wall has to run pre-graft, in the
+transform, while the user body is still legible — post-graft it is
+invisible to every checker by design. `refuseUncrossable` — in
+`store.uncrossable.kz`, beside the `Graft` it guards — is that wall;
+690_357–360 pin it across the four graft families.
+
+The second instance ran the same shape the other direction. The JS emitter
+never carried a `[norun]` guard — `std/indexes:store`'s site-claiming flow
+reached `flowN()` and leaked the parser's `source: <implicit_source>`
+marker verbatim into emitted JS, a syntax error at `node`. It had never
+needed the guard: the comptime classifier stripped every Source-fielded
+event's flows wholesale, so `[norun]` sites never survived to JS emission.
+When the classifier was corrected to key on `Program` only — itself the
+right fix — the borrowed coverage vanished and the absent guard stood
+naked, four index tests red at `js-runtime`. The Zig walk had carried the
+explicit check the whole time.
+
+The generalisation, sharper now: **coverage borrowed from a pass whose job
+is something else is a wall you do not have.** The classifier's job was
+timing, not norun; the subtree marker's job was transform bookkeeping, not
+user-code exoneration. Both covered the gap for free and silently, which is
+why the gaps were invisible until the borrowed half was touched. The tell
+stays the same — look at where the refusal comes from — but add a second
+question: *what else was standing between this construct and the host?* If
+the answer is a flag or a filter that exists for a different reason, the
+wall is borrowed.

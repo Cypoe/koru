@@ -167,9 +167,9 @@
     if (none_arm != null and !is_first) {
         return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, SPlan.MSG_none_pairs, .{store_name}) };
     }
-    const sc = sc_query orelse sc_first orelse {
-        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, SPlan.MSG_no_arm, .{store_name}) };
-    };
+    const sc = sc_query orelse sc_first orelse return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, SPlan.MSG_no_arm, .{store_name}) };
+    // `=>`/`->` in the arm body is unimplementable — the body grafts into a void per-row unit (wired/holes/10; wall pre-graft, in store.uncrossable.kz).
+    if (refuseUncrossable(allocator, reporter, "query", store_name, if (is_first) "first" else "query", sc, flow.module)) |r| return .{ .transformed = r };
     // A destructure block on the query arm is a REQUEST. Each entry carries a
     // PREFIX annotation naming what the visit should synthesize for it, and the
     // transform provides exactly what is asked for and nothing more:

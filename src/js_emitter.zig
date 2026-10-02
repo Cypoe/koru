@@ -231,6 +231,7 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
             if (item.flow.inv().path.module_qualifier) |mq| {
                 if (std.mem.eql(u8, mq, "koru")) continue;
             }
+            if (em.flowIsNorunSite(&item.flow)) continue;
             try em.emitFlow(&item.flow, flow_num);
             flow_num += 1;
         }
@@ -644,6 +645,24 @@ const Emitter = struct {
         if (flow.inline_body == null) return false;
         const decl = self.findEventDecl(&flow.inv().path) orelse return false;
         return annotation_parser.hasPart(decl.annotations, "declaration");
+    }
+
+    /// A `[norun]` event claims its site as AST data — the flow never
+    /// executes and no handler call may reach the output. This is the Zig
+    /// walk's guard (visitor_emitter.zig's `is_norun` skip) in its own
+    /// right: the JS emitter never needed it while the comptime classifier
+    /// stripped Source-fielded events wholesale — keyed on Program-only
+    /// now, `std/indexes:store`'s flow reaches emission and would leak the
+    /// parser's `source: <implicit_source>` marker verbatim into the file.
+    /// A transform-rewritten flow (inline body / preamble / @pass_ran)
+    /// emits its own residue and is exempt, same as the Zig side.
+    fn flowIsNorunSite(self: *Emitter, flow: *const ast.Flow) bool {
+        if (flow.inline_body != null or flow.preamble_code != null) return false;
+        for (flow.inv().annotations) |ann| {
+            if (std.mem.startsWith(u8, ann, "@pass_ran")) return false;
+        }
+        const site = self.findDeclSiteIn(self.items, &flow.inv().path, null) orelse return false;
+        return annotation_parser.hasPart(site.decl.annotations, "norun");
     }
     fn findEventDeclIn(self: *Emitter, scope: []const ast.Item, path: *const ast.DottedPath, current_module: ?[]const u8) ?*const ast.EventDecl {
         for (scope) |*item| {
@@ -1220,6 +1239,7 @@ const Emitter = struct {
             if (flow.inv().path.module_qualifier) |mq| {
                 if (std.mem.eql(u8, mq, "koru")) continue;
             }
+            if (self.flowIsNorunSite(flow)) continue;
             try self.reachFlow(null, flow, reached, IMPL_WALK_DEPTH);
         }
     }
