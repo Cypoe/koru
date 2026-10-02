@@ -1,0 +1,16 @@
+dispatch 0 sent express
+dispatch 0 challenged at the pass — returned to depot
+dispatch 0 arrived — seal 0 intact
+dispatch 1 arrived — seal 1 intact
+dispatch 2 arrived — seal 2 intact
+dispatch 3 challenged at the pass — returned to depot
+dispatch 3 arrived — seal 3 intact
+dispatch 4 sent express
+dispatch 4 arrived — seal 4 intact
+dispatch 5 arrived — seal 5 intact
+dispatch 6 challenged at the pass — returned to depot
+dispatch 6 arrived — seal 6 intact
+dispatch 7 arrived — seal 7 intact
+dispatch 8 sent express
+dispatch 8 arrived — seal 8 intact
+relay closed: 9 dispatched, 3 turned back, 9 filed

@@ -1,0 +1,29 @@
+// The pouch — a proc-minted resource whose stamps are someone else's job.
+// took-pouch issues <held!>; file-dispatch is the ONLY discharge and it
+// demands <!delivered> — so a pouch cannot leave the world unfiled.
+// peek-seal is a borrow: it reads the seal off a <carried> pouch and hands
+// it back untouched. Every stamp between held and delivered lives in
+// lib/stamps.k — pure Koru retagging a pointer this module owns.
+
+const std = @import("std");
+
+const Pouch = struct { seal: i64 };
+
+~pub tor took-pouch { seal: i64 } -> *Pouch<held!>
+~proc took-pouch|zig {
+    const p = std.heap.page_allocator.create(Pouch) catch unreachable;
+    p.* = .{ .seal = seal };
+    return p;
+}
+
+~pub tor peek-seal { p: *Pouch<carried> } -> i64
+~proc peek-seal|zig {
+    return p.seal;
+}
+
+~pub tor file-dispatch { p: *Pouch<!delivered> }
+~proc file-dispatch|zig {
+    // Silent on purpose: std.debug.print is stderr, and the harness merges
+    // streams into actual.txt — interleaving would make the oracle flaky.
+    std.heap.page_allocator.destroy(p);
+}
