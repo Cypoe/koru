@@ -49,10 +49,16 @@ folds whose step is polynomial-in-state get *decidable equality*:
   over the construct-splice GA.
 - Does **not** need the koru dialect — its encode target is
   certificates, not ITerms.
-- Still missing (Lean, ideally): uniqueness-from-initial-conditions for
-  P-recursive sequences stated as a theorem — the gate *implements* it;
-  the Lean side would discharge the meta-justification the runtime
-  currently asserts.
+- Lean bridge — LANDED in isar-proofs (`da97bdd`,
+  `src/ISAR/PRecursive.lean`): `PRecursiveCertificate` +
+  `eq_of_satisfiesRecurrence_of_init` — non-singular uniqueness proven
+  (strong induction, peel leading term, cancel in ℚ). The gate's bound
+  is now discharged, not asserted.
+- Open: singular-point case as a Lean theorem (agreement at indices
+  where the leading coefficient vanishes replaces the missing
+  constraint); and the cross-field bridge — a sequence is P-recursive
+  iff its generating function is D-finite (`Holonomic`), the honest
+  form of "holonomic across fields." Bigger formalization, parked here.
 - Fuzzer tie-in — LANDED as `scripts/holonomic_synth.py`: GA over
   update-expression genomes (born in-fragment by construction), fitness
   = first-divergence index into the 64-iterate window (semantic, not
