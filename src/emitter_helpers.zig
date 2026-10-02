@@ -1292,6 +1292,11 @@ pub fn emitMainModuleStart(emitter: *CodeEmitter, pub_compiler_env: bool, needs_
         try emitter.write("    @import(\"std\").debug.FullPanic(@import(\"std\").debug.defaultPanic)\n");
         try emitter.write("else\n");
         try emitter.write("    @import(\"std\").debug.simple_panic;\n\n");
+        // Runtime emission: `Source`-typed fields lower to `__koru_ast.Source`
+        // in Input structs and call-site literals. The comptime-mode file
+        // already declares this alias (main.zig emits it into
+        // backend_output_emitted.zig); declaring it twice is a redecl.
+        try emitter.write("const __koru_ast = @import(\"ast\");\n\n");
     }
     // KORU ALLOCATOR SPINE — the one allocator stdlib runtime procs use.
     // Emitted into BOTH outputs so proc bodies (pasted into both) always
@@ -9023,26 +9028,12 @@ fn emitArgs(emitter: *CodeEmitter, ctx: *EmissionContext, args: []const ast.Arg,
         }
 
         if (is_expression_arg) {
-            // CRITICAL: Expression parameters are comptime-only
-            const is_comptime_emission = if (ctx.emit_mode) |mode| mode == .comptime_only else false;
-
-            if (!is_comptime_emission) {
-                // Build event name for error message
-                var event_name_buf: [256]u8 = undefined;
-                var event_name_len: usize = 0;
-
-                event_name_len = invocation_path.writeQualified(&event_name_buf, event_name_len);
-                const event_name = event_name_buf[0..event_name_len];
-
-                log.debug("\n", .{});
-                log.debug("ERROR: Comptime event '{s}' with Expression parameter reached runtime emission\n", .{event_name});
-                log.debug("Expression parameter: {s}\n", .{arg.name});
-                log.debug("\n", .{});
-
-                return error.ComptimeEventNotTransformed;
-            }
-
-            // In comptime_only mode: emit the expression value as a string literal
+            // An Expression parameter carries the captured expression TEXT —
+            // the same `arg.value` string literal serves both emission modes:
+            // comptime handlers consume it during evaluate_comptime, and a
+            // runtime-position call transports the text to the callee
+            // (parser.zig: "an Expression is just another way to pass a
+            // string").
             try emitter.write("\"");
             for (arg.value) |c| {
                 switch (c) {
@@ -9059,40 +9050,14 @@ fn emitArgs(emitter: *CodeEmitter, ctx: *EmissionContext, args: []const ast.Arg,
             }
             try emitter.write("\"");
         } else if (is_source_arg) {
-            // CRITICAL: Only error if we're NOT in comptime_only mode
-            // In comptime_only mode, we're emitting to backend_output_emitted.zig which SHOULD contain Source parameters
-            // The error only applies to runtime emission (when the transform didn't run)
-            const is_comptime_emission = if (ctx.emit_mode) |mode| mode == .comptime_only else false;
-
-            if (!is_comptime_emission) {
-                // USER ERROR: Source parameter reached runtime emission
-                // This means the comptime handler didn't transform this invocation during evaluate_comptime
-
-                // Build event name for error message
-                var event_name_buf: [256]u8 = undefined;
-                var event_name_len: usize = 0;
-
-                event_name_len = invocation_path.writeQualified(&event_name_buf, event_name_len);
-                const event_name = event_name_buf[0..event_name_len];
-
-                // Print helpful error message to stderr
-                log.debug("\n", .{});
-                log.debug("ERROR: Comptime event '{s}' with Source parameter reached runtime emission\n", .{event_name});
-                log.debug("\n", .{});
-                log.debug("This means the comptime handler didn't transform this invocation into runtime code.\n", .{});
-                log.debug("\n", .{});
-                log.debug("Check your ~proc {s} implementation:\n", .{event_name});
-                log.debug("  - It should execute during the evaluate_comptime pass\n", .{});
-                log.debug("  - It should generate runtime code to replace this invocation\n", .{});
-                log.debug("  - The generated code should NOT contain Source parameters\n", .{});
-                log.debug("\n", .{});
-                log.debug("Source parameter: {s}\n", .{arg.name});
-                log.debug("\n", .{});
-
-                return error.ComptimeEventNotTransformed;
-            }
-
-            // In comptime_only mode: emit the Source value
+            // A Source param carries captured text — the callee receives the
+            // Source struct with `.text` set to what the call site wrote.
+            // Emit the same literal in both modes: comptime handlers consume
+            // it during evaluate_comptime; a runtime-position call to an
+            // unannotated tor transports the text. `[comptime]` callees never
+            // reach here — flowInvokesComptimeEvent routes their flows to
+            // comptime emission; a slipped call fails at backend compile on
+            // the missing decl rather than panicking here.
             // The AST already has the properly serialized Source in arg.source_value
             // We emit a reference to it (the AST is available as PROGRAM_AST)
             // For now, construct inline - the text is in arg.value

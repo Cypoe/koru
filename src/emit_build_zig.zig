@@ -244,6 +244,37 @@ pub fn emitOutputBuildZig(
         \\
     );
 
+    // `Source`-typed tor fields emit `__koru_ast.Source` references into
+    // output_emitted.zig. Map the ast module (plus its errors and
+    // glob_pattern_matcher deps) unconditionally — Zig analyzes a mapped module
+    // only when the emitted code actually imports it, so programs without
+    // Source fields pay nothing.
+    var ast_mod_buf: [4096]u8 = undefined;
+    const ast_mod_src = std.fmt.bufPrint(&ast_mod_buf,
+        \\    // Compiler-AST module — mapped for `Source`-typed fields (see header comment)
+        \\    const __koru_errors_mod = __koru_b.createModule(.{{
+        \\        .root_source_file = .{{ .cwd_relative = "{s}/src/errors.zig" }},
+        \\        .target = __koru_target,
+        \\        .optimize = __koru_optimize,
+        \\    }});
+        \\    const __koru_gpm_mod = __koru_b.createModule(.{{
+        \\        .root_source_file = .{{ .cwd_relative = "{s}/src/glob_pattern_matcher.zig" }},
+        \\        .target = __koru_target,
+        \\        .optimize = __koru_optimize,
+        \\    }});
+        \\    const __koru_ast_mod = __koru_b.createModule(.{{
+        \\        .root_source_file = .{{ .cwd_relative = "{s}/src/ast.zig" }},
+        \\        .target = __koru_target,
+        \\        .optimize = __koru_optimize,
+        \\    }});
+        \\    __koru_ast_mod.addImport("errors", __koru_errors_mod);
+        \\    __koru_ast_mod.addImport("glob_pattern_matcher", __koru_gpm_mod);
+        \\    __koru_exe.root_module.addImport("ast", __koru_ast_mod);
+        \\
+        \\
+    , .{ rel_to_root, rel_to_root, rel_to_root }) catch return error.BufferOverflow;
+    append(&buffer, &pos, ast_mod_src);
+
     // Add each build requirement
     for (requires, 0..) |*req, i| {
         try appendRequirementWrapper(allocator, &buffer, &pos, req, i, rel_to_root, "User module: ");

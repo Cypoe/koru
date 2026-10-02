@@ -1776,8 +1776,10 @@ const emitFlowWithMocks = struct {
 // Comptime evaluation pass - executes tors with Program/Source parameters
 // This runs BEFORE emission so comptime tors can transform the AST
 ~proc evaluate-comptime|zig {
-    const isProgramType = struct {
-        fn check(raw_type: []const u8) bool {
+    // Comptime-only means "takes the compiler's own AST" — a Program param.
+    // Source/Expression carry captured text, not timing.
+    const comptime_scan = struct {
+        fn isProgramType(raw_type: []const u8) bool {
             var t = raw_type;
             while (true) {
                 t = std.mem.trimLeft(u8, t, " \t");
@@ -1791,68 +1793,56 @@ const emitFlowWithMocks = struct {
                 }
                 break;
             }
-
             return std.mem.endsWith(u8, t, "Program");
         }
-    }.check;
 
-    // Phase 1: Build map of comptime-only tors
-    // (Tors that have Program or Source parameters)
-    var comptime_events: [64][]const u8 = undefined;
-    var comptime_count: usize = 0;
-
-    for (ctx.ast.items) |item| {
-        switch (item) {
-            .event_decl => |event_decl| {
-                // Check if this tor has comptime-only parameters
-                var is_comptime = false;
-                for (event_decl.input.fields) |field| {
-                    if (field.is_source or isProgramType(field.type)) {
-                        is_comptime = true;
-                        break;
-                    }
+        fn record(event_decl: anytype, qualifier: ?[]const u8, allocator: Allocator,
+                  comptime_events: *[64][]const u8, comptime_count: *usize) void {
+            var is_comptime = false;
+            for (event_decl.input.fields) |field| {
+                if (isProgramType(field.type)) {
+                    is_comptime = true;
+                    break;
                 }
+            }
+            if (!is_comptime or comptime_count.* >= 64) return;
+            const path_str = joinPathAlloc(allocator, event_decl.path.segments);
+            const event_name = if (qualifier) |q|
+                std.fmt.allocPrint(allocator, "{s}:{s}", .{q, path_str}) catch path_str
+            else
+                path_str;
+            comptime_events[comptime_count.*] = event_name;
+            comptime_count.* += 1;
+        }
 
-                if (is_comptime and comptime_count < 64) {
-                    // Build tor name from path segments using heap allocation
-                    const path_str = joinPathAlloc(ctx.allocator, event_decl.path.segments);
-                    const event_name = if (event_decl.path.module_qualifier) |mq|
-                        std.fmt.allocPrint(ctx.allocator, "{s}:{s}", .{mq, path_str}) catch path_str
-                    else
-                        path_str;
-                    comptime_events[comptime_count] = event_name;
-                    comptime_count += 1;
-                }
-            },
-            .module_decl => |module| {
-                // Also check imported modules
-                for (module.items) |mod_item| {
-                    if (mod_item == .event_decl) {
-                        const event_decl = mod_item.event_decl;
-                        var is_comptime = false;
-                        for (event_decl.input.fields) |field| {
-                            if (field.is_source or isProgramType(field.type)) {
-                                is_comptime = true;
-                                break;
+        fn run(items: []const Item, allocator: Allocator,
+               comptime_events: *[64][]const u8, comptime_count: *usize) void {
+            for (items) |item| {
+                switch (item) {
+                    .event_decl => |event_decl| {
+                        record(event_decl, event_decl.path.module_qualifier, allocator,
+                               comptime_events, comptime_count);
+                    },
+                    .module_decl => |module| {
+                        for (module.items) |mod_item| {
+                            if (mod_item == .event_decl) {
+                                const qualifier: ?[]const u8 = if (module.logical_name.len > 0)
+                                    module.logical_name else null;
+                                record(mod_item.event_decl, qualifier, allocator,
+                                       comptime_events, comptime_count);
                             }
                         }
-
-                        if (is_comptime and comptime_count < 64) {
-                            // For module tors, include the module name: "std.build:requires"
-                            const path_str = joinPathAlloc(ctx.allocator, event_decl.path.segments);
-                            const event_name = if (module.logical_name.len > 0)
-                                std.fmt.allocPrint(ctx.allocator, "{s}:{s}", .{module.logical_name, path_str}) catch path_str
-                            else
-                                path_str;
-                            comptime_events[comptime_count] = event_name;
-                            comptime_count += 1;
-                        }
-                    }
+                    },
+                    else => {},
                 }
-            },
-            else => {},
+            }
         }
-    }
+    };
+
+    // Phase 1: Build map of comptime-only tors (Program params)
+    var comptime_events: [64][]const u8 = undefined;
+    var comptime_count: usize = 0;
+    comptime_scan.run(ctx.ast.items, ctx.allocator, &comptime_events, &comptime_count);
 
     // Phase 2: Walk flows and find comptime tor invocations
     // std.debug.print("  Phase 2: Scanning flows for comptime invocations...\n", .{});
@@ -1977,57 +1967,7 @@ const emitFlowWithMocks = struct {
     // Transforms may have added/removed tors, so we need to rescan
     log.debug("[PHASE 2.6] Rescanning transformed AST ({} items)\n", .{comptime_updated_ctx.ast.items.len});
     comptime_count = 0;  // Reset counter
-    for (comptime_updated_ctx.ast.items) |item| {
-        switch (item) {
-            .event_decl => |event_decl| {
-                // Check if this tor has comptime-only parameters
-                var is_comptime = false;
-                for (event_decl.input.fields) |field| {
-                    if (field.is_source or isProgramType(field.type)) {
-                        is_comptime = true;
-                        break;
-                    }
-                }
-
-                if (is_comptime and comptime_count < 64) {
-                    // Use heap-allocated path string
-                    const path_str = joinPathAlloc(ctx.allocator, event_decl.path.segments);
-                    const event_name = if (event_decl.path.module_qualifier) |mq|
-                        std.fmt.allocPrint(ctx.allocator, "{s}:{s}", .{mq, path_str}) catch path_str
-                    else
-                        path_str;
-                    log.debug("  Found comptime event: {s} (fields: {})\n", .{event_name, event_decl.input.fields.len});
-                    comptime_events[comptime_count] = event_name;
-                    comptime_count += 1;
-                }
-            },
-            .module_decl => |module| {
-                for (module.items) |mod_item| {
-                    if (mod_item == .event_decl) {
-                        const event_decl = mod_item.event_decl;
-                        var is_comptime = false;
-                        for (event_decl.input.fields) |field| {
-                            if (field.is_source or isProgramType(field.type)) {
-                                is_comptime = true;
-                                break;
-                            }
-                        }
-
-                        if (is_comptime and comptime_count < 64) {
-                            const path_str = joinPathAlloc(ctx.allocator, event_decl.path.segments);
-                            const event_name = if (module.logical_name.len > 0)
-                                std.fmt.allocPrint(ctx.allocator, "{s}:{s}", .{module.logical_name, path_str}) catch path_str
-                            else
-                                path_str;
-                            comptime_events[comptime_count] = event_name;
-                            comptime_count += 1;
-                        }
-                    }
-                }
-            },
-            else => {},
-        }
-    }
+    comptime_scan.run(comptime_updated_ctx.ast.items, ctx.allocator, &comptime_events, &comptime_count);
     log.debug("[PHASE 2.6] Rescan complete: {} comptime events found\n", .{comptime_count});
     for (0..comptime_count) |i| {
         log.debug("  [{}] {s}\n", .{i, comptime_events[i]});

@@ -2144,11 +2144,17 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\        const emit_path = try __koru_std.fmt.bufPrint(&emit_path_buf, "-femit-bin={s}", .{output_exe});
             \\        const debug = CompilerEnv.hasFlag("debug");
             \\        const release_fast = CompilerEnv.hasFlag("release=fast");
-            \\        var exe_argv: [14][]const u8 = undefined;
+            \\        // `Source`-typed fields emit `__koru_ast.Source` references into
+            \\        // output_emitted.zig. When the emitted text uses them, the ast
+            \\        // module (plus its errors and glob_pattern_matcher deps) must be
+            \\        // mapped via --dep/-M — the bare build-exe path has no build file
+            \\        // to do it. Positional and -M main-module spellings conflict, so
+            \\        // the module cluster takes the explicit -Mroot= form.
+            \\        const needs_ast_module = __koru_std.mem.indexOf(u8, generated_code, "__koru_ast.") != null;
+            \\        var exe_argv: [24][]const u8 = undefined;
             \\        var exe_argc: usize = 0;
             \\        exe_argv[exe_argc] = "zig"; exe_argc += 1;
             \\        exe_argv[exe_argc] = "build-exe"; exe_argc += 1;
-            \\        exe_argv[exe_argc] = emitted_file; exe_argc += 1;
             \\        // koru_allocator() backs onto std.heap.c_allocator (real libc
             \\        // malloc/free) -- needs libc linked on this direct build-exe path too.
             \\        exe_argv[exe_argc] = "-lc"; exe_argc += 1;
@@ -2165,6 +2171,30 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\        // an explicit Debug.
             \\        exe_argv[exe_argc] = if (release_fast and !debug) "ReleaseFast" else "Debug"; exe_argc += 1;
             \\        exe_argv[exe_argc] = emit_path; exe_argc += 1;
+            \\        var ast_path_buf: [1024]u8 = undefined;
+            \\        var errors_path_buf: [1024]u8 = undefined;
+            \\        var gpm_path_buf: [1024]u8 = undefined;
+            \\        var root_mod_buf: [512]u8 = undefined;
+            \\        var ast_mod_buf: [1088]u8 = undefined;
+            \\        var errors_mod_buf: [1088]u8 = undefined;
+            \\        var gpm_mod_buf: [1088]u8 = undefined;
+            \\        if (needs_ast_module) {
+            \\            const ast_path = try __koru_std.fmt.bufPrint(&ast_path_buf, "{s}/src/ast.zig", .{CompilerEnv.koru_home});
+            \\            const errors_path = try __koru_std.fmt.bufPrint(&errors_path_buf, "{s}/src/errors.zig", .{CompilerEnv.koru_home});
+            \\            const gpm_path = try __koru_std.fmt.bufPrint(&gpm_path_buf, "{s}/src/glob_pattern_matcher.zig", .{CompilerEnv.koru_home});
+            \\            exe_argv[exe_argc] = "--dep"; exe_argc += 1;
+            \\            exe_argv[exe_argc] = "ast"; exe_argc += 1;
+            \\            exe_argv[exe_argc] = try __koru_std.fmt.bufPrint(&root_mod_buf, "-Mroot={s}", .{emitted_file}); exe_argc += 1;
+            \\            exe_argv[exe_argc] = "--dep"; exe_argc += 1;
+            \\            exe_argv[exe_argc] = "errors"; exe_argc += 1;
+            \\            exe_argv[exe_argc] = "--dep"; exe_argc += 1;
+            \\            exe_argv[exe_argc] = "glob_pattern_matcher"; exe_argc += 1;
+            \\            exe_argv[exe_argc] = try __koru_std.fmt.bufPrint(&ast_mod_buf, "-Mast={s}", .{ast_path}); exe_argc += 1;
+            \\            exe_argv[exe_argc] = try __koru_std.fmt.bufPrint(&errors_mod_buf, "-Merrors={s}", .{errors_path}); exe_argc += 1;
+            \\            exe_argv[exe_argc] = try __koru_std.fmt.bufPrint(&gpm_mod_buf, "-Mglob_pattern_matcher={s}", .{gpm_path}); exe_argc += 1;
+            \\        } else {
+            \\            exe_argv[exe_argc] = emitted_file; exe_argc += 1;
+            \\        }
             \\        const result = __koru_std.process.Child.run(.{
             \\            .allocator = allocator,
             \\            .argv = exe_argv[0..exe_argc],

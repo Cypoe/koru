@@ -58,3 +58,19 @@ off the declared param type) and the PARSE006 punning wall (a bare arg must
 pun to a parameter, or bind implicitly to an `expr: Expression` / `source:
 Source` slot). Same session, same principle: the declared *type* is the
 contract, and it means exactly one thing — never a smuggled second one.
+
+**2026-10-02 — the ruling is now true end-to-end.** Three stale walls still
+treated the flags as timing after the decoupling: `emitArgs` refused a
+runtime-position Source/Expression arg outright (`ComptimeEventNotTransformed`),
+`evaluate-comptime` classified every `is_source` tor as comptime and stripped
+its procs from the runtime AST (the "nothing implements" stub), and the
+type-home collector let a captured field's bare name backfill whichever module
+merely *aliased* it — `const Source = ast.Source` in std.compiler welded the
+comptime module into runtime output. All three now key on `Program` or the
+capture flags, never on the name. Verified: a runtime `|zig` proc receives
+`"2 + 3"` for `expr: Expression` and raw block text for `source: Source`
+(400_202, 400_203); quoted-form Source keeps the literal's spelling (quotes
+included). A bare uncaptured name still resolves its home — `Invocation` →
+`koru_interpreter` — because the flag, not the name, is the discriminator.
+`EventDecl.isComptimeOnly()` still returns true for these fields on purpose:
+its callers ask "is this input compiler-supplied", and captured text is.

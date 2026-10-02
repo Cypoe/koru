@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # pre-commit — two walls:
 #   1. git-wall: refuse commits that stage repo rot (.gitignore is the oracle)
-#   2. invariant gate, enforcing: `check:` rows block (deterministic) and
-#      judgment rows block under GATE_BLOCK=1 (Jev via koru/odds,
-#      staged-diff-scoped; no key → UNJUDGED → blocked)
+#   2. invariant gate, enforcing: the in-language gate runs the manifest's
+#      git-gate profile — `check:` rows block (deterministic) and judgment
+#      rows delegate to the profile's declared judge (Jev via koru/odds;
+#      UNJUDGED blocks). gate.py remains as the read-only reference oracle.
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 bash "$ROOT/scripts/git_wall.sh" --staged
-GATE_BLOCK=1 python3 "$ROOT/invariants/gate.py"
+"$ROOT/zig-out/bin/koruc" "$ROOT/invariants/invariants.kz" gate git-gate

@@ -542,9 +542,14 @@ pub const VisitorEmitter = struct {
         if (shouldFilter(event.annotations, module_annotations, event.module, self.emit_mode)) return false;
         if (annotationsAreConsumedCompilerSurface(event.annotations, self.emit_mode)) return false;
         for (event.input.fields) |field| {
-            if (field.is_source or field.is_expression or
-                std.mem.indexOf(u8, field.type, "Program") != null)
-            {
+            // Only `Program` is genuinely compile-time — the AST cannot exist
+            // at runtime. `Source`/`Expression` fields carry captured text and
+            // emit at runtime like any other param (parser.zig: "an Expression
+            // is just another way to pass a string"). The interpreter's wire
+            // reads their InputFieldSpec type_name to direct a field's
+            // admitted spelling — the decl must exist for the scope registry
+            // to dispatch to it.
+            if (std.mem.indexOf(u8, field.type, "Program") != null) {
                 return self.emit_mode != .runtime_only;
             }
         }
@@ -629,15 +634,30 @@ pub const VisitorEmitter = struct {
             switch (item.*) {
                 .event_decl => |*event| {
                     if (!self.eventSignatureEmits(event, module_annotations)) continue;
-                    for (event.input.fields) |f| try noteType(self, set, qualified, f.type, f.module_path, scanning_module);
+                    // Captured fields (`is_source`/`is_expression`) emit as
+                    // builtins — `__koru_ast.Source`, `[]const u8` — no module
+                    // home to collect. Letting them reach the homes map
+                    // backfills whichever module merely ALIASES the spelling
+                    // (`const Source = ast.Source` in std.compiler) and welds
+                    // that module's bodies into the emitted program.
+                    for (event.input.fields) |f| {
+                        if (f.is_source or f.is_expression) continue;
+                        try noteType(self, set, qualified, f.type, f.module_path, scanning_module);
+                    }
                     if (event.return_type) |rt| try noteType(self, set, qualified, rt, null, scanning_module);
                     for (event.branches) |branch| {
-                        for (branch.payload.fields) |f| try noteType(self, set, qualified, f.type, f.module_path, scanning_module);
+                        for (branch.payload.fields) |f| {
+                            if (f.is_source or f.is_expression) continue;
+                            try noteType(self, set, qualified, f.type, f.module_path, scanning_module);
+                        }
                         if (branch.resume_type) |rt| try noteType(self, set, qualified, rt, null, scanning_module);
                     }
                 },
                 .host_type_decl => |*ht| {
-                    for (ht.shape.fields) |f| try noteType(self, set, qualified, f.type, f.module_path, scanning_module);
+                    for (ht.shape.fields) |f| {
+                        if (f.is_source or f.is_expression) continue;
+                        try noteType(self, set, qualified, f.type, f.module_path, scanning_module);
+                    }
                 },
                 else => {},
             }
@@ -1439,14 +1459,14 @@ pub const VisitorEmitter = struct {
                     return;
                 }
 
-                // Check if this event has comptime parameters (Source/Expression/Program)
-                // Events with these parameters are implicitly comptime, regardless of annotations
+                // Check if this tor has comptime parameters (Program)
+                // Tors carrying `Program` are implicitly comptime — the AST
+                // does not exist at runtime. `Source`/`Expression` fields are
+                // captured text, not timing: an unannotated tor declaring them
+                // emits at runtime and transports what the call site wrote.
                 var has_comptime_params = false;
                 for (event.input.fields) |field| {
-                    if (field.is_source or
-                        field.is_expression or
-                        std.mem.indexOf(u8, field.type, "Program") != null)
-                    {
+                    if (std.mem.indexOf(u8, field.type, "Program") != null) {
                         has_comptime_params = true;
                         break;
                     }
@@ -5271,13 +5291,12 @@ pub const VisitorEmitter = struct {
 
         const event = event_type.?;
 
-        // Check if event has comptime parameters by examining input_shape
+        // Check if the tor has comptime parameters by examining input_shape.
+        // Only `Program` counts — `Source`/`Expression` carry captured text
+        // and emit at runtime like any other param.
         if (event.input_shape) |shape| {
             for (shape.fields) |field| {
-                if (field.is_source or field.is_expression or
-                    std.mem.indexOf(u8, field.type, "Program") != null or
-                    std.mem.eql(u8, field.type, "Expression"))
-                {
+                if (std.mem.indexOf(u8, field.type, "Program") != null) {
                     log.debug("  TypeRegistry event has comptime parameter\n", .{});
                     return true;
                 }
