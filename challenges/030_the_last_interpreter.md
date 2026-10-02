@@ -2,9 +2,7 @@
 challenge: the-last-interpreter
 kind: frame
 status: standing
-yields: one external instrument retired — a Python or shell step in the toolchain's
-  enforcement path replaced by an in-language surface that produces verdict-equal
-  output on the same input, with the old file deleted or demoted to read-only oracle
+yields: "one external instrument retired — a Python or shell step in the toolchain's enforcement path replaced by an in-language surface that produces verdict-equal output on the same input, with the old file deleted or demoted to read-only oracle"
 family: toolchain
 created: 2026-10-02
 ---
