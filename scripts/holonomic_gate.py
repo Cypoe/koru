@@ -64,7 +64,7 @@ class Fold:
     observe: str                 # field whose trajectory is compared
 
 
-_ARITH = re.compile(r"^[A-Za-z_@][A-Za-z0-9_@.() \t+\-*/%]*$")
+_ARITH = re.compile(r"^[A-Za-z_@0-9+\-][A-Za-z0-9_@.() \t+\-*/%]*$")
 
 
 def _split_top(s: str):
@@ -175,12 +175,15 @@ _OPS = {"<": lambda a, b: a < b, ">": lambda a, b: a > b,
         "==": lambda a, b: a == b, "!=": lambda a, b: a != b}
 
 
-def trajectory(fold: Fold, steps: int):
-    """Iterate the transition numerically: observed post-update values."""
+def trajectory(fold: Fold, steps: int, bounded: bool = True):
+    """Iterate the transition numerically: observed post-update values.
+    bounded=True stops at the guard (the program's actual output);
+    bounded=False iterates F regardless — the certificate is a property
+    of the transition, not of where the program chooses to stop."""
     state = dict(fold.init)
     out = []
     for _ in range(steps):
-        if fold.guard:
+        if bounded and fold.guard:
             f, op, rhs = fold.guard
             if rhs in state:
                 rv = state[rhs]
@@ -314,7 +317,7 @@ def verify_generic(fold: Fold, order: int, polys) -> bool:
 def certify(fold: Fold, window: int = 64):
     """First verified certificate for the observed trajectory.
     Returns (order, polys, method) or (None, reason, saw_candidate)."""
-    seq = trajectory(fold, window)
+    seq = trajectory(fold, window, bounded=False)
     cf = closed_form(fold)
     saw = False
     for order, polys in candidate_certs(seq):
@@ -342,15 +345,14 @@ def gate(src_a: str, src_b: str, window: int = 64):
 
     ca = certify(fa, window)
     cb = certify(fb, window)
-    seq_a = ca[1] if ca[0] is None else None
-    seq_b = cb[1] if cb[0] is None else None
-    if seq_a is None:
-        seq_a = trajectory(fa, window)
-    if seq_b is None:
-        seq_b = trajectory(fb, window)
-
-    if len(seq_a) != len(seq_b):
-        return "NOT-EQUAL", f"trajectory length {len(seq_a)} vs {len(seq_b)}"
+    # output equality needs same stopping point AND same iterates; the
+    # certificate argument applies to the unbounded F-trajectory
+    out_a = trajectory(fa, window, bounded=True)
+    out_b = trajectory(fb, window, bounded=True)
+    if len(out_a) != len(out_b):
+        return "NOT-EQUAL", f"output length {len(out_a)} vs {len(out_b)}"
+    seq_a = trajectory(fa, window, bounded=False)
+    seq_b = trajectory(fb, window, bounded=False)
     diff = [a - b for a, b in zip(seq_a, seq_b)]
 
     if ca[0] is None or cb[0] is None:
@@ -395,6 +397,7 @@ _SELFTEST_CERT = [
     ("tri.k", "CERTIFIED"),
     ("fact.k", "CERTIFIED"),
     ("tri_builtin.k", "CANDIDATE"),      # non-affine, non-generic-verifiable
+    ("sum_desc.k", "CERTIFIED"),         # 020_028 corpus fold, 5-iter output
     ("refused_fn.k", "REFUSED"),
     ("refused_nofold.k", "REFUSED"),
 ]
@@ -404,6 +407,9 @@ _SELFTEST_EQ = [
     ("sq_incr.k", "sq_direct.k", "EQUAL"),      # sum-of-odds == squares
     ("sq_incr.k", "tri.k", "NOT-EQUAL"),        # diverges inside the bound
     ("fact.k", "fact.k", "EQUAL"),              # identity
+    # 020_028 corpus fold vs its commuted twin — GA-style mutation
+    # proven identical; bound 2 + singular point at n=10 is checked
+    ("sum_desc.k", "sum_desc_commuted.k", "EQUAL"),
 ]
 
 
