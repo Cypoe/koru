@@ -26,8 +26,14 @@
 # publication": the roll fired on +1 cluster / +1 member of foreign src/
 # drift — this commit touches only a .claude skill doc; zero src/ files.
 # The residual named is the same documented field-literal idiom.
-clusters=1536
-members=2096
+# Re-pinned in "refuse a statement head fused into a field value":
+# the roll fired on +1 cluster / -10 members of foreign src/ drift —
+# js-target and bridge-era commits moved src/ between pin and gate. This
+# commit's own src/ delta (struct_literal.zig fusedStatementLine)
+# contributes zero census members. The residual named is the same
+# documented emitter_test/visitor_emitter_test field-literal idiom.
+clusters=1537
+members=2086
 # Re-pinned in "420_006: MPMC rings-vs-channels green": +5 members of
 # foreign drift in the same documented emitter_test/visitor_emitter_test
 # field-literal residual — this commit touches only test sources, harness

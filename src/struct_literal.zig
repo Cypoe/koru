@@ -38,6 +38,7 @@ pub const ParseError = error{
     BareEntryNotPunnable,
     RedundantExplicitLabel,
     MissingComma,
+    FusedStatement,
     DuplicateField,
     NamelessField,
     TypelessField,
@@ -261,6 +262,56 @@ pub fn fusedFieldLine(value: []const u8) ?[]const u8 {
     return null;
 }
 
+/// A top-level newline inside a field's VALUE followed by a statement head —
+/// `!` (watch/effect), `|` or `|>` (branch/continuation), `~` (tor), `=>`
+/// (branch result), or `#` (label) — is a tor line fused into the field for
+/// want of a boundary, not expression continuation. The composition fuzzer
+/// proved the shape compiles green while the emitted Zig carries the Koru
+/// line verbatim (`acc.n = acc.n + 1\n! row e |> ...` fails `zig ast-check`),
+/// so this must refuse at parse, not reach emission. Continuation lines of
+/// real expressions start with operators (`+ @min(...)`) or operands, never
+/// with a statement head. Returns the fused line's text when found, else null.
+///
+/// `!=` is not a head (comparison could wrap onto it), so `!` requires the
+/// next byte be neither `=` nor ident-joined; `|` excludes `||` and `|=`.
+fn fusedStatementLine(value: []const u8) ?[]const u8 {
+    var depth: usize = 0;
+    var i: usize = 0;
+    while (i < value.len) : (i += 1) {
+        switch (value[i]) {
+            '"' => {
+                i += 1;
+                while (i < value.len and value[i] != '"') : (i += 1) {
+                    if (value[i] == '\\' and i + 1 < value.len) i += 1;
+                }
+            },
+            '{', '(', '[' => depth += 1,
+            '}', ')', ']' => if (depth > 0) {
+                depth -= 1;
+            },
+            '\n' => if (depth == 0) {
+                var j = i + 1;
+                while (j < value.len and (value[j] == ' ' or value[j] == '\t' or value[j] == '\r')) : (j += 1) {}
+                if (j >= value.len) continue;
+                const head = switch (value[j]) {
+                    '!' => j + 1 >= value.len or
+                        (value[j + 1] != '=' and !isIdentChar(value[j + 1])),
+                    '~', '#', '|' => true,
+                    '=' => j + 1 < value.len and value[j + 1] == '>',
+                    else => false,
+                };
+                if (head) {
+                    var e = j;
+                    while (e < value.len and value[e] != '\n') : (e += 1) {}
+                    return std.mem.trim(u8, value[j..e], " \t\r");
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
 /// The field name a value would pun to — the segment after the last `.`, or
 /// the whole token when there's no dot — or `null` when the value CANNOT pun.
 /// Mirrors `lexer.punnableName` (kept local so this module stays free of a
@@ -314,6 +365,7 @@ fn projectRawFields(
             // `.name =` with nothing after it.
             if (value.len == 0) return error.TypelessField;
             if (fusedFieldLine(value) != null) return error.MissingComma;
+            if (fusedStatementLine(value) != null) return error.FusedStatement;
             if (punnableName(value)) |punned| {
                 if (std.mem.eql(u8, punned, name)) return error.RedundantExplicitLabel;
             }
@@ -383,6 +435,7 @@ pub fn describeError(err: ParseError) []const u8 {
         error.BareEntryNotPunnable => "positional assignment is never allowed — name the target (`x: expr`); a bare entry must be a punnable name or path",
         error.RedundantExplicitLabel => "punning is mandatory — drop the redundant label and write the bare pun",
         error.MissingComma => "missing comma between fields — a `name: value` line that does not end in a comma fuses with the next line into one field",
+        error.FusedStatement => "a `!` / `|` / `=>` line inside a `{ }` block begins a new step — it cannot continue the field above it",
         error.NamelessField => "field has no name — a field is `name: value` or a bare punnable name; `: value` dropped the name",
         error.TypelessField => "field has no value — a field is `name: value`; `name:` dropped the value",
         error.DuplicateField => "a field list takes each name once — the list cannot carry two fields with the same name",
@@ -464,6 +517,21 @@ pub fn describeErrorIn(allocator: Allocator, err: ParseError, input: []const u8)
     if (err == error.DuplicateField) {
         if (duplicateFieldName(allocator, input)) |name| {
             return std.fmt.allocPrint(allocator, "field '{s}' is bound twice — a field list takes each name once", .{name}) catch describeError(err);
+        }
+        return describeError(err);
+    }
+    if (err == error.FusedStatement) {
+        const trimmed = std.mem.trim(u8, input, " \t\n\r");
+        if (trimmed.len >= 2 and trimmed[0] == '{' and trimmed[trimmed.len - 1] == '}') {
+            if (splitFields(allocator, trimmed[1 .. trimmed.len - 1])) |raw_fields| {
+                for (raw_fields) |raw| {
+                    if (topLevelColon(raw)) |colon| {
+                        if (fusedStatementLine(std.mem.trim(u8, raw[colon + 1 ..], " \t\n\r"))) |line| {
+                            return std.fmt.allocPrint(allocator, "'{s}' is a new step, not part of the field above it — a `!` / `|` / `=>` line cannot continue a field value; move it out of the `{{ }}` block", .{line}) catch describeError(err);
+                        }
+                    }
+                }
+            } else |_| {}
         }
         return describeError(err);
     }

@@ -56,6 +56,19 @@ Splicing into such a block produces a green that means *dropped*, not
   `std/proto` bodies all take `{ name: type }`-shaped text through their
   own grammars). A census of which ones keep-or-refuse versus keep-or-drop
   is the actual coverage question.
+- **Drop has a twin: fuse-and-emit.** The same evening, GP scored
+  `store__capture` green on a splice that put a `! row e |> store:take`
+  watch inside a `captured { }` field. `struct_literal.parseFields` split
+  the block on top-level commas only, so the tor line fused into the
+  field's value — and the emitter pasted it *verbatim into the Zig*:
+  `acc.n = acc.n + 1\n! row e |> std/store:take(arena[e]);` — text that
+  fails `zig ast-check`. Nothing dropped it; it shipped. `--deep-check`
+  writes emission without checking the emission parses. Fix: a depth-0
+  newline followed by a statement head (`!`, `|`, `~`, `=>`, `#`) inside a
+  field value is refused as `FusedStatement` (KORU164, names the line) —
+  pinned by 100_089, which sits beside 100_083's unclosed-paren twin.
+  The witness rule sharpens again: the witness must appear in emitted
+  output that is itself parseable.
 
 ## Open
 
@@ -64,3 +77,5 @@ Splicing into such a block produces a green that means *dropped*, not
   (440_016's discharge-phantom path).
 - Which other `Source` consumers drop unresolved lines; each is a falsifier
   of any text-level coverage claim over it.
+- Whether `--deep-check` should `zig ast-check` its own emission — the
+  oracle currently cannot distinguish "emitted" from "emitted valid Zig".

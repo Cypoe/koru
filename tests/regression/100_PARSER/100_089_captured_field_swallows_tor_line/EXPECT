@@ -1,0 +1,3 @@
+CONTAINS error[KORU164]
+CONTAINS is a new step, not part of the field above it
+CONTAINS bogus
