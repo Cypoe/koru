@@ -1,0 +1,9 @@
+name: instrument
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `blind-spot` — declare that name. (orphan drained
+  2026-10-02; the firing named an instrument's sightline limit — a fuzz
+  PASS credited as coverage while a dropped splice emitted nothing —
+  which is blind-spot semantics, not a new type)

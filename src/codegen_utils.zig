@@ -1280,6 +1280,17 @@ fn lowerJsInto(
             i += 1;
             continue;
         }
+        // Zig WRAPPING operators `*%` `+%` `-%`. The JS int model is a double,
+        // and the neighbouring bitwise ops (`^`, `&`, `|`) already coerce to
+        // i32 — so `Math.imul` is the bit-exact spelling of `*%` here and the
+        // `| 0` coercion is `+%`/`-%`. Without this the spelling leaks verbatim
+        // and the emitted file is a syntax error, not a wrong answer.
+        if ((c == '*' or c == '+' or c == '-') and i + 1 < text.len and text[i + 1] == '%') {
+            if (try jsWrapOp(out, allocator, text, i, diag)) |after| {
+                i = after;
+                continue;
+            }
+        }
         // Zig ARRAY literal: `[_]i32{1, 2, 3}`. The type prefix has no JS
         // counterpart and the braces become brackets.
         if (c == '[') {
@@ -1319,6 +1330,121 @@ fn lowerJsInto(
         try out.append(allocator, c);
         i += 1;
     }
+}
+
+/// Operand capture for the `*%` `+%` `-%` lowerings in `lowerJsInto`.
+/// `text[at]` is the operator's first character (the `%` follows it). The LHS
+/// sits at the END of `out` — already appended — and is pulled back off; the
+/// RHS is the next term in `text`. A term is a balanced `(...)`/`[...]`/`{...}`
+/// group or an atom: identifier/dotted path, numeric literal, or a call.
+/// Returns the source index just past the RHS, or null when either side is not
+/// a shape this can capture — the op then falls through verbatim, a loud syntax
+/// error downstream rather than a silent wrong answer.
+fn jsWrapOp(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    at: usize,
+    diag: ?*LowerDiag,
+) LowerError!?usize {
+    // --- LHS: trailing operand of the already-emitted text.
+    var l = out.items.len;
+    while (l > 0 and std.ascii.isWhitespace(out.items[l - 1])) l -= 1;
+    if (l == 0) return null;
+    const l_end = l;
+    const last = out.items[l - 1];
+    if (last == ')' or last == ']' or last == '}') {
+        const open: u8 = switch (last) {
+            ')' => '(',
+            ']' => '[',
+            '}' => '{',
+            else => unreachable,
+        };
+        var depth: usize = 0;
+        while (l > 0) {
+            l -= 1;
+            const ch = out.items[l];
+            if (ch == last) depth += 1;
+            if (ch == open) {
+                if (depth == 0) return null;
+                depth -= 1;
+                if (depth == 0) break;
+            }
+        }
+        if (depth != 0) return null;
+    } else if (exprIdentChar(last) or last == '.') {
+        while (l > 0 and (exprIdentChar(out.items[l - 1]) or out.items[l - 1] == '.')) l -= 1;
+    } else return null;
+    const lhs = try allocator.dupe(u8, out.items[l..l_end]);
+    defer allocator.free(lhs);
+    out.shrinkRetainingCapacity(l);
+
+    // --- RHS: next term in the source text.
+    var j = at + 2;
+    while (j < text.len and std.ascii.isWhitespace(text[j])) j += 1;
+    if (j >= text.len) return null;
+    var r_end = j;
+    if (text[j] == '(' or text[j] == '[' or text[j] == '{') {
+        var depth: usize = 0;
+        while (r_end < text.len) {
+            const ch = text[r_end];
+            if (ch == '"' or ch == '\'' or ch == '`') {
+                r_end = jsSkipQuoted(text, r_end);
+                continue;
+            }
+            if (ch == '(' or ch == '[' or ch == '{') depth += 1;
+            if (ch == ')' or ch == ']' or ch == '}') {
+                depth -= 1;
+                if (depth == 0) {
+                    r_end += 1;
+                    break;
+                }
+            }
+            r_end += 1;
+        }
+        if (depth != 0) return null;
+    } else {
+        while (r_end < text.len and (exprIdentChar(text[r_end]) or text[r_end] == '.' or text[r_end] == '@')) r_end += 1;
+        // An atom followed by `(` is a call — take the balanced group too.
+        if (r_end < text.len and text[r_end] == '(') {
+            var depth: usize = 0;
+            var k = r_end;
+            while (k < text.len) {
+                const ch = text[k];
+                if (ch == '"' or ch == '\'' or ch == '`') {
+                    k = jsSkipQuoted(text, k);
+                    continue;
+                }
+                if (ch == '(') depth += 1;
+                if (ch == ')') {
+                    depth -= 1;
+                    if (depth == 0) {
+                        k += 1;
+                        break;
+                    }
+                }
+                k += 1;
+            }
+            if (depth != 0) return null;
+            r_end = k;
+        }
+    }
+    if (r_end == j) return null;
+
+    if (text[at] == '*') {
+        try out.appendSlice(allocator, "Math.imul(");
+        try out.appendSlice(allocator, lhs);
+        try out.appendSlice(allocator, ", ");
+        try lowerJsInto(out, allocator, text[j..r_end], .koru_expr, diag);
+        try out.append(allocator, ')');
+    } else {
+        try out.appendSlice(allocator, "((");
+        try out.appendSlice(allocator, lhs);
+        try out.append(allocator, text[at]);
+        try lowerJsInto(out, allocator, text[j..r_end], .koru_expr, diag);
+        try out.appendSlice(allocator, ") | 0)");
+    }
+    return r_end;
 }
 
 /// Skip a quoted literal opening at `text[i]` (`"`, `'`, or backtick).

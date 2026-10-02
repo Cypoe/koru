@@ -125,6 +125,19 @@ fn parseRangeFilter(allocator: std.mem.Allocator, args: []const liquid.Value) an
     return liquid.Value{ .record = node };
 }
 
+/// `js_lower(expr)` filter: run an expression through the JS target's
+/// Koru-expression lowering (`lowerKoruExpr` .js/.koru_expr) so Zig-spelled
+/// terms — `if (c) a else b`, `*%`, `@builtins` — arrive as JavaScript in
+/// template splices that emit their argument verbatim (the `for|js` range
+/// bounds, the `for…of` iterable, `keep`). A refused builtin propagates as a
+/// render failure — loudly, not as unlowered text spliced downstream.
+fn jsLowerFilter(allocator: std.mem.Allocator, args: []const liquid.Value) anyerror!liquid.Value {
+    if (args.len != 1 or args[0] != .string) return error.BadArgs;
+    var d = codegen_utils.LowerDiag{};
+    const s = try codegen_utils.lowerKoruExpr(allocator, args[0].string, .js, .koru_expr, &d);
+    return liquid.Value{ .string = s };
+}
+
 /// Return the index of the next top-level `,` (or end / closing `}`) at or
 /// after `start`, treating `{}`/`()`/`[]` nesting and `"…"` string literals as
 /// opaque. Mirrors codegen_utils.parseValue's depth tracking — the value of a
@@ -988,6 +1001,7 @@ pub fn renderTemplateInvocation(
     var filters = liquid.FilterRegistry.init(allocator);
     defer filters.deinit();
     try filters.put("parse_range", parseRangeFilter);
+    try filters.put("js_lower", jsLowerFilter);
     try filters.put("parse_fields", parseFieldsFilter);
     try filters.put("table_from", tableFromFilter);
     try filters.put("table_gaps", tableGapsFilter);

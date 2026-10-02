@@ -95,3 +95,17 @@ Open question, and it is the one that decides whether this stays prose: is
 return type for host-language strings, so that producing one without a
 `HostLang` in hand does not compile? That would move the belief into the type
 system and let this fragment shrink to a pointer.
+
+**Falsified as predicted, at a third site (2026-10-02).** The committed list
+said "that set is exactly two" — the `for|js` template in koru_std/control.kz
+was a third: it spliced `{{ __koru_range.lo }}` / `{{ __koru_range.hi }}` /
+`{{ expr }}` / `{{ keep }}` — raw Koru expression text — into a JavaScript
+loop header, and an inline `if (c) a else b` bound or `@builtin` inside it
+emitted verbatim Zig inside `for (let …)`. The fix also moves the defense up
+one level: rather than a third `HostLang` key, a `js_lower` Liquid filter
+(template_processor.zig) now routes every expression splice in that template
+through `lowerKoruExpr`, so the whole Zig-spelled vocabulary — inline ifs,
+`*%`/`+%`/`-%`, builtins — lowers instead of each construct needing its own
+keyed render. The standing claim is now weaker and still cheap to falsify:
+expression-bearing splices are covered in `for|js`; other per-call templates
+that splice `{{ expr }}`-shaped text were not audited in this pass.
