@@ -32,8 +32,13 @@
 # commit's own src/ delta (struct_literal.zig fusedStatementLine)
 # contributes zero census members. The residual named is the same
 # documented emitter_test/visitor_emitter_test field-literal idiom.
-clusters=1537
-members=2086
+# Re-pinned in "challenge 030 replay 1: gate.py A/B — verdict-equal on
+# dogfood, divergent on two edges": the roll fired on +2 clusters /
+# +3 members of foreign src/ drift in the same documented residual —
+# this commit touches only the challenge catalog and a concept frag;
+# zero src/ files.
+clusters=1539
+members=2089
 # Re-pinned in "420_006: MPMC rings-vs-channels green": +5 members of
 # foreign drift in the same documented emitter_test/visitor_emitter_test
 # field-literal residual — this commit touches only test sources, harness

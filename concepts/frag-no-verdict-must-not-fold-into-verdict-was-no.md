@@ -49,6 +49,18 @@ about a check whose pattern is fine but whose *worklist* silently loses rows
 between enumeration and judgment. Both report health; only one of them is
 detectable by reading the predicate.
 
+**The fold lives one layer deeper, too — in the input fetch.** Measured
+2026-10-02 on the git-gate port (challenge 030 replay 1): `std/gate`'s
+staged-diff read rides `Child.run`'s 50KB `max_output_bytes` default, so a
+60KB diff — inside the 96KB judge window — errors the fetch, `staged` stays
+null, and every judged row takes the empty-state path — "no staged changes" —
+a true-absence verdict for an error-shaped absence. The port even *contains* the third bucket (an UNJUDGED
+branch for states over the 96KB judge window) and it is unreachable: the cap
+strangles the input before the window check runs. The oracle (gate.py) reports
+UNJUDGED and blocks; the port reports clean and exits 0. Same law, one layer
+down: not only must the gate distinguish "never judged" from "judged no" — it
+must distinguish "the state never arrived" from "the state was empty."
+
 **What would correct this:** a case where the third bucket is noise — where
 "never ran" is routine and expected, and forcing the gate to fail on it trains
 everyone to ignore the exit code. Then the third state has become decoration and

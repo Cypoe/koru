@@ -76,10 +76,50 @@ is the catalog — if a surface is already retired, pick another.
 
 ## The catalog — retired surfaces
 
-*(empty at frame creation — the first replay writes the first row)*
+*(first replay measured gate.py against its port — verdict-equal on the
+dogfood corpus, divergent on two named edges; not yet retired)*
 
-| instrument | retired by | verified against | date |
-|---|---|---|---|
+| surface | oracle | method | verdict | divergences | date |
+|---|---|---|---|---|---|
+| `invariants/gate.py` → `koruc invariants/invariants.kz gate git-gate [--repo]` | `python3 invariants/gate.py --repo <scratch>` (`GATE_BLOCK=1` ≡ profile `block: true`) | 6 /tmp scratch repos, identical staged diffs, both runners, per-row verdicts + exit codes | verdict-equal on the dogfood corpus (swallow VIOLATION/exit 1 both; lograise & readme clean/exit 0 both; 17/17 rows same verdict class; odds rolls byte-identical on every fetched diff — on oversized the port rolled over an empty fetch, symptom of divergence 2) | **2, named below — blocks retirement** | 2026-10-02 |
+
+### Replay 1 evidence — gate.py A/B, pick5/gate-equivalence
+
+Per-row verdicts on identical staged diffs (koru worktree manifest,
+`zig-out/bin/koruc` = 5b4d514ff):
+
+- `swallow` (`except Exception: pass` staged): `no-fallbacks` VIOLATION
+  both sides (Jev p=0.94 vs p=0.91 — live-model jitter on the shared
+  judge binary; verdict identical). All 12 non-judged rows identical.
+  Exit 1 both.
+- `lograise` (`except …: log.warning; raise`): all judged CLEAN p=1
+  both; exit 0 both. `deslop-stdlib-host-board` rolled 0 < 10 and fired
+  in both, then skipped manifest-scoped in both.
+- `readme` (doc-only diff): identical, exit 0 both.
+- `oversized` (120,118B staged diff): **DIVERGED** — gate.py: 4 judged
+  rows `UNJUDGED state exceeds ~96KB`, enforcing → 4 blocking, exit 1.
+  koruc gate: judged rows reported "no staged changes" → clean, exit 0.
+- `mid` (60,118B staged diff — inside the 96KB judge window): same
+  bottom line by accident, divergent accounting — gate.py fetched the
+  diff and got 4 live Jev verdicts (CLEAN p=0.83–1, exit 0); koruc gate
+  reported "no staged changes" → clean, exit 0, never judging. Root
+  cause for both divergent runs: `helpers.runOut` rides
+  `std.process.Child.run`'s default `max_output_bytes = 50KB`; the
+  fetch errors, `staged` stays null, and the rows take the empty-state
+  path. The >96KB UNJUDGED branch exists in gate.kz but is unreachable
+  — the cap strangles the input before the window check, and judged
+  rows silently skip on any diff over 50KB. Cannot-verify folded into
+  clean.
+- `pick5-teaching-surface` (foreign repo sharing the manifest dir's
+  basename): **DIVERGED** — gate.py skips manifest-scoped check rows
+  (realpath identity); gate.kz:270 tests `basename(gated_repo) ==
+  basename(prof_repo)`, so all 7 manifest checks RAN — instrumenting
+  the manifest's own tree while reporting against the foreign repo.
+  A red manifest check would block an unrelated foreign commit.
+
+Untested seam: BROKEN-manifest path (koruc can't read the listing →
+gate.py prints BROKEN + exit 1; the in-language gate fails at compile —
+both loud, shape differs, not measured).
 
 Done-gates, all mechanical: verdict-equivalence demonstrated on real inputs
 and quoted · honesty states preserved (BROKEN/UNJUDGED/refusal) · old file
