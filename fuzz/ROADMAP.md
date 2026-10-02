@@ -53,8 +53,13 @@ folds whose step is polynomial-in-state get *decidable equality*:
   P-recursive sequences stated as a theorem — the gate *implements* it;
   the Lean side would discharge the meta-justification the runtime
   currently asserts.
-- Fuzzer tie-in: GA-synthesized folds feed the gate → certified
-  program synthesis (program + equality certificate, not program + hope).
+- Fuzzer tie-in — LANDED as `scripts/holonomic_synth.py`: GA over
+  update-expression genomes (born in-fragment by construction), fitness
+  = first-divergence index into the 64-iterate window (semantic, not
+  syntactic), terminal = gate `EQUAL`. `--selftest` pins it: 3 distinct
+  certified-equal mutants of `sq_direct` in ≤3 generations, including
+  the incremental `acc + 2n - 1` discovered by search. Program +
+  certificate, not program + hope.
 
 ## 2. Obligation-scoped mutation fuzzing
 
