@@ -6249,6 +6249,7 @@ pub fn emitFlow(
             emitter.dedent();
             try emitter.writeIndent();
             try emitter.write("}\n");
+            try emitFoldFallthroughGuard(emitter, ctx);
         } else {
             // No pre_label - emit all continuations normally.
             // A head step that declares NO terminal branches (a branchless
@@ -10481,6 +10482,36 @@ fn emitBranchProduce(emitter: *CodeEmitter, ctx: *EmissionContext, code: []const
     return true;
 }
 
+/// A `label: while (true)` fold inside a handler whose Output is non-void must
+/// produce on every path — looping arms `continue`, exiting arms `return` a
+/// value inside the switch. A path that reaches `break :label` (a `_`
+/// continuation, an arm end with no produce — "can't happen" spelled `|> _`)
+/// owes a value it never made. Falling off the end of a non-void fn is invalid
+/// Zig; `unreachable` is UB under the ReleaseFast output build, so the guard
+/// panics loudly in every optimize mode. Void contexts skip it — there
+/// `break :label` is a legitimate fold exit into whatever follows the loop.
+fn emitFoldFallthroughGuard(emitter: *CodeEmitter, ctx: *EmissionContext) !void {
+    const decl = ctx.produce_event orelse ctx.impl_event_decl orelse return;
+    var nonvoid = decl.return_type != null;
+    if (!nonvoid) {
+        for (decl.branches) |b| {
+            if (b.kind == .terminal) {
+                nonvoid = true;
+                break;
+            }
+        }
+    }
+    if (!nonvoid) return;
+    const name = if (decl.path.segments.len > 0) decl.path.segments[decl.path.segments.len - 1] else "?";
+    const msg = try std.fmt.allocPrint(
+        ctx.allocator,
+        "@panic(\"koru: a #label fold arm in '{s}' exited the loop without a continue or a `->` produce — the handler owes a value it never made\");\n",
+        .{name},
+    );
+    try emitter.writeIndent();
+    try emitter.write(msg);
+}
+
 pub fn emitContinuationBody(
     emitter: *CodeEmitter,
     ctx: *EmissionContext,
@@ -10744,6 +10775,7 @@ pub fn emitContinuationBody(
         emitter.dedent();
         try emitter.writeIndent();
         try emitter.write("}\n");
+        try emitFoldFallthroughGuard(emitter, ctx);
 
         // Label case is done - no remaining steps to process
     } else {

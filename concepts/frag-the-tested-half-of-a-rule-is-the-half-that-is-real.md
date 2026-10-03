@@ -233,3 +233,32 @@ The counting habit, sharpened: enumerate a refusal's carriers by *who owns
 the text* — parser-typed positions get the frontend check; `Source`-typed
 positions get it inside the transform that consumes them. Pins:
 `210_285`–`210_297`, `390_127`/`390_128`, `690_345`–`690_348`, `697_015`.
+
+## 2026-10-03 — the same asymmetry in a REWRITE, and the deleted machinery was the safety net
+
+548aae02b rewrote `#label` fold loops from a `while (result == .live)` driver
+to `while (true)` + an exhaustive switch with a uniform `break :label` — a
+real simplification, "-746 lines" including "unreachable-arm machinery
+deleted", verified against a 74-test label sweep. Every tested shape was
+correct. The untested shape was a **non-void handler** (`-> i64`) whose fold
+arm exits without producing — `| err _ |> _`, the "can't happen" spelling,
+exactly the arm the deleted machinery existed for.
+
+The old driver masked the same defect as a silent spin (an empty `.err` arm
+fell through to a re-test of an unchanged union); the rewrite traded the
+silent spin for invalid Zig — a non-void function falling off its end —
+and the flagship prime sieve stopped compiling at stage-D. Both sides were
+the untested half: the old code was never *right* on this shape, it was
+merely unexposed.
+
+So the form generalises once more: **a rewrite verified on the tested half
+deletes machinery that was load-bearing on the untested half**, and the
+sweep's size is not evidence — 74 green tests covering the same half is
+still half. A fallback arm that "can't fire" is where the totality debt
+actually lives; deleting it because it looks unreachable removes the only
+thing keeping the non-total shape loud. Fix: the emitter now emits an
+`@panic` after a `#label` fold when the enclosing handler's Output is
+non-void — loud in every optimize mode (`unreachable` would be UB under
+the ReleaseFast output build). Pinned at `248_label_fold_arm_exit_
+without_produce_panics`; found by the benchmark-revisit session, not by
+the suite.
