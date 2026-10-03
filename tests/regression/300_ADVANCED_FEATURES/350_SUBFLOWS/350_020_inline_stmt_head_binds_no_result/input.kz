@@ -35,19 +35,20 @@ const std = @import("std");
     const flow = if (item.* == .flow) &item.flow else return .{};
 
     // Idempotence: the transform pass may revisit an already-rewritten site.
-    for (flow.inv().annotations) |ann| {
-        if (std.mem.startsWith(u8, ann, "@pass_ran")) return .{};
+    for (flow.inv().marks) |mark| {
+        if (std.mem.startsWith(u8, mark, "@pass_ran")) return .{};
     }
 
-    const new_annotations = allocator.alloc([]const u8, flow.inv().annotations.len + 1) catch unreachable;
-    for (flow.inv().annotations, 0..) |ann, j| new_annotations[j] = ann;
-    new_annotations[flow.inv().annotations.len] =
+    const new_marks = allocator.alloc([]const u8, flow.inv().marks.len + 1) catch unreachable;
+    for (flow.inv().marks, 0..) |mark, j| new_marks[j] = mark;
+    new_marks[flow.inv().marks.len] =
         allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
 
     const new_invocation = ast_mod.Invocation{
         .path = flow.inv().path,
         .args = flow.inv().args,
-        .annotations = new_annotations,
+        .annotations = flow.inv().annotations,
+        .marks = new_marks,
     };
 
     const empty_conts = allocator.alloc(ast_mod.Continuation, 0) catch unreachable;

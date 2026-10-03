@@ -16,8 +16,8 @@ const std = @import("std");
     else
         return .{ .transformed = .{} };
 
-    for (flow.inv().annotations) |ann| {
-        if (std.mem.startsWith(u8, ann, "@pass_ran")) {
+    for (flow.inv().marks) |mark| {
+        if (std.mem.startsWith(u8, mark, "@pass_ran")) {
             return .{ .transformed = .{} };
         }
     }
@@ -27,14 +27,15 @@ const std = @import("std");
         \\    std.debug.print("hi\n", .{});
         ;
 
-    const new_inv_annotations = allocator.alloc([]const u8, flow.inv().annotations.len + 1) catch unreachable;
-    for (flow.inv().annotations, 0..) |ann, j| new_inv_annotations[j] = ann;
-    new_inv_annotations[flow.inv().annotations.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
+    const new_inv_marks = allocator.alloc([]const u8, flow.inv().marks.len + 1) catch unreachable;
+    for (flow.inv().marks, 0..) |mark, j| new_inv_marks[j] = mark;
+    new_inv_marks[flow.inv().marks.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
 
     const new_invocation = ast_mod.Invocation{
         .path = flow.inv().path,
         .args = flow.inv().args,
-        .annotations = new_inv_annotations,
+        .annotations = flow.inv().annotations,
+        .marks = new_inv_marks,
     };
     const empty_conts = allocator.alloc(ast_mod.Continuation, 0) catch unreachable;
 
