@@ -1,0 +1,15 @@
+out/
+a.out
+backend.zig
+backend_output_emitted.zig
+build_backend.zig
+build.zig
+output_emitted.zig
+output_emitted.js
+program.ast.json
+.zig-cache/
+zig-out/
+bin/
+obj/
+compiler_env.json
+compiler_env.zig
