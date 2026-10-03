@@ -9082,8 +9082,14 @@ fn emitArgs(emitter: *CodeEmitter, ctx: *EmissionContext, args: []const ast.Arg,
             try emitter.write("__koru_ast.Source{ .text = \n");
             emitter.indent();
             try emitter.writeIndent();
-            // Use Zig multiline string syntax - split on newlines manually
+            // Use Zig multiline string syntax - split on newlines manually.
+            // An empty Source emits no lines at all — spell it `""` rather
+            // than leaving `.text =` dangling against the next field.
             var line_start: usize = 0;
+            if (arg.value.len == 0) {
+                try emitter.write("\"\"\n");
+                try emitter.writeIndent();
+            }
             for (arg.value, 0..) |c, i| {
                 if (c == '\n') {
                     try emitter.write("\\\\");
