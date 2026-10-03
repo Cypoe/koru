@@ -158,15 +158,16 @@ const std = @import("std");
     // @pass_ran (circuit breaker) + @shape_valid (the dissolution consumes the user
     // branches, so the replacement no longer matches the tor's declared contract;
     // the user surface was validated by parse, not the shape checker).
-    const new_annotations = allocator.alloc([]const u8, flow.inv().annotations.len + 2) catch unreachable;
-    for (flow.inv().annotations, 0..) |ann, i| new_annotations[i] = ann;
-    new_annotations[flow.inv().annotations.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
-    new_annotations[flow.inv().annotations.len + 1] = allocator.dupe(u8, "@shape_valid(\"constructor dissolves ! construct / | constructed into a comptime list preamble\")") catch unreachable;
+    const new_marks = allocator.alloc([]const u8, flow.inv().marks.len + 2) catch unreachable;
+    for (flow.inv().marks, 0..) |m, i| new_marks[i] = m;
+    new_marks[flow.inv().marks.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
+    new_marks[flow.inv().marks.len + 1] = allocator.dupe(u8, "@shape_valid(\"constructor dissolves ! construct / | constructed into a comptime list preamble\")") catch unreachable;
 
     const new_invocation = ast.Invocation{
         .path = flow.inv().path,
         .args = flow.inv().args,
-        .annotations = new_annotations,
+        .annotations = flow.inv().annotations,
+        .marks = new_marks,
         .inserted_by_tap = flow.inv().inserted_by_tap,
         .from_opaque_tap = flow.inv().from_opaque_tap,
     };

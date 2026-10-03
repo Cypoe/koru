@@ -1794,8 +1794,8 @@ const Emitter = struct {
     /// other preamble REPLACES the call. Same annotation, same meaning, as
     /// emitter_helpers.zig:4911.
     fn preambleThenCall(inv: *const ast.Invocation) bool {
-        for (inv.annotations) |ann| {
-            if (std.mem.eql(u8, ann, "@preamble_then_call")) return true;
+        for (inv.marks) |mark| {
+            if (std.mem.eql(u8, mark, "@preamble_then_call")) return true;
         }
         return false;
     }

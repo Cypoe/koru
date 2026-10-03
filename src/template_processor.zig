@@ -1083,16 +1083,16 @@ fn tagScopeFromRenderedBody(
     }
 }
 
-/// Idempotently add `@scope` to a continuation's `binding_annotations`.
+/// Idempotently add `@scope` to a continuation's `binding_marks`.
 fn stampScope(cont: *ast.Continuation, allocator: std.mem.Allocator) !void {
-    for (cont.binding_annotations) |ann| {
-        if (std.mem.eql(u8, ann, "@scope")) return;
+    for (cont.binding_marks) |mark| {
+        if (std.mem.eql(u8, mark, "@scope")) return;
     }
-    const old = cont.binding_annotations;
-    const new_anns = try allocator.alloc([]const u8, old.len + 1);
-    @memcpy(new_anns[0..old.len], old);
-    new_anns[old.len] = "@scope";
-    cont.binding_annotations = new_anns;
+    const old = cont.binding_marks;
+    const new_marks = try allocator.alloc([]const u8, old.len + 1);
+    @memcpy(new_marks[0..old.len], old);
+    new_marks[old.len] = "@scope";
+    cont.binding_marks = new_marks;
 }
 
 /// Walk continuations depth-first, rendering any `for`/template invocation found

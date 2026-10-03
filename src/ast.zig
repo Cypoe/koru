@@ -1511,7 +1511,11 @@ pub const NamedBranch = struct {
     body: []const Continuation, // The continuations in this branch
     binding: ?[]const u8 = null, // Optional binding for the branch (e.g., "item" in | each item |>)
     is_optional: bool = false, // Marks branches that don't need to be handled (like `for`'s `done`)
-    annotations: []const []const u8 = &.{}, // Branch annotations (e.g., [@scope] for loop bodies)
+    annotations: []const []const u8 = &.{}, // Branch annotations (e.g., [mutable])
+    /// Compiler-internal marks (`@scope`, ...) — pass-produced only, never
+    /// parsed from surface syntax. The internal side-channel: opaque strings a
+    /// pass stamps and later passes honor.
+    marks: []const []const u8 = &.{},
 
     pub fn deinit(self: *NamedBranch, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
@@ -1519,12 +1523,22 @@ pub const NamedBranch = struct {
         if (self.binding) |b| allocator.free(b);
         for (self.annotations) |ann| allocator.free(ann);
         if (self.annotations.len > 0) allocator.free(@constCast(self.annotations));
+        for (self.marks) |mark| allocator.free(@constCast(mark));
+        if (self.marks.len > 0) allocator.free(@constCast(self.marks));
     }
 
     /// Check if this branch has a specific annotation
     pub fn hasAnnotation(self: *const NamedBranch, annotation: []const u8) bool {
         for (self.annotations) |ann| {
             if (std.mem.eql(u8, ann, annotation)) return true;
+        }
+        return false;
+    }
+
+    /// Check if this branch carries a compiler mark (e.g., "@scope")
+    pub fn hasMark(self: *const NamedBranch, mark: []const u8) bool {
+        for (self.marks) |m| {
+            if (std.mem.eql(u8, m, mark)) return true;
         }
         return false;
     }
@@ -1559,7 +1573,12 @@ pub const NamedBranch = struct {
 pub const Invocation = struct {
     path: DottedPath,
     args: []const Arg,
-    annotations: []const []const u8 = &[_][]const u8{}, // Compiler pass tracking (e.g., @pass_ran("transform"))
+    annotations: []const []const u8 = &[_][]const u8{},
+    /// Compiler-internal marks (`@pass_ran("transform")`, `@shape_valid(...)`,
+    /// `@preamble_then_call`) — pass-produced only, never parsed from surface
+    /// syntax. Invocation-level side-channel between transforms and later
+    /// passes/emitters.
+    marks: []const []const u8 = &.{},
     inserted_by_tap: bool = false, // Marks invocations inserted by tap transformation
     from_opaque_tap: bool = false, // Marks steps from opaque taps (to skip nested tap observations)
     source_module: []const u8 = "", // Module where this invocation appears
@@ -1578,7 +1597,7 @@ pub const Invocation = struct {
     // (field:new.on-stack) uses it to declare caller-frame stack vars and STILL make
     // the routed call. Flow.preamble_code is the flow-level twin; this is the slot a
     // NESTED site carries it in (transform_pass_runner.itemToNode), gated by the
-    // @preamble_then_call annotation.
+    // @preamble_then_call mark.
     preamble_code: ?[]const u8 = null,
 
     pub fn deinit(self: *Invocation, allocator: std.mem.Allocator) void {
@@ -1589,6 +1608,10 @@ pub const Invocation = struct {
             allocator.free(@constCast(annotation));
         }
         allocator.free(@constCast(self.annotations));
+        for (self.marks) |mark| {
+            allocator.free(@constCast(mark));
+        }
+        allocator.free(@constCast(self.marks));
         if (self.source_module.len > 0) {
             allocator.free(@constCast(self.source_module));
         }
@@ -1673,6 +1696,10 @@ pub const Continuation = struct {
     branch: []const u8,
     binding: ?[]const u8,
     binding_annotations: []const []const u8 = &[_][]const u8{}, // Annotations on binding (e.g., [mutable])
+    /// Compiler-internal marks on the binding (`@scope`) — pass-produced only,
+    /// never parsed from surface syntax. Scope boundaries for loops/taps are
+    /// stamped here by auto_discharge_inserter, template_processor, taps.kz.
+    binding_marks: []const []const u8 = &.{},
     /// Shape-destructure at the binding position (empty = none). Mutually
     /// exclusive with `binding`: a continuation binds the whole payload to
     /// one name OR destructures it by field name.
@@ -1711,6 +1738,12 @@ pub const Continuation = struct {
         }
         if (self.binding_annotations.len > 0) {
             allocator.free(self.binding_annotations);
+        }
+        for (self.binding_marks) |mark| {
+            allocator.free(@constCast(mark));
+        }
+        if (self.binding_marks.len > 0) {
+            allocator.free(@constCast(self.binding_marks));
         }
         if (self.catchall_metatype) |m| allocator.free(m);
         if (self.condition) |c| allocator.free(c);
@@ -2353,8 +2386,8 @@ pub const ASTNode = union(enum) {
     pub fn isAlreadyTransformed(self: ASTNode) bool {
         if (self != .invocation) return false;
         const inv = self.invocation;
-        for (inv.annotations) |ann| {
-            if (std.mem.eql(u8, ann, "@pass_ran(\"transform\")")) {
+        for (inv.marks) |mark| {
+            if (std.mem.eql(u8, mark, "@pass_ran(\"transform\")")) {
                 return true;
             }
         }

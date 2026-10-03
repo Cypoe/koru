@@ -81,6 +81,7 @@ pub const ErrorCode = enum(u16) {
     PARSE009, // A call binds the same name twice — one value is silently dropped downstream
     PARSE010, // A field list binds the same name twice — tor input shapes, branch payloads, branch constructors, record types: the dup reaches Zig as a doubled struct field
     PARSE011, // `= <expr>` on a branch payload field — the emitted union drops it; defaults only apply to tor input fields
+    PARSE012, // `@`-prefixed annotation in surface syntax — compiler marks are pass-produced, never parsed
 
     // Type inference errors
     TYPE001, // Branch not found in expected union

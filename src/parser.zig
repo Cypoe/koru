@@ -1847,6 +1847,24 @@ pub const Parser = struct {
         return c == '-' or c == '*' or c == '+';
     }
 
+    /// Compiler marks (`@scope`, `@pass_ran(...)`, ...) are the internal
+    /// pass-to-pass channel — passes stamp them, later passes honor them, and
+    /// they ride the AST as `marks` fields. Surface `[...]` annotations are
+    /// user input; an `@`-prefixed entry is a user asserting pass-produced
+    /// state, so it is refused at every site annotations parse.
+    fn refuseCompilerMark(self: *Parser, entry: []const u8, line: usize, col: usize) !void {
+        if (entry.len > 0 and entry[0] == '@') {
+            try self.reporter.addError(
+                .PARSE012,
+                line,
+                col,
+                "'{s}' is a compiler mark — `@` annotations are produced by compiler passes, not written in source.",
+                .{entry},
+            );
+            return error.InvalidBinding;
+        }
+    }
+
     /// PARSE007 — refuse a `,` where annotations delimit on `|`.
     ///
     /// `~[default, depends_on(x)]` is not two annotations; it is one entry
@@ -1926,6 +1944,7 @@ pub const Parser = struct {
             const entries = try annotation_parser.splitEntries(self.allocator, ann_str);
             defer self.allocator.free(entries);
             for (entries) |entry| {
+                try self.refuseCompilerMark(entry, opening_line_idx + 1, close_bracket + 2);
                 try annotations.append(self.allocator, try self.allocator.dupe(u8, entry));
             }
             const remaining = content_with_bracket[close_bracket + 1 ..];
@@ -1966,6 +1985,7 @@ pub const Parser = struct {
                         const entries = try annotation_parser.splitEntries(self.allocator, bullet_content);
                         defer self.allocator.free(entries);
                         for (entries) |entry| {
+                            try self.refuseCompilerMark(entry, self.current, bracket_idx + 2);
                             try annotations.append(self.allocator, try self.allocator.dupe(u8, entry));
                         }
                     }
@@ -2002,6 +2022,7 @@ pub const Parser = struct {
                     const entries = try annotation_parser.splitEntries(self.allocator, bullet_content);
                     defer self.allocator.free(entries);
                     for (entries) |entry| {
+                        try self.refuseCompilerMark(entry, self.current, 1);
                         try annotations.append(self.allocator, try self.allocator.dupe(u8, entry));
                     }
                 }
@@ -5226,6 +5247,7 @@ pub const Parser = struct {
                         while (ann_it.next()) |tok| {
                             const t = lexer.trim(tok);
                             if (t.len == 0) continue;
+                            try self.refuseCompilerMark(t, self.current, 0);
                             try ann_list.append(self.allocator, try self.allocator.dupe(u8, t));
                         }
                         return_binding_annotations = try ann_list.toOwnedSlice(self.allocator);
@@ -7387,7 +7409,10 @@ pub const Parser = struct {
                     return error.InvalidBinding;
                 };
                 const ann = lexer.trim(rest[1..close]);
-                if (ann.len > 0) try anns.append(self.allocator, try self.allocator.dupe(u8, ann));
+                if (ann.len > 0) {
+                    try self.refuseCompilerMark(ann, self.current, indent + 2);
+                    try anns.append(self.allocator, try self.allocator.dupe(u8, ann));
+                }
                 rest = lexer.trim(rest[close + 1 ..]);
             }
 
@@ -7735,6 +7760,7 @@ pub const Parser = struct {
                                 while (ann_iter.next()) |ann| {
                                     const trimmed_ann = lexer.trim(ann);
                                     if (trimmed_ann.len > 0) {
+                                        try self.refuseCompilerMark(trimmed_ann, self.current, indent + 2);
                                         try ann_list.append(self.allocator, try self.allocator.dupe(u8, trimmed_ann));
                                     }
                                 }

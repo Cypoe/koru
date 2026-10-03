@@ -705,8 +705,8 @@ var metatype_global_counter: usize = 0;
 
             // Add @scope annotation to mark this as a scope boundary for obligation tracking.
             // Tap code runs in its own scope - it can observe but cannot satisfy outer obligations.
-            const scope_annotations = alloc.alloc([]const u8, 1) catch unreachable;
-            scope_annotations[0] = alloc.dupe(u8, "@scope") catch unreachable;
+            const scope_marks = alloc.alloc([]const u8, 1) catch unreachable;
+            scope_marks[0] = alloc.dupe(u8, "@scope") catch unreachable;
 
             // For metatype taps, insert a metatype_binding step before the tap step
             var actual_step = rewritten_step;
@@ -771,7 +771,7 @@ var metatype_global_counter: usize = 0;
                 .branch = original.branch,
                 .binding = effective_binding,
                 .binding_type = original.binding_type,
-                .binding_annotations = scope_annotations,
+                .binding_marks = scope_marks,
                 .node = actual_step,
                 .continuations = actual_conts,
                 .indent = original.indent,

@@ -545,8 +545,8 @@ pub const ShapeChecker = struct {
         // guarantee — transform output must be valid like any other AST.
         const prev_vouched = self.vouched_flow;
         defer self.vouched_flow = prev_vouched;
-        for (flow.inv().annotations) |ann| {
-            if (std.mem.startsWith(u8, ann, "@shape_valid")) {
+        for (flow.inv().marks) |mark| {
+            if (std.mem.startsWith(u8, mark, "@shape_valid")) {
                 self.vouched_flow = true;
             }
         }
@@ -1966,8 +1966,8 @@ pub const ShapeChecker = struct {
         // does NOT exempt: a pass having run is not a validity guarantee.
         const prev_vouched = self.vouched_flow;
         defer self.vouched_flow = prev_vouched;
-        for (flow.inv().annotations) |ann| {
-            if (std.mem.startsWith(u8, ann, "@shape_valid")) {
+        for (flow.inv().marks) |mark| {
+            if (std.mem.startsWith(u8, mark, "@shape_valid")) {
                 self.vouched_flow = true;
             }
         }

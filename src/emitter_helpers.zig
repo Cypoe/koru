@@ -6020,8 +6020,8 @@ pub fn emitFlow(
     // (and the field binding) still happen.
     if (flow.preamble_code) |preamble| {
         var keep_call = false;
-        for (flow.inv().annotations) |ann| {
-            if (std.mem.eql(u8, ann, "@preamble_then_call")) {
+        for (flow.inv().marks) |mark| {
+            if (std.mem.eql(u8, mark, "@preamble_then_call")) {
                 keep_call = true;
                 break;
             }
@@ -11913,9 +11913,9 @@ fn emitStep(
             defer post_loop_branches.deinit(ctx.allocator);
 
             for (fe.branches) |*branch| {
-                // Branch with @scope annotation is the loop body (runs N times)
-                const has_scope = for (branch.annotations) |ann| {
-                    if (std.mem.eql(u8, ann, "@scope")) break true;
+                // Branch with @scope mark is the loop body (runs N times)
+                const has_scope = for (branch.marks) |mark| {
+                    if (std.mem.eql(u8, mark, "@scope")) break true;
                 } else false;
 
                 if (has_scope) {

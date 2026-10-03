@@ -97,8 +97,8 @@ fn itemToNode(item: *const ast.Item) !NodeConv {
             // preamble on the invocation (Invocation.preamble_code) and fall through to
             // the normal invocation node below; the nested emitter emits it before the call.
             const keep_call = blk_kc: {
-                for (f.inv().annotations) |ann| {
-                    if (std.mem.eql(u8, ann, "@preamble_then_call")) break :blk_kc true;
+                for (f.inv().marks) |mark| {
+                    if (std.mem.eql(u8, mark, "@preamble_then_call")) break :blk_kc true;
                 }
                 break :blk_kc false;
             };
@@ -709,9 +709,9 @@ fn flowStillMatchesTransform(allocator: std.mem.Allocator, inv: *const Invocatio
         return false; // Different event path - transform properly replaced itself
     }
 
-    // Check if it has @pass_ran annotation (if so, it won't be transformed again)
-    for (inv.annotations) |ann| {
-        if (std.mem.eql(u8, ann, "@pass_ran(\"transform\")")) {
+    // Check if it has the @pass_ran mark (if so, it won't be transformed again)
+    for (inv.marks) |mark| {
+        if (std.mem.eql(u8, mark, "@pass_ran(\"transform\")")) {
             return false; // Has @pass_ran, won't match again
         }
     }
@@ -1263,14 +1263,14 @@ fn applyTransform(
     if (result.replacement == null and result.replacement_node == null and result.whole_program == null and result.appended.len == 0) {
         log.debug("Transform '{s}' produced an empty SiteResult, marking as processed\n", .{transform.name});
         const mutable_inv = @constCast(node.invocation);
-        const new_annotations = allocator.alloc([]const u8, mutable_inv.annotations.len + 1) catch {
+        const new_marks = allocator.alloc([]const u8, mutable_inv.marks.len + 1) catch {
             return error.TransformReturnedSamePointer;
         };
-        for (mutable_inv.annotations, 0..) |ann, ai| {
-            new_annotations[ai] = ann;
+        for (mutable_inv.marks, 0..) |mark, mi| {
+            new_marks[mi] = mark;
         }
-        new_annotations[mutable_inv.annotations.len] = "@pass_ran(\"transform\")";
-        mutable_inv.annotations = new_annotations;
+        new_marks[mutable_inv.marks.len] = "@pass_ran(\"transform\")";
+        mutable_inv.marks = new_marks;
 
         // Also strip Source/Expression args so the emitter doesn't see
         // comptime-only parameters on a passthrough transform.
@@ -1497,16 +1497,17 @@ fn applyExpandTemplate(
     };
 
     // @pass_ran on the site invocation so it isn't re-expanded.
-    const new_inv_annotations = try allocator.alloc([]const u8, invocation.annotations.len + 1);
-    for (invocation.annotations, 0..) |ann, i| {
-        new_inv_annotations[i] = ann;
+    const new_inv_marks = try allocator.alloc([]const u8, invocation.marks.len + 1);
+    for (invocation.marks, 0..) |mark, i| {
+        new_inv_marks[i] = mark;
     }
-    new_inv_annotations[invocation.annotations.len] = try allocator.dupe(u8, "@pass_ran(\"transform\")");
+    new_inv_marks[invocation.marks.len] = try allocator.dupe(u8, "@pass_ran(\"transform\")");
 
     const new_invocation = ast.Invocation{
         .path = invocation.path,
         .args = invocation.args,
-        .annotations = new_inv_annotations,
+        .annotations = invocation.annotations,
+        .marks = new_inv_marks,
         .inserted_by_tap = invocation.inserted_by_tap,
         .from_opaque_tap = invocation.from_opaque_tap,
     };

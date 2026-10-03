@@ -1258,8 +1258,8 @@ pub const VisitorEmitter = struct {
 
                         // Check if transform already ran (look for @pass_ran annotation)
                         var has_pass_ran = false;
-                        for (flow.inv().annotations) |ann| {
-                            if (std.mem.startsWith(u8, ann, "@pass_ran")) {
+                        for (flow.inv().marks) |mark| {
+                            if (std.mem.startsWith(u8, mark, "@pass_ran")) {
                                 has_pass_ran = true;
                                 break;
                             }
@@ -1338,8 +1338,8 @@ pub const VisitorEmitter = struct {
 
                             // CRITICAL: Check if transform already ran (look for @pass_ran annotation)
                             var has_pass_ran = false;
-                            for (flow.inv().annotations) |ann| {
-                                if (std.mem.startsWith(u8, ann, "@pass_ran")) {
+                            for (flow.inv().marks) |mark| {
+                                if (std.mem.startsWith(u8, mark, "@pass_ran")) {
                                     has_pass_ran = true;
                                     break;
                                 }
@@ -1533,8 +1533,8 @@ pub const VisitorEmitter = struct {
                 // EXCEPTION: If the flow has inline_body OR preamble_code OR @pass_ran annotation, the transform already ran and we MUST emit it
                 // Note: @pass_ran is parametrized like @pass_ran("transform"), so check for prefix
                 var has_pass_ran = false;
-                for (flow.inv().annotations) |ann| {
-                    if (std.mem.startsWith(u8, ann, "@pass_ran")) {
+                for (flow.inv().marks) |mark| {
+                    if (std.mem.startsWith(u8, mark, "@pass_ran")) {
                         has_pass_ran = true;
                         break;
                     }
@@ -3475,8 +3475,8 @@ pub const VisitorEmitter = struct {
                                     // new-instack) marks its invocation @preamble_then_call: emit the preamble
                                     // (stack vars) here, then fall through to the NORMAL handler call below.
                                     const keep_call = blk_kc: {
-                                        for (flow.inv().annotations) |ann| {
-                                            if (std.mem.eql(u8, ann, "@preamble_then_call")) break :blk_kc true;
+                                        for (flow.inv().marks) |mark| {
+                                            if (std.mem.eql(u8, mark, "@preamble_then_call")) break :blk_kc true;
                                         }
                                         break :blk_kc false;
                                     };

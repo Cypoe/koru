@@ -2054,8 +2054,8 @@ const emitFlowWithMocks = struct {
                     if (flow.inline_body != null or flow.preamble_code != null) {
                         transformed = true;
                     } else {
-                        for (flow.inv().annotations) |ann| {
-                            if (std.mem.eql(u8, ann, "@pass_ran(\"transform\")")) {
+                        for (flow.inv().marks) |mark| {
+                            if (std.mem.eql(u8, mark, "@pass_ran(\"transform\")")) {
                                 transformed = true;
                                 break;
                             }
@@ -2123,8 +2123,8 @@ const emitFlowWithMocks = struct {
                     if (flow.inline_body != null or flow.preamble_code != null) {
                         transformed = true;
                     } else {
-                        for (flow.inv().annotations) |ann| {
-                            if (std.mem.eql(u8, ann, "@pass_ran(\"transform\")")) {
+                        for (flow.inv().marks) |mark| {
+                            if (std.mem.eql(u8, mark, "@pass_ran(\"transform\")")) {
                                 transformed = true;
                                 break;
                             }

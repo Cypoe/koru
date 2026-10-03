@@ -218,9 +218,11 @@ to break multi-terminal flows.
 **Orthogonal / deferred (NOT needed for these tests):**
 - **`@scope` declaration (was "(B)").** Ruled to do, but it's a PRECISION cleanup of
   the `kind == .effect` heuristic (which over-broadly treats `! as` as a loop), not
-  what fixed discharge. Separate follow-up; spelling chosen `[@scope]`, needs parser
-  support for event-decl branch annotations (the `ast.Branch.annotations` field
-  exists; the parser never fills it).
+  what fixed discharge. Separate follow-up. **Spelling superseded 2026-10-03:**
+  the marks-channel migration makes `@`-prefixed entries compiler-internal —
+  surface `[@scope]` is now refused (PARSE012). A user-facing scope declaration
+  would need a non-`@` spelling (e.g. `[scope]` on event-decl branch annotations;
+  the `ast.Branch.annotations` field exists, the parser never fills it).
 - **Nested-for `result_N` var shadowing (emitter) — FIXED 2026-06-16.** `330_016`
   green. Root cause: the effect-splice result prefix (`emitter_helpers.zig:3477`)
   REPLACED the namespace with `result_e{d}_` from the local effect index, so a

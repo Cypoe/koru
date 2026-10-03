@@ -214,7 +214,7 @@ var __field_noop_alloc = std.mem.Allocator{
                 .segments = seg2,
             },
             .args = args2,
-            .annotations = anns2,
+            .marks = anns2,
         };
         var kept = std.ArrayList(ast.Continuation){};
         var inv2_bound = inv2;
@@ -333,7 +333,7 @@ var __field_noop_alloc = std.mem.Allocator{
             .segments = seg,
         },
         .args = args,
-        .annotations = anns,
+        .marks = anns,
     };
 
     var kept = std.ArrayList(ast.Continuation){};
@@ -678,13 +678,14 @@ var __field_noop_alloc = std.mem.Allocator{
     const body = std.fmt.allocPrint(allocator, "//@koru:inline_stmt\n{{ __mm_disp_{d}_{d}(({s}).data, {s}, {s}, {s}); }}", .{ L, C, f_expr, from_expr, stride_expr, limit_expr }) catch unreachable;
 
     // rebuild the flow: same invocation marked @pass_ran, inline_body = dispatch
-    const new_anns = allocator.alloc([]const u8, flow.inv().annotations.len + 1) catch unreachable;
-    for (flow.inv().annotations, 0..) |an, k| new_anns[k] = an;
-    new_anns[flow.inv().annotations.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
+    const new_marks = allocator.alloc([]const u8, flow.inv().marks.len + 1) catch unreachable;
+    for (flow.inv().marks, 0..) |m, k| new_marks[k] = m;
+    new_marks[flow.inv().marks.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
     const new_inv = ast.Invocation{
         .path = flow.inv().path,
         .args = flow.inv().args,
-        .annotations = new_anns,
+        .annotations = flow.inv().annotations,
+        .marks = new_marks,
         .inserted_by_tap = flow.inv().inserted_by_tap,
         .from_opaque_tap = flow.inv().from_opaque_tap,
     };

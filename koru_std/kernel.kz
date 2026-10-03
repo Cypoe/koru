@@ -2276,15 +2276,15 @@ const codegen_utils_kernel = @import("codegen_utils");
     const each_body = allocator.alloc(ast.Continuation, 1) catch unreachable;
     each_body[0] = pairwise_body_cont;
 
-    const scope_annotations = allocator.alloc([]const u8, 1) catch unreachable;
-    scope_annotations[0] = allocator.dupe(u8, "@scope") catch unreachable;
+    const scope_marks = allocator.alloc([]const u8, 1) catch unreachable;
+    scope_marks[0] = allocator.dupe(u8, "@scope") catch unreachable;
 
     const branches = allocator.alloc(ast.NamedBranch, 1) catch unreachable;
     branches[0] = ast.NamedBranch{
         .name = allocator.dupe(u8, "step") catch unreachable,
         .body = each_body,
         .binding = allocator.dupe(u8, "_") catch unreachable,
-        .annotations = scope_annotations,
+        .marks = scope_marks,
     };
 
     const foreach_node = ast.Node{ .foreach = .{
