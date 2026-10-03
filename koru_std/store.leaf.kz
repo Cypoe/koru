@@ -20,8 +20,8 @@ const SL = struct {
     const TermRef = struct {
         fn isTerminalVerb(verb: []const u8) bool {
             // The terminal verbs ARE the scalar vocabulary —
-            // `std/proto:i64(Port)` mints `const Port = i64`.
-            return ast_functional.isScalar(verb);
+            // `std/proto:i64(Port)` mints `const Port = i64`; `std/types:enum` mints terminal-shaped too.
+            return ast_functional.isScalar(verb) or std.mem.eql(u8, verb, "enum");
         }
         fn bareName(value: []const u8) []const u8 {
             var text = std.mem.trim(u8, value, " \t");

@@ -533,3 +533,46 @@ it unpinned, which an audit caught before it could rot into silence.
 What would `correct` this: an unguarded set query that
 silently skips a member kind, or a set-and-seed store whose members
 come from the seed.
+
+---
+
+## `enum` returns as the first materialization verb (2026-10)
+
+The 2026-08-23 dissolution killed `std/types:enum` as a standalone mint —
+"the entry IS its tag list" was true then and remains true, which is exactly
+why it is the FIRST verb back: a closed tag set has no fields to inherit, so
+it needs no proto substrate, and it is the only post-dissolution mint that
+adds no custody surface (tags own nothing). The return is justified by a real
+consumer, not by the mint's own test cluster — the LINQ-shaped benchmark needs
+`level` printing `high`, and a proto compound needs `level: ThreatLevel` to
+resolve as a field type.
+
+Mechanics that fell out, all measured:
+
+- **`std/types:enum(Name) { low, medium, high }`** mints `enum(i64)` with
+  implicit ordinals and writes TWO markers: `// proto-terminal Name: Name`
+  (the terminal's host material is the minted const's own name, so consumers
+  re-emitting the name land on it) and `// types-enum Name: <tags>` so
+  tag-set readers — a future exhaustiveness check, an ordinal lowering —
+  can read members back. Bare `TypeName.tag` construction needs no syntax:
+  the emitted const is referenced verbatim.
+- **The terminal-scanner drift class paid its second toll.** `isTerminalVerb`
+  lived in two places (proto.resolve.kz, store.leaf.kz) — teaching "enum is
+  terminal-shaped" meant editing both. Same class of split the mask/adjacency
+  commit just paid: two sites, one rule, drift by omission.
+- **`:t` is the tag-name spec, `:s` refuses at the Zig layer** — `{s}` demands
+  a slice, an enum is not one. A Koru-layer diagnostic that knows
+  `:s`-on-enum is a later rung; today's refusal is honest but arrives wearing
+  Zig's voice.
+- **Refusals are load-bearing rungs, not gaps**: explicit tag values
+  (`low: 5`), duplicate tags, and empty bodies all refuse KORU173 loudly —
+  half-parsing a future grammar is worse than refusing it.
+
+Where this lands the rung map: enum minted alone because there was nothing to
+project; `struct` is the opposite case — a proto's field bundle IS the
+substrate, and materializing it is a projection that must carry the
+fold/unfold custody law (obligations aggregate into the materialization's own
+debt or they refuse); `union` defers until payload custody inside variants is
+designed. What would correct this: a second consumer that needs the enum NOT
+terminal-shaped, or a proto field grammar that resolves enums but rejects the
+terminal marker.

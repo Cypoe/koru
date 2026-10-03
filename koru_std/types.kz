@@ -46,7 +46,6 @@ const std = @import("std");
     {{ continuations["done"].continue }}
 }
 
-
 // ============================================================================
 // NOMINAL PRIMITIVE TYPES
 // ============================================================================
@@ -372,3 +371,4 @@ const std = @import("std");
 }
 
 ~part fields
+~part enum
