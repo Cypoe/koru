@@ -1,0 +1,6 @@
+name: reversal
+kind: inferred
+shape: categorical
+face: in
+membrane: true
+note: folded into `belief-change` — declare that name. (orphan drained 2026-10-03)
