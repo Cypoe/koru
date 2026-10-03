@@ -1,0 +1,54 @@
+// 400_204: an absent `| else` on a mid-chain `|> if` must not mint a phantom
+// leaf for the obligation live-through it. `r` is bound inside `| ok`'s body
+// and discharged once at the join (`|> drop(r)` after the if). With no else
+// arm, the emitter must treat the false path as "skip then-body, fall to
+// join" — r is live-through both paths and settles ONCE.
+//
+// Defect pinned: the absent else is treated as a discharge leaf — `drop(r)`
+// is emitted inside the else block AND again at the join. The else copy frees
+// r early; the join copy touches freed memory → double-free segfault. Found
+// by /tmp/rpg/koru (related_post_gen): a guard `if | then fail` with no else
+// freed the whole allocation tail on the false path before the program ran.
+// Sibling of 400_193 (explicit both-arms live-through); this pins the
+// omitted-arm path of the same machine.
+
+~import std/io
+~import std/control
+
+const std = @import("std");
+
+const Res = struct { v: i64 };
+
+~tor mark { tag: string }
+~proc mark|zig {
+    std.debug.print("MARK {s}\n", .{tag});
+}
+
+~tor grab {} -> *Res<res!>
+~proc grab|zig {
+    const r = std.heap.page_allocator.create(Res) catch unreachable;
+    r.* = .{ .v = 7 };
+    return r;
+}
+
+~tor drop { r: *Res<!res> }
+~proc drop|zig {
+    std.debug.print("DROPPED {d}\n", .{r.v});
+    std.heap.page_allocator.destroy(r);
+}
+
+~tor doit {}
+| ok
+| fail
+~proc doit|zig {
+    return .{ .ok = .{} };
+}
+
+~doit()
+| ok |> grab(): r
+    |> mark(tag: "pre")
+    |> if(1 > 2)
+        | then |> mark(tag: "bad")
+    |> mark(tag: "join1")
+    |> drop(r)
+| fail |> mark(tag: "failed")

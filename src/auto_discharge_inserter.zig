@@ -2206,11 +2206,31 @@ pub const AutoDischargeInserter = struct {
                 if (context.hasObligations() and !context.in_sequential_prefix) {
                     // (Sequential-prefix steps are not flow exits — see in_sequential_prefix.
                     // Their obligations are discharged by the final sibling.)
+
+                    // JOIN LIVE-THROUGH: inside a named arm a join continuation
+                    // follows (join_watermark stamped at arm entry), obligations
+                    // acquired before the arm rejoin at the join — this leaf is
+                    // not their exit. Same treatment as the implicit-terminal
+                    // leaf below; without it a synthesized optional arm (absent
+                    // `| else` minted as a .terminal) settles join-live
+                    // obligations inside the arm and the join settles them a
+                    // second time — a double-free (400_204).
+                    var filtered_ctx: ?BindingContext = null;
+                    defer if (filtered_ctx) |*f| f.deinit();
+                    var eff: *BindingContext = &context;
+                    if (context.join_watermark != 0) {
+                        filtered_ctx = try self.contextExcludingJoinLive(&context);
+                        if (filtered_ctx) |*f| eff = f;
+                    }
+                    if (!eff.hasObligations()) {
+                        return .{ .transformed = false, .program = program };
+                    }
+
                     // Count how many obligations are from current scope
                     var current_scope_count: u32 = 0;
-                    var obl_iter = context.obligations();
+                    var obl_iter = eff.obligations();
                     while (obl_iter.next()) |entry| {
-                        if (entry.value_ptr.scope_depth == context.scope_depth) {
+                        if (entry.value_ptr.scope_depth == eff.scope_depth) {
                             current_scope_count += 1;
                         }
                     }
@@ -2218,14 +2238,14 @@ pub const AutoDischargeInserter = struct {
                     if (mode == .full) {
                         if (current_scope_count > 0) {
                             // We have current-scope obligations to dispose
-                            return try self.insertDisposals(cont, &context, program, flow, event_decl, module_name);
+                            return try self.insertDisposals(cont, eff, program, flow, event_decl, module_name);
                         }
                         // Outer-scope obligations exist but not current-scope ones
                         // In a repeating context, this is OK - they'll be handled at `done`
                         // In a non-repeating context, they should be disposed here
-                        if (!context.is_repeating) {
+                        if (!eff.is_repeating) {
                             // Non-repeating: dispose all remaining obligations
-                            return try self.insertDisposals(cont, &context, program, flow, event_decl, module_name);
+                            return try self.insertDisposals(cont, eff, program, flow, event_decl, module_name);
                         }
                         // Repeating: outer obligations will flow through to `done`
                     }
@@ -4669,11 +4689,27 @@ pub const AutoDischargeInserter = struct {
         if (missing.items.len == 0 and missing_opt.items.len == 0) return null;
 
         const out = try self.allocator.alloc(ast.Continuation, existing.len + missing.items.len + missing_opt.items.len);
-        @memcpy(out[0..existing.len], existing);
+        // Synthesized named arms must precede the anonymous tail. An unnamed
+        // continuation after named arms is a keyword construct's JOIN — it
+        // rejoins after the conditional — and an arm appended past it reads as
+        // the list's leaf, so the discharge walk settles join-live obligations
+        // inside it even though that arm falls through to the join. Pinned at
+        // 400_204: absent `| else` on `if` minted a second discharge and
+        // double-freed. With the arm placed before the join, joinFollows sees
+        // the join and the watermark keeps outer obligations live-through.
+        var join_idx: usize = existing.len;
+        for (existing, 0..) |*c, idx| {
+            if (!c.is_catchall and c.branch.len == 0) {
+                join_idx = idx;
+                break;
+            }
+        }
+        @memcpy(out[0..join_idx], existing[0..join_idx]);
+        @memcpy(out[join_idx + missing.items.len + missing_opt.items.len ..], existing[join_idx..]);
         for (missing.items, 0..) |branch, i| {
             const has_payload = panicHasPayload(branch);
             const panic_msg = try synthPanicBody(self.allocator, qualified, branch, self.lang);
-            out[existing.len + i] = ast.Continuation{
+            out[join_idx + i] = ast.Continuation{
                 .branch = try self.allocator.dupe(u8, branch.name),
                 .binding = try self.allocator.dupe(u8, if (has_payload) "v" else "_"),
                 .binding_annotations = &[_][]const u8{},
@@ -4689,7 +4725,7 @@ pub const AutoDischargeInserter = struct {
             };
         }
         for (missing_opt.items, 0..) |branch_name, i| {
-            out[existing.len + missing.items.len + i] = ast.Continuation{
+            out[join_idx + missing.items.len + i] = ast.Continuation{
                 .branch = try self.allocator.dupe(u8, branch_name),
                 .binding = try self.allocator.dupe(u8, "_"),
                 .binding_annotations = &[_][]const u8{},
@@ -4905,27 +4941,51 @@ pub const AutoDischargeInserter = struct {
         }
 
         // Create new continuations array with synthesized branches. Pruned
-        // undeclared arms (prototype dual) are dropped, so kept_count is the base
-        // offset the synthesized arms append after.
+        // undeclared arms (prototype dual) are dropped, so kept_count is the
+        // number of existing arms retained.
         const kept_count = flow.body.continuations.len - prune_count;
         const new_len = kept_count + missing_optional.items.len +
             missing_panic.items.len + missing_prototype.items.len;
         var new_continuations = try self.allocator.alloc(ast.Continuation, new_len);
         errdefer self.allocator.free(new_continuations);
 
-        // Copy existing continuations, skipping pruned undeclared arms.
+        // Synthesized named arms must precede the anonymous tail. An unnamed
+        // continuation after named arms is a keyword construct's JOIN — it
+        // rejoins after the conditional — and an arm appended past it reads as
+        // the list's leaf, so the discharge walk settles join-live obligations
+        // inside it even though that arm falls through to the join. Pinned at
+        // 400_204: absent `| else` on `if` minted a second discharge and
+        // double-freed.
+        const synth_count = missing_optional.items.len + missing_panic.items.len +
+            missing_prototype.items.len;
+        var join_idx: usize = kept_count;
+        {
+            var seen: usize = 0;
+            for (flow.body.continuations, 0..) |*cont, i| {
+                if (prune_flags[i]) continue;
+                defer seen += 1;
+                if (!cont.is_catchall and cont.branch.len == 0) {
+                    join_idx = seen;
+                    break;
+                }
+            }
+        }
+
+        // Copy existing continuations, skipping pruned undeclared arms and
+        // leaving a synth_count-wide slot at join_idx for the synthesized arms.
         {
             var write_idx: usize = 0;
             for (flow.body.continuations, 0..) |*cont, i| {
                 if (prune_flags[i]) continue;
-                new_continuations[write_idx] = try ast_functional.cloneContinuation(self.allocator, cont);
-                write_idx += 1;
+                defer write_idx += 1;
+                const dst = if (write_idx < join_idx) write_idx else write_idx + synth_count;
+                new_continuations[dst] = try ast_functional.cloneContinuation(self.allocator, cont);
             }
         }
 
         // Add synthesized continuations for missing optional branches (NO-OP body).
         for (missing_optional.items, 0..) |branch_name, i| {
-            const idx = kept_count + i;
+            const idx = join_idx + i;
             new_continuations[idx] = ast.Continuation{
                 .branch = try self.allocator.dupe(u8, branch_name),
                 .binding = try self.allocator.dupe(u8, "_"), // Discard binding - auto-discharge will synthesize _auto_N
@@ -4951,7 +5011,7 @@ pub const AutoDischargeInserter = struct {
         const owner_name = try self.pathToString(event_decl.path);
         defer self.allocator.free(owner_name);
         for (missing_panic.items, 0..) |branch, i| {
-            const idx = kept_count + missing_optional.items.len + i;
+            const idx = join_idx + missing_optional.items.len + i;
             const has_payload = panicHasPayload(branch);
             const panic_msg = try synthPanicBody(self.allocator, owner_name, branch, self.lang);
             new_continuations[idx] = ast.Continuation{
@@ -4975,7 +5035,7 @@ pub const AutoDischargeInserter = struct {
         // panic-branch arm above — a loud @panic — but a distinct, guiding
         // message: this path was never built, not a rare-failure escape hatch.
         for (missing_prototype.items, 0..) |branch_name, i| {
-            const idx = kept_count + missing_optional.items.len +
+            const idx = join_idx + missing_optional.items.len +
                 missing_panic.items.len + i;
             const panic_msg = try std.fmt.allocPrint(
                 self.allocator,
