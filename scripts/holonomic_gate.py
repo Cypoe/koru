@@ -31,6 +31,15 @@ Certificates themselves are fitted by undetermined coefficients over QQ
 (bounded order/degree search — "not found within bounds" is a result,
 never a refutation). Everything else gets a structured REFUSED.
 
+Extraction is scoped, not file-global: the transition comes from the
+single record arm of the fold's own continue branch (the arm that
+re-dispatches `@L`), composed with the re-dispatch args — `@L(s.acc,
+s.n)` swaps state and is NOT the same map. `when` is honored as the
+loop guard when it sits on that single continue arm (the param_init
+shape) and refused everywhere else — a guard we can't see is a stop
+condition we'd certify away. Conditional transitions (multiple record
+arms) refuse rather than first-match.
+
 Modes:
     cert FILE            fit + verify a P-recurrence for the observed field
     equal FILE_A FILE_B  certified equality of the two observed fields
@@ -108,6 +117,22 @@ def _to_sympy(expr: str, env: dict):
     return out
 
 
+def _arm_block(src: str, start: int) -> str:
+    """A construct line at `start` plus its following `|`-arm lines —
+    the extraction scope. Stops at the first non-arm line."""
+    lines = src[start:].splitlines()
+    keep = [lines[0]]
+    for ln in lines[1:]:
+        if re.match(r"\s*\|", ln):
+            keep.append(ln)
+        else:
+            break
+    return "\n".join(keep)
+
+
+_CMP = r"\s*(\w+)\s*(<=|>=|!=|==|<|>)\s*(-?\w+)"
+
+
 def extract_fold(src: str, label: str = "") -> Fold:
     src = "\n".join(ln.split("//")[0] for ln in src.splitlines())
 
@@ -118,28 +143,83 @@ def extract_fold(src: str, label: str = "") -> Fold:
     if label and label != lab:
         raise Refused(f"fold #{label} not found (found #{lab})")
 
-    pm = re.search(rf"tor {step_name}\s*{{([^}}]*)}}", src)
+    pm = re.search(rf"tor\s+{re.escape(step_name)}\s*{{([^}}]*)}}", src)
     if not pm:
         raise Refused(f"step tor {step_name} decl not found")
     params = [p.split(":")[0].strip() for p in pm.group(1).split(",") if p.strip()]
 
-    # continue-arm update record: `=> <br> { f: e, ... }`
-    um = re.search(r"=>\s*\w+\s*{([^}]*)}", src)
-    if not um:
-        raise Refused("no {f: e, ...} update record in continue arm")
+    # fold-call arm block: the `| <br> s |> @L(...)` arm names the
+    # continue branch and how its payload re-enters the step
+    call_block = _arm_block(src, m.start())
+    if re.search(r"\bwhen\b", call_block):
+        raise Refused("`when` on a fold continuation arm — loop-edge "
+                      "condition not modeled")
+    disp = re.findall(rf"\|\s*(\w+)\s+(\w+)\s*\|>\s*@{re.escape(lab)}"
+                      r"\(([^)]*)\)", call_block)
+    if len(disp) > 1:
+        raise Refused("multiple @L re-dispatch arms — the continue branch "
+                      "is chosen per-outcome, not one autonomous transition")
+    if not disp:
+        raise Refused(f"no `| <br> s |> @{lab}(...)` re-dispatch arm")
+    cont_branch, bind, argstr = disp[0]
+
+    # step body scope: `step_name = <head>` plus its `|` arms only —
+    # file-global searches could pick a different tor's record
+    bm = re.search(rf"(?m)^{re.escape(step_name)}\s*=", src)
+    if not bm:
+        raise Refused(f"step tor {step_name} body not found")
+    body = _arm_block(src, bm.start())
+
+    # continue arms = record-producing arms for the dispatch branch;
+    # `when` anywhere else changes stopping/selection the model can't see
+    cont_rec = []
+    stray_when = False
+    for ln in body.splitlines()[1:]:
+        am = re.search(rf"=>\s*{re.escape(cont_branch)}\s*{{([^}}]*)}}", ln)
+        wm = re.search(r"\bwhen\b(.*?)=>", ln)
+        if am:
+            cont_rec.append((wm.group(1).strip() if wm else None,
+                             am.group(1)))
+        elif re.search(r"\bwhen\b", ln):
+            stray_when = True
+    if stray_when:
+        raise Refused("`when` on a non-continue arm — the stop/selection "
+                      "condition is not modeled")
+    if len(cont_rec) > 1:
+        raise Refused(f"multiple `=> {cont_branch} {{...}}` arms — a "
+                      "conditional transition, not one autonomous map")
+    if not cont_rec:
+        raise Refused("no {f: e, ...} update record on the continue arm")
+    when_cond, rectext = cont_rec[0]
+
     raw_updates = {}
-    for kv in _split_top(um.group(1)):
+    for kv in _split_top(rectext):
         if ":" in kv:
             f, e = kv.split(":", 1)
             raw_updates[f.strip()] = e.strip()
 
-    # guard: `step = if(<cond>)` — single comparison or none
-    gm = re.search(rf"{step_name}\s*=\s*if\(([^)]*)\)", src)
+    # guard: `step = if(cond)` head, else `when <cond>` on the continue
+    # arm itself (the param_init shape — the when IS the loop guard).
+    # An unparseable one is refused, not silently dropped: the gate's
+    # EQUAL is a claim about program output, including where it stops.
+    head = body.splitlines()[0]
+    gm = re.search(r"=\s*if\(([^)]*)\)", head)
     guard = None
     if gm:
-        gm2 = re.match(r"\s*(\w+)\s*(<=|>=|!=|==|<|>)\s*(-?\w+)", gm.group(1))
-        if gm2:
-            guard = (gm2.group(1), gm2.group(2), gm2.group(3))
+        gm2 = re.match(_CMP + r"\s*$", gm.group(1))
+        if not gm2:
+            raise Refused(f"guard is not a single comparison: "
+                          f"{gm.group(1)!r}")
+        guard = (gm2.group(1), gm2.group(2), gm2.group(3))
+        if when_cond is not None:
+            raise Refused("`when` on the continue arm under an if-guard "
+                          "head — conditional transition not modeled")
+    elif when_cond is not None:
+        gm2 = re.match(_CMP + r"\s*$", when_cond)
+        if not gm2:
+            raise Refused(f"continue `when` is not a single comparison: "
+                          f"{when_cond!r}")
+        guard = (gm2.group(1), gm2.group(2), gm2.group(3))
 
     # init args from `#L step(n: start, acc: 0)` — positional args map to
     # fields in declaration order (`#L tick(limit, passes: 0)`); free
@@ -177,8 +257,28 @@ def extract_fold(src: str, label: str = "") -> Fold:
 
     env = {p: sp.Symbol(p) for p in params}
     updates = {f: _to_sympy(e, env) for f, e in raw_updates.items()}
+    fmap = {f: updates.get(f, env[f]) for f in params}
 
-    dm = re.search(r"=>\s*done\s+(\w+)", src)
+    # `| more s |> @L(a1, ...)` re-dispatch args compose over the record
+    # state: next field_i = a_i[s.f := F_f(state)]. Identity when args are
+    # `s.<field>` in declaration order; swaps, resets, and arithmetic all
+    # change the transition — ignoring them would certify the wrong map.
+    args = [a.strip() for a in _split_top(argstr) if a.strip()]
+    if len(args) != len(params):
+        raise Refused(f"@{lab} re-dispatch arity {len(args)} != "
+                      f"{len(params)} params")
+    updates = {}
+    for i, a in enumerate(args):
+        if ":" in a:
+            a = a.split(":", 1)[1].strip()
+        a = re.sub(rf"\b{re.escape(bind)}\.(\w+)", r"(\1)", a)
+        # simultaneous: the update exprs are evaluated on the CURRENT
+        # state — without it, subs would re-substitute field names inside
+        # F itself (acc -> acc+2n-1, then n -> n+1 inside that: wrong)
+        updates[params[i]] = sp.expand(
+            _to_sympy(a, env).subs(fmap, simultaneous=True))
+
+    dm = re.search(r"=>\s*done\s+(\w+)", body)
     obs = dm.group(1) if dm and dm.group(1) in params else params[-1]
 
     return Fold(step_name, params, guard, updates, init, obs)
@@ -460,6 +560,15 @@ _SELFTEST_CERT = [
     ("param_init.k", "CERTIFIED"),
     ("refused_fn.k", "REFUSED"),
     ("refused_nofold.k", "REFUSED"),
+    # conditional transition — two `=> more {…}` records under different
+    # `when` guards; first-match extraction used to certify one of them
+    ("when_mutant.k", "REFUSED"),
+    # `when` on a non-continue arm — the stop/selection condition is
+    # invisible to the model
+    ("when_exit.k", "REFUSED"),
+    # swapped @L re-dispatch args — the record is identical to sq_incr's
+    # but the composed transition is not; certifies its own dynamics
+    ("swap_dispatch.k", "CERTIFIED"),
 ]
 
 # (a, b) -> expected `equal` verdict
@@ -473,6 +582,13 @@ _SELFTEST_EQ = [
     # 320_152 corpus fold vs commuted updates — certified identical for
     # ALL values of the parametric init `n` (singular point at n=2)
     ("param_init.k", "param_init_commuted.k", "EQUAL"),
+    # @L args swapped — same record, different transition; caught by the
+    # composed map (bounded lengths 19 vs 5), was EQUAL pre-fix
+    ("sq_incr.k", "swap_dispatch.k", "NOT-EQUAL"),
+    # `when` guard tightened left>0 -> left>1 — same F, one fewer real
+    # iterate; the bounded length check (3 vs 2) is what makes the
+    # certificate claim about the program, not just the transition
+    ("param_init.k", "when_shorter.k", "NOT-EQUAL"),
 ]
 
 

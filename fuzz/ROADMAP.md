@@ -56,11 +56,18 @@ folds whose step is polynomial-in-state get *decidable equality*:
   {n: f+4, …}` — the payload var feeds the next state) and head-bound
   names (`clock(passes): n |> …` — the head output feeds the step).
   Both are *forced* recurrences, not autonomous `F(s)` transitions —
-  a different theorem shape, not just parser work. Caveat found while
-  widening: `when`-guarded arm conditions are not modeled — extraction
-  takes the first `=> name {…}` as the transition, so a `when`-mutant
-  could gate EQUAL while real bounded output differs. Guard coverage
-  is only the `step = if(cond)` shape; that's the next honest gap.
+  a different theorem shape, not just parser work. `when` gap CLOSED
+  (2026-10-03): extraction is now scoped to the step tor's body and
+  the fold's own arm block — the transition is the single record arm
+  of the branch that re-dispatches `@L`, composed with the re-dispatch
+  args (`@L(s.acc, s.n)` swaps state — was silently treated as identity).
+  A `when` on that continue arm IS the loop guard (param_init shape —
+  bounded length now honest); `when` anywhere else, multiple record
+  arms, multiple dispatch arms, or an unparsed guard all REFUSED rather
+  than first-matched. Pinned by `when_mutant`, `when_exit`,
+  `swap_dispatch`, `when_shorter` — the last being the exact mutant
+  this caveat feared (same F, `left>1` vs `left>0`, 2 vs 3 iterates →
+  NOT-EQUAL, previously EQUAL). Forced-recurrence shapes still open.
 - Does **not** need the koru dialect — its encode target is
   certificates, not ITerms.
 - Lean bridge — LANDED in isar-proofs (`da97bdd`,
