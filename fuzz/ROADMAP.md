@@ -51,6 +51,16 @@ folds whose step is polynomial-in-state get *decidable equality*:
   more extractor shapes; certified synthesis means a fold-*targeted*
   expression genome (mutate update arithmetic, gate supplies fitness),
   not an adapter over the construct-splice GA.
+- Residual classification (2026-10-03): of the 53 non-`{f:e}` refusals,
+  the dominant real shapes are arm-payload bindings (`boom f => more
+  {n: f+4, …}` — the payload var feeds the next state) and head-bound
+  names (`clock(passes): n |> …` — the head output feeds the step).
+  Both are *forced* recurrences, not autonomous `F(s)` transitions —
+  a different theorem shape, not just parser work. Caveat found while
+  widening: `when`-guarded arm conditions are not modeled — extraction
+  takes the first `=> name {…}` as the transition, so a `when`-mutant
+  could gate EQUAL while real bounded output differs. Guard coverage
+  is only the `step = if(cond)` shape; that's the next honest gap.
 - Does **not** need the koru dialect — its encode target is
   certificates, not ITerms.
 - Lean bridge — LANDED in isar-proofs (`da97bdd`,
