@@ -191,3 +191,22 @@ stays the same — look at where the refusal comes from — but add a second
 question: *what else was standing between this construct and the host?* If
 the answer is a flag or a filter that exists for a different reason, the
 wall is borrowed.
+
+## A contract collision needs no borrowed flag — it needs no pass at all
+(2026-10-03)
+
+Same family, one step upstream: not a body grafted past a skip-list, but
+two declaration halves each legal alone that combine into a program no
+backend can represent. A tor declared `-> T` AND `| named` outcomes kept
+both in the `EventDecl` — `return_type` wins at codegen, so every named
+branch is unreachable ("a bare return has no tags", KORU021, reported at
+the *call site* for vocabulary declared at the *definition*), and a `| ?!`
+panic arm was worse: it joins the outcome union while the bare return emits
+an empty switch tag — raw-Zig death again. No checker skipped anything;
+there was simply no site that ever held both halves and asked whether they
+could coexist. `PARSE003` now refuses at the declaration, where the author
+can act on it (210_309/210_310). Effect arms stay legal — `!` yields are
+not outcomes (210_189 and the pump `! ?polled` decls pin the legal mix).
+The census question generalises once more: **any two spellings the parser
+accepts independently owe a reconciliation site for the combination** — if
+none exists, the pair's verdict is whatever the host happens to say.

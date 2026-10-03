@@ -3207,6 +3207,29 @@ pub const Parser = struct {
             }
         }
 
+        // A bare return `-> T` and named `|` outcome branches are different
+        // contracts, and only one survives: `return_type` wins, so every
+        // declared `| branch` is unreachable at any call site ("a bare
+        // return has no tags"), and a `| ?!` panic arm is worse — it joins
+        // the outcome union while the bare return emits an invalid empty
+        // tag, which is raw-Zig death downstream. Declared vocabulary that
+        // cannot be spelled must refuse, not drop or corrupt. Effect (`!`)
+        // arms stay legal — they are yields, not outcomes (210_189 and the
+        // pump `! ?polled` decls pin the legal mixes).
+        if (return_type != null) {
+            for (branches.items) |b| {
+                if (b.kind == .terminal) {
+                    return self.fail(
+                        .PARSE003,
+                        event_line_index + 1,
+                        1,
+                        "tor '{s}' declares a bare return `-> {s}` AND named `| {s}` outcomes — a bare return has no tags, so every declared branch is unreachable at the call site. Pick one contract: `-> T` alone, or named `| branch` outcomes with no `->`",
+                        .{ if (path.segments.len > 0) path.segments[path.segments.len - 1] else "?", return_type.?, b.name },
+                    );
+                }
+            }
+        }
+
         // `[transform]` declares WHAT (a transformation intent); `[comptime]`
         // declares WHERE (it emits into the backend). A transform tor without
         // `[comptime]` is never registered as a pass, so it silently does
