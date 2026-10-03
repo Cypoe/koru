@@ -156,8 +156,14 @@ grafted**: the user's text crossed the checker boundary carrying a flag
 that was never meant for it. The wall has to run pre-graft, in the
 transform, while the user body is still legible — post-graft it is
 invisible to every checker by design. `refuseUncrossable` — in
-`store.uncrossable.kz`, beside the `Graft` it guards — is that wall;
-690_357–360 pin it across the four graft families.
+`src/ast.zig`, since the boundary is a cross-cutting transform contract —
+is that wall; store wraps it in `refuseVoidArm` (in
+`store.uncrossable.kz`, beside the `Graft` it guards) for the one
+exemption: `new`'s `step`/`wait` arms, whose `=>` legitimately constructs
+declared pump verdicts. 690_357–360 pin it across store's four graft
+families; sweeping the rest of `koru_std` for the same void-graft shape
+found two more — 697_016 (`grid:sweep`) and 699_035 (channel consumer
+arms), both dying the identical raw-Zig death until walled.
 
 The second instance ran the same shape the other direction. The JS emitter
 never carried a `[norun]` guard — `std/indexes:store`'s site-claiming flow

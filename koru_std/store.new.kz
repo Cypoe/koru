@@ -1166,8 +1166,8 @@
             if (bname.len == 0) continue;
             // `=>`/`->` in an interceptor body is uncrossable — the body grafts
             // into a void unit (wired/holes/10). `step`/`wait` are exempt inside
-            // refuseUncrossable: their `=>` constructs declared pump verdicts.
-            if (refuseUncrossable(allocator, reporter, "new", store_name, bname, ic, flow.module)) |r| return .{ .transformed = r };
+            // refuseVoidArm: their `=>` constructs declared pump verdicts.
+            if (refuseVoidArm(allocator, reporter, "new", store_name, bname, ic, flow.module)) |r| return .{ .transformed = r };
             if (ic.condition != null) {
                 return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): guarded interceptors are a later slice - interceptors are the store's unconditional contract", .{store_name}) } };
             }
@@ -1437,7 +1437,7 @@
                         return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, wf.location, wf.module, "std/store:watch({s}): field '{s}' is watched more than once - multi-watch sequencing is pinned at 690_010", .{ store_name, wc.branch }) } };
                     }
                 }
-                if (refuseUncrossable(allocator, reporter, "watch", store_name, std.mem.trim(u8, wc.branch, " "), wc, wf.module)) |r| return .{ .transformed = r };
+                if (refuseVoidArm(allocator, reporter, "watch", store_name, std.mem.trim(u8, wc.branch, " "), wc, wf.module)) |r| return .{ .transformed = r };
                 // A `when` guard fuses into the write path as an arm condition
                 // (producer owns the `if`) — the cloned continuation carries it
                 // through to the apply/write flow's arm, and storeRefsContH
@@ -1533,7 +1533,7 @@
                 return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, qf.location, qf.module, "std/store:{s}({s}): continuation marker `|` used where an effect branch is required — `{s}` fires the effect arm `! {s}`, not `| {s}`", .{ q_verb, store_name, q_verb, q_arm, q_arm }) } };
             }
             // Same wall as the query site — the arm body grafts into a void qbody.
-            if (refuseUncrossable(allocator, reporter, q_verb, store_name, q_arm, qc, qf.module)) |r| return .{ .transformed = r };
+            if (refuseVoidArm(allocator, reporter, q_verb, store_name, q_arm, qc, qf.module)) |r| return .{ .transformed = r };
             // A destructure block on a rule/preorder arm is a REQUEST, exactly
             // as it is on `! query` (the parse at the query transform is the
             // mirror of this one). RULED 2026-08-03. Before this, ANY
@@ -5193,7 +5193,7 @@
                 }
                 return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, wf.location, wf.module, "std/store:watch({s}): '{s}' is not a field of store '{s}'", .{ store_name, wc.branch, store_name }) } };
             };
-            if (refuseUncrossable(allocator, reporter, "watch", store_name, std.mem.trim(u8, wc.branch, " "), wc, wf.module)) |r| return .{ .transformed = r };
+            if (refuseVoidArm(allocator, reporter, "watch", store_name, std.mem.trim(u8, wc.branch, " "), wc, wf.module)) |r| return .{ .transformed = r };
             // Ruling 4: subscriptions are consumer-level and MANY - every
             // watch on a field fires, in source order (690_010).
             const cloned = ast_functional.cloneContinuation(allocator, wc) catch unreachable;
@@ -5780,7 +5780,7 @@
     // dispatch stays exhaustive (210_085's coverage rule, 400_089's rescue
     // shape).
     // Graft (`atEnds`/`asVoidStep`) lives in store.uncrossable.kz — the
-    // void-graft mechanism sits beside refuseUncrossable, the wall the
+    // void-graft mechanism sits beside refuseVoidArm, the wall the
     // grafted bodies need (wired/holes/10).
     var arms = std.ArrayList(ast.Continuation).initCapacity(allocator, cell_fields.len + 2) catch unreachable;
     // Plural foreign-guard targets needing a per-row re-announce sweep —

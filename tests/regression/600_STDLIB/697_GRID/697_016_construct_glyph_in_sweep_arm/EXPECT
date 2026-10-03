@@ -1,0 +1,4 @@
+MUST_ERROR
+CONTAINS error[KORU102]
+CONTAINS nothing to construct
+NOT_CONTAINS output_emitted.zig

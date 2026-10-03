@@ -905,6 +905,59 @@ pub fn refuseWithHint(
     return .{ .replacement = refusalWithHint(alloc, rep, code, loc, module, fmt, args, hint_fmt, hint_args) };
 }
 
+/// A `=>`/`->` step inside a body a transform grafts into a VOID synthesized
+/// unit can never be satisfied — the unit declares no branches to construct.
+/// Post-graft the body rides under `is_transformed_subtree`, which every
+/// checker walk skips (transformed subtrees are compiler-owned, already
+/// validated), so the refusal has to happen pre-graft, while the
+/// user-authored body is still legible — kopium wired/holes/10 measured the
+/// alternative: `=>` sailed through checking and died in emitted Zig. The
+/// walk covers nested bodies (conditional / foreach / switch-result), not
+/// just the arm's top level.
+/// `site` is the dotted verb spelling (`store:query`, `grid:sweep`,
+/// `channel`), `name` the named instance, `arm` the arm's own name.
+/// Returns the refusal, or null when clean.
+pub fn refuseUncrossable(
+    alloc: std.mem.Allocator,
+    rep: anytype,
+    site: []const u8,
+    name: []const u8,
+    arm: []const u8,
+    c: *const Continuation,
+    module: []const u8,
+) ?SiteResult {
+    const bad = findUncrossableCtor(c) orelse return null;
+    const bc = bad.node.?.branch_constructor;
+    const glyph: []const u8 = if (bc.is_bare_return) "->" else "=>";
+    return refuse(alloc, rep, .KORU102, bad.location, module, "std/{s}({s}): `{s}` inside a `! {s}` arm has nothing to construct — the arm body grafts into a void synthesized unit, so a branch of the enclosing tor cannot be produced from in there. Hand the verdict out through the enclosing surface and branch after it returns.", .{ site, name, glyph, arm });
+}
+
+fn findUncrossableCtor(c: *const Continuation) ?*const Continuation {
+    if (c.node) |*n| {
+        if (n.* == .branch_constructor) return c;
+        switch (n.*) {
+            .conditional => |cb| for (cb.branches) |*b| {
+                if (findUncrossableCtorSlice(b.body)) |hit| return hit;
+            },
+            .foreach => |fb| for (fb.branches) |*b| {
+                if (findUncrossableCtorSlice(b.body)) |hit| return hit;
+            },
+            .switch_result => |sb| for (sb.branches) |*b| {
+                if (findUncrossableCtorSlice(b.body)) |hit| return hit;
+            },
+            else => {},
+        }
+    }
+    return findUncrossableCtorSlice(c.continuations);
+}
+
+fn findUncrossableCtorSlice(conts: []const Continuation) ?*const Continuation {
+    for (conts) |*c| {
+        if (findUncrossableCtor(c)) |h| return h;
+    }
+    return null;
+}
+
 /// Which byte positions of `text` are EXPRESSION context rather than literal
 /// prose. Inside a string, only a `{{ … }}` interpolation is an expression.
 ///

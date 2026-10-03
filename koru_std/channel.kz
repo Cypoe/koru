@@ -698,6 +698,8 @@ const CH = struct {
             const cb = std.mem.trim(u8, c.branch, " ");
             if (cb.len == 0) continue;
             if (c.kind != .effect) continue; // `|` arms were refused at the [pre] rewrite
+            // `=>`/`->` in a consumer arm is uncrossable — the arm mints into a drained void unit.
+            if (ast.refuseUncrossable(allocator, reporter, "channel", chan_name, cb, c, cf.module)) |r| return .{ .transformed = r };
             if (std.mem.eql(u8, cb, "closed")) {
                 closed_arms.append(allocator, .{ .kind = "closed", .cont = c, .at = cf }) catch unreachable;
                 continue;
@@ -1152,9 +1154,7 @@ const CH = struct {
                             if (f.body.node) |*n| {
                                 if (n.* == .invocation and CHM.isChannelInv(&n.invocation, "new")) {
                                     for (n.invocation.args) |a| {
-                                        if (std.mem.eql(u8, a.name, "expr")) {
-                                            out.append(al, CH.stripQuotes(a.value)) catch unreachable;
-                                        }
+                                        if (std.mem.eql(u8, a.name, "expr")) out.append(al, CH.stripQuotes(a.value)) catch unreachable;
                                     }
                                 }
                             }

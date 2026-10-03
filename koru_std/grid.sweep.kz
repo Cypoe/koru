@@ -152,6 +152,7 @@
     // than re-deriving it, and a grid whose size changes cannot leave a stale
     // bound behind in a sweep.
     const cur = std.fmt.allocPrint(allocator, "__koru_gi_L{d}", .{flow.location.line}) catch unreachable;
+    if (ast.refuseUncrossable(allocator, reporter, "grid:sweep", grid_name, "sweep", arm, flow.module)) |r| return .{ .transformed = r };
     const body = ast_functional.cloneContinuation(allocator, arm) catch unreachable;
     var mutable_body = body;
     S.walk(allocator, &mutable_body, std.mem.trim(u8, bind, " "), grid_ns, grid_name, cur);
@@ -302,4 +303,3 @@
         .appended = appended.toOwnedSlice(allocator) catch unreachable,
     } };
 }
-
