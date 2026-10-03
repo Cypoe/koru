@@ -66,7 +66,7 @@ koru_std/env.kz	52
 koru_std/eval.kz	454
 koru_std/explain.kz	181
 koru_std/explain.wit.kz	34
-koru_std/field.kz	759
+koru_std/field.kz	743
 koru_std/fmt.jsprec.kz	39
 koru_std/fmt.kz	816
 koru_std/foreign.kz	125

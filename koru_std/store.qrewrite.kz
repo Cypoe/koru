@@ -69,9 +69,9 @@ const SRewrite = struct {
             // On a multi-column store the bare binding is the ROW CURSOR —
             // `take(store[r])` addresses the swept row. The body's cursor
             // input is a DENSE index but `store[...]` resolves handles, so
-            // the rewrite mints the handle at use (`__koru_handle_of`),
-            // matching the rule path's bare-binding rule (690_031).
-            if (!row_is_identity and expr_ctx[i] and at_boundary and std.mem.startsWith(u8, text[i..], bind)) {
+            // the rewrite mints the handle at use (`__koru_handle_of`), matching
+            // 690_031 — never a `:`-glued name: spec position (`{{ s.ip:s }}`, 690_361).
+            if (!row_is_identity and expr_ctx[i] and at_boundary and (i == 0 or text[i - 1] != ':') and std.mem.startsWith(u8, text[i..], bind)) {
                 const after = i + bind.len;
                 const next_is_ident = after < text.len and isIdentCh(text[after]);
                 const next_is_dot = after < text.len and text[after] == '.';
@@ -82,7 +82,7 @@ const SRewrite = struct {
                     continue;
                 }
             }
-            if (row_is_identity and expr_ctx[i] and at_boundary and std.mem.startsWith(u8, text[i..], bind)) {
+            if (row_is_identity and expr_ctx[i] and at_boundary and (i == 0 or text[i - 1] != ':') and std.mem.startsWith(u8, text[i..], bind)) {
                 const after = i + bind.len;
                 if (after >= text.len or (!isIdentCh(text[after]) and text[after] != '.')) {
                     const fname = fields[0];

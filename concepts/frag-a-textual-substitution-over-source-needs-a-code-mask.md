@@ -75,7 +75,28 @@ mask must model REFERENCE position, not merely code — inside code, "is this
 identifier a reference or a name in someone else's namespace" is the next
 question down, and `..` keeps it honest.
 
-Open: nothing enumerates the substitution sites. Three are known
-(visitor_emitter, store's entityRefs, store's bindStrip); there is no list, so
-the next one is found the way these two were — by a consumer shipping text
-nobody wrote.
+Fifth site, 2026-10-03, and the inverse of every earlier one: the mask was
+consulted, the mask was RIGHT — and the defect still shipped, because the
+format placeholder lived where no literal exists. `{{ s.ip:s }}` inside an
+unquoted `fmt.blk` block (Source text, not a `"…"` argument) had its `:s`
+SPEC rewritten to `__koru_store_Sessions.__koru_handle_of(…)` by
+`store.qrewrite`'s bare-binding branch — the emitted Zig format string
+became `{__koru_store_Sessions.__koru_handle_of(__koru_sdix_s_L33)}` and
+died in Writer.zig, "cannot format slice without a specifier". The site-3
+fix taught `expressionMask` the `{{ expr:spec }}` third class, but that
+grammar only exists inside literals; in a Source block the mask sees one
+uniform expression context and the spec tail has nowhere to hide. The
+fix is per-site again — `:`-glued names are spec/qualifier position and a
+row handle is never spelled that way — not another widening of the mask:
+the mask cannot classify what it cannot delimit. The belief sharpens a
+fourth time: **the third class re-forms at every unquoted placeholder
+surface; each rewriter that reads bare bindings must refuse `:`-glued
+positions itself**, because the mask's grammar ends at the literal edge.
+
+Open: nothing enumerates the substitution sites, and nothing enumerates the
+unquoted Source grammars either — `fmt.blk` blocks are the one that shipped
+a defect; any other transform that consumes a bare `{…}` body carrying
+`{{ }}` placeholders (or a `:` grammar of its own) is the same hole waiting
+for its first `s`/`d`/`f`-named binding. The known substitution sites
+(visitor_emitter, store's entityRefs, store's bindStrip, qrewrite's refs)
+still have no list.
