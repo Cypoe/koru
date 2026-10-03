@@ -1,0 +1,2 @@
+The comment-seamed chain must compile AND execute — a severed chain
+silently dropping the second take would pass a compile-only check.

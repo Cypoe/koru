@@ -7070,7 +7070,20 @@ pub const Parser = struct {
             try link_lines.append(self.allocator, head_line_idx);
         }
         while (self.current < self.lines.len) {
-            const nl = self.lines[self.current];
+            var idx = self.current;
+            if (lexer.isCommentLine(self.lines[idx])) {
+                // Comments are trivia between `|>` links — the same ruling
+                // chainCommentDisposition applies below ("a comment between
+                // them changes nothing about which steps are chained"). Peek
+                // to the next meaningful line; a blank still ends the chain,
+                // and if what follows isn't a `|>` the comments stay for the
+                // continuation loop's own disposition (arm → KORU010).
+                var peek = idx + 1;
+                while (peek < self.lines.len and lexer.isCommentLine(self.lines[peek])) peek += 1;
+                if (peek >= self.lines.len or lexer.trim(self.lines[peek]).len == 0) break;
+                idx = peek;
+            }
+            const nl = self.lines[idx];
             const nt = lexer.trim(nl);
             if (nt.len < 2 or nt[0] != '|' or nt[1] != '>') break;
             const ni = lexer.getIndent(nl);
@@ -7084,13 +7097,13 @@ pub const Parser = struct {
             // string literal is data and stays). Reuses the file-level
             // stripTrailingLineComment helper.
             for (0..countChainDelimiters(nt)) |_| {
-                try link_lines.append(self.allocator, self.current);
+                try link_lines.append(self.allocator, idx);
             }
             text = try std.fmt.allocPrint(self.allocator, "{s} {s}", .{
                 stripTrailingLineComment(text),
                 stripTrailingLineComment(nt),
             });
-            self.current += 1;
+            self.current = idx + 1;
         }
         return .{
             .text = text,
