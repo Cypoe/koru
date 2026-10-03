@@ -1,0 +1,13 @@
+  agent> read(path: "hello.txt") | ok t |> write(path: "backup.txt", text: t)
+  world< {"branch":"","value":"wrote"}
+  agent> tor backup { src: string, dst: string }
+backup = read(path: src) | ok t |> write(path: dst, text: t)
+  world< defined backup
+  agent> backup(src: "hello.txt", dst: "again.txt")
+  world< {"branch":"","value":"wrote"}
+  agent> vocabulary()
+  world< {"branch":"","value":"read(path: string)\nwrite(path: string, text: string)\nvocabulary()\ngrammar()\nbind(name: string, value: Source)\nnote(text: Source) — speaks to the observer, not the user: reasoning, plans, and \"why I'm stuck\" go here\nbackup(src: string, dst: string)"}
+  agent> backup(src: "hello.txt", dst: "b-copy.txt")
+  world< {"branch":"","value":"wrote"}
+  agent> format-disk()
+  world< denied: format-disk
