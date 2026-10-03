@@ -1,0 +1,23 @@
+name: instrument-repair
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: |
+  Fires when the measuring apparatus itself is made right — a checker, board,
+  or map whose output was WRONG (not merely coarse) is repaired, so the numbers
+  it prints change while the thing measured never moved.
+
+  Distinct from `measurement-artifact`, which names the misread when it is
+  discovered, and from `instrument-sharpened`, where the instrument was correct
+  but blunt and gains discrimination it lacked. Repair is for a wrong model
+  inside the instrument: the artifact signal fired at the discovery; this one
+  fires when the fix lands.
+
+  Canonical instance: js-parity-map read koru_std/ flat, registering
+  part files (store.new.kz) as unimportable modules named "store.new";
+  every store:*/list:* call site missed against the primary and 27.0% of
+  the corpus landed DO-NOT-TRUST — a property of the map, not the corpus.
+  Joining on the declared ~part lines dropped the tail to 0.3% with zero
+  corpus or stdlib change (465a1a2f).
+route: surface
