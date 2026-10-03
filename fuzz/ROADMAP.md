@@ -39,14 +39,18 @@ folds whose step is polynomial-in-state get *decidable equality*:
   corpus fold vs a commuted twin — GA-style mutation proven identical,
   bound 2 + singular point n=10), and `tri_builtin` (honest CANDIDATE:
   `@divTrunc` is non-affine).
-- **Measured coverage (2026-10-02): 1/111 corpus `#`-fold files in-
-  fragment.** The extractor accepts one shape — `=> br {f: e, …}` update
-  records, literal-or-callsite-resolvable init, single comparison guard.
-  The corpus's other folds refuse on arm shape, `for()`-library loops,
-  or parametric init. Widening coverage means more extractor shapes;
-  certified synthesis means a fold-*targeted* expression genome
-  (mutate update arithmetic, gate supplies fitness), not an adapter
-  over the construct-splice GA.
+- **Measured coverage: 8/128 `#`-files CERTIFIED** (2026-10-03 rescan;
+  6 fixtures + 020_028 + 320_152 — the second corpus certification comes
+  from **parametric init**: `attempt(n, left: 3)` where `n` is a caller
+  parameter stays symbolic; the certificate is fitted on a prime
+  specialization and verified for all parameter values. Positional init
+  args map to fields in declaration order.) Remaining refusals: 59×
+  `#` non-fold labels, 53× non-`{f: e}` arm shapes, head/arm-payload
+  bindings (`clock(passes): n |>`, `boom f =>`) — forced recurrences,
+  not autonomous transitions — plus `@min`. Widening further means
+  more extractor shapes; certified synthesis means a fold-*targeted*
+  expression genome (mutate update arithmetic, gate supplies fitness),
+  not an adapter over the construct-splice GA.
 - Does **not** need the koru dialect — its encode target is
   certificates, not ITerms.
 - Lean bridge — LANDED in isar-proofs (`da97bdd`,
@@ -54,11 +58,18 @@ folds whose step is polynomial-in-state get *decidable equality*:
   `eq_of_satisfiesRecurrence_of_init` — non-singular uniqueness proven
   (strong induction, peel leading term, cancel in ℚ). The gate's bound
   is now discharged, not asserted.
-- Open: singular-point case as a Lean theorem (agreement at indices
-  where the leading coefficient vanishes replaces the missing
-  constraint); and the cross-field bridge — a sequence is P-recursive
-  iff its generating function is D-finite (`Holonomic`), the honest
-  form of "holonomic across fields." Bigger formalization, parked here.
+- Cross-field bridge — FORWARD direction LANDED in isar-proofs
+  (`d4660f0`, `src/ISAR/HolonomicBridge.lean`): `dfiniteResidual`
+  (coefficient of x^N on the sequence side), `bridgePolyCoeffs`
+  (translated recurrence coefficients `(X+k)↓ᵢ`), and
+  `dfiniteResidual_eq_bridge` — the two residuals agree for
+  N ≥ shiftBound. `satisfiesRecurrence_of_dfinite` wraps it:
+  ODE satisfaction implies `PRecursiveCertificate` satisfaction
+  (certificate packaging needs q_order(0) ≠ 0; the identity does not).
+  Open: the converse (P-recursive ⇒ D-finite via the Euler operator,
+  needs initial-term truncation), and the singular-point uniqueness
+  theorem (agreement at indices where the leading coefficient
+  vanishes replaces the missing constraint).
 - Fuzzer tie-in — LANDED as `scripts/holonomic_synth.py`: GA over
   update-expression genomes (born in-fragment by construction), fitness
   = first-divergence index into the 64-iterate window (semantic, not

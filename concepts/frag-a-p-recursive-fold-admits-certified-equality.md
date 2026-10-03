@@ -22,8 +22,10 @@ is identical-everywhere.
 This reframes what "checkable surface" means for the language. The compiler
 checks shape and obligations; the gate checks *identity*: two programs can
 be proven the same iterate sequence without either being run. The fragment
-is deliberately narrow — arithmetic updates, resolvable literal init, one
-comparison guard — and everything outside it gets a structured refusal, not
+is deliberately narrow — arithmetic updates, literal or caller-parametric
+init (fitted on a prime specialization, verified for all parameter
+values), one comparison guard — and everything outside it gets a
+structured refusal, not
 a weaker verdict. `CANDIDATE` (fitted but unverifiable) and
 `NOT-FOUND-WITHIN-BOUNDS` are results, never refutations.
 

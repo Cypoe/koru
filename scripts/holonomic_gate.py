@@ -60,7 +60,7 @@ class Fold:
     params: list                 # ordered state field names
     guard: tuple                 # (field, op, rhs) — continues while true
     updates: dict                # field -> sympy expr over state syms
-    init: dict                   # field -> int
+    init: dict                   # field -> int or sympy expr (parametric)
     observe: str                 # field whose trajectory is compared
 
 
@@ -141,13 +141,22 @@ def extract_fold(src: str, label: str = "") -> Fold:
         if gm2:
             guard = (gm2.group(1), gm2.group(2), gm2.group(3))
 
-    # init args from `#L step(n: start, acc: 0)`; free names resolved via the
-    # concrete call site `entry(param: lit)` found anywhere in the file
+    # init args from `#L step(n: start, acc: 0)` — positional args map to
+    # fields in declaration order (`#L tick(limit, passes: 0)`); free
+    # names resolved via the concrete call site `entry(param: lit)` found
+    # anywhere in the file
+    positional = []
     named = {}
     for a in init_args.split(","):
+        a = a.strip()
         if ":" in a:
             k, v = a.split(":", 1)
             named[k.strip()] = v.strip()
+        elif a:
+            positional.append(a)
+    for i, v in enumerate(positional):
+        if i < len(params):
+            named.setdefault(params[i], v)
     callers = dict(re.findall(r"(\w+)\s*:\s*(-?\d+)", src))
     init = {}
     for p in params:
@@ -156,8 +165,15 @@ def extract_fold(src: str, label: str = "") -> Fold:
             init[p] = int(v)
         elif v in callers:
             init[p] = int(callers[v])
+        elif not v:
+            raise Refused(f"missing init for field {p}")
         else:
-            raise Refused(f"unresolved init for field {p}: {v!r}")
+            # parametric init: a free name or arithmetic expression over
+            # caller-supplied parameters — kept symbolic; certificates are
+            # fitted on a specialization and verified for all values
+            env0 = {nm: sp.Symbol(nm)
+                    for nm in re.findall(r"[A-Za-z_]\w*", v)}
+            init[p] = _to_sympy(v, env0)
 
     env = {p: sp.Symbol(p) for p in params}
     updates = {f: _to_sympy(e, env) for f, e in raw_updates.items()}
@@ -191,21 +207,36 @@ def trajectory(fold: Fold, steps: int, bounded: bool = True):
                 rv = int(rhs)
             else:
                 raise Refused(f"guard rhs not resolvable: {rhs!r}")
-            if not _OPS[op](state[f], rv):
+            try:
+                stop = not _OPS[op](state[f], rv)
+            except TypeError:
+                raise Refused("guard undecidable under parametric init")
+            if stop:
                 break
         nxt = {}
         for f in fold.params:
             e = fold.updates.get(f, sp.Symbol(f))
             v = e.subs(state)
-            if not v.is_number:
-                raise Refused(f"non-numeric update for {f}: {v}")
-            nxt[f] = sp.Integer(v)
+            if v.is_number:
+                nxt[f] = sp.Integer(v) if v.is_Integer else v
+            else:
+                nxt[f] = sp.expand(v)   # parametric init: symbolic iterate
         out.append(nxt[fold.observe])
-        if any(abs(v) > sp.Integer(10)**200 for v in nxt.values()):
+        if any(v.is_number and abs(v) > sp.Integer(10)**200
+               for v in nxt.values()):
             raise Refused("trajectory magnitude exceeds 10^200 — "
                           "super-exponential growth outside the fragment")
         state = nxt
     return out
+
+
+def init_symbols(fold: Fold):
+    """Free symbols in the initial state — caller-supplied parameters."""
+    out = set()
+    for v in fold.init.values():
+        if isinstance(v, sp.Basic):
+            out |= v.free_symbols
+    return sorted(out, key=str)
 
 
 # --------------------------------------------------------------- certificates
@@ -320,11 +351,26 @@ def verify_generic(fold: Fold, order: int, polys) -> bool:
 
 def certify(fold: Fold, window: int = 64):
     """First verified certificate for the observed trajectory.
-    Returns (order, polys, method) or (None, reason, saw_candidate)."""
+    Returns (order, polys, method) or (None, reason, saw_candidate).
+
+    Under parametric init the trajectory is symbolic: the certificate is
+    fitted on a numeric specialization (distinct small primes — generic
+    enough to avoid accidental degeneracy) and then verified on the
+    symbolic closed form / generic state, so the verified cert holds for
+    all parameter values, not just the specialization."""
     seq = trajectory(fold, window, bounded=False)
     cf = closed_form(fold)
+    syms = set()
+    for v in seq:
+        if isinstance(v, sp.Basic):
+            syms |= v.free_symbols
+    seq_fit = seq
+    if syms:
+        spec = {s: p for s, p in
+                zip(sorted(syms, key=str), (3, 5, 7, 11, 13, 17))}
+        seq_fit = [v.subs(spec) for v in seq]
     saw = False
-    for order, polys in candidate_certs(seq):
+    for order, polys in candidate_certs(seq_fit):
         saw = True
         if cf is not None:
             if verify_closed_form(fold, order, polys, cf):
@@ -348,15 +394,26 @@ def gate(src_a: str, src_b: str, window: int = 64):
     fb = extract_fold(src_b)
 
     # cheap refutation first: output length, then any nonzero iterate in
-    # the window is a concrete witness — no certificates needed
-    out_a = trajectory(fa, window, bounded=True)
-    out_b = trajectory(fb, window, bounded=True)
-    if len(out_a) != len(out_b):
-        return "NOT-EQUAL", f"output length {len(out_a)} vs {len(out_b)}"
+    # the window is a concrete witness — no certificates needed. The
+    # length check needs a decidable guard; under parametric init the
+    # guard is symbolic, so it is skipped (length is param-dependent
+    # anyway and a symbolic divergence witness below is still honest:
+    # a nonzero expression in the params means the folds differ as
+    # functions of their inputs).
+    try:
+        out_a = trajectory(fa, window, bounded=True)
+        out_b = trajectory(fb, window, bounded=True)
+        if len(out_a) != len(out_b):
+            return "NOT-EQUAL", (f"output length {len(out_a)} vs "
+                                 f"{len(out_b)}")
+    except Refused:
+        if not (init_symbols(fa) or init_symbols(fb)):
+            raise
     seq_a = trajectory(fa, window, bounded=False)
     seq_b = trajectory(fb, window, bounded=False)
     diff = [a - b for a, b in zip(seq_a, seq_b)]
-    bad = next((i for i, v in enumerate(diff) if v != 0), None)
+    bad = next((i for i, v in enumerate(diff) if sp.simplify(v) != 0),
+               None)
     if bad is not None:
         return "NOT-EQUAL", f"diverges at iterate {bad}"
 
@@ -398,6 +455,9 @@ _SELFTEST_CERT = [
     ("fact.k", "CERTIFIED"),
     ("tri_builtin.k", "CANDIDATE"),      # non-affine, non-generic-verifiable
     ("sum_desc.k", "CERTIFIED"),         # 020_028 corpus fold, 5-iter output
+    # 320_152 corpus fold — `n` init is a caller-supplied parameter, the
+    # certificate is fitted on a specialization and verified ∀ values
+    ("param_init.k", "CERTIFIED"),
     ("refused_fn.k", "REFUSED"),
     ("refused_nofold.k", "REFUSED"),
 ]
@@ -410,6 +470,9 @@ _SELFTEST_EQ = [
     # 020_028 corpus fold vs its commuted twin — GA-style mutation
     # proven identical; bound 2 + singular point at n=10 is checked
     ("sum_desc.k", "sum_desc_commuted.k", "EQUAL"),
+    # 320_152 corpus fold vs commuted updates — certified identical for
+    # ALL values of the parametric init `n` (singular point at n=2)
+    ("param_init.k", "param_init_commuted.k", "EQUAL"),
 ]
 
 
