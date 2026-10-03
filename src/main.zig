@@ -2116,8 +2116,12 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\                __koru_std.process.exit(1);
             \\            },
             \\            .Signal => |sig| {
-            \\                const msg2 = try __koru_std.fmt.bufPrint(&buf2, "✗ zig build was killed by signal {d} — ended from outside, before it could finish. This usually means the machine ran out of memory, or something killed it externally. Check memory and load, then rerun. The source program was never judged.\n", .{sig});
+            \\                const msg2 = try __koru_std.fmt.bufPrint(&buf2, "✗ zig build was killed by signal {d} — ended from outside, before it could finish. This usually means the machine ran out of memory, or something killed it externally (a zig panic aborts the same way — stderr below is the trace if it left one). Check memory and load, then rerun. The source program was never judged.\n", .{sig});
             \\                try __koru_std.fs.File.stderr().writeAll(msg2);
+            \\                if (result.stderr.len > 0) {
+            \\                    try __koru_std.fs.File.stderr().writeAll(result.stderr);
+            \\                    try __koru_std.fs.File.stderr().writeAll("\n");
+            \\                }
             \\                __koru_std.process.exit(1);
             \\            },
             \\            .Stopped => |sig| {
@@ -2190,8 +2194,12 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\                __koru_std.process.exit(1);
             \\            },
             \\            .Signal => |sig| {
-            \\                const msg2 = try __koru_std.fmt.bufPrint(&buf2, "✗ zig build-exe was killed by signal {d} — ended from outside, before it could finish. This usually means the machine ran out of memory, or something killed it externally. Check memory and load, then rerun. The source program was never judged.\n", .{sig});
+            \\                const msg2 = try __koru_std.fmt.bufPrint(&buf2, "✗ zig build-exe was killed by signal {d} — ended from outside, before it could finish. This usually means the machine ran out of memory, or something killed it externally (a zig panic aborts the same way — stderr below is the trace if it left one). Check memory and load, then rerun. The source program was never judged.\n", .{sig});
             \\                try __koru_std.fs.File.stderr().writeAll(msg2);
+            \\                if (result.stderr.len > 0) {
+            \\                    try __koru_std.fs.File.stderr().writeAll(result.stderr);
+            \\                    try __koru_std.fs.File.stderr().writeAll("\n");
+            \\                }
             \\                __koru_std.process.exit(1);
             \\            },
             \\            .Stopped => |sig| {
