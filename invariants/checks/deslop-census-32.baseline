@@ -37,8 +37,8 @@
 # +3 members of foreign src/ drift in the same documented residual —
 # this commit touches only the challenge catalog and a concept frag;
 # zero src/ files.
-clusters=1539
-members=2089
+clusters=1540
+members=2092
 # Re-pinned in "420_006: MPMC rings-vs-channels green": +5 members of
 # foreign drift in the same documented emitter_test/visitor_emitter_test
 # field-literal residual — this commit touches only test sources, harness
@@ -64,3 +64,8 @@ members=2089
 # drift in the same documented emitter_test/visitor_emitter_test/
 # glob_matcher_spec_test decl-literal residual — this commit touches only
 # koru_std/, tests/, and a concept frag; zero src/ files.
+# Re-pinned in "close the void-graft census": the roll fired on +1
+# cluster / +3 members of foreign src/ drift in the same documented
+# emitter_test/visitor_emitter_test residual (da3dc8eff/e67673d0a/
+# 24019b770 moved those files under rolls that missed) — this commit
+# touches only a concept frag; zero src/ files.

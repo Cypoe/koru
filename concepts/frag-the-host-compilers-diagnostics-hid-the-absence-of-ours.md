@@ -163,7 +163,13 @@ exemption: `new`'s `step`/`wait` arms, whose `=>` legitimately constructs
 declared pump verdicts. 690_357–360 pin it across store's four graft
 families; sweeping the rest of `koru_std` for the same void-graft shape
 found two more — 697_016 (`grid:sweep`) and 699_035 (channel consumer
-arms), both dying the identical raw-Zig death until walled.
+arms), both dying the identical raw-Zig death until walled. The census
+is now closed: every other surface either carries the tor context
+through the clone (`impl_of` on rings/taps/`pump.run` — `=>` there is
+legal), walls the construct itself before the body is consumed
+(parser's KORU163 picker shape, supervisor's arm vocabulary plus
+KORU105 on nested arms), or can't reach the position (pump verb units
+carry a verdict contract, and `=>` parses as a stray step there).
 
 The second instance ran the same shape the other direction. The JS emitter
 never carried a `[norun]` guard — `std/indexes:store`'s site-claiming flow
