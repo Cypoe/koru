@@ -41,19 +41,27 @@ alone.** Lead with the concrete subject — the feature or concept, by name.
   the past posts' prose *voice* (step 2) — never their *titles*.
 - **The test:** could someone scanning `/blog` tell this post is about *<the
   feature>* from the title alone? If not, rewrite it.
-- A clever hook is allowed **only** when the subject still leads. Put the feature
-  name first and let the hook ride behind it — `Prototype Mode: <hook>` — or park
-  the color in the `excerpt`, never the title. The subject drives; wit is a
-  passenger.
+- **There is no hook slot.** The title is a description of the contents and
+  nothing else — `Orisha vs Actix and ASP.NET on SQLite`, not `Orisha: The
+  Cold Path Is the Library`. A colon is allowed when what follows is still a
+  plain description (`std/channel: Where Blocking Is a Branch`); an evocative
+  riddle after the colon is not. Wit lives in the `excerpt`, never the title.
 - **Declare the subject in frontmatter; the commit gate enforces the rule
-  against it.** `subject: "Prototype Mode"` is required whenever a title or
-  subject is written (new post, retitle, field change); `check:publication`
-  refuses a title whose lead — everything before the colon — does not equal
-  it. `LARS_HAS_READ_IT` never forgives this one. A body-only edit to a
-  subject-less legacy post passes untaxed; add the field when you touch the
-  title. (Wall landed 2026-09-18 after "The Judge Is a Phantom Type" was
-  committed as a draft — a verdict that named no subject, the exact shape
-  the ruling exists to kill.)
+  against it.** `subject: "Orisha"` is required whenever a title or subject
+  is written (new post, retitle, field change); `check:publication` refuses
+  a title that does not open with the subject's name. `LARS_HAS_READ_IT`
+  never forgives this one. A body-only edit to a subject-less legacy post
+  passes untaxed; add the field when you touch the title. (Wall landed
+  2026-09-18 after "The Judge Is a Phantom Type" was committed as a draft —
+  a verdict that named no subject, the exact shape the ruling exists to
+  kill.)
+- **The slug is the title, kebab-cased — same gate.** The directory name is
+  the post's address; it is built from the title's own words and names the
+  subject (`orisha-vs-actix-and-aspnet-on-sqlite`), never a private name for
+  the piece (`the-cold-path-is-the-library` was a benchmark post wearing a
+  metaphor). `check:publication` refuses a slug whose tokens do not appear
+  in the title or that does not name its subject — same moments, same
+  unforgiving tier.
 - **Prefer plain-and-clear over clever-and-vague, every time.** "Prototype Mode:
   Running Incomplete Programs" beats "Doodle the Flow." When in doubt, name the
   feature and stop.
@@ -170,11 +178,12 @@ alone.** Lead with the concrete subject — the feature or concept, by name.
 
 ## Voice
 
-- **Title leads with the subject by name; any hook rides behind it.** A reader
-  scanning the index must see WHAT the post is about from the title alone —
-  "Prototype Mode: Doodle the Flow", not "Doodle the Flow, Let the Events
-  Catch Up". (Lars-ruled 2026-07-15 after a title that never named its
-  feature.)
+- **Title opens with the subject by name and describes the post — no hooks.**
+  A reader scanning the index must see WHAT the post is about from the title
+  alone — "Orisha vs Actix and ASP.NET on SQLite", not "Doodle the Flow, Let
+  the Events Catch Up". The slug is the title kebab-cased, not a private
+  name. (Lars-ruled 2026-07-15 after a title that never named its feature;
+  tightened 2026-10-03 — the hook half of the old form stayed cryptic.)
 - **Present tense, describe the feature — not the journey.** "A grammar is two
   glyphs" not "Today I added a parser." No changelog narration, no "we then…" —
   and no *design* journey either. The seductive form is the ruled-out road:
