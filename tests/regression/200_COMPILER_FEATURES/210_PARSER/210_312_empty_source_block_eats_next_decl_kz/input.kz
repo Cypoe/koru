@@ -4,7 +4,8 @@
 // through the next block's `}`, eating the declaration between them.
 //
 // Three print.blk flows must exist in the AST (post.sh counts them), and
-// the program prints exactly "first", "third".
+// the program prints "first", a blank line (the empty block's empty
+// source), then "third".
 ~import std/io
 
 ~std/io:print.blk {

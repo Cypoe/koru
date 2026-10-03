@@ -6553,7 +6553,16 @@ pub const Parser = struct {
             // This handles both top-level and nested-in-pipeline cases
             const close_threshold = first_content_indent orelse base_indent;
 
-            if (std.mem.eql(u8, trimmed, "}") and line_indent < close_threshold) {
+            // A `}` alone at or below the head's own indent is the close even
+            // when no content line has arrived yet. Without this clause an
+            // empty block (head `{`, then `}` at head indent) has no
+            // first_content_indent, so `}` at base_indent fails
+            // `line_indent < close_threshold`, gets captured AS content, and
+            // the scan runs on to swallow the next declaration's `}` —
+            // 210_311 (.k) / 210_312 (.kz).
+            if (std.mem.eql(u8, trimmed, "}") and
+                (line_indent < close_threshold or
+                    (first_content_indent == null and line_indent <= base_indent))) {
                 self.current += 1;
                 inside_braces = false;
                 break;

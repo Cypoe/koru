@@ -10,8 +10,8 @@
 // silently dropped its depends_on edge.
 //
 // Three print.blk flows must exist in the AST (post.sh counts them), and
-// the program prints exactly "first", "third" — the empty block
-// contributes empty source, i.e. no output.
+// the program prints "first", a blank line (the empty block's empty
+// source), then "third".
 import std/io
 
 std/io:print.blk {
