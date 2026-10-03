@@ -1,0 +1,50 @@
+// OBSERVATION (obligation fuzz, 2026-10-03): a user-written `[@scope]` on an
+// ordinary fold outcome arm is honored — compiles, passes all coordination
+// passes, builds, runs. 14/14 scope-toggle(add) mutants across the 330_07x-08x
+// family behaved this way.
+//
+// `[@scope]` marks a scope boundary for obligation tracking: inside it, outer
+// obligations are observable but not dischargeable. It is auto-stamped on tap
+// weaves and `done`-shaped loop exits; `!`-effect bodies are implicit
+// boundaries. Here it is hand-written on a plain `| again` back-edge arm —
+// not an effect body, not a loop body, a dispatch arm.
+//
+// The direction is benign (over-restriction — nothing may discharge inside),
+// so this is NOT a defect pin. The open question is intent: is `[@scope]` on
+// arbitrary user arms sanctioned surface, or should the checker refuse it
+// outside effect/tap/exit contexts? If it stays legal, `scope-toggle(remove)`
+// is the dangerous twin and currently has zero corpus coverage.
+//
+// Repro: `koruc fuzz/repros/probe_scope_on_user_arm.kz` -> builds + runs n=3.
+const std = @import("std");
+const Handle = struct { n: i32 };
+
+~tor make {} -> *Handle<owned!>
+~proc make|zig {
+    const h = std.heap.page_allocator.create(Handle) catch unreachable;
+    h.* = .{ .n = 0 };
+    return h;
+}
+
+~tor step { h: *Handle<!owned> }
+| again *Handle<owned!>
+| stop *Handle<owned!>
+~proc step|zig {
+    h.n += 1;
+    if (h.n < 3) return .{ .again = h };
+    return .{ .stop = h };
+}
+
+~tor done { h: *Handle<!owned> }
+~proc done|zig {
+    std.debug.print("n={}\n", .{h.n});
+    std.heap.page_allocator.destroy(h);
+}
+
+~tor spin {} -> *Handle<owned!>
+
+~spin = make(): h0 |> #loop step(h: h0)
+| again v[@scope] |> @loop(h: v)
+| stop r -> r
+
+~spin(): hf |> done(h: hf)
