@@ -25,3 +25,17 @@ local re-import; keep it container-scoped).
 
 When a part itself outgrows the seam, the sanctioned promotion is a
 directory module (`index.kz` + submodules), not a deeper part.
+
+The seam has a second-order consequence for every derived instrument: **a
+filename is not a module name.** `scripts/js-parity-map.mjs` listed
+`koru_std/` flat and registered `store.new.kz` as a module named
+`store.new` that no import can spell; every `store:*`/`list:*` call site
+then resolved against the primary alone, missed, and 27% of the corpus
+landed in its unresolved tail — the map's own DO-NOT-TRUST verdict. The
+flat read failed quietly: it produced self-consistent wrongness rather
+than an error, because the phantom modules it minted are real files
+holding real procs. Any tool that maps the stdlib surface by listing the
+directory must join `<module>.<part>.<facet>` files on the primary's
+`~part` lines — the declaration is the only authority, and the join is
+declaration-gated (an undeclared dotted file stays its own unimportable
+name rather than being silently attached).

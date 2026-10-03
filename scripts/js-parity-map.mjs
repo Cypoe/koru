@@ -154,20 +154,44 @@ function procBody(src, from) {
 // is true of every one of them and would mark the whole runtime surface ported.
 const rendersJs = (p) => p.langs.has('js') || (p.transform && (p.langAware || !p.emitsHost))
 
+// A module's `~part name` declaration joins every `<module>.<name>.<facet>`
+// file into the same module — store.kz carries 40 (`store.new.kz`,
+// `store.query.kz`, …), list.kz 10. Read flat, each part file registered as a
+// module named `store.new` that no test can import, and `store:new` resolved
+// against the primary alone: not there, so every store/list call site landed
+// in `unresolved` — 27% of the corpus, and the verdict self-refused.
+const PART_DECL = /^\s*~?part\s+([A-Za-z0-9_-]+)/gm
+
 function loadStdlib() {
   const mods = new Map()
   const get = (n) => {
     if (!mods.has(n)) mods.set(n, { name: n, procs: new Map(), tors: new Map(), facets: new Set(), lines: 0 })
     return mods.get(n)
   }
+  const files = []
+  const declaredParts = new Map()
   for (const f of readdirSync(STD)) {
-    const m = f.match(/^(.+)\.(kz|k|kjs)$/)
+    const m = f.match(/^([A-Za-z0-9_-]+?)(?:\.([A-Za-z0-9_-]+))?\.(kz|k|kjs)$/)
     if (!m) continue
-    const [, name, ext] = m
     const src = readFileSync(join(STD, f), 'utf8')
+    files.push({ base: m[1], part: m[2], ext: m[3], src })
+    // Parts are flat — a part file may not declare parts — so only a primary
+    // (undotted) file's `~part` lines can own a sibling.
+    if (!m[2]) {
+      for (const p of src.matchAll(PART_DECL)) {
+        if (!declaredParts.has(m[1])) declaredParts.set(m[1], new Set())
+        declaredParts.get(m[1]).add(p[1])
+      }
+    }
+  }
+  for (const { base, part, ext, src } of files) {
+    // Join only on the primary's declaration, matching the compiler: a dotted
+    // file the primary never named keeps its literal dotted name, which no
+    // import can spell, rather than being silently attached.
+    const name = part && declaredParts.get(base)?.has(part) ? base : part ? `${base}.${part}` : base
     const mod = get(name)
     mod.facets.add(ext)
-    if (ext === 'kz') mod.lines = src.split('\n').length
+    if (ext === 'kz') mod.lines += src.split('\n').length
     // Keep the event's OWN annotation. A proc inherits transform-ness from the
     // event it implements, and the annotation is frequently written there
     // rather than on the proc line: kernel.kz:80 declares
