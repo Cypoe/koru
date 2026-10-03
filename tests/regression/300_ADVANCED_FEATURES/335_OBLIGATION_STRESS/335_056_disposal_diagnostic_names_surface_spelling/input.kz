@@ -1,0 +1,18 @@
+// RED PIN — canonical names should be surface spellings.
+//
+// `std/io:read-file`'s buffer carries `allocated!`; under
+// --auto-discharge=disable the leak is a loud KORU030 that names the
+// disposer. What this test pins is the NAME: the suggestion must read
+// `std/io:free` — a spelling the parser accepts — not the internal
+// dot-joined canonical form `std.io:free` (a shape KORU035 refuses in
+// source).
+//
+// Stays red until canonical names stop normalizing `/`→`.` at the parse
+// boundary — concepts/frag-a-canonical-name-should-be-its-surface-spelling.
+
+~import std/io
+
+~std/io:read-file(path: "data.txt")
+| ok content |> std/io:print.ln("{{ content:s }}")
+| not-found |> _
+| failed _ |> _

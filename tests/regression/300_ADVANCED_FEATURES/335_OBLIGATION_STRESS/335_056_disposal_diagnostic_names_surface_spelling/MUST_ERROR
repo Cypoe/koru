@@ -1,0 +1,5 @@
+RED PIN — canonical names should be surface spellings. KORU030 names the
+disposer in the internal dot-joined form `std.io:free`; the diagnostic
+should print `std/io:free`, the spelling that parses. This stays red until
+internal canonical names stop normalizing `/`→`.` at the parse boundary —
+see concepts/frag-a-canonical-name-should-be-its-surface-spelling.
