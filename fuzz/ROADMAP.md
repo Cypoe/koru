@@ -113,12 +113,27 @@ becomes a witness under the `stdout+rc` regime; `cross_verify` gains a
 limb. Turns every KORU021/022-type disagreement into a congruence question.
 Lean obligation: `QuotientMapO.preserves`.
 
-## 4. GA → observation fitness (depends on 3)
+## 4. GA → observation fitness — PARTIALLY LANDED (dialect-free variant)
 
-Rewire `fuzz/ga.k` / `composition_gp.py` fitness from uncovered-cell hits
-to `observe(encode(candidate))` agreement. Adversarial variant: maximize
-cross-layer disagreement (-c vs coordination vs substrate NF) — targeted
-synthesis of the KORU021/022 class rather than random splicing.
+The dependency on item 3 was overstated for the regression variant: the
+holonomic gate's own observation surface (trajectory agreement + verified
+certificates) is enough — `observe(encode(x))` is needed only when the
+observation must be substrate NF.
+
+- `scripts/holonomic_regress.py` — certified *symbolic regression*:
+  the target is bare iterate data, not a reference program. Fitness is
+  first-divergence depth into the observed window; terminal is
+  `REGRESSED` — a candidate whose certified trajectory reproduces all W
+  terms, with overdetermination (W − order) reported. The certificate
+  is a theorem about the program; the data-fit is honestly regression
+  (finite observations admit infinitely many extensions — the verdict
+  says so). Selftest: squares data → 3 certified programs in ≤2
+  generations (`n*n` spellings + discovered `acc + 2n − 1`); fibonacci
+  data → honest zero-match (unreachable in the single-acc fragment).
+- Still parked behind item 3: the substrate-NF observation variant and
+  the adversarial cross-layer-disagreement fitness (synthesize the
+  KORU021/022 class). The obligation sweep already produces that class
+  empirically — wiring it as *fitness* wants the dialect.
 
 ## 5. Quantity / structural arithmetic — orthogonal, cheap
 
