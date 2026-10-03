@@ -57,6 +57,21 @@ subflow declaration into the session's durable defined-flows table; a later
 possession machinery. Pinned at 440_008_runtime_define — the belief's
 growth-mechanism half is now code, not prose.
 
+The permanence rung is LANDED too (440_040): `create(world: <dir>)` mounts
+a directory of `*.k` flow files as the session's starting vocabulary, and
+every define that lands writes `<dir>/<name>.k` — verbatim definition
+source, one file per flow, so the genome reads and diffs like a program
+rather than a serialized table. Restore runs the SAME install path a fresh
+define takes (one `installDefine` chokepoint every define site shares), so
+a mounted world is not a second define mechanism — it is the same one,
+replayed. The "same verbs as ordinary work" line above landed sideways:
+the write path is not agent-level file verbs but `define` itself — one
+verb, two effects (install + persist), and the meta/object unity survives
+through the verb rather than through `std/fs`. A corrupt genome panics at
+mount naming the file — `create`'s `-> *Bridge` bare return cannot spell a
+refusal arm (656953029 walls that collision at the parser), so panic is
+the only refusal available, matching dischargeAll's severity.
+
 New side effects are the one thing flows cannot create — they are
 compiled primitives, grown by the platform at build boundaries, with a rare
 gated native-module escape hatch for mid-session needs.

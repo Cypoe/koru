@@ -46,6 +46,9 @@ pub const Bridge = struct {
     /// wire path; when not, they are event-denied like any unvocabularied
     /// word. There is no other way to ask the session what it knows.
     introspection: bool,
+    /// The world dir this session's defined flows persist into, or null —
+    /// set by `create(world: ...)`, owned here, freed by deinit.
+    world: ?[]const u8,
     /// Durable session bindings — values a turn named that stay named on
     /// the next turn. `run` auto-binds every result as `r{N}` and the
     /// `bind` host verb writes here directly; both are seeded into each
@@ -61,13 +64,14 @@ pub const Bridge = struct {
     /// Next auto-bind ordinal — names are `r1`, `r2`, … in run order.
     bound_count: u64,
 
-    pub fn init(allocator: std.mem.Allocator, session_id: []const u8, scope: []const u8, introspection: bool) Bridge {
+    pub fn init(allocator: std.mem.Allocator, session_id: []const u8, scope: []const u8, introspection: bool, world: []const u8) Bridge {
         const defined = allocator.create(DefinedFlows) catch @panic("std/bridge:create: OOM minting defined-flows table");
         defined.* = DefinedFlows.init(allocator);
         const session_arena = allocator.create(std.heap.ArenaAllocator) catch @panic("std/bridge:create: OOM minting session arena");
         session_arena.* = std.heap.ArenaAllocator.init(allocator);
         const session_env = allocator.create(Environment) catch @panic("std/bridge:create: OOM minting session env");
         session_env.* = Environment.init(session_arena.allocator());
+        const world_owned: ?[]const u8 = if (world.len > 0) allocator.dupe(u8, world) catch world else null;
         return .{
             .pool = HandlePool.init(allocator),
             .allocator = allocator,
@@ -77,6 +81,7 @@ pub const Bridge = struct {
             .last_active = std.time.milliTimestamp(),
             .defined = defined,
             .introspection = introspection,
+            .world = world_owned,
             .session_env = session_env,
             .session_arena = session_arena,
             .bound_count = 0,
@@ -139,6 +144,7 @@ pub const Bridge = struct {
     pub fn deinit(self: *Bridge) void {
         self.allocator.free(self.session_id);
         self.allocator.free(self.scope);
+        if (self.world) |w| self.allocator.free(w);
         self.pool.deinit();
         self.defined.deinit();
         self.allocator.destroy(self.defined);
@@ -148,19 +154,6 @@ pub const Bridge = struct {
         self.allocator.destroy(self.session_arena);
     }
 };
-
-// ============================================================================
-// CREATE - Open a bridge session against a registered scope
-// ============================================================================
-
-~pub tor create { id: string, scope: string, introspection: bool = false } -> *Bridge<session!>
-
-~proc create|zig {
-    const allocator = koru_allocator();
-    const br = allocator.create(Bridge) catch unreachable;
-    br.* = Bridge.init(allocator, id, scope, introspection);
-    return br;
-}
 
 // ============================================================================
 // GET_HANDLES - Query handles currently on the bridge
@@ -191,6 +184,7 @@ pub const Bridge = struct {
 ~proc close|zig {
     br.dischargeAll(); br.deinit(); koru_allocator().destroy(br);
 }
+~part world
 ~part run
 ~part run-exec
 ~part steps

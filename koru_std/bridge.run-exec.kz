@@ -3,8 +3,6 @@
 // bridge module at load. The tor decl rides in the `run` part.
 
 ~proc run|zig {
-    const interp = @import("root").koru_std.koru_interpreter;
-
     br.touch();
 
     // SEQUENCING (frag-partial-programs): a turn is a run of items, each
@@ -34,10 +32,7 @@
         {
             const trimmed = std.mem.trim(u8, source, " \t\r\n");
             if (std.mem.startsWith(u8, trimmed, "tor ")) {
-                return switch (interp.define_event.handler(.{
-                    .source = source,
-                    .defined = br.defined,
-                })) {
+                return switch (installDefine(br, source)) {
                     .defined => |d| .{ .defined = d },
                     .parse_error => |e| .{ .parse_error = .{
                         .message = e.message,

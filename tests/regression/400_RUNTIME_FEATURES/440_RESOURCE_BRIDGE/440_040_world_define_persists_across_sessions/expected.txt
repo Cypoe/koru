@@ -1,0 +1,6 @@
+--- session a open
+  defined greet
+--- session a closed
+--- session b open
+  greet -> {"branch":"","value":"echo:hi"}
+--- session b closed

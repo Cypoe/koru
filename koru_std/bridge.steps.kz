@@ -19,7 +19,6 @@ const StepRun = struct {
 /// program RUNS, and the model learns every step's outcome in one
 /// observation instead of discovering failures one turn at a time.
 fn runSteps(br: *Bridge, source: []const u8, items: []const TurnItem) StepRun {
-    const interp = @import("root").koru_std.koru_interpreter;
     var report = std.ArrayList(u8){};
     defer report.deinit(br.allocator);
     const writer = report.writer(br.allocator);
@@ -39,7 +38,7 @@ fn runSteps(br: *Bridge, source: []const u8, items: []const TurnItem) StepRun {
         const item = std.mem.trim(u8, source[it.start..it.end], " \t\r\n");
         if (isDefineItem(item)) {
             all_residue = false;
-            switch (interp.define_event.handler(.{ .source = item, .defined = br.defined })) {
+            switch (installDefine(br, item)) {
                 .defined => |d| writer.print("step {d}/{d} defined: {s}\n", .{ step, total, d }) catch {},
                 .parse_error => |e| {
                     wire_failures += 1;

@@ -15,12 +15,8 @@
 | parse-error { message: string, line: u32, column: u32 }
 
 ~proc define|zig {
-    const interp = @import("root").koru_std.koru_interpreter;
     br.touch();
-    return switch (interp.define_event.handler(.{
-        .source = source,
-        .defined = br.defined,
-    })) {
+    return switch (installDefine(br, source)) {
         .defined => |d| .{ .defined = d },
         .parse_error => |e| .{ .parse_error = .{
             .message = e.message,
