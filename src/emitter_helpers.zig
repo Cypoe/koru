@@ -5580,6 +5580,24 @@ pub fn writeInlineCodeWithLabel(
     }
 }
 
+/// Emit the construct's join: anonymous continuations ride no template marker
+/// (`{{ continuations["X"].continue }}` resolves by branch name — an unnamed
+/// tail has no name to be resolved by), so every path that hands named arms to
+/// markers must still emit this tail itself, in order, after the construct
+/// (400_205: `! each`'s join was silently dropped, and an obligation written
+/// onto it leaked undiagnosed).
+fn emitAnonymousContinuations(
+    emitter: *CodeEmitter,
+    ctx: *EmissionContext,
+    continuations: []const ast.Continuation,
+    result_counter: *usize,
+) !void {
+    for (continuations) |*cont| {
+        if (cont.branch.len != 0) continue;
+        try emitContinuationBody(emitter, ctx, cont, result_counter);
+    }
+}
+
 /// Emit a node whose template transform produced `inline_body` (zero-overhead
 /// control flow: `~if`, `~for`, …). Shared by `emitFlow` (top-level) and
 /// `emitContinuationBody` (nested), so the inline-template lowering works
@@ -5744,6 +5762,7 @@ pub fn emitInlineBodyNode(
                 // the resolver above lowers into the consumer dispatch. An
                 // effect-bearing template with no `.continue` simply emits no
                 // terminal body (e.g. a `for` with no `| done`).
+                try emitAnonymousContinuations(emitter, ctx, continuations, result_counter);
                 _ = &inline_terminal_conts;
                 return;
             }
@@ -5769,6 +5788,8 @@ pub fn emitInlineBodyNode(
                     try emitter.write(";");
                 }
                 try emitter.write("\n");
+                // Same join rule as the SPLICE path above (400_205).
+                try emitAnonymousContinuations(emitter, ctx, continuations, result_counter);
                 return;
             }
             // Site-unique name: nested or sibling inline-effect sites each
@@ -5822,7 +5843,9 @@ pub fn emitInlineBodyNode(
             try emitter.write("\n");
 
             // Terminal continuations are not appended — the template hands off to
-            // them via the resolved `__koru_continue_<idx>` markers above.
+            // them via the resolved `__koru_continue_<idx>` markers above. The
+            // anonymous join tail rides no marker either — it emits here (400_205).
+            try emitAnonymousContinuations(emitter, ctx, continuations, result_counter);
             _ = &inline_terminal_conts;
             return;
         }
@@ -5840,10 +5863,7 @@ pub fn emitInlineBodyNode(
             try emitter.write(" = ");
             try writeInlineCodeWithLabel(emitter, ctx, inline_code);
             try emitter.write(";\n");
-            for (continuations) |*cont| {
-                if (cont.branch.len != 0) continue; // terminal — returned, not appended
-                try emitContinuationBody(emitter, ctx, cont, result_counter);
-            }
+            try emitAnonymousContinuations(emitter, ctx, continuations, result_counter);
             return;
         }
 
@@ -5862,10 +5882,7 @@ pub fn emitInlineBodyNode(
         // Void-chain continuations share the CALLER's result counter — at
         // depth the chain continues in the same Zig scope, and a reset here
         // re-issues result_N names that shadow the enclosing scope's.
-        for (continuations) |*cont| {
-            if (cont.branch.len != 0) continue; // terminal — returned, not appended
-            try emitContinuationBody(emitter, ctx, cont, result_counter);
-        }
+        try emitAnonymousContinuations(emitter, ctx, continuations, result_counter);
         return;
     }
 

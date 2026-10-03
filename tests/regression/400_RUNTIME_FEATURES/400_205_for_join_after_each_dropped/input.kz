@@ -1,0 +1,39 @@
+// JOIN after `for`'s effect arms: an anonymous `|>` at the loop step's level is
+// the construct's join (resolveAnonymousArms: "keyword events rejoin") and must
+// emit after the loop — not be dropped with the absent `| done`. The chain's
+// drop(r) rides the same tail: swallowing it leaks the obligation silently.
+//
+~import std/io
+~import std/control
+
+const std = @import("std");
+const Res = struct { v: i64 };
+
+~tor mark { tag: string }
+~proc mark|zig { std.debug.print("MARK {s}\n", .{tag}); }
+~tor grab {} -> *Res<res!>
+~proc grab|zig {
+    const r = std.heap.page_allocator.create(Res) catch unreachable;
+    r.* = .{ .v = 7 };
+    return r;
+}
+~tor drop { r: *Res<!res> }
+~proc drop|zig {
+    std.debug.print("DROPPED {d}\n", .{r.v});
+    std.heap.page_allocator.destroy(r);
+}
+~tor use { r: *Res<res> }
+~proc use|zig { std.debug.print("USE {d}\n", .{r.v}); }
+~tor doit {} | ok | fail
+~proc doit|zig { return .{ .ok = .{} }; }
+~tor probe {} | hit | ?skip
+~proc probe|zig { return .{ .hit = .{} }; }
+~tor probe2 {} | hit | ?skip
+~proc probe2|zig { return .{ .skip = .{} }; }
+~grab(): r |> doit()
+| ok     |> mark(tag: "pre")
+        |> for(0..2)
+            ! each _ |> mark(tag: "lap")
+    |> mark(tag: "join")
+    |> drop(r)
+| fail |> _

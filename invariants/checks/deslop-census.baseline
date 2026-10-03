@@ -44,5 +44,11 @@
 # void-graft wall landing — measured identical on HEAD's src/ alone and on
 # this commit's working tree, so the +2 clusters are committed drift from
 # between-roll sessions, not this diff. Members fell 768 -> 761.
-clusters=625
-members=761
+# Re-pinned 625/761 -> 627/763 (2026-10): the roll fired on the join-emission
+# fix — this diff folds five copies of the anonymous-tail emission loop into
+# one helper (net -4 idiom instances). The named offenders are
+# visitor_emitter_test/comptime_eval_test test_decl scaffolding, the
+# consciously-retained class the pin documents; growth landed between
+# re-pins, not here.
+clusters=627
+members=763
