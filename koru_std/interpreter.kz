@@ -723,10 +723,6 @@ pub const DefinedFlows = struct {
     }
 };
 
-pub fn findDefinedFlow(defined: *const DefinedFlows, name: []const u8) ?DefinedFlow {
-    return defined.get(name);
-}
-
 // ============================================================================
 // INTERPRETER CONTEXT - Passed to the execution loop
 // ============================================================================
@@ -754,6 +750,8 @@ pub const InterpreterContext = struct {
     scope_name: []const u8,
     // Runtime-defined flows (the REPL define) — consulted before the scope
     defined: ?*DefinedFlows,
+    // Defined-dispatch nesting level — bound: interpreter.defined.kz.
+    defined_depth: u32 = 0,
     // Tor -> declared input fields (InputFieldSpec, phantom spellings
     // included). Needed at dispatch, not only at validate: a `T<state>`
     // borrow param is enforced HERE against the live pool — field
@@ -872,3 +870,4 @@ pub fn findHostTilde(source: []const u8) ?HostTilde {
 ~part trace
 ~part handles
 ~part flowsrc
+~part defined

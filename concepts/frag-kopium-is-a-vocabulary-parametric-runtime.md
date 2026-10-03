@@ -76,6 +76,20 @@ New side effects are the one thing flows cannot create — they are
 compiled primitives, grown by the platform at build boundaries, with a rare
 gated native-module escape hatch for mid-session needs.
 
+2026-10-01 — the terminating-vocabulary law extends to *execution depth*.
+Because the defined-flows table is a live namespace, a body that calls its
+own name resolves to the current body: a self-referencing redefine is
+recursion, and `run` forwards no budget, so nothing bounded it — a runaway
+defined flow nested real frames until the host stack died mid-turn
+(measured: kopium `probe_define_selfref`, exit 139). The refusal-not-feature
+stance now has its mechanism: defined dispatches carry a depth counter
+(`MAX_DEFINED_DEPTH` 64), a runaway answers `defined flow '<name>' exceeded
+the dispatch depth cap` as an ordinary bridge refusal, and the session
+survives to redefine. Bounded recursion is still vocabulary work — a drain
+that re-calls itself only while a verb answers `more` is legal under the
+cap; what refuses is recursion with no outcome that stops it. Pin:
+440_042.
+
 What would correct this: a vocabulary that cannot be served by derivation (a
 domain needing hand-written grammar or lowering), or a terminating-vocabulary
 bet that fails in practice (agents routinely needing unbounded expression) —
