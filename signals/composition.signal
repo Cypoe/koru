@@ -1,0 +1,10 @@
+name: composition
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a composed surface — a scope built from other scopes, a module
+      folded into a registry — silently minted the wrong thing: present
+      in name, empty in content. The defect is in how parts join, not
+      in any member's semantics. Distinct from bug-fix: the members each
+      worked; only the join lied.
