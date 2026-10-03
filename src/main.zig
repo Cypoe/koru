@@ -2225,12 +2225,38 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\    // no a.out. Gated on CompilerEnv.lang so the Zig path below is untouched.
             \\    if (__koru_std.mem.eql(u8, CompilerEnv.lang, "js")) return;
             \\
-            \\    // --deep-check: the koruc-level verdict is already final — every
+            \\    // --deep-check: the koruc-level verdict is almost final — every
             \\    // pass ran, emission succeeded, output_emitted.zig is on disk.
             \\    // Stage D is native codegen, not a verdict input; a fuzzer
             \\    // scoring on -c cannot see the refusals that live above this
             \\    // line (check-flow runs post-transform, backend-only).
-            \\    if (CompilerEnv.hasFlag("deep-check")) return;
+            \\    //
+            \\    // What a bare return here skips is the last witness: that the
+            \\    // emission is a parseable program, not text. Fuzz splices land
+            \\    // Koru-shaped lines inside `proc|zig` bodies and record fields,
+            \\    // and both paste verbatim into the Zig — a green verdict on
+            \\    // emission `zig ast-check` refuses (challenge-031 gp_2_pass).
+            \\    // "Emitted" is not the verdict; "emitted valid" is. The full
+            \\    // stage-D build stays skipped; only the parse is witnessed.
+            \\    if (CompilerEnv.hasFlag("deep-check")) {
+            \\        const emitted_z = try compile_allocator.dupeZ(u8, generated_code);
+            \\        const emit_tree = __koru_std.zig.Ast.parse(compile_allocator, emitted_z, .zig) catch |perr| {
+            \\            __koru_std.debug.print("error[KORU207]: emission validation itself failed ({s}) — output_emitted.zig could not be parsed\n", .{@errorName(perr)});
+            \\            __koru_std.process.exit(1);
+            \\        };
+            \\        if (emit_tree.errors.len != 0) {
+            \\            var aw: __koru_std.Io.Writer.Allocating = .init(compile_allocator);
+            \\            for (emit_tree.errors) |perr| {
+            \\                if (perr.is_note) continue;
+            \\                const loc = emit_tree.tokenLocation(0, perr.token);
+            \\                emit_tree.renderError(perr, &aw.writer) catch {};
+            \\                __koru_std.debug.print("error[KORU207]: {s}:{d}:{d}: emitted Zig does not parse — {s}\n", .{ emitted_file, loc.line + 1, loc.column + 1, aw.written() });
+            \\                aw.clearRetainingCapacity();
+            \\            }
+            \\            __koru_std.process.exit(1);
+            \\        }
+            \\        return;
+            \\    }
             \\
             \\    // K# vertical: the cs path's Stage D is the .NET SDK. dotnet 9 has
             \\    // no file-based `dotnet run x.cs`, so a minimal csproj IS the

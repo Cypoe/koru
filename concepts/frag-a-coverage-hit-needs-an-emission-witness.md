@@ -135,5 +135,8 @@ audit found it — but the machinery it audited no longer exists.
   (440_016's discharge-phantom path).
 - Which other `Source` consumers drop unresolved lines; each is a falsifier
   of any text-level coverage claim over it.
-- Whether `--deep-check` should `zig ast-check` its own emission — the
-  oracle currently cannot distinguish "emitted" from "emitted valid Zig".
+- ~~Whether `--deep-check` should `zig ast-check` its own emission~~ —
+  resolved 2026-10-03: it does (in-process `Ast.parse` of
+  `output_emitted.zig`, refusal `KORU207`, pinned by the 510_126 pin).
+  The oracle now witnesses rung 3 itself; rungs above (semantic
+  presence, liveness) remain the caller's job.
