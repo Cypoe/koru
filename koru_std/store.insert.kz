@@ -40,61 +40,6 @@
         fn fieldOrder(alloc: std.mem.Allocator, prog: *const ast.Program, store: []const u8) ?[]const []const u8 {
             return storeInsertOrder(alloc, prog, store);
         }
-        // Is `col` a fixed-char column, and how many bytes does it hold?
-        // (690_052 — the comptime-literal overflow check needs N at the
-        // insert site.) Sources, mirroring fieldOrder's transform-order
-        // tolerance: the generated SoA cell host_line when create already
-        // ran (`<col>: [CAP][N]u8` — store.kz owns both the writer and this
-        // reader), else the untransformed create's seed block (`char[N]`).
-        fn charCap(alloc: std.mem.Allocator, prog: *const ast.Program, store: []const u8, col: []const u8) ?usize {
-            const marker = std.fmt.allocPrint(alloc, "const __KoruStoreT_{s} = struct {{", .{store}) catch unreachable;
-            for (flatItems(alloc, prog.items)) |pi| {
-                if (pi.* != .host_line) continue;
-                const t = pi.host_line.content;
-                if (std.mem.indexOf(u8, t, marker) == null) continue;
-                const fkey = std.fmt.allocPrint(alloc, "\n    {s}: [", .{col}) catch unreachable;
-                const fpos = std.mem.indexOf(u8, t, fkey) orelse return null;
-                const rest = t[fpos + fkey.len ..];
-                // scalar: `8]i64 = undefined`; fixed-char: `8][16]u8 = undefined`
-                const close = std.mem.indexOfScalar(u8, rest, ']') orelse return null;
-                const after = rest[close + 1 ..];
-                if (after.len == 0 or after[0] != '[') return null;
-                const close2 = std.mem.indexOfScalar(u8, after, ']') orelse return null;
-                if (!std.mem.startsWith(u8, after[close2 + 1 ..], "u8")) return null;
-                return std.fmt.parseInt(usize, after[1..close2], 10) catch null;
-            }
-            // create not yet transformed: read the raw seed block.
-            for (flatItems(alloc, prog.items)) |pi| {
-                if (pi.* != .flow) continue;
-                const f = &pi.flow;
-                const inv = f.inv();
-                if (inv.path.segments.len != 1 or !std.mem.eql(u8, inv.path.segments[0], "new")) continue;
-                const mq = inv.path.module_qualifier orelse continue;
-                if (!std.mem.eql(u8, mq, "std.store")) continue;
-                var name_matches = false;
-                var seed: ?[]const u8 = null;
-                for (inv.args) |a| {
-                    if (std.mem.eql(u8, a.name, "expr")) {
-                        name_matches = std.mem.eql(u8, stripQuotes(a.value), store);
-                    } else if (std.mem.eql(u8, a.name, "source")) {
-                        seed = a.value;
-                    }
-                }
-                if (!name_matches or seed == null) continue;
-                const braced = std.fmt.allocPrint(alloc, "{{{s}}}", .{seed.?}) catch unreachable;
-                const cf = struct_literal.parseFields(alloc, braced) catch return null;
-                for (cf) |c| {
-                    if (!std.mem.eql(u8, c.name, col)) continue;
-                    const v = std.mem.trim(u8, c.value, " ");
-                    if (std.mem.startsWith(u8, v, "char[") and v.len > "char[".len and v[v.len - 1] == ']') {
-                        return std.fmt.parseInt(usize, std.mem.trim(u8, v["char[".len .. v.len - 1], " "), 10) catch null;
-                    }
-                    return null;
-                }
-                return null;
-            }
-            return null;
-        }
         // Is `col` an OWNED column (the store holds `[CAP]*Type` and teardown
         // frees the live pointers — 690_053's single-ownership contract)?
         // Sources, mirroring charCap's transform-order tolerance: the
@@ -357,7 +302,7 @@
         // exceeds the column's byte length is a compile error naming column +
         // limit. Runtime values truncate in the insert proc (the `| toolong`
         // branch is a deferred refinement).
-        if (H.charCap(allocator, program, store_name, col)) |ncap| {
+        if (charCap(allocator, program, store_name, col)) |ncap| {
             const v = std.mem.trim(u8, val, " ");
             if (v.len >= 2 and v[0] == '"' and v[v.len - 1] == '"') {
                 const blen = H.literalByteLen(v[1 .. v.len - 1]);

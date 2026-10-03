@@ -972,15 +972,22 @@ fn findUncrossableCtorSlice(conts: []const Continuation) ?*const Continuation {
 pub fn expressionMask(alloc: std.mem.Allocator, text: []const u8) []bool {
     const mask = alloc.alloc(bool, text.len) catch unreachable;
     var in_str = false;
+    var in_tick = false;
+    var in_char = false;
     var in_interp = false;
     var interp_spec = false;
     var i: usize = 0;
     while (i < text.len) : (i += 1) {
-        if (in_str and !in_interp and text[i] == '{' and i + 1 < text.len and text[i + 1] == '{') {
+        const c = text[i];
+        // `{{ }}` is interpolation whether it sits inside a quoted string or
+        // in bare source (a fmt.blk block) — an unquoted `{{ }}` carries the
+        // same `:spec` tail, and masking it only inside strings is what left
+        // `{{ s.ip:s }}`'s spec reachable by the row rewriter (690_361).
+        if (!in_interp and c == '{' and i + 1 < text.len and text[i + 1] == '{') {
             in_interp = true;
             interp_spec = false;
         }
-        if (in_str and in_interp and text[i] == '}' and i + 1 < text.len and text[i + 1] == '}') {
+        if (in_interp and c == '}' and i + 1 < text.len and text[i + 1] == '}') {
             in_interp = false;
             interp_spec = false;
         }
@@ -990,13 +997,29 @@ pub fn expressionMask(alloc: std.mem.Allocator, text: []const u8) []bool {
         // char that collides with a binding — `{{ d.id:d }}` emitted the
         // row's `__koru_handle_of` mint INTO the format placeholder
         // (690_122/124/192).
-        if (in_str and in_interp and !interp_spec and text[i] == ':') interp_spec = true;
-        if (text[i] == '"' and (i == 0 or text[i - 1] != '\\') and !in_interp) {
+        if (in_interp and !interp_spec and c == ':') interp_spec = true;
+        if (c == '"' and (i == 0 or text[i - 1] != '\\') and !in_interp and !in_tick and !in_char) {
             in_str = !in_str;
             mask[i] = false;
             continue;
         }
-        mask[i] = (!in_str or in_interp) and !interp_spec;
+        // Backtick-quoted names (switch arm heads, regex literals) and char
+        // literals are literal text too — a bare ` or ' opens one wherever a
+        // literal can matter: outside strings, or inside a {{ }} hole. A
+        // stray ' in a comment closes at end of line rather than masking the
+        // rest of the body.
+        if (c == '`' and (!in_str or in_interp) and !in_char) {
+            in_tick = !in_tick;
+            mask[i] = false;
+            continue;
+        }
+        if (c == '\'' and (!in_str or in_interp) and !in_tick) {
+            in_char = !in_char;
+            mask[i] = false;
+            continue;
+        }
+        if (in_char and c == '\n') in_char = false;
+        mask[i] = (in_interp or (!in_str and !in_tick and !in_char)) and !interp_spec;
     }
     return mask;
 }

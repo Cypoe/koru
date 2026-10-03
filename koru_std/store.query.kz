@@ -655,7 +655,7 @@
                     }
                     if (found_col) {
                         const esc_cn = codegen_utils_store.escapeZigIdentifier(allocator, cn) catch cn;
-                        const read = std.fmt.allocPrint(allocator, "{s}__koru_store_{s}.{s}[__koru_si]", .{ mem_cellq, mem_name, esc_cn }) catch unreachable;
+                        const read = cellRead(allocator, host_is_js, program, mem_cellq, mem_name, cn, esc_cn);
                         loop.appendSlice(allocator, HS.constBind(allocator, host_target, pn, read)) catch unreachable;
                     } else {
                         const def_val = zeroFillForType(col_types[ci]) orelse "0";
@@ -706,7 +706,7 @@
             loop.appendSlice(allocator, HS.loopHead(allocator, host_target, "__koru_si", cell_len)) catch unreachable;
         }
         var bad_op: []const u8 = "";
-        if (!StoreIndexWalk.fireRow(allocator, &loop, host_target, proj_names, proj_cols, col_names, cellq, store_name, scan_guard, q_may_remove, is_first and none_arm != null, home_ns, sbody_name, program.main_module_name, argb.items, &bad_op))
+        if (!fireRow(allocator, &loop, host_target, program, proj_names, proj_cols, col_names, cellq, store_name, scan_guard, q_may_remove, is_first and none_arm != null, home_ns, sbody_name, program.main_module_name, argb.items, &bad_op))
             return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): the sweep guard names `@{s}`, and that operation has no lowering for this target - a store guard is a Koru expression, and the operations Koru names with `@` are the shared table in codegen_utils.lowerBuiltin", .{ store_name, bad_op }) };
         if (index_rhs != null)
             loop.appendSlice(allocator, StoreIndex.firstClose(allocator, host_is_js, none_call)) catch unreachable

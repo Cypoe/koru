@@ -628,12 +628,6 @@ fn storeAllNames(alloc: std.mem.Allocator, prog: *const ast_find.Program) []cons
     return names.toOwnedSlice(alloc) catch unreachable;
 }
 
-const StoreColInfo = struct {
-    name: []const u8,
-    type: []const u8,
-    module_path: ?[]const u8,
-    phantom: ?[]const u8,
-};
 fn storeViewMembers(alloc: std.mem.Allocator, prog: *const ast_find.Program, view_name: []const u8) ?[]const []const u8 {
     for (flatItems(alloc, prog.items)) |pi| {
         if (pi.* == .inline_code) {
@@ -675,130 +669,6 @@ fn storeViewMembers(alloc: std.mem.Allocator, prog: *const ast_find.Program, vie
         }
     }
     return null;
-}
-fn storeMemberColumns(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8) ?[]const StoreColInfo {
-    const insert_name = std.fmt.allocPrint(alloc, "__store_insert_{s}", .{store}) catch unreachable;
-    if (findSynthDecl(prog.items, insert_name)) |ed| {
-        var count: usize = 0;
-        for (ed.input.fields) |f| {
-            if (std.mem.eql(u8, f.name, "__site_line")) continue;
-            if (std.mem.eql(u8, f.name, "kind")) continue;
-            count += 1;
-        }
-        const cols = alloc.alloc(StoreColInfo, count) catch unreachable;
-        var idx: usize = 0;
-        for (ed.input.fields) |f| {
-            if (std.mem.eql(u8, f.name, "__site_line")) continue;
-            if (std.mem.eql(u8, f.name, "kind")) continue;
-            cols[idx] = .{
-                .name = f.name,
-                .type = f.type,
-                .module_path = f.module_path,
-                .phantom = f.phantom,
-            };
-            idx += 1;
-        }
-        return cols;
-    }
-    return null;
-}
-/// A store's COLUMNS, in declaration order — every column the SoA cell holds,
-/// including a `[tree]`-synthesized `parent`. Answers under any transform
-/// order: the generated apply tor's branches when the coordinator has run,
-/// else the untransformed create's seed block.
-///
-/// NOT the same question as `storeInsertOrder`, and the two were briefly merged
-/// here on the strength of matching names and shapes. They differ by exactly
-/// one column: the insert SURFACE excludes `parent`, because a tree row's
-/// parent is set by reparenting and never by the insert. Merging them broke all
-/// five 695_STORE_TREE tests, which is this concept's own half-rule tell caught
-/// in the act — two functions correct in their own scope, one name apart.
-fn storeFieldOrder(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8) ?[]const []const u8 {
-    if (storeViewMembers(alloc, prog, store)) |mems| {
-        var names = std.ArrayList([]const u8).initCapacity(alloc, 8) catch unreachable;
-        for (mems) |m| {
-            if (storeMemberColumns(alloc, prog, m)) |cols| {
-                for (cols) |c| {
-                    var seen = false;
-                    for (names.items) |prev| {
-                        if (std.mem.eql(u8, prev, c.name)) {
-                            seen = true;
-                            break;
-                        }
-                    }
-                    if (!seen) names.append(alloc, c.name) catch unreachable;
-                }
-            }
-        }
-        names.append(alloc, "kind") catch unreachable;
-        return names.toOwnedSlice(alloc) catch unreachable;
-    }
-    const struct_literal = @import("struct_literal");
-    const apply_name = std.fmt.allocPrint(alloc, "__store_apply_{s}", .{store}) catch unreachable;
-    if (findSynthDecl(prog.items, apply_name)) |ed| {
-        const names = alloc.alloc([]const u8, ed.branches.len) catch unreachable;
-        for (ed.branches, 0..) |b, i| names[i] = b.name;
-        return names;
-    }
-    for (flatItems(alloc, prog.items)) |pi| {
-        if (pi.* != .flow) continue;
-        const f = &pi.flow;
-        const inv = f.inv();
-        if (inv.path.segments.len != 1 or !std.mem.eql(u8, inv.path.segments[0], "new")) continue;
-        const mq = inv.path.module_qualifier orelse continue;
-        if (!std.mem.eql(u8, mq, "std.store")) continue;
-        var name_matches = false;
-        var seed: ?[]const u8 = null;
-        for (inv.args) |a| {
-            if (std.mem.eql(u8, a.name, "expr")) {
-                name_matches = std.mem.eql(u8, storeStripQuotes(a.value), store);
-            } else if (std.mem.eql(u8, a.name, "source")) {
-                seed = a.value;
-            }
-        }
-        if (!name_matches or seed == null) continue;
-        const braced = std.fmt.allocPrint(alloc, "{{{s}}}", .{seed.?}) catch unreachable;
-        const cf = struct_literal.parseFields(alloc, braced) catch &[_]struct_literal.StructField{};
-        if (cf.len == 0) return null;
-        const names = alloc.alloc([]const u8, cf.len) catch unreachable;
-        for (cf, 0..) |c, i| names[i] = c.name;
-        return names;
-    }
-    return null;
-}
-
-/// The INSERT SURFACE's column order — the columns an `insert(s) { … }` site
-/// may name. Preferred source is the generated `__store_insert_<s>` event's
-/// input shape, whose fields ARE the insert contract (user columns + a trailing
-/// synthetic `__site_line`), and which EXCLUDES a `[tree]`-synthesized `parent`:
-/// a tree row's parent is set by reparenting, never at insert.
-///
-/// Falls back to `storeFieldOrder` — pre-tree stores where the insert surface
-/// and the column set coincide.
-fn storeInsertOrder(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8) ?[]const []const u8 {
-    const insert_ev_name = std.fmt.allocPrint(alloc, "__store_insert_{s}", .{store}) catch unreachable;
-    for (flatItems(alloc, prog.items)) |pi| {
-        if (pi.* != .event_decl) continue;
-        const ed = &pi.event_decl;
-        if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], insert_ev_name)) {
-            const flds = ed.input.fields;
-            if (flds.len == 0) return null;
-            // The trailing field is the synthetic __site_line arg.
-            var end: usize = flds.len - 1;
-            // A synthesized kind tag (second-to-last) is NOT insert-surface:
-            // it travels via the `kind:` head arg, never the row block. A
-            // hand-written user column named kind (no members) stays.
-            if (end > 0 and std.mem.eql(u8, flds[end - 1].name, "kind")) {
-                if (storeKindMembers(alloc, prog, store)) |mm| {
-                    if (mm.len > 0) end -= 1;
-                }
-            }
-            const names = alloc.alloc([]const u8, end) catch unreachable;
-            for (flds[0..end], 0..) |f2, i| names[i] = f2.name;
-            return names;
-        }
-    }
-    return storeFieldOrder(alloc, prog, store);
 }
 
 /// `store[index].field` → the SoA column read, for ONE store, in arbitrary text.
@@ -1008,3 +878,4 @@ fn storeLowerText(
 ~part keyed
 ~part wait
 ~part uncrossable
+~part cols

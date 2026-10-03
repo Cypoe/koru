@@ -190,6 +190,7 @@ koru_std/store.bulk.kz	258
 koru_std/store.bulkemit.kz	178
 koru_std/store.bulkjoin.kz	62
 koru_std/store.clear.kz	98
+koru_std/store.cols.kz	290
 koru_std/store.cursor.kz	38
 koru_std/store.default.kz	79
 koru_std/store.drain.kz	99
@@ -199,11 +200,11 @@ koru_std/store.gate.kz	523
 koru_std/store.hstruct.kz	74
 koru_std/store.idecls.kz	104
 koru_std/store.index.kz	202
-koru_std/store.indexwalk.kz	279
-koru_std/store.insert.kz	473
+koru_std/store.indexwalk.kz	234
+koru_std/store.insert.kz	418
 koru_std/store.keyed.kz	43
 koru_std/store.kinds.kz	704
-koru_std/store.kz	1010
+koru_std/store.kz	881
 koru_std/store.leaf.kz	207
 koru_std/store.new.kz	6289
 koru_std/store.plan.kz	236
@@ -213,7 +214,7 @@ koru_std/store.qcaps.kz	370
 koru_std/store.qmiss.kz	46
 koru_std/store.qmisskind.kz	58
 koru_std/store.qnone.kz	129
-koru_std/store.qrewrite.kz	229
+koru_std/store.qrewrite.kz	224
 koru_std/store.query.kz	857
 koru_std/store.refhome.kz	323
 koru_std/store.refhomeapi.kz	32

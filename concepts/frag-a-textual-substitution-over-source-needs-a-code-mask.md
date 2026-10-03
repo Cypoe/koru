@@ -100,3 +100,26 @@ a defect; any other transform that consumes a bare `{…}` body carrying
 for its first `s`/`d`/`f`-named binding. The known substitution sites
 (visitor_emitter, store's entityRefs, store's bindStrip, qrewrite's refs)
 still have no list.
+
+Sixth site, 2026-10-03, and this one revises the fifth's prognosis. Site five
+ruled "the fix is per-site again — not another widening of the mask: the mask
+cannot classify what it cannot delimit." That was true of the mask AS WRITTEN —
+its grammar genuinely ended at the literal edge — but wrong as a bound on what
+the mask can own. Teaching `expressionMask` that `{{ }}` inside unquoted Source
+text is also an interpolation region made the spec rule fall out for free:
+inside `{{ }}`, only the text before the first `:` is expression, and now that
+holds whether the `{{ }}` sits in a `"…"` literal or a `fmt.blk` block. The
+belief sharpens a fifth time, splitting the rule into its two true halves:
+**the mask owns REGION classification** — is this byte literal text, an
+interpolation, a spec tail, a char literal, a backtick name — and **the
+rewriter owns ROLE classification** — is this identifier a reference or a name
+in someone else's namespace. `bind:` (arg/field/label name, 690_362) and
+`.bind` (field of another expr, 690_363) are role questions the mask cannot
+see; `{{ x:s }}` is a region question the rewriter never should have had to.
+A substitution that conflates them gets each wrong at a different site —
+the first `:`-adjacency patch answered a region question at the consumer and
+was correct everywhere the region grammar already ran, wrong nowhere it
+didn't, and silent about why. The adjacency predicate is now one function
+(bareBindEnd) instead of an implicit per-site table, which is the first
+approximation of the site enumeration this concept has listed as open since
+site two.
