@@ -1,0 +1,53 @@
+// A register site's transform replaces its flow with generated dispatcher
+// code, erasing the scope definition from the AST. This pins that a
+// scope(other) entry written at a LATER site still resolves the earlier
+// scope — composition is order-free, not collection-at-first-sight.
+
+~import std/runtime
+~import std/interpreter
+~import std/io
+
+~pub tor alpha {}
+
+~proc alpha|zig {
+    const std = @import("std");
+    std.debug.print("alpha!\n", .{});
+}
+
+~pub tor beta {}
+
+~proc beta|zig {
+    const std = @import("std");
+    std.debug.print("beta!\n", .{});
+}
+
+~std/runtime:register(scope: "first") {
+    alpha
+}
+
+~std/runtime:register(scope: "second") {
+    scope(first)
+    beta
+}
+
+const ALPHA_SOURCE = "alpha()";
+const BETA_SOURCE = "beta()";
+
+// alpha is not declared in "second"'s register block — it arrives only
+// through scope(first). beta is "second"'s own event.
+~std/runtime:get-scope(name: "second")
+| scope s |> std/interpreter:run(source: ALPHA_SOURCE, s.dispatcher)
+    | result _ |> std/io:print.ln("alpha ran")
+        |> std/interpreter:run(source: BETA_SOURCE, s.dispatcher)
+        | result _ |> std/io:print.ln("beta ran")
+        | unhandled-branch _ |> std/io:print.ln("FAIL: beta unhandled")
+        | exhausted _ |> std/io:print.ln("BETA EXHAUSTED")
+        | parse-error _ |> std/io:print.ln("BETA PARSE ERROR")
+        | validation-error _ |> std/io:print.ln("BETA VALIDATION ERROR")
+        | dispatch-error _ |> std/io:print.ln("BETA DISPATCH ERROR")
+    | unhandled-branch _ |> std/io:print.ln("FAIL: alpha unhandled")
+    | exhausted _ |> std/io:print.ln("EXHAUSTED")
+    | parse-error _ |> std/io:print.ln("PARSE ERROR")
+    | validation-error _ |> std/io:print.ln("VALIDATION ERROR")
+    | dispatch-error _ |> std/io:print.ln("DISPATCH ERROR")
+| not-found |> std/io:print.ln("SCOPE NOT FOUND")

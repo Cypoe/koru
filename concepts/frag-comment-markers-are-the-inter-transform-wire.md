@@ -30,6 +30,7 @@ comment, another pass parses it. Everything below is the second kind.
 | `// store-member-types …` | `store.new.kz:3146` | `store.kz:721` | store member types |
 | `// store-view …` | `store.view.kz:62` | `store.kz:1183,1316,1341` | store view decl |
 | `// __pump_decl_<name>` / `// __pump_ran_<name>` | `pump.kz` (`create`/`run`) | `pump.kz` (`run` join discovery), **`orisha/lib/pump.kz`**, **`koru-libs/vaxis/index.kz`** | open-pump regions: the pump's name parsed from the comment tail; `decl`−`ran` = "a pump is open" — library `run` transforms read it to emit join units instead of a driver |
+| `// __KORU_SCOPE_DEF__:<name>:<b64>` | `runtime.kz` (register transform's own write-back) | `runtime.registry.kz` `collectMarkerDefs` | a consumed scope's name + base64 source block — a `scope(other)` entry at a LATER register site resolves a scope whose own transform already erased it, so composition is order-free |
 | ~~`// refine home:Name: …`~~ | ~~`refine.k`~~ | ~~`refine.k`~~ | **MIGRATED** — first namespace off the wire: now `Item.facet_decl` (typed node: `name`/`module`/`fields` with structured `lo`/`hi`/`eq` bounds). The emitter still *renders* `// refine …` into generated Zig — write-only debug output, never parsed back. |
 
 ## Family B — sentinel flags: a comment marks a generated block
@@ -69,6 +70,13 @@ comment, another pass parses it. Everything below is the second kind.
   dead_strip's don't-strip rule. Removing it silently changes codegen.
 - `__KORU_RUNTIME_REGISTRY_HELPERS__` → runtime.kz emitting its helper
   block exactly once.
+- `__KORU_SCOPE_DEF__` → `scope(other)` composition. A register site
+  replaces its flow with the generated dispatcher, so an earlier scope's
+  declaration is gone from the AST by the time a later site collects
+  defs. The marker is the spent site's memory of itself; without it a
+  `scope(other)` at a later site resolved nothing and every composite
+  scope silently registered as empty or self-only (430_068 pins the
+  order-free resolution).
 
 ## Lineage — who started it
 
