@@ -40,6 +40,15 @@ shape) and refused everywhere else — a guard we can't see is a stop
 condition we'd certify away. Conditional transitions (multiple record
 arms) refuse rather than first-match.
 
+Heads are resolved, not assumed: `step = NAME(args)` heads inline the
+named tor's if-body — its outcome predicates are conjuncts of the loop
+guard and its payloads substitute into record/dispatch exprs (the
+`boom f => more {n: f+4}` shape reduces to the autonomous map).
+`NAME(args): b |> if(c)` value heads resolve single-return `|zig`
+procs — the certificate is then conditioned on that proc body being
+the function it states. Unresolvable heads are genuinely forced and
+refuse.
+
 Modes:
     cert FILE            fit + verify a P-recurrence for the observed field
     equal FILE_A FILE_B  certified equality of the two observed fields
@@ -67,7 +76,8 @@ class Refused(Exception):
 class Fold:
     step_name: str
     params: list                 # ordered state field names
-    guard: tuple                 # (field, op, rhs) — continues while true
+    guards: list                 # [(lhs, op, rhs)] sympy conjuncts —
+                                 # continues while ALL hold
     updates: dict                # field -> sympy expr over state syms
     init: dict                   # field -> int or sympy expr (parametric)
     observe: str                 # field whose trajectory is compared
@@ -130,7 +140,121 @@ def _arm_block(src: str, start: int) -> str:
     return "\n".join(keep)
 
 
-_CMP = r"\s*(\w+)\s*(<=|>=|!=|==|<|>)\s*(-?\w+)"
+# alternation ordered long-first so `<=` wins over `<`; written `>|<` to
+# keep diff tooling happy
+_CMP = r"(\w+)\s*(>=|<=|==|!=|>|<)\s*(-?\w+)"
+_COND = r"(.+?)\s*(>=|<=|==|!=|>|<)\s*(.+?)"
+_NEG = {">": "<=", "<": ">=", ">=": "<", "<=": ">", "==": "!=", "!=": "=="}
+
+
+def _parse_cond(text: str, env: dict):
+    """`EXPR OP EXPR` -> (lhs, op, rhs) sympy conjunct, or None."""
+    m = re.match(r"\s*" + _COND + r"\s*$", text)
+    if not m:
+        return None
+    lhs, op, rhs = m.groups()
+    try:
+        return (_to_sympy(lhs, env), op, _to_sympy(rhs, env))
+    except Refused:
+        return None
+
+
+def _parse_arms(body: str):
+    """`| OUT bind? (when c)? => BR (scalar|{rec})` arm lines of a body."""
+    arms = []
+    for ln in body.splitlines()[1:]:
+        am = re.match(r"\s*\|\s*(\w+)(?:\s+(\w+))?\s*"
+                      r"(?:when\s+(.*?))?\s*=>\s*(\w+)\s*(.*)$", ln)
+        if not am:
+            continue
+        out, bind, when, br, rest = am.groups()
+        rm = re.match(r"\s*{([^}]*)}", rest)
+        rec = rm.group(1) if rm else None
+        payload = None if rec is not None else (rest.strip() or None)
+        arms.append({"out": out, "bind": bind,
+                     "when": when.strip() if when else None,
+                     "br": br, "rec": rec, "payload": payload})
+    return arms
+
+
+def _rename_params(text: str, hparams, args, params):
+    """Rewrite head-param names to their call args. Args must be plain
+    state-field names — anything else is refused, not approximated."""
+    if len(args) != len(hparams):
+        raise Refused(f"head arity {len(args)} != {len(hparams)} params")
+    out = text
+    for hp, a in zip(hparams, args):
+        if not re.fullmatch(r"\w+", a):
+            raise Refused(f"head arg not a state field: {a!r}")
+        if a not in params:
+            raise Refused(f"head arg {a!r} is not a state field")
+        out = re.sub(rf"\b{re.escape(hp)}\b", f"({a})", out)
+    return out
+
+
+def _named_head(src, name: str, argstr: str, params, env):
+    """Resolve `step = NAME(args)` where NAME is an in-file tor whose body
+    is a single `if(cond)` with two `=> OUT payload` arms. Returns
+    (preds, payloads): outcome -> guard conjuncts, outcome -> payload
+    sympy expr over state symbols. Anything else REFUSED — an
+    unresolvable head is a genuinely forced recurrence."""
+    pm = re.search(rf"tor\s+{re.escape(name)}\s*{{([^}}]*)}}", src)
+    bm = re.search(rf"(?m)^~?{re.escape(name)}\s*=", src)
+    if not pm or not bm:
+        raise Refused(f"step head {name} not resolvable in-file")
+    hparams = [p.split(":")[0].strip()
+               for p in pm.group(1).split(",") if p.strip()]
+    args = [a.strip() for a in _split_top(argstr) if a.strip()]
+    body = _arm_block(src, bm.start())
+    gm = re.match(r"\s*\w+\s*=\s*if\(([^)]*)\)", body.splitlines()[0])
+    if not gm:
+        raise Refused(f"step head {name} is not an if(cond) body")
+    cond = _rename_params(gm.group(1), hparams, args, params)
+    harms = _parse_arms(body)
+    if len(harms) != 2 or harms[0]["when"] or harms[1]["when"]:
+        raise Refused(f"step head {name} is not a two-arm if body")
+    c = _parse_cond(cond, env)
+    if c is None:
+        raise Refused(f"head guard not a comparison: {gm.group(1)!r}")
+    preds, payloads = {}, {}
+    # keyed by produced outcome (a["br"]) — that is what the step's own
+    # `| OUT ...` arms dispatch on; the arm label (then/else) only says
+    # which side of the head's if produced it
+    for a, neg in ((harms[0], False), (harms[1], True)):
+        if a["br"] in preds:
+            raise Refused(f"step head {name} produces `{a['br']}` under "
+                          "both conditions")
+        preds[a["br"]] = [(c[0], _NEG[c[1]], c[2])] if neg else [c]
+        payloads[a["br"]] = None
+        if a["payload"] is not None:
+            ptxt = _rename_params(a["payload"], hparams, args, params)
+            payloads[a["br"]] = _to_sympy(ptxt, env)
+    return preds, payloads
+
+
+def _value_head(src, name: str, argstr: str, params, env):
+    """Resolve `NAME` in `step = NAME(args): b |> if(c)` — a `~proc
+    NAME|zig { return <expr>; }` single-return proc. The certificate
+    is conditioned on the proc body literally returning <expr>."""
+    pm = re.search(rf"~?proc\s+{re.escape(name)}\s*\|zig\s*{{(.*?)}}",
+                   src, re.S)
+    if not pm:
+        raise Refused(f"value head {name} is not a resolvable |zig proc")
+    pbody = pm.group(1)
+    # a truncated or multi-return proc is not a single function — the
+    # certificate would condition on a body that never ran
+    if pbody.count("{") != pbody.count("}") or pbody.count("return") != 1:
+        raise Refused(f"value head {name}: proc body is not a single "
+                      "`return e;`")
+    rm = re.search(r"return\s+(.+?)\s*;", pbody)
+    if not rm:
+        raise Refused(f"value head {name}: proc body is not `return e;`")
+    tm = re.search(rf"tor\s+{re.escape(name)}\s*{{([^}}]*)}}", src)
+    hparams = [p.split(":")[0].strip()
+               for p in tm.group(1).split(",") if p.strip()] if tm else []
+    args = [a.strip() for a in _split_top(argstr) if a.strip()]
+    return _to_sympy(_rename_params(rm.group(1), hparams, args, params),
+                     env)
 
 
 def extract_fold(src: str, label: str = "") -> Fold:
@@ -147,6 +271,7 @@ def extract_fold(src: str, label: str = "") -> Fold:
     if not pm:
         raise Refused(f"step tor {step_name} decl not found")
     params = [p.split(":")[0].strip() for p in pm.group(1).split(",") if p.strip()]
+    env = {p: sp.Symbol(p) for p in params}
 
     # fold-call arm block: the `| <br> s |> @L(...)` arm names the
     # continue branch and how its payload re-enters the step
@@ -165,61 +290,80 @@ def extract_fold(src: str, label: str = "") -> Fold:
 
     # step body scope: `step_name = <head>` plus its `|` arms only —
     # file-global searches could pick a different tor's record
-    bm = re.search(rf"(?m)^{re.escape(step_name)}\s*=", src)
+    bm = re.search(rf"(?m)^~?{re.escape(step_name)}\s*=", src)
     if not bm:
         raise Refused(f"step tor {step_name} body not found")
     body = _arm_block(src, bm.start())
+    head = body.splitlines()[0].split("=", 1)[1].strip()
+    arms = _parse_arms(body)
 
-    # continue arms = record-producing arms for the dispatch branch;
-    # `when` anywhere else changes stopping/selection the model can't see
-    cont_rec = []
-    stray_when = False
-    for ln in body.splitlines()[1:]:
-        am = re.search(rf"=>\s*{re.escape(cont_branch)}\s*{{([^}}]*)}}", ln)
-        wm = re.search(r"\bwhen\b(.*?)=>", ln)
-        if am:
-            cont_rec.append((wm.group(1).strip() if wm else None,
-                             am.group(1)))
-        elif re.search(r"\bwhen\b", ln):
-            stray_when = True
+    # head resolution -> outcome preds / payloads / extra bindings
+    # preds[outcome] = conjuncts that must hold for the head to produce
+    # that outcome; payloads[outcome] = its scalar payload expr (or None)
+    extra_env = dict(env)          # arm-visible names beyond state fields
+    preds, payloads = {}, {}
+    hm = re.match(r"if\(([^)]*)\)$", head)
+    nm = re.match(r"(\w+)\(([^)]*)\)$", head)
+    vm = re.match(r"(\w+)\(([^)]*)\)\s*:\s*(\w+)\s*\|>\s*if\(([^)]*)\)$",
+                  head)
+    if hm:
+        c = _parse_cond(hm.group(1), env)
+        if c is None:
+            raise Refused(f"guard is not a single comparison: "
+                          f"{hm.group(1)!r}")
+        preds = {"then": [c], "else": [(c[0], _NEG[c[1]], c[2])]}
+    elif vm:
+        hname, hargs, vbind, vcond = vm.groups()
+        ret = _value_head(src, hname, hargs, params, env)
+        extra_env[vbind] = ret
+        venv = dict(extra_env)
+        c = _parse_cond(vcond, venv)
+        if c is None:
+            raise Refused(f"value-head guard not a comparison: {vcond!r}")
+        preds = {"then": [c], "else": [(c[0], _NEG[c[1]], c[2])]}
+    elif nm:
+        preds, payloads = _named_head(src, nm.group(1), nm.group(2),
+                                      params, env)
+    else:
+        raise Refused(f"step head not extractable: {head!r}")
+
+    # continue arm = the single arm producing `cont_branch` as a record;
+    # its outcome's pred conjuncts + its `when` ARE the loop guard.
+    cont_arms = [a for a in arms if a["br"] == cont_branch]
+    stray_when = any(a["when"] for a in arms if a["br"] != cont_branch)
     if stray_when:
         raise Refused("`when` on a non-continue arm — the stop/selection "
                       "condition is not modeled")
-    if len(cont_rec) > 1:
+    if len(cont_arms) > 1:
         raise Refused(f"multiple `=> {cont_branch} {{...}}` arms — a "
                       "conditional transition, not one autonomous map")
-    if not cont_rec:
+    if not cont_arms:
         raise Refused("no {f: e, ...} update record on the continue arm")
-    when_cond, rectext = cont_rec[0]
+    ca = cont_arms[0]
+    if ca["rec"] is None:
+        raise Refused("continue arm produces no {f: e, ...} record")
+    if ca["out"] not in preds:
+        raise Refused(f"continue outcome `{ca['out']}` not produced by "
+                      "the resolved head")
+    guards = list(preds[ca["out"]])
+    if ca["when"] is not None:
+        wc = _parse_cond(ca["when"], extra_env)
+        if wc is None:
+            raise Refused(f"continue `when` is not a comparison: "
+                          f"{ca['when']!r}")
+        guards.append(wc)
+    if ca["bind"] and ca["bind"] != "_":
+        pl = payloads.get(ca["out"])
+        if pl is None:
+            raise Refused(f"continue binds `{ca['bind']}` but outcome "
+                          f"`{ca['out']}` carries no scalar payload")
+        extra_env[ca["bind"]] = pl
 
     raw_updates = {}
-    for kv in _split_top(rectext):
+    for kv in _split_top(ca["rec"]):
         if ":" in kv:
             f, e = kv.split(":", 1)
             raw_updates[f.strip()] = e.strip()
-
-    # guard: `step = if(cond)` head, else `when <cond>` on the continue
-    # arm itself (the param_init shape — the when IS the loop guard).
-    # An unparseable one is refused, not silently dropped: the gate's
-    # EQUAL is a claim about program output, including where it stops.
-    head = body.splitlines()[0]
-    gm = re.search(r"=\s*if\(([^)]*)\)", head)
-    guard = None
-    if gm:
-        gm2 = re.match(_CMP + r"\s*$", gm.group(1))
-        if not gm2:
-            raise Refused(f"guard is not a single comparison: "
-                          f"{gm.group(1)!r}")
-        guard = (gm2.group(1), gm2.group(2), gm2.group(3))
-        if when_cond is not None:
-            raise Refused("`when` on the continue arm under an if-guard "
-                          "head — conditional transition not modeled")
-    elif when_cond is not None:
-        gm2 = re.match(_CMP + r"\s*$", when_cond)
-        if not gm2:
-            raise Refused(f"continue `when` is not a single comparison: "
-                          f"{when_cond!r}")
-        guard = (gm2.group(1), gm2.group(2), gm2.group(3))
 
     # init args from `#L step(n: start, acc: 0)` — positional args map to
     # fields in declaration order (`#L tick(limit, passes: 0)`); free
@@ -255,8 +399,7 @@ def extract_fold(src: str, label: str = "") -> Fold:
                     for nm in re.findall(r"[A-Za-z_]\w*", v)}
             init[p] = _to_sympy(v, env0)
 
-    env = {p: sp.Symbol(p) for p in params}
-    updates = {f: _to_sympy(e, env) for f, e in raw_updates.items()}
+    updates = {f: _to_sympy(e, extra_env) for f, e in raw_updates.items()}
     fmap = {f: updates.get(f, env[f]) for f in params}
 
     # `| more s |> @L(a1, ...)` re-dispatch args compose over the record
@@ -276,12 +419,12 @@ def extract_fold(src: str, label: str = "") -> Fold:
         # state — without it, subs would re-substitute field names inside
         # F itself (acc -> acc+2n-1, then n -> n+1 inside that: wrong)
         updates[params[i]] = sp.expand(
-            _to_sympy(a, env).subs(fmap, simultaneous=True))
+            _to_sympy(a, extra_env).subs(fmap, simultaneous=True))
 
     dm = re.search(r"=>\s*done\s+(\w+)", body)
     obs = dm.group(1) if dm and dm.group(1) in params else params[-1]
 
-    return Fold(step_name, params, guard, updates, init, obs)
+    return Fold(step_name, params, guards, updates, init, obs)
 
 
 # ------------------------------------------------------------- trajectory
@@ -299,18 +442,18 @@ def trajectory(fold: Fold, steps: int, bounded: bool = True):
     state = dict(fold.init)
     out = []
     for _ in range(steps):
-        if bounded and fold.guard:
-            f, op, rhs = fold.guard
-            if rhs in state:
-                rv = state[rhs]
-            elif re.fullmatch(r"-?\d+", rhs):
-                rv = int(rhs)
-            else:
-                raise Refused(f"guard rhs not resolvable: {rhs!r}")
-            try:
-                stop = not _OPS[op](state[f], rv)
-            except TypeError:
-                raise Refused("guard undecidable under parametric init")
+        if bounded and fold.guards:
+            stop = False
+            for lhs, op, rhs in fold.guards:
+                try:
+                    # `not <relational>` bool()s it — a symbolic lhs/rhs
+                    # raises TypeError, the undecidable signal
+                    if not _OPS[op](lhs.subs(state), rhs.subs(state)):
+                        stop = True
+                        break
+                except TypeError:
+                    raise Refused(
+                        "guard undecidable under parametric init")
             if stop:
                 break
         nxt = {}
@@ -447,6 +590,39 @@ def verify_generic(fold: Fold, order: int, polys) -> bool:
     return sp.simplify(residual) == 0
 
 
+def _guard_key(g):
+    """Canonical integer-domain form of a conjunct: a > b  is  a-b-1 >= 0
+    over Z, so `x > 0` and `x >= 1` share a key. Sets of keys are what the
+    parametric guard-compare measures."""
+    lhs, op, rhs = g
+    d = sp.expand(lhs - rhs)
+    if op == ">":
+        return (str(sp.expand(d - 1)), ">=")
+    if op == ">=":
+        return (str(d), ">=")
+    if op == "<":
+        return (str(sp.expand(-d - 1)), ">=")
+    if op == "<=":
+        return (str(sp.expand(-d)), ">=")
+    return (str(d), op)                      # == and !=
+
+
+def _specialize(fold: Fold, spec):
+    init = {f: (v.subs(spec) if isinstance(v, sp.Basic) else v)
+            for f, v in fold.init.items()}
+    return Fold(fold.step_name, fold.params, fold.guards, fold.updates,
+                init, fold.observe)
+
+
+def _init_specs(fa: Fold, fb: Fold):
+    """Sampled init values for guard-witness search under parametric
+    init — a spread around typical guard thresholds, same value to all
+    symbols (a line, not a grid: good enough for witnesses)."""
+    syms = sorted(set(init_symbols(fa)) | set(init_symbols(fb)), key=str)
+    for v in (-20, -13, -9, -5, -2, -1, 0, 1, 2, 3, 5, 7, 11):
+        yield {s: v for s in syms}
+
+
 # --------------------------------------------------------------------- gate
 
 def certify(fold: Fold, window: int = 64):
@@ -509,6 +685,23 @@ def gate(src_a: str, src_b: str, window: int = 64):
     except Refused:
         if not (init_symbols(fa) or init_symbols(fb)):
             raise
+        # bounded length is param-dependent — but the stop conditions
+        # are still comparable. Identical F under different guards means
+        # the programs differ as functions of their inputs; witness it
+        # on a sampled init or refuse the comparison honestly.
+        if {_guard_key(g) for g in fa.guards} != \
+           {_guard_key(g) for g in fb.guards}:
+            for spec in _init_specs(fa, fb):
+                try:
+                    la = len(trajectory(_specialize(fa, spec), window))
+                    lb = len(trajectory(_specialize(fb, spec), window))
+                except Refused:
+                    continue
+                if la != lb:
+                    return ("NOT-EQUAL",
+                            f"output length {la} vs {lb} at init {spec}")
+            return ("CANDIDATE",
+                    "stop conditions differ but agree on sampled inits")
     seq_a = trajectory(fa, window, bounded=False)
     seq_b = trajectory(fb, window, bounded=False)
     diff = [a - b for a, b in zip(seq_a, seq_b)]
@@ -528,7 +721,8 @@ def gate(src_a: str, src_b: str, window: int = 64):
     # singular points of either side propagate into the sum-closure
     # recurrence for d: the leading coefficient of the combined operator
     # vanishes wherever either side's does.
-    sing = _singular_indices(ca[1], window) | _singular_indices(cb[1], window)
+    sing = (_singular_indices(ca[1], window)
+            | _singular_indices(cb[1], window))
     required = set(range(bound)) | sing
     if max(required, default=0) >= len(diff):
         return "NOT-FOUND-WITHIN-BOUNDS", (
@@ -569,6 +763,14 @@ _SELFTEST_CERT = [
     # swapped @L re-dispatch args — the record is identical to sq_incr's
     # but the composed transition is not; certifies its own dynamics
     ("swap_dispatch.k", "CERTIFIED"),
+    # arm-payload shape (320_151): `| boom f => more {n: f+4}` — f is
+    # resolved through the head (worker booms n under n<0) to n+4;
+    # the guard gains the head-outcome conjunct n<0 alongside left>0
+    ("payload_retry.k", "CERTIFIED"),
+    # head-bound shape (320_097): `clock(passes): n` — the |zig proc's
+    # single `return passes;` binds n := passes; F is passes+1 under
+    # passes < limit (cert conditioned on the proc body)
+    ("value_head.k", "CERTIFIED"),
 ]
 
 # (a, b) -> expected `equal` verdict
@@ -589,6 +791,10 @@ _SELFTEST_EQ = [
     # iterate; the bounded length check (3 vs 2) is what makes the
     # certificate claim about the program, not just the transition
     ("param_init.k", "when_shorter.k", "NOT-EQUAL"),
+    # arm-payload spelling vs inlined spelling — `n: f+4` with f the
+    # boom payload resolves to the same transition AND the same guard
+    # set; certified identical as functions of the parametric init
+    ("payload_retry.k", "param_init.k", "EQUAL"),
 ]
 
 
@@ -641,10 +847,17 @@ def main():
             return selftest()
         if args[0] == "cert":
             fold = extract_fold(open(args[1], encoding="utf-8").read())
-            seq = trajectory(fold, 64)
+            try:
+                seq = trajectory(fold, 64)
+                tag = ""
+            except Refused:
+                # symbolic guard conjunct — the program's output length
+                # is param-dependent; show the transition iterates
+                seq = trajectory(fold, 64, bounded=False)
+                tag = " (unbounded: guard is param-dependent)"
             head = ", ".join(str(v) for v in seq[:12])
             print(f"observed({fold.observe}): [{head}]"
-                  f"{'...' if len(seq) > 12 else ''}")
+                  f"{'...' if len(seq) > 12 else ''}{tag}")
             cf = closed_form(fold)
             if cf is not None:
                 print(f"closed form: a[n] = {sp.sstr(cf)}")

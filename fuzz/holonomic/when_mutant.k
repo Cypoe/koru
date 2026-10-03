@@ -2,6 +2,14 @@
 // the transition is conditional (F1 when n > 10, F2 otherwise), which
 // is not one autonomous map. First-match extraction used to take
 // whichever arm came textually first and certify THAT. Must refuse.
+tor bump { n: i64 }
+| ok i64
+| boom i64
+
+bump = if(n < 100)
+| then => ok n
+| else => boom n
+
 tor step { n: i64, acc: i64 }
 | more { n: i64, acc: i64 }
 | done i64

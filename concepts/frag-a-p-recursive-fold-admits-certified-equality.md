@@ -49,6 +49,20 @@ A `when` on the single continue arm is the guard itself; `when` anywhere
 else, a second record arm, a second dispatch arm, or a comparison the
 parser can't read all REFUSED.
 
+"Forced" was a misclassification. The shapes that looked like
+environment-driven recurrences — arm-payload bindings (`| boom f =>
+more {n: f+4}`) and head-bound names (`clock(passes): n |> if`) — are
+payload *routing* through variant boundaries: `f` is the head's outcome
+payload, `n` is a deterministic head's return. Both substitute back to
+an autonomous map, and the loop's real stop condition is a
+*conjunction*: the head-outcome predicate AND the `when` (boom ∧ budget
+is `n<0 ∧ left>0` — a model that only kept the `when` was one conjunct
+short of faithful). The theorem shape is unchanged — same P-recursive
+fragment, same bound — provided the head resolves in-file (an if-tor,
+or a single-`return` `|zig` proc whose body the cert then conditions
+on). Heads that don't resolve — multi-return procs, effects, imports —
+are the genuinely forced residue and stay refused.
+
 ## The test this leaves behind
 
 The recursion is also the fuzzer tie-in: a GA that proposes fold bodies can

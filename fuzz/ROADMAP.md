@@ -39,8 +39,9 @@ folds whose step is polynomial-in-state get *decidable equality*:
   corpus fold vs a commuted twin — GA-style mutation proven identical,
   bound 2 + singular point n=10), and `tri_builtin` (honest CANDIDATE:
   `@divTrunc` is non-affine).
-- **Measured coverage: 8/128 `#`-files CERTIFIED** (2026-10-03 rescan;
-  6 fixtures + 020_028 + 320_152 — the second corpus certification comes
+- **Measured coverage: 16/136 `#`-files CERTIFIED** (2026-10-03 rescan;
+  12 fixtures + 4 corpus: 020_028, 320_152, and the newly-extractable
+  head/payload shapes 320_097 + 320_151. The earlier 8/128 figure:
   from **parametric init**: `attempt(n, left: 3)` where `n` is a caller
   parameter stays symbolic; the certificate is fitted on a prime
   specialization and verified for all parameter values. Positional init
@@ -55,8 +56,9 @@ folds whose step is polynomial-in-state get *decidable equality*:
   the dominant real shapes are arm-payload bindings (`boom f => more
   {n: f+4, …}` — the payload var feeds the next state) and head-bound
   names (`clock(passes): n |> …` — the head output feeds the step).
-  Both are *forced* recurrences, not autonomous `F(s)` transitions —
-  a different theorem shape, not just parser work. `when` gap CLOSED
+  Initially classified as *forced* recurrences (a different theorem
+  shape) — WRONG for the dominant shapes, see below; they reduce to
+  autonomous `F(s)` once the head is resolved. `when` gap CLOSED
   (2026-10-03): extraction is now scoped to the step tor's body and
   the fold's own arm block — the transition is the single record arm
   of the branch that re-dispatches `@L`, composed with the re-dispatch
@@ -67,7 +69,21 @@ folds whose step is polynomial-in-state get *decidable equality*:
   than first-matched. Pinned by `when_mutant`, `when_exit`,
   `swap_dispatch`, `when_shorter` — the last being the exact mutant
   this caveat feared (same F, `left>1` vs `left>0`, 2 vs 3 iterates →
-  NOT-EQUAL, previously EQUAL). Forced-recurrence shapes still open.
+  NOT-EQUAL, previously EQUAL). Forced-recurrence shapes PARTIALLY
+  DISSOLVED (2026-10-03): they were payload routing, not forcing —
+  heads resolve in-file (`worker`-style if-tors → outcome preds +
+  payload exprs; single-return `~proc|zig { return e; }` → value
+  heads with the cert conditioned on that body), arm payloads
+  substitute into records and dispatch args, and the guard is now a
+  conjunct list (boom∧budget = n<0 ∧ left>0 — the model was one
+  conjunct short of faithful). 320_097 + 320_151 certify for real;
+  `equal payload_retry param_init` proves the payload-explicit and
+  inlined spellings identical. Parametric guard-diff compares
+  canonical integer-normalized conjuncts and hunts a length witness on
+  sampled inits (CANDIDATE if none — never a guess). Still forced:
+  heads that don't resolve (multi-return/variant zig procs like the
+  `count` loops, effects, imports) and record payloads
+  (`| next n |> @L(x: n.value)` with payload fields ≠ param names).
 - Does **not** need the koru dialect — its encode target is
   certificates, not ITerms.
 - Lean bridge — LANDED in isar-proofs (`da97bdd`,
