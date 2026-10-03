@@ -74,3 +74,14 @@ included). A bare uncaptured name still resolves its home — `Invocation` →
 `koru_interpreter` — because the flag, not the name, is the discriminator.
 `EventDecl.isComptimeOnly()` still returns true for these fields on purpose:
 its callers ask "is this input compiler-supplied", and captured text is.
+
+**2026-10-03 — "end-to-end" missed one classifier.** The 10-02 rewrite
+dropped `is_source` from `evaluate-comptime`'s strip map but kept no
+annotation leg, so a `[comptime]` decl taking `Source` — `std/build:config`
+itself — fell out of the map; its armless invocation flow stayed in the
+runtime AST and failed branch coverage (KORU022), breaking every
+`~std/build:config {}` call site including the vercel reactor entry.
+`record()` now counts `Program` params OR the `[comptime]`/`[norun]`
+annotation — the same contract `flowInvokesComptimeEvent` has always
+routed by. 310_057, the pin for the exact shape, had not been run since
+the classifier landed.

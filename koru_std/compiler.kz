@@ -1798,12 +1798,12 @@ const emitFlowWithMocks = struct {
 
         fn record(event_decl: anytype, qualifier: ?[]const u8, allocator: Allocator,
                   comptime_events: *[64][]const u8, comptime_count: *usize) void {
-            var is_comptime = false;
+            // [comptime]/[norun] decls count, not Program params alone —
+            // field-keyed alone dropped std/build:config and KORU022'd its call sites.
+            const ann = @import("annotation_parser").hasPart;
+            var is_comptime = ann(event_decl.annotations, "comptime") or ann(event_decl.annotations, "norun");
             for (event_decl.input.fields) |field| {
-                if (isProgramType(field.type)) {
-                    is_comptime = true;
-                    break;
-                }
+                if (isProgramType(field.type)) { is_comptime = true; break; }
             }
             if (!is_comptime or comptime_count.* >= 64) return;
             const path_str = joinPathAlloc(allocator, event_decl.path.segments);
