@@ -1354,7 +1354,7 @@ fn applyTransform(
         log.err("\n", .{});
         log.err("FIX: Your transform must either:\n", .{});
         log.err("  1. Change the invocation path (e.g., 'query.src' -> 'query.src.impl')\n", .{});
-        log.err("  2. Add @pass_ran(\"transform\") annotation to the new invocation\n", .{});
+        log.err("  2. Add @pass_ran(\"transform\") mark to the new invocation\n", .{});
         log.err("\n", .{});
         return error.TransformDidNotReplace;
     }

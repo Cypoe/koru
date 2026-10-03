@@ -64,6 +64,14 @@ marks serialize and clone like every other field.
   consumed marks, asserted by test), not typing. That manifest is
   **unbuilt** as of this writing; the channel's failure mode
   (stamp-and-vanish) is currently unchecked.
+- Observed once already, at the channel's own merge (2026-10-03):
+  `js_emitter.zig`'s `flowIsNorunSite` was added on main *after* the
+  branch's base and read `inv().annotations` for `@pass_ran` — a
+  consumer on the old channel that would have matched nothing forever
+  the moment the merge landed. No textual conflict; only a
+  `base..main -G'<mark strings>'` sweep caught it. That grep is the
+  manual stand-in for the unbuilt registry — run it on both sides of
+  any integration that crosses this channel's migration boundary.
 
 ## Boundaries of the ruling
 
