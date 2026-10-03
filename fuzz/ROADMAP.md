@@ -67,7 +67,7 @@ folds whose step is polynomial-in-state get *decidable equality*:
   the incremental `acc + 2n - 1` discovered by search. Program +
   certificate, not program + hope.
 
-## 2. Obligation-scoped mutation fuzzing
+## 2. Obligation-scoped mutation fuzzing — FIRST SWEEP LANDED
 
 Move discharges across scope boundaries instead of splicing syntax:
 consume-inside-`! each`, drop-before-`@`-edge, `[@scope]` add/remove,
@@ -77,6 +77,31 @@ conditional-consume join states, borrow escape into a store.
   and `probe_nested_consume.kz` (KORU030 caught). The checker is firmer
   than its LIMITATION-1 comment feared — per-binding discharge state
   catches re-feeds; the residual holes are join-point state and aliasing.
+- `scripts/obligation_fuzz.py` (run under WSL — `koruc` is an ELF and
+  needs `/home/cypoe/tools/zig-0.15.1` on PATH plus the zigcache env
+  vars, which the script now injects). Five semantic operators:
+  `refeed-stale`, `drop-at-arg`, `double-dispatch`, `arm-end-consume`,
+  `scope-toggle`. Operators mask `//` comments before matching —
+  the 330 corpus documents its own fold shape in prose and an early
+  run produced mutants that only edited the comment (vacuous GREENs).
+- Measured (2026-10-03, 75 mutants over the 330_07x–08x family + probes):
+  45 KORU030, 11 KORU100, 2 KORU022 at their expected layers — the
+  coordination wall holds. 14 `scope-toggle(add)` mutants build
+  end-to-end: a user-written `[@scope]` on an ordinary fold arm is
+  honored (over-restriction, benign direction — but confirms the
+  annotation is not loop-body-only).
+- **Finding** — `fuzz/repros/probe_arm_end_consume_emit.kz`: an outcome
+  arm routed to a discharger (`| again v |> done(h: v)`) passes `-c`
+  AND all 20 coordination passes, then emits uncompilable Zig
+  (`loop: while(true)` with no `continue` → unused label). Routing the
+  same arm to a non-consumer refuses correctly (KORU022), so the
+  checker tracks obligation drop but not the unproduced declared
+  return — and emission emits the loop label on arm structure, not on
+  whether a `continue` exists.
+- Open: `scope-toggle(remove)` has no coverage — no seed carries
+  `[@scope]` to remove, and removal is the dangerous direction.
+  Conditional-consume join-point state and borrow-escape-into-store
+  remain unprobed.
 
 ## 3. Koru dialect in isar-proofs — the general version
 
