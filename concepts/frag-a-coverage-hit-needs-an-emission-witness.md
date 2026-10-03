@@ -69,6 +69,21 @@ Splicing into such a block produces a green that means *dropped*, not
   pinned by 100_089, which sits beside 100_083's unclosed-paren twin.
   The witness rule sharpens again: the witness must appear in emitted
   output that is itself parseable.
+- **Drop has a third sibling: transform-bypassed check.** `gp_1_pass`
+  scored green on a `| missing` arm under a bool-`if` inside a `| captured`
+  continuation — a shape the `| done` sibling refuses KORU021
+  ("has no branch 'missing'"). The capture transform consumes the subtree;
+  the unknown-branch check never re-runs on it, and the emitter renders
+  the arm as an *empty* `else` — steps carrying unbound names vanish.
+  This one defeats even a parseable-emission witness: the emitted Zig is
+  valid, the arm's body simply isn't there. The witness must show the
+  construct *semantically present* (its steps' effects), not just a
+  syntactically plausible skeleton. Pinned red: 510_125.
+- **Dead code is a hiding place.** `gp_2`/`gp_11` spliced Koru-looking
+  lines inside `proc|zig` bodies of tors `main` never calls — dead_strip
+  removed the whole proc, the construct never reached emission, PASS is
+  vacuous. A coverage hit requires a *live* carrier: reachable from an
+  executed root, not merely compiled.
 
 ## Open
 

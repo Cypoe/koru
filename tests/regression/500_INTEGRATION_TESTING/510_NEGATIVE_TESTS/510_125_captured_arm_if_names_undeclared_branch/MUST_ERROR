@@ -1,0 +1,4 @@
+RED PIN — an unknown `if` branch inside a `| captured` arm must refuse
+KORU021 like its `| done`-arm sibling does. Today it compiles green and
+the arm's steps are silently dropped from emission (empty `else`).
+See concepts/frag-a-coverage-hit-needs-an-emission-witness.md.
