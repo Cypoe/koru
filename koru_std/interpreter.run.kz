@@ -809,38 +809,8 @@ fn executeFlow(
             var dispatched_defined = false;
             if (ctx.defined) |defined| {
                 if (findDefinedFlow(defined, event_name)) |df| {
-                    for (df.params) |pname| {
-                        var pval: []const u8 = "";
-                        for (evaluated_inv.args) |arg| {
-                            if (std.mem.eql(u8, arg.name, pname)) {
-                                pval = arg.value;
-                                break;
-                            }
-                        }
-                        try ctx.env.bind(pname, .{
-                            .branch = try ctx.allocator.dupe(u8, pval),
-                            .fields = &[_]NamedField{},
-                        });
-                    }
-                    switch (flow_parser.parseFlow(ctx.allocator, df.body_source)) {
-                        .flow => |*body_flow| {
-                            const body_value = try executeFlow(body_flow, ctx);
-                            dispatch_result = .{
-                                .branch = body_value.branch,
-                                .fields = body_value.fields,
-                            };
-                            dispatched_defined = true;
-                        },
-                        .err => |e| {
-                            // The body was validated at define time; a parse
-                            // failure here is an internal inconsistency, not
-                            // the model's. Name the flow, the rejection, and
-                            // the stored body so the shape stays debuggable.
-                            std.debug.print("[REDEFINE-DISPATCH] re-parse of '{s}' failed: {s}; body was: '{s}'\n", .{ df.name, e.message, df.body_source });
-                            return error.ValidationFailed;
-                        },
-                    }
-                    for (df.params) |pname| ctx.env.remove(pname);
+                    dispatch_result = try dispatchDefinedFlow(ctx, df, &evaluated_inv);
+                    dispatched_defined = true;
                 }
             }
             if (!dispatched_defined) {

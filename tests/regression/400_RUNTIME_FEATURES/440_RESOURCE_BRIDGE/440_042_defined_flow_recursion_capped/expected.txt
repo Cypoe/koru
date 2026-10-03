@@ -1,0 +1,12 @@
+  defined drain
+tick
+tick
+tick
+  unhandled done
+  defined loop
+emit: once
+  unhandled ok
+  defined loop
+  refused: defined flow 'loop' exceeded the dispatch depth cap (64) — its body calls itself with no outcome that stops it
+emit: alive
+  unhandled ok
