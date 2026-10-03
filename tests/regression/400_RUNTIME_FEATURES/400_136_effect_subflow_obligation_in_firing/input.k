@@ -23,5 +23,4 @@ gen = for(0..n)
 gen(n: 3)
 ! each i |> std/field:new(bits: 64)
     | field f |> std/io:print.ln("firing {{ i:d }}") |> std/field:free(f)
-    | err _ |> _
 | done _ |> _

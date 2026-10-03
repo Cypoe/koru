@@ -30,5 +30,4 @@ gen = for(0..n)
 gen(n: 3)
 ! each i |> std/field:new(bits: 64)
     | field f |> std/io:print.ln("leaking {{ i:d }}")
-    | err _ |> _
 | done _ |> _

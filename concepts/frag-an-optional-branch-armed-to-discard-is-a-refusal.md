@@ -64,3 +64,19 @@ a 16ms heartbeat. The body was `_` because the work was in the presence. The
 banned spelling forced the real API: `run(tick_ms: 16)` configures the clock
 directly. When a no-op arm turns out to be load-bearing, the load belongs in
 the signature, not in a handler-shaped lie.
+
+## 2026-10-03 — the doctrine reaches the declaration side
+
+First application to a shipped stdlib contract. `std/field:new`'s `err`
+was a REQUIRED branch whose only trigger was allocator failure — every
+call site spelled `| err _ |> _`, a forced no-op on a required arm: the
+mirror image of the refusal, written by the contract rather than the
+consumer. The fix was on the declaration: `| ?!err string` — declinable,
+loud when fired. Callers with real handlers keep them; discard arms
+evaporate.
+
+The rule generalizes: an outcome that can only fire on an
+unserviceable failure — OOM, unreachable, invariant breach — belongs to
+the `?!` panic class, not to required coverage. Required-ness is for
+outcomes a caller can meaningfully answer. `std/list`'s `?!oom` and
+`?!violated` already held this; `std/field:new` was the holdout.

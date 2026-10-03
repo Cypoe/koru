@@ -277,7 +277,7 @@ var __field_noop_alloc = std.mem.Allocator{
 // site). The Field carries its allocator, so `free` is allocator-agnostic.
 ~pub tor new-heap { bits: usize }
 | field *Field<field!>
-| err string
+| ?!err string
 
 ~proc new-heap|zig {
     const allocator = koru_allocator();
