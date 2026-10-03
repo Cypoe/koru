@@ -153,6 +153,16 @@ and borrow escape into a store. These are the baseline seeds for an
 obligation-scoped fuzzer (mutations: move discharge across an `! each` /
 `@`-edge / `[@scope]` boundary).
 
+### Obligation-scoped sweep probes (`obligation_fuzz.py`, 2026-10-03)
+
+Different finding class than the table above: these pass `-c` AND all 20
+coordination passes — the wall under test is emission.
+
+| file | shape | verdict |
+|---|---|---|
+| `probe_arm_end_consume_emit.kz` | fold `again` arm routed to a discharger instead of `@loop` | coordination green, **emitted Zig does not compile** (`loop:` label, no `continue`) |
+| `probe_scope_on_user_arm.kz` | hand-written `[@scope]` on a plain back-edge arm | builds + runs `n=3` — benign over-restriction; open question whether user `[@scope]` is sanctioned surface |
+
 ## Yield
 TL;DR
 Three corpus-driven fuzzers + a GA driver written in Koru itself. Zero compiler miscompiles found. The real output is four boundary observations + one frontend/backend disagreement — the honest kind of yield for a differential run: mostly "the seams hold," plus places where the checker's acceptance and the backend's acceptance disagree about what a composition means.
