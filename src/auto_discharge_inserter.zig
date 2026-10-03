@@ -197,10 +197,10 @@ pub const AutoDischargeInserter = struct {
         is_default: bool, // Has [!] annotation - preferred for auto-discharge
     };
 
-    /// Check if a continuation has @scope annotation (marks scope boundary)
+    /// Check if a continuation has the @scope mark (marks scope boundary)
     fn hasScope(cont: *const ast.Continuation) bool {
-        for (cont.binding_annotations) |ann| {
-            if (std.mem.eql(u8, ann, "@scope")) return true;
+        for (cont.binding_marks) |mark| {
+            if (std.mem.eql(u8, mark, "@scope")) return true;
         }
         return false;
     }
@@ -447,10 +447,10 @@ pub const AutoDischargeInserter = struct {
         return null;
     }
 
-    /// Check if a NamedBranch has @scope annotation (marks scope boundary)
+    /// Check if a NamedBranch has the @scope mark (marks scope boundary)
     fn branchHasScope(branch: *const ast.NamedBranch) bool {
-        for (branch.annotations) |ann| {
-            if (std.mem.eql(u8, ann, "@scope")) return true;
+        for (branch.marks) |mark| {
+            if (std.mem.eql(u8, mark, "@scope")) return true;
         }
         return false;
     }
@@ -1009,17 +1009,17 @@ pub const AutoDischargeInserter = struct {
         return false;
     }
 
-    /// Add @scope to binding_annotations of a continuation
+    /// Add @scope to binding_marks of a continuation
     fn addScopeAnnotation(self: *AutoDischargeInserter, cont: *const ast.Continuation) !ast.Continuation {
-        const old_anns = cont.binding_annotations;
-        const new_anns = try self.allocator.alloc([]const u8, old_anns.len + 1);
-        for (old_anns, 0..) |ann, ai| {
-            new_anns[ai] = try self.allocator.dupe(u8, ann);
+        const old_marks = cont.binding_marks;
+        const new_marks = try self.allocator.alloc([]const u8, old_marks.len + 1);
+        for (old_marks, 0..) |mark, mi| {
+            new_marks[mi] = try self.allocator.dupe(u8, mark);
         }
-        new_anns[old_anns.len] = try self.allocator.dupe(u8, "@scope");
+        new_marks[old_marks.len] = try self.allocator.dupe(u8, "@scope");
 
         var new_cont = cont.*;
-        new_cont.binding_annotations = new_anns;
+        new_cont.binding_marks = new_marks;
         return new_cont;
     }
 
@@ -4148,10 +4148,14 @@ pub const AutoDischargeInserter = struct {
             for (branch.body, 0..) |*body_cont, bci| {
                 new_body[bci] = try self.replaceContinuationInTree(body_cont, old_cont, new_cont);
             }
-            // Clone annotations (critical for @scope)
+            // Clone annotations and marks (@scope lives in marks)
             var cloned_anns = try self.allocator.alloc([]const u8, branch.annotations.len);
             for (branch.annotations, 0..) |ann, ai| {
                 cloned_anns[ai] = try self.allocator.dupe(u8, ann);
+            }
+            var cloned_marks = try self.allocator.alloc([]const u8, branch.marks.len);
+            for (branch.marks, 0..) |mark, mi| {
+                cloned_marks[mi] = try self.allocator.dupe(u8, mark);
             }
             new_branches[bi] = .{
                 .name = try self.allocator.dupe(u8, branch.name),
@@ -4159,6 +4163,7 @@ pub const AutoDischargeInserter = struct {
                 .binding = if (branch.binding) |b| try self.allocator.dupe(u8, b) else null,
                 .is_optional = branch.is_optional,
                 .annotations = cloned_anns,
+                .marks = cloned_marks,
             };
         }
         return new_branches;

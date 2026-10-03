@@ -916,6 +916,19 @@ pub const AstSerializer = struct {
         try self.writeIndent();
         try self.write("},\n");
 
+        // Compiler marks (@pass_ran/@shape_valid/@preamble_then_call)
+        try self.writeIndent();
+        try self.write(".marks = &.{\n");
+        self.indent();
+        for (invoc.marks) |mark| {
+            try self.writeIndent();
+            try self.writeString(mark);
+            try self.write(",\n");
+        }
+        self.dedent();
+        try self.writeIndent();
+        try self.write("},\n");
+
         // inserted_by_tap flag (CRITICAL for tap transformation)
         try self.writeIndent();
         try self.write(".inserted_by_tap = ");
@@ -1171,6 +1184,22 @@ pub const AstSerializer = struct {
             for (cont.binding_annotations) |ann| {
                 try self.writeIndent();
                 try self.writeString(ann);
+                try self.write(",\n");
+            }
+            self.dedent();
+            try self.writeIndent();
+        }
+        try self.write("},\n");
+
+        // Compiler marks on the binding (@scope) — pass-stamped, source-invisible
+        try self.writeIndent();
+        try self.write(".binding_marks = &[_][]const u8{");
+        if (cont.binding_marks.len > 0) {
+            try self.write("\n");
+            self.indent();
+            for (cont.binding_marks) |mark| {
+                try self.writeIndent();
+                try self.writeString(mark);
                 try self.write(",\n");
             }
             self.dedent();
@@ -2165,6 +2194,23 @@ pub const AstSerializer = struct {
         try self.writeIndent();
         try self.write("\"variant\": ");
         try self.writeOptString(inv.variant);
+
+        // Compiler marks (pass-stamped; invisible in source — worth surfacing here)
+        if (inv.marks.len > 0) {
+            try self.write(",\n");
+            try self.writeIndent();
+            try self.write("\"marks\": [\n");
+            self.indent();
+            for (inv.marks, 0..) |mark, i| {
+                if (i > 0) try self.write(",\n");
+                try self.writeIndent();
+                try self.writeString(mark);
+            }
+            try self.write("\n");
+            self.dedent();
+            try self.writeIndent();
+            try self.write("]");
+        }
         try self.write("\n");
 
         self.dedent();
@@ -2242,7 +2288,25 @@ pub const AstSerializer = struct {
         try self.write("\n");
         self.dedent();
         try self.writeIndent();
-        try self.write("]\n");
+        try self.write("]");
+
+        // Compiler marks on the binding (@scope — source-invisible)
+        if (cont.binding_marks.len > 0) {
+            try self.write(",\n");
+            try self.writeIndent();
+            try self.write("\"binding_marks\": [\n");
+            self.indent();
+            for (cont.binding_marks, 0..) |mark, i| {
+                if (i > 0) try self.write(",\n");
+                try self.writeIndent();
+                try self.writeString(mark);
+            }
+            try self.write("\n");
+            self.dedent();
+            try self.writeIndent();
+            try self.write("]");
+        }
+        try self.write("\n");
 
         self.dedent();
         try self.writeIndent();
@@ -2274,7 +2338,25 @@ pub const AstSerializer = struct {
         try self.write("\n");
         self.dedent();
         try self.writeIndent();
-        try self.write("]\n");
+        try self.write("]");
+
+        // Compiler marks on the branch (@scope — source-invisible)
+        if (branch.marks.len > 0) {
+            try self.write(",\n");
+            try self.writeIndent();
+            try self.write("\"marks\": [\n");
+            self.indent();
+            for (branch.marks, 0..) |mark, i| {
+                if (i > 0) try self.write(",\n");
+                try self.writeIndent();
+                try self.writeString(mark);
+            }
+            try self.write("\n");
+            self.dedent();
+            try self.writeIndent();
+            try self.write("]");
+        }
+        try self.write("\n");
 
         self.dedent();
         try self.writeIndent();

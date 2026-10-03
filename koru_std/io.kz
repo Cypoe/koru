@@ -732,16 +732,17 @@ fn __printInterpolate(
         return .{};
     }
 
-    const new_inv_annotations = allocator.alloc([]const u8, flow.inv().annotations.len + 1) catch unreachable;
+    const new_marks = allocator.alloc([]const u8, flow.inv().marks.len + 1) catch unreachable;
     for (flow.inv().annotations, 0..) |ann, idx| {
-        new_inv_annotations[idx] = ann;
+        new_marks[idx] = ann;
     }
-    new_inv_annotations[flow.inv().annotations.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
+    new_marks[flow.inv().marks.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
 
     const new_invocation = ast.Invocation{
         .path = impl_path,
         .args = flow.inv().args,
-        .annotations = new_inv_annotations,
+        .annotations = flow.inv().annotations,
+        .marks = new_marks,
         .inserted_by_tap = flow.inv().inserted_by_tap,
         .from_opaque_tap = flow.inv().from_opaque_tap,
     };
@@ -972,16 +973,17 @@ fn __printInterpolateJs(
         .segments = impl_segments,
     };
 
-    const new_inv_annotations = allocator.alloc([]const u8, flow.inv().annotations.len + 1) catch unreachable;
+    const new_marks = allocator.alloc([]const u8, flow.inv().marks.len + 1) catch unreachable;
     for (flow.inv().annotations, 0..) |ann, idx| {
-        new_inv_annotations[idx] = ann;
+        new_marks[idx] = ann;
     }
-    new_inv_annotations[flow.inv().annotations.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
+    new_marks[flow.inv().marks.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
 
     const new_invocation = ast.Invocation{
         .path = impl_path,
         .args = flow.inv().args,
-        .annotations = new_inv_annotations,
+        .annotations = flow.inv().annotations,
+        .marks = new_marks,
         .inserted_by_tap = flow.inv().inserted_by_tap,
         .from_opaque_tap = flow.inv().from_opaque_tap,
     };

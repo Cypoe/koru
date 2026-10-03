@@ -170,9 +170,9 @@ const BulkEmit = struct {
     }
 
     fn annotate(alloc: std.mem.Allocator, iv: *ast.Invocation) void {
-        const anns = alloc.alloc([]const u8, iv.annotations.len + 1) catch unreachable;
-        @memcpy(anns[0..iv.annotations.len], iv.annotations);
-        anns[iv.annotations.len] = "@pass_ran(\"transform\")";
-        iv.annotations = anns;
+        const anns = alloc.alloc([]const u8, iv.marks.len + 1) catch unreachable;
+        @memcpy(anns[0..iv.marks.len], iv.marks);
+        anns[iv.marks.len] = "@pass_ran(\"transform\")";
+        iv.marks = anns;
     }
 };

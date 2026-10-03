@@ -466,10 +466,18 @@ fn cloneContinuations(allocator: std.mem.Allocator, continuations: []const ast.C
             }
             break :blk list;
         } else &[_][]const u8{};
+        const marks = if (cont.binding_marks.len > 0) blk: {
+            var list = try allocator.alloc([]const u8, cont.binding_marks.len);
+            for (cont.binding_marks, 0..) |mark, j| {
+                list[j] = try allocator.dupe(u8, mark);
+            }
+            break :blk list;
+        } else &[_][]const u8{};
         result[i] = .{
             .branch = try allocator.dupe(u8, cont.branch),
             .binding = if (cont.binding) |b| try allocator.dupe(u8, b) else null,
             .binding_annotations = anns,
+            .binding_marks = marks,
             .destructure = try ast.copyDestructure(allocator, cont.destructure),
             .binding_type = cont.binding_type,
             // Preserve the branch axis (`|` vs `!`) and catch-all markers — a

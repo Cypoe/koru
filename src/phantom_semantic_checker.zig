@@ -2355,18 +2355,19 @@ pub const PhantomSemanticChecker = struct {
             return false;
         }
 
-        // Check for @scope annotation on the binding (e.g., | each _[@scope] |>).
+        // Check for the @scope mark on the binding (e.g., | each _ |>, stamped
+        // by a pass — surface syntax cannot spell marks).
         // ALSO treat an effect branch (`! line`, `! each`) as a scope boundary: it
         // lowers to a host loop firing 0..N times, so an OUTER obligation must not
         // be required to discharge INSIDE the effect body (that would be a
         // per-iteration double-free) — it discharges after the loop (done/failed).
         // This is the checker-side twin of the auto-discharge inserter's
-        // kind==.effect scope entry; the @scope annotation was previously the only
+        // kind==.effect scope entry; the @scope mark was previously the only
         // recognized loop boundary, leaving stdlib effects invisible to both passes.
         const has_scope = blk: {
             if (cont.kind == .effect) break :blk true;
-            for (cont.binding_annotations) |ann| {
-                if (std.mem.eql(u8, ann, "@scope")) {
+            for (cont.binding_marks) |mark| {
+                if (std.mem.eql(u8, mark, "@scope")) {
                     break :blk true;
                 }
             }
@@ -3156,10 +3157,10 @@ pub const PhantomSemanticChecker = struct {
     fn validateNamedBranchRecursive(self: *PhantomSemanticChecker, branch: *const ast.NamedBranch, parent_context: *BindingContext, event_map: *std.StringHashMap(EventInfo), current_module: ?[]const u8, caller_location: errors.SourceLocation) !bool {
         var has_errors = false;
 
-        // Check if this branch has @scope annotation
+        // Check if this branch has the @scope mark
         const has_scope = blk: {
-            for (branch.annotations) |ann| {
-                if (std.mem.eql(u8, ann, "@scope")) {
+            for (branch.marks) |mark| {
+                if (std.mem.eql(u8, mark, "@scope")) {
                     break :blk true;
                 }
             }

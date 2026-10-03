@@ -612,11 +612,18 @@ fn cloneContinuationWithNodeAndContinuations(
         binding_annotations[i] = try allocator.dupe(u8, ann);
     }
 
+    var binding_marks = try allocator.alloc([]const u8, cont.binding_marks.len);
+    errdefer allocator.free(binding_marks);
+    for (cont.binding_marks, 0..) |mark, i| {
+        binding_marks[i] = try allocator.dupe(u8, mark);
+    }
+
     return .{
         .branch = try allocator.dupe(u8, cont.branch),
         .binding = if (cont.binding) |b| try allocator.dupe(u8, b) else null,
         .destructure = try ast.copyDestructure(allocator, cont.destructure),
         .binding_annotations = binding_annotations,
+        .binding_marks = binding_marks,
         .binding_type = cont.binding_type,
         .kind = cont.kind,
         .is_catchall = cont.is_catchall,
@@ -1473,6 +1480,12 @@ pub fn cloneInvocation(allocator: std.mem.Allocator, invocation: *const ast.Invo
         annotations[i] = try allocator.dupe(u8, ann);
     }
 
+    var marks = try allocator.alloc([]const u8, invocation.marks.len);
+    errdefer allocator.free(marks);
+    for (invocation.marks, 0..) |mark, i| {
+        marks[i] = try allocator.dupe(u8, mark);
+    }
+
     var return_binding_annotations = try allocator.alloc([]const u8, invocation.return_binding_annotations.len);
     errdefer allocator.free(return_binding_annotations);
     for (invocation.return_binding_annotations, 0..) |ann, i| {
@@ -1483,6 +1496,7 @@ pub fn cloneInvocation(allocator: std.mem.Allocator, invocation: *const ast.Invo
         .path = try cloneDottedPath(allocator, &invocation.path),
         .args = args,
         .annotations = annotations,
+        .marks = marks,
         .inserted_by_tap = invocation.inserted_by_tap,
         .from_opaque_tap = invocation.from_opaque_tap,
         .source_module = if (invocation.source_module.len > 0)
@@ -1673,10 +1687,14 @@ fn cloneNamedBranch(allocator: std.mem.Allocator, branch: *const ast.NamedBranch
         cloned_body[i] = try cloneContinuation(allocator, cont);
     }
 
-    // Clone annotations (critical for @scope and other branch-level annotations)
+    // Clone annotations and marks (critical for @scope — it lives in marks)
     var cloned_annotations = try allocator.alloc([]const u8, branch.annotations.len);
     for (branch.annotations, 0..) |ann, i| {
         cloned_annotations[i] = try allocator.dupe(u8, ann);
+    }
+    var cloned_marks = try allocator.alloc([]const u8, branch.marks.len);
+    for (branch.marks, 0..) |mark, i| {
+        cloned_marks[i] = try allocator.dupe(u8, mark);
     }
 
     return .{
@@ -1685,6 +1703,7 @@ fn cloneNamedBranch(allocator: std.mem.Allocator, branch: *const ast.NamedBranch
         .binding = if (branch.binding) |b| try allocator.dupe(u8, b) else null,
         .is_optional = branch.is_optional,
         .annotations = cloned_annotations,
+        .marks = cloned_marks,
     };
 }
 

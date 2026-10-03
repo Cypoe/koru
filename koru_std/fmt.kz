@@ -294,16 +294,17 @@ pub const FormattedText = struct {
         .segments = impl_segments,
     };
 
-    const new_inv_annotations = allocator.alloc([]const u8, flow.inv().annotations.len + 1) catch unreachable;
+    const new_marks = allocator.alloc([]const u8, flow.inv().marks.len + 1) catch unreachable;
     for (flow.inv().annotations, 0..) |ann, idx| {
-        new_inv_annotations[idx] = ann;
+        new_marks[idx] = ann;
     }
-    new_inv_annotations[flow.inv().annotations.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
+    new_marks[flow.inv().marks.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
 
     const new_invocation = ast.Invocation{
         .path = impl_path,
         .args = flow.inv().args,
-        .annotations = new_inv_annotations,
+        .annotations = flow.inv().annotations,
+        .marks = new_marks,
         .inserted_by_tap = flow.inv().inserted_by_tap,
         .from_opaque_tap = flow.inv().from_opaque_tap,
         .inline_body = allocator.dupe(u8, inline_code) catch unreachable,
@@ -583,16 +584,17 @@ pub const FormattedText = struct {
         .segments = impl_segments,
     };
 
-    const new_inv_annotations = allocator.alloc([]const u8, invocation.annotations.len + 1) catch unreachable;
+    const new_marks = allocator.alloc([]const u8, invocation.marks.len + 1) catch unreachable;
     for (invocation.annotations, 0..) |ann, idx| {
-        new_inv_annotations[idx] = ann;
+        new_marks[idx] = ann;
     }
-    new_inv_annotations[invocation.annotations.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
+    new_marks[invocation.marks.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
 
     const new_invocation = ast.Invocation{
         .path = impl_path,
         .args = invocation.args,
-        .annotations = new_inv_annotations,
+        .annotations = invocation.annotations,
+        .marks = new_marks,
         .inserted_by_tap = invocation.inserted_by_tap,
         .from_opaque_tap = invocation.from_opaque_tap,
         .inline_body = allocator.dupe(u8, inline_code) catch unreachable,
@@ -791,16 +793,17 @@ pub const FormattedText = struct {
         .segments = impl_segments,
     };
 
-    const new_inv_annotations = allocator.alloc([]const u8, invocation.annotations.len + 1) catch unreachable;
+    const new_marks = allocator.alloc([]const u8, invocation.marks.len + 1) catch unreachable;
     for (invocation.annotations, 0..) |ann, idx| {
-        new_inv_annotations[idx] = ann;
+        new_marks[idx] = ann;
     }
-    new_inv_annotations[invocation.annotations.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
+    new_marks[invocation.marks.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
 
     const new_invocation = ast.Invocation{
         .path = impl_path,
         .args = invocation.args,
-        .annotations = new_inv_annotations,
+        .annotations = invocation.annotations,
+        .marks = new_marks,
         .inserted_by_tap = invocation.inserted_by_tap,
         .from_opaque_tap = invocation.from_opaque_tap,
         .inline_body = allocator.dupe(u8, inline_code) catch unreachable,
