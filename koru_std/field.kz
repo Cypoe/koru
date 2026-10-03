@@ -274,7 +274,7 @@ var __field_noop_alloc = std.mem.Allocator{
         allocator.destroy(self);
         return .{ .err = "allocation failed" };
     };
-    @memset(data, 0);
+    if (comptime @import("builtin").link_libc) struct { extern "c" fn bzero(p: *anyopaque, n: usize) void; }.bzero(@ptrCast(data.ptr), data.len * @sizeOf(u64)) else @memset(data, 0);
     self.* = .{ .data = data, .bits = bits, .allocator = allocator };
     return .{ .field = self };
 }
