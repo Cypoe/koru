@@ -64,7 +64,7 @@ class Fold:
     observe: str                 # field whose trajectory is compared
 
 
-_ARITH = re.compile(r"^[A-Za-z_@0-9+\-][A-Za-z0-9_@.() \t+\-*/%]*$")
+_ARITH = re.compile(r"^[A-Za-z_@0-9+\-][A-Za-z0-9_@.() \t+\-*/%]*$|^[(]")
 
 
 def _split_top(s: str):
@@ -201,6 +201,9 @@ def trajectory(fold: Fold, steps: int, bounded: bool = True):
                 raise Refused(f"non-numeric update for {f}: {v}")
             nxt[f] = sp.Integer(v)
         out.append(nxt[fold.observe])
+        if any(abs(v) > sp.Integer(10)**200 for v in nxt.values()):
+            raise Refused("trajectory magnitude exceeds 10^200 — "
+                          "super-exponential growth outside the fragment")
         state = nxt
     return out
 
@@ -270,9 +273,10 @@ def closed_form(fold: Fold):
     T = sp.Matrix(rows).col_join(sp.Matrix([[0] * dim + [1]]))
     s0 = sp.Matrix([fold.init[p] for p in fold.params] + [1])
     try:
-        state_n = T**N * s0
-        state_n1 = (T**(N + 1) * s0)
+        state_n1 = (T**(N + 1) * s0).as_explicit()
     except Exception:
+        return None                    # symbolic power failed (e.g. nilpotent)
+    if not isinstance(state_n1, sp.MatrixBase):
         return None
     obs = fold.params.index(fold.observe)
     return sp.expand(state_n1[obs])
@@ -343,10 +347,8 @@ def gate(src_a: str, src_b: str, window: int = 64):
     fa = extract_fold(src_a)
     fb = extract_fold(src_b)
 
-    ca = certify(fa, window)
-    cb = certify(fb, window)
-    # output equality needs same stopping point AND same iterates; the
-    # certificate argument applies to the unbounded F-trajectory
+    # cheap refutation first: output length, then any nonzero iterate in
+    # the window is a concrete witness — no certificates needed
     out_a = trajectory(fa, window, bounded=True)
     out_b = trajectory(fb, window, bounded=True)
     if len(out_a) != len(out_b):
@@ -354,11 +356,13 @@ def gate(src_a: str, src_b: str, window: int = 64):
     seq_a = trajectory(fa, window, bounded=False)
     seq_b = trajectory(fb, window, bounded=False)
     diff = [a - b for a, b in zip(seq_a, seq_b)]
+    bad = next((i for i, v in enumerate(diff) if v != 0), None)
+    if bad is not None:
+        return "NOT-EQUAL", f"diverges at iterate {bad}"
 
+    ca = certify(fa, window)
+    cb = certify(fb, window)
     if ca[0] is None or cb[0] is None:
-        if any(v != 0 for v in diff):
-            i = next(i for i, v in enumerate(diff) if v != 0)
-            return "NOT-EQUAL", f"diverges at iterate {i}"
         missing = "A" if ca[0] is None else "B"
         return "CANDIDATE", (f"{missing} has no verified certificate "
                              "within bounds; in-window agreement only")
@@ -373,13 +377,9 @@ def gate(src_a: str, src_b: str, window: int = 64):
         return "NOT-FOUND-WITHIN-BOUNDS", (
             f"bound {bound} + singular indices {sorted(sing)} exceed "
             f"the {len(diff)}-term window")
-    bad = sorted(k for k in required if diff[k] != 0)
-    if bad:
-        return "NOT-EQUAL", (f"nonzero difference inside the uniqueness "
-                             f"bound at iterates {bad}")
-    extra = next((i for i, v in enumerate(diff) if v != 0), None)
-    if extra is not None:
-        return "NOT-EQUAL", f"diverges at iterate {extra} (beyond bound)"
+    # diff is all-zero on the window here; required terms check out by
+    # construction — the certificate bound is what turns window-agreement
+    # into identical-everywhere
     why = (f"orders {m_a}+{m_b} -> bound {bound}"
            + (f", singular pts {sorted(sing)}" if sing else "")
            + f"; certs [{ca[2]}] {cert_str(*ca[:2])} "
