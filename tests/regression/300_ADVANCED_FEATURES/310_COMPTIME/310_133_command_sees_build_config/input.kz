@@ -1,0 +1,49 @@
+// Pins that a [comptime|command] handler observes build:config values.
+//
+// Command handlers dispatch via koru_command_dispatch, which returns before
+// the pipeline's comptime passes — the passes that register build:config /
+// build:variants into emitter_helpers. Dispatch primes comptime_main before
+// invoking a handler, so this handler reads a populated registry.
+//
+// Run: koruc input.kz cfg --build=dev   → port=3000
+//      koruc input.kz cfg --build=prod  → port=80
+
+~import std/build
+~import std/compiler
+
+~[build("dev")]std/build:config {
+    "port": "3000"
+}
+
+~[build("prod")]std/build:config {
+    "port": "80"
+}
+
+~std/compiler:command.declare {
+    "name": "cfg",
+    "description": "Print the build:config port the handler observes"
+}
+
+~[comptime|command]pub tor cfg {
+    program: *const Program,
+    allocator: __koru_std.mem.Allocator,
+    argv: []string,
+}
+
+const std = @import("std");
+
+~proc cfg|zig {
+    const emitter_helpers = @import("emitter_helpers");
+    if (emitter_helpers.getBuildConfig("port")) |v| {
+        std.debug.print("port={s}\n", .{v});
+    } else {
+        std.debug.print("port=MISSING\n", .{});
+    }
+}
+
+~tor main {}
+
+~proc main|zig {
+}
+
+~main()

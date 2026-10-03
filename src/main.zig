@@ -2484,6 +2484,15 @@ fn generateComptimeBackendEmitted(allocator: std.mem.Allocator, source_file: *as
         \\) void {
         \\    const name_typed: *const []const u8 = @ptrCast(@alignCast(name));
         \\    const argv_typed: *const []const []const u8 = @ptrCast(@alignCast(argv));
+        \\    // Command dispatch returns before the pipeline reaches Phase 2.3.5,
+        \\    // the early comptime_main pass that registers build:config /
+        \\    // build:variants into emitter_helpers. Without this prime those
+        \\    // registries are empty inside every command handler. The returned
+        \\    // program is discarded: handlers keep the seed AST, the prime is
+        \\    // for registry side-effects only.
+        \\    if (@hasDecl(@This(), "comptime_main")) {
+        \\        _ = comptime_main(program, allocator.*);
+        \\    }
         \\
     );
     for (cmd_result.commands[0..cmd_result.count]) |cmd| {
