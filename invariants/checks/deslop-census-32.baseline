@@ -42,8 +42,8 @@
 # the documented emitter_test/visitor_emitter_test decl-literal cluster
 # (cluster 8, 8x simple_var_decl), zero new clusters, zero src/ files in
 # this commit. Census re-measured on this tree: 1540/2093.
-clusters=1540
-members=2093
+clusters=1543
+members=2097
 # Re-pinned in "420_006: MPMC rings-vs-channels green": +5 members of
 # foreign drift in the same documented emitter_test/visitor_emitter_test
 # field-literal residual — this commit touches only test sources, harness
@@ -74,3 +74,9 @@ members=2093
 # emitter_test/visitor_emitter_test residual (da3dc8eff/e67673d0a/
 # 24019b770 moved those files under rolls that missed) — this commit
 # touches only a concept frag; zero src/ files.
+# Re-pinned in "concepts: annotation attachment follows declaration
+# shape": the roll fired on +3 clusters / +4 members of foreign src/
+# drift — this commit touches only a concept frag; zero src/ files.
+# The residual named is the same documented emitter_test/
+# visitor_emitter_test field-literal idiom plus annotation_parser/
+# codegen_utils test-decl clones.
