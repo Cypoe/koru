@@ -1,0 +1,19 @@
+// Same pin as 210_312, on the .kz spelling: an EMPTY source block must
+// capture empty text — not consume the declaration that follows it.
+// Measured 2026-10-03: `~std/io:print.blk {` + `}` captures from that `}`
+// through the next block's `}`, eating the declaration between them.
+//
+// Three print.blk flows must exist in the AST (post.sh counts them), and
+// the program prints exactly "first", "third".
+~import std/io
+
+~std/io:print.blk {
+    first
+}
+
+~std/io:print.blk {
+}
+
+~std/io:print.blk {
+    third
+}
