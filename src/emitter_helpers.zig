@@ -7479,7 +7479,12 @@ fn branchHasPayloadFieldsSearchAll(
                     // Found the event - check if branch has payload
                     for (event.branches) |branch| {
                         if (std.mem.eql(u8, branch.name, branch_name)) {
-                            return branch.payload.fields.len > 0;
+                            // `| tag *` is a wildcard payload — fields are empty
+                            // but the payload EXISTS (anytype). Every other site
+                            // counts it (7803/8234/10506); counting only fields
+                            // here suppressed the `|b|` capture and left arm
+                            // bodies referencing an unbound name.
+                            return branch.payload.fields.len > 0 or branch.payload.is_wildcard;
                         }
                     }
                 }
