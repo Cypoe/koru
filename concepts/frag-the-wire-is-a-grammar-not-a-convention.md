@@ -149,6 +149,20 @@ already proves a declared type changes what a position admits), so
 like `var: string` — are the mechanism the misspellings were voting for;
 the flat head-arg validator is bootstrap scaffolding, not the design.
 
+2026-10-04 — the ruling met Koru's own grammar. Call parens had hugged
+their arguments in every file ever written — 0 loose `f( ` or `f(x )`
+spellings across all 2,974 tracked `.k`/`.kz` — yet nothing refused the
+loose form; it was a convention held by volume alone, until generated code
+wrote `adx( g.qlen, ...`. C's whitespace tolerance is exactly the class of
+admission this frag exists against, and the measurement showed the hope
+shape precisely: the corpus was not disciplined, it was lucky. `parseArgs`
+now refuses whitespace at either call-paren edge (`f(x)`, never `f( x` or
+`f(x )`) — one check at the shared splitter, covering invocations, `|>`
+steps, and `@label` jumps, skipped for paren-free callers so `{ a: 1 }`
+record breathing stays legal. Pinned by `100_090_call_parens_hug_args`;
+0-of-2,974 regression scan confirms the refusal is a wall around a
+convention, not a break.
+
 The same measurement surfaced the boundary
 case the item-as-unit rule missed: `note(...)say(...)` on one line is
 one item, and the malformed note was swallowing a well-formed call into

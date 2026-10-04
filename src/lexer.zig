@@ -610,10 +610,21 @@ pub fn parseArgs(allocator: std.mem.Allocator, args_str: []const u8) ![]ArgPair 
     }
 
     // Remove parentheses if present
-    const content = if (std.mem.startsWith(u8, args_str, "(") and std.mem.endsWith(u8, args_str, ")"))
+    const had_parens = std.mem.startsWith(u8, args_str, "(") and std.mem.endsWith(u8, args_str, ")");
+    const content = if (had_parens)
         args_str[1..args_str.len - 1]
     else
         args_str;
+
+    // Call parens hug their arguments — 'f(x)', never 'f( x' or 'f(x )'.
+    // The corpus has never had a loose call paren; this refuses it. Fires
+    // only when the caller passed the parens through — brace-record inner
+    // text ('{ a: 1 }', where breathing room is legal) never reaches here.
+    if (had_parens and content.len > 0 and
+        (std.ascii.isWhitespace(content[0]) or std.ascii.isWhitespace(content[content.len - 1])))
+    {
+        return error.LooseCallParens;
+    }
 
     // Parse arguments with proper string handling
     var i: usize = 0;

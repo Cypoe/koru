@@ -5409,6 +5409,20 @@ pub const Parser = struct {
                     // Find content between ( and )
                     if (args_str.len > 2 and args_str[0] == '(' and args_str[args_str.len - 1] == ')') {
                         const args_content = args_str[1 .. args_str.len - 1];
+                        // Same paren-hug rule as parseArgsReported — this path
+                        // tokenizes args itself instead of going through
+                        // lexer.parseArgs.
+                        if (std.ascii.isWhitespace(args_content[0]) or
+                            std.ascii.isWhitespace(args_content[args_content.len - 1]))
+                        {
+                            return self.fail(
+                                .PARSE003,
+                                self.current,
+                                1,
+                                "call parens hug their arguments — write 'f(x)', not 'f( x' or 'f(x )'",
+                                .{},
+                            );
+                        }
                         // Simple arg parsing: split by comma, then by colon
                         var arg_iter = std.mem.tokenizeScalar(u8, args_content, ',');
                         while (arg_iter.next()) |arg_part| {
@@ -11000,6 +11014,15 @@ pub const Parser = struct {
                     self.current,
                     1,
                     "unbalanced ')' or ']' in arguments — closing delimiter has no matching opener",
+                    .{},
+                );
+            },
+            error.LooseCallParens => {
+                return self.fail(
+                    .PARSE003,
+                    self.current,
+                    1,
+                    "call parens hug their arguments — write 'f(x)', not 'f( x' or 'f(x )'",
                     .{},
                 );
             },

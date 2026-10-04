@@ -50,6 +50,7 @@ pub fn parseFlow(allocator: std.mem.Allocator, source: []const u8) FlowParseResu
 const ParseError = error{
     EmptyInput,
     InvalidInvocation,
+    LooseCallParens,
     MalformedArgs,
     MalformedContinuation,
     MalformedBranchConstructor,
@@ -297,7 +298,10 @@ fn parseInvocationLine(allocator: std.mem.Allocator, line: []const u8, line_num:
         }
 
         const path = lexer.parseQualifiedPath(allocator, path_str, ast) catch return ParseError.InvalidInvocation;
-        const arg_pairs = lexer.parseArgs(allocator, args_str) catch return ParseError.MalformedArgs;
+        const arg_pairs = lexer.parseArgs(allocator, args_str) catch |err| switch (err) {
+            error.LooseCallParens => return ParseError.LooseCallParens,
+            else => return ParseError.MalformedArgs,
+        };
 
         // Convert ArgPair[] to Arg[]
         const args = try convertArgPairs(allocator, arg_pairs);
