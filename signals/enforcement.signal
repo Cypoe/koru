@@ -1,0 +1,9 @@
+name: enforcement
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `widened-law` — declare that name. The comma-refusal
+  already fired on fused mid-line entries; 6e2e21fbf extended the same
+  rule to edge commas across four grammars — a carrier widening, not a
+  new law. (orphan drained 2026-10)
