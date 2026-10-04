@@ -3818,7 +3818,28 @@ pub const VisitorEmitter = struct {
                                             try self.code_emitter.write(param_name);
                                             try self.code_emitter.write(" = ");
 
-                                            if (arg.value.len >= 2 and arg.value[0] == '[' and arg.value[arg.value.len - 1] == ']') {
+                                            // A Source param must emit the
+                                            // `__koru_ast.Source{...}` literal —
+                                            // never the captured text raw, which
+                                            // splices Koru syntax into Zig. Same
+                                            // twin checks as emitArgs: the decl
+                                            // field, then arg.source_value for
+                                            // callees the decl lookup misses.
+                                            var sf_is_source = arg.source_value != null;
+                                            if (!sf_is_source) {
+                                                if (invoked_event) |inv_event| {
+                                                    for (inv_event.input.fields) |*field| {
+                                                        if (std.mem.eql(u8, field.name, param_name) and field.is_source) {
+                                                            sf_is_source = true;
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            if (sf_is_source) {
+                                                try emitter.emitSourceValue(self.code_emitter, &arg);
+                                            } else if (arg.value.len >= 2 and arg.value[0] == '[' and arg.value[arg.value.len - 1] == ']') {
                                                 const field = blk: {
                                                     if (invoked_event) |inv_event| {
                                                         for (inv_event.input.fields) |*field| {

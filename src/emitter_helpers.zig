@@ -8995,6 +8995,42 @@ fn emitInvocationMetaFields(
     try emitter.write("}");
 }
 
+/// Emit a Source argument value as the `__koru_ast.Source{...}` literal the
+/// callee's input field declares. `arg.source_value`/`arg.value` carry the
+/// captured text; the text lands as Zig `\\` multiline lines — an empty
+/// Source emits `""` rather than leaving `.text =` dangling.
+/// Every call-site emitter (emitArgs, subflow heads, string codegen) routes
+/// through this one so Source never splices raw Koru text into Zig.
+pub fn emitSourceValue(emitter: *CodeEmitter, arg: *const ast.Arg) !void {
+    try emitter.write("__koru_ast.Source{ .text = \n");
+    emitter.indent();
+    try emitter.writeIndent();
+    // Use Zig multiline string syntax - split on newlines manually.
+    var line_start: usize = 0;
+    if (arg.value.len == 0) {
+        try emitter.write("\"\"\n");
+        try emitter.writeIndent();
+    }
+    for (arg.value, 0..) |c, i| {
+        if (c == '\n') {
+            try emitter.write("\\\\");
+            try emitter.write(arg.value[line_start..i]);
+            try emitter.write("\n");
+            try emitter.writeIndent();
+            line_start = i + 1;
+        }
+    }
+    // Handle last line (no trailing newline)
+    if (line_start < arg.value.len) {
+        try emitter.write("\\\\");
+        try emitter.write(arg.value[line_start..]);
+        try emitter.write("\n");
+        try emitter.writeIndent();
+    }
+    emitter.dedent();
+    try emitter.write(", .scope = .{ .bindings = &.{} }, .phantom_type = null }");
+}
+
 /// Emit arguments for an invocation
 fn emitArgs(emitter: *CodeEmitter, ctx: *EmissionContext, args: []const ast.Arg, invocation_path: *const ast.DottedPath) !void {
     // Look up the event declaration to check for is_source fields
@@ -9044,6 +9080,17 @@ fn emitArgs(emitter: *CodeEmitter, ctx: *EmissionContext, args: []const ast.Arg,
                 }
             }
         }
+        // The decl lookup misses for callees that are not plain event decls
+        // — transforms like capture/captured take Source params but resolve
+        // through a different table. The parser already marked the arg:
+        // `source_value` is set only for Source-typed args (expression_value
+        // rides on ordinary args too), so trust it here — the emission is the
+        // typed literal, never the raw text spliced into the struct field.
+        if (!is_source_arg and !is_expression_arg and !is_invocation_meta_arg and
+            arg.source_value != null)
+        {
+            is_source_arg = true;
+        }
 
         if (is_expression_arg) {
             // An Expression parameter carries the captured expression TEXT —
@@ -9076,38 +9123,7 @@ fn emitArgs(emitter: *CodeEmitter, ctx: *EmissionContext, args: []const ast.Arg,
             // reach here — flowInvokesComptimeEvent routes their flows to
             // comptime emission; a slipped call fails at backend compile on
             // the missing decl rather than panicking here.
-            // The AST already has the properly serialized Source in arg.source_value
-            // We emit a reference to it (the AST is available as PROGRAM_AST)
-            // For now, construct inline - the text is in arg.value
-            try emitter.write("__koru_ast.Source{ .text = \n");
-            emitter.indent();
-            try emitter.writeIndent();
-            // Use Zig multiline string syntax - split on newlines manually.
-            // An empty Source emits no lines at all — spell it `""` rather
-            // than leaving `.text =` dangling against the next field.
-            var line_start: usize = 0;
-            if (arg.value.len == 0) {
-                try emitter.write("\"\"\n");
-                try emitter.writeIndent();
-            }
-            for (arg.value, 0..) |c, i| {
-                if (c == '\n') {
-                    try emitter.write("\\\\");
-                    try emitter.write(arg.value[line_start..i]);
-                    try emitter.write("\n");
-                    try emitter.writeIndent();
-                    line_start = i + 1;
-                }
-            }
-            // Handle last line (no trailing newline)
-            if (line_start < arg.value.len) {
-                try emitter.write("\\\\");
-                try emitter.write(arg.value[line_start..]);
-                try emitter.write("\n");
-                try emitter.writeIndent();
-            }
-            emitter.dedent();
-            try emitter.write(", .scope = .{ .bindings = &.{} }, .phantom_type = null }");
+            try emitSourceValue(emitter, &arg);
         } else if (is_invocation_meta_arg) {
             // InvocationMeta: synthesize from context (NOT from arg.value)
             // This provides call site metadata for comptime introspection

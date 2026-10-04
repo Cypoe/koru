@@ -416,6 +416,12 @@ pub const Evaluator = struct {
     fn evalArgs(self: *Evaluator, env: *Env, args: []const ast.Arg) EvalError![]ArgValue {
         const out = self.allocator.alloc(ArgValue, args.len) catch return error.OutOfMemory;
         for (args, 0..) |arg, i| {
+            // `arg.source_value` marks a Source-typed arg: `value` is captured
+            // source text, not an expression — evalText would misparse it.
+            // Source params are transform machinery (flowIsFoldable refuses
+            // them for the same reason); a walked call can't carry one.
+            if (arg.source_value != null)
+                return self.fail(error.UnsupportedConstruct, "comptime walk: argument `{s}` is a Source capture — Source params belong to transforms, which run at elaboration, not to walkable calls", .{arg.name});
             out[i] = .{ .name = arg.name, .value = try self.evalText(env, arg.value) };
         }
         return out;
