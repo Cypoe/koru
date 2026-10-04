@@ -88,6 +88,40 @@ work around it in the file. Toolchain-first.
   is the source, not the extension), but verify the dir's standing
   state, don't invent a new expectation for it.
 
+### Findings the judgment lanes earned (2026-10-05)
+
+- **`error-pin-review` closed: 58/59 converted, zero real refusals lost.**
+  Every converted pin fires the identical diagnostic under `.k`; the
+  facet was incidental in all but one. `140_029_dup_tor_across_facets_
+  refused` stays `.kz` — the pin *is* cross-facet duplication.
+- **Coordinate drift is not a verdict.** `expected_patterns.txt` /
+  `expected_error.txt` entries that pin `input\.kz` or absolute line
+  numbers fail on a converted file with the *same* refusal — refresh
+  the coordinate (`210_014`: same KORU021, filename moved), keep the pin.
+  In `ERROR_AT`-pinned dirs every line before the refusal is
+  position-load-bearing — do not drop residue there (`210_305`).
+- **A red pin stays red under conversion.** `335_056` pins the
+  `std/io:free` diagnostic spelling normalization still hasn't landed;
+  `.k` preserves its redness exactly. Redness is the test's state, not
+  the facet's.
+- **Allow entries now beat dir heuristics.** `exempted()` returned
+  "sibling MUST_ERROR" before reading the allow file, so an error-dir
+  keep could never record a verdict — reordered; recorded rulings
+  dispose.
+- **The ambient host-const trap** (`near-pure`): a stray `const std =
+  @import("std")` can be load-bearing even when nothing in the file
+  references it — emitted Zig resolves `std.` names against verbatim
+  host lines (`220_036` failed `backend-exec` the moment it was
+  dropped). Residue is only residue after checking what the *emitter*
+  produces.
+- **Empty status meant `unparseable`, not `near-pure`.** 14 files whose
+  koruc output was empty (stderr parse failures) fell through the
+  manifest's status match into the judgment lane; fixed — they now
+  count as `unparseable` where they belong.
+- **Board at close:** convert-test 0, convert-other 0,
+  error-pin-review 0, near-pure 32 (all keep-`.kz` verdicts — real
+  host items, per-file verified), exempt 37.
+
 ## The contestant recipe
 
     python3 scripts/kz_sweep_manifest.py --lane <lane> --slice <i> --of <n>
