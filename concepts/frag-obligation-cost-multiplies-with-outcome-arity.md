@@ -56,7 +56,7 @@ signature you chose.
 The arm COUNT is untouched: sixteen outcomes are still sixteen arms, because
 branch coverage is exhaustive and that is separate from who writes the discharge.
 Whether a verb should mirror an eight-outcome vocabulary at all is the live
-question — narrowing the outcome set is legitimate, and a catch-all arm that
+question — narrowing the outcome set is legitimate, and any arm that
 skips the hang-up still is not.
 
 Also open: a disposer cannot currently say "I failed" in a way that keeps it

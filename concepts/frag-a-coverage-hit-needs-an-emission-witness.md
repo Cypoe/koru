@@ -118,6 +118,16 @@ Splicing into such a block produces a green that means *dropped*, not
   `unhandled-branch` (440_020) — already agreed; only these three seams
   dissented.
 
+## Epilogue (2026-10-04)
+
+The construct whose grant this frag adjudicated was later removed entire:
+`|?`/`!?` refuse at parse (PARSE003) on both compiled and interpreted
+surfaces — see [[frag-the-callsite-cannot-spell-a-residual-case]]. The pins
+cited above were re-pointed to that refusal (355_013/015/016, 440_020) or
+rewritten without the arm (355_014, 400_206); KORU026 is retired
+unreachable. The witness lesson stands — the counterfeit was real, the
+audit found it — but the machinery it audited no longer exists.
+
 ## Open
 
 - Whether `register` should refuse, warn, or stay silent on unresolvable

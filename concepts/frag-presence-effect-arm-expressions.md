@@ -93,8 +93,8 @@ So the "proc side gets a nullable fn-ptr alias" claim above is **handler-path
 only**. It reads as universal solely because 400_148's arm is *resuming* (`-> T`),
 which is permanently call-path (inline cannot express a resume value) — a yielding
 arm that reaches the inline path breaks under the same body text. One body cannot
-satisfy both paths; a guarded-only (catch-all-free) consumer is inline-eligible,
-a guard-group / catch-all keeps the call path.
+satisfy both paths; a guarded-only consumer is inline-eligible, a
+guard-group keeps the call path.
 
 RESOLUTION (ruled + implemented 2026-07-19, "Option B"): a YIELDING optional arm
 is a **callable** — the body calls it directly (`ready()`, `key(payload)`), and

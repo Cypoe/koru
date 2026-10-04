@@ -69,7 +69,7 @@ never carried the mirror, so a wire flow could hold a dead arm and report
 turn's append on the still-live handle duplicated the bytes). Interpreted
 flows now meet the same judge: `checkShadowedArms` refuses the second
 unguarded same-branch terminal arm as `validation-error`, teaching the
-indented nesting spelling in the message. `when` narrows, `|?` falls back,
-`!` links compose — none shadow, exactly as on the compiled side. Pinned by
+indented nesting spelling in the message. `when` narrows, `!` links
+compose — none shadow, exactly as on the compiled side. Pinned by
 `440_027`; `410_002` had silently carried the dead-arm shape itself (masked
 by budget exhaustion) and now spells the chain nested.
