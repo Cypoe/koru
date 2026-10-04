@@ -11,3 +11,11 @@
 #
 # An entry only matters while its path is staged — dormant entries are
 # notes, not failures (diff-scope makes "matches no site" the normal case).
+
+# The facet sweep's six keeps — pure by the parser, .kz by design.
+koru_std/index.kz | module index — a .k index flips every .kz sibling's ~pub into KORU111 contract violations
+koru_std/bridge.run.kz | part file of the bridge module — a lone .k part puts the module in contract-split mode (KORU111)
+koru_std/compiler.directives.kz | part file of the compiler module — same contract-split trigger as bridge.run
+koru_std/runtime.parsewire.kz | part file of the runtime module — same contract-split trigger as bridge.run
+tests/regression/100_MODULE_SYSTEM/140_FILE_LAYOUT/140_021_part_tilde_spelling/input.kz | pins host-embedded `~` part declarations — converting vacates the pin
+tests/regression/200_COMPILER_FEATURES/210_PARSER/210_312_empty_source_block_eats_next_decl_kz/input.kz | the test names the .kz spelling — the bug it pins only reproduces on the host-embedded facet

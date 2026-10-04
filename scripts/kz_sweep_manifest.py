@@ -42,6 +42,17 @@ KORUC = os.path.join(REPO, "zig-out", "bin", "koruc")
 sys.path.insert(0, os.path.join(REPO, "invariants", "checks"))
 from check_kz_preference import exempted  # noqa: E402 — one exemption grammar
 
+ALLOW_PATH = os.path.join(REPO, "invariants", "checks", "kz-preference.allow")
+ALLOW = {}
+if os.path.exists(ALLOW_PATH):
+    for _ln in open(ALLOW_PATH):
+        _ln = _ln.strip()
+        if not _ln or _ln.startswith("#"):
+            continue
+        _path, _, _reason = (p.strip() for p in _ln.partition("|"))
+        if _reason:
+            ALLOW[_path] = _reason
+
 
 def classify(path):
     proc = subprocess.run([KORUC, path, "--check-k-convertible"],
@@ -57,7 +68,7 @@ def classify(path):
     if status == "UNPARSEABLE":
         return (path, "unparseable", host, "")
     if status == "CONVERTIBLE":
-        reason = exempted(REPO, path, {})
+        reason = exempted(REPO, path, ALLOW)
         if reason:
             if "EXPECT" in reason or "MUST_ERROR" in reason:
                 return (path, "error-pin-review", host, reason)
