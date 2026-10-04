@@ -34,13 +34,13 @@ State at 2026-10-04 (`git rev-parse HEAD` pins what you measure, not this):
 
 | lane | files | meaning |
 |---|---|---|
-| `convert-test` | 25 | CONVERTIBLE test input/fixture — convert, run the test, green is the gate |
-| `convert-other` | 30 | CONVERTIBLE outside test dirs — `koru_std/`, `examples/` — convert, `koruc -c` + a consumer compile is the gate |
+| `convert-test` | 0 | cleared 2026-10-04 — 23 converted, 2 facet-pinned keeps |
+| `convert-other` | 0 | cleared 2026-10-04 — 26 converted, 4 module-part keeps |
 | `error-pin-review` | 59 | CONVERTIBLE inside an error-marked dir — **judgment**: is `.kz` part of the pin or incidental? |
 | `near-pure` | 59 | 1–3 host items, no proc — **judgment**: residue to drop, or load-bearing (e.g. `const std = @import("std")` feeding a template's `std.` calls)? |
-| `exempt` | 30 | `expected.json` / `LANGUAGES` / `input.k` sibling / broken — by-construction, not drift |
-| `earned` | 1162 | honest `.kz` — do not touch |
-| `unparseable` | 191 | error pins and `part` files — out of scope |
+| `exempt` | 36 | `expected.json` / `LANGUAGES` / `input.k` sibling / broken / allow-listed keeps — by-construction, not drift |
+| `earned` | 1161 | honest `.kz` — do not touch |
+| `unparseable` | 192 | error pins and `part` files — out of scope |
 
 The manifest reuses `invariants/checks/check_kz_preference.exempted`, so the
 exemption grammar lives in exactly one place. If you believe a row is
@@ -64,6 +64,29 @@ regression run green.
 If `to-k` writes a `.k` that then fails its test or `-c`, that is an oracle
 bug — the flag said convertible and wasn't. Stop and fix it in `src/`; do not
 work around it in the file. Toolchain-first.
+
+### Findings the first lanes earned (2026-10-04)
+
+- **Oracle bug, found and fixed** (`0912ee290`): a kept multi-line gated
+  import — `~[ … ]import app/x` in `.kz`, `[ … ]import app/x` in `.k` —
+  died on `.k`'s own no-`~` wall: the parser rewrote the close line to
+  `~import` and re-entered the loop, which refused its own synthesis.
+  `310_113` converted, failed under `--profile`, and now permanently pins
+  the kept `]import` path in `.k`.
+- **The contract-split trap**: `CONVERTIBLE` counts host items, not module
+  semantics. A `.k` in a module flips every `.kz` sibling into
+  "implementation file" status — KORU111 then refuses each sibling's
+  `~pub` decl. `koru_std/{index,bridge.run,compiler.directives,
+  runtime.parsewire}` all parse clean and all four stay `.kz` for this
+  reason — they are allow-listed, not converted. Rule for contestants:
+  before converting a `koru_std/` or multi-part-module file, `ls` the
+  stem's siblings; `.kz` siblings with `~pub` decls mean the conversion
+  is a module-level decision, not a file-level one.
+- **TODO dirs are not SUCCESS dirs**: `convert-other` caught every
+  `input.kz` whose dir lacked `SUCCESS` — aspirational tests, KNOWN_BUG
+  repros, module fixtures. Converting them is still correct (the repro
+  is the source, not the extension), but verify the dir's standing
+  state, don't invent a new expectation for it.
 
 ## The contestant recipe
 
