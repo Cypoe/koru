@@ -4613,6 +4613,7 @@ const usage_footer =
     \\  koruc -o output.zig app.kz  # Compile to output.zig
     \\  koruc --check app.kz        # Check without emitting
     \\  koruc app.kz install        # Install npm dependencies
+    \\  koruc app.kz to-k           # Write app.k — refuses if the .kz facet is earned
     \\  koruc zen                   # Display Koru philosophy
     \\
 ;
@@ -7230,6 +7231,11 @@ pub fn main() !void {
         try compiler_config.addFlag(flag);
     }
 
+    // `to-k` classifies a single file — the facet question is per-file, so it
+    // rides the same pre-merge AST surface as --check-k-convertible.
+    const to_k_mode = command_candidate != null and
+        std.mem.eql(u8, command_candidate.?, "to-k");
+
     // Auto-inject build=<host_os> if no build=<os> flag was passed.
     // This makes os-keyed variant selection (e.g. ~[build(macos)]) work without
     // requiring the user to pass --build=<os> on every invocation. Cross-compilation
@@ -7476,7 +7482,7 @@ pub fn main() !void {
     // against each other regardless of which facet declared them. Single-file
     // programs (no siblings) are untouched — the merge is a no-op. This is the
     // entry-side mirror of `loadFileWithCompanions` (used for imports).
-    if (!ast_json_mode and !ast_canon_mode and !print_mode and !check_k_convertible_mode) {
+    if (!ast_json_mode and !ast_canon_mode and !print_mode and !check_k_convertible_mode and !to_k_mode) {
         source_file = try import_pipeline.mergeEntryCompanions(allocator, parse_allocator, input, source_file, !show_help);
     }
 
@@ -7567,6 +7573,110 @@ pub fn main() !void {
         } else {
             try printStdout(allocator, "NOT_CONVERTIBLE\t{s}\thost_line={d} host_type_decl={d} proc_decl={d}\n", .{ input, host_lines, host_types, procs });
         }
+        return;
+    }
+
+    // `koruc <file.kz> to-k` — emit the `.k` facet of a pure-Koru `.kz`. The
+    // oracle is the same item classification --check-k-convertible reports;
+    // conversion is a mechanical strip of the line-start `~` markers (the
+    // transform scripts/kz_convertible.sh compile-gates), then a re-parse of
+    // the emitted text under the `.k` name — the tool writes only a file it
+    // watched parse. `to-k --stdout` prints instead of writing.
+    if (to_k_mode) {
+        const in_base = std.fs.path.basename(input);
+        const ext = file_types.koruExtensionOf(in_base) orelse "";
+        if (!std.mem.eql(u8, ext, ".kz")) {
+            try printStderr(allocator, "to-k: {s} is not a .kz file — nothing to convert\n", .{input});
+            std.process.exit(1);
+        }
+        if (parser.reporter.hasErrors() or source_file.hasParseErrors()) {
+            try printStderr(allocator, "to-k: {s} does not parse — fix the errors before converting\n", .{input});
+            std.process.exit(1);
+        }
+        var host_lines: usize = 0;
+        var host_types: usize = 0;
+        var procs: usize = 0;
+        for (source_file.items) |item| {
+            switch (item) {
+                .host_line => |line| {
+                    // Comments are not host content — same carve-out as the
+                    // convertible flag.
+                    const trimmed = std.mem.trim(u8, line.content, " \t\r\n");
+                    if (trimmed.len == 0 or std.mem.startsWith(u8, trimmed, "//")) continue;
+                    host_lines += 1;
+                },
+                .host_type_decl => host_types += 1,
+                .proc_decl => procs += 1,
+                else => {},
+            }
+        }
+        if (host_lines + host_types + procs > 0) {
+            try printStderr(allocator, "to-k: {s} earns the facet — host_line={d} host_type_decl={d} proc_decl={d}\n", .{ input, host_lines, host_types, procs });
+            std.process.exit(1);
+        }
+
+        var stripped = std.ArrayList(u8){};
+        defer stripped.deinit(allocator);
+        var lit = std.mem.splitScalar(u8, source, '\n');
+        var first_line = true;
+        while (lit.next()) |line| {
+            if (!first_line) try stripped.append(allocator, '\n');
+            first_line = false;
+            var start: usize = 0;
+            while (start < line.len and (line[start] == ' ' or line[start] == '\t')) start += 1;
+            if (start < line.len and line[start] == '~') {
+                try stripped.appendSlice(allocator, line[0..start]);
+                try stripped.appendSlice(allocator, line[start + 1 ..]);
+            } else {
+                try stripped.appendSlice(allocator, line);
+            }
+        }
+
+        const out_path = try std.fmt.allocPrint(allocator, "{s}.k", .{input[0 .. input.len - ".kz".len]});
+        defer allocator.free(out_path);
+
+        // Re-parse the stripped text under the .k name (the parser keys facet
+        // mode off the extension), with the same compiler import a real .k
+        // compile synthesizes. A refusal here is a tool bug, not a file bug —
+        // the AST already proved the content.
+        const needs_import = std.mem.indexOf(u8, stripped.items, "import std/compiler") == null;
+        const verify_source = if (needs_import)
+            try std.fmt.allocPrint(parse_allocator, "import std/compiler\n{s}", .{stripped.items})
+        else
+            stripped.items;
+        defer if (needs_import) parse_allocator.free(verify_source);
+        var verify_resolver = try ModuleResolver.init(allocator, &project_config, project_root, input_dir_absolute, compiler_config.flags.items, null);
+        defer verify_resolver.deinit();
+        var verify_parser = try Parser.init(parse_allocator, verify_source, out_path, compiler_config.flags.items, &verify_resolver);
+        verify_parser.fail_fast = true;
+        defer verify_parser.deinit();
+        const verify_result = verify_parser.parse() catch {
+            try printStderr(allocator, "to-k: the stripped source failed to parse as .k — tool bug, not file bug; report it\n", .{});
+            std.process.exit(1);
+        };
+        if (verify_parser.reporter.hasErrors() or verify_result.source_file.hasParseErrors()) {
+            try printStderr(allocator, "to-k: the stripped source does not parse as .k — tool bug; `koruc {s} -c` names the refusal\n", .{out_path});
+            std.process.exit(1);
+        }
+
+        var to_stdout = false;
+        for (args) |a| {
+            if (std.mem.eql(u8, a, "--stdout")) to_stdout = true;
+        }
+        if (to_stdout) {
+            try printStdout(allocator, "{s}", .{stripped.items});
+            return;
+        }
+        if ((std.fs.cwd().statFile(out_path) catch null) != null) {
+            try printStderr(allocator, "to-k: {s} already exists — refusing to overwrite\n", .{out_path});
+            std.process.exit(1);
+        }
+        const out_file = try std.fs.cwd().createFile(out_path, .{});
+        defer out_file.close();
+        try out_file.writeAll(stripped.items);
+        // Same-stem facets merge — leaving the .kz would double-declare the
+        // module. The caller owns the rm; the tool only refuses to overwrite.
+        try printStdout(allocator, "WROTE {s} — remove {s}; same-stem facets merge\n", .{ out_path, input });
         return;
     }
 

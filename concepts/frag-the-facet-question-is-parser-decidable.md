@@ -29,6 +29,13 @@ compiler computes for another reason is a free check. The inference
 question was real; it was asked about a property that had been an integer
 for three months.
 
+And once the question is parser-decidable, the correction is
+parser-verifiable: a compiler verb can refuse to emit any `.k` it has not
+watched parse under the `.k` facet. `koruc <file.kz> to-k` is that verb —
+the same item classification, then a mechanical `~`-strip, then a re-parse
+of the output it is about to write. Conversion stopped being a script's
+worktree ceremony and became a property of the emitter.
+
 Where judgment genuinely remains — the **near-pure gradient**. A `.kz`
 carrying 1–3 stray host items is Koru-native in shape but can't convert
 without deleting or justifying the host line (`const std =
@@ -42,8 +49,10 @@ Census at write time (1528 `.kz` files): 144 CONVERTIBLE (9.4% backlog —
 56 positive tests, 64 error-marked, 24 other), 185 UNPARSEABLE (error
 pins + `part` files that don't standalone-parse), the rest honestly
 `.kz`. The gate row `kz-extension-is-earned` (diff-scoped, staged blobs)
-holds new debt at zero; `scripts/kz_convertible.sh --verify` owns the
-backlog.
+holds new debt at zero; the backlog belongs to
+`challenges/032_the_facet_sweep` — `scripts/kz_sweep_manifest.py` lanes it,
+`to-k` does each mechanical conversion, `kz_convertible.sh --verify` still
+owns mass compile-gating.
 
 Open: the warning severity class (a suppression spelling is new surface —
 Lars's ruling); whether the M-filter's touch-to-own ratchet on backlog
