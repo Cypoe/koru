@@ -3,15 +3,15 @@
 // Override BOTH the whole pipeline AND individual passes.
 // Demonstrates that abstract event overrides compose cleanly.
 
-~import std/compiler
-~import std/time
-~import std/io
+import std/compiler
+import std/time
+import std/io
 
 // ============================================================================
 // WHOLE PIPELINE TIMING (outer layer)
 // ============================================================================
 
-~std/compiler:coordinate = std/time:now()
+std/compiler:coordinate = std/time:now()
 | t pipeline_start |> std/compiler:coordinate.default(program_ast, allocator)
     | coordinated c |> std/time:report(start: pipeline_start, label: "TOTAL PIPELINE") => coordinated c
     | error e => error e
@@ -20,7 +20,7 @@
 // FRONTEND PASS TIMING (inner layer - composes with above!)
 // ============================================================================
 
-~std/compiler:elaborate = std/time:now()
+std/compiler:elaborate = std/time:now()
 | t start |> std/compiler:elaborate.default(ctx)
     | ctx c |> std/time:report(start, label: "  elaborate") => ctx c
 
@@ -28,4 +28,4 @@
 // THE PROGRAM
 // ============================================================================
 
-~std/io:print.ln("Compiled with composed timing!")
+std/io:print.ln("Compiled with composed timing!")

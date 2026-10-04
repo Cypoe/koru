@@ -1,9 +1,9 @@
 // Module B - imports input.kz back, closing the cycle.
 // from-b dispatches back into input.s from-a, then relays its result.
 
-~import app/input
+import app/input
 
-~pub tor from-b { msg: string } -> string
+pub tor from-b { msg: string } -> string
 
-~from-b = app/input:from-a(msg)
+from-b = app/input:from-a(msg)
     | received r -> r

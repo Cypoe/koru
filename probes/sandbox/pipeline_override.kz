@@ -1,3 +1,0 @@
-~import std/compiler
-
-~std/compiler:coordinate = error "Pipeline completely overridden in user-space!"

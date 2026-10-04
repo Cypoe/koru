@@ -8,8 +8,8 @@
 // This enables rich debug logging, tracing, and error messages
 // with zero manual annotation.
 
-~import std/template
+import std/template
 
-~std/template:emit {
+std/template:emit {
     Called from {{ source.file }}:{{ source.line }}
 }

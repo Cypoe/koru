@@ -1,11 +1,11 @@
 // Same module shape as 310_126, but the gated item is a `=>`
 // branch-constructor override — the demo's exact spelling.
-~import std/compiler
+import std/compiler
 
-~std/compiler:flag.declare {
+std/compiler:flag.declare {
     "name": "my-flag",
     "description": "Enable the gated calc branch override (=> pin)",
     "type": "boolean"
 }
 
-~[flag(my-flag)]input:calc => error "boom"
+[flag(my-flag)]input:calc => error "boom"

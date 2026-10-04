@@ -28,10 +28,10 @@
 //
 // Surface PROVISIONAL — a design sketch, honest-red until the language can express it.
 
-~import std/constructor
-~import std/io
+import std/constructor
+import std/io
 
-~std/constructor(graph)
+std/constructor(graph)
 ! construct |> for(1..4)
     ! each x |> std/constructor:push(nodes: x)
 | constructor c |> std/constructor:construct(c): built |> for(built.nodes)

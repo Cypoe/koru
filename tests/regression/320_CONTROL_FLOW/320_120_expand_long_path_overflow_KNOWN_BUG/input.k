@@ -28,6 +28,6 @@
 // koru_std/control.kz, so this path is superseded and exercised only by its own
 // handful of tests — hence parked TODO, not actively fixed. Revisit alongside the
 // [expand] deprecation decision.
-~import std/io
+import std/io
 
-~debug-print(value: 42)
+debug-print(value: 42)

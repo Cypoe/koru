@@ -17,20 +17,20 @@
 // (membership annotations on flows) rides the same walker and is pinned
 // implicitly by the variant guard (680_011).
 
-~import std/trellis
-~import std/kernel
-~import std/io
+import std/trellis
+import std/kernel
+import std/io
 
-~std/trellis:define("gpu-legal")
+std/trellis:define("gpu-legal")
 | `std/kernel:init/kernel/std/kernel:step.*` _ => error "std/kernel:step is not gpu-legal (sequential outer iteration)"
 | `.*` _ => ok
 
-~std/kernel:shape(Body) {
+std/kernel:shape(Body) {
     mass: f64,
 }
 
 // Flow 1: pairwise/self only — gpu-legal.
-~std/kernel:init(Body) {
+std/kernel:init(Body) {
     { mass: 3.0 },
 }
 | kernel k |> std/kernel:self { k.mass *= 2.0 }
@@ -39,7 +39,7 @@
     }
 
 // Flow 2: uses step — NOT gpu-legal.
-~std/kernel:init(Body) {
+std/kernel:init(Body) {
     { mass: 1.0 },
 }
 | kernel k |> std/kernel:step(0..2)
@@ -48,4 +48,4 @@
         b={{ c[0].mass:f }}
     }
 
-~std/trellis:census("gpu-legal")
+std/trellis:census("gpu-legal")

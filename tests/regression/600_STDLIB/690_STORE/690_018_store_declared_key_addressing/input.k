@@ -16,11 +16,11 @@
 // identity that survives, which is why this head and that defect are one piece
 // of work.
 
-~import std/io
-~import std/store
+import std/io
+import std/store
 
-~std/store:new(pool, key: id, capacity: 64) { id: i64, hp: i64 }
+std/store:new(pool, key: id, capacity: 64) { id: i64, hp: i64 }
 
-~std/store:insert(pool) { id: 7, hp: 50 }
+std/store:insert(pool) { id: 7, hp: 50 }
 | row _ |> std/store:stored { pool[id: 7].hp: pool[id: 7].hp - 10 }
     |> std/io:print.ln("hp {{ pool[id: 7].hp:d }}")

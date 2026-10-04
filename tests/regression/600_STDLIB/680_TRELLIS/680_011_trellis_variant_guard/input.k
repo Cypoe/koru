@@ -27,22 +27,22 @@
 // baton_trellis_capability_annotations. The MESSAGE shape is the stable
 // part of this pin.
 
-~import std/trellis
-~import std/kernel
-~import std/io
+import std/trellis
+import std/kernel
+import std/io
 
-~std/trellis:define("gpu-legal")
+std/trellis:define("gpu-legal")
 | `std/kernel:init/kernel/std/kernel:step.*` _ => error "std/kernel:step is not gpu-legal (sequential outer iteration)"
 | `.*` _ => ok
 
-~std/trellis:guard(variant: "gpu", trellis: "gpu-legal")
+std/trellis:guard(variant: "gpu", trellis: "gpu-legal")
 
-~std/kernel:shape(Body) {
+std/kernel:shape(Body) {
     mass: f64,
 }
 
 // VIOLATION: requests |gpu but uses step — fails the gpu-legal trellis.
-~std/kernel:init(Body)|gpu {
+std/kernel:init(Body)|gpu {
     { mass: 1.0 },
 }
 | kernel k |> std/kernel:step(0..2)

@@ -20,11 +20,11 @@
 //   ${name}       - substitute with named binding value
 //   ${| branch |} - inline the continuation code for this branch
 
-~[comptime]
+[comptime]
 
 // Define a named template with source code pattern
 // [norun] means it doesn't execute - just stores data in AST for later lookup
-~[comptime|norun]pub tor define {
+[comptime|norun]pub tor define {
     name: string,
     source: Source
 }
@@ -39,13 +39,13 @@
 // This file should only contain the templating system, not the actual template definitions.
 
 // IF template - conditional branching <-- These should be moved to control.kz
-~define(name: "if") {
+define(name: "if") {
     if (${condition}) { ${| then |} } else { ${| else |} }
 }
 
 // FOR template - iteration with done continuation after loop <-- Move to `control.kz`
 // Note: ${binding_discard} is "_ = &binding; " to suppress unused capture warning
-~define(name: "for") {
+define(name: "for") {
     for (${iterable}) |${binding}| { ${binding_discard}${| each |} }
     ${| done |}
 }
@@ -54,7 +54,7 @@
 // The | as | body contains the iteration, with `captured` replaced by assignments
 // After the body, the final value is bound to the done binding
 // NOTE: Uses comptime @Type to convert anonymous comptime struct to runtime struct
-~define(name: "capture") {
+define(name: "capture") {
     const __CaptureT = comptime blk: { const info = @typeInfo(@TypeOf(${init})); var fields: [info.@"struct".fields.len]@import("std").builtin.Type.StructField = undefined; for (info.@"struct".fields, 0..) |f, i| { fields[i] = .{ .name = f.name, .type = f.type, .default_value_ptr = null, .is_comptime = false, .alignment = f.alignment, }; } break :blk @Type(.{ .@"struct" = .{ .layout = .auto, .fields = &fields, .decls = &.{}, .is_tuple = false, } }); };
     var ${binding}: __CaptureT = ${init};
     ${| as |}
@@ -65,7 +65,7 @@
 
 // CONST template - immutable bindings that flow through pipelines
 // Much simpler than capture: no mutation, no runtime struct conversion needed
-~define(name: "const") {
+define(name: "const") {
     const ${binding} = ${init};
     ${| as |}
 }

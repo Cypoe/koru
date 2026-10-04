@@ -2,10 +2,10 @@
 // BUG: String interpolation doesn't substitute metatype bindings
 // {{a.source}} should become _profile_0.source but doesn't
 
-~import std/taps
-~import std/io
+import std/taps
+import std/io
 
 // VALID: Module wildcard (input:*) + metatype (Audit)
 // Audit metatype works on ANY event in the main module
-~tap(input:* -> *)
+tap(input:* -> *)
 | Audit a |> std/io:print.ln("[TAP] Audit: {{a.source:s}}.{{a.branch:s}}")

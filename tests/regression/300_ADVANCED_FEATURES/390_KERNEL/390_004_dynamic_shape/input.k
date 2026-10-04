@@ -4,10 +4,10 @@
 // k.X refers to kernel_k[i]
 // k.other.X refers to kernel_k[j]
 
-~import std/kernel
+import std/kernel
 
 // This needs to be module scoped
-~std/kernel:shape(Body) {
+std/kernel:shape(Body) {
     id: u32,
     x: f64,
     y: f64,
@@ -19,7 +19,7 @@
 // Body 0: 1 + 2 + 3 = 6
 // Body 1: 2 + 3 = 5
 // Body 2: 3 (unchanged)
-~std/kernel:initialize(Body) {
+std/kernel:initialize(Body) {
     { id: 1, x: 0.0, y: 0.0, mass: 1.0 },
     { id: 2, x: 1.0, y: 0.0, mass: 2.0 },
     { id: 3, x: 2.0, y: 0.0, mass: 3.0 },

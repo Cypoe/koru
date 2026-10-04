@@ -15,15 +15,15 @@
 //   5. The whole thing compiles as a nested catch-all in router
 // ============================================================================
 
-~import orisha
-~import std/io
+import orisha
+import std/io
 
-~orisha:static(name: "site", root: "testdata")
+orisha:static(name: "site", root: "testdata")
 
-~orisha:handler = orisha:router(req)
+orisha:handler = orisha:router(req)
 ! [GET /api/health] => response { status: 200, body: "ok", content_type: "application/json" }
 ! [*] |> orisha:static_router(name: "site")
 
-~orisha:serve(port: 3099)
+orisha:serve(port: 3099)
 | shutdown s |> std/io:print.ln(s)
 | failed f |> std/io:print.ln(f)

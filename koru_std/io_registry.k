@@ -16,11 +16,11 @@
 //       my_custom_event
 //   }
 
-~import std/io
-~import std/runtime
+import std/io
+import std/runtime
 
 // Register io tors for runtime dispatch
-~std/runtime:register(scope: "std.io") {
+std/runtime:register(scope: "std.io") {
     std/io:print
     std/io:readln
     std/io:print.ln
