@@ -47,3 +47,11 @@ Open observations riding the pin: double evaluation of comptime flows
 (fold + evaluate), and the leak diagnostic pointing at
 `auto_discharge:33:0` instead of the user's source, naming nothing
 about the comptime context.
+
+Evolved 2026-10-17: the erasure is not fold-specific. `spliceResidue` is
+shared by fold, walk, and thunk heads — measured on the walk path: a
+`[comptime]` subflow impl returning `-> string<unsanitized!>`, bound to `s`
+and never discharged, compiled clean. The residue rewrite deletes the
+obligation-carrying binding whichever engine produced the result, so the
+ruled fix (obligation pass as a frontend segment before comptime machinery)
+covers all three heads, not just the fold the original pin observed.
