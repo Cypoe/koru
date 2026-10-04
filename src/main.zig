@@ -7976,6 +7976,42 @@ pub fn main() !void {
                 break;
             }
         }
+
+        // `koruc <file> --flag <command>` puts a flag in the command slot,
+        // leaving the real command stranded in the tail — which today
+        // silently does a normal build and never runs it. When the
+        // positional candidate was a flag and a later arg names a declared
+        // command — comptime, shell, zig, koru.json, or a frontend verb —
+        // refuse and name the correct order.
+        if (detected_comptime_command == null and
+            std.mem.startsWith(u8, potential_command, "-"))
+        {
+            const misplaced: ?[]const u8 = blk: {
+                for (command_trailing_args) |tail| {
+                    if (std.mem.startsWith(u8, tail, "-")) continue;
+                    for (comptime_cmd_result.commands[0..comptime_cmd_result.count]) |cmd| {
+                        if (std.mem.eql(u8, cmd.name, tail)) break :blk tail;
+                    }
+                    for (shell_commands) |cmd| {
+                        if (std.mem.eql(u8, cmd.name, tail)) break :blk tail;
+                    }
+                    for (zig_commands) |cmd| {
+                        if (std.mem.eql(u8, cmd.name, tail)) break :blk tail;
+                    }
+                    for (koru_commands) |cmd| {
+                        if (std.mem.eql(u8, cmd.name, tail)) break :blk tail;
+                    }
+                    inline for (.{ "mint", "help", "glance", "at" }) |verb| {
+                        if (std.mem.eql(u8, verb, tail)) break :blk tail;
+                    }
+                }
+                break :blk null;
+            };
+            if (misplaced) |tail| {
+                try printStderr(allocator, "koruc: '{s}' is a command — command position is immediately after the input file, not after flags\n  hint: koruc {s} {s} … {s}\n", .{ tail, input_file.?, tail, potential_command });
+                std.process.exit(1);
+            }
+        }
     }
 
     // compiler:use — the mint directive. Frontend-collected textually like

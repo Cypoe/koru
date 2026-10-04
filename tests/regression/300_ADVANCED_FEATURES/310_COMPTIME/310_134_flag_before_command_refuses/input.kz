@@ -1,0 +1,33 @@
+// Pins that `koruc <file> --flag <command>` refuses instead of silently
+// building. Command detection takes the arg immediately after the input
+// file; a flag in that slot used to strand the real command in the tail,
+// where it was ignored and a normal build ran instead.
+//
+// koruc input.kz --build=dev ordercmd  → refusal, exit 1
+// koruc input.kz ordercmd --build=dev  → command runs
+
+~import std/compiler
+
+~std/compiler:command.declare {
+    "name": "ordercmd",
+    "description": "Command used to pin command-position enforcement"
+}
+
+~[comptime|command]pub tor ordercmd {
+    program: *const Program,
+    allocator: __koru_std.mem.Allocator,
+    argv: []string,
+}
+
+const std = @import("std");
+
+~proc ordercmd|zig {
+    std.debug.print("ordercmd ran\n", .{});
+}
+
+~tor main {}
+
+~proc main|zig {
+}
+
+~main()
