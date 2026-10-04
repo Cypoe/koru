@@ -1,0 +1,8 @@
+name: classification
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `board-move` — the commit's signal was pins re-homed
+  without a behavior change, which that name already carries.
+  (orphan minted 2026-10-05 by the error-pin sweep commit, drained same day)

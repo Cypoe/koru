@@ -57,3 +57,29 @@ owns mass compile-gating.
 Open: the warning severity class (a suppression spelling is new surface —
 Lars's ruling); whether the M-filter's touch-to-own ratchet on backlog
 files bites (flip AMR→A if it does).
+
+---
+
+*2026-10-05, error-pin lane closed.* The 59-file `error-pin-review` lane
+was the facet question's hardest case: CONVERTIBLE files inside
+error-marked dirs, where "is the refusal about the file's facet" looked
+like judgment. It mostly wasn't — **58 of 59 converted; the refusal fires
+identically under `.k` in every case measured.** The one keep
+(`140_029_dup_tor_across_facets_refused`) is facet-bound by construction:
+the pin *is* cross-facet duplication, so a `.k` twin changes what it
+measures.
+
+Three classes the lane teaches, all cheap to apply:
+
+- **Coordinate drift is not a verdict.** `expected_patterns.txt` /
+  `expected_error.txt` that pin `input\.kz` or line numbers fail on a
+  converted file with the *same* refusal — refresh the coordinate, keep
+  the pin. (`210_014`: identical KORU021, only the filename in the
+  diagnostic moved.)
+- **A red pin stays red under conversion.** `335_056` pins the
+  `std/io:free` spelling that normalization still strips; `.k` doesn't
+  touch it. Redness is the test's state, not the facet's.
+- **Explicit verdict beats dir heuristic.** `exempted()` returned
+  "sibling MUST_ERROR" before consulting the allow file, so an
+  error-dir keep could never take an allow entry — allow now wins.
+  Heuristics propose; recorded rulings dispose.
