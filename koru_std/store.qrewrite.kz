@@ -73,7 +73,7 @@ const SRewrite = struct {
             // 690_031. `bareBindEnd` (store.cols.kz) owns the adjacency rule —
             // the binding counts only in VALUE position, never as a `.bind`
             // field, a `bind:` name, or a `#`/`@`/`?` marker (690_361/362/363).
-            const bare_end = if (expr_ctx[i] and at_boundary) bareBindEnd(text, i, bind) else null;
+            const bare_end = if (expr_ctx[i] and at_boundary) bareBindEnd(text, i, bind, expr_ctx) else null;
             if (!row_is_identity and bare_end != null and (form == .input or form == .live)) {
                 const t = std.fmt.allocPrint(alloc, "__koru_store_{s}.__koru_handle_of({s})", .{ store, SCursor.liveIndex(alloc, cursor) }) catch unreachable;
                 out.appendSlice(alloc, t) catch unreachable;

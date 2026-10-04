@@ -220,14 +220,13 @@ fn cellRead(alloc: std.mem.Allocator, host_is_js: bool, prog: *const ast_find.Pr
 }
 
 /// The query rewriter's one adjacency rule: is `bind` at `i` a VALUE-position
-/// use — not a name? `.bind` is a field of some other expression (`A[0].v`,
-/// 690_363), `bind:` is an arg/field/label name (`{ v: v.v }`, 690_362),
+/// use — not a name? `.bind` is a field of some other expression (690_363),
 /// `#bind` a label, `@bind` a builtin, `?bind` an arm head; `bind`
-/// mid-identifier or opening a `bind.` field path isn't bare either. Spec
-/// position (`{{ s.ip:s }}`, 690_361) is the expressionMask's job, upstream
-/// of this scan — `:`-preceded is a real value spot in `f(x:s)`. Returns the
-/// end index on a bare hit.
-fn bareBindEnd(text: []const u8, i: usize, bind: []const u8) ?usize {
+/// mid-identifier or opening a `bind.` field path isn't bare either. `bind:`
+/// names (690_362) only in expression context — inside `{{ n:d }}` the colon
+/// is the mask's spec delimiter and `n` IS the value (690_100/271/294).
+/// Returns the end index on a bare hit.
+fn bareBindEnd(text: []const u8, i: usize, bind: []const u8, expr_ctx: []const bool) ?usize {
     const isIdentCh = @import("emitter_helpers").isKebabIdentChar;
     if (i > 0) {
         const p = text[i - 1];
@@ -237,7 +236,8 @@ fn bareBindEnd(text: []const u8, i: usize, bind: []const u8) ?usize {
     const after = i + bind.len;
     if (after < text.len) {
         const n = text[after];
-        if (isIdentCh(n) or n == '.' or n == ':') return null;
+        if (isIdentCh(n) or n == '.') return null;
+        if (n == ':' and expr_ctx[after]) return null;
     }
     return after;
 }

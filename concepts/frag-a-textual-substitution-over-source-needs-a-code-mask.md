@@ -123,3 +123,17 @@ didn't, and silent about why. The adjacency predicate is now one function
 (bareBindEnd) instead of an implicit per-site table, which is the first
 approximation of the site enumeration this concept has listed as open since
 site two.
+
+## Seventh site: the split needs a CHANNEL, not just a split (2026-10)
+
+The sixth-site refinement drew the layering — mask owns REGION, rewriter
+owns ROLE — and `bareBindEnd`'s `:`-adjacency then broke `{{ n:d }}` in
+query bodies (690_100/271/294 regressed on the board): `bind:` is a name
+position in expression context but a VALUE before a spec colon, and the
+rewriter's role check could not see the difference because it never
+looked at the mask. The layering doctrine now carries its interface:
+region classification flows INTO role classification — `bareBindEnd`
+takes `expr_ctx` and rules `:` a naming colon only when the mask marks
+it expression context. A role rule that re-derives region knowledge
+locally is the drift this frag exists to kill; a role rule that CONSULTS
+the region map is the intended consumer shape.
