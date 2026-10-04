@@ -619,8 +619,6 @@ fn cloneContinuationWithNodeAndContinuations(
         .binding_annotations = binding_annotations,
         .binding_type = cont.binding_type,
         .kind = cont.kind,
-        .is_catchall = cont.is_catchall,
-        .catchall_metatype = if (cont.catchall_metatype) |m| try allocator.dupe(u8, m) else null,
         .condition = if (cont.condition) |c| try allocator.dupe(u8, c) else null,
         .condition_expr = cont.condition_expr,
         .node = new_node,

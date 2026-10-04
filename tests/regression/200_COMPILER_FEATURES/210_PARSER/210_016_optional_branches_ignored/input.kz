@@ -1,6 +1,6 @@
 // ============================================================================
 // Test 065: Optional Branches Are Truly Optional
-// Tests that optional branches can be COMPLETELY IGNORED (no |? catch-all needed)
+// Tests that optional branches can be COMPLETELY IGNORED — no arm needed at all
 // This is the killer feature - they're truly optional!
 // ============================================================================
 
@@ -30,7 +30,6 @@ const std = @import("std");
 // This should compile and run - warning/debug branches are silently ignored
 ~process(value: 10)
 | success _ |> _
-// NO |? catch-all needed!
 // NO | warning w |> needed!
 // NO | debug d |> needed!
 // They're truly optional - silent no-op if they fire!

@@ -2853,22 +2853,20 @@ const Emitter = struct {
 
     /// Drive the TERMINAL continuations of one dispatch.
     ///
-    /// PLAIN shape (no `when` guard, no `|?` catchall): one independent
+    /// PLAIN shape (no `when` guard): one independent
     /// `if (r.tag === …)` per arm. The tags are mutually exclusive, so order
     /// cannot matter and nothing needs to know an earlier arm already fired.
     ///
-    /// GUARDED / CATCHALL shape: the arms stop being mutually exclusive. Two arms
-    /// may share a tag and differ only by their `when` guard, and a `|?` catchall
-    /// matches whatever no earlier arm did. FIRST MATCH WINS — and a guard reads
-    /// names the arm itself binds, so its test cannot be hoisted above the
-    /// binding. That is a matched-sentinel chain:
+    /// GUARDED shape: the arms stop being mutually exclusive. Two arms
+    /// may share a tag and differ only by their `when` guard. FIRST MATCH
+    /// WINS — and a guard reads names the arm itself binds, so its test
+    /// cannot be hoisted above the binding. That is a matched-sentinel chain:
     ///
     ///     let __matched_0 = false;
     ///     if (!__matched_0 && r.tag === "found") { const age = r.found.age;
     ///         if (age > 40) { __matched_0 = true; … } }
     ///     if (!__matched_0 && r.tag === "found") { const age = r.found.age;
     ///         __matched_0 = true; … }
-    ///     if (!__matched_0) { __matched_0 = true; … }     // `|?` catchall
     ///
     /// The plain shape is kept as-is rather than folded into the sentinel form:
     /// it is what every already-green dispatch emits, and it owes nothing to the
@@ -2884,7 +2882,7 @@ const Emitter = struct {
         var needs_chain = false;
         for (continuations) |*cont| {
             if (cont.kind != .terminal) continue;
-            if (cont.condition != null or cont.is_catchall) needs_chain = true;
+            if (cont.condition != null) needs_chain = true;
         }
 
         var matched: ?[]const u8 = null;
@@ -2932,10 +2930,9 @@ const Emitter = struct {
         }.f;
 
         if (matched) |mv| {
-            // Chain gate: nothing matched yet, and — unless this is the catchall,
-            // which matches whatever is left — the tag is ours.
+            // Chain gate: nothing matched yet — the tag is ours.
             try self.writeFmt("{s}if (!{s}", .{ indent, mv });
-            if (dispatch and !cont.is_catchall and cont.branch.len > 0) {
+            if (dispatch and cont.branch.len > 0) {
                 const rn = result_name orelse {
                     log.err("[js_emitter] guarded terminal chain needs a result value but none was emitted\n", .{});
                     return JsEmitError.UnsupportedConstruct;

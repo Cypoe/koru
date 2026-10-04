@@ -1,3 +1,3 @@
-error\[KORU026\]
-pay-for-nothing catch-all
+error\[PARSE003\]
+catch-all continuations are not a thing
 \|\? Transition _ \|> _

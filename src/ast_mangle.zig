@@ -144,7 +144,7 @@ fn normalizeContinuations(conts: []ast.Continuation) void {
 fn normalizeContinuation(c: *ast.Continuation) void {
     mangle(c.branch);
     mangleOpt(c.binding);
-    // condition / catchall_metatype are host expr / metatype name — verbatim.
+    // condition is a host expr — verbatim.
     if (c.node) |*n| normalizeNode(n);
     normalizeContinuations(@constCast(c.continuations));
 }

@@ -1,13 +1,13 @@
-// Test 355_007: Optional Branches - when Guards + |? Interaction
+// Test 355_007: Optional Branches - when Guards + Omission
 //
 // Verifies:
 // 1. Using when guards for partial matching on optional branches
 // 2. Bare continuation (no when) acts as else-case for when-guarded branches
-// 3. |? catch-all handles OTHER optional branches not handled at all
+// 3. Unnamed optional branches (debug) absorb silently — no arm needed
 //
 // Note: KORU050 requires when-guarded branches have an else case (bare handler).
-// The |? catch-all does NOT substitute for the else case — it catches
-// entirely unhandled optional branches, not unmatched when-guards.
+// A bare handler is the else case — `?debug` goes unnamed entirely and
+// absorbs with no syntax.
 
 ~import std/io
 
@@ -41,7 +41,6 @@
 | warning w when w.level > 5 |> std/io:print.ln("CRITICAL")
 | warning w when w.level > 2 |> std/io:print.ln("MODERATE")
 | warning _ |> std/io:print.ln("WARNING LOW")
-|? |> std/io:print.ln("OPTIONAL IGNORED")
 
 // value=150 → warning level 10 → matches first when guard (level > 5)
 ~process(value: 150)
@@ -49,7 +48,6 @@
 | warning w when w.level > 5 |> std/io:print.ln("CRITICAL")
 | warning w when w.level > 2 |> std/io:print.ln("MODERATE")
 | warning _ |> std/io:print.ln("WARNING LOW")
-|? |> std/io:print.ln("OPTIONAL IGNORED")
 
 // value=60 → warning level 4 → matches second when guard (level > 2)
 ~process(value: 60)
@@ -57,7 +55,6 @@
 | warning w when w.level > 5 |> std/io:print.ln("CRITICAL")
 | warning w when w.level > 2 |> std/io:print.ln("MODERATE")
 | warning _ |> std/io:print.ln("WARNING LOW")
-|? |> std/io:print.ln("OPTIONAL IGNORED")
 
 // value=25 → warning level 1 → no guards match → falls to bare | warning _
 ~process(value: 25)
@@ -65,4 +62,3 @@
 | warning w when w.level > 5 |> std/io:print.ln("CRITICAL")
 | warning w when w.level > 2 |> std/io:print.ln("MODERATE")
 | warning _ |> std/io:print.ln("WARNING LOW")
-|? |> std/io:print.ln("OPTIONAL IGNORED")

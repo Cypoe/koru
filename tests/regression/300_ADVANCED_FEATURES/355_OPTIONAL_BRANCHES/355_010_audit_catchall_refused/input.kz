@@ -1,0 +1,33 @@
+// Test 355_010: FRONTEND_COMPILE_ERROR — `|? Audit e` refuses at parse.
+//
+// The Audit metatype is a real declaration-side concept, but no metatype
+// makes a callsite residual case legal: `e.branch` would bind "whichever
+// outcome I didn't name," which is a set the consumer computed, not a
+// branch the producer declared. To observe a `?` outcome, name its arm.
+
+~import std/io
+
+~tor process { value: u32 }
+| success u32
+| ?warning string
+| ?debug string
+
+~proc process|zig {
+    if (value > 100) {
+        return .{ .warning = "Value too large" };
+    }
+    if (value % 2 == 1) {
+        return .{ .debug = "Value is odd" };
+    }
+    return .{ .success = value * 2 };
+}
+
+~tor print-str { text: string }
+~proc print-str|zig {
+    _ = @import("std").posix.write(1, text) catch {};
+    _ = @import("std").posix.write(1, "\n") catch {};
+}
+
+~process(value: 10)
+| success _ |> std/io:print.ln("SUCCESS")
+|? Audit e |> print-str(text: e.branch)

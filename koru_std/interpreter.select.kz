@@ -1,20 +1,14 @@
 // Koru Standard Library: the `select` part of interpreter.kz — picking the
 // arm a dispatched outcome runs. Joined via `~part select` in interpreter.kz.
 //
-// `|?` catch-all is the fallback, never an override: it fires only when no
-// named arm matched. `|? M b` (metatype in `branch`, binding in `binding`)
-// cannot be judged by an interpreter outcome — `metatype_only` refuses it
-// rather than catching what compiled code would not. A same-branch `when`
-// guard gates the arm and is judged in source order — the machinery lives
-// in the `guards` part. (440_020, 440_024; kopium bridge-mirror
-// 2026-09-12-branch-arms, 2026-09-13-arm-when-guards)
+// There is no catch-all: an arm names a declared branch or the outcome goes
+// unhandled. A same-branch `when` guard gates the arm and is judged in
+// source order — the machinery lives in the `guards` part. (kopium
+// bridge-mirror 2026-09-12-branch-arms, 2026-09-13-arm-when-guards)
 
 const ArmChoice = struct {
     // The continuation to run, or null when nothing applies.
     idx: ?usize,
-    // True when no named arm and no bare catch-all matched but a metatype
-    // catch-all is present — unjudgeable, never silently fired.
-    metatype_only: bool,
 };
 
 fn selectArm(
@@ -25,18 +19,12 @@ fn selectArm(
     allocator: std.mem.Allocator,
 ) !ArmChoice {
     var matched_idx: ?usize = null;
-    var catchall_idx: ?usize = null;
-    var metatype_catchall = false;
     for (continuations, 0..) |*c, ci| {
-        if (c.is_catchall) {
-            if (c.binding != null and c.branch.len > 0) metatype_catchall = true else if (catchall_idx == null) catchall_idx = ci;
-            continue;
-        }
         const plain_ok = branch.len == 0 and namesEql(c.branch, "ok");
         if (!plain_ok and !namesEql(c.branch, branch)) continue;
         if (!try armGuardPasses(c, branch, fields, bindings, allocator)) continue;
         matched_idx = ci;
         break;
     }
-    return .{ .idx = matched_idx orelse catchall_idx, .metatype_only = matched_idx == null and catchall_idx == null and metatype_catchall };
+    return .{ .idx = matched_idx };
 }

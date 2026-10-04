@@ -1,0 +1,20 @@
+// Test 210_077: FRONTEND_COMPILE_ERROR — `!?` refuses at parse.
+//
+// The effect-side catch-all spelling is the same refusal as `|?`: an
+// effect arm names a declared `!` branch or is absent. `! ?warning` is
+// the producer's optional mark — silently ignorable with no consumer
+// syntax at all. `!? Transition` binds nothing that exists.
+
+~pub tor tokenize { source: string }
+! token string
+! ?warning string
+| done usize
+
+~pub tor consume-token { t: string }
+~pub tor end-run { n: usize }
+~pub tor log-unhandled { name: string }
+
+~tokenize(source: "x")
+! token t |> consume-token(t)
+!? Transition _ |> log-unhandled(name: "warn")
+| done n |> end-run(n)

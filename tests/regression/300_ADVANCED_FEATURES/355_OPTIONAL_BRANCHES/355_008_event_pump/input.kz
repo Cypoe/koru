@@ -1,9 +1,9 @@
-// Test 918h: Optional Branches - Event Pump Loop (THE USE CASE)
+// Test 355_008: Optional Branches - Event Pump Loop (THE USE CASE)
 //
 // Verifies:
 // 1. Event pump with multiple optional event types
 // 2. Loop using labels/jumps that repeatedly calls pump
-// 3. |? catches unhandled events, loop continues
+// 3. Named optional arms continue the loop for every event type
 // 4. THE motivating use case: wrapping WIN32/SDL/etc event systems
 
 ~import std/io
@@ -37,9 +37,10 @@ const std = @import("std");
     }
 }
 
-// Event loop: only handle keyboard and mouse, |? catches the rest
+// Event loop: keyboard and mouse report; window/timer continue named
 ~#loop pump(iteration: 0)
 | keyboard _ |> std/io:print.ln("KEYBOARD") |> @loop(iteration: iteration + 1)
 | mouse _ |> std/io:print.ln("MOUSE") |> @loop(iteration: iteration + 1)
 | quit _ |> std/io:print.ln("QUIT")
-|? |> std/io:print.ln("OTHER") |> @loop(iteration: iteration + 1)
+| window _ |> std/io:print.ln("OTHER") |> @loop(iteration: iteration + 1)
+| timer _ |> std/io:print.ln("OTHER") |> @loop(iteration: iteration + 1)

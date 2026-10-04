@@ -150,7 +150,6 @@
                 {
                     "branch": "each",
                     "kind": "effect",
-                    "is_catchall": false,
                     "binding": "_",
                     "binding_type": "branch_payload",
                     "condition": null,
@@ -176,7 +175,6 @@
                 {
                     "branch": "done",
                     "kind": "terminal",
-                    "is_catchall": false,
                     "binding": "_",
                     "binding_type": "branch_payload",
                     "condition": null,

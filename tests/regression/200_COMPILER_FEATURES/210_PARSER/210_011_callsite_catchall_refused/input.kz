@@ -1,0 +1,30 @@
+// ============================================================================
+// Test 210_011: FRONTEND_COMPILE_ERROR — a callsite `|?` arm refuses at
+//                          parse, metatype-bound or not.
+//
+// There is no catch-all spelling. An arm names a declared branch or is
+// absent; the consumer cannot spell a residual case over outcomes it did
+// not name — optionality is the producer's `?` mark, not an arm. The
+// parser refuses `|?`, `|? Metatype`, `!?`, and `!? Metatype` uniformly;
+// this file pins the metatype-bound form (210_081/082/083 pin the others).
+// ============================================================================
+
+const std = @import("std");
+
+~tor process { value: u32 }
+| success u32        // Required
+| ?warning string   // Optional — may go unnamed, never wild-caught
+| ?debug string
+
+~proc process|zig {
+    return .{ .success = value };
+}
+
+~pub tor observe { name: string }
+~proc observe|zig {
+    _ = name;
+}
+
+~process(value: 10)
+| success _ |> _
+|? Transition _ |> observe(name: "t1")

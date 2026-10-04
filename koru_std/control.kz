@@ -61,7 +61,7 @@ const std = @import("std");
 //
 // Syntax: cond(scrutinee)
 //         | c b when <guard> -> <value>   // N guarded arms, first match wins
-//         | c _ -> <default>              // guardless catch-all (the else)
+//         | c _ -> <default>              // guardless final arm (the else)
 //
 // ARCHITECTURE:
 // - `cond` is a `[template]` proc, like `if`. `| c *` is a single VARIADIC

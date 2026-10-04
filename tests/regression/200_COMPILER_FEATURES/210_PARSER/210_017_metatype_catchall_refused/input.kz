@@ -1,0 +1,24 @@
+// ============================================================================
+// Test 210_017: FRONTEND_COMPILE_ERROR — `|? Transition` refuses at parse.
+//
+// Complement to 210_011: the metatype-bound catch-all spelled on a tor
+// with a single optional sibling refuses identically — the arm is judged
+// by its spelling, not by what the declared outcome set happens to be.
+// ============================================================================
+
+~tor process { value: u32 }
+| success u32
+| ?warning string
+
+~proc process|zig {
+    return .{ .success = value };
+}
+
+~pub tor observed { name: string }
+~proc observed|zig {
+    _ = name;
+}
+
+~process(value: 42)
+| success _ |> _
+|? Transition _ |> observed(name: "unhandled")

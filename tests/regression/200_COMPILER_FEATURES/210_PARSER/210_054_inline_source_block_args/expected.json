@@ -217,7 +217,6 @@
                 {
                     "branch": "transformed",
                     "kind": "terminal",
-                    "is_catchall": false,
                     "binding": null,
                     "binding_type": "branch_payload",
                     "condition": null,
@@ -264,7 +263,6 @@
                 {
                     "branch": "",
                     "kind": "terminal",
-                    "is_catchall": false,
                     "binding": null,
                     "binding_type": "branch_payload",
                     "condition": null,
@@ -321,7 +319,6 @@
                         {
                             "branch": "transformed",
                             "kind": "terminal",
-                            "is_catchall": false,
                             "binding": null,
                             "binding_type": "branch_payload",
                             "condition": null,

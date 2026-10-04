@@ -4870,7 +4870,7 @@ pub const Parser = struct {
                     // Only check pipes at brace_depth 0 (outside source blocks)
                     if (brace_depth == 0 and c == '|' and i + 1 < remaining.len) {
                         const next_char = remaining[i + 1];
-                        // |> is valid (void chaining), |? is valid (catch-all)
+                        // |> is valid (void chaining)
                         // | followed by space then word is invalid (branch must be on new line)
                         if (next_char == ' ') {
                             // Check if there's a word after the space (branch name)
@@ -7048,8 +7048,7 @@ pub const Parser = struct {
             self.current += 1; // Move past current line before parsing
             const cont = try self.parseContinuationWithNested(indent, location);
 
-            // Ordering rule check. Catch-all (`!?` / `|?`) handlers are exempt
-            // — they're symmetric ends for both sides.
+            // Ordering rule check.
             //
             // A `|>` CHAIN STEP is not a terminal handler. It shares the leading
             // `|` and parses as `.terminal`, but it names no branch — and a
@@ -7062,7 +7061,7 @@ pub const Parser = struct {
             // The discriminator is the one `reattachArmsToLastStep` already
             // uses: an unnamed step is a step, a named branch is an arm
             // (ast_transform.zig isUnnamedStep).
-            if (!cont.is_catchall and cont.branch.len > 0) {
+            if (cont.branch.len > 0) {
                 if (cont.kind == .effect and seen_terminal_handler) {
                     try errors.terminalBeforeEffect(&self.reporter, handler_line, indent + 1, cont.branch, .dispatch);
                 }
@@ -7306,11 +7305,13 @@ pub const Parser = struct {
 
     fn parseContinuationWithNested(self: *Parser, indent: usize, location: errors.SourceLocation) anyerror!ast.Continuation {
         const head = try self.parseContinuationHead(indent, location);
-        if (head.pipeline_step) return head.cont;
 
         var cont = head.cont;
         // Parse nested continuations - ONLY greater indentation means nesting
         // Same-indent continuations are siblings, period. No magic auto-nesting.
+        // Pipeline steps collect too: `|> if (c)` followed by a deeper `| then`
+        // arm nests the arm under the step — the flat-sibling fallback steals
+        // it for an earlier step and leaves this one unhandled.
         const multi_line_continuations = try self.parseNestedContinuationsForLevel(indent);
 
         // FIX: If we have inline chained continuations, attach multi-line ones to the deepest
@@ -7578,132 +7579,24 @@ pub const Parser = struct {
         // For non-pattern parsing, we still need a tokenizer for the rest
         var parts = std.mem.tokenizeAny(u8, rest_after_branch, " ");
 
-        // Check for |? catch-all continuation
+        // `|?` / `!?` catch-all continuations do not exist: the call site
+        // cannot spell a residual case. A consumer names declared branches
+        // or omits them — `?`-optional branches may go unhandled. The
+        // outcome contract is the declaration's, never the call site's.
         if (std.mem.eql(u8, branch_name, "?")) {
-            // This is a catch-all continuation: |? [Metatype binding] |> pipeline
-            var catchall_metatype: ?[]const u8 = null;
-            var binding: ?[]const u8 = null;
-            var rest = parts.rest();
-
-            // Check if next token is a metatype (Transition, Profile, or Audit)
-            if (parts.peek()) |next| {
-                if (std.mem.eql(u8, next, "Transition") or
-                    std.mem.eql(u8, next, "Profile") or
-                    std.mem.eql(u8, next, "Audit"))
-                {
-                    catchall_metatype = try self.allocator.dupe(u8, next);
-                    _ = parts.next(); // consume metatype
-
-                    // Metatype requires a binding or explicit _ discard
-                    // e.g., |? Transition t |> ... or |? Audit _ |> ...
-                    if (parts.peek()) |binding_name| {
-                        if (std.mem.startsWith(u8, binding_name, "|>")) {
-                            return self.fail(
-                                .PARSE001,
-                                self.current,
-                                indent + 2,
-                                "Metatype '{s}' requires a binding (e.g., |? {s} t |>) or explicit discard (|? {s} _ |>).",
-                                .{ catchall_metatype.?, catchall_metatype.?, catchall_metatype.? },
-                            );
-                        }
-                        // Validate binding is a valid identifier (or _ for discard)
-                        if (!std.mem.eql(u8, binding_name, "_") and !lexer.isValidIdentifier(binding_name)) {
-                            try self.reporter.addError(
-                                .PARSE001,
-                                self.current,
-                                indent + 2,
-                                "Invalid binding '{s}'. Bindings must be valid identifiers or '_' for discard.",
-                                .{binding_name},
-                            );
-                            return error.InvalidBinding;
-                        }
-                        // Reject a user `_blah` binding (not bare `_`): neither
-                        // a discard nor a real name.
-                        try self.rejectLeadingUnderscoreBinding(binding_name, self.current, "binding");
-                        binding = try self.allocator.dupe(u8, binding_name);
-                        _ = parts.next(); // consume binding
-                    } else {
-                        return self.fail(
-                            .PARSE001,
-                            self.current,
-                            indent + 2,
-                            "Metatype '{s}' requires a binding (e.g., |? {s} t |>) or explicit discard (|? {s} _ |>).",
-                            .{ catchall_metatype.?, catchall_metatype.?, catchall_metatype.? },
-                        );
-                    }
-                    rest = parts.rest();
-                }
-            }
-
-            const catch_all_branch = try self.allocator.dupe(u8, "?");
-            try self.context_stack.append(self.allocator, .{
-                .in_continuation = .{
-                    .branch = catch_all_branch,
-                    .binding = binding,
-                },
-            });
-            defer {
-                _ = self.context_stack.pop();
-                self.allocator.free(catch_all_branch);
-            }
-
-            // Pay-for-nothing rule: catch-all at the dispatch site disables
-            // comptime elision and routes unhandled branches into a handler.
-            // That's a real runtime cost (struct construction for metatype
-            // variants, routing for bare). If the consumer doesn't engage
-            // — body is pure `_` discard — they paid the cost for zero
-            // information gain. Strictly worse than the no-catch-all default.
-            //
-            // Rule: catch-all body must do real work. `|? |> _` and
-            // `|? Metatype _ |> _` are rejected; `|? Metatype t |> body` and
-            // `|? Metatype _ |> work(...)` are accepted (the latter because
-            // the body does work even though the binding is discarded).
-            //
-            // See `docs/EFFECT_BRANCHES.md` "Dispatch-site catch-all rules".
-            if (std.mem.indexOf(u8, rest, "|>")) |idx| {
-                const after = std.mem.trim(u8, rest[idx + 2 ..], " \t");
-                if (std.mem.eql(u8, after, "_")) {
-                    return self.fail(
-                        .KORU026,
-                        self.current,
-                        indent + 2,
-                        "pay-for-nothing catch-all: body discards without engagement. Either remove the catch-all (unhandled optional branches are already no-ops) or use a metatype-bound form that does work (e.g., `|? Transition t |> log(t)`).",
-                        .{},
-                    );
-                }
-            }
-
-            // Parse step if present
-            var step: ?ast.Step = null;
-
-            if (std.mem.indexOf(u8, rest, "|>")) |_| {
-                // Catch-all `|? ...` body — branch handler body, `_` allowed as sole step.
-                const steps = try self.parsePipelineSteps(rest, true, location);
-                defer self.allocator.free(steps);
-                if (steps.len > 0) {
-                    step = steps[0];
-                }
-            }
-
-            return ast.Continuation{
-                .branch = try self.allocator.dupe(u8, "?"), // Special branch name for catch-all
-                .binding = binding,
-                .binding_type = .branch_payload,
-                .is_catchall = true,
-                .catchall_metatype = catchall_metatype,
-                .condition = null,
-                .condition_expr = null,
-                .node = step,
-                .indent = indent,
-                .continuations = &[_]ast.Continuation{},
-                .location = location,
-            };
+            return self.fail(
+                .PARSE003,
+                self.current,
+                indent + 2,
+                "catch-all continuations are not a thing — name a declared branch or omit it (`?` optional branches may go unhandled)",
+                .{},
+            );
         }
 
         // Normal branch continuation - validate branch name is a valid identifier.
         // Pattern branches ([...]) and raw pattern branches (`...`) skip this
         // check - the pattern is opaque data for transforms, not an identifier.
-        if (!is_pattern_branch and !is_raw_branch and !std.mem.eql(u8, branch_name, "?")) {
+        if (!is_pattern_branch and !is_raw_branch) {
             try self.rejectSnakeName(branch_name, self.current - 1, "branch");
         }
         if (!is_pattern_branch and !is_raw_branch and !isValidIdentifier(branch_name)) {
@@ -8359,7 +8252,7 @@ pub const Parser = struct {
             // The head stamp stays: this continuation IS the `| branch` arm —
             // its `|` stands on the head line. Only chain LINKS (the `|>`
             // steps inside the arm body) carry per-link lines; the same holds
-            // for the arm-head returns above and the `|?` catch-all head.
+            // for the arm-head returns above.
             .location = location,
         };
     }

@@ -45,8 +45,8 @@ pub fn checkShadowedArms(
 }
 
 /// Unguarded terminal handlers are the arms that shadow and are shadowed —
-/// catch-alls are the fallback, `when` narrows, `!` links compose. (Mirror
-/// of branch_checker's HandledBranch predicates.)
+/// `when` narrows, `!` links compose. (Mirror of branch_checker's
+/// HandledBranch predicates.)
 fn armShadowable(arm: *const ast.Continuation) bool {
-    return !arm.is_catchall and arm.condition == null and arm.kind == .terminal;
+    return arm.condition == null and arm.kind == .terminal;
 }

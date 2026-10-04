@@ -1,18 +1,9 @@
 // ============================================================================
-// Test 210_082: MUST_ERROR — bare `!? |> _` effect catch-all is
-//                          pay-for-nothing and must be parser-rejected.
+// Test 210_082: FRONTEND_COMPILE_ERROR — bare `!? |> _` refuses at parse.
 //
-// Symmetric with 210_081 for effect branches. Without `!?`, unhandled
-// optional effect branches compile-time-elide (handler not installed in
-// comptime struct → call lowers to nothing). With `!? |> _`, the consumer
-// asks for unhandled effects to route into a no-op handler — runtime cost
-// for zero information.
-//
-// Engagement rule applies identically to `!?` and `|?`: catch-all requires
-// real work in the body, optionally informed by a metatype binding.
-//
-// Expected: parser rejects `!? |> _` with a message pointing at the
-// catch-all line and explaining the no-engagement rule.
+// Symmetric with 210_081 on the effect side. `! ?warning` is the
+// producer's optional mark — an unnamed optional effect lowers to
+// nothing with zero consumer syntax. There is no `!?` arm to write.
 // ============================================================================
 
 ~pub tor tokenize { source: string }

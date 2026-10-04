@@ -1,21 +1,11 @@
 // ============================================================================
-// Test 210_083: MUST_ERROR — metatype catch-all with discard binding AND
-//                          discard body is still pay-for-nothing.
+// Test 210_083: FRONTEND_COMPILE_ERROR — `|? Transition _ |> _` refuses
+//                          at parse.
 //
-// `|? Transition _ |> _` asks the compiler to build the Transition
-// reflection struct on every unhandled branch, bind it to `_`, then do
-// nothing. Strictly worse than the no-catch-all default: synthesis cost
-// for the metatype struct PLUS routing cost PLUS zero information gain.
-//
-// The pay-for-nothing rule applies regardless of whether a metatype is
-// named. What matters is whether the body does real work. `|? Transition
-// t |> log(t)` is fine — the binding `t` is used, real work happens.
-// `|? Transition _ |> log("unhandled")` is also fine — binding is `_`
-// but the body emits work that uses the *fact* a branch fired. But
-// `|? Transition _ |> _` does neither.
-//
-// Expected: parser rejects `|? Transition _ |> _` with a message
-// pointing at the catch-all and explaining the no-engagement rule.
+// Metatype, binding, and body are all irrelevant: the arm is judged by
+// its spelling, and the spelling does not exist. `Transition`/`Profile`/
+// `Audit` remain legitimate declaration-side metatypes; they were never
+// a license for a callsite residual case.
 // ============================================================================
 
 ~tor process { value: u32 }

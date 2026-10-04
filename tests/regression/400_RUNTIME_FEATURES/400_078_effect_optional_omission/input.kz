@@ -1,0 +1,27 @@
+// Test: optional `!` branches are silently no-op when omitted.
+//
+// Producer fires `a(1)`, `b(2)`, `c(3)`. Consumer explicitly handles
+// `! a`; the optional `! ?b` and `! ?c` are omitted entirely. Per the
+// doc, that's the no-op — the handlers aren't installed in the comptime
+// struct, so the producer's calls to b/c lower to nothing.
+//
+// (No consumer marker exists for this: `!?` is refused at parse —
+// 210_082. Omission is the entire mechanism.)
+
+~import std/io
+
+~pub tor multi {}
+! a usize
+! ?b usize
+! ?c usize
+
+~proc multi|zig {
+    a(1);
+    b(2);
+    c(3);
+}
+
+~multi()
+! a v |> std/io:print.blk {
+    a {{ v:d }}
+}

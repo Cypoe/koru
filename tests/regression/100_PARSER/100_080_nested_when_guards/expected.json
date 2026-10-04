@@ -128,7 +128,6 @@
                 {
                     "branch": "",
                     "kind": "terminal",
-                    "is_catchall": false,
                     "binding": null,
                     "binding_type": "branch_payload",
                     "condition": null,
@@ -154,7 +153,6 @@
                         {
                             "branch": "key",
                             "kind": "terminal",
-                            "is_catchall": false,
                             "binding": "k",
                             "binding_type": "branch_payload",
                             "condition": "k.code == 'q'",
@@ -180,7 +178,6 @@
                         {
                             "branch": "key",
                             "kind": "terminal",
-                            "is_catchall": false,
                             "binding": "k",
                             "binding_type": "branch_payload",
                             "condition": null,

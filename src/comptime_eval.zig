@@ -529,8 +529,8 @@ pub const Evaluator = struct {
             if (result.payload == null)
                 return self.fail(error.UnsupportedConstruct, "comptime walk: a void call cannot dispatch branch arms", .{});
             for (arms) |*arm| {
-                if (arm.is_catchall or arm.branch.len == 0)
-                    return self.fail(error.UnsupportedConstruct, "comptime walk: a `-> T` result cannot dispatch a catchall or unnamed arm", .{});
+                if (arm.branch.len == 0)
+                    return self.fail(error.UnsupportedConstruct, "comptime walk: a `-> T` result cannot dispatch an unnamed arm", .{});
                 if (try self.matchArm(items, arm, result.payload, env)) |outcome| return outcome;
             }
             return self.fail(error.UnsupportedConstruct, "comptime walk: `-> T` result matched no arm — every when-guard false", .{});
@@ -871,8 +871,8 @@ pub const Folder = struct {
             else blk: {
                 // `-> T` bare return: no tag to match — every named arm is a
                 // candidate, when-guards select (dispatchArms' convention).
-                if (arm.is_catchall or arm.branch.len == 0)
-                    return self.evaluator.fail(error.UnsupportedConstruct, "comptime fold: a `-> T` result cannot dispatch a catchall or unnamed residue arm", .{});
+                if (arm.branch.len == 0)
+                    return self.evaluator.fail(error.UnsupportedConstruct, "comptime fold: a `-> T` result cannot dispatch an unnamed residue arm", .{});
                 break :blk true;
             };
             if (!name_matches) continue;
@@ -895,8 +895,6 @@ pub const Folder = struct {
             new_root.binding = null;
             new_root.binding_annotations = &.{};
             new_root.destructure = &.{};
-            new_root.is_catchall = false;
-            new_root.catchall_metatype = null;
             new_root.condition = null;
             new_root.condition_expr = null;
             // A promoted arm becomes the flow's root — and a flow's head is

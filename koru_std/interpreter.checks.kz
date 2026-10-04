@@ -69,9 +69,6 @@ fn checkInvocationArgs(
         defer added.deinit(allocator);
         if (arm.binding) |b| seedBound(bound, &added, b, allocator);
         seedDestructure(bound, &added, arm.destructure, allocator);
-        if (arm.is_catchall and arm.binding == null and arm.branch.len > 0) {
-            seedBound(bound, &added, arm.branch, allocator);
-        }
         const r = checkInvocationArgs(arm, input_fn, defined, bound, allocator);
         for (added.items) |name| _ = bound.remove(name);
         if (r) |e| return e;

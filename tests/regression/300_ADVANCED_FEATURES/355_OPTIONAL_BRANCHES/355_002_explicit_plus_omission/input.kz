@@ -1,0 +1,49 @@
+// Test 355_002: Optional Branches - Explicit Handling + Omission
+//
+// Verifies:
+// 1. Handler explicitly handles SOME optional branches by name
+// 2. Unnamed optional branches absorb silently — no syntax needed
+// 3. Most realistic real-world pattern
+
+~import std/io
+
+// Event with required + multiple optional branches
+// success is REQUIRED, warning is handled explicitly, debug/trace absorb
+~tor process { value: u32 }
+| success u32
+| ?warning string
+| ?debug string
+| ?trace string
+
+~proc process|zig {
+    if (value > 100) {
+        return .{ .warning = "Value too large" };
+    }
+    if (value % 2 == 1) {
+        return .{ .debug = "Value is odd" };
+    }
+    if (value < 5) {
+        return .{ .trace = "Very small value" };
+    }
+    return .{ .success = value * 2 };
+}
+
+// value=10 → success (required, handled)
+~process(value: 10)
+| success _ |> std/io:print.ln("SUCCESS")
+| warning _ |> std/io:print.ln("WARNING")
+
+// value=150 → warning (optional, handled explicitly)
+~process(value: 150)
+| success _ |> std/io:print.ln("SUCCESS")
+| warning _ |> std/io:print.ln("WARNING")
+
+// value=7 → debug (optional, unnamed → absorbs silently)
+~process(value: 7)
+| success _ |> std/io:print.ln("SUCCESS")
+| warning _ |> std/io:print.ln("WARNING")
+
+// value=2 → trace (optional, unnamed → absorbs silently)
+~process(value: 2)
+| success _ |> std/io:print.ln("SUCCESS")
+| warning _ |> std/io:print.ln("WARNING")

@@ -1,0 +1,48 @@
+// Test 355_001: Optional Branches - Named Handling
+//
+// Verifies:
+// 1. Required branches handled as usual
+// 2. Optional branches are handled by naming them — `| warning`, `| debug`
+// 3. Each named optional arm receives its own outcome
+
+~import std/io
+
+// success is REQUIRED - must be handled
+// warning and debug are OPTIONAL - may be named or omitted
+~tor process { value: u32 }
+| success u32
+| ?warning string
+| ?debug string
+
+~proc process|zig {
+    // When value > 100, return optional warning branch
+    if (value > 100) {
+        return .{ .warning = "Value is large" };
+    }
+
+    // When value is odd, return optional debug branch
+    if (value % 2 == 1) {
+        return .{ .debug = "Value is odd" };
+    }
+
+    // Otherwise return required success branch
+    return .{ .success = value * 2 };
+}
+
+// Call 1: value=10 → even, <100 → success branch
+~process(value: 10)
+| success _ |> std/io:print.ln("GOT SUCCESS")
+| warning _ |> std/io:print.ln("GOT WARNING")
+| debug _ |> std/io:print.ln("GOT DEBUG")
+
+// Call 2: value=150 → >100 → warning branch (named optional arm)
+~process(value: 150)
+| success _ |> std/io:print.ln("GOT SUCCESS")
+| warning _ |> std/io:print.ln("GOT WARNING")
+| debug _ |> std/io:print.ln("GOT DEBUG")
+
+// Call 3: value=7 → odd → debug branch (named optional arm)
+~process(value: 7)
+| success _ |> std/io:print.ln("GOT SUCCESS")
+| warning _ |> std/io:print.ln("GOT WARNING")
+| debug _ |> std/io:print.ln("GOT DEBUG")

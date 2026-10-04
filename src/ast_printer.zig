@@ -454,7 +454,7 @@ const Printer = struct {
     fn printChildren(self: *Printer, conts: []const ast.Continuation, depth: usize) PrintError!void {
         var seen_branch = false;
         for (conts) |*c| {
-            const is_chain = c.branch.len == 0 and !c.is_catchall;
+            const is_chain = c.branch.len == 0;
             if (is_chain) {
                 if (seen_branch) return self.unprintable("chain continuation after branch continuation");
                 try self.printChainCont(c, depth);
@@ -477,12 +477,7 @@ const Printer = struct {
             .terminal => "|",
             .effect => "!",
         });
-        if (c.is_catchall) {
-            // Catch-alls store "?" as their branch name — the glyph, not a
-            // real name. `|? Transition t |> …` / `|? b |> …`.
-            try self.write("?");
-            if (c.catchall_metatype) |mt| try self.print(" {s}", .{mt});
-        } else if (c.branch.len > 0) {
+        if (c.branch.len > 0) {
             try self.write(" ");
             try self.writeBranchName(c.branch);
         }
@@ -502,7 +497,7 @@ const Printer = struct {
 
     fn hasBranchChildren(conts: []const ast.Continuation) bool {
         for (conts) |*c| {
-            if (c.branch.len > 0 or c.is_catchall) return true;
+            if (c.branch.len > 0) return true;
             if (hasBranchChildren(c.continuations)) return true;
         }
         return false;
@@ -528,7 +523,7 @@ const Printer = struct {
             else => {},
         }
         for (conts) |*c| {
-            if (c.branch.len == 0 and !c.is_catchall) {
+            if (c.branch.len == 0) {
                 if (c.node) |*n| {
                     if (lineCarriesMultilineBlock(n, c.continuations)) return true;
                 }

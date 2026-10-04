@@ -1,0 +1,26 @@
+// Test 355_013: FRONTEND_COMPILE_ERROR — a callsite `|?` refuses at parse, even when
+//                          offered as a rescue for an unhandled required
+//                          branch.
+//
+// 'failure' is required and unnamed — but the answer is to name it, not
+// to write an arm for "the rest." The parser refuses the spelling before
+// coverage is ever judged: there is no residual case at the call site.
+
+~tor process { value: u32 }
+| success u32
+| failure string
+
+~proc process|zig {
+    if (value > 5) return .{ .success = value };
+    return .{ .failure = "small" };
+}
+
+~pub tor observe { name: string }
+~proc observe|zig {
+    _ = name;
+}
+
+// 'failure' is required and unnamed — |? cannot stand in for it.
+~process(value: 10)
+| success _ |> observe(name: "ok")
+|? |> observe(name: "catchall")

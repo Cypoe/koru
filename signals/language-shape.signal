@@ -1,0 +1,6 @@
+name: language-shape
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `language-surface` — declare that name. (orphan drained 2026-10-04)

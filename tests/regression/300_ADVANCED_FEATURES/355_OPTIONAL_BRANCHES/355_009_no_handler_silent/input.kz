@@ -1,7 +1,7 @@
-// Test 918i: Optional Branches - No |? and No Handler
+// Test 355_009: Optional Branches - No Handler, Silent
 //
 // Verifies:
-// 1. Handler has NO |? catch-all
+// 1. Handler names no optional arms
 // 2. Optional branch fires at runtime with no handler
 // 3. Expected: silently ignored (optional = truly optional)
 
@@ -22,9 +22,9 @@
 // value=10 → success → handled normally
 ~process(value: 10)
 | success _ |> std/io:print.ln("SUCCESS")
-// No |? — that's OK
+// No optional arms — that's OK
 
-// value=150 → warning → no handler, no |? → silently ignored
+// value=150 → warning → no handler → silently ignored
 ~process(value: 150)
 | success _ |> std/io:print.ln("SUCCESS")
-// No warning handler, no |? — optional branch fires into the void
+// No warning handler — optional branch fires into the void

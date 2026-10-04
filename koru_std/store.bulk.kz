@@ -163,7 +163,7 @@ const Bulk = struct {
             const d = &c.continuations[1];
             if (!std.mem.eql(u8, std.mem.trim(u8, d.branch, " "), "done")) return null;
             if (d.kind != .terminal) return null;
-            if (d.is_catchall or d.destructure.len != 0) return null;
+            if (d.destructure.len != 0) return null;
             if (d.binding) |db| {
                 const bt = std.mem.trim(u8, db, " ");
                 if (bt.len != 0 and !std.mem.eql(u8, bt, "_")) return null;
@@ -208,8 +208,6 @@ const Bulk = struct {
                 .binding = null,
                 .binding_annotations = &.{},
                 .binding_type = .branch_payload,
-                .is_catchall = false,
-                .catchall_metatype = null,
                 .condition = null,
                 .condition_expr = null,
                 .node = .{ .terminal = {} },

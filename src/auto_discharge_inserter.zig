@@ -438,7 +438,6 @@ pub const AutoDischargeInserter = struct {
         if (flow.inv().return_binding != null) return null;
         for (flow.body.continuations) |*cont| {
             if (cont.kind == .effect) continue;
-            if (cont.is_catchall) continue;
             if (cont.branch.len == 0) continue;
             if (cont.binding) |b| {
                 if (!std.mem.eql(u8, b, "_")) return b;
@@ -4643,9 +4642,8 @@ pub const AutoDischargeInserter = struct {
     }
 
     /// The arms `inv`'s callee declares as `| ?!` that `existing` does not
-    /// write, rendered as loud terminals. Null when there are none, when the
-    /// callee is not a known event, or when a catchall already answers
-    /// everything.
+    /// write, rendered as loud terminals. Null when there are none or when
+    /// the callee is not a known event.
     fn loudArmsFor(
         self: *AutoDischargeInserter,
         inv: *const ast.Invocation,
@@ -4662,15 +4660,7 @@ pub const AutoDischargeInserter = struct {
 
         var handled = std.StringHashMap(void).init(self.allocator);
         defer handled.deinit();
-        var has_catchall = false;
         for (existing) |*c| {
-            if (c.is_catchall) {
-                // Answers the remaining OPTIONAL branches — panic arms still
-                // synthesize (|? never routes `| ?!`; the union variant exists
-                // and only a named loud arm can fill it).
-                has_catchall = true;
-                continue;
-            }
             try handled.put(c.branch, {});
         }
 
@@ -4690,7 +4680,7 @@ pub const AutoDischargeInserter = struct {
             if (branch.is_panic) {
                 try missing.append(self.allocator, branch);
             } else if (branch.is_optional) {
-                if (!has_catchall) try missing_opt.append(self.allocator, branch.name);
+                try missing_opt.append(self.allocator, branch.name);
             }
         }
         if (missing.items.len == 0 and missing_opt.items.len == 0) return null;
@@ -4706,7 +4696,7 @@ pub const AutoDischargeInserter = struct {
         // the join and the watermark keeps outer obligations live-through.
         var join_idx: usize = existing.len;
         for (existing, 0..) |*c, idx| {
-            if (!c.is_catchall and c.branch.len == 0) {
+            if (c.branch.len == 0) {
                 join_idx = idx;
                 break;
             }
@@ -4721,8 +4711,6 @@ pub const AutoDischargeInserter = struct {
                 .binding = try self.allocator.dupe(u8, if (has_payload) "v" else "_"),
                 .binding_annotations = &[_][]const u8{},
                 .binding_type = .branch_payload,
-                .is_catchall = false,
-                .catchall_metatype = null,
                 .condition = null,
                 .condition_expr = null,
                 .node = .{ .inline_code = panic_msg },
@@ -4737,8 +4725,6 @@ pub const AutoDischargeInserter = struct {
                 .binding = try self.allocator.dupe(u8, "_"),
                 .binding_annotations = &[_][]const u8{},
                 .binding_type = .branch_payload,
-                .is_catchall = false,
-                .catchall_metatype = null,
                 .condition = null,
                 .condition_expr = null,
                 .node = .{ .terminal = {} },
@@ -4775,7 +4761,7 @@ pub const AutoDischargeInserter = struct {
         if (annotation_parser.isKeyword(decl.annotations)) return null;
         var has_anon = false;
         for (conts) |*c| {
-            if (!c.is_catchall and c.branch.len == 0) {
+            if (c.branch.len == 0) {
                 has_anon = true;
                 break;
             }
@@ -4804,7 +4790,7 @@ pub const AutoDischargeInserter = struct {
         errdefer self.allocator.free(out);
         for (conts, 0..) |*c, i| {
             out[i] = c.*;
-            if (!c.is_catchall and c.branch.len == 0) {
+            if (c.branch.len == 0) {
                 out[i].branch = try self.allocator.dupe(u8, success);
             }
         }
@@ -4825,18 +4811,7 @@ pub const AutoDischargeInserter = struct {
         var handled = std.StringHashMap(void).init(self.allocator);
         defer handled.deinit();
 
-        var has_catchall = false;
         for (flow.body.continuations) |*cont| {
-            if (cont.is_catchall) {
-                // Catch-all routes all OPTIONAL branches - no no-op synthesis
-                // for those (the emitter wires them into the catch-all body,
-                // and a synthesized named arm would shadow it). It does NOT
-                // route panic or required branches: `| ?!` still needs its
-                // loud arm, and a ~[prototype] hole still needs its @panic —
-                // the emitted union variants exist either way.
-                has_catchall = true;
-                continue;
-            }
             try handled.put(cont.branch, {});
         }
 
@@ -4870,7 +4845,7 @@ pub const AutoDischargeInserter = struct {
             if (branch.is_panic) {
                 try missing_panic.append(self.allocator, branch);
             } else if (branch.is_optional) {
-                if (!has_catchall) try missing_optional.append(self.allocator, branch.name);
+                try missing_optional.append(self.allocator, branch.name);
             } else if (self.prototype_mode) {
                 // A plain REQUIRED terminal left unhandled under ~[prototype] is
                 // a HOLE: synthesize a loud @panic arm (same as | ?!) so the
@@ -4886,7 +4861,7 @@ pub const AutoDischargeInserter = struct {
         // invalid switch case (`.soon =>` on a union with no `soon`). The checkers
         // already let it slide (KORU021 / KORU030); here we DROP it from the
         // lowered switch. Terminal-only (an undeclared effect arm already errored
-        // at KORU030), never a catchall or metatype (Transition/Profile/Audit are
+        // at KORU030), never a metatype (Transition/Profile/Audit are
         // valid), and never when the event declares a raw-name class branch (`*`),
         // which makes every name declared.
         var prune_flags = try self.allocator.alloc(bool, flow.body.continuations.len);
@@ -4896,7 +4871,6 @@ pub const AutoDischargeInserter = struct {
             for (flow.body.continuations, 0..) |*cont, i| {
                 prune_flags[i] = false;
                 if (cont.branch.len == 0) continue; // void event chain (|> event()), not a named branch
-                if (cont.is_catchall) continue;
                 if (cont.kind == .effect) continue;
                 if (isMetatypeBranchName(cont.branch)) continue;
                 if (branchNameIsDeclared(event_decl, cont.branch)) continue;
@@ -4978,7 +4952,7 @@ pub const AutoDischargeInserter = struct {
             for (flow.body.continuations, 0..) |*cont, i| {
                 if (prune_flags[i]) continue;
                 defer seen += 1;
-                if (!cont.is_catchall and cont.branch.len == 0) {
+                if (cont.branch.len == 0) {
                     join_idx = seen;
                     break;
                 }
@@ -5005,8 +4979,6 @@ pub const AutoDischargeInserter = struct {
                 .binding = try self.allocator.dupe(u8, "_"), // Discard binding - auto-discharge will synthesize _auto_N
                 .binding_annotations = &[_][]const u8{},
                 .binding_type = .branch_payload,
-                .is_catchall = false,
-                .catchall_metatype = null,
                 .condition = null,
                 .condition_expr = null,
                 .node = .{ .terminal = {} }, // Terminal - triggers auto-discharge check
@@ -5033,8 +5005,6 @@ pub const AutoDischargeInserter = struct {
                 .binding = try self.allocator.dupe(u8, if (has_payload) "v" else "_"),
                 .binding_annotations = &[_][]const u8{},
                 .binding_type = .branch_payload,
-                .is_catchall = false,
-                .catchall_metatype = null,
                 .condition = null,
                 .condition_expr = null,
                 .node = .{ .inline_code = panic_msg }, // @panic(...) — loud, not a no-op
@@ -5061,8 +5031,6 @@ pub const AutoDischargeInserter = struct {
                 .binding = try self.allocator.dupe(u8, "_"),
                 .binding_annotations = &[_][]const u8{},
                 .binding_type = .branch_payload,
-                .is_catchall = false,
-                .catchall_metatype = null,
                 .condition = null,
                 .condition_expr = null,
                 .node = .{ .inline_code = panic_msg }, // @panic(...) — loud hole, not a no-op

@@ -1009,14 +1009,12 @@ fn executeFlow(
     // branchless; compiled code matches it as `ok` by declaration knowledge,
     // so the interpreter meets it there — otherwise armed chains over
     // plain-return verbs (open's handle included) can never match.
-    // `|?` selection lives in the `select` part of interpreter.kz: the catch-all is the
-    // fallback arm, and a metatype catch-all refuses — an interpreter
-    // outcome carries no metatype to filter on.
+    // Arm selection lives in the `select` part of interpreter.kz — name
+    // match plus `when`-guard judging.
     const choice = try selectArm(flow.body.continuations, dispatch_result.branch, dispatch_result.fields, ctx.expr_bindings, ctx.allocator);
-    if (choice.metatype_only) return error.CatchallMetatypeUnsupported;
     if (choice.idx) |ci| {
         const cont = flow.body.continuations[ci];
-        const arm_binding = cont.binding orelse (if (cont.is_catchall and cont.branch.len > 0) cont.branch else null);
+        const arm_binding = cont.binding;
         {
             // Bind the result if there's a binding name
             if (arm_binding) |binding_name| {

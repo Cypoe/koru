@@ -1,23 +1,12 @@
 // ============================================================================
-// Test 210_081: MUST_ERROR — bare `|? |> _` catch-all is pay-for-nothing
-//                          and must be parser-rejected.
+// Test 210_081: FRONTEND_COMPILE_ERROR — bare `|? |> _` refuses at parse.
 //
-// Without a catch-all, unhandled branches compile-time-elide: the handler
-// simply isn't installed in the synthesized comptime struct, so the call
-// site lowers to nothing. Zero cost.
+// There is no catch-all spelling, in any form. Unhandled `?` branches
+// need no marker: the producer's `?` already says they may go unnamed,
+// and "unnamed" is absence — not a case a consumer may write an arm for.
 //
-// With `|? |> _`, the consumer is asking the compiler to *stop eliding*
-// unhandled branches, route them into a handler, and then throw the result
-// away. That's pay-for-nothing — runtime cost for zero information gain,
-// strictly worse than the no-catch-all default.
-//
-// Rule: if you write a catch-all, you engage. Engagement means the body
-// does real work, optionally informed by a metatype binding
-// (`|? Transition t |> body`). Anything that lowers to "do nothing on
-// unhandled branches" must be expressed by *not writing a catch-all*.
-//
-// Expected: parser rejects `|? |> _` with a message pointing at the
-// catch-all line and explaining the no-engagement rule.
+// 210_011/210_017 pin the metatype-bound refusal; this file pins the
+// barest form.
 // ============================================================================
 
 ~tor process { value: u32 }

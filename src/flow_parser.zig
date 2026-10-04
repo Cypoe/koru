@@ -538,12 +538,12 @@ fn parseSingleContinuation(
 ) ParseError!ast.Continuation {
     var content = lexer.trim(line);
 
-    // Determine if catch-all (|?)
-    var is_catchall = false;
+    // `|?` catch-all continuations do not exist: the call site cannot
+    // spell a residual case — name a declared branch or omit it.
     if (std.mem.startsWith(u8, content, "|?")) {
-        is_catchall = true;
-        content = lexer.trim(content[2..]);
-    } else if (std.mem.startsWith(u8, content, "|>")) {
+        return ParseError.MalformedContinuation;
+    }
+    if (std.mem.startsWith(u8, content, "|>")) {
         // Pipeline continuation: |> event()
         content = lexer.trim(content[2..]);
         const node = try parseNode(allocator, content);
@@ -586,7 +586,6 @@ fn parseSingleContinuation(
         return .{
             .branch = branch_info.branch,
             .binding = branch_info.binding,
-            .is_catchall = is_catchall,
             .condition = branch_info.condition,
             .node = node,
             .indent = indent,
@@ -599,7 +598,6 @@ fn parseSingleContinuation(
         return .{
             .branch = branch_info.branch,
             .binding = branch_info.binding,
-            .is_catchall = is_catchall,
             .condition = branch_info.condition,
             .node = null,
             .indent = indent,
@@ -670,8 +668,8 @@ fn findPipeGt(text: []const u8) ?usize {
 }
 
 /// Find a branch `|` (pipe NOT followed by `>`) at depth 0 outside
-/// strings and backticks. `|>` pipeline markers are not branches; `|?`
-/// catch-alls are. Same tracking discipline as findPipeGt.
+/// strings and backticks. `|>` pipeline markers are not branches.
+/// Same tracking discipline as findPipeGt.
 fn findBranchPipe(text: []const u8) ?usize {
     return findBranchPipeFrom(text, 0);
 }
@@ -1302,7 +1300,7 @@ test "parseFlow: pipeline continuation" {
     }
 }
 
-test "parseFlow: catch-all continuation" {
+test "parseFlow: `|?` catch-all continuation refuses" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -1314,12 +1312,8 @@ test "parseFlow: catch-all continuation" {
 
     const result = parseFlow(alloc, source);
     switch (result) {
-        .flow => |f| {
-            try std.testing.expectEqual(@as(usize, 1), f.body.continuations.len);
-            try std.testing.expect(f.body.continuations[0].is_catchall);
-            try std.testing.expectEqualStrings("err", f.body.continuations[0].branch);
-        },
-        .err => return error.UnexpectedError,
+        .flow => return error.ExpectedParseError,
+        .err => {},
     }
 }
 
