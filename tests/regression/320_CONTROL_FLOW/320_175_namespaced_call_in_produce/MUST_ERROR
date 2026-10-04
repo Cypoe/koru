@@ -1,0 +1,6 @@
+A module-path call inside a PRODUCE (->) expression is illegal — same wall
+as 320_129, but the callee's `mod:name` shape is what opened the bypass:
+`std/io` parses as a complete path atom, the prefix parse stopped at the
+`:`, and the call after it was never judged. Guarded by the KORU104
+expression-admission wall (flow_checker, Stage A) now that
+textContainsCall parses whole-input (parseAll) rather than prefix.

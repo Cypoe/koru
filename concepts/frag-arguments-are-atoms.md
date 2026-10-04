@@ -76,3 +76,21 @@ Displaces the belief carried in pin commit 032b0e69, which encoded the
 argument-position shape as legal-but-mislowered ("fix = make the emitter
 lower it"). It was never a lowering gap; it is an illegal construct
 missing its wall — and the wall was missing on five surfaces, not one.
+
+Evolved 2026-10-05: the wall's coverage was real but its PREDICATE had a
+hole the pin family couldn't see. `textContainsCall` used the expression
+parser's prefix mode (`parse()`), which stops at the first token it
+can't continue — so a leading namespaced callee `mod:name(...)` admitted
+as the bare path-atom `mod` and the call after the `:` was never judged.
+Every KORU104 pin used shapes that were either unqualified calls or
+unparseable early (labeled args `g(a: 4)`), so all five stayed green
+while `libs/ogun:mesh.vert(eng, …)` in a produce sailed through and
+leaked verbatim into emitted Zig — measured in armored-rail-ogun/rail,
+`return libs/ogun:mesh.vert(...)` dying as a raw Stage-D error, the same
+leak class the wall was built to kill. Fix: `parseAll()` — whole-input
+parsing makes TrailingGarbage route the entire text to the raw scan,
+which judges `name(` as a call regardless of namespacing. The lesson is
+in the wall's own contract now: a pass/fail admission predicate on
+complete text must parse ALL of it, because "parseable prefix + garbage"
+is exactly the shape an adversary (or a namespaced callee) uses to walk
+past a prefix judge. Pin: 320_175_namespaced_call_in_produce.

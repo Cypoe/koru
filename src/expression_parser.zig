@@ -817,7 +817,12 @@ pub fn containsUserFunctionCall(expr: *const Expression) bool {
 pub fn textContainsCall(allocator: std.mem.Allocator, text: []const u8) bool {
     var parser = ExpressionParser.init(allocator, text);
     defer parser.deinit();
-    if (parser.parse()) |expr| {
+    // parseAll, not parse: a prefix parse silently truncates at the first
+    // token it can't continue, so `libs/ogun:mesh.vert(eng, …)` admitted as
+    // the bare path-atom `libs/ogun` and the call after the `:` was never
+    // judged — the namespaced-callee bypass measured at rail/main.k.
+    // TrailingGarbage must route the WHOLE text to the raw scan below.
+    if (parser.parseAll()) |expr| {
         defer {
             var mutable = @constCast(expr);
             mutable.deinit(allocator);
