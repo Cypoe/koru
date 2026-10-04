@@ -1,0 +1,4 @@
+[strict]
+
+import app/fs
+app/fs:open(path: "test.txt")

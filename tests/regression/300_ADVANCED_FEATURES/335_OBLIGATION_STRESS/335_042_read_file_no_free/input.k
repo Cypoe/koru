@@ -1,0 +1,22 @@
+// NEGATIVE (under --auto-discharge=disable): `std/io:read-file`'s buffer
+// carries `allocated!` and MUST reach `std/io:free`.
+//
+// RULED 2026-07-31 (this file used to be the open question): one label —
+// `allocated` — for every allocator-owned buffer an io tor hands back
+// (read-file here, read-stdin in 335_043), and one disposer, `std/io:free`.
+// The phantom machinery was never missing (335_047 tracked `tainted` on a
+// bare string); this was the spelling landing on the IO surface.
+//
+// Under DEFAULT settings auto-discharge inserts the free (the same
+// convenience curl/yyjson/sse lean on) and this file compiles and runs
+// clean — proven the day of the ruling by koru-examples/kopium's leak
+// check going green. With the net disabled, the leak is a loud refusal:
+//   error[KORU030]: Resource 'content' carries obligation <allocated!>
+//   was not discharged. Call: std.io:free
+
+import std/io
+
+std/io:read-file(path: "data.txt")
+| ok content |> std/io:print.ln("{{ content:s }}")
+| not-found |> _
+| failed _ |> _

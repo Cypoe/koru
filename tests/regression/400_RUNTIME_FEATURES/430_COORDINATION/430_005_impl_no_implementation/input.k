@@ -1,0 +1,9 @@
+// Test 430_005: Abstract with No Implementation (Error Case)
+// When an abstract event has NEITHER default NOR override,
+// invoking it should be a compiler error.
+
+// Define abstract event with NO implementation at all
+[abstract] tor unimplemented { x: i32 }
+
+// Try to invoke it - THIS SHOULD BE A COMPILER ERROR
+unimplemented(x: 42)

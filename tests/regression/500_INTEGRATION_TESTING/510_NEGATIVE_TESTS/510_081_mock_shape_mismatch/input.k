@@ -1,0 +1,5 @@
+tor match { path: string, pattern: string } -> string
+
+test(Should fail clearly) {
+    match -> { path: "/", pattern: "/" }
+}

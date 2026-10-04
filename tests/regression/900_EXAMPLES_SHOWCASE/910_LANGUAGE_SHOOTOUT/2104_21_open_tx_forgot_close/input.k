@@ -1,0 +1,14 @@
+// Ground truth for korulang.org phantom explorer — commit but forget close
+//
+// With --auto-discharge=disable, the active! connection handed back by commit
+// must be closed explicitly. It is not, and that is the refusal pinned here.
+//
+// `tx.begin` / `tx.exec` / `tx.commit` each produce a bare return, so their
+// results are bound with `: <name>` — the spelling every green sibling in this
+// family uses (2104_18/19/20/22).
+
+import app/db
+
+app/db:open(connstr: "postgres://localhost/test")
+| connected c |> app/db:tx.begin(conn: c): t |> app/db:tx.exec(tx: t, sql: "INSERT INTO users VALUES (1, 'alice')"): r |> app/db:tx.commit(tx: r): _
+| connection-failed |> _

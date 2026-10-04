@@ -1,0 +1,45 @@
+// PIN (design gap investigation): A []const u8<unsanitized!> tainted value
+// is passed through an ECHO event — a non-phantom-aware event that takes
+// []const u8 in and returns it in | out []const u8 (also no phantom).
+//
+// After the round-trip, the output binding `out` has type []const u8 (plain).
+// The phantom checker SHOULD either:
+//   (a) Block the input call (obligation still live — same as 335_044), OR
+//   (b) Allow the input call but treat the <unsanitized!> obligation as still
+//       live (unresolved), so it's flagged at scope exit.
+//
+// The DANGEROUS outcome is: the checker allows the input call AND forgets the
+// obligation, treating the outbound `out` binding as taint-free. That would
+// mean a non-phantom-aware gateway can silently launder tainted data through
+// the type system, bypassing the obligation completely.
+//
+// This probes: does the phantom obligation survive a plain-typed echo boundary,
+// or is it erased at the call site?
+//
+// PREDICTION: UNCERTAIN (likely RED PIN — taint is erased and the binding
+// `out` is treated as clean, even though the original `s` was unsanitized).
+//
+// Grounding:
+//   []const u8<unsanitized!>  — 330_068/input.kz line 15 (output branch type)
+//   get-input event pattern   — 330_068/input.kz lines 14-17
+//   => branch arm syntax      — 330_068/input.kz line 17
+//   | out branch output       — mirrors 330_069/input.kz line 20 pattern
+//   print.ln call             — 330_068/input.kz line 26
+//   Negative twin: 330_069 (direct print of tainted string is caught)
+
+import std/io
+
+pub tor get-input {} -> string<unsanitized!>
+
+get-input -> "untrusted user input"
+
+// Plain-typed echo: takes []const u8 (no phantom), returns []const u8 (no phantom).
+// No knowledge of taint — acts as an opaque non-phantom-aware gateway.
+tor echo { data: string } -> string
+
+echo -> data
+
+// Pass tainted value through the echo boundary.
+// After the call, `result` has type []const u8 — taint should still be tracked
+// as an undischarged obligation, but is the checker smart enough to notice?
+get-input(): s |> echo(data: s): result |> std/io:print.ln("{{ result:s }}")

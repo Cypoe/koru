@@ -1,0 +1,15 @@
+// TEST: Transaction started but never executed or committed
+//
+// begin() produces Transaction<started!>
+// We never call exec(), so we can't call commit() (needs <!active>)
+// The <started!> obligation is never discharged.
+//
+// EXPECTED: Compiler error - Transaction<started!> obligation not satisfied
+
+import app/db
+
+app/db:connect(host: "localhost")
+| ok c |> app/db:begin(conn: c)
+    | ok _ |> _
+    | err _ |> _
+| err _ |> _

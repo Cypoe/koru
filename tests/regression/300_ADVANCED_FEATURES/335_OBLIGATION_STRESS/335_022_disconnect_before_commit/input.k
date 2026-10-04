@@ -1,0 +1,17 @@
+// PIN: disconnect (outer resource) is called BEFORE commit (inner resource
+// that requires the outer connection). This violates LIFO resource ordering:
+// Rust would drop inner before outer; every DB library commits before
+// disconnecting. After disconnect(conn: c), c is discharged (<connected!>
+// consumed). commit(tx, conn: c) then reads c as <connected> — use-after-discharge.
+//
+// Legal order (330_027/input.kz): commit(tx) |> disconnect(conn: c)
+// This test inverts that order.
+//
+// Grounding:
+//   - flow structure:            330_027/input.kz
+//   - connect/query/disconnect:  ./db.kz (this dir's fixture)
+//   - commit requiring conn:     ./db.kz (conn: *Connection<connected>)
+//   - disconnect consuming conn: ./db.kz (pub tor disconnect { conn: *Connection<!connected> })
+import app/db
+
+app/db:connect(url: "postgres://localhost/test"): c |> app/db:query(conn: c): tx |> app/db:disconnect(conn: c) |> app/db:commit(tx, conn: c)

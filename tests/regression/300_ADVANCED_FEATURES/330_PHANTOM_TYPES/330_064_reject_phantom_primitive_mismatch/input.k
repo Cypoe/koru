@@ -1,0 +1,16 @@
+// Test (negative): passing a bare `f32` (no phantom label) where `f32[celsius]`
+// is required must be rejected by the phantom semantic checker.
+//
+// Safety counterpart to 330_063_phantom_state_on_primitive — that test proves
+// matching phantoms compile and a conversion event transitions across labels;
+// this one proves that an un-labelled f32 can't masquerade as a labelled one.
+
+tor read-raw { sensor_id: u8 } -> f32                          // BARE f32 — no phantom label
+
+read-raw -> 22.5
+
+tor to-fahrenheit { c: f32<celsius> }   // requires [celsius] -> f32<fahrenheit>
+
+to-fahrenheit -> c * 9.0 / 5.0 + 32.0
+
+read-raw(sensor_id: 1): t |> to-fahrenheit(c: t): _     // ERROR: f32 cannot satisfy f32[celsius]

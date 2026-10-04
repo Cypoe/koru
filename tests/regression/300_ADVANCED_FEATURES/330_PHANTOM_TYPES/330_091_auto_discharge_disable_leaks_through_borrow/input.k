@@ -1,0 +1,20 @@
+// PIN: `--auto-discharge=disable` must still enforce an obligation that has
+// passed through a bare-borrow.
+//
+// `open` grants <hashing!>. `update` BORROWS it (bare <hashing>), so `d` is
+// still live and still owing after the call. We then FORGET to finalize `d`.
+// `koruc --help` promises: "Disable automatic disposal insertion — phantom
+// errors WILL fire for unsatisfied obligations." So disable must reject this
+// with "was not discharged", borrow or no borrow.
+//
+// Enforcement under disable lives in a different pass (phantom-semantic-checker)
+// than under default (auto-discharge-inserter); this pins that the two agree on
+// whether an obligation survives a bare-borrow. Control: the green sibling
+// 2104_21_open_tx_forgot_close is the same forgotten-discharge WITHOUT a borrow.
+//
+// MUST_ERROR under --auto-discharge=disable (see COMPILER_FLAGS).
+
+import app/digest
+import std/io
+
+app/digest:open(): d |> app/digest:update(d, n: 1) |> std/io:print.ln("forgot to finalize d after a borrow")

@@ -1,0 +1,5 @@
+// Test: Unknown label should produce a clear error message
+
+tor foo {}
+
+foo() |> @missing()

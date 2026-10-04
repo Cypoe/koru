@@ -1,0 +1,5 @@
+// Test: Call to event that doesn't exist
+// BAD: Backend says "Unknown event referenced" without naming which event
+// Should say: "Event 'nonexistent' is not defined"
+
+nonexistent(x: 1)

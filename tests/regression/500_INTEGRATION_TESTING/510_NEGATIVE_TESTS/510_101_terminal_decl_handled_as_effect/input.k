@@ -1,0 +1,11 @@
+// ============================================================================
+// Test 510_101: MUST_ERROR — terminal `|` decl branch handled by `!` cont.
+//
+// The event declares `done` as a TERMINAL branch (`|`), but the consumer
+// dispatches with `! done`. The shape checker rejects.
+// ============================================================================
+
+pub tor compute { x: i32 } -> i32
+
+compute(x: 1)
+! done _ |> _

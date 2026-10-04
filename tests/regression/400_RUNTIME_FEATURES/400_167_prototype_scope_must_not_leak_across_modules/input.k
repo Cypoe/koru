@@ -1,0 +1,38 @@
+// PINS: [prototype] must be scoped to the module that bears the annotation.
+// It is a per-file opt-in (concepts/frag-prototype-mode-panic-holes.md) — a
+// module that does NOT carry the annotation must keep full exhaustiveness even
+// when some OTHER module in the program is a prototype.
+//
+// This main module IS [prototype], and imports app/helper — a plain,
+// non-prototype module. helper.kz contains an incomplete flow (a declared
+// terminal left unhandled). Because helper is not a prototype, that hole must
+// be rejected KORU022, exactly as it is when no module in the program is a
+// prototype at all.
+//
+// The annotation lives on a single program-level field (ast.Program
+// .module_annotations), so today the leniency it grants is program-WIDE: the
+// prototype flag flips exhaustiveness for helper's flow too, and the hole is
+// silently tolerated instead of rejected.
+//
+// The fix does NOT need a new AST field (checked 2026-07-31). ast.ModuleDecl
+// ALREADY carries its own `annotations`, and the checkers already read them —
+// flow_checker.zig:95 reads `hasPart(module.annotations, "comptime")` while
+// descending into an imported module's items. So `prototype_mode` can become
+// "the module currently being walked is a prototype": keep the field compiler.kz
+// sets (which is the MAIN module's annotation) and, on descent into a
+// `.module_decl`, temporarily set it from that module's own annotations.
+// No koru_std/compiler.kz change, no ast.zig change.
+//
+// FOUR passes read the flag and each needs the same save/restore on descent:
+//   check-structure  — shape_checker.zig:37   (relaxes KORU022 coverage)
+//   check-flow       — flow_checker.zig:48    (same relaxation)
+//   pass-auto-discharge — auto_discharge_inserter.zig:88 (SYNTHESIZES the
+//                       @panic hole; this is the one that actually tolerates
+//                       helper's hole rather than merely not reporting it)
+//   check-phantom-args — set at compiler.kz:2738
+//
+// Four files is past the "stop and present the scope" line in AGENTS.md, which
+// is why this stays red rather than being half-done.
+
+[prototype]
+import app/helper

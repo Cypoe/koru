@@ -1,0 +1,8 @@
+// TEST: Try to close a connection without using it in a transaction.
+// close() requires Connection<!active>, but connect yields <connected!>.
+// These states don't match — you can't close a fresh (never-active) connection.
+import app/db
+
+app/db:connect(host: "localhost")
+| ok c |> app/db:close(conn: c)
+| err _ |> _

@@ -1,0 +1,21 @@
+// ============================================================================
+// Test 210_095: MUST_ERROR — a BARE literal argument must be REJECTED; a
+//   literal cannot be punned, so it REQUIRES an explicit label. Bare-side
+//   twin of 210_091's legal `echo(v: 5)`.
+//
+//   `echo(5)` is none of the three legal forms (5 is not an Expr-typed first
+//   param, not explicitly named, and cannot pun). The legal spelling is
+//   `echo(v: 5)`.
+//
+// CURRENT BEHAVIOR (the bug this pins): compiles clean — a bare literal is
+//   bound positionally to parameter[0]. RED until the frontend rejects it.
+//   Diagnostic is a design call; expected_patterns below is the target.
+// ============================================================================
+
+import std/io
+
+tor echo { v: i32 } -> i32
+
+echo -> v
+
+echo(5): r |> std/io:print.ln("{{ r:d }}")

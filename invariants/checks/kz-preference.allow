@@ -19,3 +19,4 @@ koru_std/compiler.directives.kz | part file of the compiler module — same cont
 koru_std/runtime.parsewire.kz | part file of the runtime module — same contract-split trigger as bridge.run
 tests/regression/100_MODULE_SYSTEM/140_FILE_LAYOUT/140_021_part_tilde_spelling/input.kz | pins host-embedded `~` part declarations — converting vacates the pin
 tests/regression/200_COMPILER_FEATURES/210_PARSER/210_312_empty_source_block_eats_next_decl_kz/input.kz | the test names the .kz spelling — the bug it pins only reproduces on the host-embedded facet
+tests/regression/100_MODULE_SYSTEM/140_FILE_LAYOUT/140_029_dup_tor_across_facets_refused/input.kz | the pin is facet-companion duplication itself — a .k twin changes what the test measures

@@ -94,6 +94,8 @@ def exempted(repo, rel, allow):
     d = os.path.dirname(os.path.join(repo, rel))
     if os.path.normpath(rel).startswith("tests/broken/"):
         return "tests/broken is parked"
+    if rel in allow:
+        return f"allow: {allow[rel]}"
     for marker in ("expected.json", "LANGUAGES", "MUST_ERROR", "input.k"):
         if os.path.exists(os.path.join(d, marker)):
             return f"sibling {marker}"
@@ -104,8 +106,6 @@ def exempted(repo, rel, allow):
                 return "error-EXPECT dir"
         except OSError:
             pass
-    if rel in allow:
-        return f"allow: {allow[rel]}"
     return None
 
 

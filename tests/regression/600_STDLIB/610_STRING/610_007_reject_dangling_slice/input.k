@@ -1,0 +1,11 @@
+// PIN (GREEN since KORU095): a `-> string` bare return projecting a
+// parameter's memory is refused — borrows flow down, never up.
+//
+// `std/string:read` was exactly this tor (`{ s } -> s.data`); it retired
+// the day this check landed (610_007, ruled 2026-09-05). Consumers take the
+// handle; genuine escapes copy out through `snapshot`.
+import std/string
+import std/io
+
+pub tor peek { s: *std/string:String<view> } -> string
+peek -> s.data

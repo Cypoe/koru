@@ -1,0 +1,7 @@
+// Test: Flow handles branch that doesn't exist on event
+// GOOD: Backend catches with KORU021/KORU022
+
+tor foo { x: i32 }
+
+foo(x: 1)
+| success |> _
