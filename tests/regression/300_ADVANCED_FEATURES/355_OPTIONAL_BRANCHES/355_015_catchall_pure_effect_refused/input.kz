@@ -1,0 +1,28 @@
+// Test 355_015: MUST_ERROR — `|?` on a pure-effect tor refuses.
+//
+// `|?` routes OPTIONAL `|` outcome branches. A tor declaring only `!`
+// effect links produces no outcome union to dispatch on — the catch-all
+// has nothing to fall back from. It reads as "handle the rest" while
+// nothing can ever reach it, which is the pay-for-nothing shape with a
+// worse symptom: emission dropped the invocation entirely.
+//
+// Expected: KORU026 — the catch-all names a fallback for a union that
+// does not exist.
+
+~tor tokenize { source: string }
+! token u32
+! ?warn string
+
+~proc tokenize|zig {
+    _ = source;
+    token(1);
+}
+
+~pub tor observe { name: string }
+~proc observe|zig {
+    _ = name;
+}
+
+~tokenize(source: "x")
+! token _ |> observe(name: "tok")
+|? |> observe(name: "rest")

@@ -1206,6 +1206,20 @@ pub const ShapeChecker = struct {
         parent_inv: ?*const ast.Invocation,
         bare_return: bool,
     ) !bool {
+        // Track if we found any errors (but continue checking to find all of them)
+        var has_errors = false;
+
+        // `|?` on a callee with no `|` outcomes catches nothing — refuse.
+        if (ast.deadCatchall(event_branches, bare_return, continuations)) |cont| {
+            try self.reporter.addErrorAtLocation(
+                .KORU026,
+                if (cont.location.line != 0) cont.location else location,
+                "catch-all '|?' on '{s}' has no '|' outcome branches to catch — it routes optional outcome branches only",
+                .{event_name},
+            );
+            has_errors = true;
+        }
+
         // Bare-return events (`-> T`) have no branch tags. A named `| tag`
         // continuation is the one-variant union (PARSE003's use-site twin):
         // bind the value with `: name`. Empty names are the rest of a `|>`
@@ -1217,6 +1231,7 @@ pub const ShapeChecker = struct {
             for (continuations) |cont| {
                 if (cont.is_transformed_subtree) continue;
                 if (cont.kind == .effect) continue;
+                if (cont.is_catchall) continue; // dead-catchall rule above already names it
                 if (cont.branch.len == 0) continue;
                 if (std.mem.eql(u8, cont.branch, "_")) continue;
                 const loc = if (cont.location.line != 0) cont.location else location;
@@ -1231,11 +1246,8 @@ pub const ShapeChecker = struct {
                 tagged = true;
             }
             const pipeline_ok = try self.validatePipelineSteps(event_branches, continuations, location, parent_inv);
-            return pipeline_ok and !tagged;
+            return pipeline_ok and !tagged and !has_errors;
         }
-
-        // Track if we found any errors (but continue checking to find all of them)
-        var has_errors = false;
 
         // PRESENCE WALL (KORU131): `if(<required arm>)` — a required arm is
         // always installed (exhaustiveness guarantees a handler), so testing

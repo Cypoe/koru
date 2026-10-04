@@ -4662,8 +4662,15 @@ pub const AutoDischargeInserter = struct {
 
         var handled = std.StringHashMap(void).init(self.allocator);
         defer handled.deinit();
+        var has_catchall = false;
         for (existing) |*c| {
-            if (c.is_catchall) return null; // answers whatever is left
+            if (c.is_catchall) {
+                // Answers the remaining OPTIONAL branches — panic arms still
+                // synthesize (|? never routes `| ?!`; the union variant exists
+                // and only a named loud arm can fill it).
+                has_catchall = true;
+                continue;
+            }
             try handled.put(c.branch, {});
         }
 
@@ -4683,7 +4690,7 @@ pub const AutoDischargeInserter = struct {
             if (branch.is_panic) {
                 try missing.append(self.allocator, branch);
             } else if (branch.is_optional) {
-                try missing_opt.append(self.allocator, branch.name);
+                if (!has_catchall) try missing_opt.append(self.allocator, branch.name);
             }
         }
         if (missing.items.len == 0 and missing_opt.items.len == 0) return null;
@@ -4818,10 +4825,17 @@ pub const AutoDischargeInserter = struct {
         var handled = std.StringHashMap(void).init(self.allocator);
         defer handled.deinit();
 
+        var has_catchall = false;
         for (flow.body.continuations) |*cont| {
             if (cont.is_catchall) {
-                // Catch-all handles all optional branches - no synthesis needed
-                return null;
+                // Catch-all routes all OPTIONAL branches - no no-op synthesis
+                // for those (the emitter wires them into the catch-all body,
+                // and a synthesized named arm would shadow it). It does NOT
+                // route panic or required branches: `| ?!` still needs its
+                // loud arm, and a ~[prototype] hole still needs its @panic —
+                // the emitted union variants exist either way.
+                has_catchall = true;
+                continue;
             }
             try handled.put(cont.branch, {});
         }
@@ -4856,7 +4870,7 @@ pub const AutoDischargeInserter = struct {
             if (branch.is_panic) {
                 try missing_panic.append(self.allocator, branch);
             } else if (branch.is_optional) {
-                try missing_optional.append(self.allocator, branch.name);
+                if (!has_catchall) try missing_optional.append(self.allocator, branch.name);
             } else if (self.prototype_mode) {
                 // A plain REQUIRED terminal left unhandled under ~[prototype] is
                 // a HOLE: synthesize a loud @panic arm (same as | ?!) so the

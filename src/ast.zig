@@ -1571,6 +1571,34 @@ pub const Branch = struct {
     }
 };
 
+/// True when the decl's branch list holds at least one `|` outcome branch —
+/// the union variants a `|?` catch-all routes. Bare-return (`-> T`), void,
+/// and `!`-effect-only decls produce no outcome switch, so nothing can fall
+/// back to a catch-all written against them.
+pub fn hasTerminalBranch(branches: []const Branch, bare_return: bool) bool {
+    if (bare_return) return false;
+    for (branches) |*b| {
+        if (b.kind != .effect) return true;
+    }
+    return false;
+}
+
+/// A `|?` written against a callee with no `|` outcome branches: the dispatch
+/// has no outcome union to fall back from — emission drops the call or runs
+/// the arm's body on every fire. Returns the offending catch-all arm for the
+/// caller to refuse, or null when the site is legal.
+pub fn deadCatchall(
+    branches: []const Branch,
+    bare_return: bool,
+    continuations: []const Continuation,
+) ?*const Continuation {
+    if (hasTerminalBranch(branches, bare_return)) return null;
+    for (continuations) |*cont| {
+        if (cont.is_catchall) return cont;
+    }
+    return null;
+}
+
 /// NamedBranch - uniform structure for control flow branches in AST nodes
 ///
 /// This type enables the shape checker to validate branches uniformly without

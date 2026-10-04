@@ -1839,6 +1839,16 @@ pub const FlowChecker = struct {
             return;
         };
 
+        // `|?` on a callee with no `|` outcomes catches nothing — refuse.
+        if (ast.deadCatchall(event_decl.branches, event_decl.return_type != null, continuations) != null) {
+            const segs = event_decl.path.segments;
+            try self.reporter.addError(
+                .KORU026, location.line, location.column,
+                "catch-all '|?' on '{s}' has no '|' outcome branches to catch — it routes optional outcome branches only",
+                .{if (segs.len > 0) segs[segs.len - 1] else "(unknown)"},
+            );
+        }
+
         // Bare-return events (`-> T`) carry no branch tags — only a single unnamed
         // output. Continuations on such callees use produce syntax (`| _ v -> expr`);
         // the `| label` is binding sugar, not a shape-contract tag. Tag-based

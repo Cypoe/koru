@@ -99,6 +99,24 @@ Splicing into such a block produces a green that means *dropped*, not
   that `|?` never substitutes for a named required arm; only the checker's
   prose dissented. A coverage rule with no emission path behind it is not
   a relaxation, it is a refusal deferred. Pinned: 355_013.
+- **The suppressor can be the counterfeiter too.** `auto_discharge_inserter`
+  treated `|?` as answering everything left — so an unhandled `| ?!` panic
+  variant and a `~[prototype]` hole both lost their synthesized `@panic`
+  arms, and codegen died on the missing variant instead. The grant was
+  silent twice over: no arm emitted AND no arm synthesized. Now `|?`
+  silences only the optional no-ops it actually routes; panic arms and
+  prototype holes still synthesize. Pinned: 355_014, 400_206.
+- **A catch-all with no union to catch is the same grant in negative.**
+  `|?` on a pure-effect, bare-return, or void callee attached a fallback
+  to a dispatch that has no outcome switch: emission dropped the
+  invocation outright (unused block label) or ran the arm's body on every
+  call. Neither checker had asked the question "is there anything here to
+  catch". Refused as KORU026 in both flow_checker and shape_checker;
+  pinned 355_015, 355_016. The full shape census — guarded `|?` (KORU103),
+  guard-only required with `|?` (KORU050), class branch `| \`*\` *` with
+  an unnamed required branch (KORU022), the interpreter's honest
+  `unhandled-branch` (440_020) — already agreed; only these three seams
+  dissented.
 
 ## Open
 

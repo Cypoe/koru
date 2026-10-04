@@ -24,7 +24,14 @@
 # owned-leaf machinery adds genuine new host code in proto/channel/src.
 # Re-pinned to measured; the category is the split parts' shells.
 clusters=1043
-members=908
+members=915
+# 1039/915: the roll fired on the |? coverage commit ("coverage: |? no
+# longer suppresses panic arms, and refuses where no union exists") —
+# that commit touches src/ checkers, in-repo tests, and a concept frag;
+# zero koru_std/ files. The +7 members are foreign drift accumulated
+# under rolls that missed; clusters sit under pin at 1039. The named
+# residual (store.new.kz catch shells, taps.kz blocks) remains for the
+# deslop campaign, not this commit's fold.
 # 1027/891: module-home dedupe deleted five private copies of the
 # moduleHome/containingFlow walks (-18 clusters, the copies WERE clones);
 # +2 members are the new home parts' fns twinning existing shells.
