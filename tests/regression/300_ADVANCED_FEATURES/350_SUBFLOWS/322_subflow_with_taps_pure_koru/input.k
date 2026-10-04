@@ -19,24 +19,24 @@
 //   tappable through a subflow as a |zig one.
 // ============================================================================
 
-~import std/io
-~import std/taps
+import std/io
+import std/taps
 
 // Base event: adds 5 to a number, as a pure value continuation.
 // (cf. 040_CONTROL_FLOW/211_nested_depth_2: `add-one => done value + 1`)
-~tor add-five { value: i32 } -> i32
+tor add-five { value: i32 } -> i32
 
-~add-five -> value + 5
+add-five -> value + 5
 
 // Subflow that calls add-five and passes its result through.
 // (cf. 350_SUBFLOWS/303_subflow_chained)
-~tor double { value: i32 } -> i32
+tor double { value: i32 } -> i32
 
-~double = add-five(value): r -> r
+double = add-five(value): r -> r
 
 // TAP: observe add-five's bare-return transition and print purely. `: v` binds
 // the produced value (unused here), mirroring the ruled form in 508/505.
-~tap(add-five -> *): v |> std/io:print.ln("TAP FIRED: add-five -> result observed!")
+tap(add-five -> *): v |> std/io:print.ln("TAP FIRED: add-five -> result observed!")
 
 // Execute the subflow — the tap fires during it, then print the final value.
-~double(value: 10): r |> std/io:print.ln("Final: {{ r:d }}")
+double(value: 10): r |> std/io:print.ln("Final: {{ r:d }}")

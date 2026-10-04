@@ -275,16 +275,14 @@ test "emit multiple branches" {
 // CORNER CASES FROM THE PROCEDURAL MONSTER
 // ============================================================================
 
-test "skip events with Source parameters (comptime-only)" {
-    // Line 2132-2146 of compiler_bootstrap.kz: Skip comptime-only events
+// A comptime-only tor (marker on the input field) emits nothing.
+// Line 2132-2146 of compiler_bootstrap.kz: skip comptime-only decls.
+fn expectEventDeclSkipped(input_fields: []ast.Field) !void {
     var buffer: [4096]u8 = undefined;
     var code_emitter = emitter.CodeEmitter.init(&buffer);
 
-    var input_fields = [_]ast.Field{
-        .{ .name = "source", .type = "Source", .is_file = false, .is_embed_file = false, .is_source = true, .phantom = null, .expression = null, .expression_str = null, .owns_expression = false },
-    };
     var output_fields = [_]ast.Field{};
-    const input_shape = ast.Shape{ .fields = &input_fields };
+    const input_shape = ast.Shape{ .fields = input_fields };
     const output_shape = ast.Shape{ .fields = &output_fields };
     var branches = [_]ast.Branch{
         .{ .name = "done", .payload = output_shape, .is_optional = false },
@@ -302,79 +300,26 @@ test "skip events with Source parameters (comptime-only)" {
     };
 
     try emitter.emitEventDeclInMainModule(&code_emitter, &event, &[_]ast.Item{});
+    try testing.expectEqual(@as(usize, 0), code_emitter.getOutput().len);
+}
 
-    const output = code_emitter.getOutput();
+fn markerField(name: []const u8, field_type: []const u8, is_source: bool) ast.Field {
+    return .{ .name = name, .type = field_type, .is_file = false, .is_embed_file = false, .is_source = is_source, .phantom = null, .expression = null, .expression_str = null, .owns_expression = false };
+}
 
-    // Should be skipped (comptime-only event)
-    try testing.expectEqual(@as(usize, 0), output.len);
+test "skip events with Source parameters (comptime-only)" {
+    var input_fields = [_]ast.Field{markerField("source", "Source", true)};
+    try expectEventDeclSkipped(&input_fields);
 }
 
 test "skip events with ProgramAST parameters" {
-    // Another comptime-only marker
-    var buffer: [4096]u8 = undefined;
-    var code_emitter = emitter.CodeEmitter.init(&buffer);
-
-    var input_fields = [_]ast.Field{
-        .{ .name = "program", .type = "ProgramAST", .is_file = false, .is_embed_file = false, .is_source = false, .phantom = null, .expression = null, .expression_str = null, .owns_expression = false },
-    };
-    var output_fields = [_]ast.Field{};
-    const input_shape = ast.Shape{ .fields = &input_fields };
-    const output_shape = ast.Shape{ .fields = &output_fields };
-    var branches = [_]ast.Branch{
-        .{ .name = "done", .payload = output_shape, .is_optional = false },
-    };
-
-    const event = ast.EventDecl{
-        .path = .{ .module_qualifier = null, .segments = @constCast(&[_][]const u8{"comptime_event"}) },
-        .input = input_shape,
-        .branches = &branches,
-        .is_public = true,
-        .is_implicit_flow = false,
-        .annotations = @constCast(&[_][]const u8{}),
-        .location = .{ .line = 1, .column = 0, .file = "test.kz" },
-        .module = "test",
-    };
-
-    try emitter.emitEventDeclInMainModule(&code_emitter, &event, &[_]ast.Item{});
-
-    const output = code_emitter.getOutput();
-
-    // Should be skipped
-    try testing.expectEqual(@as(usize, 0), output.len);
+    var input_fields = [_]ast.Field{markerField("program", "ProgramAST", false)};
+    try expectEventDeclSkipped(&input_fields);
 }
 
 test "skip events with Program parameters" {
-    // Yet another comptime-only marker
-    var buffer: [4096]u8 = undefined;
-    var code_emitter = emitter.CodeEmitter.init(&buffer);
-
-    var input_fields = [_]ast.Field{
-        .{ .name = "source", .type = "Program", .is_file = false, .is_embed_file = false, .is_source = false, .phantom = null, .expression = null, .expression_str = null, .owns_expression = false },
-    };
-    var output_fields = [_]ast.Field{};
-    const input_shape = ast.Shape{ .fields = &input_fields };
-    const output_shape = ast.Shape{ .fields = &output_fields };
-    var branches = [_]ast.Branch{
-        .{ .name = "done", .payload = output_shape, .is_optional = false },
-    };
-
-    const event = ast.EventDecl{
-        .path = .{ .module_qualifier = null, .segments = @constCast(&[_][]const u8{"comptime_event"}) },
-        .input = input_shape,
-        .branches = &branches,
-        .is_public = true,
-        .is_implicit_flow = false,
-        .annotations = @constCast(&[_][]const u8{}),
-        .location = .{ .line = 1, .column = 0, .file = "test.kz" },
-        .module = "test",
-    };
-
-    try emitter.emitEventDeclInMainModule(&code_emitter, &event, &[_]ast.Item{});
-
-    const output = code_emitter.getOutput();
-
-    // Should be skipped
-    try testing.expectEqual(@as(usize, 0), output.len);
+    var input_fields = [_]ast.Field{markerField("source", "Program", false)};
+    try expectEventDeclSkipped(&input_fields);
 }
 
 test "event name becomes snake_case with _event suffix" {

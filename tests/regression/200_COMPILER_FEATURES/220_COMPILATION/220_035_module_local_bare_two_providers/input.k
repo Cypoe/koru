@@ -20,10 +20,10 @@
 // first-wins emission the second module's signatures point at the first
 // module's struct and the program does not compile (Zig types are nominal).
 
-~import app/alpha
-~import app/beta
-~import std/io
+import app/alpha
+import app/beta
+import std/io
 
-~app/alpha:mint(id: 1): t |> app/alpha:read(t): a |> std/io:print.ln(a)
+app/alpha:mint(id: 1): t |> app/alpha:read(t): a |> std/io:print.ln(a)
 
-~app/beta:mint(id: 2): t |> app/beta:read(t): b |> std/io:print.ln(b)
+app/beta:mint(id: 2): t |> app/beta:read(t): b |> std/io:print.ln(b)

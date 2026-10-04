@@ -8,8 +8,8 @@
 // 330_027_db_transaction_pattern. Measured TRUE: all four flows compile and
 // the output is byte-identical to expected.txt. The call side is also pinned
 // by 330_051 (green); this pin adds the full four-path trace.
-~import app/connection
-~app/connection:create(): c1 |> app/connection:connect(conn: c1): c2 |> app/connection:resume(conn: c2): c3 |> app/connection:close(conn: c3)
-~app/connection:create(): c1 |> app/connection:connect(conn: c1): c2 |> app/connection:pause(conn: c2): c3 |> app/connection:resume(conn: c3): c4 |> app/connection:close(conn: c4)
-~app/connection:create(): c1 |> app/connection:connect(conn: c1): c2 |> app/connection:close(conn: c2)
-~app/connection:create(): c1 |> app/connection:connect(conn: c1): c2 |> app/connection:pause(conn: c2): c3 |> app/connection:close(conn: c3)
+import app/connection
+app/connection:create(): c1 |> app/connection:connect(conn: c1): c2 |> app/connection:resume(conn: c2): c3 |> app/connection:close(conn: c3)
+app/connection:create(): c1 |> app/connection:connect(conn: c1): c2 |> app/connection:pause(conn: c2): c3 |> app/connection:resume(conn: c3): c4 |> app/connection:close(conn: c4)
+app/connection:create(): c1 |> app/connection:connect(conn: c1): c2 |> app/connection:close(conn: c2)
+app/connection:create(): c1 |> app/connection:connect(conn: c1): c2 |> app/connection:pause(conn: c2): c3 |> app/connection:close(conn: c3)

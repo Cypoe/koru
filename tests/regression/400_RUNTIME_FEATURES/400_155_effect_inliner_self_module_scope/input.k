@@ -3,11 +3,11 @@
 // - spin: cut-1 inline splice path ($mod. -> the module's emitted namespace)
 // See lib/gadget.kz for the fixture and the contract statement.
 
-~import std/io
-~import app/lib/gadget
+import std/io
+import app/lib/gadget
 
-~app/lib/gadget:calc(n: 5): v |> std/io:print.ln("calc {{ v:d }}")
+app/lib/gadget:calc(n: 5): v |> std/io:print.ln("calc {{ v:d }}")
 
-~app/lib/gadget:spin(count: 3)
+app/lib/gadget:spin(count: 3)
 ! tick w |> std/io:print.ln("tick {{ w.n:d }}")
 | done total |> std/io:print.ln("total {{ total:d }}")

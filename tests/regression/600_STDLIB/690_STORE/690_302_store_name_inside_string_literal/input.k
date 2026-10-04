@@ -5,9 +5,9 @@
 // lines down did — so a store named `tape` rewrote the word `tape.` inside
 // literals. Found by koru-examples/kopium-demo: a scripted turn reading
 // "this transcript is a tape." printed "__koru_store_tape.".
-~import std/io
-~import std/store
+import std/io
+import std/store
 
-~std/store:new(tape) { v: 0[i64] }
+std/store:new(tape) { v: 0[i64] }
 
-~std/io:print.ln("the word tape. stays verbatim")
+std/io:print.ln("the word tape. stays verbatim")

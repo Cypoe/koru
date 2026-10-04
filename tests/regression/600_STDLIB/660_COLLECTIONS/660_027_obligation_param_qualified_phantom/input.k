@@ -14,13 +14,13 @@
 //
 // This is THE wall behind AoC days 7, 10, 22 (see those ledgers): without
 // it, no owned collection handle can pass through any user event.
-~import std/io
-~import std/list
+import std/io
+import std/list
 
-~pub tor roundtrip { cur: *std/list:List_i64<!list> } -> *std/list:List_i64<list!>
+pub tor roundtrip { cur: *std/list:List_i64<!list> } -> *std/list:List_i64<list!>
 
-~roundtrip -> cur
+roundtrip -> cur
 
-~std/list:new(i64)
+std/list:new(i64)
 | list xs |> roundtrip(cur: xs): ys |> std/list:len(xs: ys): n |> std/io:print.ln("len={{ n:d }}") |> std/list:free(xs: ys)
 | err e |> std/io:print.ln("ERR seed {{ e:s }}")

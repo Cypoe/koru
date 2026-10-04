@@ -25,17 +25,17 @@
 // key, no effect branch). This is the intersection, and it is the shape Orisha's
 // `serve` over `orisha/pump:run` is written in.
 
-~import std/io
-~import std/build
-~import mylib
+import std/io
+import std/build
+import mylib
 
-~std/build:variants {
+std/build:variants {
     "mylib/pump:run": "alt"
 }
 | configured _ |> _
 | skipped _ |> _
 | invalid-event _ |> _
 
-~mylib:drive(n: 3)
+mylib:drive(n: 3)
 | finished f |> std/io:print.ln(f)
 | blank |> std/io:print.ln("blank")

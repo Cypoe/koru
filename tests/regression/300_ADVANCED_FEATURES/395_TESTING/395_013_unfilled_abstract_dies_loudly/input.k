@@ -11,25 +11,25 @@
 //
 // A test block stands KORU047 down wholesale (see 395_012), which is what lets
 // an unimplemented event reach emission at all.
-~import std/testing
-~import std/io
+import std/testing
+import std/io
 
-~[abstract] tor fetch { id: u32 }
+[abstract] tor fetch { id: u32 }
 | found u32
 | missing
 
-~tor run-it { id: u32 }
+tor run-it { id: u32 }
 | ok u32
 | gone
 
-~run-it = fetch(id)
+run-it = fetch(id)
 | found f => ok f
 | missing => gone
 
-~test(a test block exists and mocks nothing) {
-    ~assert.ok()
+test(a test block exists and mocks nothing) {
+    assert.ok()
 }
 
-~run-it(id: 1)
+run-it(id: 1)
 | ok v |> std/io:print.ln("value = {{ v:d }}")
 | gone |> std/io:print.ln("nothing there")

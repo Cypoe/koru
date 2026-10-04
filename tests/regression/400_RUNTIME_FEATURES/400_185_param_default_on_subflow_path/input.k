@@ -11,10 +11,10 @@
 // `src/auto_discharge_inserter.zig` carries the honest note next to its
 // auto-fill classifier: `TODO: event-input defaults when the surface supports
 // them on shapes`. It does not support them; it leaks them.
-~import std/io
+import std/io
 
-~tor add { a: i32, b: i32 = 5 } -> i32
+tor add { a: i32, b: i32 = 5 } -> i32
 
-~add -> a + b
+add -> a + b
 
-~add(a: 1): r |> std/io:print.ln("{{ r:d }}")
+add(a: 1): r |> std/io:print.ln("{{ r:d }}")

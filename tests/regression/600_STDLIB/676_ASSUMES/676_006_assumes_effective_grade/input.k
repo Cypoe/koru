@@ -15,18 +15,18 @@
 //
 //   koruc <file> assumes claimed
 
-~import std/rules
+import std/rules
 
-~[
+[
 - aspirational someday-streams
   Honest admitted debt: this slurps, not built yet.
 ]tor stream { n: i64 } -> i64
 
-~tor bought { n: i64 }
-~bought = stream(n: 1)
+tor bought { n: i64 }
+bought = stream(n: 1)
 
-~[
+[
 - proven bought-with-debt
   Claims proven, but its closure rests on the aspirational above.
 ]tor claimed { n: i64 }
-~claimed = bought(n: 2)
+claimed = bought(n: 2)

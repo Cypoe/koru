@@ -6,5 +6,5 @@
 // This MUST_RUN pins the DESIRED behavior: a dotted disposer auto-discharges
 // exactly like a single-name one, so the program builds and runs. Currently
 // RED — the pin stays red until auto-discharge resolves dotted disposer names.
-~import app/fsd
-~app/fsd:open(path: "x")
+import app/fsd
+app/fsd:open(path: "x")

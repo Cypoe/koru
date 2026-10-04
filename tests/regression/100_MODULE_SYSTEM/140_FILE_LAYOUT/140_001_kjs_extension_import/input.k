@@ -3,7 +3,7 @@
 // Phase 2 is about file discovery, not about wiring a JS emitter. The
 // extension is purely organizational at this layer.
 
-~import std/io
-~import app/helper
+import std/io
+import app/helper
 
-~app/helper:greet(name: "World"): g |> std/io:print.ln("{{ g:s }}")
+app/helper:greet(name: "World"): g |> std/io:print.ln("{{ g:s }}")

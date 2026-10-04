@@ -4,11 +4,11 @@
 // house label, but fresh labels were asserted (incorrectly, 2026-09-06)
 // to NOT travel; this pins the corrected belief. Both paths print the
 // value and exit clean.
-~import std/io
-~import lib
-~lib:speak(n: 7)
+import std/io
+import lib
+lib:speak(n: 7)
 | ok s |> std/io:print.ln("explicit {{ s:s }}") |> lib:drop(t: s)
 | err |> std/io:print.ln("err")
-~lib:speak(n: 9)
+lib:speak(n: 9)
 | ok s |> std/io:print.ln("auto {{ s:s }}")
 | err |> std/io:print.ln("err")

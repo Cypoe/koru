@@ -4,9 +4,9 @@
 // flow's ROOT invocation, so a bare module call nested under a bare-return
 // chain stayed a literal `lib/door` path and failed KORU040 "unknown tor".
 
-~import lib/door
-~import std/io
+import lib/door
+import std/io
 
-~lib/door(name: "root"): v1
+lib/door(name: "root"): v1
 |> lib/door(name: "nested"): v2
 |> std/io:print.ln("{{ v1:s }} then {{ v2:s }}")

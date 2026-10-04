@@ -10,24 +10,24 @@
 //
 // Both spellings of the implementation are pinned: unqualified, and qualified
 // with the file's own module.
-~import std/io
+import std/io
 
-~[abstract] tor greet { name: string }
+[abstract] tor greet { name: string }
 | greeted string
 | skipped
 
-~greet => greeted name
+greet => greeted name
 
-~[abstract] tor shout { name: string }
+[abstract] tor shout { name: string }
 | shouted string
 | skipped
 
-~input:shout => shouted name
+input:shout => shouted name
 
-~greet(name: "world")
+greet(name: "world")
 | greeted g |> std/io:print.ln(g)
 | skipped |> std/io:print.ln("greet was skipped")
 
-~shout(name: "WORLD")
+shout(name: "WORLD")
 | shouted s |> std/io:print.ln(s)
 | skipped |> std/io:print.ln("shout was skipped")

@@ -13,17 +13,17 @@
 // and it must NOT fabricate claims for anything else. The absence is the
 // test: `mid` is reached and reported `unclaimed`, never silently dropped.
 
-~import std/compiler
+import std/compiler
 
-~[
+[
 - proven contract-honest
   Declared by the same shape checker that discharges the obligation.
 ]tor leaf { v: i64 } -> i64
 
-~tor mid { n: i64 }
+tor mid { n: i64 }
 
-~mid = leaf(v: 42)
+mid = leaf(v: 42)
 
-~tor root { n: i64 }
+tor root { n: i64 }
 
-~root = mid(n: 7)
+root = mid(n: 7)

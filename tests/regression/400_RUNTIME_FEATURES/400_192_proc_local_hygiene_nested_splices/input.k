@@ -10,11 +10,11 @@
 // both bodies kept their own `__i` (the outer values stay 0/1, the inner's
 // are offset by `base`), not a shared or shadowed one.
 
-~import lib/outer
-~import lib/inner
-~import std/io
+import lib/outer
+import lib/inner
+import std/io
 
-~lib/outer:each-outer()
+lib/outer:each-outer()
 ! step t |> lib/inner:each-inner(base: 100)
     ! step u |> std/io:print.ln("{{ t:d }}.{{ u:d }}")
     | done |> _

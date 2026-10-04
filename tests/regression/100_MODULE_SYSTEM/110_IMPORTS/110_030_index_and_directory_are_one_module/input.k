@@ -16,7 +16,7 @@
 // The sibling itself is reached twice too (as a directory submodule and as the
 // explicit file import), so it pins the same property one level down.
 
-~import mylib
+import mylib
 
-~mylib:greet(n: 1)
-~mylib/helper:helper-say(n: 2)
+mylib:greet(n: 1)
+mylib/helper:helper-say(n: 2)

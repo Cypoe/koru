@@ -12,26 +12,26 @@
 // This is the scaffold shape the swarm workflow depends on: the whole program
 // as high-level flow, boxes left empty, running before anything is filled in.
 // Running is right; running silently is not.
-~import std/testing
-~import std/io
+import std/testing
+import std/io
 
-~tor fetch { id: u32 }
+tor fetch { id: u32 }
 | found u32
 | missing
 
-~tor run-it { id: u32 }
+tor run-it { id: u32 }
 | ok u32
 | gone
 
-~run-it = fetch(id)
+run-it = fetch(id)
 | found f => ok f
 | missing => gone
 
 // A test block exists — this alone stands the wall down — and it mocks nothing.
-~test(a test block exists and mocks nothing) {
-    ~assert.ok()
+test(a test block exists and mocks nothing) {
+    assert.ok()
 }
 
-~run-it(id: 1)
+run-it(id: 1)
 | ok v |> std/io:print.ln("value = {{ v:d }}")
 | gone |> std/io:print.ln("nothing there")

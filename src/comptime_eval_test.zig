@@ -348,79 +348,46 @@ fn entry(arena: std.mem.Allocator, provider: *const Provider, text: []const u8) 
     return comptime_eval.evalAnnotationEntry(arena, provider, text);
 }
 
-test "entry: bare atom resolves through flags, absent is false" {
+fn expectFlags(flags: []const []const u8, expr: []const u8, expected: bool) !void {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
-    const arena = arena_state.allocator();
+    const p = Provider{ .flags = flags };
+    try std.testing.expectEqual(expected, (try entry(arena_state.allocator(), &p, expr)).truthy);
+}
 
-    const flags = [_][]const u8{"profile"};
-    const p = Provider{ .flags = &flags };
-
-    try std.testing.expect((try entry(arena, &p, "profile")).truthy);
-    try std.testing.expect(!(try entry(arena, &p, "debug")).truthy);
+test "entry: bare atom resolves through flags, absent is false" {
+    try expectFlags(&.{"profile"}, "profile", true);
+    try expectFlags(&.{"profile"}, "debug", false);
 }
 
 test "entry: valued flag comparison with quoted RHS" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    const flags = [_][]const u8{"build=release"};
-    const p = Provider{ .flags = &flags };
-
-    try std.testing.expect((try entry(arena, &p, "build == \"release\"")).truthy);
-    try std.testing.expect(!(try entry(arena, &p, "build == \"debug\"")).truthy);
+    try expectFlags(&.{"build=release"}, "build == \"release\"", true);
+    try expectFlags(&.{"build=release"}, "build == \"debug\"", false);
 }
 
 test "entry: bare RHS is a symbol (ruled 2026-07-20)" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    const flags = [_][]const u8{"build=release"};
-    const p = Provider{ .flags = &flags };
-
     // `release` is NOT a flag; as a symbol the comparison is true anyway.
-    try std.testing.expect((try entry(arena, &p, "build == release")).truthy);
-    try std.testing.expect(!(try entry(arena, &p, "build == debug")).truthy);
+    try expectFlags(&.{"build=release"}, "build == release", true);
+    try expectFlags(&.{"build=release"}, "build == debug", false);
 }
 
 test "entry: kebab and path atoms resolve as single identifiers" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
     const flags = [_][]const u8{ "fast-scan", "target=std/explain" };
-    const p = Provider{ .flags = &flags };
-
-    try std.testing.expect((try entry(arena, &p, "fast-scan")).truthy);
-    try std.testing.expect((try entry(arena, &p, "target == std/explain")).truthy);
+    try expectFlags(&flags, "fast-scan", true);
+    try expectFlags(&flags, "target == std/explain", true);
 }
 
 test "entry: numeric flag values order-compare" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    const flags = [_][]const u8{"version=15"};
-    const p = Provider{ .flags = &flags };
-
-    try std.testing.expect((try entry(arena, &p, "version >= 15")).truthy);
-    try std.testing.expect(!(try entry(arena, &p, "version > 15")).truthy);
+    try expectFlags(&.{"version=15"}, "version >= 15", true);
+    try expectFlags(&.{"version=15"}, "version > 15", false);
 }
 
 test "entry: and/or/not compose with truthiness" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
     const flags = [_][]const u8{ "profile", "build=release" };
-    const p = Provider{ .flags = &flags };
-
-    try std.testing.expect((try entry(arena, &p, "profile && build == \"release\"")).truthy);
-    try std.testing.expect((try entry(arena, &p, "debug || profile")).truthy);
-    try std.testing.expect(!(try entry(arena, &p, "!profile")).truthy);
-    try std.testing.expect((try entry(arena, &p, "!debug")).truthy);
+    try expectFlags(&flags, "profile && build == \"release\"", true);
+    try expectFlags(&flags, "debug || profile", true);
+    try expectFlags(&flags, "!profile", false);
+    try expectFlags(&flags, "!debug", true);
 }
 
 test "entry: narrowing heads pin one provider" {
