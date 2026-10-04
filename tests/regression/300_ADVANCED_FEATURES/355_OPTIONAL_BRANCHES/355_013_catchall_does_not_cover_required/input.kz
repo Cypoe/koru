@@ -1,0 +1,29 @@
+// Test 355_013: MUST_ERROR — a `|?` catch-all does not cover a REQUIRED
+//                          branch.
+//
+// Pins the boundary the rest of the 355 cluster already assumes: `|?`
+// routes OPTIONAL branches (355_001/002/005/010 name every required
+// branch). A required branch left to the catch-all is missing coverage,
+// not generic routing — the emitter never wires required arms into `|?`,
+// so a checker that lets it count passes a program codegen cannot build.
+// The refusal is KORU022 at the frontend, not a Zig switch-exhaustiveness
+// crash two layers down.
+
+~tor process { value: u32 }
+| success u32
+| failure string
+
+~proc process|zig {
+    if (value > 5) return .{ .success = value };
+    return .{ .failure = "small" };
+}
+
+~pub tor observe { name: string }
+~proc observe|zig {
+    _ = name;
+}
+
+// 'failure' is required and unnamed — |? cannot stand in for it.
+~process(value: 10)
+| success _ |> observe(name: "ok")
+|? |> observe(name: "catchall")

@@ -94,13 +94,16 @@ pub const BranchChecker = struct {
     /// - unknown_branches: handled branches that don't exist in declaration
     ///
     /// Rules:
-    /// - Required branches MUST be covered by an UNGUARDED handler, an
-    ///   engaging catchall, or a chain that ends in an unguarded fallback.
+    /// - Required branches MUST be covered by an UNGUARDED handler, or a
+    ///   chain that ends in an unguarded fallback.
     /// - Optional branches MAY be handled. `when`-only handlers on optional
     ///   branches are fine because "no handler fires" is a legal trajectory
     ///   under the optional contract.
     /// - Unknown branches are ERRORS
-    /// - Catchall (|?) covers all unhandled REQUIRED branches.
+    /// - A catchall (|?) does NOT satisfy required coverage: the emitter
+    ///   routes only OPTIONAL branches to it, so letting it count here
+    ///   passes a program codegen cannot compile (Zig switch
+    ///   exhaustiveness dies where KORU022 should have fired).
     /// - `when` guards NARROW a `|` outcome — they pick out a subset of
     ///   results, and the result must still route somewhere, so a
     ///   `when`-only terminal leaves the false-guard case uncovered
@@ -136,25 +139,15 @@ pub const BranchChecker = struct {
         var proto_undeclared = try std.ArrayList([]const u8).initCapacity(allocator, 0);
         errdefer proto_undeclared.deinit(allocator);
 
-        // Check for catchall - if present, all required branches are covered
-        var has_catchall = false;
-        for (handled) |h| {
-            if (h.is_catchall) {
-                has_catchall = true;
-                break;
-            }
-        }
-
         // Check that all required branches are handled by at least one
-        // UNGUARDED handler (or by a catchall). Handled names resolve via
+        // UNGUARDED handler. A catchall does not count — it receives only
+        // optional branches at emission. Handled names resolve via
         // resolveDeclared, so a raw-name CLASS branch (`*`) is covered by any
         // handled name it catches.
         for (declared, 0..) |decl, di| {
             if (decl.is_optional) continue; // Optional branches don't need handling
             if (decl.is_panic) continue; // Panic branches are ignorable (unhandled => synthesized @panic)
             if (prototype_mode and decl.kind == .terminal) continue; // ~[prototype]: unhandled terminal => synthesized @panic hole (400_160)
-
-            if (has_catchall) continue; // Catchall covers everything
 
             var found_unguarded = false;
             for (handled) |h| {
@@ -402,7 +395,9 @@ test "unknown branch - invalid" {
     try std.testing.expectEqualStrings("donkey", result.unknown_branches[0]);
 }
 
-test "catchall covers all required branches - valid" {
+test "catchall does NOT cover required branches - invalid" {
+    // |? receives optional branches only at emission; required branches it
+    // "covers" here would die in codegen on switch exhaustiveness.
     const allocator = std.testing.allocator;
     const declared = [_]BranchChecker.DeclaredBranch{
         .{ .name = "success" },
@@ -410,13 +405,14 @@ test "catchall covers all required branches - valid" {
         .{ .name = "timeout" },
     };
     const handled = [_]BranchChecker.HandledBranch{
-        .{ .name = "", .is_catchall = true }, // |? covers everything
+        .{ .name = "", .is_catchall = true },
     };
 
     var result = try BranchChecker.validate(allocator, &declared, &handled);
     defer BranchChecker.freeResult(allocator, &result);
 
-    try std.testing.expect(result.is_valid);
+    try std.testing.expect(!result.is_valid);
+    try std.testing.expectEqual(@as(usize, 3), result.missing_branches.len);
 }
 
 test "when-only handler does NOT cover a required continuation branch - invalid" {
@@ -457,7 +453,7 @@ test "multiple handlers for same branch - valid" {
     try std.testing.expect(result.is_valid);
 }
 
-test "partial catchall with explicit handlers - valid" {
+test "catchall with explicit handlers still misses unnamed required - invalid" {
     const allocator = std.testing.allocator;
     const declared = [_]BranchChecker.DeclaredBranch{
         .{ .name = "success" },
@@ -466,13 +462,14 @@ test "partial catchall with explicit handlers - valid" {
     };
     const handled = [_]BranchChecker.HandledBranch{
         .{ .name = "success" }, // Handle success explicitly
-        .{ .name = "", .is_catchall = true }, // |? for the rest
+        .{ .name = "", .is_catchall = true }, // |? catches optional only
     };
 
     var result = try BranchChecker.validate(allocator, &declared, &handled);
     defer BranchChecker.freeResult(allocator, &result);
 
-    try std.testing.expect(result.is_valid);
+    try std.testing.expect(!result.is_valid);
+    try std.testing.expectEqual(@as(usize, 2), result.missing_branches.len);
 }
 
 test "only optional branches, none handled - valid" {

@@ -9,10 +9,11 @@
 // which is a coverage hole that looks like coverage in source.
 //
 // Rule: a required branch with only `when`-guarded handlers is incomplete.
-// Rescue shapes:
-//   1. Add an unguarded sibling handler: `| ok x when x > 0 |> a`
-//                                         `| ok _ |> b`
-//   2. Add a metatype catch-all that engages: `|? Transition t |> log(t)`.
+// Rescue shape: add an unguarded sibling handler —
+//   `| ok x when x > 0 |> a`
+//   `| ok _ |> b`
+// (A catch-all is NOT a rescue: `|?` routes optional branches only —
+//  see 355_013.)
 //
 // Optionals do NOT have this requirement (see 210_086) because "no handler
 // for this fire" is a legal trajectory under the optional contract.

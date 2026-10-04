@@ -4,8 +4,11 @@ id: frag-a-coverage-hit-needs-an-emission-witness
 provenance: adjudicating .kfuzz findings, 2026-10-02 — a GA finding scored
   `capture__read_lines` green under --deep-check, but the spliced AoC
   interpreter sat inside a `std/runtime:register` block whose line-scanner
-  turned every line into an event name and dropped all of them unresolved
-ts: 2026-10-02
+  turned every line into an event name and dropped all of them unresolved;
+  extended 2026-10-04 when the counterfeiter turned out to be the
+  compiler's own checker — branch_checker granted `|?` required-branch
+  coverage the emitter never wired
+ts: 2026-10-04
 ---
 
 # A coverage hit is text until the emitted artifact witnesses the construct (belief)
@@ -84,6 +87,18 @@ Splicing into such a block produces a green that means *dropped*, not
   removed the whole proc, the construct never reached emission, PASS is
   vacuous. A coverage hit requires a *live* carrier: reachable from an
   executed root, not merely compiled.
+- **The checker can be the counterfeiter.** `branch_checker` let `|?`
+  satisfy required-branch coverage — its doc comment and two unit tests
+  called it law — while the emitter routes optional branches only. A
+  required arm left to the catch-all passed the whole frontend and died in
+  Zig codegen on switch exhaustiveness: the witness was absent and the
+  failure arrived two layers down wearing the wrong diagnostic, on both
+  `|` outcomes and `!` effect links. The grant was deleted, not widened —
+  every executable pin (355 cluster, the emitter's `is_optional` gate,
+  the interpreter's honest `unhandled-branch` outcome) already agreed
+  that `|?` never substitutes for a named required arm; only the checker's
+  prose dissented. A coverage rule with no emission path behind it is not
+  a relaxation, it is a refusal deferred. Pinned: 355_013.
 
 ## Open
 
