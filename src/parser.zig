@@ -1465,8 +1465,10 @@ pub const Parser = struct {
                             }
                             self.allocator.free(result.annotations);
                             if (keep) {
-                                // Re-enter the main loop on a plain ~import line.
-                                const normalized_line = try std.fmt.allocPrint(self.allocator, "~{s}", .{result.remaining});
+                                // Re-enter the main loop on a plain import line —
+                                // `.k` re-synthesizes the `~` itself, and its
+                                // no-tilde wall refuses a synthesized one.
+                                const normalized_line = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ if (self.is_k) "" else "~", result.remaining });
                                 self.lines[line_with_bracket] = normalized_line;
                                 self.current = line_with_bracket;
                             }
