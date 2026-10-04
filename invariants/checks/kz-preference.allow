@@ -1,0 +1,13 @@
+# Declared exemptions for kz-extension-is-earned.
+#
+# Format: staged-path | reason
+#   path   — repo-relative path of the staged .kz, exactly as git reports it
+#   reason — why the facet stays even though the file carries no host
+#            content. Mandatory. This file is for DELIBERATE .kz-pure files
+#            (a positive test whose purpose is the .kz parse surface); the
+#            mechanical cases (expected.json, MUST_ERROR, LANGUAGES,
+#            input.k sibling, tests/broken) are exempted by the check
+#            itself and belong nowhere here.
+#
+# An entry only matters while its path is staged — dormant entries are
+# notes, not failures (diff-scope makes "matches no site" the normal case).

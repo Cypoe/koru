@@ -89,6 +89,29 @@
     "check": "zig run ../tools/check_claim_instruments.zig -- .. --allow checks/claim-instruments.allow ../koru_std ../tests ../examples"
 }
 
+// The facet is earned: `.k` is the pure-Koru default, `.kz` is for files
+// that carry host content — and which a file is, the parser decides. The
+// row is diff-scoped (staged .kz paths only, judged on the STAGED blob —
+// a partial stage can't make the gate rule on bytes the commit won't
+// ship), so the historical backlog stays the lint's problem
+// (scripts/kz_convertible.sh) and this row only stops new debt.
+~std/invariants:inferred {
+    "name": "kz-extension-is-earned",
+    "tags": ["git-gate"],
+    "rule": "Every .kz path in the staged diff (added, modified, or renamed into the facet) must carry host content — a non-comment host_line, a host_type_decl, or a proc_decl — decided by `koruc --check-k-convertible` on the staged blob. A .kz with zero host items is a .k wearing the wrong extension. Exempt: expected.json AST-snapshot dirs (the snapshot embeds the input.kz filename), MUST_ERROR / error-EXPECT dirs (a rename can change which error fires; .kz-semantics pins live there), LANGUAGES dirs, input.k siblings, tests/broken, and path+reason entries in checks/kz-preference.allow. What the check cannot see: the near-pure gradient (1-3 stray host lines — residue vs load-bearing is judgment, the warning channel's class), and it skips UNPARSEABLE files with a note. It self-tests the oracle before scanning and reports BROKEN, never clean, if the flag stops answering.",
+    "check": "python3 checks/check_kz_preference.py ../zig-out/bin/koruc .. checks/kz-preference.allow"
+}
+
+// The same law aimed at the consumer: koru-libs' staged .kz files judged
+// by this repo's compiler — the facet convention is toolchain property,
+// not package taste.
+~std/invariants:inferred {
+    "name": "kz-extension-is-earned-koru-libs",
+    "tags": ["git-gate", "repo-koru-libs"],
+    "rule": "The kz-extension-is-earned row applied to koru-libs' staged diff: every staged .kz must carry host content per `koruc --check-k-convertible`, with the same exemptions and the same allow file. Fires only when gating the koru-libs repo.",
+    "check": "python3 checks/check_kz_preference.py ../zig-out/bin/koruc ../../koru-libs checks/kz-preference.allow"
+}
+
 // The semantic half of the ref gap — narrowed, not closed. Both
 // consumers that exist check at their own boundary through one shared
 // authority (StoreRefHome.homesOf): stores at column writes
