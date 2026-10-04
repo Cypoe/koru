@@ -36,3 +36,18 @@ Wrong-ability: this belief dies if the board stops being read — reds
 accumulating unexamined, or the "payment" frame becoming a licence to ignore
 what a regression was protecting. The line is that regressions are acceptable
 *because* they are read; the day red becomes invisible is the day this was wrong.
+
+## The instrument enforces the clause (2026-10)
+
+The wrong-ability clause — "the day red becomes invisible is the day this
+was wrong" — was until now enforced by nothing but attention: the board
+computed a delta, printed it, and the terminal forgot. The regression
+ledger (`test-results/regression-ledger.tsv`, append-only) makes the
+clause mechanical: every board's regressed/fixed events append as rows,
+the open set (a test whose last event is `regressed`) prints on every
+board and rides the float payload, and each FAILED TESTS entry carries
+its verdict (REGRESSED / NEW-TO-BOARD / CHANGED / standing) so red can
+never again read flat. The payment frame now has a receipt that does not
+scroll away — a regression is still welcome and still not gating, but it
+is *accounted*: named, dated, attributed to a commit, and visible until a
+later board records its close.

@@ -91,20 +91,21 @@ board_delta() {
     delta_out=$(node scripts/diff-snapshots.js 2>&1) || true
     echo "$delta_out"
     BOARD_DELTA_OUT="$delta_out"
+    # The ledger records this board's regressed/fixed events — append-only,
+    # so "we shed garbage" is visible history, not scrollback. Its human
+    # report prints on stderr here; the open set rides the float payload.
+    local ledger_json
+    ledger_json=$(node scripts/regression-ledger.js record <<< "$delta_out" || echo '{}')
     local payload
-    payload=$(node -e '
-        const t = require("fs").readFileSync(0, "utf8");
-        const grab = (mark) => t.split("\n").map(l => l.trim())
-            .filter(l => l.startsWith(mark))
-            .map(l => l.slice(mark.length).trim())
-            .filter(s => /^\d{3}_\d{3}_/.test(s))
-            .map(s => s.replace(/\s*\(.*$/, ""));
+    payload=$(KORU_LEDGER_JSON="$ledger_json" node -e '
+        const led = JSON.parse(process.env.KORU_LEDGER_JSON || "{}");
         console.log(JSON.stringify({
             _type: "koru.regression.delta",
             head: process.env.KORU_BOARD_HEAD || "unknown",
-            regressed: grab("❌"),
-            fixed: grab("✅")
-        }));' <<< "$delta_out" 2>/dev/null)
+            regressed: led.regressed || [],
+            fixed: led.fixed || [],
+            open_regressions: led.open || 0
+        }));' 2>/dev/null)
     [ -n "$payload" ] && board_float "$payload"
     return 0
 }
