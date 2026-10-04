@@ -59,15 +59,15 @@ const std = @import("std");
     if (!name_ok or name.len == 0) {
         return .{ .replacement = ast.refusal(allocator, reporter, .KORU173, flow.location, flow.module, "std/foreign:struct — the entry name '{s}' is not usable — a foreign name must be an identifier (a-z, A-Z, 0-9, '_', '-'; no leading digit)", .{name}) };
     }
-    // Field grammar: bare names, one per line (comma optional, trailing
-    // commas fine). A field carrying a type (`path: []const u8`) is refused:
-    // deep-typing host fields in Koru is the subset-parser tarpit, and the
-    // airlock registers presence, never substance.
+    // Field grammar: bare names, one per line — a comma refuses, as does a
+    // type (`path: []const u8`): the host owns substance, the airlock
+    // registers presence.
     var field_lines: usize = 0;
     var lines1 = std.mem.splitScalar(u8, source.text, '\n');
     while (lines1.next()) |line_raw| {
-        const line = std.mem.trim(u8, line_raw, " \t\r,");
+        const line = std.mem.trim(u8, line_raw, " \t\r");
         if (line.len == 0) continue;
+        if (std.mem.indexOfScalar(u8, line, ',') != null) return .{ .replacement = ast.refusal(allocator, reporter, .KORU173, flow.location, flow.module, "std/foreign:struct({s}): field line '{s}' carries a ',' — fields separate on lines, not commas", .{ name, line }) };
         if (std.mem.indexOfScalar(u8, line, ':') != null) {
             return .{ .replacement = ast.refusal(allocator, reporter, .KORU173, flow.location, flow.module, "std/foreign:struct({s}): field line '{s}' carries a type — foreign fields are bare names (presence claims); the host owns substance", .{ name, line }) };
         }

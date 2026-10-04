@@ -3,6 +3,6 @@
 import std/types
 
 std/types:enum(ThreatLevel) {
-    low: 5,
+    low: 5
     high
 }

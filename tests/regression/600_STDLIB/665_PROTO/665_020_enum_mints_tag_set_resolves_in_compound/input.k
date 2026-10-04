@@ -8,15 +8,15 @@ import std/proto
 import std/list
 
 std/types:enum(ThreatLevel) {
-    low,
-    medium,
-    high,
+    low
+    medium
+    high
     critical
 }
 
 std/proto(Session) {
-    ip: string,
-    score: i64,
+    ip: string
+    score: i64
     level: ThreatLevel
 }
 

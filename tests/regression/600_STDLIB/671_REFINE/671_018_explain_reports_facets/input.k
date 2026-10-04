@@ -12,8 +12,8 @@ import std/explain
 std/proto:i64(Port)
 
 std/proto(Server) {
-    port: Port,
-    gain: i64,
+    port: Port
+    gain: i64
     host: string
 }
 

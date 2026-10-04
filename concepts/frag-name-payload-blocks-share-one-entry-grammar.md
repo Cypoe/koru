@@ -52,3 +52,28 @@ began a new field on the same line"). Inherited-field merge semantics are
 unchanged — the seen-set scopes to one block's text, so a child re-binding a
 parent field still deduplicates rather than refusing. Pinned by
 665_015–019.
+
+## The ruling is now enforced (2026-10): the wart refuses, not parses
+
+The 2026-09-25 ruling — "a comma in a proto field list is a wart... it
+refuses, it does not parse" — was ahead of its implementation: every
+one-per-line block grammar tolerated a *trailing* comma by trimming it
+silently. The drift was in four places: `protoFieldBlock` in both its copies
+(proto.fields.kz, types.fields.kz), `std/types:enum`'s tag walk, and
+`std/foreign:struct`'s field walk. All four now refuse a `,` anywhere in a
+live-source line (`KORU173`, "fields separate on lines; a comma is a wart,
+not a separator"), while the erased `// proto Name: f: t, g: u` marker keeps
+its `comma_separates` convention — commas are *legal inside our own emitted
+markers* and illegal in author source. Pinned by 665_023 (std/proto door),
+665_024 (std/types:proto door — the second copy is pinned separately
+precisely because it can drift), 665_025 (enum), 667_007 (foreign).
+
+One deliberate exclusion: store view seeds (`{ <: A, <: B }`) keep commas —
+their member list is a comma-separated set on ONE line, not a line-per-entry
+block, so the comma is a real separator there and the rule does not apply.
+The ruling's scope is line-delimited entry grammars; a comma that does
+delimiting work is not a wart.
+
+What would correct this: a live-source block where a comma legitimately
+separates two entries on one line — a grammar that grows multi-entry lines
+reopens the separator question.

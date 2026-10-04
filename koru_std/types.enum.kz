@@ -63,15 +63,15 @@
     }
     const pub_prefix = if (is_pub) "pub " else "";
 
-    // Tag grammar: bare names, one per line (comma optional, trailing commas
-    // fine) — presence claims like foreign's field lines, except these mint
-    // substance. A tag carrying a value (`low: 5`) refuses loudly: explicit
+    // Tag grammar: bare names, one per line — a comma refuses like every
+    // wart. A tag carrying a value (`low: 5`) refuses loudly: explicit
     // ordinals are a later rung, not a silent parse.
     var tags = std.ArrayList([]const u8).initCapacity(allocator, 8) catch unreachable;
     var lines = std.mem.splitScalar(u8, source.text, '\n');
     while (lines.next()) |line_raw| {
-        const line = std.mem.trim(u8, line_raw, " \t\r,");
+        const line = std.mem.trim(u8, line_raw, " \t\r");
         if (line.len == 0) continue;
+        if (std.mem.indexOfScalar(u8, line, ',') != null) return .{ .replacement = ast.refusal(allocator, reporter, .KORU173, flow.location, flow.module, "std/types:enum({s}): tag line '{s}' carries a ',' — tags separate on lines, not commas", .{ name, line }) };
         if (std.mem.indexOfScalar(u8, line, ':') != null) {
             return .{ .replacement = ast.refusal(allocator, reporter, .KORU173, flow.location, flow.module, "std/types:enum({s}): tag '{s}' carries an explicit value — rung 1 mints implicit ordinals only (i64, 0-based)", .{ name, line }) };
         }

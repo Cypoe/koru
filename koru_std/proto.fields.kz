@@ -22,9 +22,8 @@ const FieldBlock = union(enum) {
 
 // Walk one block's field text and return its entries or the refusal's
 // reason. `comma_separates` selects the erased-marker convention — the
-// `// proto Name: f: t, g: u` marker the doors emit joins fields on ", ", so
-// the parent re-parse splits on commas — versus live declaration source,
-// where a comma is a wart, never a separator.
+// `// proto Name: f: t, g: u` marker joins fields on ", " — versus live
+// source, where a comma refuses: a wart, never a separator.
 fn protoFieldBlock(alloc: std.mem.Allocator, text: []const u8, comma_separates: bool) FieldBlock {
     var entries = std.ArrayList(ProtoFieldEntry).initCapacity(alloc, 8) catch unreachable;
     var seen = std.ArrayList([]const u8).initCapacity(alloc, 8) catch unreachable;
@@ -33,12 +32,13 @@ fn protoFieldBlock(alloc: std.mem.Allocator, text: []const u8, comma_separates: 
     else
         std.mem.tokenizeAny(u8, text, "\n");
     while (lines.next()) |raw| {
-        const line = std.mem.trim(u8, raw, " \t\r,");
+        const line = std.mem.trim(u8, raw, " \t\r");
         if (line.len == 0) continue;
+        if (std.mem.indexOfScalar(u8, line, ',') != null) return .{ .fault = std.fmt.allocPrint(alloc, "field line '{s}' carries a ',' — fields separate on lines; a comma is a wart, not a separator", .{line}) catch unreachable };
         const colon = std.mem.indexOfScalar(u8, line, ':') orelse
             return .{ .fault = std.fmt.allocPrint(alloc, "field line '{s}' has no ':' — each field must be `name: type`", .{line}) catch unreachable };
         const fname = std.mem.trim(u8, line[0..colon], " \t");
-        const ftype = std.mem.trim(u8, line[colon + 1 ..], " \t,");
+        const ftype = std.mem.trim(u8, line[colon + 1 ..], " \t");
         if (fname.len == 0 or ftype.len == 0)
             return .{ .fault = std.fmt.allocPrint(alloc, "field line '{s}' is missing a name or a type", .{line}) catch unreachable };
         // A second `name:` after the type is a fused field — the tail is its

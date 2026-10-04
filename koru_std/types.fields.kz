@@ -21,21 +21,21 @@ const FieldBlock = union(enum) {
 
 // Walk one block's field text and return its entries or the refusal's
 // reason. The types door sees live declaration source only — entries
-// separate on LINES and a comma is a wart, never a separator, so this copy
-// hard-codes the newline convention (the `comma_separates` branch in
-// proto.fields.kz exists for the erased `// proto Name: f: t, g: u` marker,
-// a form this module never reads).
+// separate on LINES and a comma refuses (proto.fields.kz's `comma_separates`
+// branch exists for the erased `// proto Name: f: t, g: u` marker, a form
+// this module never reads).
 fn protoFieldBlock(alloc: std.mem.Allocator, text: []const u8) FieldBlock {
     var entries = std.ArrayList(ProtoFieldEntry).initCapacity(alloc, 8) catch unreachable;
     var seen = std.ArrayList([]const u8).initCapacity(alloc, 8) catch unreachable;
     var lines = std.mem.tokenizeAny(u8, text, "\n");
     while (lines.next()) |raw| {
-        const line = std.mem.trim(u8, raw, " \t\r,");
+        const line = std.mem.trim(u8, raw, " \t\r");
         if (line.len == 0) continue;
+        if (std.mem.indexOfScalar(u8, line, ',') != null) return .{ .fault = std.fmt.allocPrint(alloc, "field line '{s}' carries a ',' — fields separate on lines; a comma is a wart, not a separator", .{line}) catch unreachable };
         const colon = std.mem.indexOfScalar(u8, line, ':') orelse
             return .{ .fault = std.fmt.allocPrint(alloc, "field line '{s}' has no ':' — each field must be `name: type`", .{line}) catch unreachable };
         const fname = std.mem.trim(u8, line[0..colon], " \t");
-        const ftype = std.mem.trim(u8, line[colon + 1 ..], " \t,");
+        const ftype = std.mem.trim(u8, line[colon + 1 ..], " \t");
         if (fname.len == 0 or ftype.len == 0)
             return .{ .fault = std.fmt.allocPrint(alloc, "field line '{s}' is missing a name or a type", .{line}) catch unreachable };
         // A second `name:` after the type is a fused field — the tail is its

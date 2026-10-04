@@ -12,7 +12,7 @@ import std/io
 std/proto:i64(Port)
 
 std/proto(Server) {
-    port: Port,
+    port: Port
     host: string
 }
 

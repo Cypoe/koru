@@ -11,9 +11,9 @@ std/proto:f64(Health)
 std/proto:bool(IsActive)
 
 std/proto(Contact) {
-    email: Email,
-    user: UserId,
-    health: Health,
+    email: Email
+    user: UserId
+    health: Health
     active: IsActive
 }
 
