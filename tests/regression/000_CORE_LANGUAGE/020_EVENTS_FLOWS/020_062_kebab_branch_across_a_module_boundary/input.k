@@ -20,11 +20,10 @@
 // transform-generated path, which nothing here exercises. Do not read a green
 // here as cover for that.
 
-const std = @import("std");
 
-~import std/io
-~import app/lib
+import std/io
+import app/lib
 
-~app/lib:classify(n: -1)
+app/lib:classify(n: -1)
 | parse-error e |> std/io:print.ln("{{ e.message:s }}@{{ e.line:d }}")
 | ok s |> std/io:print.ln(s)

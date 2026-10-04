@@ -1,0 +1,5 @@
+
+import std/io
+
+pub tor take-word { word: string }
+take-word = std/io:print.ln("{{ word:s }}")

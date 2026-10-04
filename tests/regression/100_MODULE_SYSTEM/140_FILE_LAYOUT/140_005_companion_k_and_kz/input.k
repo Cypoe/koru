@@ -10,9 +10,8 @@
 // the host language. Split along this seam and the declarative half has no
 // host language in it, so the character is not needed anywhere in it.
 
-const std = @import("std");
 
-~import std/io
-~import app/contract
+import std/io
+import app/contract
 
-~app/contract:compute(x: 42): v |> std/io:print.ln("{{ v:d }}")
+app/contract:compute(x: 42): v |> std/io:print.ln("{{ v:d }}")

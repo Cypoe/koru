@@ -1,14 +1,13 @@
 // Helper module - middle level in import chain
 // Imports base.kz and builds on its functionality
 
-const std = @import("std");
 
 // TRANSITIVE IMPORT: helper imports base
-~import app/base
+import app/base
 
 // Define quadruple by calling base's double twice
-~pub tor quadruple { x: i32 } -> i32
+pub tor quadruple { x: i32 } -> i32
 
-~quadruple =
+quadruple =
     app/base:double(x): d1 |> app/base:double(x: d1)
         | doubled d2 -> d2

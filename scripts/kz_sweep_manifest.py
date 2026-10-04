@@ -59,7 +59,11 @@ def classify(path):
                           capture_output=True, text=True, cwd=REPO)
     parts = proc.stdout.strip().split("\t")
     status = parts[0]
+    # Refused parses report on stderr — stdout is empty, so no known status
+    # arrives at all; that is the unparseable class, not a silent zero-count.
     host = {"host_line": 0, "host_type_decl": 0, "proc_decl": 0}
+    if status not in ("CONVERTIBLE", "NOT_CONVERTIBLE", "UNPARSEABLE"):
+        return (path, "unparseable", host, "refused (stderr diagnostic)")
     if len(parts) > 2:
         for kv in parts[2].split():
             k, _, v = kv.partition("=")

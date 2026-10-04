@@ -9,15 +9,14 @@
 // Two branches, not one: a lone payload-carrying branch is refused at the
 // DECLARATION by PARSE003 ("declare the single output as a bare return
 // instead"), which masks this case entirely at one branch.
-const std = @import("std");
-~import std/io
+import std/io
 
-~tor compute { x: i32 }
+tor compute { x: i32 }
 | result i32
 | skipped
 
-~compute => result x * 2
+compute => result x * 2
 
-~compute(x: 42)
+compute(x: 42)
 | result |> std/io:print.ln("done")
 | skipped |> _

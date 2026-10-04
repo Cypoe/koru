@@ -3,16 +3,15 @@
 // Common pattern: read file -> process lines -> transform -> write output
 // Tests: directory imports, multiple modules from same package, error handling
 
-const std = @import("std");
 
 // Import directory 'lib/io' containing:
 // - file.kz (read, write events)
 // - parse.kz (lines event)
 // - transform.kz (uppercase event)
-~import app/lib/io
+import app/lib/io
 
 // The full pipeline using directory imports
-~app/lib/io/file:read(path: "input.txt")
+app/lib/io/file:read(path: "input.txt")
 | success s |> app/lib/io/parse:lines(text: s)
     | parsed _ |> app/lib/io/transform:uppercase(text: s)
         | transformed t |> app/lib/io/file:write(path: "output.txt", data: t)

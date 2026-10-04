@@ -8,13 +8,12 @@
 // KEY TEST: Does the compiler correctly handle transitive imports?
 // Does base.kz get emitted even though input.kz doesn't directly import it?
 
-const std = @import("std");
 
 // Import helper (which itself imports base)
-~import app/helper
+import app/helper
 
 // Use helper's quadruple event (which uses base's double event internally)
-~app/helper:quadruple(x: 5)
+app/helper:quadruple(x: 5)
 
 // Expected: 5 * 4 = 20
 // (quadruple calls double twice: 5 -> 10 -> 20)

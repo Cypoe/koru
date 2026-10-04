@@ -20,18 +20,17 @@
 //
 // See test 110_003 for the SUCCESS case (with pub events)
 
-const std = @import("std");
 
-~import app/test_lib
+import app/test_lib
 
 // Initialize graphics subsystem
-~app/test_lib/graphics:init()
+app/test_lib/graphics:init()
 
 // Initialize audio subsystem
-~app/test_lib/audio:init()
+app/test_lib/audio:init()
 
 // Render a frame
-~app/test_lib/graphics:render(frame: 42)
+app/test_lib/graphics:render(frame: 42)
 
 // Play a sound
-~app/test_lib/audio:play(sound: "explosion.wav")
+app/test_lib/audio:play(sound: "explosion.wav")

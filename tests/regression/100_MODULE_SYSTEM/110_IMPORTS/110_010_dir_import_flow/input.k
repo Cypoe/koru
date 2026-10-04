@@ -3,12 +3,11 @@
 // Tests realistic HTTP server pattern using multiple modules from same package
 // Demonstrates: net/tcp:server.listen() → net/tcp:connection.read() → net/http:request.parse()
 
-const std = @import("std");
 
-~import app/lib/net
+import app/lib/net
 
 // HTTP server flow using multiple modules from 'net' package
-~app/lib/net/tcp:server.listen(port: 8080)
+app/lib/net/tcp:server.listen(port: 8080)
 | listening server_id |> app/lib/net/tcp:server.accept(server_id)
     | connection conn_id |> app/lib/net/tcp:connection.read(conn_id)
         | data bytes |> app/lib/net/http:request.parse(bytes)

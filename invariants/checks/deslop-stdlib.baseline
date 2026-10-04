@@ -1,8 +1,8 @@
 # Pin: tools/deslop_kz.py over koru_std at --min-nodes=32, measured
 # 2026-10-13. The stdlib is the definitional layer — 45 spellings in
 # use, a tight corpus. Keys are ceilings; see the sibling baselines.
-clusters=87
-members=140
+clusters=89
+members=138
 skipped=2
 spellings=45
 # 70/111: store.keyed.kz joined io.blk-style import preamble clone w/ interpreter.select.kz (3 shared compiler-module imports, boilerplate)
@@ -38,3 +38,9 @@ spellings=45
 # growth since 2026-10-13 is committed stdlib work (channel/pump/observer
 # landings), not this change. The evaluate-comptime rescan dupe was folded
 # into comptime_scan in the same commit.
+# 89/138: measured 2026-10-04 during the facet sweep — four koru_std .kz
+# became .k (indexes/io_registry/optimizer/template), and concurrent
+# in-flight sessions added rules.kz import_decl twins and a
+# bridge.steps/store.wait preamble pair. Members shrank (-2) while
+# clusters grew (+2): re-pinning records the working tree as measured,
+# per the row's uncommitted-work clause.

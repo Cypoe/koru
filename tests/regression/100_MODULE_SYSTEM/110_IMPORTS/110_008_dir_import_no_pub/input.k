@@ -3,13 +3,12 @@
 // Tests that importing events WITHOUT pub markers fails at compile time
 // This enforces proper API boundaries
 
-const std = @import("std");
 
 // Import directory 'lib/raylib' containing graphics.kz and audio.kz
 // Events in these files are NOT marked pub, so this should fail
-~import app/lib/raylib
+import app/lib/raylib
 
 // Attempting to use non-public events should fail
-~app/lib/raylib/graphics:render(width: 1920, height: 1080) |> app/lib/raylib/graphics:clear(color: 0xFF0000)
+app/lib/raylib/graphics:render(width: 1920, height: 1080) |> app/lib/raylib/graphics:clear(color: 0xFF0000)
     | cleared |> app/lib/raylib/audio:play(sound_id: 42) |> app/lib/raylib/audio:stop()
         | stopped |> _
