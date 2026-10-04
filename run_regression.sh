@@ -90,6 +90,7 @@ board_delta() {
     local delta_out
     delta_out=$(node scripts/diff-snapshots.js 2>&1) || true
     echo "$delta_out"
+    BOARD_DELTA_OUT="$delta_out"
     local payload
     payload=$(node -e '
         const t = require("fs").readFileSync(0, "utf8");
@@ -106,6 +107,38 @@ board_delta() {
         }));' <<< "$delta_out" 2>/dev/null)
     [ -n "$payload" ] && board_float "$payload"
     return 0
+}
+
+# Populated by board_delta — the diff-snapshots transcript, section headers
+# included. The FAILED TESTS reports read it to tag each failure, so "which
+# of these reds are new?" doesn't require joining two sections by eye.
+BOARD_DELTA_OUT=""
+
+# Tag a FAILED_LIST/FAILED_TESTS entry with its delta status: REGRESSED when
+# the delta lists it under REGRESSIONS (was green), NEW-TO-BOARD when it
+# arrived failing under NEW TESTS, CHANGED for other status flips into
+# failure (todo→failure etc.), standing otherwise. `  ❌ NAME` appears under
+# both REGRESSIONS and NEW TESTS — only the enclosing section separates
+# them, so this walks the headers. Non-test failures (registry-coherence,
+# prose-check, …) and filtered runs (delta never computed) tag nothing.
+failure_verdict() {
+    [ -n "${BOARD_DELTA_OUT:-}" ] || return 0
+    local n="${1%%\(*}" section="" l
+    case "$n" in [0-9][0-9][0-9]_*) ;; *) return 0 ;; esac
+    while IFS= read -r l; do
+        case "$l" in
+            "⚠️  REGRESSIONS "*)    section=reg ;;
+            "🆕 NEW TESTS "*)       section=new ;;
+            "📝 OTHER CHANGES "*)   section=chg ;;
+            "✅ IMPROVEMENTS "*|"🗑️  REMOVED TESTS "*) section= ;;
+            "  ❌ $n"|"  ❌ $n "*)
+                [ "$section" = reg ] && { echo " ← REGRESSED"; return 0; }
+                [ "$section" = new ] && { echo " ← NEW-TO-BOARD"; return 0; } ;;
+            "  📝 $n: "*"→ failure"*)
+                [ "$section" = chg ] && { echo " ← CHANGED"; return 0; } ;;
+        esac
+    done <<< "$BOARD_DELTA_OUT"
+    echo " ← standing"
 }
 
 run_coherence_watchers() {
@@ -1259,12 +1292,13 @@ PY
         fi
     fi
 
-    # Show failed tests
+    # Show failed tests — each entry tagged by the board delta so a
+    # regression, a new-to-board failure, and a standing red read differently.
     if [ "$FAILED_COUNT" -gt 0 ]; then
         echo ""
         echo -e "${RED}FAILED TESTS:${NC}"
         for item in "${FAILED_LIST[@]}"; do
-            echo "  $item"
+            echo "  $item$(failure_verdict "$item")"
         done
         echo ""
     fi
@@ -1495,9 +1529,18 @@ if [ "$RUN_UNIT_TESTS" = true ]; then
     fi
 fi
 
-# Report failed tests
+# Float the delta BEFORE the snapshot — diff needs the previous latest.json
+# still in place — and before the failure report, which tags entries from it.
+# (Sequential path; parallel calls it above.)
+board_delta
+
+# Report failed tests — each entry tagged by the board delta (parallel path
+# prints its own block in collect_results).
 if [ -n "$FAILED_TESTS" ]; then
-    echo -e "${RED}❌ FAILED TESTS:$FAILED_TESTS${NC}"
+    echo -e "${RED}❌ FAILED TESTS:${NC}"
+    for item in $FAILED_TESTS; do
+        echo "  $item$(failure_verdict "$item")"
+    done
 fi
 
 # Report priority tests
@@ -1508,9 +1551,6 @@ fi
 
 # Save snapshot after full run (not for filtered runs)
 # Only save if Node.js is available and this was a full run
-# Float the delta BEFORE the snapshot — diff needs the previous latest.json
-# still in place. (Sequential path; parallel calls it above.)
-board_delta
 
 if [ ${#TEST_FILTERS[@]} -eq 0 ] && [ "$SMOKE_MODE" = false ]; then
     if command -v node >/dev/null 2>&1; then
