@@ -717,7 +717,12 @@ pub const Folder = struct {
     pub fn fold(self: *Folder, program: *const ast.Program) EvalError!*const ast.Program {
         var found = false;
         for (program.items) |item| {
-            if (item == .flow and flowIsInterpreterConsumable(program.items, &item.flow) != null) {
+            // Impl flows are definitions, not call sites — the walker enters
+            // them through the tor they implement and their `=>` producer
+            // arms are not fold residue. Fold leaves impl bodies untouched.
+            if (item == .flow and item.flow.impl_of == null and
+                flowIsInterpreterConsumable(program.items, &item.flow) != null)
+            {
                 found = true;
                 break;
             }
@@ -727,7 +732,9 @@ pub const Folder = struct {
         var new_items = std.ArrayList(ast.Item).initCapacity(self.allocator, program.items.len) catch return error.OutOfMemory;
         for (program.items) |item| {
             if (item == .flow) {
-                if (flowIsInterpreterConsumable(program.items, &item.flow) != null) {
+                if (item.flow.impl_of == null and
+                    flowIsInterpreterConsumable(program.items, &item.flow) != null)
+                {
                     var current: ?ast.Flow = item.flow;
                     while (current) |*cur| {
                         if (flowIsInterpreterConsumable(program.items, cur)) |consumable| {
@@ -886,6 +893,15 @@ pub const Folder = struct {
             new_root.catchall_metatype = null;
             new_root.condition = null;
             new_root.condition_expr = null;
+            // A promoted arm becomes the flow's root — and a flow's head is
+            // always an invocation (Flow.inv() asserts it). A `=>` producer
+            // arm's node is a branch_constructor: promoting it would leave a
+            // flow whose head is not an invocation, and every later inv()
+            // site panics. Named wall instead. (Impl bodies never reach
+            // here — the fold loop skips impl_of flows; the walker owns
+            // them and handles `=>` itself.)
+            if (new_root.node != null and new_root.node.? != .invocation)
+                return self.evaluator.fail(error.UnsupportedConstruct, "comptime fold: arm `| {s}` produces via `=>` — a producer arm has a result slot only inside a tor impl", .{arm.branch});
             if (new_root.node == null and new_root.continuations.len == 0)
                 return self.evaluator.fail(error.UnsupportedConstruct, "comptime fold: residue arm `| {s}` has no body — nothing to emit", .{arm.branch});
             return try self.promoteResidue(flow, new_root);

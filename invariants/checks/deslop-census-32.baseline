@@ -42,8 +42,13 @@
 # the documented emitter_test/visitor_emitter_test decl-literal cluster
 # (cluster 8, 8x simple_var_decl), zero new clusters, zero src/ files in
 # this commit. Census re-measured on this tree: 1540/2093.
-clusters=1543
-members=2097
+clusters=1548
+members=2099
+# Re-pinned in "fold: impl bodies are walk input, not fold residue":
+# the roll fired on +5 clusters / +2 members of foreign src/ drift in
+# the same documented emitter_test/visitor_emitter_test field-literal
+# residual — this commit touches comptime_eval.zig, a test, and concept
+# frags; the delta adds zero clone members.
 # Re-pinned in "420_006: MPMC rings-vs-channels green": +5 members of
 # foreign drift in the same documented emitter_test/visitor_emitter_test
 # field-literal residual — this commit touches only test sources, harness
