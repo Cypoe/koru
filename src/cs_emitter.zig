@@ -66,12 +66,17 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
 
     var em = Emitter{ .allocator = allocator, .buf = &buf, .items = program.items, .main_module_name = program.main_module_name };
     defer em.ops_buf.deinit(allocator);
+    defer em.cells.deinit(allocator);
+    defer em.host_text.deinit(allocator);
 
     // Phase 0: `.kcs` host lines verbatim at the TOP of the file (using
     // directives, file-scope declarations) — routed by host language, the same
     // test that selects a `|cs` proc body. Descends into module_decl so an
     // imported facet's host state reaches the output.
     try emitCsHostLines(&em, program.items);
+    // …and collect the module cells those lines declare, for the
+    // handler-scope hoist in emitEventDecl.
+    try collectCsCells(&em, program.items);
 
     try em.write("static class main_module {\n");
     // The stdout/stderr surface lives INSIDE main_module so the unqualified
@@ -301,6 +306,136 @@ fn emitCsHostLines(em: *Emitter, items: []const ast.Item) CsEmitError!void {
     }
 }
 
+/// A module cell — a `static` field declared on a facet-authored
+/// `static class` (the KoruHost convention). Slices borrow from the host
+/// line text, which outlives emission.
+const Cell = struct {
+    name: []const u8,
+    owner: []const u8,
+    cs_ty: []const u8,
+};
+
+fn csIdentChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_';
+}
+
+/// `name` appears in `text` as a standalone identifier (word-boundary both
+/// sides). `KoruHost.total`'s `total` qualifies — the boundary test only
+/// asks about identifier characters, not `.`.
+fn textMentionsIdent(text: []const u8, name: []const u8) bool {
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, text, pos, name)) |at| {
+        if ((at == 0 or !csIdentChar(text[at - 1])) and
+            (at + name.len >= text.len or !csIdentChar(text[at + name.len])))
+            return true;
+        pos = at + 1;
+    }
+    return false;
+}
+
+/// Gather every cs host line into one buffer for the cell scan — the same
+/// selection emitCsHostLines writes.
+fn gatherCsHostLines(items: []const ast.Item, out: *std.ArrayList(u8), allocator: std.mem.Allocator) CsEmitError!void {
+    for (items) |*item| {
+        switch (item.*) {
+            .host_line => |*line| {
+                const host = file_types.hostLangOfFile(line.location.file) orelse continue;
+                if (!std.mem.eql(u8, host, CS_TARGET)) continue;
+                try out.appendSlice(allocator, line.content);
+                try out.append(allocator, '\n');
+            },
+            .module_decl => |*m| try gatherCsHostLines(m.items, out, allocator),
+            else => {},
+        }
+    }
+}
+
+/// Scan cs host text for `static class <Owner> { … static <T> <name> = … }`
+/// field declarations — the module cells a handler may hoist. A name shared
+/// by two owners is ambiguous under `using static` already; first wins, and
+/// every gate in cellMayHoist drops on doubt anyway.
+fn collectCsCells(em: *Emitter, items: []const ast.Item) CsEmitError!void {
+    // The gathered text MOVES ONTO the emitter — Cell slices borrow from it,
+    // so it must outlive emission, not this function.
+    try gatherCsHostLines(items, &em.host_text, em.allocator);
+    const t = em.host_text.items;
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, t, pos, "static class")) |at| {
+        var i = at + "static class".len;
+        while (i < t.len and !csIdentChar(t[i])) i += 1;
+        const ostart = i;
+        while (i < t.len and csIdentChar(t[i])) i += 1;
+        const owner = t[ostart..i];
+        while (i < t.len and (t[i] == ' ' or t[i] == '\t')) i += 1;
+        if (i >= t.len or t[i] != '{') {
+            pos = i;
+            continue;
+        }
+        // matching close brace
+        var depth: usize = 1;
+        i += 1;
+        while (i < t.len and depth > 0) : (i += 1) {
+            if (t[i] == '{') depth += 1;
+            if (t[i] == '}') depth -= 1;
+        }
+        const end = i -| 1;
+        // Scan the class body for `static <T> <name>` FIELD decls — `(` after
+        // the name is a method; `class`/`static` in the type slot is a nested
+        // decl. Anything else that lexes odd simply isn't a cell.
+        var j = ostart + owner.len;
+        while (j + 6 < end) : (j += 1) {
+            if (!std.mem.eql(u8, t[j .. j + 6], "static")) continue;
+            if (j > 0 and csIdentChar(t[j - 1])) continue;
+            var k = j + 6;
+            if (k < end and csIdentChar(t[k])) continue;
+            while (k < end and (t[k] == ' ' or t[k] == '\t')) k += 1;
+            const tstart = k;
+            while (k < end and csIdentChar(t[k])) k += 1;
+            const ty = t[tstart..k];
+            while (k < end and (t[k] == ' ' or t[k] == '\t')) k += 1;
+            const nstart = k;
+            while (k < end and csIdentChar(t[k])) k += 1;
+            const nm = t[nstart..k];
+            while (k < end and (t[k] == ' ' or t[k] == '\t')) k += 1;
+            if (ty.len == 0 or nm.len == 0 or k >= end) continue;
+            if (std.mem.eql(u8, ty, "class") or std.mem.eql(u8, ty, "static")) continue;
+            if (t[k] != '=' and t[k] != ';') continue;
+            try em.addCell(owner, ty, nm);
+            j = k;
+        }
+        pos = end;
+    }
+}
+
+/// Word-boundary rename of `name` to `replacement` inside `text` — used to
+/// rebind an inlined proc's params to `__koru_p_<name>` so a splice can't
+/// collide with an in-scope local. String literals containing the name get
+/// renamed too; the name appearing inside a literal AND as a live param is
+/// a pathological body either way.
+fn replaceIdent(allocator: std.mem.Allocator, text: []const u8, name: []const u8, replacement: []const u8) CsEmitError![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    // `wrote` marks appended-until; `scan` marks searched-from. They differ:
+    // a match that FAILS the boundary (`width` inside `width_sum`) advances
+    // the scan but must not consume — its characters still need emitting.
+    var wrote: usize = 0;
+    var scan: usize = 0;
+    while (std.mem.indexOfPos(u8, text, scan, name)) |at| {
+        if ((at == 0 or !csIdentChar(text[at - 1])) and
+            (at + name.len >= text.len or !csIdentChar(text[at + name.len])))
+        {
+            try out.appendSlice(allocator, text[wrote..at]);
+            try out.appendSlice(allocator, replacement);
+            wrote = at + name.len;
+            scan = wrote;
+        } else {
+            scan = at + 1;
+        }
+    }
+    try out.appendSlice(allocator, text[wrote..]);
+    return out.toOwnedSlice(allocator);
+}
+
 /// Module-scope `[declaration]` flows — a `const {}` introducing names into
 /// the enclosing scope. Spliced inside main_module as class members through
 /// the host-text lowering (a rendered `const|zig` body with `@as` refuses
@@ -379,6 +514,17 @@ const Emitter = struct {
     /// value copies in at construction). Stored in emitted spelling —
     /// kebab-lowered, `@`-escaped — the form the body text contains.
     flow_locals: std.ArrayList([]const u8) = .empty,
+    /// Module cells — `static` fields declared on facet-authored
+    /// `static class`es (the KoruHost convention: C# has no file-scope
+    /// variables, so module state is a class static). Nothing outside the
+    /// program's own text can name a cell — there are no variables, so the
+    /// accessor list is the grammar — which is what makes a handler allowed
+    /// to materialize one as a LOCAL for its body's duration and write back
+    /// once at the end.
+    cells: std.ArrayList(Cell) = .empty,
+    /// The concatenated `.kcs` host text the cells' slices borrow from —
+    /// kept alive until emit() returns.
+    host_text: std.ArrayList(u8) = .empty,
 
     fn nextId(self: *Emitter) usize {
         const id = self.id_counter;
@@ -408,6 +554,16 @@ const Emitter = struct {
         var buf: [300]u8 = undefined;
         const s = spelledName(&buf, name) orelse name;
         return self.allocator.dupe(u8, s);
+    }
+
+    /// Record a module cell discovered in the host lines — first owner wins
+    /// on a name collision (a bare name ambiguous under `using static` is a
+    /// broken facet to begin with; cellMayHoist drops on doubt regardless).
+    fn addCell(self: *Emitter, owner: []const u8, cs_ty: []const u8, name: []const u8) CsEmitError!void {
+        for (self.cells.items) |c| {
+            if (std.mem.eql(u8, c.name, name)) return;
+        }
+        try self.cells.append(self.allocator, .{ .name = name, .owner = owner, .cs_ty = cs_ty });
     }
 
     fn write(self: *Emitter, text: []const u8) CsEmitError!void {
@@ -752,30 +908,78 @@ const Emitter = struct {
         };
 
         switch (impl) {
-            .proc => |proc| {
-                // A [transform] tor has NO runtime body: the transform's
-                // output replaced every call site, so the decl-site handler
-                // is dead — splice a self-naming stub, not the proc's
-                // stage-C Zig source.
-                if (annotation_parser.hasPart(ev.annotations, "transform")) {
-                    try self.writeFmt("      throw new global::System.Exception(\"{s}: [transform] tor is lowered at compile time and must never be called\");\n", .{name});
-                } else {
-                    try self.emitReindented(proc.body.text, "      ");
-                    try self.emitImplTail();
-                }
-                try self.write("\n");
-            },
-            // A per-call `|template|` proc was rendered into every call site
-            // before the emitter ran — the decl-site handler is dead code and
-            // its body is template text. The stub NAMES itself.
             .template_stub => try self.writeFmt(
                 "      throw new global::System.Exception(\"{s}: |template| proc is inlined at call sites and must never be called\");\n",
                 .{name},
             ),
             .immediate => |ii| try self.emitBranchConstructorReturn(&ii.value, "      "),
-            .subflow => |flow| {
-                try self.emitSubflowImplBody(ev, flow, "      ");
-                try self.emitImplTail();
+            .proc, .subflow => {
+                // CELL HOIST — emit the body into a scratch buffer, then for
+                // every module cell it names bare, materialize the cell as a
+                // local for the body's duration and write back once at the
+                // end. Legal because there are no variables: a cell's whole
+                // accessor list is the program text, so no unnamed path can
+                // read the stale static while the region runs. `return` in
+                // the body or `=>` (a lambda can outlive the region and its
+                // cell reads bind the static) both refuse the hoist outright.
+                var scratch: std.ArrayList(u8) = .empty;
+                defer scratch.deinit(self.allocator);
+                {
+                    const saved_buf = self.buf;
+                    defer self.buf = saved_buf;
+                    self.buf = &scratch;
+                    switch (impl) {
+                        .proc => |proc| {
+                            // A [transform] tor has NO runtime body: the
+                            // transform's output replaced every call site, so
+                            // the decl-site handler is dead — splice a
+                            // self-naming stub, not the proc's stage-C Zig
+                            // source.
+                            if (annotation_parser.hasPart(ev.annotations, "transform")) {
+                                try self.writeFmt("      throw new global::System.Exception(\"{s}: [transform] tor is lowered at compile time and must never be called\");\n", .{name});
+                            } else {
+                                try self.emitReindented(proc.body.text, "      ");
+                            }
+                        },
+                        .subflow => |flow| try self.emitSubflowImplBody(ev, flow, "      "),
+                        else => unreachable,
+                    }
+                }
+
+                const body = scratch.items;
+                var hoisted: std.ArrayList(Cell) = .empty;
+                defer hoisted.deinit(self.allocator);
+                if (std.mem.indexOf(u8, body, "return") == null and
+                    std.mem.indexOf(u8, body, "=>") == null)
+                {
+                    for (self.cells.items) |cell| {
+                        // An input binding already owns the name — a second
+                        // `var` would collide (CS0128), not shadow.
+                        var input_takes = false;
+                        for (ev.input.fields) |field| {
+                            var nb: [300]u8 = undefined;
+                            if (std.mem.eql(u8, spelledName(&nb, field.name) orelse field.name, cell.name)) {
+                                input_takes = true;
+                                break;
+                            }
+                        }
+                        if (input_takes) continue;
+                        if (try self.cellMayHoist(body, cell)) {
+                            try hoisted.append(self.allocator, cell);
+                        }
+                    }
+                }
+                for (hoisted.items) |cell| {
+                    try self.writeFmt("      var {s} = {s}.{s};\n", .{ cell.name, cell.owner, cell.name });
+                }
+                try self.write(body);
+                for (hoisted.items) |cell| {
+                    try self.writeFmt("      {s}.{s} = {s};\n", .{ cell.owner, cell.name, cell.name });
+                }
+                const is_transform_stub = std.meta.activeTag(impl) == .proc and
+                    annotation_parser.hasPart(ev.annotations, "transform");
+                if (!is_transform_stub) try self.emitImplTail();
+                try self.write("\n");
             },
         }
         try self.write("    }\n  }\n");
@@ -1560,17 +1764,30 @@ const Emitter = struct {
         };
         defer if (result_name) |rn| self.allocator.free(rn);
 
-        if (result_name) |rn| {
-            try self.writeFmt("{s}var {s} = main_module.{s}_event.handler(", .{ indent, rn, ev_name });
-            try self.registerLocal(rn);
-        } else {
-            try self.writeFmt("{s}main_module.{s}_event.handler(", .{ indent, ev_name });
+        // CALL-SITE INLINE — a tor whose whole cs impl is one return-free
+        // opaque |cs| proc splices its body here instead of dispatching: the
+        // same inlining the JIT already does, one scope earlier, so a bare
+        // cell name in the body binds the caller's hoisted local and the
+        // write can register-materialize. A body holding `return` produces
+        // through the callee's frame and cannot splice into a statement
+        // chain; a result-binding or destructuring call site still needs the
+        // handler's return value.
+        const inlined = result_name == null and !ev_has_effect and
+            inv.return_destructure.len == 0 and
+            try self.tryEmitInlinedProcCall(inv, ev, indent);
+        if (!inlined) {
+            if (result_name) |rn| {
+                try self.writeFmt("{s}var {s} = main_module.{s}_event.handler(", .{ indent, rn, ev_name });
+                try self.registerLocal(rn);
+            } else {
+                try self.writeFmt("{s}main_module.{s}_event.handler(", .{ indent, ev_name });
+            }
+            try self.emitArgsObject(inv.args, ev, ev_name);
+            if (ev_has_effect) {
+                try self.writeFmt(", {s}", .{handlers_name.?});
+            }
+            try self.write(");\n");
         }
-        try self.emitArgsObject(inv.args, ev, ev_name);
-        if (ev_has_effect) {
-            try self.writeFmt(", {s}", .{handlers_name.?});
-        }
-        try self.write(");\n");
 
         // A BIND-POSITION destructure (`~locate(): { pos: { x, y } } |> …`).
         if (inv.return_destructure.len > 0) {
@@ -1840,6 +2057,171 @@ const Emitter = struct {
             try self.write(indent);
             try self.write(content);
         }
+    }
+
+    /// Splice an opaque `|cs` proc impl at its call site —
+    /// `acc(v: r)` becomes `{ var __koru_p_v = (long)(r); <body> }`. Params
+    /// rebind to reserved `__koru_p_<name>` locals because C# forbids a `var`
+    /// that shadows an in-scope local (CS0136 — a param named `i` inside a
+    /// `for`'s arm block would collide with the induction binding), and a
+    /// uniform rename keeps the body's own uses intact. The payoff over a
+    /// call: a bare cell name in the body binds whatever is in scope HERE —
+    /// a hoisted local when the enclosing handler materialized the cell.
+    /// Returns false — caller emits the ordinary call — when the impl isn't
+    /// a plain proc or the body can't splice (`return` would escape the
+    /// caller's frame, not the callee's).
+    fn tryEmitInlinedProcCall(self: *Emitter, inv: *const ast.Invocation, ev: *const ast.EventDecl, indent: []const u8) CsEmitError!bool {
+        const site = self.findDeclSiteIn(self.items, &inv.path, null) orelse return false;
+        const impl = self.findImplIn(site.scope, &ev.path) orelse return false;
+        const proc = switch (impl) {
+            .proc => |p| p,
+            else => return false,
+        };
+        if (std.mem.indexOf(u8, proc.body.text, "return") != null) return false;
+
+        var body = try self.allocator.dupe(u8, proc.body.text);
+        defer self.allocator.free(body);
+        if (!ev.input.is_wildcard) {
+            for (ev.input.fields) |field| {
+                var nb: [300]u8 = undefined;
+                const spelled = spelledName(&nb, field.name) orelse field.name;
+                const fresh = try std.fmt.allocPrint(self.allocator, "__koru_p_{s}", .{spelled});
+                defer self.allocator.free(fresh);
+                const rebound = try replaceIdent(self.allocator, body, spelled, fresh);
+                self.allocator.free(body);
+                body = rebound;
+            }
+        }
+
+        try self.writeFmt("{s}{{\n", .{indent});
+        const inner = try std.fmt.allocPrint(self.allocator, "{s}  ", .{indent});
+        defer self.allocator.free(inner);
+        if (ev.input.is_wildcard) {
+            for (inv.args) |arg| {
+                if (arg.name.len == 0) continue;
+                var nb: [300]u8 = undefined;
+                const spelled = spelledName(&nb, arg.name) orelse arg.name;
+                try self.writeFmt("{s}var __koru_p_{s} = ", .{ inner, spelled });
+                try self.writeCsExpr(arg.value);
+                try self.write(";\n");
+            }
+        } else {
+            for (ev.input.fields) |field| {
+                var nb: [300]u8 = undefined;
+                const spelled = spelledName(&nb, field.name) orelse field.name;
+                try self.writeFmt("{s}var __koru_p_{s} = ", .{ inner, spelled });
+                const ft = csType(field.type);
+                if (findArgForField(inv.args, field.name)) |a| {
+                    if (!std.mem.eql(u8, ft, "dynamic")) {
+                        try self.writeFmt("({s})(", .{ft});
+                        try self.writeCsExpr(a.value);
+                        try self.write(")");
+                    } else {
+                        try self.writeCsExpr(a.value);
+                    }
+                } else if (field.default) |dflt| {
+                    try self.writeCsExpr(dflt);
+                } else {
+                    try self.writeFmt("default({s})", .{ft});
+                }
+                try self.write(";\n");
+            }
+        }
+        try self.emitReindented(body, inner);
+        try self.writeFmt("{s}}}\n", .{indent});
+        return true;
+    }
+
+    /// The arg bound to a declared input field — names arrive resolved (a
+    /// positional `work(i)` already carries `i`), same read emitArgsObject
+    /// makes.
+    fn findArgForField(args: []const ast.Arg, name: []const u8) ?*const ast.Arg {
+        for (args) |*arg| {
+            if (std.mem.eql(u8, arg.name, name)) return arg;
+        }
+        return null;
+    }
+
+    /// May `cell` materialize as a handler-scope local for `body`? The gates
+    /// — in order, each one a place the name could hide: the body must name
+    /// it bare at all; `Owner.name` qualified (or any `<x>.name`) bypasses
+    /// the local so one mention disqualifies; `<ident> <name>` is a
+    /// declaration the hoist would shadow-collide with; `<name>(` is a
+    /// method, not the field; and every `<x>_event.handler(` callee inside
+    /// the body must be clean — a callee touching the cell behind a call
+    /// boundary would read the stale static mid-region.
+    fn cellMayHoist(self: *Emitter, body: []const u8, cell: Cell) CsEmitError!bool {
+        var mentioned = false;
+        var pos: usize = 0;
+        while (std.mem.indexOfPos(u8, body, pos, cell.name)) |at| {
+            pos = at + 1;
+            if (at > 0 and csIdentChar(body[at - 1])) continue;
+            if (at + cell.name.len < body.len and csIdentChar(body[at + cell.name.len])) continue;
+            mentioned = true;
+            if (at > 0 and body[at - 1] == '.') return false;
+            var q = at;
+            while (q > 0 and (body[q - 1] == ' ' or body[q - 1] == '\t')) q -= 1;
+            if (q > 0 and csIdentChar(body[q - 1])) return false;
+            var r = at + cell.name.len;
+            while (r < body.len and (body[r] == ' ' or body[r] == '\t')) r += 1;
+            if (r < body.len and body[r] == '(') return false;
+        }
+        if (!mentioned) return false;
+        return !try self.calleeMentionsIdent(body, cell.name);
+    }
+
+    /// Scan `body` for `<leaf>_event.handler(` callees and refuse the hoist
+    /// when any of their impls names the cell. A lowered leaf name that
+    /// matches several events checks them all — ambiguous by construction,
+    /// conservative by default.
+    fn calleeMentionsIdent(self: *Emitter, body: []const u8, name: []const u8) CsEmitError!bool {
+        var pos: usize = 0;
+        while (std.mem.indexOfPos(u8, body, pos, "_event.handler(")) |at| {
+            pos = at + 1;
+            var s = at;
+            while (s > 0 and csIdentChar(body[s - 1])) s -= 1;
+            const leaf = body[s..at];
+            if (leaf.len == 0) continue;
+            if (try self.leafImplMentionsIdent(self.items, leaf, name)) return true;
+        }
+        return false;
+    }
+
+    /// Every event whose lowered leaf name matches — impl-bodies checked.
+    fn leafImplMentionsIdent(self: *Emitter, items: []const ast.Item, leaf: []const u8, name: []const u8) CsEmitError!bool {
+        for (items) |*item| {
+            switch (item.*) {
+                .event_decl => |*e| {
+                    var nb: [256]u8 = undefined;
+                    const last = e.path.segments[e.path.segments.len - 1];
+                    if (last.len > nb.len) continue;
+                    if (std.mem.eql(u8, lowerIdentBuf(&nb, last), leaf)) {
+                        const impl = self.findImplIn(items, &e.path) orelse continue;
+                        if (implMentionsIdent(impl, name)) return true;
+                    }
+                },
+                .module_decl => |*m| {
+                    if (try self.leafImplMentionsIdent(m.items, leaf, name)) return true;
+                },
+                else => {},
+            }
+        }
+        return false;
+    }
+
+    /// Does this impl's emitted text name the cell? Proc bodies and bare
+    /// expressions lower to checkable text; a subflow can hold the name in a
+    /// continuation's inline text anywhere down its spine — out of textual
+    /// reach here, so it counts as a mention (drops the hoist, never wrong).
+    fn implMentionsIdent(impl: EventImpl, name: []const u8) bool {
+        return switch (impl) {
+            .proc => |p| textMentionsIdent(p.body.text, name),
+            .immediate => |ii| blk: {
+                const pv = ii.value.plain_value orelse break :blk false;
+                break :blk textMentionsIdent(pv, name);
+            },
+            .subflow, .template_stub => true,
+        };
     }
 
     /// Emit an arm's BODY as a `{ … }` block — the shared shape behind the
