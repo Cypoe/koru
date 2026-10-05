@@ -270,6 +270,311 @@ fn generateSequentialNested(
     return buf.toOwnedSlice(allocator) catch unreachable;
 }
 
+/// The two marker families a `[template]` proc's rendered body can carry
+/// (`{{ continuations["X"].continue }}` / `{{ h.inlined_link[scope] }}(arg)`).
+/// emitter_helpers.emitInlineCodeResolvingSplices resolves them when it writes
+/// inline code; the continuation-string path (orisha:router's per-branch
+/// bodies, everything generated through generatePipelineCode) emitted them
+/// verbatim — a raw `__koru_continue_0` in output_emitted.zig for any
+/// `if`/`cond`/`for` inside a route arm. This is the same resolver contract,
+/// producing strings instead of emitter writes: unresolvable markers pass
+/// through verbatim so they still fail loudly at the Zig compile.
+const CODEGEN_CONTINUE_PREFIX = "__koru_continue_";
+const CODEGEN_INLINE_PREFIX = "__koru_inline_";
+
+/// Identifier-boundary token scan — port of emitter_helpers.containsToken
+/// (private there): skips strings, chars, and line comments.
+fn containsTokenLocal(body: []const u8, token: []const u8) bool {
+    var i: usize = 0;
+    var q: u8 = 0;
+    while (i < body.len) : (i += 1) {
+        const c = body[i];
+        if (q != 0) {
+            if (c == '\\') {
+                i += 1;
+            } else if (c == q) {
+                q = 0;
+            }
+            continue;
+        }
+        if (c == '"' or c == '\'') {
+            q = c;
+            continue;
+        }
+        if (c == '/' and i + 1 < body.len and body[i + 1] == '/') {
+            while (i < body.len and body[i] != '\n') i += 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, body[i..], token)) {
+            const before_ok = i == 0 or !(std.ascii.isAlphanumeric(body[i - 1]) or body[i - 1] == '_' or body[i - 1] == '.');
+            const after = i + token.len;
+            const after_ok = after >= body.len or !(std.ascii.isAlphanumeric(body[after]) or body[after] == '_');
+            if (before_ok and after_ok) return true;
+        }
+    }
+    return false;
+}
+
+/// Token-boundary replace of `from` with `to` — for renaming a spliced
+/// effect binding that would shadow a producer-scope local.
+fn replaceIdent(allocator: std.mem.Allocator, body: []const u8, from: []const u8, to: []const u8) ![]const u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, body.len + 32) catch unreachable;
+    var i: usize = 0;
+    var q: u8 = 0;
+    while (i < body.len) {
+        const c = body[i];
+        if (q != 0) {
+            try buf.append(allocator, c);
+            i += 1;
+            if (c == '\\' and i < body.len) {
+                try buf.append(allocator, body[i]);
+                i += 1;
+            } else if (c == q) {
+                q = 0;
+            }
+            continue;
+        }
+        if (c == '"' or c == '\'') {
+            q = c;
+            try buf.append(allocator, c);
+            i += 1;
+            continue;
+        }
+        if (c == '/' and i + 1 < body.len and body[i + 1] == '/') {
+            while (i < body.len and body[i] != '\n') : (i += 1) try buf.append(allocator, body[i]);
+            continue;
+        }
+        if (std.mem.startsWith(u8, body[i..], from)) {
+            const before_ok = i == 0 or !(std.ascii.isAlphanumeric(body[i - 1]) or body[i - 1] == '_' or body[i - 1] == '.');
+            const after = i + from.len;
+            const after_ok = after >= body.len or !(std.ascii.isAlphanumeric(body[after]) or body[after] == '_');
+            if (before_ok and after_ok) {
+                try buf.appendSlice(allocator, to);
+                i = after;
+                continue;
+            }
+        }
+        try buf.append(allocator, c);
+        i += 1;
+    }
+    return buf.toOwnedSlice(allocator) catch unreachable;
+}
+
+/// `const <name> = <prefix>.<name>; _ = &<name>;` per leaf — the string-side
+/// port of emitDestructureConsts for the `! each {a, b}` binding shape.
+fn appendDestructureConsts(
+    buf: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    fields: []const ast.DestructureField,
+    prefix: []const u8,
+) !void {
+    for (fields) |f| {
+        if (std.mem.eql(u8, f.name, "_")) continue;
+        if (f.sub.len > 0) {
+            var path_buf: [256]u8 = undefined;
+            const sub_prefix = std.fmt.bufPrint(&path_buf, "{s}.{s}", .{ prefix, f.name }) catch {
+                @panic("destructure path too long");
+            };
+            try appendDestructureConsts(buf, allocator, f.sub, sub_prefix);
+            continue;
+        }
+        try buf.appendSlice(allocator, "const ");
+        try codegen_utils.appendBranchName(buf, allocator, f.name);
+        try buf.appendSlice(allocator, " = ");
+        try buf.appendSlice(allocator, prefix);
+        try buf.appendSlice(allocator, ".");
+        try codegen_utils.appendBranchName(buf, allocator, f.name);
+        try buf.appendSlice(allocator, "; _ = &");
+        try codegen_utils.appendBranchName(buf, allocator, f.name);
+        try buf.appendSlice(allocator, "; ");
+    }
+}
+
+/// Resolve the continuation markers inside a transform's rendered
+/// inline_body against this step's own continuations (`nested`):
+///
+///   - `__koru_continue_[bare_]<idx>`   — `{ [if (<guard>)] { <nested[idx]> } }`
+///   - `__koru_inline_[scoped_]<idx>(<arg>)` — `{ const <bind> = <arg>;
+///     [if (<guard>)] { <nested[idx]> } }`, with the same pun / shadow-rename
+///     / destructure rules the emitter applies.
+///
+/// The spliced arm is generated recursively through
+/// generateContinuationChainWithPrefix under a `{prefix}c<idx>_` /
+/// `{prefix}e<idx>_` namespace, matching the emitter's result-prefix nesting.
+/// Sets `resolved_any` when at least one marker was consumed — the caller
+/// uses that to know the template's own dispatch claimed the arms and the
+/// generic post-emit continuation walk must not re-emit them.
+fn resolveInlineMarkers(
+    allocator: std.mem.Allocator,
+    code: []const u8,
+    nested: []const ast.Continuation,
+    main_module_name: []const u8,
+    result_counter: *usize,
+    indent_level: usize,
+    var_prefix: []const u8,
+    resolved_any: *bool,
+) CodegenError![]const u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, code.len + 128) catch unreachable;
+    var pos: usize = 0;
+    while (true) {
+        const splice_at = std.mem.indexOfPos(u8, code, pos, CODEGEN_INLINE_PREFIX);
+        const continue_at = std.mem.indexOfPos(u8, code, pos, CODEGEN_CONTINUE_PREFIX);
+        var m: usize = undefined;
+        var is_continue: bool = undefined;
+        if (splice_at) |s| {
+            if (continue_at) |r| {
+                is_continue = r < s;
+                m = if (is_continue) r else s;
+            } else {
+                is_continue = false;
+                m = s;
+            }
+        } else if (continue_at) |r| {
+            is_continue = true;
+            m = r;
+        } else {
+            break;
+        }
+        try buf.appendSlice(allocator, code[pos..m]);
+
+        if (is_continue) {
+            var i = m + CODEGEN_CONTINUE_PREFIX.len;
+            const unguarded = std.mem.startsWith(u8, code[i..], "bare_");
+            if (unguarded) i += "bare_".len;
+            const idx = codegen_utils.scanDecimalIndex(code, &i) orelse nested.len;
+            if (idx < nested.len) {
+                resolved_any.* = true;
+                const cont = &nested[idx];
+                try buf.appendSlice(allocator, "{ ");
+                const guarded = cont.condition != null and !unguarded;
+                if (guarded) {
+                    const cond_out = (codegen_utils.rewriteZigExpr(allocator, cont.condition.?) catch null) orelse cont.condition.?;
+                    try buf.appendSlice(allocator, "if (");
+                    try buf.appendSlice(allocator, cond_out);
+                    try buf.appendSlice(allocator, ") { ");
+                }
+                const nested_prefix = try std.fmt.allocPrint(allocator, "{s}c{d}_", .{ var_prefix, idx });
+                defer allocator.free(nested_prefix);
+                const chain = try generateContinuationChainWithPrefix(allocator, cont, main_module_name, result_counter, indent_level, nested_prefix);
+                defer allocator.free(chain);
+                try buf.appendSlice(allocator, chain);
+                if (guarded) try buf.appendSlice(allocator, " }");
+                try buf.appendSlice(allocator, " }");
+            } else {
+                try buf.appendSlice(allocator, code[m..i]); // unresolvable; loud
+            }
+            pos = i;
+            continue;
+        }
+
+        // EFFECT CALL — `__koru_inline_[scoped_]<idx>(<arg>)`
+        var i = m + CODEGEN_INLINE_PREFIX.len;
+        if (std.mem.startsWith(u8, code[i..], "scoped_")) i += "scoped_".len;
+        const maybe_idx = codegen_utils.scanDecimalIndex(code, &i);
+        var arg: []const u8 = "";
+        if (maybe_idx != null and i < code.len and code[i] == '(') {
+            const arg_start = i + 1;
+            var depth: usize = 1;
+            var j = arg_start;
+            var q: u8 = 0;
+            while (j < code.len and depth > 0) : (j += 1) {
+                const ch = code[j];
+                if (q != 0) {
+                    if (ch == '\\') {
+                        j += 1;
+                    } else if (ch == q) {
+                        q = 0;
+                    }
+                    continue;
+                }
+                if (ch == '"' or ch == '\'') {
+                    q = ch;
+                } else if (ch == '(') {
+                    depth += 1;
+                } else if (ch == ')') {
+                    depth -= 1;
+                }
+            }
+            arg = std.mem.trim(u8, code[arg_start .. j - 1], " \t");
+            i = j;
+            // The marker resolves to a block statement, so swallow a trailing
+            // `;` the template wrote in call-statement shape.
+            if (i < code.len and code[i] == ';') i += 1;
+        }
+        const idx = maybe_idx orelse nested.len;
+        if (idx < nested.len) {
+            resolved_any.* = true;
+            const cont = &nested[idx];
+            const binding = cont.binding orelse "_";
+            // Cross-boundary splice hygiene (emitter's 400_151): if the
+            // consumer binding names a token that already occurs in the
+            // producer's inline text, `const <binding>` would shadow it.
+            var uniq_buf: [64]u8 = undefined;
+            var bind_to: []const u8 = binding;
+            const is_pun = arg.len != 0 and std.mem.eql(u8, arg, binding);
+            if (!std.mem.eql(u8, binding, "_") and cont.destructure.len == 0 and arg.len != 0 and !is_pun and containsTokenLocal(code, binding)) {
+                bind_to = std.fmt.bufPrint(&uniq_buf, "__koru_bind_{d}_{d}", .{ cont.location.line, cont.location.column }) catch binding;
+            }
+            try buf.appendSlice(allocator, "{ ");
+            if (arg.len == 0) {
+                // Void-payload effect: nothing to bind, nothing to discard.
+            } else if (cont.destructure.len > 0) {
+                var dst_buf: [64]u8 = undefined;
+                const dst = std.fmt.bufPrint(&dst_buf, "__koru_dst_{d}_{d}", .{ cont.location.line, cont.location.column }) catch "__koru_dst";
+                try buf.appendSlice(allocator, "const ");
+                try buf.appendSlice(allocator, dst);
+                try buf.appendSlice(allocator, " = ");
+                try buf.appendSlice(allocator, arg);
+                try buf.appendSlice(allocator, "; _ = &");
+                try buf.appendSlice(allocator, dst);
+                try buf.appendSlice(allocator, "; ");
+                try appendDestructureConsts(&buf, allocator, cont.destructure, dst);
+            } else if (std.mem.eql(u8, binding, "_")) {
+                try buf.appendSlice(allocator, "_ = ");
+                try buf.appendSlice(allocator, arg);
+                try buf.appendSlice(allocator, "; ");
+            } else if (is_pun) {
+                // The splice arg IS the binding — use it as-is.
+            } else {
+                try buf.appendSlice(allocator, "const ");
+                try codegen_utils.appendBranchName(&buf, allocator, bind_to);
+                try buf.appendSlice(allocator, " = ");
+                try buf.appendSlice(allocator, arg);
+                try buf.appendSlice(allocator, "; _ = &");
+                try codegen_utils.appendBranchName(&buf, allocator, bind_to);
+                try buf.appendSlice(allocator, "; ");
+            }
+            var nested_prefix = var_prefix;
+            const np = std.fmt.allocPrint(allocator, "{s}e{d}_", .{ var_prefix, idx }) catch null;
+            if (np) |p| nested_prefix = p;
+            var chain = try generateContinuationChainWithPrefix(allocator, cont, main_module_name, result_counter, indent_level, nested_prefix);
+            defer allocator.free(chain);
+            var cond_out: []const u8 = "";
+            const guarded = cont.condition != null;
+            if (guarded) {
+                cond_out = (codegen_utils.rewriteZigExpr(allocator, cont.condition.?) catch null) orelse cont.condition.?;
+            }
+            if (!std.mem.eql(u8, bind_to, binding)) {
+                chain = replaceIdent(allocator, chain, binding, bind_to) catch chain;
+                if (guarded) cond_out = replaceIdent(allocator, cond_out, binding, bind_to) catch cond_out;
+            }
+            if (guarded) {
+                try buf.appendSlice(allocator, "if (");
+                try buf.appendSlice(allocator, cond_out);
+                try buf.appendSlice(allocator, ") { ");
+            }
+            try buf.appendSlice(allocator, chain);
+            if (guarded) try buf.appendSlice(allocator, " }");
+            try buf.appendSlice(allocator, " }");
+        } else {
+            try buf.appendSlice(allocator, code[m..i]); // unresolvable; loud
+        }
+        pos = i;
+    }
+    try buf.appendSlice(allocator, code[pos..]);
+    return buf.toOwnedSlice(allocator) catch unreachable;
+}
+
 /// Generate code for a single continuation's pipeline (the steps after |>)
 /// This handles invoking events and recursively processing nested continuations.
 fn generatePipelineCode(
@@ -288,11 +593,29 @@ fn generatePipelineCode(
     for (pipeline) |step| {
         switch (step) {
             .invocation => |inv| {
-                if (inv.inline_body) |ib| {
+                if (inv.inline_body) |ib_raw| {
+                    // Resolve any continuation markers the template left in
+                    // the body against this step's own arms. The emitter path
+                    // does this at write time; this path builds strings, so
+                    // the resolution happens here — without it the raw
+                    // `__koru_continue_0` reaches output_emitted.zig.
+                    var markers_resolved = false;
+                    const ib = try resolveInlineMarkers(
+                        allocator,
+                        ib_raw,
+                        nested,
+                        main_module_name,
+                        result_counter,
+                        indent_level,
+                        var_prefix,
+                        &markers_resolved,
+                    );
+                    defer allocator.free(ib);
+
                     // A body that never breaks with a value is a STATEMENT: emit
                     // it as one. No label, no result variable, and nothing for a
                     // continuation switch to switch on. See inlineBodyYieldsValue.
-                    if (!inlineBodyYieldsValue(ib)) {
+                    if (!inlineBodyYieldsValue(ib_raw)) {
                         const ind_stmt = try indent(allocator, indent_level);
                         defer allocator.free(ind_stmt);
                         try buf.appendSlice(allocator, ind_stmt);
@@ -338,7 +661,9 @@ fn generatePipelineCode(
                     }
                     try buf.appendSlice(allocator, ";\n");
 
-                    if (nested.len > 0) {
+                    // Marker-referenced arms were spliced into the body by the
+                    // template's own dispatch — do not walk them again here.
+                    if (nested.len > 0 and !markers_resolved) {
                         if (shouldSwitchOnResult(&inv, nested)) {
                             const switch_code = try generateBranchSwitch(
                                 allocator,
@@ -348,7 +673,7 @@ fn generatePipelineCode(
                                 result_counter,
                                 indent_level,
                                 var_prefix,
-                                inlineBodyAllocates(ib),
+                                inlineBodyAllocates(ib_raw),
                             );
                             defer allocator.free(switch_code);
                             try buf.appendSlice(allocator, switch_code);
@@ -367,7 +692,7 @@ fn generatePipelineCode(
                             // release-body). Freeing here would be
                             // use-after-free; not marking leaks (350_023).
                             const mark_response = if (invocationBindName(&inv)) |bind_name|
-                                inlineBodyAllocates(ib) and chainReturnsBodyBinding(nested, bind_name)
+                                inlineBodyAllocates(ib_raw) and chainReturnsBodyBinding(nested, bind_name)
                             else
                                 false;
                             const seq = try generateSequentialNested(
