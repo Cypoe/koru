@@ -1298,9 +1298,11 @@ fn lowerCsInto(
         // `.len` — the member JavaScript patched onto prototypes; C# has no
         // such escape hatch, so the lowering rewrites to `.Length`. `x.len()`
         // becomes `x.Length()` — a compile error one stage down, still loud.
+        // The lookahead is bounds-guarded: an expr ENDING in `.len` lowers
+        // too (store rewrites mint `__koru_store_<name>.len` placeholders).
         if (c == '.' and i + 3 < text.len and
             std.mem.eql(u8, text[i + 1 .. i + 4], "len") and
-            !exprIdentChar(text[i + 4]))
+            (i + 4 >= text.len or !exprIdentChar(text[i + 4])))
         {
             try out.appendSlice(allocator, ".Length");
             i += 4;

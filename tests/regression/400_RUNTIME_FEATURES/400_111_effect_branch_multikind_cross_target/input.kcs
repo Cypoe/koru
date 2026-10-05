@@ -1,0 +1,24 @@
+// C# implementation facet. Tors are declared in input.k; this file holds
+// the |cs proc bodies. Module state lives as statics on KoruHost pulled
+// into file scope by `using static` — C# has no file-scope variables.
+
+using static KoruHost;
+
+static class KoruHost {
+    public static ulong tokens = 0;
+    public static ulong warnings = 0;
+    public static ulong token_sum = 0;
+}
+
+~proc tokenize|cs {
+    for (ulong i = 0; i < n; i++) {
+        token(i);
+        if (i % 2 == 0) {
+            warning(i);
+        }
+    }
+}
+
+~proc on-token|cs { tokens = tokens + 1; token_sum = token_sum + t; }
+~proc on-warning|cs { warnings = warnings + 1; }
+~proc report|cs { __koru_stdout_write("tokens=" + tokens + " warnings=" + warnings + " sum=" + token_sum + "\n"); }

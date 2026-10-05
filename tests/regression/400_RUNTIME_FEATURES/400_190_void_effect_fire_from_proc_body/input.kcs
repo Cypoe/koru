@@ -1,0 +1,8 @@
+// C# implementation facet. Tors are declared in input.k; this file holds
+// the |cs proc bodies. No module state — KoruHost is omitted.
+
+~proc boot|cs {
+    ready();
+}
+
+~proc report|cs { __koru_stdout_write("ready fired\n"); }
