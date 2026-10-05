@@ -2845,6 +2845,69 @@ fn collectVariantTargetsForEventPath(
     return try found.toOwnedSlice(allocator);
 }
 
+/// `--lang` namespace guard (KORU126): the tag must name a registered
+/// emitter or a proc variant actually declared in this program. Every
+/// other name used to sail through unrefused and emit a Zig binary
+/// under the foreign tag — measured 2026-10-05: `koruc input.k
+/// --lang=cs` produced a working Mach-O executable. The admitted set
+/// is generous on purpose: a declared `|mlir[gpu]` admits both `mlir`
+/// (the base transform dispatch compares) and `mlir[gpu]` (the full
+/// tag the emitter compares) — what is refused is a name nothing
+/// declared.
+fn enforceLangNamespace(
+    allocator: std.mem.Allocator,
+    program: *const ast.Program,
+    lang: []const u8,
+) !void {
+    // Emitters wired into the stage-C dispatch (koru_std/compiler.kz).
+    if (std.mem.eql(u8, lang, "zig") or std.mem.eql(u8, lang, "js")) return;
+
+    var declared = std.StringHashMap(void).init(allocator);
+    defer declared.deinit();
+    try collectProcVariantTags(&declared, program.items);
+    if (declared.contains(lang)) return;
+
+    var names = std.ArrayList([]const u8){};
+    defer names.deinit(allocator);
+    var kit = declared.keyIterator();
+    while (kit.next()) |k| try names.append(allocator, k.*);
+    std.mem.sort([]const u8, names.items, {}, struct {
+        fn lt(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.order(u8, a, b) == .lt;
+        }
+    }.lt);
+    var list = std.ArrayList(u8){};
+    defer list.deinit(allocator);
+    const lw = list.writer(allocator);
+    for (names.items, 0..) |n, i| {
+        if (i > 0) try lw.writeAll(", ");
+        try lw.writeAll(n);
+    }
+
+    try printStderr(allocator, "error[KORU126]: --lang='{s}' names no emitter and no proc variant declared in this program\n  emitters: zig, js\n  declared variant tags: {s}\n  `--lang=<tag>` selects which `~proc <tor>|<tag>` bodies get emitted — a tag nothing declares still compiles, under a name that selects nothing\n  fix: pass one of the declared tags, or declare `~proc <tor>|{s} {{ ... }}` bodies for the target first\n", .{ lang, if (names.items.len == 0) "(none)" else list.items, lang });
+    std.process.exit(1);
+}
+
+/// Every proc variant tag the program declares, walking module items —
+/// full tags (the emitter compares `target == lang` exactly) and base
+/// tags (transform dispatch strips `(...)`/`[...]` parameter groups
+/// before comparing).
+fn collectProcVariantTags(set: *std.StringHashMap(void), items: []const ast.Item) !void {
+    for (items) |item| {
+        switch (item) {
+            .proc_decl => |proc| {
+                const target = proc.target orelse continue;
+                try set.put(target, {});
+                if (std.mem.indexOfAny(u8, target, "([")) |cut| {
+                    try set.put(target[0..cut], {});
+                }
+            },
+            .module_decl => |module| try collectProcVariantTags(set, module.items),
+            else => {},
+        }
+    }
+}
+
 /// Frontend `glance` — print the program's declaration surface (every module's
 /// events with full signatures, annotations, and file:line) from the fully
 /// resolved post-import AST, then return. Same category as `--help`/`--ast-json`:
@@ -8332,6 +8395,12 @@ pub fn main() !void {
         try exitOnReportedErrors(&parser.reporter);
         return err;
     };
+
+    // `--lang` must name an emitter or a variant the program actually
+    // declares — anything else used to emit a Zig binary under the
+    // foreign tag with no diagnostic. Runs before check_only so `-c`
+    // refuses the same lies as a full build.
+    try enforceLangNamespace(compile_allocator, &source_file, compiler_config.lang);
 
     // If check-only, we're done
     if (check_only) {
