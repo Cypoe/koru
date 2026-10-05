@@ -1,0 +1,27 @@
+// PINS: a real tor returning `string<std/io:allocated!>`, bound in an
+// orisha:router arm and returned as the Response body, claims
+// `body_allocated` on the record. 350_023 pins the fmt.blk twin where the
+// allocating producer is inline-bodied; for a non-inline call the codegen
+// mark keyed on the producer's emission shape and never fired — the body
+// rode out unmarked, release-body freed nothing, one leak per request.
+// The mark now follows the invoked tor's return_phantom.
+
+~import orisha
+~import std/io
+
+const std = @import("std");
+
+const raw = "GET / HTTP/1.1\r\n\r\n";
+
+~tor render {} -> string<std/io:allocated!>
+
+~proc render|zig {
+    const __a = koru_allocator();
+    return std.fmt.allocPrint(__a, "<h1>{s}</h1>", .{"M2"}) catch unreachable;
+}
+
+~orisha:handler = orisha:router(req)
+! [GET /] |> render(): b -> { status: 200, body: b, content_type: "text/html" }
+! [*] -> { status: 404, body: "miss", content_type: "text/plain" }
+
+~orisha:answer(raw): a |> std/io:print.ln("{{ a.body:s }}") |> orisha:release-body(a.body, allocated: a.body_allocated)
