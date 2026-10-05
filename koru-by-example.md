@@ -229,6 +229,8 @@ Testing subflow-defined semantics:
 // ============================================================================
 // Test 208: Simple server-style flow with nested labels
 // A simplified synthetic example inspired by tcp-echo for flow visualization
+// The `shutdown` arm is the accept_loop's exit path — a fold where every arm
+// jumps back can never exit and is refused at compile time (KORU206).
 // ============================================================================
 
 const std = @import("std");
@@ -249,11 +251,15 @@ proc listen|zig {
 tor accept { server: u32 }
 | connected { conn: u32, server: u32 }
 | failed u32
+| shutdown u32
 
 proc accept|zig {
     std.debug.print("Accepting connection\n", .{});
     if (server == 9999) {
         return .{ .failed = server };
+    }
+    if (server == 8888) {
+        return .{ .shutdown = server };
     }
     return .{ .connected = .{ .conn = server + 1, .server = server } };
 }
@@ -301,6 +307,7 @@ listen(port: 8080)
         | retry r |> @process_loop(conn: r)
         | error e |> log-error(e.conn, e.msg): l |> cleanup(conn: l) |> @accept_loop(c.server)
     | failed f |> @accept_loop(server: f)
+    | shutdown _ |> _
 | failed _ |> _
 ```
 
