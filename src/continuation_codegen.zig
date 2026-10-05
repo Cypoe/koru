@@ -44,6 +44,7 @@ fn appendContinuationBodies(
     result_counter: *usize,
     indent_level: usize,
     var_prefix: []const u8,
+    program_items: ?[]const ast.Item,
 ) !void {
     for (conts) |*cont| {
         const code = try generateContinuationChainWithPrefix(
@@ -53,6 +54,7 @@ fn appendContinuationBodies(
             result_counter,
             indent_level,
             var_prefix,
+            program_items,
         );
         defer allocator.free(code);
         try buf.appendSlice(allocator, code);
@@ -249,6 +251,7 @@ fn generateSequentialNested(
     indent_level: usize,
     var_prefix: []const u8,
     mark_body_allocated: bool,
+    program_items: ?[]const ast.Item,
 ) CodegenError![]const u8 {
     var buf = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
     for (nested) |*cont| {
@@ -263,6 +266,7 @@ fn generateSequentialNested(
             var_prefix,
             false,
             mark_body_allocated,
+            program_items,
         );
         defer allocator.free(code);
         try buf.appendSlice(allocator, code);
@@ -412,6 +416,7 @@ fn resolveInlineMarkers(
     result_counter: *usize,
     indent_level: usize,
     var_prefix: []const u8,
+    program_items: ?[]const ast.Item,
     resolved_any: *bool,
 ) CodegenError![]const u8 {
     var buf = std.ArrayList(u8).initCapacity(allocator, code.len + 128) catch unreachable;
@@ -455,7 +460,7 @@ fn resolveInlineMarkers(
                 }
                 const nested_prefix = try std.fmt.allocPrint(allocator, "{s}c{d}_", .{ var_prefix, idx });
                 defer allocator.free(nested_prefix);
-                const chain = try generateContinuationChainWithPrefix(allocator, cont, main_module_name, result_counter, indent_level, nested_prefix);
+                const chain = try generateContinuationChainWithPrefix(allocator, cont, main_module_name, result_counter, indent_level, nested_prefix, program_items);
                 defer allocator.free(chain);
                 try buf.appendSlice(allocator, chain);
                 if (guarded) try buf.appendSlice(allocator, " }");
@@ -547,7 +552,7 @@ fn resolveInlineMarkers(
             var nested_prefix = var_prefix;
             const np = std.fmt.allocPrint(allocator, "{s}e{d}_", .{ var_prefix, idx }) catch null;
             if (np) |p| nested_prefix = p;
-            var chain = try generateContinuationChainWithPrefix(allocator, cont, main_module_name, result_counter, indent_level, nested_prefix);
+            var chain = try generateContinuationChainWithPrefix(allocator, cont, main_module_name, result_counter, indent_level, nested_prefix, program_items);
             defer allocator.free(chain);
             var cond_out: []const u8 = "";
             const guarded = cont.condition != null;
@@ -587,6 +592,7 @@ fn generatePipelineCode(
     var_prefix: []const u8,
     is_root: bool,
     mark_body_allocated: bool,
+    program_items: ?[]const ast.Item,
 ) CodegenError![]const u8 {
     var buf = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
 
@@ -608,6 +614,7 @@ fn generatePipelineCode(
                         result_counter,
                         indent_level,
                         var_prefix,
+                        program_items,
                         &markers_resolved,
                     );
                     defer allocator.free(ib);
@@ -674,6 +681,7 @@ fn generatePipelineCode(
                                 indent_level,
                                 var_prefix,
                                 inlineBodyAllocates(ib_raw),
+                                program_items,
                             );
                             defer allocator.free(switch_code);
                             try buf.appendSlice(allocator, switch_code);
@@ -703,6 +711,7 @@ fn generatePipelineCode(
                                 indent_level,
                                 var_prefix,
                                 mark_response,
+                                program_items,
                             );
                             defer allocator.free(seq);
                             try buf.appendSlice(allocator, seq);
@@ -760,6 +769,7 @@ fn generatePipelineCode(
                             indent_level,
                             var_prefix,
                             false,
+                            program_items,
                         );
                         defer allocator.free(switch_code);
                         try buf.appendSlice(allocator, switch_code);
@@ -776,6 +786,12 @@ fn generatePipelineCode(
                         defer allocator.free(call_code);
                         try buf.appendSlice(allocator, call_code);
 
+                        // Same contract as the inline-body twin above: a
+                        // `-> T<allocated!>` tor's buffer bound here and
+                        // RETURNED in a Response-shaped record must claim
+                        // body_allocated on it (orisha release-body).
+                        const mark_response = invocationReturnsAllocated(program_items, &inv) and
+                            chainReturnsBodyBinding(nested, rb);
                         const seq = try generateSequentialNested(
                             allocator,
                             nested,
@@ -783,7 +799,8 @@ fn generatePipelineCode(
                             result_counter,
                             indent_level,
                             var_prefix,
-                            false,
+                            mark_response,
+                            program_items,
                         );
                         defer allocator.free(seq);
                         try buf.appendSlice(allocator, seq);
@@ -805,6 +822,7 @@ fn generatePipelineCode(
                             indent_level,
                             var_prefix,
                             false,
+                            program_items,
                         );
                         defer allocator.free(seq);
                         try buf.appendSlice(allocator, seq);
@@ -958,6 +976,7 @@ fn generatePipelineCode(
                             indent_level,
                             var_prefix,
                             false,
+                            program_items,
                         );
                         defer allocator.free(switch_code);
                         try buf.appendSlice(allocator, switch_code);
@@ -974,6 +993,7 @@ fn generatePipelineCode(
                             indent_level,
                             var_prefix,
                             false,
+                            program_items,
                         );
                         defer allocator.free(seq);
                         try buf.appendSlice(allocator, seq);
@@ -1013,13 +1033,13 @@ fn generatePipelineCode(
                 try buf.appendSlice(allocator, "| {\n");
 
                 // Emit body continuations
-                try appendContinuationBodies(&buf, allocator, each_body, main_module_name, result_counter, indent_level + 1, var_prefix);
+                try appendContinuationBodies(&buf, allocator, each_body, main_module_name, result_counter, indent_level + 1, var_prefix, program_items);
 
                 try buf.appendSlice(allocator, ind);
                 try buf.appendSlice(allocator, "}\n");
 
                 // Emit done_body after the loop
-                try appendContinuationBodies(&buf, allocator, done_body, main_module_name, result_counter, indent_level, var_prefix);
+                try appendContinuationBodies(&buf, allocator, done_body, main_module_name, result_counter, indent_level, var_prefix, program_items);
             },
             .conditional => |cond| {
                 // Emit if/else with bodies
@@ -1039,12 +1059,12 @@ fn generatePipelineCode(
                 try buf.appendSlice(allocator, ") {\n");
 
                 // Emit then_body
-                try appendContinuationBodies(&buf, allocator, then_body, main_module_name, result_counter, indent_level + 1, var_prefix);
+                try appendContinuationBodies(&buf, allocator, then_body, main_module_name, result_counter, indent_level + 1, var_prefix, program_items);
 
                 if (else_body.len > 0) {
                     try buf.appendSlice(allocator, ind);
                     try buf.appendSlice(allocator, "} else {\n");
-                    try appendContinuationBodies(&buf, allocator, else_body, main_module_name, result_counter, indent_level + 1, var_prefix);
+                    try appendContinuationBodies(&buf, allocator, else_body, main_module_name, result_counter, indent_level + 1, var_prefix, program_items);
                 }
 
                 try buf.appendSlice(allocator, ind);
@@ -1131,6 +1151,63 @@ fn fieldHasBodyValue(field: []const u8, binding: []const u8) bool {
     return false;
 }
 
+/// True when the invoked tor's decl declares an `allocated` return
+/// (`-> string<std.io:allocated!>`). Codegen-side twin
+/// of `inlineBodyAllocates` for REAL tor calls: a bound `allocated!` result
+/// that a Response-shaped produce returns must claim `body_allocated`, since
+/// router-inlined arms are lowered to Zig before auto-discharge can see them.
+fn invocationReturnsAllocated(items: ?[]const ast.Item, inv: *const ast.Invocation) bool {
+    const decl = findEventDeclLocal(items orelse return false, &inv.path) orelse return false;
+    const ph = decl.return_phantom orelse return false;
+    var label = std.mem.trim(u8, ph, " \t");
+    label = std.mem.trimRight(u8, label, "!?");
+    if (std.mem.lastIndexOfScalar(u8, label, ':')) |c| label = label[c + 1 ..];
+    return std.mem.eql(u8, label, "allocated");
+}
+
+/// Module-qualified path walk over program items — local twin of
+/// emitter_helpers.findEventDeclByPath (kept here so this module stays
+/// leaf-deps only: ast + codegen_utils).
+fn findEventDeclLocal(items: []const ast.Item, path: *const ast.DottedPath) ?*const ast.EventDecl {
+    if (path.module_qualifier) |mq| {
+        for (items) |*item| {
+            if (item.* == .module_decl and std.mem.eql(u8, item.module_decl.logical_name, mq)) {
+                return findEventDeclBySegments(item.module_decl.items, path.segments);
+            }
+        }
+        return findEventDeclBySegments(items, path.segments);
+    }
+    for (items) |*item| {
+        switch (item.*) {
+            .module_decl => |*module| {
+                if (findEventDeclLocal(module.items, path)) |found| return found;
+            },
+            .event_decl => |*ed| {
+                if (segmentsMatch(ed.path.segments, path.segments)) return ed;
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn findEventDeclBySegments(items: []const ast.Item, segments: []const []const u8) ?*const ast.EventDecl {
+    for (items) |*item| {
+        if (item.* == .event_decl and segmentsMatch(item.event_decl.path.segments, segments)) {
+            return &item.event_decl;
+        }
+    }
+    return null;
+}
+
+fn segmentsMatch(a: []const []const u8, b: []const []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (!std.mem.eql(u8, x, y)) return false;
+    }
+    return true;
+}
+
 /// Whether an inline body allocated a buffer the caller binds. fmt.blk's
 /// transform writes `allocPrint` against `__fmt_alloc`. Auto-discharge runs
 /// after inlining transforms have already lowered nested sites to Zig, so
@@ -1150,6 +1227,7 @@ fn generateBranchSwitch(
     indent_level: usize,
     var_prefix: []const u8,
     discharge_allocated: bool,
+    program_items: ?[]const ast.Item,
 ) CodegenError![]const u8 {
     var buf = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
 
@@ -1224,6 +1302,7 @@ fn generateBranchSwitch(
             var_prefix,
             false,
             discharge_allocated,
+            program_items,
         );
         defer allocator.free(pipeline_code);
         try buf.appendSlice(allocator, pipeline_code);
@@ -1279,6 +1358,7 @@ pub fn generateContinuationChain(
     main_module_name: []const u8,
     result_counter: *usize,
     indent_level: usize,
+    program_items: ?[]const ast.Item,
 ) CodegenError![]const u8 {
     return generateContinuationChainWithPrefix(
         allocator,
@@ -1287,6 +1367,7 @@ pub fn generateContinuationChain(
         result_counter,
         indent_level,
         "result_", // Default prefix for backward compatibility
+        program_items,
     );
 }
 
@@ -1299,6 +1380,7 @@ pub fn generateContinuationChainWithPrefix(
     result_counter: *usize,
     indent_level: usize,
     var_prefix: []const u8,
+    program_items: ?[]const ast.Item,
 ) CodegenError![]const u8 {
     // Convert single step to array for compatibility with generatePipelineCode
     const pipeline = if (continuation.node) |node| &[_]ast.Node{node} else &[_]ast.Node{};
@@ -1312,5 +1394,6 @@ pub fn generateContinuationChainWithPrefix(
         var_prefix,
         true, // root: the continuation's own node is a bare produce when leaf
         false,
+        program_items,
     );
 }

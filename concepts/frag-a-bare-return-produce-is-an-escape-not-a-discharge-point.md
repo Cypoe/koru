@@ -41,3 +41,22 @@ only as emitted garbage two passes later, which reads as an emitter bug.
 - Whether the emitter should refuse to emit any continuation after a producing
   return — defense in depth that would have turned this defect into a loud
   compile error instead of undeclared-identifier noise.
+
+## Codegen twin — an escape the inserter cannot see still needs its marker (2026-10-05)
+
+The same escape discipline applied again one layer down. Router-inlined arms
+(`orisha:router`) are lowered to Zig by `continuation_codegen` BEFORE the
+inserter runs, so an `allocated!` result bound and returned in a
+Response-shaped produce (`|> X : b -> { body: b }`) escapes invisibly: no
+discharge — correct — but also no `body_allocated` mark, because the mark
+keyed on the producer's inline-body shape (`inlineBodyAllocates`) rather than
+on the obligation the binding carries. The buffer leaked once per request,
+silently, at exit 0 — the shape this frag's whole premise predicts: the
+evidence of escape is negative. The mark now keys off the invoked tor's
+`return_phantom`; `program_items` rides the codegen chain so the lookup
+reaches the decl.
+
+The free-half residue is recorded, not fixed here: an `allocated!` bind that
+is neither returned nor switched on still has no discharge path on the
+router-lowered arm — the inserter owns that decision and it never sees the
+arm.
