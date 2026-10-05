@@ -1,0 +1,32 @@
+// Pins the three-state deps report: `check` answers presence, `ready`
+// answers liveness. `present-ready` passes both; `present-down` passes check
+// but its ready probe exits nonzero — deps must report it as
+// "installed, not ready", never claim all-clear, and not route it to the
+// install path (installing cannot fix a down daemon).
+//
+// Run: koruc input.kz deps   → present-ready ✓, present-down ⚠ not ready,
+//                              "Installed but not ready" section present,
+//                              no "All system dependencies are installed!"
+
+~import std/deps
+
+~std/deps:requires.system {
+    "name": "present-ready",
+    "check": "echo 1.0.0",
+    "ready": "true",
+    "brew": "nothing"
+}
+
+~std/deps:requires.system {
+    "name": "present-down",
+    "check": "echo 1.0.0",
+    "ready": "false",
+    "brew": "nothing"
+}
+
+~tor main {}
+
+~proc main|zig {
+}
+
+~main()
