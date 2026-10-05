@@ -1,23 +1,14 @@
 // ============================================================================
-// PARSER BUG: Multi-line function calls in subflows break continuation parsing
-// ============================================================================
+// Test 210_019: COMPILE_ONLY — multi-line call args fold correctly inside a
+//               subflow continuation chain.
 //
-// The parser fails to recognize continuation lines after multi-line function
-// calls in subflow expressions. After the closing ')' of a multi-line call,
-// the next '|' is treated as a "stray continuation line" instead of being
-// recognized as part of the subflow.
+// Parens hug their arguments (f2f67db50): `f(` hugs the first arg, `)` hugs
+// the last. Within that style a call may span lines, and the continuation
+// `|>` after the closing paren must keep parsing as part of the subflow —
+// this pins that shape. (Historical: this test once pinned a bug where the
+// fold lost subflow context after a multi-line call.)
 //
-// Expected: Parser should handle multi-line calls and continue parsing the flow
-// Actual: Parser loses track of subflow context after ')'
-//
-// Do not work around this by moving the event composition into a proc. Procs are
-// host/Zig implementation space; this repro exists because the subflow form is
-// the intended authoring model.
-//
-// This bug was discovered while implementing benchmark 2101b_nbody_granular,
-// which needed to pass multiple arguments to assemble-solar-system() across
-// multiple lines.
-//
+// The subflow form is the intended authoring model — no proc workaround.
 // ============================================================================
 
 const std = @import("std");
@@ -40,14 +31,11 @@ const std = @import("std");
     return x * 2;
 }
 
-// This subflow should work but currently fails
 ~tor test-multiline-call {} -> i32
 
-~test-multiline-call = step-a(x: 10): a |> step-b(
-    a,
+~test-multiline-call = step-a(x: 10): a |> step-b(a,
     b: 20,
-    c: 30
-): b |> step-c(x: b): c -> c
+    c: 30): b |> step-c(x: b): c -> c
 
 // Main flow
 ~test-multiline-call()
