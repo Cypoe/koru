@@ -6900,16 +6900,61 @@ fn rewriteInlineHasDeclPresence(
 /// was safe (115_004 against its green original 2106). One implementation, two
 /// call sites, so the next path to render a template inherits the fix rather
 /// than the bug.
+/// std.mem.replaceOwned, but a hit only counts when the character AFTER the
+/// needle is not an identifier char — `__koru_item` matches, `__koru_item4`
+/// does not. Used where a rewrite must touch only the raw template spelling
+/// and leave already-unique names alone.
+fn replaceOwnedWordBoundary(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    input: []const T,
+    needle: []const T,
+    replacement: []const T,
+) ![]T {
+    var out = std.ArrayList(T).empty;
+    errdefer out.deinit(allocator);
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(T, input, pos, needle)) |hit| {
+        const tail = hit + needle.len;
+        if (tail < input.len and isIdentChar(input[tail])) {
+            try out.appendSlice(allocator, input[pos..tail]);
+            pos = tail;
+            continue;
+        }
+        try out.appendSlice(allocator, input[pos..hit]);
+        try out.appendSlice(allocator, replacement);
+        pos = tail;
+    }
+    try out.appendSlice(allocator, input[pos..]);
+    return out.toOwnedSlice(allocator);
+}
+
 fn uniquifyForCapture(ctx: *EmissionContext, code: []const u8) !?[]u8 {
     const KORU_ITEM = "__koru_item";
     var current: ?[]u8 = null;
 
-    if (std.mem.indexOf(u8, code, KORU_ITEM) != null) {
+    // Bare `__koru_item` only — a name the template already made site-unique
+    // (`__koru_item{{ __site }}` → `__koru_item4`) must NOT be rewritten again,
+    // or the pass would mint `__koru_item_04`. The boundary check is the same
+    // token rule the compiler applies: an identifier char adjacent means the
+    // name is already someone's, not the raw template spelling.
+    var scan: usize = 0;
+    var bare_found = false;
+    while (std.mem.indexOfPos(u8, code, scan, KORU_ITEM)) |hit| {
+        const tail = hit + KORU_ITEM.len;
+        const bare = tail >= code.len or !isIdentChar(code[tail]);
+        if (bare) {
+            bare_found = true;
+            break;
+        }
+        scan = tail;
+    }
+    if (bare_found) {
         const for_id = ctx.for_counter;
         ctx.for_counter += 1;
         var unique_buf: [64]u8 = undefined;
         const unique_item = std.fmt.bufPrint(&unique_buf, "__koru_item_{d}", .{for_id}) catch KORU_ITEM;
-        current = try std.mem.replaceOwned(u8, ctx.allocator, code, KORU_ITEM, unique_item);
+        current = try replaceOwnedWordBoundary(u8, ctx.allocator, code, KORU_ITEM, unique_item);
     }
 
     // USER-authored captures collide the same way the template's does: two

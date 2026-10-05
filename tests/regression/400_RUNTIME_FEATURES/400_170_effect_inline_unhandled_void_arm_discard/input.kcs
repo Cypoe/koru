@@ -1,0 +1,8 @@
+// C# implementation facet. Tors are declared in input.kz (merged at
+// import); this file holds the |cs proc bodies.
+
+~proc beat|cs {
+    tick();
+    tick();
+    return new { tag = "done", done = 2 };
+}

@@ -1242,6 +1242,11 @@ fn lowerCsInto(
 ) LowerError!void {
     var i: usize = 0;
     var quote: ?u8 = null;
+    // One entry per open `[` we are inside, saying whether its closer must be
+    // written as `}` — the decision the literal-position `new dynamic[] {`
+    // rewrite makes at the opener has to survive to the matching `]`.
+    var bracket_is_literal: [64]bool = undefined;
+    var bracket_depth: usize = 0;
     while (i < text.len) {
         const c = text[i];
         if (quote) |q| {
@@ -1311,6 +1316,40 @@ fn lowerCsInto(
             if (name.len > 0 and p < text.len and text[p] == '(') {
                 if (diag) |d| d.unknown_builtin = name;
                 return LowerError.UnsupportedBuiltin;
+            }
+        }
+        // Koru LIST literal `[a, b]`: passed verbatim, C# reads a collection
+        // expression — legal only where a target type exists, and
+        // `foreach (var x in […])` supplies none (CS9176). In LITERAL
+        // position — no operand closer precedes — spell `new dynamic[] {…}`:
+        // `dynamic[]` iterates, indexes, and reads `.Length` everywhere a
+        // Koru list can appear. An index/slice `[` (after an identifier,
+        // `)`, `]`, a quote, or a digit — all inside exprIdentChar or the
+        // closer set) stays verbatim. `.koru_expr` only: in host text `[` is
+        // a genuine C# collection expression or attribute the author chose.
+        if (mode == .koru_expr and c == '[') {
+            var l = out.items.len;
+            while (l > 0 and std.ascii.isWhitespace(out.items[l - 1])) l -= 1;
+            const operand_closes = l > 0 and
+                (exprIdentChar(out.items[l - 1]) or out.items[l - 1] == ')' or
+                    out.items[l - 1] == ']' or out.items[l - 1] == '"' or
+                    out.items[l - 1] == '\'' or out.items[l - 1] == '.');
+            if (bracket_depth < bracket_is_literal.len) {
+                bracket_is_literal[bracket_depth] = !operand_closes;
+                bracket_depth += 1;
+                if (!operand_closes) {
+                    try out.appendSlice(allocator, "new dynamic[] {");
+                    i += 1;
+                    continue;
+                }
+            }
+        }
+        if (c == ']' and bracket_depth > 0) {
+            bracket_depth -= 1;
+            if (bracket_is_literal[bracket_depth]) {
+                try out.append(allocator, '}');
+                i += 1;
+                continue;
             }
         }
         // RESERVED-WORD rename — `.koru_expr` only, same rule as the JS arm:

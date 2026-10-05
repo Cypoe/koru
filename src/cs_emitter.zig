@@ -531,47 +531,47 @@ const Emitter = struct {
     }
 
     /// Emit one EventDecl as `static class <name>_event { … handler … }`.
-    fn emitEventDecl(self: *Emitter, event: *const ast.EventDecl, scope: []const ast.Item) CsEmitError!void {
-        const impl = self.findImplIn(scope, &event.path) orelse {
-            log.err("[cs_emitter] tor '{s}' has no |cs proc, immediate, or subflow body\n", .{event.path.segments[event.path.segments.len - 1]});
+    fn emitEventDecl(self: *Emitter, ev: *const ast.EventDecl, scope: []const ast.Item) CsEmitError!void {
+        const impl = self.findImplIn(scope, &ev.path) orelse {
+            log.err("[cs_emitter] tor '{s}' has no |cs proc, immediate, or subflow body\n", .{ev.path.segments[ev.path.segments.len - 1]});
             return CsEmitError.NoCsProcBody;
         };
 
-        const name = event.path.segments[event.path.segments.len - 1];
+        const name = ev.path.segments[ev.path.segments.len - 1];
 
         var has_effect = false;
-        for (event.branches) |b| {
+        for (ev.branches) |b| {
             if (b.kind == .effect) {
                 has_effect = true;
                 break;
             }
         }
-        // Effect dispatch itself (Handlers objects, arm fires) is unmodeled —
-        // but an effect DECLARATION only bites when the emitted handler could
-        // fire one. A dead stub (template/transform) or a pure value impl
-        // never references an op; a real proc or subflow body can.
-        if (has_effect) {
-            const dead_handler = switch (impl) {
-                .template_stub, .immediate => true,
-                .proc => annotation_parser.hasPart(event.annotations, "transform"),
-                .subflow => false,
-            };
-            if (!dead_handler) {
-                log.err("[cs_emitter] tor '{s}' declares effect branches, which the cs target does not model\n", .{name});
-                return CsEmitError.UnsupportedConstruct;
-            }
-        }
 
         var name_buf: [256]u8 = undefined;
         try self.writeFmt("  public static class {s}_event {{\n", .{lowerIdentBuf(&name_buf, name)});
-        try self.writeFmt("    public static dynamic handler(dynamic {s}) {{\n", .{INPUT_PARAM});
+        if (has_effect) {
+            try self.writeFmt("    public static dynamic handler(dynamic {s}, dynamic __koru_handlers) {{\n", .{INPUT_PARAM});
+            // Bind each effect-branch op as a local: `var each = __koru_handlers.each;`
+            // — a `dynamic` delegate the impl body (or a subflow arm fire)
+            // invokes by bare name.
+            for (ev.branches) |b| {
+                if (b.kind != .effect) continue;
+                try self.write("      var ");
+                try self.writeBinding(b.name);
+                try self.write(" = __koru_handlers.");
+                try self.writeBinding(b.name);
+                try self.write(";\n");
+            }
+        } else {
+            try self.writeFmt("    public static dynamic handler(dynamic {s}) {{\n", .{INPUT_PARAM});
+        }
 
         // Bind input fields as locals: `var n = __koru_input.n;`. Every impl
         // kind reads its inputs by bare name, so this precedes all four
         // bodies. A field DEFAULT applies here (C# anonymous objects have no
         // defaults either — same hole, same fix): `?? <dflt>` reads through
         // dynamic the way JS's `??` does.
-        for (event.input.fields) |field| {
+        for (ev.input.fields) |field| {
             try self.write("      var ");
             try self.writeBinding(field.name);
             try self.writeFmt(" = {s}.", .{INPUT_PARAM});
@@ -589,7 +589,7 @@ const Emitter = struct {
                 // output replaced every call site, so the decl-site handler
                 // is dead — splice a self-naming stub, not the proc's
                 // stage-C Zig source.
-                if (annotation_parser.hasPart(event.annotations, "transform")) {
+                if (annotation_parser.hasPart(ev.annotations, "transform")) {
                     try self.writeFmt("      throw new global::System.Exception(\"{s}: [transform] tor is lowered at compile time and must never be called\");\n", .{name});
                 } else {
                     try self.emitReindented(proc.body.text, "      ");
@@ -604,7 +604,7 @@ const Emitter = struct {
                 .{name},
             ),
             .immediate => |ii| try self.emitBranchConstructorReturn(&ii.value, "      "),
-            .subflow => |flow| try self.emitSubflowImplBody(event, flow, "      "),
+            .subflow => |flow| try self.emitSubflowImplBody(ev, flow, "      "),
         }
         try self.write("    }\n  }\n");
     }
@@ -1267,33 +1267,32 @@ const Emitter = struct {
             try self.emitUnconsumedContinuations(continuations, consumed, indent);
             return;
         }
-        // An effect-arm fire is a callback into the caller — and unmodelled.
+        // SUBFLOW-IMPLEMENTED EFFECT FIRE. Inside the impl of an
+        // effect-bearing tor, a call to one of THAT tor's own effect arms is
+        // the FIRING — it invokes the `Func` the caller installed on
+        // `__koru_handlers`, bound to a local at handler entry.
         if (self.impl_event) |impl_ev| {
             if (findEffectArm(impl_ev, &inv.path)) |arm| {
-                log.err("[cs_emitter] effect-arm fire '{s}' is not yet modelled on the cs target\n", .{arm.name});
-                return CsEmitError.UnsupportedConstruct;
+                try self.emitEffectArmFire(arm, inv, continuations, indent);
+                return;
             }
         }
 
-        const event = self.findEventDecl(&inv.path) orelse {
-            log.err("[cs_emitter] flow invokes unresolved event\n", .{});
+        const ev = self.findEventDecl(&inv.path) orelse {
+            log.err("[cs_emitter] flow invokes unresolved tor\n", .{});
             return CsEmitError.UnresolvedEvent;
         };
 
-        var event_has_effect = false;
+        var ev_has_effect = false;
         var terminal_branches: usize = 0;
-        for (event.branches) |b| {
+        for (ev.branches) |b| {
             if (b.kind == .effect) {
-                event_has_effect = true;
+                ev_has_effect = true;
             } else {
                 terminal_branches += 1;
             }
         }
-        if (event_has_effect) {
-            log.err("[cs_emitter] invocation of effect-bearing event '{s}' is not yet modelled on the cs target\n", .{event.path.segments[event.path.segments.len - 1]});
-            return CsEmitError.UnsupportedConstruct;
-        }
-        const callee_bare_return = terminal_branches == 0 and event.return_type != null;
+        const callee_bare_return = terminal_branches == 0 and ev.return_type != null;
 
         // Only allocate a result binding when a continuation actually reads
         // it (a payload bind, a 2+ branch dispatch, a call-site `: name`).
@@ -1310,8 +1309,63 @@ const Emitter = struct {
         if (terminal_count >= 2 and !callee_bare_return) needs_result = true;
         if (namedReturnBinding(inv) != null) needs_result = true;
 
+        // Build the Handlers object from the EFFECT continuations — an
+        // anonymous object whose members are `Func<dynamic, dynamic>`
+        // delegates. Lambdas capture the enclosing flow's locals the way a
+        // JS object literal's methods close over theirs, so the call site's
+        // names reach the handler body unchanged. The id is monotonic so
+        // nested frames get distinct names.
+        var handlers_name: ?[]const u8 = null;
+        defer if (handlers_name) |hn| self.allocator.free(hn);
+
+        if (ev_has_effect) {
+            const hid = self.nextId();
+            handlers_name = try std.fmt.allocPrint(self.allocator, "__koru_handlers_{d}", .{hid});
+            try self.writeFmt("{s}var {s} = new {{\n", .{ indent, handlers_name.? });
+            const inner_indent = try std.fmt.allocPrint(self.allocator, "{s}  ", .{indent});
+            defer self.allocator.free(inner_indent);
+            // ONE delegate per ARM, not per continuation — two continuations
+            // naming the same fire differ only by guard, and a second member
+            // with the same name is a duplicate anonymous-type member
+            // (CS0833), not an override.
+            for (continuations, 0..) |*cont, ci| {
+                if (cont.kind != .effect) continue;
+                var already = false;
+                for (continuations[0..ci]) |*prev| {
+                    if (prev.kind == .effect and std.mem.eql(u8, prev.branch, cont.branch)) {
+                        already = true;
+                        break;
+                    }
+                }
+                if (already) continue;
+                const arm = findBranchDecl(ev, cont.branch) orelse continue;
+                try self.emitEffectHandlerMethod(continuations, cont.branch, arm, inner_indent);
+            }
+            // OMITTED VOID ARM → a no-op delegate (Option B, pinned
+            // 400_168/400_170). A missing MEMBER would throw at the handler's
+            // eager `var <op> = __koru_handlers.<op>` bind — the runtime
+            // binder turns a silent no-op into a crash before the body runs.
+            // RESUMING arms fill with NULL instead: the proc reads presence
+            // (`if (ask != null)`) and picks its own fallback — 400_148's
+            // contract, where a synthesized no-op would lie about presence.
+            for (ev.branches) |*b| {
+                if (b.kind != .effect) continue;
+                if (continuationForBranch(continuations, b.name) != null) continue;
+                try self.writeFmt("{s}", .{inner_indent});
+                try self.writeBinding(b.name);
+                if (b.resume_type != null or b.resume_arms != null) {
+                    try self.write(" = (object)null,\n");
+                } else if (armIsPayloadless(b)) {
+                    try self.write(" = (global::System.Func<dynamic>)(() => null),\n");
+                } else {
+                    try self.write(" = (global::System.Func<dynamic, dynamic>)(_ => null),\n");
+                }
+            }
+            try self.writeFmt("{s}}};\n", .{indent});
+        }
+
         var ev_name_buf: [256]u8 = undefined;
-        const ev_name = lowerIdentBuf(&ev_name_buf, event.path.segments[event.path.segments.len - 1]);
+        const ev_name = lowerIdentBuf(&ev_name_buf, ev.path.segments[ev.path.segments.len - 1]);
         const result_name: ?[]const u8 = if (!needs_result) null else if (namedReturnBinding(inv)) |rb|
             try self.allocator.dupe(u8, rb)
         else blk: {
@@ -1326,6 +1380,9 @@ const Emitter = struct {
             try self.writeFmt("{s}main_module.{s}_event.handler(", .{ indent, ev_name });
         }
         try self.emitArgsObject(inv.args);
+        if (ev_has_effect) {
+            try self.writeFmt(", {s}", .{handlers_name.?});
+        }
         try self.write(");\n");
 
         // A BIND-POSITION destructure (`~locate(): { pos: { x, y } } |> …`).
@@ -1565,7 +1622,260 @@ const Emitter = struct {
             try self.write(content);
         }
     }
+
+    /// Emit one Handlers member: `<op> = (Func…)(arg => …),`.
+    /// The delegate arity is the ARM's fire signature, not the handler's —
+    /// the proc body is opaque host text that calls `tick()` literally, so a
+    /// payloadless arm's member must be `Func<dynamic>` or the runtime binder
+    /// refuses the 0-arg invoke (JS's arity-tolerant call hides this).
+    /// One continuation for the arm lowers straight (emitEffectHandlerSimple);
+    /// several — same fire, different `when` guards or destructures — lower
+    /// to a block lambda whose per-arm guarded blocks return on first match.
+    fn emitEffectHandlerMethod(
+        self: *Emitter,
+        all: []const ast.Continuation,
+        branch: []const u8,
+        arm: *const ast.Branch,
+        indent: []const u8,
+    ) CsEmitError!void {
+        const payloadless = armIsPayloadless(arm);
+        var arm_count: usize = 0;
+        var first_arm: ?*const ast.Continuation = null;
+        for (all) |*c| {
+            if (c.kind != .effect or !std.mem.eql(u8, c.branch, branch)) continue;
+            arm_count += 1;
+            if (first_arm == null) first_arm = c;
+        }
+        const cont = first_arm orelse return;
+
+        if (arm_count == 1 and cont.condition == null and cont.destructure.len == 0) {
+            try self.emitEffectHandlerSimple(cont, payloadless, indent);
+            return;
+        }
+
+        const param = try std.fmt.allocPrint(self.allocator, "__koru_arm_{d}", .{self.nextId()});
+        defer self.allocator.free(param);
+        try self.write(indent);
+        try self.writeBinding(branch);
+        if (payloadless) {
+            try self.write(" = (global::System.Func<dynamic>)(() => {\n");
+        } else {
+            try self.writeFmt(" = (global::System.Func<dynamic, dynamic>)({s} => {{\n", .{param});
+        }
+        const arm_indent = try std.fmt.allocPrint(self.allocator, "{s}  ", .{indent});
+        defer self.allocator.free(arm_indent);
+        const body_indent = try std.fmt.allocPrint(self.allocator, "{s}  ", .{arm_indent});
+        defer self.allocator.free(body_indent);
+
+        for (all) |*cont_arm| {
+            if (cont_arm.kind != .effect or !std.mem.eql(u8, cont_arm.branch, branch)) continue;
+
+            // A block per arm, so two arms may both name `a` off the same fire.
+            try self.writeFmt("{s}{{\n", .{arm_indent});
+            if (!payloadless and cont_arm.destructure.len > 0) {
+                try self.emitDestructureBindings(cont_arm.destructure, param, body_indent);
+            } else if (!payloadless) {
+                if (cont_arm.binding) |b| {
+                    if (!std.mem.eql(u8, b, "_")) {
+                        try self.write(body_indent);
+                        try self.write("var ");
+                        try self.writeBinding(b);
+                        try self.writeFmt(" = {s};\n", .{param});
+                    }
+                }
+            }
+
+            const guard_indent = if (cont_arm.condition != null) body_indent else arm_indent;
+            if (cont_arm.condition) |condition| {
+                try self.writeFmt("{s}if (", .{body_indent});
+                try self.writeCsExpr(condition);
+                try self.write(") {\n");
+            }
+            const inner_indent = try std.fmt.allocPrint(self.allocator, "{s}  ", .{guard_indent});
+            defer self.allocator.free(inner_indent);
+
+            const arm_returns = try self.emitEffectArmBody(cont_arm, inner_indent);
+            if (!arm_returns) try self.writeFmt("{s}return null;\n", .{inner_indent});
+
+            if (cont_arm.condition != null) try self.writeFmt("{s}}}\n", .{body_indent});
+            try self.writeFmt("{s}}}\n", .{arm_indent});
+        }
+        try self.writeFmt("{s}return null;\n", .{arm_indent});
+        try self.writeFmt("{s}}}),\n", .{indent});
+    }
+
+    /// The one-continuation, unguarded, undestructured effect handler:
+    /// payload straight onto the lambda parameter, body emitted bare.
+    /// `payloadless` selects `Func<dynamic>` over `Func<dynamic, dynamic>` —
+    /// the arm's fire signature, not the binding shape.
+    fn emitEffectHandlerSimple(
+        self: *Emitter,
+        cont: *const ast.Continuation,
+        payloadless: bool,
+        indent: []const u8,
+    ) CsEmitError!void {
+        const param = cont.binding orelse "_";
+        const node = cont.node orelse {
+            try self.write(indent);
+            try self.writeBinding(cont.branch);
+            try self.write(if (payloadless) " = (global::System.Func<dynamic>)(() => null),\n" else " = (global::System.Func<dynamic, dynamic>)(_ => null),\n");
+            return;
+        };
+        try self.write(indent);
+        try self.writeBinding(cont.branch);
+        switch (node) {
+            .expression => |expr| {
+                if (payloadless) {
+                    try self.write(" = (global::System.Func<dynamic>)(() => ");
+                } else {
+                    try self.writeFmt(" = (global::System.Func<dynamic, dynamic>)({s} => ", .{param});
+                }
+                try self.writeCsExpr(expr);
+                try self.write("),\n");
+            },
+            .terminal => {
+                try self.write(if (payloadless) " = (global::System.Func<dynamic>)(() => null),\n" else " = (global::System.Func<dynamic, dynamic>)(_ => null),\n");
+            },
+            else => {
+                if (payloadless) {
+                    try self.write(" = (global::System.Func<dynamic>)(() => {\n");
+                } else {
+                    try self.writeFmt(" = (global::System.Func<dynamic, dynamic>)({s} => {{\n", .{param});
+                }
+                const inner_indent = try std.fmt.allocPrint(self.allocator, "{s}  ", .{indent});
+                defer self.allocator.free(inner_indent);
+                const arm_returns = try self.emitEffectArmBody(cont, inner_indent);
+                if (!arm_returns) try self.writeFmt("{s}return null;\n", .{inner_indent});
+                try self.writeFmt("{s}}}),\n", .{indent});
+            },
+        }
+    }
+
+    /// The BODY of one effect arm, payload already bound. Shared by the
+    /// simple and chained shapes — same node kinds as a terminal body, and
+    /// `emitInlineContinuationBody` already lowers all of them. Returns true
+    /// when the body ends in its own `return` (`expression`, `branch_
+    /// constructor`) — the caller must then NOT append the `return null;` a
+    /// void body still needs to satisfy `Func<dynamic>`. For `.invocation`
+    /// the answer is deliberately conservative: a guarded terminal
+    /// continuation leaves a fall-through path where the missing return is a
+    /// CS0161 compile error, so the `null` stays — load-bearing when guarded,
+    /// dead-but-silent when a continuation already returned.
+    fn emitEffectArmBody(
+        self: *Emitter,
+        cont: *const ast.Continuation,
+        indent: []const u8,
+    ) CsEmitError!bool {
+        try self.emitInlineContinuationBody(cont, indent);
+        const node = cont.node orelse return false;
+        return switch (node) {
+            .expression, .branch_constructor => true,
+            else => false,
+        };
+    }
+
+    /// Emit a FIRE of one of the enclosing tor's own effect arms. The handler
+    /// already aliased every arm to a local (`var each = __koru_handlers.each;`),
+    /// so the fire is a plain call on that `dynamic` delegate. A void arm is
+    /// a bare statement; a resuming arm's value binds to the call-site `: name`
+    /// or dispatches through the ordinary terminal-continuation path.
+    fn emitEffectArmFire(
+        self: *Emitter,
+        arm: *const ast.Branch,
+        inv: *const ast.Invocation,
+        continuations: []const ast.Continuation,
+        indent: []const u8,
+    ) CsEmitError!void {
+        const has_resume = arm.resume_type != null or arm.resume_arms != null;
+
+        var terminal_count: usize = 0;
+        var needs_result = false;
+        for (continuations) |*cont| {
+            if (cont.kind != .terminal) continue;
+            terminal_count += 1;
+            if (cont.binding != null and !std.mem.eql(u8, cont.binding.?, "_")) needs_result = true;
+        }
+        if (terminal_count >= 2) needs_result = true;
+        if (namedReturnBinding(inv) != null) needs_result = true;
+        if (!has_resume) needs_result = false;
+
+        const result_name: ?[]const u8 = if (!needs_result) null else if (namedReturnBinding(inv)) |rb|
+            try self.allocator.dupe(u8, rb)
+        else blk: {
+            const rid = self.nextId();
+            break :blk try std.fmt.allocPrint(self.allocator, "result_{d}", .{rid});
+        };
+        defer if (result_name) |rn| self.allocator.free(rn);
+
+        try self.write(indent);
+        // An OPTIONAL void arm may simply not be installed — the alias is
+        // null and the guard reads it.
+        if (arm.is_optional and !has_resume) {
+            try self.write("if (");
+            try self.writeBinding(arm.name);
+            try self.write(" != null) ");
+        }
+        if (result_name) |rn| try self.writeFmt("var {s} = ", .{rn});
+        try self.writeBinding(arm.name);
+        try self.write("(");
+        try self.emitArmFirePayload(arm, inv);
+        try self.write(");\n");
+
+        // A single `-> T` resume hands back the value untagged; only a
+        // multi-arm resume sum carries a `.tag`.
+        const plain_resume = arm.resume_type != null and arm.resume_arms == null;
+        const needs_dispatch = terminal_count >= 2 and !plain_resume;
+        try self.emitTerminalContinuations(continuations, result_name, indent, needs_dispatch, plain_resume);
+    }
+
+    /// The payload passed to an arm fire, in C# spelling:
+    ///   payloadless arm → nothing (`ask()`)
+    ///   identity / wildcard payload → the single arg's value (`each(i * i)`)
+    ///   named-field payload → an anonymous object (`new { a = 1, b = 2 }`)
+    fn emitArmFirePayload(self: *Emitter, arm: *const ast.Branch, inv: *const ast.Invocation) CsEmitError!void {
+        if (arm.payload.fields.len == 0 and !arm.payload.is_wildcard) return;
+
+        const is_identity = arm.payload.fields.len == 1 and
+            std.mem.eql(u8, arm.payload.fields[0].name, "__type_ref");
+        if (is_identity or arm.payload.is_wildcard) {
+            if (inv.args.len > 0) try self.writeCsExpr(inv.args[0].value);
+            return;
+        }
+
+        try self.write("new { ");
+        for (inv.args, 0..) |arg, i| {
+            if (i > 0) try self.write(", ");
+            try self.writeBinding(arg.name);
+            try self.write(" = ");
+            try self.writeCsExpr(arg.value);
+        }
+        try self.write(" }");
+    }
 };
+
+/// Find the tor's branch decl for `name` — the fire-signature decl a
+/// Handlers member must match arity against.
+fn findBranchDecl(ev: *const ast.EventDecl, name: []const u8) ?*const ast.Branch {
+    for (ev.branches) |*b| {
+        if (b.kind == .effect and std.mem.eql(u8, b.name, name)) return b;
+    }
+    return null;
+}
+
+/// Does this arm's fire take no payload — `tick()` rather than `beep(7)`?
+/// The opaque proc body spells the call literally, so the installed delegate
+/// must accept exactly the args the decl declares.
+fn armIsPayloadless(arm: *const ast.Branch) bool {
+    return arm.payload.fields.len == 0 and !arm.payload.is_wildcard;
+}
+
+/// Does a continuation set install a handler for `op`?
+fn continuationForBranch(continuations: []const ast.Continuation, op: []const u8) ?*const ast.Continuation {
+    for (continuations) |*cont| {
+        if (cont.kind == .effect and std.mem.eql(u8, cont.branch, op)) return cont;
+    }
+    return null;
+}
 
 /// Does this proc declare `[template]` and apply to the cs build? A null
 /// target is target-agnostic, `|cs` is ours, anything else is not.

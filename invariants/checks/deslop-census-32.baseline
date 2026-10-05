@@ -50,8 +50,8 @@
 # delta is +8 clusters / -9 members: cs_emitter's effect-splice block is
 # an intentional twin of the js_emitter shape it ports (different output
 # text per target — the duplication IS the variant model).
-clusters=1783
-members=2224
+clusters=1807
+members=2234
 # Re-pinned in "fold: impl bodies are walk input, not fold residue":
 # the roll fired on +5 clusters / +2 members of foreign src/ drift in
 # the same documented emitter_test/visitor_emitter_test field-literal
@@ -93,3 +93,11 @@ members=2224
 # The residual named is the same documented emitter_test/
 # visitor_emitter_test field-literal idiom plus annotation_parser/
 # codegen_utils test-decl clones.
+# Re-pinned 1783/2224 -> 1807/2234 in the k-sharp effect-dispatch
+# commit: the regrowth is entirely this diff — measured identical at pin
+# value with the commit's src/ files stashed. The named offenders are
+# cs_emitter.zig's emitEffectHandlerMethod/emitEffectHandlerSimple/
+# emitEffectArmFire/Handlers-object construction, intentional twins of
+# the js_emitter dispatch block they port — per-target emitters
+# duplicate shape by design; the text each writes differs, the shape
+# is the mechanism.

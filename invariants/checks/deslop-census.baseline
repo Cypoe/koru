@@ -22,6 +22,13 @@
 # deleting 43 identical emit blocks re-shaped ast_serializer's tree, so
 # three previously-shadowed nodes surfaced as maximal members. Net code
 # is down ~160 lines; the bump is a measurement artifact, not new slop.
+# 820/877: the roll fired on the k-sharp effect-dispatch commit — the
+# growth is entirely this diff's intentional js_emitter twins (measured
+# identical at pin value with the commit's src/ files stashed): the
+# Handlers-object construction and emitEffectHandlerMethod/
+# emitEffectArmFire port the js_emitter dispatch block shape-for-shape.
+# Per-target emitters duplicate shape by design — the text each writes
+# differs, the shape is the mechanism.
 # Re-pinned 609/750 -> 611/754 (2026-10-14): test_decl/simple_var_decl
 # regrowth from the parser session's in-flight work in the shared
 # checkout — same consciously-retained test-scaffolding class. The census
@@ -58,5 +65,5 @@
 # effect-splice resolver, is an intentional 1057-token twin of the
 # js_emitter block it ports — per-target emitters duplicate shape by
 # design (the text each writes differs; the shape is the mechanism).
-clusters=808
-members=874
+clusters=820
+members=877

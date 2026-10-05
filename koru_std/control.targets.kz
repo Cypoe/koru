@@ -97,9 +97,9 @@
 // (docs/PARSER_PALETTE.md §8.4); for now JS `for` supports ranges + JS-shaped
 // iterables.
 ~[template]proc for|js {
-    {% const __koru_iter = js_lower(expr) %}{% const __koru_range = parse_range(__koru_iter) %}{% if __koru_range.is_range %}for (let __koru_item = {{ __koru_range.lo }}; __koru_item < {{ __koru_range.hi }}; __koru_item++) {% else %}for (const __koru_item of {{ __koru_iter }}) {% endif %}{
+    {% const __koru_iter = js_lower(expr) %}{% const __koru_range = parse_range(__koru_iter) %}{% if __koru_range.is_range %}for (let __koru_item{{ __site }} = {{ __koru_range.lo }}; __koru_item{{ __site }} < {{ __koru_range.hi }}; __koru_item{{ __site }}++) {% else %}for (const __koru_item{{ __site }} of {{ __koru_iter }}) {% endif %}{
         {% if keep != "" %}{% const __koru_keep = js_lower(keep) %}if (!({{ __koru_keep }})) break;
-        {% endif %}{% for h in effects["each"] %}{{ h.inlined_link[scope] }}(__koru_item);
+        {% endif %}{% for h in effects["each"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});
         {% endfor %}
     }
     {{ continuations["done"].continue }}

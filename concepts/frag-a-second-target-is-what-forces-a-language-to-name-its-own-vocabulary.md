@@ -120,3 +120,47 @@ rhetorical: of 750 pure `.k` files only 62 use any Zig-only expression form, and
 `orelse`, `catch`, `.?`, `try` and `|err|` appear zero times. The surface is
 already far closer to Koru than to Zig, so a third host may find much less to
 refuse than JavaScript did.
+
+## The third target arrived (k-sharp, 2026-10-05): the variable is which LAYER the host can absorb, not likeness or count
+
+The C# backend ran the experiment this belief's correction clause set up —
+and the result is neither correction nor plain confirmation. C# did find less
+to refuse in the expression vocabulary (ternary, arithmetic, comparisons all
+lower cleanly), exactly as the census predicted. But it forced *new* namings
+in organs JavaScript had never been strict enough to expose:
+
+- **Handler arity.** A payloadless effect arm fired `tick()` worked in JS
+  because JS absorbs call-shape mismatches; `Func<dynamic, dynamic>` in C#
+  makes `tick()` a RuntimeBinderException. The arm's *fire signature* —
+  payloadless `Func<dynamic>` vs payload-bearing `Func<dynamic, dynamic>` —
+  had to become part of the contract, spelled by the emitter, invisible to
+  every target that came before.
+- **Presence as a value.** An omitted optional resuming arm was "absent" in
+  JS because `undefined` is both a value and a callable-ish; C#'s `null`
+  forces the distinction to be *spelled*: the member is emitted
+  `(object)null` so a producer-side `ask != null` can read presence, while an
+  omitted void arm gets a no-op delegate. Two different fill policies for two
+  different arm kinds — a distinction the semantics always had and no host
+  had ever made observable.
+- **Literal position.** `[1,2,3]` passed through verbatim into JS and Zig
+  because both hosts read `[` the same way in every position; C#'s collection
+  expressions are legal only under a target type, so `foreach (var x in […])`
+  is CS9176. The emitter now has to know `[` in *literal* position
+  (`new dynamic[] {…}`) from `[` in index position — a positional
+  distinction no previous host's grammar had ever demanded.
+- **The skip list itself.** The Zig emitter carries a hardcoded
+  `foreign_targets` registry — `{"gpu","js","python","wasm","glsl"}` — and
+  `cs` wasn't in it, so `.kcs` facet bodies leaked into Zig emission until
+  the list was amended. "Foreign" was never a computed property; it was an
+  enumeration waiting to go stale, and only a *new* foreign body could show
+  it. Every emitter addition re-opens every existing emitter's hardcoded
+  notion of what it isn't.
+
+The refined claim: each target names the surface **at the layer where its own
+permissiveness runs out**. JS named the expression vocabulary because JS
+refuses syntax it doesn't know; C# named dispatch semantics because C#
+refuses arity and nullity it can't absorb — while staying permissive exactly
+where JS was (expressions pass through fine). The number of targets is not
+the variable, and likeness-to-Zig is not the variable: the variable is which
+layer the *newest* host cannot pass through, and the surface is finished being
+named only when no host can find a layer nobody enumerated.

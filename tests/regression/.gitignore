@@ -25,6 +25,7 @@
 !**/*.kz
 !**/*.k
 !**/*.kjs
+!**/*.kcs
 !**/*.kc
 !**/*.kgpu
 !**/expected.txt
