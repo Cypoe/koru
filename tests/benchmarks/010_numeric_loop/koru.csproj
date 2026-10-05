@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AssemblyName>numeric_loop</AssemblyName>
+    <WarningLevel>0</WarningLevel>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <StartupObject>Bench</StartupObject>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="output_emitted.cs" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,10 @@
+// C# facet: the accumulator is module state — a static on KoruHost (C# has
+// no file-scope variables), standing in for a store cell until std/store's
+// kernel grows a cs arm.
+using static KoruHost;
+
+static class KoruHost {
+    public static long total = 0;
+}
+
+~proc acc|cs { total += v; }
