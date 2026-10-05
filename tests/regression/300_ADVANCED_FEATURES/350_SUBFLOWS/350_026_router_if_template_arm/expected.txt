@@ -1,0 +1,3 @@
+t
+long
+empty

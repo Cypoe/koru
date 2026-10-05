@@ -1,0 +1,21 @@
+// PINS: a `cond` template inside an orisha:router arm resolves its
+// `__koru_continue_bare_N` markers on the string-codegen path — guarded
+// arms carry the bare variant because the template's own cascade wraps
+// them in `if`, and the guardless `| c _` arm carries the plain one.
+
+~import orisha
+~import std/io
+
+const req_hit = "GET /t HTTP/1.1\r\n\r\n";
+const req_get = "GET /miss HTTP/1.1\r\n\r\n";
+const req_post = "POST /miss HTTP/1.1\r\n\r\n";
+
+~orisha:handler = orisha:router(req)
+! [GET /t] -> { status: 200, body: "t", content_type: "text/plain" }
+! [*] |> cond(req.method)
+    | c m when m == "POST" -> { status: 405, body: "post", content_type: "text/plain" }
+    | c _ -> { status: 404, body: "other", content_type: "text/plain" }
+
+~orisha:answer(raw: req_hit): a |> std/io:print.ln("{{ a.body:s }}") |> orisha:release-body(a.body, allocated: a.body_allocated)
+~orisha:answer(raw: req_get): b |> std/io:print.ln("{{ b.body:s }}") |> orisha:release-body(b.body, allocated: b.body_allocated)
+~orisha:answer(raw: req_post): c |> std/io:print.ln("{{ c.body:s }}") |> orisha:release-body(c.body, allocated: c.body_allocated)

@@ -1,0 +1,23 @@
+// PINS: an `if` template inside an orisha:router arm resolves its
+// `__koru_continue_N` splice markers on the string-codegen path — the
+// router lowers each arm through generatePipelineCode, which emits the
+// template's inline_body as text; markers in it must splice the arm's
+// continuations just as emitInlineCodeResolvingSplices does on the
+// emitter path.
+
+~import orisha
+~import std/io
+
+const req_hit = "GET /t HTTP/1.1\r\n\r\n";
+const req_then = "GET /nope HTTP/1.1\r\n\r\n";
+const req_else = "GET / HTTP/1.1\r\n\r\n";
+
+~orisha:handler = orisha:router(req)
+! [GET /t] -> { status: 200, body: "t", content_type: "text/plain" }
+! [*] |> if(req.path.len > 1)
+    | then -> { status: 404, body: "long", content_type: "text/plain" }
+    | else -> { status: 404, body: "empty", content_type: "text/plain" }
+
+~orisha:answer(raw: req_hit): a |> std/io:print.ln("{{ a.body:s }}") |> orisha:release-body(a.body, allocated: a.body_allocated)
+~orisha:answer(raw: req_then): b |> std/io:print.ln("{{ b.body:s }}") |> orisha:release-body(b.body, allocated: b.body_allocated)
+~orisha:answer(raw: req_else): c |> std/io:print.ln("{{ c.body:s }}") |> orisha:release-body(c.body, allocated: c.body_allocated)
