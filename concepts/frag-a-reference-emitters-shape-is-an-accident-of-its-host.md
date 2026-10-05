@@ -145,3 +145,21 @@ identically at decl, ctor, and read sites. The generalization: a
 host shape's reserved vocabulary is part of the accident — port the
 semantics and the shape's *namespace discipline* must survive contact
 with the user's own field names.
+
+2026-10-05 — the accident can also be a spelling a third host has
+never been asked to compile. The `[tree]` store's cycle-guard proc
+(`__store_writec_*`) emitted `const` locals — legal Zig, illegal C#,
+which wants `var` for non-constant initializers — and built its
+forwarded call through `HS.argRec`, which spells an anonymous
+`new { … }` that cannot convert to the callee's typed `Input` struct.
+Zig and JS compiled it for months because a `.{}`/`{…}` literal IS the
+argument convention on those hosts; C# simply never saw the path —
+no `695_STORE_TREE` test carried a `cs` mark, so the emission sat
+green-by-absence until a probe compiled it and `dotnet` refused.
+The fix is the same discipline twice: per-host spelling where the
+host's grammar differs (`var`/`const`), and `HS.callArg` — the typed
+`new <ev>_event.Input { … }` — wherever the callee's `Input` is
+declared rather than wildcard. The generalization: a per-host
+emission arm that no test marks is not ported, it is merely unstruck;
+the sweep's board is the set of marks, and the cold paths outside
+it are where the next host's refusals live.

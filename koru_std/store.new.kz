@@ -3735,25 +3735,23 @@
             // transform resolved the caller's handle at its call site). The
             // ancestor chain carries HANDLES, so the self-compare
             // reconstructs this row's handle once.
+            const write_ev_name = std.fmt.allocPrint(allocator, "__store_write_{s}", .{store_name}) catch unreachable;
             const cbody = std.fmt.allocPrint(allocator,
-                \\const __koru_self = __koru_store_{s}.__koru_handle_of({s});
+                \\{s} __koru_self = __koru_store_{s}.__koru_handle_of({s});
                 \\var __koru_cyc = value;
                 \\while (__koru_cyc != -1) {{
                 \\    if (__koru_cyc == __koru_self) return {s};
-                \\    const __koru_cycr = __koru_store_{s}.__koru_resolve(__koru_cyc);
+                \\    {s} __koru_cycr = __koru_store_{s}.__koru_resolve(__koru_cyc);
                 \\    __koru_cyc = __koru_store_{s}.parent[__koru_cycr];
                 \\}}
-                \\{s}__store_write_{s}_event.handler({s});
+                \\{s}{s}_event.handler({s});
                 \\return {s};
             , .{
-                store_name,
-                "row",
+                if (host_is_cs) "var" else "const", store_name, "row",
                 HS.branchEmpty(allocator, host_target, "cycle"),
-                store_name,
-                store_name,
-                emit_ns,
-                store_name,
-                HS.argRec(allocator, host_target, std.fmt.allocPrint(allocator, "{s}, {s}{s}", .{
+                if (host_is_cs) "var" else "const", store_name, store_name,
+                emit_ns, write_ev_name,
+                HS.callArg(allocator, host_target, emit_ns, write_ev_name, std.fmt.allocPrint(allocator, "{s}, {s}{s}", .{
                     HS.recField(allocator, host_target, "row", "row"),
                     HS.recField(allocator, host_target, "field", "field"),
                     cw_slots.items,
