@@ -1358,7 +1358,6 @@ pub fn generateContinuationChain(
     main_module_name: []const u8,
     result_counter: *usize,
     indent_level: usize,
-    program_items: ?[]const ast.Item,
 ) CodegenError![]const u8 {
     return generateContinuationChainWithPrefix(
         allocator,
@@ -1367,6 +1366,30 @@ pub fn generateContinuationChain(
         result_counter,
         indent_level,
         "result_", // Default prefix for backward compatibility
+        null,
+    );
+}
+
+/// Same as `generateContinuationChain` but carries the program's item list so
+/// codegen can resolve invoked decls — currently the `body_allocated` mark
+/// reads an invoked tor's `return_phantom` (allocated! returns escaping into
+/// Response-shaped produces). Callers without the program in scope keep the
+/// 5-arg entry; they get no decl-keyed marking.
+pub fn generateContinuationChainWithItems(
+    allocator: std.mem.Allocator,
+    continuation: *const ast.Continuation,
+    main_module_name: []const u8,
+    result_counter: *usize,
+    indent_level: usize,
+    program_items: ?[]const ast.Item,
+) CodegenError![]const u8 {
+    return generateContinuationChainWithPrefix(
+        allocator,
+        continuation,
+        main_module_name,
+        result_counter,
+        indent_level,
+        "result_",
         program_items,
     );
 }
