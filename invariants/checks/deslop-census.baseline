@@ -50,5 +50,13 @@
 # visitor_emitter_test/comptime_eval_test test_decl scaffolding, the
 # consciously-retained class the pin documents; growth landed between
 # re-pins, not here.
-clusters=627
-members=763
+# 808/874: the roll fired on the k-sharp commit ("emit: k-sharp grows
+# if, for, and the front-page Hello World"). ~173 clusters of the excess
+# is foreign src/ drift accumulated under rolls that missed — measured
+# 800/879 at HEAD with this commit's files stashed. This commit's own
+# delta is +8 clusters / -5 members: cs_emitter.zig:1014-1157, the
+# effect-splice resolver, is an intentional 1057-token twin of the
+# js_emitter block it ports — per-target emitters duplicate shape by
+# design (the text each writes differs; the shape is the mechanism).
+clusters=808
+members=874

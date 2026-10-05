@@ -11,6 +11,7 @@
 // keyword is globally available whenever any std/* module is imported.
 
 ~[comptime]
+~part targets
 
 // ============================================================================
 // CONST - module-level value declarations as a per-target TEMPLATE.
@@ -51,7 +52,3 @@
 {% endfor %}
 }
 
-~[template]proc const|js {
-{% const fields = parse_fields(source) %}{% for f in fields %}const {{ f.name }} = {{ f.value }};
-{% endfor %}
-}

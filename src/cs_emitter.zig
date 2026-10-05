@@ -530,10 +530,10 @@ const Emitter = struct {
         return null;
     }
 
-    /// Emit one event decl as `static class <name>_event { … handler … }`.
+    /// Emit one EventDecl as `static class <name>_event { … handler … }`.
     fn emitEventDecl(self: *Emitter, event: *const ast.EventDecl, scope: []const ast.Item) CsEmitError!void {
         const impl = self.findImplIn(scope, &event.path) orelse {
-            log.err("[cs_emitter] event '{s}' has no |cs proc, immediate, or subflow body\n", .{event.path.segments[event.path.segments.len - 1]});
+            log.err("[cs_emitter] tor '{s}' has no |cs proc, immediate, or subflow body\n", .{event.path.segments[event.path.segments.len - 1]});
             return CsEmitError.NoCsProcBody;
         };
 
@@ -546,11 +546,20 @@ const Emitter = struct {
                 break;
             }
         }
-        // The vertical does not model effect dispatch (Handlers objects,
-        // arm fires). Refuse by name rather than emit a shape unmeasured.
+        // Effect dispatch itself (Handlers objects, arm fires) is unmodeled —
+        // but an effect DECLARATION only bites when the emitted handler could
+        // fire one. A dead stub (template/transform) or a pure value impl
+        // never references an op; a real proc or subflow body can.
         if (has_effect) {
-            log.err("[cs_emitter] event '{s}' declares effect branches, which the cs target does not model\n", .{name});
-            return CsEmitError.UnsupportedConstruct;
+            const dead_handler = switch (impl) {
+                .template_stub, .immediate => true,
+                .proc => annotation_parser.hasPart(event.annotations, "transform"),
+                .subflow => false,
+            };
+            if (!dead_handler) {
+                log.err("[cs_emitter] tor '{s}' declares effect branches, which the cs target does not model\n", .{name});
+                return CsEmitError.UnsupportedConstruct;
+            }
         }
 
         var name_buf: [256]u8 = undefined;
@@ -1017,6 +1026,7 @@ const Emitter = struct {
 
         const SPLICE_PREFIX = "__koru_inline_";
         const CONTINUE_PREFIX = "__koru_continue_";
+        const SCOPED_INFIX = "scoped_";
         const BARE_INFIX = "bare_";
 
         const trimmed = std.mem.trim(u8, body, " \t\r\n");
@@ -1073,11 +1083,75 @@ const Emitter = struct {
                 continue;
             }
 
-            // EFFECT splice — `__koru_inline[_scoped]_N(arg)`. The vertical
-            // does not model effect handlers; refuse by name rather than
-            // splice a shape unmeasured.
-            log.err("[cs_emitter] effect-handler splice (__koru_inline_N) reached — effect continuations are not yet modelled on the cs target\n", .{});
-            return CsEmitError.UnsupportedConstruct;
+            // EFFECT splice — `__koru_inline[_scoped]_N(arg)`: bind `arg` to
+            // the handler's parameter, then run the handler body in a block.
+            // The optional `scoped_` infix carries no emission meaning (scope
+            // is an obligation-checker concept, already stamped on the
+            // continuation), so skip past it to the digits — same ruling as
+            // the JS and Zig emitters.
+            var i = m + SPLICE_PREFIX.len;
+            if (std.mem.startsWith(u8, trimmed[i..], SCOPED_INFIX)) i += SCOPED_INFIX.len;
+            const maybe_idx = codegen_utils.scanDecimalIndex(trimmed, &i);
+
+            // Read the `(arg)` immediately following (balanced parens).
+            var arg: []const u8 = "";
+            if (maybe_idx != null and i < trimmed.len and trimmed[i] == '(') {
+                const arg_start = i + 1;
+                var depth: usize = 1;
+                var j = arg_start;
+                while (j < trimmed.len and depth > 0) : (j += 1) {
+                    if (trimmed[j] == '(') {
+                        depth += 1;
+                    } else if (trimmed[j] == ')') {
+                        depth -= 1;
+                    }
+                }
+                arg = std.mem.trim(u8, trimmed[arg_start .. j - 1], " \t");
+                i = j; // past the closing ')'
+                // The marker resolves to a block statement; swallow a trailing `;`
+                // the template wrote in call-statement shape (`marker(arg);`).
+                if (i < trimmed.len and trimmed[i] == ';') i += 1;
+            }
+
+            const idx = maybe_idx orelse {
+                log.err("[cs_emitter] malformed __koru_inline marker\n", .{});
+                return CsEmitError.UnsupportedConstruct;
+            };
+            if (idx >= continuations.len) {
+                log.err("[cs_emitter] __koru_inline_{d} has no matching continuation (have {d})\n", .{ idx, continuations.len });
+                return CsEmitError.UnsupportedConstruct;
+            }
+            if (consumed) |c| {
+                if (idx < 64) c.* |= @as(u64, 1) << @intCast(idx);
+            }
+            const cont = &continuations[idx];
+            const binding = cont.binding orelse "_";
+            try self.write("{ ");
+            if (cont.destructure.len > 0) {
+                // Shape-destructure at the binding position — payload into a
+                // temp first (arg may be a multi-read expression), then each
+                // field once. Mirrors emitDestructureBindings at every other
+                // arm path.
+                const tmp = try std.fmt.allocPrint(self.allocator, "__koru_payload_{d}", .{self.nextId()});
+                defer self.allocator.free(tmp);
+                try self.writeFmt("var {s} = {s}; ", .{ tmp, arg });
+                if (!std.mem.eql(u8, binding, "_")) {
+                    try self.writeFmt("var {s} = {s}; ", .{ binding, tmp });
+                }
+                try self.emitDestructureBindings(cont.destructure, tmp, "");
+            } else if (!std.mem.eql(u8, binding, "_")) {
+                try self.writeFmt("var {s} = {s}; ", .{ binding, arg });
+            }
+            const guarded = cont.condition != null;
+            if (guarded) {
+                try self.write("if (");
+                try self.writeCsExpr(cont.condition.?);
+                try self.write(") { ");
+            }
+            try self.emitInlineContinuationBody(cont, body_indent);
+            if (guarded) try self.write(" }");
+            try self.write(" }");
+            pos = i;
         }
         try self.writeHostText(trimmed[pos..]);
     }

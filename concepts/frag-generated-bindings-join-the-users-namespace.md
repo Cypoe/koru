@@ -43,3 +43,17 @@ the user, where that one protects user producers from each other. The
 mechanism both inherit is [[frag-nesting-a-module-inherits-its-parents-namespace]]
 — the host's scoping rule, adopted wholesale by the lowering. Dedupe-key
 discipline is [[frag-a-dedup-key-must-be-an-identity-not-a-spelling]].
+
+A second axis, measured on the C# target (k-sharp, 2026-10-05): the prefix
+protects generated names from the USER, but says nothing about generated
+names colliding WITH EACH OTHER across renders. `for|cs` emits a fixed
+`__koru_item` induction local; a nested `for` renders a second `__koru_item`
+inside the first — legal under JS `let` and Zig captures, a hard CS0136
+under C#, which permits no local shadowing at any depth. The reservation
+is total against the user namespace and zero against the template's own
+next render. The fix is per-render uniqueness, not a wider prefix: the
+template context now exposes `__site` (a monotonic render token), and the
+loop spells `__koru_item{{ __site }}` so header and splice arg share the
+one render's name. A host that cannot shadow forces generated names to be
+site-unique wherever the template itself declares — the same obligation the
+emitter's `nextId` temps already honor inside one render.

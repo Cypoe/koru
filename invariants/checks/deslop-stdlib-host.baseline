@@ -23,8 +23,14 @@
 # is counted at its new file, twinning the shapes it left), and the
 # owned-leaf machinery adds genuine new host code in proto/channel/src.
 # Re-pinned to measured; the category is the split parts' shells.
-clusters=1043
-members=915
+# 1045/916: the roll fired on the same k-sharp commit. Its koru_std
+# files measure ZERO delta at this floor — io.blkcs.kz (print.blk|cs) and
+# declarations.targets.kz are new part files whose host text adds no
+# clusters (the port twins its |js sibling's shape but under the token
+# floor or against unparseable-template siblings); the +2/+1 is committed
+# drift accumulated under rolls that missed.
+clusters=1045
+members=916
 # 1039/915: the roll fired on the |? coverage commit ("coverage: |? no
 # longer suppresses panic arms, and refuses where no union exists") —
 # that commit touches src/ checkers, in-repo tests, and a concept frag;

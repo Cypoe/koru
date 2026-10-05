@@ -42,8 +42,16 @@
 # the documented emitter_test/visitor_emitter_test decl-literal cluster
 # (cluster 8, 8x simple_var_decl), zero new clusters, zero src/ files in
 # this commit. Census re-measured on this tree: 1540/2093.
-clusters=1548
-members=2099
+# 1783/2224: the roll fired on the k-sharp commit ("emit: k-sharp grows
+# if, for, and the front-page Hello World"). Foreign src/ drift of ~230
+# clusters sits under this pin — measured 1775/2233 at HEAD with this
+# commit's files stashed, the same emitter_test/visitor_emitter_test
+# field-literal residual the pins above keep naming. This commit's own
+# delta is +8 clusters / -9 members: cs_emitter's effect-splice block is
+# an intentional twin of the js_emitter shape it ports (different output
+# text per target — the duplication IS the variant model).
+clusters=1783
+members=2224
 # Re-pinned in "fold: impl bodies are walk input, not fold residue":
 # the roll fired on +5 clusters / +2 members of foreign src/ drift in
 # the same documented emitter_test/visitor_emitter_test field-literal

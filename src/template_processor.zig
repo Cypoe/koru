@@ -823,6 +823,10 @@ fn buildCondBinds(
 /// inline_body (with the inline_stmt marker), or null if the invocation doesn't
 /// resolve to a per-call template proc. Shared by top-level flows and nested
 /// continuations so inline-template lowering works at every depth.
+/// Monotonic per-process render counter backing the `__site` context key —
+/// see its put site in renderTemplateInvocation.
+var render_site_counter: usize = 0;
+
 pub fn renderTemplateInvocation(
     all_items: []ast.Item,
     invocation: *const ast.Invocation,
@@ -847,6 +851,15 @@ pub fn renderTemplateInvocation(
     // bind to the event's field at that position so `{{ iterable }}` resolves.
     var ctx = liquid.Context.init(allocator);
     defer ctx.deinit();
+
+    // `__site`: a render-unique token the template may splice into generated
+    // names. Hosts that forbid local shadowing (C#: CS0136 fires on a nested
+    // `for` redeclaring the outer's `__koru_item`) need every per-render
+    // declaration spelled uniquely; hosts that allow it ignore the key. The
+    // counter is file-scope and monotonic for the process — the walk order is
+    // deterministic, so the numbering is too.
+    render_site_counter += 1;
+    try ctx.put("__site", .{ .string = try std.fmt.allocPrint(allocator, "{d}", .{render_site_counter}) });
 
     const event_decl = findEventDeclByLastSegment(allocator, all_items, &invocation.path);
 

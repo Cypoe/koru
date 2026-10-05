@@ -383,6 +383,109 @@ regression_check_js_equivalence() {
     echo -e "${GREEN}  ✓ JS equivalence (node output matches expected.txt)${NC}"
 }
 
+# Cross-target equivalence check for the C# (k-sharp) target — the .NET twin of
+# regression_check_js_equivalence. If a test's LANGUAGES marker lists `cs`, the
+# CS emitter must produce a program whose output matches the SAME expected.txt.
+#
+# Unlike JS the CS target runs a real Stage D: `koruc --lang=cs -o <path>`
+# writes output_emitted.cs + koru.csproj next to the input, `dotnet build`s the
+# apphost at <path>, and this function executes it directly (no node). A
+# `CS_REFUSES` file pins a clean refusal, the CS-side twin of JS_REFUSES.
+# TARGETS.json MERGES the cs row rather than rewriting — the js check may have
+# already written zig+js rows this run, and last-writer-wins would drop them.
+regression_check_cs_equivalence() {
+    local test_dir="$1"
+    local TEST_NAME
+    TEST_NAME=$(basename "$test_dir")
+
+    [ -f "$test_dir/LANGUAGES" ] || return 0
+    grep -qiw 'cs' "$test_dir/LANGUAGES" || return 0
+    [ -f "$test_dir/SUCCESS" ] && [ ! -f "$test_dir/FAILURE" ] || return 0
+    [ -f "$test_dir/MUST_RUN" ] && [ -f "$test_dir/expected.txt" ] || return 0
+    [ -f "$test_dir/EXPECT_TRAP" ] && return 0
+
+    local flags=""
+    [ -f "$test_dir/COMPILER_FLAGS" ] && flags=$(tr '\n' ' ' < "$test_dir/COMPILER_FLAGS")
+
+    # Upsert one row into TARGETS.json: read the existing array (the js check
+    # may have already written zig+js this run), drop any prior cs/zig rows,
+    # then append this run's truth. Written in every exit branch.
+    _write_cs_target() {
+        TGT_DIR="$test_dir" TGT_CS_STATUS="$1" TGT_CS_REASON="$2" node -e '
+            const fs = require("fs");
+            const d = process.env.TGT_DIR;
+            const rd = (f) => { try { return fs.readFileSync(d + "/" + f, "utf8"); } catch { return null; } };
+            let out = { expected: rd("expected.txt"), targets: [] };
+            try { out = JSON.parse(fs.readFileSync(d + "/TARGETS.json", "utf8")); } catch {}
+            out.targets = (out.targets || []).filter(t => t.lang !== "cs" && t.lang !== "zig");
+            out.targets.unshift({ lang: "zig", label: "Zig", status: "success", actual: rd("actual.txt") });
+            out.targets.push({ lang: "cs", label: "C#", status: process.env.TGT_CS_STATUS,
+                               reason: process.env.TGT_CS_REASON || null, actual: rd("actual.cs.txt") });
+            fs.writeFileSync(d + "/TARGETS.json", JSON.stringify(out, null, 2));
+        ' 2>/dev/null
+    }
+
+    _cs_equiv_fail() {
+        rm -f "$test_dir/SUCCESS"
+        echo "$1" > "$test_dir/FAILURE"
+        FAILED_TESTS="$FAILED_TESTS $TEST_NAME($1)"
+        [ "${PASSED_TESTS:-0}" -gt 0 ] && PASSED_TESTS=$((PASSED_TESTS - 1))
+        echo -e "${RED}  ✗ CS equivalence: $2${NC}"
+        _write_cs_target "failure" "$1"
+    }
+
+    # -o names the apphost; koruc writes output_emitted.cs + koru.csproj next
+    # to the input and `dotnet build -o`s the apphost to the -o dir. Stage D is
+    # real here (unlike JS), so a non-empty a_cs_equiv is the emit+build gate.
+    # The -o path resolves against the INPUT's directory inside the backend, so
+    # it must be absolute — a repo-relative path would nest a second tests/ tree.
+    local cs_app="$(cd "$test_dir" && pwd)/a_cs_equiv"
+    if ! "${KORUC:?KORUC is unset — the harness must snapshot the compiler before running a test}" "$(test_entry "$test_dir")" --lang=cs $flags -o "$cs_app" \
+            >"$test_dir/compile_cs.err" 2>&1; then
+        if [ -f "$test_dir/CS_REFUSES" ]; then
+            local want
+            want=$(cat "$test_dir/CS_REFUSES")
+            if grep -qF "$want" "$test_dir/compile_cs.err"; then
+                _write_cs_target "refused" "$want"
+                echo -e "${GREEN}  ✓ CS refused cleanly (CS_REFUSES pinned)${NC}"
+                return 0
+            fi
+            _cs_equiv_fail "cs-compile" "CS refused, but not with the pinned text (CS_REFUSES)"
+            return 0
+        fi
+        _cs_equiv_fail "cs-compile" "koruc --lang=cs failed (see compile_cs.err)"
+        return 0
+    fi
+    if [ ! -x "$cs_app" ]; then
+        _cs_equiv_fail "cs-noemit" "no apphost produced at $cs_app"
+        return 0
+    fi
+
+    local cs_actual="$test_dir/actual.cs.txt"
+    local -a RUN_ARGS=()
+    if [ -f "$test_dir/ARGS" ]; then
+        while IFS= read -r _arg || [ -n "$_arg" ]; do
+            RUN_ARGS+=("$_arg")
+        done < "$test_dir/ARGS"
+    fi
+    timeout "${REGRESSION_TEST_TIMEOUT:-30}" "$cs_app" "${RUN_ARGS[@]}" >"$cs_actual" 2>&1
+    local cs_exit=$?
+    if [ "$cs_exit" -ne 0 ]; then
+        _cs_equiv_fail "cs-runtime" "apphost exited $cs_exit (see actual.cs.txt)"
+        return 0
+    fi
+    local exp act
+    exp=$(sed 's/[[:space:]]*$//' "$test_dir/expected.txt")
+    act=$(sed 's/[[:space:]]*$//' "$cs_actual")
+    if [ "$exp" != "$act" ]; then
+        _cs_equiv_fail "cs-mismatch" "CS output != expected.txt"
+        diff -u "$test_dir/expected.txt" "$cs_actual" 2>/dev/null | head -15 | sed 's/^/    /'
+        return 0
+    fi
+    _write_cs_target "success" ""
+    echo -e "${GREEN}  ✓ CS equivalence (.NET apphost output matches expected.txt)${NC}"
+}
+
 regression_run_one_test() {
     local test_dir="$1"
     local TEST_NAME
@@ -1891,6 +1994,8 @@ EOF
     # Cross-target: if this test opted into JS (LANGUAGES lists js) and passed
     # the Zig baseline, require the JS target to agree on the same expected.txt.
     regression_check_js_equivalence "$test_dir"
+    # The C#/.NET twin — same opt-in, same expected.txt, real apphost.
+    regression_check_cs_equivalence "$test_dir"
 
     # Residual hygiene on a passed test: the JS-equivalence deposit (a JS-target
     # backend in zig-out/, output_emitted.js, js-run artifacts) must not linger —

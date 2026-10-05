@@ -10,6 +10,7 @@
 ~part jsprec
 ~part csprec
 ~part lowers
+~part blkcs
 
 const std = @import("std");
 const codegen_utils_io = @import("codegen_utils");
@@ -36,14 +37,7 @@ const codegen_utils_io = @import("codegen_utils");
 // form must fail loudly once removed).
 
 // Print formatted text
-// NOTE: printf with varargs would require runtime support - skipping for now
-// pub tor io.printf { format: string, args: anytype }
-// | printed {}
-//
-// proc io.printf {
-//     std.debug.print(format, args);
-//     return .{ .printed = .{} };
-// }
+// NOTE: printf with varargs would require runtime support — deliberately absent.
 
 // One blocking line from stdin. EOF is a branch, not an empty string —
 // an empty line is `line` with length 0. The buffer is module-static:
