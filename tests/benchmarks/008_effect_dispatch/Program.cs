@@ -162,15 +162,16 @@ static class Bench {
         last_ms = sw.ElapsedMilliseconds;
         return sum;
     }
-    // GEN-NOREAD — generated minus the `.done` dynamic member read: isolates
-    // the DLR binder's share of the envelope cost.
-    static long TimeGenNoRead() {
+    // GEN-DYNREAD — the typed Output consumed through `dynamic`: boxing +
+    // DLR binder on `.done`. What a dynamic consumer pays on the typed
+    // envelope — the cost `var r; r.done` used to pay on every call.
+    static long TimeGenDynRead() {
         fires = 0;
         var sw = Stopwatch.StartNew();
         long sum = 0;
         for (int i = 0; i < N; i++) {
-            var r = main_module.beat_event.handler(new main_module.beat_event.Input { }, new BenchOps());
-            if (r != null) sum++;
+            dynamic r = main_module.beat_event.handler(new main_module.beat_event.Input { }, new BenchOps());
+            sum += (int)r.done;
         }
         sw.Stop();
         last_ms = sw.ElapsedMilliseconds;
@@ -201,7 +202,7 @@ static class Bench {
         RunOne("gen-subflow",  TimeGenSubflow);
         RunOne("typed-io",     TimeTypedIO);
         RunOne("typed-func",   TimeTypedFunc);
-        RunOne("gen-noread",   TimeGenNoRead);
+        RunOne("gen-dynread",  TimeGenDynRead);
         RunOne("struct-method",TimeStructMethod);
         RunOne("virtual",      () => TimeVirtual(vops));
         RunOne("anon-func",    TimeAnon);

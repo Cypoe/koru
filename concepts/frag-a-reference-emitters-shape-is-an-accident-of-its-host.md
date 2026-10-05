@@ -83,6 +83,24 @@ have left the claim at "2.2ns is the floor"; the strict host's shape
 named what the semantic actually is, and the floor turned out to be
 zero.
 
+**And the second instance's bound was wrong — the envelope typed
+anyway.** That paragraph ended with "the envelope can only be typed
+where the emitter authors both sides" — opaque `|cs` text authors its
+own result, so `beat` stayed `dynamic` at ~11ns "by contract, not by
+accident." The bound was assumed, not enforced: the event *decl* knows
+every branch type, so `struct Output` is public and statically nameable
+by host text. Making it the contract — `handler` returns `Output` for
+every branch tor regardless of impl kind, host-authored `return new
+Output { tag = "done", … }`, the C# compiler refusing the old anonymous
+shape — moved the opaque arm from 10.8ns to 0.3ns, identical to
+`direct`. The generalization worth keeping: when the lax-host shape
+leaks into a port as an untyped boundary, the fix is not always
+"the emitter can't type what it didn't write" — sometimes it is "write
+the type anyway and let the host's checker enforce it on whoever
+did write." The measured residue of `dynamic` on that path is what a
+consumer pays for insisting on it: 10.0ns + 56B/call to read the same
+typed `Output` through a dynamic reference.
+
 ## What would correct this belief
 
 A counterexample where the strict host's shape over-constrains the port —

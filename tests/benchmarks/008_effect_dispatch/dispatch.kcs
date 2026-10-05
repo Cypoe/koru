@@ -1,4 +1,4 @@
 ~proc beat|cs {
     tick();
-    return new { tag = "done", done = 0 };
+    return new Output { tag = "done", done = 0 };
 }

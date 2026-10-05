@@ -28,8 +28,8 @@ nothing.
 | `typed-func` | the `Func`-delegate floor: `Func<int>` props, `int` in/out — what the previous surface cost with the envelope typed |
 | `typed-io` | `Func`-delegate dispatch with struct In/Out — a hypothesis arm for the envelope port |
 | `gen-subflow` | the real emitted handler for `pulse` — a pure-Koru impl (`pulse = tick() => done 0`): `handler<H>(Input, H) → Output`, all structs, arm installed as a `void tick()` **method** on the ops struct |
-| `generated` | the real emitted handler for `beat` — an opaque `\|cs` impl, so the envelope stays `dynamic` (host text constructs its own result object); the arm call is a method, same as `gen-subflow` |
-| `gen-noread` | generated minus the `.done` dynamic member read — isolates the DLR binder's share |
+| `generated` | the real emitted handler for `beat` — an opaque `\|cs` impl under the same contract: host text produces `new Output { tag = "done", … }`, compile-enforced |
+| `gen-dynread` | the typed `Output` consumed through `dynamic` — boxing + DLR binder, what the typed envelope saves a typed consumer |
 | `anon-func` | the previous k-sharp shape: dynamic anonymous handler object |
 
 ## Measured
@@ -42,12 +42,12 @@ Apple M-series (arm64), .NET 9 runtime executing a net8.0 target, Release.
 | direct | 9 | 0.3 | 0 |
 | struct-method | 9 | 0.3 | 0 |
 | **gen-subflow** | **9** | **0.3** | **0** |
-| virtual | 62 | 2.1 | 0 |
-| typed-func | 69 | 2.3 | 0 |
-| typed-io | 73 | 2.4 | 0 |
-| **generated (opaque impl)** | **324** | **10.8** | **56** |
-| gen-noread | 367 | 12.2 | 56 |
-| anon-func | 631 | 21.0 | 80 |
+| **generated (opaque impl)** | **9** | **0.3** | **0** |
+| virtual | 61 | 2.0 | 0 |
+| typed-func | 67 | 2.2 | 0 |
+| typed-io | 67 | 2.2 | 0 |
+| gen-dynread | 301 | 10.0 | 56 |
+| anon-func | 640 | 21.3 | 80 |
 
 `DOTNET_JitDisasm` on the same shapes: `handlerM[MOps]` compiles to 20 bytes
 (the empty `tick()` inlines to nothing), `handlerG[GOps]` to 92 B, the old
@@ -56,43 +56,46 @@ and `handlerM` each appear as their own `[ConcreteOps]` instantiation.
 
 ## What the numbers say
 
-Three measurements in one table, each landing a change the previous one
-predicted.
+Four measurements in one table, each landing a change the previous one
+predicted. The last one closed the file: **every real generated arm —
+compiler-written impl or opaque `|cs` host text — measures identical to
+`direct`, the static-call atom.**
 
-**The dispatch surface landed at the atom.** Non-resuming effect arms now
+**The dispatch surface landed at the atom.** Non-resuming effect arms
 emit as *methods* on the ops struct — `IOps` declares `void tick()`, the
-call-site struct implements it, and `handler` calls `ops.tick()` through a
-local-function shim. The JIT devirtualizes the struct-constrained call and
-inlines the arm body into `handler`, which inlines into the loop:
-**gen-subflow measures 0.3ns at 0 B/call — identical to `direct` and
-`struct-method`.** Generated Koru dispatch costs exactly what a static C#
-call costs. The ~2.3ns `Func`-delegate floor (typed-func/typed-io) is what
-the previous property surface still would have paid.
+call-site struct implements it, and `handler` calls `ops.tick()` through
+a local-function shim. The JIT devirtualizes the struct-constrained call
+and inlines the arm body into `handler`, which inlines into the loop.
+The ~2.2ns `Func`-delegate floor (typed-func/typed-io) is what the
+previous property surface still would have paid.
 
-**The envelope was the earlier cost, and it is typed.** The first runs of
-this benchmark decomposed `generated`'s 13.3ns into ~10.6ns of anonymous
-In/Out objects (56B/call of gen0 churn) plus a small DLR binder share. The
-emitter ports zig's `Input`/`Output` pair: per-event `struct Input` /
-`struct Output { tag, done }`, `handler<H>(Input, H) → Output`,
-`new ev_event.Input { … }` call sites — zero allocation on the
-compiler-generated path.
+**The envelope is typed end to end — including host text.** The emitter
+ports zig's `Input`/`Output` pair: `handler<H>(Input, H) → Output`,
+`new ev_event.Input { … }` call sites, `new Output { tag = "done", … }`
+produces. The last move made the typed `Output` the *contract* for
+opaque `|cs` bodies too — host text that used to return anonymous
+`new { tag, done }` now writes `new Output { tag = "done", … }` and the
+C# compiler enforces it. That is what moved `generated` from 10.8ns to
+the atom: there is no `dynamic` left on the path.
+
+**What `dynamic` still costs, measured honestly:** `gen-dynread` reads
+the same typed `Output` through a `dynamic` reference — boxing +
+call-site binder — and pays 10.0ns + 56B/call for it. The typed
+envelope's win is exactly that, per consumer.
 
 **Captures are fields, not closures.** Zig's nested `Handlers_N` fns
 const-capture enclosing bindings natively; C# methods can't, so the
 emitter scans each arm body for references to enclosing flow locals and
 materializes them as `__cap_*` struct fields — the same snapshot
 semantics, spelled. An arm body that references something the scanner
-can't prove (host-text locals in opaque bodies) falls back to a stored
-`Func` forwarded by the method — the interface stays statically callable,
-the pathological arm pays the old price.
+can't prove (host-text locals) falls back to a stored `Func` forwarded
+by the method — the interface stays statically callable, the
+pathological arm pays the old price.
 
-**The honest bound is the impl's opacity.** `beat`'s `~proc beat|cs` body
-authors its own `new { tag, done }` return, so its envelope stays
-`dynamic` — 10.8ns, and the method-arms change already shaved the ~2ns
-delegate invoke off its earlier 12.9. Optional *resuming* arms keep their
-nullable `Func` properties: presence is observable (`ask != null`), so
-they can't be methods — they are the one arm kind that still pays
-delegate invoke.
+**What is left of `Func`:** only optional *resuming* arms keep nullable
+`Func<dynamic,dynamic>` properties — presence is observable
+(`ask != null`), a method has no "absent" spelling. And wildcard-input
+tors keep `dynamic` input — their members cannot be named at decl time.
 
 ## Run
 

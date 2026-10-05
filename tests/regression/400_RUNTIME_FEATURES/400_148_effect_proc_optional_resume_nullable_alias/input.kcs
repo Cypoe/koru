@@ -3,7 +3,7 @@
 
 ~proc query|cs {
     if (ask != null) {
-        return new { tag = "done", done = ask(q) };
+        return new Output { tag = "done", done = ask(q) };
     }
-    return new { tag = "done", done = 0 };
+    return new Output { tag = "done", done = 0 };
 }

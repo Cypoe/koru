@@ -596,20 +596,18 @@ const Emitter = struct {
             }
         }
 
-        // Only a compiler-generated body can return a typed Output — opaque
-        // |cs text constructs its own anonymous objects, and a subflow with
-        // inline_body or a preamble splices host text that may `return`
-        // arbitrarily. Input is typed regardless (zig passes `Input` to
-        // opaque procs too); the wildcard-input shape stays dynamic because
-        // its members cannot be named at decl time.
-        const generated_impl = switch (impl) {
-            .immediate => true,
-            .subflow => |flow| flow.inline_body == null and flow.preamble_code == null,
-            else => false,
-        };
+        // The envelope is the tor's contract, whoever writes the body:
+        // handler returns `Output` for a branch tor, `<T>` for a bare
+        // `-> T`, dynamic only when the decl itself cannot name a type.
+        // That includes opaque |cs text — host-authored impls must produce
+        // `new Output { tag = "done", … }` / `return <T>;` and the compiler
+        // enforces it (an anonymous `new { tag, done }` is now a type
+        // error, not a convention). Input is typed regardless (zig passes
+        // `Input` to opaque procs too); the wildcard-input shape stays
+        // dynamic because its members cannot be named at decl time.
         const typed_input = !ev.input.is_wildcard;
         const input_cs: []const u8 = if (typed_input) "Input" else "dynamic";
-        const output_cs: []const u8 = if (!generated_impl) "dynamic" else if (has_terminal)
+        const output_cs: []const u8 = if (has_terminal)
             "Output"
         else if (ev.return_type) |rt|
             csType(rt)
@@ -742,13 +740,15 @@ const Emitter = struct {
                 .tagged
             else
                 .dynamic,
-            .subflow => if (!generated_impl) .dynamic else if (has_terminal)
+            // Host-authored bodies get the same typed contract — see the
+            // envelope comment above. Produces inside a preamble/subflow's
+            // generated continuations emit `new Output { … }` alongside.
+            else => if (has_terminal)
                 .tagged
             else if (ev.return_type) |rt|
                 ImplOut{ .bare = csType(rt) }
             else
                 .dynamic,
-            else => .dynamic,
         };
 
         switch (impl) {

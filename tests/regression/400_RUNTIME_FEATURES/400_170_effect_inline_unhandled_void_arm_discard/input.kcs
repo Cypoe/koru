@@ -4,5 +4,5 @@
 ~proc beat|cs {
     tick();
     tick();
-    return new { tag = "done", done = 2 };
+    return new Output { tag = "done", done = 2 };
 }

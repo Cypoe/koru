@@ -4,5 +4,5 @@
 ~proc run|cs {
     tick();
     beep(7);
-    return new { tag = "done", done = 99 };
+    return new Output { tag = "done", done = 99 };
 }
