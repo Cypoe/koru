@@ -45,7 +45,14 @@ alone.** Lead with the concrete subject — the feature or concept, by name.
   nothing else — `Orisha vs Actix and ASP.NET on SQLite`, not `Orisha: The
   Cold Path Is the Library`. A colon is allowed when what follows is still a
   plain description (`std/channel: Where Blocking Is a Branch`); an evocative
-  riddle after the colon is not. Wit lives in the `excerpt`, never the title.
+  riddle after the colon is not. `Introducing`/`Meet`/`Announcing`/
+  `Presenting` are sanctioned lead-ins — "Introducing Koru Stack" names the
+  subject at the front of the title and passes the gate (widened
+  2026-10-05, when "Stack: Orchestration Is a Compile-Time Obligation" —
+  compliant, subject-first, and completely obtuse — proved "descriptive"
+  alone wasn't enough; the title must tell the reader WHAT the thing is,
+  and an announcement does that better than a thesis). Wit lives in the
+  `excerpt`, never the title.
 - **Declare the subject in frontmatter; the commit gate enforces the rule
   against it.** `subject: "Orisha"` is required whenever a title or subject
   is written (new post, retitle, field change); `check:publication` refuses
@@ -55,13 +62,19 @@ alone.** Lead with the concrete subject — the feature or concept, by name.
   2026-09-18 after "The Judge Is a Phantom Type" was committed as a draft —
   a verdict that named no subject, the exact shape the ruling exists to
   kill.)
-- **The slug is the title, kebab-cased — same gate.** The directory name is
-  the post's address; it is built from the title's own words and names the
-  subject (`orisha-vs-actix-and-aspnet-on-sqlite`), never a private name for
-  the piece (`the-cold-path-is-the-library` was a benchmark post wearing a
-  metaphor). `check:publication` refuses a slug whose tokens do not appear
-  in the title or that does not name its subject — same moments, same
-  unforgiving tier.
+- **The slug is the subject's name — NOT the title kebab-cased.** The
+  directory name is the post's permanent address and should be the shortest
+  handle a reader would use for the thing itself: `stack`, `std-gate`,
+  `orisha-vs-actix-and-aspnet-on-sqlite`. Deriving the slug from the title's
+  own words is how you get `stack-orchestration-as-obligation` — a thesis
+  statement wearing an address, obtuse by construction (Lars-ruled
+  2026-10-05, after four consecutive thesis-slugs; the prior "title
+  kebab-cased" rule was written to kill private-metaphor slugs like
+  `the-cold-path-is-the-library` and overcorrected). Add a disambiguator
+  only when the bare name collides (`stack-up` for a second stack post).
+  `check:publication` refuses a slug whose tokens do not appear in the
+  title or that does not name its subject — so the title still must name
+  the thing — but the slug stops at the name.
 - **Prefer plain-and-clear over clever-and-vague, every time.** "Prototype Mode:
   Running Incomplete Programs" beats "Doodle the Flow." When in doubt, name the
   feature and stop.
@@ -181,9 +194,11 @@ alone.** Lead with the concrete subject — the feature or concept, by name.
 - **Title opens with the subject by name and describes the post — no hooks.**
   A reader scanning the index must see WHAT the post is about from the title
   alone — "Orisha vs Actix and ASP.NET on SQLite", not "Doodle the Flow, Let
-  the Events Catch Up". The slug is the title kebab-cased, not a private
-  name. (Lars-ruled 2026-07-15 after a title that never named its feature;
-  tightened 2026-10-03 — the hook half of the old form stayed cryptic.)
+  the Events Catch Up". The slug is the subject's name, not the title
+  kebab-cased. (Lars-ruled 2026-07-15 after a title that never named its
+  feature; tightened 2026-10-03 — the hook half of the old form stayed
+  cryptic; slug rule re-ruled 2026-10-05 — title-derived slugs produce
+  thesis-statement addresses.)
 - **Present tense, describe the feature — not the journey.** "A grammar is two
   glyphs" not "Today I added a parser." No changelog narration, no "we then…" —
   and no *design* journey either. The seductive form is the ruled-out road:
