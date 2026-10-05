@@ -1,0 +1,19 @@
+// C# implementation facet. Tors are declared in input.k (merged at
+// import); this file holds the |cs proc bodies plus the module counter —
+// a static on KoruHost pulled into file scope by `using static`.
+
+using static KoruHost;
+
+static class KoruHost {
+    public static dynamic count = 0;
+}
+
+~proc run|cs {
+    for (ulong i = 0; i < n; i++) {
+        ulong c = 42;
+        key(c);
+    }
+}
+
+~proc onKey|cs { count = count + 1; }
+~proc report|cs { __koru_stdout_write("count=" + count + "\n"); }

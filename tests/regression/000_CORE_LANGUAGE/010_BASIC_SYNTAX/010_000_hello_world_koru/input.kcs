@@ -1,0 +1,11 @@
+// C# implementation facet. The |zig/`const` host lines in input.kz and the
+// `let` lines in input.kjs declare module state the flow's interpolation
+// references unqualified. C# has no file-scope variables, so the facet holds
+// them as statics on a helper class pulled into file scope by `using static`.
+using static KoruHost;
+
+static class KoruHost {
+    public const string name = "World";
+    public const bool debug = true;
+    public const int count = 42;
+}

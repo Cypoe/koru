@@ -1,0 +1,6 @@
+// C# implementation facet: this port's C# host implementation. Merged at
+// compile (sibling to input.kz); selected when the target is --lang=cs.
+~proc greet|cs {
+    __koru_stdout_write("Hello, " + name + "\n");
+    return name;
+}

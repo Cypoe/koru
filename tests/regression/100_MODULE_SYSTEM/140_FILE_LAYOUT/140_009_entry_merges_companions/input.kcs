@@ -1,0 +1,5 @@
+// C# implementation facet. Tors are declared in input.k (merged at
+// import); this file holds the |cs proc bodies.
+
+~proc compute|cs { return x + 100; }
+~proc show|cs { __koru_stdout_write(v + "\n"); }

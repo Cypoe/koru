@@ -1,0 +1,48 @@
+// C# implementation facet. Tors are declared in input.k (merged at
+// import); this file holds the |cs proc bodies plus the module state the
+// handlers mutate — statics on KoruHost pulled into file scope by
+// `using static` (C# has no file-scope variables).
+
+using static KoruHost;
+
+static class KoruHost {
+    public static dynamic keys = 0;
+    public static dynamic resizes = 0;
+    public static dynamic focus = 0;
+    public static dynamic quits = 0;
+    public static dynamic width_sum = 0;
+    public static dynamic focus_xor = 0;
+}
+
+~proc run|cs {
+    for (ulong i = 0; i < n; i++) {
+        var m = i % 64;
+        if (m == 63) {
+            resize(80 + (i & 31));
+        } else if (m == 31) {
+            focus_in(i);
+        } else {
+            ulong c = (i % 97 == 0) ? 113 : 97 + (i % 26);
+            key(c);
+        }
+    }
+}
+
+~proc on-key|cs {
+    keys = keys + 1;
+    if (ch == 113) { quits = quits + 1; }
+}
+
+~proc on-resize|cs {
+    resizes = resizes + 1;
+    width_sum = width_sum + width;
+}
+
+~proc on-focus|cs {
+    focus = focus + 1;
+    focus_xor = focus_xor ^ id;
+}
+
+~proc report|cs {
+    __koru_stdout_write("k=" + keys + " r=" + resizes + " f=" + focus + " q=" + quits + " ws=" + width_sum + " fx=" + focus_xor + "\n");
+}
