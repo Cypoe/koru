@@ -111,7 +111,7 @@
 // enclosing local (CS0136 — unlike JS `let`), so each render spells a fresh
 // induction name shared by the header and the splice arg.
 ~[template]proc for|cs {
-    {% const __koru_iter = cs_lower(expr) %}{% const __koru_range = parse_range(__koru_iter) %}{% if __koru_range.is_range %}for (var __koru_item{{ __site }} = {{ __koru_range.lo }}; __koru_item{{ __site }} < {{ __koru_range.hi }}; __koru_item{{ __site }}++) {% else %}foreach (var __koru_item{{ __site }} in {{ __koru_iter }}) {% endif %}{
+    {% const __koru_iter = cs_lower(expr) %}{% const __koru_range = parse_range(__koru_iter) %}{% if __koru_range.is_range %}for (long __koru_item{{ __site }} = {{ __koru_range.lo }}; __koru_item{{ __site }} < {{ __koru_range.hi }}; __koru_item{{ __site }}++) {% else %}foreach (var __koru_item{{ __site }} in {{ __koru_iter }}) {% endif %}{
         {% if keep != "" %}{% const __koru_keep = cs_lower(keep) %}if (!({{ __koru_keep }})) break;
         {% endif %}{% for h in effects["each"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});
         {% endfor %}

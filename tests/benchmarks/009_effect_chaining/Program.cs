@@ -32,7 +32,7 @@ static class Bench {
     static long TimeGenerated() {
         var sw = Stopwatch.StartNew();
         long sum = 0;
-        for (int i = 0; i < N; i++)
+        for (long i = 0; i < N; i++)
             sum += main_module.chain_event.handler(new main_module.chain_event.Input { x = i }, new ChainOps()).done;
         sw.Stop();
         last_ms = sw.ElapsedMilliseconds;

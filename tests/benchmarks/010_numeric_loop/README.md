@@ -71,18 +71,20 @@ fix provable rather than guessed. Corrected 2026-10-05.
 ## Measured (this machine, net8.0 ARM64, 100M elems, min of 3)
 
 ```
-generated           122 ms      0 B/elem   ← now the register shape
-twin                165 ms      0 B/elem   ← keeps the static-write shape
-func                 40 ms      0 B/elem
-virtual             203 ms      0 B/elem
-direct-static       208 ms      0 B/elem
-direct-int          122 ms      0 B/elem
-direct              122 ms      0 B/elem   ← generated == direct
+generated           121 ms      0 B/elem   ← register shape
+twin                161 ms      0 B/elem   ← keeps the static-write shape
+func                 39 ms      0 B/elem
+virtual             204 ms      0 B/elem
+direct-static       203 ms      0 B/elem
+direct-int          120 ms      0 B/elem
+direct              119 ms      0 B/elem   ← generated == direct
 ```
 
 All arms produce the identical sum — the correctness control. Every arm
 allocates zero bytes per element, generated included.
 
 The remaining timing spread on near-identical streams is microarchitectural
-luck; the disassembly — 7 instructions, no per-element memory traffic — is
-the claim.
+luck; the disassembly is the claim, and after `for|cs` started emitting a
+`long` counter (the `var` off `0` bound `int`, costing two `sxtw` per
+element against a `long` bound) the generated hot loop is *instruction-
+identical* to `direct` — five instructions: `madd; add; add; cmp; blt`.

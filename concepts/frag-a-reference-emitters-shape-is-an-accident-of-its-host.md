@@ -163,3 +163,17 @@ declared rather than wildcard. The generalization: a per-host
 emission arm that no test marks is not ported, it is merely unstruck;
 the sweep's board is the set of marks, and the cold paths outside
 it are where the next host's refusals live.
+
+2026-10-05 — the host's *type inference* is an accident too. The
+user-level `for|cs` emitted `for (var __koru_item = 0; …)` — `var`
+binds the literal's width, so a counter over a `usize` range came
+out `int` against a `long` bound: two `sxtw` per element, the only
+difference between the emitted numeric loop and the handwritten
+atom. C# compiled it happily — widening is legal, just not free —
+and every test stayed green; only `DOTNET_JitDisasm` could see the
+instructions the stopwatch couldn't separate from noise. The fix is
+what the store sweeps already spelled: emit the declared type
+(`long`), not `var`, where the source's type is known. The
+generalization: type inference in generated code is an emission bug
+class — `var` inherits the initializer's width, and the initializer
+is a literal, not the semantics.

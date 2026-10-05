@@ -63,19 +63,31 @@ Release. 30M values × 8 stages per rep, min of 3.
 
 | arm | min ms | ns/element | B/call |
 |---|---:|---:|---:|
-| direct | 8 | 0.27 | 0 |
-| **generated** | **15** | **0.50** | **0** |
+| direct | 9 | 0.30 | 0 |
+| **generated** | **9** | **0.30** | **0** |
 | virtual | 19 | 0.63 | 0 |
 | func-chain | 24 | 0.80 | 0 |
 | linq | 647 | 21.6 | 0 |
 
 ## What the numbers say
 
-**The generated chain beats every composition idiom C# offers — 43×
-over LINQ** — and lands within 2× of a fused handwritten loop. The
-residual over `direct` (~7ms) is the `Input`/`Output` struct envelope
-around the fused adds; the K hops themselves inlined away entirely —
-`step` as a struct method is what makes that legal for the JIT.
+**The generated chain is the fused loop.** `DOTNET_JitDisasm` on
+`TimeGenerated` (Tier1-OSR) shows a five-instruction hot loop —
+`add x2, x0, #8; add x19, x19, x2; add x0, x0, #1; cmp; blt` —
+instruction-identical to `direct`. The JIT inlines `handler<ChainOps>`
+and all eight `step` hops, folds them to `i + 8`, and promotes the whole
+`Input`/`Output` envelope to registers: the `tag` store and the
+struct-return machinery do not exist in the machine code. `step` as a
+struct method is what makes that legal for the JIT.
+
+An earlier draft measured generated at 15ms and called the residual the
+envelope. The disassembly proves that attribution wrong: the only extra
+instruction was one `sxtw` — the harness iterated `int i` here while
+`direct` iterated `long i`, so every element paid a sign-extension the
+other arm didn't. Symmetric counters, identical instructions, identical
+time. Second instance of the same lesson the `fires++` fix taught:
+when generated looks slow, check what the harness is feeding it before
+blaming the emission.
 
 LINQ's 21.6ns/element is the composition tax paid per stage per
 element: each `Select` wraps the previous enumerator, so a value climbs
