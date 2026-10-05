@@ -138,6 +138,16 @@ fn jsLowerFilter(allocator: std.mem.Allocator, args: []const liquid.Value) anyer
     return liquid.Value{ .string = s };
 }
 
+/// `cs_lower(expr)` filter: the `cs` target's twin of `js_lower` — a
+/// Zig-spelled term in a `|cs` template splice arrives as C# or fails loudly
+/// (a builtin the cs arm does not know is a render failure, not silent text).
+fn csLowerFilter(allocator: std.mem.Allocator, args: []const liquid.Value) anyerror!liquid.Value {
+    if (args.len != 1 or args[0] != .string) return error.BadArgs;
+    var d = codegen_utils.LowerDiag{};
+    const s = try codegen_utils.lowerKoruExpr(allocator, args[0].string, .cs, .koru_expr, &d);
+    return liquid.Value{ .string = s };
+}
+
 /// Return the index of the next top-level `,` (or end / closing `}`) at or
 /// after `start`, treating `{}`/`()`/`[]` nesting and `"…"` string literals as
 /// opaque. Mirrors codegen_utils.parseValue's depth tracking — the value of a
@@ -637,15 +647,18 @@ fn processPerCallInvocations(
 /// time. Read the renders when the suspect is in the list above; trust the
 /// compiler otherwise.
 ///
-/// A third target reaching here is walled upstream: a render only happens after
+/// A fourth target reaching here is walled upstream: a render only happens after
 /// selectPerCallTemplateProc found a `~[template]proc <name>|<build_lang>` proc, and
-/// only `zig` and `js` declare any — KORU121 refuses every other lang first.
+/// only `zig`, `js`, and `cs` declare any — KORU121 refuses every other lang first.
 const HostLang = enum {
     zig,
     js,
+    cs,
 
     fn of(build_lang: []const u8) HostLang {
-        return if (std.mem.eql(u8, build_lang, "js")) .js else .zig;
+        if (std.mem.eql(u8, build_lang, "js")) return .js;
+        if (std.mem.eql(u8, build_lang, "cs")) return .cs;
+        return .zig;
     }
 };
 
@@ -663,12 +676,13 @@ fn lowerScrutinee(allocator: std.mem.Allocator, text: []const u8, host: HostLang
     try buf.appendSlice(allocator, switch (host) {
         .zig => ".{ ",
         .js => "{ ",
+        .cs => "new { ",
     });
     for (fields) |f| {
         if (host == .zig) try buf.appendSlice(allocator, ".");
         try buf.appendSlice(allocator, f.name);
         try buf.appendSlice(allocator, switch (host) {
-            .zig => " = ",
+            .zig, .cs => " = ",
             .js => ": ",
         });
         try buf.appendSlice(allocator, f.value);
@@ -710,7 +724,8 @@ fn appendDestructureConsts(
             if (s.contains(f.name)) continue;
             try s.put(f.name, {});
         }
-        try buf.appendSlice(allocator, "const ");
+        // C# `const` demands a compile-time constant — its local binding is `var`.
+        try buf.appendSlice(allocator, if (host == .cs) "var " else "const ");
         try buf.appendSlice(allocator, f.name);
         if (host == .zig) {
             if (f.type_text) |t| {
@@ -766,7 +781,7 @@ fn buildCondBinds(
         if (cont.destructure.len > 0) {
             const s_host = try lowerScrutinee(allocator, scrutinee, host);
             const tmp = try std.fmt.allocPrint(allocator, "__koru_cond_s_{d}_{d}", .{ cont.location.line, cont.location.column });
-            try buf.appendSlice(allocator, "const ");
+            try buf.appendSlice(allocator, if (host == .cs) "var " else "const ");
             try buf.appendSlice(allocator, tmp);
             try buf.appendSlice(allocator, " = ");
             try buf.appendSlice(allocator, s_host);
@@ -798,6 +813,7 @@ fn buildCondBinds(
         try buf.appendSlice(allocator, switch (host) {
             .zig => try std.fmt.allocPrint(allocator, "const {s} = {s}; _ = &{s}; ", .{ b, s_host, b }),
             .js => try std.fmt.allocPrint(allocator, "const {s} = {s}; ", .{ b, s_host }),
+            .cs => try std.fmt.allocPrint(allocator, "var {s} = {s}; ", .{ b, s_host }),
         });
     }
     return buf.toOwnedSlice(allocator);
@@ -1002,6 +1018,7 @@ pub fn renderTemplateInvocation(
     defer filters.deinit();
     try filters.put("parse_range", parseRangeFilter);
     try filters.put("js_lower", jsLowerFilter);
+    try filters.put("cs_lower", csLowerFilter);
     try filters.put("parse_fields", parseFieldsFilter);
     try filters.put("table_from", tableFromFilter);
     try filters.put("table_gaps", tableGapsFilter);
@@ -1183,6 +1200,7 @@ fn presenceRewriteTemplateArg(
         return switch (host) {
             .zig => try std.fmt.allocPrint(allocator, "@hasDecl(__H, \"{s}\")", .{b.name}),
             .js => try std.fmt.allocPrint(allocator, "H.{s} !== undefined", .{b.name}),
+            .cs => try std.fmt.allocPrint(allocator, "H.{s} != null", .{b.name}),
         };
     }
     return text;

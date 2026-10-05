@@ -793,7 +793,7 @@ test "koruWrapperPrefix Phase 2" {
 // purpose. That is the next rung and it is a language ruling, not a refactor.
 
 /// Which host the expression is being rendered for.
-pub const HostTarget = enum { zig, js };
+pub const HostTarget = enum { zig, js, cs };
 
 /// WHAT KIND OF TEXT THIS IS, which decides how much of the lowering applies.
 ///
@@ -866,7 +866,11 @@ pub fn lowerKoruExpr(
 
     var out = try std.ArrayList(u8).initCapacity(allocator, text.len + 32);
     errdefer out.deinit(allocator);
-    try lowerJsInto(&out, allocator, text, mode, diag);
+    if (target == .cs) {
+        try lowerCsInto(&out, allocator, text, mode, diag);
+    } else {
+        try lowerJsInto(&out, allocator, text, mode, diag);
+    }
     return out.toOwnedSlice(allocator);
 }
 
@@ -900,6 +904,50 @@ fn isJsReserved(name: []const u8) bool {
         if (std.mem.eql(u8, name, w)) return true;
     }
     return false;
+}
+
+/// C#'S RESERVED WORDS — the names a Koru program may legally choose and C#
+/// may not bind. Same rule as JS_RESERVED: keywords that cannot be BOUND,
+/// not every word C# treats specially — `true`/`false`/`null` are literals
+/// with the same meaning in both languages and are absent on purpose.
+const CS_RESERVED = [_][]const u8{
+    "abstract", "as",       "base",     "bool",    "break",    "byte",
+    "case",     "catch",    "char",     "checked", "class",    "const",
+    "continue", "decimal",  "default",  "delegate", "do",      "double",
+    "else",     "enum",     "event",    "explicit", "extern",  "finally",
+    "fixed",    "float",    "for",      "foreach", "goto",     "if",
+    "implicit", "in",       "int",      "interface", "internal", "is",
+    "lock",     "long",     "namespace", "new",    "object",   "operator",
+    "out",      "override", "params",   "private", "protected", "public",
+    "readonly", "ref",      "return",   "sbyte",   "sealed",   "short",
+    "sizeof",   "stackalloc", "static", "string",  "struct",   "switch",
+    "this",     "throw",    "try",      "typeof",  "uint",     "ulong",
+    "unchecked", "unsafe",  "ushort",   "using",   "virtual",  "void",
+    "volatile", "while",
+};
+
+fn isCsReserved(name: []const u8) bool {
+    for (CS_RESERVED) |w| {
+        if (std.mem.eql(u8, name, w)) return true;
+    }
+    return false;
+}
+
+/// Public face of the C# reserved-word test — the cs emitter's binding
+/// boundary (`writeBinding`) consults it to decide the `@`-verbatim escape.
+/// Kept separate from `isJsReserved`'s `needsJsMangle` shape: C# has no
+/// `$`-suffix collision class, so no stem-stripping is needed.
+pub fn isCsReservedForEmit(name: []const u8) bool {
+    return isCsReserved(name);
+}
+
+/// The C# spelling of a Koru name in BINDING position. C# has the native
+/// mechanism JS lacks — `@event` is a verbatim identifier, still readable —
+/// so the mangle is the host's own escape rather than a `$` suffix.
+/// Caller owns the result.
+pub fn mangleCsIdent(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
+    if (!isCsReserved(name)) return allocator.dupe(u8, name);
+    return std.fmt.allocPrint(allocator, "@{s}", .{name});
 }
 
 /// Does this name need renaming to be BOUND in JavaScript?
@@ -952,49 +1000,59 @@ pub const HostShape = struct {
     /// `| name <value>` — a payload that IS the value.
     pub fn branchOne(alloc: std.mem.Allocator, t: HostTarget, name: []const u8, value: []const u8) []const u8 {
         const esc_name = escapeZigIdentifier(alloc, name) catch name;
-        return if (t == .js)
-            std.fmt.allocPrint(alloc, "{{ tag: \"{s}\", {s}: {s} }}", .{ name, name, value }) catch unreachable
-        else
-            std.fmt.allocPrint(alloc, ".{{ .{s} = {s} }}", .{ esc_name, value }) catch unreachable;
+        return switch (t) {
+            .js => std.fmt.allocPrint(alloc, "{{ tag: \"{s}\", {s}: {s} }}", .{ name, name, value }) catch unreachable,
+            .cs => std.fmt.allocPrint(alloc, "new {{ tag = \"{s}\", {s} = {s} }}", .{ name, name, value }) catch unreachable,
+            .zig => std.fmt.allocPrint(alloc, ".{{ .{s} = {s} }}", .{ esc_name, value }) catch unreachable,
+        };
     }
 
     /// `| name` — a branch that carries nothing.
     pub fn branchEmpty(alloc: std.mem.Allocator, t: HostTarget, name: []const u8) []const u8 {
         const esc_name = escapeZigIdentifier(alloc, name) catch name;
-        return if (t == .js)
-            std.fmt.allocPrint(alloc, "{{ tag: \"{s}\", {s}: {{}} }}", .{ name, name }) catch unreachable
-        else
-            std.fmt.allocPrint(alloc, ".{{ .{s} = .{{}} }}", .{esc_name}) catch unreachable;
+        return switch (t) {
+            .js => std.fmt.allocPrint(alloc, "{{ tag: \"{s}\", {s}: {{}} }}", .{ name, name }) catch unreachable,
+            .cs => std.fmt.allocPrint(alloc, "new {{ tag = \"{s}\", {s} = new {{ }} }}", .{ name, name }) catch unreachable,
+            .zig => std.fmt.allocPrint(alloc, ".{{ .{s} = .{{}} }}", .{esc_name}) catch unreachable,
+        };
     }
 
     /// `| name { a, b }` — a record payload. `body` is the already-joined field
     /// list in the host's own spelling, which `recField` produces.
     pub fn branchRec(alloc: std.mem.Allocator, t: HostTarget, name: []const u8, body: []const u8) []const u8 {
         const esc_name = escapeZigIdentifier(alloc, name) catch name;
-        return if (t == .js)
-            std.fmt.allocPrint(alloc, "{{ tag: \"{s}\", {s}: {{ {s} }} }}", .{ name, name, body }) catch unreachable
-        else
-            std.fmt.allocPrint(alloc, ".{{ .{s} = .{{ {s} }} }}", .{ esc_name, body }) catch unreachable;
+        return switch (t) {
+            .js => std.fmt.allocPrint(alloc, "{{ tag: \"{s}\", {s}: {{ {s} }} }}", .{ name, name, body }) catch unreachable,
+            .cs => std.fmt.allocPrint(alloc, "new {{ tag = \"{s}\", {s} = new {{ {s} }} }}", .{ name, name, body }) catch unreachable,
+            .zig => std.fmt.allocPrint(alloc, ".{{ .{s} = .{{ {s} }} }}", .{ esc_name, body }) catch unreachable,
+        };
     }
 
     /// One `name = value` pair inside a record payload or argument object.
     pub fn recField(alloc: std.mem.Allocator, t: HostTarget, name: []const u8, value: []const u8) []const u8 {
         const esc_name = escapeZigIdentifier(alloc, name) catch name;
-        return if (t == .js)
-            std.fmt.allocPrint(alloc, "{s}: {s}", .{ name, value }) catch unreachable
-        else
-            std.fmt.allocPrint(alloc, ".{s} = {s}", .{ esc_name, value }) catch unreachable;
+        return switch (t) {
+            .js => std.fmt.allocPrint(alloc, "{s}: {s}", .{ name, value }) catch unreachable,
+            .cs => std.fmt.allocPrint(alloc, "{s} = {s}", .{ name, value }) catch unreachable,
+            .zig => std.fmt.allocPrint(alloc, ".{s} = {s}", .{ esc_name, value }) catch unreachable,
+        };
     }
 
-    /// A handler's ARGUMENT object — `.{ … }` on Zig, `{ … }` on JS. Not a
-    /// branch: nothing is tagged, it is just the input record. `body` is the
-    /// already-joined pair list from `recField`; empty for a no-arg call.
+    /// A handler's ARGUMENT object — `.{ … }` on Zig, `{ … }` on JS,
+    /// `new { … }` on C# (an anonymous object — the dynamic-readable record).
+    /// Not a branch: nothing is tagged, it is just the input record. `body` is
+    /// the already-joined pair list from `recField`; empty for a no-arg call.
     pub fn argRec(alloc: std.mem.Allocator, t: HostTarget, body: []const u8) []const u8 {
-        if (body.len == 0) return if (t == .js) "{}" else ".{}";
-        return if (t == .js)
-            std.fmt.allocPrint(alloc, "{{ {s} }}", .{body}) catch unreachable
-        else
-            std.fmt.allocPrint(alloc, ".{{ {s} }}", .{body}) catch unreachable;
+        if (body.len == 0) return switch (t) {
+            .js => "{}",
+            .cs => "new { }",
+            .zig => ".{}",
+        };
+        return switch (t) {
+            .js => std.fmt.allocPrint(alloc, "{{ {s} }}", .{body}) catch unreachable,
+            .cs => std.fmt.allocPrint(alloc, "new {{ {s} }}", .{body}) catch unreachable,
+            .zig => std.fmt.allocPrint(alloc, ".{{ {s} }}", .{body}) catch unreachable,
+        };
     }
 
     /// A COLUMN-ORDINAL DISPATCH. The arms' statements are largely the same text
@@ -1005,72 +1063,86 @@ pub const HostShape = struct {
     /// by a throw — falling out of a JS switch yields `undefined`, and the
     /// caller would read that as a branch object.
     pub fn switchHead(t: HostTarget) []const u8 {
-        return if (t == .js) "switch (field) {\n" else "return switch (field) {\n";
+        return switch (t) {
+            .js, .cs => "switch (field) {\n",
+            .zig => "return switch (field) {\n",
+        };
     }
 
     pub fn switchArmOpen(alloc: std.mem.Allocator, t: HostTarget, ordinal: usize) []const u8 {
-        return if (t == .js)
-            std.fmt.allocPrint(alloc, "  case {d}: {{ ", .{ordinal}) catch unreachable
-        else
-            std.fmt.allocPrint(alloc, "    {d} => blk: {{ ", .{ordinal}) catch unreachable;
+        return switch (t) {
+            .js, .cs => std.fmt.allocPrint(alloc, "  case {d}: {{ ", .{ordinal}) catch unreachable,
+            .zig => std.fmt.allocPrint(alloc, "    {d} => blk: {{ ", .{ordinal}) catch unreachable,
+        };
     }
 
     pub fn switchArmClose(alloc: std.mem.Allocator, t: HostTarget, value: []const u8) []const u8 {
-        return if (t == .js)
-            std.fmt.allocPrint(alloc, "return {s}; }}\n", .{value}) catch unreachable
-        else
-            std.fmt.allocPrint(alloc, "break :blk {s}; }},\n", .{value}) catch unreachable;
+        return switch (t) {
+            .js, .cs => std.fmt.allocPrint(alloc, "return {s}; }}\n", .{value}) catch unreachable,
+            .zig => std.fmt.allocPrint(alloc, "break :blk {s}; }},\n", .{value}) catch unreachable,
+        };
     }
 
     pub fn switchTail(alloc: std.mem.Allocator, t: HostTarget, unit: []const u8, store: []const u8) []const u8 {
-        return if (t == .js)
-            std.fmt.allocPrint(alloc, "}}\nthrow new Error(\"{s}: field index \" + field + \" is not a column of store '{s}'\");", .{ unit, store }) catch unreachable
-        else
-            "    else => unreachable,\n};";
+        return switch (t) {
+            .js => std.fmt.allocPrint(alloc, "}}\nthrow new Error(\"{s}: field index \" + field + \" is not a column of store '{s}'\");", .{ unit, store }) catch unreachable,
+            .cs => std.fmt.allocPrint(alloc, "}}\nthrow new global::System.Exception(\"{s}: field index \" + field + \" is not a column of store '{s}'\");", .{ unit, store }) catch unreachable,
+            .zig => "    else => unreachable,\n};",
+        };
     }
 
-    /// `row` arrives DENSE and is `usize` already — both targets bind it
+    /// `row` arrives DENSE and is `usize` already — all targets bind it
     /// straight through, keeping one name for the statements above to share.
     pub fn rowHead(t: HostTarget) []const u8 {
-        return if (t == .js) "const __koru_r = row;\n" else "const __koru_r: usize = row;\n";
+        return switch (t) {
+            .js => "const __koru_r = row;\n",
+            .cs => "var __koru_r = row;\n",
+            .zig => "const __koru_r: usize = row;\n",
+        };
     }
 
-    /// A COUNTED LOOP over `0..limit`, binding `cursor`. Zig's range-`for` and
-    /// JS's three-clause `for` are the same loop and share nothing textually.
+    /// A COUNTED LOOP over `0..limit`, binding `cursor`. Zig's range-`for`,
+    /// JS's `let`-clause, and C#'s `var`-clause are the same loop and share
+    /// nothing textually.
     pub fn loopHead(alloc: std.mem.Allocator, t: HostTarget, cursor: []const u8, limit: []const u8) []const u8 {
-        return if (t == .js)
-            std.fmt.allocPrint(alloc, "for (let {s} = 0; {s} < {s}; {s}++) {{\n", .{ cursor, cursor, limit, cursor }) catch unreachable
-        else
-            std.fmt.allocPrint(alloc, "for (0..{s}) |{s}| {{\n", .{ limit, cursor }) catch unreachable;
+        return switch (t) {
+            .js => std.fmt.allocPrint(alloc, "for (let {s} = 0; {s} < {s}; {s}++) {{\n", .{ cursor, cursor, limit, cursor }) catch unreachable,
+            .cs => std.fmt.allocPrint(alloc, "for (var {s} = 0; {s} < {s}; {s}++) {{\n", .{ cursor, cursor, limit, cursor }) catch unreachable,
+            .zig => std.fmt.allocPrint(alloc, "for (0..{s}) |{s}| {{\n", .{ limit, cursor }) catch unreachable,
+        };
     }
 
-    /// Bind a loop-local `const`. Zig warns on an unused local, and a projected
+    /// Bind a loop-local binding. Zig warns on an unused local, and a projected
     /// column the body never reads is normal, so the Zig arm carries the `_ = &x`
-    /// discard. JS has no such rule and the discard is a syntax error there.
+    /// discard. JS and C# have no such rule and the discard is a syntax error
+    /// there.
     pub fn constBind(alloc: std.mem.Allocator, t: HostTarget, name: []const u8, value: []const u8) []const u8 {
-        return if (t == .js)
-            std.fmt.allocPrint(alloc, "const {s} = {s};\n", .{ name, value }) catch unreachable
-        else
-            std.fmt.allocPrint(alloc, "const {s} = {s};\n_ = &{s};\n", .{ name, value, name }) catch unreachable;
+        return switch (t) {
+            .js => std.fmt.allocPrint(alloc, "const {s} = {s};\n", .{ name, value }) catch unreachable,
+            .cs => std.fmt.allocPrint(alloc, "var {s} = {s};\n", .{ name, value }) catch unreachable,
+            .zig => std.fmt.allocPrint(alloc, "const {s} = {s};\n_ = &{s};\n", .{ name, value, name }) catch unreachable,
+        };
     }
 
     /// A dense cursor used where the host expects a signed integer. Zig needs
-    /// the cast; JS has one number type. `__koru_intcast` rather than
-    /// `@intCast`: the cursor is `usize`, so release builds bitcast the
-    /// sign flip instead of paying @intCast's in-loop `llvm.assume`.
+    /// the cast; JS has one number type; C# casts the CLR way. `__koru_intcast`
+    /// rather than `@intCast` on Zig: the cursor is `usize`, so release builds
+    /// bitcast the sign flip instead of paying @intCast's in-loop `llvm.assume`.
     pub fn asI64(alloc: std.mem.Allocator, t: HostTarget, expr: []const u8) []const u8 {
-        return if (t == .js)
-            alloc.dupe(u8, expr) catch unreachable
-        else
-            std.fmt.allocPrint(alloc, "__koru_intcast(i64, {s})", .{expr}) catch unreachable;
+        return switch (t) {
+            .js => alloc.dupe(u8, expr) catch unreachable,
+            .cs => std.fmt.allocPrint(alloc, "((long)({s}))", .{expr}) catch unreachable,
+            .zig => std.fmt.allocPrint(alloc, "__koru_intcast(i64, {s})", .{expr}) catch unreachable,
+        };
     }
 
     /// A dense cursor used as an INDEX. Same split, different target type.
     pub fn asIndex(alloc: std.mem.Allocator, t: HostTarget, expr: []const u8) []const u8 {
-        return if (t == .js)
-            alloc.dupe(u8, expr) catch unreachable
-        else
-            std.fmt.allocPrint(alloc, "__koru_intcast(usize, {s})", .{expr}) catch unreachable;
+        return switch (t) {
+            .js => alloc.dupe(u8, expr) catch unreachable,
+            .cs => std.fmt.allocPrint(alloc, "((int)({s}))", .{expr}) catch unreachable,
+            .zig => std.fmt.allocPrint(alloc, "__koru_intcast(usize, {s})", .{expr}) catch unreachable,
+        };
     }
 };
 
@@ -1146,6 +1218,118 @@ fn exprPositionalTuple(text: []const u8, at: usize) bool {
         }
     }
     return true;
+}
+
+/// The C# arm, deliberately narrow — the K# vertical's vocabulary. Walk the
+/// text once, leave string and char literals untouched, rewrite the tokens
+/// C# cannot parse, and REFUSE the Zig builtins rather than guess a spelling:
+/// the table is empty on purpose so an unmodelled operation fails here, loud,
+/// instead of reaching csc as plausible text. C# has no `$` in identifiers
+/// but does have `@`-verbatim names, so a reserved binding mangles to `@name`.
+///
+/// What is NOT lowered yet — by design of the vertical, not oversight: `if
+/// (c) a else b` (Koru ternary, needs `c ? a : b`), typed decls `var x: T`,
+/// `.{…}` struct literals, `[…]` array literals, `&` prefix. All produce
+/// text csc rejects, so they fail loud one stage down — but they are
+/// compile errors at dotnet build, not emission refusals, and the distance
+/// between those is the honest gap a real port closes next.
+fn lowerCsInto(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    mode: ExprMode,
+    diag: ?*LowerDiag,
+) LowerError!void {
+    var i: usize = 0;
+    var quote: ?u8 = null;
+    while (i < text.len) {
+        const c = text[i];
+        if (quote) |q| {
+            if (c == '\\' and i + 1 < text.len) {
+                try out.appendSlice(allocator, text[i .. i + 2]);
+                i += 2;
+                continue;
+            }
+            if (c == q) quote = null;
+            try out.append(allocator, c);
+            i += 1;
+            continue;
+        }
+        if (c == '"' or c == '\'') {
+            quote = c;
+            try out.append(allocator, c);
+            i += 1;
+            continue;
+        }
+        // `++` is Koru's concatenation, spelled Zig's way — in C# it is the
+        // increment operator, so `a ++ b` is a syntax error, not a wrong answer.
+        // Host text is already C#, so its `++` is a genuine increment and stays.
+        if (mode != .host_text and c == '+' and i + 1 < text.len and text[i + 1] == '+') {
+            try out.append(allocator, '+');
+            i += 2;
+            continue;
+        }
+        // `and`/`or` word-boundary anchored — `android`, `.or_else` untouched.
+        // `==`/`!=`/`%` pass through by C#'s OWN semantics: C# string == is
+        // value equality (Koru's meaning — the hole the .zig arm patches is
+        // absent), and C# % is truncated remainder, the C-parity choice
+        // comptime_eval already folds.
+        if ((c == 'a' or c == 'o') and (i == 0 or (!exprIdentChar(text[i - 1]) and text[i - 1] != '.'))) {
+            const word: ?[]const u8 = if (std.mem.startsWith(u8, text[i..], "and"))
+                "&&"
+            else if (std.mem.startsWith(u8, text[i..], "or"))
+                "||"
+            else
+                null;
+            if (word) |cs_op| {
+                const len: usize = if (cs_op[0] == '&') 3 else 2;
+                if (i + len >= text.len or !exprIdentChar(text[i + len])) {
+                    try out.appendSlice(allocator, cs_op);
+                    i += len;
+                    continue;
+                }
+            }
+        }
+        // `.len` — the member JavaScript patched onto prototypes; C# has no
+        // such escape hatch, so the lowering rewrites to `.Length`. `x.len()`
+        // becomes `x.Length()` — a compile error one stage down, still loud.
+        if (c == '.' and i + 3 < text.len and
+            std.mem.eql(u8, text[i + 1 .. i + 4], "len") and
+            !exprIdentChar(text[i + 4]))
+        {
+            try out.appendSlice(allocator, ".Length");
+            i += 4;
+            continue;
+        }
+        // Zig builtins: no C# table yet — every `@foo(...)` refuses here.
+        // C# has no `@name(` call syntax, so this arm only ever sees genuine
+        // builtins, never host text.
+        if (c == '@') {
+            var p = i + 1;
+            while (p < text.len and exprIdentChar(text[p])) p += 1;
+            const name = text[i + 1 .. p];
+            if (name.len > 0 and p < text.len and text[p] == '(') {
+                if (diag) |d| d.unknown_builtin = name;
+                return LowerError.UnsupportedBuiltin;
+            }
+        }
+        // RESERVED-WORD rename — `.koru_expr` only, same rule as the JS arm:
+        // in `.host_text` the words are GENUINE C# (`return`, `if (…)`) and
+        // renaming them would destroy working host code.
+        if (mode == .koru_expr and (c == '_' or (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z'))) {
+            var w = i;
+            while (w < text.len and exprIdentChar(text[w])) w += 1;
+            const word = text[i..w];
+            if (isCsReserved(word)) {
+                try out.append(allocator, '@');
+                try out.appendSlice(allocator, word);
+                i = w;
+                continue;
+            }
+        }
+        try out.append(allocator, c);
+        i += 1;
+    }
 }
 
 /// The JS arm: walk the text once, leave string and char literals untouched, and

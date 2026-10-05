@@ -4,6 +4,7 @@ id: frag-a-backend-cache-keyed-on-mtime-can-serve-poison
 provenance: 2026-08-15 — koru 172be12d backend cache; the airline bench gate build SIGABRT'd with ComptimeEventNotTransformed until ~/.cache/koru-backend-cache was cleared
 ts: 2026-08-15
 evolved: 2026-08-16 — content hash landed, THEN the key's COVERAGE missed the per-invocation generated compiler_env.zig; --lang=js backend served to zig builds (koru b90be9be → main.zig backendCacheKey fix)
+evolved: 2026-10-05 — Fail 3: the key cannot see the koruc binary's own embedded backend template; a stale generator keys correct, poisons completely (K# vertical, cs stage-D)
 ---
 
 # A backend binary cache can serve a poisoned kernel (belief)
@@ -12,7 +13,8 @@ evolved: 2026-08-16 — content hash landed, THEN the key's COVERAGE missed the 
 `src/` + `koru_std/` files. The assumption is that equal key ⇒ equal source ⇒
 the cached backend is byte-fresh. The key must be BOTH faithful (equal
 metadata/content ⇒ equal source) AND complete (every input that can change
-the binary is in the key). It has now failed once on each half.
+the binary is in the key — including the generator's own embedded bytes).
+It has now failed three times on three different axes.
 
 **Fail 1 — faithful (mtime, 2026-08-15).** Keyed on path/size/mtime, a tree
 in mid-motion races the rebuild: the first backend compiled from the
@@ -43,13 +45,35 @@ build "impossibly" took the JS path. Fixed by hashing the generated
 compiler_env.zig into the key (FAIL LOUD: unreadable env file ⇒ cache
 disabled, never a cross-invocation serve).
 
-The discipline that catches both, retroactively: **enumerate what the binary
-actually embeds — every file the compilation unit imports, including files
-the build generates — and put each one in the key by construction, not by
-faith.** A cache entry is trusted state; anything less than a complete input
-closure is a latent miscompile. Also: a compiler that starts failing on
-unmodified input is not a compiler change; it is a cache or env change —
-ask *which binary is actually running* before bisecting the tree.
+**Fail 3 — the generator is not a file (2026-10-05, the K# vertical).** The
+key enumerates files: `src/`, `koru_std/`, the generated
+`backend_output_emitted.zig`. But `backend.zig`'s *text* is not read from a
+file — it is a string embedded in the **koruc binary**
+(`generateBackendCode`'s emitted template inside `src/main.zig`, baked at
+`zig build` time). A stale koruc writes backend text from an OLD template
+while hashing the CURRENT `src/` — the entry is keyed correctly and poisoned
+completely, because the input that changed (the template inside the binary)
+has no file the key can see. Measured during the cs stage-D work: a
+koruc built before `net9.0` → `net8.0` was edited cached a net9.0-emitting
+backend under the net8.0 `src/` key; the fresh koruc hit it and produced an
+apphost demanding a runtime the box does not have. The failure surface was
+`.NET location:` complaining — three indirections from the actual cause,
+which was *which binary ran an hour ago*. Same family tell: the symptom
+names something (a missing framework) that no file in the key can explain.
+Mitigations, none landed: hash the embedded template's rendered bytes into
+the key (the template is inspectable — generateBackendCode could emit a
+self-hash comment into backend.zig and the frontend could compare it before
+trusting a hit), or treat `zig build` as a cache epoch and let the binary's
+own build id ride the key.
+
+The discipline that catches all three, retroactively: **enumerate what the
+binary actually embeds — every file the compilation unit imports, every file
+the build generates, AND every byte the generating binary itself carries —
+and put each one in the key by construction, not by faith.** A cache entry
+is trusted state; anything less than a complete input closure is a latent
+miscompile. Also: a compiler that starts failing on unmodified input is not
+a compiler change; it is a cache or env change — ask *which binary is
+actually running* before bisecting the tree.
 
 ## Related
 

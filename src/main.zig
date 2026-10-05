@@ -1905,6 +1905,8 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\    // re-exported as `pub const CompilerEnv` at the top of this backend.
             \\    const emitted_file = if (__koru_std.mem.eql(u8, CompilerEnv.lang, "js"))
             \\        "output_emitted.js"
+            \\    else if (__koru_std.mem.eql(u8, CompilerEnv.lang, "cs"))
+            \\        "output_emitted.cs"
             \\    else
             \\        "output_emitted.zig";
             \\
@@ -2037,6 +2039,71 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\    // scoring on -c cannot see the refusals that live above this
             \\    // line (check-flow runs post-transform, backend-only).
             \\    if (CompilerEnv.hasFlag("deep-check")) return;
+            \\
+            \\    // K# vertical: the cs path's Stage D is the .NET SDK. dotnet 9 has
+            \\    // no file-based `dotnet run x.cs`, so a minimal csproj IS the
+            \\    // driver — the same role build_output.zig plays on the Zig path.
+            \\    // The SDK names the apphost after AssemblyName — a bare NAME, no
+            \\    // separators — so output_exe splits into dir/basename: the
+            \\    // apphost lands at exactly the path koruc was asked for.
+            \\    if (__koru_std.mem.eql(u8, CompilerEnv.lang, "cs")) {
+            \\        const cs_out_dir = __koru_std.fs.path.dirname(output_exe) orelse ".";
+            \\        const cs_assembly = __koru_std.fs.path.basename(output_exe);
+            \\        const csproj_text = __koru_std.fmt.allocPrint(allocator,
+            \\            "<Project Sdk=\"Microsoft.NET.Sdk\">\n" ++
+            \\            "  <PropertyGroup>\n" ++
+            \\            "    <OutputType>Exe</OutputType>\n" ++
+            \\            "    <TargetFramework>net8.0</TargetFramework>\n" ++
+            \\            "    <ImplicitUsings>disable</ImplicitUsings>\n" ++
+            \\            "    <Nullable>disable</Nullable>\n" ++
+            \\            "    <AssemblyName>{s}</AssemblyName>\n" ++
+            \\            "    <WarningLevel>0</WarningLevel>\n" ++
+            \\            "    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>\n" ++
+            \\            "  </PropertyGroup>\n" ++
+            \\            "  <ItemGroup>\n" ++
+            \\            "    <Compile Include=\"output_emitted.cs\" />\n" ++
+            \\            "  </ItemGroup>\n" ++
+            \\            "</Project>\n", .{cs_assembly}) catch |err| {
+            \\            __koru_std.debug.print("✗ csproj generation failed: {}\n", .{err});
+            \\            __koru_std.process.exit(1);
+            \\        };
+            \\        defer allocator.free(csproj_text);
+            \\        const csproj_file = try __koru_std.fs.cwd().createFile("koru.csproj", .{});
+            \\        defer csproj_file.close();
+            \\        try csproj_file.writeAll(csproj_text);
+            \\
+            \\        const cs_result = __koru_std.process.Child.run(.{
+            \\            .allocator = allocator,
+            \\            .argv = &.{ "dotnet", "build", "koru.csproj", "-o", cs_out_dir, "--nologo", "-v:q" },
+            \\            .max_output_bytes = 10 * 1024 * 1024,
+            \\        }) catch |err| {
+            \\            const msg3 = try __koru_std.fmt.bufPrint(&buf, "✗ dotnet build failed to launch: {} — is the .NET SDK on PATH?\n", .{err});
+            \\            try __koru_std.fs.File.stderr().writeAll(msg3);
+            \\            __koru_std.process.exit(1);
+            \\        };
+            \\        defer allocator.free(cs_result.stdout);
+            \\        defer allocator.free(cs_result.stderr);
+            \\        switch (cs_result.term) {
+            \\            .Exited => |exit_code| if (exit_code == 0) {
+            \\                const msg3 = try __koru_std.fmt.bufPrint(&buf, "✓ Compiled to {s} (dotnet build)\n", .{output_exe});
+            \\                try stdout.writeAll(msg3);
+            \\            } else {
+            \\                try stdout.writeAll("✗ dotnet build failed\n");
+            \\                if (cs_result.stderr.len > 0) {
+            \\                    try __koru_std.fs.File.stderr().writeAll(cs_result.stderr);
+            \\                }
+            \\                if (cs_result.stdout.len > 0) {
+            \\                    try __koru_std.fs.File.stderr().writeAll(cs_result.stdout);
+            \\                }
+            \\                __koru_std.process.exit(1);
+            \\            },
+            \\            else => {
+            \\                try stdout.writeAll("✗ dotnet build ended abnormally\n");
+            \\                __koru_std.process.exit(1);
+            \\            },
+            \\        }
+            \\        return;
+            \\    }
             \\
             \\    // Now compile the emitted code
             \\    // Check for cross-compilation target from build:config
@@ -9160,7 +9227,8 @@ pub fn main() !void {
             // The mode rides the success line — the Debug default is
             // deliberate (checks on for the suite to judge), but silent
             // is how a benchmark ends up timing a bounds-checked binary.
-            const exe_mode = if (compiler_config.hasFlag("release=fast") and !compiler_config.hasFlag("debug")) "ReleaseFast" else "Debug";
+            const is_cs_target = std.mem.eql(u8, compiler_config.lang, "cs");
+            const exe_mode = if (is_cs_target) ".NET" else if (compiler_config.hasFlag("release=fast") and !compiler_config.hasFlag("debug")) "ReleaseFast" else "Debug";
             try printStdout(allocator, "✓ Built executable: {s} ({s})\n", .{ exe_name, exe_mode });
         } else |_| {}
 

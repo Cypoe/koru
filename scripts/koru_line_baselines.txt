@@ -52,12 +52,14 @@ koru_std/compiler.control.kz	31
 koru_std/compiler.directives.kz	15
 koru_std/compiler.dump.kz	24
 koru_std/compiler.flags.kz	6
-koru_std/compiler.kz	2778
+koru_std/compiler.kz	2749
 koru_std/compiler.paths.kz	33
+koru_std/compiler.stages.kz	61
 koru_std/compiler.with.kz	313
 koru_std/constructor.kz	305
 koru_std/control.capture.kz	352
-koru_std/control.kz	203
+koru_std/control.kz	138
+koru_std/control.targets.kz	121
 koru_std/crypto.kz	37
 koru_std/declarations.kz	57
 koru_std/deps.command.kz	570
@@ -108,8 +110,9 @@ koru_std/interpreter.validate.kz	34
 koru_std/invariants.kz	179
 koru_std/io_registry.k	30
 koru_std/io.blk.kz	1117
+koru_std/io.csprec.kz	275
 koru_std/io.jsprec.kz	48
-koru_std/io.kz	1024
+koru_std/io.kz	1006
 koru_std/json.kz	268
 koru_std/kernel.body.kz	69
 koru_std/kernel.fields.kz	108

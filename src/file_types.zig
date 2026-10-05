@@ -7,7 +7,7 @@ const std = @import("std");
 ///
 /// Naming convention: `.k` + host-language abbreviation. `.k` itself is
 /// pure Koru (contract-only: events, types, obligations — no proc bodies).
-pub const koru_extensions = [_][]const u8{ ".kgpu", ".kjs", ".kz", ".kc", ".k" };
+pub const koru_extensions = [_][]const u8{ ".kgpu", ".kjs", ".kcs", ".kz", ".kc", ".k" };
 
 /// True if `name` ends with any Koru file extension.
 pub fn isKoruFile(name: []const u8) bool {
@@ -36,7 +36,7 @@ pub fn isContractFile(file_path: []const u8) bool {
 
 /// The host language a Koru file's bytes are written in, derived from its
 /// extension — returned as a variant-tag string in the SAME namespace as
-/// `--lang` / `proc.target` (`"zig"`, `"js"`, `"c"`, `"gpu"`).
+/// `--lang` / `proc.target` (`"zig"`, `"js"`, `"cs"`, `"c"`, `"gpu"`).
 ///
 /// This is the unifying point of the multi-variant design: a host line and a
 /// proc body are both host-language bytes, so an emitter targeting language L
@@ -54,6 +54,7 @@ pub fn hostLangOfFile(name: []const u8) ?[]const u8 {
     const ext = koruExtensionOf(name) orelse return null;
     if (std.mem.eql(u8, ext, ".kz")) return "zig";
     if (std.mem.eql(u8, ext, ".kjs")) return "js";
+    if (std.mem.eql(u8, ext, ".kcs")) return "cs";
     if (std.mem.eql(u8, ext, ".kc")) return "c";
     if (std.mem.eql(u8, ext, ".kgpu")) return "gpu";
     // ".k" — pure contract, no host bytes.
@@ -82,6 +83,7 @@ test "koruExtensionOf returns longest match (greedy)" {
     // .kgpu must beat .k
     try testing.expectEqualStrings(".kgpu", koruExtensionOf("foo.kgpu").?);
     try testing.expectEqualStrings(".kjs", koruExtensionOf("foo.kjs").?);
+    try testing.expectEqualStrings(".kcs", koruExtensionOf("foo.kcs").?);
     try testing.expectEqualStrings(".kz", koruExtensionOf("foo.kz").?);
     try testing.expectEqualStrings(".kc", koruExtensionOf("foo.kc").?);
     try testing.expectEqualStrings(".k", koruExtensionOf("foo.k").?);
@@ -96,6 +98,7 @@ test "koruExtensionOf returns null for non-Koru" {
 test "hostLangOfFile maps each extension to its variant-tag string" {
     try testing.expectEqualStrings("zig", hostLangOfFile("chain.kz").?);
     try testing.expectEqualStrings("js", hostLangOfFile("chain.kjs").?);
+    try testing.expectEqualStrings("cs", hostLangOfFile("chain.kcs").?);
     try testing.expectEqualStrings("c", hostLangOfFile("chain.kc").?);
     try testing.expectEqualStrings("gpu", hostLangOfFile("chain.kgpu").?);
 }
