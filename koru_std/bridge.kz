@@ -175,7 +175,6 @@ pub const Bridge = struct {
 // appends a bare call and cannot invent a binding for its output. A `close`
 // that returned the still-held count disqualified itself, which meant every
 // failure arm of every conversation had to spell the hang-up by hand.
-//
 // Failing to release is not a value a caller may drop; it panics. `get-handles`
 // is there for anyone who wants the count on either side of the call.
 
@@ -198,3 +197,4 @@ pub const Bridge = struct {
 ~part wiregate
 ~part items
 ~part define
+~part deflines

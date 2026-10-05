@@ -2,4 +2,5 @@ open(path: string) -> <open!>
 append(handle: string<!open>, text: string) -> <open!>
 close(handle: string<!open>)
 say(text: string)
+read(path: string) | ok string | missing string | too-large string | ?hint string
 NOT FOUND

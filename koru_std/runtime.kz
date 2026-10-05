@@ -1071,36 +1071,13 @@ fn buildScopeTable() []const ScopeRuntime {
             const events = scope_info.events_fn.?();
             for (events) |event_name| {
                 if (out.items.len > 0) out.append(allocator, '\n') catch unreachable;
-                out.appendSlice(allocator, event_name) catch unreachable;
-                out.append(allocator, '(') catch unreachable;
                 const input = if (scope_info.input_fn) |f| f(event_name) orelse &.{} else &.{};
-                for (input, 0..) |field, i| {
-                    if (i > 0) out.appendSlice(allocator, ", ") catch unreachable;
-                    out.appendSlice(allocator, field.name) catch unreachable;
-                    out.appendSlice(allocator, ": ") catch unreachable;
-                    out.appendSlice(allocator, field.type_name) catch unreachable;
-                    if (field.phantom) |p| {
-                        out.append(allocator, '<') catch unreachable;
-                        out.appendSlice(allocator, p) catch unreachable;
-                        out.append(allocator, '>') catch unreachable;
-                    }
-                }
-                out.append(allocator, ')') catch unreachable;
+                wireSignatureLine(&out, allocator, event_name, input);
                 // What the verb mints — the produce edge a `<state>` arg
-                // elsewhere consumes. Rendered from the same spec table the
-                // pool enforces, so the signature cannot lie about it.
-                if (scope_info.creates_spec_fn) |cs| {
-                    for (cs(event_name)) |spec| {
-                        out.appendSlice(allocator, " -> ") catch unreachable;
-                        if (spec.branch) |b| {
-                            out.appendSlice(allocator, b) catch unreachable;
-                            out.append(allocator, ' ') catch unreachable;
-                        }
-                        out.append(allocator, '<') catch unreachable;
-                        out.appendSlice(allocator, spec.obligation_name) catch unreachable;
-                        out.appendSlice(allocator, "!>") catch unreachable;
-                    }
-                }
+                // elsewhere consumes, from the spec table the pool enforces.
+                if (scope_info.creates_spec_fn) |cs| wireMintSuffix(&out, allocator, cs(event_name));
+                // The outcome contract — the branch names an arm must spell.
+                if (scope_info.branches_fn) |bf| wireBranchSuffix(&out, allocator, bf(event_name));
             }
             return .{ .ok = out.toOwnedSlice(allocator) catch unreachable };
         }
@@ -1303,4 +1280,5 @@ fn lookupEventBranches(scope_name: []const u8, event_name: []const u8) []const B
 ~part affordances
 ~part manifest
 ~part wiretext
+~part contract
 ~part registry

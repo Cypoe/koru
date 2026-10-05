@@ -46,6 +46,31 @@ absent by construction — the record is minted before any session exists — so
 served contract is the compiled base; a session-shaped view layers session
 inventions on top at serve time.
 
+---
+
+EVOLVED 2026-10-06 (vocabulary gains the outcome contract): the "same bytes"
+principle was violated by omission. The render covered the call surface —
+`name(arg: type<!obligation>)` plus the `-> <obligation!>` mints — and stopped
+before the answer surface: a verb's declared `| ok | missing | too-large`
+rendered nowhere. The wire grammar then told the model "the arm word is the
+branch name in the signature" while the signature carried no branch names, so
+a fluent model had to learn each contract by firing `unhandled-branch` once
+per hidden outcome — a teaching cost paid in turns, discovered only after the
+callsite residual (`|?`, removed) could no longer launder the gap. Now the
+vocabulary line carries the branches too (`read(path: string) | ok string |
+missing string | too-large string | ?hint string`, `?` marking the omittable
+ones), rendered from `branches_fn` — the same spec table the shape checker
+validates arms against. Defined flows got the same contract: `define` renders
+its decl's branches into `DefinedFlow.contract_suffix` at install, so an
+invented verb shows its outcomes in the next prompt, and the world restore
+gets it free by re-parsing the same source. The grammar text gained the one
+rule the contract needed: `?` may go unarmed; every other named outcome must
+be armed or the turn stops `unhandled-branch`. The two renders (compiled
+`BranchSpec` vs parsed `ed.branches`) are parallel by module direction —
+interpreter cannot import runtime — a deliberate clone the deslop census may
+name; folding it would mean plumbing AST decls through BranchSpec for one
+spelling.
+
 Related: [[frag-two-parse-paths-feed-one-dispatch]] — the other half of "an
 interpreter fed by a language model gets garbage-in routinely; make the
 diagnostics and surfaces honest."

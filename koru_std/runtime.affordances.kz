@@ -61,20 +61,10 @@
                 }
                 if (!callable) continue;
                 if (out.items.len > 0) out.append(allocator, '\n') catch unreachable;
-                out.appendSlice(allocator, event_name) catch unreachable;
-                out.append(allocator, '(') catch unreachable;
-                for (input, 0..) |field, i| {
-                    if (i > 0) out.appendSlice(allocator, ", ") catch unreachable;
-                    out.appendSlice(allocator, field.name) catch unreachable;
-                    out.appendSlice(allocator, ": ") catch unreachable;
-                    out.appendSlice(allocator, field.type_name) catch unreachable;
-                    if (field.phantom) |p| {
-                        out.append(allocator, '<') catch unreachable;
-                        out.appendSlice(allocator, p) catch unreachable;
-                        out.append(allocator, '>') catch unreachable;
-                    }
-                }
-                out.append(allocator, ')') catch unreachable;
+                // Same signature spelling as scope-vocabulary — outcomes too,
+                // or a callable line would promise a contract it doesn't show.
+                wireSignatureLine(&out, allocator, event_name, input);
+                if (scope_info.branches_fn) |bf| wireBranchSuffix(&out, allocator, bf(event_name));
             }
             return .{ .ok = out.toOwnedSlice(allocator) catch unreachable };
         }

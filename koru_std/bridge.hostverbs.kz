@@ -79,23 +79,9 @@ fn appendBoundLines(out: *std.ArrayList(u8), allocator: std.mem.Allocator, sessi
     }
 }
 
-fn appendDefinedLines(out: *std.ArrayList(u8), allocator: std.mem.Allocator, defined: ?*DefinedFlows) void {
-    const d = defined orelse return;
-    var it = d.map.iterator();
-    while (it.next()) |entry| {
-        const flow = entry.value_ptr.*;
-        if (out.items.len > 0) out.append(allocator, '\n') catch unreachable;
-        out.appendSlice(allocator, flow.name) catch unreachable;
-        out.append(allocator, '(') catch unreachable;
-        for (flow.params, 0..) |pname, i| {
-            if (i > 0) out.appendSlice(allocator, ", ") catch unreachable;
-            out.appendSlice(allocator, pname) catch unreachable;
-            out.appendSlice(allocator, ": ") catch unreachable;
-            out.appendSlice(allocator, flow.param_types[i]) catch unreachable;
-        }
-        out.append(allocator, ')') catch unreachable;
-    }
-}
+// `appendDefinedLines` — the invented-verbs render, with each flow's
+// declared outcome contract — lives in bridge.deflines.kz (the `deflines`
+// part), shared with the affordances render.
 
 // ============================================================================
 // GRAMMAR - the derived prompt, complete: the wire's rules + the session's
