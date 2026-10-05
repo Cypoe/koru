@@ -7,8 +7,13 @@
 # committed drift accumulated under rolls that missed (the named
 # cross-file import_decl/event_decl residuals include the concurrent
 # scope-vocabulary feature's new part files).
+# Re-pinned 92/145 -> 92/146 in "signals: define
+# sibling-enforcement-drift": the roll fired on +1 member of
+# foreign koru_std drift (invariants.kz/package.kz/parser.kz/
+# rules.kz twins from the concurrent cs lane); this commit
+# stages only a signal definition — zero .kz files.
 clusters=92
-members=145
+members=146
 skipped=2
 spellings=45
 # 70/111: store.keyed.kz joined io.blk-style import preamble clone w/ interpreter.select.kz (3 shared compiler-module imports, boilerplate)

@@ -1,0 +1,21 @@
+name: sibling-enforcement-drift
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: |
+  Fires when two codepaths that must enforce the SAME rule hold different
+  versions of it — one was fixed, the sibling never got the ruling. The
+  tell is asymmetric strictness on identical input: a router rejects what
+  the grammar admits, or a checker admits what the grammar rejects.
+
+  Witnessed 2026-10-05 in "bridge: the segmenter's alphabet is the wire's
+  alphabet": runtime.wirescan.kz had already ruled `'` a character, not a
+  delimiter; bridge.turn.kz's scanLineChars never got the ruling and a
+  narration apostrophe swallowed the next wire item whole. Same shape as
+  the parsewire header declaring a validation-error nobody had built —
+  the divergence is invisible until a live input lands in the seam.
+
+  Detector: enumerate the rule's enforcement surfaces (parsers, scanners,
+  routers, checkers sharing one grammar) and diff their literal sets —
+  delimiters, keywords, spellings — not just their pass/fail outputs.
