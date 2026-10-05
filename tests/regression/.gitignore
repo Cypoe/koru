@@ -44,6 +44,7 @@
 !**/PARSER_TEST
 !**/LANGUAGES
 !**/JS_REFUSES
+!**/CS_REFUSES
 !**/ARGS
 !**/STDIN
 !**/input.txt

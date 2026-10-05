@@ -1306,16 +1306,14 @@ fn lowerCsInto(
             i += 4;
             continue;
         }
-        // Zig builtins: no C# table yet — every `@foo(...)` refuses here.
-        // C# has no `@name(` call syntax, so this arm only ever sees genuine
-        // builtins, never host text.
+        // Zig builtins: the cs table lives in `lowerCsBuiltin` — a real cast
+        // and Math.* spellings, not the JS arm's paren-wraps. C# has no
+        // `@name(` call syntax, so a `@` here is a genuine builtin in either
+        // mode; a non-call `@` (host text) falls through verbatim.
         if (c == '@') {
-            var p = i + 1;
-            while (p < text.len and exprIdentChar(text[p])) p += 1;
-            const name = text[i + 1 .. p];
-            if (name.len > 0 and p < text.len and text[p] == '(') {
-                if (diag) |d| d.unknown_builtin = name;
-                return LowerError.UnsupportedBuiltin;
+            if (try lowerCsBuiltin(out, allocator, text, i, diag)) |after| {
+                i = after;
+                continue;
             }
         }
         // Koru LIST literal `[a, b]`: passed verbatim, C# reads a collection
@@ -1932,13 +1930,195 @@ pub fn jsModBare(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
     return try out.toOwnedSlice(allocator);
 }
 
-/// THE VOCABULARY. Lower one `@`-operation starting at `text[at] == '@'`,
-/// returning the index just past it, or null when the `@` does not open a call at
-/// all (so the caller writes it through unchanged).
+/// THE VOCABULARY — twice. `lowerBuiltin` (js) and `lowerCsBuiltin` (cs) each
+/// lower one `@`-operation starting at `text[at] == '@'`, returning the index
+/// just past it, or null when the `@` does not open a call at all (so the
+/// caller writes it through unchanged).
 ///
-/// Every operation Koru names with an `@` is listed here, and an operation that
-/// is not listed is REFUSED rather than passed through. That refusal is the only
-/// reason this list is a definition instead of a description.
+/// Every operation Koru names with an `@` is listed in the target's table,
+/// and an operation that is not listed is REFUSED rather than passed through.
+/// That refusal is the only reason each list is a definition instead of a
+/// description.
+///
+/// The C# host spelling of a declared Koru type — shared by the cs emitter's
+/// Input/Output/arm surfaces AND this file's `@as` lowering, so the two can
+/// never drift on what `i64` means. `usize` concretizes `long`: a Koru usize
+/// is unsigned, but `ulong` refuses arithmetic and comparison against every
+/// signed type on this host (the tranche's int+ulong binder deaths), and C#
+/// indexes and lengths are signed by convention. Unknown spellings → dynamic:
+/// the escape-hatch type, not a claim about the type.
+pub fn csType(koru_type: []const u8) []const u8 {
+    const pairs = [_][2][]const u8{
+        .{ "i64", "long" },      .{ "i32", "int" },    .{ "i16", "short" },
+        .{ "i8", "sbyte" },      .{ "u64", "ulong" },  .{ "u32", "uint" },
+        .{ "u16", "ushort" },    .{ "u8", "byte" },    .{ "f64", "double" },
+        .{ "f32", "float" },     .{ "bool", "bool" },  .{ "string", "string" },
+        .{ "char", "char" },     .{ "usize", "long" },
+    };
+    for (pairs) |p| {
+        if (std.mem.eql(u8, koru_type, p[0])) return p[1];
+    }
+    return "dynamic";
+}
+
+/// The cs arm's builtin table — `lowerBuiltin`'s twin, but C# is a statically
+/// typed host, so the JS spellings don't transplant: casts carry their type
+/// (`@as` → `(T)(x)`), math goes through `System.Math`, and `@panic` needs a
+/// thrown delegate because C# `throw` is not a general expression. Same
+/// refusal contract: unknown name → UnsupportedBuiltin with diag set.
+fn lowerCsBuiltin(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    at: usize,
+    diag: ?*LowerDiag,
+) LowerError!?usize {
+    var p = at + 1;
+    while (p < text.len and exprIdentChar(text[p])) p += 1;
+    const name = text[at + 1 .. p];
+    if (name.len == 0) return null;
+    if (p >= text.len or text[p] != '(') return null;
+
+    // Balanced-paren scan, top-level comma split — `lowerBuiltin`'s shape.
+    const args_start = p + 1;
+    var depth: usize = 1;
+    var j = args_start;
+    var split: ?usize = null;
+    while (j < text.len and depth > 0) : (j += 1) {
+        switch (text[j]) {
+            '(', '[', '{' => depth += 1,
+            ')', ']', '}' => depth -= 1,
+            ',' => if (depth == 1 and split == null) {
+                split = j;
+            },
+            else => {},
+        }
+    }
+    if (depth != 0) return null;
+    const args_end = j - 1;
+    const first = std.mem.trim(u8, text[args_start .. split orelse args_end], " \t");
+    const second = if (split) |s| std.mem.trim(u8, text[s + 1 .. args_end], " \t") else "";
+
+    const eql = std.mem.eql;
+    // Type-carrying casts: the JS paren-wrap is a no-op there, but on this
+    // host the cast is the lowering — `@as(i64, x)` → `(long)(x)`.
+    if (eql(u8, name, "as") or eql(u8, name, "enumFromInt")) {
+        try out.append(allocator, '(');
+        try out.appendSlice(allocator, csType(first));
+        try out.appendSlice(allocator, ")(");
+        try lowerCsInto(out, allocator, second, .koru_expr, diag);
+        try out.append(allocator, ')');
+        return j;
+    }
+    // Casts WITHOUT a spelled target: Zig infers it from context, C# cannot,
+    // so emit the bare grouping — the enclosing construct's own cast (`@as`,
+    // the typed-Input `(<T>)(…)`) is where the conversion lands. Inventing a
+    // width here would be a silent-truncation bug, not a lowering.
+    if (eql(u8, name, "intCast") or eql(u8, name, "truncate") or
+        eql(u8, name, "floatFromInt") or eql(u8, name, "intFromEnum") or
+        eql(u8, name, "floatCast"))
+    {
+        try out.append(allocator, '(');
+        try lowerCsInto(out, allocator, first, .koru_expr, diag);
+        try out.append(allocator, ')');
+        return j;
+    }
+    const unary_wrapped = [_]struct { name: []const u8, prefix: []const u8, suffix: []const u8 }{
+        // A bool is 0/1 — the ternary; Convert.ToInt32 unboxes oddly under dynamic.
+        .{ .name = "intFromBool", .prefix = "((", .suffix = ") ? 1 : 0)" },
+        // Zig's @intFromFloat truncates toward zero; a C# `long` cast does too.
+        .{ .name = "intFromFloat", .prefix = "(long)(", .suffix = ")" },
+        // Hardware popcount exists — System.Numerics is the tight-layer API.
+        .{ .name = "popCount", .prefix = "global::System.Numerics.BitOperations.PopCount((ulong)(", .suffix = "))" },
+        .{ .name = "exp2", .prefix = "global::System.Math.Pow(2, ", .suffix = ")" },
+    };
+    for (unary_wrapped) |uw| {
+        if (eql(u8, name, uw.name)) {
+            try out.appendSlice(allocator, uw.prefix);
+            try lowerCsInto(out, allocator, first, .koru_expr, diag);
+            try out.appendSlice(allocator, uw.suffix);
+            return j;
+        }
+    }
+    if (eql(u8, name, "divTrunc") or eql(u8, name, "divExact")) {
+        // C# `/` on integers truncates toward zero — @divTrunc for free.
+        // @divExact's no-remainder contract is asserted on the Zig lane; like
+        // the JS arm we emit the bare division (same honesty bound).
+        try out.appendSlice(allocator, "((");
+        try lowerCsInto(out, allocator, first, .koru_expr, diag);
+        try out.appendSlice(allocator, ") / (");
+        try lowerCsInto(out, allocator, second, .koru_expr, diag);
+        try out.appendSlice(allocator, "))");
+        return j;
+    }
+    if (eql(u8, name, "divFloor")) {
+        try out.appendSlice(allocator, "global::System.Math.Floor((");
+        try lowerCsInto(out, allocator, first, .koru_expr, diag);
+        try out.appendSlice(allocator, ") / (double)(");
+        try lowerCsInto(out, allocator, second, .koru_expr, diag);
+        try out.appendSlice(allocator, "))");
+        return j;
+    }
+    if (eql(u8, name, "rem")) {
+        try out.appendSlice(allocator, "((");
+        try lowerCsInto(out, allocator, first, .koru_expr, diag);
+        try out.appendSlice(allocator, ") % (");
+        try lowerCsInto(out, allocator, second, .koru_expr, diag);
+        try out.appendSlice(allocator, "))");
+        return j;
+    }
+    if (eql(u8, name, "mod")) {
+        // Euclidean: Zig's @mod is non-negative for a positive divisor, C#'s %
+        // keeps the dividend's sign — same double-application the JS arm uses.
+        try out.appendSlice(allocator, "((((");
+        try lowerCsInto(out, allocator, first, .koru_expr, diag);
+        try out.appendSlice(allocator, ") % (");
+        try lowerCsInto(out, allocator, second, .koru_expr, diag);
+        try out.appendSlice(allocator, ")) + (");
+        try lowerCsInto(out, allocator, second, .koru_expr, diag);
+        try out.appendSlice(allocator, ")) % (");
+        try lowerCsInto(out, allocator, second, .koru_expr, diag);
+        try out.appendSlice(allocator, "))");
+        return j;
+    }
+    const math_map = [_]struct { name: []const u8, member: []const u8 }{
+        .{ .name = "min", .member = "Min" },       .{ .name = "max", .member = "Max" },
+        .{ .name = "abs", .member = "Abs" },       .{ .name = "sqrt", .member = "Sqrt" },
+        .{ .name = "sin", .member = "Sin" },       .{ .name = "cos", .member = "Cos" },
+        .{ .name = "tan", .member = "Tan" },       .{ .name = "exp", .member = "Exp" },
+        .{ .name = "log", .member = "Log" },       .{ .name = "log2", .member = "Log2" },
+        .{ .name = "log10", .member = "Log10" },   .{ .name = "floor", .member = "Floor" },
+        .{ .name = "ceil", .member = "Ceiling" },  .{ .name = "trunc", .member = "Truncate" },
+    };
+    for (math_map) |m| {
+        if (eql(u8, name, m.name)) {
+            try out.appendSlice(allocator, "global::System.Math.");
+            try out.appendSlice(allocator, m.member);
+            try out.append(allocator, '(');
+            try lowerCsInto(out, allocator, first, .koru_expr, diag);
+            if (split != null) {
+                try out.appendSlice(allocator, ", ");
+                try lowerCsInto(out, allocator, second, .koru_expr, diag);
+            }
+            try out.append(allocator, ')');
+            return j;
+        }
+    }
+
+    // ABORT WITH A MESSAGE. `throw` is an expression in only a few C# slots,
+    // so the IIFE spelling the JS arm invented is the portable one — a thrown
+    // delegate call sits in any value position.
+    if (eql(u8, name, "panic")) {
+        try out.appendSlice(allocator, "((global::System.Func<dynamic>)(() => { throw new global::System.Exception(\"\" + (");
+        try lowerCsInto(out, allocator, first, .koru_expr, diag);
+        try out.appendSlice(allocator, ")); }))()");
+        return j;
+    }
+
+    if (diag) |d| d.unknown_builtin = name;
+    return LowerError.UnsupportedBuiltin;
+}
+
 fn lowerBuiltin(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,

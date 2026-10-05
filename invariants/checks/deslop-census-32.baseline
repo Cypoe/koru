@@ -50,8 +50,12 @@
 # delta is +8 clusters / -9 members: cs_emitter's effect-splice block is
 # an intentional twin of the js_emitter shape it ports (different output
 # text per target — the duplication IS the variant model).
-clusters=1808
-members=2266
+clusters=1817
+members=2276
+# Re-pinned to 1817/2276 on the cs builtin-table commit: lowerCsBuiltin's
+# scan/table arms twin lowerBuiltin's at the small-idiom tier too (per-target
+# lowering vocabularies — sanctioned twin class), plus the jsLowerFilter/
+# csLowerFilter catch twins in template_processor.
 # Re-pinned to 1808/2266 on the method-arms commit: the arm-body block
 # emitter, ops-struct decl, and capture scanner added more cs↔js twin
 # shape — same sanctioned per-target duplication class. Clusters fell

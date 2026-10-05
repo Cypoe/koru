@@ -75,6 +75,31 @@ fn emitInvalidConditionAndExit(location: errors.SourceLocation, condition: []con
     std.process.exit(1);
 }
 
+/// A `js_lower`/`cs_lower` filter refused a builtin — the render-time twin of
+/// the emitter's own refusal. Emitted here because the filter's raw error
+/// otherwise propagates to the stage proc's `catch unreachable` and the
+/// backend panics: a refusal is a diagnostic, not a signal death.
+fn emitUnsupportedBuiltinAndExit(location: errors.SourceLocation, name: []const u8, lang: []const u8) noreturn {
+    std.debug.print(
+        \\error[{s}]: template builtin '@{s}' has no {s} lowering
+        \\  --> {s}:{d}:{d}
+        \\
+        \\  a per-call template spliced a Koru builtin the target's lowering
+        \\  table does not cover. The tables are `lowerBuiltin` (js) and
+        \\  `lowerCsBuiltin` (cs) in codegen_utils.zig — either the builtin
+        \\  needs a row there, or the template needs a host-native spelling.
+        \\
+    , .{
+        @tagName(errors.ErrorCode.KORU120),
+        name,
+        lang,
+        location.file,
+        location.line,
+        location.column,
+    });
+    std.process.exit(1);
+}
+
 /// A `[template]` proc's parse filter refused the invocation's Source text —
 /// e.g. `const { … }` carrying a malformed field entry (nameless, valueless,
 /// fused for want of a comma, a name bound twice). Surface it as a located
@@ -134,7 +159,10 @@ fn parseRangeFilter(allocator: std.mem.Allocator, args: []const liquid.Value) an
 fn jsLowerFilter(allocator: std.mem.Allocator, args: []const liquid.Value) anyerror!liquid.Value {
     if (args.len != 1 or args[0] != .string) return error.BadArgs;
     var d = codegen_utils.LowerDiag{};
-    const s = try codegen_utils.lowerKoruExpr(allocator, args[0].string, .js, .koru_expr, &d);
+    const s = codegen_utils.lowerKoruExpr(allocator, args[0].string, .js, .koru_expr, &d) catch |err| {
+        if (err == error.UnsupportedBuiltin) lower_diag = .{ .name = d.unknown_builtin, .lang = "js" };
+        return err;
+    };
     return liquid.Value{ .string = s };
 }
 
@@ -144,7 +172,10 @@ fn jsLowerFilter(allocator: std.mem.Allocator, args: []const liquid.Value) anyer
 fn csLowerFilter(allocator: std.mem.Allocator, args: []const liquid.Value) anyerror!liquid.Value {
     if (args.len != 1 or args[0] != .string) return error.BadArgs;
     var d = codegen_utils.LowerDiag{};
-    const s = try codegen_utils.lowerKoruExpr(allocator, args[0].string, .cs, .koru_expr, &d);
+    const s = codegen_utils.lowerKoruExpr(allocator, args[0].string, .cs, .koru_expr, &d) catch |err| {
+        if (err == error.UnsupportedBuiltin) lower_diag = .{ .name = d.unknown_builtin, .lang = "cs" };
+        return err;
+    };
     return liquid.Value{ .string = s };
 }
 
@@ -236,6 +267,13 @@ fn renderZigConstValue(allocator: std.mem.Allocator, value: []const u8, type_ann
 /// site, the frame that owns the invocation's location. Set only on refusal;
 /// cleared at the top of each render. Cold path: an error exits the compile.
 var field_list_diag: ?[]const u8 = null;
+
+/// Stash twin of field_list_diag, for the `js_lower`/`cs_lower` filters: when
+/// the lowering refuses a builtin, the filter stashes the name and target so
+/// the render catch can emit a located diagnostic. Without it the raw error
+/// reaches the stage proc's `catch unreachable` and the backend SIGABRTs —
+/// measured on 230_006's `for|cs` bound, which panicked instead of refusing.
+var lower_diag: ?struct { name: []const u8, lang: []const u8 } = null;
 
 /// Raise a field-list `err`, stashing the diagnostic text for the render call
 /// site. `describeErrorIn` is not reused wholesale: it re-derives fragments
@@ -1039,6 +1077,7 @@ pub fn renderTemplateInvocation(
 
     var comp_err: ?[]const u8 = null;
     field_list_diag = null;
+    lower_diag = null;
     const rendered = liquid.renderWithEnv(allocator, proc.body.text, &ctx, &comp_err, .{ .filters = &filters }) catch |err| {
         if (err == error.CompError) {
             emitCompErrorAndExit(location, comp_err orelse "template comp error");
@@ -1051,6 +1090,11 @@ pub fn renderTemplateInvocation(
         // same emit-then-exit shape as the comp-error path above.
         if (field_list_diag) |msg| {
             emitMalformedFieldListAndExit(location, msg);
+        }
+        // A lower filter's refusal names the builtin in the stash — surface
+        // it as a located diagnostic before the error falls any further.
+        if (lower_diag) |ld| {
+            emitUnsupportedBuiltinAndExit(location, ld.name, ld.lang);
         }
         return err;
     };

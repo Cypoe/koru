@@ -2519,22 +2519,9 @@ const ImplOut = union(enum) {
     bare: []const u8, // `-> expr` → `return (<T>)(<expr>)` — T is the C# spelling
 };
 
-/// Map a declared Koru type spelling to its C# host type. `dynamic` is the
-/// answer for anything not in the table — records, generics, phantoms — the
-/// field is still typed, the value just flows through object.
-fn csType(koru_type: []const u8) []const u8 {
-    const pairs = [_][2][]const u8{
-        .{ "i64", "long" },      .{ "i32", "int" },    .{ "i16", "short" },
-        .{ "i8", "sbyte" },      .{ "u64", "ulong" },  .{ "u32", "uint" },
-        .{ "u16", "ushort" },    .{ "u8", "byte" },    .{ "f64", "double" },
-        .{ "f32", "float" },     .{ "bool", "bool" },  .{ "string", "string" },
-        .{ "char", "char" },
-    };
-    for (pairs) |p| {
-        if (std.mem.eql(u8, koru_type, p[0])) return p[1];
-    }
-    return "dynamic";
-}
+// The Koru→C# type spelling lives in codegen_utils — shared with the
+// `@as` builtin lowering so the two sites can never drift on it.
+const csType = codegen_utils.csType;
 
 /// An arm whose ABSENCE is observable — `! ?ask -> T`. It alone keeps the
 /// nullable-Func surface: `ask != null` in impl text is the presence read,

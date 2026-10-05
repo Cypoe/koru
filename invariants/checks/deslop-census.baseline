@@ -65,8 +65,8 @@
 # effect-splice resolver, is an intentional 1057-token twin of the
 # js_emitter block it ports — per-target emitters duplicate shape by
 # design (the text each writes differs; the shape is the mechanism).
-clusters=815
-members=896
+clusters=823
+members=903
 # Re-pinned to 819/889 on the typed-envelope commit: the Input/Output
 # struct emission + produce-site typing ported more of the js_emitter
 # twin shape into cs_emitter — same sanctioned per-target duplication
@@ -77,3 +77,11 @@ members=896
 # js arm bodies, emitEventDecl x js event decls) — same sanctioned
 # per-target duplication class again. Clusters fell 819->815, members
 # rose 889->896.
+# Re-pinned to 823/903 on the cs builtin-table commit: lowerCsBuiltin
+# ports lowerBuiltin's scan/table structure arm-for-arm (the census
+# names codegen_utils:1987-2083 — div/rem/mod and paren-wrap blocks,
+# twins of the JS arms they replace) plus the two three-line
+# jsLowerFilter/csLowerFilter catch bodies in template_processor —
+# same sanctioned per-target twin class; the text each arm writes
+# differs, the shape is the mechanism. Remaining growth is the
+# consciously-retained test-scaffolding class.
