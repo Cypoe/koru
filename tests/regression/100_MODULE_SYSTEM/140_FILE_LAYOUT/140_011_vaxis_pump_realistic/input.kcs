@@ -6,12 +6,12 @@
 using static KoruHost;
 
 static class KoruHost {
-    public static dynamic keys = 0;
-    public static dynamic resizes = 0;
-    public static dynamic focus = 0;
-    public static dynamic quits = 0;
-    public static dynamic width_sum = 0;
-    public static dynamic focus_xor = 0;
+    public static ulong keys = 0;
+    public static ulong resizes = 0;
+    public static ulong focus = 0;
+    public static ulong quits = 0;
+    public static ulong width_sum = 0;
+    public static ulong focus_xor = 0;
 }
 
 ~proc run|cs {

@@ -761,6 +761,7 @@ const Emitter = struct {
                     try self.writeFmt("      throw new global::System.Exception(\"{s}: [transform] tor is lowered at compile time and must never be called\");\n", .{name});
                 } else {
                     try self.emitReindented(proc.body.text, "      ");
+                    try self.emitImplTail();
                 }
                 try self.write("\n");
             },
@@ -772,9 +773,22 @@ const Emitter = struct {
                 .{name},
             ),
             .immediate => |ii| try self.emitBranchConstructorReturn(&ii.value, "      "),
-            .subflow => |flow| try self.emitSubflowImplBody(ev, flow, "      "),
+            .subflow => |flow| {
+                try self.emitSubflowImplBody(ev, flow, "      ");
+                try self.emitImplTail();
+            },
         }
         try self.write("    }\n  }\n");
+    }
+
+    /// The handler-scope fall-through for impl bodies the emitter cannot
+    /// prove return on every path — pasted |cs text and subflow
+    /// continuations with conditional produces. `return default;` is the one
+    /// spelling that is always legal here: `null` under a dynamic signature,
+    /// the zero value under Output or a bare <T> — the arm-tail rule, one
+    /// scope up. Dead after a proven return, and WarningLevel is 0.
+    fn emitImplTail(self: *Emitter) CsEmitError!void {
+        try self.write("\n      return default;\n");
     }
 
     /// Emit `return <value>;` for a BranchConstructor — the shared shape
@@ -1778,9 +1792,33 @@ const Emitter = struct {
             if (idx > 0) try self.write(", ");
             try self.writeBinding(arg.name);
             try self.write(" = ");
-            try self.writeCsExpr(arg.value);
+            // The declared field type wraps the value in an explicit cast —
+            // the same `(<T>)(<expr>)` rule bare produces use. Literal `0.5`
+            // is a `double` in C# and will not convert into a `float` field;
+            // `(float)(0.5)` is legal, as is `(long)(v)` on a dynamic arg —
+            // one rule covers every narrow type, not just the f32 that
+            // measured first.
+            const ft = argFieldCsType(ev, arg.name);
+            if (typed and !std.mem.eql(u8, ft, "dynamic")) {
+                try self.writeFmt("({s})(", .{ft});
+                try self.writeCsExpr(arg.value);
+                try self.write(")");
+            } else {
+                try self.writeCsExpr(arg.value);
+            }
         }
         try self.write("}");
+    }
+
+    /// The C# spelling of the declared type of a named Input field —
+    /// `dynamic` when the name does not resolve (wildcard members, stray
+    /// args) so callers can keep the uncast shape.
+    fn argFieldCsType(ev: *const ast.EventDecl, name: []const u8) []const u8 {
+        if (ev.input.is_wildcard) return "dynamic";
+        for (ev.input.fields) |field| {
+            if (std.mem.eql(u8, field.name, name)) return csType(field.type);
+        }
+        return "dynamic";
     }
 
     /// Re-indent a multi-line opaque body to `indent`, trimming leading blank

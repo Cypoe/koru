@@ -101,6 +101,25 @@ did write." The measured residue of `dynamic` on that path is what a
 consumer pays for insisting on it: 10.0ns + 56B/call to read the same
 typed `Output` through a dynamic reference.
 
+**Fourth instance, 2026-10 — the lax spelling inside authored host text,
+and the strict host's refusal moved to runtime.** The tranche facets
+declared module state the JS way: `public static dynamic counter = 0` —
+the `.kjs` facet's `let counter = 0` ported, because `dynamic` is the
+closest C# spelling of an untyped binding. It *compiles* — that is the
+accident — and then `counter + v` dies in the DLR binder: the boxed `int`
+meets a `ulong` arm parameter and `int + ulong` has no operator in C#
+either, so the error the strict host would have refused at compile time
+detonates at runtime instead (`RuntimeBinderException`, a cs-runtime red
+four layers down the stack). Typing the state at the tor's declared type
+(`ulong counter`) turns the same source green. The wrinkle worth keeping:
+`dynamic` does not merely cost speed here — it *moves the boundary the
+checker can see*. Every `dynamic` in host text is a hole in the strict
+host's coverage, and the failures it hides land one stage later, in the
+binder, where they read like emitter bugs but are authoring bugs. The
+facet-authoring rule follows: host text types its state at the declared
+tor types; `dynamic` is for boundaries the decl cannot name, not for
+laziness about ones it can.
+
 ## What would correct this belief
 
 A counterexample where the strict host's shape over-constrains the port —

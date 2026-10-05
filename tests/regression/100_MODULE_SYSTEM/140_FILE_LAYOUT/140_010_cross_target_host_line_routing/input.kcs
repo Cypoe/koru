@@ -6,7 +6,7 @@
 using static KoruHost;
 
 static class KoruHost {
-    public static dynamic counter = 0;
+    public static ulong counter = 0;
 }
 
 ~proc run|cs {
