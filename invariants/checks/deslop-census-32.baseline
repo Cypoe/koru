@@ -50,8 +50,8 @@
 # delta is +8 clusters / -9 members: cs_emitter's effect-splice block is
 # an intentional twin of the js_emitter shape it ports (different output
 # text per target — the duplication IS the variant model).
-clusters=1807
-members=2234
+clusters=1800
+members=2246
 # Re-pinned in "fold: impl bodies are walk input, not fold residue":
 # the roll fired on +5 clusters / +2 members of foreign src/ drift in
 # the same documented emitter_test/visitor_emitter_test field-literal
@@ -101,3 +101,7 @@ members=2234
 # the js_emitter dispatch block they port — per-target emitters
 # duplicate shape by design; the text each writes differs, the shape
 # is the mechanism.
+# Re-pinned to 1800/2246 on the k-sharp generic-struct dispatch commit:
+# clusters fell 1807->1800, members rose 2234->2246 — same measured
+# mechanism as the 48-token board (the ops-struct/interface emission
+# re-shaped the twin blocks, not new slop).

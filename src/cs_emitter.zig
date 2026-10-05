@@ -65,6 +65,7 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     errdefer buf.deinit(allocator);
 
     var em = Emitter{ .allocator = allocator, .buf = &buf, .items = program.items, .main_module_name = program.main_module_name };
+    defer em.ops_buf.deinit(allocator);
 
     // Phase 0: `.kcs` host lines verbatim at the TOP of the file (using
     // directives, file-scope declarations) — routed by host language, the same
@@ -141,6 +142,7 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         }
     }
 
+    try em.write(em.ops_buf.items);
     try em.write("}\n");
 
     // The entry point: Program.Main invokes every emitted flow. A library
@@ -358,6 +360,14 @@ const Emitter = struct {
     /// FIRING, not an event invocation. The vertical refuses both anyway;
     /// the field stays so the shape of the check survives.
     impl_event: ?*const ast.EventDecl = null,
+    /// Handler STRUCT decls collected while emitting call sites — flushed at
+    /// main_module scope before the class closes. C# has no type decls inside
+    /// methods and a call site may sit inside a nested event class, so the
+    /// struct must land one scope up no matter which body produced it.
+    ops_buf: std.ArrayList(u8) = .empty,
+    /// Shared noop delegates, emitted once into ops_buf the first time an
+    /// omitted optional-void arm needs a fill.
+    noops_emitted: bool = false,
 
     fn nextId(self: *Emitter) usize {
         const id = self.id_counter;
@@ -550,15 +560,30 @@ const Emitter = struct {
         var name_buf: [256]u8 = undefined;
         try self.writeFmt("  public static class {s}_event {{\n", .{lowerIdentBuf(&name_buf, name)});
         if (has_effect) {
-            try self.writeFmt("    public static dynamic handler(dynamic {s}, dynamic __koru_handlers) {{\n", .{INPUT_PARAM});
-            // Bind each effect-branch op as a local: `var each = __koru_handlers.each;`
-            // — a `dynamic` delegate the impl body (or a subflow arm fire)
+            // IOps is the `comptime __H: type` analogue: each call site hands
+            // a STRUCT implementing every arm member, and `handler<H>`
+            // monomorphizes per site — the JIT devirtualizes the member
+            // reads, and an omitted-optional-void fill inlines to nothing the
+            // way LLVM erases Zig's `@hasDecl ? __H.x : noop`.
+            try self.write("    public interface IOps {\n");
+            for (ev.branches) |*b| {
+                if (b.kind != .effect) continue;
+                try self.write("      global::System.Func<dynamic");
+                if (!armIsPayloadless(b)) try self.write(", dynamic");
+                try self.write("> ");
+                try self.writeBinding(b.name);
+                try self.write(" { get; }\n");
+            }
+            try self.write("    }\n");
+            try self.writeFmt("    public static dynamic handler<H>(dynamic {s}, H ops) where H : struct, IOps {{\n", .{INPUT_PARAM});
+            // Bind each effect-branch op as a local: `var each = ops.each;` —
+            // a statically-typed Func the impl body (or a subflow arm fire)
             // invokes by bare name.
             for (ev.branches) |b| {
                 if (b.kind != .effect) continue;
                 try self.write("      var ");
                 try self.writeBinding(b.name);
-                try self.write(" = __koru_handlers.");
+                try self.write(" = ops.");
                 try self.writeBinding(b.name);
                 try self.write(";\n");
             }
@@ -1269,8 +1294,8 @@ const Emitter = struct {
         }
         // SUBFLOW-IMPLEMENTED EFFECT FIRE. Inside the impl of an
         // effect-bearing tor, a call to one of THAT tor's own effect arms is
-        // the FIRING — it invokes the `Func` the caller installed on
-        // `__koru_handlers`, bound to a local at handler entry.
+        // the FIRING — it invokes the `Func` the caller installed on its ops
+        // struct, bound to a local at handler entry.
         if (self.impl_event) |impl_ev| {
             if (findEffectArm(impl_ev, &inv.path)) |arm| {
                 try self.emitEffectArmFire(arm, inv, continuations, indent);
@@ -1321,7 +1346,8 @@ const Emitter = struct {
         if (ev_has_effect) {
             const hid = self.nextId();
             handlers_name = try std.fmt.allocPrint(self.allocator, "__koru_handlers_{d}", .{hid});
-            try self.writeFmt("{s}var {s} = new {{\n", .{ indent, handlers_name.? });
+            try self.emitOpsStructDecl(ev, continuations, handlers_name.?);
+            try self.writeFmt("{s}var {s} = new {s} {{\n", .{ indent, handlers_name.?, handlers_name.? });
             const inner_indent = try std.fmt.allocPrint(self.allocator, "{s}  ", .{indent});
             defer self.allocator.free(inner_indent);
             // ONE delegate per ARM, not per continuation — two continuations
@@ -1340,26 +1366,6 @@ const Emitter = struct {
                 if (already) continue;
                 const arm = findBranchDecl(ev, cont.branch) orelse continue;
                 try self.emitEffectHandlerMethod(continuations, cont.branch, arm, inner_indent);
-            }
-            // OMITTED VOID ARM → a no-op delegate (Option B, pinned
-            // 400_168/400_170). A missing MEMBER would throw at the handler's
-            // eager `var <op> = __koru_handlers.<op>` bind — the runtime
-            // binder turns a silent no-op into a crash before the body runs.
-            // RESUMING arms fill with NULL instead: the proc reads presence
-            // (`if (ask != null)`) and picks its own fallback — 400_148's
-            // contract, where a synthesized no-op would lie about presence.
-            for (ev.branches) |*b| {
-                if (b.kind != .effect) continue;
-                if (continuationForBranch(continuations, b.name) != null) continue;
-                try self.writeFmt("{s}", .{inner_indent});
-                try self.writeBinding(b.name);
-                if (b.resume_type != null or b.resume_arms != null) {
-                    try self.write(" = (object)null,\n");
-                } else if (armIsPayloadless(b)) {
-                    try self.write(" = (global::System.Func<dynamic>)(() => null),\n");
-                } else {
-                    try self.write(" = (global::System.Func<dynamic, dynamic>)(_ => null),\n");
-                }
             }
             try self.writeFmt("{s}}};\n", .{indent});
         }
@@ -1774,9 +1780,69 @@ const Emitter = struct {
         };
     }
 
+    /// Emit the STRUCT a call site instantiates as its ops argument — one
+    /// settable property per arm of `ev`, implementing `<ev>_event.IOps`.
+    /// Written into `ops_buf` (flushed at main_module scope); the call site
+    /// itself emits only `new __koru_handlers_N { arm = <lambda>, … }`.
+    /// An OMITTED OPTIONAL VOID arm gets a shared-noop initializer — the
+    /// `if (@hasDecl(__H,"tick")) __H.tick else noop` contract; resuming and
+    /// required props stay null (presence, and a loud NRE on a genuinely
+    /// missing required arm).
+    fn emitOpsStructDecl(
+        self: *Emitter,
+        ev: *const ast.EventDecl,
+        continuations: []const ast.Continuation,
+        struct_name: []const u8,
+    ) CsEmitError!void {
+        const saved_buf = self.buf;
+        self.buf = &self.ops_buf;
+        defer self.buf = saved_buf;
+
+        var ev_name_buf: [256]u8 = undefined;
+        const ev_name = lowerIdentBuf(&ev_name_buf, ev.path.segments[ev.path.segments.len - 1]);
+
+        // First noop fill emits the shared delegates. Class-member order is
+        // free on C#, so landing them inside ops_buf before their first
+        // referent is safe.
+        for (ev.branches) |b| {
+            if (b.kind != .effect) continue;
+            const resuming = b.resume_type != null or b.resume_arms != null;
+            if (!resuming and b.is_optional and continuationForBranch(continuations, b.name) == null) {
+                if (!self.noops_emitted) {
+                    self.noops_emitted = true;
+                    try self.write("  static readonly global::System.Func<dynamic> __koru_noop0 = () => null;\n");
+                    try self.write("  static readonly global::System.Func<dynamic, dynamic> __koru_noop1 = _ => null;\n");
+                }
+                break;
+            }
+        }
+
+        try self.writeFmt("  struct {s} : {s}_event.IOps {{\n", .{ struct_name, ev_name });
+        var any_initializer = false;
+        for (ev.branches) |*b| {
+            if (b.kind != .effect) continue;
+            try self.write("    public global::System.Func<dynamic");
+            if (!armIsPayloadless(b)) try self.write(", dynamic");
+            try self.write("> ");
+            try self.writeBinding(b.name);
+            try self.write(" { get; set; }");
+            const resuming = b.resume_type != null or b.resume_arms != null;
+            if (!resuming and b.is_optional and continuationForBranch(continuations, b.name) == null) {
+                try self.write(if (armIsPayloadless(b)) " = __koru_noop0;" else " = __koru_noop1;");
+                any_initializer = true;
+            }
+            try self.write("\n");
+        }
+        // CS8983: initializers above only run if the struct declares SOME
+        // explicit ctor; an empty parameterless one satisfies the rule and
+        // keeps `new H { arm = … }` spelling legal.
+        if (any_initializer) try self.writeFmt("    public {s}() {{ }}\n", .{struct_name});
+        try self.write("  }\n");
+    }
+
     /// Emit a FIRE of one of the enclosing tor's own effect arms. The handler
-    /// already aliased every arm to a local (`var each = __koru_handlers.each;`),
-    /// so the fire is a plain call on that `dynamic` delegate. A void arm is
+    /// already aliased every arm to a local (`var each = ops.each;`), so the
+    /// fire is a plain call on that `dynamic` delegate. A void arm is
     /// a bare statement; a resuming arm's value binds to the call-site `: name`
     /// or dispatches through the ordinary terminal-continuation path.
     fn emitEffectArmFire(
@@ -1807,14 +1873,23 @@ const Emitter = struct {
         };
         defer if (result_name) |rn| self.allocator.free(rn);
 
-        try self.write(indent);
-        // An OPTIONAL void arm may simply not be installed — the alias is
-        // null and the guard reads it.
-        if (arm.is_optional and !has_resume) {
+        // An OPTIONAL RESUMING arm may simply not be installed — the alias is
+        // null, and the fire plus everything consuming its result lives
+        // inside a presence guard. (Optional VOID arms are always-callable:
+        // the ops struct fills a shared noop, so no guard is needed — the
+        // `@hasDecl ? __H.x : noop` contract.)
+        const guard_presence = arm.is_optional and has_resume;
+        var fire_indent = indent;
+        if (guard_presence) {
+            try self.write(indent);
             try self.write("if (");
             try self.writeBinding(arm.name);
-            try self.write(" != null) ");
+            try self.write(" != null) {\n");
+            fire_indent = try std.fmt.allocPrint(self.allocator, "{s}  ", .{indent});
         }
+        defer if (guard_presence) self.allocator.free(fire_indent);
+
+        try self.write(fire_indent);
         if (result_name) |rn| try self.writeFmt("var {s} = ", .{rn});
         try self.writeBinding(arm.name);
         try self.write("(");
@@ -1825,7 +1900,8 @@ const Emitter = struct {
         // multi-arm resume sum carries a `.tag`.
         const plain_resume = arm.resume_type != null and arm.resume_arms == null;
         const needs_dispatch = terminal_count >= 2 and !plain_resume;
-        try self.emitTerminalContinuations(continuations, result_name, indent, needs_dispatch, plain_resume);
+        try self.emitTerminalContinuations(continuations, result_name, fire_indent, needs_dispatch, plain_resume);
+        if (guard_presence) try self.writeFmt("{s}}}\n", .{indent});
     }
 
     /// The payload passed to an arm fire, in C# spelling:
