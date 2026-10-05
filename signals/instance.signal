@@ -1,0 +1,9 @@
+name: instance
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `extension` — declare that name. A "measured instance of a
+held belief" is scope-growth when it annexes new territory (host text, not
+emitter shape), plain `confirmation` when it lands where the model already
+stood. (orphan drained 2026-10-05)
