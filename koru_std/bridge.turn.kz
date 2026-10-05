@@ -92,7 +92,7 @@ fn scanLineChars(raw: []const u8, paren: *i32, brace: *i32, bracket: *i32, in_st
             k += 1;
             continue;
         }
-        if (c == '"' or c == '\'') {
+        if (c == '"') {
             in_string.* = c;
         } else if (c == '(') {
             paren.* += 1;

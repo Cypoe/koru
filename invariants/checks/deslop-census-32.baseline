@@ -50,8 +50,15 @@
 # delta is +8 clusters / -9 members: cs_emitter's effect-splice block is
 # an intentional twin of the js_emitter shape it ports (different output
 # text per target — the duplication IS the variant model).
-clusters=1817
-members=2276
+# Re-pinned in "bridge: the segmenter's alphabet is the wire's
+# alphabet": the roll fired on +10 members of foreign src/ drift
+# (emitter_test decl-literals, annotation_parser/codegen_utils
+# test_decl twins, shape_analyzer/parser.zig errdefer cluster);
+# this commit touches only koru_std/bridge.turn.kz, a regression
+# test, and a concept frag — zero src/ files. Working tree
+# included uncommitted foreign cs_emitter.zig work.
+clusters=1813
+members=2286
 # Re-pinned to 1817/2276 on the cs builtin-table commit: lowerCsBuiltin's
 # scan/table arms twin lowerBuiltin's at the small-idiom tier too (per-target
 # lowering vocabularies — sanctioned twin class), plus the jsLowerFilter/

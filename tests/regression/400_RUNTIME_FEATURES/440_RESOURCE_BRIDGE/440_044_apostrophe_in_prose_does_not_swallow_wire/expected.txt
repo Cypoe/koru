@@ -1,0 +1,7 @@
+hi
+step 1/2 residue bound: r1 — your reply was not wire; nothing reached the user, but the observer kept it. To deliver it, call say(text: r1); to keep thinking out loud, call note(text: ...)
+step 2/2 result: {"branch":""} bound: r2
+
+RESIDUE residue bound: r3 — your reply was not wire; nothing reached the user, but the observer kept it. To deliver it, call say(text: r3); to keep thinking out loud, call note(text: ...)
+it's quoted fine
+RESULT bound=r4

@@ -190,3 +190,19 @@ with it: `introspection_verbs` renders at comptime from the same
 `host_verbs` table the gate and `hostDispatch` enforce — prompt, parser,
 and dispatch are one declaration read three ways. Pinned by 440_038
 (marshal) and 440_039 (admission).
+
+2026-10-05 — the drift ran the other way once too: a router believing
+MORE grammar than the grammar. `segmentTurn`'s line scanner counted `'`
+as a string delimiter and carried the state across lines, so an
+apostrophe in narration ("I'll read…") opened a phantom string that
+swallowed the wire item after it — the whole reply failed the gate as
+`not_invocation` and bound as residue while correct wire sat inside it.
+`runtime.wirescan.kz` had already ruled `'` a character ("an apostrophe
+in captured text is a character, not a delimiter"); the ruling never
+reached the sibling scanner. A router stricter than its grammar is a
+silent kill — nothing refuses, nothing teaches, the model's valid wire
+dies in transit. Same lesson as the admission edge: every scanner that
+partitions the wire must read the wire's own alphabet, and the alphabet
+has one quote. Pinned by 440_044; live witness: kopium `live.k` turn 5
+(muse-spark emitted a correctly three-armed `read` that the segmenter,
+not the model, destroyed).
