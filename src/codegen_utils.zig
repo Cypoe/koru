@@ -998,11 +998,40 @@ pub fn mangleJsIdent(allocator: std.mem.Allocator, name: []const u8) ![]const u8
 /// compiler machinery in a shipped artifact.
 pub const HostShape = struct {
     /// `| name <value>` — a payload that IS the value.
+    /// The cs spelling of `name` in a member position — kebab and the
+    /// dotted-name join both fold to underscores (the emitter's `writeIdent`
+    /// does the same to the declared member) and a reserved word takes the
+    /// `@` escape.
+    pub fn csMember(alloc: std.mem.Allocator, name: []const u8) []const u8 {
+        return mangleCsIdent(alloc, csFolded(alloc, name)) catch unreachable;
+    }
+
+    /// `csMember` minus the `@` keyword escape — for positions where the
+    /// name is glued behind a longer identifier (`__koru_read_<field>`)
+    /// and can never itself be a keyword.
+    pub fn csFolded(alloc: std.mem.Allocator, name: []const u8) []const u8 {
+        const de_kebabed = std.mem.replaceOwned(u8, alloc, name, "-", "_") catch unreachable;
+        return std.mem.replaceOwned(u8, alloc, de_kebabed, ".", "_") catch unreachable;
+    }
+
+    /// A branch-payload member name spelled for C# — `csMember` folded, plus
+    /// the one struct-member collision the Output shape creates: `tag` is the
+    /// discriminator member, so a branch literally named `tag` (a `tag`
+    /// column's apply arm, 690_336) carries its payload as `__ktag`.
+    /// The emitter maps the same branch name at payload READ sites
+    /// (`writeMember`/destructure bases in cs_emitter.zig).
+    pub fn csPayloadMember(alloc: std.mem.Allocator, name: []const u8) []const u8 {
+        const m = csMember(alloc, name);
+        return if (std.mem.eql(u8, m, "tag")) "__ktag" else m;
+    }
+
     pub fn branchOne(alloc: std.mem.Allocator, t: HostTarget, name: []const u8, value: []const u8) []const u8 {
         const esc_name = escapeZigIdentifier(alloc, name) catch name;
         return switch (t) {
             .js => std.fmt.allocPrint(alloc, "{{ tag: \"{s}\", {s}: {s} }}", .{ name, name, value }) catch unreachable,
-            .cs => std.fmt.allocPrint(alloc, "new {{ tag = \"{s}\", {s} = {s} }}", .{ name, name, value }) catch unreachable,
+            // `Output`, not an anonymous object — a cs handler's return type
+            // is the declared Output struct, and `new {…}` cannot convert.
+            .cs => std.fmt.allocPrint(alloc, "new Output {{ tag = \"{s}\", {s} = {s} }}", .{ name, csPayloadMember(alloc, name), value }) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, ".{{ .{s} = {s} }}", .{ esc_name, value }) catch unreachable,
         };
     }
@@ -1012,7 +1041,7 @@ pub const HostShape = struct {
         const esc_name = escapeZigIdentifier(alloc, name) catch name;
         return switch (t) {
             .js => std.fmt.allocPrint(alloc, "{{ tag: \"{s}\", {s}: {{}} }}", .{ name, name }) catch unreachable,
-            .cs => std.fmt.allocPrint(alloc, "new {{ tag = \"{s}\", {s} = new {{ }} }}", .{ name, name }) catch unreachable,
+            .cs => std.fmt.allocPrint(alloc, "new Output {{ tag = \"{s}\", {s} = new {{ }} }}", .{ name, csPayloadMember(alloc, name) }) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, ".{{ .{s} = .{{}} }}", .{esc_name}) catch unreachable,
         };
     }
@@ -1023,7 +1052,7 @@ pub const HostShape = struct {
         const esc_name = escapeZigIdentifier(alloc, name) catch name;
         return switch (t) {
             .js => std.fmt.allocPrint(alloc, "{{ tag: \"{s}\", {s}: {{ {s} }} }}", .{ name, name, body }) catch unreachable,
-            .cs => std.fmt.allocPrint(alloc, "new {{ tag = \"{s}\", {s} = new {{ {s} }} }}", .{ name, name, body }) catch unreachable,
+            .cs => std.fmt.allocPrint(alloc, "new Output {{ tag = \"{s}\", {s} = new {{ {s} }} }}", .{ name, csPayloadMember(alloc, name), body }) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, ".{{ .{s} = .{{ {s} }} }}", .{ esc_name, body }) catch unreachable,
         };
     }
@@ -1031,9 +1060,14 @@ pub const HostShape = struct {
     /// One `name = value` pair inside a record payload or argument object.
     pub fn recField(alloc: std.mem.Allocator, t: HostTarget, name: []const u8, value: []const u8) []const u8 {
         const esc_name = escapeZigIdentifier(alloc, name) catch name;
+        // C# member-INIT position is as reserved as binding position: a field
+        // named `new` writes `new = v` and CS1526s — the verbatim @-escape is
+        // the spelling (`@new = v`), and the declared member is mangleCsIdent'd
+        // the same way so the two sides agree.
+        const cs_name = csMember(alloc, name);
         return switch (t) {
             .js => std.fmt.allocPrint(alloc, "{s}: {s}", .{ name, value }) catch unreachable,
-            .cs => std.fmt.allocPrint(alloc, "{s} = {s}", .{ name, value }) catch unreachable,
+            .cs => std.fmt.allocPrint(alloc, "{s} = {s}", .{ cs_name, value }) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, ".{s} = {s}", .{ esc_name, value }) catch unreachable,
         };
     }
@@ -1052,6 +1086,19 @@ pub const HostShape = struct {
             .js => std.fmt.allocPrint(alloc, "{{ {s} }}", .{body}) catch unreachable,
             .cs => std.fmt.allocPrint(alloc, "new {{ {s} }}", .{body}) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, ".{{ {s} }}", .{body}) catch unreachable,
+        };
+    }
+
+    /// The argument object at a SYNTHESIZED `<ev>_event.handler(…)` call site.
+    /// C# handlers take the declared `Input` struct — `new <ns><ev>_event.Input
+    /// { … }` — where JS's `{ … }` and Zig's `.{ … }` are literals; an
+    /// anonymous `new { … }` (argRec's cs arm) has no conversion to `Input`.
+    /// `ns`/`ev` are the same qualifier and basename the caller already wrote
+    /// ahead of `_event.handler(`.
+    pub fn callArg(alloc: std.mem.Allocator, t: HostTarget, ns: []const u8, ev: []const u8, body: []const u8) []const u8 {
+        return switch (t) {
+            .js, .zig => argRec(alloc, t, body),
+            .cs => std.fmt.allocPrint(alloc, "new {s}{s}_event.Input {{ {s} }}", .{ ns, ev, body }) catch unreachable,
         };
     }
 
@@ -1300,13 +1347,22 @@ fn lowerCsInto(
         // becomes `x.Length()` — a compile error one stage down, still loud.
         // The lookahead is bounds-guarded: an expr ENDING in `.len` lowers
         // too (store rewrites mint `__koru_store_<name>.len` placeholders).
+        // EXEMPTION: `__koru_store_<s>.len` is not a length expression — `len`
+        // is a real field the cell class declares, and `.Length` would name a
+        // member that does not exist (690_073's sweep bound read).
+        var store_cell_len = false;
         if (c == '.' and i + 3 < text.len and
             std.mem.eql(u8, text[i + 1 .. i + 4], "len") and
             (i + 4 >= text.len or !exprIdentChar(text[i + 4])))
         {
-            try out.appendSlice(allocator, ".Length");
-            i += 4;
-            continue;
+            var j = i;
+            while (j > 0 and exprIdentChar(text[j - 1])) j -= 1;
+            store_cell_len = std.mem.startsWith(u8, text[j..i], "__koru_store_");
+            if (!store_cell_len) {
+                try out.appendSlice(allocator, ".Length");
+                i += 4;
+                continue;
+            }
         }
         // Zig builtins: the cs table lives in `lowerCsBuiltin` — a real cast
         // and Math.* spellings, not the JS arm's paren-wraps. C# has no
@@ -2010,6 +2066,16 @@ fn lowerCsBuiltin(
         try out.appendSlice(allocator, ")(");
         try lowerCsInto(out, allocator, second, .koru_expr, diag);
         try out.append(allocator, ')');
+        return j;
+    }
+    // `@bitCast` with no spelled target: the integer lanes reinterpret
+    // bit-identically through a `long`/`ulong` round-trip (`(long)(ulong)x`
+    // is the 64-bit move; narrower ints truncate the same bits a bitCast
+    // would keep). Float bitcasts would need BitConverter — no site yet.
+    if (eql(u8, name, "bitCast")) {
+        try out.appendSlice(allocator, "(long)((ulong)(");
+        try lowerCsInto(out, allocator, first, .koru_expr, diag);
+        try out.appendSlice(allocator, "))");
         return j;
     }
     // Casts WITHOUT a spelled target: Zig infers it from context, C# cannot,

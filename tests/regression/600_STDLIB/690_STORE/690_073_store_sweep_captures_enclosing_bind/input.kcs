@@ -1,0 +1,6 @@
+// C# implementation facet. The events are declared in input.k
+// (merged at import); this file holds the |cs proc bodies.
+
+~proc make|cs {
+    return 7L;
+}

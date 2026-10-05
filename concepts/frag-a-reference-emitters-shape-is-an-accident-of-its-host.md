@@ -129,3 +129,19 @@ handler set chosen at runtime rather than lexically at the call site) would
 be such a case: the grammar does not currently allow it, but if it ever does,
 the `where H : struct` model needs a fallback and the JS shape turns out to
 have been load-bearing after all.
+
+2026-10-05 — the shape's *names* are accidents too, not only its
+dispatch model. The tagged-union rendering every emitter shares —
+`tag` discriminates, each branch's payload sits in a member named for
+the branch — collided the moment a store column was literally named
+`tag` (690_336): the generated C# `Output` declared `public string
+tag` and `public long tag` in the same struct. Zig never noticed
+because a field named `tag` on a tagged union is just a payload
+member; C#'s flattened record made the reservation visible. The fix
+kept `tag` as the discriminator — authored `.kcs` bodies spell
+`new Output { tag = "…" }` and that convention is load-bearing —
+and renamed only the colliding payload member (`__ktag`), mapped
+identically at decl, ctor, and read sites. The generalization: a
+host shape's reserved vocabulary is part of the accident — port the
+semantics and the shape's *namespace discipline* must survive contact
+with the user's own field names.

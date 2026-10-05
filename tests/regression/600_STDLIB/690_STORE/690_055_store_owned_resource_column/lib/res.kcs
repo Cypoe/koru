@@ -1,0 +1,15 @@
+// C# implementation facet for app/lib/res — the |cs twin of res.kz's |zig
+// bodies. Representation is the std/string.kcs shape: an owned pointer is an
+// anonymous object carried as `dynamic`; GC is the allocator.
+
+~proc new|cs {
+    return new { tag = 42L };
+}
+
+~proc free|cs {
+    // GC is the implementation — the honest body is empty (a port, not a stub).
+}
+
+~proc tag|cs {
+    return r.tag;
+}

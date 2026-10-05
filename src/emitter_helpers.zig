@@ -4748,7 +4748,27 @@ pub fn storeAnnounceEachItems(
             \\}}
             \\return;
         , .{ target_store, target_store }) catch unreachable
-    else
+    else if (std.mem.eql(u8, proc_target, "cs")) blk: {
+        // cs spells the qualifier like store.kz's storeEventQualifier:
+        // `main_module.` for the entry module, `main_module.<folded-home>_`
+        // folded into the basename otherwise. The arg record is the typed
+        // `Input` struct, and the cell's `len` field reads bare (the
+        // `.len`→`.Length` lowering exempts `__koru_store_*` receivers).
+        const csq = if (t_home.len == 0 or std.mem.eql(u8, t_home, main_module_name))
+            alloc.dupe(u8, "main_module.") catch unreachable
+        else csq_blk: {
+            const folded = alloc.dupe(u8, t_home) catch unreachable;
+            for (folded) |*c| {
+                if (c.* == '/' or c.* == '.' or c.* == '-') c.* = '_';
+            }
+            break :csq_blk std.fmt.allocPrint(alloc, "main_module.{s}_", .{folded}) catch unreachable;
+        };
+        break :blk std.fmt.allocPrint(alloc,
+            \\for (long __koru_r = 0; __koru_r < __koru_store_{s}.len; __koru_r++) {{
+            \\    {s}__store_announce_{s}_event.handler(new {s}__store_announce_{s}_event.Input {{ row = __koru_r, field = field }});
+            \\}}
+        , .{ target_store, csq, target_store, csq, target_store }) catch unreachable;
+    } else
         std.fmt.allocPrint(alloc,
             \\for (0..{s}__koru_store_{s}.len) |__koru_r| {{
             \\    {s}__store_announce_{s}_event.handler(.{{ .row = __koru_r, .field = field }});

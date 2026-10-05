@@ -29,8 +29,9 @@
     // with `.target = "zig"` and the emitter had nothing to run.
     const HS = codegen_utils_store.HostShape;
     const host_is_js = std.mem.eql(u8, CompilerEnv.lang, "js");
-    const host_target: codegen_utils_store.HostTarget = if (host_is_js) .js else .zig;
-    const proc_target = if (host_is_js) "js" else "zig";
+    const host_is_cs = std.mem.eql(u8, CompilerEnv.lang, "cs");
+    const host_target: codegen_utils_store.HostTarget = if (host_is_js) .js else if (host_is_cs) .cs else .zig;
+    const proc_target = if (host_is_js) "js" else if (host_is_cs) "cs" else "zig";
 
     if (item.* != .flow) @panic("store:query transform: containing item is not a flow - walker dispatch contract broken");
     const flow = &item.flow;
@@ -601,24 +602,19 @@
         (if (host_is_js) "let __koru_found = false;\n" else "var __koru_found = false;\n")
     else
         "";
-    var none_call_buf = std.ArrayList(u8).initCapacity(allocator, 64) catch unreachable;
-    if (none_arm != null) {
-        none_call_buf.appendSlice(allocator, "if (!__koru_found) {\n") catch unreachable;
-        none_call_buf.appendSlice(allocator, storeEventQualifier(allocator, home_ns, program.main_module_name)) catch unreachable;
-        none_call_buf.appendSlice(allocator, nbody_name) catch unreachable;
-        none_call_buf.appendSlice(allocator, "_event.handler(") catch unreachable;
-        none_call_buf.appendSlice(allocator, HS.argRec(allocator, host_target, nargb_text)) catch unreachable;
-        none_call_buf.appendSlice(allocator, ");\n}\n") catch unreachable;
-    }
-    const none_call = none_call_buf.items;
+    const none_call: []const u8 = if (none_arm != null) blk: {
+        const nq = storeEventQualifier(allocator, home_ns, program.main_module_name);
+        break :blk std.fmt.allocPrint(allocator, "if (!__koru_found) {{\n{s}{s}_event.handler({s});\n}}\n", .{ nq, nbody_name, HS.callArg(allocator, host_target, nq, nbody_name, nargb_text) }) catch unreachable;
+    } else "";
 
     var loop = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
     if (is_view) {
         loop.appendSlice(allocator, "{\n") catch unreachable;
         loop.appendSlice(allocator, found_decl) catch unreachable;
         // The member loops nest two blocks deep; a plain `break` exits only
-        // the innermost. The label spans them all.
-        if (is_first) loop.appendSlice(allocator, "firstblk: {\n") catch unreachable;
+        // the innermost. The label spans them all — cs has no labeled block,
+        // so its arm emits `goto` to a label the close plants past the loops.
+        if (is_first) loop.appendSlice(allocator, if (host_is_cs) "{\n" else "firstblk: {\n") catch unreachable;
         const members_vocab = storeKindMembers(allocator, program, store_name) orelse &[_][]const u8{};
         const proven = guardProvenMembers(allocator, sc.condition orelse "", guard_is orelse sc.condition orelse "", row_bind, members_vocab);
 
@@ -655,7 +651,7 @@
                     }
                     if (found_col) {
                         const esc_cn = codegen_utils_store.escapeZigIdentifier(allocator, cn) catch cn;
-                        const read = cellRead(allocator, host_is_js, program, mem_cellq, mem_name, cn, esc_cn);
+                        const read = cellRead(allocator, host_target, program, mem_cellq, mem_name, cn, esc_cn);
                         loop.appendSlice(allocator, HS.constBind(allocator, host_target, pn, read)) catch unreachable;
                     } else {
                         const def_val = zeroFillForType(col_types[ci]) orelse "0";
@@ -671,19 +667,20 @@
                 loop.appendSlice(allocator, gz) catch unreachable;
             }
             if (is_first and none_arm != null) loop.appendSlice(allocator, "__koru_found = true;\n") catch unreachable;
-            loop.appendSlice(allocator, storeEventQualifier(allocator, home_ns, program.main_module_name)) catch unreachable;
+            const sq = storeEventQualifier(allocator, home_ns, program.main_module_name);
+            loop.appendSlice(allocator, sq) catch unreachable;
             loop.appendSlice(allocator, sbody_name) catch unreachable;
             loop.appendSlice(allocator, "_event.handler(") catch unreachable;
-            loop.appendSlice(allocator, HS.argRec(allocator, host_target, argb.items)) catch unreachable;
+            loop.appendSlice(allocator, HS.callArg(allocator, host_target, sq, sbody_name, argb.items)) catch unreachable;
             if (is_first) {
-                const brk: []const u8 = if (host_is_js) ");\nbreak firstblk;\n" else ");\nbreak :firstblk;\n";
+                const brk: []const u8 = if (host_is_cs) ");\ngoto __koru_firstblk_done;\n" else if (host_is_js) ");\nbreak firstblk;\n" else ");\nbreak :firstblk;\n";
                 loop.appendSlice(allocator, brk) catch unreachable;
             } else {
                 loop.appendSlice(allocator, ");\n") catch unreachable;
             }
             loop.appendSlice(allocator, "}\n}\n") catch unreachable;
         }
-        if (is_first) loop.appendSlice(allocator, "}\n") catch unreachable;
+        if (is_first) loop.appendSlice(allocator, if (host_is_cs) "}\n__koru_firstblk_done: ;\n" else "}\n") catch unreachable;
         loop.appendSlice(allocator, none_call) catch unreachable;
         loop.appendSlice(allocator, "}\n") catch unreachable;
     } else {
@@ -700,8 +697,8 @@
         else if (q_may_remove) {
             // Removal-tolerant sweep: len is re-read each iteration and the
             // cursor only advances when the body left len unchanged (690_031).
-            loop.appendSlice(allocator, if (host_is_js) "let __koru_si = 0;\n" else "var __koru_si: usize = 0;\n") catch unreachable;
-            loop.appendSlice(allocator, std.fmt.allocPrint(allocator, "while (__koru_si < {s}) {{\nconst __koru_len_before = {s};\n", .{ cell_len, cell_len }) catch unreachable) catch unreachable;
+            loop.appendSlice(allocator, if (host_is_js) "let __koru_si = 0;\n" else if (host_is_cs) "var __koru_si = 0;\n" else "var __koru_si: usize = 0;\n") catch unreachable;
+            loop.appendSlice(allocator, std.fmt.allocPrint(allocator, "while (__koru_si < {s}) {{\n{s} __koru_len_before = {s};\n", .{ cell_len, if (host_is_cs) "var" else "const", cell_len }) catch unreachable) catch unreachable;
         } else {
             loop.appendSlice(allocator, HS.loopHead(allocator, host_target, "__koru_si", cell_len)) catch unreachable;
         }
@@ -711,7 +708,7 @@
         if (index_rhs != null)
             loop.appendSlice(allocator, StoreIndex.firstClose(allocator, host_is_js, none_call)) catch unreachable
         else if (q_index_rhs != null)
-            loop.appendSlice(allocator, StoreIndexWalk.memberClose(allocator, host_is_js, cellq, store_name, q_index_icol, q_bucket_stable)) catch unreachable
+            loop.appendSlice(allocator, siwMemberClose(allocator, host_is_js, cellq, store_name, q_index_icol, q_bucket_stable)) catch unreachable
         else if (is_first) {
             loop.appendSlice(allocator, ");\nbreak;\n}\n") catch unreachable;
             loop.appendSlice(allocator, none_call) catch unreachable;
@@ -786,7 +783,7 @@
     };
     if (is_head and lexical_captures > 0) {
         if (flow.impl_of) |iof| {
-            const pbody = std.fmt.allocPrint(allocator, "{s}return;", .{loop.items}) catch unreachable;
+            const pbody = std.fmt.allocPrint(allocator, "{s}{s}", .{ loop.items, if (host_is_cs) "" else "return;" }) catch unreachable;
             return .{ .transformed = .{
                 .replacement = ast.Item{ .proc_decl = ast.ProcDecl{
                     .path = iof,
@@ -822,7 +819,7 @@
         .location = flow.location,
         .module = allocator.dupe(u8, flow.module) catch unreachable,
     } }) catch unreachable;
-    const srun_body = std.fmt.allocPrint(allocator, "{s}return;", .{loop.items}) catch unreachable;
+    const srun_body = std.fmt.allocPrint(allocator, "{s}{s}", .{ loop.items, if (host_is_cs) "" else "return;" }) catch unreachable;
     appended.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
         .path = H.mkPathH(allocator, home_ns, srun_name),
         .body = ast.Source{ .text = srun_body, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },

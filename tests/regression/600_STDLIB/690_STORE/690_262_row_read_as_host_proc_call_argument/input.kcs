@@ -1,0 +1,2 @@
+~proc mk|cs { return "x"; }
+~proc show|cs { global::System.Console.WriteLine("row " + id + " " + label); }

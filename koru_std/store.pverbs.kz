@@ -531,7 +531,7 @@ if (step_arm) |*sa| {
         const drain = std.fmt.allocPrint(allocator, "{s}__store_dischargeone_{s}_event.handler({s});\n", .{ body_ns, store_name, hs.argRec(allocator, host_target, hs.recField(allocator, host_target, da.binding.?, "__koru_out")) }) catch unreachable;
         pb.appendSlice(allocator, drain) catch unreachable;
     } else {
-        const drain = std.fmt.allocPrint(allocator, "{s}{s}.{s}_event.handler({s});\n", .{ if (host_is_js) "" else "_ = ", soi.disch_host, soi.disch_event, hs.argRec(allocator, host_target, hs.recField(allocator, host_target, soi.disch_param, "__koru_out")) }) catch unreachable;
+        const drain = std.fmt.allocPrint(allocator, "{s}{s}.{s}_event.handler({s});\n", .{ if (host_is_js) "" else "_ = ", soi.disch_host, soi.disch_emitted, hs.argRec(allocator, host_target, hs.recField(allocator, host_target, soi.disch_param, "__koru_out")) }) catch unreachable;
         pb.appendSlice(allocator, drain) catch unreachable;
     }
     if (host_is_js) {

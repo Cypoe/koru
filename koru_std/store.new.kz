@@ -41,7 +41,8 @@
     // first green exists here" because it measured the container's 111 emitted
     // lines; the singleton is a separable rung reached by its own tests.
     const host_is_js = std.mem.eql(u8, CompilerEnv.lang, "js");
-    const proc_target = if (host_is_js) "js" else "zig";
+    const host_is_cs = std.mem.eql(u8, CompilerEnv.lang, "cs");
+    const proc_target = if (host_is_js) "js" else if (host_is_cs) "cs" else "zig";
 
     // The host-shape helpers live in `codegen_utils` beside `lowerKoruExpr`,
     // for that function's reason and one more: `store:query` emits a sweep loop
@@ -49,7 +50,7 @@
     // a `.kz` module-scope helper would be emitted into every program that
     // imports std/store — 90 lines of compiler machinery in a shipped artifact.
     const HS = codegen_utils_store.HostShape;
-    const host_target: codegen_utils_store.HostTarget = if (host_is_js) .js else .zig;
+    const host_target: codegen_utils_store.HostTarget = if (host_is_js) .js else if (host_is_cs) .cs else .zig;
 
     if (item.* != .flow) @panic("store:new transform: containing item is not a flow - walker dispatch contract broken");
     const flow = &item.flow;
@@ -708,6 +709,10 @@
         host_type: []const u8, // "koru_std.koru_string.String" (Zig storage cell)
         state: []const u8, // "instance" / "owned"
         disch_event: []const u8, // canonical discharger event name ("free")
+        disch_emitted: []const u8, // the name the host spells — cs folds the
+        // module qualifier into the class name (`std_io_free`) when the
+        // discharger lives outside the main module; other hosts use
+        // disch_event verbatim.
         disch_param: []const u8, // its consuming param field name ("s")
         disch_host: []const u8, // "koru_std.koru_string" (discharger module host)
     };
@@ -798,6 +803,7 @@
                 .host_type = std.fmt.allocPrint(allocator, "{s}.{s}", .{ HostPath.build(allocator, module_slash), type_name }) catch unreachable,
                 .state = allocator.dupe(u8, state) catch unreachable,
                 .disch_event = "",
+                .disch_emitted = "",
                 .disch_param = "",
                 .disch_host = "",
             };
@@ -1010,7 +1016,25 @@
             // exists. Emitting the Zig path here reached node as
             // `ReferenceError: koru_std is not defined`, at teardown, on 13
             // tests that had just started compiling.
-            oi.disch_host = if (storeHostTarget() == .js) "main_module" else HostPath.build(allocator, oi.module_slash);
+            // cs joins JS's flat answer: `main_module.<ev>_event.handler` — the
+            // cs emitter flattens every module's decls into main_module too.
+            oi.disch_host = if (storeHostTarget() == .zig) HostPath.build(allocator, oi.module_slash) else "main_module";
+            // On cs the emitted class name carries the module qualifier
+            // (`std/io:free` → `std_io_free_event`) — UNLESS the discharger
+            // lives in the main module itself, where the emitter keeps the
+            // bare name (`free_event`). Mirrors eventClassName in
+            // cs_emitter.zig.
+            oi.disch_emitted = oi.disch_event;
+            if (storeHostTarget() == .cs) {
+                const in_main = std.mem.eql(u8, oi.module_slash, program.main_module_name) or std.mem.eql(u8, oi.module_dot, program.main_module_name);
+                if (!in_main) {
+                    var qbuf = std.ArrayList(u8).initCapacity(allocator, oi.module_slash.len + 1 + oi.disch_event.len) catch unreachable;
+                    for (oi.module_slash) |qc| qbuf.append(allocator, switch (qc) { '/', '.', '-' => '_', else => qc }) catch unreachable;
+                    qbuf.append(allocator, '_') catch unreachable;
+                    qbuf.appendSlice(allocator, oi.disch_event) catch unreachable;
+                    oi.disch_emitted = qbuf.toOwnedSlice(allocator) catch unreachable;
+                }
+            }
             field_owned_info[oi_idx] = oi;
             // RETAIN the discovered discharger (its event_decl AND matching
             // proc_decl) so dead-strip preserves them. The teardown calls the
@@ -1678,7 +1702,7 @@
             updated_arms.items.len == 0 and cleared_arms.items.len == 0 and
             pwatch_arms.items.len == 0 and discharge_arm == null and
             !want_kind and
-            !Bulk.hasFacets(allocator, program, leaf_provs.items) and
+            !bulkHasFacets(allocator, program, leaf_provs.items) and
             blk_lean_cols: {
                 var bad = false;
                 for (field_owned) |fo| {
@@ -1787,433 +1811,6 @@
         //     the indexed lvalue head (`<store>[__koru_qrow].<f>` — O2
         //     query-row head), the VALUE side to a direct fresh column read.
         //   - anywhere else: direct fresh column read.
-        const PRewrite = struct {
-            // An OWNED column's value is a pointer that carries a phantom
-            // (`*String<std.string:instance>`), and the phantom only travels
-            // through the qbody's projected input — a raw cell read has none,
-            // and the checker refuses it (690_238). The input is MANGLED so a
-            // body binding of the field's own name cannot claim it (the same
-            // reservation the read path's srf_* names make).
-            fn projName(alloc: std.mem.Allocator, field: []const u8) []const u8 {
-                const mangled = std.mem.replaceOwned(u8, alloc, field, ".", "_") catch unreachable;
-                return std.fmt.allocPrint(alloc, "__koru_qproj_{s}", .{mangled}) catch unreachable;
-            }
-            // `cur` is the row cursor's NAME and `dense` says what it holds.
-            //
-            // A rule whose program can never remove a row gets the DENSE loop
-            // index, the same cursor the query path has carried since the
-            // O10.iv elision, and it is spelled `__koru_sdix_*` so the write
-            // family passes it through untouched (store.kz:5698 keys on that
-            // prefix). Otherwise the cursor is a generational HANDLE and every
-            // access resolves it: `handle -> hslot_gen -> hslot_row -> column`
-            // is a four-deep chain of dependent loads behind four panic
-            // branches, in the hottest loop the language has, and no part of
-            // it can be vectorised or hoisted because each address depends on
-            // the previous load.
-            //
-            // The elision is safe rather than merely fast because the surface
-            // no longer admits a raw row index anywhere: `store[cell]` names a
-            // row by handle, so a dense cursor is INTERNAL to this lowering
-            // and there is nothing user-written for it to leak into. Reserving
-            // brand 0 (690_242) is the second half — a dense index in a handle
-            // position now traps instead of addressing an unrelated slot.
-            fn colRead(alloc: std.mem.Allocator, store: []const u8, field: []const u8, is_char: bool, cur: []const u8, dense: bool) []const u8 {
-                // The column is named through a POINTER (`&`) before the index:
-                // a by-value base would force Zig to materialise the whole
-                // column ahead of a call-valued index
-                // (frag-a-call-valued-index-copies-the-whole-array); an 8-byte
-                // pointer base costs nothing and stays a plain expression, so
-                // it survives the `{{ ... }}` interpolation contexts a hoisted
-                // const block cannot.
-                const idx = if (dense)
-                    std.fmt.allocPrint(alloc, "@as(usize, @intCast({s}))", .{cur}) catch unreachable
-                else
-                    std.fmt.allocPrint(alloc, "__koru_store_{s}.__koru_resolve({s})", .{ store, cur }) catch unreachable;
-                const esc_field = codegen_utils_store.escapeZigIdentifier(alloc, field) catch field;
-                // A char column reads as the string slice up to the first NUL
-                // (the same shape the qrow projection binds); scalars read
-                // their cell slot directly. On the JS target the char cell IS
-                // a string (seeded "", written by truncation at insert), so
-                // the read is the plain column read — `@import(...)` has no JS
-                // lowering and must never reach that emitter.
-                if (is_char) {
-                    if (std.mem.eql(u8, CompilerEnv.lang, "js")) {
-                        return std.fmt.allocPrint(alloc, "(&__koru_store_{s}.{s})[{s}]", .{ store, esc_field, idx }) catch unreachable;
-                    }
-                    return std.fmt.allocPrint(alloc, "@import(\"std\").mem.sliceTo(&(&__koru_store_{s}.{s})[{s}], 0)", .{ store, esc_field, idx }) catch unreachable;
-                }
-                return std.fmt.allocPrint(alloc, "(&__koru_store_{s}.{s})[{s}]", .{ store, esc_field, idx }) catch unreachable;
-            }
-            fn entityRefs(alloc: std.mem.Allocator, text: []const u8, store: []const u8, fields: []const []const u8, char_caps: []const ?usize, owned: []const bool, target_form: bool, use_owned_param: bool, bind: []const u8, used: []bool, cur: []const u8, dense: bool) []const u8 {
-                const prefix = std.fmt.allocPrint(alloc, "{s}.", .{bind}) catch unreachable;
-                const expr_ctx = ast.expressionMask(alloc, text);
-                var out = std.ArrayList(u8).initCapacity(alloc, text.len + 32) catch unreachable;
-                var i: usize = 0;
-                while (i < text.len) {
-                    const at_boundary = ast.identBoundaryBefore(text, i);
-                    // `expr_ctx[i]` is what keeps this OUT OF STRING LITERALS.
-                    // The mask was computed here from the start and consulted
-                    // only by the bare-identity branch below, so a bare `e` was
-                    // safe while `e.<column>` — the common case — rewrote
-                    // wherever it appeared, text included. A rule arm storing
-                    // the literal "e.label is a column" shipped a Zig cell read
-                    // in its place: compiled, ran, wrong, silent on the JS lane
-                    // and an unreadable Zig error on the other. Same disease as
-                    // the visitor emitter's literal corruption (230_016), a
-                    // different site, and the reason both are worth a mask
-                    // rather than a special case.
-                    if (at_boundary and expr_ctx[i] and std.mem.startsWith(u8, text[i..], prefix)) {
-                        const fstart = i + prefix.len;
-                        const rest = text[fstart..];
-                        var best_fi: ?usize = null;
-                        var best_len: usize = 0;
-                        for (fields, 0..) |f, kfi| {
-                            if (std.mem.startsWith(u8, rest, f)) {
-                                const after_char_idx = fstart + f.len;
-                                const boundary_ok = after_char_idx >= text.len or !H.isIdentChar(text[after_char_idx]);
-                                if (boundary_ok and f.len > best_len) {
-                                    best_fi = kfi;
-                                    best_len = f.len;
-                                }
-                            }
-                        }
-                        if (best_fi) |kidx| {
-                            const fname = fields[kidx];
-                            const fend = fstart + best_len;
-                            if (target_form) {
-                                const esc_fname = codegen_utils_store.escapeZigIdentifier(alloc, fname) catch fname;
-                                const t = std.fmt.allocPrint(alloc, "{s}[{s}].{s}", .{ store, cur, esc_fname }) catch unreachable;
-                                out.appendSlice(alloc, t) catch unreachable;
-                            } else if (use_owned_param and owned[kidx]) {
-                                // The ONLY body reference that needs a
-                                // projection: an owned column travels as the
-                                // phantom-carrying input, never as a raw cell
-                                // read (690_238). A scalar takes the column
-                                // read below and costs the row nothing.
-                                used[kidx] = true;
-                                out.appendSlice(alloc, projName(alloc, fname)) catch unreachable;
-                            } else {
-                                out.appendSlice(alloc, colRead(alloc, store, fname, char_caps[kidx] != null, cur, dense)) catch unreachable;
-                            }
-                            i = fend;
-                            continue;
-                        }
-                    }
-                    // A BARE binding (not `<row>.field`, not `<row>Xyz`) is the
-                    // query's row cursor itself — e.g. `take(store[r])` addresses
-                    // the currently-swept row. Rewrite it to the qbody's
-                    // row-cursor input so take/stored heads resolve it (690_031).
-                    //
-                    // EXCEPT on a one-column store, where the row IS its value and
-                    // a bare binding reads the column — the same call sweep makes.
-                    // The two readings genuinely collide there: `store[r]` wants
-                    // the cursor and `{{ r:d }}` wants the value. Value wins, so
-                    // row-addressing a one-column store has no spelling yet.
-                    if (at_boundary and std.mem.startsWith(u8, text[i..], bind)) {
-                        const after = i + bind.len;
-                        const next_is_ident = after < text.len and H.isIdentChar(text[after]);
-                        const next_is_dot = after < text.len and text[after] == '.';
-                        if (!next_is_ident and !next_is_dot) {
-                            if (fields.len == 1 and std.mem.eql(u8, fields[0], ast.STORE_IDENTITY_COLUMN) and expr_ctx[i]) {
-                                if (target_form) {
-                                    const t = std.fmt.allocPrint(alloc, "{s}[{s}].{s}", .{ store, cur, fields[0] }) catch unreachable;
-                                    out.appendSlice(alloc, t) catch unreachable;
-                                } else if (use_owned_param and owned[0]) {
-                                    used[0] = true;
-                                    out.appendSlice(alloc, projName(alloc, fields[0])) catch unreachable;
-                                } else {
-                                    out.appendSlice(alloc, colRead(alloc, store, fields[0], char_caps[0] != null, cur, dense)) catch unreachable;
-                                }
-                            } else {
-                                out.appendSlice(alloc, cur) catch unreachable;
-                            }
-                            i = after;
-                            continue;
-                        }
-                    }
-                    out.append(alloc, text[i]) catch unreachable;
-                    i += 1;
-                }
-                return out.toOwnedSlice(alloc) catch unreachable;
-            }
-            /// Split an already-rewritten template into a host format string and
-            /// its argument list. By the time a stored value reaches here the
-            /// `{{ … }}` holes hold HOST code — the row rewrite treats a hole as
-            /// expression context, which is why `print.ln("{{ e.v:d }}")` has
-            /// always worked — so this only has to separate the literal text
-            /// from the holes and carry each hole's format specifier across.
-            ///
-            /// Returns null when the text holds no hole, which is the ordinary
-            /// case: a plain literal is written as-is.
-            const Rendered = struct { fmt: []const u8, args: []const u8 };
-            fn renderTemplate(alloc: std.mem.Allocator, text: []const u8, host_js: bool) ?Rendered {
-                if (std.mem.indexOf(u8, text, "{{") == null) return null;
-                // The surrounding quotes are part of the literal's text.
-                var body = text;
-                if (body.len >= 2 and body[0] == '"' and body[body.len - 1] == '"') body = body[1 .. body.len - 1];
-                var fmt = std.ArrayList(u8).initCapacity(alloc, body.len + 16) catch unreachable;
-                var args = std.ArrayList(u8).initCapacity(alloc, 64) catch unreachable;
-                var n_args: usize = 0;
-                var i: usize = 0;
-                while (i < body.len) {
-                    if (i + 1 < body.len and body[i] == '{' and body[i + 1] == '{') {
-                        const close = std.mem.indexOfPos(u8, body, i + 2, "}}") orelse break;
-                        const hole = std.mem.trim(u8, body[i + 2 .. close], " \t");
-                        // The specifier is the LAST colon outside any bracket —
-                        // a hole's expression may itself contain colons (a
-                        // module-qualified call, an indexed cell read).
-                        var spec: []const u8 = "any";
-                        var expr = hole;
-                        var depth: i32 = 0;
-                        var k: usize = hole.len;
-                        while (k > 0) {
-                            k -= 1;
-                            const c = hole[k];
-                            if (c == ')' or c == ']') depth += 1;
-                            if (c == '(' or c == '[') depth -= 1;
-                            if (c == ':' and depth == 0) {
-                                spec = hole[k + 1 ..];
-                                expr = hole[0..k];
-                                break;
-                            }
-                        }
-                        if (host_js) {
-                            fmt.appendSlice(alloc, "\" + (") catch unreachable;
-                            fmt.appendSlice(alloc, expr) catch unreachable;
-                            fmt.appendSlice(alloc, ") + \"") catch unreachable;
-                        } else {
-                            fmt.append(alloc, '{') catch unreachable;
-                            // `:f` is Koru's spelling for "a float, rendered
-                            // plainly"; Zig spells that as no specifier at all.
-                            if (!std.mem.eql(u8, spec, "f")) fmt.appendSlice(alloc, spec) catch unreachable;
-                            fmt.append(alloc, '}') catch unreachable;
-                            if (n_args > 0) args.appendSlice(alloc, ", ") catch unreachable;
-                            // A char column reads as a fixed array; `{s}` needs
-                            // the NUL-trimmed slice, which is what the read path
-                            // hands every other consumer.
-                            args.appendSlice(alloc, expr) catch unreachable;
-                        }
-                        n_args += 1;
-                        i = close + 2;
-                        continue;
-                    }
-                    fmt.append(alloc, body[i]) catch unreachable;
-                    i += 1;
-                }
-                return .{ .fmt = fmt.toOwnedSlice(alloc) catch unreachable, .args = args.toOwnedSlice(alloc) catch unreachable };
-            }
-            // A stored block is `target: value` pairs — target keys keep the
-            // indexed-lvalue form, values read columns directly. Values never
-            // take the owned projection: the write path reads the cell at write
-            // time (690_083), same as the read path's .live form.
-            fn storedBlock(alloc: std.mem.Allocator, text: []const u8, store: []const u8, fields: []const []const u8, char_caps: []const ?usize, owned: []const bool, bind: []const u8, used: []bool, cur: []const u8, dense: bool) []const u8 {
-                const braced2 = std.fmt.allocPrint(alloc, "{{{s}}}", .{text}) catch unreachable;
-                const struct_literal2 = @import("struct_literal");
-                const pairs = struct_literal2.parseFields(alloc, braced2) catch return text;
-                var out = std.ArrayList(u8).initCapacity(alloc, text.len + 64) catch unreachable;
-                for (pairs, 0..) |pr, i| {
-                    if (i > 0) out.appendSlice(alloc, ", ") catch unreachable;
-                    out.appendSlice(alloc, entityRefs(alloc, pr.name, store, fields, char_caps, owned, true, false, bind, used, cur, dense)) catch unreachable;
-                    out.appendSlice(alloc, ": ") catch unreachable;
-                    out.appendSlice(alloc, entityRefs(alloc, pr.value, store, fields, char_caps, owned, false, false, bind, used, cur, dense)) catch unreachable;
-                }
-                return out.toOwnedSlice(alloc) catch unreachable;
-            }
-            /// `<row>.<field>` -> `<field>`, and a bare `<row>` on a ONE-column
-            /// store -> that column's projected name. Expression context only.
-            fn bindStrip(alloc: std.mem.Allocator, text: []const u8, bind: []const u8, fields: []const []const u8, used: []bool) []const u8 {
-                const prefix = std.fmt.allocPrint(alloc, "{s}.", .{bind}) catch unreachable;
-                const expr_ctx = ast.expressionMask(alloc, text);
-                var out = std.ArrayList(u8).initCapacity(alloc, text.len + 16) catch unreachable;
-                var i: usize = 0;
-                while (i < text.len) {
-                    const at_boundary = ast.identBoundaryBefore(text, i);
-                    if (at_boundary and expr_ctx[i] and std.mem.startsWith(u8, text[i..], prefix)) {
-                        // The guard runs in the qrow scope, where a column is
-                        // reachable only as a projected const — so stripping a
-                        // reference is what PUTS that column in the projection.
-                        const fstart = i + prefix.len;
-                        const rest = text[fstart..];
-                        var best_fi: ?usize = null;
-                        var best_len: usize = 0;
-                        for (fields, 0..) |f, fi| {
-                            if (std.mem.startsWith(u8, rest, f)) {
-                                const after_char_idx = fstart + f.len;
-                                const boundary_ok = after_char_idx >= text.len or !H.isIdentChar(text[after_char_idx]);
-                                if (boundary_ok and f.len > best_len) {
-                                    best_fi = fi;
-                                    best_len = f.len;
-                                }
-                            }
-                        }
-                        if (best_fi) |fi| {
-                            used[fi] = true;
-                            i += prefix.len;
-                            continue;
-                        }
-                    }
-                    if (at_boundary and expr_ctx[i] and fields.len == 1 and
-                        std.mem.eql(u8, fields[0], ast.STORE_IDENTITY_COLUMN) and
-                        std.mem.startsWith(u8, text[i..], bind))
-                    {
-                        const after = i + bind.len;
-                        if (after >= text.len or !H.isIdentChar(text[after])) {
-                            used[0] = true;
-                            out.appendSlice(alloc, fields[0]) catch unreachable;
-                            i = after;
-                            continue;
-                        }
-                    }
-                    out.append(alloc, text[i]) catch unreachable;
-                    i += 1;
-                }
-                return out.toOwnedSlice(alloc) catch unreachable;
-            }
-            /// Lower every `{{ … }}`-carrying value in a stored block into a
-            /// built string, declaring the buffer in the invocation's preamble.
-            ///
-            /// The buffer is sized to the TARGET COLUMN, which is the whole
-            /// reason this is cheap: the destination width is known at compile
-            /// time, so the text is formatted straight into a stack array of
-            /// exactly that size. `print` uses a blanket 64KB because it has no
-            /// destination to measure; a column write does.
-            var tmpl_seq: usize = 0;
-            fn templateValues(alloc: std.mem.Allocator, text: []const u8, inv: *ast.Invocation, fields: []const []const u8, char_caps: []const ?usize, host_js: bool) []const u8 {
-                const first = std.mem.indexOf(u8, text, "{{") orelse return text;
-                // The value's extent is found from the TEMPLATE outward, never
-                // by scanning quotes. After the row rewrite a hole holds host
-                // code that carries its own string literals — `@import("std")`
-                // — so the value is no longer a well-formed quoted literal, and
-                // a quote scanner starts a span in the middle of one. This is
-                // why print's own scanner keys on `{{`/`}}` and never on
-                // quotes; same reason here.
-                //
-                // One templated write per block this rung. A block mixing a
-                // templated value with others would need the pair boundaries,
-                // and those are exactly what the rewritten text no longer
-                // reliably shows.
-                if (std.mem.indexOfPos(u8, text, first + 2, "{{") != null and std.mem.count(u8, text, "{{") > std.mem.count(u8, text, "}}")) return text;
-                const vstart = std.mem.lastIndexOfScalar(u8, text[0..first], '"') orelse return text;
-                const last_close = std.mem.lastIndexOf(u8, text, "}}") orelse return text;
-                const vend = std.mem.indexOfScalarPos(u8, text, last_close + 2, '"') orelse return text;
-                const span = text[vstart .. vend + 1];
-                const r = renderTemplate(alloc, span, host_js) orelse return text;
-
-                // Size the buffer from the column being written: the target is
-                // whatever identifier precedes the `:` before the value.
-                var cap: usize = 256;
-                {
-                    var k = vstart;
-                    while (k > 0 and (text[k - 1] == ' ' or text[k - 1] == ':')) k -= 1;
-                    const nend = k;
-                    while (k > 0 and (H.isIdentChar(text[k - 1]) or text[k - 1] == '.')) k -= 1;
-                    const tname = text[k..nend];
-                    const fname = if (std.mem.lastIndexOfScalar(u8, tname, '.')) |d| tname[d + 1 ..] else tname;
-                    for (fields, 0..) |f, fi| {
-                        if (std.mem.eql(u8, f, fname)) {
-                            if (char_caps[fi]) |cc| cap = cc;
-                        }
-                    }
-                }
-
-                tmpl_seq += 1;
-                const nm = std.fmt.allocPrint(alloc, "__koru_tmpl_{d}", .{tmpl_seq}) catch unreachable;
-                var pre = std.ArrayList(u8).initCapacity(alloc, 256) catch unreachable;
-                if (inv.preamble_code) |existing| pre.appendSlice(alloc, existing) catch unreachable;
-                if (host_js) {
-                    const line = std.fmt.allocPrint(alloc, "const {s} = \"{s}\";\n", .{ nm, r.fmt }) catch unreachable;
-                    pre.appendSlice(alloc, line) catch unreachable;
-                } else {
-                    // A column-sized buffer TRUNCATES an over-long result —
-                    // exactly what the column write already does to an
-                    // over-long literal. Consistent, and both want a
-                    // `| full`-shaped answer rather than silence.
-                    const line = std.fmt.allocPrint(alloc,
-                        "var __koru_tb_{d}: [{d}]u8 = undefined;\nconst {s} = @import(\"std\").fmt.bufPrint(&__koru_tb_{d}, \"{s}\", .{{{s}}}) catch __koru_tb_{d}[0..0];\n",
-                        .{ tmpl_seq, cap, nm, tmpl_seq, r.fmt, r.args, tmpl_seq }) catch unreachable;
-                    pre.appendSlice(alloc, line) catch unreachable;
-                }
-                inv.preamble_code = pre.toOwnedSlice(alloc) catch unreachable;
-
-                var out = std.ArrayList(u8).initCapacity(alloc, text.len + 32) catch unreachable;
-                out.appendSlice(alloc, text[0..vstart]) catch unreachable;
-                out.appendSlice(alloc, nm) catch unreachable;
-                out.appendSlice(alloc, text[vend + 1 ..]) catch unreachable;
-                return out.toOwnedSlice(alloc) catch unreachable;
-            }
-            fn walkCont(alloc: std.mem.Allocator, cont: *ast.Continuation, store: []const u8, fields: []const []const u8, char_caps: []const ?usize, owned: []const bool, bind: []const u8, used: []bool, cur: []const u8, dense: bool, host_js_w: bool) void {
-                if (cont.node) |*n| {
-                    switch (@constCast(n).*) {
-                        .invocation => |*inv| {
-                            const is_stored = blk: {
-                                if (inv.path.module_qualifier) |mq| {
-                                    if (std.mem.eql(u8, mq, "std.store") and inv.path.segments.len == 1 and std.mem.eql(u8, inv.path.segments[0], "stored")) break :blk true;
-                                }
-                                break :blk false;
-                            };
-                            for (inv.args) |*a| {
-                                if (is_stored and std.mem.eql(u8, a.name, "source")) {
-                                    @constCast(a).value = storedBlock(alloc, a.value, store, fields, char_caps, owned, bind, used, cur, dense);
-                                    // A written value carrying `{{ … }}` builds
-                                    // text. The buffer it builds into CANNOT be
-                                    // an expression-local: the write memcpys out
-                                    // of it, so a `blk:` temporary would hand
-                                    // the copy a dangling slice. It goes in the
-                                    // invocation's preamble, which outlives the
-                                    // statement by construction.
-                                    // ONE lowering, shared by both carriers. The
-                                    // arg's `value` and its `source_value.text`
-                                    // are two views of the same written block —
-                                    // downstream reads the Source — so lowering
-                                    // each independently mints two buffers and
-                                    // leaves whichever one is not read dangling
-                                    // as an unused local.
-                                    // Mutate through the NODE pointer, never the switch capture: switching
-                                    // on a dereferenced node makes `inv` a TEMPORARY, so a field set on
-                                    // it is discarded (the 690_074 trap this walk already documents for
-                                    // inline_body). `a.value` survives only because args is a slice whose
-                                    // data is shared — which is exactly why the value substituted while
-                                    // its buffer declaration vanished.
-                                    @constCast(a).value = templateValues(alloc, a.value, &n.invocation, fields, char_caps, host_js_w);
-                                    if (a.source_value) |sv| {
-                                        const fresh = alloc.create(ast.Source) catch unreachable;
-                                        fresh.* = sv.*;
-                                        fresh.text = storedBlock(alloc, sv.text, store, fields, char_caps, owned, bind, used, cur, dense);
-                                        @constCast(a).source_value = fresh;
-                                    }
-                                } else {
-                                    @constCast(a).value = entityRefs(alloc, a.value, store, fields, char_caps, owned, false, true, bind, used, cur, dense);
-                                    if (a.expression_value) |ev| {
-                                        const fresh = alloc.create(ast.CapturedExpression) catch unreachable;
-                                        fresh.* = ev.*;
-                                        fresh.text = entityRefs(alloc, ev.text, store, fields, char_caps, owned, false, true, bind, used, cur, dense);
-                                        @constCast(a).expression_value = fresh;
-                                    }
-                                    if (a.source_value) |sv| {
-                                        const fresh = alloc.create(ast.Source) catch unreachable;
-                                        fresh.* = sv.*;
-                                        fresh.text = entityRefs(alloc, sv.text, store, fields, char_caps, owned, false, true, bind, used, cur, dense);
-                                        @constCast(a).source_value = fresh;
-                                    }
-                                }
-                            }
-                            // Template expand (`if`/`for`) froze its rendered
-                            // body — condition text included — into inline_body
-                            // BEFORE this walk runs (690_074's freeze). The row
-                            // binding has to reach into the frozen text too, or
-                            // an `if(e.id == 7)` under the arm ships its raw
-                            // surface. Mutate via the NODE pointer — the switch
-                            // capture is a temporary (the 690_074 trap).
-                            if (n.invocation.inline_body) |ib| {
-                                n.invocation.inline_body = entityRefs(alloc, ib, store, fields, char_caps, owned, false, true, bind, used, cur, dense);
-                            }
-                        },
-                        else => {},
-                    }
-                }
-                for (cont.continuations) |*c| walkCont(alloc, @constCast(c), store, fields, char_caps, owned, bind, used, cur, dense, host_js_w);
-            }
-        };
         for (qsites.items) |*qs| {
             // Aligned with field_names: owned[i] is true exactly where
             // field_owned_info[i] names a column.
@@ -2243,7 +1840,7 @@
             const cursor_dense = !qs.may_remove;
             qs.cursor = cursor;
             qs.cursor_dense = cursor_dense;
-            PRewrite.walkCont(allocator, &qs.body, store_name, field_names, field_char_caps, owned_flags, qs.row_bind, used, cursor, cursor_dense, host_is_js);
+            PRewrite.walkCont(allocator, &qs.body, store_name, field_names, field_char_caps, owned_flags, qs.row_bind, used, cursor, cursor_dense, host_is_js, host_is_cs);
             // The `when` guard is held beside the body, not inside it, so the
             // body walk never reached it. It sees the row through the binding
             // like everything else does.
@@ -2603,13 +2200,58 @@
             jc.appendSlice(allocator, "};\n") catch unreachable;
             jc.appendSlice(allocator, refhome.js) catch unreachable;
             break :blk_pjs jc.toOwnedSlice(allocator) catch unreachable;
+        } else if (host_is_cs) blk_pcs: {
+            // The cs cell is a nested `static class` — the columns are fixed-
+            // size arrays (capacity is a compile-time constant), `len` is a
+            // long, and the handle machinery keeps ZIG's bitwise packing —
+            // C# has real 64-bit shifts, so the JS multiplication encoding is
+            // unnecessary here.
+            var cc = std.ArrayList(u8).initCapacity(allocator, 1024) catch unreachable;
+            cc.appendSlice(allocator, "static class __koru_store_") catch unreachable;
+            cc.appendSlice(allocator, store_name) catch unreachable;
+            cc.appendSlice(allocator, " {\n") catch unreachable;
+            for (field_names, field_types, field_char_caps, field_owned_info) |fname, ftype, fcc, foi| {
+                // Char columns hold a cs string (the fixed cap is enforced at
+                // the write, like js); owned columns hold a boxed reference —
+                // `dynamic` because the host cell type names a zig type.
+                const ct: []const u8 = if (fcc != null) "string" else if (foi != null) "dynamic" else codegen_utils_store.csType(ftype);
+                cc.appendSlice(allocator, "    public static ") catch unreachable;
+                cc.appendSlice(allocator, ct) catch unreachable;
+                cc.appendSlice(allocator, "[] ") catch unreachable;
+                cc.appendSlice(allocator, codegen_utils_store.HostShape.csMember(allocator, fname)) catch unreachable;
+                cc.appendSlice(allocator, " = new ") catch unreachable;
+                cc.appendSlice(allocator, ct) catch unreachable;
+                cc.appendSlice(allocator, std.fmt.allocPrint(allocator, "[{d}];\n", .{CAP}) catch unreachable) catch unreachable;
+                // A handle-addressed read of this column — `col[resolve(h)]`
+                // spelled as a method so the call never sits in index
+                // position (call-valued-index fires on that shape in emitted
+                // text; the hoist it wants lives inside the method here).
+                if (needs_handles) {
+                    cc.appendSlice(allocator, std.fmt.allocPrint(allocator, "    public static dynamic __koru_read_{s}(long __h) {{ long __r = __koru_resolve(__h); return {s}[(int)__r]; }}\n", .{ codegen_utils_store.HostShape.csFolded(allocator, fname), codegen_utils_store.HostShape.csMember(allocator, fname) }) catch unreachable) catch unreachable;
+                }
+            }
+            if (index_col) |icol| {
+                cc.appendSlice(allocator, std.fmt.allocPrint(allocator, "    public static global::System.Collections.Generic.Dictionary<long, global::System.Collections.Generic.List<long>> __index_{s} = new global::System.Collections.Generic.Dictionary<long, global::System.Collections.Generic.List<long>>();\n", .{icol}) catch unreachable) catch unreachable;
+            }
+            cc.appendSlice(allocator, "    public static long len = 0;\n") catch unreachable;
+            // `__koru_brand` is unconditional — the ref-home guard reads it on
+            // candidate home stores, and -1 is the "not a handle source"
+            // sentinel when no hslot machinery was emitted.
+            if (needs_handles) {
+                cc.appendSlice(allocator, hstructEmitCs(allocator, CAP, store_ordinal, store_name)) catch unreachable;
+            } else {
+                cc.appendSlice(allocator, "    public static long __koru_brand = -1;\n") catch unreachable;
+            }
+            cc.appendSlice(allocator, "}\n") catch unreachable;
+            cc.appendSlice(allocator, refhome.cs) catch unreachable;
+            break :blk_pcs cc.toOwnedSlice(allocator) catch unreachable;
         } else pc.toOwnedSlice(allocator) catch unreachable;
 
         var appended_items = std.ArrayList(ast.Item).initCapacity(allocator, 8 + qsites.items.len * 3) catch unreachable;
         // Same routing as the singleton cell: a synthesized `host_line` points
         // at the user's `.k`, and the JS emitter only takes host lines from a JS
         // host facet (js_emitter.zig:223), so on JS it is dropped in silence.
-        const pcell_item = if (host_is_js) ast.Item{ .inline_code = ast.InlineCode{
+        const pcell_item = if (host_is_js or host_is_cs) ast.Item{ .inline_code = ast.InlineCode{
             .code = pcell_decl,
             .location = flow.location,
             .module = allocator.dupe(u8, flow.module) catch unreachable,
@@ -2641,15 +2283,15 @@
                 for (met) |*mf| {
                     if (!std.mem.eql(u8, mf.name, pv.field)) continue;
                     if (!ast_functional.facets.hasTerms(mf) and mf.clamp == null) break;
-                    const pexpr = if (host_is_js) pv.col else (codegen_utils_store.escapeZigIdentifier(allocator, pv.col) catch pv.col);
-                    const vexpr = ast_functional.facets.normExprFor(allocator, mf, pexpr, host_is_js);
+                    const pexpr = if (host_is_js) pv.col else if (host_is_cs) codegen_utils_store.HostShape.csMember(allocator, pv.col) else (codegen_utils_store.escapeZigIdentifier(allocator, pv.col) catch pv.col);
+                    const vexpr = ast_functional.facets.normExprFor(allocator, mf, pexpr, switch (host_target) { .zig => .zig, .js => .js, .cs => .cs });
                     for (field_names[0..user_field_count], 0..) |fname, fci| {
                         if (std.mem.eql(u8, fname, pv.col)) {
                             facet_norms[fci] = vexpr;
                             break;
                         }
                     }
-                    const cond = ast_functional.facets.predicate(allocator, mf, vexpr, host_is_js) orelse break;
+                    const cond = ast_functional.facets.predicate(allocator, mf, vexpr, switch (host_target) { .zig => .zig, .js => .js, .cs => .cs }) orelse break;
                     const payload = std.fmt.allocPrint(allocator, "\"{s}\"", .{pv.col}) catch unreachable;
                     const g = std.fmt.allocPrint(allocator, "if (!({s})) return {s};\n", .{ cond, HS.branchOne(allocator, host_target, ast_functional.facets.violated, payload) }) catch unreachable;
                     facet_prelude.appendSlice(allocator, g) catch unreachable;
@@ -2772,6 +2414,95 @@
                     \\}}
                     \\
                 , .{ qs.line, emit_ns, store_name, qs.line, storeSiteTag(allocator, qs.file) }) catch unreachable;
+                ap.appendSlice(allocator, call) catch unreachable;
+            }
+        } else if (host_is_cs) {
+            // Zig semantics in cs spelling: the handle packing is bitwise
+            // (HStruct.emitCs), the throw carries what @panic said, and the
+            // handler calls build typed `Input` structs — never anonymous.
+            const grow = std.fmt.allocPrint(allocator,
+                \\if (__koru_store_{s}.len >= {d}) throw new global::System.Exception("std/store: store '{s}' is full (capacity {d}) - declared capacity and the `| full` branch are pinned at 690_011");
+                \\long __koru_new_row = __koru_store_{s}.len;
+                \\
+            , .{ store_name, CAP, store_name, CAP, store_name }) catch unreachable;
+            ap.appendSlice(allocator, grow) catch unreachable;
+            if (needs_handles) {
+                const mint = std.fmt.allocPrint(allocator,
+                    \\long __koru_hslot;
+                    \\if (__koru_store_{s}.__koru_hslot_free_len > 0) {{
+                    \\  __koru_store_{s}.__koru_hslot_free_len -= 1;
+                    \\  __koru_hslot = __koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len];
+                    \\}} else {{
+                    \\  __koru_hslot = __koru_store_{s}.__koru_hslot_next;
+                    \\  __koru_store_{s}.__koru_hslot_next += 1;
+                    \\}}
+                    \\if (!__koru_store_{s}.__koru_ident) {{
+                    \\  __koru_store_{s}.__koru_hslot_row[__koru_hslot] = __koru_new_row;
+                    \\  __koru_store_{s}.__koru_row_hslot[__koru_new_row] = __koru_hslot;
+                    \\}}
+                    \\
+                , .{ store_name, store_name, store_name, store_name, store_name, store_name, store_name, store_name, store_name }) catch unreachable;
+                ap.appendSlice(allocator, mint) catch unreachable;
+            }
+            for (field_names[0..user_field_count], 0..) |fname, fci| {
+                const rhs = facet_norms[fci] orelse codegen_utils_store.HostShape.csMember(allocator, fname);
+                const csf = codegen_utils_store.HostShape.csMember(allocator, fname);
+                if (StoreRefHome.colTarget(cell_fields, fci) != null) ap.appendSlice(allocator, std.fmt.allocPrint(allocator, "__koru_home_{s}_{s}({s});\n", .{ store_name, fname, rhs }) catch unreachable) catch unreachable;
+                const w = if (field_char_caps[fci]) |n|
+                    std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_new_row] = ({s}.Length > {d}) ? {s}.Substring(0, {d}) : {s};\n", .{ store_name, csf, rhs, n, rhs, n, rhs }) catch unreachable
+                else
+                    std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_new_row] = {s};\n", .{ store_name, csf, rhs }) catch unreachable;
+                ap.appendSlice(allocator, w) catch unreachable;
+            }
+            if (is_tree) {
+                const w = std.fmt.allocPrint(allocator, "__koru_store_{s}.parent[__koru_new_row] = -1;\n", .{store_name}) catch unreachable;
+                ap.appendSlice(allocator, w) catch unreachable;
+            }
+            if (want_kind) {
+                const w = std.fmt.allocPrint(allocator, "__koru_store_{s}.kind[__koru_new_row] = kind;\n", .{store_name}) catch unreachable;
+                ap.appendSlice(allocator, w) catch unreachable;
+            }
+            const bump = std.fmt.allocPrint(allocator, "__koru_store_{s}.len += 1;\n", .{store_name}) catch unreachable;
+            ap.appendSlice(allocator, bump) catch unreachable;
+            if (index_col) |icol| {
+                ap.appendSlice(allocator, StoreIndex.insertPut(allocator, false, store_name, icol, icol)) catch unreachable;
+            }
+            for (inserted_arms.items, 0..) |arm, ai| {
+                const head = std.fmt.allocPrint(allocator, "{s}__store_inserted_{s}_{d}_event.handler(new {s}__store_inserted_{s}_{d}_event.Input {{ ", .{ emit_ns, store_name, ai, emit_ns, store_name, ai }) catch unreachable;
+                ap.appendSlice(allocator, head) catch unreachable;
+                for (arm.fields, 0..) |fnm, fi| {
+                    if (fi > 0) ap.appendSlice(allocator, ", ") catch unreachable;
+                    var is_owned = false;
+                    for (field_names, field_owned) |cn, co| {
+                        if (co and std.mem.eql(u8, cn, fnm)) is_owned = true;
+                    }
+                    const csfnm = codegen_utils_store.HostShape.csMember(allocator, fnm);
+                    const p = if (is_owned)
+                        std.fmt.allocPrint(allocator, "{s} = __koru_store_{s}.{s}[__koru_new_row]", .{ csfnm, store_name, csfnm }) catch unreachable
+                    else
+                        std.fmt.allocPrint(allocator, "{s} = {s}", .{ csfnm, blk: {
+                            for (field_names[0..user_field_count], 0..) |cn2, ci2| {
+                                if (std.mem.eql(u8, cn2, fnm)) break :blk facet_norms[ci2] orelse codegen_utils_store.HostShape.csMember(allocator, fnm);
+                            }
+                            break :blk codegen_utils_store.HostShape.csMember(allocator, fnm);
+                        } }) catch unreachable;
+                    ap.appendSlice(allocator, p) catch unreachable;
+                }
+                for (arm.id_requests, 0..) |idn, ii| {
+                    if (arm.fields.len + ii > 0) ap.appendSlice(allocator, ", ") catch unreachable;
+                    const p = std.fmt.allocPrint(allocator, "{s} = __koru_store_{s}.__koru_handle_of(__koru_new_row)", .{ codegen_utils_store.HostShape.csMember(allocator, idn), store_name }) catch unreachable;
+                    ap.appendSlice(allocator, p) catch unreachable;
+                }
+                ap.appendSlice(allocator, " });\n") catch unreachable;
+            }
+            for (qsites.items) |qs| {
+                if (qs.is_preorder) continue;
+                const call = std.fmt.allocPrint(allocator,
+                    \\if (__site_line > {d}) {{
+                    \\  {s}__store_qrow_{s}_L{d}_{s}_event.handler(new {s}__store_qrow_{s}_L{d}_{s}_event.Input {{ row = __koru_new_row }});
+                    \\}}
+                    \\
+                , .{ qs.line, emit_ns, store_name, qs.line, storeSiteTag(allocator, qs.file), emit_ns, store_name, qs.line, storeSiteTag(allocator, qs.file) }) catch unreachable;
                 ap.appendSlice(allocator, call) catch unreachable;
             }
         } else {
@@ -2957,6 +2688,8 @@
             } }) catch unreachable;
             const ok_tail = if (has_facet_guards)
                 std.fmt.allocPrint(allocator, "return {s};", .{HS.branchEmpty(allocator, host_target, ast_functional.facets.ok)}) catch unreachable
+            else if (host_is_cs)
+                ""
             else
                 "return;";
             const body = std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ facet_prelude.items, append_text, ok_tail }) catch unreachable;
@@ -3003,7 +2736,7 @@
             // BINDS it flips the handle gate.
             const handle_expr: []const u8 = if (needs_handles)
                 std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_handle_of(__koru_new_row)", .{store_name}) catch unreachable
-            else if (host_is_js)
+            else if (host_is_js or host_is_cs)
                 "__koru_new_row"
             else
                 "@as(i64, @intCast(__koru_new_row))";
@@ -3103,7 +2836,7 @@
                 std.fmt.allocPrint(allocator, "if (__koru_store_{s}.len >= {d}) return {s};\n", .{ store_name, CAP, HS.branchEmpty(allocator, host_target, "full") }) catch unreachable;
             const fhandle: []const u8 = if (needs_handles)
                 std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_handle_of(__koru_new_row)", .{store_name}) catch unreachable
-            else if (host_is_js)
+            else if (host_is_js or host_is_cs)
                 "__koru_new_row"
             else
                 "@as(i64, @intCast(__koru_new_row))";
@@ -3232,21 +2965,34 @@
                 if (is_tree and i == user_field_count) {
                     // `row` is dense; the ancestor chain carries HANDLES, so
                     // the self-compare reconstructs this row's handle once.
-                    const guard = if (host_is_js)
+                    const guard = if (host_is_cs)
+                        std.fmt.allocPrint(allocator, "var __koru_self = __koru_store_{s}.__koru_handle_of(__koru_r); var __koru_cyc = value_{d}; while (__koru_cyc != -1) {{ if (__koru_cyc == __koru_self) throw new global::System.Exception(\"std/store:stored: reparent in [tree] store '{s}' would make the row its own ancestor (cycle) - the write is rejected; handle it with a `| cycle` branch (default-on guard and branch are pinned at 695_002)\"); var __koru_cycr = __koru_store_{s}.__koru_resolve(__koru_cyc); __koru_cyc = __koru_store_{s}.parent[__koru_cycr]; }} ", .{ store_name, i, store_name, store_name, store_name }) catch unreachable
+                    else if (host_is_js)
                         std.fmt.allocPrint(allocator, "const __koru_self = __koru_store_{s}.__koru_handle_of(__koru_r); let __koru_cyc = value_{d}; while (__koru_cyc !== -1) {{ if (__koru_cyc === __koru_self) throw new Error(\"std/store:stored: reparent in [tree] store '{s}' would make the row its own ancestor (cycle) - the write is rejected; handle it with a `| cycle` branch (default-on guard and branch are pinned at 695_002)\"); const __koru_cycr = __koru_store_{s}.__koru_resolve(__koru_cyc); __koru_cyc = __koru_store_{s}.parent[__koru_cycr]; }} ", .{ store_name, i, store_name, store_name, store_name }) catch unreachable
                     else
                         std.fmt.allocPrint(allocator, "const __koru_self = __koru_store_{s}.__koru_handle_of(__koru_r); var __koru_cyc = value_{d}; while (__koru_cyc != -1) {{ if (__koru_cyc == __koru_self) @panic(\"std/store:stored: reparent in [tree] store '{s}' would make the row its own ancestor (cycle) - the write is rejected; handle it with a `| cycle` branch (default-on guard and branch are pinned at 695_002)\"); const __koru_cycr = __koru_store_{s}.__koru_resolve(__koru_cyc); __koru_cyc = __koru_store_{s}.parent[__koru_cycr]; }} ", .{ store_name, i, store_name, store_name, store_name }) catch unreachable;
                     atext.appendSlice(allocator, guard) catch unreachable;
                 }
+                // One field name, three member spellings in `.{s}` slots:
+                // zig quotes (`@"a.b"`), js keeps the raw key, cs folds the
+                // dotted join (`a.b` → `a_b`). Identifier-EMBED positions
+                // (event names, temp names) keep `fname`/`esc_fname`.
+                const esc_fname = codegen_utils_store.escapeZigIdentifier(allocator, fname) catch fname;
+                const mem = if (host_is_cs)
+                    codegen_utils_store.HostShape.csMember(allocator, fname)
+                else if (host_is_js)
+                    fname
+                else
+                    esc_fname;
                 if (updated_needs_old) {
                     // A char column's pre-image is COPIED before the write (a
                     // slice into the cell would observe the overwrite), then
                     // sliced to the first NUL — the `updated` payload's
-                    // `string` shape.
-                    const oldr = if (field_char_caps[i] != null and !host_is_js)
-                        std.fmt.allocPrint(allocator, "const __koru_oldbuf = __koru_store_{s}.{s}[__koru_r]; const __koru_old = @import(\"std\").mem.sliceTo(&__koru_oldbuf, 0); ", .{ store_name, fname }) catch unreachable
+                    // `string` shape. The cs column is a `string` — no padding.
+                    const oldr = if (field_char_caps[i] != null and host_target == .zig)
+                        std.fmt.allocPrint(allocator, "const __koru_oldbuf = __koru_store_{s}.{s}[__koru_r]; const __koru_old = @import(\"std\").mem.sliceTo(&__koru_oldbuf, 0); ", .{ store_name, mem }) catch unreachable
                     else
-                        std.fmt.allocPrint(allocator, "const __koru_old = __koru_store_{s}.{s}[__koru_r]; ", .{ store_name, fname }) catch unreachable;
+                        std.fmt.allocPrint(allocator, "{s} __koru_old = __koru_store_{s}.{s}[__koru_r]; ", .{ if (host_is_cs) "var" else "const", store_name, mem }) catch unreachable;
                     atext.appendSlice(allocator, oldr) catch unreachable;
                 }
                 // An OWNED arm is discharge-old + consume-new (690_062): read
@@ -3256,45 +3002,50 @@
                 // discharger on it (the teardown call convention,
                 // `<host>.<event>_event.handler`), then move the new pointer
                 // in. The caller's <!state> was consumed at the write event.
-                const esc_fname = codegen_utils_store.escapeZigIdentifier(allocator, fname) catch fname;
-                var wr: []const u8 = if (field_owned_info[i]) |oi| (if (host_is_js)
-                    std.fmt.allocPrint(allocator, "const __koru_old_ptr = __koru_store_{s}.{s}[__koru_r]; {s}.{s}_event.handler({{ {s}: __koru_old_ptr }}); __koru_store_{s}.{s}[__koru_r] = value_{d}; ", .{ store_name, fname, oi.disch_host, oi.disch_event, oi.disch_param, store_name, fname, i }) catch unreachable
+                var wr: []const u8 = if (field_owned_info[i]) |oi| (if (host_is_cs)
+                    std.fmt.allocPrint(allocator, "var __koru_old_ptr = __koru_store_{s}.{s}[__koru_r]; {s}.{s}_event.handler({s}); __koru_store_{s}.{s}[__koru_r] = value_{d}; ", .{ store_name, mem, oi.disch_host, oi.disch_emitted, HS.callArg(allocator, host_target, std.fmt.allocPrint(allocator, "{s}.", .{oi.disch_host}) catch unreachable, oi.disch_emitted, std.fmt.allocPrint(allocator, "{s}", .{HS.recField(allocator, host_target, oi.disch_param, "__koru_old_ptr")}) catch unreachable), store_name, mem, i }) catch unreachable
+                else if (host_is_js)
+                    std.fmt.allocPrint(allocator, "const __koru_old_ptr = __koru_store_{s}.{s}[__koru_r]; {s}.{s}_event.handler({{ {s}: __koru_old_ptr }}); __koru_store_{s}.{s}[__koru_r] = value_{d}; ", .{ store_name, mem, oi.disch_host, oi.disch_event, oi.disch_param, store_name, mem, i }) catch unreachable
                 else
-                    std.fmt.allocPrint(allocator, "const __koru_old_ptr = __koru_store_{s}.{s}[__koru_r]; _ = {s}.{s}_event.handler(.{{ .{s} = __koru_old_ptr }}); __koru_store_{s}.{s}[__koru_r] = value_{d}; ", .{ store_name, esc_fname, oi.disch_host, oi.disch_event, oi.disch_param, store_name, esc_fname, i }) catch unreachable)
-                else if (field_char_caps[i]) |n| (if (host_is_js)
+                    std.fmt.allocPrint(allocator, "const __koru_old_ptr = __koru_store_{s}.{s}[__koru_r]; _ = {s}.{s}_event.handler(.{{ .{s} = __koru_old_ptr }}); __koru_store_{s}.{s}[__koru_r] = value_{d}; ", .{ store_name, mem, oi.disch_host, oi.disch_event, oi.disch_param, store_name, mem, i }) catch unreachable)
+                else if (field_char_caps[i]) |n| (if (host_is_cs)
+                    // A cs char column is a `string`: the fixed-width buffer is
+                    // a truncation; there is no zero-fill analogue.
+                    std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = (value_{d}.Length > {d}) ? value_{d}.Substring(0, {d}) : value_{d}; ", .{ store_name, mem, i, n, i, n, i }) catch unreachable
+                else if (host_is_js)
                     // A JS char column is a string: the fixed-width buffer is a
                     // truncation and the zero-fill has no observable analogue.
-                    std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = value_{d}.slice(0, {d}); ", .{ store_name, fname, i, n }) catch unreachable
+                    std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = value_{d}.slice(0, {d}); ", .{ store_name, mem, i, n }) catch unreachable
                 else
-                    std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = @import(\"std\").mem.zeroes([{d}]u8); const __koru_wl = @min(value_{d}.len, {d}); @memcpy(__koru_store_{s}.{s}[__koru_r][0..__koru_wl], value_{d}[0..__koru_wl]); ", .{ store_name, esc_fname, n, i, n, store_name, esc_fname, i }) catch unreachable)
+                    std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = @import(\"std\").mem.zeroes([{d}]u8); const __koru_wl = @min(value_{d}.len, {d}); @memcpy(__koru_store_{s}.{s}[__koru_r][0..__koru_wl], value_{d}[0..__koru_wl]); ", .{ store_name, mem, n, i, n, store_name, mem, i }) catch unreachable)
                 else
-                    std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = value_{d}; ", .{ store_name, esc_fname, i }) catch unreachable;
+                    std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = value_{d}; ", .{ store_name, mem, i }) catch unreachable;
                 if (StoreRefHome.colTarget(cell_fields, i) != null) wr = std.fmt.allocPrint(allocator, "__koru_home_{s}_{s}(value_{d}); {s}", .{ store_name, fname, i, wr }) catch unreachable;
                 // `std/indexes:store` — a write to the indexed column moves
                 // the row's key: release the old (reseat the next-lowest
                 // claimant), claim the new when it is now the lowest.
                 if (index_col != null and i == index_idx) {
                     const vv = std.fmt.allocPrint(allocator, "value_{d}", .{i}) catch unreachable;
-                    wr = StoreIndex.writeWrap(allocator, host_is_js, store_name, index_col.?, esc_fname, wr, vv);
+                    wr = storeIndexWriteWrap(allocator, host_is_js, store_name, index_col.?, esc_fname, wr, vv);
                 }
                 atext.appendSlice(allocator, wr) catch unreachable;
                 for (updated_arms.items, 0..) |ua, ai| {
-                    const upd_payload = if (ua.fields.len != 0) blk_up: {
+                    const upd_ev = std.fmt.allocPrint(allocator, "__store_updated_{s}_{d}", .{ store_name, ai }) catch unreachable;
+                    const upd_fields = if (ua.fields.len != 0) blk_up: {
                         const nv = std.fmt.allocPrint(allocator, "value_{d}", .{i}) catch unreachable;
-                        const pair = std.fmt.allocPrint(allocator, "{s}, {s}", .{
+                        break :blk_up std.fmt.allocPrint(allocator, "{s}, {s}", .{
                             HS.recField(allocator, host_target, "old", "__koru_old"),
                             HS.recField(allocator, host_target, "new", nv),
                         }) catch unreachable;
-                        break :blk_up HS.argRec(allocator, host_target, pair);
-                    } else HS.argRec(allocator, host_target, "");
-                    const call = std.fmt.allocPrint(allocator, "{s}__store_updated_{s}_{d}_event.handler({s}); ", .{ emit_ns, store_name, ai, upd_payload }) catch unreachable;
+                    } else "";
+                    const call = std.fmt.allocPrint(allocator, "{s}{s}_event.handler({s}); ", .{ emit_ns, upd_ev, HS.callArg(allocator, host_target, emit_ns, upd_ev, upd_fields) }) catch unreachable;
                     atext.appendSlice(allocator, call) catch unreachable;
                 }
                 // An owned arm dispatches the FRESH cell read, not the consumed
                 // param (the 690_061 fresh-from-cell rule, 690_063): the watch
                 // arm borrow-reads the value the store now owns.
                 const arm_value = if (field_owned_info[i] != null)
-                    HS.branchOne(allocator, host_target, fname, std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r]", .{ store_name, esc_fname }) catch unreachable)
+                    HS.branchOne(allocator, host_target, fname, std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r]", .{ store_name, mem }) catch unreachable)
                 else
                     HS.branchOne(allocator, host_target, fname, std.fmt.allocPrint(allocator, "value_{d}", .{i}) catch unreachable);
                 const tail = HS.switchArmClose(allocator, host_target, arm_value);
@@ -3452,37 +3203,58 @@
                     const fapply_head = allocator.dupe(u8, HS.rowHead(host_target)) catch unreachable;
                     fatext.appendSlice(allocator, fapply_head) catch unreachable;
                     if (is_tree and i == user_field_count) {
-                        const fguard = std.fmt.allocPrint(allocator, "const __koru_self = __koru_store_{s}.__koru_handle_of(__koru_r); var __koru_cyc = value; while (__koru_cyc != -1) {{ if (__koru_cyc == __koru_self) @panic(\"std/store:stored: reparent in [tree] store '{s}' would make the row its own ancestor (cycle) - the write is rejected; handle it with a `| cycle` branch (default-on guard and branch are pinned at 695_002)\"); const __koru_cycr = __koru_store_{s}.__koru_resolve(__koru_cyc); __koru_cyc = __koru_store_{s}.parent[__koru_cycr]; }} ", .{ store_name, store_name, store_name, store_name }) catch unreachable;
+                        const fguard = if (host_is_cs)
+                            std.fmt.allocPrint(allocator, "var __koru_self = __koru_store_{s}.__koru_handle_of(__koru_r); var __koru_cyc = value; while (__koru_cyc != -1) {{ if (__koru_cyc == __koru_self) throw new global::System.Exception(\"std/store:stored: reparent in [tree] store '{s}' would make the row its own ancestor (cycle) - the write is rejected; handle it with a `| cycle` branch (default-on guard and branch are pinned at 695_002)\"); var __koru_cycr = __koru_store_{s}.__koru_resolve(__koru_cyc); __koru_cyc = __koru_store_{s}.parent[__koru_cycr]; }} ", .{ store_name, store_name, store_name, store_name }) catch unreachable
+                        else if (host_is_js)
+                            std.fmt.allocPrint(allocator, "const __koru_self = __koru_store_{s}.__koru_handle_of(__koru_r); let __koru_cyc = value; while (__koru_cyc !== -1) {{ if (__koru_cyc === __koru_self) throw new Error(\"std/store:stored: reparent in [tree] store '{s}' would make the row its own ancestor (cycle) - the write is rejected; handle it with a `| cycle` branch (default-on guard and branch are pinned at 695_002)\"); const __koru_cycr = __koru_store_{s}.__koru_resolve(__koru_cyc); __koru_cyc = __koru_store_{s}.parent[__koru_cycr]; }} ", .{ store_name, store_name, store_name, store_name }) catch unreachable
+                        else
+                            std.fmt.allocPrint(allocator, "const __koru_self = __koru_store_{s}.__koru_handle_of(__koru_r); var __koru_cyc = value; while (__koru_cyc != -1) {{ if (__koru_cyc == __koru_self) @panic(\"std/store:stored: reparent in [tree] store '{s}' would make the row its own ancestor (cycle) - the write is rejected; handle it with a `| cycle` branch (default-on guard and branch are pinned at 695_002)\"); const __koru_cycr = __koru_store_{s}.__koru_resolve(__koru_cyc); __koru_cyc = __koru_store_{s}.parent[__koru_cycr]; }} ", .{ store_name, store_name, store_name, store_name }) catch unreachable;
                         fatext.appendSlice(allocator, fguard) catch unreachable;
                     }
+                    // Same member-spelling rule as the bundled apply arm —
+                    // `.{s}` slots take the host's member spelling.
+                    const fmem = if (host_is_cs)
+                        codegen_utils_store.HostShape.csMember(allocator, fname)
+                    else if (host_is_js)
+                        fname
+                    else
+                        codegen_utils_store.escapeZigIdentifier(allocator, fname) catch fname;
                     if (updated_needs_old) {
-                        const foldr = if (field_char_caps[i] != null)
-                            std.fmt.allocPrint(allocator, "const __koru_oldbuf = __koru_store_{s}.{s}[__koru_r]; const __koru_old = @import(\"std\").mem.sliceTo(&__koru_oldbuf, 0); ", .{ store_name, fname }) catch unreachable
+                        const foldr = if (field_char_caps[i] != null and host_target == .zig)
+                            std.fmt.allocPrint(allocator, "const __koru_oldbuf = __koru_store_{s}.{s}[__koru_r]; const __koru_old = @import(\"std\").mem.sliceTo(&__koru_oldbuf, 0); ", .{ store_name, fmem }) catch unreachable
                         else
-                            std.fmt.allocPrint(allocator, "const __koru_old = __koru_store_{s}.{s}[__koru_r]; ", .{ store_name, fname }) catch unreachable;
+                            std.fmt.allocPrint(allocator, "{s} __koru_old = __koru_store_{s}.{s}[__koru_r]; ", .{ if (host_is_cs) "var" else "const", store_name, fmem }) catch unreachable;
                         fatext.appendSlice(allocator, foldr) catch unreachable;
                     }
                     // An OWNED arm is discharge-old + consume-new (690_062);
                     // the caller's <!state> was consumed at the fwrite event.
-                    var fwr: []const u8 = if (field_owned_info[i]) |oi|
-                        std.fmt.allocPrint(allocator, "const __koru_old_ptr = __koru_store_{s}.{s}[__koru_r]; {s}{s}.{s}_event.handler({s}); __koru_store_{s}.{s}[__koru_r] = value; ", .{ store_name, fname, if (host_is_js) "" else "_ = ", oi.disch_host, oi.disch_event, HS.argRec(allocator, host_target, HS.recField(allocator, host_target, oi.disch_param, "__koru_old_ptr")), store_name, fname }) catch unreachable
-                    else if (field_char_caps[i]) |n|
-                        std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = @import(\"std\").mem.zeroes([{d}]u8); const __koru_wl = @min(value.len, {d}); @memcpy(__koru_store_{s}.{s}[__koru_r][0..__koru_wl], value[0..__koru_wl]); ", .{ store_name, fname, n, n, store_name, fname }) catch unreachable
+                    var fwr: []const u8 = if (field_owned_info[i]) |oi| (if (host_is_cs)
+                        std.fmt.allocPrint(allocator, "var __koru_old_ptr = __koru_store_{s}.{s}[__koru_r]; {s}.{s}_event.handler({s}); __koru_store_{s}.{s}[__koru_r] = value; ", .{ store_name, fmem, oi.disch_host, oi.disch_emitted, HS.callArg(allocator, host_target, std.fmt.allocPrint(allocator, "{s}.", .{oi.disch_host}) catch unreachable, oi.disch_emitted, std.fmt.allocPrint(allocator, "{s}", .{HS.recField(allocator, host_target, oi.disch_param, "__koru_old_ptr")}) catch unreachable), store_name, fmem }) catch unreachable
                     else
-                        std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = value; ", .{ store_name, fname }) catch unreachable;
+                        std.fmt.allocPrint(allocator, "const __koru_old_ptr = __koru_store_{s}.{s}[__koru_r]; {s}{s}.{s}_event.handler({s}); __koru_store_{s}.{s}[__koru_r] = value; ", .{ store_name, fmem, if (host_is_js) "" else "_ = ", oi.disch_host, oi.disch_event, HS.argRec(allocator, host_target, HS.recField(allocator, host_target, oi.disch_param, "__koru_old_ptr")), store_name, fmem }) catch unreachable)
+                    else if (field_char_caps[i]) |n| (if (host_is_cs)
+                        std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = (value.Length > {d}) ? value.Substring(0, {d}) : value; ", .{ store_name, fmem, n, n }) catch unreachable
+                    else if (host_is_js)
+                        std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = value.slice(0, {d}); ", .{ store_name, fmem, n }) catch unreachable
+                    else
+                        std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = @import(\"std\").mem.zeroes([{d}]u8); const __koru_wl = @min(value.len, {d}); @memcpy(__koru_store_{s}.{s}[__koru_r][0..__koru_wl], value[0..__koru_wl]); ", .{ store_name, fmem, n, n, store_name, fmem }) catch unreachable)
+                    else
+                        std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = value; ", .{ store_name, fmem }) catch unreachable;
                     if (StoreRefHome.colTarget(cell_fields, i) != null) fwr = std.fmt.allocPrint(allocator, "__koru_home_{s}_{s}(value); {s}", .{ store_name, fname, fwr }) catch unreachable;
                     // `std/indexes:store` — same key maintenance as the
                     // bundled apply arm (an owned-containing store still
                     // writes its scalar columns through this targeted path).
                     if (index_col != null and i == index_idx) {
-                        fwr = StoreIndex.writeWrap(allocator, host_is_js, store_name, index_col.?, index_col.?, fwr, "value");
+                        fwr = storeIndexWriteWrap(allocator, host_is_js, store_name, index_col.?, index_col.?, fwr, "value");
                     }
                     fatext.appendSlice(allocator, fwr) catch unreachable;
                     for (updated_arms.items, 0..) |ua, ai| {
-                        const fcall = if (ua.fields.len != 0)
-                            std.fmt.allocPrint(allocator, "{s}__store_updated_{s}_{d}_event.handler({s}); ", .{ emit_ns, store_name, ai, HS.argRec(allocator, host_target, std.fmt.allocPrint(allocator, "{s}, {s}", .{ HS.recField(allocator, host_target, "old", "__koru_old"), HS.recField(allocator, host_target, "new", "value") }) catch unreachable) }) catch unreachable
+                        const fupd_ev = std.fmt.allocPrint(allocator, "__store_updated_{s}_{d}", .{ store_name, ai }) catch unreachable;
+                        const fupd_fields = if (ua.fields.len != 0)
+                            std.fmt.allocPrint(allocator, "{s}, {s}", .{ HS.recField(allocator, host_target, "old", "__koru_old"), HS.recField(allocator, host_target, "new", "value") }) catch unreachable
                         else
-                            std.fmt.allocPrint(allocator, "{s}__store_updated_{s}_{d}_event.handler({s}); ", .{ emit_ns, store_name, ai, HS.argRec(allocator, host_target, "") }) catch unreachable;
+                            "";
+                        const fcall = std.fmt.allocPrint(allocator, "{s}{s}_event.handler({s}); ", .{ emit_ns, fupd_ev, HS.callArg(allocator, host_target, emit_ns, fupd_ev, fupd_fields) }) catch unreachable;
                         fatext.appendSlice(allocator, fcall) catch unreachable;
                     }
                     // An owned arm dispatches the FRESH cell read (690_061/063).
@@ -3613,7 +3385,9 @@
                 //
                 // It also deletes N-1 calls per block, each of which carried a
                 // full-width payload of typed zeros.
-                const ew_head = if (host_is_js)
+                const ew_head = if (host_is_cs)
+                    allocator.dupe(u8, "var __koru_r = row;\nvar __koru_mask = (long)(field);\n") catch unreachable
+                else if (host_is_js)
                     allocator.dupe(u8, "const __koru_r = row;\nconst __koru_mask = field;\n") catch unreachable
                 else
                     allocator.dupe(u8, "const __koru_r = row;\nconst __koru_mask = @as(u64, @bitCast(field));\n") catch unreachable;
@@ -3626,39 +3400,54 @@
                 const col_arm = allocator.alloc([]const u8, field_names.len) catch unreachable;
                 for (field_names, 0..) |fname, i| {
                     const esc_fname = codegen_utils_store.escapeZigIdentifier(allocator, fname) catch fname;
+                    const emem = if (host_is_cs)
+                        codegen_utils_store.HostShape.csMember(allocator, fname)
+                    else if (host_is_js)
+                        fname
+                    else
+                        esc_fname;
                     var ab = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
                     // The write half of the bundled apply arm, verbatim: tree
                     // guard, pre-image read, cell write, updated interceptors.
                     // No branch dispatch — that is announce's half.
                     if (is_tree and i == user_field_count) {
-                        const eguard = std.fmt.allocPrint(allocator, "const __koru_self = __koru_store_{s}.__koru_handle_of(__koru_r); var __koru_cyc = value_{d}; while (__koru_cyc != -1) {{ if (__koru_cyc == __koru_self) @panic(\"std/store:stored: reparent in [tree] store '{s}' would make the row its own ancestor (cycle) - the write is rejected; handle it with a `| cycle` branch (default-on guard and branch are pinned at 695_002)\"); const __koru_cycr = __koru_store_{s}.__koru_resolve(__koru_cyc); __koru_cyc = __koru_store_{s}.parent[__koru_cycr]; }} ", .{ store_name, i, store_name, store_name, store_name }) catch unreachable;
+                        const eguard = if (host_is_cs)
+                            std.fmt.allocPrint(allocator, "var __koru_self = __koru_store_{s}.__koru_handle_of(__koru_r); var __koru_cyc = value_{d}; while (__koru_cyc != -1) {{ if (__koru_cyc == __koru_self) throw new global::System.Exception(\"std/store:stored: reparent in [tree] store '{s}' would make the row its own ancestor (cycle) - the write is rejected; handle it with a `| cycle` branch (default-on guard and branch are pinned at 695_002)\"); var __koru_cycr = __koru_store_{s}.__koru_resolve(__koru_cyc); __koru_cyc = __koru_store_{s}.parent[__koru_cycr]; }} ", .{ store_name, i, store_name, store_name, store_name }) catch unreachable
+                        else
+                            std.fmt.allocPrint(allocator, "const __koru_self = __koru_store_{s}.__koru_handle_of(__koru_r); var __koru_cyc = value_{d}; while (__koru_cyc != -1) {{ if (__koru_cyc == __koru_self) @panic(\"std/store:stored: reparent in [tree] store '{s}' would make the row its own ancestor (cycle) - the write is rejected; handle it with a `| cycle` branch (default-on guard and branch are pinned at 695_002)\"); const __koru_cycr = __koru_store_{s}.__koru_resolve(__koru_cyc); __koru_cyc = __koru_store_{s}.parent[__koru_cycr]; }} ", .{ store_name, i, store_name, store_name, store_name }) catch unreachable;
                         ab.appendSlice(allocator, eguard) catch unreachable;
                     }
                     if (updated_needs_old) {
-                        const eoldr = if (field_char_caps[i] != null)
-                            std.fmt.allocPrint(allocator, "const __koru_oldbuf = __koru_store_{s}.{s}[__koru_r]; const __koru_old = @import(\"std\").mem.sliceTo(&__koru_oldbuf, 0); ", .{ store_name, esc_fname }) catch unreachable
+                        const eoldr = if (field_char_caps[i] != null and host_target == .zig)
+                            std.fmt.allocPrint(allocator, "const __koru_oldbuf = __koru_store_{s}.{s}[__koru_r]; const __koru_old = @import(\"std\").mem.sliceTo(&__koru_oldbuf, 0); ", .{ store_name, emem }) catch unreachable
                         else
-                            std.fmt.allocPrint(allocator, "const __koru_old = __koru_store_{s}.{s}[__koru_r]; ", .{ store_name, esc_fname }) catch unreachable;
+                            std.fmt.allocPrint(allocator, "{s} __koru_old = __koru_store_{s}.{s}[__koru_r]; ", .{ if (host_is_cs) "var" else "const", store_name, emem }) catch unreachable;
                         ab.appendSlice(allocator, eoldr) catch unreachable;
                     }
-                    var ewr: []const u8 = if (field_char_caps[i]) |n|
-                        std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = @import(\"std\").mem.zeroes([{d}]u8); const __koru_wl = @min(value_{d}.len, {d}); @memcpy(__koru_store_{s}.{s}[__koru_r][0..__koru_wl], value_{d}[0..__koru_wl]); ", .{ store_name, esc_fname, n, i, n, store_name, esc_fname, i }) catch unreachable
+                    var ewr: []const u8 = if (field_char_caps[i]) |n| (if (host_is_cs)
+                        std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = (value_{d}.Length > {d}) ? value_{d}.Substring(0, {d}) : value_{d}; ", .{ store_name, emem, i, n, i, n, i }) catch unreachable
+                    else if (host_is_js)
+                        std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = value_{d}.slice(0, {d}); ", .{ store_name, emem, i, n }) catch unreachable
                     else
-                        std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = value_{d}; ", .{ store_name, esc_fname, i }) catch unreachable;
+                        std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = @import(\"std\").mem.zeroes([{d}]u8); const __koru_wl = @min(value_{d}.len, {d}); @memcpy(__koru_store_{s}.{s}[__koru_r][0..__koru_wl], value_{d}[0..__koru_wl]); ", .{ store_name, emem, n, i, n, store_name, emem, i }) catch unreachable)
+                    else
+                        std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r] = value_{d}; ", .{ store_name, emem, i }) catch unreachable;
                     if (StoreRefHome.colTarget(cell_fields, i) != null) ewr = std.fmt.allocPrint(allocator, "__koru_home_{s}_{s}(value_{d}); {s}", .{ store_name, fname, i, ewr }) catch unreachable;
                     // `std/indexes:store` — one write text, composed into the
                     // masked unit and the specialisations alike, so the key
                     // maintenance rides the shared col_arm verbatim.
                     if (index_col != null and i == index_idx) {
                         const ev = std.fmt.allocPrint(allocator, "value_{d}", .{i}) catch unreachable;
-                        ewr = StoreIndex.writeWrap(allocator, host_is_js, store_name, index_col.?, esc_fname, ewr, ev);
+                        ewr = storeIndexWriteWrap(allocator, host_is_js, store_name, index_col.?, esc_fname, ewr, ev);
                     }
                     ab.appendSlice(allocator, ewr) catch unreachable;
                     for (updated_arms.items, 0..) |ua, ai| {
-                        const ecall = if (ua.fields.len != 0)
-                            std.fmt.allocPrint(allocator, "{s}__store_updated_{s}_{d}_event.handler({s}); ", .{ emit_ns, store_name, ai, HS.argRec(allocator, host_target, std.fmt.allocPrint(allocator, "{s}, {s}", .{ HS.recField(allocator, host_target, "old", "__koru_old"), HS.recField(allocator, host_target, "new", std.fmt.allocPrint(allocator, "value_{d}", .{i}) catch unreachable) }) catch unreachable) }) catch unreachable
+                        const eupd_ev = std.fmt.allocPrint(allocator, "__store_updated_{s}_{d}", .{ store_name, ai }) catch unreachable;
+                        const eupd_fields = if (ua.fields.len != 0)
+                            std.fmt.allocPrint(allocator, "{s}, {s}", .{ HS.recField(allocator, host_target, "old", "__koru_old"), HS.recField(allocator, host_target, "new", std.fmt.allocPrint(allocator, "value_{d}", .{i}) catch unreachable) }) catch unreachable
                         else
-                            std.fmt.allocPrint(allocator, "{s}__store_updated_{s}_{d}_event.handler({s}); ", .{ emit_ns, store_name, ai, HS.argRec(allocator, host_target, "") }) catch unreachable;
+                            "";
+                        const ecall = std.fmt.allocPrint(allocator, "{s}{s}_event.handler({s}); ", .{ emit_ns, eupd_ev, HS.callArg(allocator, host_target, emit_ns, eupd_ev, eupd_fields) }) catch unreachable;
                         ab.appendSlice(allocator, ecall) catch unreachable;
                     }
                     col_arm[i] = ab.toOwnedSlice(allocator) catch unreachable;
@@ -3669,7 +3458,9 @@
                     // answers for the low 32 columns only — the same trap the
                     // `@popCount` lowering documents. Division by a power of two
                     // stays exact across the 53-bit safe range.
-                    const arm_open = if (host_is_js)
+                    const arm_open = if (host_is_cs)
+                        std.fmt.allocPrint(allocator, "if ((__koru_mask & (1L << {d})) != 0) {{ ", .{i}) catch unreachable
+                    else if (host_is_js)
                         std.fmt.allocPrint(allocator, "if (Math.floor(__koru_mask / {d}) % 2 === 1) {{ ", .{@as(u64, 1) << @intCast(i)}) catch unreachable
                     else
                         std.fmt.allocPrint(allocator, "if (__koru_mask & (@as(u64, 1) << {d}) != 0) {{ ", .{i}) catch unreachable;
@@ -3677,7 +3468,7 @@
                     ewb.appendSlice(allocator, col_arm[i]) catch unreachable;
                     ewb.appendSlice(allocator, "}\n") catch unreachable;
                 }
-                ewb.appendSlice(allocator, "return;") catch unreachable;
+                ewb.appendSlice(allocator, if (host_is_cs) "" else "return;") catch unreachable;
                 appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
                     .path = H.mkPathH(allocator, home_ns, penvw_name),
                     .body = ast.Source{ .text = ewb.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
@@ -3692,8 +3483,8 @@
                 // for the measurement that motivates it. A set the scan cannot
                 // see simply is not emitted, and its site keeps calling the
                 // general unit above: slower, never wrong.
-                const spec_head = if (host_is_js)
-                    "const __koru_r = row;\n"
+                const spec_head = if (host_is_cs)
+                    "var __koru_r = row;\n"
                 else
                     "const __koru_r = row;\n";
                 for (storeWriteColumnSets(allocator, program, store_name, field_names)) |set| {
@@ -3722,7 +3513,7 @@
                     var sb = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
                     sb.appendSlice(allocator, spec_head) catch unreachable;
                     for (set) |ci| sb.appendSlice(allocator, col_arm[ci]) catch unreachable;
-                    sb.appendSlice(allocator, "\nreturn;") catch unreachable;
+                    sb.appendSlice(allocator, if (host_is_cs) "" else "\nreturn;") catch unreachable;
                     appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
                         .path = H.mkPathH(allocator, home_ns, spec_name),
                         .body = ast.Source{ .text = sb.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
@@ -3767,7 +3558,7 @@
                     // A Zig char column is a `[N]u8` buffer and reads out as a
                     // slice to the first NUL; a JS char column is already the
                     // string, so there is nothing to slice.
-                    const read_expr = if (field_char_caps[i] != null and !host_is_js)
+                    const read_expr = if (field_char_caps[i] != null and host_target == .zig)
                         std.fmt.allocPrint(allocator, "@import(\"std\").mem.sliceTo(&__koru_store_{s}.{s}[__koru_r], 0)", .{ store_name, fname }) catch unreachable
                     else
                         std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_r]", .{ store_name, fname }) catch unreachable;
@@ -3867,7 +3658,7 @@
                     // is the cheap one.
                     appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
                         .path = H.mkPathH(allocator, home_ns, pann_name),
-                        .body = ast.Source{ .text = allocator.dupe(u8, "return;") catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
+                        .body = ast.Source{ .text = allocator.dupe(u8, if (host_is_cs) "" else "return;") catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                         .annotations = &[_][]const u8{},
                         .target = allocator.dupe(u8, proc_target) catch unreachable,
                         .location = flow.location,
@@ -4011,7 +3802,9 @@
                 // an N-full buffer yields all N bytes). On JS the column IS a
                 // string, and `_ = &x;` is Zig's discard, not JavaScript.
                 const esc_f = codegen_utils_store.escapeZigIdentifier(allocator, field_names[pfidx]) catch field_names[pfidx];
-                const ld = if (host_is_js)
+                const ld = if (host_is_cs)
+                    std.fmt.allocPrint(allocator, "var {s} = __koru_store_{s}.{s}[__koru_r];\n", .{ codegen_utils_store.HostShape.csMember(allocator, pname), store_name, codegen_utils_store.HostShape.csMember(allocator, field_names[pfidx]) }) catch unreachable
+                else if (host_is_js)
                     std.fmt.allocPrint(allocator, "const {s} = __koru_store_{s}.{s}[__koru_r];\n", .{ pname, store_name, esc_f }) catch unreachable
                 else if (field_char_caps[pfidx] != null)
                     std.fmt.allocPrint(allocator, "const {s} = @import(\"std\").mem.sliceTo(&__koru_store_{s}.{s}[__koru_r], 0);\n_ = &{s};\n", .{ pname, store_name, esc_f, pname }) catch unreachable
@@ -4024,7 +3817,9 @@
             // taking-cursor path and the [tree] cycle guards already make at
             // this site, so this adds no machinery, only a name.
             if (qs.req_id) |idn| {
-                const idz = if (host_is_js)
+                const idz = if (host_is_cs)
+                    std.fmt.allocPrint(allocator, "var {s} = __koru_store_{s}.__koru_handle_of(__koru_r);\n", .{ codegen_utils_store.HostShape.csMember(allocator, idn), store_name }) catch unreachable
+                else if (host_is_js)
                     std.fmt.allocPrint(allocator, "const {s} = __koru_store_{s}.__koru_handle_of(__koru_r);\n", .{ idn, store_name }) catch unreachable
                 else
                     std.fmt.allocPrint(allocator, "const {s} = __koru_store_{s}.__koru_handle_of(__koru_r);\n_ = &{s};\n", .{ idn, store_name, idn }) catch unreachable;
@@ -4053,12 +3848,22 @@
                 var unknown_op: []const u8 = "";
                 const lowered_g = storeLowerExpr(allocator, g_cells, &unknown_op) orelse
                     return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): the guard names `@{s}`, and that operation has no lowering for this target - a store guard is a Koru expression, and the operations Koru names with `@` are the shared table in codegen_utils.lowerBuiltin", .{ store_name, unknown_op }) } };
-                const gz = std.fmt.allocPrint(allocator, "if (!({s})) return;\n", .{lowered_g}) catch unreachable;
+                const gz = if (host_is_cs)
+                    std.fmt.allocPrint(allocator, "if (!({s})) return default;\n", .{lowered_g}) catch unreachable
+                else
+                    std.fmt.allocPrint(allocator, "if (!({s})) return;\n", .{lowered_g}) catch unreachable;
                 qr.appendSlice(allocator, gz) catch unreachable;
             }
             qr.appendSlice(allocator, emit_ns) catch unreachable;
             qr.appendSlice(allocator, qbody_name) catch unreachable;
-            qr.appendSlice(allocator, if (host_is_js) "_event.handler({ " else "_event.handler(.{ ") catch unreachable;
+            if (host_is_cs) {
+                qr.appendSlice(allocator, "_event.handler(new ") catch unreachable;
+                qr.appendSlice(allocator, emit_ns) catch unreachable;
+                qr.appendSlice(allocator, qbody_name) catch unreachable;
+                qr.appendSlice(allocator, "_event.Input { ") catch unreachable;
+            } else {
+                qr.appendSlice(allocator, if (host_is_js) "_event.handler({ " else "_event.handler(.{ ") catch unreachable;
+            }
             for (qs.proj_names, qs.proj_fields, 0..) |pname, pfidx, i| {
                 if (i > 0) qr.appendSlice(allocator, ", ") catch unreachable;
                 // The qbody input an OWNED column projects to is mangled
@@ -4089,7 +3894,9 @@
                 const idc = std.fmt.allocPrint(allocator, ", {s} ", .{HS.recField(allocator, host_target, idn, idn)}) catch unreachable;
                 qr.appendSlice(allocator, idc) catch unreachable;
             }
-            qr.appendSlice(allocator, "});\nreturn;") catch unreachable;
+            // The cs handler is `dynamic`-returning — a bare `return;` is
+            // CS0126; the body's end lets the emitter tail carry it.
+            qr.appendSlice(allocator, if (host_is_cs) "});\n" else "});\nreturn;") catch unreachable;
             appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
                 .path = H.mkPathH(allocator, home_ns, qrow_name),
                 .body = ast.Source{ .text = qr.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
@@ -4214,7 +4021,7 @@
                 \\  }}
                 \\}}
                 \\return;
-            , .{ CAP, store_name, store_name, store_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable else if (qs.drain) DrainScan.sweepBody(allocator, true, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
+            , .{ CAP, store_name, store_name, store_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable else if (qs.drain) drainScanSweepBody(allocator, host_target, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
                 \\let __koru_i = 0;
                 \\while (__koru_i < __koru_store_{s}.len) {{
                 \\  const __koru_len_before = __koru_store_{s}.len;
@@ -4227,7 +4034,44 @@
                 \\  {s}{s}_event.handler({{ row: __koru_i }});
                 \\}}
                 \\return;
-            , .{ store_name, emit_ns, qrow_name }) catch unreachable) else if (qs.is_preorder) std.fmt.allocPrint(allocator,
+            , .{ store_name, emit_ns, qrow_name }) catch unreachable) else if (host_is_cs) (if (qs.is_preorder) std.fmt.allocPrint(allocator,
+                \\long[] __koru_stack = new long[{d}];
+                \\long __koru_sp = 0;
+                \\for (long __koru_ri = 0; __koru_ri < __koru_store_{s}.len; __koru_ri++) {{
+                \\  long __koru_i = __koru_store_{s}.len - 1 - __koru_ri;
+                \\  if (__koru_store_{s}.parent[__koru_i] == -1) {{
+                \\    __koru_stack[__koru_sp] = __koru_i;
+                \\    __koru_sp += 1;
+                \\  }}
+                \\}}
+                \\while (__koru_sp > 0) {{
+                \\  __koru_sp -= 1;
+                \\  long __koru_cur = __koru_stack[__koru_sp];
+                \\  {s}{s}_event.handler(new {s}{s}_event.Input {{ row = __koru_cur }});
+                \\  for (long __koru_rj = 0; __koru_rj < __koru_store_{s}.len; __koru_rj++) {{
+                \\    long __koru_j = __koru_store_{s}.len - 1 - __koru_rj;
+                \\    if (__koru_store_{s}.parent[__koru_j] == __koru_store_{s}.__koru_handle_of(__koru_cur)) {{
+                \\      __koru_stack[__koru_sp] = __koru_j;
+                \\      __koru_sp += 1;
+                \\    }}
+                \\  }}
+                \\}}
+            , .{ CAP, store_name, store_name, store_name, emit_ns, qrow_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable else if (qs.drain) drainScanSweepBody(allocator, host_target, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
+                \\long __koru_i = 0;
+                \\while (__koru_i < __koru_store_{s}.len) {{
+                \\  long __koru_len_before = __koru_store_{s}.len;
+                \\  {s}{s}_event.handler(new {s}{s}_event.Input {{ row = __koru_i }});
+                \\  if (__koru_store_{s}.len >= __koru_len_before) __koru_i += 1;
+                \\}}
+            , .{ store_name, store_name, emit_ns, qrow_name, emit_ns, qrow_name, store_name }) catch unreachable else std.fmt.allocPrint(allocator,
+                // Same shape as the js arm — the trip count is read per
+                // iteration (`len` is a live cell read), the body cannot
+                // remove, and the emitter's `return default;` tail carries
+                // the exit.
+                \\for (long __koru_i = 0; __koru_i < __koru_store_{s}.len; __koru_i++) {{
+                \\  {s}{s}_event.handler(new {s}{s}_event.Input {{ row = __koru_i }});
+                \\}}
+            , .{ store_name, emit_ns, qrow_name, emit_ns, qrow_name }) catch unreachable) else if (qs.is_preorder) std.fmt.allocPrint(allocator,
                 \\var __koru_stack: [{d}]usize = undefined;
                 \\var __koru_sp: usize = 0;
                 \\for (0..__koru_store_{s}.len) |__koru_ri| {{
@@ -4250,7 +4094,7 @@
                 \\    }}
                 \\}}
                 \\return;
-            , .{ CAP, store_name, store_name, store_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable else if (qs.drain) DrainScan.sweepBody(allocator, false, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
+            , .{ CAP, store_name, store_name, store_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable else if (qs.drain) drainScanSweepBody(allocator, host_target, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
                 \\var __koru_i: usize = 0;
                 \\while (__koru_i < __koru_store_{s}.len) {{
                 \\    const __koru_len_before = __koru_store_{s}.len;
@@ -4391,7 +4235,15 @@
             // (:2800) and row 0 is a real row, so the JS arm compares against
             // null rather than testing truthiness.
             const t_empty = HS.branchEmpty(allocator, host_target, "empty");
-            const thead = if (host_is_js)
+            const thead = if (host_is_cs)
+                std.fmt.allocPrint(allocator,
+                    \\__koru_store_{s}.__koru_materialize();
+                    \\long __koru_r = __koru_store_{s}.__koru_row_of(row);
+                    \\if (__koru_r < 0) return {s};
+                    \\long __koru_gone_slot = __koru_store_{s}.__koru_row_hslot[__koru_r];
+                    \\
+                , .{ store_name, store_name, t_empty, store_name }) catch unreachable
+            else if (host_is_js)
                 std.fmt.allocPrint(allocator,
                     \\const __koru_r = __koru_store_{s}.__koru_row_of(row);
                     \\if (__koru_r === null) return {s};
@@ -4407,26 +4259,30 @@
                 , .{ store_name, store_name, t_empty, store_name }) catch unreachable;
             tb.appendSlice(allocator, thead) catch unreachable;
             for (field_names) |fname| {
-                const ld = std.fmt.allocPrint(allocator, "const __koru_out_{s} = __koru_store_{s}.{s}[__koru_r];\n", .{ fname, store_name, fname }) catch unreachable;
+                const ld = std.fmt.allocPrint(allocator, "{s} __koru_out_{s} = __koru_store_{s}.{s}[__koru_r];\n", .{ if (host_is_cs) "var" else "const", fname, store_name, fname }) catch unreachable;
                 tb.appendSlice(allocator, ld) catch unreachable;
             }
             // `removed` lifecycle interceptors fire before the swap-remove, with
             // the row's outgoing values (the qbody pattern, take side).
             for (removed_arms.items, 0..) |arm, ai| {
-                const head = std.fmt.allocPrint(allocator, "{s}__store_removed_{s}_{d}_event.handler({s} ", .{ emit_ns, store_name, ai, if (host_is_js) "{" else ".{" }) catch unreachable;
+                const head = if (host_is_cs)
+                    std.fmt.allocPrint(allocator, "{s}__store_removed_{s}_{d}_event.handler(new {s}__store_removed_{s}_{d}_event.Input {{ ", .{ emit_ns, store_name, ai, emit_ns, store_name, ai }) catch unreachable
+                else
+                    std.fmt.allocPrint(allocator, "{s}__store_removed_{s}_{d}_event.handler({s} ", .{ emit_ns, store_name, ai, if (host_is_js) "{" else ".{" }) catch unreachable;
                 tb.appendSlice(allocator, head) catch unreachable;
                 for (arm.fields, 0..) |fnm, fi| {
                     if (fi > 0) tb.appendSlice(allocator, ", ") catch unreachable;
                     // A char field's payload is the NUL-trimmed slice of the
                     // outgoing COPY (`__koru_out_*` outlives the handler call;
-                    // the cell slot is about to be swap-clobbered).
+                    // the cell slot is about to be swap-clobbered). A cs char
+                    // column is a `string` — no NUL padding to slice away.
                     const fnm_is_char = blk: {
                         for (field_names, field_char_caps) |cn, cc| {
                             if (std.mem.eql(u8, cn, fnm)) break :blk cc != null;
                         }
                         break :blk false;
                     };
-                    const p = if (fnm_is_char)
+                    const p = if (fnm_is_char and !host_is_cs and !host_is_js)
                         HS.recField(allocator, host_target, fnm, std.fmt.allocPrint(allocator, "@import(\"std\").mem.sliceTo(&__koru_out_{s}, 0)", .{fnm}) catch unreachable)
                     else
                         HS.recField(allocator, host_target, fnm, std.fmt.allocPrint(allocator, "__koru_out_{s}", .{fnm}) catch unreachable);
@@ -4444,7 +4300,7 @@
                 }
                 tb.appendSlice(allocator, " });\n") catch unreachable;
             }
-            const swap = std.fmt.allocPrint(allocator, "const __koru_last = __koru_store_{s}.len - 1;\nif (__koru_r != __koru_last) {{\n", .{store_name}) catch unreachable;
+            const swap = std.fmt.allocPrint(allocator, "{s} __koru_last = __koru_store_{s}.len - 1;\nif (__koru_r != __koru_last) {{\n", .{ if (host_is_cs) "var" else "const", store_name }) catch unreachable;
             tb.appendSlice(allocator, swap) catch unreachable;
             for (field_names) |fname| {
                 const mv = std.fmt.allocPrint(allocator, "    __koru_store_{s}.{s}[__koru_r] = __koru_store_{s}.{s}[__koru_last];\n", .{ store_name, fname, store_name, fname }) catch unreachable;
@@ -4454,7 +4310,7 @@
             // the dense position it just landed in (O10.iii — handles stable
             // across other rows' removal), then the taken row's slot dies (one
             // generation bump) and returns to the freelist.
-            const mvfix = std.fmt.allocPrint(allocator, "    const __koru_mv_slot = __koru_store_{s}.__koru_row_hslot[__koru_last];\n    __koru_store_{s}.__koru_hslot_row[__koru_mv_slot] = __koru_r;\n    __koru_store_{s}.__koru_row_hslot[__koru_r] = __koru_mv_slot;\n", .{ store_name, store_name, store_name }) catch unreachable;
+            const mvfix = std.fmt.allocPrint(allocator, "    {s} __koru_mv_slot = __koru_store_{s}.__koru_row_hslot[__koru_last];\n    __koru_store_{s}.__koru_hslot_row[__koru_mv_slot] = __koru_r;\n    __koru_store_{s}.__koru_row_hslot[__koru_r] = __koru_mv_slot;\n", .{ if (host_is_cs) "var" else "const", store_name, store_name, store_name }) catch unreachable;
             tb.appendSlice(allocator, mvfix) catch unreachable;
             // The generation bump WRAPS, and the two lanes wrap at DIFFERENT
             // PLACES for a reason that is not stylistic.
@@ -4477,11 +4333,16 @@
             // after 2^21 reuses of one slot is the same aliasing Zig already
             // admits at 2^32; what it removes is the window where the encoding
             // itself stopped being a bijection. Pinned at 690_270.
+            // C# wraps at 2^32 like Zig — the handle packs the generation into
+            // the upper 32 bits of a long, and a gen past 2^32 would overflow
+            // the pack width the same way Zig's u32 does at its own wrap.
             const genbump: []const u8 = if (host_is_js)
                 std.fmt.allocPrint(allocator, "= (__koru_store_{s}.__koru_hslot_gen[__koru_gone_slot] + 1) % 2097152", .{store_name}) catch unreachable
+            else if (host_is_cs)
+                std.fmt.allocPrint(allocator, "= ((__koru_store_{s}.__koru_hslot_gen[__koru_gone_slot] + 1) & 4294967295L)", .{store_name}) catch unreachable
             else
                 "+%= 1";
-            const tombstone: []const u8 = if (host_is_js) "-1" else "@import(\"std\").math.maxInt(usize)";
+            const tombstone: []const u8 = if (host_is_js) "-1" else if (host_is_cs) "-1" else "@import(\"std\").math.maxInt(usize)";
             const tail = std.fmt.allocPrint(allocator, "}}\n__koru_store_{s}.__koru_hslot_row[__koru_gone_slot] = {s};\n__koru_store_{s}.len = __koru_last;\n__koru_store_{s}.__koru_hslot_gen[__koru_gone_slot] {s};\n__koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_gone_slot;\n__koru_store_{s}.__koru_hslot_free_len += 1;\n{s}", .{ store_name, tombstone, store_name, store_name, genbump, store_name, store_name, store_name, if (host_is_js) "" else std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_gen0 = false;\n", .{store_name}) catch unreachable }) catch unreachable;
             tb.appendSlice(allocator, tail) catch unreachable;
             // `std/indexes:store` — take emits NOTHING here. The taken row's
@@ -4590,7 +4451,11 @@
                             // local. The body is a nested store read's spliced
                             // loop, which `query` now renders for whichever
                             // host is being built, so the tag must follow it.
-                            .target = alloc.dupe(u8, if (storeHostTarget() == .js) "js" else "zig") catch unreachable,
+                            .target = alloc.dupe(u8, switch (storeHostTarget()) {
+                                .js => "js",
+                                .cs => "cs",
+                                .zig => "zig",
+                            }) catch unreachable,
                             .location = loc,
                             .module = alloc.dupe(u8, module) catch unreachable,
                         } }) catch unreachable;
@@ -4772,7 +4637,9 @@
                     if (ca.fields.len > 0) wants_count = true;
                 }
                 if (wants_count) {
-                const cnt_decl = if (host_is_js)
+                const cnt_decl = if (host_is_cs)
+                    std.fmt.allocPrint(allocator, "long __koru_n = __koru_store_{s}.len;\n", .{store_name}) catch unreachable
+                else if (host_is_js)
                     std.fmt.allocPrint(allocator, "const __koru_n = __koru_store_{s}.len;\n", .{store_name}) catch unreachable
                 else
                     std.fmt.allocPrint(allocator, "const __koru_n: i64 = @as(i64, @intCast(__koru_store_{s}.len));\n", .{store_name}) catch unreachable;
@@ -4783,7 +4650,14 @@
                 // store has no generations to invalidate — no handle can be
                 // outstanding when none was ever minted.
                 if (needs_handles) {
-                    const genloop = if (host_is_js)
+                    const genloop = if (host_is_cs)
+                        std.fmt.allocPrint(allocator,
+                            \\for (long __koru_i = 0; __koru_i < __koru_store_{s}.__koru_hslot_next; __koru_i++) {{
+                            \\  __koru_store_{s}.__koru_hslot_gen[__koru_i] = (__koru_store_{s}.__koru_hslot_gen[__koru_i] + 1) & 4294967295L;
+                            \\}}
+                            \\
+                        , .{ store_name, store_name, store_name }) catch unreachable
+                    else if (host_is_js)
                         std.fmt.allocPrint(allocator,
                             \\for (let __koru_i = 0; __koru_i < __koru_store_{s}.__koru_hslot_next; __koru_i++) {{
                             \\  __koru_store_{s}.__koru_hslot_gen[__koru_i] = (__koru_store_{s}.__koru_hslot_gen[__koru_i] + 1) % 2097152;
@@ -4806,7 +4680,7 @@
                         \\__koru_store_{s}.__koru_hslot_free_len = 0;
                         \\__koru_store_{s}.__koru_hslot_next = 0;
                         \\{s}
-                    , .{ if (host_is_js) "" else std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_gen0 = __koru_store_{s}.__koru_gen0 and __koru_store_{s}.__koru_hslot_next == 0;\n", .{ store_name, store_name, store_name }) catch unreachable, store_name, store_name, store_name, if (host_is_js) "" else std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_ident = true;\n", .{store_name}) catch unreachable }) catch unreachable;
+                    , .{ if (host_is_js) "" else if (host_is_cs) std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_gen0 = __koru_store_{s}.__koru_gen0 && __koru_store_{s}.__koru_hslot_next == 0;\n", .{ store_name, store_name, store_name }) catch unreachable else std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_gen0 = __koru_store_{s}.__koru_gen0 and __koru_store_{s}.__koru_hslot_next == 0;\n", .{ store_name, store_name, store_name }) catch unreachable, store_name, store_name, store_name, if (host_is_js) "" else std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_ident = true;\n", .{store_name}) catch unreachable }) catch unreachable;
                     cb.appendSlice(allocator, reset) catch unreachable;
                 } else {
                     const reset = std.fmt.allocPrint(allocator, "__koru_store_{s}.len = 0;\n", .{store_name}) catch unreachable;
@@ -4816,10 +4690,11 @@
                 // past-tense fact about the whole store, and a body that could
                 // still see rows would be describing a half-done operation.
                 for (cleared_arms.items, 0..) |arm, ai| {
+                    const c_ev = std.fmt.allocPrint(allocator, "__store_cleared_{s}_{d}", .{ store_name, ai }) catch unreachable;
                     const call = if (arm.fields.len == 0)
-                        std.fmt.allocPrint(allocator, "{s}__store_cleared_{s}_{d}_event.handler({s});\n", .{ emit_ns, store_name, ai, if (host_is_js) "{}" else ".{}" }) catch unreachable
+                        std.fmt.allocPrint(allocator, "{s}{s}_event.handler({s});\n", .{ emit_ns, c_ev, HS.callArg(allocator, host_target, emit_ns, c_ev, "") }) catch unreachable
                     else
-                        std.fmt.allocPrint(allocator, "{s}__store_cleared_{s}_{d}_event.handler({s} {s} __koru_n }});\n", .{ emit_ns, store_name, ai, if (host_is_js) "{" else ".{", if (host_is_js) std.fmt.allocPrint(allocator, "{s}:", .{arm.fields[0]}) catch unreachable else std.fmt.allocPrint(allocator, ".{s} =", .{arm.fields[0]}) catch unreachable }) catch unreachable;
+                        std.fmt.allocPrint(allocator, "{s}{s}_event.handler({s});\n", .{ emit_ns, c_ev, HS.callArg(allocator, host_target, emit_ns, c_ev, HS.recField(allocator, host_target, arm.fields[0], "__koru_n")) }) catch unreachable;
                     cb.appendSlice(allocator, call) catch unreachable;
                 }
                 appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
@@ -4863,7 +4738,7 @@
             if (stripe_order.items.len == 0) {
                 appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
                     .path = H.mkPathH(allocator, home_ns, pstripe_name),
-                    .body = ast.Source{ .text = allocator.dupe(u8, "return;") catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
+                    .body = ast.Source{ .text = allocator.dupe(u8, if (host_is_cs) "" else "return;") catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                     .annotations = &[_][]const u8{},
                     .target = allocator.dupe(u8, proc_target) catch unreachable,
                     .location = flow.location,
@@ -5032,7 +4907,10 @@
                     // the same `<name>_event.handler` convention every emitted call
                     // uses (buildKoruModulePath). std/string's `free` is just one
                     // instance; a user *Resource routes to its own `free`/`close`.
-                    const fr = std.fmt.allocPrint(allocator, "    {s}{s}.{s}_event.handler({s});\n", .{ if (host_is_js) "" else "_ = ", oi.disch_host, oi.disch_event, HS.argRec(allocator, host_target, HS.recField(allocator, host_target, oi.disch_param, std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_i]", .{ store_name, fname }) catch unreachable)) }) catch unreachable;
+                    const fr = if (host_is_cs)
+                        std.fmt.allocPrint(allocator, "    {s}.{s}_event.handler({s});\n", .{ oi.disch_host, oi.disch_emitted, HS.callArg(allocator, host_target, std.fmt.allocPrint(allocator, "{s}.", .{oi.disch_host}) catch unreachable, oi.disch_emitted, HS.recField(allocator, host_target, oi.disch_param, std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_i]", .{ store_name, fname }) catch unreachable)) }) catch unreachable
+                    else
+                        std.fmt.allocPrint(allocator, "    {s}{s}.{s}_event.handler({s});\n", .{ if (host_is_js) "" else "_ = ", oi.disch_host, oi.disch_event, HS.argRec(allocator, host_target, HS.recField(allocator, host_target, oi.disch_param, std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_i]", .{ store_name, fname }) catch unreachable)) }) catch unreachable;
                     td.appendSlice(allocator, fr) catch unreachable;
                 }
             }
@@ -5041,9 +4919,9 @@
             // close belongs to the row drain (emitted only under has_owned).
             const td_close: []const u8 = if (has_owned) "}\n" else "";
             const td_tail = if (index_col) |icol|
-                std.fmt.allocPrint(allocator, "{s}{s}__koru_store_{s}.len = 0;\nreturn;", .{ td_close, StoreIndex.clearDrop(allocator, host_is_js, store_name, icol), store_name }) catch unreachable
+                std.fmt.allocPrint(allocator, "{s}{s}__koru_store_{s}.len = 0;\n{s}", .{ td_close, StoreIndex.clearDrop(allocator, host_is_js, store_name, icol), store_name, if (host_is_cs) "" else "return;" }) catch unreachable
             else
-                std.fmt.allocPrint(allocator, "{s}__koru_store_{s}.len = 0;\nreturn;", .{ td_close, store_name }) catch unreachable;
+                std.fmt.allocPrint(allocator, "{s}__koru_store_{s}.len = 0;\n{s}", .{ td_close, store_name, if (host_is_cs) "" else "return;" }) catch unreachable;
             td.appendSlice(allocator, td_tail) catch unreachable;
             appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
                 .path = H.mkPathH(allocator, home_ns, td_name),
@@ -5608,7 +5486,28 @@
     // pin it to. There is no `@Type` twin because the Zig side only builds one
     // to get a NAMED struct type for the `var` annotation, which JS neither has
     // nor needs.
-    const cell_decl = if (host_is_js) blk_js: {
+    const cell_decl = if (host_is_cs) blk_cs: {
+        // The cs cell is a nested `static class` inside main_module — a named
+        // module state cell, same shape the emitter's hoist pass scans for in
+        // `.kcs` host lines. `__koru_brand` is always present (see the cs arm
+        // of StoreRefHome.guard for why -1 stands in for @hasDecl).
+        var cp = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
+        cp.appendSlice(allocator, "static class __koru_store_") catch unreachable;
+        cp.appendSlice(allocator, store_name) catch unreachable;
+        cp.appendSlice(allocator, " {\n") catch unreachable;
+        for (cell_fields, 0..) |cf, i| {
+            cp.appendSlice(allocator, "    public static ") catch unreachable;
+            cp.appendSlice(allocator, codegen_utils_store.csType(field_types[i])) catch unreachable;
+            cp.appendSlice(allocator, " ") catch unreachable;
+            cp.appendSlice(allocator, codegen_utils_store.HostShape.csMember(allocator, cf.name)) catch unreachable;
+            cp.appendSlice(allocator, " = ") catch unreachable;
+            cp.appendSlice(allocator, field_defaults[i] orelse "0") catch unreachable;
+            cp.appendSlice(allocator, ";\n") catch unreachable;
+        }
+        cp.appendSlice(allocator, "    public static long __koru_brand = -1;\n}") catch unreachable;
+        cp.appendSlice(allocator, refhome.cs) catch unreachable;
+        break :blk_cs cp.toOwnedSlice(allocator) catch unreachable;
+    } else if (host_is_js) blk_js: {
         var jp = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
         jp.appendSlice(allocator, "let __koru_store_") catch unreachable;
         jp.appendSlice(allocator, store_name) catch unreachable;
@@ -5725,6 +5624,24 @@
         }
         pb.appendSlice(allocator, "}\n") catch unreachable;
         pb.appendSlice(allocator, std.fmt.allocPrint(allocator, "throw new Error(\"{s}: field index \" + field + \" is not a column of store '{s}'\");", .{ apply_name, store_name }) catch unreachable) catch unreachable;
+    } else if (host_is_cs) {
+        // Same switch as the JS arm — cs reads it natively. The produced
+        // value is the event's `Output` struct (tag + per-branch member —
+        // `__type_ref` payloads keep their declared type on the member, the
+        // old/new pair lands in a `dynamic` anonymous object). Member names
+        // are binding-mangled the way the emitter's writeBinding spells them.
+        pb.appendSlice(allocator, "switch (field) {\n") catch unreachable;
+        for (field_names, 0..) |fname, i| {
+            const fm = codegen_utils_store.HostShape.csMember(allocator, fname);
+            const pm = codegen_utils_store.HostShape.csPayloadMember(allocator, fname);
+            const arm = if (old_new_mode)
+                std.fmt.allocPrint(allocator, "  case {d}: {{ {s}var __old = __koru_store_{s}.{s}; __koru_store_{s}.{s} = value; return new Output {{ tag = \"{s}\", {s} = new {{ old = __old, @new = value }} }}; }}\n", .{ i, StoreRefHome.call(allocator, cell_fields, i, store_name, "value"), store_name, fm, store_name, fm, fname, pm }) catch unreachable
+            else
+                std.fmt.allocPrint(allocator, "  case {d}: {{ {s}__koru_store_{s}.{s} = value; return new Output {{ tag = \"{s}\", {s} = value }}; }}\n", .{ i, StoreRefHome.call(allocator, cell_fields, i, store_name, "value"), store_name, fm, fname, pm }) catch unreachable;
+            pb.appendSlice(allocator, arm) catch unreachable;
+        }
+        pb.appendSlice(allocator, "}\n") catch unreachable;
+        pb.appendSlice(allocator, std.fmt.allocPrint(allocator, "throw new global::System.Exception(\"{s}: field index \" + field + \" is not a column of store '{s}'\");", .{ apply_name, store_name }) catch unreachable) catch unreachable;
     } else {
         pb.appendSlice(allocator, "return switch (field) {\n") catch unreachable;
         for (field_names, 0..) |fname, i| {
@@ -5990,6 +5907,16 @@
             }
             pk.appendSlice(allocator, "}\n") catch unreachable;
             pk.appendSlice(allocator, std.fmt.allocPrint(allocator, "throw new Error(\"{s}: field index \" + field + \" is not a column of store '{s}'\");", .{ peek_name, store_name }) catch unreachable) catch unreachable;
+        } else if (host_is_cs) {
+            pk.appendSlice(allocator, "switch (field) {\n") catch unreachable;
+            for (field_names, 0..) |fname, i| {
+                const fm = codegen_utils_store.HostShape.csMember(allocator, fname);
+                const pm = codegen_utils_store.HostShape.csPayloadMember(allocator, fname);
+                const arm = std.fmt.allocPrint(allocator, "  case {d}: return new Output {{ tag = \"{s}\", {s} = __koru_store_{s}.{s} }};\n", .{ i, fname, pm, store_name, fm }) catch unreachable;
+                pk.appendSlice(allocator, arm) catch unreachable;
+            }
+            pk.appendSlice(allocator, "}\n") catch unreachable;
+            pk.appendSlice(allocator, std.fmt.allocPrint(allocator, "throw new global::System.Exception(\"{s}: field index \" + field + \" is not a column of store '{s}'\");", .{ peek_name, store_name }) catch unreachable) catch unreachable;
         } else {
             pk.appendSlice(allocator, "return switch (field) {\n") catch unreachable;
             for (field_names, 0..) |fname, i| {
@@ -6069,7 +5996,10 @@
         if (!any_observer_s) {
             stripe_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
                 .path = mkPath(allocator, home_ns, announce_name),
-                .body = ast.Source{ .text = allocator.dupe(u8, "return;") catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
+                // cs handlers return `dynamic` — a bare `return;` is CS0126
+                // there; the empty body lets the emitter's `return default;`
+                // tail carry the exit.
+                .body = ast.Source{ .text = if (host_is_cs) "" else allocator.dupe(u8, "return;") catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                 .annotations = &[_][]const u8{},
                 .target = allocator.dupe(u8, proc_target) catch unreachable,
                 .location = flow.location,
@@ -6129,6 +6059,17 @@
                     ew.appendSlice(allocator, arm3) catch unreachable;
                 }
                 ew.appendSlice(allocator, "return;") catch unreachable;
+            } else if (host_is_cs) {
+                // A ulong mask is the same word the zig arm bitCasts — C#
+                // shifts are full-width on ulong, no division dance needed.
+                // No trailing `return`: the cs handler's declared type is
+                // `dynamic`, a bare `return;` is CS0126, and the emitter
+                // already appends the `return default;` tail.
+                ew.appendSlice(allocator, "var __koru_mask = (ulong)field;\n") catch unreachable;
+                for (field_names, 0..) |fname, i| {
+                    const arm3 = std.fmt.allocPrint(allocator, "if ((__koru_mask & (1UL << {d})) != 0) __koru_store_{s}.{s} = value;\n", .{ i, store_name, fname }) catch unreachable;
+                    ew.appendSlice(allocator, arm3) catch unreachable;
+                }
             } else {
                 ew.appendSlice(allocator, "const __koru_mask = @as(u64, @bitCast(field));\n") catch unreachable;
                 for (field_names, 0..) |fname, i| {
@@ -6163,13 +6104,20 @@
         // difference (`.{ .field = 0 }` vs `{ field: 0 }`).
         var sb2 = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
         for (field_names, 0..) |_, i| {
-            const call2 = if (host_is_js)
+            const call2 = if (host_is_cs)
+                // cs handlers take a typed `Input` struct — the arg record is
+                // `new <ev>_event.Input { field = i }`, qualified the same way
+                // the call itself is.
+                std.fmt.allocPrint(allocator, "{s}{s}_event.handler(new {s}{s}_event.Input {{ field = {d} }});\n", .{ storeEventQualifier(allocator, home_ns, program.main_module_name), announce_name, storeEventQualifier(allocator, home_ns, program.main_module_name), announce_name, i }) catch unreachable
+            else if (host_is_js)
                 std.fmt.allocPrint(allocator, "{s}{s}_event.handler({{ field: {d} }});\n", .{ storeEventQualifier(allocator, home_ns, program.main_module_name), announce_name, i }) catch unreachable
             else
                 std.fmt.allocPrint(allocator, "{s}{s}_event.handler(.{{ .field = {d} }});\n", .{ storeEventQualifier(allocator, home_ns, program.main_module_name), announce_name, i }) catch unreachable;
             sb2.appendSlice(allocator, call2) catch unreachable;
         }
-        sb2.appendSlice(allocator, "return;") catch unreachable;
+        // cs handlers return `dynamic` — a bare `return;` is CS0126; the
+        // emitter's `return default;` tail covers the exit.
+        if (!host_is_cs) sb2.appendSlice(allocator, "return;") catch unreachable;
         stripe_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
             .path = mkPath(allocator, home_ns, stripe_name),
             .body = ast.Source{ .text = sb2.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
@@ -6269,7 +6217,10 @@
     // the `host_line` stays, because that is what places the cell INSIDE the
     // declaring module's emitted struct, and `.inline_code` is written above
     // `main_module` where a JS `let` is exactly as reachable.
-    appended[0] = if (host_is_js) ast.Item{ .inline_code = ast.InlineCode{
+    appended[0] = if (host_is_js or host_is_cs) ast.Item{ .inline_code = ast.InlineCode{
+        // cs joins JS here: `emitTopLevelInlineCode` writes the blob inside
+        // `main_module`, where a nested `static class` is exactly the module
+        // cell the accessors name.
         .code = cell_decl,
         .location = flow.location,
         .module = allocator.dupe(u8, home_ns) catch unreachable,

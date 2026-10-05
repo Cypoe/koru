@@ -1,0 +1,398 @@
+// Koru Standard Library: String Formatting — CS placeholder emission.
+// Joined via `~part csprec` in fmt.kz; merged into the fmt module at load.
+
+/// Emit one `{{ ... }}` placeholder's value expression for the C# concat the
+/// `ln|cs` transform is building — bare `name` normally (C# `+` promotes the
+/// operand to string the way JS does), `(...).ToString("F"+N,
+/// InvariantCulture)` when the spec carries a `:.N` precision tail — the same
+/// choice io.csprec makes, culture-invariant so a French locale doesn't
+/// answer "3,14" for "3.14".
+///
+/// A dotted path (`req.text`) is a cs member read verbatim, and a segment
+/// that collides with a C# keyword is legal after a dot — nothing to escape.
+fn csPlaceholder(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, placeholder: []const u8) void {
+    var var_name: []const u8 = placeholder;
+    var precision: ?[]const u8 = null;
+    // `:S` is the handle form — interpolate the payload (`s.data`), not the
+    // handle object itself. Same ruling io.csprec's operand lowering made.
+    var handle_form = false;
+    if (std.mem.indexOf(u8, placeholder, ":")) |colon_pos| {
+        var_name = placeholder[0..colon_pos];
+        const spec = placeholder[colon_pos + 1 ..];
+        if (std.mem.eql(u8, spec, "S")) handle_form = true;
+        if (std.mem.indexOf(u8, spec, ":")) |p2| {
+            // `:.N` — the dot is the precision marker, digits after it are N.
+            const rest = spec[p2 + 1 ..];
+            if (rest.len > 1 and rest[0] == '.') {
+                const d = rest[1..];
+                var digits = true;
+                for (d) |c| digits = digits and c >= '0' and c <= '9';
+                if (digits) precision = d;
+            }
+        }
+    }
+    if (precision) |d| {
+        buf.appendSlice(allocator, "(") catch unreachable;
+        buf.appendSlice(allocator, var_name) catch unreachable;
+        buf.appendSlice(allocator, ").ToString(\"F") catch unreachable;
+        buf.appendSlice(allocator, d) catch unreachable;
+        buf.appendSlice(allocator, "\", global::System.Globalization.CultureInfo.InvariantCulture)") catch unreachable;
+    } else {
+        // `__koru_str` unwraps bools — see io.csprec for why the test lives
+        // behind `dynamic`.
+        buf.appendSlice(allocator, "__koru_str(") catch unreachable;
+        buf.appendSlice(allocator, var_name) catch unreachable;
+        if (handle_form) buf.appendSlice(allocator, ".data") catch unreachable;
+        buf.appendSlice(allocator, ")") catch unreachable;
+        return;
+    }
+    if (handle_form) buf.appendSlice(allocator, ".data") catch unreachable;
+}
+
+// FMT.BLK | C#
+//
+// Everything `ln|cs` says about the contract applies here, with the
+// `: name` / `| formatted f` split `blk|zig` documents: a call-site `: f`
+// bind yields the formatted STRING itself (the `allocated` label's
+// disposer, `std/io:free`, is a no-op on this host — strings are GC'd);
+// a `| formatted f` arm binds `f` as `new { formatted = … }`, the
+// anonymous record standing in for the zig union variant. C# strings are
+// immutable and GC-owned, so there is no allocator and no hidden buffer —
+// the whole zig scratch/allocPrint ceremony collapses to one `+`-concat.
+~proc fmt.blk|cs {
+    const ast = @import("ast");
+
+    const flow = if (item.* == .flow)
+        &item.flow
+    else
+        return .{};
+
+    // Already transformed — don't re-run.
+    if (invocation.inline_body != null) {
+        return .{};
+    }
+
+    const expr = if (invocation.args.len > 0) invocation.args[0].value else "";
+
+    const openLit = struct {
+        fn call(b: *std.ArrayList(u8), a: std.mem.Allocator, f: *bool, il: *bool) void {
+            if (!il.*) {
+                if (!f.*) b.appendSlice(a, " + ") catch unreachable;
+                b.append(a, '"') catch unreachable;
+                il.* = true;
+                f.* = false;
+            }
+        }
+    }.call;
+
+    const closeLit = struct {
+        fn call(b: *std.ArrayList(u8), a: std.mem.Allocator, il: *bool) void {
+            if (il.*) {
+                b.append(a, '"') catch unreachable;
+                il.* = false;
+            }
+        }
+    }.call;
+
+    var buf = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
+    var first = true;
+    var in_literal = false;
+
+    const start_pos: usize = if (expr.len > 0 and expr[0] == '"') 1 else 0;
+    const end_pos: usize = if (expr.len > 0 and expr[expr.len - 1] == '"') expr.len - 1 else expr.len;
+    const content = expr[start_pos..end_pos];
+
+    var i: usize = 0;
+    while (i < content.len) {
+        if (i + 1 < content.len and content[i] == '{' and content[i + 1] == '{') {
+            const placeholder_start = i + 2;
+            var ws_start = placeholder_start;
+            while (ws_start < content.len and (content[ws_start] == ' ' or content[ws_start] == '\t')) : (ws_start += 1) {}
+
+            var j = ws_start;
+            while (j + 1 < content.len and !(content[j] == '}' and content[j + 1] == '}')) : (j += 1) {}
+
+            if (j + 1 < content.len) {
+                var ws_end = j;
+                while (ws_end > ws_start and (content[ws_end - 1] == ' ' or content[ws_end - 1] == '\t')) : (ws_end -= 1) {}
+
+                const placeholder = content[ws_start..ws_end];
+                closeLit(&buf, allocator, &in_literal);
+                if (!first) buf.appendSlice(allocator, " + ") catch unreachable;
+                first = false;
+                csPlaceholder(&buf, allocator, placeholder);
+
+                i = j + 2;
+            } else {
+                openLit(&buf, allocator, &first, &in_literal);
+                buf.append(allocator, content[i]) catch unreachable;
+                i += 1;
+            }
+        } else {
+            openLit(&buf, allocator, &first, &in_literal);
+            switch (content[i]) {
+                '"' => buf.appendSlice(allocator, "\\\"") catch unreachable,
+                '\\' => {
+                    buf.append(allocator, '\\') catch unreachable;
+                    if (i + 1 < content.len) {
+                        i += 1;
+                        buf.append(allocator, content[i]) catch unreachable;
+                    }
+                },
+                '\n' => buf.appendSlice(allocator, "\\n") catch unreachable,
+                '\r' => buf.appendSlice(allocator, "\\r") catch unreachable,
+                '\t' => buf.appendSlice(allocator, "\\t") catch unreachable,
+                else => buf.append(allocator, content[i]) catch unreachable,
+            }
+            i += 1;
+        }
+    }
+    closeLit(&buf, allocator, &in_literal);
+    if (first) buf.appendSlice(allocator, "\"\"") catch unreachable;
+
+    // The two binding shapes are `blk|zig`'s: a call-site `: f` bind yields
+    // the string itself; a `| formatted f` arm binds the tagged record and
+    // hands off with a marker.
+    var bind_name: []const u8 = "";
+    var arm_index: ?usize = null;
+    var via_call_site = false;
+    if (invocation.return_binding) |rb| {
+        if (!std.mem.eql(u8, rb, "_")) {
+            bind_name = rb;
+            via_call_site = true;
+        }
+    }
+    if (bind_name.len == 0) {
+        for (flow.body.continuations, 0..) |cont, idx| {
+            if (cont.kind != .terminal) continue;
+            arm_index = idx;
+            if (cont.binding) |b| {
+                if (!std.mem.eql(u8, b, "_")) bind_name = b;
+            }
+            break;
+        }
+    }
+
+    var code = std.ArrayList(u8).initCapacity(allocator, 192) catch unreachable;
+    if (bind_name.len > 0) {
+        code.appendSlice(allocator, "var ") catch unreachable;
+        code.appendSlice(allocator, bind_name) catch unreachable;
+        if (via_call_site) {
+            code.appendSlice(allocator, " = ") catch unreachable;
+        } else {
+            code.appendSlice(allocator, " = new { formatted = ") catch unreachable;
+        }
+        code.appendSlice(allocator, buf.items) catch unreachable;
+        if (!via_call_site) code.appendSlice(allocator, " }") catch unreachable;
+        code.appendSlice(allocator, ";") catch unreachable;
+    }
+    if (arm_index) |idx| {
+        if (code.items.len > 0) code.append(allocator, '\n') catch unreachable;
+        const marker = std.fmt.allocPrint(allocator, "__koru_continue_{d}", .{idx}) catch unreachable;
+        code.appendSlice(allocator, marker) catch unreachable;
+    }
+    const inline_code = code.items;
+
+    const impl_segments = allocator.alloc([]const u8, 2) catch unreachable;
+    impl_segments[0] = allocator.dupe(u8, "fmt") catch unreachable;
+    impl_segments[1] = allocator.dupe(u8, "blk.impl") catch unreachable;
+    const impl_path = ast.DottedPath{
+        .module_qualifier = invocation.path.module_qualifier,
+        .segments = impl_segments,
+    };
+
+    const new_inv_annotations = allocator.alloc([]const u8, invocation.annotations.len + 1) catch unreachable;
+    for (invocation.annotations, 0..) |ann, idx| {
+        new_inv_annotations[idx] = ann;
+    }
+    new_inv_annotations[invocation.annotations.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
+
+    const new_invocation = ast.Invocation{
+        .path = impl_path,
+        .args = invocation.args,
+        .annotations = new_inv_annotations,
+        .inserted_by_tap = invocation.inserted_by_tap,
+        .from_opaque_tap = invocation.from_opaque_tap,
+        .inline_body = allocator.dupe(u8, inline_code) catch unreachable,
+        .return_binding = invocation.return_binding,
+    };
+
+    var transformed_flow = flow.*;
+    transformed_flow.body = ast.rootSite(new_invocation, flow.body.continuations, flow.location);
+    transformed_flow.inline_body = inline_code;
+
+    const new_item = ast.Item{ .flow = transformed_flow };
+    return .{ .replacement = new_item };
+}
+
+
+// ============================================================================
+// ln|cs — the C# rendering of the same transform contract.
+//
+// Everything |js says about the contract applies here: the proc body is Zig
+// running inside koruc, the OUTPUT written onto `inline_body` is C# source —
+// `var l = new { text = "clicked " + c + " times" };` where |zig writes a
+// labeled block around `std.fmt.bufPrint`. The cs emitter splices
+// `inv.inline_body` and resolves `__koru_continue_N` markers the same way, so
+// the `: l |> …` / `| line l -> …` binding shapes are the same two cases.
+// ============================================================================
+~proc ln|cs {
+    const ast = @import("ast");
+
+    const flow = if (item.* == .flow)
+        &item.flow
+    else
+        return .{};
+
+    // Already transformed — don't re-run.
+    if (invocation.inline_body != null) {
+        return .{};
+    }
+
+    const expr = if (invocation.args.len > 0) invocation.args[0].value else "";
+
+    const openLit = struct {
+        fn call(b: *std.ArrayList(u8), a: std.mem.Allocator, f: *bool, il: *bool) void {
+            if (!il.*) {
+                if (!f.*) b.appendSlice(a, " + ") catch unreachable;
+                b.append(a, '"') catch unreachable;
+                il.* = true;
+                f.* = false;
+            }
+        }
+    }.call;
+
+    const closeLit = struct {
+        fn call(b: *std.ArrayList(u8), a: std.mem.Allocator, il: *bool) void {
+            if (il.*) {
+                b.append(a, '"') catch unreachable;
+                il.* = false;
+            }
+        }
+    }.call;
+
+    var buf = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
+    var first = true;
+    var in_literal = false;
+
+    // Strip the source quotes — same slice |zig takes.
+    const start_pos: usize = if (expr.len > 0 and expr[0] == '"') 1 else 0;
+    const end_pos: usize = if (expr.len > 0 and expr[expr.len - 1] == '"') expr.len - 1 else expr.len;
+    const content = expr[start_pos..end_pos];
+
+    var i: usize = 0;
+    while (i < content.len) {
+        if (i + 1 < content.len and content[i] == '{' and content[i + 1] == '{') {
+            const placeholder_start = i + 2;
+            var ws_start = placeholder_start;
+            while (ws_start < content.len and (content[ws_start] == ' ' or content[ws_start] == '\t')) : (ws_start += 1) {}
+
+            var j = ws_start;
+            while (j + 1 < content.len and !(content[j] == '}' and content[j + 1] == '}')) : (j += 1) {}
+
+            if (j + 1 < content.len) {
+                var ws_end = j;
+                while (ws_end > ws_start and (content[ws_end - 1] == ' ' or content[ws_end - 1] == '\t')) : (ws_end -= 1) {}
+
+                const placeholder = content[ws_start..ws_end];
+                closeLit(&buf, allocator, &in_literal);
+                if (!first) buf.appendSlice(allocator, " + ") catch unreachable;
+                first = false;
+                csPlaceholder(&buf, allocator, placeholder);
+
+                i = j + 2;
+            } else {
+                openLit(&buf, allocator, &first, &in_literal);
+                buf.append(allocator, content[i]) catch unreachable;
+                i += 1;
+            }
+        } else {
+            openLit(&buf, allocator, &first, &in_literal);
+            switch (content[i]) {
+                '"' => buf.appendSlice(allocator, "\\\"") catch unreachable,
+                '\\' => {
+                    // Same as the JS arm: the arg is a SOURCE string literal,
+                    // so `\n` here is the two-char escape — C# double quotes
+                    // read the same escapes, pass the pair through.
+                    buf.append(allocator, '\\') catch unreachable;
+                    if (i + 1 < content.len) {
+                        i += 1;
+                        buf.append(allocator, content[i]) catch unreachable;
+                    }
+                },
+                '\n' => buf.appendSlice(allocator, "\\n") catch unreachable,
+                '\r' => buf.appendSlice(allocator, "\\r") catch unreachable,
+                '\t' => buf.appendSlice(allocator, "\\t") catch unreachable,
+                else => buf.append(allocator, content[i]) catch unreachable,
+            }
+            i += 1;
+        }
+    }
+    closeLit(&buf, allocator, &in_literal);
+    if (first) buf.appendSlice(allocator, "\"\"") catch unreachable;
+
+    // The two binding shapes are |js's: `: l |> …` declares `l` in the spliced
+    // text; `| line l -> …` declares it here AND hands off with a marker.
+    var bind_name: []const u8 = "";
+    var arm_index: ?usize = null;
+    if (invocation.return_binding) |rb| {
+        if (!std.mem.eql(u8, rb, "_")) bind_name = rb;
+    }
+    if (bind_name.len == 0) {
+        for (flow.body.continuations, 0..) |cont, idx| {
+            if (cont.kind != .terminal) continue;
+            arm_index = idx;
+            if (cont.binding) |b| {
+                if (!std.mem.eql(u8, b, "_")) bind_name = b;
+            }
+            break;
+        }
+    }
+
+    var code = std.ArrayList(u8).initCapacity(allocator, 192) catch unreachable;
+    if (bind_name.len > 0) {
+        // `{ text: … }` is `new { text = … }` on this host — an anonymous
+        // record the `l.text` reads resolve against.
+        code.appendSlice(allocator, "var ") catch unreachable;
+        code.appendSlice(allocator, bind_name) catch unreachable;
+        code.appendSlice(allocator, " = new { text = ") catch unreachable;
+        code.appendSlice(allocator, buf.items) catch unreachable;
+        code.appendSlice(allocator, " };") catch unreachable;
+    }
+    if (arm_index) |idx| {
+        if (code.items.len > 0) code.append(allocator, '\n') catch unreachable;
+        const marker = std.fmt.allocPrint(allocator, "__koru_continue_{d}", .{idx}) catch unreachable;
+        code.appendSlice(allocator, marker) catch unreachable;
+    }
+    const inline_code = code.items;
+
+    const impl_segments = allocator.alloc([]const u8, 1) catch unreachable;
+    impl_segments[0] = allocator.dupe(u8, "ln.impl") catch unreachable;
+    const impl_path = ast.DottedPath{
+        .module_qualifier = invocation.path.module_qualifier,
+        .segments = impl_segments,
+    };
+
+    const new_inv_annotations = allocator.alloc([]const u8, invocation.annotations.len + 1) catch unreachable;
+    for (invocation.annotations, 0..) |ann, idx| {
+        new_inv_annotations[idx] = ann;
+    }
+    new_inv_annotations[invocation.annotations.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
+
+    const new_invocation = ast.Invocation{
+        .path = impl_path,
+        .args = invocation.args,
+        .annotations = new_inv_annotations,
+        .inserted_by_tap = invocation.inserted_by_tap,
+        .from_opaque_tap = invocation.from_opaque_tap,
+        .inline_body = allocator.dupe(u8, inline_code) catch unreachable,
+        .return_binding = invocation.return_binding,
+    };
+
+    var transformed_flow = flow.*;
+    transformed_flow.body = ast.rootSite(new_invocation, flow.body.continuations, flow.location);
+    transformed_flow.inline_body = inline_code;
+
+    const new_item = ast.Item{ .flow = transformed_flow };
+    return .{ .replacement = new_item };
+}

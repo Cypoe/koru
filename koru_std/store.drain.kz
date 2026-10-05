@@ -32,6 +32,7 @@
 
 const DrainScan = struct {
     const ast = @import("ast");
+    const codegen_utils = @import("codegen_utils");
 
     // The pre-rewrite body is one `take(s[row_bind])` site whose
     // continuations are all empty `item`/`empty` arms — the payload
@@ -65,35 +66,4 @@ const DrainScan = struct {
         return true;
     }
 
-    // The body a drain-lowered site emits — the clear unit's reset:
-    // bump every issued slot's generation, then drop len, the freelist
-    // and the fresh cursor; ident re-arms (vacuous at len 0). Refill
-    // issues slots in fresh order rather than take's LIFO pop order —
-    // the observable difference is handle bit values only.
-    fn sweepBody(alloc: std.mem.Allocator, host_is_js: bool, store: []const u8) []const u8 {
-        if (host_is_js) return std.fmt.allocPrint(alloc,
-            \\const __koru_dn = __koru_store_{s}.len;
-            \\if (__koru_dn > 0) {{
-            \\  for (let __koru_i = 0; __koru_i < __koru_store_{s}.__koru_hslot_next; __koru_i++) {{
-            \\    __koru_store_{s}.__koru_hslot_gen[__koru_i] = (__koru_store_{s}.__koru_hslot_gen[__koru_i] + 1) % 2097152;
-            \\  }}
-            \\  __koru_store_{s}.len = 0;
-            \\  __koru_store_{s}.__koru_hslot_free_len = 0;
-            \\  __koru_store_{s}.__koru_hslot_next = 0;
-            \\}}
-            \\return;
-        , .{ store, store, store, store, store, store, store }) catch unreachable;
-        return std.fmt.allocPrint(alloc,
-            \\const __koru_dn = __koru_store_{s}.len;
-            \\if (__koru_dn > 0) {{
-            \\    for (0..__koru_store_{s}.__koru_hslot_next) |__koru_i| __koru_store_{s}.__koru_hslot_gen[__koru_i] +%= 1;
-            \\    __koru_store_{s}.__koru_gen0 = false;
-            \\    __koru_store_{s}.len = 0;
-            \\    __koru_store_{s}.__koru_hslot_free_len = 0;
-            \\    __koru_store_{s}.__koru_hslot_next = 0;
-            \\    __koru_store_{s}.__koru_ident = true;
-            \\}}
-            \\return;
-        , .{ store, store, store, store, store, store, store, store }) catch unreachable;
-    }
 };

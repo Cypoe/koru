@@ -106,7 +106,7 @@ fn synthesizeContainer(
         }
         const flat = facets.flat(allocator, fname);
         refcalls.appendSlice(allocator, std.fmt.allocPrint(allocator, "__koru_home_{s}_{s}({s}); ", .{ list_name, flat, flat }) catch unreachable) catch unreachable;
-        guardtext.appendSlice(allocator, koru_std.koru_store.StoreRefHome.guard(allocator, false, "list", list_name, flat, t, hs)) catch unreachable;
+        guardtext.appendSlice(allocator, koru_std.koru_store.StoreRefHome.guard(allocator, .zig, "list", list_name, flat, t, hs)) catch unreachable;
     }
 
     // RECORD element: the container stores the whole proto value and push

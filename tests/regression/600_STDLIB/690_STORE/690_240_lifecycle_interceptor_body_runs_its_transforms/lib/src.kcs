@@ -1,0 +1,27 @@
+// C# implementation facet for app/lib/src — the |cs twin of src.kz's |zig
+// bodies.
+//
+// *Src is a mutable two-field handle — `step` decrements s.left in place —
+// so the carrier is a declared class, not an anonymous object (C# anonymous
+// members are read-only; same ruling as string.kcs's __KoruBox). GC is the
+// allocator: `close` doesn't free, it only reads the id out.
+public class SrcBox {
+    public dynamic id;
+    public dynamic left;
+}
+
+~proc open|cs {
+    return new SrcBox { id = id, left = work };
+}
+
+~proc step|cs {
+    if (s.left <= 0) return new Output { tag = "complete" };
+    s.left -= 1;
+    moved(s.id);
+    if (s.left == 0) return new Output { tag = "complete" };
+    return new Output { tag = "running" };
+}
+
+~proc close|cs {
+    return s.id;
+}

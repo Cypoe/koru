@@ -1,0 +1,11 @@
+// C# implementation facet for app/lib/res — the |cs twin of res.kz's |zig
+// bodies. An owned pointer is an anonymous object carried as `dynamic`; GC
+// is the allocator, so `dispose` only performs the observable write.
+
+~proc make|cs {
+    return new { h = new { n = id }, n = id * 10 };
+}
+
+~proc dispose|cs {
+    __koru_stdout_write("disposed " + __koru_str(h.n) + "\n");
+}

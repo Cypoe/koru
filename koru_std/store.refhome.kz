@@ -19,6 +19,7 @@
 pub const StoreRefHome = struct {
     const ast = @import("ast");
     const struct_literal = @import("struct_literal");
+    const codegen_utils = @import("codegen_utils");
 
     /// A leaf column in seed spelling — post-expansion for a store.
     const LeafSpec = struct { name: []const u8, type: []const u8 };
@@ -279,10 +280,11 @@ pub const StoreRefHome = struct {
     /// The whole home-check computation for one store's ref columns:
     /// refuses when a target has no home, else carries both targets' guard
     /// fn texts for the cell emission to append.
-    const Checks = struct { refusal: ?ast.Item, zig: []const u8, js: []const u8 };
+    const Checks = struct { refusal: ?ast.Item, zig: []const u8, js: []const u8, cs: []const u8 };
     fn build(alloc: std.mem.Allocator, prog: *const ast.Program, reporter: anytype, flow: *const ast.Flow, store_name: []const u8, cell_fields: []const struct_literal.StructField, scope_home: []const u8) Checks {
         var zig = std.ArrayList(u8){};
         var js = std.ArrayList(u8){};
+        var cs = std.ArrayList(u8){};
         const self_leaves = alloc.alloc(LeafSpec, cell_fields.len) catch unreachable;
         for (cell_fields, 0..) |cf, i| {
             const peeled = struct_literal.peelBaseType(cf.value);
@@ -293,31 +295,18 @@ pub const StoreRefHome = struct {
             const t = colTarget(cell_fields, i) orelse continue;
             const hs = RefHomeQuery.homesOf(alloc, prog, t, scope_home, store_name, self_leaves);
             if (hs.len == 0) {
-                return .{ .refusal = ast.refusal(alloc, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): field '{s}' is ref({s}) but no store holds {s} rows — a ref column needs a home: a container store whose row carries the target's fields (std/store:new(dogs, capacity: N) {{ Dog }}); without one the column can only ever hold -1", .{ store_name, fname, t, t }), .zig = "", .js = "" };
+                return .{ .refusal = ast.refusal(alloc, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): field '{s}' is ref({s}) but no store holds {s} rows — a ref column needs a home: a container store whose row carries the target's fields (std/store:new(dogs, capacity: N) {{ Dog }}); without one the column can only ever hold -1", .{ store_name, fname, t, t }), .zig = "", .js = "", .cs = "" };
             }
-            zig.appendSlice(alloc, guard(alloc, false, "store", store_name, fname, t, hs)) catch unreachable;
-            js.appendSlice(alloc, guard(alloc, true, "store", store_name, fname, t, hs)) catch unreachable;
+            zig.appendSlice(alloc, guard(alloc, .zig, "store", store_name, fname, t, hs)) catch unreachable;
+            js.appendSlice(alloc, guard(alloc, .js, "store", store_name, fname, t, hs)) catch unreachable;
+            cs.appendSlice(alloc, guard(alloc, .cs, "store", store_name, fname, t, hs)) catch unreachable;
         }
-        return .{ .refusal = null, .zig = zig.items, .js = js.items };
+        return .{ .refusal = null, .zig = zig.items, .js = js.items, .cs = cs.items };
     }
 
-    /// `__koru_home_<owner>_<col>(v)` — -1 (the unset sentinel) passes;
-    /// anything else must carry a home store's brand, the same byte
-    /// `__koru_row_of` compares at deref. Lean stores self-skip: a store
-    /// that never mints handles is no home. `label` is the consumer's
-    /// module name — the panic names the enforcing library (`std/store`
-    /// on a column write, `std/list` on a push), not the home's.
-    pub fn guard(alloc: std.mem.Allocator, js: bool, label: []const u8, owner: []const u8, col: []const u8, target: []const u8, home_list: []const []const u8) []const u8 {
-        var sb = std.ArrayList(u8){};
-        if (js) {
-            sb.appendSlice(alloc, std.fmt.allocPrint(alloc, "function __koru_home_{s}_{s}(__v) {{\n    if (__v === -1) return;\n    const __g = Math.floor(__v / 4294967296); const __b = Math.floor((__v - __g * 4294967296) / 16777216);\n", .{ owner, col }) catch unreachable) catch unreachable;
-            for (home_list) |h| sb.appendSlice(alloc, std.fmt.allocPrint(alloc, "    if (__koru_store_{s}.__koru_brand !== undefined && __b === __koru_store_{s}.__koru_brand) return;\n", .{ h, h }) catch unreachable) catch unreachable;
-            sb.appendSlice(alloc, std.fmt.allocPrint(alloc, "    throw new Error(\"std/{s}: '{s}.{s}' is ref({s}) - the value is not a handle a {s}-holding store minted (`| row` on such a store's insert or cursor; -1 is the unset sentinel)\");\n}}\n", .{ label, owner, col, target, target }) catch unreachable) catch unreachable;
-        } else {
-            sb.appendSlice(alloc, std.fmt.allocPrint(alloc, "\nfn __koru_home_{s}_{s}(__v: i64) void {{\n    if (__v == -1) return;\n    const __b = @as(u32, @truncate(@as(u64, @bitCast(__v)))) >> 24;\n", .{ owner, col }) catch unreachable) catch unreachable;
-            for (home_list) |h| sb.appendSlice(alloc, std.fmt.allocPrint(alloc, "    if (@hasDecl(__KoruStoreT_{s}, \"__koru_brand\") and __b == __KoruStoreT_{s}.__koru_brand) return;\n", .{ h, h }) catch unreachable) catch unreachable;
-            sb.appendSlice(alloc, std.fmt.allocPrint(alloc, "    @panic(\"std/{s}: '{s}.{s}' is ref({s}) - the value is not a handle a {s}-holding store minted (`| row` on such a store's insert or cursor; -1 is the unset sentinel)\");\n}}\n", .{ label, owner, col, target, target }) catch unreachable) catch unreachable;
-        }
-        return sb.items;
+    // The guard body lives in the `hostemit` part (line wall); the pub
+    // member stays — `std/list` calls `StoreRefHome.guard` cross-module.
+    pub fn guard(alloc: std.mem.Allocator, host: codegen_utils.HostTarget, label: []const u8, owner: []const u8, col: []const u8, target: []const u8, home_list: []const []const u8) []const u8 {
+        return storeRefHomeGuard(alloc, host, label, owner, col, target, home_list);
     }
 };

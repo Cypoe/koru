@@ -30,9 +30,9 @@ fn mintTerminal(allocator: std.mem.Allocator, item: *const astz.Item, expr: []co
 
     // The marker records the vocabulary scalar the user spelled; the const
     // lowers to the host type — `string` is a scalar name, not a Zig type.
-    // On JS the alias has no runtime content, so the marker alone lands.
+    // On JS and C# the alias has no runtime content, so the marker alone lands.
     const host = if (std.mem.eql(u8, scalar, "string")) "[]const u8" else scalar;
-    const code = if (std.mem.eql(u8, CompilerEnv.lang, "js"))
+    const code = if (std.mem.eql(u8, CompilerEnv.lang, "js") or std.mem.eql(u8, CompilerEnv.lang, "cs"))
         std.fmt.allocPrint(allocator, "// proto-terminal {s}: {s}", .{ type_name, scalar }) catch unreachable
     else
         std.fmt.allocPrint(allocator, "// proto-terminal {s}: {s}\n{s}const {s} = {s};", .{ type_name, scalar, pub_prefix, type_name, host }) catch unreachable;

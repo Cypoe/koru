@@ -105,7 +105,13 @@ fn synthPanicBody(
     lang: []const u8,
 ) ![]const u8 {
     const is_js = std.mem.eql(u8, lang, "js");
+    const is_cs = std.mem.eql(u8, lang, "cs");
     if (!panicHasPayload(branch)) {
+        if (is_cs) return std.fmt.allocPrint(
+            allocator,
+            "throw new global::System.Exception(\"{s}: unhandled panic branch '{s}' fired at runtime\");",
+            .{ event_name, branch.name },
+        );
         return if (is_js)
             std.fmt.allocPrint(
                 allocator,
@@ -126,6 +132,16 @@ fn synthPanicBody(
         (std.mem.eql(u8, branch.payload.fields[0].type, "string") or
             std.mem.eql(u8, branch.payload.fields[0].type, "[]const u8") or
             std.mem.eql(u8, branch.payload.fields[0].type, "[]u8"));
+    if (is_cs) {
+        // `__koru_stderr_write`/`__koru_str` are preamble helpers; the string
+        // payload concatenates bare, any other shape goes through the
+        // bool-aware textifier (Zig's `{any}` has no direct C# analogue).
+        return std.fmt.allocPrint(
+            allocator,
+            "__koru_stderr_write(\"{s}: panic branch '{s}' fired — payload: \" + {s} + \"\\n\");\nthrow new global::System.Exception(\"{s}: unhandled panic branch '{s}' fired at runtime\");",
+            .{ event_name, branch.name, if (is_str) "v" else "__koru_str(v)", event_name, branch.name },
+        );
+    }
     if (is_js) {
         return std.fmt.allocPrint(
             allocator,

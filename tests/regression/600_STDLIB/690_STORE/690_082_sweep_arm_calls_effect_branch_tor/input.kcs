@@ -1,0 +1,7 @@
+// C# implementation facet. The events are declared in input.kz
+// (merged at import); this file holds the |cs proc bodies.
+
+~proc beats|cs {
+    for (var i = 0L; i < k; i++) beat(i);
+    return new Output { tag = "done" };
+}

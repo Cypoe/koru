@@ -54,6 +54,16 @@ const StoreIndex = struct {
     /// Insert: the fresh row joins its key's bucket — appended last, the
     /// newest member, so the bucket's order is the rows' join order.
     fn insertPut(alloc: std.mem.Allocator, host_is_js: bool, store_name: []const u8, icol: []const u8, ecol: []const u8) []const u8 {
+        if (storeHostTarget() == .cs)
+            // `__index_<col>` is a `Dictionary<long, List<long>>` (the cell
+            // decl's cs arm) — TryGetValue is getOrPut, `.Add` is append.
+            return std.fmt.allocPrint(alloc,
+                \\long __koru_ik = (long)(__koru_store_{s}.{s}[__koru_new_row]);
+                \\global::System.Collections.Generic.List<long> __koru_ib;
+                \\if (!__koru_store_{s}.__index_{s}.TryGetValue(__koru_ik, out __koru_ib)) {{ __koru_ib = new global::System.Collections.Generic.List<long>(); __koru_store_{s}.__index_{s}[__koru_ik] = __koru_ib; }}
+                \\__koru_ib.Add(__koru_store_{s}.__koru_handle_of(__koru_new_row));
+                \\
+            , .{ store_name, ecol, store_name, icol, store_name, icol, store_name }) catch unreachable;
         if (host_is_js)
             return std.fmt.allocPrint(alloc,
                 \\const __koru_ik = __koru_store_{s}.{s}[__koru_new_row];
@@ -71,54 +81,11 @@ const StoreIndex = struct {
         , .{ store_name, ecol, store_name, icol, store_name }) catch unreachable;
     }
 
-    /// A `stored` write to the indexed column: `write` is the cell write
-    /// (`cell[row] = <value>`) and `value` its rhs expression. When the
-    /// value actually changes the row LEAVES its old bucket (membership is
-    /// eager — a stale member under the old key would answer for a row
-    /// that stopped carrying it) and JOINS the new one at the end — a
-    /// write that moves membership is a join for ordering purposes.
-    /// `__koru_iold` is captured before the write.
-    fn writeWrap(alloc: std.mem.Allocator, host_is_js: bool, store_name: []const u8, icol: []const u8, ecol: []const u8, write: []const u8, value: []const u8) []const u8 {
-        if (host_is_js)
-            return std.fmt.allocPrint(alloc,
-                \\const __koru_iold = __koru_store_{s}.{s}[__koru_r];
-                \\const __koru_ih = __koru_store_{s}.__koru_handle_of(__koru_r);
-                \\{s}if (__koru_iold !== {s}) {{
-                \\    const __koru_ib = __koru_store_{s}.__index_{s}.get(__koru_iold);
-                \\    if (__koru_ib !== undefined) {{
-                \\        const __koru_mi = __koru_ib.indexOf(__koru_ih);
-                \\        if (__koru_mi >= 0) __koru_ib.splice(__koru_mi, 1);
-                \\        if (__koru_ib.length === 0) __koru_store_{s}.__index_{s}.delete(__koru_iold);
-                \\    }}
-                \\    let __koru_ib2 = __koru_store_{s}.__index_{s}.get({s});
-                \\    if (__koru_ib2 === undefined) {{ __koru_ib2 = []; __koru_store_{s}.__index_{s}.set({s}, __koru_ib2); }}
-                \\    __koru_ib2.push(__koru_ih);
-                \\}}
-                \\
-            , .{ store_name, ecol, store_name, write, value, store_name, icol, store_name, icol, store_name, icol, value, store_name, icol, value }) catch unreachable;
-        return std.fmt.allocPrint(alloc,
-            \\const __koru_iold = __koru_store_{s}.{s}[__koru_r];
-            \\const __koru_ih = __koru_store_{s}.__koru_handle_of(__koru_r);
-            \\{s}if (__koru_iold != {s}) {{
-            \\    if (__koru_store_{s}.__index_{s}.getPtr(__koru_iold)) |__koru_ib| {{
-            \\        for (__koru_ib.items, 0..) |__koru_im, __koru_mi| {{
-            \\            if (__koru_im == __koru_ih) {{ _ = __koru_ib.orderedRemove(__koru_mi); break; }}
-            \\        }}
-            \\        if (__koru_ib.items.len == 0) {{
-            \\            __koru_ib.deinit(koru_allocator());
-            \\            _ = __koru_store_{s}.__index_{s}.remove(__koru_iold);
-            \\        }}
-            \\    }}
-            \\    const __koru_ig = __koru_store_{s}.__index_{s}.getOrPut(koru_allocator(), {s}) catch @panic("std/indexes: index write ran out of memory");
-            \\    if (!__koru_ig.found_existing) __koru_ig.value_ptr.* = .{{}};
-            \\    __koru_ig.value_ptr.append(koru_allocator(), __koru_ih) catch @panic("std/indexes: index write ran out of memory");
-            \\}}
-            \\
-        , .{ store_name, ecol, store_name, write, value, store_name, icol, store_name, icol, store_name, icol, value }) catch unreachable;
-    }
-
     /// `clear`: every bucket's backing list goes with the map.
     fn clearDrop(alloc: std.mem.Allocator, host_is_js: bool, store_name: []const u8, icol: []const u8) []const u8 {
+        if (storeHostTarget() == .cs)
+            // GC reclaims the buckets — `Clear` is the whole job.
+            return std.fmt.allocPrint(alloc, "__koru_store_{s}.__index_{s}.Clear();\n", .{ store_name, icol }) catch unreachable;
         if (host_is_js)
             return std.fmt.allocPrint(alloc, "__koru_store_{s}.__index_{s}.clear();\n", .{ store_name, icol }) catch unreachable;
         return std.fmt.allocPrint(alloc,
@@ -186,6 +153,10 @@ const StoreIndex = struct {
     /// (taken rows, never ejected) resolve to no row and skip. Opened as
     /// the block the projections and the body call still sit inside.
     fn firstHead(alloc: std.mem.Allocator, host_is_js: bool, cellq: []const u8, store_name: []const u8, icol: []const u8, key: []const u8) []const u8 {
+        if (storeHostTarget() == .cs)
+            // `__koru_row_of` answers -1 for a dead member — `-1` is the
+            // "no candidate yet" sentinel, not maxInt.
+            return std.fmt.allocPrint(alloc, "{{\nglobal::System.Collections.Generic.List<long> __koru_ib;\nif ({s}__koru_store_{s}.__index_{s}.TryGetValue((long)({s}), out __koru_ib)) {{\nlong __koru_im = -1;\nforeach (var __koru_bh in __koru_ib) {{\n    var __koru_cand = {s}__koru_store_{s}.__koru_row_of(__koru_bh);\n    if (__koru_cand >= 0 && (__koru_im < 0 || __koru_cand < __koru_im)) __koru_im = __koru_cand;\n}}\nif (__koru_im >= 0) {{\nvar __koru_si = __koru_im;\n", .{ cellq, store_name, icol, key, cellq, store_name }) catch unreachable;
         if (host_is_js)
             return std.fmt.allocPrint(alloc, "{{\nconst __koru_ib = {s}__koru_store_{s}.__index_{s}.get({s});\nif (__koru_ib !== undefined) {{\nlet __koru_im = -1;\nfor (const __koru_bh of __koru_ib) {{\n    const __koru_cand = {s}__koru_store_{s}.__koru_row_of(__koru_bh);\n    if (__koru_cand !== null && (__koru_im < 0 || __koru_cand < __koru_im)) __koru_im = __koru_cand;\n}}\nif (__koru_im >= 0) {{\nconst __koru_si = __koru_im;\n", .{ cellq, store_name, icol, key, cellq, store_name }) catch unreachable;
         return std.fmt.allocPrint(alloc, "if ({s}__koru_store_{s}.__index_{s}.get({s})) |__koru_ib| {{\nvar __koru_im: usize = @import(\"std\").math.maxInt(usize);\nfor (__koru_ib.items) |__koru_bh| {{\n    if ({s}__koru_store_{s}.__koru_row_of(__koru_bh)) |__koru_cand| {{\n        if (__koru_cand < __koru_im) __koru_im = __koru_cand;\n    }}\n}}\nif (__koru_im != @import(\"std\").math.maxInt(usize)) {{\nconst __koru_si = __koru_im;\n", .{ cellq, store_name, icol, key, cellq, store_name }) catch unreachable;
@@ -196,7 +167,9 @@ const StoreIndex = struct {
     /// itself inside the head; on JS also the scoping block), then
     /// `| none` and the block the scan path would have closed.
     fn firstClose(alloc: std.mem.Allocator, host_is_js: bool, none_call: []const u8) []const u8 {
-        const seal: []const u8 = if (host_is_js) ");\n}\n}\n}\n" else ");\n}\n}\n";
+        // The cs head opens the same three blocks as js (`{`, the bucket
+        // `if`, the `__koru_im >= 0` `if`) — same seal.
+        const seal: []const u8 = if (host_is_js or storeHostTarget() == .cs) ");\n}\n}\n}\n" else ");\n}\n}\n";
         return std.fmt.allocPrint(alloc, "{s}{s}}}\n", .{ seal, none_call }) catch unreachable;
     }
 };

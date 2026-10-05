@@ -30,6 +30,11 @@ const StoreIndexWalk = struct {
     /// duration. A body that CAN takes a `while` walk whose end is a live
     /// question — see memberClose. The key binds ONCE either way.
     fn memberHead(alloc: std.mem.Allocator, host_is_js: bool, cellq: []const u8, store_name: []const u8, icol: []const u8, key: []const u8, stable: bool) []const u8 {
+        if (storeHostTarget() == .cs) {
+            if (stable)
+                return std.fmt.allocPrint(alloc, "long __koru_ik = (long)({s});\nglobal::System.Collections.Generic.List<long> __koru_ib;\nif ({s}__koru_store_{s}.__index_{s}.TryGetValue(__koru_ik, out __koru_ib)) {{\nforeach (var __koru_bh in __koru_ib) {{\n    var __koru_si = {s}__koru_store_{s}.__koru_row_of(__koru_bh);\n    if (__koru_si < 0) continue;\n", .{ key, cellq, store_name, icol, cellq, store_name }) catch unreachable;
+            return std.fmt.allocPrint(alloc, "long __koru_ik = (long)({s});\nvar __koru_bi = 0;\nwhile (true) {{\n    global::System.Collections.Generic.List<long> __koru_ib;\n    if (!{s}__koru_store_{s}.__index_{s}.TryGetValue(__koru_ik, out __koru_ib) || __koru_bi >= __koru_ib.Count) break;\n    var __koru_bh = __koru_ib[__koru_bi];\n    var __koru_si = {s}__koru_store_{s}.__koru_row_of(__koru_bh);\n    if (__koru_si < 0) {{ __koru_bi += 1; continue; }}\n", .{ key, cellq, store_name, icol, cellq, store_name }) catch unreachable;
+        }
         if (host_is_js) {
             if (stable)
                 return std.fmt.allocPrint(alloc, "const __koru_ik = {s};\nconst __koru_ib = {s}__koru_store_{s}.__index_{s}.get(__koru_ik);\nif (__koru_ib !== undefined) {{\nfor (const __koru_bh of __koru_ib) {{\n    const __koru_si = {s}__koru_store_{s}.__koru_row_of(__koru_bh);\n    if (__koru_si === null) continue;\n", .{ key, cellq, store_name, icol, cellq, store_name }) catch unreachable;
@@ -38,23 +43,6 @@ const StoreIndexWalk = struct {
         if (stable)
             return std.fmt.allocPrint(alloc, "const __koru_ik = {s};\nif ({s}__koru_store_{s}.__index_{s}.getPtr(__koru_ik)) |__koru_ib| {{\nfor (__koru_ib.items) |__koru_bh| {{\n    const __koru_si = {s}__koru_store_{s}.__koru_row_of(__koru_bh) orelse continue;\n", .{ key, cellq, store_name, icol, cellq, store_name }) catch unreachable;
         return std.fmt.allocPrint(alloc, "const __koru_ik = {s};\nvar __koru_bi: usize = 0;\nwhile (true) {{\n    const __koru_ib = {s}__koru_store_{s}.__index_{s}.getPtr(__koru_ik) orelse break;\n    if (__koru_bi >= __koru_ib.items.len) break;\n    const __koru_bh = __koru_ib.items[__koru_bi];\n    const __koru_si = {s}__koru_store_{s}.__koru_row_of(__koru_bh) orelse {{ __koru_bi += 1; continue; }};\n", .{ key, cellq, store_name, icol, cellq, store_name }) catch unreachable;
-    }
-
-    /// The membership walk's close. `stable` just seals: the `for`, the
-    /// bucket's `if`, and the caller's block. Otherwise the survival
-    /// check runs — after the body, the bucket is re-read and the cursor
-    /// advances only when the member it visited still sits at the
-    /// cursor's position; a member moved out by an indexed-column write
-    /// has handed its slot to the next unvisited member, which the walk
-    /// then examines — the dense sweep's re-check contract (690_031) at
-    /// bucket granularity. A bucket that lost its key (cleared, or
-    /// emptied by moves) ends the walk; the pointer is re-fetched
-    /// because the body can rehash the map by inserting under a new key.
-    fn memberClose(alloc: std.mem.Allocator, host_is_js: bool, cellq: []const u8, store_name: []const u8, icol: []const u8, stable: bool) []const u8 {
-        if (stable) return std.fmt.allocPrint(alloc, ");\n}}\n}}\n}}\n", .{}) catch unreachable;
-        if (host_is_js)
-            return std.fmt.allocPrint(alloc, ");\nconst __koru_ib2 = {s}__koru_store_{s}.__index_{s}.get(__koru_ik);\nif (__koru_ib2 === undefined) break;\nif (__koru_bi < __koru_ib2.length && __koru_ib2[__koru_bi] === __koru_bh) __koru_bi += 1;\n}}\n}}\n", .{ cellq, store_name, icol }) catch unreachable;
-        return std.fmt.allocPrint(alloc, ");\nif ({s}__koru_store_{s}.__index_{s}.getPtr(__koru_ik)) |__koru_ib2| {{\n    if (__koru_bi < __koru_ib2.items.len and __koru_ib2.items[__koru_bi] == __koru_bh) __koru_bi += 1;\n}} else break;\n}}\n}}\n", .{ cellq, store_name, icol }) catch unreachable;
     }
 
     // --- the stable-walk gate: can the body disturb this bucket? ---

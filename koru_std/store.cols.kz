@@ -208,16 +208,6 @@ fn charCap(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []con
     return null;
 }
 
-/// One column's READ at `__koru_si`. A `char[N]` cell binds the row text up
-/// to the first NUL (690_052 semantics) — the plain indexed read hands the
-/// handler a [N]u8 where its Input types a []const u8, a raw Zig coercion
-/// error at a site the author never wrote (threat_bench). On JS the cell IS
-/// a string; the plain read stands.
-fn cellRead(alloc: std.mem.Allocator, host_is_js: bool, prog: *const ast_find.Program, cellq: []const u8, store: []const u8, col: []const u8, esc_col: []const u8) []const u8 {
-    if (!host_is_js and charCap(alloc, prog, store, col) != null)
-        return std.fmt.allocPrint(alloc, "@import(\"std\").mem.sliceTo(&{s}__koru_store_{s}.{s}[__koru_si], 0)", .{ cellq, store, esc_col }) catch unreachable;
-    return std.fmt.allocPrint(alloc, "{s}__koru_store_{s}.{s}[__koru_si]", .{ cellq, store, esc_col }) catch unreachable;
-}
 
 /// The query rewriter's one adjacency rule: is `bind` at `i` a VALUE-position
 /// use — not a name? `.bind` is a field of some other expression (690_363),
@@ -270,7 +260,7 @@ fn fireRow(
 ) bool {
     for (proj_names, proj_cols) |pn, ci| {
         const esc_cn = codegen_utils_store.escapeZigIdentifier(alloc, col_names[ci]) catch col_names[ci];
-        const read = cellRead(alloc, host_target == .js, prog, cellq, store_name, col_names[ci], esc_cn);
+        const read = cellRead(alloc, host_target, prog, cellq, store_name, col_names[ci], esc_cn);
         loop.appendSlice(alloc, codegen_utils_store.HostShape.constBind(alloc, host_target, pn, read)) catch unreachable;
     }
     if (scan_guard) |cond| {
@@ -282,9 +272,10 @@ fn fireRow(
         loop.appendSlice(alloc, gz) catch unreachable;
     }
     if (mark_found) loop.appendSlice(alloc, "__koru_found = true;\n") catch unreachable;
-    loop.appendSlice(alloc, storeEventQualifier(alloc, home_ns, main_module_name)) catch unreachable;
+    const callq = storeEventQualifier(alloc, home_ns, main_module_name);
+    loop.appendSlice(alloc, callq) catch unreachable;
     loop.appendSlice(alloc, sbody_name) catch unreachable;
     loop.appendSlice(alloc, "_event.handler(") catch unreachable;
-    loop.appendSlice(alloc, codegen_utils_store.HostShape.argRec(alloc, host_target, argb)) catch unreachable;
+    loop.appendSlice(alloc, codegen_utils_store.HostShape.callArg(alloc, host_target, callq, sbody_name, argb)) catch unreachable;
     return true;
 }

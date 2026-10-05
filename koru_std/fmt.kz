@@ -10,6 +10,7 @@
 
 ~[comptime|runtime]
 ~part jsprec
+~part csprec
 
 const std = @import("std");
 
@@ -331,7 +332,6 @@ pub const FormattedText = struct {
     // runner grafts it (top-level or lifted-nested), same as ln.
     return .{ .replacement = new_item };
 }
-
 // ============================================================================
 // FMT.BLK.WITH_ALLOCATOR - Explicit allocator control
 // ============================================================================

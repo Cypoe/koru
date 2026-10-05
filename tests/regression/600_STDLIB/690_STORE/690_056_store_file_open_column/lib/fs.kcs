@@ -1,0 +1,13 @@
+// C# implementation facet for app/fs — the |cs twin of fs.kz's |zig bodies.
+// The fixture never touches a real file on any host: `open` prints and
+// returns a fake handle, `close` prints and frees. On C# the File is an
+// anonymous object carried as `dynamic`; GC is the allocator.
+
+~proc open|cs {
+    __koru_stdout_write("open " + path + "\n");
+    return new { handle = 42 };
+}
+
+~proc close|cs {
+    __koru_stdout_write("close " + file.handle + "\n");
+}

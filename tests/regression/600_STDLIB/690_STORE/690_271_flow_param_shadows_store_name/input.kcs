@@ -1,0 +1,3 @@
+~proc nop-impl|cs {}
+
+~proc reframe|cs { return history + "|" + goal; }

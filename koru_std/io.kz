@@ -229,6 +229,11 @@ var readln_buf: [8192]u8 = undefined;
     koru_allocator().free(content);
 }
 
+~proc free|cs {
+    // The host owns memory — a Koru string is a managed C# string and the
+    // GC settles the `allocated!` debt. Empty by construction.
+}
+
 // Get command line arguments
 ~pub tor args {} -> []string
 

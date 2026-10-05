@@ -86,6 +86,16 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     try em.write(
         \\  public static void __koru_stdout_write(dynamic s) => global::System.Console.Out.Write(s);
         \\  public static void __koru_stderr_write(dynamic s) => global::System.Console.Error.Write(s);
+        \\  // The mutable handle carrier — `*String`-style resources are
+        \\  // `new __KoruBox { data = … }` because C# anonymous types are
+        \\  // read-only: `s.data = …` (std/string append/clear, handle
+        \\  // mutation generally) needs a settable member.
+        \\  public class __KoruBox { public dynamic data; }
+        \\  // Textification for `{{ … }}` operands: C# bool ToStrings as
+        \\  // `True` where Koru prints `true`, and the operand is `dynamic`
+        \\  // at this boundary — a `(x) is bool` inline test would be a
+        \\  // compile error on statically-typed operands instead.
+        \\  public static dynamic __koru_str(dynamic v) => v is bool b ? (b ? "true" : "false") : v;
         \\
     );
 
@@ -415,13 +425,64 @@ fn collectCsCells(em: *Emitter, items: []const ast.Item) CsEmitError!void {
 fn replaceIdent(allocator: std.mem.Allocator, text: []const u8, name: []const u8, replacement: []const u8) CsEmitError![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
+    // Positions inside a `new <T> { … }` object initializer — a name
+    // appearing there as `<name> =` is a MEMBER KEY of the callee's Input
+    // struct, not a use of the caller's local (a sweepbody capture at an
+    // inlined-proc site: `Input { d = __koru_p_d }` — the value renames,
+    // the key must not; 690_234/243).
+    const in_init = try allocator.alloc(bool, text.len);
+    defer allocator.free(in_init);
+    @memset(in_init, false);
+    {
+        var stack: std.ArrayList(bool) = .empty; // true = an initializer brace
+        defer stack.deinit(allocator);
+        var i: usize = 0;
+        while (i < text.len) {
+            if (i + 3 <= text.len and std.mem.eql(u8, text[i .. i + 3], "new") and
+                (i + 3 == text.len or !csIdentChar(text[i + 3])) and
+                (i == 0 or !csIdentChar(text[i - 1])))
+            {
+                // Skip the type/member spelling; a `{` terminates it as an
+                // initializer, anything else (`(`, `=`, `;`, `,`, `)`)
+                // means an expression `new` with no initializer.
+                var j = i + 3;
+                while (j < text.len and (csIdentChar(text[j]) or text[j] == '.' or text[j] == ' ' or text[j] == '\t' or text[j] == '<' or text[j] == '>' or text[j] == '?')) j += 1;
+                if (j < text.len and text[j] == '{') {
+                    try stack.append(allocator, true);
+                    i = j + 1;
+                    continue;
+                }
+                i += 3;
+                continue;
+            }
+            if (text[i] == '{') {
+                try stack.append(allocator, false);
+            } else if (text[i] == '}') {
+                if (stack.pop()) |_| {}
+            }
+            if (stack.items.len > 0 and stack.items[stack.items.len - 1]) in_init[i] = true;
+            i += 1;
+        }
+    }
     // `wrote` marks appended-until; `scan` marks searched-from. They differ:
     // a match that FAILS the boundary (`width` inside `width_sum`) advances
     // the scan but must not consume — its characters still need emitting.
     var wrote: usize = 0;
     var scan: usize = 0;
     while (std.mem.indexOfPos(u8, text, scan, name)) |at| {
-        if ((at == 0 or !csIdentChar(text[at - 1])) and
+        // `.name` is member access — `store.hp` does not bind the local `hp`
+        // an inlined callee's param rebind would rename (the plural store's
+        // cell columns share their names with insert's parameters).
+        const member_access = at > 0 and text[at - 1] == '.';
+        // Inside an initializer, `name =` is a member key — skip it.
+        var member_key = false;
+        if (at < in_init.len and in_init[at]) {
+            var k = at + name.len;
+            while (k < text.len and (text[k] == ' ' or text[k] == '\t')) k += 1;
+            member_key = k < text.len and text[k] == '=' and (k + 1 >= text.len or text[k + 1] != '=');
+        }
+        if (!member_access and !member_key and
+            (at == 0 or !csIdentChar(text[at - 1])) and
             (at + name.len >= text.len or !csIdentChar(text[at + name.len])))
         {
             try out.appendSlice(allocator, text[wrote..at]);
@@ -580,7 +641,10 @@ const Emitter = struct {
     /// object's member names are identifiers, so keys lower here too).
     fn writeIdent(self: *Emitter, name: []const u8) CsEmitError!void {
         for (name) |c| {
-            try self.buf.append(self.allocator, if (c == '-') '_' else c);
+            // `-` is Koru's kebab and `.` the dotted-name join (a union-folded
+            // column like `creature.alive` is ONE name, Zig's `@"…"` quoting
+            // notwithstanding); both fold into the cs identifier.
+            try self.buf.append(self.allocator, if (c == '-' or c == '.') '_' else c);
         }
     }
 
@@ -595,7 +659,7 @@ const Emitter = struct {
         const needs_mangle = blk: {
             var stem_buf: [256]u8 = undefined;
             if (name.len <= stem_buf.len) {
-                for (name, 0..) |c, i| stem_buf[i] = if (c == '-') '_' else c;
+                for (name, 0..) |c, i| stem_buf[i] = if (c == '-' or c == '.') '_' else c;
                 break :blk codegen_utils.isCsReservedForEmit(stem_buf[0..name.len]);
             }
             break :blk false;
@@ -609,9 +673,57 @@ const Emitter = struct {
     fn lowerIdentBuf(buf: []u8, name: []const u8) []const u8 {
         @memcpy(buf[0..name.len], name);
         for (buf[0..name.len]) |*c| {
-            if (c.* == '-') c.* = '_';
+            if (c.* == '-' or c.* == '.') c.* = '_';
         }
         return buf[0..name.len];
+    }
+
+    /// A terminal branch's payload member name — `tag` collides with the
+    /// Output struct's discriminator member (a `tag` column's apply arm,
+    /// 690_336), so it reads and writes as `__ktag`. Transform-authored
+    /// text maps through `HostShape.csPayloadMember`, the same spelling.
+    fn csPayloadName(name: []const u8) []const u8 {
+        return if (std.mem.eql(u8, name, "tag")) "__ktag" else name;
+    }
+
+    /// The emitted class name for an event — the module qualifier then the
+    /// FULL dotted path joined (`io:print.ln` → `std_io_print_ln_event`),
+    /// EXCEPT the main module's own decls, which keep the bare joined path:
+    /// transform-authored call text spells `<name>_event` for the
+    /// synthesized events it placed there (`__store_sweepbody_*`,
+    /// `__store_qrow_*`, …) and cannot predict a qualifier it never wrote.
+    /// Nested classes are one flat namespace while Koru tor identities are
+    /// qualifier + path: `fmt:ln` and `io:print.ln` share the last segment
+    /// `ln`, and `io:free`/`string:free` share the WHOLE path — last-
+    /// segment naming emitted duplicate `<name>_event` classes in one file
+    /// (690_046, 690_190). JS keeps the dot inside the object key, which is
+    /// why that target never collided.
+    fn eventClassName(self: *Emitter, buf: []u8, ev: *const ast.EventDecl) []const u8 {
+        var n: usize = 0;
+        if (ev.path.module_qualifier) |mq| {
+            if (!std.mem.eql(u8, mq, self.main_module_name)) {
+                for (mq) |c| {
+                    buf[n] = switch (c) {
+                        '/', '.', '-' => '_',
+                        else => c,
+                    };
+                    n += 1;
+                }
+                buf[n] = '_';
+                n += 1;
+            }
+        }
+        for (ev.path.segments, 0..) |seg, si| {
+            if (si > 0) {
+                buf[n] = '_';
+                n += 1;
+            }
+            for (seg) |c| {
+                buf[n] = if (c == '-') '_' else c;
+                n += 1;
+            }
+        }
+        return buf[0..n];
     }
 
     /// Read a property off a `dynamic` — `base.key`. A payload key lowers to a
@@ -771,7 +883,7 @@ const Emitter = struct {
             "dynamic";
 
         var name_buf: [256]u8 = undefined;
-        const ev_name = lowerIdentBuf(&name_buf, name);
+        const ev_name = self.eventClassName(&name_buf, ev);
         try self.writeFmt("  public static class {s}_event {{\n", .{ev_name});
 
         // The Input struct mirrors zig's `pub const Input` — declared fields
@@ -801,7 +913,7 @@ const Emitter = struct {
             for (ev.branches) |*b| {
                 if (b.kind != .terminal) continue;
                 try self.writeFmt("      public {s} ", .{branchPayloadCsType(b)});
-                try self.writeBinding(b.name);
+                try self.writeBinding(csPayloadName(b.name));
                 try self.write(";\n");
             }
             try self.write("    }\n");
@@ -939,6 +1051,9 @@ const Emitter = struct {
                                 try self.writeFmt("      throw new global::System.Exception(\"{s}: [transform] tor is lowered at compile time and must never be called\");\n", .{name});
                             } else {
                                 try self.emitReindented(proc.body.text, "      ");
+                                // A trailing `//` line would swallow whatever
+                                // lands next — terminate the last line.
+                                try self.write("\n");
                             }
                         },
                         .subflow => |flow| try self.emitSubflowImplBody(ev, flow, "      "),
@@ -1040,12 +1155,12 @@ const Emitter = struct {
         try self.writeFmt("{s}return new {s}{{ tag = \"{s}\"", .{ indent, if (tagged) "Output " else "", bc.branch_name });
         if (bc.plain_value) |pv| {
             try self.write(", ");
-            try self.writeBinding(bc.branch_name);
+            try self.writeBinding(csPayloadName(bc.branch_name));
             try self.write(" = ");
             try self.writeProduceValue(pv);
         } else if (bc.fields.len > 0) {
             try self.write(", ");
-            try self.writeBinding(bc.branch_name);
+            try self.writeBinding(csPayloadName(bc.branch_name));
             try self.write(" = new { ");
             for (bc.fields, 0..) |field, k| {
                 if (k > 0) try self.write(", ");
@@ -1139,6 +1254,7 @@ const Emitter = struct {
             error.OutOfMemory => return CsEmitError.OutOfMemory,
             error.UnsupportedBuiltin => {
                 log.err("[cs_emitter] host builtin '@{s}' has no C# lowering\n", .{diag.unknown_builtin});
+                log.err("[cs_emitter]   in: {s}\n", .{text[0..@min(text.len, 400)]});
                 return CsEmitError.UnsupportedConstruct;
             },
         };
@@ -1236,9 +1352,7 @@ const Emitter = struct {
     /// Record `event`'s lowered class key as taken.
     fn claimEventKey(self: *Emitter, keys: *EmittedKeys, event: *const ast.EventDecl) CsEmitError!void {
         var buf: [256]u8 = undefined;
-        const name = event.path.segments[event.path.segments.len - 1];
-        if (name.len > buf.len) return;
-        const key = lowerIdentBuf(&buf, name);
+        const key = self.eventClassName(&buf, event);
         if (keys.contains(key)) return;
         try keys.put(try self.allocator.dupe(u8, key), {});
     }
@@ -1265,9 +1379,7 @@ const Emitter = struct {
                     }
                     if (!reached.contains(event)) continue;
                     var name_buf: [256]u8 = undefined;
-                    const name = event.path.segments[event.path.segments.len - 1];
-                    if (name.len > name_buf.len) continue;
-                    const key = lowerIdentBuf(&name_buf, name);
+                    const key = self.eventClassName(&name_buf, event);
                     if (emitted_keys.contains(key)) continue;
                     try self.emitUnlowerableEventRefusal(event, module);
                     try self.claimEventKey(emitted_keys, event);
@@ -1284,7 +1396,7 @@ const Emitter = struct {
     fn emitUnlowerableEventRefusal(self: *Emitter, event: *const ast.EventDecl, module: *const ast.ModuleDecl) CsEmitError!void {
         var name_buf: [256]u8 = undefined;
         const name = event.path.segments[event.path.segments.len - 1];
-        try self.writeFmt("  public static class {s}_event {{\n", .{lowerIdentBuf(&name_buf, name)});
+        try self.writeFmt("  public static class {s}_event {{\n", .{self.eventClassName(&name_buf, event)});
         // Call sites construct `new <ev>_event.Input { … }` — the members
         // must exist for the program to build, or the refusal arrives at
         // compile time instead of the call frame it was written for.
@@ -1755,7 +1867,7 @@ const Emitter = struct {
         }
 
         var ev_name_buf: [256]u8 = undefined;
-        const ev_name = lowerIdentBuf(&ev_name_buf, ev.path.segments[ev.path.segments.len - 1]);
+        const ev_name = self.eventClassName(&ev_name_buf, ev);
         const result_name: ?[]const u8 = if (!needs_result) null else if (namedReturnBinding(inv)) |rb|
             try self.dupeSpelled(rb)
         else blk: {
@@ -1894,7 +2006,7 @@ const Emitter = struct {
                     try self.writeFmt("{s}var ", .{body_indent});
                     try self.writeBinding(binding);
                     try self.write(" = ");
-                    try self.writeMember(rn, cont.branch);
+                    try self.writeMember(rn, csPayloadName(cont.branch));
                     try self.write(";\n");
                 }
                 try self.registerLocal(binding);
@@ -1912,8 +2024,9 @@ const Emitter = struct {
             if (!(bare_return or cont.branch.len == 0)) {
                 try base_buf.append(self.allocator, '.');
                 var kb: [256]u8 = undefined;
-                if (cont.branch.len <= kb.len) {
-                    const lowered = lowerIdentBuf(&kb, cont.branch);
+                const branch_key = csPayloadName(cont.branch);
+                if (branch_key.len <= kb.len) {
+                    const lowered = lowerIdentBuf(&kb, branch_key);
                     try base_buf.appendSlice(self.allocator, lowered);
                 }
             }
@@ -2128,6 +2241,9 @@ const Emitter = struct {
             }
         }
         try self.emitReindented(body, inner);
+        // Newline before the close — a trailing `//` comment in the body
+        // would otherwise eat the `}`.
+        try self.write("\n");
         try self.writeFmt("{s}}}\n", .{indent});
         return true;
     }
@@ -2193,12 +2309,9 @@ const Emitter = struct {
             switch (item.*) {
                 .event_decl => |*e| {
                     var nb: [256]u8 = undefined;
-                    const last = e.path.segments[e.path.segments.len - 1];
-                    if (last.len > nb.len) continue;
-                    if (std.mem.eql(u8, lowerIdentBuf(&nb, last), leaf)) {
-                        const impl = self.findImplIn(items, &e.path) orelse continue;
-                        if (implMentionsIdent(impl, name)) return true;
-                    }
+                    if (!std.mem.eql(u8, self.eventClassName(&nb, e), leaf)) continue;
+                    const impl = self.findImplIn(items, &e.path) orelse continue;
+                    if (implMentionsIdent(impl, name)) return true;
                 },
                 .module_decl => |*m| {
                     if (try self.leafImplMentionsIdent(m.items, leaf, name)) return true;
@@ -2393,7 +2506,7 @@ const Emitter = struct {
         defer self.buf = saved_buf;
 
         var ev_name_buf: [256]u8 = undefined;
-        const ev_name = lowerIdentBuf(&ev_name_buf, ev.path.segments[ev.path.segments.len - 1]);
+        const ev_name = self.eventClassName(&ev_name_buf, ev);
 
         self.buf = &self.ops_buf;
         try self.writeFmt("  struct {s} : {s}_event.IOps {{\n", .{ struct_name, ev_name });
@@ -3021,14 +3134,14 @@ fn spelledName(buf: []u8, name: []const u8) ?[]const u8 {
     if (name.len <= buf.len - 1) {
         var stem_buf: [256]u8 = undefined;
         if (name.len > stem_buf.len) return null;
-        for (name, 0..) |c, k| stem_buf[k] = if (c == '-') '_' else c;
+        for (name, 0..) |c, k| stem_buf[k] = if (c == '-' or c == '.') '_' else c;
         if (codegen_utils.isCsReservedForEmit(stem_buf[0..name.len])) {
             buf[0] = '@';
             i = 1;
         }
     }
     for (name) |c| {
-        buf[i] = if (c == '-') '_' else c;
+        buf[i] = if (c == '-' or c == '.') '_' else c;
         i += 1;
     }
     return buf[0..i];

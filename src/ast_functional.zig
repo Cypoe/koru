@@ -3322,14 +3322,20 @@ pub const facets = struct {
     ///
     /// `ff` is any facet field — the typed node (`ast.FacetField`) or the
     /// fold's own record (`koru_refine.Field`): same terms, two structs.
-    /// `js` picks the host's spelling, so a consumer emitting JavaScript
+    /// The hosts a facet's guard/sink text can spell. A local enum rather
+    /// than codegen_utils's HostTarget — importing it would draw the whole
+    /// lowering table into a module that only needs three cases.
+    pub const FacetHost = enum { zig, js, cs };
+
+    /// `host` picks the host's spelling, so a consumer emitting JavaScript
     /// saturates with JavaScript.
-    pub fn normExprFor(alloc: std.mem.Allocator, ff: anytype, name: []const u8, js: bool) []const u8 {
+    pub fn normExprFor(alloc: std.mem.Allocator, ff: anytype, name: []const u8, host: FacetHost) []const u8 {
         const c = ff.clamp orelse return name;
-        return if (js)
-            std.fmt.allocPrint(alloc, "Math.min(Math.max({s}, {d}), {d})", .{ name, c.lo, c.hi }) catch unreachable
-        else
-            std.fmt.allocPrint(alloc, "@min(@max({s}, {d}), {d})", .{ name, c.lo, c.hi }) catch unreachable;
+        return switch (host) {
+            .js => std.fmt.allocPrint(alloc, "Math.min(Math.max({s}, {d}), {d})", .{ name, c.lo, c.hi }) catch unreachable,
+            .cs => std.fmt.allocPrint(alloc, "global::System.Math.Min(global::System.Math.Max({s}, {d}L), {d}L)", .{ name, c.lo, c.hi }) catch unreachable,
+            .zig => std.fmt.allocPrint(alloc, "@min(@max({s}, {d}), {d})", .{ name, c.lo, c.hi }) catch unreachable,
+        };
     }
 
     /// True when a field carries a term a boundary can JUDGE — the question
@@ -3351,18 +3357,18 @@ pub const facets = struct {
     /// synthesized `push` and the store's insert prelude both do — so a new
     /// atom kind cannot reach one boundary and miss another, and the two
     /// enforcers cannot disagree about what a field's facet says.
-    pub fn predicate(alloc: std.mem.Allocator, ff: anytype, expr: []const u8, js: bool) ?[]const u8 {
+    pub fn predicate(alloc: std.mem.Allocator, ff: anytype, expr: []const u8, host: FacetHost) ?[]const u8 {
         const alts: ?[]const i64 = ff.alts;
         const has_alts = alts != null and alts.?.len > 0;
         if (!hasTerms(ff)) return null;
-        const conj = if (js) " && " else " and ";
+        const conj = if (host == .zig) " and " else " && ";
         var cond = std.ArrayList(u8).initCapacity(alloc, 64) catch unreachable;
         if (has_alts) {
             // Membership: the met set is the reachable values for this field,
             // so a boundary admits exactly its members.
             cond.appendSlice(alloc, "(") catch unreachable;
             for (alts.?, 0..) |v, i| {
-                if (i > 0) cond.appendSlice(alloc, if (js) " || " else " or ") catch unreachable;
+                if (i > 0) cond.appendSlice(alloc, if (host == .zig) " or " else " || ") catch unreachable;
                 cond.appendSlice(alloc, std.fmt.allocPrint(alloc, "{s} == {d}", .{ expr, v }) catch unreachable) catch unreachable;
             }
             cond.appendSlice(alloc, ")") catch unreachable;
@@ -3396,7 +3402,7 @@ pub const facets = struct {
         const base = flat(alloc, field_name);
         const fd = find(prog, elemName(elem), protoHome(prog, elem)) orelse return base;
         for (fd.fields) |*ff| {
-            if (std.mem.eql(u8, flat(alloc, ff.name), base)) return normExprFor(alloc, ff, base, false);
+            if (std.mem.eql(u8, flat(alloc, ff.name), base)) return normExprFor(alloc, ff, base, .zig);
         }
         return base;
     }
@@ -3423,8 +3429,8 @@ pub const facets = struct {
         var out = std.ArrayList(u8).initCapacity(alloc, 128) catch unreachable;
         for (fd.fields) |*ff| {
             const pname = flat(alloc, ff.name);
-            const vname = normExprFor(alloc, ff, pname, false);
-            const cond = predicate(alloc, ff, vname, false) orelse continue;
+            const vname = normExprFor(alloc, ff, pname, .zig);
+            const cond = predicate(alloc, ff, vname, .zig) orelse continue;
             const guard = std.fmt.allocPrint(
                 alloc,
                 "if (!({s})) {{\n    return .{{ .{s} = \"{s}\" }};\n}}\n",
