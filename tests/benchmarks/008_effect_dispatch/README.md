@@ -6,10 +6,11 @@ where does it go.
 
 ## What `generated` actually is
 
-Not a paste — `run.sh` compiles `dispatch.kz` with `--lang=cs`, builds the
+Not a paste — `run.sh` compiles `dispatch.k` with `--lang=cs`, builds the
 resulting `output_emitted.cs` into the benchmark assembly, and the harness
-calls `main_module.beat_event.handler<BenchOps>` — the same public generic
-method a real call site invokes, monomorphized on a harness ops struct
+calls `main_module.beat_event.handler<BenchOps>` and
+`main_module.pulse_event.handler<PulseOps>` — the same public generic
+methods a real call site invokes, monomorphized on harness ops structs
 standing in for the emitted (private) `__koru_handlers_N`. If the emission
 shape changes, this file stops compiling. That is the pin.
 
@@ -25,8 +26,9 @@ nothing.
 | `struct-method` | `where H : struct, IOps` with `void tick()` *methods* — the handwritten analogue of `comptime __H` |
 | `virtual` | interface call on a class — classic OOP dispatch |
 | `typed-func` | our `IOps`/`Func`-property surface, but typed payloads (`Func<int>`, `int` in/out) |
-| `typed-io` | our dispatch surface with struct In/Out — the typed-envelope *hypothesis*, not current emission |
-| `generated` | the real emitted handler: `handler<H>(dynamic, H)` + `Func<dynamic>` props + anonymous result object |
+| `typed-io` | our dispatch surface with struct In/Out — a hypothesis arm |
+| `gen-subflow` | the real emitted handler for `pulse` — a pure-Koru impl (`pulse = tick() => done 0`), so the emitter generates the produce: `handler<H>(Input, H) → Output`, all structs |
+| `generated` | the real emitted handler for `beat` — an opaque `\|cs` impl, so the envelope stays `dynamic` (host text constructs its own result object) |
 | `gen-noread` | generated minus the `.done` dynamic member read — isolates the DLR binder's share |
 | `anon-func` | the previous k-sharp shape: dynamic anonymous handler object |
 
@@ -39,12 +41,13 @@ Apple M-series (arm64), .NET 9 runtime executing a net8.0 target, Release.
 |---|---:|---:|---:|
 | direct | 9 | 0.3 | 0 |
 | struct-method | 9 | 0.3 | 0 |
-| virtual | 60 | 2.0 | 0 |
+| virtual | 59 | 2.0 | 0 |
+| **gen-subflow** | **66** | **2.2** | **0** |
 | typed-io | 67 | 2.2 | 0 |
-| typed-func | 67 | 2.2 | 0 |
-| gen-noread | 409 | 13.6 | 56 |
-| **generated** | **398** | **13.3** | **56** |
-| anon-func | 655 | 21.8 | 80 |
+| typed-func | 66 | 2.2 | 0 |
+| gen-noread | 417 | 13.9 | 56 |
+| **generated (opaque impl)** | **386** | **12.9** | **56** |
+| anon-func | 633 | 21.1 | 80 |
 
 `DOTNET_JitDisasm` on the same shapes: `handlerM[MOps]` compiles to 20 bytes
 (the empty `tick()` inlines to nothing), `handlerG[GOps]` to 92 B, the old
@@ -53,29 +56,33 @@ and `handlerM` each appear as their own `[ConcreteOps]` instantiation.
 
 ## What the numbers say
 
-The struct-generic dispatch surface is **done** — it sits at the ~2.2ns
-delegate floor (typed-io/typed-func), and the JIT receipt shows real
-per-site monomorphization. The remaining ~11ns in `generated` is the
-`dynamic` envelope, and it decomposes:
+Two measurements in one table, because the second run landed a change the
+first one predicted.
 
-- `.done` member read through the DLR binder: ~0.7ns (gen-noread) — the
-  call-site cache works.
-- The rest is the envelope itself: an anonymous args object and an anonymous
-  `new { tag, done }` result object allocated per call — 56B/call, 1.7GB of
-  gen0 churn per 30M calls.
+**The dispatch surface was already done.** Generic-struct `IOps` +
+`Func` props sits at the ~2.2ns delegate floor — typed-io and typed-func
+both read 66–67ms — and the JIT receipt shows real per-site
+monomorphization.
 
-So the next factor-of-five is not in dispatch — it is typing the envelope:
-the effect decl knows `q i64` in and `done i64` out. Emit `struct In` /
-`struct Out` instead of `new { }` + `dynamic` and generated lands at
-typed-io: ~2.2ns. Below that needs arms as struct *methods* (0.3ns), which
-only works when the arm captures nothing — the `Func` indirection is the
-price of closure capture.
+**The envelope was the cost, and it is now typed.** The first run of this
+benchmark decomposed `generated`'s 13.3ns: ~0.7ns DLR binder on `.done`,
+~10.6ns the anonymous In/Out objects (56B/call of gen0 churn). The emitter
+now ports zig's `Input`/`Output` pair: per-event `struct Input { public
+long q }` / `struct Output { public string tag; public long done }`,
+`handler<H>(Input, H) → Output`, `new ev_event.Input { … }` call sites,
+`return new Output { tag = "done", done = a }` produces. The same harness,
+same workload: **gen-subflow measures 2.2ns at 0 B/call** — the real
+emitted code lands exactly on the hypothesis arm.
 
-Honest scope note: the result object in *this* fixture is host-authored —
-`dispatch.kcs`'s `~proc beat|cs` writes `return new { tag = "done", done =
-0 }` as opaque text, the same shape a compiler-generated produce emits.
-The envelope cost is identical either way; typing applies only where the
-emitter constructs the result, not inside opaque host text.
+**The honest bound is the impl's opacity.** `beat`'s `~proc beat|cs` body
+is opaque host text — it authors its own `new { tag, done }` return, so
+its handler keeps `dynamic` in/out and stays at 12.9ns. The typed path
+covers every impl the compiler generates (`immediate`, `subflow`); host
+text is where the envelope ends.
+
+Below 2.2ns needs arms as struct *methods* (0.3ns), which only works when
+the arm captures nothing — the `Func` indirection is the price of closure
+capture, and it costs ~1.9ns/call here.
 
 ## Run
 

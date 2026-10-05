@@ -18,6 +18,12 @@ static class Bench {
     public struct BenchOps : main_module.beat_event.IOps {
         public global::System.Func<dynamic> tick { get; set; }
     }
+    // GENERATED-SUBFLOW — `pulse` is the same tor shape with a pure-Koru
+    // impl (`pulse = tick() => done 0`), so the emitter generates its
+    // produce — the typed-envelope path: handler<H>(Input, H) -> Output.
+    public struct PulseOps : main_module.pulse_event.IOps {
+        public global::System.Func<dynamic> tick { get; set; }
+    }
 
     // STRUCT-METHOD — the handwritten-idiomatic analogue of comptime __H:
     // generic-struct ops with void METHODS, typed input, typed return.
@@ -78,10 +84,24 @@ static class Bench {
         var sw = Stopwatch.StartNew();
         long sum = 0;
         for (int i = 0; i < N; i++) {
-            var r = main_module.beat_event.handler(new { }, new BenchOps {
+            var r = main_module.beat_event.handler(new main_module.beat_event.Input { }, new BenchOps {
                 tick = (global::System.Func<dynamic>)(() => { fires++; return null; }),
             });
             sum += (int)r.done;
+        }
+        sw.Stop();
+        last_ms = sw.ElapsedMilliseconds;
+        return sum;
+    }
+    static long TimeGenSubflow() {
+        fires = 0;
+        var sw = Stopwatch.StartNew();
+        long sum = 0;
+        for (int i = 0; i < N; i++) {
+            var r = main_module.pulse_event.handler(new main_module.pulse_event.Input { }, new PulseOps {
+                tick = (global::System.Func<dynamic>)(() => { fires++; return null; }),
+            });
+            sum += r.done;
         }
         sw.Stop();
         last_ms = sw.ElapsedMilliseconds;
@@ -151,7 +171,7 @@ static class Bench {
         var sw = Stopwatch.StartNew();
         long sum = 0;
         for (int i = 0; i < N; i++) {
-            var r = main_module.beat_event.handler(new { }, new BenchOps {
+            var r = main_module.beat_event.handler(new main_module.beat_event.Input { }, new BenchOps {
                 tick = (global::System.Func<dynamic>)(() => { fires++; return null; }),
             });
             if (r != null) sum++;
@@ -182,6 +202,7 @@ static class Bench {
         System.Console.WriteLine($"  {N} calls per rep, min of 3, arm body = fires++");
         System.Console.WriteLine();
         RunOne("generated",    TimeGenerated);
+        RunOne("gen-subflow",  TimeGenSubflow);
         RunOne("typed-io",     TimeTypedIO);
         RunOne("typed-func",   TimeTypedFunc);
         RunOne("gen-noread",   TimeGenNoRead);

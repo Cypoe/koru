@@ -360,6 +360,13 @@ const Emitter = struct {
     /// FIRING, not an event invocation. The vertical refuses both anyway;
     /// the field stays so the shape of the check survives.
     impl_event: ?*const ast.EventDecl = null,
+    /// How produce sites inside the current impl spell their result. `dynamic`
+    /// keeps the anonymous-object/`return <expr>` shape (opaque |cs bodies and
+    /// any context outside a generated impl — including ARM delegate bodies,
+    /// whose produce is a resume value, not the tor's Output). `tagged` turns
+    /// `=> b` into `new <Output> { tag = "b", … }`; `bare` turns `-> expr`
+    /// into `return (<T>)(<expr>)`.
+    impl_out: ImplOut = .dynamic,
     /// Handler STRUCT decls collected while emitting call sites — flushed at
     /// main_module scope before the class closes. C# has no type decls inside
     /// methods and a call site may sit inside a nested event class, so the
@@ -550,15 +557,71 @@ const Emitter = struct {
         const name = ev.path.segments[ev.path.segments.len - 1];
 
         var has_effect = false;
+        var has_terminal = false;
         for (ev.branches) |b| {
             if (b.kind == .effect) {
                 has_effect = true;
-                break;
+            } else {
+                has_terminal = true;
             }
         }
 
+        // Only a compiler-generated body can return a typed Output — opaque
+        // |cs text constructs its own anonymous objects, and a subflow with
+        // inline_body or a preamble splices host text that may `return`
+        // arbitrarily. Input is typed regardless (zig passes `Input` to
+        // opaque procs too); the wildcard-input shape stays dynamic because
+        // its members cannot be named at decl time.
+        const generated_impl = switch (impl) {
+            .immediate => true,
+            .subflow => |flow| flow.inline_body == null and flow.preamble_code == null,
+            else => false,
+        };
+        const typed_input = !ev.input.is_wildcard;
+        const input_cs: []const u8 = if (typed_input) "Input" else "dynamic";
+        const output_cs: []const u8 = if (!generated_impl) "dynamic" else if (has_terminal)
+            "Output"
+        else if (ev.return_type) |rt|
+            csType(rt)
+        else
+            "dynamic";
+
         var name_buf: [256]u8 = undefined;
-        try self.writeFmt("  public static class {s}_event {{\n", .{lowerIdentBuf(&name_buf, name)});
+        const ev_name = lowerIdentBuf(&name_buf, name);
+        try self.writeFmt("  public static class {s}_event {{\n", .{ev_name});
+
+        // The Input struct mirrors zig's `pub const Input` — declared fields
+        // carry the declared types, `= <expr>` field defaults become C# field
+        // initializers (the explicit parameterless ctor is what makes them
+        // run, so `new Input { q = 41 }` still fills the rest).
+        if (typed_input) {
+            try self.write("    public struct Input {\n");
+            var has_init = false;
+            for (ev.input.fields) |field| {
+                try self.writeFmt("      public {s} ", .{csType(field.type)});
+                try self.writeBinding(field.name);
+                if (field.default) |dflt| {
+                    try self.write(" = ");
+                    try self.writeCsExpr(dflt);
+                    has_init = true;
+                }
+                try self.write(";\n");
+            }
+            if (has_init) try self.write("      public Input() { }\n");
+            try self.write("    }\n");
+        }
+        // Branch tors get the union analogue: `tag` discriminates, one member
+        // per terminal branch carries the payload.
+        if (has_terminal) {
+            try self.write("    public struct Output {\n      public string tag;\n");
+            for (ev.branches) |*b| {
+                if (b.kind != .terminal) continue;
+                try self.writeFmt("      public {s} ", .{branchPayloadCsType(b)});
+                try self.writeBinding(b.name);
+                try self.write(";\n");
+            }
+            try self.write("    }\n");
+        }
         if (has_effect) {
             // IOps is the `comptime __H: type` analogue: each call site hands
             // a STRUCT implementing every arm member, and `handler<H>`
@@ -575,7 +638,7 @@ const Emitter = struct {
                 try self.write(" { get; }\n");
             }
             try self.write("    }\n");
-            try self.writeFmt("    public static dynamic handler<H>(dynamic {s}, H ops) where H : struct, IOps {{\n", .{INPUT_PARAM});
+            try self.writeFmt("    public static {s} handler<H>({s} {s}, H ops) where H : struct, IOps {{\n", .{ output_cs, input_cs, INPUT_PARAM });
             // Bind each effect-branch op as a local: `var each = ops.each;` —
             // a statically-typed Func the impl body (or a subflow arm fire)
             // invokes by bare name.
@@ -588,25 +651,45 @@ const Emitter = struct {
                 try self.write(";\n");
             }
         } else {
-            try self.writeFmt("    public static dynamic handler(dynamic {s}) {{\n", .{INPUT_PARAM});
+            try self.writeFmt("    public static {s} handler({s} {s}) {{\n", .{ output_cs, input_cs, INPUT_PARAM });
         }
 
         // Bind input fields as locals: `var n = __koru_input.n;`. Every impl
         // kind reads its inputs by bare name, so this precedes all four
-        // bodies. A field DEFAULT applies here (C# anonymous objects have no
-        // defaults either — same hole, same fix): `?? <dflt>` reads through
-        // dynamic the way JS's `??` does.
+        // bodies. Under a typed Input the struct ctor already applied field
+        // defaults; under the dynamic (wildcard) path `?? <dflt>` reads
+        // through dynamic the way JS's `??` does.
         for (ev.input.fields) |field| {
             try self.write("      var ");
             try self.writeBinding(field.name);
             try self.writeFmt(" = {s}.", .{INPUT_PARAM});
             try self.writeBinding(field.name);
-            if (field.default) |dflt| {
-                try self.write(" ?? ");
-                try self.writeCsExpr(dflt);
+            if (!typed_input) {
+                if (field.default) |dflt| {
+                    try self.write(" ?? ");
+                    try self.writeCsExpr(dflt);
+                }
             }
             try self.write(";\n");
         }
+
+        const saved_impl_out = self.impl_out;
+        defer self.impl_out = saved_impl_out;
+        self.impl_out = switch (impl) {
+            .immediate => |ii| if (ii.value.is_bare_return)
+                (if (ev.return_type) |rt| ImplOut{ .bare = csType(rt) } else .dynamic)
+            else if (has_terminal)
+                .tagged
+            else
+                .dynamic,
+            .subflow => if (!generated_impl) .dynamic else if (has_terminal)
+                .tagged
+            else if (ev.return_type) |rt|
+                ImplOut{ .bare = csType(rt) }
+            else
+                .dynamic,
+            else => .dynamic,
+        };
 
         switch (impl) {
             .proc => |proc| {
@@ -649,17 +732,34 @@ const Emitter = struct {
     /// agree by construction.
     fn emitBranchConstructorReturn(self: *Emitter, bc: *const ast.BranchConstructor, indent: []const u8) CsEmitError!void {
         if (bc.is_bare_return) {
-            try self.writeFmt("{s}return ", .{indent});
-            if (bc.plain_value) |pv| {
-                try self.writeProduceValue(pv);
-            } else {
-                try self.write("null");
+            switch (self.impl_out) {
+                // The impl's own `-> T` produce under a typed return:
+                // `return (long)(x + 1);`. An arm's resume produce stays on
+                // the dynamic path — its value is not the tor's Output.
+                .bare => |t| {
+                    if (bc.plain_value) |pv| {
+                        try self.writeFmt("{s}return ({s})(", .{ indent, t });
+                        try self.writeProduceValue(pv);
+                        try self.write(");\n");
+                    } else {
+                        try self.writeFmt("{s}return default({s});\n", .{ indent, t });
+                    }
+                },
+                else => {
+                    try self.writeFmt("{s}return ", .{indent});
+                    if (bc.plain_value) |pv| {
+                        try self.writeProduceValue(pv);
+                    } else {
+                        try self.write("null");
+                    }
+                    try self.write(";\n");
+                },
             }
-            try self.write(";\n");
             return;
         }
 
-        try self.writeFmt("{s}return new {{ tag = \"{s}\"", .{ indent, bc.branch_name });
+        const tagged = self.impl_out == .tagged;
+        try self.writeFmt("{s}return new {s}{{ tag = \"{s}\"", .{ indent, if (tagged) "Output " else "", bc.branch_name });
         if (bc.plain_value) |pv| {
             try self.write(", ");
             try self.writeBinding(bc.branch_name);
@@ -907,6 +1007,16 @@ const Emitter = struct {
         var name_buf: [256]u8 = undefined;
         const name = event.path.segments[event.path.segments.len - 1];
         try self.writeFmt("  public static class {s}_event {{\n", .{lowerIdentBuf(&name_buf, name)});
+        // Call sites construct `new <ev>_event.Input { … }` — the members
+        // must exist for the program to build, or the refusal arrives at
+        // compile time instead of the call frame it was written for.
+        try self.write("    public struct Input {\n");
+        for (event.input.fields) |field| {
+            try self.write("      public dynamic ");
+            try self.writeBinding(field.name);
+            try self.write(";\n");
+        }
+        try self.write("    }\n");
         try self.writeFmt("    public static dynamic handler(dynamic {s}) {{\n", .{INPUT_PARAM});
         try self.writeFmt(
             "      throw new global::System.Exception(\"{s}:{s} has no C# implementation — its body resolves only to a non-cs target (|zig / [comptime]), directly or through a callee\");\n",
@@ -1344,6 +1454,12 @@ const Emitter = struct {
         defer if (handlers_name) |hn| self.allocator.free(hn);
 
         if (ev_has_effect) {
+            // Arm delegate bodies produce RESUME values for a
+            // Func<dynamic,…>, not the enclosing tor's Output — force the
+            // dynamic produce path while their lambdas emit.
+            const saved_out = self.impl_out;
+            defer self.impl_out = saved_out;
+            self.impl_out = .dynamic;
             const hid = self.nextId();
             handlers_name = try std.fmt.allocPrint(self.allocator, "__koru_handlers_{d}", .{hid});
             try self.emitOpsStructDecl(ev, continuations, handlers_name.?);
@@ -1385,7 +1501,7 @@ const Emitter = struct {
         } else {
             try self.writeFmt("{s}main_module.{s}_event.handler(", .{ indent, ev_name });
         }
-        try self.emitArgsObject(inv.args);
+        try self.emitArgsObject(inv.args, ev, ev_name);
         if (ev_has_effect) {
             try self.writeFmt(", {s}", .{handlers_name.?});
         }
@@ -1592,20 +1708,22 @@ const Emitter = struct {
         }
     }
 
-    /// Emit the args as a C# anonymous object: `new { name = value, … }`.
-    fn emitArgsObject(self: *Emitter, args: []const ast.Arg) CsEmitError!void {
-        if (args.len == 0) {
-            try self.write("new { }");
-            return;
-        }
-        try self.write("new { ");
+    /// Emit the args as the callee's typed Input struct — `new
+    /// beat_event.Input { q = 41 }` — the zero-allocation twin of zig's
+    /// `.{ .q = 41 }`. A wildcard-input tor keeps the anonymous object: its
+    /// members cannot be named at decl time.
+    fn emitArgsObject(self: *Emitter, args: []const ast.Arg, ev: *const ast.EventDecl, ev_name: []const u8) CsEmitError!void {
+        const typed = !ev.input.is_wildcard;
+        try self.write("new ");
+        if (typed) try self.writeFmt("{s}_event.Input ", .{ev_name});
+        try self.write("{ ");
         for (args, 0..) |arg, idx| {
             if (idx > 0) try self.write(", ");
             try self.writeBinding(arg.name);
             try self.write(" = ");
             try self.writeCsExpr(arg.value);
         }
-        try self.write(" }");
+        try self.write("}");
     }
 
     /// Re-indent a multi-line opaque body to `indent`, trimming leading blank
@@ -1928,6 +2046,46 @@ const Emitter = struct {
         try self.write(" }");
     }
 };
+
+/// How a generated impl spells its produces — the typed-envelope port of
+/// zig's `Input`/`Output` pair. Zig's handler is `fn(Input) Output` where
+/// Output is a `union(enum)` for branch tors and the declared `-> T` for
+/// bare-return tors; C# has no union, so the branch-tor Output is a struct
+/// carrying `tag` plus one field per terminal branch.
+const ImplOut = union(enum) {
+    dynamic,
+    tagged, // `=> b` → `new Output { tag = "b", … }` (Output resolves inside the event class)
+    bare: []const u8, // `-> expr` → `return (<T>)(<expr>)` — T is the C# spelling
+};
+
+/// Map a declared Koru type spelling to its C# host type. `dynamic` is the
+/// answer for anything not in the table — records, generics, phantoms — the
+/// field is still typed, the value just flows through object.
+fn csType(koru_type: []const u8) []const u8 {
+    const pairs = [_][2][]const u8{
+        .{ "i64", "long" },      .{ "i32", "int" },    .{ "i16", "short" },
+        .{ "i8", "sbyte" },      .{ "u64", "ulong" },  .{ "u32", "uint" },
+        .{ "u16", "ushort" },    .{ "u8", "byte" },    .{ "f64", "double" },
+        .{ "f32", "float" },     .{ "bool", "bool" },  .{ "string", "string" },
+        .{ "char", "char" },
+    };
+    for (pairs) |p| {
+        if (std.mem.eql(u8, koru_type, p[0])) return p[1];
+    }
+    return "dynamic";
+}
+
+/// The C# type of a terminal branch's payload member in `Output`. `| done
+/// i64` is an identity payload — one `__type_ref` field — so `done` is
+/// `long`; a record payload or wildcard stays `dynamic`.
+fn branchPayloadCsType(b: *const ast.Branch) []const u8 {
+    if (b.payload.fields.len == 1 and
+        std.mem.eql(u8, b.payload.fields[0].name, "__type_ref"))
+    {
+        return csType(b.payload.fields[0].type);
+    }
+    return "dynamic";
+}
 
 /// Find the tor's branch decl for `name` — the fire-signature decl a
 /// Handlers member must match arity against.

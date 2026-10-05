@@ -50,8 +50,11 @@
 # delta is +8 clusters / -9 members: cs_emitter's effect-splice block is
 # an intentional twin of the js_emitter shape it ports (different output
 # text per target — the duplication IS the variant model).
-clusters=1800
-members=2246
+clusters=1810
+members=2254
+# Re-pinned to 1810/2254 on the typed-envelope commit — the Input/Output
+# struct emission blocks are more of the same cs_emitter↔js_emitter twin
+# class; +10/+8 measured against the working tree.
 # Re-pinned in "fold: impl bodies are walk input, not fold residue":
 # the roll fired on +5 clusters / +2 members of foreign src/ drift in
 # the same documented emitter_test/visitor_emitter_test field-literal

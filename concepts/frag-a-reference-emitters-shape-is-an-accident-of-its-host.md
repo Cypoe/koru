@@ -47,6 +47,23 @@ through; this one says an *emitter's* shape is already named by its host's
 pass-through profile — so the permissive host's emitter is the wrong spec to
 copy from.
 
+**Second instance, 2026-10-14 — the envelope, and this time the benchmark
+named it before the host did.** The same mistake had survived in the
+*input/output envelope*: `dynamic __koru_input`, anonymous `new { tag, done
+}` produces, `dynamic` handler returns — the JS object literal transplanted
+again, one layer down. What surfaced it was not a strict host refusing but a
+measurement: 008_effect_dispatch decomposed a 13.3ns/call effect dispatch
+into ~2.2ns of dispatch and ~11ns of anonymous-object churn (56B/call),
+and zig's emitted `Input`/`Output` struct+union pair was sitting in the
+same tree as the strict spelling the whole time. Porting it — `struct
+Input` with declared field types and initializer defaults, `struct Output`
+with `tag` + one payload member per terminal branch, `handler<H>(Input, H)
+→ Output` — lands the *generated* code at 2.2ns and 0 B/call, identical to
+the handwritten typed-io control. The honest bound the lax host had been
+hiding: the envelope can only be typed where the emitter authors both
+sides — an opaque `|cs` body writes its own `new { tag, done }`, so its
+boundary stays `dynamic` by contract, not by accident.
+
 ## What would correct this belief
 
 A counterexample where the strict host's shape over-constrains the port —
