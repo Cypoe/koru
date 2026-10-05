@@ -1,4 +1,4 @@
-// JavaScript implementation facet. Events are declared in input.kz (merged at
+// JavaScript implementation facet. Tors are declared in input.kz (merged at
 // import); this file holds the |js proc bodies plus the module-level slot its
 // Zig twin keeps in a `var`. The aliasing the fixture pins survives the port
 // verbatim: `h` and `g` are the same object here exactly as they are the same

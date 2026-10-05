@@ -1,4 +1,4 @@
-// JavaScript implementation facet. Events are declared in input.kz (merged at
+// JavaScript implementation facet. Tors are declared in input.kz (merged at
 // import); this file holds the |js proc bodies.
 
 ~proc ticker|js {

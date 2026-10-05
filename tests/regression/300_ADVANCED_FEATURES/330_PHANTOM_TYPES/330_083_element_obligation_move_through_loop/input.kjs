@@ -1,4 +1,4 @@
-// JavaScript implementation facet. Events are declared in input.kz (merged at
+// JavaScript implementation facet. Tors are declared in input.kz (merged at
 // import); this file holds the |js proc bodies plus the module-level host state
 // its Zig twin keeps in `var` slots. The obligation lifecycle is what the
 // fixture pins, so allocation is modelled by plain objects.
