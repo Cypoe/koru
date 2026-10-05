@@ -1,0 +1,20 @@
+// PINS: a `for` template inside an orisha:router arm resolves its
+// `__koru_inline_scoped_N(arg)` effect splice and its `done`
+// `__koru_continue_N` marker on the string-codegen path — the same
+// contract 350_026 pins for `if`, here covering the arg-carrying
+// splice the effect-branch engine mints for `! each`.
+
+~import orisha
+~import std/io
+
+const req_hit = "GET /t HTTP/1.1\r\n\r\n";
+const req_loop = "GET /loop HTTP/1.1\r\n\r\n";
+
+~orisha:handler = orisha:router(req)
+! [GET /t] -> { status: 200, body: "t", content_type: "text/plain" }
+! [*] |> for("ab")
+    ! each i |> std/io:print.ln("tick")
+    | done -> { status: 404, body: "looped", content_type: "text/plain" }
+
+~orisha:answer(raw: req_hit): a |> std/io:print.ln("{{ a.body:s }}") |> orisha:release-body(a.body, allocated: a.body_allocated)
+~orisha:answer(raw: req_loop): b |> std/io:print.ln("{{ b.body:s }}") |> orisha:release-body(b.body, allocated: b.body_allocated)

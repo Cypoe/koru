@@ -41,11 +41,14 @@ Two honest debts this leaves:
   grammar) but not code. A drift between them is the exact bug class this
   commit fixes, one level up — the end-state is one resolver over a write
   interface, or a documented freeze point both call.
-- **Coverage beyond `__koru_continue_N` is by construction, not corpus.** The
-  effect-splice (`__koru_inline_N(arg)`) path is exercised by `for`'s
-  `each`/`done` only if a route arm loops — the pin
-  (350_026_router_if_template_arm) covers continue-markers; an arm that puts
-  `for` inside a route is the next probe worth writing.
+- **The resolver family is now pinned at three marker kinds.**
+  350_026_router_if_template_arm covers `__koru_continue_N`;
+  350_027_router_for_template_arm covers the arg-carrying effect splice
+  (`__koru_inline_scoped_N(__koru_item)` for `! each`, plus `done`'s
+  continue); 350_028_router_cond_template_arm covers `__koru_continue_bare_N`
+  (guarded arms, where the template owns the `if`). Remaining by-construction
+  surface: the shadow-rename (`__koru_bind_L_C`) and destructure paths fire
+  only on collisions/shape-binds no route arm has needed yet.
 
 Sister to `frag-vocabulary-is-not-evidence-of-what-a-transform-emits`: there,
 surface vocabulary was mistaken for output; here, one emit path's fidelity was
