@@ -3750,7 +3750,38 @@ pub const VisitorEmitter = struct {
                                             // build:variants registers under. A second spelling of
                                             // this key is the bug, not a fix for it.
                                             try self.code_emitter.write("_event.");
-                                            const sf_variant: ?[]const u8 = if (flow.inv().variant) |v| v else blk: {
+                                            const sf_variant: ?[]const u8 = if (flow.inv().variant) |v| blk: {
+                                                // A [norun] event's call site is declaration
+                                                // data — `|variant` is collector metadata
+                                                // (stack's `service(db)|dev`), not proc
+                                                // dispatch. Keep it only when a variant
+                                                // proc was actually declared; the event
+                                                // struct has no `handler__<v>` otherwise.
+                                                if (self.findEventDeclInItems(self.all_items, &flow.inv().path)) |sf_ed| {
+                                                    var sf_norun = false;
+                                                    for (sf_ed.annotations) |ann| {
+                                                        if (std.mem.eql(u8, ann, "norun")) {
+                                                            sf_norun = true;
+                                                            break;
+                                                        }
+                                                    }
+                                                    if (sf_norun) {
+                                                        const sf_vprocs = emitter.findVariantProcsByPath(self.allocator, self.all_items, &flow.inv().path) catch &.{};
+                                                        defer self.allocator.free(sf_vprocs);
+                                                        var sf_found = false;
+                                                        for (sf_vprocs) |vp| {
+                                                            if (vp.target) |t| {
+                                                                if (std.mem.eql(u8, t, v)) {
+                                                                    sf_found = true;
+                                                                    break;
+                                                                }
+                                                            }
+                                                        }
+                                                        if (!sf_found) break :blk null;
+                                                    }
+                                                }
+                                                break :blk v;
+                                            } else blk: {
                                                 const key = emitter.buildCanonicalEventName(&flow.inv().path, self.allocator, null) catch break :blk null;
                                                 defer self.allocator.free(key);
                                                 break :blk emitter.getVariant(key);

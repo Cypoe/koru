@@ -8592,6 +8592,44 @@ fn emitInvocation(
     // 3. Else use the default handler
     var effective_variant: ?[]const u8 = invocation.variant;
 
+    // A `[norun]` event's call site is declaration data — `|variant` there is
+    // metadata a collector reads off the AST (stack's `service(db)|dev`), not
+    // proc dispatch. Emit `handler__<variant>` only when a variant proc was
+    // actually declared; otherwise the event struct has no such member and the
+    // base handler is the only honest target.
+    if (effective_variant) |v| {
+        if (findEventDeclForEmission(ctx, &invocation.path)) |ed| {
+            var is_norun = false;
+            for (ed.annotations) |ann| {
+                if (std.mem.eql(u8, ann, "norun")) {
+                    is_norun = true;
+                    break;
+                }
+            }
+            if (is_norun) {
+                var has_variant_impl = false;
+                const item_lists = [2]?[]const ast.Item{ ctx.ast_items, ctx.program_items };
+                for (item_lists) |maybe_items| {
+                    if (maybe_items) |items| {
+                        if (findVariantProcsByPath(ctx.allocator, items, &invocation.path)) |vprocs| {
+                            defer ctx.allocator.free(vprocs);
+                            for (vprocs) |vp| {
+                                if (vp.target) |t| {
+                                    if (std.mem.eql(u8, t, v)) {
+                                        has_variant_impl = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        } else |_| {}
+                        if (has_variant_impl) break;
+                    }
+                }
+                if (!has_variant_impl) effective_variant = null;
+            }
+        }
+    }
+
     if (effective_variant == null) {
         // Build canonical name from path: "module:event.path"
         // e.g., "std.io:print.ln" or "input:compute"

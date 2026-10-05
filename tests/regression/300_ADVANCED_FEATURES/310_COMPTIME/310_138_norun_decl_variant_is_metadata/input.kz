@@ -1,0 +1,55 @@
+// Pins that `path(args)|variant` on a [comptime|norun] decl is declaration
+// metadata, not proc dispatch: no `proc tag|dev` exists, so the emitted
+// comptime_flowN must call the BASE `handler` — `handler__dev` does not exist
+// on the event struct. The command handler reads the variant back off the
+// AST to prove the tag survives for collectors (stack's `service(db)|dev`).
+//
+// Run: koruc input.kz seen   → variant=dev, then ok
+
+~import std/compiler
+
+~[comptime|norun]tor tag {
+    name: string,
+}
+
+~proc tag|zig {
+}
+
+~tag(name: "first")
+~tag(name: "second")|dev
+
+~std/compiler:command.declare {
+    "name": "seen",
+    "description": "Print the variant tag carried by each tag decl"
+}
+
+~[comptime|command]pub tor seen {
+    program: *const Program,
+    allocator: __koru_std.mem.Allocator,
+    argv: []string,
+}
+
+const std = @import("std");
+
+~proc seen|zig {
+    for (program.items) |*item| {
+        if (item.* == .flow) {
+            const f = &item.flow;
+            if (f.inv().path.segments.len == 1 and
+                std.mem.eql(u8, f.inv().path.segments[0], "tag"))
+            {
+                if (f.inv().variant) |v| {
+                    std.debug.print("variant={s}\n", .{v});
+                }
+            }
+        }
+    }
+    std.debug.print("ok\n", .{});
+}
+
+~tor main {}
+
+~proc main|zig {
+}
+
+~main()
