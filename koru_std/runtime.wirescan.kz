@@ -156,7 +156,7 @@ fn wireScan(allocator: std.mem.Allocator, s: []const u8, input_fn: ?InputLookupF
         while (i < s.len and wireIdentChar(s[i])) i += 1;
         const field = s[field_start..i];
         while (i < s.len and (s[i] == ' ' or s[i] == '\t')) i += 1;
-        if (i >= s.len or s[i] != ':') return .{ .reject = wireReject("expected ':' after the field '{s}'", .{field}, i) };
+        if (i >= s.len or s[i] != ':') return .{ .reject = wireReject("in your '{s}' call: expected ':' after the field '{s}' — '{s}' was inside bare prose that stops at ',' or ')' — wrap punctuation or newlines in \"double quotes\"", .{ verb, field, field }, i) };
         i += 1;
         while (i < s.len and (s[i] == ' ' or s[i] == '\t')) i += 1;
         out.appendSlice(allocator, s[field_start..i]) catch unreachable;

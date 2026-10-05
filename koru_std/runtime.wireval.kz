@@ -10,7 +10,7 @@ const WIRE_GRAMMAR_TEXT =
     \\- An arm binds what a call issued to a name for the next call: `| ok u |>` for an ordinary result, `| chosen c |>` for a named branch — the arm word is the branch name the verb's line in the vocabulary declares; a `| ?` outcome may go unarmed, every other named outcome must be armed or the turn stops with `unhandled-branch`.
     \\- The verb is a bare name from your vocabulary — letters, digits, '-', '_' — immediately followed by '('.
     \\- A value is a double-quoted string (escape \" and \\ inside) or a bare literal: a number, true/false, or a name a `|` arm already bound.
-    \\- A field typed `Expression` takes expression text bare (`calc(expr: 2 + 3)`); a field typed `Source` takes prose bare (`note(text: thinking this through)`) — and a verb whose only field is Source also answers to `verb: prose`.
+    \\- A field typed `Expression` takes expression text bare (`calc(expr: 2 + 3)`); a field typed `Source` takes prose bare to a top-level `,` or `)` (`note(text: thinking this through)`) — prose with punctuation or newlines goes in "quotes", and a verb whose only field is Source also answers to `verb: <rest of that line>`.
     \\- A field typed `name<x>` takes only a bound name the session minted `<x!>` — an `rN` from an earlier verb or an arm binding, never literal text. `name<!x>` spends it.
     \\- A bound name keeps its fields: `r3.user_id` reads that field out of the value r3 bound — the whole result stays readable in the session, not just its name.
     \\- A second invocation starts a second item: one invocation per line runs each in order with one line of report per step.

@@ -206,3 +206,14 @@ partitions the wire must read the wire's own alphabet, and the alphabet
 has one quote. Pinned by 440_044; live witness: kopium `live.k` turn 5
 (muse-spark emitted a correctly three-armed `read` that the segmenter,
 not the model, destroyed).
+
+2026-10-05 (bis) — the refusal must teach the RULE, not the symptom.
+`say(text: prose with a comma)` broke as `expected ':' after the field
+'I'` — mechanically true (bare Source prose stops at a top-level `,` or
+`)`, the tail parsed as a field) and pedagogically useless: a model
+retried the same shape until the six-strike bound killed the turn
+(kopium task 40, smoke run). The grammar text now states the stop set
+and the error itself names it. Admission edge honesty has a second
+half: not only must the edge be derived, the refusal must be
+self-teaching — a diagnostic that can't be learned from is a toll, not
+a gate.
