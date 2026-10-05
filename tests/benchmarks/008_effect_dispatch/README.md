@@ -25,10 +25,10 @@ nothing.
 | `direct` | static call to a static body — the atom |
 | `struct-method` | `where H : struct, IOps` with `void tick()` *methods* — the handwritten analogue of `comptime __H` |
 | `virtual` | interface call on a class — classic OOP dispatch |
-| `typed-func` | our `IOps`/`Func`-property surface, but typed payloads (`Func<int>`, `int` in/out) |
-| `typed-io` | our dispatch surface with struct In/Out — a hypothesis arm |
-| `gen-subflow` | the real emitted handler for `pulse` — a pure-Koru impl (`pulse = tick() => done 0`), so the emitter generates the produce: `handler<H>(Input, H) → Output`, all structs |
-| `generated` | the real emitted handler for `beat` — an opaque `\|cs` impl, so the envelope stays `dynamic` (host text constructs its own result object) |
+| `typed-func` | the `Func`-delegate floor: `Func<int>` props, `int` in/out — what the previous surface cost with the envelope typed |
+| `typed-io` | `Func`-delegate dispatch with struct In/Out — a hypothesis arm for the envelope port |
+| `gen-subflow` | the real emitted handler for `pulse` — a pure-Koru impl (`pulse = tick() => done 0`): `handler<H>(Input, H) → Output`, all structs, arm installed as a `void tick()` **method** on the ops struct |
+| `generated` | the real emitted handler for `beat` — an opaque `\|cs` impl, so the envelope stays `dynamic` (host text constructs its own result object); the arm call is a method, same as `gen-subflow` |
 | `gen-noread` | generated minus the `.done` dynamic member read — isolates the DLR binder's share |
 | `anon-func` | the previous k-sharp shape: dynamic anonymous handler object |
 
@@ -41,13 +41,13 @@ Apple M-series (arm64), .NET 9 runtime executing a net8.0 target, Release.
 |---|---:|---:|---:|
 | direct | 9 | 0.3 | 0 |
 | struct-method | 9 | 0.3 | 0 |
-| virtual | 59 | 2.0 | 0 |
-| **gen-subflow** | **66** | **2.2** | **0** |
-| typed-io | 67 | 2.2 | 0 |
-| typed-func | 66 | 2.2 | 0 |
-| gen-noread | 417 | 13.9 | 56 |
-| **generated (opaque impl)** | **386** | **12.9** | **56** |
-| anon-func | 633 | 21.1 | 80 |
+| **gen-subflow** | **9** | **0.3** | **0** |
+| virtual | 62 | 2.1 | 0 |
+| typed-func | 69 | 2.3 | 0 |
+| typed-io | 73 | 2.4 | 0 |
+| **generated (opaque impl)** | **324** | **10.8** | **56** |
+| gen-noread | 367 | 12.2 | 56 |
+| anon-func | 631 | 21.0 | 80 |
 
 `DOTNET_JitDisasm` on the same shapes: `handlerM[MOps]` compiles to 20 bytes
 (the empty `tick()` inlines to nothing), `handlerG[GOps]` to 92 B, the old
@@ -56,33 +56,43 @@ and `handlerM` each appear as their own `[ConcreteOps]` instantiation.
 
 ## What the numbers say
 
-Two measurements in one table, because the second run landed a change the
-first one predicted.
+Three measurements in one table, each landing a change the previous one
+predicted.
 
-**The dispatch surface was already done.** Generic-struct `IOps` +
-`Func` props sits at the ~2.2ns delegate floor — typed-io and typed-func
-both read 66–67ms — and the JIT receipt shows real per-site
-monomorphization.
+**The dispatch surface landed at the atom.** Non-resuming effect arms now
+emit as *methods* on the ops struct — `IOps` declares `void tick()`, the
+call-site struct implements it, and `handler` calls `ops.tick()` through a
+local-function shim. The JIT devirtualizes the struct-constrained call and
+inlines the arm body into `handler`, which inlines into the loop:
+**gen-subflow measures 0.3ns at 0 B/call — identical to `direct` and
+`struct-method`.** Generated Koru dispatch costs exactly what a static C#
+call costs. The ~2.3ns `Func`-delegate floor (typed-func/typed-io) is what
+the previous property surface still would have paid.
 
-**The envelope was the cost, and it is now typed.** The first run of this
-benchmark decomposed `generated`'s 13.3ns: ~0.7ns DLR binder on `.done`,
-~10.6ns the anonymous In/Out objects (56B/call of gen0 churn). The emitter
-now ports zig's `Input`/`Output` pair: per-event `struct Input { public
-long q }` / `struct Output { public string tag; public long done }`,
-`handler<H>(Input, H) → Output`, `new ev_event.Input { … }` call sites,
-`return new Output { tag = "done", done = a }` produces. The same harness,
-same workload: **gen-subflow measures 2.2ns at 0 B/call** — the real
-emitted code lands exactly on the hypothesis arm.
+**The envelope was the earlier cost, and it is typed.** The first runs of
+this benchmark decomposed `generated`'s 13.3ns into ~10.6ns of anonymous
+In/Out objects (56B/call of gen0 churn) plus a small DLR binder share. The
+emitter ports zig's `Input`/`Output` pair: per-event `struct Input` /
+`struct Output { tag, done }`, `handler<H>(Input, H) → Output`,
+`new ev_event.Input { … }` call sites — zero allocation on the
+compiler-generated path.
+
+**Captures are fields, not closures.** Zig's nested `Handlers_N` fns
+const-capture enclosing bindings natively; C# methods can't, so the
+emitter scans each arm body for references to enclosing flow locals and
+materializes them as `__cap_*` struct fields — the same snapshot
+semantics, spelled. An arm body that references something the scanner
+can't prove (host-text locals in opaque bodies) falls back to a stored
+`Func` forwarded by the method — the interface stays statically callable,
+the pathological arm pays the old price.
 
 **The honest bound is the impl's opacity.** `beat`'s `~proc beat|cs` body
-is opaque host text — it authors its own `new { tag, done }` return, so
-its handler keeps `dynamic` in/out and stays at 12.9ns. The typed path
-covers every impl the compiler generates (`immediate`, `subflow`); host
-text is where the envelope ends.
-
-Below 2.2ns needs arms as struct *methods* (0.3ns), which only works when
-the arm captures nothing — the `Func` indirection is the price of closure
-capture, and it costs ~1.9ns/call here.
+authors its own `new { tag, done }` return, so its envelope stays
+`dynamic` — 10.8ns, and the method-arms change already shaved the ~2ns
+delegate invoke off its earlier 12.9. Optional *resuming* arms keep their
+nullable `Func` properties: presence is observable (`ask != null`), so
+they can't be methods — they are the one arm kind that still pays
+delegate invoke.
 
 ## Run
 

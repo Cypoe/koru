@@ -372,14 +372,42 @@ const Emitter = struct {
     /// methods and a call site may sit inside a nested event class, so the
     /// struct must land one scope up no matter which body produced it.
     ops_buf: std.ArrayList(u8) = .empty,
-    /// Shared noop delegates, emitted once into ops_buf the first time an
-    /// omitted optional-void arm needs a fill.
-    noops_emitted: bool = false,
+    /// The names currently in scope as locals of the method being emitted —
+    /// the candidates an arm-body METHOD may capture into `__cap_*` struct
+    /// fields (the C# spelling of Zig's const-capture: `Handlers_N.fn` reads
+    /// the enclosing `const` directly; a C# struct member cannot, so the
+    /// value copies in at construction). Stored in emitted spelling —
+    /// kebab-lowered, `@`-escaped — the form the body text contains.
+    flow_locals: std.ArrayList([]const u8) = .empty,
 
     fn nextId(self: *Emitter) usize {
         const id = self.id_counter;
         self.id_counter += 1;
         return id;
+    }
+
+    /// Record a name just emitted as a local of the current method — a
+    /// capture candidate for arm-body methods. Internal names (`__koru_*`,
+    /// `result_*`) can never be written as koru bindings and are skipped.
+    /// A `result-1` binding collides with the internal prefix on purpose:
+    /// that name simply cannot be captured.
+    fn registerLocal(self: *Emitter, name: []const u8) CsEmitError!void {
+        var buf: [300]u8 = undefined;
+        const spelled = spelledName(&buf, name) orelse return;
+        if (std.mem.startsWith(u8, spelled, "__koru_") or
+            std.mem.startsWith(u8, spelled, "result_")) return;
+        for (self.flow_locals.items) |n| {
+            if (std.mem.eql(u8, n, spelled)) return;
+        }
+        try self.flow_locals.append(self.allocator, try self.allocator.dupe(u8, spelled));
+    }
+
+    /// A binding name in emitted spelling, owned — for `var` declarations
+    /// the result-binding path writes as plain `{s}` text.
+    fn dupeSpelled(self: *Emitter, name: []const u8) CsEmitError![]u8 {
+        var buf: [300]u8 = undefined;
+        const s = spelledName(&buf, name) orelse name;
+        return self.allocator.dupe(u8, s);
     }
 
     fn write(self: *Emitter, text: []const u8) CsEmitError!void {
@@ -549,6 +577,8 @@ const Emitter = struct {
 
     /// Emit one EventDecl as `static class <name>_event { … handler … }`.
     fn emitEventDecl(self: *Emitter, ev: *const ast.EventDecl, scope: []const ast.Item) CsEmitError!void {
+        const saved_locals = self.flow_locals.items.len;
+        defer self.flow_locals.shrinkRetainingCapacity(saved_locals);
         const impl = self.findImplIn(scope, &ev.path) orelse {
             log.err("[cs_emitter] tor '{s}' has no |cs proc, immediate, or subflow body\n", .{ev.path.segments[ev.path.segments.len - 1]});
             return CsEmitError.NoCsProcBody;
@@ -624,31 +654,60 @@ const Emitter = struct {
         }
         if (has_effect) {
             // IOps is the `comptime __H: type` analogue: each call site hands
-            // a STRUCT implementing every arm member, and `handler<H>`
-            // monomorphizes per site — the JIT devirtualizes the member
-            // reads, and an omitted-optional-void fill inlines to nothing the
-            // way LLVM erases Zig's `@hasDecl ? __H.x : noop`.
+            // a STRUCT implementing every arm, and `handler<H>` monomorphizes
+            // per site. Arm members are METHODS — devirtualized and inlined
+            // the way a `Handlers_N.fn` direct call is — not Func properties:
+            // a delegate invoke cannot inline, and measured ~1.9ns/call over
+            // the method path. The ONE exception is an optional resuming
+            // arm: its presence is observable (`if (ask != null)`), and a
+            // method has no "absent" spelling — it keeps a nullable Func.
             try self.write("    public interface IOps {\n");
             for (ev.branches) |*b| {
                 if (b.kind != .effect) continue;
-                try self.write("      global::System.Func<dynamic");
-                if (!armIsPayloadless(b)) try self.write(", dynamic");
-                try self.write("> ");
-                try self.writeBinding(b.name);
-                try self.write(" { get; }\n");
+                if (optionalResumingArm(b)) {
+                    try self.write("      global::System.Func<dynamic, dynamic> ");
+                    try self.writeBinding(b.name);
+                    try self.write(" { get; }\n");
+                } else {
+                    try self.writeFmt("      {s} ", .{armReturnCsType(b)});
+                    try self.writeBinding(b.name);
+                    try self.write("(");
+                    if (!armIsPayloadless(b)) {
+                        try self.writeFmt("{s} __koru_arg", .{armParamCsType(b)});
+                    }
+                    try self.write(");\n");
+                }
             }
             try self.write("    }\n");
             try self.writeFmt("    public static {s} handler<H>({s} {s}, H ops) where H : struct, IOps {{\n", .{ output_cs, input_cs, INPUT_PARAM });
-            // Bind each effect-branch op as a local: `var each = ops.each;` —
-            // a statically-typed Func the impl body (or a subflow arm fire)
-            // invokes by bare name.
-            for (ev.branches) |b| {
+            // Bare `tick()` spellings in impl bodies (opaque |cs text AND
+            // generated subflow fires) resolve to these: an optional resuming
+            // arm keeps its `var` alias (the Func IS the value, presence
+            // included); a method arm gets a local-function shim forwarding
+            // to `ops.<arm>(...)` — one extra static hop the JIT inlines
+            // through, and the only way a bare name can reach a member.
+            for (ev.branches) |*b| {
                 if (b.kind != .effect) continue;
-                try self.write("      var ");
-                try self.writeBinding(b.name);
-                try self.write(" = ops.");
-                try self.writeBinding(b.name);
-                try self.write(";\n");
+                try self.write("      ");
+                if (optionalResumingArm(b)) {
+                    try self.write("var ");
+                    try self.writeBinding(b.name);
+                    try self.write(" = ops.");
+                    try self.writeBinding(b.name);
+                    try self.write(";\n");
+                } else {
+                    try self.writeFmt("{s} ", .{armReturnCsType(b)});
+                    try self.writeBinding(b.name);
+                    try self.write("(");
+                    if (!armIsPayloadless(b)) {
+                        try self.writeFmt("{s} __koru_arg", .{armParamCsType(b)});
+                    }
+                    try self.write(") => ops.");
+                    try self.writeBinding(b.name);
+                    try self.write("(");
+                    if (!armIsPayloadless(b)) try self.write("__koru_arg");
+                    try self.write(");\n");
+                }
             }
         } else {
             try self.writeFmt("    public static {s} handler({s} {s}) {{\n", .{ output_cs, input_cs, INPUT_PARAM });
@@ -671,6 +730,7 @@ const Emitter = struct {
                 }
             }
             try self.write(";\n");
+            try self.registerLocal(field.name);
         }
 
         const saved_impl_out = self.impl_out;
@@ -1080,6 +1140,8 @@ const Emitter = struct {
 
     /// Emit a top-level flow as `flowN()`.
     fn emitFlow(self: *Emitter, flow: *const ast.Flow, flow_num: usize) CsEmitError!void {
+        const saved_locals = self.flow_locals.items.len;
+        defer self.flow_locals.shrinkRetainingCapacity(saved_locals);
         try self.writeFmt("  public static void flow{d}() {{\n", .{flow_num});
         // PREAMBLE REPLACES THE CALL — a dissolving transform hangs the real
         // declaration on `preamble_code`; emitting the handler call as well
@@ -1272,10 +1334,12 @@ const Emitter = struct {
                 try self.writeFmt("var {s} = {s}; ", .{ tmp, arg });
                 if (!std.mem.eql(u8, binding, "_")) {
                     try self.writeFmt("var {s} = {s}; ", .{ binding, tmp });
+                    try self.registerLocal(binding);
                 }
-                try self.emitDestructureBindings(cont.destructure, tmp, "");
+                try self.emitDestructureBindings(cont.destructure, tmp, "", true);
             } else if (!std.mem.eql(u8, binding, "_")) {
                 try self.writeFmt("var {s} = {s}; ", .{ binding, arg });
+                try self.registerLocal(binding);
             }
             const guarded = cont.condition != null;
             if (guarded) {
@@ -1454,42 +1518,28 @@ const Emitter = struct {
         defer if (handlers_name) |hn| self.allocator.free(hn);
 
         if (ev_has_effect) {
-            // Arm delegate bodies produce RESUME values for a
-            // Func<dynamic,…>, not the enclosing tor's Output — force the
-            // dynamic produce path while their lambdas emit.
+            // Arm bodies produce RESUME values, not the enclosing tor's
+            // Output — force the dynamic produce path while they emit. The
+            // struct decl lands in ops_buf; `init_buf` collects the call
+            // site's `new H { … }` entries — `__cap_<n>` capture copies and
+            // the Func values a forwarded or optional-resuming arm keeps.
             const saved_out = self.impl_out;
             defer self.impl_out = saved_out;
             self.impl_out = .dynamic;
             const hid = self.nextId();
             handlers_name = try std.fmt.allocPrint(self.allocator, "__koru_handlers_{d}", .{hid});
-            try self.emitOpsStructDecl(ev, continuations, handlers_name.?);
-            try self.writeFmt("{s}var {s} = new {s} {{\n", .{ indent, handlers_name.?, handlers_name.? });
+            var init_buf: std.ArrayList(u8) = .empty;
+            defer init_buf.deinit(self.allocator);
             const inner_indent = try std.fmt.allocPrint(self.allocator, "{s}  ", .{indent});
             defer self.allocator.free(inner_indent);
-            // ONE delegate per ARM, not per continuation — two continuations
-            // naming the same fire differ only by guard, and a second member
-            // with the same name is a duplicate anonymous-type member
-            // (CS0833), not an override.
-            for (continuations, 0..) |*cont, ci| {
-                if (cont.kind != .effect) continue;
-                var already = false;
-                for (continuations[0..ci]) |*prev| {
-                    if (prev.kind == .effect and std.mem.eql(u8, prev.branch, cont.branch)) {
-                        already = true;
-                        break;
-                    }
-                }
-                if (already) continue;
-                const arm = findBranchDecl(ev, cont.branch) orelse continue;
-                try self.emitEffectHandlerMethod(continuations, cont.branch, arm, inner_indent);
-            }
-            try self.writeFmt("{s}}};\n", .{indent});
+            try self.emitOpsStructDecl(ev, continuations, handlers_name.?, &init_buf, inner_indent);
+            try self.writeFmt("{s}var {s} = new {s} {{ {s} }};\n", .{ indent, handlers_name.?, handlers_name.?, std.mem.trim(u8, init_buf.items, " \t\r\n") });
         }
 
         var ev_name_buf: [256]u8 = undefined;
         const ev_name = lowerIdentBuf(&ev_name_buf, ev.path.segments[ev.path.segments.len - 1]);
         const result_name: ?[]const u8 = if (!needs_result) null else if (namedReturnBinding(inv)) |rb|
-            try self.allocator.dupe(u8, rb)
+            try self.dupeSpelled(rb)
         else blk: {
             const rid = self.nextId();
             break :blk try std.fmt.allocPrint(self.allocator, "result_{d}", .{rid});
@@ -1498,6 +1548,7 @@ const Emitter = struct {
 
         if (result_name) |rn| {
             try self.writeFmt("{s}var {s} = main_module.{s}_event.handler(", .{ indent, rn, ev_name });
+            try self.registerLocal(rn);
         } else {
             try self.writeFmt("{s}main_module.{s}_event.handler(", .{ indent, ev_name });
         }
@@ -1510,7 +1561,7 @@ const Emitter = struct {
         // A BIND-POSITION destructure (`~locate(): { pos: { x, y } } |> …`).
         if (inv.return_destructure.len > 0) {
             if (result_name) |rn| {
-                try self.emitDestructureBindings(inv.return_destructure, rn, indent);
+                try self.emitDestructureBindings(inv.return_destructure, rn, indent, true);
             }
         }
 
@@ -1615,6 +1666,7 @@ const Emitter = struct {
                     try self.writeMember(rn, cont.branch);
                     try self.write(";\n");
                 }
+                try self.registerLocal(binding);
             }
         }
 
@@ -1634,7 +1686,7 @@ const Emitter = struct {
                     try base_buf.appendSlice(self.allocator, lowered);
                 }
             }
-            try self.emitDestructureBindings(cont.destructure, base_buf.items, body_indent);
+            try self.emitDestructureBindings(cont.destructure, base_buf.items, body_indent, true);
         }
 
         // The `when` guard runs AFTER the bindings — it reads them.
@@ -1685,19 +1737,23 @@ const Emitter = struct {
     }
 
     /// Bind a shape-destructure's fields off `base`, recursing into nested
-    /// destructures by lengthening the access path.
+    /// destructures by lengthening the access path. `track` registers the
+    /// names as capture candidates — true at flow level, false inside an arm
+    /// body where the names are method-locals that must not escape into a
+    /// later site's `__cap_*` initializer.
     fn emitDestructureBindings(
         self: *Emitter,
         fields: []const ast.DestructureField,
         base: []const u8,
         indent: []const u8,
+        track: bool,
     ) CsEmitError!void {
         for (fields) |field| {
             if (std.mem.eql(u8, field.name, "_")) continue;
             if (field.sub.len > 0) {
                 const path = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ base, field.name });
                 defer self.allocator.free(path);
-                try self.emitDestructureBindings(field.sub, path, indent);
+                try self.emitDestructureBindings(field.sub, path, indent, track);
                 continue;
             }
             try self.writeFmt("{s}var ", .{indent});
@@ -1705,6 +1761,7 @@ const Emitter = struct {
             try self.write(" = ");
             try self.writeMember(base, field.name);
             try self.write(";\n");
+            if (track) try self.registerLocal(field.name);
         }
     }
 
@@ -1747,20 +1804,24 @@ const Emitter = struct {
         }
     }
 
-    /// Emit one Handlers member: `<op> = (Func…)(arg => …),`.
-    /// The delegate arity is the ARM's fire signature, not the handler's —
-    /// the proc body is opaque host text that calls `tick()` literally, so a
-    /// payloadless arm's member must be `Func<dynamic>` or the runtime binder
-    /// refuses the 0-arg invoke (JS's arity-tolerant call hides this).
-    /// One continuation for the arm lowers straight (emitEffectHandlerSimple);
-    /// several — same fire, different `when` guards or destructures — lower
-    /// to a block lambda whose per-arm guarded blocks return on first match.
-    fn emitEffectHandlerMethod(
+    /// Emit an arm's BODY as a `{ … }` block — the shared shape behind the
+    /// struct METHOD spelling (`dynamic ask(dynamic p) { … }`) and the
+    /// Func-lambda spelling (`p => { … }`) an optional-resuming arm or the
+    /// closure fallback keeps. `param` is the payload parameter name the
+    /// block binds from; `tail` spells the fall-through return a guarded or
+    /// non-returning body still needs: `.null` for `Func<dynamic>`/`dynamic`
+    /// returns, `.default` for typed returns (`return default;` — `null`
+    /// won't compile), `.none` for `void`.
+    const ArmTail = enum { none, null_t, default_t };
+
+    fn emitArmBodyBlock(
         self: *Emitter,
         all: []const ast.Continuation,
         branch: []const u8,
         arm: *const ast.Branch,
+        param: []const u8,
         indent: []const u8,
+        tail: ArmTail,
     ) CsEmitError!void {
         const payloadless = armIsPayloadless(arm);
         var arm_count: usize = 0;
@@ -1770,22 +1831,49 @@ const Emitter = struct {
             arm_count += 1;
             if (first_arm == null) first_arm = c;
         }
-        const cont = first_arm orelse return;
+        const cont = first_arm orelse {
+            try self.write("{ }");
+            return;
+        };
 
+        // The one-continuation, unguarded, undestructured arm — bare body.
         if (arm_count == 1 and cont.condition == null and cont.destructure.len == 0) {
-            try self.emitEffectHandlerSimple(cont, payloadless, indent);
+            try self.write("{\n");
+            const inner = try std.fmt.allocPrint(self.allocator, "{s}  ", .{indent});
+            defer self.allocator.free(inner);
+            if (!payloadless) {
+                if (cont.binding) |b| {
+                    if (!std.mem.eql(u8, b, "_")) {
+                        try self.write(inner);
+                        try self.write("var ");
+                        try self.writeBinding(b);
+                        try self.writeFmt(" = {s};\n", .{param});
+                    }
+                }
+            }
+            var arm_returns = false;
+            if (cont.node) |node| {
+                switch (node) {
+                    .expression => |expr| {
+                        try self.writeFmt("{s}return ", .{inner});
+                        try self.writeCsExpr(expr);
+                        try self.write(";\n");
+                        arm_returns = true;
+                    },
+                    .terminal => {},
+                    else => {
+                        arm_returns = try self.emitEffectArmBody(cont, inner);
+                    },
+                }
+            }
+            if (!arm_returns) try self.emitArmTail(tail, inner);
+            try self.writeFmt("{s}}}", .{indent});
             return;
         }
 
-        const param = try std.fmt.allocPrint(self.allocator, "__koru_arm_{d}", .{self.nextId()});
-        defer self.allocator.free(param);
-        try self.write(indent);
-        try self.writeBinding(branch);
-        if (payloadless) {
-            try self.write(" = (global::System.Func<dynamic>)(() => {\n");
-        } else {
-            try self.writeFmt(" = (global::System.Func<dynamic, dynamic>)({s} => {{\n", .{param});
-        }
+        // Guarded / destructured / multicast arms — a block each so two arms
+        // may both name `a` off the same fire.
+        try self.write("{\n");
         const arm_indent = try std.fmt.allocPrint(self.allocator, "{s}  ", .{indent});
         defer self.allocator.free(arm_indent);
         const body_indent = try std.fmt.allocPrint(self.allocator, "{s}  ", .{arm_indent});
@@ -1794,10 +1882,9 @@ const Emitter = struct {
         for (all) |*cont_arm| {
             if (cont_arm.kind != .effect or !std.mem.eql(u8, cont_arm.branch, branch)) continue;
 
-            // A block per arm, so two arms may both name `a` off the same fire.
             try self.writeFmt("{s}{{\n", .{arm_indent});
             if (!payloadless and cont_arm.destructure.len > 0) {
-                try self.emitDestructureBindings(cont_arm.destructure, param, body_indent);
+                try self.emitDestructureBindings(cont_arm.destructure, param, body_indent, false);
             } else if (!payloadless) {
                 if (cont_arm.binding) |b| {
                     if (!std.mem.eql(u8, b, "_")) {
@@ -1819,59 +1906,21 @@ const Emitter = struct {
             defer self.allocator.free(inner_indent);
 
             const arm_returns = try self.emitEffectArmBody(cont_arm, inner_indent);
-            if (!arm_returns) try self.writeFmt("{s}return null;\n", .{inner_indent});
+            if (!arm_returns) try self.emitArmTail(tail, inner_indent);
 
             if (cont_arm.condition != null) try self.writeFmt("{s}}}\n", .{body_indent});
             try self.writeFmt("{s}}}\n", .{arm_indent});
         }
-        try self.writeFmt("{s}return null;\n", .{arm_indent});
-        try self.writeFmt("{s}}}),\n", .{indent});
+        try self.emitArmTail(tail, arm_indent);
+        try self.writeFmt("{s}}}", .{indent});
     }
 
-    /// The one-continuation, unguarded, undestructured effect handler:
-    /// payload straight onto the lambda parameter, body emitted bare.
-    /// `payloadless` selects `Func<dynamic>` over `Func<dynamic, dynamic>` —
-    /// the arm's fire signature, not the binding shape.
-    fn emitEffectHandlerSimple(
-        self: *Emitter,
-        cont: *const ast.Continuation,
-        payloadless: bool,
-        indent: []const u8,
-    ) CsEmitError!void {
-        const param = cont.binding orelse "_";
-        const node = cont.node orelse {
-            try self.write(indent);
-            try self.writeBinding(cont.branch);
-            try self.write(if (payloadless) " = (global::System.Func<dynamic>)(() => null),\n" else " = (global::System.Func<dynamic, dynamic>)(_ => null),\n");
-            return;
-        };
-        try self.write(indent);
-        try self.writeBinding(cont.branch);
-        switch (node) {
-            .expression => |expr| {
-                if (payloadless) {
-                    try self.write(" = (global::System.Func<dynamic>)(() => ");
-                } else {
-                    try self.writeFmt(" = (global::System.Func<dynamic, dynamic>)({s} => ", .{param});
-                }
-                try self.writeCsExpr(expr);
-                try self.write("),\n");
-            },
-            .terminal => {
-                try self.write(if (payloadless) " = (global::System.Func<dynamic>)(() => null),\n" else " = (global::System.Func<dynamic, dynamic>)(_ => null),\n");
-            },
-            else => {
-                if (payloadless) {
-                    try self.write(" = (global::System.Func<dynamic>)(() => {\n");
-                } else {
-                    try self.writeFmt(" = (global::System.Func<dynamic, dynamic>)({s} => {{\n", .{param});
-                }
-                const inner_indent = try std.fmt.allocPrint(self.allocator, "{s}  ", .{indent});
-                defer self.allocator.free(inner_indent);
-                const arm_returns = try self.emitEffectArmBody(cont, inner_indent);
-                if (!arm_returns) try self.writeFmt("{s}return null;\n", .{inner_indent});
-                try self.writeFmt("{s}}}),\n", .{indent});
-            },
+    /// The fall-through return at a block's end — see ArmTail.
+    fn emitArmTail(self: *Emitter, tail: ArmTail, indent: []const u8) CsEmitError!void {
+        switch (tail) {
+            .none => {},
+            .null_t => try self.writeFmt("{s}return null;\n", .{indent}),
+            .default_t => try self.writeFmt("{s}return default;\n", .{indent}),
         }
     }
 
@@ -1898,71 +1947,442 @@ const Emitter = struct {
         };
     }
 
-    /// Emit the STRUCT a call site instantiates as its ops argument — one
-    /// settable property per arm of `ev`, implementing `<ev>_event.IOps`.
-    /// Written into `ops_buf` (flushed at main_module scope); the call site
-    /// itself emits only `new __koru_handlers_N { arm = <lambda>, … }`.
-    /// An OMITTED OPTIONAL VOID arm gets a shared-noop initializer — the
-    /// `if (@hasDecl(__H,"tick")) __H.tick else noop` contract; resuming and
-    /// required props stay null (presence, and a loud NRE on a genuinely
-    /// missing required arm).
+    /// Emit the STRUCT a call site instantiates as its ops argument — arm
+    /// METHODS implementing `<ev>_event.IOps`, the `Handlers_N` fn-members
+    /// analogue. Written into `ops_buf` (flushed at main_module scope);
+    /// `init_buf` collects the call site's `new H { … }` entries — one
+    /// `__cap_<n> = <n>` per captured flow local, and the Func value where a
+    /// Func still answers (an optional-resuming prop, or a body whose free
+    /// names the scan can't classify — the closure fallback).
+    ///
+    /// Member shapes:
+    ///   installed arm          → `public <ret> <b>(<p>) { <body> }`
+    ///   omitted optional void  → `public void <b>(<p>) { }`  (the noop fill)
+    ///   omitted required       → no member; CS0535 names the site
+    ///   optional resuming      → `public Func<…> <b> { get; set; }` (presence)
+    ///   unclassifiable body    → `Func` field + a forwarding method
     fn emitOpsStructDecl(
         self: *Emitter,
         ev: *const ast.EventDecl,
         continuations: []const ast.Continuation,
         struct_name: []const u8,
+        init_buf: *std.ArrayList(u8),
+        init_indent: []const u8,
     ) CsEmitError!void {
         const saved_buf = self.buf;
-        self.buf = &self.ops_buf;
         defer self.buf = saved_buf;
 
         var ev_name_buf: [256]u8 = undefined;
         const ev_name = lowerIdentBuf(&ev_name_buf, ev.path.segments[ev.path.segments.len - 1]);
 
-        // First noop fill emits the shared delegates. Class-member order is
-        // free on C#, so landing them inside ops_buf before their first
-        // referent is safe.
-        for (ev.branches) |b| {
-            if (b.kind != .effect) continue;
-            const resuming = b.resume_type != null or b.resume_arms != null;
-            if (!resuming and b.is_optional and continuationForBranch(continuations, b.name) == null) {
-                if (!self.noops_emitted) {
-                    self.noops_emitted = true;
-                    try self.write("  static readonly global::System.Func<dynamic> __koru_noop0 = () => null;\n");
-                    try self.write("  static readonly global::System.Func<dynamic, dynamic> __koru_noop1 = _ => null;\n");
-                }
-                break;
-            }
-        }
-
+        self.buf = &self.ops_buf;
         try self.writeFmt("  struct {s} : {s}_event.IOps {{\n", .{ struct_name, ev_name });
-        var any_initializer = false;
+
         for (ev.branches) |*b| {
             if (b.kind != .effect) continue;
-            try self.write("    public global::System.Func<dynamic");
-            if (!armIsPayloadless(b)) try self.write(", dynamic");
-            try self.write("> ");
-            try self.writeBinding(b.name);
-            try self.write(" { get; set; }");
-            const resuming = b.resume_type != null or b.resume_arms != null;
-            if (!resuming and b.is_optional and continuationForBranch(continuations, b.name) == null) {
-                try self.write(if (armIsPayloadless(b)) " = __koru_noop0;" else " = __koru_noop1;");
-                any_initializer = true;
+            const installed = continuationForBranch(continuations, b.name) != null;
+
+            // Optional RESUMING arm: presence is observable, so it keeps the
+            // nullable Func surface — prop here, closure-bodied init below.
+            if (optionalResumingArm(b)) {
+                try self.write("    public global::System.Func<dynamic");
+                if (!armIsPayloadless(b)) try self.write(", dynamic");
+                try self.write("> ");
+                try self.writeBinding(b.name);
+                try self.write(" { get; set; }\n");
+                if (installed) {
+                    const param = try std.fmt.allocPrint(self.allocator, "__koru_arm_{d}", .{self.nextId()});
+                    defer self.allocator.free(param);
+                    self.buf = init_buf;
+                    try self.write(init_indent);
+                    try self.writeBinding(b.name);
+                    try self.write(" = (global::System.Func<dynamic");
+                    if (!armIsPayloadless(b)) try self.write(", dynamic");
+                    try self.write(">)(");
+                    if (!armIsPayloadless(b)) try self.write(param);
+                    try self.write(" => ");
+                    try self.emitArmBodyBlock(continuations, b.name, b, param, init_indent, .null_t);
+                    try self.write("),\n");
+                    self.buf = &self.ops_buf;
+                }
+                continue;
             }
+
+            if (!installed) {
+                // Omitted OPTIONAL non-resuming arm — the always-callable
+                // noop member; omitted REQUIRED arm — no member at all, so
+                // CS0535 names the call site the way `@hasDecl` failure does.
+                if (b.is_optional) {
+                    try self.writeFmt("    public {s} ", .{armReturnCsType(b)});
+                    try self.writeBinding(b.name);
+                    try self.write("(");
+                    if (!armIsPayloadless(b)) try self.writeFmt("{s} __koru_arg", .{armParamCsType(b)});
+                    try self.write(") { }\n");
+                }
+                continue;
+            }
+
+            // Installed method arm — body to a scratch buffer first: the
+            // capture scan decides whether the struct spells it as a METHOD
+            // (with `__cap_*` fields) or as a Func field the method forwards
+            // to (host-text locals and other unprovable free names keep the
+            // closure that already answered them).
+            const param = try std.fmt.allocPrint(self.allocator, "__koru_arm_{d}", .{self.nextId()});
+            defer self.allocator.free(param);
+            const ret = armReturnCsType(b);
+            const tail: ArmTail = if (std.mem.eql(u8, ret, "void"))
+                .none
+            else if (std.mem.eql(u8, ret, "dynamic"))
+                .null_t
+            else
+                .default_t;
+
+            var body_buf: std.ArrayList(u8) = .empty;
+            defer body_buf.deinit(self.allocator);
+            self.buf = &body_buf;
+            try self.emitArmBodyBlock(continuations, b.name, b, param, "      ", tail);
+            self.buf = &self.ops_buf;
+
+            var scan = try self.scanArmBody(body_buf.items, ev, param);
+            defer scan.captures.deinit(self.allocator);
+
+            if (scan.needs_closure) {
+                // Forwarder: the method is the static surface, the Func field
+                // is the body — the lambda captures whatever the scan could
+                // not prove, at the delegate-invoke cost measured before.
+                // The field is `Func<dynamic>` regardless of the method's
+                // return, so a void arm's body re-emits with the null tail a
+                // `Func` conversion still requires.
+                try self.write("    public global::System.Func<dynamic");
+                if (!armIsPayloadless(b)) try self.write(", dynamic");
+                try self.write("> __koru_fn_");
+                try self.writeBinding(b.name);
+                try self.write(";\n");
+                try self.writeFmt("    public {s} ", .{ret});
+                try self.writeBinding(b.name);
+                try self.write("(");
+                if (!armIsPayloadless(b)) try self.writeFmt("{s} {s}", .{ armParamCsType(b), param });
+                try self.write(") => __koru_fn_");
+                try self.writeBinding(b.name);
+                try self.write("(");
+                if (!armIsPayloadless(b)) try self.write(param);
+                try self.write(");\n");
+                self.buf = init_buf;
+                try self.write(init_indent);
+                try self.write("__koru_fn_");
+                try self.writeBinding(b.name);
+                try self.write(" = (");
+                if (!armIsPayloadless(b)) try self.write(param);
+                try self.write(") => ");
+                if (tail == .null_t) {
+                    try self.write(body_buf.items);
+                } else {
+                    var fn_buf: std.ArrayList(u8) = .empty;
+                    defer fn_buf.deinit(self.allocator);
+                    const saved = self.buf;
+                    self.buf = &fn_buf;
+                    try self.emitArmBodyBlock(continuations, b.name, b, param, "      ", .null_t);
+                    self.buf = saved;
+                    try self.write(fn_buf.items);
+                    self.buf = init_buf;
+                }
+                try self.write(",\n");
+                self.buf = &self.ops_buf;
+                continue;
+            }
+
+            // Method arm: `__cap_<n>` fields for the captured locals, the
+            // initializer copies them in — Zig's const-capture, spelled.
+            for (scan.captures.items) |cap| {
+                try self.writeFmt("    public dynamic __cap_{s};\n", .{capFieldName(cap)});
+            }
+            const rewritten = try self.rewriteArmCaptures(body_buf.items, scan.captures.items);
+            defer self.allocator.free(rewritten);
+            try self.writeFmt("    public {s} ", .{ret});
+            try self.writeBinding(b.name);
+            try self.write("(");
+            if (!armIsPayloadless(b)) try self.writeFmt("{s} {s}", .{ armParamCsType(b), param });
+            try self.write(") ");
+            try self.write(rewritten);
             try self.write("\n");
+            self.buf = init_buf;
+            for (scan.captures.items) |cap| {
+                try self.writeFmt("{s}__cap_{s} = {s},\n", .{ init_indent, capFieldName(cap), cap });
+            }
+            self.buf = &self.ops_buf;
         }
-        // CS8983: initializers above only run if the struct declares SOME
-        // explicit ctor; an empty parameterless one satisfies the rule and
-        // keeps `new H { arm = … }` spelling legal.
-        if (any_initializer) try self.writeFmt("    public {s}() {{ }}\n", .{struct_name});
         try self.write("  }\n");
     }
 
+    /// What an emitted arm body reads from its enclosing method. `captures`
+    /// are flow_locals found in reference position — they become `__cap_*`
+    /// fields. `needs_closure` is anything the scan cannot prove — a
+    /// host-text local, a lambda parameter, an unknown method name — those
+    /// arms keep the closure (a Func field the method forwards to). The
+    /// fallback is never wrong code: it is the pre-method shape, verbatim.
+    const ArmScan = struct {
+        captures: std.ArrayList([]const u8) = .empty,
+        needs_closure: bool = false,
+    };
+
+    /// Classify the free identifiers of an emitted arm body. Member position
+    /// (`.name`), object-initializer labels (`new { name = … }`), `var`
+    /// declarations, the payload param, sibling arm names, and known globals
+    /// are skipped; flow_locals become captures; anything else forces the
+    /// closure fallback. Interpolated/verbatim strings hide references the
+    /// scanner cannot see — their presence alone forwards.
+    fn scanArmBody(
+        self: *Emitter,
+        body: []const u8,
+        ev: *const ast.EventDecl,
+        param: []const u8,
+    ) CsEmitError!ArmScan {
+        var scan = ArmScan{};
+        errdefer scan.captures.deinit(self.allocator);
+        if (std.mem.indexOf(u8, body, "$\"") != null or
+            std.mem.indexOf(u8, body, "@\"") != null)
+        {
+            scan.needs_closure = true;
+            return scan;
+        }
+
+        var toks: std.ArrayList(ArmTok) = .empty;
+        defer toks.deinit(self.allocator);
+        var declared: std.ArrayList([]const u8) = .empty;
+        defer declared.deinit(self.allocator);
+        try self.tokenizeArmBody(body, &toks, &declared);
+
+        for (toks.items) |tok| {
+            if (tok.member or tok.label) continue;
+            const name = tok.text;
+            var is_declared = false;
+            for (declared.items) |d| {
+                if (std.mem.eql(u8, d, name)) is_declared = true;
+            }
+            if (is_declared) continue;
+            if (std.mem.eql(u8, name, param)) continue;
+            var is_local = false;
+            for (self.flow_locals.items) |n| {
+                if (std.mem.eql(u8, n, name)) {
+                    is_local = true;
+                    var seen = false;
+                    for (scan.captures.items) |c| {
+                        if (std.mem.eql(u8, c, name)) seen = true;
+                    }
+                    if (!seen) try scan.captures.append(self.allocator, name);
+                }
+            }
+            if (is_local) continue;
+            var is_arm = false;
+            for (ev.branches) |b| {
+                if (b.kind != .effect) continue;
+                var nb: [256]u8 = undefined;
+                if (b.name.len <= nb.len) {
+                    const lowered = lowerIdentBuf(&nb, b.name);
+                    var spelled: [257]u8 = undefined;
+                    const cmp = if (codegen_utils.isCsReservedForEmit(lowered)) blk: {
+                        spelled[0] = '@';
+                        @memcpy(spelled[1 .. lowered.len + 1], lowered);
+                        break :blk spelled[0 .. lowered.len + 1];
+                    } else lowered;
+                    if (std.mem.eql(u8, name, cmp)) is_arm = true;
+                }
+            }
+            if (is_arm) continue;
+            if (std.mem.startsWith(u8, name, "__koru_") or
+                std.mem.startsWith(u8, name, "result_") or
+                std.mem.startsWith(u8, name, "__cap_") or
+                std.mem.endsWith(u8, name, "_event") or
+                isFlowMethodName(name) or
+                isArmGlobalWord(name)) continue;
+            scan.needs_closure = true;
+        }
+        return scan;
+    }
+
+    /// Rewrite `cap` references in `body` to `__cap_<n>` field reads — the
+    /// same tokenizer as the scan: member position and initializer labels
+    /// are left alone (a `new { count = … }` key is a member name, not a
+    /// reference).
+    fn rewriteArmCaptures(
+        self: *Emitter,
+        body: []const u8,
+        captures: []const []const u8,
+    ) CsEmitError![]u8 {
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(self.allocator);
+
+        var i: usize = 0;
+        var lit_stack: std.ArrayList(usize) = .empty;
+        defer lit_stack.deinit(self.allocator);
+        var brace_depth: usize = 0;
+        var pending_new = false;
+        var prev_nonspace: u8 = 0;
+        while (i < body.len) {
+            const c = body[i];
+            if (c == '/' and i + 1 < body.len and body[i + 1] == '/') {
+                const end = std.mem.indexOfScalarPos(u8, body, i, '\n') orelse body.len;
+                try out.appendSlice(self.allocator, body[i..end]);
+                i = end;
+                continue;
+            }
+            if (c == '/' and i + 1 < body.len and body[i + 1] == '*') {
+                const end = std.mem.indexOfPos(u8, body, i + 2, "*/") orelse body.len - 1;
+                try out.appendSlice(self.allocator, body[i .. @min(body.len, end + 2)]);
+                i = @min(body.len, end + 2);
+                continue;
+            }
+            if (c == '"' or c == '\'') {
+                const q = c;
+                var j = i + 1;
+                while (j < body.len and body[j] != q) {
+                    if (body[j] == '\\') j += 1;
+                    j += 1;
+                }
+                j = @min(body.len, j + 1);
+                try out.appendSlice(self.allocator, body[i..j]);
+                i = j;
+                prev_nonspace = q;
+                continue;
+            }
+            if (isArmIdentStart(c) or (c == '@' and i + 1 < body.len and isArmIdentStart(body[i + 1]))) {
+                const start = i;
+                if (c == '@') i += 1;
+                while (i < body.len and isArmIdentChar(body[i])) i += 1;
+                const tok = body[start..i];
+                const member = prev_nonspace == '.';
+                var j = i;
+                while (j < body.len and (body[j] == ' ' or body[j] == '\t')) j += 1;
+                const label = lit_stack.items.len > 0 and j < body.len and body[j] == '=' and
+                    (j + 1 >= body.len or (body[j + 1] != '=' and body[j + 1] != '>'));
+                var is_cap = false;
+                if (!member and !label) {
+                    for (captures) |cap| {
+                        if (std.mem.eql(u8, cap, tok)) is_cap = true;
+                    }
+                }
+                if (is_cap) {
+                    try out.appendSlice(self.allocator, "__cap_");
+                    try out.appendSlice(self.allocator, capFieldName(tok));
+                } else {
+                    try out.appendSlice(self.allocator, tok);
+                }
+                if (std.mem.eql(u8, tok, "new")) pending_new = true;
+                prev_nonspace = tok[tok.len - 1];
+                continue;
+            }
+            if (c == '{') {
+                brace_depth += 1;
+                if (pending_new) {
+                    try lit_stack.append(self.allocator, brace_depth);
+                    pending_new = false;
+                }
+            } else if (c == '}') {
+                if (lit_stack.items.len > 0 and lit_stack.items[lit_stack.items.len - 1] == brace_depth) {
+                    _ = lit_stack.pop();
+                }
+                brace_depth -= 1;
+            } else if (c == '(' or c == ';' or c == '=') {
+                pending_new = false;
+            }
+            if (!std.ascii.isWhitespace(c)) prev_nonspace = c;
+            try out.append(self.allocator, c);
+            i += 1;
+        }
+        return out.toOwnedSlice(self.allocator);
+    }
+
+    /// Tokenize an arm body into candidate-reference identifiers plus the
+    /// `var`-declared names that exclude them. Shares the string/comment/
+    /// initializer-label rules with `rewriteArmCaptures`.
+    fn tokenizeArmBody(
+        self: *Emitter,
+        body: []const u8,
+        toks: *std.ArrayList(ArmTok),
+        declared: *std.ArrayList([]const u8),
+    ) CsEmitError!void {
+        var i: usize = 0;
+        var lit_stack: std.ArrayList(usize) = .empty;
+        defer lit_stack.deinit(self.allocator);
+        var brace_depth: usize = 0;
+        var pending_new = false;
+        var pending_var = false;
+        var prev_nonspace: u8 = 0;
+        while (i < body.len) {
+            const c = body[i];
+            if (c == '/' and i + 1 < body.len and body[i + 1] == '/') {
+                const end = std.mem.indexOfScalarPos(u8, body, i, '\n') orelse body.len;
+                i = end;
+                continue;
+            }
+            if (c == '/' and i + 1 < body.len and body[i + 1] == '*') {
+                const end = std.mem.indexOfPos(u8, body, i + 2, "*/") orelse body.len - 1;
+                i = @min(body.len, end + 2);
+                continue;
+            }
+            if (c == '"' or c == '\'') {
+                const q = c;
+                i += 1;
+                while (i < body.len and body[i] != q) {
+                    if (body[i] == '\\') i += 1;
+                    i += 1;
+                }
+                if (i < body.len) i += 1;
+                prev_nonspace = q;
+                continue;
+            }
+            if (isArmIdentStart(c) or (c == '@' and i + 1 < body.len and isArmIdentStart(body[i + 1]))) {
+                const start = i;
+                if (c == '@') i += 1;
+                while (i < body.len and isArmIdentChar(body[i])) i += 1;
+                const tok = body[start..i];
+                const member = prev_nonspace == '.';
+                var j = i;
+                while (j < body.len and (body[j] == ' ' or body[j] == '\t')) j += 1;
+                const label = lit_stack.items.len > 0 and j < body.len and body[j] == '=' and
+                    (j + 1 >= body.len or (body[j + 1] != '=' and body[j + 1] != '>'));
+                if (std.mem.eql(u8, tok, "var")) {
+                    pending_var = true;
+                } else if (std.mem.eql(u8, tok, "new")) {
+                    pending_new = true;
+                    pending_var = false;
+                } else if (pending_var and !member) {
+                    try declared.append(self.allocator, tok);
+                    pending_var = false;
+                } else {
+                    pending_var = false;
+                    if (!member and !label and !isArmKeyword(tok)) {
+                        try toks.append(self.allocator, .{ .text = tok, .member = member, .label = label });
+                    }
+                }
+                prev_nonspace = tok[tok.len - 1];
+                continue;
+            }
+            if (c == '{') {
+                brace_depth += 1;
+                if (pending_new) {
+                    try lit_stack.append(self.allocator, brace_depth);
+                    pending_new = false;
+                }
+            } else if (c == '}') {
+                if (lit_stack.items.len > 0 and lit_stack.items[lit_stack.items.len - 1] == brace_depth) {
+                    _ = lit_stack.pop();
+                }
+                brace_depth -= 1;
+            } else if (c == '(' or c == ';' or c == '=') {
+                pending_new = false;
+            }
+            if (!std.ascii.isWhitespace(c)) prev_nonspace = c;
+            i += 1;
+        }
+    }
+
     /// Emit a FIRE of one of the enclosing tor's own effect arms. The handler
-    /// already aliased every arm to a local (`var each = ops.each;`), so the
-    /// fire is a plain call on that `dynamic` delegate. A void arm is
-    /// a bare statement; a resuming arm's value binds to the call-site `: name`
-    /// or dispatches through the ordinary terminal-continuation path.
+    /// already bound every arm to a bare name — a local-function shim for a
+    /// method arm, a `var` alias for an optional-resuming Func — so the fire
+    /// is a plain call. A void arm is a bare statement; a resuming arm's
+    /// value binds to the call-site `: name` or dispatches through the
+    /// ordinary terminal-continuation path.
     fn emitEffectArmFire(
         self: *Emitter,
         arm: *const ast.Branch,
@@ -1984,7 +2404,7 @@ const Emitter = struct {
         if (!has_resume) needs_result = false;
 
         const result_name: ?[]const u8 = if (!needs_result) null else if (namedReturnBinding(inv)) |rb|
-            try self.allocator.dupe(u8, rb)
+            try self.dupeSpelled(rb)
         else blk: {
             const rid = self.nextId();
             break :blk try std.fmt.allocPrint(self.allocator, "result_{d}", .{rid});
@@ -2008,7 +2428,10 @@ const Emitter = struct {
         defer if (guard_presence) self.allocator.free(fire_indent);
 
         try self.write(fire_indent);
-        if (result_name) |rn| try self.writeFmt("var {s} = ", .{rn});
+        if (result_name) |rn| {
+            try self.writeFmt("var {s} = ", .{rn});
+            try self.registerLocal(rn);
+        }
         try self.writeBinding(arm.name);
         try self.write("(");
         try self.emitArmFirePayload(arm, inv);
@@ -2075,6 +2498,37 @@ fn csType(koru_type: []const u8) []const u8 {
     return "dynamic";
 }
 
+/// An arm whose ABSENCE is observable — `! ?ask -> T`. It alone keeps the
+/// nullable-Func surface: `ask != null` in impl text is the presence read,
+/// and a method member has no absent spelling. Every other arm is a method —
+/// omitted optional voids included (`{ }` is the `@hasDecl ? __H.x : noop`
+/// fill, cheaper than the shared-delegate trick it replaces).
+fn optionalResumingArm(b: *const ast.Branch) bool {
+    return b.is_optional and (b.resume_type != null or b.resume_arms != null);
+}
+
+/// The C# return type of an arm's METHOD. `-> T` → T's spelling, a resume
+/// sum → dynamic (the arm-tag object), void otherwise. A produce inside a
+/// void arm is refused by the C# compiler — the same refusal zig's
+/// `fn tick() void` hands a `return .{ .done = … }`.
+fn armReturnCsType(b: *const ast.Branch) []const u8 {
+    if (b.resume_arms != null) return "dynamic";
+    if (b.resume_type) |rt| return csType(rt);
+    return "void";
+}
+
+/// The C# parameter type of an arm's METHOD — identity payloads take the
+/// declared type; wildcard and named-field payloads stay `dynamic` (the
+/// fire site spells `new { f = … }`, an anonymous object).
+fn armParamCsType(b: *const ast.Branch) []const u8 {
+    if (b.payload.fields.len == 1 and
+        std.mem.eql(u8, b.payload.fields[0].name, "__type_ref"))
+    {
+        return csType(b.payload.fields[0].type);
+    }
+    return "dynamic";
+}
+
 /// The C# type of a terminal branch's payload member in `Output`. `| done
 /// i64` is an identity payload — one `__type_ref` field — so `done` is
 /// `long`; a record payload or wildcard stays `dynamic`.
@@ -2132,6 +2586,106 @@ fn stripInlineStmtMarker(text: []const u8) []const u8 {
     const marker = "//@koru:inline_stmt\n";
     if (std.mem.startsWith(u8, text, marker)) return text[marker.len..];
     return text;
+}
+
+/// A free-identifier token from the arm-body scan: `member` is `.name`
+/// position (a field/label, never a local reference); `label` is the
+/// initializer-label position inside `new { … }`/`new T { … }`.
+const ArmTok = struct {
+    text: []const u8,
+    member: bool,
+    label: bool,
+};
+
+/// The `__cap_*` field suffix for a captured local — the flow_locals
+/// spelling minus its `@` escape (`@base` → `base`). Captured names are
+/// already kebab-lowered.
+fn capFieldName(spelled: []const u8) []const u8 {
+    if (spelled.len > 0 and spelled[0] == '@') return spelled[1..];
+    return spelled;
+}
+
+/// The name as it appears in emitted text: kebab-lowered, `@`-escaped when
+/// reserved. Buffers the `@` ahead of the lowered name — writeBinding's
+/// spelling as a string.
+fn spelledName(buf: []u8, name: []const u8) ?[]const u8 {
+    if (name.len + 1 > buf.len) return null;
+    var i: usize = 0;
+    if (name.len <= buf.len - 1) {
+        var stem_buf: [256]u8 = undefined;
+        if (name.len > stem_buf.len) return null;
+        for (name, 0..) |c, k| stem_buf[k] = if (c == '-') '_' else c;
+        if (codegen_utils.isCsReservedForEmit(stem_buf[0..name.len])) {
+            buf[0] = '@';
+            i = 1;
+        }
+    }
+    for (name) |c| {
+        buf[i] = if (c == '-') '_' else c;
+        i += 1;
+    }
+    return buf[0..i];
+}
+
+fn isArmIdentStart(c: u8) bool {
+    return std.ascii.isAlphabetic(c) or c == '_';
+}
+
+fn isArmIdentChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_';
+}
+
+/// `flow0`…`flowN` — the sibling method names a body's identifier can never
+/// be: koru bindings do not lower to that shape, so the check is exact.
+fn isFlowMethodName(name: []const u8) bool {
+    if (!std.mem.startsWith(u8, name, "flow") or name.len <= 4) return false;
+    for (name[4..]) |c| {
+        if (!std.ascii.isDigit(c)) return false;
+    }
+    return true;
+}
+
+/// C# keywords plus the handful of framework/main-module names that resolve
+/// without being captures. Anything missing here costs a closure fallback —
+/// conservative, never wrong.
+fn isArmKeyword(name: []const u8) bool {
+    const words = [_][]const u8{
+        "var",       "new",      "return",   "if",       "else",    "for",
+        "foreach",   "while",    "do",       "switch",   "case",    "break",
+        "continue",  "default",  "try",      "catch",    "finally", "throw",
+        "in",        "out",      "ref",      "is",       "as",      "typeof",
+        "nameof",    "sizeof",   "checked",  "unchecked", "lock",   "dynamic",
+        "object",    "string",   "long",     "int",      "short",   "byte",
+        "sbyte",     "uint",     "ulong",    "ushort",   "double",  "float",
+        "bool",      "char",     "void",     "static",   "public",  "private",
+        "internal",  "protected", "sealed",  "abstract", "virtual", "override",
+        "readonly",  "const",    "volatile", "struct",   "class",   "interface",
+        "enum",      "delegate", "event",    "namespace", "get",    "set",
+        "value",     "params",   "implicit", "explicit", "operator", "await",
+        "async",     "yield",    "with",     "init",     "record",  "null",
+        "true",      "false",    "base",     "this",
+    };
+    for (words) |w| {
+        if (std.mem.eql(u8, name, w)) return true;
+    }
+    return false;
+}
+
+/// Names that resolve at class/framework scope inside generated bodies —
+/// never captures. The `_event` suffix gets its own check upstream.
+fn isArmGlobalWord(name: []const u8) bool {
+    const words = [_][]const u8{
+        "main_module",  "Program",  "ops",    "__koru_input", "global",
+        "System",       "Console",  "Math",   "Convert",      "Exception",
+        "String",       "Int64",    "Int32",  "Double",       "Boolean",
+        "Object",       "Array",    "List",   "Dictionary",   "DateTime",
+        "Task",         "Func",     "Action", "Tuple",        "ValueTuple",
+        "Enumerable",   "StringBuilder", "Guid", "Random",    "Environment",
+    };
+    for (words) |w| {
+        if (std.mem.eql(u8, name, w)) return true;
+    }
+    return false;
 }
 
 /// Is `path` a bare reference to one of `event`'s own EFFECT arms?

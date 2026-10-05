@@ -14,15 +14,17 @@ static class Bench {
     // GENERATED — the actual emitted artifact. BenchOps stands in for the
     // emitted per-site __koru_handlers_N struct (private nested, not
     // constructible from here); the JIT monomorphizes handler<BenchOps>
-    // exactly as it does handler<__koru_handlers_N>.
+    // exactly as it does handler<__koru_handlers_N>. IOps members are
+    // METHODS — the comptime __H analogue — devirtualized on the
+    // struct-constrained generic.
     public struct BenchOps : main_module.beat_event.IOps {
-        public global::System.Func<dynamic> tick { get; set; }
+        public void tick() { fires++; }
     }
     // GENERATED-SUBFLOW — `pulse` is the same tor shape with a pure-Koru
     // impl (`pulse = tick() => done 0`), so the emitter generates its
     // produce — the typed-envelope path: handler<H>(Input, H) -> Output.
     public struct PulseOps : main_module.pulse_event.IOps {
-        public global::System.Func<dynamic> tick { get; set; }
+        public void tick() { fires++; }
     }
 
     // STRUCT-METHOD — the handwritten-idiomatic analogue of comptime __H:
@@ -84,9 +86,7 @@ static class Bench {
         var sw = Stopwatch.StartNew();
         long sum = 0;
         for (int i = 0; i < N; i++) {
-            var r = main_module.beat_event.handler(new main_module.beat_event.Input { }, new BenchOps {
-                tick = (global::System.Func<dynamic>)(() => { fires++; return null; }),
-            });
+            var r = main_module.beat_event.handler(new main_module.beat_event.Input { }, new BenchOps());
             sum += (int)r.done;
         }
         sw.Stop();
@@ -98,9 +98,7 @@ static class Bench {
         var sw = Stopwatch.StartNew();
         long sum = 0;
         for (int i = 0; i < N; i++) {
-            var r = main_module.pulse_event.handler(new main_module.pulse_event.Input { }, new PulseOps {
-                tick = (global::System.Func<dynamic>)(() => { fires++; return null; }),
-            });
+            var r = main_module.pulse_event.handler(new main_module.pulse_event.Input { }, new PulseOps());
             sum += r.done;
         }
         sw.Stop();
@@ -171,9 +169,7 @@ static class Bench {
         var sw = Stopwatch.StartNew();
         long sum = 0;
         for (int i = 0; i < N; i++) {
-            var r = main_module.beat_event.handler(new main_module.beat_event.Input { }, new BenchOps {
-                tick = (global::System.Func<dynamic>)(() => { fires++; return null; }),
-            });
+            var r = main_module.beat_event.handler(new main_module.beat_event.Input { }, new BenchOps());
             if (r != null) sum++;
         }
         sw.Stop();

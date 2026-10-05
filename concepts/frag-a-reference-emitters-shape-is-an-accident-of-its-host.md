@@ -64,6 +64,25 @@ hiding: the envelope can only be typed where the emitter authors both
 sides — an opaque `|cs` body writes its own `new { tag, done }`, so its
 boundary stays `dynamic` by contract, not by accident.
 
+**Third instance, 2026-10 — captures, and the strict host named a
+semantic the lax host never had to.** The last `Func` on the dispatch
+surface was the arm bodies themselves — a delegate is the only C#
+closure, so arms looked stuck behind the ~1.9ns delegate-invoke floor.
+Zig's nested `Handlers_N` fns const-capture enclosing bindings natively:
+the strict host's shape made visible that Koru arm bodies read enclosing
+locals as *snapshots* — legal semantics with a precise contract. A struct
+method cannot close over a local, but a struct *field* spells the same
+snapshot: the emitter scans each arm body for references to enclosing
+flow locals and materializes them as `__cap_*` fields — const-capture
+ported, not closure capture imitated. The measured landing: the
+generated arm, as a `void tick()` method on the ops struct, inlines
+through the monomorphized `handler<H>` into the loop — 0.3ns/call,
+measuring identical to the `direct` static-call atom and to the
+handwritten `struct-method` comparator. The lax host's closure would
+have left the claim at "2.2ns is the floor"; the strict host's shape
+named what the semantic actually is, and the floor turned out to be
+zero.
+
 ## What would correct this belief
 
 A counterexample where the strict host's shape over-constrains the port —
