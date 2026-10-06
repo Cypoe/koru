@@ -217,3 +217,18 @@ and the error itself names it. Admission edge honesty has a second
 half: not only must the edge be derived, the refusal must be
 self-teaching — a diagnostic that can't be learned from is a toll, not
 a gate.
+
+2026-10-06 — the canonicalization itself drifted from the grammar it
+canonicalizes for. The scanner's quoted path assumed "a quoted value is
+already canonical — copy it verbatim", and verbatim meant a raw newline
+inside the model's quotes went straight into normalized wire — where the
+interpreter's string literal cannot hold it, so the field arrived "".
+Admission stayed true, eval read nothing: `say(text: "<three
+paragraphs>")` dispatched with empty text and the marshal's own message
+validator killed the run (kopium task 2, 27 calls of good work destroyed
+by one line; the same emission with `\n` escapes worked all along). The
+scanner now re-escapes `\r`/`\n` inside quoted values — canonical is
+judged by what the interpreter's parser can read back, not by what the
+model spelled. Pinned by 440_045. Sibling of the fifth instance above
+(the lexer tolerated what eval dropped) — same admit/eval promise, this
+time the copy direction.

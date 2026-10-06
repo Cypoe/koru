@@ -44,9 +44,7 @@ fn wireFieldType(specs: ?[]const InputFieldSpec, field: []const u8) ?[]const u8 
     return null;
 }
 
-// Captured-text fields name their type as `Expression`/`Source`, possibly
-// module-qualified (`ast.Source`) — the emit records the declaration's
-// spelling. Match the base name.
+// Captured-text fields name their type `Expression`/`Source` (module-qualified spellings included).
 fn wireIsCapturedType(t: []const u8) bool {
     const base = if (std.mem.lastIndexOfScalar(u8, t, '.')) |d| t[d + 1 ..] else t;
     return std.mem.eql(u8, base, "Expression") or std.mem.eql(u8, base, "Source");
@@ -179,16 +177,18 @@ fn wireScan(allocator: std.mem.Allocator, s: []const u8, input_fn: ?InputLookupF
                 i += 1;
             }
             if (!closed) return .{ .reject = wireReject("unterminated string for the field '{s}' — the reply looks truncated", .{field}, i) };
-            // A quoted value is already canonical — copy it verbatim.
-            out.appendSlice(allocator, s[quote_start..i]) catch unreachable;
+            // A quoted value with raw newlines isn't canonical — verbatim copies eval to "" downstream.
+            const quoted = s[quote_start..i];
+            const canon = if (std.mem.indexOfAny(u8, quoted, "\r\n") == null) quoted else
+                std.mem.replaceOwned(u8, allocator, std.mem.replaceOwned(u8, allocator, quoted, "\n", "\\n") catch unreachable, "\r", "\\r") catch unreachable;
+            out.appendSlice(allocator, canon) catch unreachable;
         } else if (field_type != null and wireIsCapturedType(field_type.?)) {
             const raw = std.mem.trim(u8, wireScanCaptured(s, &i), " \t");
             if (raw.len == 0) return .{ .reject = wireReject("the field '{s}' expects captured text — an expression or raw source text", .{field}, i) };
             wireEmitQuoted(&out, allocator, raw);
         } else {
-            // Bare literal — number, true/false, or a bound name (`h`,
-            // `r.user_id`): the same token the interpreter's own parser
-            // accepts in this position, judged by it, not re-parsed here.
+            // Bare literal — number, true/false, or a bound name: the same token the
+            // interpreter's own parser accepts here, judged by it, not re-parsed.
             const value_start = i;
             while (i < s.len and wireBareValueChar(s[i])) i += 1;
             if (i == value_start) return .{ .reject = wireReject("the value of '{s}' must be a double-quoted string or a bare literal — a number, true/false, or a bound name", .{field}, i) };
