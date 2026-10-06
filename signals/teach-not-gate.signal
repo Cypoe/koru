@@ -1,0 +1,8 @@
+name: teach-not-gate
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a refusal or report was changed to teach the rule it enforces —
+      the diagnostic carries the correct form, not just the boundary
+route: surface, wake
