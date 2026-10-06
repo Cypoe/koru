@@ -17,7 +17,6 @@
 
 ~import std/interpreter
 ~import std/runtime
-
 const std = @import("std");
 
 // Re-export interpreter types
@@ -194,6 +193,7 @@ pub const Bridge = struct {
 ~part residue
 ~part affordances
 ~part turn
+~part turnscan
 ~part wiregate
 ~part items
 ~part define

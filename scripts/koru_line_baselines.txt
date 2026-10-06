@@ -31,7 +31,8 @@ koru_std/bridge.run-exec.kz	129
 koru_std/bridge.run.kz	39
 koru_std/bridge.session.kz	20
 koru_std/bridge.steps.kz	131
-koru_std/bridge.turn.kz	114
+koru_std/bridge.turn.kz	92
+koru_std/bridge.turnscan.kz	70
 koru_std/bridge.wiregate.kz	106
 koru_std/bridge.world.kz	104
 koru_std/build_image.kz	357
@@ -72,7 +73,7 @@ koru_std/eval.kz	454
 koru_std/explain.kz	181
 koru_std/explain.wit.kz	34
 koru_std/field.kz	743
-koru_std/fmt.csprec.kz	398
+koru_std/fmt.csprec.kz	371
 koru_std/fmt.jsprec.kz	39
 koru_std/fmt.kz	816
 koru_std/foreign.kz	125
@@ -221,7 +222,7 @@ koru_std/store.keyed.kz	43
 koru_std/store.kinds.kz	704
 koru_std/store.kz	817
 koru_std/store.leaf.kz	207
-koru_std/store.new.kz	6240
+koru_std/store.new.kz	6238
 koru_std/store.plan.kz	236
 koru_std/store.preorder.kz	103
 koru_std/store.prewrite.kz	445

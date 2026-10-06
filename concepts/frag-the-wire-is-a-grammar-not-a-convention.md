@@ -232,3 +232,18 @@ judged by what the interpreter's parser can read back, not by what the
 model spelled. Pinned by 440_045. Sibling of the fifth instance above
 (the lexer tolerated what eval dropped) — same admit/eval promise, this
 time the copy direction.
+
+2026-10-07 — a `verb:` item is a BLOCK, not a line. `segmentTurn` closed
+every item at the newline, so a multi-line `say:` emitted its
+continuation lines as separate items and each died at the gate as
+residue — the model wrote correct wire and the segmenter shredded it.
+The segmenter now tracks an open colon item: `name: <prose>` runs until
+the next invocation head (a `|` arm, a `tor ` define, `name(`,
+`name:`), and stray quotes or delimiters inside the prose carry no
+scanner state — they are text, not code. `wirelex`'s ident scanners
+went `pub` so the segmenter reads the wire's own alphabet instead of
+re-spelling it, and the grammar text teaches the block outright ("writes
+prose, commas and newlines and all, until the next invocation line").
+Pinned by 440_046; measured on the landed kopium board: residue items
+3170 → 765. The same chronicle rule again — a scanner stricter than
+the grammar it serves is a silent kill.

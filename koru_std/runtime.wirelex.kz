@@ -3,11 +3,11 @@
 // line/column diagnostic. Joined via `~part wirelex` in runtime.kz;
 // merged into the runtime module at load.
 
-fn wireIdentStart(c: u8) bool {
+pub fn wireIdentStart(c: u8) bool {
     return std.ascii.isAlphabetic(c) or c == '_';
 }
 
-fn wireIdentChar(c: u8) bool {
+pub fn wireIdentChar(c: u8) bool {
     return std.ascii.isAlphanumeric(c) or c == '_' or c == '-';
 }
 
