@@ -1,0 +1,15 @@
+render:line1
+
+line2
+shout:hi
+step 1/2 result: {"branch":""} bound: r1
+step 2/2 result: {"branch":""} bound: r2
+
+render:a
+step 1/2 result: {"branch":""} bound: r3
+step 2/2 residue bound: r4 — your reply was not wire; nothing reached the user, but the observer kept it. To deliver it, call say(text: r4); prose meant for the user wants `say:` up front (no quoting needed), `note:` for thinking out loud
+
+render:b
+step 1/2 result: {"branch":""} bound: r5
+step 2/2 residue bound: r6 — your reply was not wire; nothing reached the user, but the observer kept it. To deliver it, call say(text: r6); prose meant for the user wants `say:` up front (no quoting needed), `note:` for thinking out loud
+

@@ -7,7 +7,7 @@ echo -> {"branch":"","value":"ok"} bound: r3
   noarg dispatch-error: 'note' needs a `text:` field — note(text: "what you're thinking")
   note-rN -> {"branch":"","value":"ok"}
   tail partial wire_failures=0
-step 1/2 residue bound: r5 — your note did not parse as wire, but the observer kept it. Well-formed: note(text: "..."); to deliver it to the user, call say(text: r5)
+step 1/2 residue bound: r5 — your note did not parse as wire, but the observer kept it. Well-formed: note(text: "...") or note: <prose>; to deliver it to the user, call say(text: r5)
 step 2/2 result: {"branch":"","value":"reached"} bound: r6
 
 --- ungranted session

@@ -247,3 +247,17 @@ prose, commas and newlines and all, until the next invocation line").
 Pinned by 440_046; measured on the landed kopium board: residue items
 3170 → 765. The same chronicle rule again — a scanner stricter than
 the grammar it serves is a silent kill.
+
+2026-10-07 (bis) — the residue report teaches the FORM, not just the
+boundary. A census of the landed board found every residue reject was
+the same shape: a whole turn of plain assistant prose, no invocation —
+the model forgot the wire existed, and the report answered only "call
+say(text: rN)". That teaches redelivery, not the rule. The report now
+names the forms the model was reaching for: "prose meant for the user
+wants `say:` up front (no quoting needed), `note:` for thinking out
+loud" — and the malformed-note variant shows `note:` beside
+`note(text: "...")`. Strictness unchanged: prose still reaches nobody,
+the reject still costs a turn. First live witness: the next smoke run
+rejected one prose turn and the model's next reply opened `say:` in
+colon form on its own. Continuation of 2026-10-05 (bis) — the refusal
+must teach the rule; now the rule names the shape.
