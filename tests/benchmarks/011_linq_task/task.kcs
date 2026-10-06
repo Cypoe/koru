@@ -1,0 +1,11 @@
+// C# facet: the accumulator is module state — a static on KoruHost standing
+// in for `capture`, whose lowering needs @typeInfo (cs emitter refuses it:
+// KORU047, measured). The benchmark proves the iteration shape — for + when
+// + map + accumulate — not custody; same disclosure as 010's store shim.
+using static KoruHost;
+
+static class KoruHost {
+    public static long total = 0;
+}
+
+~proc acc|cs { total += v; }

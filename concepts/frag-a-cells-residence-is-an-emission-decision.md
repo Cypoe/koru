@@ -53,6 +53,20 @@ that has no spelling for them. "Cannot" claims about emission deserve the
 same bar as "can't" claims about the language: name the gate that would
 refuse, or mark it unproven.
 
+**Evolution (2026-10-06, `011_linq_task`):** the belief extends across the
+substitution boundary. `capture`'s lowering needs `@typeInfo`, which cs
+refuses (KORU047) — so the filter→map→sum benchmark declared `acc` as a
+`~proc` writing a `KoruHost.total` static, a disclosed stand-in for the
+ledgered cell. The hoist didn't care: the emitted handler reads the
+static into a local, mutates the local across the loop, writes back once
+— identical treatment to a "real" cell, because the gates bound the
+accessor list of the *location*, not of the construct that declared it.
+Residence is an emission decision even when the cell itself is a shim.
+The same program's OSR loop runs one instruction over the `direct` atom
+(a register copy for `i := item` the JIT declined to coalesce) — and
+races the LINQ post's headline task at `Where().Select().Sum()`'s own
+runtime: generated 7ms, LINQ-array 14ms, LINQ-range 31ms, N=10M.
+
 Related: [[frag-a-reference-emitters-shape-is-an-accident-of-its-host]] —
 that belief is about porting a *shape* from a lax host; this one is about
 mistaking a host's *limits* for the language's. Both reduce to the same
