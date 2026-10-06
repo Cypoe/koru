@@ -912,7 +912,7 @@ const Emitter = struct {
             try self.write("    public struct Output {\n      public string tag;\n");
             for (ev.branches) |*b| {
                 if (b.kind != .terminal) continue;
-                try self.writeFmt("      public {s} ", .{branchPayloadCsType(b)});
+                try self.writeFmt("      public {s} ", .{try branchPayloadCsType(self.allocator, b)});
                 try self.writeBinding(csPayloadName(b.name));
                 try self.write(";\n");
             }
@@ -939,7 +939,7 @@ const Emitter = struct {
                     try self.writeBinding(b.name);
                     try self.write("(");
                     if (!armIsPayloadless(b)) {
-                        try self.writeFmt("{s} __koru_arg", .{armParamCsType(b)});
+                        try self.writeFmt("{s} __koru_arg", .{try armParamCsType(self.allocator, b)});
                     }
                     try self.write(");\n");
                 }
@@ -966,7 +966,7 @@ const Emitter = struct {
                     try self.writeBinding(b.name);
                     try self.write("(");
                     if (!armIsPayloadless(b)) {
-                        try self.writeFmt("{s} __koru_arg", .{armParamCsType(b)});
+                        try self.writeFmt("{s} __koru_arg", .{try armParamCsType(self.allocator, b)});
                     }
                     try self.write(") => ops.");
                     try self.writeBinding(b.name);
@@ -1161,14 +1161,27 @@ const Emitter = struct {
         } else if (bc.fields.len > 0) {
             try self.write(", ");
             try self.writeBinding(csPayloadName(bc.branch_name));
-            try self.write(" = new { ");
+            // The Output member is a named TUPLE when the branch declared a
+            // record payload — `b = (f: v, …)` — and `dynamic` otherwise
+            // (the anonymous object still answers there).
+            const decl_b: ?*const ast.Branch = if (self.impl_event) |ie| blk: {
+                for (ie.branches) |*tb| {
+                    if (tb.kind == .terminal and std.mem.eql(u8, tb.name, bc.branch_name)) break :blk tb;
+                }
+                break :blk null;
+            } else null;
+            const tuple_member = if (decl_b) |tb|
+                (try recordPayloadCsType(self.allocator, tb)) != null
+            else
+                false;
+            try self.write(if (tuple_member) " = ( " else " = new { ");
             for (bc.fields, 0..) |field, k| {
                 if (k > 0) try self.write(", ");
                 try self.writeBinding(field.name);
-                try self.write(" = ");
+                try self.write(if (tuple_member) ": " else " = ");
                 try self.writeCsExpr(if (field.expression_str) |e| e else field.type);
             }
-            try self.write(" }");
+            try self.write(if (tuple_member) " )" else " }");
         }
         try self.write(" };\n");
     }
@@ -2549,7 +2562,7 @@ const Emitter = struct {
                     try self.writeFmt("    public {s} ", .{armReturnCsType(b)});
                     try self.writeBinding(b.name);
                     try self.write("(");
-                    if (!armIsPayloadless(b)) try self.writeFmt("{s} __koru_arg", .{armParamCsType(b)});
+                    if (!armIsPayloadless(b)) try self.writeFmt("{s} __koru_arg", .{try armParamCsType(self.allocator, b)});
                     try self.write(") { }\n");
                 }
                 continue;
@@ -2594,11 +2607,28 @@ const Emitter = struct {
                 try self.writeFmt("    public {s} ", .{ret});
                 try self.writeBinding(b.name);
                 try self.write("(");
-                if (!armIsPayloadless(b)) try self.writeFmt("{s} {s}", .{ armParamCsType(b), param });
+                if (!armIsPayloadless(b)) try self.writeFmt("{s} {s}", .{ try armParamCsType(self.allocator, b), param });
                 try self.write(") => __koru_fn_");
                 try self.writeBinding(b.name);
                 try self.write("(");
-                if (!armIsPayloadless(b)) try self.write(param);
+                if (!armIsPayloadless(b)) {
+                    // The Func's arg is dynamic — a boxed tuple's element
+                    // names erase at runtime, so the body (written for the
+                    // anonymous shape) reads `.f` through a REAL object.
+                    // The method takes the tuple and re-wraps per field.
+                    if (try recordPayloadCsType(self.allocator, b)) |_| {
+                        try self.write("new { ");
+                        for (b.payload.fields, 0..) |f, i| {
+                            if (i > 0) try self.write(", ");
+                            try self.writeBinding(f.name);
+                            try self.writeFmt(" = {s}.", .{param});
+                            try self.writeBinding(f.name);
+                        }
+                        try self.write(" }");
+                    } else {
+                        try self.write(param);
+                    }
+                }
                 try self.write(");\n");
                 self.buf = init_buf;
                 try self.write(init_indent);
@@ -2634,7 +2664,7 @@ const Emitter = struct {
             try self.writeFmt("    public {s} ", .{ret});
             try self.writeBinding(b.name);
             try self.write("(");
-            if (!armIsPayloadless(b)) try self.writeFmt("{s} {s}", .{ armParamCsType(b), param });
+            if (!armIsPayloadless(b)) try self.writeFmt("{s} {s}", .{ try armParamCsType(self.allocator, b), param });
             try self.write(") ");
             try self.write(rewritten);
             try self.write("\n");
@@ -2981,7 +3011,10 @@ const Emitter = struct {
     /// The payload passed to an arm fire, in C# spelling:
     ///   payloadless arm → nothing (`ask()`)
     ///   identity / wildcard payload → the single arg's value (`each(i * i)`)
-    ///   named-field payload → an anonymous object (`new { a = 1, b = 2 }`)
+    ///   named-field payload → the tuple literal (`(tx: v, n: v)`) the arm's
+    ///     signature declares — a single unnamed arg IS the record already and
+    ///     passes bare; the optional-resuming Func surface keeps `new { … }`
+    ///     (a boxed tuple's element names erase under `dynamic`).
     fn emitArmFirePayload(self: *Emitter, arm: *const ast.Branch, inv: *const ast.Invocation) CsEmitError!void {
         if (arm.payload.fields.len == 0 and !arm.payload.is_wildcard) return;
 
@@ -2989,6 +3022,27 @@ const Emitter = struct {
             std.mem.eql(u8, arm.payload.fields[0].name, "__type_ref");
         if (is_identity or arm.payload.is_wildcard) {
             if (inv.args.len > 0) try self.writeCsExpr(inv.args[0].value);
+            return;
+        }
+
+        if (!optionalResumingArm(arm) and arm.payload.fields.len >= 2) {
+            if (inv.args.len == 1 and inv.args[0].name.len == 0) {
+                try self.writeCsExpr(inv.args[0].value);
+                return;
+            }
+            try self.write("(");
+            for (arm.payload.fields, 0..) |f, i| {
+                if (i > 0) try self.write(", ");
+                try self.writeBinding(f.name);
+                try self.write(": ");
+                const arg = findArgForField(inv.args, f.name);
+                if (arg) |a| {
+                    try self.writeCsExpr(a.value);
+                } else {
+                    try self.writeFmt("default({s})", .{csType(f.type)});
+                }
+            }
+            try self.write(")");
             return;
         }
 
@@ -3037,27 +3091,51 @@ fn armReturnCsType(b: *const ast.Branch) []const u8 {
     return "void";
 }
 
+/// A named-field record payload's C# type — the named TUPLE
+/// `(dynamic tx, long n)`. C# anonymous `new { … }` types are unnameable,
+/// which is what kept these payloads on `dynamic`; the tuple is the record
+/// shape a signature CAN carry, typed members included. null for
+/// payloadless, wildcard, identity, and single-field payloads — C# has no
+/// 1-tuple.
+fn recordPayloadCsType(allocator: std.mem.Allocator, b: *const ast.Branch) CsEmitError!?[]const u8 {
+    if (b.payload.is_wildcard or b.payload.fields.len < 2) return null;
+    var buf = std.ArrayList(u8).initCapacity(allocator, 8 + b.payload.fields.len * 16) catch
+        return CsEmitError.OutOfMemory;
+    try buf.append(allocator, '(');
+    for (b.payload.fields, 0..) |f, i| {
+        if (i > 0) try buf.appendSlice(allocator, ", ");
+        try buf.appendSlice(allocator, csType(f.type));
+        try buf.append(allocator, ' ');
+        try buf.appendSlice(allocator, codegen_utils.HostShape.csMember(allocator, f.name));
+    }
+    try buf.append(allocator, ')');
+    return buf.items;
+}
+
 /// The C# parameter type of an arm's METHOD — identity payloads take the
-/// declared type; wildcard and named-field payloads stay `dynamic` (the
-/// fire site spells `new { f = … }`, an anonymous object).
-fn armParamCsType(b: *const ast.Branch) []const u8 {
+/// declared type; named-field payloads take the record's tuple spelling;
+/// wildcard and single-field payloads stay `dynamic`.
+fn armParamCsType(allocator: std.mem.Allocator, b: *const ast.Branch) CsEmitError![]const u8 {
     if (b.payload.fields.len == 1 and
         std.mem.eql(u8, b.payload.fields[0].name, "__type_ref"))
     {
         return csType(b.payload.fields[0].type);
     }
+    if (try recordPayloadCsType(allocator, b)) |t| return t;
     return "dynamic";
 }
 
 /// The C# type of a terminal branch's payload member in `Output`. `| done
 /// i64` is an identity payload — one `__type_ref` field — so `done` is
-/// `long`; a record payload or wildcard stays `dynamic`.
-fn branchPayloadCsType(b: *const ast.Branch) []const u8 {
+/// `long`; a record payload spells the same tuple an arm param does; a
+/// wildcard stays `dynamic`.
+fn branchPayloadCsType(allocator: std.mem.Allocator, b: *const ast.Branch) CsEmitError![]const u8 {
     if (b.payload.fields.len == 1 and
         std.mem.eql(u8, b.payload.fields[0].name, "__type_ref"))
     {
         return csType(b.payload.fields[0].type);
     }
+    if (try recordPayloadCsType(allocator, b)) |t| return t;
     return "dynamic";
 }
 

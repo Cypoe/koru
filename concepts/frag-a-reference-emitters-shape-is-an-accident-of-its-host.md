@@ -177,3 +177,25 @@ what the store sweeps already spelled: emit the declared type
 generalization: type inference in generated code is an emission bug
 class — `var` inherits the initializer's width, and the initializer
 is a literal, not the semantics.
+
+2026-10-06 — the host's *record spellings* are accidents too, and they
+partition by what a signature can carry. js_emitter's record is an
+anonymous object literal — `{ f: v }` — and cs swallowed that shape as
+`new { … }`, which compiles and reads through `dynamic` but is
+UNNAMEABLE: no method signature, no field declaration can spell its
+type, so every multi-field arm payload and terminal record stayed
+`dynamic` and looked like a `csType` vocabulary gap. It wasn't — the
+record shape a C# signature CAN carry is the named tuple,
+`(dynamic tx, long n)`, struct-passed, member-readable, zero-boxing in
+the generic-struct dispatch. Zig already spelled its own answer
+(anonymous `.{ .f = v }` structs inline); the cs port had inherited
+js's spelling, not zig's semantics. The second edge is in the host's
+grammar: C# has no 1-tuple, so a single-field record has no tuple at
+all — the payload's declared FIELD COUNT reaches the spelling decision
+(`payloadPair`/`armPayload`/`branchRec` take `n_fields`; <2 falls back
+to `new { f = v }` under the `dynamic` the signature honestly spells).
+And the third: tuple element names are compile-time metadata — boxed
+through `dynamic` they erase, so the closure-fallback forwarder re-wraps
+the tuple into a real anonymous object before the `Func<dynamic>` sees
+it. Three different host laws inside one commit — none of them visible
+until the sweep's board marked the tests that struck them.

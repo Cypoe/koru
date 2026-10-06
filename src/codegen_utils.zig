@@ -1047,12 +1047,19 @@ pub const HostShape = struct {
     }
 
     /// `| name { a, b }` — a record payload. `body` is the already-joined field
-    /// list in the host's own spelling, which `recField` produces.
-    pub fn branchRec(alloc: std.mem.Allocator, t: HostTarget, name: []const u8, body: []const u8) []const u8 {
+    /// list in the host's own spelling, which `payloadPair` produces — cs's
+    /// payload member is a named tuple, so its pair separator is `:` like js,
+    /// not `=` like member-init. `n_fields` is the declared field count: C#
+    /// has no 1-tuple, so a one-field record spells `new { f = v }` and lands
+    /// in the member's `dynamic` fallback, matching `branchPayloadCsType`.
+    pub fn branchRec(alloc: std.mem.Allocator, t: HostTarget, name: []const u8, body: []const u8, n_fields: usize) []const u8 {
         const esc_name = escapeZigIdentifier(alloc, name) catch name;
         return switch (t) {
             .js => std.fmt.allocPrint(alloc, "{{ tag: \"{s}\", {s}: {{ {s} }} }}", .{ name, name, body }) catch unreachable,
-            .cs => std.fmt.allocPrint(alloc, "new Output {{ tag = \"{s}\", {s} = new {{ {s} }} }}", .{ name, csPayloadMember(alloc, name), body }) catch unreachable,
+            .cs => if (n_fields < 2)
+                std.fmt.allocPrint(alloc, "new Output {{ tag = \"{s}\", {s} = new {{ {s} }} }}", .{ name, csPayloadMember(alloc, name), body }) catch unreachable
+            else
+                std.fmt.allocPrint(alloc, "new Output {{ tag = \"{s}\", {s} = ({s}) }}", .{ name, csPayloadMember(alloc, name), body }) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, ".{{ .{s} = .{{ {s} }} }}", .{ esc_name, body }) catch unreachable,
         };
     }
@@ -1086,6 +1093,42 @@ pub const HostShape = struct {
             .js => std.fmt.allocPrint(alloc, "{{ {s} }}", .{body}) catch unreachable,
             .cs => std.fmt.allocPrint(alloc, "new {{ {s} }}", .{body}) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, ".{{ {s} }}", .{body}) catch unreachable,
+        };
+    }
+
+    /// One `name: value` pair inside a record payload spelled as a TUPLE.
+    /// cs arm payloads are named tuples — `(tx: v, n: v)` — because that is
+    /// the record shape C# can carry across a signature (`new { … }` is
+    /// unnameable; that is what kept arm params on `dynamic`). js/zig spell
+    /// exactly what `recField` produces — only the cs separator differs.
+    pub fn tupField(alloc: std.mem.Allocator, t: HostTarget, name: []const u8, value: []const u8) []const u8 {
+        const esc_name = escapeZigIdentifier(alloc, name) catch name;
+        return switch (t) {
+            .js => std.fmt.allocPrint(alloc, "{s}: {s}", .{ name, value }) catch unreachable,
+            .cs => std.fmt.allocPrint(alloc, "{s}: {s}", .{ csMember(alloc, name), value }) catch unreachable,
+            .zig => std.fmt.allocPrint(alloc, ".{s} = {s}", .{ esc_name, value }) catch unreachable,
+        };
+    }
+
+    /// A record-payload field pair, picked by the declared field count: a
+    /// ≥2-field payload is a cs tuple (`f: v`), a 1-field payload is the
+    /// `new { f = v }` fallback (no 1-tuple). js/zig spellings coincide.
+    pub fn payloadPair(alloc: std.mem.Allocator, t: HostTarget, name: []const u8, value: []const u8, n_fields: usize) []const u8 {
+        return if (n_fields < 2) recField(alloc, t, name, value) else tupField(alloc, t, name, value);
+    }
+
+    /// An ARM's record payload at its fire — zig `.{ … }`, js `{ … }`,
+    /// cs a tuple literal `(f: v, …)` matching the tuple-typed arm
+    /// signature (see `armParamCsType`). `body` is the already-joined
+    /// `payloadPair` list; `n_fields < 2` spells the `new { … }` the
+    /// `dynamic` signature expects.
+    pub fn armPayload(alloc: std.mem.Allocator, t: HostTarget, body: []const u8, n_fields: usize) []const u8 {
+        return switch (t) {
+            .js, .zig => argRec(alloc, t, body),
+            .cs => if (n_fields < 2)
+                std.fmt.allocPrint(alloc, "new {{ {s} }}", .{body}) catch unreachable
+            else
+                std.fmt.allocPrint(alloc, "({s})", .{body}) catch unreachable,
         };
     }
 
