@@ -211,3 +211,19 @@ record as a tuple by the VALUE's field count put a `ValueTuple` into
 same `RuntimeBinderException: 'System.ValueTuple<…>' does not contain a
 definition for 'hp'`. The decider is the DECL's arity, spelled in scope
 as `item_pf.len`/`f_full_pf.len` — pass it, not the pair-list length.
+
+2026-10-06 (third entry) — the accident also lives in HELPER SIGNATURES,
+and this one had no test to strike it: `__koru_str(dynamic v)` in the cs
+preamble textifies `{{ }}` operands. In JS the untyped parameter is free
+— everything is boxed anyway — so `dynamic` was the faithful port of
+`str(v)`. On C# it is a *calling-convention* accident: every value-type
+operand boxes to cross the `dynamic` boundary. 012_threat_scanner priced
+it: `i % 256` is `long`, 6M boxes ≈ 750ms of a 2700ms run — the
+difference between generated losing to verbatim LINQ and generated
+sitting inside the handwritten pack. The strict spelling was `__koru_str<T>`
+— the JIT specializes per operand type and the box vanishes, no type
+information needed at the emit site. The generalization: a helper the
+emitter writes once and everything calls is a performance surface, not
+preamble boilerplate — its parameter types are part of the port, and
+`dynamic` on a helper signature is the lax host's shape at the exact
+point where the strict host's generic would have been free.

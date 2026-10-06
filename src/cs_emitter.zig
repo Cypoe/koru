@@ -92,10 +92,13 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         \\  // mutation generally) needs a settable member.
         \\  public class __KoruBox { public dynamic data; }
         \\  // Textification for `{{ … }}` operands: C# bool ToStrings as
-        \\  // `True` where Koru prints `true`, and the operand is `dynamic`
-        \\  // at this boundary — a `(x) is bool` inline test would be a
-        \\  // compile error on statically-typed operands instead.
-        \\  public static dynamic __koru_str(dynamic v) => v is bool b ? (b ? "true" : "false") : v;
+        \\  // `True` where Koru prints `true`, and the operand's static type
+        \\  // is unknown at this boundary — a `(x) is bool` inline test would
+        \\  // be a compile error on statically-typed operands instead. Generic
+        \\  // on purpose: `dynamic` boxed every value-type operand — measured
+        \\  // ~1s/10M elements on 012_threat_scanner — while T specializes to
+        \\  // the operand's own ToString() with no box.
+        \\  public static string __koru_str<T>(T v) => v is bool b ? (b ? "true" : "false") : v?.ToString();
         \\
     );
 

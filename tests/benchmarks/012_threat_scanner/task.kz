@@ -1,0 +1,13 @@
+// Zig facet: the same disclosed shim as task.kcs — module state stands in
+// for custody; the claim under test is the pipeline, not the bookkeeping.
+const std = @import("std");
+
+var hits: i64 = 0;
+var chars: i64 = 0;
+var results: std.ArrayListUnmanaged([]const u8) = .{};
+
+~proc collect|zig {
+    results.append(std.heap.page_allocator, s) catch unreachable;
+    hits += 1;
+    chars += @intCast(s.len);
+}

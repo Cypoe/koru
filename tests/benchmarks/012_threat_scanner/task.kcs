@@ -1,0 +1,13 @@
+// C# facet: the results list + counters are module state standing in for
+// custody — same disclosed shim as 010/011 (capture's @typeInfo lowering is
+// a measured cs refusal, KORU047). The claim under test is the pipeline:
+// filter -> format -> materialize.
+using static KoruHost;
+
+static class KoruHost {
+    public static long hits = 0;
+    public static long chars = 0;
+    public static readonly System.Collections.Generic.List<string> results = new();
+}
+
+~proc collect|cs { results.Add((string)s); hits += 1; chars += ((string)s).Length; }
