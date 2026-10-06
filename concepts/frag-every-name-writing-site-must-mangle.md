@@ -76,6 +76,21 @@ established code-masked word-boundary rewrite) run at the text funnels:
 thirty-odd call sites individually would drift again the same way the four
 injection copies did.
 
+2026-10-06, the boundary crossed in the other direction, measured on
+once-campfire-koru: a site that *reads back* emitted spellings must
+un-mangle. `dead_strip`'s `collectFromInlineBody` walks proc `.text` for
+`_event.handler` references to keep synthesized callees alive — and extracts
+`Frag_render`, the emitted Zig spelling, while the decl it must keep is
+`Frag-render`, the source spelling. The two sets (`used` vs decl paths)
+never intersected on any hyphenated name, so a koru/dom child component —
+a call that exists ONLY inside opaque inline source, ONLY in emitted
+spelling — had its render event dead-stripped out from under the parent's
+generated code: `use of undeclared identifier 'Frag_render_event'` in code
+the author never wrote. `markBareName` now marks the `_`→`-` variant too;
+the emitter collapses `-`→`_`, so the spellings are one symbol. Same belief,
+read side: **any site crossing the declared↔emitted boundary translates, in
+either direction.**
+
 Related:
 [[frag-the-safe-koru-identifier-surface-is-smaller-than-the-language-says]] —
 same wall seen from the author's side (keywords/primitives); this is the

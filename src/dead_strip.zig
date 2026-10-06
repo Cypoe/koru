@@ -188,10 +188,25 @@ pub const DeadStripPass = struct {
         self.used.put(bare, {}) catch {
             self.allocator.free(bare);
         };
+        if (main_module.len > 0) {
+            const qualified = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ main_module, name });
+            self.used.put(qualified, {}) catch {
+                self.allocator.free(qualified);
+            };
+        }
+        // Inline bodies hold EMITTED spellings — the emitter maps `-` to `_`,
+        // so `Frag-render` arrives here as `Frag_render`. Mark the hyphenated
+        // variant too: the two spellings are one symbol in emitted Zig.
+        if (std.mem.indexOfScalar(u8, name, '_') == null) return;
+        const hyphens = try self.allocator.dupe(u8, name);
+        std.mem.replaceScalar(u8, hyphens, '_', '-');
+        self.used.put(hyphens, {}) catch {
+            self.allocator.free(hyphens);
+        };
         if (main_module.len == 0) return;
-        const qualified = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ main_module, name });
-        self.used.put(qualified, {}) catch {
-            self.allocator.free(qualified);
+        const qual_h = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ main_module, hyphens });
+        self.used.put(qual_h, {}) catch {
+            self.allocator.free(qual_h);
         };
     }
 
@@ -690,6 +705,64 @@ test "keeps welded-module events when decl carries stale basename qualifier" {
             try std.testing.expectEqual(@as(usize, 1), item.module_decl.items.len);
         }
     }
+}
+
+test "inline body edge survives the emitted underscore spelling" {
+    const allocator = std.testing.allocator;
+
+    var pass = DeadStripPass.init(allocator);
+    defer pass.deinit();
+
+    // A synthesized proc calls `Frag_render_event.handler(...)` in its Zig
+    // text — the decl it references is `Frag-render` (hyphen). koru/dom child
+    // components are exactly this edge: the call exists only inside opaque
+    // inline source, and only in its emitted spelling.
+    const caller = ast.Item{ .proc_decl = ast.ProcDecl{
+        .path = ast.DottedPath{ .module_qualifier = null, .segments = &.{ "Shell-render" } },
+        .target = null,
+        .body = testProcBody("const __r0 = Frag_render_event.handler(.{});"),
+        .annotations = &.{},
+        .location = .{ .file = "input.kz", .line = 1, .column = 0 },
+        .module = "input",
+    } };
+    const callee_event = ast.Item{ .event_decl = ast.EventDecl{
+        .path = ast.DottedPath{ .module_qualifier = null, .segments = &.{"Frag-render"} },
+        .input = .{ .fields = &.{} },
+        .branches = &.{},
+        .return_type = null,
+        .return_phantom = null,
+        .is_public = false,
+        .is_implicit_flow = false,
+        .annotations = &.{},
+        .prose = "",
+        .location = .{ .file = "input.kz", .line = 2, .column = 0 },
+        .module = "input",
+    } };
+    const callee_proc = ast.Item{ .proc_decl = ast.ProcDecl{
+        .path = ast.DottedPath{ .module_qualifier = null, .segments = &.{"Frag-render"} },
+        .target = null,
+        .body = testProcBody("return \"\";"),
+        .annotations = &.{},
+        .location = .{ .file = "input.kz", .line = 3, .column = 0 },
+        .module = "input",
+    } };
+
+    const program = ast.Program{
+        .items = &.{ caller, callee_event, callee_proc },
+        .module_annotations = &.{},
+        .main_module_name = "input",
+        .allocator = allocator,
+    };
+
+    const filtered = try pass.run(&program, null);
+    defer freeFilteredProgram(allocator, filtered);
+
+    var kept: usize = 0;
+    for (filtered.items) |item| {
+        if (item == .event_decl and std.mem.eql(u8, item.event_decl.path.segments[0], "Frag-render")) kept += 1;
+        if (item == .proc_decl and std.mem.eql(u8, item.proc_decl.path.segments[0], "Frag-render")) kept += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), kept);
 }
 
 test "comment-only host lines are cargo except @koru markers" {
