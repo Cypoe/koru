@@ -2,6 +2,12 @@
 // custody — same disclosed shim as 010/011 (capture's @typeInfo lowering is
 // a measured cs refusal, KORU047). The claim under test is the pipeline:
 // filter -> format -> materialize.
+//
+// collect is ONLY the ToList — `results.Add`. The hits/chars counters stay
+// declared (task.k's closing print reads them; on cs they read zero) but
+// are NOT touched in the loop: every other arm checksums after the
+// stopwatch, and the generated arm's checksum is likewise computed
+// post-timer from KoruHost.results by the harness.
 using static KoruHost;
 
 static class KoruHost {
@@ -10,4 +16,4 @@ static class KoruHost {
     public static readonly System.Collections.Generic.List<string> results = new();
 }
 
-~proc collect|cs { results.Add((string)s); hits += 1; chars += ((string)s).Length; }
+~proc collect|cs { results.Add((string)s); }

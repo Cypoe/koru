@@ -227,3 +227,23 @@ emitter writes once and everything calls is a performance surface, not
 preamble boilerplate — its parameter types are part of the port, and
 `dynamic` on a helper signature is the lax host's shape at the exact
 point where the strict host's generic would have been free.
+
+2026-10-14 — the accident is also the *combining form*, not only the
+signatures inside it. `fmt.blk|cs` and `ln|cs` emitted `{{ }}` strings as
+`"lit" + __koru_str(x) + "lit"` — plus-concat, because plus-concat is
+how JS builds strings and the port kept the shape. On C# that spelling
+pays twice per placeholder: the helper allocates a substring, then `+`
+allocates the joined result. LINQ's own `Select` never pays either —
+`$"…"` lowers to `DefaultInterpolatedStringHandler`, one buffer, holes
+written in place. 012 priced the shape: after `__koru_str` went generic,
+interp-holes emission (`$"10.0.0.{(i % 256)} [{__koru_str(lvl)}]"`)
+moved generated from 1953ms to ~1470–1480ms — under the `Where→Select→
+ToList` arm it races (1529) and inside the handwritten pack. The rule
+this instance adds: when the host has a *dedicated* surface for the
+combination (interpolation, spread, deconstruction), the emitter must
+spend the machinery the host built, not reconstruct the semantics from
+the lax host's primitive. The specification question is where the
+primitive stays load-bearing: numeric `:d`/`:f` holes emit bare
+(`{(expr)}` → `AppendFormatted(long)` — zero-alloc), while semantic
+forms keep `__koru_str` inside the hole — the handler is the shape, the
+helper's semantics the payload.

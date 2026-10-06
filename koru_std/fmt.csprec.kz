@@ -1,27 +1,34 @@
 // Koru Standard Library: String Formatting — CS placeholder emission.
 // Joined via `~part csprec` in fmt.kz; merged into the fmt module at load.
 
-/// Emit one `{{ ... }}` placeholder's value expression for the C# concat the
-/// `ln|cs` transform is building — bare `name` normally (C# `+` promotes the
-/// operand to string the way JS does), `(...).ToString("F"+N,
-/// InvariantCulture)` when the spec carries a `:.N` precision tail — the same
-/// choice io.csprec makes, culture-invariant so a French locale doesn't
-/// answer "3,14" for "3.14".
-///
-/// A dotted path (`req.text`) is a cs member read verbatim, and a segment
-/// that collides with a C# keyword is legal after a dot — nothing to escape.
-fn csPlaceholder(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, placeholder: []const u8) void {
+// One `{{ ... }}` placeholder as an interpolation HOLE inside a `$"…"`
+// literal — `fmt.blk|cs`/`ln|cs` emit the interpolated-string form because
+// the C# compiler lowers it to DefaultInterpolatedStringHandler: one pooled
+// buffer, one allocation for the result, no substring per placeholder. A
+// `+` concat with `__koru_str(…)` calls pays a ToString substring per
+// placeholder — measurable on a hot loop (012_threat_scanner: ~300ms on
+// 6M elements).
+//
+// Numeric specs (`:d`, `:f`) get a bare `{expr}` hole: the operand is a
+// numeric contract and AppendFormatted<T> writes digits straight into the
+// buffer — no substring, no helper call. Everything else keeps
+// `__koru_str` inside the hole (bool unwrapping, `:S` payload); for a
+// string operand the helper returns the same reference, so the common
+// `{{ s:s }}` is still zero-alloc. Precision keeps its InvariantCulture
+// ToString inside the hole — the `:.N` tail renders `expr.ToString("F"+N,
+// InvariantCulture)` so a French locale doesn't answer "3,14" for "3.14".
+// A dotted path (`req.text`) is a cs member read verbatim, and a segment
+// that collides with a C# keyword is legal after a dot — nothing to escape.
+fn csHole(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, placeholder: []const u8) void {
     var var_name: []const u8 = placeholder;
     var precision: ?[]const u8 = null;
-    // `:S` is the handle form — interpolate the payload (`s.data`), not the
-    // handle object itself. Same ruling io.csprec's operand lowering made.
     var handle_form = false;
+    var spec: []const u8 = "";
     if (std.mem.indexOf(u8, placeholder, ":")) |colon_pos| {
         var_name = placeholder[0..colon_pos];
-        const spec = placeholder[colon_pos + 1 ..];
+        spec = placeholder[colon_pos + 1 ..];
         if (std.mem.eql(u8, spec, "S")) handle_form = true;
         if (std.mem.indexOf(u8, spec, ":")) |p2| {
-            // `:.N` — the dot is the precision marker, digits after it are N.
             const rest = spec[p2 + 1 ..];
             if (rest.len > 1 and rest[0] == '.') {
                 const d = rest[1..];
@@ -31,22 +38,30 @@ fn csPlaceholder(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, placehol
             }
         }
     }
+    buf.append(allocator, '{') catch unreachable;
     if (precision) |d| {
         buf.appendSlice(allocator, "(") catch unreachable;
         buf.appendSlice(allocator, var_name) catch unreachable;
         buf.appendSlice(allocator, ").ToString(\"F") catch unreachable;
         buf.appendSlice(allocator, d) catch unreachable;
         buf.appendSlice(allocator, "\", global::System.Globalization.CultureInfo.InvariantCulture)") catch unreachable;
-    } else {
-        // `__koru_str` unwraps bools — see io.csprec for why the test lives
-        // behind `dynamic`.
+        if (handle_form) buf.appendSlice(allocator, ".data") catch unreachable;
+    } else if (handle_form) {
         buf.appendSlice(allocator, "__koru_str(") catch unreachable;
         buf.appendSlice(allocator, var_name) catch unreachable;
-        if (handle_form) buf.appendSlice(allocator, ".data") catch unreachable;
+        buf.appendSlice(allocator, ".data)") catch unreachable;
+    } else if (std.mem.eql(u8, spec, "d") or std.mem.eql(u8, spec, "f")) {
+        // Parens: a bare `:` or `,` inside expr would parse as the hole's
+        // format spec / alignment, not part of the expression.
+        buf.appendSlice(allocator, "(") catch unreachable;
+        buf.appendSlice(allocator, var_name) catch unreachable;
         buf.appendSlice(allocator, ")") catch unreachable;
-        return;
+    } else {
+        buf.appendSlice(allocator, "__koru_str(") catch unreachable;
+        buf.appendSlice(allocator, var_name) catch unreachable;
+        buf.appendSlice(allocator, ")") catch unreachable;
     }
-    if (handle_form) buf.appendSlice(allocator, ".data") catch unreachable;
+    buf.append(allocator, '}') catch unreachable;
 }
 
 // FMT.BLK | C#
@@ -74,34 +89,20 @@ fn csPlaceholder(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, placehol
 
     const expr = if (invocation.args.len > 0) invocation.args[0].value else "";
 
-    const openLit = struct {
-        fn call(b: *std.ArrayList(u8), a: std.mem.Allocator, f: *bool, il: *bool) void {
-            if (!il.*) {
-                if (!f.*) b.appendSlice(a, " + ") catch unreachable;
-                b.append(a, '"') catch unreachable;
-                il.* = true;
-                f.* = false;
-            }
-        }
-    }.call;
-
-    const closeLit = struct {
-        fn call(b: *std.ArrayList(u8), a: std.mem.Allocator, il: *bool) void {
-            if (il.*) {
-                b.append(a, '"') catch unreachable;
-                il.* = false;
-            }
-        }
-    }.call;
-
     var buf = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
-    var first = true;
-    var in_literal = false;
 
     const start_pos: usize = if (expr.len > 0 and expr[0] == '"') 1 else 0;
     const end_pos: usize = if (expr.len > 0 and expr[expr.len - 1] == '"') expr.len - 1 else expr.len;
     const content = expr[start_pos..end_pos];
 
+    // One interpolated string: `$"lit{hole}lit"` — see csHole for why this
+    // beats the `+` concat shape. Literal braces double up (`{{`/`}}` are
+    // escapes in an interpolated string, same as our source syntax).
+    if (content.len == 0) {
+        buf.appendSlice(allocator, "\"\"") catch unreachable;
+    } else {
+        buf.appendSlice(allocator, "$\"") catch unreachable;
+    }
     var i: usize = 0;
     while (i < content.len) {
         if (i + 1 < content.len and content[i] == '{' and content[i + 1] == '{') {
@@ -116,20 +117,13 @@ fn csPlaceholder(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, placehol
                 var ws_end = j;
                 while (ws_end > ws_start and (content[ws_end - 1] == ' ' or content[ws_end - 1] == '\t')) : (ws_end -= 1) {}
 
-                const placeholder = content[ws_start..ws_end];
-                closeLit(&buf, allocator, &in_literal);
-                if (!first) buf.appendSlice(allocator, " + ") catch unreachable;
-                first = false;
-                csPlaceholder(&buf, allocator, placeholder);
-
+                csHole(&buf, allocator, content[ws_start..ws_end]);
                 i = j + 2;
             } else {
-                openLit(&buf, allocator, &first, &in_literal);
-                buf.append(allocator, content[i]) catch unreachable;
+                buf.appendSlice(allocator, "{{") catch unreachable;
                 i += 1;
             }
         } else {
-            openLit(&buf, allocator, &first, &in_literal);
             switch (content[i]) {
                 '"' => buf.appendSlice(allocator, "\\\"") catch unreachable,
                 '\\' => {
@@ -139,6 +133,8 @@ fn csPlaceholder(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, placehol
                         buf.append(allocator, content[i]) catch unreachable;
                     }
                 },
+                '{' => buf.appendSlice(allocator, "{{") catch unreachable,
+                '}' => buf.appendSlice(allocator, "}}") catch unreachable,
                 '\n' => buf.appendSlice(allocator, "\\n") catch unreachable,
                 '\r' => buf.appendSlice(allocator, "\\r") catch unreachable,
                 '\t' => buf.appendSlice(allocator, "\\t") catch unreachable,
@@ -147,8 +143,7 @@ fn csPlaceholder(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, placehol
             i += 1;
         }
     }
-    closeLit(&buf, allocator, &in_literal);
-    if (first) buf.appendSlice(allocator, "\"\"") catch unreachable;
+    if (content.len > 0) buf.append(allocator, '"') catch unreachable;
 
     // The two binding shapes are `blk|zig`'s: a call-site `: f` bind yields
     // the string itself; a `| formatted f` arm binds the tagged record and
@@ -251,35 +246,19 @@ fn csPlaceholder(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, placehol
 
     const expr = if (invocation.args.len > 0) invocation.args[0].value else "";
 
-    const openLit = struct {
-        fn call(b: *std.ArrayList(u8), a: std.mem.Allocator, f: *bool, il: *bool) void {
-            if (!il.*) {
-                if (!f.*) b.appendSlice(a, " + ") catch unreachable;
-                b.append(a, '"') catch unreachable;
-                il.* = true;
-                f.* = false;
-            }
-        }
-    }.call;
-
-    const closeLit = struct {
-        fn call(b: *std.ArrayList(u8), a: std.mem.Allocator, il: *bool) void {
-            if (il.*) {
-                b.append(a, '"') catch unreachable;
-                il.* = false;
-            }
-        }
-    }.call;
-
     var buf = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
-    var first = true;
-    var in_literal = false;
 
     // Strip the source quotes — same slice |zig takes.
     const start_pos: usize = if (expr.len > 0 and expr[0] == '"') 1 else 0;
     const end_pos: usize = if (expr.len > 0 and expr[expr.len - 1] == '"') expr.len - 1 else expr.len;
     const content = expr[start_pos..end_pos];
 
+    // Same interpolated-string emission as fmt.blk|cs — see csHole.
+    if (content.len == 0) {
+        buf.appendSlice(allocator, "\"\"") catch unreachable;
+    } else {
+        buf.appendSlice(allocator, "$\"") catch unreachable;
+    }
     var i: usize = 0;
     while (i < content.len) {
         if (i + 1 < content.len and content[i] == '{' and content[i + 1] == '{') {
@@ -294,20 +273,13 @@ fn csPlaceholder(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, placehol
                 var ws_end = j;
                 while (ws_end > ws_start and (content[ws_end - 1] == ' ' or content[ws_end - 1] == '\t')) : (ws_end -= 1) {}
 
-                const placeholder = content[ws_start..ws_end];
-                closeLit(&buf, allocator, &in_literal);
-                if (!first) buf.appendSlice(allocator, " + ") catch unreachable;
-                first = false;
-                csPlaceholder(&buf, allocator, placeholder);
-
+                csHole(&buf, allocator, content[ws_start..ws_end]);
                 i = j + 2;
             } else {
-                openLit(&buf, allocator, &first, &in_literal);
-                buf.append(allocator, content[i]) catch unreachable;
+                buf.appendSlice(allocator, "{{") catch unreachable;
                 i += 1;
             }
         } else {
-            openLit(&buf, allocator, &first, &in_literal);
             switch (content[i]) {
                 '"' => buf.appendSlice(allocator, "\\\"") catch unreachable,
                 '\\' => {
@@ -320,6 +292,8 @@ fn csPlaceholder(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, placehol
                         buf.append(allocator, content[i]) catch unreachable;
                     }
                 },
+                '{' => buf.appendSlice(allocator, "{{") catch unreachable,
+                '}' => buf.appendSlice(allocator, "}}") catch unreachable,
                 '\n' => buf.appendSlice(allocator, "\\n") catch unreachable,
                 '\r' => buf.appendSlice(allocator, "\\r") catch unreachable,
                 '\t' => buf.appendSlice(allocator, "\\t") catch unreachable,
@@ -328,8 +302,7 @@ fn csPlaceholder(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, placehol
             i += 1;
         }
     }
-    closeLit(&buf, allocator, &in_literal);
-    if (first) buf.appendSlice(allocator, "\"\"") catch unreachable;
+    if (content.len > 0) buf.append(allocator, '"') catch unreachable;
 
     // The two binding shapes are |js's: `: l |> …` declares `l` in the spliced
     // text; `| line l -> …` declares it here AND hands off with a marker.

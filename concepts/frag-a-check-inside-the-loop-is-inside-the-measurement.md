@@ -45,3 +45,16 @@ itself.
 - "The arm ran" is proved by the result being right. A counter that
   proves presence but not correctness is weaker *and* slower — the
   worst trade.
+
+2026-10-14 — the asymmetry is the tell, and it applies at the *arm*
+boundary too. 012's `collect` shim checksummed inside the timed loop —
+`hits += 1; chars += s.Length` per element, two static stores and a
+length read — while every comparator arm ran its checksum after the
+stopwatch. The generated arm was timing bookkeeping nobody else paid:
+not a workload the task contains, but a workload only one arm carried.
+`collect` reduced to `results.Add(s)` and the generated arm fell from
+1695ms to ~1470–1480 on a calm box — inside the pack, under LINQ. The
+extension to the rule: a check inside the *shared* loop is a workload
+change; a check inside *one arm's* loop is a rigged race — the verifier
+must be identical in *placement*, not only in arithmetic, or the
+measurement is comparing two different programs.

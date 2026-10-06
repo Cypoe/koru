@@ -1,0 +1,6 @@
+name: defect-priced
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `defect-fix` — declare that name. (orphan drained 2026-10-14)

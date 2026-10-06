@@ -66,14 +66,16 @@ static class Bench {
             yield return new Session($"10.0.0.{i % 256}", (int)((i * 31) % 100), (ThreatLevel)(i % 4));
     }
 
-    // GENERATED — the actual emitted artifact.
+    // GENERATED — the actual emitted artifact. Checksum is computed from
+    // KoruHost.results AFTER the timer stops — identical accounting to the
+    // LINQ/foreach arms (the method returns a list; we count it later).
     static (long count, long chars) TimeGenerated() {
         KoruHost.hits = 0; KoruHost.chars = 0; KoruHost.results.Clear();
         var sw = Stopwatch.StartNew();
         main_module.run_event.handler(new main_module.run_event.Input { n = N, threshold = Threshold });
         sw.Stop();
         last_ms = sw.ElapsedMilliseconds;
-        return (KoruHost.hits, KoruHost.chars);
+        return Checksum(KoruHost.results);
     }
 
     // LINQ-ARRAY — the verbatim method over materialized sessions.
@@ -129,7 +131,7 @@ static class Bench {
     }
 
     public static int Main() {
-        const int reps = 3;
+        const int reps = 7;
         System.Console.WriteLine($"threat scanner: where -> interpolate -> tolist, N={N}, threshold={Threshold}, min of {reps} reps\n");
 
         // Session input built once, outside all timing — materializing it

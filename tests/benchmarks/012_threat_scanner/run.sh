@@ -35,7 +35,7 @@ cp "$ROOT/task.k" "$ROOT/task.kcs" "$ROOT/task.kz" "$work/"
 [ -f "$work/output_emitted.cs" ] || { echo "no output_emitted.cs produced" >&2; exit 1; }
 
 mkdir -p "$work/proj"
-cp "$ROOT/Program.cs" "$ROOT/koru.csproj" "$work/output_emitted.cs" "$work/proj/"
+cp "$ROOT/Program.cs" "$ROOT/bench.csproj" "$work/output_emitted.cs" "$work/proj/"
 
 echo
 ( cd "$work/proj" && dotnet build -c Release -o out >/dev/null )

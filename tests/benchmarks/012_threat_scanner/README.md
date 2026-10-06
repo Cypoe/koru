@@ -41,7 +41,8 @@ tool when all you want is the string.
 ## What the benchmark found
 
 First measured run, `generated` **lost**: 2915ms vs `linq-array`'s 1627 —
-the first 012-series number that wasn't at the floor. Residual hunt:
+the first 012-series number that wasn't at the floor. Residual hunt, four
+items:
 
 1. `fmt:ln` → `fmt.blk`: removed the per-element anonymous object
    (2915 → 2707).
@@ -51,40 +52,60 @@ the first 012-series number that wasn't at the floor. Residual hunt:
    operand type, no box (2707 → 1953). **A real compiler defect the
    benchmark exposed — fixed in `src/cs_emitter.zig`, benefitting every
    `{{ }}` placeholder on cs**, not a benchmark workaround.
+3. `fmt.blk|cs`/`ln|cs` emitted `+` concat with `__koru_str(…)` per
+   placeholder — a ToString substring per placeholder plus the concat
+   result. Fix: emit the C# interpolated-string form `$"lit{expr}lit"`,
+   which lowers to `DefaultInterpolatedStringHandler` — one pooled buffer,
+   one allocation, digits written straight in. Numeric specs (`:d`/`:f`)
+   get a bare `{expr}` hole; `:s`/bare/`:S` keep `__koru_str` inside the
+   hole (bool semantics; free for strings). (1953 → ~1700).
+4. `collect`'s cs shim folded the checksum into the timed loop —
+   `hits += 1; chars += s.Length` per element — while every other arm
+   checksums after the stopwatch. Fix: `collect` is only `results.Add`
+   (the ToList); the harness checksums `KoruHost.results` post-timer,
+   identical accounting to the LINQ/foreach arms. Disclosed in `task.kcs`.
 
-## Measured (N=10,000,000, threshold=40, min of 3)
+## Measured (N=10,000,000, threshold=40, min of 7 reps, net8.0, arm64)
+
+After steps 1–4, calm box (runaway browser processes killed):
 
 ```
-generated    1953 ms   hits=6000000 chars=109921843
-linq-array   1622 ms   hits=6000000 chars=109921843
-linq-lazy    2682 ms   hits=6000000 chars=109921843
-foreach      1903 ms   hits=6000000 chars=109921843
-direct       1733 ms   hits=6000000 chars=109921843
-zig           467 ms   hits=6000000 chars=109921843   (whole process)
+generated    1481 ms   hits=6000000 chars=109921843
+linq-array   1529 ms   hits=6000000 chars=109921843
+linq-lazy    2505 ms   hits=6000000 chars=109921843
+foreach      1518 ms   hits=6000000 chars=109921843
+direct       1522 ms   hits=6000000 chars=109921843
+zig           444 ms   hits=6000000 chars=109921843   (whole process, min of 3)
 ```
+
+Three consecutive runs, same ordering vs LINQ every time: generated
+1481/1465/1478 vs linq-array 1529/1500/1600 — generated beats both LINQ
+arms in all three. Against handwritten it sits at the top of the pack:
+one run had `foreach`'s best rep at 1386; the managed field otherwise
+overlaps within noise (~±50ms). The pre-fix baseline on the same box was
+generated 1953 vs linq-array 1622.
 
 ## Honest reading
 
-- Generated sits **inside the handwritten pack** (direct 1733, foreach
-  1903, generated 1953) — not at the top, not an outlier. This task is
-  allocation-bound: ~6M strings × ~18 chars is ~110MB of GC traffic per
-  rep, and on alloc-bound work the enumerator overhead LINQ pays
-  disappears into collection time. `linq-array` leads the whole field —
-  the array-specialized Where/Select iterators plus the interpolated-
-  string handler is genuinely .NET's best spelling for this task.
-- The ~220ms residual over `direct` is the `level-name` subflow call
-  (struct Input + `dynamic` return → virtual ToString on `lvl`) — a real
-  per-element cost the emitted code pays and the fused loop doesn't.
-  Named, not hunted further: removing it would mean writing the Select
-  into host text, which is the fraud shape these benchmarks exist to
-  prevent.
-- `zig` (whole-process, includes startup) is 4x the .NET field — the same
-  source, no GC. Its role here is the cross-backend receipt: the program
-  isn't a cs-shaped artifact.
+- Generated **beats LINQ on both arms** — 1.03x over the array fast path,
+  1.69x over the lazy `IEnumerable` the posted signature actually takes —
+  and is indistinguishable from handwritten C#. The earlier claim that
+  LINQ leads this field was true of the pre-fix emit; the fixes removed
+  ~800ms of avoidable per-element allocation.
+- This task is allocation-bound: ~6M strings × ~18 chars is ~110MB of GC
+  traffic per rep. On alloc-bound work the enumerator overhead LINQ pays
+  disappears into collection time — the remaining margin is the emit
+  paying one allocation where the old shape paid three.
+- `zig` (whole-process, includes startup) is ~3.4x the best .NET arm —
+  the same source, no GC. Its role here is the cross-backend receipt:
+  the program isn't a cs-shaped artifact.
 - `fmt.blk` on zig allocates+frees per element (its `allocated!` debt
-  discharges) where `fmt:ln` used a thread-local buffer — 196→469ms. The
-  zig number would improve with `fmt:ln`; cs wouldn't. `fmt.blk` is kept
-  because the benchmark's question is the LINQ post's task on .NET.
+  discharges) where `fmt:ln` used a thread-local buffer — 196→469ms at
+  the old measurement. The zig number would improve with `fmt:ln`; cs
+  wouldn't. `fmt.blk` is kept because the benchmark's question is the
+  LINQ post's task on .NET.
 - `capture` is still a measured cs refusal (KORU047, `@typeInfo` has no
   lowering); the `~proc` statics stand in for custody, disclosed in the
   `.kcs`/`.kz` headers.
+- Laptop numbers, even on a calmed box — treat the ±50ms band as real
+  and the ordering as the finding.
