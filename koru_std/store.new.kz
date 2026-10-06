@@ -2826,9 +2826,9 @@
                     var rb = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
                     for (ins_names, 0..) |fname, fi| {
                         if (fi > 0) rb.appendSlice(allocator, ", ") catch unreachable;
-                        rb.appendSlice(allocator, HS.payloadPair(allocator, host_target, fname, fname, ins_names.len)) catch unreachable;
+                        rb.appendSlice(allocator, HS.payloadPair(allocator, host_target, fname, fname, f_full_pf.len)) catch unreachable;
                     }
-                    const payload = HS.branchRec(allocator, host_target, "full", rb.toOwnedSlice(allocator) catch unreachable, ins_names.len);
+                    const payload = HS.branchRec(allocator, host_target, "full", rb.toOwnedSlice(allocator) catch unreachable, f_full_pf.len);
                     fb.appendSlice(allocator, std.fmt.allocPrint(allocator, "if (__koru_store_{s}.len >= {d}) return {s};\n", .{ store_name, CAP, payload }) catch unreachable) catch unreachable;
                 }
                 break :blk fb.toOwnedSlice(allocator) catch unreachable;
@@ -4356,9 +4356,9 @@
                 var ib = std.ArrayList(u8).initCapacity(allocator, 64) catch unreachable;
                 for (field_names) |fname| {
                     if (ib.items.len > 0) ib.appendSlice(allocator, ", ") catch unreachable;
-                    ib.appendSlice(allocator, HS.payloadPair(allocator, host_target, fname, std.fmt.allocPrint(allocator, "__koru_out_{s}", .{fname}) catch unreachable, field_names.len)) catch unreachable;
+                    ib.appendSlice(allocator, HS.payloadPair(allocator, host_target, fname, std.fmt.allocPrint(allocator, "__koru_out_{s}", .{fname}) catch unreachable, item_pf.len)) catch unreachable;
                 }
-                const o = std.fmt.allocPrint(allocator, "return {s};", .{HS.branchRec(allocator, host_target, "item", ib.items, field_names.len)}) catch unreachable;
+                const o = std.fmt.allocPrint(allocator, "return {s};", .{HS.branchRec(allocator, host_target, "item", ib.items, item_pf.len)}) catch unreachable;
                 tb.appendSlice(allocator, o) catch unreachable;
             }
             appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{

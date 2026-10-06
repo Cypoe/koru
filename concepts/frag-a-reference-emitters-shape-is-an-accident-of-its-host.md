@@ -199,3 +199,15 @@ through `dynamic` they erase, so the closure-fallback forwarder re-wraps
 the tuple into a real anonymous object before the `Func<dynamic>` sees
 it. Three different host laws inside one commit — none of them visible
 until the sweep's board marked the tests that struck them.
+
+2026-10-06 (second entry) — and the tuple sweep surfaced one more law:
+a payload's VALUE arity and its DECLARED arity are not the same fact.
+A non-owned multi-column take declares `| item` as a single `__type_ref`
+(the synthesized `__KoruStoreRow_<name>`) while the emitted body still
+hands back the whole row record — zig coerces `.{ .hp=…, .opp=… }` into
+the named row struct, cs lands it in a `dynamic` member. Spelling the
+record as a tuple by the VALUE's field count put a `ValueTuple` into
+`dynamic`, where element names erase — six cs-runtime failures, all the
+same `RuntimeBinderException: 'System.ValueTuple<…>' does not contain a
+definition for 'hp'`. The decider is the DECL's arity, spelled in scope
+as `item_pf.len`/`f_full_pf.len` — pass it, not the pair-list length.

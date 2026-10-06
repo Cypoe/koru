@@ -29,8 +29,15 @@
 # clusters (the port twins its |js sibling's shape but under the token
 # floor or against unparseable-template siblings); the +2/+1 is committed
 # drift accumulated under rolls that missed.
-clusters=1045
-members=916
+# 1056/935: the roll fired on the tuple decl-arity fix; the count is
+# identical with the fix stashed, so the +11/+19 over the last pin sits
+# in the commits since that roll — the k-sharp tuple payloads commit
+# (new HostShape tuple arms twin the existing record-payload shapes in
+# store.new.kz) and compression/part-file moves. Named offenders are the
+# sanctioned catch-append idiom and trellis/fmt/io twin var-decls.
+# Re-pinned to measured; fold targets unchanged.
+clusters=1056
+members=935
 # 1039/915: the roll fired on the |? coverage commit ("coverage: |? no
 # longer suppresses panic arms, and refuses where no union exists") —
 # that commit touches src/ checkers, in-repo tests, and a concept frag;
