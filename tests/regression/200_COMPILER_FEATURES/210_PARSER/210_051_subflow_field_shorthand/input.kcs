@@ -1,0 +1,11 @@
+using static KoruHost;
+
+static class KoruHost {
+    public class Entity {
+        public uint id;
+    }
+}
+
+~proc print-result|cs {
+    __koru_stdout_write($"Got entity {e.id}\n");
+}

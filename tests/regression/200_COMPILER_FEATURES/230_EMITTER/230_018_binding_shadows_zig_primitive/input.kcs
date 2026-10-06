@@ -1,0 +1,3 @@
+~proc pick|cs {
+    return n + 1;
+}

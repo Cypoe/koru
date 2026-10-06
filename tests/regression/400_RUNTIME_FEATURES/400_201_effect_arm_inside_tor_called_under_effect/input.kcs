@@ -1,0 +1,6 @@
+~proc source|cs {
+    data(2);
+}
+~proc trigger|cs {
+    return new Output { tag = "go", go = new { } };
+}

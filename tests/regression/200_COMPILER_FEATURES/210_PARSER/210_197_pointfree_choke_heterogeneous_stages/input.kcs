@@ -1,0 +1,8 @@
+~proc obj.get|cs { _ = doc; _ = key; return new Output { tag = "found", found = v + 1 }; 
+}
+~proc arr.get|cs { _ = doc; _ = index; return new Output { tag = "found", found = v + 1 }; 
+}
+~proc as.string|cs {
+    _ = doc;
+    return new Output { tag = "ok", ok = if (v == 5) "deep 5" else "wrong depth" };
+}

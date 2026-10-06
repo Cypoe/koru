@@ -1,0 +1,7 @@
+~proc open|cs {
+    _ = path;
+    return "file_1";
+}
+~proc close-file|cs {
+    __koru_stdout_write($"close-file() ran for '{handle}'\n");
+}

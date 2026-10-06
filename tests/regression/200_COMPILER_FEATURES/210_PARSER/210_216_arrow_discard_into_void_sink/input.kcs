@@ -1,0 +1,4 @@
+~proc stage|cs { return new Output { tag = "ok", ok = "hi" }; 
+}
+~proc void-sink|cs { __koru_stdout_write("sink\n"); 
+}

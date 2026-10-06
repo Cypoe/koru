@@ -1,0 +1,6 @@
+~proc process|cs {
+    if (value > 100) {
+        return new Output { tag = "warning", warning = "Value too large" };
+    }
+    return new Output { tag = "success", success = value * 2 };
+}

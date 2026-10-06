@@ -1,0 +1,13 @@
+~proc step-one|cs {
+}
+~proc step-two|cs {
+}
+~proc get-result|cs {
+    return 42;
+}
+~proc print-value|cs {
+    __koru_stdout_write($"{v}\n");
+}
+~proc setup|cs {
+    return 1;
+}

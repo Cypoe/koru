@@ -1,0 +1,3 @@
+~proc get-value|cs {
+    return 42;
+}

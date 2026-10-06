@@ -1,0 +1,3 @@
+~proc close|cs {
+    __koru_stdout_write("close() called for handle\n");
+}

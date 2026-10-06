@@ -1,0 +1,6 @@
+~proc a|cs {
+    return 1;
+}
+~proc b|cs {
+    __koru_stdout_write($"b {x}\n");
+}

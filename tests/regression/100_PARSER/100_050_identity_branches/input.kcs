@@ -1,0 +1,6 @@
+~proc get-number|cs {
+    return 42;
+}
+~proc get-message|cs {
+    return "Hello from identity branch!";
+}

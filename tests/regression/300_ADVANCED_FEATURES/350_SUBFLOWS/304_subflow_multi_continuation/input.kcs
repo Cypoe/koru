@@ -1,0 +1,13 @@
+~proc triple|cs {
+    return value * 3;
+}
+~proc double|cs {
+    return value * 2;
+}
+~proc verify-and-print|cs {
+    if (value == 30) {
+        __koru_stdout_write("30\n");
+    } else {
+        __koru_stdout_write($"ERROR: Expected 30, got {value}\n");
+    }
+}

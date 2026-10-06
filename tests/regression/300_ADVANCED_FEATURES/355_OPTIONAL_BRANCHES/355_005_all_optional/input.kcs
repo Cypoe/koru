@@ -1,0 +1,9 @@
+~proc process|cs {
+    if (value == 0) {
+        return new Output { tag = "err", err = "Zero value" };
+    }
+    if (value > 100) {
+        return new Output { tag = "warning", warning = "Large value" };
+    }
+    return new Output { tag = "success", success = value * 2 };
+}

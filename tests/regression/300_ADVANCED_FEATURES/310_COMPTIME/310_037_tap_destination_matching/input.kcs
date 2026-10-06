@@ -1,0 +1,9 @@
+~proc target|cs {
+    __koru_stdout_write("target called\n");
+}
+~proc other|cs {
+    __koru_stdout_write("other called\n");
+}
+~proc log|cs {
+    __koru_stdout_write("TAP: going to target\n");
+}

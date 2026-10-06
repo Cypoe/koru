@@ -1,0 +1,12 @@
+using static KoruHost;
+
+static class KoruHost {
+    public class TestRequest {
+        public dynamic method;
+        public dynamic path;
+    }
+}
+
+~proc info|cs {
+    return new { processor_name = "M2", core_count = "12 Cores" };
+}

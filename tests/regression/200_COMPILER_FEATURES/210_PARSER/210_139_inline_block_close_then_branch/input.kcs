@@ -1,0 +1,6 @@
+~proc pick|cs {
+    if (n > 5) {
+        return new Output { tag = "high", high = n };
+    }
+    return new Output { tag = "low", low = n };
+}

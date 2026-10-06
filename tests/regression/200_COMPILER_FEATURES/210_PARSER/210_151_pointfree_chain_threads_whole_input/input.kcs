@@ -1,0 +1,4 @@
+~proc stage-a|cs { return new Output { tag = "ctx", ctx = ctx + 1 }; 
+}
+~proc stage-b|cs { return new Output { tag = "ctx", ctx = ctx * 2 }; 
+}

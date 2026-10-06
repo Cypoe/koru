@@ -1,0 +1,4 @@
+~proc prompt-user|cs {
+    var reply = ask(question);
+    return new Output { tag = "done", done = reply };
+}

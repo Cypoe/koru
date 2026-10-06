@@ -1,0 +1,6 @@
+~proc finish|cs {
+    __koru_stdout_write("Local print\n");
+}
+~proc logger|cs {
+    __koru_stdout_write($"Observed: {source}\n");
+}

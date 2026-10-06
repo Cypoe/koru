@@ -1,0 +1,14 @@
+~proc check|cs {
+    if (value > 0) return new Output { tag = "positive", positive = value };
+    if (value < 0) return new Output { tag = "negative", negative = value };
+    return new Output { tag = "zero", zero = new { } };
+}
+~proc handle-positive|cs {
+    __koru_stdout_write($"Positive branch works: {n}\n");
+}
+~proc handle-zero|cs {
+    __koru_stdout_write("Zero branch works\n");
+}
+~proc handle-negative|cs {
+    __koru_stdout_write($"Negative branch works: {n}\n");
+}

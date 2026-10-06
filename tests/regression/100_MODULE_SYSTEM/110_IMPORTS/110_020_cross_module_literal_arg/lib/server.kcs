@@ -1,0 +1,4 @@
+~proc start|cs {
+    __koru_stdout_write($"Server starting on port {port}\n");
+    return port;
+}

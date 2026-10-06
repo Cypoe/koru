@@ -1,0 +1,21 @@
+~proc outer|cs {
+    __koru_stdout_write($"Outer: {x}\n");
+
+    if (x < 3) {
+        return new Output { tag = "next_outer", next_outer = (x, max_inner) };
+    } else {
+        return new Output { tag = "done_outer", done_outer = new { } };
+    }
+}
+~proc inner|cs {
+    __koru_stdout_write($"  Inner: {x}, {y}\n");
+
+    if (y < max_inner) {
+        return new Output { tag = "next_inner", next_inner = (x, y + 1, max_inner) };
+    } else {
+        return new Output { tag = "done_inner", done_inner = (x + 1, max_inner) };
+    }
+}
+~proc start|cs {
+    __koru_stdout_write("Starting nested loops...\n");
+}

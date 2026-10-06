@@ -1,0 +1,6 @@
+~proc stage-a|cs {
+    if (code < 0) return new Output { tag = "failed", failed = (code, "neg") };
+    return new Output { tag = "ok", ok = code + 1 };
+}
+~proc stage-b|cs { return new Output { tag = "ok", ok = code * 2 }; 
+}

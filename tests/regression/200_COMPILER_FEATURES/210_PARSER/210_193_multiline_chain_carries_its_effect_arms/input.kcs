@@ -1,0 +1,9 @@
+~proc src|cs { return 3; 
+}
+~proc bump|cs { return n; 
+}
+~proc sink|cs {
+    var i = 0;
+    for (; i < n; i += 1) { pulse(i); }
+    return new Output { tag = "done", done = new { } };
+}

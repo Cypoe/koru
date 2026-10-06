@@ -1,0 +1,6 @@
+~proc get-count|cs {
+    return n;
+}
+~proc each-i32|cs {
+    for (v) |it| item(it);
+}

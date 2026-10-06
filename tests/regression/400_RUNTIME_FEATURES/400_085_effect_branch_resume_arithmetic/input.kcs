@@ -1,0 +1,4 @@
+~proc request|cs {
+    var result = double(payload);
+    return new Output { tag = "done", done = result };
+}

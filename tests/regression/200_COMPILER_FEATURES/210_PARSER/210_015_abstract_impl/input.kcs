@@ -1,0 +1,7 @@
+~proc coordinate|cs {
+    __koru_stdout_write($"Default coordination: {ctx}\n");
+    return ctx;
+}
+~proc double|cs {
+    return value * 2;
+}

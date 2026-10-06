@@ -1,0 +1,17 @@
+using static KoruHost;
+
+static class KoruHost {
+    public static long ticked = 0;
+}
+
+~proc step|cs {
+    ticked += 1;
+    return if (ticked < 3) 1 else 0;
+}
+~proc live|cs {
+    return @intFromBool(ticked < 3);
+}
+~proc wait|cs {
+    _ = i;
+    return 1_000_000;
+}

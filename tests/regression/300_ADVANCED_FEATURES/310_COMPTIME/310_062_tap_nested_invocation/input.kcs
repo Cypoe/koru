@@ -1,0 +1,11 @@
+~proc hello|cs {
+    __koru_stdout_write("hello\n");
+    return "go";
+}
+~proc goodbye|cs {
+    __koru_stdout_write("goodbye\n");
+    return "go";
+}
+~proc observer|cs {
+    __koru_stdout_write("TAP FIRED!\n");
+}

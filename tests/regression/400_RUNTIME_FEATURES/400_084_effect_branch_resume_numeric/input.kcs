@@ -1,0 +1,4 @@
+~proc query|cs {
+    var answer = ask(question);
+    return new Output { tag = "done", done = answer };
+}

@@ -1,0 +1,6 @@
+~proc add-five|cs {
+    return value + 5;
+}
+~proc print-result|cs {
+    __koru_stdout_write($"{value}\n");
+}

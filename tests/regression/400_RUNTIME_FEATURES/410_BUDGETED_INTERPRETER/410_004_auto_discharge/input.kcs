@@ -1,0 +1,7 @@
+~proc open|cs {
+    _ = path;
+    return new Output { tag = "opened", opened = "file_1" };
+}
+~proc close|cs {
+    __koru_stdout_write("close() was called by auto-discharge\n");
+}

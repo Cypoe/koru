@@ -1,0 +1,3 @@
+~proc dims|cs {
+    return new { w = 4, h = 3 };
+}

@@ -1,0 +1,8 @@
+~proc tokenize|cs {
+    _ = source;
+    token("first");
+    warning("watch out");
+    token("second");
+    token("third");
+    warning("almost done");
+}

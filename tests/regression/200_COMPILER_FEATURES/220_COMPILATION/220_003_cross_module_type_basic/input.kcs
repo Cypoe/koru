@@ -1,0 +1,5 @@
+~proc register-user|cs {
+    // Print the user's information
+    __koru_stdout_write($"Registering user: {user_data.name}, age {user_data.age}\n");
+    return true;
+}

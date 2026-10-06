@@ -1,0 +1,4 @@
+~proc origin|cs { return "threaded"; 
+}
+~proc label|cs { return word; 
+}

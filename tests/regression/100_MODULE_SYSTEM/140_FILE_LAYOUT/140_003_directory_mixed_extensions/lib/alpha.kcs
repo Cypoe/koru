@@ -1,0 +1,3 @@
+~proc greet-alpha|cs {
+    return "alpha (kz)";
+}

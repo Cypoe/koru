@@ -1,0 +1,4 @@
+~proc grant-access|cs {
+    __koru_stdout_write($"Granting access: {user_data.email} as {user_data.role} (perms: {user_data.permissions})\n");
+    return true;
+}

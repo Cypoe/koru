@@ -1,0 +1,7 @@
+~proc compute|cs {
+    __koru_stdout_write($"compute({x})\n");
+    return x * 2;
+}
+~proc observed|cs {
+    __koru_stdout_write($"[TAP] saw {value}\n");
+}

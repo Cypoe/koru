@@ -1,0 +1,7 @@
+~proc check-value|cs {
+    if (n > 0) {
+        return new Output { tag = "positive", positive = new { } };
+    } else {
+        return new Output { tag = "non_positive", non_positive = new { } };
+    }
+}

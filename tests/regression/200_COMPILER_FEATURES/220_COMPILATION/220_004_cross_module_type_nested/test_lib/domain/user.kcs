@@ -1,0 +1,8 @@
+~proc create|cs {
+    var new_user = DomainUser{
+        .email = email,
+        .role = role,
+        .permissions = permissions,
+    };
+    return new_user;
+}

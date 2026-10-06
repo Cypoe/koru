@@ -1,0 +1,7 @@
+~proc compute|cs {
+    __koru_stdout_write($"compute({x})\n");
+    return x * 2;
+}
+~proc display|cs {
+    __koru_stdout_write($"Final: {value}\n");
+}

@@ -1,0 +1,17 @@
+using static KoruHost;
+
+static class KoruHost {
+    public const long count = 7;
+    public static uint unrelatedHelper() {
+    var count = 7;
+    return (uint)(count);
+}
+}
+
+~proc describe|cs {
+    _ = unrelatedHelper();
+    if (count == 0) {
+        return "a count of zero";
+    }
+    return "a count above zero";
+}

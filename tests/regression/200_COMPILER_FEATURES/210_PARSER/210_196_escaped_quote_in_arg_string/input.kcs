@@ -1,0 +1,4 @@
+~proc first|cs {
+    _ = tail;
+    return msg;
+}

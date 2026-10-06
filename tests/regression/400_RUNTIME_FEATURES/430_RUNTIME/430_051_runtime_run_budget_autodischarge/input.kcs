@@ -1,0 +1,16 @@
+using static KoruHost;
+
+static class KoruHost {
+    public const string TEST_SOURCE = "open-handle()\n| opened _ |> step()";
+}
+
+~proc open-handle|cs {
+    __koru_stdout_write("OPEN\n");
+    return new Output { tag = "opened", opened = "h1" };
+}
+~proc close-handle|cs {
+    __koru_stdout_write("CLOSE\n");
+}
+~proc step|cs {
+    __koru_stdout_write("STEP\n");
+}

@@ -1,0 +1,10 @@
+~proc ramp|cs {
+    var i = start;
+    for (; i < start + 2; i += 1) {
+        step(i);
+    }
+    if (start < 4) {
+        return new Output { tag = "restart", restart = start + 2 };
+    }
+    return new Output { tag = "done", done = i };
+}

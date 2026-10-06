@@ -1,0 +1,15 @@
+~proc server.accept|cs {
+    __koru_stdout_write("Accept\n");
+    // Simulate accepting 2 connections then stopping
+    var static = struct {
+        var count = 0;
+    };
+    static.count += 1;
+    if (static.count <= 2) {
+        return new Output { };
+    }
+    return new Output { };
+}
+~proc server.handle|cs {
+    __koru_stdout_write($"Handle {id}\n");
+}

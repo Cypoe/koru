@@ -1,0 +1,3 @@
+~proc print-num|cs {
+    __koru_stdout_write($"[print_num] n = {n}\n");
+}

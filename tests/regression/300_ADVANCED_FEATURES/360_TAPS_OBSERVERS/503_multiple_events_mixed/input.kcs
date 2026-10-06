@@ -1,0 +1,9 @@
+~proc compute|cs {
+    return x * 2;
+}
+~proc validate|cs {
+    if (n > 0) {
+        return .valid;
+    }
+    return .invalid;
+}

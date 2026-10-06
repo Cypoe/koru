@@ -1,0 +1,3 @@
+~proc get-number|cs {
+    return 42;
+}

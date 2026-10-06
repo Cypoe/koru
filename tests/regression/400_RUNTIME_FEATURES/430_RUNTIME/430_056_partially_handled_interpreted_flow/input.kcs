@@ -1,0 +1,13 @@
+using static KoruHost;
+
+static class KoruHost {
+    public const string A = "pick(n: -1)";
+}
+
+~proc pick|cs {
+    if (n > 0) return new Output { tag = "ok", ok = n };
+    return new Output { tag = "bad", bad = "n was not positive" };
+}
+~proc note|cs {
+    __koru_stdout_write($"      note: {text}\n");
+}

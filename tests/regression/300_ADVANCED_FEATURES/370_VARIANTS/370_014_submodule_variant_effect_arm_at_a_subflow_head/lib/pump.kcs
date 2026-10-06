@@ -1,0 +1,4 @@
+~proc run|cs {
+    tick(n * 10);
+    return new Output { tag = "done", done = "zig-done" };
+}

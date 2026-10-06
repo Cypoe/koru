@@ -1,0 +1,7 @@
+~proc seed|cs { return 0; 
+}
+~proc step|cs {
+    tick(n);
+    if (n < 3) return new Output { tag = "again", again = n + 1 };
+    return new Output { tag = "stop", stop = n };
+}

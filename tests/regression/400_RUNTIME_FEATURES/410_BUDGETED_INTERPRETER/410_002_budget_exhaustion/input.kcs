@@ -1,0 +1,4 @@
+~proc expensive|cs {
+    _ = data;
+    return .processed;
+}

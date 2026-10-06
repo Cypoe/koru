@@ -1,0 +1,12 @@
+~proc step-one|cs {
+    // Does nothing, just tests void event handling
+}
+~proc step-two|cs {
+    // Does nothing
+}
+~proc get-value|cs {
+    return 42;
+}
+~proc print-value|cs {
+    __koru_stdout_write($"{v}\n");
+}

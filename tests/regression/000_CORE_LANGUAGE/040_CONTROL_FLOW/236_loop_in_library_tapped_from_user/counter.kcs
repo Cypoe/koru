@@ -1,0 +1,6 @@
+~proc tick|cs {
+    if (n < 5) {
+        return new Output { tag = "next", next = n + 1 };
+    }
+    return new Output { tag = "done", done = new { } };
+}

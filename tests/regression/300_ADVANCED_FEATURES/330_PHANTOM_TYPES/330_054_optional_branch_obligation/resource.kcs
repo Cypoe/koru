@@ -1,0 +1,17 @@
+using static KoruHost;
+
+static class KoruHost {
+    public class Handle {
+        public int id;
+    }
+}
+
+~proc risky|cs {
+    // Always succeeds in this test, but the event DECLARES
+    // that it COULD return ?leaked with an obligation
+    __koru_stdout_write("Operation succeeded\n");
+    return new Output { tag = "success", success = 42 };
+}
+~proc close|cs {
+    __koru_stdout_write("Closing handle\n");
+}

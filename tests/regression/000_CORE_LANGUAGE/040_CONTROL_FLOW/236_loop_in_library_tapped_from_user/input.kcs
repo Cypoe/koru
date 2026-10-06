@@ -1,0 +1,3 @@
+~proc log|cs {
+    __koru_stdout_write($"tick {n}\n");
+}

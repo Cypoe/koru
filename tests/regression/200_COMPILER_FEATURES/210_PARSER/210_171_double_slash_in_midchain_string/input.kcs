@@ -1,0 +1,4 @@
+~proc seed|cs { return 1; 
+}
+~proc take|cs { _ = s; return n; 
+}

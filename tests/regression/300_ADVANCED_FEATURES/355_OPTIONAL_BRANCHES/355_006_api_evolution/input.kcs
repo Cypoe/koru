@@ -1,0 +1,9 @@
+~proc process|cs {
+    if (value < 5) {
+        return new Output { tag = "debug", debug = "Small value" };
+    }
+    if (value > 100) {
+        return new Output { tag = "warning", warning = "Large value" };
+    }
+    return new Output { tag = "success", success = value * 2 };
+}

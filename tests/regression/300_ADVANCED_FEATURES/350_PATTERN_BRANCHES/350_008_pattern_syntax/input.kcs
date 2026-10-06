@@ -1,0 +1,3 @@
+~proc incoming|cs {
+    return new { method = "GET", path = "/users/42" };
+}

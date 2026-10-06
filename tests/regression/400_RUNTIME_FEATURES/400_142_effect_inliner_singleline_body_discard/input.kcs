@@ -1,0 +1,10 @@
+using static KoruHost;
+
+static class KoruHost {
+    public class Config {
+        public ulong timeout_ms;
+    }
+}
+
+~proc fetch|cs { _ = url; var cfg = Config{}; configure(&cfg); return new Output { tag = "done", done = cfg.timeout_ms }; 
+}

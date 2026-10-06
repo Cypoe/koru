@@ -1,0 +1,3 @@
+~proc print-int|cs {
+    __koru_stdout_write($"{value}\n");
+}

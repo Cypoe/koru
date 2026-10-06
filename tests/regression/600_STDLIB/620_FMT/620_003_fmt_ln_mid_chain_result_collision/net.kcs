@@ -1,0 +1,16 @@
+~proc connect|cs {
+    _ = host;
+    return new Output { tag = "ok", ok = 7 };
+}
+~proc write|cs {
+    __koru_stdout_write($"write: {data}\n");
+    return new Output { tag = "ok", ok = conn };
+}
+~proc read|cs {
+    __koru_stdout_write($"read from conn {conn}\n");
+    return new Output { tag = "ok", ok = (conn, 42) };
+}
+~proc shutdown|cs {
+    __koru_stdout_write($"shutdown conn {conn}\n");
+    return new Output { tag = "ok", ok = new { } };
+}

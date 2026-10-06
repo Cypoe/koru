@@ -1,0 +1,4 @@
+~proc compute|cs { return x + 2; 
+}
+~proc show|cs { __koru_stdout_write($"{v}\n"); 
+}

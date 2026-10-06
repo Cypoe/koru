@@ -1,0 +1,27 @@
+using static KoruHost;
+
+static class KoruHost {
+    public static int setup_count = 0;
+    public static int cleanup_count = 0;
+    public static int process_count = 0;
+}
+
+~proc setup|cs {
+    setup_count += 1;
+    __koru_stdout_write($"Setup: count={setup_count}\n");
+}
+~proc cleanup|cs {
+    cleanup_count += 1;
+    __koru_stdout_write($"Cleanup: count={cleanup_count}\n");
+}
+~proc process|cs {
+    process_count += 1;
+    __koru_stdout_write($"Process: count={process_count}\n");
+}
+~proc verify|cs {
+    if (setup_count == 1 && process_count == 3 && cleanup_count == 1) {
+        __koru_stdout_write("Void events work correctly\n");
+    } else {
+        __koru_stdout_write($"FAILED: setup={setup_count}, process={process_count}, cleanup={cleanup_count}\n");
+    }
+}

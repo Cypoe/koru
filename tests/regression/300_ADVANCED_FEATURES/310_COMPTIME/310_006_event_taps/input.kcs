@@ -1,0 +1,7 @@
+~proc hello|cs {
+    __koru_stdout_write("Main flow executed\n");
+    return "go";
+}
+~proc tap-action|cs {
+    __koru_stdout_write("TAP observed!\n");
+}

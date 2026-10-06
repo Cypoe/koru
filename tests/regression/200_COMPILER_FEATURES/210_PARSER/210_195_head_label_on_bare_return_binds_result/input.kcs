@@ -1,0 +1,2 @@
+~proc seed|cs { return 1; 
+}

@@ -1,0 +1,9 @@
+~proc first|cs {
+    return value * 2;
+}
+~proc second|cs {
+    return value * 3;
+}
+~proc show|cs {
+    __koru_stdout_write($"Outer: {outer_val}, Inner: {inner_val}\n");
+}

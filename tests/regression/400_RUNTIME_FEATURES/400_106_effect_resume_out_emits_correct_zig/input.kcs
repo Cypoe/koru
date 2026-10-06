@@ -1,0 +1,15 @@
+using static KoruHost;
+
+static class KoruHost {
+    public class Resource {
+        public ulong id;
+    }
+}
+
+~proc borrow|cs {
+    for (0..n) |i| {
+        var r = lend(i);
+        __koru_stdout_write($"got {r.id}\n");
+    }
+    return new Output { tag = "done", done = n };
+}

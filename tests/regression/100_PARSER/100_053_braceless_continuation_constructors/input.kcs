@@ -1,0 +1,6 @@
+~proc compute|cs {
+    return x * 2;
+}
+~proc run-test|cs {
+    // This internally tests braceless continuation constructors
+}

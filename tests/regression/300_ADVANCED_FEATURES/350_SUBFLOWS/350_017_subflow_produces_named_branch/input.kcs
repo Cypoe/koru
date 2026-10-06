@@ -1,0 +1,4 @@
+~proc source|cs {
+    if (n == 0) return .empty;
+    return new Output { tag = "done", done = "ok" };
+}

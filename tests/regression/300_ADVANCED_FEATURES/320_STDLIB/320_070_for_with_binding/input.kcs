@@ -1,0 +1,17 @@
+using static KoruHost;
+
+static class KoruHost {
+    public static int sum = 0;
+    public static int[] my_items = new int[] {  1, 2, 3  };
+}
+
+~proc get-items|cs {
+    return new Output { tag = "items", items = &my_items };
+}
+~proc add-item|cs {
+    sum += value;
+    __koru_stdout_write($"Added {value}, sum = {sum}\n");
+}
+~proc show-sum|cs {
+    __koru_stdout_write($"Final sum: {sum}\n");
+}

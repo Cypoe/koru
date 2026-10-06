@@ -1,0 +1,22 @@
+using static KoruHost;
+
+static class KoruHost {
+    public class P {
+        public ulong m;
+    }
+}
+
+~proc mint|cs {
+    return 7;
+}
+~proc boxed|cs {
+    const p: P = .{ .m = m };
+    var s = 0;
+    for (0..m) |i| {
+        s += i;
+    }
+    return new Output { tag = "ok", ok = p.m + s + m };
+}
+~proc show|cs {
+    __koru_stdout_write($"{x}\n");
+}

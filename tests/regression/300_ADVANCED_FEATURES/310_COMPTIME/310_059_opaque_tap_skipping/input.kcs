@@ -1,0 +1,6 @@
+~proc hello|cs {
+    __koru_stdout_write("Hello\n");
+}
+~proc internal-log|cs {
+    __koru_stdout_write($"[INTERNAL] {msg}\n");
+}

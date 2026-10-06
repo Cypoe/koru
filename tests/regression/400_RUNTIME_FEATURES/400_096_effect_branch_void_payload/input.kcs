@@ -1,0 +1,4 @@
+~proc ping|cs {
+    pong();
+    return new Output { tag = "result", result = 1 };
+}

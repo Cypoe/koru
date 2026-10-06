@@ -1,0 +1,4 @@
+~proc window|cs {
+    __koru_stdout_write($"Window size: {window}\n");
+    return window * 2;
+}

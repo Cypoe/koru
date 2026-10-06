@@ -1,0 +1,8 @@
+~proc process|cs {
+    if (value > 0) {
+        return new Output { tag = "ok", ok = value };
+    }
+    return new Output { tag = "error", error = "negative" };
+}
+~proc logger|cs {
+}

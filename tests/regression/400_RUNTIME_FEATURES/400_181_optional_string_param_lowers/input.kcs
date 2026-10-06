@@ -1,0 +1,7 @@
+~proc greet|cs {
+    _ = name;
+    if (title) |t| {
+        return t;
+    }
+    return "untitled";
+}

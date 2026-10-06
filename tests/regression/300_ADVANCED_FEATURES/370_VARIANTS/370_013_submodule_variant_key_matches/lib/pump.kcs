@@ -1,0 +1,4 @@
+~proc run|cs {
+    _ = &n;
+    return "default";
+}

@@ -1,0 +1,3 @@
+~proc each-i32|cs {
+    for (items) |it| item(it);
+}

@@ -1,0 +1,3 @@
+~proc print-pair|cs {
+    __koru_stdout_write($"{i},{j}\n");
+}

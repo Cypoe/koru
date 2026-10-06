@@ -1,0 +1,4 @@
+~proc consume|cs {
+    __koru_stdout_write($"[consume] received n = '{n}'\n");
+    return new Output { tag = "echoed", echoed = n };
+}

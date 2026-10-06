@@ -1,0 +1,9 @@
+~proc count|cs {
+    if (i < 10) {
+        return new Output { tag = "next", next = i + 1 };
+    } else {
+    }
+}
+~proc print|cs {
+    __koru_stdout_write($"i = {i}\n");
+}

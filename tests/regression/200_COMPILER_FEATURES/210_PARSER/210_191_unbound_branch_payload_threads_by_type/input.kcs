@@ -1,0 +1,6 @@
+~proc pick|cs {
+    if (n < 10) return new Output { tag = "lo", lo = n };
+    return new Output { tag = "hi", hi = n };
+}
+~proc tally|cs { return n + ((long)(((long)(tag.Length)))); 
+}

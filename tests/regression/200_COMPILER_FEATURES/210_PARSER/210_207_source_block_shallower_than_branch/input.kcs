@@ -1,0 +1,3 @@
+~proc wrap|cs {
+    return new Output { tag = "cfg", cfg = raw };
+}

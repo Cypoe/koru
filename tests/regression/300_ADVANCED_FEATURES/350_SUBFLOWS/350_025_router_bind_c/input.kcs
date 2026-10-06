@@ -1,0 +1,9 @@
+using static KoruHost;
+
+static class KoruHost {
+    public const string raw = "GET / HTTP/1.1\r\n\r\n";
+}
+
+~proc label|cs {
+    return "Ada";
+}

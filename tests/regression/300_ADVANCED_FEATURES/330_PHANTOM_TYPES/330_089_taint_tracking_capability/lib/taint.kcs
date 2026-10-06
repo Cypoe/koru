@@ -1,0 +1,6 @@
+~proc tag-tainted|cs {
+    return payload;
+}
+~proc sanitize|cs {
+    return s;
+}

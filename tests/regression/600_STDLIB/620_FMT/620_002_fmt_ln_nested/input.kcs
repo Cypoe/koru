@@ -1,0 +1,3 @@
+~proc get-name|cs {
+    return "World";
+}

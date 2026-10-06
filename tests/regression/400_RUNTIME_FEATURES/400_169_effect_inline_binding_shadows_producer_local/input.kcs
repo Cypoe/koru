@@ -1,0 +1,12 @@
+~proc pump|cs {
+    var k = 0;
+    var sum = 0;
+    for (; k < 3; k += 1) {
+        // Payload is a COMPUTED expr over the producer's `k` (not `k` itself,
+        // which would pun) — so the consumer's `var k = <expr>` genuinely
+        // shadows `var k` unless the splice renames it.
+        key(k * 10);
+        sum += k;
+    }
+    return new Output { tag = "done", done = sum };
+}

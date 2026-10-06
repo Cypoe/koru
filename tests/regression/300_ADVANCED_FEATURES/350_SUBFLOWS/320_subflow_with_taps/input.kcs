@@ -1,0 +1,10 @@
+~proc add-five|cs {
+    __koru_stdout_write($"add_five: {value} + 5 = {value + 5}\n");
+    return value + 5;
+}
+~proc observer|cs {
+    __koru_stdout_write("TAP FIRED: add_five -> result transition observed!\n");
+}
+~proc print-final|cs {
+    __koru_stdout_write($"Final: {value}\n");
+}

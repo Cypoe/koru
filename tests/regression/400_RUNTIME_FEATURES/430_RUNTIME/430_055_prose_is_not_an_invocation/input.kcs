@@ -1,0 +1,9 @@
+using static KoruHost;
+
+static class KoruHost {
+    public const string PROSE = "I cannot delete files. My vocabulary only includes open(), append(), and close().";
+}
+
+~proc greet|cs {
+    return name;
+}

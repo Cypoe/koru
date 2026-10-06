@@ -1,0 +1,3 @@
+~proc greet|cs {
+    return "REGISTRY vaxis";
+}

@@ -1,0 +1,8 @@
+~proc yes|cs {
+    __koru_stdout_write($"YES: {result}\n");
+    return 1;
+}
+~proc no|cs {
+    __koru_stdout_write($"NO: {result}\n");
+    return 0;
+}

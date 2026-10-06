@@ -1,0 +1,6 @@
+~proc log|cs {
+    __koru_stdout_write($"TAP: {msg}\n");
+}
+~proc finish|cs {
+    __koru_stdout_write("Done\n");
+}

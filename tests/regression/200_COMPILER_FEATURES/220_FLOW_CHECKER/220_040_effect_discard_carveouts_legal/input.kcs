@@ -1,0 +1,4 @@
+~proc poll|cs { return new Output { tag = "done", done = new { } }; 
+}
+~proc risky|cs { return new Output { tag = "ok", ok = x }; 
+}

@@ -1,0 +1,5 @@
+~proc get-data|cs { return 42; }
+~proc mutate-and-print|cs {
+    ptr.data += 1;
+    __koru_stdout_write("Value: " + ptr.data + "\n");
+}

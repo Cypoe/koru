@@ -1,0 +1,7 @@
+~proc goodbye|cs {
+    __koru_stdout_write("Goodbye\n");
+}
+~proc goodbye|cs {
+    __koru_stdout_write("Goodbye\n");
+    return new Output { tag = "done", done = new { } };
+}

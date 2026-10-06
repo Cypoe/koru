@@ -1,0 +1,3 @@
+~proc greet|cs {
+    __koru_stdout_write($"Hello, {name}!\n");
+}

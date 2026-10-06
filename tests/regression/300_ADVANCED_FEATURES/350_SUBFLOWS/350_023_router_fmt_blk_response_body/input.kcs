@@ -1,0 +1,9 @@
+using static KoruHost;
+
+static class KoruHost {
+    public const string raw = "GET / HTTP/1.1\r\n\r\n";
+}
+
+~proc info|cs {
+    return new { processor_name = "M2", core_count = "12 Cores" };
+}

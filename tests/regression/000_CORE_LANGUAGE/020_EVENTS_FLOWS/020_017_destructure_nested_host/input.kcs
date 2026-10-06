@@ -1,0 +1,11 @@
+using static KoruHost;
+
+static class KoruHost {
+    public class Pos {
+        public long x;
+        public long y;
+    }
+}
+
+~proc locate|cs { return new { pos = new {  x = 3, y = 7  }, label = "home" }; 
+}

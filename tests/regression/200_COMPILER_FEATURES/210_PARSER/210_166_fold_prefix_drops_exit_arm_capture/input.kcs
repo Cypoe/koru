@@ -1,0 +1,6 @@
+~proc seed|cs { return 0; 
+}
+~proc step|cs {
+    if (n < 3) return new Output { tag = "next", next = n + 1 };
+    return new Output { tag = "done", done = n };
+}

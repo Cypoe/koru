@@ -1,0 +1,9 @@
+~proc get-str|cs {
+    return "hi";
+}
+~proc flip|cs {
+    return new Output { tag = "heads", heads = "x" };
+}
+~proc show|cs {
+    __koru_stdout_write($"{s}\n");
+}

@@ -1,0 +1,14 @@
+~proc process|cs {
+    // When value > 100, return optional warning branch
+    if (value > 100) {
+        return new Output { tag = "warning", warning = "Value is large" };
+    }
+
+    // When value is odd, return optional debug branch
+    if (value % 2 == 1) {
+        return new Output { tag = "debug", debug = "Value is odd" };
+    }
+
+    // Otherwise return required success branch
+    return new Output { tag = "success", success = value * 2 };
+}

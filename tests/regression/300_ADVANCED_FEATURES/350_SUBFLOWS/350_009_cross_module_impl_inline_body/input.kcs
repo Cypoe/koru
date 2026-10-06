@@ -1,0 +1,6 @@
+~proc categorize|cs {
+    return -999;
+}
+~proc print-num|cs {
+    __koru_stdout_write($"{n}\n");
+}

@@ -1,0 +1,6 @@
+~proc base|cs { return 10; 
+}
+~proc step|cs {
+    if (n < 30) return new Output { tag = "next", next = n };
+    return new Output { tag = "done", done = n };
+}

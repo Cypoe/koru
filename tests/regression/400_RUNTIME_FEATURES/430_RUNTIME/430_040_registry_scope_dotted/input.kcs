@@ -1,0 +1,8 @@
+using static KoruHost;
+
+static class KoruHost {
+    public const string SOURCE = "greet(id: 7)";
+}
+
+~proc greet|cs {
+}

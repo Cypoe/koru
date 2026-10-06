@@ -1,0 +1,11 @@
+~proc open|cs {
+    __koru_stdout_write($"opened {path}\n");
+    return new Output { tag = "opened", opened = "file_1" };
+}
+~proc close|cs {
+    __koru_stdout_write("auto-closing file\n");
+}
+~proc expensive-read|cs {
+    _ = handle;
+    return "file contents";
+}

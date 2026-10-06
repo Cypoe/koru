@@ -1,0 +1,3 @@
+~proc helper-say|cs {
+    __koru_stdout_write($"helper {n}\n");
+}

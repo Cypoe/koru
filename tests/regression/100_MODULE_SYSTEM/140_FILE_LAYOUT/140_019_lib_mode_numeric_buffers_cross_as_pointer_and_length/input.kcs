@@ -1,0 +1,10 @@
+~proc apply-gain|cs {
+    for (input, output) |s, *o| {
+        o.* = s * gain;
+    }
+}
+~proc sum-buffer|cs {
+    var total = 0;
+    for (values) |v| total += v;
+    return total;
+}

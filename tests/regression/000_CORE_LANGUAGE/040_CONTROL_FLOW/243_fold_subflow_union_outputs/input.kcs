@@ -1,0 +1,5 @@
+~proc round|cs {
+    if (rounds < 0) return .broke;
+    if (rounds <= 1) return new Output { tag = "stop", stop = text };
+    return new Output { tag = "again", again = (text, rounds - 1) };
+}

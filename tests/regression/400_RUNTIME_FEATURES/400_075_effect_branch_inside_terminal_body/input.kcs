@@ -1,0 +1,7 @@
+~proc work|cs {
+    var i = 0;
+    for (; i < steps; i += 1) {
+        progress(i);
+    }
+    progress(steps); // final emission RIGHT BEFORE the terminal return return new Output { tag = "done", done = steps };
+}

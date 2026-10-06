@@ -1,0 +1,9 @@
+~proc count|cs {
+    __koru_stdout_write($"Count: {current}\n");
+
+    if (current < target) {
+        return new Output { tag = "next", next = (current + 1, target) };
+    } else {
+        return new Output { tag = "done", done = current };
+    }
+}

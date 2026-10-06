@@ -1,0 +1,3 @@
+~proc hello|cs {
+    __koru_stdout_write("Flow executed\n");
+}

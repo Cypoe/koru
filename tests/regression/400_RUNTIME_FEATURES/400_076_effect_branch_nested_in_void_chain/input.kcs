@@ -1,0 +1,8 @@
+~proc setup|cs {
+}
+~proc emitter|cs {
+    var i = 0;
+    for (; i < n; i += 1) {
+        item(i);
+    }
+}

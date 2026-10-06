@@ -1,0 +1,7 @@
+~proc maybe|cs {
+    var i = 0;
+    for (; i < count; i += 1) {
+        warn("ignored");
+    }
+    return new Output { tag = "done", done = count };
+}

@@ -1,0 +1,14 @@
+~proc validate|cs {
+    if (value > 0) {
+        return new Output { tag = "ok", ok = value };
+    } else {
+        return new Output { tag = "failure", failure = "negative" };
+    }
+}
+~proc double|cs {
+    if (value < 100) {
+        return new Output { tag = "ok", ok = value * 2 };
+    } else {
+        return new Output { tag = "failure", failure = "too large" };
+    }
+}

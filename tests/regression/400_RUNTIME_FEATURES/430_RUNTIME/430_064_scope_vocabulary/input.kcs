@@ -1,0 +1,4 @@
+~proc read|cs {
+    _ = path;
+    return new Output { tag = "ok", ok = "contents" };
+}

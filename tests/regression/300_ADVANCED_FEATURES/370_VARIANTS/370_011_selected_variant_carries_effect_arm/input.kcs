@@ -1,0 +1,13 @@
+using static KoruHost;
+
+static class KoruHost {
+    public const long factor = 10;
+}
+
+~proc pump|cs {
+    tick(n * $mod.factor);
+    return new Output { tag = "done", done = "zig" };
+}
+~proc show|cs {
+    __koru_stdout_write($"{value}\n");
+}

@@ -1,0 +1,6 @@
+~proc ping|cs { __koru_stdout_write("ping\n"); 
+}
+~proc mk|cs { return 42; 
+}
+~proc consume|cs { __koru_stdout_write($"got {v}\n"); 
+}

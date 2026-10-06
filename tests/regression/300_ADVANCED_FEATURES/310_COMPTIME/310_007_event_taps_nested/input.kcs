@@ -1,0 +1,8 @@
+~proc helper|cs {
+    __koru_stdout_write("Helper executed\n");
+}
+~proc log-tap|cs {
+    __koru_stdout_write("TAP executed from nested context!\n");
+}
+~proc outer|cs {
+}

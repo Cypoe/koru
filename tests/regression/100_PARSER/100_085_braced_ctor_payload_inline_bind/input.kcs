@@ -1,0 +1,6 @@
+~proc double|cs {
+    return value * 2;
+}
+~proc print-result|cs {
+    __koru_stdout_write($"{value}\n");
+}

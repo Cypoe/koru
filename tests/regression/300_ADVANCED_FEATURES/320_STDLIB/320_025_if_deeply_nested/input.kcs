@@ -1,0 +1,5 @@
+~proc step1|cs {
+}
+~proc step2|cs {
+    return 42;
+}

@@ -1,0 +1,3 @@
+~proc double|cs {
+    return a * 2;
+}

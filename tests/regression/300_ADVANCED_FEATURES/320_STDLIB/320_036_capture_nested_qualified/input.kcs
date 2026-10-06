@@ -1,0 +1,3 @@
+~proc print-results|cs {
+    __koru_stdout_write($"outer={outer_val}, inner={inner_val}\n");
+}

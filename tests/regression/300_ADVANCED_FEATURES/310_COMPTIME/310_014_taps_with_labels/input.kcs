@@ -1,0 +1,11 @@
+~proc counter|cs {
+    if (n < 3) {
+        return new Output { tag = "next", next = n + 1 };
+    }
+    return new Output { tag = "done", done = n };
+}
+~proc log-iteration|cs {
+    __koru_stdout_write($"Iteration: {value}\n");
+}
+~proc start|cs {
+}

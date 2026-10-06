@@ -1,0 +1,15 @@
+~proc open|cs {
+    _ = path;
+    return path;
+}
+~proc merge|cs {
+    _ = left;
+    _ = right;
+    return "merged_1";
+}
+~proc close-file|cs {
+    __koru_stdout_write($"close-file() ran for '{handle}'\n");
+}
+~proc close-merge|cs {
+    __koru_stdout_write($"close-merge() ran for '{handle}'\n");
+}

@@ -1,0 +1,9 @@
+~proc file.read|cs {
+    __koru_stdout_write("Reading file\n");
+}
+~proc file.write|cs {
+    __koru_stdout_write("Writing file\n");
+}
+~proc logger|cs {
+    __koru_stdout_write("File operation observed!\n");
+}

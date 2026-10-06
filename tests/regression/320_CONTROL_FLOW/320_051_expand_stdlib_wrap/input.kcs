@@ -1,0 +1,12 @@
+~proc verify|cs {
+    // Check sorted order
+    var prev = numbers[0];
+    for (numbers[1..]) |n| {
+        if (n < prev) {
+            __koru_stdout_write($"FAIL: {n} < {prev}\n");
+            return;
+        }
+        prev = n;
+    }
+    __koru_stdout_write("PASS: array sorted correctly\n");
+}

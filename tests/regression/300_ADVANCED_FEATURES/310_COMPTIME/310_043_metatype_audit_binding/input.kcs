@@ -1,0 +1,6 @@
+~proc hello|cs {
+    __koru_stdout_write("Hello\n");
+}
+~proc logger|cs {
+    __koru_stdout_write("[AUDIT] captured\n");
+}

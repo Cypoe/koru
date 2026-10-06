@@ -1,0 +1,3 @@
+~proc open|cs {
+    return path;
+}

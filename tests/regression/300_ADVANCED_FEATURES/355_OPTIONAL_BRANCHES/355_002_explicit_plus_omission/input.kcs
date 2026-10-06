@@ -1,0 +1,12 @@
+~proc process|cs {
+    if (value > 100) {
+        return new Output { tag = "warning", warning = "Value too large" };
+    }
+    if (value % 2 == 1) {
+        return new Output { tag = "debug", debug = "Value is odd" };
+    }
+    if (value < 5) {
+        return new Output { tag = "trace", trace = "Very small value" };
+    }
+    return new Output { tag = "success", success = value * 2 };
+}

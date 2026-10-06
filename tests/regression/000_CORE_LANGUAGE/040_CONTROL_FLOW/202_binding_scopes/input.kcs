@@ -1,0 +1,19 @@
+~proc outer|cs {
+    // x is accessible here directly
+    return x;
+}
+~proc middle|cs {
+    return y * 2;
+}
+~proc inner|cs {
+    return z * 3;
+}
+~proc nested-data|cs {
+    // Access nested field
+    const len: i32 = @intCast(info.profile.name.len);
+    return len;
+}
+~proc show-values|cs {
+    // Should print values showing the scope chain worked
+    __koru_stdout_write($"Values from scope chain: {a} {b} {c}\n");
+}

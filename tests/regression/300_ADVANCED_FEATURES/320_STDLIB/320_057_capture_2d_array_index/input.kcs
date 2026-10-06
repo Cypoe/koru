@@ -1,0 +1,4 @@
+~proc print-sum|cs {
+    var sum = g[0][0] + g[0][1] + g[1][0] + g[1][1];
+    __koru_stdout_write($"{sum}\n");
+}

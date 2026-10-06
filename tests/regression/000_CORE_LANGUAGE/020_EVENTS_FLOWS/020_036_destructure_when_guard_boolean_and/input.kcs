@@ -1,0 +1,6 @@
+~proc scan-pairs|cs {
+    pair(.{ .a = 1, .b = 2 });
+    pair(.{ .a = 3, .b = 4 });
+    pair(.{ .a = 5, .b = 6 });
+    return .done;
+}

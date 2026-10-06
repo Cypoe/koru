@@ -1,0 +1,4 @@
+~proc transform|cs {
+    var squared = squarify(payload * payload);
+    return new Output { tag = "done", done = squared };
+}

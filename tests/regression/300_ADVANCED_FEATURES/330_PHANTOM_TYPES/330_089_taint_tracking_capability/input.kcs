@@ -1,0 +1,6 @@
+~proc read-input|cs {
+    return "untrusted";
+}
+~proc query|cs {
+    return;
+}

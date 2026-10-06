@@ -1,0 +1,12 @@
+using static KoruHost;
+
+static class KoruHost {
+    public class TestRequest {
+        public dynamic method;
+        public dynamic path;
+    }
+}
+
+~proc usage|cs {
+    return new { processor = 7, ram = 11, storage = 13 };
+}

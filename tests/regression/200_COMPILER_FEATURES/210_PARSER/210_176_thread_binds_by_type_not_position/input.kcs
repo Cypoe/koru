@@ -1,0 +1,4 @@
+~proc seed|cs { return 7; 
+}
+~proc tally|cs { return n + ((long)(((long)(tag.Length)))); 
+}

@@ -1,0 +1,6 @@
+~proc first|cs {
+    __koru_stdout_write("First\n");
+}
+~proc second|cs {
+    __koru_stdout_write("Second\n");
+}

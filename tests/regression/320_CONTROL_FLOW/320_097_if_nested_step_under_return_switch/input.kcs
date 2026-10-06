@@ -1,0 +1,3 @@
+~proc clock|cs {
+    return passes;
+}

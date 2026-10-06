@@ -1,0 +1,3 @@
+~proc get-box|cs {
+    return new { v = 7, other = 11 };
+}

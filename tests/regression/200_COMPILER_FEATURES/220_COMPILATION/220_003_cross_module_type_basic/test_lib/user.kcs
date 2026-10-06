@@ -1,0 +1,7 @@
+~proc create|cs {
+    var t_user = User{
+        .name = name,
+        .age = age,
+    };
+    return t_user;
+}

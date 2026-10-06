@@ -1,0 +1,12 @@
+~proc counter|cs {
+    __koru_stdout_write($"Count: {n}\n");
+
+    if (n < 5) {
+        return new Output { tag = "next", next = n + 1 };
+    } else {
+        return new Output { tag = "done", done = n };
+    }
+}
+~proc start|cs {
+    __koru_stdout_write("Starting counter...\n");
+}

@@ -1,0 +1,5 @@
+~proc beats|cs {
+    var i = 0;
+    while (i < k) { beat(i); i += 1; }
+    return new Output { tag = "done", done = new { } };
+}

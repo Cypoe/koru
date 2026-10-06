@@ -1,0 +1,13 @@
+~proc count|cs {
+    var new_i = i + 1;
+    var new_sum = sum + i;
+
+    if (new_i < 10_000_000) {
+        return new Output { tag = "next", next = (new_i, new_sum) };
+    } else {
+        return new Output { tag = "done", done = new_sum };
+    }
+}
+~proc print|cs {
+    __koru_stdout_write($"Sum: {result}\n");
+}

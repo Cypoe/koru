@@ -1,0 +1,6 @@
+~proc process-ast|cs {
+    return result.source_file.items.Length;
+}
+~proc report|cs {
+    __koru_stdout_write($"AST has {count} items\n");
+}

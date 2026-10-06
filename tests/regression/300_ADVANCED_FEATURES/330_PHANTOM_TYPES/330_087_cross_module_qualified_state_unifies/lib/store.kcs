@@ -1,0 +1,6 @@
+~proc make-secret|cs {
+    return payload;
+}
+~proc reveal|cs {
+    return s;
+}

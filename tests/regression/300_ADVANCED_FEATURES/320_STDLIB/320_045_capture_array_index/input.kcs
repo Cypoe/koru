@@ -1,0 +1,4 @@
+~proc print-sum|cs {
+    var sum = arr[0] + arr[1] + arr[2];
+    __koru_stdout_write($"{sum}\n");
+}

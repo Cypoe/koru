@@ -1,0 +1,3 @@
+~proc my-event|cs {
+    __koru_stdout_write("kebab event ok\n");
+}

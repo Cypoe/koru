@@ -1,0 +1,13 @@
+~proc src|cs {
+    return new Output { tag = "ok", ok = 3 };
+}
+~proc mks|cs {
+    return 3;
+}
+~proc scan|cs {
+    var i = 0;
+    for (; i < n; i += 1) {
+        hit(i);
+    }
+    return new Output { tag = "done", done = new { } };
+}

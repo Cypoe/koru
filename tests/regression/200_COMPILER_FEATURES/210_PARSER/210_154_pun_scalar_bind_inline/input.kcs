@@ -1,0 +1,4 @@
+~proc get-msg|cs { return "punned!"; 
+}
+~proc render-at|cs { __koru_stdout_write($"{x}:{text}\n"); 
+}

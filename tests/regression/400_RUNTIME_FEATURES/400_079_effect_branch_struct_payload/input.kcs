@@ -1,0 +1,5 @@
+~proc tokenize|cs {
+    _ = source;
+    token(.{ .kind = 1, .lexeme = "first" });
+    token(.{ .kind = 2, .lexeme = "second" });
+}

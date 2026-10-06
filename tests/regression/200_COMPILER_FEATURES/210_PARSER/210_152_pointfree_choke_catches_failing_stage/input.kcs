@@ -1,0 +1,6 @@
+~proc stage-a|cs {
+    if (ctx < 0) return new Output { tag = "failed", failed = "negative" };
+    return new Output { tag = "ctx", ctx = ctx + 1 };
+}
+~proc stage-b|cs { return new Output { tag = "ctx", ctx = ctx * 2 }; 
+}

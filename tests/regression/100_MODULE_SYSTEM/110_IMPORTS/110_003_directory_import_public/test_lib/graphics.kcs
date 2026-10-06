@@ -1,0 +1,6 @@
+~proc init|cs {
+    __koru_stdout_write("Graphics initialized\n");
+}
+~proc render|cs {
+    __koru_stdout_write($"Rendering frame {frame}\n");
+}

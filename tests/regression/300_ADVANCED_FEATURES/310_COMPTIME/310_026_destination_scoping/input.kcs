@@ -1,0 +1,10 @@
+~proc file.read|cs {
+}
+~proc file.write|cs {
+    __koru_stdout_write("Writing\n");
+}
+~proc network.fetch|cs {
+}
+~proc logger|cs {
+    __koru_stdout_write($"write called from: {caller}\n");
+}

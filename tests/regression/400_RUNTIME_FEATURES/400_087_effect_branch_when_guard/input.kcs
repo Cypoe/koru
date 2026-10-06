@@ -1,0 +1,6 @@
+~proc ticker|cs {
+    var i = 0;
+    for (; i < n; i += 1) {
+        tick(i);
+    }
+}

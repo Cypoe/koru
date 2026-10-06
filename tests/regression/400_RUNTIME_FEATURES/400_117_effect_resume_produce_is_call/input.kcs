@@ -1,0 +1,5 @@
+~proc mix|cs { return x + 1; 
+}
+~proc driver|cs {
+    return new Output { tag = "done", done = step(41) };
+}

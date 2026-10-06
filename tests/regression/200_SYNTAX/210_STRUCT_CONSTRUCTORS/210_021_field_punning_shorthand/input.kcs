@@ -1,0 +1,3 @@
+~proc make-point|cs {
+    return new Point { x = x, y = y  };
+}

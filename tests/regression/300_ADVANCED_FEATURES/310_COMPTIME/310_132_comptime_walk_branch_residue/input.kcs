@@ -1,0 +1,4 @@
+~proc pick|cs {
+    if (n < 10) return new Output { tag = "small", small = n };
+    return new Output { tag = "big", big = n };
+}

@@ -1,0 +1,6 @@
+~proc guarded|cs {
+    __koru_stdout_write("guarded ran\n");
+}
+~proc vertical-guarded|cs {
+    __koru_stdout_write("vertical-guarded ran\n");
+}

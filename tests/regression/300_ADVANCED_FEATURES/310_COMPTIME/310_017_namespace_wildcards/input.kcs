@@ -1,0 +1,12 @@
+~proc http.request|cs {
+    __koru_stdout_write("HTTP request\n");
+}
+~proc http.response|cs {
+    __koru_stdout_write("HTTP response\n");
+}
+~proc db.query|cs {
+    __koru_stdout_write("DB query\n");
+}
+~proc logger|cs {
+    __koru_stdout_write($"HTTP event: {source}\n");
+}

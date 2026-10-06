@@ -1,0 +1,4 @@
+~proc init|cs {
+    ready(value);
+    return new Output { tag = "done", done = value };
+}

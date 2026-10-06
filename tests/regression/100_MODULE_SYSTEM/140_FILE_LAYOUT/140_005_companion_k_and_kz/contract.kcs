@@ -1,0 +1,3 @@
+~proc compute|cs {
+    return x + 100;
+}

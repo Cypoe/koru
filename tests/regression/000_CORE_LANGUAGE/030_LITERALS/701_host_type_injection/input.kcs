@@ -1,0 +1,3 @@
+~proc test-pass|cs {
+    __koru_stdout_write("HostTypeDecl infrastructure ready\n");
+}

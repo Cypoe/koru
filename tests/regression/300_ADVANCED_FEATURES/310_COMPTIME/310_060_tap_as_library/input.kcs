@@ -1,0 +1,7 @@
+~proc hello|cs {
+    __koru_stdout_write("Hello executed\n");
+    return "go";
+}
+~proc observer|cs {
+    __koru_stdout_write("Observer fired!\n");
+}

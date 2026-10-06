@@ -1,0 +1,18 @@
+using static KoruHost;
+
+static class KoruHost {
+    public static ulong counter = 0;
+}
+
+~proc leaf|cs {
+    for (0..n) |i| v(i);
+}
+~proc outer|cs {
+    for (0..n) |i| v(i);
+}
+~proc inc|cs {
+    counter +%= 1;
+}
+~proc show|cs {
+    __koru_stdout_write($"{counter}\n");
+}

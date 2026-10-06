@@ -1,0 +1,14 @@
+~proc outer|cs {
+    __koru_stdout_write($"Outer: {count}\n");
+    if (count < 2) {
+        return new Output { };
+    }
+    return new Output { };
+}
+~proc inner|cs {
+    __koru_stdout_write($"  Inner: {count}\n");
+    if (count < 2) {
+        return new Output { };
+    }
+    return new Output { };
+}

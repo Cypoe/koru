@@ -1,0 +1,6 @@
+~proc init|cs {
+    __koru_stdout_write("Audio initialized\n");
+}
+~proc play|cs {
+    __koru_stdout_write($"Playing sound: {sound}\n");
+}

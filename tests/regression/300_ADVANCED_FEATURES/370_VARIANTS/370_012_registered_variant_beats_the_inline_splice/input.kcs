@@ -1,0 +1,7 @@
+~proc pump|cs {
+    tick(n);
+    return new Output { tag = "done", done = "default" };
+}
+~proc show|cs {
+    __koru_stdout_write($"{value}\n");
+}

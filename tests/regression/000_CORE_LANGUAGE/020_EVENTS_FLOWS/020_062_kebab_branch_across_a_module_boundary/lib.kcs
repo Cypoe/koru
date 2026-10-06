@@ -1,0 +1,4 @@
+~proc classify|cs {
+    if (n < 0) return new Output { tag = "parse_error", parse_error = ("negative", 3) };
+    return new Output { tag = "ok", ok = "fine" };
+}

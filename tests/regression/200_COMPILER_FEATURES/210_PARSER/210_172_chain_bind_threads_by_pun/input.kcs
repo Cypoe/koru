@@ -1,0 +1,4 @@
+~proc seed|cs { return 1; 
+}
+~proc bump|cs { return n + 10; 
+}

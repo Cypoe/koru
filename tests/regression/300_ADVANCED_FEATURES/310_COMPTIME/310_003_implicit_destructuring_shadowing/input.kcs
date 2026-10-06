@@ -1,0 +1,9 @@
+using static KoruHost;
+
+static class KoruHost {
+    public const string name = "World";
+}
+
+~proc greet|cs {
+    __koru_stdout_write($"Hello, {name}!\n");
+}

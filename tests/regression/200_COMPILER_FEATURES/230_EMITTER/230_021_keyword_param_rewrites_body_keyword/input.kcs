@@ -1,0 +1,8 @@
+~proc bump|cs {
+    var n = var;
+    n += 1;
+    return n;
+}
+~proc show|cs {
+    __koru_stdout_write($"{x}\n");
+}

@@ -1,0 +1,66 @@
+using static KoruHost;
+
+static class KoruHost {
+    public static ulong name_buf = 0;
+    public static ulong name_len = 0;
+    public static ulong event_name = 0;
+    public static ulong input = 0;
+    public static ulong raw = 0;
+    public static ulong r = 0;
+    public static ulong v = 0;
+    public static ulong n = 0;
+    public static ulong i = 0;
+    public static ulong p = 0;
+    public static ulong count = 0;
+    public static ulong field = 0;
+    public static ulong branch = 0;
+    public static ulong field_count = 0;
+    public static ulong payload_fields = 0;
+    public static ulong ptr_info = 0;
+    public static ulong arr = 0;
+    public static ulong ev = 0;
+    public static ulong dis = 0;
+    public static ulong cre = 0;
+    public static ulong discharges_it = 0;
+    public static ulong reissues = 0;
+    public static ulong obligation = 0;
+    public static ulong args = 0;
+    public static ulong arg = 0;
+    public static ulong inv = 0;
+    public static ulong out = 0;
+    public static ulong mq = 0;
+    public static ulong seg = 0;
+    public static readonly dynamic Input = usize;
+    public static readonly dynamic Output = usize;
+    public static readonly dynamic Handler = usize;
+    public static readonly dynamic ReturnType = usize;
+    public static readonly dynamic V = usize;
+    public static readonly dynamic S = usize;
+    public static readonly dynamic SR = usize;
+    public static readonly dynamic P = usize;
+    public static readonly dynamic T = usize;
+    public static readonly dynamic F = usize;
+    public static readonly dynamic dispatcher_ast = usize;
+    public static readonly dynamic ScopeEvent = usize;
+    public static readonly dynamic ScopeDescriptor = usize;
+    public static readonly dynamic ScopeManifest = usize;
+    public static readonly dynamic ManifestEvent = usize;
+    public static readonly dynamic ManifestArg = usize;
+    public static readonly dynamic ManifestCreate = usize;
+    public static readonly dynamic ManifestDischarge = usize;
+    public static readonly dynamic ManifestBranch = usize;
+    public static readonly dynamic ManifestBranchField = usize;
+    public static readonly dynamic FieldValue = usize;
+    public static readonly dynamic NamedField = usize;
+    public static ulong getArg(ulong a) {
+    return (ulong)(a);
+}
+    public static ulong buildInput(ulong a) {
+    return (ulong)(a);
+}
+}
+
+~proc ping|cs {
+    $mod.name_len = text.len;
+    __koru_stdout_write($"ping wrote name_len={text.Length}\n");
+}

@@ -1,0 +1,3 @@
+~proc pick|cs {
+    return if (n > 5) .high else .low;
+}

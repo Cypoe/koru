@@ -1,0 +1,4 @@
+~proc round|cs {
+    if (count >= 3) return new Output { tag = "done", done = tag };
+    return new Output { tag = "again", again = count + 1 };
+}
