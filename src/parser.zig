@@ -5693,19 +5693,138 @@ pub const Parser = struct {
         // (`~std/kernel:init(Body)|gpu` — the 210_140 swallow: only the
         // pre-paren form `blur|gpu` was split, so a variant tag on a source-
         // block transform invocation vanished without a diagnostic).
+        //
+        // The variant token is opaque and greedy: `|` takes everything up to
+        // the next top-level whitespace or `:` (the bind delimiter). Parens
+        // and brackets inside it balance, so `zig(godot)` is one token and
+        // its contents are never analyzed. Whitespace then separates the
+        // variant from what follows — a spaced arg list `f|zig(godot) (x: 1)`
+        // or a result bind `f(x)|zig(godot): r`, both of which live in the
+        // tail the head scan could not see past the `|`.
         const variant_pipe = findTopLevelVariantPipe(invocation_part);
         const invocation_head = if (variant_pipe) |vp| lexer.trim(invocation_part[0..vp]) else invocation_part;
 
-        // Check for |variant suffix (e.g., "blur|gpu" or "compute|zig[optimized]")
-        // Note: variants use [] not () for parameterization to avoid ambiguity with args
         var variant: ?[]const u8 = null;
+        var variant_args_str: ?[]const u8 = null;
+        var variant_tail: []const u8 = "";
         if (variant_pipe) |vp| {
-            const variant_str = lexer.trim(invocation_part[vp + 1 ..]);
+            var vend = vp + 1;
+            var vdepth: i32 = 0;
+            while (vend < invocation_part.len) : (vend += 1) {
+                const c = invocation_part[vend];
+                if (vdepth == 0 and (c == ' ' or c == '\t' or c == ':' or c == '{')) break;
+                if (c == '(' or c == '[') vdepth += 1;
+                if (c == ')' or c == ']') vdepth -= 1;
+            }
+            const variant_str = lexer.trim(invocation_part[vp + 1 .. vend]);
             if (variant_str.len > 0) {
                 variant = try self.allocator.dupe(u8, variant_str);
             }
+            variant_tail = lexer.trim(invocation_part[vend..]);
         }
         errdefer if (variant) |v| self.allocator.free(v);
+
+        // What follows the variant token: a spaced arg list `(…)`
+        // (`f|zig(godot) (x: 1)`) and/or a result bind (`f(x)|zig(godot): r`
+        // — the head's bind strip cannot see past the `|`). Anything else
+        // that survived to the tail is a refusal, not a silent drop.
+        if (variant_tail.len > 0 and variant_tail[0] == '(') {
+            var tdepth: i32 = 1;
+            var tend: usize = 1;
+            var tquote: u8 = 0;
+            while (tend < variant_tail.len and tdepth > 0) : (tend += 1) {
+                const ch = variant_tail[tend];
+                if (tquote != 0) {
+                    if (ch == '\\') {
+                        tend += 1;
+                    } else if (ch == tquote) {
+                        tquote = 0;
+                    }
+                    continue;
+                }
+                switch (ch) {
+                    '"', '\'' => tquote = ch,
+                    '(' => tdepth += 1,
+                    ')' => tdepth -= 1,
+                    else => {},
+                }
+            }
+            if (tdepth != 0) {
+                return self.fail(
+                    .PARSE003,
+                    self.current,
+                    1,
+                    "unbalanced parentheses in invocation arguments",
+                    .{},
+                );
+            }
+            variant_args_str = variant_tail[0..tend];
+            variant_tail = lexer.trim(variant_tail[tend..]);
+        }
+        if (variant_tail.len > 0 and variant_tail[0] == ':') {
+            var k2: usize = 1;
+            while (k2 < variant_tail.len and (variant_tail[k2] == ' ' or variant_tail[k2] == '\t')) : (k2 += 1) {}
+            var name_end = k2;
+            while (name_end < variant_tail.len and
+                (std.ascii.isAlphanumeric(variant_tail[name_end]) or
+                    variant_tail[name_end] == '_' or variant_tail[name_end] == '-')) : (name_end += 1)
+            {}
+            if (name_end == k2) {
+                return self.fail(
+                    .PARSE001,
+                    self.current,
+                    0,
+                    "expected a binding name after `:` (e.g. `~greet(...)|variant: result |> ...`)",
+                    .{},
+                );
+            }
+            if (return_binding != null) {
+                return self.fail(
+                    .PARSE001,
+                    self.current,
+                    0,
+                    "two result bindings on one invocation — bind once: `f(...)|variant: name`",
+                    .{},
+                );
+            }
+            return_binding = try self.allocator.dupe(u8, variant_tail[k2..name_end]);
+            if (name_end < variant_tail.len and variant_tail[name_end] == '[') {
+                const ann_close = std.mem.indexOfScalarPos(u8, variant_tail, name_end, ']') orelse {
+                    return self.fail(
+                        .PARSE001,
+                        self.current,
+                        0,
+                        "unterminated binding annotation; expected `]` (e.g. `~greet(...)|variant: r[mutable] |> ...`)",
+                        .{},
+                    );
+                };
+                const inner = variant_tail[name_end + 1 .. ann_close];
+                var ann_list = try std.ArrayList([]const u8).initCapacity(self.allocator, 2);
+                errdefer {
+                    for (ann_list.items) |a| self.allocator.free(@constCast(a));
+                    ann_list.deinit(self.allocator);
+                }
+                var ann_it = std.mem.splitScalar(u8, inner, ',');
+                while (ann_it.next()) |tok| {
+                    const t = lexer.trim(tok);
+                    if (t.len == 0) continue;
+                    try ann_list.append(self.allocator, try self.allocator.dupe(u8, t));
+                }
+                return_binding_annotations = try ann_list.toOwnedSlice(self.allocator);
+                variant_tail = lexer.trim(variant_tail[ann_close + 1 ..]);
+            } else {
+                variant_tail = lexer.trim(variant_tail[name_end..]);
+            }
+        }
+        if (variant_tail.len > 0 and variant_tail[0] != '{') {
+            return self.fail(
+                .PARSE001,
+                self.current,
+                1,
+                "unexpected text after |variant — args follow it spaced (`f|zig(godot) (x: 1)`), a bind follows `:` (`f(x)|zig(godot): r`)",
+                .{},
+            );
+        }
 
         const paren_idx = std.mem.indexOf(u8, invocation_head, "(");
 
@@ -5791,6 +5910,43 @@ pub const Parser = struct {
                     tryParseArgExpression(self.allocator, &ast_arg);
                     try args.append(self.allocator, ast_arg);
                 }
+            }
+        }
+
+        // Args that followed the variant token (`f|zig(godot) (x: 1)`) merge
+        // with any head args — but not both: `f(a)|v (b)` has two lists and
+        // no rule to order them, so it refuses instead of guessing.
+        if (variant_args_str) |vas| {
+            if (args.items.len > 0) {
+                return self.fail(
+                    .PARSE001,
+                    self.current,
+                    1,
+                    "arg list on both sides of |variant — put them before it (`f(a)|v`) or after it spaced (`f|v (a)`), not both",
+                    .{},
+                );
+            }
+            const tail_args = try self.parseArgsReported(vas);
+            defer self.allocator.free(tail_args);
+            try self.checkRedundantPunning(tail_args, self.current);
+            for (tail_args) |arg| {
+                if (lexer.startsWith(arg.value, ".{")) {
+                    return self.fail(
+                        .PARSE003,
+                        self.current,
+                        1,
+                        "Zig-style struct syntax '.{{' is not valid in Koru parameter values — pass fields as named parameters instead",
+                        .{},
+                    );
+                }
+                var ast_arg = ast.Arg{
+                    .name = arg.name,
+                    .value = arg.value,
+                    .phantom_type = arg.phantom_type,
+                    .had_explicit_label = arg.had_explicit_label,
+                };
+                tryParseArgExpression(self.allocator, &ast_arg);
+                try args.append(self.allocator, ast_arg);
             }
         }
 

@@ -1,0 +1,31 @@
+// Test: qualified variant selected at the call site.
+//
+//   ~proc ping|zig          — default impl
+//   ~proc ping|zig(godot)   — qualified variant (zig host driving godot path)
+//
+// The call-site spelling is `f|zig(godot)` with the variant opaque and
+// greedy: `|` takes everything up to the next top-level whitespace, and
+// whitespace separates the variant from a following arg list:
+//
+//   ping|zig(godot) (x: 41)   — qualified variant, spaced args
+//   ping(x: 41)|zig(godot)    — post-paren variant
+//
+// Both must dispatch to handler__zig_28_godot_29_ and keep the `: bind`.
+
+const std = @import("std");
+
+~import std/io
+
+~tor ping { x: i32 } -> i32
+
+~proc ping|zig {
+    return x + 1;
+}
+
+~proc ping|zig(godot) {
+    return x + 100;
+}
+
+~ping(x: 41): r1 |> std/io:print.ln("bare {{ r1:d }}")
+~ping|zig(godot) (x: 41): r2 |> std/io:print.ln("pre {{ r2:d }}")
+~ping(x: 41)|zig(godot): r3 |> std/io:print.ln("post {{ r3:d }}")

@@ -68,8 +68,13 @@
 # Re-pinned 2026-10-08: sampled roll fired under an invariants baseline
 # re-pin; members drift 903→908 is foreign (uncommitted cs_emitter.zig
 # work from another session — the census reads the working tree).
-clusters=823
-members=908
+clusters=820
+members=911
+# Re-pinned to 820/911 on the call-site |variant commit: the sampled roll
+# named containsTokenLocal x containsToken (continuation_codegen /
+# emitter_helpers) and an emitter_test test_decl pair — none of those
+# files are in this diff, and parser.zig does not appear among the
+# census's offenders; the +3 members are foreign working-tree drift.
 # Re-pinned to 819/889 on the typed-envelope commit: the Input/Output
 # struct emission + produce-site typing ported more of the js_emitter
 # twin shape into cs_emitter — same sanctioned per-target duplication

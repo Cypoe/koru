@@ -42,3 +42,20 @@ the documentation.
   selects: `--lang=cs` with `|cs` bodies in source passes the guard and
   produces Zig text with C# spliced in. The deeper wall (the tag names no
   emitter) belongs to the stage-C dispatch work, not the namespace guard.
+
+## Second instance — the call-site variant (2026-10-08)
+
+The same disease, one layer down. `f|variant` on an invocation selected
+*any* name: nothing compared it against the proc's declared targets, so
+`|zig(gdoot)` emitted a `handler__zig_28_gdoot_29_` call that
+existed nowhere and surfaced as a Zig backend `no member` error — a
+mangled string the user never wrote. Every green call site was
+consistent with both the guarded and unguarded world, exactly as the
+claim predicts; the defect surfaced only when a qualified variant
+(`|zig(godot)`) was called for the first time ever, for ogun's
+`shader.new`. KORU177 (flow_checker, beside KORU110) is the point of
+refusal. The grammar that made it reachable is the opaque-greedy rule:
+the variant token runs to the next top-level whitespace, parens inside
+balance, so call and declaration share one spelling verbatim and a glued
+`f|zig(godot)(args)` fails existence-check *spelled correctly* — the
+malformed name teaches the right one.

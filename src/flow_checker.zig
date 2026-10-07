@@ -773,13 +773,18 @@ pub const FlowChecker = struct {
 
         var has_match = false;
         var has_variant_proc = false;
+        var declared_targets = std.ArrayList([]const u8){};
+        defer declared_targets.deinit(self.allocator);
 
         for (items) |*item| {
             switch (item.*) {
                 .proc_decl => |*proc| {
                     if (!pathSegmentsEqual(inv.path.segments, proc.path.segments)) continue;
                     has_match = true;
-                    if (proc.target != null) has_variant_proc = true;
+                    if (proc.target) |t| {
+                        has_variant_proc = true;
+                        try declared_targets.append(self.allocator, t);
+                    }
                 },
                 .module_decl => |*module| {
                     for (module.items) |*mod_item| {
@@ -787,10 +792,54 @@ pub const FlowChecker = struct {
                         const proc = mod_item.proc_decl;
                         if (!pathSegmentsEqual(inv.path.segments, proc.path.segments)) continue;
                         has_match = true;
-                        if (proc.target != null) has_variant_proc = true;
+                        if (proc.target) |t| {
+                            has_variant_proc = true;
+                            try declared_targets.append(self.allocator, t);
+                        }
                     }
                 },
                 else => {},
+            }
+        }
+
+        // KORU177: an explicit |variant on the call must name a declared proc
+        // target. Without this wall the emitter writes `handler__<variant>`
+        // against a body that was never declared and the miss surfaces as a
+        // Zig backend 'no member' error naming a mangled string the user
+        // never wrote (370_015's sibling: `f|zig(gdoot)` misspelling).
+        if (inv.variant) |v| {
+            var found = false;
+            for (declared_targets.items) |t| {
+                if (std.mem.eql(u8, t, v)) {
+                    found = true;
+                    break;
+                }
+            }
+            // Only when variant-tagged procs exist at all — an all-bare-proc
+            // call is already KORU110's teaching error; stacking a second
+            // refusal on it would report the same fault twice.
+            if (!found and has_variant_proc) {
+                var name_buf = std.ArrayList(u8){};
+                defer name_buf.deinit(self.allocator);
+                for (inv.path.segments, 0..) |seg, i| {
+                    if (i > 0) try name_buf.append(self.allocator, '.');
+                    try name_buf.appendSlice(self.allocator, seg);
+                }
+                var variants_buf = std.ArrayList(u8){};
+                defer variants_buf.deinit(self.allocator);
+                for (declared_targets.items, 0..) |t, i| {
+                    if (i > 0) try variants_buf.appendSlice(self.allocator, ", ");
+                    try variants_buf.appendSlice(self.allocator, t);
+                }
+                try self.reporter.addErrorWithHint(
+                    .KORU177,
+                    location.line,
+                    location.column,
+                    "'{s}' is called with variant |{s}, but no ~proc declares that target",
+                    .{ name_buf.items, v },
+                    "declared variants: {s} — the |variant tag is opaque text and must match a `~proc {s}|<target> {{ ... }}` verbatim",
+                    .{ variants_buf.items, name_buf.items },
+                );
             }
         }
 
