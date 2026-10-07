@@ -57,11 +57,10 @@
             // verb. Nothing strands: the value, the handle, and the outcome
             // all survive.
             if (e.not_invocation or isNoteAttempt(br, source)) {
-                const rn = bindResidue(br, std.mem.trim(u8, source, " \t\r\n"));
-                if (rn.len > 0) return .{ .residue = .{
-                    .report = residueNote(rn),
-                    .observer = !e.not_invocation,
-                } };
+                const prose = std.mem.trim(u8, source, " \t\r\n");
+                const rn = bindResidue(br, prose);
+                if (rn.len > 0) return .{ .residue = .{ .report = residueNote(rn),
+                    .observer = !e.not_invocation, .bound = rn, .text = prose } };
             }
             return .{ .parse_error = .{
                 .message = e.message, .line = e.line, .column = e.column,
@@ -104,19 +103,15 @@
     if (all_prose) {
         const trimmed = std.mem.trim(u8, source, " \t\r\n");
         const rn = bindResidue(br, trimmed);
-        if (rn.len > 0) return .{ .residue = .{
-            .report = residueNote(rn),
-            .observer = isNoteAttempt(br, trimmed),
-        } };
+        if (rn.len > 0) return .{ .residue = .{ .report = residueNote(rn),
+            .observer = isNoteAttempt(br, trimmed), .bound = rn, .text = trimmed } };
         // Bind failed — fall through to the per-item loop, which reports
         // per-step refusals instead of lying about a single binding.
     }
 
     const steps = runSteps(br, source, items);
     if (steps.all_residue) return .{ .residue = .{
-        .report = steps.report,
-        .observer = isNoteAttempt(br, source),
-    } };
+        .report = steps.report, .observer = isNoteAttempt(br, source), .bound = "", .text = "" } };
     return .{ .partial = .{
         .ran = steps.total,
         .total = steps.total,

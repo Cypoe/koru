@@ -261,3 +261,20 @@ the reject still costs a turn. First live witness: the next smoke run
 rejected one prose turn and the model's next reply opened `say:` in
 colon form on its own. Continuation of 2026-10-05 (bis) — the refusal
 must teach the rule; now the rule names the shape.
+
+2026-10-07 (ter) — a captured-text field is LITERAL: `rN` in a `Source`
+position is prose, not a reference. The same report that taught "call
+say(text: rN)" was unfulfillable advice — `say`'s lone field is `Source`,
+and Source captures raw text, so the obeying model delivered the literal
+string "r4" to the user. Witnessed in the bench receipts (corpus-replay
+20260927) and re-witnessed live in the first implicit-say smoke: the
+harness emitted `say(text: r29)` and the user read "r29". Only
+`name<x>` and ordinary scalar fields resolve bound names; Source and
+Expression never look anything up — that is what "captured" means. The
+verdict now carries the redelivery materials itself: `bound` (the name,
+for the report) and `text` (the prose, so a harness can emit `say:`
+<prose> — colon form, safe because bound prose contains no
+invocation-head lines by construction). The report's advice is
+re-emission, not name-passing: "re-emit your text in that shape." A
+teaching message whose own instruction cannot be obeyed is worse than
+silence — it manufactures a second failure out of the first.

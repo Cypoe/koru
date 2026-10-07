@@ -2,12 +2,12 @@
 // teaching text and the observer-channel classifier. Joined via
 // `~part residue` in bridge.kz; merged into the bridge module at load.
 
-/// The report a bound residue hands back: the `rN` name twice — the model
-/// needs the name to re-emit the text through `say`, so the message carries
-/// it in both the report slot and the teaching clause.
+/// The report a bound residue hands back. The name is narrative only —
+/// `say`'s field is Source, so `say(text: rN)` would deliver the literal
+/// name; the only honest redelivery is re-emitting the prose under `say:`.
 fn residueNote(rn: []const u8) []const u8 {
     return std.fmt.allocPrint(std.heap.page_allocator,
-        "residue bound: {s} — your reply was not wire; nothing reached the user, but the observer kept it. To deliver it, call say(text: {s}); prose meant for the user wants `say:` up front (no quoting needed), `note:` for thinking out loud", .{ rn, rn })
+        "residue bound: {s} — your reply was not wire; nothing reached the user, but the observer kept it. Prose meant for the user wants `say:` up front (no quoting needed), `note:` for thinking out loud — re-emit your text in that shape", .{rn})
         catch @panic("bridge: OOM building residue report");
 }
 

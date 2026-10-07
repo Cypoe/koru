@@ -52,14 +52,14 @@ fn runSteps(br: *Bridge, source: []const u8, items: []const TurnItem) StepRun {
             if (e.not_invocation) {
                 const rn = bindResidue(br, item);
                 if (rn.len > 0) {
-                    writer.print("step {d}/{d} residue bound: {s} — your reply was not wire; nothing reached the user, but the observer kept it. To deliver it, call say(text: {s}); prose meant for the user wants `say:` up front (no quoting needed), `note:` for thinking out loud\n", .{ step, total, rn, rn }) catch {};
+                    writer.print("step {d}/{d} residue bound: {s} — your reply was not wire; nothing reached the user, but the observer kept it. Prose meant for the user wants `say:` up front (no quoting needed), `note:` for thinking out loud — re-emit that text in that shape\n", .{ step, total, rn }) catch {};
                     continue;
                 }
             }
             if (isNoteAttempt(br, item)) {
                 const rn = bindResidue(br, item);
                 if (rn.len > 0) {
-                    writer.print("step {d}/{d} residue bound: {s} — your note did not parse as wire, but the observer kept it. Well-formed: note(text: \"...\") or note: <prose>; to deliver it to the user, call say(text: {s})\n", .{ step, total, rn, rn }) catch {};
+                    writer.print("step {d}/{d} residue bound: {s} — your note did not parse as wire, but the observer kept it. Well-formed: note(text: \"...\") or note: <prose>; to reach the user, re-emit the text under `say:`\n", .{ step, total, rn }) catch {};
                     continue;
                 }
             }

@@ -1,7 +1,7 @@
 hi
-step 1/2 residue bound: r1 — your reply was not wire; nothing reached the user, but the observer kept it. To deliver it, call say(text: r1); prose meant for the user wants `say:` up front (no quoting needed), `note:` for thinking out loud
+step 1/2 residue bound: r1 — your reply was not wire; nothing reached the user, but the observer kept it. Prose meant for the user wants `say:` up front (no quoting needed), `note:` for thinking out loud — re-emit that text in that shape
 step 2/2 result: {"branch":""} bound: r2
 
-RESIDUE residue bound: r3 — your reply was not wire; nothing reached the user, but the observer kept it. To deliver it, call say(text: r3); prose meant for the user wants `say:` up front (no quoting needed), `note:` for thinking out loud
+RESIDUE residue bound: r3 — your reply was not wire; nothing reached the user, but the observer kept it. Prose meant for the user wants `say:` up front (no quoting needed), `note:` for thinking out loud — re-emit your text in that shape
 it's quoted fine
 RESULT bound=r4
