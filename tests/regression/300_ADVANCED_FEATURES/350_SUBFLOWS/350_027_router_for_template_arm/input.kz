@@ -16,5 +16,5 @@ const req_loop = "GET /loop HTTP/1.1\r\n\r\n";
     ! each i |> std/io:print.ln("tick")
     | done -> { status: 404, body: "looped", content_type: "text/plain" }
 
-~orisha:answer(raw: req_hit): a |> std/io:print.ln("{{ a.body:s }}") |> orisha:release-body(a.body, allocated: a.body_allocated)
-~orisha:answer(raw: req_loop): b |> std/io:print.ln("{{ b.body:s }}") |> orisha:release-body(b.body, allocated: b.body_allocated)
+~orisha:answer(raw: req_hit, fd: 0): a |> std/io:print.ln("{{ a.body:s }}") |> orisha:release-body(a.body, allocated: a.body_allocated)
+~orisha:answer(raw: req_loop, fd: 0): b |> std/io:print.ln("{{ b.body:s }}") |> orisha:release-body(b.body, allocated: b.body_allocated)

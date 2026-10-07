@@ -25,4 +25,4 @@ const raw = "POST /api/setup HTTP/1.1\r\n\r\nhello";
     | invalid -> { status: 400, body: "invalid", content_type: "text/plain" }
 ! [*] -> { status: 404, body: "miss", content_type: "text/plain" }
 
-~orisha:answer(raw): a |> std/io:print.ln("{{ a.body:s }}") |> orisha:release-body(a.body, allocated: a.body_allocated)
+~orisha:answer(raw, fd: 0): a |> std/io:print.ln("{{ a.body:s }}") |> orisha:release-body(a.body, allocated: a.body_allocated)

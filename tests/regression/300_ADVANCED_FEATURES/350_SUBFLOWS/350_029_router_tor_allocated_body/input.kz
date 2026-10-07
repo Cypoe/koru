@@ -24,4 +24,4 @@ const raw = "GET / HTTP/1.1\r\n\r\n";
 ! [GET /] |> render(): b -> { status: 200, body: b, content_type: "text/html" }
 ! [*] -> { status: 404, body: "miss", content_type: "text/plain" }
 
-~orisha:answer(raw): a |> std/io:print.ln("{{ a.body:s }}") |> orisha:release-body(a.body, allocated: a.body_allocated)
+~orisha:answer(raw, fd: 0): a |> std/io:print.ln("{{ a.body:s }}") |> orisha:release-body(a.body, allocated: a.body_allocated)

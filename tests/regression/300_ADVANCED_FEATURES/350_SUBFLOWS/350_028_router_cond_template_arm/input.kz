@@ -16,6 +16,6 @@ const req_post = "POST /miss HTTP/1.1\r\n\r\n";
     | c m when m == "POST" -> { status: 405, body: "post", content_type: "text/plain" }
     | c _ -> { status: 404, body: "other", content_type: "text/plain" }
 
-~orisha:answer(raw: req_hit): a |> std/io:print.ln("{{ a.body:s }}") |> orisha:release-body(a.body, allocated: a.body_allocated)
-~orisha:answer(raw: req_get): b |> std/io:print.ln("{{ b.body:s }}") |> orisha:release-body(b.body, allocated: b.body_allocated)
-~orisha:answer(raw: req_post): c |> std/io:print.ln("{{ c.body:s }}") |> orisha:release-body(c.body, allocated: c.body_allocated)
+~orisha:answer(raw: req_hit, fd: 0): a |> std/io:print.ln("{{ a.body:s }}") |> orisha:release-body(a.body, allocated: a.body_allocated)
+~orisha:answer(raw: req_get, fd: 0): b |> std/io:print.ln("{{ b.body:s }}") |> orisha:release-body(b.body, allocated: b.body_allocated)
+~orisha:answer(raw: req_post, fd: 0): c |> std/io:print.ln("{{ c.body:s }}") |> orisha:release-body(c.body, allocated: c.body_allocated)

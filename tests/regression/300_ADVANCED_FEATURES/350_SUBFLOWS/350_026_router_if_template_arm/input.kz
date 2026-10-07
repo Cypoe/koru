@@ -18,6 +18,6 @@ const req_else = "GET / HTTP/1.1\r\n\r\n";
     | then -> { status: 404, body: "long", content_type: "text/plain" }
     | else -> { status: 404, body: "empty", content_type: "text/plain" }
 
-~orisha:answer(raw: req_hit): a |> std/io:print.ln("{{ a.body:s }}") |> orisha:release-body(a.body, allocated: a.body_allocated)
-~orisha:answer(raw: req_then): b |> std/io:print.ln("{{ b.body:s }}") |> orisha:release-body(b.body, allocated: b.body_allocated)
-~orisha:answer(raw: req_else): c |> std/io:print.ln("{{ c.body:s }}") |> orisha:release-body(c.body, allocated: c.body_allocated)
+~orisha:answer(raw: req_hit, fd: 0): a |> std/io:print.ln("{{ a.body:s }}") |> orisha:release-body(a.body, allocated: a.body_allocated)
+~orisha:answer(raw: req_then, fd: 0): b |> std/io:print.ln("{{ b.body:s }}") |> orisha:release-body(b.body, allocated: b.body_allocated)
+~orisha:answer(raw: req_else, fd: 0): c |> std/io:print.ln("{{ c.body:s }}") |> orisha:release-body(c.body, allocated: c.body_allocated)
