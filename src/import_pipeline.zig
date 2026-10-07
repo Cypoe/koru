@@ -339,16 +339,25 @@ fn processImport(allocator: std.mem.Allocator, parse_allocator: std.mem.Allocato
                 if (seen_stems.contains(submod_name)) continue;
                 try seen_stems.put(try alloc.dupe(u8, submod_name), {});
 
+                // The canonical path must be the file a `~import <pkg>/<stem>`
+                // would resolve to, NOT whichever dirent `readdir` surfaced
+                // first — the queue dedup and `addModuleToAST` compare canonical
+                // paths, so a facet order that disagrees with extension priority
+                // lands the same module twice (every decl emitted in duplicate).
+                const canonical = try module_resolver_mod.resolveKoruFileIn(alloc, dir_path, submod_name) orelse
+                    try alloc.dupe(u8, file_path);
+                defer alloc.free(canonical);
+
                 // Loads this dirent AND its facet siblings, merging their items,
                 // module annotations and public events into one program — the same
                 // call the file-import path makes. It also owns the arena dupe of
                 // the path the parser hangs every SourceLocation.file off, which
                 // matters because the `files` slice is freed when this returns.
-                const loaded = try loadFileWithCompanions(alloc, parse_alloc, file_path, res.compiler_flags, quiet_gates);
+                const loaded = try loadFileWithCompanions(alloc, parse_alloc, canonical, res.compiler_flags, quiet_gates);
 
                 try submodules.append(alloc, ImportedModule{
                     .logical_name = try alloc.dupe(u8, submod_name),
-                    .canonical_path = try alloc.dupe(u8, file_path),
+                    .canonical_path = try alloc.dupe(u8, canonical),
                     .public_events = loaded.public_events,
                     .source_file = loaded.source_file,
                     .is_directory = false,
