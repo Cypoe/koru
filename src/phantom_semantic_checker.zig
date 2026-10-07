@@ -493,7 +493,10 @@ pub const PhantomSemanticChecker = struct {
 
     /// Build qualified event name like "module:event" or "module:event[!]"
     fn buildDisposalQualifiedEventName(self: *PhantomSemanticChecker, event_decl: *const ast.EventDecl) ![]const u8 {
-        return self.buildDisposalQualifiedEventNameWithModule(event_decl, event_decl.module);
+        // Part-facet decls carry the part stem in .module but qualify under
+        // the primary — same owner rule as buildEventMap (330_136).
+        const owner = event_decl.path.module_qualifier orelse event_decl.module;
+        return self.buildDisposalQualifiedEventNameWithModule(event_decl, owner);
     }
 
     /// Build qualified event name with explicit module name
@@ -1534,8 +1537,13 @@ pub const PhantomSemanticChecker = struct {
                     const event_name = try self.pathToString(event_decl.path);
                     defer self.allocator.free(event_name);
 
+                    // A `part` facet's decls merge in with .module = the part's
+                    // stem (input.comp) while their path carries the primary
+                    // module_qualifier (input) that call sites qualify under.
+                    // Key by the owner the calls spell — 330_136.
+                    const owner = event_decl.path.module_qualifier orelse event_decl.module;
                     // Store with module:event format (using : separator, not .)
-                    const qualified_name = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ event_decl.module, event_name });
+                    const qualified_name = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ owner, event_name });
                     try event_map.put(qualified_name, EventInfo{ .decl = event_decl });
                 },
                 .module_decl => |module| {
@@ -2798,23 +2806,11 @@ pub const PhantomSemanticChecker = struct {
                 // tracked state, so a downstream consumer (`append(s: owned)`) fails
                 // its phantom precondition. Mirrors the branch-payload recording.
                 if (inv.return_binding) |rb| {
-                    if (nested_event_info.decl.return_phantom) |rp| {
-                        // Canonicalize with the call-site module qualifier (same source
-                        // the nested event uses for its required-state canonicalization),
-                        // NOT the bare decl module — otherwise `string:instance!` won't
-                        // match the consumer's `std.string:instance`.
-                        const ret_module = module_name;
-                        const ret_home = if (nested_event_info.decl.return_type) |rt| try self.typeStringModule(rt) else null;
-                        const canonical_phantom = try self.canonicalizePhantomStateWithBase(rp, ret_module, ret_home);
-                        defer self.allocator.free(canonical_phantom);
-                        if (nested_event_info.decl.return_type) |rt| {
-                            const canonical_base_type = try self.canonicalizeBaseType(rt, null, ret_module);
-                            defer self.allocator.free(canonical_base_type);
-                            try context.setWithType(rb, canonical_phantom, canonical_base_type);
-                        } else {
-                            try context.set(rb, canonical_phantom);
-                        }
-                    }
+                    // Route through the shared recorder so a record return's
+                    // per-FIELD obligations seed too — whole-value-only
+                    // seeding left `make(): r` under a `! each` arm holding an
+                    // untracked `r.h` (330_135).
+                    try self.recordReturnObligationAs(rb, inv.return_destructure, nested_event_info.decl, module_name, qualified_name, &context);
                 }
 
                 // Validate nested continuations against the invoked event (not parent event)
