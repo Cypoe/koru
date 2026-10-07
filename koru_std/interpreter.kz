@@ -36,7 +36,7 @@ const flow_parser = @import("flow_parser");
 // BUILD REQUIREMENTS - Parser and checkers for runtime use
 
 ~std/build:requires {
-    const REL_TO_ROOT = "/usr/local/lib/koru";
+    const REL_TO_ROOT = "${REL_TO_ROOT}";
 
     // Errors module (needed by parser and ast)
     const errors_module = b.createModule(.{
@@ -747,7 +747,6 @@ pub fn findHostTilde(source: []const u8) ?HostTilde {
     }
     return null;
 }
-
 ~part args
 ~part argref
 ~part arith
@@ -760,6 +759,7 @@ pub fn findHostTilde(source: []const u8) ?HostTilde {
 ~part names
 ~part parse
 ~part run
+~part refuse
 ~part runcached
 ~part select
 ~part literal

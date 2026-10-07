@@ -472,9 +472,11 @@ fn cloneContinuations(allocator: std.mem.Allocator, continuations: []const ast.C
             .binding_annotations = anns,
             .destructure = try ast.copyDestructure(allocator, cont.destructure),
             .binding_type = cont.binding_type,
-            // Preserve the branch axis (`|` vs `!`) — a clone that resets
-            // `kind` would turn an effect arm into a terminal.
+            // Preserve the branch axis (`|` vs `!`) and catch-all markers — a
+            // clone that resets `kind` would turn an effect arm into a terminal.
             .kind = cont.kind,
+            .is_catchall = cont.is_catchall,
+            .catchall_metatype = if (cont.catchall_metatype) |m| try allocator.dupe(u8, m) else null,
             .condition = if (cont.condition) |c| try allocator.dupe(u8, c) else null,
             .condition_expr = null,
             .node = if (cont.node) |node| try cloneStep(allocator, node) else null,
@@ -762,6 +764,7 @@ fn reattachArmsToLastStep(
 /// `tryDesugarChain` separates the two).
 fn isUnnamedStep(c: *const ast.Continuation) bool {
     if (c.branch.len != 0) return false;
+    if (c.is_catchall) return false;
     if (c.condition != null) return false;
     if (c.binding != null) return false;
     const n = c.node orelse return false;
@@ -902,11 +905,11 @@ fn appendedArgs(
 /// out what threads; replication without it clones dead arms onto stages that
 /// never declare them, and the coverage wall rightly refuses them (KORU021).
 ///
-/// `!` effect arms carry no terminal-branch name to match, so they clone
-/// through to every stage unchanged.
+/// `!` effect arms and catch-alls carry no terminal-branch name to match, so
+/// they clone through to every stage unchanged.
 fn chokeBelongsOn(info: EventInfo, choke: ast.Continuation) bool {
     if (choke.kind != .terminal) return true;
-    if (choke.branch.len == 0) return true;
+    if (choke.is_catchall or choke.branch.len == 0) return true;
     return branchNamed(info, choke.branch) != null;
 }
 
@@ -1011,7 +1014,7 @@ fn tryDesugarChain(
     // 220_025 pins.
     var type_mismatch = false;
     for (chokes.items) |choke| {
-        if (choke.branch.len == 0) continue;
+        if (choke.branch.len == 0 or choke.is_catchall) continue;
         var ref_payload: ?ast.Shape = null;
         var ref_label: []const u8 = "choke";
         if (enclosing) |encl| {
@@ -1055,7 +1058,7 @@ fn tryDesugarChain(
     var dead_claim = false;
     for (chokes.items) |choke| {
         if (claims_owned) break; // an ancestor already judged this choke set
-        if (choke.kind != .terminal or choke.branch.len == 0) continue;
+        if (choke.kind != .terminal or choke.is_catchall or choke.branch.len == 0) continue;
         var lands = false;
         for (stage_infos.items) |info| {
             if (branchNamed(info, choke.branch) != null) {
@@ -1784,7 +1787,7 @@ fn storeSynthPayloadFields(allocator: std.mem.Allocator, items: []const ast.Item
 /// it says nothing about where the flow's VALUE comes from, so a chain wearing
 /// one is still a chain and its last step still produces the flow's output.
 /// Everything else at a level DOES say where the value comes from — a terminal
-/// `| branch` arm or an already-written `-> v` terminus — and
+/// `| branch` arm, a catch-all, or an already-written `-> v` terminus — and
 /// this rule never overrides an answer the author gave.
 fn linearChainLastStep(body: *ast.Continuation) ?*ast.Continuation {
     var cur: *ast.Continuation = body;
@@ -1796,7 +1799,7 @@ fn linearChainLastStep(body: *ast.Continuation) ?*ast.Continuation {
                 step = child;
                 continue;
             }
-            if (child.kind == .effect) continue;
+            if (child.kind == .effect and !child.is_catchall) continue;
             return null;
         }
         cur = step orelse return cur;

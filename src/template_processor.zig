@@ -797,7 +797,7 @@ fn appendDestructureConsts(
 ///
 /// Distinct-by-NAME: arms routinely reuse one binder (`| c k when …` ×5), and
 /// every arm binds the same scrutinee, so one declaration serves all of them.
-/// Returns "" when nothing binds — a `_` discard, or an `~if`/`~for` terminal
+/// Returns "" when nothing binds — a `_` catch-all, or an `~if`/`~for` terminal
 /// with no scrutinee to bind. Cond arms reuse the payload-less terminal marker,
 /// so — unlike an effect splice, whose call arg the emitter binds — the
 /// scrutinee is threaded in here.

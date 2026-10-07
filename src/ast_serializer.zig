@@ -1178,6 +1178,12 @@ pub const AstSerializer = struct {
         }
         try self.write("},\n");
 
+        // Catch-all flag
+        try self.writeIndent();
+        try self.write(".is_catchall = ");
+        try self.write(if (cont.is_catchall) "true" else "false");
+        try self.write(",\n");
+
         // Branch kind (terminal `|` or effect `!`)
         try self.writeIndent();
         try self.write(".kind = ");
@@ -1185,6 +1191,12 @@ pub const AstSerializer = struct {
             .effect => ".effect",
             .terminal => ".terminal",
         });
+        try self.write(",\n");
+
+        // Catch-all metatype
+        try self.writeIndent();
+        try self.write(".catchall_metatype = ");
+        try self.writeOptString(cont.catchall_metatype);
         try self.write(",\n");
 
         // Condition (where clause)
@@ -2176,6 +2188,11 @@ pub const AstSerializer = struct {
             .effect => "effect",
             .terminal => "terminal",
         });
+        try self.write(",\n");
+
+        try self.writeIndent();
+        try self.write("\"is_catchall\": ");
+        try self.write(if (cont.is_catchall) "true" else "false");
         try self.write(",\n");
 
         try self.writeIndent();

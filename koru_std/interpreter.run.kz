@@ -91,22 +91,15 @@
         },
     };
 
-    // An tor name must lex as an tor name — identifier segments with
-    // `.`/`-`/`:` between them, never spaces. The fast path already rejects
-    // prose in flow_parser, but the full-parser FALLBACK above re-accepts an
-    // English sentence whose first `(` makes it look like an invocation; gate
-    // here, after either parse path and before the scope lookup, so prose is
-    // always a parse-error and never a misleading `event-denied`. (430_055)
-    for (flow.inv().path.segments) |seg| {
-        if (std.mem.indexOfScalar(u8, seg, ' ') != null or std.mem.indexOfScalar(u8, seg, '\t') != null) {
-            return .{ .parse_error = .{
-                .message = std.heap.page_allocator.dupe(u8, "Event name must not contain spaces: prose is not an invocation") catch "parse error",
-                .line = 0,
-                .column = 0,
-            }};
-        }
+    // Post-parse wire refusals (part `refuse`) — a prose invocation name
+    // (430_055) and a `|*` residual arm (440_020) — gate after either parse
+    // path and before the scope lookup, so neither surfaces as a misleading
+    // `event-denied` nor an unjudgeable dispatch.
+    if (wireParseRefusal(flow)) |msg| {
+        return .{ .parse_error = .{
+            .message = msg, .line = 0, .column = 0,
+        }};
     }
-
     // Validation pass
     if (validateFlow(flow, allocator, input_fn, defined, session_env)) |validation_err| {
         return .{ .validation_error = std.heap.page_allocator.dupe(u8, validation_err.message) catch "validation error" };
@@ -1164,6 +1157,11 @@ fn executeFlow(
 ~proc eval|zig {
     const allocator = InterpreterThreadState.prepare();
 
+
+    // Same refusal as `run` — a pre-parsed AST can carry a residual arm too.
+    if (containsResidualArm(flow.body.continuations)) {
+        return .{ .validation_error = "`|*` residual arm is not spellable on the interpreted surface" };
+    }
     // Validation pass - check for errors BEFORE execution
     if (validateFlow(flow, allocator, input_fn, defined, session_env)) |validation_err| {
         return .{ .validation_error = validation_err.message };

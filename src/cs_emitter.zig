@@ -1720,7 +1720,7 @@ const Emitter = struct {
                 if (cont.branch.len != 0) continue;
                 try self.emitInlineContinuationBody(cont, indent);
             } else {
-                try self.emitTerminalContinuation(cont, null, indent, false, false, null);
+                try self.emitTerminalContinuation(cont, null, continuations, null, indent, false, false, null);
             }
         }
     }
@@ -1846,6 +1846,7 @@ const Emitter = struct {
         for (continuations) |*cont| {
             if (cont.kind != .terminal) continue;
             terminal_count += 1;
+            if (cont.is_catchall) needs_result = true; // the gate reads .tag
             if (cont.binding != null and !std.mem.eql(u8, cont.binding.?, "_")) {
                 needs_result = true;
             }
@@ -1926,7 +1927,7 @@ const Emitter = struct {
 
         // Drive terminal continuations — 2+ branches dispatch on `.tag`.
         const needs_dispatch = terminal_count >= 2 and !callee_bare_return;
-        try self.emitTerminalContinuations(continuations, result_name, indent, needs_dispatch, callee_bare_return);
+        try self.emitTerminalContinuations(continuations, ev, result_name, indent, needs_dispatch, callee_bare_return);
     }
 
     /// Emit the terminal `| branch` continuations of a dispatch. A `when`
@@ -1935,6 +1936,7 @@ const Emitter = struct {
     fn emitTerminalContinuations(
         self: *Emitter,
         continuations: []const ast.Continuation,
+        ev: ?*const ast.EventDecl,
         result_name: ?[]const u8,
         indent: []const u8,
         dispatch: bool,
@@ -1955,15 +1957,62 @@ const Emitter = struct {
 
         for (continuations) |*cont| {
             if (cont.kind != .terminal) continue;
-            try self.emitTerminalContinuation(cont, result_name, indent, dispatch, bare_return, matched);
+            try self.emitTerminalContinuation(cont, ev, continuations, result_name, indent, dispatch, bare_return, matched);
         }
     }
 
+    /// `(<rn>.tag == "a" || <rn>.tag == "b" || …)` over the callee's OPTIONAL
+    /// terminal branches that no sibling arm names — the residual's route set.
+    fn emitResidualTagGateBare(
+        self: *Emitter,
+        rn: []const u8,
+        ev: ?*const ast.EventDecl,
+        siblings: []const ast.Continuation,
+    ) CsEmitError!void {
+        const evd = ev orelse {
+            try self.write("true");
+            return;
+        };
+        var first = true;
+        try self.write("(");
+        for (evd.branches) |b| {
+            if (!b.is_optional or b.kind == .effect) continue;
+            var named = false;
+            for (siblings) |*sib| {
+                if (!sib.is_catchall and std.mem.eql(u8, sib.branch, b.name)) {
+                    named = true;
+                    break;
+                }
+            }
+            if (named) continue;
+            if (!first) try self.write(" || ");
+            first = false;
+            try self.writeFmt("{s}.tag == \"{s}\"", .{ rn, b.name });
+        }
+        if (first) try self.write("false");
+        try self.write(")");
+    }
+
+    /// Same gate as an `&&`-clause inside a `__matched` chain condition.
+    fn emitResidualTagGate(
+        self: *Emitter,
+        rn: []const u8,
+        ev: ?*const ast.EventDecl,
+        siblings: []const ast.Continuation,
+    ) CsEmitError!void {
+        try self.write(" && ");
+        try self.emitResidualTagGateBare(rn, ev, siblings);
+    }
+
     /// Emit a terminal continuation: `| done r |> BODY` →
-    /// `var r = <result>.done;` then BODY.
+    /// `var r = <result>.done;` then BODY. A `|*` residual gates on the
+    /// callee's OPTIONAL branches not already named at this site — the same
+    /// set the Zig emitter routes into the residual arm.
     fn emitTerminalContinuation(
         self: *Emitter,
         cont: *const ast.Continuation,
+        ev: ?*const ast.EventDecl,
+        siblings: []const ast.Continuation,
         result_name: ?[]const u8,
         indent: []const u8,
         dispatch: bool,
@@ -1989,19 +2038,29 @@ const Emitter = struct {
                     log.err("[cs_emitter] guarded terminal chain needs a result value but none was emitted\n", .{});
                     return CsEmitError.UnsupportedConstruct;
                 };
-                try self.writeFmt(" && {s}.tag == \"{s}\"", .{ rn, cont.branch });
+                if (cont.is_catchall) {
+                    try self.emitResidualTagGate(rn, ev, siblings);
+                } else {
+                    try self.writeFmt(" && {s}.tag == \"{s}\"", .{ rn, cont.branch });
+                }
             }
             try self.write(") {\n");
             indents[indent_count] = try deeper(self, indent);
             body_indent = indents[indent_count];
             indent_count += 1;
             open_braces += 1;
-        } else if (dispatch) {
+        } else if (dispatch or (cont.is_catchall and result_name != null)) {
             const rn = result_name orelse {
                 log.err("[cs_emitter] terminal dispatch needs a result value but none was emitted\n", .{});
                 return CsEmitError.UnsupportedConstruct;
             };
-            try self.writeFmt("{s}if ({s}.tag == \"{s}\") {{\n", .{ indent, rn, cont.branch });
+            if (cont.is_catchall) {
+                try self.writeFmt("{s}if (", .{indent});
+                try self.emitResidualTagGateBare(rn, ev, siblings);
+                try self.write(") {\n");
+            } else {
+                try self.writeFmt("{s}if ({s}.tag == \"{s}\") {{\n", .{ indent, rn, cont.branch });
+            }
             indents[indent_count] = try deeper(self, indent);
             body_indent = indents[indent_count];
             indent_count += 1;
@@ -2014,7 +2073,13 @@ const Emitter = struct {
                     log.err("[cs_emitter] terminal continuation binds '{s}' (branch '{s}') but no result binding was emitted\n", .{ binding, cont.branch });
                     return CsEmitError.UnsupportedConstruct;
                 };
-                if (bare_return or cont.branch.len == 0) {
+                if (cont.is_catchall) {
+                    // `|* M b` — the residual record carries which branch
+                    // fired (the metatype record's testimony field).
+                    try self.writeFmt("{s}var ", .{body_indent});
+                    try self.writeBinding(binding);
+                    try self.writeFmt(" = new {{ branch = {s}.tag }};\n", .{rn});
+                } else if (bare_return or cont.branch.len == 0) {
                     try self.writeFmt("{s}var ", .{body_indent});
                     try self.writeBinding(binding);
                     try self.writeFmt(" = {s};\n", .{rn});
@@ -3007,7 +3072,7 @@ const Emitter = struct {
         // multi-arm resume sum carries a `.tag`.
         const plain_resume = arm.resume_type != null and arm.resume_arms == null;
         const needs_dispatch = terminal_count >= 2 and !plain_resume;
-        try self.emitTerminalContinuations(continuations, result_name, fire_indent, needs_dispatch, plain_resume);
+        try self.emitTerminalContinuations(continuations, null, result_name, fire_indent, needs_dispatch, plain_resume);
         if (guard_presence) try self.writeFmt("{s}}}\n", .{indent});
     }
 

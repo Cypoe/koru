@@ -538,11 +538,6 @@ fn parseSingleContinuation(
 ) ParseError!ast.Continuation {
     var content = lexer.trim(line);
 
-    // `|?` catch-all continuations do not exist: the call site cannot
-    // spell a residual case — name a declared branch or omit it.
-    if (std.mem.startsWith(u8, content, "|?")) {
-        return ParseError.MalformedContinuation;
-    }
     if (std.mem.startsWith(u8, content, "|>")) {
         // Pipeline continuation: |> event()
         content = lexer.trim(content[2..]);
@@ -558,6 +553,13 @@ fn parseSingleContinuation(
         };
     } else if (std.mem.startsWith(u8, content, "|")) {
         content = lexer.trim(content[1..]);
+        // Dead arm-head spellings on the interpreted surface: `|?`/`| ?`
+        // (removed catch-all), `|*`/`| *` (the residual arm — compiled-surface
+        // only; this surface has no coverage check to keep it honest). An arm
+        // names a declared branch or the outcome goes unhandled.
+        if (content.len > 0 and (content[0] == '?' or content[0] == '*')) {
+            return ParseError.MalformedContinuation;
+        }
     } else {
         return ParseError.MalformedContinuation;
     }
@@ -668,7 +670,8 @@ fn findPipeGt(text: []const u8) ?usize {
 }
 
 /// Find a branch `|` (pipe NOT followed by `>`) at depth 0 outside
-/// strings and backticks. `|>` pipeline markers are not branches.
+/// strings and backticks. `|>` pipeline markers are not branches; `|*`
+/// residual arms are (refused on this surface — see parseSingleContinuation).
 /// Same tracking discipline as findPipeGt.
 fn findBranchPipe(text: []const u8) ?usize {
     return findBranchPipeFrom(text, 0);
@@ -1300,20 +1303,26 @@ test "parseFlow: pipeline continuation" {
     }
 }
 
-test "parseFlow: `|?` catch-all continuation refuses" {
+test "parseFlow: residual spellings refuse on the interpreted surface" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const source =
-        \\risky_call()
-        \\    |? err |> handle_error(e: err)
-    ;
-
-    const result = parseFlow(alloc, source);
-    switch (result) {
-        .flow => return error.ExpectedParseError,
-        .err => {},
+    // `|?` (dead), `| ?` spaced corpse, and `|*` (compiled-surface residual)
+    // all refuse: an arm here names a declared branch or the outcome goes
+    // unhandled.
+    const sources = [_][]const u8{
+        "risky_call()\n    |? err |> handle_error(e: err)\n",
+        "risky_call()\n    | ? err |> handle_error(e: err)\n",
+        "risky_call()\n    |* err |> handle_error(e: err)\n",
+        "risky_call()\n    | * err |> handle_error(e: err)\n",
+    };
+    for (sources) |source| {
+        const result = parseFlow(alloc, source);
+        switch (result) {
+            .flow => return error.ExpectedError,
+            .err => {},
+        }
     }
 }
 

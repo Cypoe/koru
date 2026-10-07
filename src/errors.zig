@@ -13,7 +13,7 @@ pub const ErrorCode = enum(u16) {
     KORU023, // Yielding `!` branches must precede terminal `|` branches
     KORU024, // Redundant outer parens around `when` condition
     KORU025, // Branch kind mismatch (e.g. `!` decl handled by `|` cont, or vice versa)
-    KORU026, // Retired — the callsite catch-all (`|?`/`!?`) no longer exists
+    KORU026, // Pay-for-nothing residual arm (`|* |> _` or `|* Metatype _ |> _`)
     KORU027, // Incoherent obligation marker on an effect branch (0-to-N firing): payload discharge or resume issue
     KORU028, // Duplicate unguarded handler for a terminal `|` branch (runs at most once)
     KORU029, // Prototype module (~[prototype]) rejected in a --release build (the production gate)

@@ -1,9 +1,9 @@
-// Test 355_005: Optional Branches - All Branches Optional (Edge Case)
+// Test 918e: Optional Branches - All Branches Optional (Edge Case)
 //
 // Verifies:
 // 1. Event with NO required branches — all optional
-// 2. Every arm is still a named arm: | success, | warning, | err
-// 3. Edge case: zero required branches — omitting everything is also legal
+// 2. Handler uses ONLY |* to catch everything
+// 3. Edge case: zero required branches + only residual
 
 ~import std/io
 
@@ -23,18 +23,12 @@
     return .{ .success = value * 2 };
 }
 
-// All named — optional branches are handled the same way required ones are
+// All caught by |*
 ~process(value: 10)
-| success _ |> std/io:print.ln("SUCCESS FIRED")
-| warning _ |> std/io:print.ln("WARNING FIRED")
-| err _ |> std/io:print.ln("ERR FIRED")
+|* |> std/io:print.ln("OPTIONAL FIRED")
 
 ~process(value: 150)
-| success _ |> std/io:print.ln("SUCCESS FIRED")
-| warning _ |> std/io:print.ln("WARNING FIRED")
-| err _ |> std/io:print.ln("ERR FIRED")
+|* |> std/io:print.ln("OPTIONAL FIRED")
 
 ~process(value: 0)
-| success _ |> std/io:print.ln("SUCCESS FIRED")
-| warning _ |> std/io:print.ln("WARNING FIRED")
-| err _ |> std/io:print.ln("ERR FIRED")
+|* |> std/io:print.ln("OPTIONAL FIRED")

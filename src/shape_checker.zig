@@ -1209,6 +1209,17 @@ pub const ShapeChecker = struct {
         // Track if we found any errors (but continue checking to find all of them)
         var has_errors = false;
 
+        // `|*` on a callee with no `|` outcomes catches nothing — refuse.
+        if (ast.deadCatchall(event_branches, bare_return, continuations)) |cont| {
+            try self.reporter.addErrorAtLocation(
+                .KORU026,
+                if (cont.location.line != 0) cont.location else location,
+                "residual arm '|*' on '{s}' has no '|' outcome branches to catch — it routes optional outcome branches only",
+                .{event_name},
+            );
+            has_errors = true;
+        }
+
         // Bare-return events (`-> T`) have no branch tags. A named `| tag`
         // continuation is the one-variant union (PARSE003's use-site twin):
         // bind the value with `: name`. Empty names are the rest of a `|>`
@@ -1220,6 +1231,7 @@ pub const ShapeChecker = struct {
             for (continuations) |cont| {
                 if (cont.is_transformed_subtree) continue;
                 if (cont.kind == .effect) continue;
+                if (cont.is_catchall) continue; // dead-catchall rule above already names it
                 if (cont.branch.len == 0) continue;
                 if (std.mem.eql(u8, cont.branch, "_")) continue;
                 const loc = if (cont.location.line != 0) cont.location else location;
@@ -1270,6 +1282,7 @@ pub const ShapeChecker = struct {
         // Convert continuations, handling special cases:
         // - Skip empty branch names (void event chains)
         // - Metatypes (Transition, Profile, Audit) are always valid
+        // - Transition also acts as catchall
         var handled = try std.ArrayList(branch_checker.BranchChecker.HandledBranch).initCapacity(
             self.allocator,
             continuations.len,
@@ -1284,6 +1297,9 @@ pub const ShapeChecker = struct {
             const is_metatype = std.mem.eql(u8, cont.branch, "Transition") or
                 std.mem.eql(u8, cont.branch, "Profile") or
                 std.mem.eql(u8, cont.branch, "Audit");
+
+            // Transition acts as a catchall
+            const is_catchall = cont.is_catchall or std.mem.eql(u8, cont.branch, "Transition");
 
             // PRESENCE (ruled 2026-07-03): a `when <optional arm>` guard is a
             // COMPTIME partition over CONSUMERS — per consumer it is
@@ -1303,17 +1319,26 @@ pub const ShapeChecker = struct {
                 try handled.append(self.allocator, .{
                     .name = cont.branch,
                     .has_when_guard = cont.condition != null and presence_guard == null,
+                    .is_catchall = is_catchall,
                     .kind = if (cont.kind == .effect) .effect else .terminal,
+                });
+            } else if (is_catchall) {
+                // Transition is a metatype but also a catchall - add it as catchall only
+                try handled.append(self.allocator, .{
+                    .name = "",
+                    .has_when_guard = false,
+                    .is_catchall = true,
                 });
             }
         }
 
         // Branch kind-mismatch check (KORU025): a `!` (effect) decl branch
         // must be handled by a `!` continuation, and a `|` (terminal) decl
-        // branch by a `|` continuation. Handled names resolve exact-first,
-        // then against a declared raw-name CLASS branch (`*`).
+        // branch by a `|` continuation. Catch-alls are exempt — they match by
+        // kind elsewhere. Handled names resolve exact-first, then against a
+        // declared raw-name CLASS branch (`*`).
         for (continuations) |cont| {
-            if (cont.branch.len == 0) continue;
+            if (cont.is_catchall or cont.branch.len == 0) continue;
             const is_metatype = std.mem.eql(u8, cont.branch, "Transition") or
                 std.mem.eql(u8, cont.branch, "Profile") or
                 std.mem.eql(u8, cont.branch, "Audit");
@@ -2034,7 +2059,7 @@ pub const ShapeChecker = struct {
     /// The RULE lives in BranchChecker.firstDuplicateSibling — the single
     /// source of truth shared with FlowChecker: effect (`!`) links may repeat
     /// freely; a terminal (`|`) branch allows at most one unguarded handler
-    /// per level; guards never count. This adapter converts
+    /// per level; guards and catch-alls never count. This adapter converts
     /// siblings, reports at the offending continuation's own source location,
     /// and recurses — it NEVER returns a raw error (the reporter carries the
     /// failure; checkSourceFile fails via hasErrors → ValidationFailed).

@@ -1,0 +1,19 @@
+// Test 355_016: MUST_ERROR — `|*` under a bare-return dispatch refuses.
+//
+// A `-> T` callee returns a value, not a tagged union — there are no `|`
+// outcome branches for a residual to route. The arm reads as "handle
+// whatever else comes back" but there is no else; emitted it ran
+// unconditionally, an arm that fires on every call.
+//
+// Expected: KORU026 — no outcome branches exist to catch.
+
+~pub tor mk { x: i64 } -> i64
+~mk -> x + 1
+
+~pub tor observe { name: string }
+~proc observe|zig {
+    _ = name;
+}
+
+~mk(x: 1)
+|* |> observe(name: "huh")

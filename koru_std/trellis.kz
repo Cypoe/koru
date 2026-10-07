@@ -24,7 +24,7 @@
 // dispatch semantics, FULL match — the whole path must match). An `ok` arm
 // accepts the path; an `error` arm rejects it, and its payload is the user
 // message. Paths matching no arm are unconstrained (placement-constraint
-// semantics; closedness is spelled with a match-all error arm).
+// semantics; closedness is spelled with a catch-all error arm).
 //
 //   std/trellis:enforce("kernel-shape")   — program-wide LAW: a violation
 //     halts compilation at Stage C with a located koru-level diagnostic:

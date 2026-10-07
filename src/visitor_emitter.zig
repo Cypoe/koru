@@ -59,7 +59,7 @@ fn headLabelBindOnBareReturn(flow: *const ast.Flow, all_items: []const ast.Item)
     if (flow.inv().return_binding != null) return null;
     if (flow.body.continuations.len != 1) return null;
     const cont = &flow.body.continuations[0];
-    if (cont.branch.len == 0) return null;
+    if (cont.branch.len == 0 or cont.is_catchall) return null;
     const bind = cont.binding orelse return null;
     const decl = emitter.findEventDeclByPath(all_items, &flow.inv().path) orelse return null;
     // Bare return means one untagged outcome: a `-> T` with no branches to name.
@@ -882,7 +882,7 @@ pub const VisitorEmitter = struct {
             switch (item) {
                 .flow => |flow| {
                     // The continuations dispatch on the flow HEAD's event — it
-                    // is the source a metatype_binding step references.
+                    // is the source a metatype catch-all references.
                     var found = try scanContinuationsForMetatypes(flow.body.continuations, allocator, items, main_module_name, &flow.inv().path);
                     defer found.deinit();
                     try result.merge(&found);
@@ -907,7 +907,7 @@ pub const VisitorEmitter = struct {
         items: []const ast.Item,
         main_module_name: ?[]const u8,
         /// The event whose arms these continuations dispatch on — the source a
-        /// metatype-binding constructor references; null when the level has
+        /// metatype catch-all constructor references; null when the level has
         /// no invocation (a synthesized preamble chain).
         source_path: ?*const ast.DottedPath,
     ) !MetatypeScanResult {
@@ -925,6 +925,37 @@ pub const VisitorEmitter = struct {
                         if (mb.dest_event) |dst| try result.addEvent(dst); // dest_event is optional
                         try result.addBranch(mb.branch);
                     } else if (std.mem.eql(u8, mb.metatype, "Audit")) {
+                        result.audit = true;
+                    }
+                }
+            }
+            // Check for residual metatype (|* Audit e |>, |* Profile p |>, etc.)
+            if (cont.is_catchall) {
+                if (cont.catchall_metatype) |metatype| {
+                    if (std.mem.eql(u8, metatype, "Profile")) {
+                        result.profile = true;
+                    } else if (std.mem.eql(u8, metatype, "Transition")) {
+                        result.transition = true;
+                        // The catch-all's constructor references enum literals
+                        // for BOTH the source event and each OPTIONAL branch it
+                        // fires on (210_017) — the EventEnum/BranchEnum must
+                        // contain them or `taps.Transition` cannot compile.
+                        if (source_path) |sp| {
+                            const canonical = emitter.buildCanonicalEventName(sp, allocator, main_module_name) catch null;
+                            if (canonical) |c| {
+                                defer allocator.free(c);
+                                // addEvent BORROWS (the metatype_binding callers
+                                // pass AST-owned names) — dupe the temporary.
+                                const owned = try allocator.dupe(u8, c);
+                                try result.addEvent(owned);
+                            }
+                            if (emitter.findEventDeclByPath(items, sp)) |ed| {
+                                for (ed.branches) |b| {
+                                    if (b.is_optional) try result.addBranch(b.name);
+                                }
+                            }
+                        }
+                    } else if (std.mem.eql(u8, metatype, "Audit")) {
                         result.audit = true;
                     }
                 }
