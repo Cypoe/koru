@@ -35,6 +35,8 @@ pub fn parseFlow(allocator: std.mem.Allocator, source: []const u8) FlowParseResu
         return .{ .err = .{
             .message = switch (err) {
                 ParseError.DestructureNotImplemented => "destructure `| <branch> { … }` is not implemented in an interpreted flow — bind the payload by name (`| <branch> name |>`)",
+                ParseError.ResidualArmNotSpellable => "`|*` residual arm is not spellable on the interpreted surface — name each branch explicitly; unhandled optionals surface as `unhandled-branch`",
+                ParseError.CatchAllArmRemoved => "`|?` catch-all is not a Koru spelling — an arm names a declared branch; an unhandled `?`-marked outcome surfaces as `unhandled-branch`",
                 else => @errorName(err),
             },
             .line = 0,
@@ -59,6 +61,8 @@ const ParseError = error{
     UnbalancedParens,
     UnbalancedBraces,
     DestructureNotImplemented,
+    ResidualArmNotSpellable,
+    CatchAllArmRemoved,
     OutOfMemory,
 };
 
@@ -557,8 +561,11 @@ fn parseSingleContinuation(
         // (removed catch-all), `|*`/`| *` (the residual arm — compiled-surface
         // only; this surface has no coverage check to keep it honest). An arm
         // names a declared branch or the outcome goes unhandled.
-        if (content.len > 0 and (content[0] == '?' or content[0] == '*')) {
-            return ParseError.MalformedContinuation;
+        if (content.len > 0 and content[0] == '?') {
+            return ParseError.CatchAllArmRemoved;
+        }
+        if (content.len > 0 and content[0] == '*') {
+            return ParseError.ResidualArmNotSpellable;
         }
     } else {
         return ParseError.MalformedContinuation;
@@ -1309,19 +1316,22 @@ test "parseFlow: residual spellings refuse on the interpreted surface" {
     const alloc = arena.allocator();
 
     // `|?` (dead), `| ?` spaced corpse, and `|*` (compiled-surface residual)
-    // all refuse: an arm here names a declared branch or the outcome goes
-    // unhandled.
-    const sources = [_][]const u8{
-        "risky_call()\n    |? err |> handle_error(e: err)\n",
-        "risky_call()\n    | ? err |> handle_error(e: err)\n",
-        "risky_call()\n    |* err |> handle_error(e: err)\n",
-        "risky_call()\n    | * err |> handle_error(e: err)\n",
+    // all refuse — and the refusal teaches: the wire is the surface a model
+    // emits, so the message names the construct and the honest alternative,
+    // not just `MalformedContinuation`.
+    const residual_msg = "`|*` residual arm is not spellable on the interpreted surface — name each branch explicitly; unhandled optionals surface as `unhandled-branch`";
+    const catchall_msg = "`|?` catch-all is not a Koru spelling — an arm names a declared branch; an unhandled `?`-marked outcome surfaces as `unhandled-branch`";
+    const cases = [_]struct { source: []const u8, message: []const u8 }{
+        .{ .source = "risky_call()\n    |? err |> handle_error(e: err)\n", .message = catchall_msg },
+        .{ .source = "risky_call()\n    | ? err |> handle_error(e: err)\n", .message = catchall_msg },
+        .{ .source = "risky_call()\n    |* err |> handle_error(e: err)\n", .message = residual_msg },
+        .{ .source = "risky_call()\n    | * err |> handle_error(e: err)\n", .message = residual_msg },
     };
-    for (sources) |source| {
-        const result = parseFlow(alloc, source);
+    for (cases) |case| {
+        const result = parseFlow(alloc, case.source);
         switch (result) {
             .flow => return error.ExpectedError,
-            .err => {},
+            .err => |e| try std.testing.expectEqualStrings(case.message, e.message),
         }
     }
 }
