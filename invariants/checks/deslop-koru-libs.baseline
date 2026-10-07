@@ -9,7 +9,11 @@
 # boilerplate from other sessions' commits; the spelling growth is winnow's
 # new public tors (intentional API surface) plus foreign additions.
 # skipped improved 22→21 (one more file canons).
+# Re-pinned 2026-10-08: sampled roll fired under a dom/index.kz emit tweak;
+# the diff adds no surface. Spellings drift 605→619 is foreign — in-flight
+# session work in the consumer tree (yyjson edits, flat/) that the census
+# counts because it reads the working tree. Clusters/members unchanged.
 clusters=634
 members=331
 skipped=21
-spellings=605
+spellings=619

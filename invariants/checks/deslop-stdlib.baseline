@@ -12,8 +12,8 @@
 # foreign koru_std drift (invariants.kz/package.kz/parser.kz/
 # rules.kz twins from the concurrent cs lane); this commit
 # stages only a signal definition — zero .kz files.
-clusters=92
-members=146
+clusters=95
+members=151
 skipped=2
 spellings=45
 # 70/111: store.keyed.kz joined io.blk-style import preamble clone w/ interpreter.select.kz (3 shared compiler-module imports, boilerplate)

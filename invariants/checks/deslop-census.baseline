@@ -65,8 +65,11 @@
 # effect-splice resolver, is an intentional 1057-token twin of the
 # js_emitter block it ports — per-target emitters duplicate shape by
 # design (the text each writes differs; the shape is the mechanism).
+# Re-pinned 2026-10-08: sampled roll fired under an invariants baseline
+# re-pin; members drift 903→908 is foreign (uncommitted cs_emitter.zig
+# work from another session — the census reads the working tree).
 clusters=823
-members=903
+members=908
 # Re-pinned to 819/889 on the typed-envelope commit: the Input/Output
 # struct emission + produce-site typing ported more of the js_emitter
 # twin shape into cs_emitter — same sanctioned per-target duplication

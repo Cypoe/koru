@@ -57,8 +57,8 @@
 # this commit touches only koru_std/bridge.turn.kz, a regression
 # test, and a concept frag — zero src/ files. Working tree
 # included uncommitted foreign cs_emitter.zig work.
-clusters=1813
-members=2286
+clusters=1831
+members=2311
 # Re-pinned to 1817/2276 on the cs builtin-table commit: lowerCsBuiltin's
 # scan/table arms twin lowerBuiltin's at the small-idiom tier too (per-target
 # lowering vocabularies — sanctioned twin class), plus the jsLowerFilter/
