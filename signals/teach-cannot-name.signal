@@ -1,0 +1,10 @@
+name: teach-cannot-name
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a diagnostic or report taught a form the grammar itself cannot
+      satisfy — the advice, obeyed, produces a second failure (e.g.
+      `say(text: rN)` delivers the literal name through a Source field);
+      correct the teaching or carry the materials to obey it
+route: surface, wake
