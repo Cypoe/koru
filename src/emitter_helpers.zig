@@ -1384,12 +1384,12 @@ pub fn emitMainModuleStart(emitter: *CodeEmitter, pub_compiler_env: bool, needs_
     try emitter.write("    const allocator = @import(\"std\").mem.Allocator{ .ptr = undefined, .vtable = &vtable };\n");
     try emitter.write("};\n");
     try emitter.write("const __koru_backing = if (@import(\"builtin\").link_libc) @import(\"std\").heap.c_allocator else if (@import(\"builtin\").os.tag == .freestanding) __koru_bare.allocator else @import(\"std\").heap.page_allocator;\n");
-    try emitter.write("var __koru_leak_count: usize = 0;\n");
+    try emitter.write("var __koru_leak_count: @import(\"std\").atomic.Value(usize) = .init(0);\n");
     try emitter.write("fn __koru_alloc(ctx: *anyopaque, len: usize, alignment: @import(\"std\").mem.Alignment, ret_addr: usize) ?[*]u8 {\n");
     try emitter.write("    _ = ctx;\n");
     try emitter.write("    const r = __koru_backing.rawAlloc(len, alignment, ret_addr);\n");
     try emitter.write("    if (comptime @import(\"builtin\").mode == .Debug) {\n");
-    try emitter.write("        if (r != null) __koru_leak_count += 1;\n");
+    try emitter.write("        if (r != null) _ = __koru_leak_count.fetchAdd(1, .monotonic);\n");
     try emitter.write("    }\n");
     try emitter.write("    return r;\n");
     try emitter.write("}\n");
@@ -1405,7 +1405,7 @@ pub fn emitMainModuleStart(emitter: *CodeEmitter, pub_compiler_env: bool, needs_
     try emitter.write("    _ = ctx;\n");
     try emitter.write("    __koru_backing.rawFree(memory, alignment, ret_addr);\n");
     try emitter.write("    if (comptime @import(\"builtin\").mode == .Debug) {\n");
-    try emitter.write("        __koru_leak_count -= 1;\n");
+    try emitter.write("        _ = __koru_leak_count.fetchSub(1, .monotonic);\n");
     try emitter.write("    }\n");
     try emitter.write("}\n");
     try emitter.write("const __koru_vtable = @import(\"std\").mem.Allocator.VTable{ .alloc = __koru_alloc, .resize = __koru_resize, .remap = __koru_remap, .free = __koru_free };\n");
@@ -1478,7 +1478,7 @@ pub fn emitMainModuleStart(emitter: *CodeEmitter, pub_compiler_env: bool, needs_
     // than to a console, so the message has somewhere else to arrive.
     try emitter.write("pub fn koru_leak_check() void {\n");
     try emitter.write("    if (comptime @import(\"builtin\").mode != .Debug) return;\n");
-    try emitter.write("    if (__koru_leak_count == 0) return;\n");
+    try emitter.write("    if (__koru_leak_count.load(.acquire) == 0) return;\n");
     try emitter.write("    if (comptime @import(\"builtin\").target.os.tag == .freestanding) {\n");
     try emitter.write("        if (comptime @import(\"builtin\").cpu.arch == .wasm32 or @import(\"builtin\").cpu.arch == .wasm64) {\n");
     try emitter.write("            @panic(\"KORU LEAK CHECK FAILED: the produced program leaked\");\n");
@@ -1488,7 +1488,7 @@ pub fn emitMainModuleStart(emitter: *CodeEmitter, pub_compiler_env: bool, needs_
     try emitter.write("            const __lm = \"KORU LEAK CHECK FAILED: allocations still outstanding at end of run: \";\n");
     try emitter.write("            @memcpy(__lb[0..__lm.len], __lm);\n");
     try emitter.write("            var __ln: usize = __lm.len;\n");
-    try emitter.write("            var __lv = __koru_leak_count;\n");
+    try emitter.write("            var __lv = __koru_leak_count.load(.acquire);\n");
     try emitter.write("            var __ld: [20]u8 = undefined;\n");
     try emitter.write("            var __lk: usize = 0;\n");
     try emitter.write("            while (__lv > 0) : (__lk += 1) { __ld[__lk] = @intCast('0' + __lv % 10); __lv /= 10; }\n");

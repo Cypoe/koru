@@ -36,3 +36,12 @@ build mode* runs the watch.
 What would `correct` this: a ReleaseFast program that still increments
 `__koru_leak_count`, a Debug program that leaks and exits 0, or a
 quiet-window remasure where gated max sits below ungated min.
+
+2026-10-08 — the Debug counter is a shared global, and produced programs
+have worker threads. Campfire under wrk -c50: `integer overflow` panics on
+`__koru_leak_count -= 1` — racing non-atomic increments lost updates until
+a free underflowed the usize. The meter now mutates through
+`atomic.Value(usize)` fetchAdd/fetchSub and reads with `.load(.acquire)`:
+the audit's contract (outstanding allocs at exit) is only meaningful if
+the count is exact under concurrency. A meter that crashes the program it
+measures inverts its own purpose.
