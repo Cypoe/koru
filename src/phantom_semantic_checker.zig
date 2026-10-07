@@ -635,8 +635,17 @@ pub const PhantomSemanticChecker = struct {
                                 defer self.allocator.free(consumer_state);
 
                                 if (std.mem.eql(u8, consumer_state, base_state)) {
-                                    // Use full qualified name (e.g., "app.db:begin")
-                                    try results.append(self.allocator, try self.allocator.dupe(u8, entry.key_ptr.*));
+                                    // The map key is canonical (`std.io:free`),
+                                    // dot-joined; the diagnostic names the
+                                    // surface spelling the parser accepts
+                                    // (`std/io:free`) — 335_056.
+                                    const surface = try self.allocator.dupe(u8, entry.key_ptr.*);
+                                    if (std.mem.lastIndexOfScalar(u8, surface, ':')) |colon| {
+                                        for (surface[0..colon]) |*c| {
+                                            if (c.* == '.') c.* = '/';
+                                        }
+                                    }
+                                    try results.append(self.allocator, surface);
                                 }
                             }
                         },
@@ -661,8 +670,16 @@ pub const PhantomSemanticChecker = struct {
                                 defer self.allocator.free(consumer_state);
 
                                 if (std.mem.eql(u8, consumer_state, base_state)) {
-                                    // Use full qualified name (e.g., "app.db:begin")
-                                    try results.append(self.allocator, try self.allocator.dupe(u8, entry.key_ptr.*));
+                                    // Same surface-spelling rewrite as the
+                                    // concrete branch above — canonical keys
+                                    // dot-join, diagnostics spell `/`.
+                                    const surface = try self.allocator.dupe(u8, entry.key_ptr.*);
+                                    if (std.mem.lastIndexOfScalar(u8, surface, ':')) |colon| {
+                                        for (surface[0..colon]) |*c| {
+                                            if (c.* == '.') c.* = '/';
+                                        }
+                                    }
+                                    try results.append(self.allocator, surface);
                                     break;
                                 }
                             }

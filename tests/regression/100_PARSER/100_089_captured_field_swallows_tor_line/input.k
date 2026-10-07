@@ -9,6 +9,11 @@
 // carried the Koru line verbatim — `acc.n = acc.n + 1\n! bogus e |> ...` —
 // which is not parseable Zig. `zig ast-check` fails on the emission; the
 // "pass" was a frontend that accepted what it never checked.
+//
+// Pinned KORU164 at write time; the wall that fires is KORU104 — the
+// expression-admission scan strengthened (parseAll catches namespaced
+// callees, f2fa2e83) and now names the fused call inside field 'n' before
+// the capture transform's own refusal can run.
 import std/io
 import std/fs
 
