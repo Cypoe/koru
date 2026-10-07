@@ -1,0 +1,11 @@
+const std = @import("std");
+
+// The directory's own index file-imports its submodule — the same
+// self-import shape as orisha/lib/index.k reaching for orisha/pump.
+~import app/orderlib/wid
+
+~pub tor top {} -> string
+
+~proc top|zig {
+    return "top";
+}

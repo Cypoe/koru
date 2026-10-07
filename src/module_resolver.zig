@@ -564,7 +564,16 @@ pub const ModuleResolver = struct {
             try files.append(self.allocator, full_path);
         }
 
-        return try files.toOwnedSlice(self.allocator);
+        // readdir order is filesystem-specific; sorting keeps module
+        // enumeration (and therefore emitted declaration order) reproducible
+        // across overlayfs, virtiofs, APFS, etc.
+        const sorted = try files.toOwnedSlice(self.allocator);
+        std.mem.sort([]const u8, sorted, {}, struct {
+            fn lt(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.lessThan(u8, a, b);
+            }
+        }.lt);
+        return sorted;
     }
 
     /// Resolve an import path to BOTH file and directory (if they exist)

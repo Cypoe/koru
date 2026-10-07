@@ -1,0 +1,5 @@
+const std = @import("std");
+
+~proc ping|zig {
+    return "pong";
+}

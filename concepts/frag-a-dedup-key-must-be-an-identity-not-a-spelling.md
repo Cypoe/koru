@@ -1,8 +1,8 @@
 ---
 type: belief
 id: frag-a-dedup-key-must-be-an-identity-not-a-spelling
-provenance: `~import mylib` resolved to `<dir>`; the `mylib/index` import the compiler synthesizes for `~import mylib/helper` resolved to `<dir>/index.kz`. Dedup keyed on the resolved path, so one module was imported twice and every declaration in its index emitted twice. Found 2026-08-08 wiring orisha's pump seam; fixed and pinned as 110_030. Evolved 2026-09-29: the same fault, second shape — the phantom-discharge JOIN between a synthesized `std/store:taken!` literal and a parser-canonicalized `std.store:taken!`.
-ts: 2026-09-29
+provenance: `~import mylib` resolved to `<dir>`; the `mylib/index` import the compiler synthesizes for `~import mylib/helper` resolved to `<dir>/index.kz`. Dedup keyed on the resolved path, so one module was imported twice and every declaration in its index emitted twice. Found 2026-08-08 wiring orisha's pump seam; fixed and pinned as 110_030. Evolved 2026-09-29: the same fault, second shape — the phantom-discharge JOIN between a synthesized `std/store:taken!` literal and a parser-canonicalized `std.store:taken!`. Evolved 2026-10-07: third shape — the dir-submodule's canonical path was the first-seen `readdir` dirent while the file-import path minted it by extension priority; orisha's `pump` emitted twice on overlayfs, once on virtiofs, pinned as 140_030.
+ts: 2026-10-07
 ---
 
 # A comparison key must be an identity, not whichever spelling arrived
@@ -52,6 +52,28 @@ That second instance sharpens the rule: **canonicalization is not a property of
 a boundary, it is a property of every writer.** Canonicalizing at parse time
 while a transform mints the raw spelling is the same partial guard — it only
 looks complete because the two spellings had never been made to differ before.
+
+## The third shape: the ambient writer
+
+The first two shapes had two code paths minting two spellings. The third has a
+writer that is not code at all: `readdir`. A stem-grouped submodule's canonical
+path was whichever dirent enumeration surfaced first — so the identity of
+`orisha.pump` was `pump.k` on overlayfs and `pump.kz` on virtiofs. The
+file-import door minted `pump.kz` every time, from the fixed extension-priority
+probe. Same module, two identities, and the disagreement was *filesystem*,
+not program: a build that was green on the Mac host died inside the container
+with 84 duplicate-member errors, in a layer (Zig backend compile) that knows
+nothing of modules. **Ambient enumeration is a writer too** — anywhere order
+or first-seen selection feeds a comparison key, the key is only as stable as
+the enumeration, and the enum is nobody's contract.
+
+The fix is the same rule, applied at the dir-import construction site: the
+canonical facet is the file `resolveKoruFile` would pick, because that is the
+canonicalization function the file-import door already routes through. Sorting
+the enumeration makes emitted order reproducible; it does not fix identity —
+under a sorted listing `pump.k` precedes `pump.kz` and the wrong door keeps
+winning. Determinism and canonical agreement are separate obligations; the
+first is cheap, the second is the identity.
 
 Three rules fall out. **The key must be a canonical form**, computed by a
 function that every construction site of the thing routes through — a source

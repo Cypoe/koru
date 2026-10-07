@@ -3248,6 +3248,12 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
     var transform_events = std.ArrayList(TransformEvent){};
     defer transform_events.deinit(allocator);
 
+    // A module can arrive more than once in the AST (companion .k/.kz facets
+    // loaded through different paths); each copy carries the same events, so
+    // the same stub_name would be emitted as a duplicate handler + table entry.
+    var seen_stubs = std.StringHashMap(void).init(allocator);
+    defer seen_stubs.deinit();
+
     for (source_file.items) |item| {
         if (item == .event_decl) {
             const event_decl = item.event_decl;
@@ -3302,6 +3308,9 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                 // Collect variant targets across the whole program (top-level event, so
                 // variants may live in any module that implements it).
                 const variant_targets_top = try collectVariantTargetsForEventPath(allocator, source_file.items, event_decl.path.segments, comptime_default_lang);
+
+                const stub_gop = try seen_stubs.getOrPut(stub_name);
+                if (stub_gop.found_existing) continue;
 
                 try transform_events.append(allocator, .{
                     .stub_name = stub_name,
@@ -3480,6 +3489,8 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                             .qualifier = qualifier_val,
                             .variant_targets = variant_targets_mod,
                         };
+                        const stub_gop = try seen_stubs.getOrPut(stub_name);
+                        if (stub_gop.found_existing) continue;
                         try transform_events.append(allocator, new_te);
                     }
                 }
