@@ -5241,6 +5241,13 @@ fn emitInlineCodeResolvingSplices(
                 var prefix_buf: [128]u8 = undefined;
                 ctx.result_prefix = std.fmt.bufPrint(&prefix_buf, "{s}c{d}_", .{ saved_prefix, idx }) catch saved_prefix;
                 defer ctx.result_prefix = saved_prefix;
+                // The spliced body lands inside the construct's braces — a
+                // `.terminal` in it ends the nested chain, not the enclosing
+                // label loop; only an arm-top-level terminal may lower to
+                // `break :label` (320_171).
+                const saved_label = ctx.current_label;
+                ctx.current_label = null;
+                defer ctx.current_label = saved_label;
                 var c: usize = 0;
                 try emitContinuationBody(emitter, ctx, cont, &c);
                 if (guarded) try emitter.write(" }");
@@ -5399,6 +5406,13 @@ fn emitInlineCodeResolvingSplices(
             const saved_bind_rename = ctx.splice_binding_rename;
             if (bind_rename) |br| ctx.splice_binding_rename = br;
             defer ctx.splice_binding_rename = saved_bind_rename;
+            // The spliced body lands inside the construct's braces — a
+            // `.terminal` in it ends the nested chain, not the enclosing
+            // label loop; only an arm-top-level terminal may lower to
+            // `break :label` (320_171).
+            const saved_label = ctx.current_label;
+            ctx.current_label = null;
+            defer ctx.current_label = saved_label;
             var c: usize = 0;
             try emitContinuationBody(emitter, ctx, cont, &c);
             if (guarded) try emitter.write(" }");
@@ -10907,6 +10921,13 @@ fn emitStep(
             // Outside of loops, terminal steps don't need to emit anything
         },
         .conditional_block => |*cb| {
+            // A `.terminal` inside a spliced sub-construct ends the nested
+            // chain, not the enclosing label loop — only an arm-top-level
+            // terminal may lower to `break :label` (320_171).
+            const saved_label = ctx.current_label;
+            ctx.current_label = null;
+            defer ctx.current_label = saved_label;
+
             // Emit if (condition) { steps }
             try emitter.writeIndent();
             try emitter.write("if (");
@@ -11095,6 +11116,13 @@ fn emitStep(
             }
         },
         .foreach => |fe| {
+            // A `.terminal` inside a spliced sub-construct ends the nested
+            // chain, not the enclosing label loop — only an arm-top-level
+            // terminal may lower to `break :label` (320_171).
+            const saved_label = ctx.current_label;
+            ctx.current_label = null;
+            defer ctx.current_label = saved_label;
+
             // Emit for loop with proper AST body
             // Iterate over branches to find loop body (has @scope) vs post-loop branches
             var loop_branch: ?*const ast.NamedBranch = null;
@@ -11207,6 +11235,13 @@ fn emitStep(
             }
         },
         .conditional => |cond| {
+            // A `.terminal` inside a spliced sub-construct ends the nested
+            // chain, not the enclosing label loop — only an arm-top-level
+            // terminal may lower to `break :label` (320_171).
+            const saved_label = ctx.current_label;
+            ctx.current_label = null;
+            defer ctx.current_label = saved_label;
+
             // Emit if/else with proper AST bodies
             const then_body = ast.NamedBranch.getBody(cond.branches, "then");
             const else_body = ast.NamedBranch.getBody(cond.branches, "else");
@@ -11284,6 +11319,13 @@ fn emitStep(
             try emitter.write("}\n");
         },
         .switch_result => |sr| {
+            // A `.terminal` inside a spliced sub-construct ends the nested
+            // chain, not the enclosing label loop — only an arm-top-level
+            // terminal may lower to `break :label` (320_171).
+            const saved_label = ctx.current_label;
+            ctx.current_label = null;
+            defer ctx.current_label = saved_label;
+
             // Emit switch on union result type (e.g., from query transform)
             // Expression is inline code block that produces the union value
             // Branches contain continuations for each variant (row, empty, err, etc.)
@@ -11476,6 +11518,13 @@ fn emitStepWithBindingSubstitution(
             // Outside of loops, terminal steps don't need to emit anything
         },
         .conditional_block => |*cb| {
+            // A `.terminal` inside a spliced sub-construct ends the nested
+            // chain, not the enclosing label loop — only an arm-top-level
+            // terminal may lower to `break :label` (320_171).
+            const saved_label = ctx.current_label;
+            ctx.current_label = null;
+            defer ctx.current_label = saved_label;
+
             // Emit if (condition) { steps } with binding substitution
             try emitter.writeIndent();
             try emitter.write("if (");
@@ -11555,6 +11604,13 @@ fn emitStepWithBindingSubstitution(
             try emitter.write("\n");
         },
         .foreach => |fe| {
+            // A `.terminal` inside a spliced sub-construct ends the nested
+            // chain, not the enclosing label loop — only an arm-top-level
+            // terminal may lower to `break :label` (320_171).
+            const saved_label = ctx.current_label;
+            ctx.current_label = null;
+            defer ctx.current_label = saved_label;
+
             // Emit for loop - binding substitution not applied inside loop body for now
             const raw_binding = ast.NamedBranch.getBinding(fe.branches, "each") orelse "_";
             const each_body = ast.NamedBranch.getBody(fe.branches, "each");
@@ -11599,6 +11655,13 @@ fn emitStepWithBindingSubstitution(
             }
         },
         .conditional => |cond| {
+            // A `.terminal` inside a spliced sub-construct ends the nested
+            // chain, not the enclosing label loop — only an arm-top-level
+            // terminal may lower to `break :label` (320_171).
+            const saved_label = ctx.current_label;
+            ctx.current_label = null;
+            defer ctx.current_label = saved_label;
+
             // Emit if/else with binding substitution
             const then_body = ast.NamedBranch.getBody(cond.branches, "then");
             const else_body = ast.NamedBranch.getBody(cond.branches, "else");
