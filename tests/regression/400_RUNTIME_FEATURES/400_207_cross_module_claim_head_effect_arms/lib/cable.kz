@@ -1,0 +1,10 @@
+const std = @import("std");
+
+~pub tor dropped { fd: i64 }
+! gone i64
+| ok
+~proc dropped|zig {
+    _ = &fd;
+    gone(fd);
+    return .{ .ok = .{} };
+}

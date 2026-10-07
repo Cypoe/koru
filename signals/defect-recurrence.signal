@@ -1,0 +1,6 @@
+name: defect-recurrence
+kind: inferred
+shape: categorical
+face: in
+membrane: true
+note: a belief already on file fired again — the same defect shape recurred at a new site, which is evidence FOR the belief (evolve, not create)

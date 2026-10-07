@@ -3120,6 +3120,56 @@ pub const VisitorEmitter = struct {
                                                 // name a const that was never emitted.
                                                 var head_bound_root = true;
 
+                                                // Effect-branches partition — the same dance the
+                                                // module-local impl path and emitFlow do. A
+                                                // cross-module claim whose head calls a tor
+                                                // declaring `!` branches (`orisha/pump:ws-closed =
+                                                // cable:dropped(fd) ! gone-room …`) must fold the
+                                                // `!` continuations into a synthesized Handlers
+                                                // struct passed as the comptime second arg; only
+                                                // `|` arms drive the result switch. Without this
+                                                // the arm lands in the switch (a variant Output
+                                                // does not carry) and the call goes out missing
+                                                // __H entirely.
+                                                const xm_invoked_event = self.findEventDeclInItems(self.all_items, &flow.inv().path);
+                                                var xm_effect_conts: std.ArrayList(ast.Continuation) = .empty;
+                                                defer xm_effect_conts.deinit(self.allocator);
+                                                var xm_terminal_conts: std.ArrayList(ast.Continuation) = .empty;
+                                                defer xm_terminal_conts.deinit(self.allocator);
+                                                var xm_handlers_name: ?[]const u8 = null;
+                                                defer if (xm_handlers_name) |h| self.allocator.free(h);
+                                                if (xm_invoked_event) |xm_ed| {
+                                                    var xm_has_effect = false;
+                                                    for (xm_ed.branches) |b| {
+                                                        if (b.kind == .effect) {
+                                                            xm_has_effect = true;
+                                                            break;
+                                                        }
+                                                    }
+                                                    if (xm_has_effect) {
+                                                        for (flow.body.continuations) |c| {
+                                                            if (c.kind == .effect) {
+                                                                try xm_effect_conts.append(self.allocator, c);
+                                                            } else {
+                                                                try xm_terminal_conts.append(self.allocator, c);
+                                                            }
+                                                        }
+                                                        const hname = try std.fmt.allocPrint(self.allocator, "Handlers_xm", .{});
+                                                        xm_handlers_name = hname;
+                                                        var xm_ctx = emitter.EmissionContext{
+                                                            .allocator = self.allocator,
+                                                            .ast_items = self.all_items,
+                                                            .tap_registry = self.tap_registry,
+                                                            .type_registry = self.type_registry,
+                                                            .main_module_name = self.main_module_name,
+                                                            .is_sync = true,
+                                                            .in_handler = true,
+                                                            .impl_event_decl = event,
+                                                        };
+                                                        try emitter.emitHandlersStruct(self.code_emitter, &xm_ctx, hname, xm_effect_conts.items, xm_ed);
+                                                    }
+                                                }
+
                                                 // Generate the invocation (or inline_body if transform set it)
                                                 if (flow.inline_body) |inline_code_raw| {
                                                     // Transform set inline_body -- emit inline instead of handler call
@@ -3169,14 +3219,20 @@ pub const VisitorEmitter = struct {
                                                         try self.code_emitter.write(" = ");
                                                         try self.code_emitter.write(arg.value);
                                                     }
-                                                    try self.code_emitter.write(" });\n");
+                                                    if (xm_handlers_name) |hname| {
+                                                        try self.code_emitter.write(" }, ");
+                                                        try self.code_emitter.write(hname);
+                                                        try self.code_emitter.write(");\n");
+                                                    } else {
+                                                        try self.code_emitter.write(" });\n");
+                                                    }
                                                 }
 
                                                 // A head with no continuations has no switch to
                                                 // consume the root const — discard-guard it.
                                                 // Only when a const actually exists: an
                                                 // inline-stmt head bound no name.
-                                                if (flow.body.continuations.len == 0 and head_bound_root) {
+                                                if ((if (xm_handlers_name != null) xm_terminal_conts.items.len == 0 else flow.body.continuations.len == 0) and head_bound_root) {
                                                     try self.code_emitter.writeIndent();
                                                     try self.code_emitter.write("_ = &");
                                                     try self.code_emitter.write(defaultHandlerRootBind(flow.inv()));
@@ -3191,9 +3247,15 @@ pub const VisitorEmitter = struct {
                                                 try self.emitSubflowMarker(&flow);
 
                                                 const source_event_name = try emitter.buildCanonicalEventName(&flow.inv().path, self.allocator, self.main_module_name);
+                                                // Terminal arms only when a Handlers struct took the
+                                                // effect arms — a switch prong for `! gone-room` would
+                                                // name a branch Output does not carry.
+                                                var rooted_conts: []const ast.Continuation = if (xm_handlers_name != null)
+                                                    xm_terminal_conts.items
+                                                else
+                                                    flow.body.continuations;
                                                 // The other spelling of the same head bind — see
                                                 // headLabelBindOnBareReturn.
-                                                var rooted_conts: []const ast.Continuation = flow.body.continuations;
                                                 if (headLabelBindOnBareReturn(&flow, self.all_items)) |label_bind| {
                                                     try self.code_emitter.writeIndent();
                                                     try self.code_emitter.write("const ");
@@ -3201,7 +3263,7 @@ pub const VisitorEmitter = struct {
                                                     try self.code_emitter.write(" = ");
                                                     try self.code_emitter.write(defaultHandlerRootBind(flow.inv()));
                                                     try self.code_emitter.write(";\n");
-                                                    rooted_conts = try voidifyHeadLabel(self.allocator, flow.body.continuations);
+                                                    rooted_conts = try voidifyHeadLabel(self.allocator, rooted_conts);
                                                 }
                                                 try emitter.emitSubflowContinuationsRooted(self.code_emitter, rooted_conts, 0, indent_str, self.all_items, self.tap_registry, self.type_registry, self.main_module_name, source_event_name, "main_module", event.return_type != null, event, defaultHandlerRootBind(flow.inv()), null, self.all_items);
 

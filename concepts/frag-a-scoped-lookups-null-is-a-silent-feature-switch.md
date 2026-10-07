@@ -66,13 +66,34 @@ a proc instead. That is a workaround for a *different* live defect, written down
 as a property of the library. The shape outlives the memory of why it exists;
 this one is still there, still uncommented as a compiler bug.
 
+## Second landing — the effect partition itself (2026-10-07)
+
+The belief fired again, twice in one diff, when Campfire's `/cable` wired
+`orisha/pump:ws-closed = cable:dropped(fd) ! gone-room …` — a CROSS-MODULE claim
+whose head calls an effect-carrying tor:
+
+- `emitFlow`'s two head-site lookups (`pre_label` typing and the effect
+  partition) still read `ctx.ast_items` only. The module-blind `findEventDeclByPath`
+  misses what `findEventDeclForEmission` — written for exactly this — resolves
+  through `program_items`. Both sites now use it.
+- The cross-module claim-impl branch in `visitor_emitter` never had the
+  partition at all: it wrote `handler(.{ … })` raw and lowered the `!` arm into
+  the result switch, naming a variant `Output` does not carry. It now runs the
+  400_175 dance — partition, `emitHandlersStruct`, `terminal_conts` to the
+  switch — that its module-local twin already had.
+
+Same lesson, second proof: the fix that lands is one line; the shape is that
+every *new* emission path re-implements the question and inherits whichever
+scope is nearest. `400_207` pins the claim-impl shape.
+
 ## Open
 
-- The same literal `_event.handler(.{` is written at five more sites — two
-  default-handler paths for an abstract event with a flow body, one variant-body
-  path, and two continuation-step emitters. None of them consults the variant
-  registry or passes a Handlers struct. Each is the same defect waiting for the
-  shape that reaches it; none is pinned, so none can be fixed honestly yet.
+- The remaining raw `handler(.{` sites are fewer now — the two emitFlow lookups
+  and the claim-impl path are closed. The continuation-step emitters were
+  already covered (`inlineEffectfulEligibility`, the 400_198 fix); what remains
+  unpinned is any FUTURE emission path that asks "does this tor have `!`
+  arms" against module-local items. The defect is not a list of sites — it is
+  the reflex of writing the question against `ctx.ast_items` at all.
 - Call-site variant mangling turned out to be REDUNDANT today, not missing: the
   event-decl emitter already swaps the default `handler` body for the selected
   variant, so `handler` and `handler__unikraft` are byte-identical. Two

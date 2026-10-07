@@ -57,8 +57,17 @@
 # this commit touches only koru_std/bridge.turn.kz, a regression
 # test, and a concept frag — zero src/ files. Working tree
 # included uncommitted foreign cs_emitter.zig work.
+# Re-pinned in "emitter: effect partition reaches cross-module heads":
+# the roll fired on members 2319 > 2311 — decomposed by running the
+# census over staged-file copies at HEAD. This commit's src/ delta is
+# +5 clusters / -2 members (the xm_ effect-partition block is a
+# deliberate twin of the module-local path pending a shared-helper
+# fold); the breach is entirely foreign UNCOMMITTED cs_emitter.zig/
+# codegen_utils.zig drift (+16 clusters / +33 members), the documented
+# per-target twin residual. Measured at HEAD: 1807/2288; full working
+# tree: 1828/2319. Clusters stay under pin.
 clusters=1831
-members=2311
+members=2319
 # Re-pinned to 1817/2276 on the cs builtin-table commit: lowerCsBuiltin's
 # scan/table arms twin lowerBuiltin's at the small-idiom tier too (per-target
 # lowering vocabularies — sanctioned twin class), plus the jsLowerFilter/

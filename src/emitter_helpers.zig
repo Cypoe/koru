@@ -5905,10 +5905,7 @@ pub fn emitFlow(
     // Check if this flow has a pre_label - if so, emit state variables and wrap in a while loop
     if (flow.pre_label) |label| {
         // Look up event definition to get parameter types
-        const event_decl = if (ctx.ast_items) |items|
-            findEventDeclByPath(items, &flow.inv().path)
-        else
-            null;
+        const event_decl = findEventDeclForEmission(ctx, &flow.inv().path);
 
         // Determine if label will be mutated by checking for .label_jump
         const label_is_mutable = labelWillBeMutated(label, flow.body.continuations);
@@ -5967,10 +5964,7 @@ pub fn emitFlow(
     // arg whenever the event declares ANY effect branch, even when every one
     // is OPTIONAL and the consumer omits all of them. In that case Handlers
     // is still synthesized; the no-op pass in emitHandlersStruct fills it.
-    const event_decl_for_partition = if (ctx.ast_items) |items|
-        findEventDeclByPath(items, &flow.inv().path)
-    else
-        null;
+    const event_decl_for_partition = findEventDeclForEmission(ctx, &flow.inv().path);
 
     // Subflow-implemented effects: when the head fires one of the implemented
     // event's own arms, its multi-arm resume sum is consumed as `|` branches

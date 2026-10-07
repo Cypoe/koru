@@ -1,0 +1,9 @@
+// The claimed tor. Lives in its own module so the claim is CROSS-MODULE:
+// the impl flow below implements `lib/hook:closed` while its head calls
+// `lib/cable:dropped`, which declares an effect branch.
+const std = @import("std");
+
+~[abstract|retain] pub tor closed { fd: i64 }
+~proc closed|zig {
+    _ = &fd;
+}
