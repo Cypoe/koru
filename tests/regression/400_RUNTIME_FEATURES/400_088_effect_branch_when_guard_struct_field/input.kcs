@@ -1,7 +1,7 @@
 ~proc keystream|cs {
-    var chars = [_]u8{ 'a', 'b', 'q', 'c' };
+    var chars = new byte[] { (byte)'a', (byte)'b', (byte)'q', (byte)'c' };
     var i = 0;
-    for (; i < count && i < chars.len; i += 1) {
-        key(.{ .ch = chars[i], .code = chars[i] });
+    for (; i < (long)count && i < chars.Length; i += 1) {
+        key((ch: chars[i], code: chars[i]));
     }
 }

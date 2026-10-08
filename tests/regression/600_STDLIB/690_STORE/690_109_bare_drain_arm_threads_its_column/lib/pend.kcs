@@ -1,0 +1,14 @@
+// C# facet for app/lib/pend — the |cs twin of pend.kz's |zig bodies.
+// *Pending<open!> is the class instance itself; GC carries the allocation,
+// so `cancel`'s destroy is a no-op — it only hands the id back.
+public class Pending {
+    public dynamic id;
+}
+
+~proc start|cs {
+    return new Pending { id = 3 };
+}
+
+~proc cancel|cs {
+    return p.id;
+}

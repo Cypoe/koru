@@ -1,8 +1,8 @@
 ~proc net.connect|cs {
     __koru_stdout_write($"Connecting to {host}\n");
-    return new Output { };
+    return new Output { tag = "connected", connected = 42 };
 }
 ~proc net.send|cs {
     __koru_stdout_write($"Sending {data.Length} bytes on connection {id}\n");
-    return new Output { };
+    return new Output { tag = "sent", sent = data.Length };
 }

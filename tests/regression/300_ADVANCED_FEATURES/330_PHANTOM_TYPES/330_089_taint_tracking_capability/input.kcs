@@ -2,5 +2,5 @@
     return "untrusted";
 }
 ~proc query|cs {
-    return;
+    return null;
 }

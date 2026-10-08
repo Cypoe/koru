@@ -5,13 +5,13 @@ static class KoruHost {
 }
 
 ~proc leaf|cs {
-    for (0..n) |i| v(i);
+    for (ulong i = 0; i < n; i++) v(i);
 }
 ~proc outer|cs {
-    for (0..n) |i| v(i);
+    for (ulong i = 0; i < n; i++) v(i);
 }
 ~proc inc|cs {
-    counter +%= 1;
+    counter += 1;
 }
 ~proc show|cs {
     __koru_stdout_write($"{counter}\n");

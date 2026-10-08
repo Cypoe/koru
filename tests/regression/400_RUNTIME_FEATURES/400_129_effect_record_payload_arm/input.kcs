@@ -1,7 +1,4 @@
 ~proc request|cs {
     var r = ask(payload);
-    return switch (r) {
-        .result => |v| new {  done = v.quadrupled + v.halved  },
-        .timeout => new {  done = -1  },
-    };
+    return r.tag == "result" ? new Output { tag = "done", done = r.result.quadrupled + r.result.halved } : new Output { tag = "done", done = -1 };
 }

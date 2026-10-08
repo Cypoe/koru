@@ -1,5 +1,5 @@
 ~proc pick|cs {
-    if (@mod(n, 2) == 0) {
+    if (n % 2 == 0) {
         return new Output { tag = "even", even = "even" };
     }
     return new Output { tag = "odd", odd = "odd" };

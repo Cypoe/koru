@@ -2,5 +2,5 @@
     if (b == 0) {
         return new Output { tag = "err", err = "Division by zero" };
     }
-    return new Output { tag = "ok", ok = @divTrunc(a };
+    return new Output { tag = "ok", ok = a / b };
 }

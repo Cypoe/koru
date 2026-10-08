@@ -4754,6 +4754,32 @@ pub const VisitorEmitter = struct {
         return i;
     }
 
+    /// Dedup key for a named module-level decl — null for items that carry
+    /// no name or emit nothing (flows, taps, impls).
+    fn moduleDeclKey(allocator: std.mem.Allocator, item: *const ast.Item) ?[]const u8 {
+        var path: ?*const ast.DottedPath = null;
+        var kind: []const u8 = "";
+        switch (item.*) {
+            .event_decl => |*e| {
+                path = &e.path;
+                kind = "e";
+            },
+            .proc_decl => |*p| {
+                path = &p.path;
+                kind = if (p.target) |t| t else "p";
+            },
+            else => return null,
+        }
+        var key = std.ArrayList(u8).empty;
+        key.appendSlice(allocator, kind) catch return null;
+        key.append(allocator, ':') catch return null;
+        for (path.?.segments) |seg| {
+            key.appendSlice(allocator, seg) catch return null;
+            key.append(allocator, '.') catch return null;
+        }
+        return key.items;
+    }
+
     fn emitModuleNode(
         self: *VisitorEmitter,
         node: *ModuleNode,
@@ -4796,6 +4822,12 @@ pub const VisitorEmitter = struct {
         const ancestor_mark = ancestor_host_lines.items.len;
         var own_aliases: std.ArrayList([]const u8) = .empty;
         defer own_aliases.deinit(self.allocator);
+
+        // A module reached through facet companions (`.kz` + `.kcs`) arrives
+        // as one ModuleDecl PER FILE with the items already merged — every
+        // copy carries the same decls. Emit each once per node.
+        var seen_decls = std.StringHashMap(void).init(self.allocator);
+        defer seen_decls.deinit();
 
         for (node.modules.items) |module| {
             for (module.items) |*module_item| {
@@ -4858,6 +4890,10 @@ pub const VisitorEmitter = struct {
             for (module.items) |*module_item| {
                 // Skip host lines - already emitted above
                 if (module_item.* != .host_line) {
+                    if (moduleDeclKey(self.allocator, module_item)) |key| {
+                        const gop = try seen_decls.getOrPut(key);
+                        if (gop.found_existing) continue;
+                    }
                     // Use the module's OWN annotations, not the top-level file's annotations
                     // This is critical for [comptime|runtime] modules like std.io
                     // NOTE: module.items is used for scoped implementation search

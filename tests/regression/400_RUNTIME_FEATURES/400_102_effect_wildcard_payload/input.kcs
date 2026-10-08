@@ -1,5 +1,5 @@
 ~proc walk|cs {
-    for (items) |item| {
+    foreach (var item in items) {
         each(item);
     }
     return new Output { tag = "done", done = items.Length };

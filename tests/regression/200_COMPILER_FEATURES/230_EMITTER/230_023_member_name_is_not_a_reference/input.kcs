@@ -2,7 +2,7 @@ using static KoruHost;
 
 static class KoruHost {
     public class P {
-        public ulong m;
+        public long m;
     }
 }
 
@@ -10,9 +10,9 @@ static class KoruHost {
     return 7;
 }
 ~proc boxed|cs {
-    const p: P = .{ .m = m };
-    var s = 0;
-    for (0..m) |i| {
+    var p = new P { m = m };
+    long s = 0;
+    for (long i = 0; i < m; i++) {
         s += i;
     }
     return new Output { tag = "ok", ok = p.m + s + m };

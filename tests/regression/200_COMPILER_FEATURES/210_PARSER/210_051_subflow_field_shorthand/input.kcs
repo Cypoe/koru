@@ -4,6 +4,7 @@ static class KoruHost {
     public class Entity {
         public uint id;
     }
+    public static Entity entity = new Entity { id = 42 };
 }
 
 ~proc print-result|cs {

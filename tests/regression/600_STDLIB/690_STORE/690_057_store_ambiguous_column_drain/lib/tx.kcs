@@ -1,0 +1,18 @@
+// C# facet for app/lib/tx — the |cs twin of tx.kz's |zig bodies.
+// *Transaction<active!> is the class instance itself; GC carries the
+// allocation, so `commit`/`rollback` only print — no destroy.
+public class Transaction {
+    public dynamic id;
+}
+
+~proc begin|cs {
+    return new Transaction { id = 7 };
+}
+
+~proc commit|cs {
+    __koru_stdout_write($"commit {tx.id}\n");
+}
+
+~proc rollback|cs {
+    __koru_stdout_write($"rollback {tx.id}\n");
+}

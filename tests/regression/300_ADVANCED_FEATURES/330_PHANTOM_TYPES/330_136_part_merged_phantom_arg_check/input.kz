@@ -1,0 +1,22 @@
+// PIN (part + phantom): per-argument phantom-state checking must hold when
+// the tors are declared in a `part` facet, not only in the primary file.
+//
+// Single-file sibling (330_093 shape): a binding re-minted `<bound!>` by a
+// `->` return and then passed to a `<free>` borrow refused with KORU030
+// "expected 'input:free' but got 'input:bound!'". Through `part comp` the
+// same program compiled clean — arg-level checks resolve the tor decl via
+// the writing module, and the merge puts the decl under the primary stem
+// while the checker looks it up by the part's own module path (or skips
+// decls not in the primary). Either way: a borrowed `<free>` accepted a
+// `<bound!>` token, and `timeline.shift` ran on a bound timeline.
+//
+// MUST_ERROR stands: the borrowed-param state mismatch must refuse
+// identically whether the decl lives in the primary or a part facet.
+
+~part comp
+~import std/io
+
+~timeline.new(): verse
+|> bind.it(tl: verse): bound
+|> timeline.shift(tl: bound, delta: 1.0)
+|> std/io:print.ln("unreachable — bound accepted by <free> borrow")

@@ -2,5 +2,5 @@
     return n;
 }
 ~proc each-i32|cs {
-    for (v) |it| item(it);
+    foreach (var it in v) item(it);
 }

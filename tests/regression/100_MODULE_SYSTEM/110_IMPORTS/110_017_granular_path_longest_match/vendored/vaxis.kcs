@@ -1,0 +1,5 @@
+// The vendored copy's cs facet — same surface, cs body only.
+
+~proc greet|cs {
+    return "VENDORED vaxis";
+}

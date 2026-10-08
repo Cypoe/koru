@@ -2,10 +2,9 @@
     __koru_stdout_write($"source={source} branch={branch}\n");
 }
 ~proc start|cs {
-    var data = Data{
-        .source = "test_event",
-        .branch = "success",
-        .destination = null,
+    var data = new { source = "test_event",
+        branch = "success",
+        destination = (dynamic)null,
     };
     return data;
 }

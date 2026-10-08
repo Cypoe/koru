@@ -6,7 +6,7 @@ static class KoruHost {
 }
 
 ~proc get-items|cs {
-    return new Output { tag = "items", items = &my_items };
+    return new Output { tag = "items", items = my_items };
 }
 ~proc add-item|cs {
     sum += value;

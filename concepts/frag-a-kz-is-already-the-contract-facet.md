@@ -48,3 +48,14 @@ Open: whether `args`'s three-file split should be collapsed back to two. It
 costs nothing to leave, and the extraction is a legal layout — but as long as
 it stands as the only stdlib example, the next reader will infer the
 prerequisite from it again.
+
+2026-10-13 — **the mechanism carried a third host.** `koru_std/args.kcs`
+landed beside `args.k`/`args.kz`/`args.kjs` — "events are declared in the
+`args.k` companion," the same stem-merge contract the `.kjs` proof
+established, now exercised for C#. The cheap-honest shape generalizes: a
+host facet adds only host bodies; nothing in the shared decls moved. The
+open collapse question gets sharper, not settled — `args` is now a
+four-file module, still the only one, still legal. What the cs port added
+that JS never needed: per-test target declaration (`LANGUAGES`) and
+declared refusal (`CS_REFUSES`) markers, so "does this test exercise cs"
+is data, not suite behavior.

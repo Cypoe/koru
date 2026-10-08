@@ -1,14 +1,16 @@
+using static KoruHost;
+
+static class KoruHost {
+    public static uint accept_count = 0;
+}
+
 ~proc server.accept|cs {
     __koru_stdout_write("Accept\n");
-    // Simulate accepting 2 connections then stopping
-    var static = struct {
-        var count = 0;
-    };
-    static.count += 1;
-    if (static.count <= 2) {
-        return new Output { };
+    KoruHost.accept_count += 1;
+    if (KoruHost.accept_count <= 2) {
+        return new Output { tag = "connection", connection = KoruHost.accept_count };
     }
-    return new Output { };
+    return new Output { tag = "stopped", stopped = new { } };
 }
 ~proc server.handle|cs {
     __koru_stdout_write($"Handle {id}\n");

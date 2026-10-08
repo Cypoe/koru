@@ -3,5 +3,6 @@
     for (; i < steps; i += 1) {
         progress(i);
     }
-    progress(steps); // final emission RIGHT BEFORE the terminal return return new Output { tag = "done", done = steps };
+    progress(steps); // final emission RIGHT BEFORE the terminal return
+    return new Output { tag = "done", done = steps };
 }

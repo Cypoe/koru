@@ -1,0 +1,11 @@
+const std = @import("std");
+
+pub const Timeline = struct { start: f64 };
+
+~proc timeline.new|zig {
+    const t = std.heap.page_allocator.create(Timeline) catch @panic("x");
+    t.* = .{ .start = 0.0 };
+    return t;
+}
+~proc bind.it|zig { return tl; }
+~proc timeline.shift|zig { _ = tl; _ = delta; }

@@ -5,6 +5,6 @@ static class KoruHost {
 }
 
 ~proc pump|cs {
-    tick(n * $mod.factor);
+    tick((int)(n * factor));
     return new Output { tag = "done", done = "zig" };
 }

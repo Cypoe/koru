@@ -1,18 +1,18 @@
 ~proc outer|cs {
     if (x > max) {
-        return new Output { tag = "done_outer", done_outer = new { } };
+        return new Output { tag = "done-outer", done_outer = new { } };
     }
 
     __koru_stdout_write($"Outer: x={x}\n");
-    return new Output { tag = "next_outer", next_outer = (x, max) };
+    return new Output { tag = "next-outer", next_outer = (x, max) };
 }
 ~proc inner|cs {
     if (y > max) {
-        return new Output { tag = "done_inner", done_inner = x };
+        return new Output { tag = "done-inner", done_inner = x };
     }
 
     __koru_stdout_write($"  Inner: x={x}, y={y}\n");
-    return new Output { tag = "next_inner", next_inner = (x, y, max) };
+    return new Output { tag = "next-inner", next_inner = (x, y, max) };
 }
 ~proc start|cs {
     __koru_stdout_write("Starting nested loops...\n");

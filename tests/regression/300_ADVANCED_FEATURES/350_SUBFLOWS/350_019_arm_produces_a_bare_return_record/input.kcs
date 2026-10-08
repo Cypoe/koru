@@ -1,3 +1,3 @@
 ~proc pick|cs {
-    return if (n > 5) .high else .low;
+    return new Output { tag = (n > 5) ? "high" : "low" };
 }

@@ -1,10 +1,10 @@
 ~proc apply-gain|cs {
-    for (input, output) |s, *o| {
-        o.* = s * gain;
+    for (long __koru_i = 0; __koru_i < input.Length; __koru_i++) {
+        output[__koru_i] = input[__koru_i] * gain;
     }
 }
 ~proc sum-buffer|cs {
-    var total = 0;
-    for (values) |v| total += v;
+    float total = 0f;
+    foreach (var v in values) total += v;
     return total;
 }

@@ -1,0 +1,11 @@
+using static KoruHost;
+
+static class KoruHost {
+    public class Token {
+        public uint id;
+    }
+}
+
+~proc mint|cs {
+    return new Token { id = id };
+}

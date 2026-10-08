@@ -27,7 +27,7 @@ koru_std/bridge.hostverbs.kz	175
 koru_std/bridge.items.kz	59
 koru_std/bridge.kz	200
 koru_std/bridge.residue.kz	22
-koru_std/bridge.run-exec.kz	129
+koru_std/bridge.run-exec.kz	124
 koru_std/bridge.run.kz	39
 koru_std/bridge.session.kz	20
 koru_std/bridge.steps.kz	131
@@ -257,7 +257,8 @@ koru_std/supervisor.h.kz	63
 koru_std/supervisor.home.kz	37
 koru_std/supervisor.kz	73
 koru_std/supervisor.policy.kz	149
-koru_std/switch.kz	151
+koru_std/switch.emit.kz	74
+koru_std/switch.kz	145
 koru_std/table.kz	62
 koru_std/taps.kz	1442
 koru_std/template.k	71

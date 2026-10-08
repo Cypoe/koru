@@ -1008,10 +1008,14 @@ pub const HostShape = struct {
 
     /// `csMember` minus the `@` keyword escape — for positions where the
     /// name is glued behind a longer identifier (`__koru_read_<field>`)
-    /// and can never itself be a keyword.
+    /// and can never itself be a keyword. Zig's `@"name"` escape also
+    /// surfaces here — `@` is only legal as a C# identifier PREFIX, so
+    /// glued positions strip it (csMember re-adds it via mangleCsIdent
+    /// when the bare name is a keyword).
     pub fn csFolded(alloc: std.mem.Allocator, name: []const u8) []const u8 {
         const de_kebabed = std.mem.replaceOwned(u8, alloc, name, "-", "_") catch unreachable;
-        return std.mem.replaceOwned(u8, alloc, de_kebabed, ".", "_") catch unreachable;
+        const de_dotted = std.mem.replaceOwned(u8, alloc, de_kebabed, ".", "_") catch unreachable;
+        return std.mem.replaceOwned(u8, alloc, de_dotted, "@", "") catch unreachable;
     }
 
     /// A branch-payload member name spelled for C# — `csMember` folded, plus
@@ -1417,6 +1421,42 @@ fn lowerCsInto(
                 continue;
             }
         }
+        // Zig ADDRESS-OF in prefix position. C# records and arrays are heap
+        // references already, so `&x` lowers to `x` — the same identity the
+        // JS arm takes. `&scalar` at a call boundary is the `__KoruBox`
+        // write-back in emitInvocationWithContinuations; anywhere else it
+        // snapshots, and a `.data` read on it fails LOUDLY, not wrongly.
+        // `&&` keeps both chars — the second `&` reads as prefix position
+        // to exprPrefixPosition and must not be erased. An INFIX `&` is
+        // bitwise-and in both languages.
+        if (c == '&' and exprPrefixPosition(text, i) and
+            (i + 1 >= text.len or text[i + 1] != '&'))
+        {
+            i += 1;
+            continue;
+        }
+        // Kebab ident fold, koru_expr only: an unspaced `-` between ident
+        // chars is a Koru name joiner (`pos-tempo` → `pos_tempo`), never
+        // subtraction — same rule as ZigExprParser.parseIdentName and the
+        // zig emitter's writeBinding. Host text's `-` is genuine C#
+        // arithmetic and stays.
+        if (mode == .koru_expr and c == '-' and i > 0 and i + 1 < text.len and
+            exprIdentChar(text[i - 1]) and exprIdentChar(text[i + 1]))
+        {
+            try out.append(allocator, '_');
+            i += 1;
+            continue;
+        }
+        // Zig optional-unwrap `.?`. On `dynamic` the operand is already
+        // null-or-value, so the suffix is identity and drops out
+        // (`e.? == x` → `e == x`, 320_147). Runs in BOTH modes: `.?` is
+        // never valid C# — `?.`/`??` spell the real operators in a
+        // different order — so host text authored `.?` can only be a Koru
+        // unwrap spliced into template text.
+        if (c == '.' and i + 1 < text.len and text[i + 1] == '?') {
+            i += 2;
+            continue;
+        }
         // Koru LIST literal `[a, b]`: passed verbatim, C# reads a collection
         // expression — legal only where a target type exists, and
         // `foreach (var x in […])` supplies none (CS9176). In LITERAL
@@ -1427,6 +1467,21 @@ fn lowerCsInto(
         // closer set) stays verbatim. `.koru_expr` only: in host text `[` is
         // a genuine C# collection expression or attribute the author chose.
         if (mode == .koru_expr and c == '[') {
+            // Zig inferred-length array literal `[_]T{...}` — a typed list
+            // literal: `new T[] { ... }`. Seen before the operand-closes
+            // check because `[_` always reads literal-position (after `=`,
+            // `(`, `,`) and would otherwise emit `new dynamic[] {_}T{…}`.
+            if (i + 2 < text.len and text[i + 1] == '_' and text[i + 2] == ']') {
+                var t_end = i + 3;
+                while (t_end < text.len and text[t_end] != '{') t_end += 1;
+                if (t_end < text.len) {
+                    try out.appendSlice(allocator, "new ");
+                    try out.appendSlice(allocator, csType(std.mem.trim(u8, text[i + 3 .. t_end], " \t")));
+                    try out.appendSlice(allocator, "[] {");
+                    i = t_end + 1;
+                    continue;
+                }
+            }
             var l = out.items.len;
             while (l > 0 and std.ascii.isWhitespace(out.items[l - 1])) l -= 1;
             const operand_closes = l > 0 and
@@ -1453,8 +1508,13 @@ fn lowerCsInto(
         }
         // RESERVED-WORD rename — `.koru_expr` only, same rule as the JS arm:
         // in `.host_text` the words are GENUINE C# (`return`, `if (…)`) and
-        // renaming them would destroy working host code.
-        if (mode == .koru_expr and (c == '_' or (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z'))) {
+        // renaming them would destroy working host code. Anchored to ident
+        // start: a non-match emits one char and re-enters, so without the
+        // anchor `read_ref` splits at `_` and `ref` escapes mid-identifier
+        // (`__koru_read_@ref` — 690_242's CS1003). `.` is not an ident char,
+        // so member names still escape (`a.ref` → `a.@ref`).
+        if (mode == .koru_expr and (c == '_' or (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')) and
+            (i == 0 or !exprIdentChar(text[i - 1]))) {
             var w = i;
             while (w < text.len and exprIdentChar(text[w])) w += 1;
             const word = text[i..w];

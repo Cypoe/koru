@@ -3,11 +3,11 @@ using static KoruHost;
 static class KoruHost {
     public static long counter = 40;
     public static void bump(long by) {
-    $mod.counter += by;
+    counter += by;
 }
 }
 
 ~proc run|cs {
     bump(2);
-    return $mod.counter;
+    return counter;
 }

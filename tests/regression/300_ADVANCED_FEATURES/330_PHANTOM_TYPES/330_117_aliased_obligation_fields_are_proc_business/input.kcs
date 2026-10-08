@@ -1,13 +1,13 @@
 using static KoruHost;
 
 static class KoruHost {
-    public static dynamic slot = new {  n = 0  };
+    public static dynamic slot = new Handle { n = 0 };
     public class Handle {
         public int n;
     }
 }
 
-~proc make-alias|cs { return new { h = &slot, g = &slot }; 
+~proc make-alias|cs { return new { h = slot, g = slot }; 
 }
 ~proc retire|cs { x.n += 1; 
 }

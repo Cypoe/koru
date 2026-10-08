@@ -527,7 +527,7 @@ const Allocator = std.mem.Allocator;
     cs_emitter_module.addImport("annotation_parser", annotation_parser_module);
     cs_emitter_module.addImport("struct_literal", struct_literal_module);
     cs_emitter_module.addImport("codegen_utils", codegen_utils_module);
-
+    cs_emitter_module.addImport("emitter_helpers", emitter_helpers_module);
     // Build.zig emission
     const emit_build_zig_module = b.createModule(.{
         .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/emit_build_zig.zig" },

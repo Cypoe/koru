@@ -1,5 +1,5 @@
 ~proc get-params|cs {
-    return new { count = 3, items = new {  10, 20, 30, 40, 50  } };
+    return new { count = 3, items = new dynamic[] { 10, 20, 30, 40, 50 } };
 }
 ~proc process-item|cs {
     __koru_stdout_write($"Processing: {value}\n");

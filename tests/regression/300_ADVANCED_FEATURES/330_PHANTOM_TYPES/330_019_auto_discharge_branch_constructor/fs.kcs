@@ -1,0 +1,16 @@
+using static KoruHost;
+
+static class KoruHost {
+    public class File {
+        public long handle;
+    }
+}
+
+~proc open|cs {
+    __koru_stdout_write($"Opening file: {path}\n");
+    return new File { handle = 42 };
+}
+
+~proc close|cs {
+    __koru_stdout_write($"Closing file (auto-discharged)\n");
+}

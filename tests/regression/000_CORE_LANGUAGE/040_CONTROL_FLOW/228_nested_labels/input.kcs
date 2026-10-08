@@ -1,14 +1,14 @@
 ~proc outer|cs {
     __koru_stdout_write($"Outer: {count}\n");
     if (count < 2) {
-        return new Output { };
+        return new Output { tag = "continue-outer", continue_outer = count + 1 };
     }
-    return new Output { };
+    return new Output { tag = "done-outer", done_outer = new { } };
 }
 ~proc inner|cs {
     __koru_stdout_write($"  Inner: {count}\n");
     if (count < 2) {
-        return new Output { };
+        return new Output { tag = "continue-inner", continue_inner = count + 1 };
     }
-    return new Output { };
+    return new Output { tag = "done-inner", done_inner = new { } };
 }

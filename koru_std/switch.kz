@@ -18,24 +18,6 @@
 
 const std = @import("std");
 
-// Emit a Zig char literal for `ch`, escaping the characters that must not
-// appear raw inside a char literal (' and \) and common control chars.
-fn charLiteral(allocator: std.mem.Allocator, ch: u8) []const u8 {
-    return switch (ch) {
-        '\'' => std.fmt.allocPrint(allocator, "'\\''", .{}) catch unreachable,
-        '\\' => std.fmt.allocPrint(allocator, "'\\\\'", .{}) catch unreachable,
-        '\n' => std.fmt.allocPrint(allocator, "'\\n'", .{}) catch unreachable,
-        '\t' => std.fmt.allocPrint(allocator, "'\\t'", .{}) catch unreachable,
-        '\r' => std.fmt.allocPrint(allocator, "'\\r'", .{}) catch unreachable,
-        else => {
-            if (ch < 32 or ch == 127) {
-                return std.fmt.allocPrint(allocator, "'\\x{x:0>2}'", .{ch}) catch unreachable;
-            }
-            return std.fmt.allocPrint(allocator, "'{c}'", .{ch}) catch unreachable;
-        },
-    };
-}
-
 // The tor declares the USER surface: any raw-name branch carries the matched
 // char (bind or discard with `_`), plus an optional void `no-match` fallback.
 // The shape checker enforces this contract; the transform owns pattern parsing
@@ -60,20 +42,22 @@ fn charLiteral(allocator: std.mem.Allocator, ch: u8) []const u8 {
     }
     const value_expr: []const u8 = invocation.args[0].value;
 
+    // The dispatch text is host code spliced into the emitted program — zig
+    // gets a `switch` prong table; cs gets the semantically identical
+    // if/else-if chain (first match wins, same contract). C# pattern syntax
+    // would carry `and`/`when` words that the host-text lowerer rewrites; the
+    // chain needs neither.
+    const host_is_cs = std.mem.eql(u8, CompilerEnv.lang, "cs");
+
     // Site-unique name for the dispatched value, so nested switches do not shadow
     // each other's binding.
     const value_name = std.fmt.allocPrint(allocator, "__koru_switch_value_{d}_{d}", .{ flow.location.line, flow.location.column }) catch unreachable;
 
     var dispatch = std.ArrayList(u8){};
-
-    const head = std.fmt.allocPrint(allocator, "//@koru:inline_stmt\n{{ const {s}: u8 = ", .{value_name}) catch unreachable;
-    dispatch.appendSlice(allocator, head) catch unreachable;
-    dispatch.appendSlice(allocator, value_expr) catch unreachable;
-    dispatch.appendSlice(allocator, "; switch (") catch unreachable;
-    dispatch.appendSlice(allocator, value_name) catch unreachable;
-    dispatch.appendSlice(allocator, ") { ") catch unreachable;
+    appendSwitchHead(allocator, &dispatch, value_expr, value_name, host_is_cs);
 
     var nomatch_idx: ?usize = null;
+    var first_arm = true;
     for (conts, 0..) |c, i| {
         const name = c.branch;
         if (std.mem.eql(u8, name, "no-match")) {
@@ -86,14 +70,19 @@ fn charLiteral(allocator: std.mem.Allocator, ch: u8) []const u8 {
         if (name.len == 0) {
             return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU167, flow.location, flow.module, "std/switch:char: empty branch pattern", .{}) } };
         }
+        if (name.len == 3 and name[1] == '-' and name[0] > name[2]) {
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU167, flow.location, flow.module, "std/switch:char: invalid range `{s}` (low > high)", .{name}) } };
+        }
+
+        if (host_is_cs) {
+            appendCsArm(allocator, &dispatch, name, i, value_name, &first_arm);
+            continue;
+        }
 
         if (name.len == 3 and name[1] == '-') {
             // Range: a-z  (inclusive both ends)
             const lo = name[0];
             const hi = name[2];
-            if (lo > hi) {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU167, flow.location, flow.module, "std/switch:char: invalid range `{s}` (low > high)", .{name}) } };
-            }
             const lo_lit = charLiteral(allocator, lo);
             const hi_lit = charLiteral(allocator, hi);
             const range = std.fmt.allocPrint(allocator, "{s}...{s}", .{ lo_lit, hi_lit }) catch unreachable;
@@ -120,14 +109,17 @@ fn charLiteral(allocator: std.mem.Allocator, ch: u8) []const u8 {
 
     // Zig switch requires an else prong. Route to the `no-match` continuation if
     // the user supplied one, otherwise fall through with an empty else.
-    if (nomatch_idx) |ni| {
-        const tail = std.fmt.allocPrint(allocator, "else => __koru_continue_{d}, ", .{ni}) catch unreachable;
-        dispatch.appendSlice(allocator, tail) catch unreachable;
+    if (host_is_cs) {
+        appendCsTail(allocator, &dispatch, nomatch_idx, first_arm);
     } else {
-        dispatch.appendSlice(allocator, "else => {}, ") catch unreachable;
+        if (nomatch_idx) |ni| {
+            const tail = std.fmt.allocPrint(allocator, "else => __koru_continue_{d}, ", .{ni}) catch unreachable;
+            dispatch.appendSlice(allocator, tail) catch unreachable;
+        } else {
+            dispatch.appendSlice(allocator, "else => {}, ") catch unreachable;
+        }
+        dispatch.appendSlice(allocator, "} }") catch unreachable;
     }
-
-    dispatch.appendSlice(allocator, "} }") catch unreachable;
 
     // Rebuild the flow: same invocation marked @pass_ran (so it isn't
     // re-transformed), inline_body = the dispatch, continuations kept.
@@ -149,3 +141,5 @@ fn charLiteral(allocator: std.mem.Allocator, ch: u8) []const u8 {
 
     return .{ .transformed = .{ .replacement = ast.Item{ .flow = new_flow } } };
 }
+
+~part emit

@@ -4,5 +4,5 @@
 }
 ~proc as.string|cs {
     _ = doc;
-    return new Output { tag = "ok", ok = if (v == 5) "deep 5" else "wrong depth" };
+    return new Output { tag = "ok", ok = v == 5 ? "deep 5" : "wrong depth" };
 }

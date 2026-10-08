@@ -1,5 +1,5 @@
 ~proc scan-pairs|cs {
-    pair(.{ .a = 1, .b = 2 });
-    pair(.{ .a = 3, .b = 4 });
-    return .done;
+    pair((a: 1L, b: 2L));
+    pair((a: 3L, b: 4L));
+    return new Output { tag = "done" };
 }

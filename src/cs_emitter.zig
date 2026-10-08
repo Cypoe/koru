@@ -36,6 +36,7 @@ const file_types = @import("file_types");
 const annotation_parser = @import("annotation_parser");
 const struct_literal = @import("struct_literal");
 const codegen_utils = @import("codegen_utils");
+const emitter_helpers = @import("emitter_helpers");
 
 pub const CsEmitError = error{
     OutOfMemory,
@@ -127,8 +128,12 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     }
 
     // Phase 1: each top-level event decl as a nested `<name>_event` class.
+    // `[comptime]` events are compile-time-only by contract — their bodies
+    // are always zig, and no runtime flow may dispatch them (the same skip
+    // flowIsNorunSite applies at the call edge).
     for (program.items) |*item| {
         if (item.* == .event_decl) {
+            if (annotation_parser.hasPart(item.event_decl.annotations, "comptime")) continue;
             try em.emitEventDecl(&item.event_decl, program.items);
             try em.claimEventKey(&emitted_keys, &item.event_decl);
         }
@@ -142,20 +147,48 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         try em.emitModuleEventDecls(&item.module_decl, &reached, &emitted_keys);
     }
 
-    // Phase 2: each top-level flow as a flowN() method.
+    // Phase 2: each top-level flow as a flowN() method. Module runtime
+    // flows emit first in the method table — a module's top-level flows are
+    // its initialization, and Main calls them between koru:start and the
+    // importer's own flows (mirrors the Zig emitter's module_runtime_flows
+    // ordering).
     var flow_num: usize = 0;
+    var koru_start_num: ?usize = null;
+    var koru_end_num: ?usize = null;
+    var module_flow_nums: std.ArrayList(usize) = .empty;
+    defer module_flow_nums.deinit(allocator);
+    var main_flow_nums: std.ArrayList(usize) = .empty;
+    defer main_flow_nums.deinit(allocator);
+    for (program.items) |*item| {
+        if (item.* != .module_decl) continue;
+        try em.emitModuleRuntimeFlows(&item.module_decl, &flow_num, &module_flow_nums);
+    }
     for (program.items) |*item| {
         if (item.* == .flow) {
             // Subflow implementations are emitted inside their event's
             // handler, not as standalone methods.
             if (item.flow.impl_of != null) continue;
             if (em.isDeclarationFlow(&item.flow)) continue;
-            // Skip injected meta-event flows (koru:start / koru:end).
+            // Injected meta-event flows (koru:start / koru:end) emit as
+            // ordinary flowN methods — their continuations carry the
+            // lifecycle taps — but Main calls them at the edges, not in
+            // declaration order.
             if (item.flow.inv().path.module_qualifier) |mq| {
-                if (std.mem.eql(u8, mq, "koru")) continue;
+                if (std.mem.eql(u8, mq, "koru")) {
+                    const leaf = item.flow.inv().path.segments[item.flow.inv().path.segments.len - 1];
+                    if (std.mem.eql(u8, leaf, "start")) {
+                        koru_start_num = flow_num;
+                    } else if (std.mem.eql(u8, leaf, "end")) {
+                        koru_end_num = flow_num;
+                    } else continue;
+                    try em.emitFlow(&item.flow, flow_num);
+                    flow_num += 1;
+                    continue;
+                }
             }
             if (em.flowIsNorunSite(&item.flow)) continue;
             try em.emitFlow(&item.flow, flow_num);
+            try main_flow_nums.append(allocator, flow_num);
             flow_num += 1;
         }
     }
@@ -167,9 +200,10 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     // emits the module class and no door into it.
     if (!library) {
         try em.write("\nstatic class Program {\n  static void Main() {\n");
-        for (0..flow_num) |i| {
-            try em.writeFmt("    main_module.flow{d}();\n", .{i});
-        }
+        if (koru_start_num) |n| try em.writeFmt("    main_module.flow{d}();\n", .{n});
+        for (module_flow_nums.items) |n| try em.writeFmt("    main_module.flow{d}();\n", .{n});
+        for (main_flow_nums.items) |n| try em.writeFmt("    main_module.flow{d}();\n", .{n});
+        if (koru_end_num) |n| try em.writeFmt("    main_module.flow{d}();\n", .{n});
         try em.write("  }\n}\n");
     }
 
@@ -422,12 +456,118 @@ fn collectCsCells(em: *Emitter, items: []const ast.Item) CsEmitError!void {
 
 /// Word-boundary rename of `name` to `replacement` inside `text` — used to
 /// rebind an inlined proc's params to `__koru_p_<name>` so a splice can't
-/// collide with an in-scope local. String literals containing the name get
-/// renamed too; the name appearing inside a literal AND as a live param is
-/// a pathological body either way.
+/// collide with an in-scope local. String/char literals and comments are
+/// masked out — except interpolation holes, where the name IS a use-site.
 fn replaceIdent(allocator: std.mem.Allocator, text: []const u8, name: []const u8, replacement: []const u8) CsEmitError![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
+    // Positions where an identifier can live: anywhere EXCEPT inside string
+    // and char literals and comments. A param named `n` rebinds the `{n}` in
+    // `$"tick {n}\n"` but must NOT touch the `n` of `\n` — the escape's tail
+    // is string content, not a use-site (236). Interpolation holes keep
+    // code=true — `{n}` inside `$"…"` names the param.
+    const code = try allocator.alloc(bool, text.len);
+    defer allocator.free(code);
+    @memset(code, true);
+    {
+        var i: usize = 0;
+        while (i < text.len) {
+            if (text[i] == '/' and i + 1 < text.len and text[i + 1] == '/') {
+                while (i < text.len and text[i] != '\n') : (i += 1) code[i] = false;
+                continue;
+            }
+            if (text[i] == '/' and i + 1 < text.len and text[i + 1] == '*') {
+                code[i] = false;
+                code[i + 1] = false;
+                i += 2;
+                while (i < text.len and !(i + 1 < text.len and text[i] == '*' and text[i + 1] == '/')) : (i += 1) code[i] = false;
+                if (i < text.len) {
+                    code[i] = false;
+                    code[i + 1] = false;
+                    i += 2;
+                }
+                continue;
+            }
+            var j = i;
+            var interp = false;
+            var verbatim = false;
+            while (j < text.len and (text[j] == '$' or text[j] == '@')) : (j += 1) {
+                if (text[j] == '$') interp = true;
+                if (text[j] == '@') verbatim = true;
+            }
+            if (j < text.len and text[j] == '"') {
+                code[j] = false;
+                j += 1;
+                while (j < text.len and text[j] != '"') {
+                    if (!verbatim and text[j] == '\\') {
+                        code[j] = false;
+                        j += 1;
+                        if (j < text.len) {
+                            code[j] = false;
+                            j += 1;
+                        }
+                        continue;
+                    }
+                    if (interp and text[j] == '{') {
+                        if (j + 1 < text.len and text[j + 1] == '{') {
+                            code[j] = false;
+                            code[j + 1] = false;
+                            j += 2;
+                            continue;
+                        }
+                        code[j] = false;
+                        j += 1;
+                        var depth: usize = 1;
+                        while (j < text.len and depth > 0) : (j += 1) {
+                            if (text[j] == '{') depth += 1;
+                            if (text[j] == '}') {
+                                depth -= 1;
+                                code[j] = false;
+                            }
+                        }
+                        continue;
+                    }
+                    if (interp and text[j] == '}' and j + 1 < text.len and text[j + 1] == '}') {
+                        code[j] = false;
+                        code[j + 1] = false;
+                        j += 2;
+                        continue;
+                    }
+                    code[j] = false;
+                    j += 1;
+                }
+                if (j < text.len) {
+                    code[j] = false;
+                    j += 1;
+                }
+                i = j;
+                continue;
+            }
+            if (text[i] == '\'') {
+                code[i] = false;
+                i += 1;
+                while (i < text.len and text[i] != '\'') {
+                    if (text[i] == '\\') {
+                        code[i] = false;
+                        i += 1;
+                        if (i < text.len) {
+                            code[i] = false;
+                            i += 1;
+                        }
+                        continue;
+                    }
+                    code[i] = false;
+                    i += 1;
+                }
+                if (i < text.len) {
+                    code[i] = false;
+                    i += 1;
+                }
+                continue;
+            }
+            i += 1;
+        }
+    }
     // Positions inside a `new <T> { … }` object initializer — a name
     // appearing there as `<name> =` is a MEMBER KEY of the callee's Input
     // struct, not a use of the caller's local (a sweepbody capture at an
@@ -484,7 +624,7 @@ fn replaceIdent(allocator: std.mem.Allocator, text: []const u8, name: []const u8
             while (k < text.len and (text[k] == ' ' or text[k] == '\t')) k += 1;
             member_key = k < text.len and text[k] == '=' and (k + 1 >= text.len or text[k + 1] != '=');
         }
-        if (!member_access and !member_key and
+        if (code[at] and !member_access and !member_key and
             (at == 0 or !csIdentChar(text[at - 1])) and
             (at + name.len >= text.len or !csIdentChar(text[at + name.len])))
         {
@@ -545,6 +685,17 @@ const ReachedEvents = std.AutoHashMap(*const ast.EventDecl, void);
 /// are one flat namespace; Koru event paths are not.
 const EmittedKeys = std.StringHashMap(void);
 
+/// One enclosing `#L` fold on the `label_frame` chain.
+const LabelFrame = struct {
+    label: []const u8,
+    /// The `var result_<id>` the fold reassigns on every turn.
+    result_name: []const u8,
+    /// The head invocation to re-run. Its arg NAMES are the fold's parameters.
+    inv: *const ast.Invocation,
+    /// The fold this one sits inside, or null at the outermost.
+    outer: ?*const LabelFrame = null,
+};
+
 const Emitter = struct {
     allocator: std.mem.Allocator,
     buf: *std.ArrayList(u8),
@@ -559,6 +710,12 @@ const Emitter = struct {
     /// FIRING, not an event invocation. The vertical refuses both anyway;
     /// the field stays so the shape of the check survives.
     impl_event: ?*const ast.EventDecl = null,
+    /// `#L` fold frames, innermost first — a `@L(…)` jump finds its target
+    /// by walking OUT through the enclosing folds, so an inner fold may
+    /// jump to an outer label. Same chain the JS emitter keeps
+    /// (js_emitter.zig:505); here it costs no allocation either.
+    label_frame: ?*const LabelFrame = null,
+
     /// How produce sites inside the current impl spell their result. `dynamic`
     /// keeps the anonymous-object/`return <expr>` shape (opaque |cs bodies and
     /// any context outside a generated impl — including ARM delegate bodies,
@@ -722,7 +879,7 @@ const Emitter = struct {
                 n += 1;
             }
             for (seg) |c| {
-                buf[n] = if (c == '-') '_' else c;
+                buf[n] = if (c == '-' or c == '.') '_' else c;
                 n += 1;
             }
         }
@@ -745,23 +902,65 @@ const Emitter = struct {
     /// time this distinction was missed.
     fn findCsProcIn(self: *Emitter, scope: []const ast.Item, event_path: *const ast.DottedPath) ?*const ast.ProcDecl {
         _ = self;
+        var joined_ev: [256]u8 = undefined;
+        var joined_ev_len: usize = 0;
+        for (event_path.segments, 0..) |seg, si| {
+            if (si > 0) {
+                if (joined_ev_len >= joined_ev.len) return null;
+                joined_ev[joined_ev_len] = '.';
+                joined_ev_len += 1;
+            }
+            if (joined_ev_len + seg.len > joined_ev.len) return null;
+            @memcpy(joined_ev[joined_ev_len .. joined_ev_len + seg.len], seg);
+            joined_ev_len += seg.len;
+        }
+        const event_joined = joined_ev[0..joined_ev_len];
         for (scope) |*item| {
             if (item.* != .proc_decl) continue;
             const proc = &item.proc_decl;
-            if (proc.path.segments.len != event_path.segments.len) continue;
-            var match = true;
-            for (proc.path.segments, event_path.segments) |sa, sb| {
-                if (!std.mem.eql(u8, sa, sb)) {
-                    match = false;
-                    break;
+            var joined_p: [256]u8 = undefined;
+            var joined_p_len: usize = 0;
+            var overflow = false;
+            for (proc.path.segments, 0..) |seg, si| {
+                if (si > 0) {
+                    if (joined_p_len >= joined_p.len) { overflow = true; break; }
+                    joined_p[joined_p_len] = '.';
+                    joined_p_len += 1;
                 }
+                if (joined_p_len + seg.len > joined_p.len) { overflow = true; break; }
+                @memcpy(joined_p[joined_p_len .. joined_p_len + seg.len], seg);
+                joined_p_len += seg.len;
             }
-            if (!match) continue;
+            if (overflow) continue;
+            // Joined compare: the abstract-default machinery splits a tor's
+            // default body into `x.default` — the .kz surface writes it as a
+            // dotted segment while a facet path tokenizes dots apart. Both
+            // spellings name the same tor.
+            if (!std.mem.eql(u8, joined_p[0..joined_p_len], event_joined)) continue;
             const target = proc.target orelse continue;
             if (!std.mem.eql(u8, target, CS_TARGET)) continue;
             if (annotation_parser.hasPart(proc.annotations, "transform")) continue;
             if (annotation_parser.hasPart(proc.annotations, "template")) continue;
             return proc;
+        }
+        // `.default` fallback: an abstract tor's synthesized `x.default`
+        // event shares the `x` proc's body — the zig emitter does this
+        // split at AST time; cs facets only ever name `x`.
+        if (event_joined.len > 8 and
+            std.mem.eql(u8, event_joined[event_joined.len - 8 ..], ".default"))
+        {
+            const base = event_joined[0 .. event_joined.len - 8];
+            for (scope) |*item| {
+                if (item.* != .proc_decl) continue;
+                const proc = &item.proc_decl;
+                var pb: [256]u8 = undefined;
+                if (!std.mem.eql(u8, joinedPath(&pb, &proc.path), base)) continue;
+                const target = proc.target orelse continue;
+                if (!std.mem.eql(u8, target, CS_TARGET)) continue;
+                if (annotation_parser.hasPart(proc.annotations, "transform")) continue;
+                if (annotation_parser.hasPart(proc.annotations, "template")) continue;
+                return proc;
+            }
         }
         return null;
     }
@@ -770,6 +969,45 @@ const Emitter = struct {
     /// modules — module-qualified call sites reconciled by pathsEqualWithModule.
     fn findEventDecl(self: *Emitter, path: *const ast.DottedPath) ?*const ast.EventDecl {
         return self.findEventDeclIn(self.items, path, null);
+    }
+
+    /// Invocation-side resolution. Inside an override subflow
+    /// (`~mod:x = x(...)`) a call back to `x` means "delegate to the
+    /// default" — zig emits `_default_handler` for that self-call; the cs
+    /// surface has the synthesized `x.default` event decl instead, so the
+    /// invocation resolves to it. Every other call resolves plainly.
+    fn resolveInvocationEvent(self: *Emitter, inv: *const ast.Invocation) ?*const ast.EventDecl {
+        const ev = self.findEventDecl(&inv.path) orelse return null;
+        const impl_ev = self.impl_event orelse return ev;
+        var ib: [256]u8 = undefined;
+        var eb: [256]u8 = undefined;
+        const inv_joined = joinedPath(&ib, &inv.path);
+        const impl_joined = joinedPath(&eb, &impl_ev.path);
+        if (!std.mem.eql(u8, inv_joined, impl_joined)) return ev;
+        var want_buf: [256]u8 = undefined;
+        const want = std.fmt.bufPrint(&want_buf, "{s}.default", .{inv_joined}) catch return ev;
+        const want_mod = impl_ev.path.module_qualifier orelse "";
+        for (self.items) |*item| {
+            switch (item.*) {
+                .event_decl => |*ed| {
+                    var db: [256]u8 = undefined;
+                    if (std.mem.eql(u8, ed.path.module_qualifier orelse "", want_mod) and
+                        std.mem.eql(u8, joinedPath(&db, &ed.path), want)) return ed;
+                },
+                .module_decl => |*md| {
+                    for (md.items) |*it2| {
+                        if (it2.* != .event_decl) continue;
+                        const ed2 = &it2.event_decl;
+                        var db: [256]u8 = undefined;
+                        if (std.mem.eql(u8, ed2.path.module_qualifier orelse "", want_mod) and
+                            std.mem.eql(u8, joinedPath(&db, &ed2.path), want))
+                            return ed2;
+                    }
+                },
+                else => {},
+            }
+        }
+        return ev;
     }
 
     fn findEventDeclIn(self: *Emitter, scope: []const ast.Item, path: *const ast.DottedPath, current_module: ?[]const u8) ?*const ast.EventDecl {
@@ -796,15 +1034,19 @@ const Emitter = struct {
     }
 
     /// A `[norun]` event claims its site as AST data — the flow never
-    /// executes and no handler call may reach the output. Mirrors the JS
-    /// emitter's guard (visitor walk's is_norun twin).
+    /// executes and no handler call may reach the output. A `[comptime]`
+    /// event's flows already ran during compilation — they print to the
+    /// BUILD log, and emitting a runtime dispatch for them would run the
+    /// body a second time. Mirrors the JS emitter's guard (visitor walk's
+    /// is_norun twin).
     fn flowIsNorunSite(self: *Emitter, flow: *const ast.Flow) bool {
         if (flow.inline_body != null or flow.preamble_code != null) return false;
         for (flow.inv().annotations) |ann| {
             if (std.mem.startsWith(u8, ann, "@pass_ran")) return false;
         }
         const site = self.findDeclSiteIn(self.items, &flow.inv().path, null) orelse return false;
-        return annotation_parser.hasPart(site.decl.annotations, "norun");
+        return annotation_parser.hasPart(site.decl.annotations, "norun") or
+            annotation_parser.hasPart(site.decl.annotations, "comptime");
     }
 
     /// How an event's behaviour is supplied — the four spellings, resolved in
@@ -814,27 +1056,71 @@ const Emitter = struct {
     const EventImpl = union(enum) {
         proc: *const ast.ProcDecl,
         template_stub: *const ast.ProcDecl,
+        /// `[norun]`/`[expand]` decl with no body of its own — call sites
+        /// are rewritten/claimed as data, so the handler is unreachable.
+        dead_stub,
+        /// Declared + dispatched but no body in ANY language — zig's
+        /// `return undefined` spelled `return default`.
+        empty_body,
         immediate: *const ast.ImmediateImpl,
         subflow: *const ast.Flow,
     };
 
-    fn findImplIn(self: *Emitter, scope: []const ast.Item, event_path: *const ast.DottedPath) ?EventImpl {
-        if (self.findCsProcIn(scope, event_path)) |proc| return .{ .proc = proc };
+    /// The joined dotted spelling of a path — `x` and `x.y` segments both
+    /// spell `x.y` — the shape the abstract-default split writes.
+    fn joinedPath(buf: []u8, path: *const ast.DottedPath) []const u8 {
+        var n: usize = 0;
+        for (path.segments, 0..) |seg, si| {
+            if (si > 0 and n < buf.len) {
+                buf[n] = '.';
+                n += 1;
+            }
+            if (n + seg.len > buf.len) return buf[0..n];
+            @memcpy(buf[n .. n + seg.len], seg);
+            n += seg.len;
+        }
+        return buf[0..n];
+    }
 
+    /// True when `scope` declares an event whose joined path is
+    /// `<event_joined>.default` — the shape the `[abstract]` machinery
+    /// synthesizes when a tor carries BOTH a default body and an override.
+    /// In that split the base-named proc belongs to `.default` and the base
+    /// event's behaviour is the override impl.
+    fn hasAbstractDefaultSibling(scope: []const ast.Item, event_joined: []const u8) bool {
         for (scope) |*item| {
-            if (item.* != .immediate_impl) continue;
-            if (pathsEqual(&item.immediate_impl.event_path, event_path)) {
-                return .{ .immediate = &item.immediate_impl };
+            if (item.* != .event_decl) continue;
+            var buf: [256]u8 = undefined;
+            const joined = joinedPath(&buf, &item.event_decl.path);
+            if (joined.len == event_joined.len + 8 and
+                std.mem.eql(u8, joined[0..event_joined.len], event_joined) and
+                std.mem.eql(u8, joined[event_joined.len..], ".default"))
+            {
+                return true;
             }
         }
+        return false;
+    }
 
-        for (scope) |*item| {
-            if (item.* != .flow) continue;
-            const flow = &item.flow;
-            const impl_of = flow.impl_of orelse continue;
-            if (flow.impl_variant != null) continue;
-            if (pathsEqual(&impl_of, event_path)) return .{ .subflow = flow };
+    fn findImplIn(self: *Emitter, scope: []const ast.Item, event_path: *const ast.DottedPath) ?EventImpl {
+        var ev_buf: [256]u8 = undefined;
+        const ev_joined = joinedPath(&ev_buf, event_path);
+        const has_default = hasAbstractDefaultSibling(scope, ev_joined);
+        // `[abstract]` split present: proc `x` is the default's body, not
+        // `x`'s — skip it here so the override impl (subflow/immediate)
+        // binds. `x.default` itself still resolves to the same proc below.
+        if (!has_default) {
+            if (self.findCsProcIn(scope, event_path)) |proc| return .{ .proc = proc };
         }
+
+        // Impls bind by TARGET, not declaration site — an override flow in
+        // the main module implements `app/lib/hook:closed` while the event
+        // decl lives inside `hook`'s module items. Scan the whole program;
+        // each enclosing module supplies the qualifier context as the walk
+        // descends, so an unqualified `foo` in module A still cannot bind
+        // `B:foo`.
+        if (findImmediateImplIn(self.items, event_path, self.main_module_name, self.main_module_name)) |ii| return .{ .immediate = ii };
+        if (findSubflowImplIn(self.items, event_path, self.main_module_name, self.main_module_name)) |flow| return .{ .subflow = flow };
 
         for (scope) |*item| {
             if (item.* != .proc_decl) continue;
@@ -846,11 +1132,101 @@ const Emitter = struct {
         return null;
     }
 
+    /// Any `proc_decl` for `event_path` at all — language-blind. Used to
+    /// tell "no impl exists" (emit the `undefined`-stub) apart from "an
+    /// impl exists but not for cs" (refuse).
+    fn anyProcDeclFor(scope: []const ast.Item, event_path: *const ast.DottedPath) bool {
+        for (scope) |*item| {
+            switch (item.*) {
+                .proc_decl => |*p| {
+                    var pb: [256]u8 = undefined;
+                    var eb: [256]u8 = undefined;
+                    if (std.mem.eql(u8, joinedPath(&pb, &p.path), joinedPath(&eb, event_path))) return true;
+                },
+                .module_decl => |*md| {
+                    if (anyProcDeclFor(md.items, event_path)) return true;
+                },
+                else => {},
+            }
+        }
+        return false;
+    }
+
+    /// `x -> expr` impls bind by their TARGET path, not by where they're
+    /// declared — a gated override in `test_lib/override.k` implements
+    /// `input:calc` from inside a module item. Descend so module-scoped
+    /// impls resolve the same as top-level ones — but the TARGET's
+    /// module qualifier must still match the event's (pathsEqual ignores
+    /// it): without that check `std.compiler:coordinate`'s own impl would
+    /// bind a main-module `coordinate`.
+    /// `x -> expr` impls bind by their TARGET path, not by where they're
+    /// declared — a gated override in `test_lib/override.k` implements
+    /// `input:calc` from inside a module item. Descend so module-scoped
+    /// impls resolve the same as top-level ones — but the TARGET must
+    /// qualify-match the event (pathsEqual ignores it): without that check
+    /// `std.compiler:coordinate`'s own impl would bind a main-module
+    /// `coordinate`. `home` is the enclosing module's logical name.
+    fn findImmediateImplIn(
+        scope: []const ast.Item,
+        event_path: *const ast.DottedPath,
+        home: []const u8,
+        main_module: []const u8,
+    ) ?*const ast.ImmediateImpl {
+        for (scope) |*item| {
+            switch (item.*) {
+                .immediate_impl => |*ii| {
+                    if (implTargetsEvent(event_path, &ii.event_path, home, main_module)) return ii;
+                },
+                .module_decl => |*md| {
+                    if (findImmediateImplIn(md.items, event_path, md.logical_name, main_module)) |found| return found;
+                },
+                else => {},
+            }
+        }
+        return null;
+    }
+
+    fn findSubflowImplIn(
+        scope: []const ast.Item,
+        event_path: *const ast.DottedPath,
+        home: []const u8,
+        main_module: []const u8,
+    ) ?*const ast.Flow {
+        for (scope) |*item| {
+            switch (item.*) {
+                .flow => |*flow| {
+                    const impl_of = flow.impl_of orelse continue;
+                    if (flow.impl_variant != null) continue;
+                    if (implTargetsEvent(event_path, &impl_of, home, main_module)) return flow;
+                },
+                .module_decl => |*md| {
+                    if (findSubflowImplIn(md.items, event_path, md.logical_name, main_module)) |found| return found;
+                },
+                else => {},
+            }
+        }
+        return null;
+    }
+
     /// Emit one EventDecl as `static class <name>_event { … handler … }`.
     fn emitEventDecl(self: *Emitter, ev: *const ast.EventDecl, scope: []const ast.Item) CsEmitError!void {
         const saved_locals = self.flow_locals.items.len;
         defer self.flow_locals.shrinkRetainingCapacity(saved_locals);
-        const impl = self.findImplIn(scope, &ev.path) orelse {
+        const impl = self.findImplIn(scope, &ev.path) orelse blk: {
+            // `[norun]`/`[expand]` events are AST data at their call sites —
+            // no runtime body exists to emit (zig emits nothing). The class
+            // still declares for typing; the handler is a dead stub.
+            if (annotation_parser.hasPart(ev.annotations, "norun") or
+                annotation_parser.hasPart(ev.annotations, "expand"))
+                break :blk EventImpl{ .dead_stub = {} };
+            // A bodiless tor — declared and dispatched, but no proc in ANY
+            // language and no impl anywhere — zig emits `return undefined`.
+            // `default` is the cs spelling of that shrug; a |zig-only proc
+            // still refuses above this line via the impl search.
+            if (!anyProcDeclFor(self.items, &ev.path) and
+                findImmediateImplIn(self.items, &ev.path, self.main_module_name, self.main_module_name) == null and
+                findSubflowImplIn(self.items, &ev.path, self.main_module_name, self.main_module_name) == null)
+                break :blk EventImpl{ .empty_body = {} };
             log.err("[cs_emitter] tor '{s}' has no |cs proc, immediate, or subflow body\n", .{ev.path.segments[ev.path.segments.len - 1]});
             return CsEmitError.NoCsProcBody;
         };
@@ -1027,7 +1403,17 @@ const Emitter = struct {
                 "      throw new global::System.Exception(\"{s}: |template| proc is inlined at call sites and must never be called\");\n",
                 .{name},
             ),
-            .immediate => |ii| try self.emitBranchConstructorReturn(&ii.value, "      "),
+            .dead_stub => try self.writeFmt(
+                "      throw new global::System.Exception(\"{s}: [expand] tor is inlined at call sites and must never be called\");\n",
+                .{name},
+            ),
+            .empty_body => try self.write("      return default;\n"),
+            .immediate => |ii| {
+                const saved_ev = self.impl_event;
+                self.impl_event = ev;
+                defer self.impl_event = saved_ev;
+                try self.emitBranchConstructorReturn(&ii.value, "      ");
+            },
             .proc, .subflow => {
                 // CELL HOIST — emit the body into a scratch buffer, then for
                 // every module cell it names bare, materialize the cell as a
@@ -1240,8 +1626,8 @@ const Emitter = struct {
             return;
         }
         if (flow.pre_label) |label| {
-            log.err("[cs_emitter] #{s} folds are not yet modelled on the cs target\n", .{label});
-            return CsEmitError.UnsupportedConstruct;
+            try self.emitLabelFoldAt(flow.inv(), flow.body.continuations, label, indent);
+            return;
         }
         try self.emitInvocationWithContinuations(flow.inv(), flow.body.continuations, indent);
     }
@@ -1314,7 +1700,7 @@ const Emitter = struct {
         if (depth == 0) return false;
         const impl = self.findImplIn(site.scope, &site.decl.path) orelse return false;
         return switch (impl) {
-            .proc, .template_stub => true,
+            .proc, .template_stub, .dead_stub, .empty_body => true,
             .immediate => true,
             .subflow => |flow| self.subflowIsCsImplementable(site.decl, flow, depth - 1),
         };
@@ -1333,8 +1719,11 @@ const Emitter = struct {
                     .invocation => |*inv| {
                         if (!self.invocationIsCsImplementable(event, inv, depth)) return false;
                     },
-                    .label_with_invocation => return false, // folds unmodelled
-                    .terminal, .branch_constructor => {},
+                    .label_with_invocation => |*lwi| {
+                        if (!lwi.is_declaration) return false;
+                        if (!self.invocationIsCsImplementable(event, &lwi.invocation, depth)) return false;
+                    },
+                    .terminal, .branch_constructor, .expression, .assignment, .label_jump, .label_apply, .metatype_binding => {},
                     .inline_code => |text| if (!self.csHostTextLowers(text)) return false,
                     else => return false,
                 }
@@ -1387,6 +1776,10 @@ const Emitter = struct {
         for (module.items) |*item| {
             switch (item.*) {
                 .event_decl => |*event| {
+                    if (annotation_parser.hasPart(event.annotations, "comptime")) continue;
+                    var name_buf: [256]u8 = undefined;
+                    const key = self.eventClassName(&name_buf, event);
+                    if (emitted_keys.contains(key)) continue;
                     const site = DeclSite{ .decl = event, .scope = module.items };
                     if (self.eventIsCsImplementable(site, IMPL_WALK_DEPTH)) {
                         try self.emitEventDecl(event, module.items);
@@ -1394,16 +1787,50 @@ const Emitter = struct {
                         continue;
                     }
                     if (!reached.contains(event)) continue;
-                    var name_buf: [256]u8 = undefined;
-                    const key = self.eventClassName(&name_buf, event);
-                    if (emitted_keys.contains(key)) continue;
-                    try self.emitUnlowerableEventRefusal(event, module);
+                    // A body-less event with exactly one terminal branch
+                    // produces it unconditionally — the injected
+                    // koru:start / koru:end meta-events land here.
+                    if (soleTerminalBranch(event)) |branch| {
+                        try self.emitSoleBranchEvent(event, branch);
+                    } else {
+                        try self.emitUnlowerableEventRefusal(event, module);
+                    }
                     try self.claimEventKey(emitted_keys, event);
                 },
                 .module_decl => |*nested| try self.emitModuleEventDecls(nested, reached, emitted_keys),
                 else => {},
             }
         }
+    }
+
+    /// The branch an impl-less event produces when it has exactly one —
+    /// there is no other outcome it could spell. Multi-branch or
+    /// effect-bearing events return null: genuinely unlowerable.
+    fn soleTerminalBranch(event: *const ast.EventDecl) ?*const ast.Branch {
+        var found: ?*const ast.Branch = null;
+        for (event.branches) |*b| {
+            if (b.kind == .effect) return null;
+            if (found != null) return null;
+            found = b;
+        }
+        return found;
+    }
+
+    /// `handler` for a body-less single-branch event — returns that branch,
+    /// the only output the event can produce.
+    fn emitSoleBranchEvent(self: *Emitter, event: *const ast.EventDecl, branch: *const ast.Branch) CsEmitError!void {
+        var name_buf: [256]u8 = undefined;
+        try self.writeFmt("  public static class {s}_event {{\n", .{self.eventClassName(&name_buf, event)});
+        try self.write("    public struct Input {\n");
+        for (event.input.fields) |field| {
+            try self.writeFmt("      public {s} ", .{csType(field.type)});
+            try self.writeBinding(field.name);
+            try self.write(";\n");
+        }
+        try self.write("    }\n    public struct Output {\n      public string tag;\n      public dynamic ");
+        try self.writeBinding(branch.name);
+        try self.write(";\n    }\n");
+        try self.writeFmt("    public static Output handler(Input {s}) => new Output {{ tag = \"{s}\" }};\n  }}\n", .{ INPUT_PARAM, branch.name });
     }
 
     /// A handler for an event this target cannot lower, whose whole body is
@@ -1440,10 +1867,38 @@ const Emitter = struct {
             if (flow.impl_of != null) continue;
             if (self.isDeclarationFlow(flow)) continue;
             if (flow.inv().path.module_qualifier) |mq| {
-                if (std.mem.eql(u8, mq, "koru")) continue;
+                if (std.mem.eql(u8, mq, "koru")) {
+                    const leaf = flow.inv().path.segments[flow.inv().path.segments.len - 1];
+                    if (!std.mem.eql(u8, leaf, "start") and !std.mem.eql(u8, leaf, "end")) continue;
+                }
             }
             if (self.flowIsNorunSite(flow)) continue;
             try self.reachFlow(null, flow, reached, IMPL_WALK_DEPTH);
+        }
+        for (self.items) |*item| {
+            if (item.* != .module_decl) continue;
+            try self.reachModuleFlows(&item.module_decl, reached);
+        }
+    }
+
+    /// Imported-module runtime flows are real dispatch sites too — their
+    /// callees must count as reached or Phase 1b would skip (or stub) an
+    /// event a module flow is about to call.
+    fn reachModuleFlows(self: *Emitter, module: *const ast.ModuleDecl, reached: *ReachedEvents) CsEmitError!void {
+        for (module.items) |*item| {
+            switch (item.*) {
+                .module_decl => |*nested| try self.reachModuleFlows(nested, reached),
+                .flow => |*flow| {
+                    if (flow.impl_of != null) continue;
+                    if (self.isDeclarationFlow(flow)) continue;
+                    if (flow.inv().path.module_qualifier) |mq| {
+                        if (std.mem.eql(u8, mq, "koru")) continue;
+                    }
+                    if (self.flowIsNorunSite(flow)) continue;
+                    try self.reachFlow(null, flow, reached, IMPL_WALK_DEPTH);
+                },
+                else => {},
+            }
         }
     }
 
@@ -1458,6 +1913,7 @@ const Emitter = struct {
         for (conts) |*cont| {
             if (cont.node) |*node| switch (node.*) {
                 .invocation => |*inv| try self.reachInvocation(impl_event, inv, reached, depth),
+                .label_with_invocation => |*lwi| try self.reachInvocation(impl_event, &lwi.invocation, reached, depth),
                 else => {},
             };
             try self.reachContinuations(impl_event, cont.continuations, reached, depth);
@@ -1484,6 +1940,36 @@ const Emitter = struct {
         }
     }
 
+    /// Emit an imported module's runtime flows as `flowN()` methods on
+    /// main_module — a module's top-level flows are its initialization, and
+    /// the flat `<module>_<event>_event` namespace already puts their
+    /// callees in scope. Recurses into nested module decls; records each
+    /// emitted number so Main can call them in traversal order.
+    fn emitModuleRuntimeFlows(
+        self: *Emitter,
+        module: *const ast.ModuleDecl,
+        flow_num: *usize,
+        module_flow_nums: *std.ArrayList(usize),
+    ) CsEmitError!void {
+        for (module.items) |*item| {
+            switch (item.*) {
+                .module_decl => |*nested| try self.emitModuleRuntimeFlows(nested, flow_num, module_flow_nums),
+                .flow => |*flow| {
+                    if (flow.impl_of != null) continue;
+                    if (self.isDeclarationFlow(flow)) continue;
+                    if (flow.inv().path.module_qualifier) |mq| {
+                        if (std.mem.eql(u8, mq, "koru")) continue;
+                    }
+                    if (self.flowIsNorunSite(flow)) continue;
+                    try self.emitFlow(flow, flow_num.*);
+                    try module_flow_nums.append(self.allocator, flow_num.*);
+                    flow_num.* += 1;
+                },
+                else => {},
+            }
+        }
+    }
+
     /// Emit a top-level flow as `flowN()`.
     fn emitFlow(self: *Emitter, flow: *const ast.Flow, flow_num: usize) CsEmitError!void {
         const saved_locals = self.flow_locals.items.len;
@@ -1506,12 +1992,107 @@ const Emitter = struct {
             try self.write("\n");
             try self.emitUnconsumedContinuations(flow.body.continuations, consumed, "    ");
         } else if (flow.pre_label) |label| {
-            log.err("[cs_emitter] #{s} folds are not yet modelled on the cs target\n", .{label});
-            return CsEmitError.UnsupportedConstruct;
+            try self.emitLabelFoldAt(flow.inv(), flow.body.continuations, label, "    ");
         } else {
             try self.emitInvocationWithContinuations(flow.inv(), flow.body.continuations, "    ");
         }
         try self.write("  }\n");
+    }
+
+    /// `<branch> <payload>` expression-produce — the cs twin of zig's
+    /// `emitBranchProduce` (emitter_helpers). A continuation arm's
+    /// `.expression` node carrying `finished d` is the parser's spelling of
+    /// `-> finished d`: the head word is the branch, the rest its payload.
+    /// Fires only when the enclosing impl event declares the head as a
+    /// terminal branch — everything else is an ordinary expression return.
+    /// Returns true when it emitted.
+    fn emitProduceExpr(self: *Emitter, expr: []const u8, indent: []const u8) CsEmitError!bool {
+        const decl = self.impl_event orelse return false;
+        if (decl.branches.len == 0) return false;
+        const trimmed = std.mem.trim(u8, expr, " \t");
+        if (trimmed.len == 0 or std.mem.eql(u8, trimmed, "_")) return false;
+
+        var split: usize = 0;
+        while (split < trimmed.len and trimmed[split] != ' ' and trimmed[split] != '\t') : (split += 1) {}
+        const head = trimmed[0..split];
+        const payload = std.mem.trim(u8, trimmed[split..], " \t");
+
+        const branch = for (decl.branches) |*b| {
+            if (b.kind != .terminal) continue;
+            if (std.mem.eql(u8, b.name, head)) break b;
+        } else return false;
+
+        const tagged = self.impl_out == .tagged;
+        if (branch.payload.fields.len == 0 and !branch.payload.is_wildcard) {
+            if (payload.len != 0) return false; // shape mismatch — let the checker speak
+            try self.writeFmt("{s}return new {s}{{ tag = \"{s}\" }};\n", .{ indent, if (tagged) "Output " else "", head });
+            return true;
+        }
+        if (payload.len == 0) return false;
+
+        try self.writeFmt("{s}return new {s}{{ tag = \"{s}\", ", .{ indent, if (tagged) "Output " else "", head });
+        try self.writeBinding(csPayloadName(head));
+        try self.write(" = ");
+        // A record-brace payload on a branch whose decl carries named fields
+        // spells the named tuple the Output member declares — the same
+        // ruling emitBranchConstructorReturn makes for `-> b {f: v}`.
+        // `dynamic` members still take the anonymous object.
+        if (payload[0] == '{' and
+            (try recordPayloadCsType(self.allocator, branch)) != null)
+        {
+            try self.writeRecordTuple(payload);
+        } else {
+            try self.writeProduceValue(payload);
+        }
+        try self.write(" };\n");
+        return true;
+    }
+
+    /// `{ k: v, … }` produce text → the named tuple literal `( k: v, … )` —
+    /// kebab field names mangle through writeBinding, values lower through
+    /// writeCsExpr. Top-level comma split; nested braces/brackets/parens and
+    /// string literals don't split.
+    fn writeRecordTuple(self: *Emitter, payload: []const u8) CsEmitError!void {
+        var inner = std.mem.trim(u8, payload, " \t");
+        if (inner.len >= 2 and inner[0] == '{' and inner[inner.len - 1] == '}') {
+            inner = std.mem.trim(u8, inner[1 .. inner.len - 1], " \t");
+        }
+        try self.write("(");
+        var pos: usize = 0;
+        var field_i: usize = 0;
+        while (pos <= inner.len) {
+            var depth: usize = 0;
+            var quote: ?u8 = null;
+            var end = pos;
+            while (end < inner.len) : (end += 1) {
+                const c = inner[end];
+                if (quote) |q| {
+                    if (c == '\\') end += 1 else if (c == q) quote = null;
+                    continue;
+                }
+                switch (c) {
+                    '"', '\'' => quote = c,
+                    '{', '(', '[' => depth += 1,
+                    '}', ')', ']' => depth -|= 1,
+                    ',' => if (depth == 0) break,
+                    else => {},
+                }
+            }
+            const part = std.mem.trim(u8, inner[pos..end], " \t");
+            pos = end + 1;
+            if (part.len == 0) continue;
+            if (field_i > 0) try self.write(", ");
+            field_i += 1;
+            const colon = std.mem.indexOfScalar(u8, part, ':') orelse part.len;
+            const fname = std.mem.trim(u8, part[0..colon], " \t");
+            const fval = std.mem.trim(u8, part[@min(colon + 1, part.len)..], " \t");
+            if (fname.len > 0 and colon < part.len) {
+                try self.writeBinding(fname);
+                try self.write(": ");
+            }
+            try self.writeCsExpr(fval);
+        }
+        try self.write(")");
     }
 
     /// Emit a flow's `preamble_code` — host DECLARATION text a comptime
@@ -1738,9 +2319,11 @@ const Emitter = struct {
             .terminal => {},
             .branch_constructor => |*bc| try self.emitBranchConstructorReturn(bc, indent),
             .expression => |expr| {
-                try self.writeFmt("{s}return ", .{indent});
-                try self.writeCsExpr(expr);
-                try self.write(";\n");
+                if (!try self.emitProduceExpr(expr, indent)) {
+                    try self.writeFmt("{s}return ", .{indent});
+                    try self.writeCsExpr(expr);
+                    try self.write(";\n");
+                }
             },
             .assignment => |asgn| {
                 try self.emitAssignment(&asgn, indent);
@@ -1750,11 +2333,43 @@ const Emitter = struct {
                 try self.emitPreamble(text, indent);
                 try self.emitPreambleContinuations(cont.continuations, indent);
             },
+            .metatype_binding => |*mb| try self.emitMetatypeBinding(mb, cont.continuations, indent),
             else => {
                 log.err("[cs_emitter] inline continuation body is a {s}, which the cs target does not model\n", .{@tagName(node)});
                 return CsEmitError.UnsupportedConstruct;
             },
         }
+    }
+
+    /// A `~tap(x -> *) | Profile p |> …` arm's observation record — produces
+    /// no dispatchable value; its continuations run in the record's scope.
+    /// Same three shapes as JS (js_emitter.zig:1895): Transition is the cheap
+    /// metatype, Profile adds the timestamp, Audit the payload slot.
+    fn emitMetatypeBinding(
+        self: *Emitter,
+        mb: anytype,
+        continuations: []const ast.Continuation,
+        indent: []const u8,
+    ) CsEmitError!void {
+        try self.writeFmt("{s}{{\n", .{indent});
+        const inner = try std.fmt.allocPrint(self.allocator, "{s}  ", .{indent});
+        defer self.allocator.free(inner);
+        try self.writeFmt("{s}var ", .{inner});
+        try self.writeBinding(mb.binding);
+        try self.writeFmt(" = new {{ source = \"{s}\", destination = ", .{mb.source_event});
+        if (mb.dest_event) |dest| {
+            try self.writeFmt("\"{s}\"", .{dest});
+        } else {
+            try self.write("(string)null");
+        }
+        try self.writeFmt(", branch = \"{s}\"", .{if (mb.branch.len == 0) "__void" else mb.branch});
+        if (!std.mem.eql(u8, mb.metatype, "Transition")) {
+            try self.write(", timestamp_ns = global::System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1000000L");
+            if (std.mem.eql(u8, mb.metatype, "Audit")) try self.write(", payload = (object)null");
+        }
+        try self.write(" };\n");
+        try self.emitPreambleContinuations(continuations, inner);
+        try self.writeFmt("{s}}}\n", .{indent});
     }
 
     /// Emit a `captured { … }` write as field stores into the cell — snapshot
@@ -1823,10 +2438,49 @@ const Emitter = struct {
             }
         }
 
-        const ev = self.findEventDecl(&inv.path) orelse {
+        const ev = self.resolveInvocationEvent(inv) orelse {
             log.err("[cs_emitter] flow invokes unresolved tor\n", .{});
             return CsEmitError.UnresolvedEvent;
         };
+
+        // VARIANT SELECTION — `std/build:variants {"input:pump": "alt"}` (or a
+        // call-site `pump|alt(…)`) routes this dispatch to `~proc pump|alt`,
+        // not `pump|cs`. Emitting the default lang body answers the wrong
+        // impl silently (370_012: `21`/`default` where `42`/`alt` was
+        // selected). The selected variant's body is not a |cs body — refuse.
+        if (inv.inline_body == null) {
+            var selected = inv.variant;
+            if (selected == null) {
+                const canonical = try emitter_helpers.buildCanonicalEventName(&inv.path, self.allocator, self.main_module_name);
+                defer self.allocator.free(canonical);
+                selected = emitter_helpers.getVariant(canonical);
+            }
+            if (selected) |v| {
+                if (!std.mem.eql(u8, v, CS_TARGET)) {
+                    const leaf = inv.path.segments[inv.path.segments.len - 1];
+                    log.err("[cs_emitter] tor '{s}' dispatch selects variant '{s}', which has no |cs body\n", .{ leaf, v });
+                    return CsEmitError.UnsupportedConstruct;
+                }
+            }
+        }
+
+        // A dispatch to a MODULE event with no cs implementable body would
+        // emit a call to the throwing refusal class — a refusal deferred to
+        // runtime. Refuse here, where the call is made. Top-level decls are
+        // exempt: Phase 1 emits their real handler or refuses them itself —
+        // only Phase 1b's module path can leave a live stub behind a call.
+        if (inv.inline_body == null) {
+            if (self.findDeclSiteIn(self.items, &inv.path, null)) |site| {
+                if (site.scope.ptr != self.items.ptr and
+                    !self.eventIsCsImplementable(site, IMPL_WALK_DEPTH) and
+                    soleTerminalBranch(site.decl) == null)
+                {
+                    const leaf = inv.path.segments[inv.path.segments.len - 1];
+                    log.err("[cs_emitter] tor '{s}' has no |cs proc, immediate, or subflow body\n", .{leaf});
+                    return CsEmitError.UnsupportedConstruct;
+                }
+            }
+        }
 
         var ev_has_effect = false;
         var terminal_branches: usize = 0;
@@ -1892,6 +2546,18 @@ const Emitter = struct {
         };
         defer if (result_name) |rn| self.allocator.free(rn);
 
+        // `&name` borrow args become `__KoruBox` handles hoisted BEFORE the
+        // call — the callee writes `.data`, and the write-back after the
+        // call puts the mutation back on the caller's binding. A box without
+        // the write-back would silently drop the mutation — the wrong-answer
+        // lie a refusal exists to prevent.
+        var borrow_box: [16]?[]const u8 = .{null} ** 16;
+        var borrow_target: [16][]const u8 = undefined;
+        defer for (borrow_box) |b| {
+            if (b) |s| self.allocator.free(s);
+        };
+        var borrow_count: usize = 0;
+
         // CALL-SITE INLINE — a tor whose whole cs impl is one return-free
         // opaque |cs| proc splices its body here instead of dispatching: the
         // same inlining the JIT already does, one scope earlier, so a bare
@@ -1904,17 +2570,36 @@ const Emitter = struct {
             inv.return_destructure.len == 0 and
             try self.tryEmitInlinedProcCall(inv, ev, indent);
         if (!inlined) {
+            for (inv.args, 0..) |arg, ai| {
+                if (ai >= borrow_box.len) break;
+                if (borrowTarget(arg.value)) |t| {
+                    const bname = try std.fmt.allocPrint(self.allocator, "__koru_borrow_{d}", .{self.nextId()});
+                    try self.writeFmt("{s}var {s} = new __KoruBox {{ data = ", .{ indent, bname });
+                    try self.writeBinding(t);
+                    try self.write(" };\n");
+                    borrow_box[ai] = bname;
+                    borrow_target[ai] = t;
+                    borrow_count += 1;
+                }
+            }
             if (result_name) |rn| {
                 try self.writeFmt("{s}var {s} = main_module.{s}_event.handler(", .{ indent, rn, ev_name });
                 try self.registerLocal(rn);
             } else {
                 try self.writeFmt("{s}main_module.{s}_event.handler(", .{ indent, ev_name });
             }
-            try self.emitArgsObject(inv.args, ev, ev_name);
+            try self.emitArgsObject(inv.args, ev, ev_name, borrow_box[0..]);
             if (ev_has_effect) {
                 try self.writeFmt(", {s}", .{handlers_name.?});
             }
             try self.write(");\n");
+            for (borrow_box, 0..) |b, bi| {
+                if (b) |bname| {
+                    try self.writeFmt("{s}", .{indent});
+                    try self.writeBinding(borrow_target[bi]);
+                    try self.writeFmt(" = {s}.data;\n", .{bname});
+                }
+            }
         }
 
         // A BIND-POSITION destructure (`~locate(): { pos: { x, y } } |> …`).
@@ -2070,9 +2755,11 @@ const Emitter = struct {
                 .terminal => {},
                 .branch_constructor => |*bc| try self.emitBranchConstructorReturn(bc, body_indent),
                 .expression => |expr| {
-                    try self.writeFmt("{s}return ", .{body_indent});
-                    try self.writeCsExpr(expr);
-                    try self.write(";\n");
+                    if (!try self.emitProduceExpr(expr, body_indent)) {
+                        try self.writeFmt("{s}return ", .{body_indent});
+                        try self.writeCsExpr(expr);
+                        try self.write(";\n");
+                    }
                 },
                 .assignment => |asgn| {
                     try self.emitAssignment(&asgn, body_indent);
@@ -2082,6 +2769,33 @@ const Emitter = struct {
                     try self.emitPreamble(text, body_indent);
                     try self.emitPreambleContinuations(cont.continuations, body_indent);
                 },
+                // A `@L(…)` jump ENDS its arm: it re-seeds the fold and the
+                // `goto` landing on the `while` header decides the next turn —
+                // C#'s spelling of JS's labelled `continue` (C# has none).
+                .label_jump => |lj| {
+                    try self.emitLabelJump(lj.label, lj.args, body_indent);
+                },
+                .label_apply => |l| {
+                    try self.emitLabelJump(l, &.{}, body_indent);
+                },
+                // `#loop counter(n: 1)` in continuation position — the fold
+                // ANCHOR. A `@loop(…)` JUMP also parses here with
+                // is_declaration false; refuse that one by name rather than
+                // fold on it (the Zig reference agrees, emitter_helpers.zig).
+                .label_with_invocation => |*lwi| {
+                    if (!lwi.is_declaration) {
+                        log.err("[cs_emitter] @{s}(…) reached as a fold ANCHOR; a jump must sit inside its own #{s}\n", .{ lwi.label, lwi.label });
+                        return CsEmitError.UnsupportedConstruct;
+                    }
+                    try self.emitLabelFoldAt(&lwi.invocation, cont.continuations, lwi.label, body_indent);
+                },
+                // A `~tap(x -> *) | Profile p |> log(msg: p.source)` arm's
+                // observation record, grafted by the tap transformer: it
+                // produces no dispatchable value; its continuations run in
+                // the record's scope. Same three shapes as JS's
+                // (js_emitter.zig:1895) — Transition is the cheap metatype,
+                // Profile adds the timestamp, Audit the payload slot.
+                .metatype_binding => |*mb| try self.emitMetatypeBinding(mb, cont.continuations, body_indent),
                 else => {
                     log.err("[cs_emitter] terminal continuation body is a {s}, which the cs target does not model\n", .{@tagName(node)});
                     return CsEmitError.UnsupportedConstruct;
@@ -2129,7 +2843,7 @@ const Emitter = struct {
     /// beat_event.Input { q = 41 }` — the zero-allocation twin of zig's
     /// `.{ .q = 41 }`. A wildcard-input tor keeps the anonymous object: its
     /// members cannot be named at decl time.
-    fn emitArgsObject(self: *Emitter, args: []const ast.Arg, ev: *const ast.EventDecl, ev_name: []const u8) CsEmitError!void {
+    fn emitArgsObject(self: *Emitter, args: []const ast.Arg, ev: *const ast.EventDecl, ev_name: []const u8, borrow_boxes: ?[]const ?[]const u8) CsEmitError!void {
         const typed = !ev.input.is_wildcard;
         try self.write("new ");
         if (typed) try self.writeFmt("{s}_event.Input ", .{ev_name});
@@ -2138,6 +2852,49 @@ const Emitter = struct {
             if (idx > 0) try self.write(", ");
             try self.writeBinding(arg.name);
             try self.write(" = ");
+            if (borrow_boxes) |bb| {
+                if (idx < bb.len) if (bb[idx]) |bname| {
+                    try self.write(bname);
+                    continue;
+                };
+            }
+            // An `Expression` param transports the captured SOURCE TEXT, not
+            // the evaluated value — `calc(expr: 2 + 3)` hands the callee
+            // "2 + 3" (parser.zig: "an Expression is just another way to
+            // pass a string"). Same quoting the zig emitter's
+            // is_expression_arg path writes.
+            var is_expression = false;
+            var is_source = false;
+            if (typed) {
+                for (ev.input.fields) |field| {
+                    if (std.mem.eql(u8, field.name, arg.name)) {
+                        is_expression = field.is_expression;
+                        is_source = field.is_source;
+                        break;
+                    }
+                }
+            }
+            if (is_expression or is_source) {
+                // A `Source` param transports captured BLOCK text — the
+                // callee reads `source.text`, so the value is an anonymous
+                // record carrying the literal.
+                if (is_source) try self.write("new { text = ");
+                try self.write("\"");
+                const captured = if (is_source and arg.source_value != null) arg.source_value.?.text else arg.value;
+                for (captured) |c| {
+                    switch (c) {
+                        '"' => try self.write("\\\""),
+                        '\\' => try self.write("\\\\"),
+                        '\n' => try self.write("\\n"),
+                        '\r' => try self.write("\\r"),
+                        '\t' => try self.write("\\t"),
+                        else => try self.write(&[_]u8{c}),
+                    }
+                }
+                try self.write("\"");
+                if (is_source) try self.write(" }");
+                continue;
+            }
             // The declared field type wraps the value in an explicit cast —
             // the same `(<T>)(<expr>)` rule bare produces use. Literal `0.5`
             // is a `double` in C# and will not convert into a `float` field;
@@ -2154,6 +2911,178 @@ const Emitter = struct {
             }
         }
         try self.write("}");
+    }
+
+    /// `#L` fold — `~start() |> #loop counter(n: 1) | next c |> @loop(n: c) | done`.
+    /// State variables carry the turn's parameters; the `while` header tests
+    /// the latest result's tag; each looping arm re-invokes and `goto`s back
+    /// to the check. C# has no labelled `continue`, so the turn-end is a
+    /// `goto` landing on a label before the `while` — same-level and
+    /// cross-level jumps share the spelling (js_emitter.zig:1375 uses a
+    /// labelled `while` for exactly the same reason).
+    fn emitLabelFoldAt(
+        self: *Emitter,
+        inv: *const ast.Invocation,
+        conts: []const ast.Continuation,
+        label: []const u8,
+        indent: []const u8,
+    ) CsEmitError!void {
+        const event = self.resolveInvocationEvent(inv) orelse {
+            log.err("[cs_emitter] #{s} fold head invokes an unresolved event\n", .{label});
+            return CsEmitError.UnresolvedEvent;
+        };
+        if (self.findDeclSiteIn(self.items, &inv.path, null)) |site| {
+            if (site.scope.ptr != self.items.ptr and
+                !self.eventIsCsImplementable(site, IMPL_WALK_DEPTH) and
+                soleTerminalBranch(site.decl) == null)
+            {
+                log.err("[cs_emitter] #{s} fold head '{s}' has no |cs proc, immediate, or subflow body\n", .{ label, inv.path.segments[inv.path.segments.len - 1] });
+                return CsEmitError.UnsupportedConstruct;
+            }
+        }
+
+        var terminal_branches: usize = 0;
+        for (event.branches) |b| {
+            if (b.kind == .effect) {
+                // Same refusal as JS: rebuilding Handlers per turn is
+                // unmodelled on both targets.
+                log.err("[cs_emitter] #{s} fold head '{s}' declares effect branches, which this target does not model\n", .{ label, event.path.segments[event.path.segments.len - 1] });
+                return CsEmitError.UnsupportedConstruct;
+            }
+            terminal_branches += 1;
+        }
+        const bare_return = terminal_branches == 0 and event.return_type != null;
+
+        // One state variable per head parameter, seeded from the head's args.
+        // Declared with the Input field's type, not `var`: the literal `0`
+        // would infer `int` and a `long` payload could not be re-seeded into it.
+        for (inv.args) |arg| {
+            const ft = argFieldCsType(event, arg.name);
+            try self.writeFmt("{s}{s} {s}", .{ indent, ft, label });
+            try self.writeBinding(arg.name);
+            try self.write(" = ");
+            try self.writeCsExpr(arg.value);
+            try self.write(";\n");
+        }
+
+        var ev_name_buf: [256]u8 = undefined;
+        const ev_name = self.eventClassName(&ev_name_buf, event);
+        const result_name = try std.fmt.allocPrint(self.allocator, "result_{d}", .{self.nextId()});
+        defer self.allocator.free(result_name);
+
+        try self.writeFmt("{s}var {s} = main_module.{s}_event.handler(", .{ indent, result_name, ev_name });
+        try self.emitLabelStateArgs(inv.args, event, ev_name, label);
+        try self.write(");\n");
+
+        var looping: usize = 0;
+        var exiting: usize = 0;
+        for (conts) |*cont| {
+            if (cont.kind != .terminal) continue;
+            if (contLoopsTo(cont, label)) looping += 1 else exiting += 1;
+        }
+
+        const inner = try std.fmt.allocPrint(self.allocator, "{s}  ", .{indent});
+        defer self.allocator.free(inner);
+
+        if (looping > 0) {
+            try self.writeFmt("{s}__fold_{s}_check:\n", .{ indent, label });
+            try self.writeFmt("{s}while (", .{indent});
+            var written: usize = 0;
+            for (conts) |*cont| {
+                if (cont.kind != .terminal or !contLoopsTo(cont, label)) continue;
+                if (written > 0) try self.write(" || ");
+                try self.writeFmt("{s}.tag == \"{s}\"", .{ result_name, cont.branch });
+                written += 1;
+            }
+            try self.write(") {\n");
+
+            const saved = self.label_frame;
+            const frame = LabelFrame{
+                .label = label,
+                .result_name = result_name,
+                .inv = inv,
+                .outer = saved,
+            };
+            self.label_frame = &frame;
+            defer self.label_frame = saved;
+
+            // Inside the loop the condition already selected the arm when
+            // there is only one; with two or more each needs its tag test.
+            for (conts) |*cont| {
+                if (cont.kind != .terminal or !contLoopsTo(cont, label)) continue;
+                try self.emitTerminalContinuation(cont, result_name, inner, looping >= 2, bare_return, null);
+            }
+            try self.writeFmt("{s}}}\n", .{indent});
+        }
+
+        // The exit arms run AFTER the loop, where every looping tag is
+        // impossible.
+        for (conts) |*cont| {
+            if (cont.kind != .terminal or contLoopsTo(cont, label)) continue;
+            try self.emitTerminalContinuation(cont, result_name, indent, exiting >= 2, bare_return, null);
+        }
+    }
+
+    /// `new <ev>_event.Input { <param> = <label>_<param>, … }` — the fold's
+    /// head args read out of the state variables, written at the seed call
+    /// and again at every jump so the two cannot disagree.
+    fn emitLabelStateArgs(
+        self: *Emitter,
+        args: []const ast.Arg,
+        ev: *const ast.EventDecl,
+        ev_name: []const u8,
+        label: []const u8,
+    ) CsEmitError!void {
+        const typed = !ev.input.is_wildcard;
+        try self.write("new ");
+        if (typed) try self.writeFmt("{s}_event.Input ", .{ev_name});
+        try self.write("{ ");
+        for (args, 0..) |arg, i| {
+            if (i > 0) try self.write(", ");
+            try self.writeBinding(arg.name);
+            try self.write(" = ");
+            const ft = argFieldCsType(ev, arg.name);
+            if (typed and !std.mem.eql(u8, ft, "dynamic")) try self.writeFmt("({s})(", .{ft});
+            try self.writeFmt("{s}", .{label});
+            try self.writeBinding(arg.name);
+            if (typed and !std.mem.eql(u8, ft, "dynamic")) try self.write(")");
+        }
+        try self.write("}");
+    }
+
+    /// `@L(args…)` — re-seed the state variables, re-run the head, and
+    /// `goto` back to the fold's `while` header. The target walks OUT
+    /// through the frame chain, so a cross-level jump leaves the inner loop
+    /// entirely — the case `goto` exists for.
+    fn emitLabelJump(self: *Emitter, label: []const u8, args: []const ast.Arg, indent: []const u8) CsEmitError!void {
+        var walk = self.label_frame;
+        const frame = while (walk) |f| : (walk = f.outer) {
+            if (std.mem.eql(u8, f.label, label)) break f;
+        } else {
+            if (self.label_frame) |innermost| {
+                log.err("[cs_emitter] @{s}(…) names no enclosing fold; innermost is #{s}\n", .{ label, innermost.label });
+            } else {
+                log.err("[cs_emitter] @{s}(…) jump outside any #{s} fold\n", .{ label, label });
+            }
+            return CsEmitError.UnsupportedConstruct;
+        };
+        const frame_event = self.resolveInvocationEvent(frame.inv) orelse {
+            log.err("[cs_emitter] @{s}(…) re-invokes an unresolved event\n", .{label});
+            return CsEmitError.UnresolvedEvent;
+        };
+        for (args) |arg| {
+            try self.writeFmt("{s}{s}", .{ indent, label });
+            try self.writeBinding(arg.name);
+            try self.write(" = ");
+            try self.writeCsExpr(arg.value);
+            try self.write(";\n");
+        }
+        var ev_name_buf: [256]u8 = undefined;
+        const ev_name = self.eventClassName(&ev_name_buf, frame_event);
+        try self.writeFmt("{s}{s} = main_module.{s}_event.handler(", .{ indent, frame.result_name, ev_name });
+        try self.emitLabelStateArgs(frame.inv.args, frame_event, ev_name, label);
+        try self.write(");\n");
+        try self.writeFmt("{s}goto __fold_{s}_check;\n", .{ indent, frame.label });
     }
 
     /// The C# spelling of the declared type of a named Input field —
@@ -2225,11 +3154,28 @@ const Emitter = struct {
         try self.writeFmt("{s}{{\n", .{indent});
         const inner = try std.fmt.allocPrint(self.allocator, "{s}  ", .{indent});
         defer self.allocator.free(inner);
+        // `&name` args bind a `__KoruBox` instead — write-backs land after
+        // the spliced body so the callee's `.data` writes reach the caller's
+        // binding (see emitInvocationWithContinuations).
+        var wb_target: [16][]const u8 = undefined;
+        var wb_param: [16][]const u8 = undefined;
+        var wb_count: usize = 0;
         if (ev.input.is_wildcard) {
             for (inv.args) |arg| {
                 if (arg.name.len == 0) continue;
                 var nb: [300]u8 = undefined;
                 const spelled = spelledName(&nb, arg.name) orelse arg.name;
+                if (borrowTarget(arg.value)) |t| {
+                    if (wb_count < 16) {
+                        wb_target[wb_count] = t;
+                        wb_param[wb_count] = try self.allocator.dupe(u8, spelled);
+                        wb_count += 1;
+                    }
+                    try self.writeFmt("{s}var __koru_p_{s} = new __KoruBox {{ data = ", .{ inner, spelled });
+                    try self.writeBinding(t);
+                    try self.write(" };\n");
+                    continue;
+                }
                 try self.writeFmt("{s}var __koru_p_{s} = ", .{ inner, spelled });
                 try self.writeCsExpr(arg.value);
                 try self.write(";\n");
@@ -2241,7 +3187,16 @@ const Emitter = struct {
                 try self.writeFmt("{s}var __koru_p_{s} = ", .{ inner, spelled });
                 const ft = csType(field.type);
                 if (findArgForField(inv.args, field.name)) |a| {
-                    if (!std.mem.eql(u8, ft, "dynamic")) {
+                    if (borrowTarget(a.value)) |t| {
+                        if (wb_count < 16) {
+                            wb_target[wb_count] = t;
+                            wb_param[wb_count] = try self.allocator.dupe(u8, spelled);
+                            wb_count += 1;
+                        }
+                        try self.write("new __KoruBox { data = ");
+                        try self.writeBinding(t);
+                        try self.write(" }");
+                    } else if (!std.mem.eql(u8, ft, "dynamic")) {
                         try self.writeFmt("({s})(", .{ft});
                         try self.writeCsExpr(a.value);
                         try self.write(")");
@@ -2257,6 +3212,12 @@ const Emitter = struct {
             }
         }
         try self.emitReindented(body, inner);
+        for (wb_param[0..wb_count], wb_target[0..wb_count]) |p, t| {
+            try self.writeFmt("{s}", .{inner});
+            try self.writeBinding(t);
+            try self.writeFmt(" = __koru_p_{s}.data;\n", .{p});
+            self.allocator.free(p);
+        }
         // Newline before the close — a trailing `//` comment in the body
         // would otherwise eat the `}`.
         try self.write("\n");
@@ -2349,7 +3310,7 @@ const Emitter = struct {
                 const pv = ii.value.plain_value orelse break :blk false;
                 break :blk textMentionsIdent(pv, name);
             },
-            .subflow, .template_stub => true,
+            .subflow, .template_stub, .dead_stub, .empty_body => true,
         };
     }
 
@@ -2411,7 +3372,7 @@ const Emitter = struct {
                     },
                     .terminal => {},
                     else => {
-                        arm_returns = try self.emitEffectArmBody(cont, inner);
+                        arm_returns = try self.emitEffectArmBody(cont, inner, tail != .none);
                     },
                 }
             }
@@ -2454,8 +3415,17 @@ const Emitter = struct {
             const inner_indent = try std.fmt.allocPrint(self.allocator, "{s}  ", .{guard_indent});
             defer self.allocator.free(inner_indent);
 
-            const arm_returns = try self.emitEffectArmBody(cont_arm, inner_indent);
-            if (!arm_returns) try self.emitArmTail(tail, inner_indent);
+            const arm_returns = try self.emitEffectArmBody(cont_arm, inner_indent, tail != .none);
+            if (!arm_returns) {
+                if (tail == .none and cont_arm.condition != null) {
+                    // A fired guarded arm ends the dispatch — first match
+                    // wins over the unguarded fallback (zig emits `return`
+                    // inside its own `if`, 400_089).
+                    try self.writeFmt("{s}return;\n", .{inner_indent});
+                } else {
+                    try self.emitArmTail(tail, inner_indent);
+                }
+            }
 
             if (cont_arm.condition != null) try self.writeFmt("{s}}}\n", .{body_indent});
             try self.writeFmt("{s}}}\n", .{arm_indent});
@@ -2487,7 +3457,32 @@ const Emitter = struct {
         self: *Emitter,
         cont: *const ast.Continuation,
         indent: []const u8,
+        expects_produce: bool,
     ) CsEmitError!bool {
+        if (cont.node) |*node| {
+            // `! step p -> mix(x: p)` — the bare invocation's result IS the
+            // arm's resume produce; emitting it as a discarded statement and
+            // tailing `return default` answers 0 instead of 42 (400_117).
+            if (expects_produce and node.* == .invocation and cont.continuations.len == 0) {
+                const inv = &node.invocation;
+                if (inv.inline_body == null) {
+                    if (self.resolveInvocationEvent(inv)) |callee| {
+                        var callee_has_effect = false;
+                        for (callee.branches) |b| {
+                            if (b.kind == .effect) callee_has_effect = true;
+                        }
+                        if (!callee_has_effect) {
+                            var ev_name_buf: [256]u8 = undefined;
+                            const ev_name = self.eventClassName(&ev_name_buf, callee);
+                            try self.writeFmt("{s}return main_module.{s}_event.handler(", .{ indent, ev_name });
+                            try self.emitArgsObject(inv.args, callee, ev_name, null);
+                            try self.write(");\n");
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
         try self.emitInlineContinuationBody(cont, indent);
         const node = cont.node orelse return false;
         return switch (node) {
@@ -3378,6 +4373,23 @@ fn moduleQualifiersMatch(a: []const u8, b: []const u8) bool {
     return qualifierSuffixMatch(a, b) or qualifierSuffixMatch(b, a);
 }
 
+/// Impl-target binding is stricter than call-site resolution: a qualified
+/// target names that module's event and nothing else, while an unqualified
+/// target means the event in the impl's OWN enclosing module. Compare each
+/// side's EFFECTIVE module — the qualifier when present, else the decl's
+/// home (or the main module for unqualified events).
+fn implTargetsEvent(
+    event_path: *const ast.DottedPath,
+    target_path: *const ast.DottedPath,
+    impl_home: []const u8,
+    main_module: []const u8,
+) bool {
+    const ev_eff = event_path.module_qualifier orelse main_module;
+    const t_eff = target_path.module_qualifier orelse impl_home;
+    if (!moduleQualifiersMatch(ev_eff, t_eff)) return false;
+    return pathsEqual(event_path, target_path);
+}
+
 /// Module-aware path equality — declaration path vs call-site path, with
 /// the qualifier reconciled against the effective module context.
 fn pathsEqualWithModule(
@@ -3401,4 +4413,35 @@ fn pathsEqualWithModule(
         if (!std.mem.eql(u8, sa, sb)) return false;
     }
     return true;
+}
+
+/// Does this continuation (or any nested sequel) loop back to `label`?
+/// Mirrors js_emitter.zig:3196 — an arm whose sequel contains `@L(…)`
+/// belongs INSIDE the fold's `while`; the rest run after it.
+fn contLoopsTo(cont: *const ast.Continuation, label: []const u8) bool {
+    if (cont.node) |node| switch (node) {
+        .label_jump => |lj| if (std.mem.eql(u8, lj.label, label)) return true,
+        .label_apply => |l| if (std.mem.eql(u8, l, label)) return true,
+        else => {},
+    };
+    for (cont.continuations) |*nested| {
+        if (contLoopsTo(nested, label)) return true;
+    }
+    return false;
+}
+
+/// `&name` — the only borrow spelling `arg.value` can carry — returns the
+/// borrowed ident. `&f(x)` and `&(a + b)` are not borrows and keep falling
+/// through to the expression lowering, where the raw `&` becomes a compile
+/// error rather than a wrong answer.
+fn borrowTarget(value: []const u8) ?[]const u8 {
+    const t = std.mem.trim(u8, value, " \t\r\n");
+    if (t.len < 2 or t[0] != '&') return null;
+    const name = t[1..];
+    for (name) |ch| {
+        const ok = (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or
+            (ch >= '0' and ch <= '9') or ch == '_' or ch == '-';
+        if (!ok) return null;
+    }
+    return name;
 }

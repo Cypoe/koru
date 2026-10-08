@@ -1,0 +1,4 @@
+~proc dropped|cs {
+    gone(fd);
+    return new Output { tag = "ok" };
+}

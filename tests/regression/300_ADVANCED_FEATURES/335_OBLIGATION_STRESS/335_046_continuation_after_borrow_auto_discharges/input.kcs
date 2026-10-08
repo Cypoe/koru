@@ -1,0 +1,17 @@
+using static KoruHost;
+
+static class KoruHost {
+    public class Handle {
+        public int n;
+    }
+}
+
+~proc make|cs {
+    return new Handle();
+}
+
+~proc touch|cs { h.n += 1; }
+
+~proc report|cs { global::System.Console.WriteLine("n=" + n); }
+
+~proc dispose|cs { }

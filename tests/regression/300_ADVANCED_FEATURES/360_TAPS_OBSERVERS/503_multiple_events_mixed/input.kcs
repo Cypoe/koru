@@ -3,7 +3,7 @@
 }
 ~proc validate|cs {
     if (n > 0) {
-        return .valid;
+        return new Output { tag = "valid" };
     }
-    return .invalid;
+    return new Output { tag = "invalid" };
 }

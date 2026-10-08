@@ -4,10 +4,11 @@ static class KoruHost {
     public class Resource {
         public ulong id;
     }
+    public static Resource global_r = new Resource { id = 99 };
 }
 
 ~proc borrow|cs {
-    for (0..n) |i| {
+    for (var i = 0; i < n; i++) {
         var r = lend(i);
         __koru_stdout_write($"got {r.id}\n");
     }

@@ -1,5 +1,5 @@
 ~proc count-up|cs {
-    for (start..end) |i| {
+    for (var i = start; i < end; i++) {
         each(i);
     }
     return new Output { tag = "done", done = end };
