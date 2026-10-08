@@ -1,0 +1,6 @@
+name: enforcement-overreach
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a checker/wall refused legal input because it enforced a narrower rule than the layer beneath it — e.g. KORU177 treating call-site `|variant` as universally proc-dispatch when the emitter ruling already knew transform-input and norun-metadata uses
