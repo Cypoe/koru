@@ -1,0 +1,9 @@
+ada
+lovelace|36|paris|nick=null|tags=3
+bob 7 lyon nick=null tags=0
+cid 9 oslo nick=present tags=1
+BAD4 9: unterminated string
+BAD5 14: missing field 'age'
+valid [1,{"a":true},null,"x"]
+BAD7 5: expected a number
+flag=true pi=3.25 v=2

@@ -87,6 +87,10 @@ KORU169
 KORU170
 KORU171
 
+# Emitted by koru_std/json.parse.kz's `parse` transform, which is Koru, not
+# Zig — the emit-scan reads .zig only. Same situation as KORU140 above.
+KORU178
+
 # `unknownConstruct` was the only emitter and nothing called it — the DEAD check
 # could not see that until 2026-09-17, when the emit-scan stopped crediting a
 # `.KORUxxx` tag in src/errors.zig whose enclosing helper has no call site. The

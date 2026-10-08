@@ -7598,35 +7598,31 @@ pub fn lowerZigType(t: []const u8) []const u8 {
     // `system: ?string`).
     if (std.mem.eql(u8, t, "?string")) return "?[]const u8";
     var i: usize = 0;
-    var slices: usize = 0;
     while (true) {
         if (std.mem.startsWith(u8, t[i..], "?")) {
             i += 1;
         } else if (std.mem.startsWith(u8, t[i..], "[]")) {
             i += 2;
-            slices += 1;
             if (std.mem.startsWith(u8, t[i..], "const ")) i += 6;
         } else break;
     }
     if (i > 0 and std.mem.eql(u8, t[i..], "string")) {
-        const consted = "[]const ".len * slices;
-        const out = lower_zig_type_buf[0 .. i + consted + "[]const u8".len];
         var w: usize = 0;
         var r: usize = 0;
         while (r < i) {
             if (std.mem.startsWith(u8, t[r..], "[]")) {
-                @memcpy(out[w..][0.."[]const ".len], "[]const ");
+                @memcpy(lower_zig_type_buf[w..][0.."[]const ".len], "[]const ");
                 w += "[]const ".len;
                 r += 2;
                 if (std.mem.startsWith(u8, t[r..], "const ")) r += 6;
             } else {
-                out[w] = t[r];
+                lower_zig_type_buf[w] = t[r];
                 w += 1;
                 r += 1;
             }
         }
-        @memcpy(out[w..], "[]const u8");
-        return out;
+        @memcpy(lower_zig_type_buf[w..][0.."[]const u8".len], "[]const u8");
+        return lower_zig_type_buf[0 .. w + "[]const u8".len];
     }
     return t;
 }
@@ -12217,40 +12213,15 @@ pub fn writeBareReturnType(
         return;
     }
 
-    // Nested spellings of the canonical text type lower at the element
-    // (`[]string` → `[]const []const u8`), mirroring writeFieldType/lowerZigType —
-    // the surface ban on raw byte slices (510_108) makes `[]string` the only
-    // spelling a slice of text can have, and `pub const Output = []string;`
-    // is a Zig syntax error ('use of undeclared identifier string').
-    {
-        var i: usize = 0;
-        while (true) {
-            if (std.mem.startsWith(u8, trimmed[i..], "?")) {
-                i += 1;
-            } else if (std.mem.startsWith(u8, trimmed[i..], "[]")) {
-                i += 2;
-                if (std.mem.startsWith(u8, trimmed[i..], "const ")) i += 6;
-            } else break;
-        }
-        if (i > 0 and std.mem.eql(u8, trimmed[i..], "string")) {
-            var r: usize = 0;
-            while (r < i) {
-                if (std.mem.startsWith(u8, trimmed[r..], "[]")) {
-                    try emitter.write("[]const ");
-                    r += 2;
-                    if (std.mem.startsWith(u8, trimmed[r..], "const ")) r += 6;
-                } else {
-                    try emitter.write(trimmed[r .. r + 1]);
-                    r += 1;
-                }
-            }
-            try emitter.write("[]const u8");
-            return;
-        }
-    }
-    // `string` is the canonical surface text type; lower it to the Zig slice.
-    if (std.mem.eql(u8, trimmed, "string")) {
-        try emitter.write("[]const u8");
+    // The canonical text type lowers through lowerZigType — bare `string` and
+    // nested spellings alike (`[]string` → `[]const []const u8`, `?[]string`,
+    // `[]const string`): the surface ban on raw byte slices (510_108) makes
+    // `[]string` the only spelling a slice of text can have, and
+    // `pub const Output = []string;` is a Zig syntax error
+    // ('use of undeclared identifier string').
+    const lowered = lowerZigType(trimmed);
+    if (!std.mem.eql(u8, lowered, trimmed)) {
+        try emitter.write(lowered);
         return;
     }
     // Compiler-provided AST types used as a BARE return live in the ast module,

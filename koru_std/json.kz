@@ -1,11 +1,9 @@
 // std/json - JSON encoding and decoding
-//
-// Minimal JSON library for building and parsing JSON.
-// Uses Zig's std.json under the hood.
-//
-// Design: Start simple, extend as needed.
-// - Object builder pattern for encoding
-// - Key-based extraction for decoding
+// - Object builder pattern for encoding; key-based extraction for decoding
+// - `~part parse` (json.parse.kz): `std/json:parse` reads the `ok` branch's
+//   destructure as the input schema and generates a bespoke parser per site.
+
+~part parse
 
 const std = @import("std");
 

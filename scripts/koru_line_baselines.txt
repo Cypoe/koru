@@ -125,6 +125,7 @@ koru_std/io.jsprec.kz	48
 koru_std/io.kz	1005
 koru_std/io.lowers.kz	36
 koru_std/json.kz	268
+koru_std/json.parse.kz	477
 koru_std/kernel.body.kz	69
 koru_std/kernel.fields.kz	108
 koru_std/kernel.fpga.kz	192
