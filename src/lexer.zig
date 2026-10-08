@@ -44,13 +44,12 @@ pub fn isContinuationLine(line: []const u8) bool {
     const trimmed = trim(line);
     if (trimmed.len == 0) return false;
     if (trimmed[0] == '|') return true;
-    // `!` continuation: `! name` or `! ?name`. `!?` stays classified so
-    // the continuation parser can refuse it as the dead catch-all
-    // spelling (PARSE003). Reject `!=` and other operators by requiring
-    // whitespace or `?` after the `!`.
+    // `!` continuation: `! name`, `! ?name`, `!?` (dead spelling), or `!*`
+    // (effect residual). Reject `!=` and other operators by requiring
+    // whitespace, `?`, or `*` after the `!`.
     if (trimmed[0] == '!' and trimmed.len >= 2) {
         const next = trimmed[1];
-        return next == ' ' or next == '\t' or next == '?';
+        return next == ' ' or next == '\t' or next == '?' or next == '*';
     }
     return false;
 }

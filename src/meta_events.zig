@@ -53,6 +53,8 @@ fn koruLifecycleFlow(allocator: std.mem.Allocator, name: []const u8) !ast.Item {
         .binding = null,  // Discard pattern (no binding)
         .binding_type = .branch_payload,
         .binding_annotations = &[_][]const u8{},
+        .is_catchall = false,
+        .catchall_metatype = null,
         .condition = null,
         .condition_expr = null,
         .node = null,  // Empty (no node)

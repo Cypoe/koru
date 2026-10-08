@@ -1,8 +1,8 @@
-// Test 355_006: Optional Branches - API Evolution
+// Test 918f: Optional Branches - API Evolution
 //
 // Verifies:
 // 1. Event evolved by adding NEW optional branch
-// 2. Old handler needs no change — the new optional branch absorbs
+// 2. Old handler (|* residual) silently catches new branch
 // 3. Adding optional branches never breaks existing handlers
 // 4. Contrast: adding REQUIRED branches would break compilation (good!)
 
@@ -25,14 +25,17 @@
     return .{ .success = value * 2 };
 }
 
-// Handler written for v1 — doesn't know about ?debug.
-// Unnamed optional outcome → absorbs silently; no arm needed.
+// Handler written for v1 — doesn't know about ?debug
+// |* silently catches the new branch
 ~process(value: 10)
 | success _ |> std/io:print.ln("SUCCESS")
+|* |> std/io:print.ln("OPTIONAL")
 
 ~process(value: 150)
 | success _ |> std/io:print.ln("SUCCESS")
+|* |> std/io:print.ln("OPTIONAL")
 
-// value=2 → returns ?debug (new in v2) — unnamed → absorbs silently
+// value=2 → returns ?debug (new in v2) — caught by |*
 ~process(value: 2)
 | success _ |> std/io:print.ln("SUCCESS")
+|* |> std/io:print.ln("OPTIONAL")

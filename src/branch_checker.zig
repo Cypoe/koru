@@ -30,6 +30,7 @@ pub const BranchChecker = struct {
     pub const HandledBranch = struct {
         name: []const u8,
         has_when_guard: bool = false,
+        is_catchall: bool = false,
         /// `|` continuation (terminal) vs `!` continuation (effect). Only used
         /// by prototype mode, which relaxes undeclared TERMINAL arms but keeps
         /// undeclared EFFECT arms as errors (parity with the terminal-only
@@ -54,7 +55,7 @@ pub const BranchChecker = struct {
 
     /// Build the sibling-handled view of a continuation list — what
     /// `firstDuplicateSibling` scans. Field-level, not AST-aware: any
-    /// type with .branch/.condition/.kind works.
+    /// type with .branch/.condition/.is_catchall/.kind works.
     pub fn handledFromContinuations(allocator: std.mem.Allocator, continuations: anytype) !std.ArrayList(HandledBranch) {
         var handled = try std.ArrayList(HandledBranch).initCapacity(allocator, continuations.len);
         errdefer handled.deinit(allocator);
@@ -62,6 +63,7 @@ pub const BranchChecker = struct {
             try handled.append(allocator, .{
                 .name = cont.branch,
                 .has_when_guard = cont.condition != null,
+                .is_catchall = cont.is_catchall,
                 .kind = if (cont.kind == .effect) .effect else .terminal,
             });
         }
@@ -98,6 +100,10 @@ pub const BranchChecker = struct {
     ///   branches are fine because "no handler fires" is a legal trajectory
     ///   under the optional contract.
     /// - Unknown branches are ERRORS
+    /// - A residual arm (|*) does NOT satisfy required coverage: the emitter
+    ///   routes only OPTIONAL branches to it, so letting it count here
+    ///   passes a program codegen cannot compile (Zig switch
+    ///   exhaustiveness dies where KORU022 should have fired).
     /// - `when` guards NARROW a `|` outcome — they pick out a subset of
     ///   results, and the result must still route somewhere, so a
     ///   `when`-only terminal leaves the false-guard case uncovered
@@ -134,9 +140,10 @@ pub const BranchChecker = struct {
         errdefer proto_undeclared.deinit(allocator);
 
         // Check that all required branches are handled by at least one
-        // UNGUARDED handler. Handled names resolve via resolveDeclared, so a
-        // raw-name CLASS branch (`*`) is covered by any handled name it
-        // catches.
+        // UNGUARDED handler. A catchall does not count — it receives only
+        // optional branches at emission. Handled names resolve via
+        // resolveDeclared, so a raw-name CLASS branch (`*`) is covered by any
+        // handled name it catches.
         for (declared, 0..) |decl, di| {
             if (decl.is_optional) continue; // Optional branches don't need handling
             if (decl.is_panic) continue; // Panic branches are ignorable (unhandled => synthesized @panic)
@@ -144,6 +151,7 @@ pub const BranchChecker = struct {
 
             var found_unguarded = false;
             for (handled) |h| {
+                if (h.is_catchall) continue; // Catchall doesn't count as specific handler
                 if (resolveDeclared(declared, h.name) != di) continue;
                 // Guards narrow a `|` outcome — they don't cover. For `!`
                 // effects they FILTER: a guarded handler is handling, an
@@ -161,6 +169,8 @@ pub const BranchChecker = struct {
         // Check for unknown branches (handled but not declared — a raw-name
         // class branch `*` makes every name resolvable, so nothing is unknown).
         for (handled) |h| {
+            if (h.is_catchall) continue; // Catchall is always valid
+
             if (resolveDeclared(declared, h.name) == null) {
                 // ~[prototype]: an undeclared TERMINAL arm is the "handle a branch
                 // the event doesn't declare yet" doodle (400_165) — let it slide
@@ -191,11 +201,11 @@ pub const BranchChecker = struct {
                 // are never duplicates of each other, but the SAME name twice
                 // (unguarded) is dead code under first-match dispatch.
                 for (handled, 0..) |h, i| {
-                    if (h.has_when_guard) continue;
+                    if (h.is_catchall or h.has_when_guard) continue;
                     if (resolveDeclared(declared, h.name) != di) continue;
                     var seen_before = false;
                     for (handled[0..i]) |p| {
-                        if (p.has_when_guard) continue;
+                        if (p.is_catchall or p.has_when_guard) continue;
                         if (std.mem.eql(u8, p.name, h.name)) {
                             seen_before = true;
                             break;
@@ -210,6 +220,7 @@ pub const BranchChecker = struct {
 
             var unguarded_count: usize = 0;
             for (handled) |h| {
+                if (h.is_catchall) continue;
                 if (h.has_when_guard) continue;
                 if (!std.mem.eql(u8, decl.name, h.name)) continue;
                 unguarded_count += 1;
@@ -251,7 +262,8 @@ pub const BranchChecker = struct {
     //   - a terminal (`|`) branch is a continuation that runs at most once, so
     //     at most ONE unguarded handler is legal at a level. A `when`-guard
     //     chain (many guarded + one unguarded fallback) is fine — guards
-    //     narrow, they don't duplicate.
+    //     narrow, they don't duplicate;
+    //   - catch-alls never count toward duplication.
     // ========================================================================
 
     /// The offending handler of a sibling-level duplicate: `index` is the
@@ -267,9 +279,11 @@ pub const BranchChecker = struct {
     /// Returns null when the level is clean.
     pub fn firstDuplicateSibling(handled: []const HandledBranch) ?SiblingDuplicate {
         for (handled, 0..) |h, i| {
+            if (h.is_catchall) continue;
             if (h.has_when_guard) continue;
             if (h.kind == .effect) continue; // effect links may repeat freely
             for (handled[0..i]) |p| {
+                if (p.is_catchall) continue;
                 if (p.has_when_guard) continue;
                 if (p.kind == .effect) continue;
                 if (std.mem.eql(u8, p.name, h.name)) {
@@ -381,9 +395,29 @@ test "unknown branch - invalid" {
     try std.testing.expectEqualStrings("donkey", result.unknown_branches[0]);
 }
 
+test "catchall does NOT cover required branches - invalid" {
+    // |* receives optional branches only at emission; required branches it
+    // "covers" here would die in codegen on switch exhaustiveness.
+    const allocator = std.testing.allocator;
+    const declared = [_]BranchChecker.DeclaredBranch{
+        .{ .name = "success" },
+        .{ .name = "failure" },
+        .{ .name = "timeout" },
+    };
+    const handled = [_]BranchChecker.HandledBranch{
+        .{ .name = "", .is_catchall = true },
+    };
+
+    var result = try BranchChecker.validate(allocator, &declared, &handled);
+    defer BranchChecker.freeResult(allocator, &result);
+
+    try std.testing.expect(!result.is_valid);
+    try std.testing.expectEqual(@as(usize, 3), result.missing_branches.len);
+}
+
 test "when-only handler does NOT cover a required continuation branch - invalid" {
     // RULING (Lars): for a continuation (terminal) branch, a `when`-guarded
-    // handler with no unguarded fallback does NOT cover it — the
+    // handler with no unguarded fallback / catch-all does NOT cover it — the
     // false-guard trajectory is left silently uncovered. (This replaces the
     // stale "when guard still counts as handled - valid" intent.)
     const allocator = std.testing.allocator;
@@ -417,6 +451,25 @@ test "multiple handlers for same branch - valid" {
     defer BranchChecker.freeResult(allocator, &result);
 
     try std.testing.expect(result.is_valid);
+}
+
+test "catchall with explicit handlers still misses unnamed required - invalid" {
+    const allocator = std.testing.allocator;
+    const declared = [_]BranchChecker.DeclaredBranch{
+        .{ .name = "success" },
+        .{ .name = "failure" },
+        .{ .name = "timeout" },
+    };
+    const handled = [_]BranchChecker.HandledBranch{
+        .{ .name = "success" }, // Handle success explicitly
+        .{ .name = "", .is_catchall = true }, // |* catches optional only
+    };
+
+    var result = try BranchChecker.validate(allocator, &declared, &handled);
+    defer BranchChecker.freeResult(allocator, &result);
+
+    try std.testing.expect(!result.is_valid);
+    try std.testing.expectEqual(@as(usize, 2), result.missing_branches.len);
 }
 
 test "only optional branches, none handled - valid" {
@@ -609,6 +662,15 @@ test "sibling duplicates: two unnamed pipeline steps - duplicate" {
     const dup = BranchChecker.firstDuplicateSibling(&handled) orelse return error.TestExpectedDuplicate;
     try std.testing.expectEqual(@as(usize, 1), dup.index);
     try std.testing.expectEqual(@as(usize, 0), dup.name.len);
+}
+
+test "sibling duplicates: catchall never counts - clean" {
+    const handled = [_]BranchChecker.HandledBranch{
+        .{ .name = "done" },
+        .{ .name = "", .is_catchall = true },
+        .{ .name = "err" },
+    };
+    try std.testing.expect(BranchChecker.firstDuplicateSibling(&handled) == null);
 }
 
 test "terminal: guarded chain plus one unguarded - valid" {

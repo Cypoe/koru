@@ -2244,6 +2244,14 @@ pub const PhantomSemanticChecker = struct {
             return self.validateNestedContinuations(cont, event_decl, event_module, flow_module, event_map, location, &void_context, implementing_event);
         }
 
+        // Residual continuations (|*) don't reference a specific branch
+        // They handle all unhandled branches, so skip branch validation
+        if (cont.is_catchall) {
+            log.debug("[PHANTOM-FLOW]   (catch-all continuation - skipping branch validation)\n", .{});
+            // Still validate nested continuations if present
+            return self.validateNestedContinuations(cont, event_decl, event_module, flow_module, event_map, location, null, implementing_event);
+        }
+
         // Empty-branch continuations (|> ...) are void chain continuations
         // They don't reference a branch - they chain after a void event in the pipeline
         // NOTE: This is different from void EVENTS (0 branches) - this handles the continuation SYNTAX

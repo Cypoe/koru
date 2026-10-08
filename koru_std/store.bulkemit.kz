@@ -55,7 +55,7 @@ const BulkEmit = struct {
     /// `storeInsertOrder`, the same list the insert transform reads.
     fn insertFields(alloc: std.mem.Allocator, prog: *const ast.Program, each: *const ast.Continuation, store: []const u8) ?[]const struct_literal.StructField {
         if (each.continuations.len != 0) return null;
-        if (each.condition != null) return null;
+        if (each.condition != null or each.is_catchall) return null;
         if (each.destructure.len != 0) return null;
         if (each.node == null) return null;
         const n: *const ast.Node = &each.node.?;

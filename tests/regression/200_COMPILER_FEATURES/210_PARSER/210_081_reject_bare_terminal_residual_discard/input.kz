@@ -1,0 +1,34 @@
+// ============================================================================
+// Test 210_081: MUST_ERROR — bare `|* |> _` residual is pay-for-nothing
+//                          and must be parser-rejected.
+//
+// Without a residual, unhandled branches compile-time-elide: the handler
+// simply isn't installed in the synthesized comptime struct, so the call
+// site lowers to nothing. Zero cost.
+//
+// With `|* |> _`, the consumer is asking the compiler to *stop eliding*
+// unhandled branches, route them into a handler, and then throw the result
+// away. That's pay-for-nothing — runtime cost for zero information gain,
+// strictly worse than the no-residual default.
+//
+// Rule: if you write a residual, you engage. Engagement means the body
+// does real work, optionally informed by a metatype binding
+// (`|* Transition t |> body`). Anything that lowers to "do nothing on
+// unhandled branches" must be expressed by *not writing a residual*.
+//
+// Expected: parser rejects `|* |> _` with a message pointing at the
+// residual line and explaining the no-engagement rule.
+// ============================================================================
+
+~tor process { value: u32 }
+| success u32
+| ?warning string
+| ?debug string
+
+~proc process|zig {
+    return .{ .success = value * 2 };
+}
+
+~process(value: 10)
+| success _ |> _
+|* |> _

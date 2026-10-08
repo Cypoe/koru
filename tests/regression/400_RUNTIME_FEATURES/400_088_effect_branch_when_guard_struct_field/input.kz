@@ -3,9 +3,9 @@
 // dispatch: handle only key events matching a specific character.
 //
 // The producer fires `! key { ch, code }` for several characters. The
-// consumer guards on `k.ch == 'q'` to dispatch only the quit key.
-// Other keys fall through the guard and drop silently — there is no
-// catch-all to write for them. Here we pin that:
+// consumer guards on `k.ch == 'q'` to dispatch only the quit key. A
+// catchall for other keys would be the next layer (`!? Transition t |>`)
+// but is out of scope for this test — here we pin that:
 //   1. `when` works on struct-payload bindings, not just identity.
 //   2. Field access in the guard (`k.ch`) parses and lowers correctly.
 //   3. Unmatched fires are silently dropped (no handler runs) — the

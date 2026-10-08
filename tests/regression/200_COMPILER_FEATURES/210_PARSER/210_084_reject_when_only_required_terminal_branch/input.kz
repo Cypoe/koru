@@ -12,7 +12,7 @@
 // Rescue shape: add an unguarded sibling handler —
 //   `| ok x when x > 0 |> a`
 //   `| ok _ |> b`
-// (No residual arm exists as a rescue: `|?` refuses at parse —
+// (A residual is NOT a rescue: `|*` routes optional branches only —
 //  see 355_013.)
 //
 // Optionals do NOT have this requirement (see 210_086) because "no handler

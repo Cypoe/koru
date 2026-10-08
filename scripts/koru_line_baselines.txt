@@ -20,6 +20,7 @@ koru_std/ast_dump.kz	29
 koru_std/benchmarking.kz	24
 koru_std/bridge.affordances.kz	86
 koru_std/bridge.bind.kz	183
+koru_std/bridge.custody.kz	65
 koru_std/bridge.define.kz	27
 koru_std/bridge.deflines.kz	27
 koru_std/bridge.grants.kz	63
@@ -103,11 +104,13 @@ koru_std/interpreter.expr.kz	278
 koru_std/interpreter.flowsrc.kz	85
 koru_std/interpreter.guards.kz	63
 koru_std/interpreter.handles.kz	279
-koru_std/interpreter.kz	771
+koru_std/interpreter.kz	575
 koru_std/interpreter.literal.kz	40
 koru_std/interpreter.names.kz	18
 koru_std/interpreter.parse.kz	52
-koru_std/interpreter.run.kz	1301
+koru_std/interpreter.pool.kz	236
+koru_std/interpreter.refuse.kz	46
+koru_std/interpreter.run.kz	1289
 koru_std/interpreter.runcached.kz	152
 koru_std/interpreter.select.kz	30
 koru_std/interpreter.trace.kz	64
@@ -198,7 +201,7 @@ koru_std/runtime.wiretext.kz	38
 koru_std/runtime.wireval.kz	31
 koru_std/set.kz	96
 koru_std/simple.kz	7
-koru_std/store.bulk.kz	198
+koru_std/store.bulk.kz	197
 koru_std/store.bulkdetect.kz	70
 koru_std/store.bulkemit.kz	116
 koru_std/store.bulkjoin.kz	62

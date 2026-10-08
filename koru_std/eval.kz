@@ -26,7 +26,7 @@
 ~import std/build
 
 ~std/build:requires {
-    const REL_TO_ROOT = "/usr/local/lib/koru";
+    const REL_TO_ROOT = "${REL_TO_ROOT}";
 
     // Errors module (needed by ast)
     const errors_module = b.createModule(.{

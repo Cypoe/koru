@@ -163,7 +163,6 @@ pub const Bridge = struct {
 ~proc get-handles|zig {
     return br.getHandleCount();
 }
-
 // ============================================================================
 // CLOSE - Hang up: release everything the session still holds
 // ============================================================================
@@ -180,9 +179,10 @@ pub const Bridge = struct {
 ~pub tor close { br: *Bridge<!session> }
 
 ~proc close|zig {
-    br.dischargeAll(); br.deinit(); koru_allocator().destroy(br);
+    br.dischargeAll(); custodyMark(br, "session-closed"); br.deinit(); koru_allocator().destroy(br);
 }
 ~part world
+~part custody
 ~part run
 ~part run-exec
 ~part steps

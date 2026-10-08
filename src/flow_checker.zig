@@ -12,7 +12,7 @@ const struct_literal = @import("struct_literal");
 /// 1. When-clause exhaustiveness (exactly one continuation without `when` per branch)
 /// 2. When-clause determinism (no ambiguous else cases)
 /// 3. Branch coverage (all required branches must be handled)
-/// 4. Optional branches (can be skipped — `?` marks them ignorable)
+/// 4. Optional branches (can be skipped, |* residual is optional)
 ///
 /// Check modes:
 /// - frontend: Syntactic checks (KORU100 unused binding, KORU104 expression purity) - runs before transforms
@@ -1888,6 +1888,16 @@ pub const FlowChecker = struct {
             return;
         };
 
+        // `|*` on a callee with no `|` outcomes catches nothing — refuse.
+        if (ast.deadCatchall(event_decl.branches, event_decl.return_type != null, continuations) != null) {
+            const segs = event_decl.path.segments;
+            try self.reporter.addError(
+                .KORU026, location.line, location.column,
+                "residual arm '|*' on '{s}' has no '|' outcome branches to catch — it routes optional outcome branches only",
+                .{if (segs.len > 0) segs[segs.len - 1] else "(unknown)"},
+            );
+        }
+
         // Bare-return events (`-> T`) carry no branch tags — only a single unnamed
         // output. Continuations on such callees use produce syntax (`| _ v -> expr`);
         // the `| label` is binding sugar, not a shape-contract tag. Tag-based
@@ -1928,6 +1938,7 @@ pub const FlowChecker = struct {
             try handled.append(self.allocator, .{
                 .name = cont.branch,
                 .has_when_guard = cont.condition != null,
+                .is_catchall = cont.is_catchall,
                 .kind = if (cont.kind == .effect) .effect else .terminal,
             });
         }
@@ -2254,8 +2265,8 @@ pub const FlowChecker = struct {
     /// Check for duplicate branch handlers at the same level. The RULE lives in
     /// BranchChecker.firstDuplicateSibling (the single source of truth shared
     /// with ShapeChecker): effect (`!`) links may repeat freely; a terminal
-    /// (`|`) branch allows at most one unguarded handler per level; guards
-    /// never count. This adapter only converts siblings, reports at
+    /// (`|`) branch allows at most one unguarded handler per level; guards and
+    /// catch-alls never count. This adapter only converts siblings, reports at
     /// the offending continuation's own source location, and recurses — it
     /// NEVER returns a raw error (the reporter carries the failure; callers
     /// fail via the standard hasErrors → FlowValidationFailed path). Returns

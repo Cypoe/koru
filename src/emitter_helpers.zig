@@ -2763,6 +2763,49 @@ fn groupContinuationsByBranch(
     return try groups.toOwnedSlice(allocator);
 }
 
+/// Expand a subflow `|*` residual into switch arms for each unhandled optional
+/// branch of `source_event_name`. Top-level `emitContinuationList` already does
+/// this; without it here, event bodies emit a literal `.@"*"` arm (355_011).
+fn emitSubflowCatchallOptionalArms(
+    emitter: *CodeEmitter,
+    ctx: *EmissionContext,
+    indent: []const u8,
+    catchall: *const ast.Continuation,
+    branch_groups: []const BranchGroup,
+    source_event_name: ?[]const u8,
+    all_items: []const ast.Item,
+    main_module_name: ?[]const u8,
+    result_counter: *usize,
+) !void {
+    var handled_branches = std.StringHashMap(void).init(ctx.allocator);
+    defer handled_branches.deinit();
+    for (branch_groups) |group| {
+        if (std.mem.eql(u8, group.branch_name, "*")) continue;
+        try handled_branches.put(group.branch_name, {});
+    }
+
+    const source_event = source_event_name orelse return;
+    const event_decl = findEventByName(all_items, source_event, ctx.allocator, main_module_name) orelse return;
+
+    for (event_decl.branches) |branch| {
+        if (!branch.is_optional) continue;
+        if (handled_branches.contains(branch.name)) continue;
+
+        try emitter.write(indent);
+        try emitter.write("    .");
+        try writeBranchName(emitter, branch.name);
+        try emitter.write(" => |_| {\n");
+
+        const old_indent = emitter.indent_level;
+        emitter.indent_level = 0;
+        try emitContinuationBody(emitter, ctx, catchall, result_counter);
+        emitter.indent_level = old_indent;
+
+        try emitter.write(indent);
+        try emitter.write("    },\n");
+    }
+}
+
 /// The target event's input fields, resolved the way the subflow arg writer
 /// resolves them: module-scoped AST first, then the global type registry for
 /// cross-module targets (all_items may be module-scoped here). Null when
@@ -3354,6 +3397,23 @@ fn emitSubflowContinuationsWithDepth(
             break :blk try std.fmt.bufPrint(&buf, "nested_result_{d}", .{depth - 1});
         };
 
+        // Sole `|*` (all optional): no "*" union field — discard and run body.
+        if (remaining_conts.len == 1 and
+            remaining_conts[0].is_catchall and
+            std.mem.eql(u8, remaining_conts[0].branch, "*") and
+            remaining_conts[0].catchall_metatype == null)
+        {
+            try emitter.write(indent);
+            try emitter.write("_ = &");
+            try writeBranchName(emitter, result_var);
+            try emitter.write(";\n");
+            const old_indent = emitter.indent_level;
+            emitter.indent_level = 0;
+            try emitContinuationBody(emitter, &ctx, &remaining_conts[0], &result_counter);
+            emitter.indent_level = old_indent;
+            return;
+        }
+
         // Group continuations by branch name to handle when-clauses
         const normal_branch_groups = try groupContinuationsByBranch(std.heap.page_allocator, continuations[start_idx..]);
         defer {
@@ -3361,6 +3421,14 @@ fn emitSubflowContinuationsWithDepth(
                 std.heap.page_allocator.free(group.continuations);
             }
             std.heap.page_allocator.free(normal_branch_groups);
+        }
+
+        var catchall_cont: ?*const ast.Continuation = null;
+        for (remaining_conts) |*cont| {
+            if (cont.is_catchall) {
+                catchall_cont = cont;
+                break;
+            }
         }
 
         // Emit normal switch statement (NOT return switch)
@@ -3371,6 +3439,9 @@ fn emitSubflowContinuationsWithDepth(
 
         // Emit each branch group
         for (normal_branch_groups) |group| {
+            // `|*` expands below — never emit a literal "*" arm
+            if (std.mem.eql(u8, group.branch_name, "*")) continue;
+
             if (group.continuations.len == 1) {
                 // Single continuation - emit as normal
                 const cont = group.continuations[0];
@@ -3556,6 +3627,20 @@ fn emitSubflowContinuationsWithDepth(
             }
         }
 
+        if (catchall_cont) |catchall| {
+            try emitSubflowCatchallOptionalArms(
+                emitter,
+                &ctx,
+                indent,
+                catchall,
+                normal_branch_groups,
+                source_event_name,
+                all_items,
+                main_module_name,
+                &result_counter,
+            );
+        }
+
         try emitter.write(indent);
         try emitter.write("}\n");
         return;
@@ -3568,6 +3653,45 @@ fn emitSubflowContinuationsWithDepth(
             std.heap.page_allocator.free(group.continuations);
         }
         std.heap.page_allocator.free(branch_groups);
+    }
+
+    // Sole `|*` on the return-switch path
+    if (remaining_conts.len == 1 and
+        remaining_conts[0].is_catchall and
+        std.mem.eql(u8, remaining_conts[0].branch, "*") and
+        remaining_conts[0].catchall_metatype == null)
+    {
+        const result_var = if (depth == 0) "result" else blk: {
+            var buf: [32]u8 = undefined;
+            break :blk try std.fmt.bufPrint(&buf, "nested_result_{d}", .{depth - 1});
+        };
+        try emitter.write(indent);
+        try emitter.write("_ = &");
+        try writeBranchName(emitter, result_var);
+        try emitter.write(";\n");
+        var ctx_sole = detachedEmissionContext(
+            all_items,
+            program_items,
+            tap_registry,
+            type_registry,
+            main_module_name,
+            source_event_name,
+            enclosing_bare_return,
+            enclosing_event,
+            self_loop_canonical,
+        );
+        ctx_sole.zig_scope_bindings.items = local_bindings.items;
+        var result_counter_sole: usize = depth;
+        try emitContinuationBody(emitter, &ctx_sole, &remaining_conts[0], &result_counter_sole);
+        return;
+    }
+
+    var catchall_cont_ret: ?*const ast.Continuation = null;
+    for (remaining_conts) |*cont| {
+        if (cont.is_catchall) {
+            catchall_cont_ret = cont;
+            break;
+        }
     }
 
     // Start the switch statement ONCE for all sibling continuations
@@ -3584,7 +3708,7 @@ fn emitSubflowContinuationsWithDepth(
 
     // Emit ALL branch groups at this level
     for (branch_groups) |group| {
-        if (std.mem.eql(u8, group.branch_name, "?")) continue;
+        if (std.mem.eql(u8, group.branch_name, "*")) continue;
 
         // Handle single vs multiple continuations for this branch
         if (group.continuations.len == 1) {
@@ -4084,6 +4208,33 @@ fn emitSubflowContinuationsWithDepth(
             try emitter.write(",\n");
         } // End of if (single vs multiple continuations)
     } // End of for loop over all branch groups
+
+    if (catchall_cont_ret) |catchall| {
+        var ctx_ca = detachedEmissionContext(
+            all_items,
+            program_items,
+            tap_registry,
+            type_registry,
+            main_module_name,
+            source_event_name,
+            enclosing_bare_return,
+            enclosing_event,
+            self_loop_canonical,
+        );
+        ctx_ca.zig_scope_bindings.items = local_bindings.items;
+        var result_counter_ca: usize = depth;
+        try emitSubflowCatchallOptionalArms(
+            emitter,
+            &ctx_ca,
+            indent,
+            catchall,
+            branch_groups,
+            source_event_name,
+            all_items,
+            main_module_name,
+            &result_counter_ca,
+        );
+    }
 
     // Close the switch
     try emitter.write(indent);
@@ -7655,6 +7806,12 @@ pub fn emitHandlersStruct(
     }
 
     for (effect_conts) |*cont| {
+        // Skip residual `!*` conts — they don't match any specific decl branch.
+        // (The catch-all body is currently not woven into per-branch dispatch;
+        // pay-for-nothing rejection in the parser will eliminate the bare-discard
+        // shape entirely, and metatype-bound forms are a separate work item.)
+        if (cont.is_catchall) continue;
+
         // Validate the branch exists in the event decl; defensively skip
         // unknowns (shape_checker is responsible for surfacing those).
         const exists = for (event_decl.branches) |*b| {
@@ -9690,6 +9847,7 @@ fn emitContinuationList(
         const needs_tag_guard = !callee_bare_return and
             !suppress_tag_guard and
             callee_terminals > 1 and
+            !cont.is_catchall and
             cont.branch.len > 0;
         if (needs_tag_guard) {
             try emitter.writeIndent();
@@ -9705,6 +9863,18 @@ fn emitContinuationList(
             emitter.writeIndent() catch {};
             emitter.write("}\n") catch {};
         };
+
+        // Special case: |? catch-all as the sole continuation (all branches optional).
+        // There is no "*" field on the union — every result IS an optional branch, so
+        // the body always fires unconditionally.  Discard the result and execute directly.
+        if (cont.is_catchall and std.mem.eql(u8, cont.branch, "*") and cont.catchall_metatype == null) {
+            try emitter.writeIndent();
+            try emitter.write("_ = &");
+            try writeBranchName(emitter, prev_result);
+            try emitter.write(";\n");
+            try emitContinuationBody(emitter, ctx, cont, result_counter);
+            return;
+        }
 
         // Use explicit binding if provided, otherwise generate unique name to avoid collisions
         // (multiple events may have same branch name like ".done")
@@ -9795,6 +9965,15 @@ fn emitContinuationList(
         ctx.allocator.free(continuation_branch_groups);
     }
 
+    // Check for |* residual continuation
+    var catchall_cont: ?*const ast.Continuation = null;
+    for (continuations) |*cont| {
+        if (cont.is_catchall) {
+            catchall_cont = cont;
+            break;
+        }
+    }
+
     // Multiple branches - emit switch statement to extract union payloads
     try emitter.writeIndent();
     try emitter.write("switch (");
@@ -9803,6 +9982,9 @@ fn emitContinuationList(
     emitter.indent();
 
     for (continuation_branch_groups) |group| {
+        // Skip residual (it has branch = "*" and will be handled separately)
+        if (std.mem.eql(u8, group.branch_name, "*")) continue;
+
         if (group.continuations.len == 1) {
             // Single continuation - emit as normal
             try emitContinuationCase(emitter, ctx, group.continuations[0], result_counter);
@@ -9817,9 +9999,10 @@ fn emitContinuationList(
     // optional contract is "may be handled" — the union still contains the
     // optional variants, so a switch with no `else` must complete them
     // (`?partial` on bridge:run was the defeat that surfaced this: every
-    // consumer without a `| partial` arm failed exhaustiveness). A partial
-    // switch adds its own `else => unreachable` and needs neither.
-    if (!is_partial_switch) {
+    // consumer without a `| partial` arm failed exhaustiveness). A catch-all
+    // already covers the same ground below; a partial switch adds its own
+    // `else => unreachable` and needs neither.
+    if (catchall_cont == null and !is_partial_switch) {
         if (ctx.current_source_event) |source_event| {
             if (ctx.ast_items) |items| {
                 const event_decl = findEventByName(items, source_event, ctx.allocator, ctx.main_module_name);
@@ -9827,6 +10010,7 @@ fn emitContinuationList(
                     var handled_branches = std.StringHashMap(void).init(ctx.allocator);
                     defer handled_branches.deinit();
                     for (continuation_branch_groups) |group| {
+                        if (std.mem.eql(u8, group.branch_name, "*")) continue;
                         try handled_branches.put(group.branch_name, {});
                     }
                     for (event.branches) |branch| {
@@ -9837,6 +10021,126 @@ fn emitContinuationList(
                         try emitter.write(".");
                         try writeBranchName(emitter, branch.name);
                         try emitter.write(" => {},\n");
+                    }
+                }
+            }
+        }
+    }
+
+    // If there's a catch-all, emit cases for unhandled optional branches
+    if (catchall_cont) |catchall| {
+        // Find which branches are explicitly handled
+        var handled_branches = std.StringHashMap(void).init(ctx.allocator);
+        defer handled_branches.deinit();
+
+        for (continuation_branch_groups) |group| {
+            if (std.mem.eql(u8, group.branch_name, "*")) continue; // Skip the residual arm itself
+            try handled_branches.put(group.branch_name, {});
+        }
+
+        // Find the event definition to get optional branches
+        if (ctx.current_source_event) |source_event| {
+            // Look up event in AST
+            if (ctx.ast_items) |items| {
+                const event_decl = findEventByName(items, source_event, ctx.allocator, ctx.main_module_name);
+                if (event_decl) |event| {
+                    // Check if residual arm has metatype binding (|* Audit e |>)
+                    const has_metatype_binding = catchall.catchall_metatype != null and
+                        catchall.binding != null and
+                        !std.mem.eql(u8, catchall.binding.?, "_");
+
+                    // Emit cases for unhandled optional branches
+                    for (event.branches) |branch| {
+                        if (!branch.is_optional) continue; // Only optional branches
+                        if (handled_branches.contains(branch.name)) continue; // Already handled
+
+                        // Emit switch case for this unhandled optional branch
+                        try emitter.writeIndent();
+                        try emitter.write(".");
+                        try writeBranchName(emitter, branch.name);
+
+                        if (has_metatype_binding) {
+                            // Capture payload (unused for now), construct metatype
+                            try emitter.write(" => |_| {\n");
+                            emitter.indent();
+
+                            // Construct the metatype object with .branch set
+                            try emitter.writeIndent();
+                            try emitter.write("const ");
+                            try emitter.write(catchall.binding.?);
+                            try emitter.write(" = taps.");
+                            try emitter.write(catchall.catchall_metatype.?);
+                            try emitter.write("{\n");
+                            emitter.indent();
+
+                            const is_transition = std.mem.eql(u8, catchall.catchall_metatype.?, "Transition");
+
+                            // .source — enum literal for Transition (taps.EventEnum),
+                            // string for Profile/Audit (their structs are string-based,
+                            // see emitTapsNamespace).
+                            try emitter.writeIndent();
+                            if (is_transition) {
+                                try emitter.write(".source = .");
+                                try canonicalNameToEnumTag(emitter, source_event);
+                                try emitter.write(",\n");
+                            } else {
+                                try emitter.write(".source = \"");
+                                try emitter.write(source_event);
+                                try emitter.write("\",\n");
+                            }
+
+                            // .destination = null (terminal)
+                            try emitter.writeIndent();
+                            try emitter.write(".destination = null,\n");
+
+                            // .branch — enum literal for Transition, string otherwise
+                            try emitter.writeIndent();
+                            try emitEnumOrStringField(emitter, ".branch = ", emitBranchEnumValue, branch.name, is_transition);
+
+                            // .timestamp_ns (Profile/Audit only)
+                            if (!is_transition) {
+                                try emitter.writeIndent();
+                                try emitter.write(".timestamp_ns = __koru_std.time.nanoTimestamp(),\n");
+
+                                // .payload (Audit only)
+                                const is_audit = std.mem.eql(u8, catchall.catchall_metatype.?, "Audit");
+                                if (is_audit) {
+                                    try emitter.writeIndent();
+                                    try emitter.write(".payload = null,\n");
+                                }
+                            }
+
+                            emitter.dedent();
+                            try emitter.writeIndent();
+                            try emitter.write("};\n");
+
+                            // The synthesized binding is minted for the
+                            // constructor even when the body discards it —
+                            // suppress the unused-constant (mirrors the
+                            // metatype_binding step path).
+                            try emitter.writeIndent();
+                            try emitter.write("_ = &");
+                            try writeBranchName(emitter, catchall.binding.?);
+                            try emitter.write(";\n");
+
+                            // Execute residual pipeline (can now reference binding)
+                            try emitContinuationBody(emitter, ctx, catchall, result_counter);
+
+                            emitter.dedent();
+                            try emitter.writeIndent();
+                            try emitter.write("},\n");
+                        } else {
+                            // No metatype binding — discard payload
+                            try emitter.write(" => |_| {\n");
+                            emitter.indent();
+
+                            // Execute residual pipeline
+                            try emitContinuationBody(emitter, ctx, catchall, result_counter);
+
+                            emitter.dedent();
+                            try emitter.writeIndent();
+                            try emitter.write("},\n");
+                        }
                     }
                 }
             }
@@ -13022,7 +13326,7 @@ fn flatContsEligible(
 ) bool {
     for (conts) |*cont| {
         if (cont.binding != null or cont.destructure.len != 0 or
-            cont.condition != null or
+            cont.is_catchall or cont.condition != null or
             cont.condition_expr != null or cont.is_transformed_subtree) return false;
         const node = cont.node orelse {
             if (!flatContsEligible(cont.continuations, self_canonical, ctx, any_chained)) return false;

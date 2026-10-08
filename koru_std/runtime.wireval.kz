@@ -7,7 +7,7 @@
 
 const WIRE_GRAMMAR_TEXT =
     \\Your reply IS wire — open it with an invocation, never narration: verb(field: value, field: value) with `|` arms chaining what each call issues.
-    \\- An arm binds what a call issued to a name for the next call: `| ok u |>` for an ordinary result, `| chosen c |>` for a named branch — the arm word is the branch name the verb's line in the vocabulary declares; a `| ?` outcome may go unarmed, every other named outcome must be armed or the turn stops with `unhandled-branch`.
+    \\- An arm binds what a call issued to a name for the next call: `| ok u |>` for an ordinary result, `| chosen c |>` for a named branch — the arm word is the branch name the verb's line in the vocabulary declares; an outcome marked `?` in that line may go unarmed, every other named outcome must be armed or the turn stops with `unhandled-branch`.
     \\- The verb is a bare name from your vocabulary — letters, digits, '-', '_' — immediately followed by '('.
     \\- A value is a double-quoted string (escape \" and \\ inside) or a bare literal: a number, true/false, or a name a `|` arm already bound.
     \\- A verb whose only field is `Source` takes its prose after the verb and a colon — `say: I'd be happy to help, what's your user id?` writes prose, commas and newlines and all, until the next invocation line — quotes never needed (`say(text: "...")` spells the same for one line). A field typed `Expression` takes expression text bare: `calc(expr: 2 + 3)`.
