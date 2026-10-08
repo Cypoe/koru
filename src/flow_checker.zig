@@ -71,6 +71,13 @@ pub const FlowChecker = struct {
         // Store AST for event lookups
         self.ast_items = source_file.items;
 
+        // ~[prototype] relaxes terminal exhaustiveness/unknowns wherever the
+        // checker runs — the check-flow pass also sets this explicitly for
+        // `.all`; reading it here covers the `.frontend` run too.
+        for (source_file.module_annotations) |ann| {
+            if (std.mem.eql(u8, ann, "prototype")) self.prototype_mode = true;
+        }
+
         // Walk all flows and validate control flow
         for (source_file.items) |*item| {
             switch (item.*) {
@@ -172,6 +179,23 @@ pub const FlowChecker = struct {
             var scope: std.ArrayList(ScopedBind) = .empty;
             defer scope.deinit(self.allocator);
             try self.checkShadowing(&flow.body, &scope);
+        }
+
+        // KORU021 (source half): an unknown arm name is a misspelling wherever
+        // it is spelled — but the `.all` pass only sees what transforms left
+        // standing. A consuming transform (capture dissolving `| captured`
+        // into a grafted void-chain) carries user-written arms into
+        // is_transformed_subtree, where every coverage walk stops — a
+        // `| missing` inside rides through unrefused (510_125). Pre-transform
+        // every arm is user-authored surface syntax, so the unknown-name half
+        // of coverage runs here. Missing-branch coverage stays `.all`-only:
+        // transforms and auto-discharge legitimately synthesize the arms that
+        // satisfy it.
+        if (self.mode == .frontend and !is_transformed) {
+            try self.validateCoverageAt(&flow.inv().path, flow.body.continuations, location, false);
+            for (flow.body.continuations) |*cont| {
+                try self.validateChainCoverage(cont, false);
+            }
         }
 
         // Check for duplicate branch handlers at each level. On a hit the tree
@@ -293,7 +317,7 @@ pub const FlowChecker = struct {
             // their branch structure has changed.
             try self.validateBranchCoverage(flow, location);
             for (flow.body.continuations) |*cont| {
-                try self.validateChainCoverage(cont);
+                try self.validateChainCoverage(cont, true);
             }
             try self.validateFoldExits(flow);
 
@@ -1849,7 +1873,7 @@ pub const FlowChecker = struct {
     /// NOTE: This check should only run AFTER transforms are applied (mode == .all)
     /// because transform events replace flows entirely.
     fn validateBranchCoverage(self: *FlowChecker, flow: *const ast.Flow, location: errors.SourceLocation) !void {
-        try self.validateCoverageAt(&flow.inv().path, flow.body.continuations, location);
+        try self.validateCoverageAt(&flow.inv().path, flow.body.continuations, location, true);
     }
 
     /// Walk the chain. Every continuation whose step is an invocation is itself
@@ -1858,7 +1882,7 @@ pub const FlowChecker = struct {
     /// deep: an unhandled branch anywhere after the head binds the whole branch
     /// union to a name and rides into emission, where the author meets a Zig
     /// error about a type they never wrote (510_109).
-    fn validateChainCoverage(self: *FlowChecker, cont: *const ast.Continuation) anyerror!void {
+    fn validateChainCoverage(self: *FlowChecker, cont: *const ast.Continuation, report_missing: bool) anyerror!void {
         // Same short-circuit the other structural checks apply: a grafted
         // subtree is the transform's own output, not user syntax.
         if (cont.is_transformed_subtree) return;
@@ -1869,25 +1893,60 @@ pub const FlowChecker = struct {
         // fault this walk exists to fix, one form over.
         if (cont.node) |n| {
             switch (n) {
-                .invocation => |inv| try self.validateCoverageAt(&inv.path, cont.continuations, cont.location),
-                .label_with_invocation => |lwi| try self.validateCoverageAt(&lwi.invocation.path, cont.continuations, cont.location),
+                .invocation => |inv| try self.validateCoverageAt(&inv.path, cont.continuations, cont.location, report_missing),
+                .label_with_invocation => |lwi| try self.validateCoverageAt(&lwi.invocation.path, cont.continuations, cont.location, report_missing),
                 else => {},
             }
         }
 
         for (cont.continuations) |*nested| {
-            try self.validateChainCoverage(nested);
+            try self.validateChainCoverage(nested, report_missing);
         }
+    }
+
+    /// Frontend KORU021 for a source-spelled arm name — reported at the arm
+    /// itself, listing the callee's declared branch vocabulary. Identical
+    /// shape refuses identically (510_125); pins assert KORU021 and
+    /// `has no branch '<name>'`.
+    fn reportUnknownArm(
+        self: *FlowChecker,
+        path: *const ast.DottedPath,
+        declared: []const branch_checker.BranchChecker.DeclaredBranch,
+        continuations: []const ast.Continuation,
+        branch_name: []const u8,
+        location: errors.SourceLocation,
+    ) !void {
+        const callee_name = try std.mem.join(self.allocator, ":", path.segments);
+        defer self.allocator.free(callee_name);
+        var available_buf = std.ArrayList(u8){};
+        defer available_buf.deinit(self.allocator);
+        for (declared, 0..) |d, i| {
+            if (i > 0) try available_buf.appendSlice(self.allocator, ", ");
+            try available_buf.appendSlice(self.allocator, d.name);
+        }
+        const arm_loc = for (continuations) |cont| {
+            if (std.mem.eql(u8, cont.branch, branch_name)) break cont.location;
+        } else location;
+        try self.reporter.addErrorAtLocation(
+            .KORU021,
+            if (arm_loc.line != 0) arm_loc else location,
+            "tor '{s}' has no branch '{s}' (available: {s})",
+            .{ callee_name, branch_name, if (available_buf.items.len > 0) available_buf.items else "(none)" },
+        );
     }
 
     /// Coverage for ONE invocation against the continuations that handle it.
     /// Shared by the flow head and every mid-chain call site — a branching
-    /// callee owes the same arms wherever it is invoked.
+    /// callee owes the same arms wherever it is invoked. `report_missing`
+    /// gates KORU022: `.all` reports both classes; the `.frontend` run reports
+    /// only unknown arms (KORU021), since transforms and auto-discharge
+    /// legitimately synthesize the arms that satisfy missing-branch coverage.
     fn validateCoverageAt(
         self: *FlowChecker,
         path: *const ast.DottedPath,
         continuations: []const ast.Continuation,
         location: errors.SourceLocation,
+        report_missing: bool,
     ) !void {
         // Find the event definition for this call site
         const event_decl = self.findEventDecl(path) orelse {
@@ -1895,6 +1954,14 @@ pub const FlowChecker = struct {
             // Just skip branch coverage validation
             return;
         };
+
+        // A [transform] callee owns its arm vocabulary: its arms are INPUT the
+        // transform consumes (parser grammar alternatives, regex patterns) or
+        // forwards onto decls it synthesizes (renderHTML's `| rendered` binds
+        // a branch on a decl that does not exist until the transform
+        // rebuilds the program — 210_026/210_158). Its user contract is
+        // enforced inside the transform (capture's KORU164s), not here.
+        if (annotation_parser.hasPart(event_decl.annotations, "transform")) return;
 
         // `|*` on a callee with no `|` outcomes catches nothing — refuse.
         if (ast.deadCatchall(event_decl.branches, event_decl.return_type != null, continuations) != null) {
@@ -1962,7 +2029,7 @@ pub const FlowChecker = struct {
         defer branch_checker.BranchChecker.freeResult(self.allocator, &result);
 
         // Report errors for missing branches
-        if (result.missing_branches.len > 0) {
+        if (report_missing and result.missing_branches.len > 0) {
             const event_name = if (event_decl.path.segments.len > 0)
                 event_decl.path.segments[event_decl.path.segments.len - 1]
             else
@@ -2003,6 +2070,10 @@ pub const FlowChecker = struct {
         // Report errors for unknown branches
         for (result.unknown_branches) |branch_name| {
             log.debug("ERROR: Unknown branch '{s}' - event has no such branch\n", .{branch_name});
+            if (self.mode == .frontend) {
+                try self.reportUnknownArm(path, declared.items, continuations, branch_name, location);
+                continue;
+            }
             try self.reporter.addError(
                 .KORU021,
                 location.line,

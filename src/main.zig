@@ -8463,7 +8463,8 @@ pub fn main() !void {
     try purity_check.check(&source_file);
 
     // Flow checking pass - FRONTEND ONLY (syntactic checks: KORU100, KORU050, KORU051)
-    // Branch coverage checks (KORU021, KORU022) run in backend after transforms are applied
+    // Unknown-branch (KORU021) runs here — source arm names only exist
+    // pre-transform; missing-branch (KORU022) stays post-transform
     var flow_check = try FlowChecker.initWithMode(compile_allocator, &parser.reporter, .frontend);
     defer flow_check.deinit();
     flow_check.checkSourceFile(&source_file) catch |err| {

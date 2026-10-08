@@ -10,10 +10,32 @@ ts: 2026-10-01
 # The check verdict is staged, and `-c` only speaks for the first stage (belief)
 
 `koruc -c` answers "does the frontend like this program" — parse, frontend
-flow-check, done. It is not "will this compile." Branch coverage (KORU021/022),
-proto/refine field grammars (KORU173/205), and emit-stage refusals all live
-*behind* the `-c` exit: coverage is deliberately post-transform because
-transforms synthesize arms, and emit refusals presuppose a backend run.
+flow-check, done. It is not "will this compile." Proto/refine field grammars
+(KORU173/205), emit-stage refusals, and the missing-branch half of coverage
+(KORU022) all live *behind* the `-c` exit: missing-branch is deliberately
+post-transform because transforms and auto-discharge legitimately synthesize
+satisfying arms.
+
+The unknown-branch half of coverage moved the other way, 2026-10-08: KORU021
+on a source-spelled arm name now fires at frontend, in `.frontend` mode,
+*before* transforms run. The reason is asymmetric with the missing-branch
+reason — a transform can synthesize a satisfying arm, but a transform can
+also *consume* an unsatisfying one. `is_transformed_subtree` blinds every
+post-transform walk to the subtree it marks, and a transform-consumed arm
+carries the user's misspelled branch name into exactly that blind zone
+(510_125: `| captured` consumed an `if` arm naming `| missing`; the arm
+silently dropped and the program died on an unrelated backend type error).
+Judging arm names can only happen where the names still exist.
+
+Two refinements ride with the move:
+
+- `[transform]` callees are exempt from the frontend arm sweep — their arm
+  names bind branches on decls the transform *generates* (`renderHTML`'s
+  `| rendered`), so no source-visible vocabulary exists to judge them
+  against. Their contract is the transform's own shape check.
+- The verdict is now staged *by check class, not by checker*: one KORU021
+  message, two pipeline homes — frontend for source vocabulary, backend for
+  the synthesized-arm landscape.
 
 A fuzzer that scores on `-c` therefore manufactures false hits: every program it
 calls a find is one the real pipeline might refuse a stage later. Measured on

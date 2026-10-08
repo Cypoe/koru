@@ -36,8 +36,8 @@
 # store.new.kz) and compression/part-file moves. Named offenders are the
 # sanctioned catch-append idiom and trellis/fmt/io twin var-decls.
 # Re-pinned to measured; fold targets unchanged.
-clusters=1056
-members=935
+clusters=1135
+members=970
 # 1039/915: the roll fired on the |? coverage commit ("coverage: |? no
 # longer suppresses panic arms, and refuses where no union exists") —
 # that commit touches src/ checkers, in-repo tests, and a concept frag;
@@ -52,3 +52,10 @@ members=935
 # same host text re-fingerprinted across a new file boundary shifts the
 # clone clusters it sat in (+6/+6); the rest is the same concurrent
 # interpreter/runtime drift the pin above names.
+# Re-pinned in "flow check: judge unknown arm names pre-transform":
+# the roll fired on 1135/970 vs pin 1056/935 — decomposed: the #1
+# cluster is nine catch blocks inside the adjacent session's
+# UNCOMMITTED store.new.kz/store.* work in the shared checkout (zero
+# gate.* or staged files named by the census); the remainder is
+# committed drift since 85f18d450. Re-pinned to measured per the
+# uncommitted-work clause; re-settles when the store work commits.
