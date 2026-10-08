@@ -27,7 +27,7 @@
     const allocator = koru_allocator();
     const br = allocator.create(Bridge) catch unreachable;
     br.* = Bridge.init(allocator, id, scope, introspection, world);
-    if (world.len > 0) loadWorld(br);
+    if (world.len > 0) { loadWorld(br); armCustodyLog(br); }
     return br;
 }
 

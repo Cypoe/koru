@@ -910,16 +910,12 @@ fn executeFlow(
                                     dep_len += 1;
                                 }
                             }
-                            _ = pool.acquire(
-                                hid,
-                                spec.obligation_module,
-                                spec.obligation_name,
-                                discharge_event,
-                                event_name,  // created_by_event
-                                spec.resource_type,
-                                ctx.scope_name,
-                                dep_ids[0..dep_len],
-                            ) catch {};
+                            // Custody subject: the verb's own args — the
+                            // why of the possess, witnessed at the mint.
+                            var subject_buf: [192]u8 = undefined;
+                            _ = pool.acquire(hid, spec.obligation_module, spec.obligation_name, discharge_event,
+                                event_name, spec.resource_type, ctx.scope_name, dep_ids[0..dep_len],
+                                custodySubject(&subject_buf, evaluated_inv.args)) catch {};
                         }
                     }
                 } else if (ctx.creates_obligations_fn) |creates_fn| {
@@ -935,16 +931,10 @@ fn executeFlow(
                             std.fmt.bufPrint(&binding_buf, "result.{s}.{d}", .{dispatch_result.branch, i}) catch "result"
                         else
                             std.fmt.bufPrint(&binding_buf, "result.{s}", .{dispatch_result.branch}) catch "result";
-                        _ = pool.acquire(
-                            binding_name,      // handle_id (legacy: use binding name)
-                            "unknown",         // obligation_module
-                            obligation,        // obligation_name
-                            discharge_event,
-                            event_name,
-                            "unknown",         // resource_type
-                            ctx.scope_name,
-                            &.{},
-                        ) catch {};
+                        var subject_buf: [192]u8 = undefined;
+                        _ = pool.acquire(binding_name, "unknown", obligation, discharge_event,
+                            event_name, "unknown", ctx.scope_name, &.{},
+                            custodySubject(&subject_buf, evaluated_inv.args)) catch {};
                     }
                 }
 
