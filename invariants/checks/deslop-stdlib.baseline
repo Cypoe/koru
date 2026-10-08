@@ -12,8 +12,8 @@
 # foreign koru_std drift (invariants.kz/package.kz/parser.kz/
 # rules.kz twins from the concurrent cs lane); this commit
 # stages only a signal definition — zero .kz files.
-clusters=95
-members=151
+clusters=96
+members=154
 skipped=2
 spellings=45
 # 70/111: store.keyed.kz joined io.blk-style import preamble clone w/ interpreter.select.kz (3 shared compiler-module imports, boilerplate)
@@ -55,3 +55,7 @@ spellings=45
 # bridge.steps/store.wait preamble pair. Members shrank (-2) while
 # clusters grew (+2): re-pinning records the working tree as measured,
 # per the row's uncommitted-work clause.
+# 96/154: judge-additions landed as koru_std/gate.diffstate.kz — the new
+# part's scaffolding joins part-file clone clusters by convention, and
+# uncommitted store.* work in the shared checkout counts per the row's
+# uncommitted-work clause (2026-10-08).

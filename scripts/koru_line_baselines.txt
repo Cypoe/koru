@@ -80,6 +80,7 @@ koru_std/fmt.kz	816
 koru_std/foreign.kz	125
 koru_std/fs.kjs	76
 koru_std/fs.kz	113
+koru_std/gate.diffstate.kz	28
 koru_std/gate.helpers.kz	222
 koru_std/gate.kz	525
 koru_std/gpu.kz	228

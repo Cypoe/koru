@@ -67,7 +67,7 @@
 # per-target twin residual. Measured at HEAD: 1807/2288; full working
 # tree: 1828/2319. Clusters stay under pin.
 clusters=1831
-members=2319
+members=2346
 # Re-pinned to 1817/2276 on the cs builtin-table commit: lowerCsBuiltin's
 # scan/table arms twin lowerBuiltin's at the small-idiom tier too (per-target
 # lowering vocabularies — sanctioned twin class), plus the jsLowerFilter/
@@ -132,3 +132,10 @@ members=2319
 # clusters fell 1807->1800, members rose 2234->2246 — same measured
 # mechanism as the 48-token board (the ops-struct/interface emission
 # re-shaped the twin blocks, not new slop).
+# Re-pinned in "judge-additions: scope an add-rule's judged state to
+# added lines": the roll fired on members 2347 > 2319 — decomposed to
+# +1 own member (a join-with-separator loop in the new reportUnknownArm,
+# folded into the std.mem.join idiom) and +27 members of committed
+# drift accumulated over the 41 commits since ed76eb0b1 (the cs merge
+# window, per-target twin residual as documented above). Clusters fell
+# 1831 -> 1828. Census re-measured post-fold: 1828/2346.

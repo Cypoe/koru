@@ -286,9 +286,8 @@
     var judge_reason: []const u8 = "";
     var judge_env: ?std.process.EnvMap = null;
 
-    // The judge's input window, measured 2026-09-21 against
-    // typesafe/jev-1.13-20260917 via OpenRouter: 100KB judged fine, 147KB
-    // refused max_tokens_exceeded. Bytes are the proxy the gate can see.
+    // The judge's input window, measured 2026-09-21 against typesafe/jev-1.13-20260917
+    // via OpenRouter: 100KB fine, 147KB refused max_tokens_exceeded.
     const JUDGE_STATE_MAX_BYTES: usize = 96_000;
 
     var n_fail: usize = 0;
@@ -399,7 +398,7 @@
         }
         var state: []const u8 = "";
         if (is_local) {
-            state = local_state orelse "";
+            state = gate_diffstate.judgedState(alloc, r.tags, local_state orelse "");
         } else {
             if (!staged_done) {
                 staged_done = true;
@@ -407,7 +406,7 @@
                     if (res.code == 0) staged = res.out;
                 }
             }
-            state = staged orelse "";
+            state = gate_diffstate.judgedState(alloc, r.tags, staged orelse "");
         }
         if (!is_local and std.mem.trim(u8, state, " \n\t").len == 0) {
             if (!want_json) helpers.row("–", r.name, namew, "no staged changes");
@@ -522,4 +521,5 @@
 
     if (n_fail > 0) std.process.exit(1);
 }
+~part diffstate
 ~part helpers

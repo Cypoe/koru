@@ -127,6 +127,17 @@ def git_staged_diff(repo):
     return proc.stdout
 
 
+def diff_additions(diff):
+    """A `judge-additions` row's state: file/hunk orientation headers plus
+    added lines only. A "does the diff add" rule cannot tell addition from
+    adjacency when unchanged context carries the very text it hunts."""
+    keep = []
+    for line in diff.splitlines():
+        if line.startswith("+") or line.startswith("diff --git") or line.startswith("@@"):
+            keep.append(line)
+    return "\n".join(keep) + ("\n" if keep else "")
+
+
 def loc_file(loc):
     """A row's loc (`file:line`) → absolute path. The listing prints
     paths relative to its cwd (this directory) for in-repo files,
@@ -323,6 +334,8 @@ def main():
                 binary_ready = True
                 if not ensure_gate_binary():
                     return 1
+            if '"judge-additions"' in r["tags"]:
+                state = diff_additions(state)
             if len(state.encode()) > JUDGE_STATE_MAX_BYTES:
                 verdict = (f"UNJUDGED state {len(state.encode())}B exceeds the "
                            f"judge's context (~{JUDGE_STATE_MAX_BYTES}B measured "

@@ -65,7 +65,7 @@
 // spelling specifically.
 ~std/invariants:inferred {
     "name": "surface-spellings-are-ruled",
-    "tags": ["git-gate"],
+    "tags": ["git-gate", "judge-additions"],
     "rule": "Does this diff add recognition for a new user-facing spelling — a shape a user can write that the toolchain detects by pattern — with no recorded ruling? Spellings include: type-position forms matched in field or argument text (`ref(T)`, `?T`, `<:`), new `std/` tor or proc names, and marker conventions downstream code string-matches. A ruling is recorded: a commit message, a design doc's RULED line, or a concepts/ frag naming the spelling as decided. A concept being ranked or a semantics being discussed is NOT a ruling on its spelling. Flag when the diff teaches koru_std or src/ to recognize or lower a form no ruling names. Do NOT flag: internal `__koru_*` machinery, diagnostic message text, refactors of ruled spellings, or a spelling whose ruling is recorded in this same diff. Answer yes ONLY if the diff creates public surface whose spelling nobody ruled."
 }
 
@@ -122,7 +122,7 @@
 // be ref-ness in the type environment — undecided, Lars's call.
 ~std/invariants:aspirational {
     "name": "ref-provenance-every-consumer",
-    "tags": ["review"],
+    "tags": ["review", "judge-additions"],
     "rule": "Every consumer that materializes `ref(T)` fields enforces handle provenance — the value's brand must trace to a plural, handle-minting store whose expanded field set subsumes T, via the shared StoreRefHome.homesOf enumeration. std/store checks at every write path (insert, apply, envelope, bulk); std/list checks at push and refuses a homeless ref at new. Flag when a diff adds a consumer that materializes `ref(T)` fields (element structs, cell types, columns) without routing the field through the home check — a spelling that checks in one consumer and not another is a type that lies about its coverage. Whether ref-ness moves into the type environment so checking is unskippable remains undecided."
 }
 
@@ -195,10 +195,13 @@
 // The rename residue rule: `event` → `tor` reached code but not prose
 // (swept 2026-09-21 — ~446 comment lines across koru_std + by-example).
 // Diff-scoped so the untouched backlog (internal vocabulary, diagnostics,
-// dated docs) never fires it; only NEW prose can regress.
+// dated docs) never fires it; only NEW prose can regress. `judge-additions`
+// enforces that literally: the judged state is added lines + orientation
+// headers, so legacy 'event' sitting in unchanged context can never trip
+// the row (measured false-firing on a clean diff, 2026-10-08).
 ~std/invariants:inferred {
     "name": "the-construct-is-a-tor",
-    "tags": ["git-gate"],
+    "tags": ["git-gate", "judge-additions"],
     "rule": "Does this diff add prose — a comment, a doc, or a string a user reads — that names the language's declared unit 'event' or 'events'? The unit is a tor: `pub tor` declares it, `|` arms end it, `!` effect arms hang off it, `|>` continues it. Flag added text like 'the event's branches', 'pub event foo', 'events are tappable'. Do NOT flag: internal identifiers and generated names (EventDecl, event_decl, *_event, created_by_event, event-denied, or a test's own names like void-event); domain events — DOM, terminal, socket, input, key/mouse events, an event loop, emitted log records such as 'transition events'; verbatim quotes of older behavior; and meta-discussion of this rename itself. Answer yes ONLY if the added prose would teach a reader that the construct's name is 'event'."
 }
 
