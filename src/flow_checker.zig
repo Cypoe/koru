@@ -769,6 +769,14 @@ pub const FlowChecker = struct {
         // mechanism, not direct proc dispatch.
         if (self.findEventDecl(&inv.path)) |event_decl| {
             if (event_decl.hasAnnotation("abstract")) return;
+            // A call-site |variant on a [transform] decl is transform INPUT —
+            // the transform reads it to select the artifact pipeline
+            // (std/kernel:self|mlir, const|template|js); on a [norun] decl it
+            // is declaration metadata collectors read off the AST (310_138).
+            // Neither emits a handler__<variant> call, so the proc-target
+            // wall below does not apply.
+            if (event_decl.hasAnnotation("transform")) return;
+            if (event_decl.hasAnnotation("norun")) return;
         }
 
         var has_match = false;
