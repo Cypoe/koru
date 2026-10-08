@@ -1,0 +1,8 @@
+name: belief-strengthened
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `extension` — declare that name. A belief tested-and-held
+  is `confirmation`; a belief whose scope grew is `extension`. The sharper
+  word added nothing either canonical lacks.

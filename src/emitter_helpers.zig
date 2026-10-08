@@ -4527,9 +4527,7 @@ fn scopeWalkCont(
         const t = try branchPayloadType(allocator, items, parent_inv, cont.branch);
         try out.append(allocator, .{ .name = name, .type = t, .value_ref = name });
     }
-    for (cont.destructure) |*df| {
-        try out.append(allocator, .{ .name = df.name, .type = df.type_text orelse "", .value_ref = df.name });
-    }
+    try appendScopeDestructure(allocator, cont.destructure, out);
     if (is_site) return true;
 
     var child_inv: ?*const ast.Invocation = parent_inv;
@@ -4541,9 +4539,7 @@ fn scopeWalkCont(
                     const t = try returnTypeOf(allocator, items, inv);
                     try out.append(allocator, .{ .name = name, .type = t, .value_ref = name });
                 }
-                for (inv.return_destructure) |*df| {
-                    try out.append(allocator, .{ .name = df.name, .type = df.type_text orelse "", .value_ref = df.name });
-                }
+                try appendScopeDestructure(allocator, inv.return_destructure, out);
                 child_inv = inv;
             },
             .label_with_invocation => |*lwi| child_inv = &lwi.invocation,
@@ -4567,6 +4563,24 @@ fn scopeWalkCont(
         }
     }
     return false;
+}
+
+/// Append a destructure's bound names to the scope, recursing into `sub` —
+/// nested fields bind too (`{ limits: { rps } }` binds `rps` as an access
+/// path off the payload). The intermediate name (`limits`) is NOT bound by
+/// emitDestructureConsts, so it is not reported here.
+fn appendScopeDestructure(
+    allocator: std.mem.Allocator,
+    fields: []const ast.DestructureField,
+    out: *std.ArrayList(ast.ScopeBinding),
+) !void {
+    for (fields) |*df| {
+        if (df.sub.len > 0) {
+            try appendScopeDestructure(allocator, df.sub, out);
+            continue;
+        }
+        try out.append(allocator, .{ .name = df.name, .type = df.type_text orelse "", .value_ref = df.name });
+    }
 }
 
 const ScopeArmCtx = struct {

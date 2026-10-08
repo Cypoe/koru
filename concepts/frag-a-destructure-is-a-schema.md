@@ -21,6 +21,15 @@ keys. No `Doc`, no `root()`, no `object.get`, no `as.*` chain: the payload
 arrives as typed bindings in the branch. The same license `std/regex:match`
 takes with named groups — the destructure names the payload.
 
+The belief survived the mirror test: `std/json:emit` carries the same claim
+on the write side, where the schema is the `value:` record literal —
+`emit(value: { service, port, limits: { rps } })` generates a direct
+buffer-append writer for exactly that shape, value types resolved from the
+enclosing scope via `scopeAtSite`/`site_of`. No builder tree, no document —
+`toOwnedSlice` hands back an owned `string<emitted!>` discharged by
+`emit.free` (or auto-discharged at scope exit). Parse was not a lucky
+direction; a shape written once at the use site pays in both directions.
+
 ## What the instrument said
 
 `koru-libs/yyjson/bench/bench.k`: one 250-byte document, identical field
@@ -56,9 +65,6 @@ syntax* can carry the shape.
 
 ## Open questions
 
-- Emit is unbuilt: the write side (`std/json:emit`) is the symmetric win —
-  a destructure-driven emitter writes straight to the buffer with no tree
-  allocation, and wire-protocol traffic is half emit.
 - Escaping the scope boundary: `string<allocated!>`-style fields that own
   their copy are not spellable in a destructure today; if they become so,
   the scoped-borrow line moves.
