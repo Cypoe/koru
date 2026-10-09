@@ -26,7 +26,7 @@ std/runtime:register(scope: "sandbox") {
     write(1)
 }
 
-tor turn { br: *std/bridge:Bridge, source: string }
+tor turn { br: *std/bridge:Bridge<session>, source: string }
 turn = std/io:print.ln("  agent> {{ source:s }}")
 |> std/bridge:run(br, source)
 | result r |> std/interpreter:value.stringify(r.value): j |> std/io:print.ln("  world< {{ j:s }}")

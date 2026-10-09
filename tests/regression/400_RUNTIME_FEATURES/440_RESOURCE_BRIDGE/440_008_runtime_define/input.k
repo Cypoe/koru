@@ -22,7 +22,7 @@ std/runtime:register(scope: "api") {
     echo(1)
 }
 
-tor check-pre { br: *std/bridge:Bridge }
+tor check-pre { br: *std/bridge:Bridge<session> }
 check-pre = std/bridge:run(br, source: "shout(text: \"hi\")")
 | unhandled-branch _ |> std/io:print.ln("  UNHANDLED (unexpected)")
 | result r |> std/io:print.ln("  pre-define: {{ r.value.branch:s }}")
@@ -36,12 +36,12 @@ check-pre = std/bridge:run(br, source: "shout(text: \"hi\")")
 | validation-error _ |> std/io:print.ln("  pre-define: VALIDATION")
 | scope-not-found _ |> std/io:print.ln("  pre-define: NO SCOPE")
 
-tor do-define { br: *std/bridge:Bridge }
+tor do-define { br: *std/bridge:Bridge<session> }
 do-define = std/bridge:define(br, source: "tor shout { text: string }\nshout = echo(text)")
 | defined d |> std/io:print.ln("  defined {{ d:s }}")
 | parse-error e |> std/io:print.ln("  define failed: {{ e.message:s }}")
 
-tor check-post { br: *std/bridge:Bridge }
+tor check-post { br: *std/bridge:Bridge<session> }
 check-post = std/bridge:run(br, source: "shout(text: \"hi\")")
 | unhandled-branch _ |> std/io:print.ln("  UNHANDLED (unexpected)")
 | result r |> std/interpreter:value.stringify(r.value): j |> std/io:print.ln("  shout -> {{ j:s }}")

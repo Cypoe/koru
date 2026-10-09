@@ -14,12 +14,12 @@ std/runtime:register(scope: "api") {
     echo(1)
 }
 
-tor do-define { br: *std/bridge:Bridge }
+tor do-define { br: *std/bridge:Bridge<session> }
 do-define = std/bridge:define(br, source: "tor shout { text: string }\nshout = echo(text)")
 | defined d |> std/io:print.ln("defined {{ d:s }}")
 | parse-error e |> std/io:print.ln("define failed: {{ e.message:s }}")
 
-tor show-grammar { br: *std/bridge:Bridge }
+tor show-grammar { br: *std/bridge:Bridge<session> }
 show-grammar = std/bridge:grammar(br)
 | ok g |> std/io:print.ln("{{ g:s }}")
 | not-found s |> std/io:print.ln("NO SCOPE {{ s:s }}")

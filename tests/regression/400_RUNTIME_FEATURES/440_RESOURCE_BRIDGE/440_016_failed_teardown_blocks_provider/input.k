@@ -4,7 +4,7 @@ import std/io
 import std/bridge
 import app/session
 
-tor run-turn { br: *std/bridge:Bridge, source: string, label: string }
+tor run-turn { br: *std/bridge:Bridge<session>, source: string, label: string }
 run-turn = std/bridge:run(br, source)
 | unhandled-branch _ |> std/io:print.ln("  UNHANDLED (unexpected)")
 | result r |> std/io:print.ln("  {{ label:s }}: held={{ r.handles:d }}")
@@ -26,7 +26,7 @@ run-turn = std/bridge:run(br, source)
 |> std/bridge:close(br)
 |> std/io:print.ln("--- done")
 
-tor run-t { br: *std/bridge:Bridge, source: string, label: string }
+tor run-t { br: *std/bridge:Bridge<session>, source: string, label: string }
 run-t = std/bridge:run(br, source)
 | unhandled-branch _ |> std/io:print.ln("  UNHANDLED (unexpected)")
 | result r |> std/io:print.ln("  {{ label:s }}: held={{ r.handles:d }}")

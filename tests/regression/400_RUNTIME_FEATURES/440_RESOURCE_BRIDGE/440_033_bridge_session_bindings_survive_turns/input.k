@@ -31,7 +31,7 @@ std/runtime:register(scope: "api") {
     echo(1)
 }
 
-tor turn { br: *std/bridge:Bridge, src: string }
+tor turn { br: *std/bridge:Bridge<session>, src: string }
 turn = std/bridge:run(br, source: src)
 | result r |> std/io:print.ln("RESULT bound={{ r.bound:s }}")
 | partial p |> std/io:print.ln("FAIL partial {{ p.report:s }}")
@@ -46,7 +46,7 @@ turn = std/bridge:run(br, source: src)
 | exhausted _ |> std/io:print.ln("FAIL exhausted")
 | scope-not-found s2 |> std/io:print.ln("FAIL noscope {{ s2:s }}")
 
-tor show-vocab { br: *std/bridge:Bridge }
+tor show-vocab { br: *std/bridge:Bridge<session> }
 show-vocab = std/bridge:vocabulary(br)
 | ok v |> std/io:print.ln("{{ v:s }}")
 | not-found nf |> std/io:print.ln("FAIL noscope {{ nf:s }}")

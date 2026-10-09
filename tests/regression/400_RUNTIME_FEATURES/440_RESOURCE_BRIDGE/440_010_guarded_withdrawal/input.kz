@@ -62,7 +62,7 @@ const std = @import("std");
 
 // Two turns: open a file (held), then query it (the minted handle depends
 // on file_1). Both run on the same bridge pool.
-~tor two-shots { br: *std/bridge:Bridge } -> u32
+~tor two-shots { br: *std/bridge:Bridge<session> } -> u32
 
 ~proc two-shots|zig {
     const rt = @import("root").koru_std.koru_runtime;

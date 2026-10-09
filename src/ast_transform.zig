@@ -1529,13 +1529,20 @@ fn bindThreadIntoStep(
 
     for (info.input.fields) |f| {
         if (!isOpenThreadSlot(f, node.invocation.args)) continue;
+        // Field.type carries the phantom stripped — `<!open>` lives in
+        // Field.phantom. Splice it back for the comparison, or a consume
+        // param reads as unqualified and the strict rule refuses the thread.
+        const f_type = if (f.phantom) |ph|
+            try std.fmt.allocPrint(allocator, "{s}<{s}>", .{ f.type, ph })
+        else
+            f.type;
         try open_names.append(allocator, f.name);
-        try open_types.append(allocator, f.type);
+        try open_types.append(allocator, f_type);
         // The thread lands by the phantom system's own compatibility rule
         // (typeCanFill), not exact-string: the drain's owned payload
         // (`*Pending<open!>`) fills a consume parameter (`*Pending<!open>`)
         // because they are the same state, carry vs consume (690_107/109).
-        if (typeCanFill(thread.type, f.type)) try matches.append(allocator, f.name);
+        if (typeCanFill(thread.type, f_type)) try matches.append(allocator, f.name);
     }
 
     // A RECORD payload (the store give-back, 690_094): match each open slot
@@ -1544,8 +1551,12 @@ fn bindThreadIntoStep(
     if (thread.fields) |flds| {
         for (info.input.fields) |f| {
             if (!isOpenThreadSlot(f, node.invocation.args)) continue;
+            const f_type = if (f.phantom) |ph|
+                try std.fmt.allocPrint(allocator, "{s}<{s}>", .{ f.type, ph })
+            else
+                f.type;
             for (flds) |fld| {
-                if (!typeCanFill(fld.type, f.type)) continue;
+                if (!typeCanFill(fld.type, f_type)) continue;
                 const holder = try threadHolderName(allocator, thread.holder, counter);
                 const path = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ holder, fld.name });
                 node.invocation.args = try appendedArgs(allocator, node.invocation.args, f.name, path, true);
@@ -2055,6 +2066,13 @@ fn punContinuationBinding(
                     if (own_payload_type) |opt| {
                         if (std.mem.eql(u8, opt, f.type)) continue; // step 1b takes it
                     }
+                    // Field.type carries the phantom stripped — the slot's real
+                    // requirement is `<!open>`/`<open!>`, spliced back here or
+                    // the strict rule reads the param as unqualified.
+                    const f_type = if (f.phantom) |ph|
+                        try std.fmt.allocPrint(allocator, "{s}<{s}>", .{ f.type, ph })
+                    else
+                        f.type;
                     // A RECORD payload (the store give-back, 690_094) claims the
                     // slots its fields match — the record-thread in step 1b
                     // places them, and an ENCLOSING bind must not win a slot the
@@ -2063,7 +2081,7 @@ fn punContinuationBinding(
                     if (payload_fields) |flds| {
                         var claimed = false;
                         for (flds) |fld| {
-                            if (typeCanFill(fld.type, f.type)) {
+                            if (typeCanFill(fld.type, f_type)) {
                                 claimed = true;
                                 break;
                             }
@@ -2093,7 +2111,7 @@ fn punContinuationBinding(
                         }
                     }
 
-                    if (nearestOfType(scope.items, f.type)) |picked| {
+                    if (nearestOfType(scope.items, f_type)) |picked| {
                         _ = picked.producer_ret;
                         // RULING 3: the in-scope binding `f.name` is a whole
                         // transform result struct (producer returns SiteResult).

@@ -20,7 +20,7 @@ std/runtime:register(scope: "api") {
     echo(1)
 }
 
-tor turn { br: *std/bridge:Bridge, src: string }
+tor turn { br: *std/bridge:Bridge<session>, src: string }
 turn = std/bridge:run(br, source: src)
 | result r |> std/io:print.ln("RESULT bound={{ r.bound:s }}")
 | partial p |> std/io:print.ln("{{ p.report:s }}")

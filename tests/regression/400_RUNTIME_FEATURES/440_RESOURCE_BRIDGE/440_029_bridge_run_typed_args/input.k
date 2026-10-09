@@ -26,7 +26,7 @@ std/runtime:register(scope: "api") {
     echo-num(1)
 }
 
-tor turn { br: *std/bridge:Bridge }
+tor turn { br: *std/bridge:Bridge<session> }
 turn = std/bridge:run(br, source: "add(a: 5, b: 3) | ok s |> echo-num(n: s)")
 | result _ |> std/io:print.ln("RESULT")
 | partial p |> std/io:print.ln("FAIL partial {{ p.report:s }}")

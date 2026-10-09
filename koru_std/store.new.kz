@@ -2889,9 +2889,9 @@
                             .type = alloc.dupe(u8, ft) catch unreachable,
                             .module_path = if (foi) |oi| alloc.dupe(u8, oi.module_slash) catch unreachable else null,
                             .phantom = if (foi) |oi|
-                                (if (with_consume) std.fmt.allocPrint(alloc, "{s}:!{s}", .{ oi.module_dot, oi.state }) catch unreachable else null)
+                                (if (with_consume) std.fmt.allocPrint(alloc, "{s}:!{s}", .{ oi.module_dot, oi.state }) catch unreachable else alloc.dupe(u8, "*") catch unreachable)
                             else
-                                null,
+                                alloc.dupe(u8, "*") catch unreachable,
                         };
                     }
                     return fields;
@@ -3162,11 +3162,10 @@
                     // in_fields (with_consume=false).
                     const fa_in = allocator.alloc(ast.Field, 2) catch unreachable;
                     fa_in[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "usize") catch unreachable };
-                    fa_in[1] = ast.Field{
-                        .name = allocator.dupe(u8, "value") catch unreachable,
-                        .type = allocator.dupe(u8, field_types[i]) catch unreachable,
+                    fa_in[1] = ast.Field{ .name = allocator.dupe(u8, "value") catch unreachable, .type = allocator.dupe(u8, field_types[i]) catch unreachable,
                         .module_path = if (field_owned_info[i]) |oi| allocator.dupe(u8, oi.module_slash) catch unreachable else null,
-                    };
+                        // Borrows the already-owned pointer — the qualifier rides the type though the debt is the store's.
+                        .phantom = allocator.dupe(u8, "*") catch unreachable };
                     // The single arm carries the same bare-borrow payload as
                     // the bundled apply's arm for this field (690_060/063):
                     // the watch arm reads the just-written value, consuming
@@ -3276,12 +3275,9 @@
                     // (`<mod:!state>`) rides ONLY an owned field's own value.
                     const fw_in = allocator.alloc(ast.Field, 2) catch unreachable;
                     fw_in[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "usize") catch unreachable };
-                    fw_in[1] = ast.Field{
-                        .name = allocator.dupe(u8, "value") catch unreachable,
-                        .type = allocator.dupe(u8, field_types[i]) catch unreachable,
+                    fw_in[1] = ast.Field{ .name = allocator.dupe(u8, "value") catch unreachable, .type = allocator.dupe(u8, field_types[i]) catch unreachable,
                         .module_path = if (field_owned_info[i]) |oi| allocator.dupe(u8, oi.module_slash) catch unreachable else null,
-                        .phantom = if (field_owned_info[i]) |oi| std.fmt.allocPrint(allocator, "{s}:!{s}", .{ oi.module_dot, oi.state }) catch unreachable else null,
-                    };
+                        .phantom = if (field_owned_info[i]) |oi| std.fmt.allocPrint(allocator, "{s}:!{s}", .{ oi.module_dot, oi.state }) catch unreachable else allocator.dupe(u8, "*") catch unreachable };
                     appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
                         .path = H.mkPathH(allocator, home_ns, fwrite_name),
                         .input = ast.Shape{ .fields = fw_in },
@@ -3492,13 +3488,10 @@
                     const sp_in = allocator.alloc(ast.Field, set.len + 1) catch unreachable;
                     sp_in[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "usize") catch unreachable };
                     for (set, 0..) |ci, k| {
-                        // Named by COLUMN INDEX, not by position, so `col_arm`'s
-                        // `value_<i>` references land unchanged.
-                        sp_in[1 + k] = ast.Field{
-                            .name = std.fmt.allocPrint(allocator, "value_{d}", .{ci}) catch unreachable,
-                            .type = allocator.dupe(u8, field_types[ci]) catch unreachable,
+                        // Named by COLUMN INDEX so `col_arm`'s `value_<i>` references land unchanged.
+                        sp_in[1 + k] = ast.Field{ .name = std.fmt.allocPrint(allocator, "value_{d}", .{ci}) catch unreachable, .type = allocator.dupe(u8, field_types[ci]) catch unreachable,
                             .module_path = if (field_owned_info[ci]) |oi| allocator.dupe(u8, oi.module_slash) catch unreachable else null,
-                        };
+                            .phantom = allocator.dupe(u8, "*") catch unreachable };
                     }
                     appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
                         .path = H.mkPathH(allocator, home_ns, spec_name),
@@ -3692,7 +3685,7 @@
             const cin_fields = allocator.alloc(ast.Field, 3) catch unreachable;
             cin_fields[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "usize") catch unreachable };
             cin_fields[1] = ast.Field{ .name = allocator.dupe(u8, "field") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
-            cin_fields[2] = ast.Field{ .name = allocator.dupe(u8, "value") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
+            cin_fields[2] = ast.Field{ .name = allocator.dupe(u8, "value") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable, .phantom = allocator.dupe(u8, "*") catch unreachable };
             const c_branches = allocator.alloc(ast.Branch, 2) catch unreachable;
             c_branches[0] = ast.Branch{
                 .name = allocator.dupe(u8, "ok") catch unreachable,
@@ -5557,7 +5550,7 @@
         fn call(alloc: std.mem.Allocator, vtype: []const u8) []ast.Field {
             const fields = alloc.alloc(ast.Field, 2) catch unreachable;
             fields[0] = ast.Field{ .name = alloc.dupe(u8, "field") catch unreachable, .type = alloc.dupe(u8, "i64") catch unreachable };
-            fields[1] = ast.Field{ .name = alloc.dupe(u8, "value") catch unreachable, .type = alloc.dupe(u8, vtype) catch unreachable };
+            fields[1] = ast.Field{ .name = alloc.dupe(u8, "value") catch unreachable, .type = alloc.dupe(u8, vtype) catch unreachable, .phantom = alloc.dupe(u8, "*") catch unreachable };
             return fields;
         }
     }.call;
@@ -6027,7 +6020,7 @@
             const envw_name = std.fmt.allocPrint(allocator, "__store_envwrite_{s}", .{store_name}) catch unreachable;
             const ew_in = allocator.alloc(ast.Field, 2) catch unreachable;
             ew_in[0] = ast.Field{ .name = allocator.dupe(u8, "field") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
-            ew_in[1] = ast.Field{ .name = allocator.dupe(u8, "value") catch unreachable, .type = allocator.dupe(u8, value_type) catch unreachable };
+            ew_in[1] = ast.Field{ .name = allocator.dupe(u8, "value") catch unreachable, .type = allocator.dupe(u8, value_type) catch unreachable, .phantom = allocator.dupe(u8, "*") catch unreachable };
             stripe_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
                 .path = mkPath(allocator, home_ns, envw_name),
                 .input = ast.Shape{ .fields = ew_in },

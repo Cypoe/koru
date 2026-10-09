@@ -31,7 +31,7 @@ pub const Resource = struct {
 }
 
 // Helper to use the resource
-~pub tor use-resource { res: *Resource }
+~pub tor use-resource { res: *Resource<*> }
 
 ~proc use-resource|zig {
     std.debug.print("  Using: {s}\n", .{res.data});

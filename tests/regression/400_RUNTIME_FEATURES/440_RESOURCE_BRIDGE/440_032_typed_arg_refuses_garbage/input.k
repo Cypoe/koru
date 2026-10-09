@@ -16,7 +16,7 @@ std/runtime:register(scope: "api") {
     add(1)
 }
 
-tor turn { br: *std/bridge:Bridge, src: string }
+tor turn { br: *std/bridge:Bridge<session>, src: string }
 turn = std/bridge:run(br, source: src)
 | result _ |> std/io:print.ln("RESULT")
 | dispatch-error e |> std/io:print.ln("DISPATCH {{ e.message:s }}")

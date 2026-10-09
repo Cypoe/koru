@@ -158,7 +158,7 @@ pub const Bridge = struct {
 // GET_HANDLES - Query handles currently on the bridge
 // ============================================================================
 
-~pub tor get-handles { br: *Bridge } -> u32
+~pub tor get-handles { br: *Bridge<session> } -> u32
 
 ~proc get-handles|zig {
     return br.getHandleCount();

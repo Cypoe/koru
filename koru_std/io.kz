@@ -270,7 +270,7 @@ var readln_buf: [8192]u8 = undefined;
 } -> SiteResult
 
 ~[norun]pub tor print.impl {
-    expr: string,
+    expr: string<*>,
 }
 
 // eprint / eprint.ln — the stderr siblings of print / print.ln. Same engine

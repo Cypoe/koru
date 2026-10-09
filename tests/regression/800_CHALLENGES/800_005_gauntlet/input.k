@@ -96,7 +96,7 @@ cull = std/store:rule(arena)
         | then |> std/store:stored { arena[i.opp].opp: -1 }
             |> std/store:stored { arena[i.opp].hp: arena[i.opp].hp + 5 }
 
-tor rounds { left: i64 } -> i64
+tor rounds { left: i64<*> } -> i64
 rounds = strike() |> cull() |> if(left <= 1)
     | then -> 1
     | else |> rounds(left: left - 1): r -> r + 1

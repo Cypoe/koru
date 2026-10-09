@@ -218,7 +218,7 @@ pub const String = struct {
 // alternative — a global/streaming regex (`scan`) that finds repeated matches
 // in place — is pinned (640_011) and waits on the engine's unanchored-search
 // "later cut"; split needs no engine work.
-~pub tor split { s: string, sep: string }
+~pub tor split { s: string<*>, sep: string<*> }
 ! piece string
 | done usize
 

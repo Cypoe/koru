@@ -30,7 +30,7 @@ std/runtime:register(scope: "api") {
 // One turn, three items: legal wire, bare value, `when` clause. Item 1
 // runs; items 2 and 3 are per-step parse-errors — the turn continues
 // past refusal, and the report names each step's verdict.
-tor gated { br: *std/bridge:Bridge }
+tor gated { br: *std/bridge:Bridge<session> }
 gated = std/bridge:run(br, source: "echo(text: \"a\")\necho(count: 3)\necho(text: \"b\") when true")
 | partial p |> std/io:print.ln("{{ p.report:s }}")
 | result r |> std/io:print.ln("FAIL result — a three-item turn is not a single result")

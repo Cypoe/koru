@@ -50,7 +50,7 @@ std/runtime:register(scope: "sandbox") {
     write(1)
 }
 
-tor turn { br: *std/bridge:Bridge, n: u32 }
+tor turn { br: *std/bridge:Bridge<session>, n: u32 }
 turn = model(n): wire
 |> std/io:print.ln("  agent> {{ wire:s }}")
 |> std/bridge:run(br, source: wire)

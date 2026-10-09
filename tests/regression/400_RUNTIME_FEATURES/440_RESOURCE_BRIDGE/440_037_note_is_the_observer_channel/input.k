@@ -25,7 +25,7 @@ std/runtime:register(scope: "echo") {
     echo(1)
 }
 
-tor noted { br: *std/bridge:Bridge }
+tor noted { br: *std/bridge:Bridge<session> }
 noted = std/bridge:run(br, source: "note(text: \"checking tier before touching the reservation\")")
 | result r |> std/interpreter:value.stringify(r.value): j |> std/io:print.ln("  note -> {{ j:s }} bound: {{ r.bound:s }}")
 | event-denied ev |> std/io:print.ln("  FAIL note DENIED {{ ev:s }}")
@@ -40,7 +40,7 @@ noted = std/bridge:run(br, source: "note(text: \"checking tier before touching t
 | scope-not-found _ |> std/io:print.ln("  FAIL note NO SCOPE")
 | partial _ |> std/io:print.ln("  FAIL note PARTIAL")
 
-tor note-chain { br: *std/bridge:Bridge }
+tor note-chain { br: *std/bridge:Bridge<session> }
 note-chain = std/bridge:run(br, source: "note(text: \"plan: greet, then book\")\n| ok n |> echo(text: n)")
 | result r |> std/interpreter:value.stringify(r.value): j |> std/io:print.ln("  chain -> {{ j:s }}\n{{ r.trace:s }}")
 | event-denied ev |> std/io:print.ln("  FAIL chain DENIED {{ ev:s }}")
@@ -55,7 +55,7 @@ note-chain = std/bridge:run(br, source: "note(text: \"plan: greet, then book\")\
 | scope-not-found _ |> std/io:print.ln("  FAIL chain NO SCOPE")
 | partial _ |> std/io:print.ln("  FAIL chain PARTIAL")
 
-tor note-no-arg { br: *std/bridge:Bridge }
+tor note-no-arg { br: *std/bridge:Bridge<session> }
 note-no-arg = std/bridge:run(br, source: "note()")
 | result r |> std/io:print.ln("  FAIL noarg RESULT {{ r.value.branch:s }}")
 | event-denied ev |> std/io:print.ln("  FAIL noarg DENIED {{ ev:s }}")
@@ -70,7 +70,7 @@ note-no-arg = std/bridge:run(br, source: "note()")
 | scope-not-found _ |> std/io:print.ln("  FAIL noarg NO SCOPE")
 | partial _ |> std/io:print.ln("  FAIL noarg PARTIAL")
 
-tor note-rname { br: *std/bridge:Bridge }
+tor note-rname { br: *std/bridge:Bridge<session> }
 note-rname = std/bridge:run(br, source: "note(text: r1)")
 | result r |> std/interpreter:value.stringify(r.value): j |> std/io:print.ln("  note-rN -> {{ j:s }}")
 | event-denied ev |> std/io:print.ln("  FAIL note-rN DENIED {{ ev:s }}")
@@ -85,7 +85,7 @@ note-rname = std/bridge:run(br, source: "note(text: r1)")
 | scope-not-found _ |> std/io:print.ln("  FAIL note-rN NO SCOPE")
 | partial _ |> std/io:print.ln("  FAIL note-rN PARTIAL")
 
-tor note-tail { br: *std/bridge:Bridge }
+tor note-tail { br: *std/bridge:Bridge<session> }
 note-tail = std/bridge:run(br, source: "note(text: bare prose, the natural spelling)echo(text: \"reached\")")
 | result r |> std/io:print.ln("  FAIL tail RESULT {{ r.value.branch:s }}")
 | event-denied ev |> std/io:print.ln("  FAIL tail DENIED {{ ev:s }}")
@@ -100,7 +100,7 @@ note-tail = std/bridge:run(br, source: "note(text: bare prose, the natural spell
 | scope-not-found _ |> std/io:print.ln("  FAIL tail NO SCOPE")
 | partial p |> std/io:print.ln("  tail partial wire_failures={{ p.wire_failures:d }}\n{{ p.report:s }}")
 
-tor denied-note { br: *std/bridge:Bridge }
+tor denied-note { br: *std/bridge:Bridge<session> }
 denied-note = std/bridge:run(br, source: "note(text: \"can you hear me\")")
 | result r |> std/io:print.ln("  FAIL denied RESULT {{ r.value.branch:s }}")
 | event-denied ev |> std/io:print.ln("  denied: event-denied {{ ev:s }}")

@@ -42,7 +42,7 @@ std/runtime:register(scope: "api") {
     say(1)
 }
 
-tor gated { br: *std/bridge:Bridge, source: string }
+tor gated { br: *std/bridge:Bridge<session>, source: string }
 gated = std/bridge:run(br, source)
 | partial p |> std/io:print.ln("{{ p.report:s }}")
 | result r |> std/io:print.ln("  single result")

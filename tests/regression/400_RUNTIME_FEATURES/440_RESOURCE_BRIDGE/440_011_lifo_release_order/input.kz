@@ -36,7 +36,7 @@ const std = @import("std");
 ~std/bridge:create(id: "session-1", scope: "files"): br |> open-two(br): held |> std/bridge:close(br) |> std/io:print.ln("held before hang-up: {{ held:d }}")
 
 // Two independent opens on the SAME bridge pool: a.txt then b.txt.
-~tor open-two { br: *std/bridge:Bridge } -> u32
+~tor open-two { br: *std/bridge:Bridge<session> } -> u32
 
 ~proc open-two|zig {
     const rt = @import("root").koru_std.koru_runtime;

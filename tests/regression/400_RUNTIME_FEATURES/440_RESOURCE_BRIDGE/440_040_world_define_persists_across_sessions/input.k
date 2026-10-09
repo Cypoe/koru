@@ -23,12 +23,12 @@ std/runtime:register(scope: "api") {
     echo(1)
 }
 
-tor do-define { br: *std/bridge:Bridge, source: string }
+tor do-define { br: *std/bridge:Bridge<session>, source: string }
 do-define = std/bridge:define(br, source)
 | defined d |> std/io:print.ln("  defined {{ d:s }}")
 | parse-error e |> std/io:print.ln("  define FAILED {{ e.message:s }}")
 
-tor run-greet { br: *std/bridge:Bridge }
+tor run-greet { br: *std/bridge:Bridge<session> }
 run-greet = std/bridge:run(br, source: "greet(text: \"hi\")")
 | result r |> std/interpreter:value.stringify(r.value): j |> std/io:print.ln("  greet -> {{ j:s }}")
 | parse-error e |> std/io:print.ln("  greet PARSE {{ e.message:s }}")

@@ -19,7 +19,7 @@
 // page-backed and intentionally never freed, because it must outlive this
 // call and land in the caller's prompt buffer.
 
-~pub tor vocabulary { br: *Bridge }
+~pub tor vocabulary { br: *Bridge<session> }
 | ok string
 | not-found string
 
@@ -97,7 +97,7 @@ fn appendBoundLines(out: *std.ArrayList(u8), allocator: std.mem.Allocator, sessi
 // (parse.wire, in `run` above) and a prompt built from this render are the
 // same declaration read twice.
 
-~pub tor grammar { br: *Bridge }
+~pub tor grammar { br: *Bridge<session> }
 | ok string
 | not-found string
 

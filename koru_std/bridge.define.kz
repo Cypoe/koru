@@ -10,7 +10,7 @@
 // back into the transcript (the honest-diagnostics rule applies here most of
 // all: a wrong declaration needs a truthful error).
 
-~pub tor define { br: *Bridge, source: string }
+~pub tor define { br: *Bridge<session>, source: string }
 | defined string
 | parse-error { message: string, line: u32, column: u32 }
 

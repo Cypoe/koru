@@ -38,7 +38,7 @@ std/runtime:register(scope: "guards") {
 
 // Turn 1: guard sees the arm binding — `t == "hit"` is true, so the
 // guarded arm fires and the unguarded same-branch arm does not.
-tor turn1 { br: *std/bridge:Bridge }
+tor turn1 { br: *std/bridge:Bridge<session> }
 turn1 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found t when t == \"hit\" |> echo(text: \"guarded-hit\")\n| found u |> echo(text: \"unguarded-t1\")")
 | result r |> std/io:print.ln("t1 result")
 | unhandled-branch ub |> std/io:print.ln("FAIL t1 unhandled {{ ub.branch:s }}")
@@ -55,7 +55,7 @@ turn1 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found t when t == \"
 
 // Turn 2: guard false — the guarded arm is SKIPPED and the unguarded
 // same-branch arm fires. Before the fix the guarded arm fired anyway.
-tor turn2 { br: *std/bridge:Bridge }
+tor turn2 { br: *std/bridge:Bridge<session> }
 turn2 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found t when t == \"nope\" |> echo(text: \"guarded-wrong\")\n| found u |> echo(text: \"unguarded-t2\")")
 | result r |> std/io:print.ln("t2 result")
 | unhandled-branch ub |> std/io:print.ln("FAIL t2 unhandled {{ ub.branch:s }}")
@@ -73,7 +73,7 @@ turn2 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found t when t == \"
 // Turn 3: every guard false and no unguarded same-branch arm — nothing
 // fires; the outcome is unhandled, exactly as the compiled if/else chain
 // with no else leaves the dispatch untouched.
-tor turn3 { br: *std/bridge:Bridge }
+tor turn3 { br: *std/bridge:Bridge<session> }
 turn3 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found t when false |> echo(text: \"never-t3\")\n| absent a |> echo(text: \"absent-t3\")")
 | result r |> std/io:print.ln("FAIL t3 result")
 | unhandled-branch ub |> std/io:print.ln("t3 unhandled {{ ub.branch:s }}")

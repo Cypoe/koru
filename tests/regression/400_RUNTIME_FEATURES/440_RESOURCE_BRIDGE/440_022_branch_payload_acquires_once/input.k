@@ -48,7 +48,7 @@ std/runtime:register(scope: "res") {
 }
 
 // Turn 1: mint. One handle held.
-tor open-turn { br: *std/bridge:Bridge }
+tor open-turn { br: *std/bridge:Bridge<session> }
 open-turn = std/bridge:run(br, source: "open(path: \"x\")")
 | result r |> std/io:print.ln("after open, holds {{ r.handles:d }}")
 | unhandled-branch ub |> std/io:print.ln("FAIL turn1 unhandled {{ ub.branch:s }}")
@@ -64,7 +64,7 @@ open-turn = std/bridge:run(br, source: "open(path: \"x\")")
 | scope-not-found s2 |> std/io:print.ln("FAIL turn1 noscope {{ s2:s }}")
 
 // Turn 2: `ok` fires — the re-issue nets zero; the pool still holds one.
-tor post-ok { br: *std/bridge:Bridge }
+tor post-ok { br: *std/bridge:Bridge<session> }
 post-ok = std/bridge:run(br, source: "post(handle: \"res_1\", amount: \"5\")\n| ok h |> echo(text: \"posted\")\n| bad-amount b |> echo(text: \"bad\")")
 | result r |> std/io:print.ln("after post-ok, holds {{ r.handles:d }}")
 | unhandled-branch ub |> std/io:print.ln("FAIL turn2 unhandled {{ ub.branch:s }}")
@@ -81,7 +81,7 @@ post-ok = std/bridge:run(br, source: "post(handle: \"res_1\", amount: \"5\")\n| 
 
 // Turn 3: `bad-amount` fires — its OWN spec acquires (kebab in the source,
 // snake in the dispatch tag), the `ok` spec stays dormant. Still one held.
-tor post-bad { br: *std/bridge:Bridge }
+tor post-bad { br: *std/bridge:Bridge<session> }
 post-bad = std/bridge:run(br, source: "post(handle: \"res_1\", amount: \"bad\")\n| ok h |> echo(text: \"posted\")\n| bad-amount b |> echo(text: \"bad\")")
 | result r |> std/io:print.ln("after post-bad, holds {{ r.handles:d }}")
 | unhandled-branch ub |> std/io:print.ln("FAIL turn3 unhandled {{ ub.branch:s }}")

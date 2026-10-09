@@ -65,7 +65,7 @@ route = if(bounced == 0 and @mod(id, 3) == 0)
 // the if (an obligation consumed in both arms is still 'live' at
 // the merge — the frontier this program pinned).
 
-tor send-all { n: i64 }
+tor send-all { n: i64<*> }
 send-all = for(0..@as(usize, @intCast(n)))
     ! each i |> app/lib/post:took-pouch(seal: @as(i64, @intCast(i))): p
         |> if(@mod(@as(i64, @intCast(i)), 4) == 0)

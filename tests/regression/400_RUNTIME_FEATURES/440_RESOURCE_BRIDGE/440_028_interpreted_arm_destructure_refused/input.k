@@ -26,7 +26,7 @@ std/runtime:register(scope: "api") {
 }
 
 // Turn 1 (control): the name-binding arm runs.
-tor turn1 { br: *std/bridge:Bridge }
+tor turn1 { br: *std/bridge:Bridge<session> }
 turn1 = std/bridge:run(br, source: "risky()\n| missing v |> echo(text: v)")
 | result r |> std/io:print.ln("t1 result")
 | residue _ |> std/io:print.ln("FAIL: residue outcome")
@@ -43,7 +43,7 @@ turn1 = std/bridge:run(br, source: "risky()\n| missing v |> echo(text: v)")
 
 // Turn 2: a destructure arm refuses at the flow's own parse — annotated
 // fields included — instead of silently binding a literal `{`.
-tor turn2 { br: *std/bridge:Bridge }
+tor turn2 { br: *std/bridge:Bridge<session> }
 turn2 = std/bridge:run(br, source: "risky()\n| missing { [row]v } |> echo(text: v)")
 | result r |> std/io:print.ln("FAIL t2 result")
 | residue _ |> std/io:print.ln("FAIL: residue outcome")

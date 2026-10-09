@@ -795,7 +795,7 @@ const CH = struct {
         in[0] = ast.Field{
             .name = allocator.dupe(u8, "value") catch unreachable,
             .type = allocator.dupe(u8, k.proto) catch unreachable,
-            .phantom = null,
+            .phantom = "*",
         };
         const brs = allocator.alloc(ast.Branch, 3) catch unreachable;
         brs[0] = CH.emptyBranch(allocator, "ok");

@@ -19,7 +19,7 @@
 // and intentionally never freed — it outlives this call and lands in the
 // caller's prompt buffer.
 
-~pub tor affordances { br: *Bridge }
+~pub tor affordances { br: *Bridge<session> }
 | ok string
 | not-found string
 

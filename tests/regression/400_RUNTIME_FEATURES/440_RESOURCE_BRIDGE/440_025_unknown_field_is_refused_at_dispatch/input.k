@@ -38,7 +38,7 @@ std/runtime:register(scope: "fields") {
 }
 
 // Turn 1 (control): declared fields only — the verb runs.
-tor turn1 { br: *std/bridge:Bridge }
+tor turn1 { br: *std/bridge:Bridge<session> }
 turn1 = std/bridge:run(br, source: "echo(text: \"ok\")")
 | result r |> std/io:print.ln("t1 result")
 | validation-error v |> std/io:print.ln("FAIL t1 invalid {{ v:s }}")
@@ -54,7 +54,7 @@ turn1 = std/bridge:run(br, source: "echo(text: \"ok\")")
 | scope-not-found s2 |> std/io:print.ln("FAIL t1 noscope {{ s2:s }}")
 
 // Turn 2: `bogus` is not on echo's signature — refused by name.
-tor turn2 { br: *std/bridge:Bridge }
+tor turn2 { br: *std/bridge:Bridge<session> }
 turn2 = std/bridge:run(br, source: "echo(text: \"x\", bogus: \"3\")")
 | result r |> std/io:print.ln("FAIL t2 result")
 | validation-error v |> std/io:print.ln("t2 refused {{ v:s }}")
@@ -71,7 +71,7 @@ turn2 = std/bridge:run(br, source: "echo(text: \"x\", bogus: \"3\")")
 
 // Turn 3: same refusal mid-turn — the bad step reports, the good step
 // already ran.
-tor turn3 { br: *std/bridge:Bridge }
+tor turn3 { br: *std/bridge:Bridge<session> }
 turn3 = std/bridge:run(br, source: "echo(text: \"a\")\necho(text: \"b\", stray: \"z\")")
 | result r |> std/io:print.ln("FAIL t3 result")
 | validation-error v |> std/io:print.ln("FAIL t3 invalid {{ v:s }}")
@@ -88,7 +88,7 @@ turn3 = std/bridge:run(br, source: "echo(text: \"a\")\necho(text: \"b\", stray: 
 
 // Turn 4: a foreign field on a NESTED arm-body invocation is the same
 // refusal — the arm never runs.
-tor turn4 { br: *std/bridge:Bridge }
+tor turn4 { br: *std/bridge:Bridge<session> }
 turn4 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found t |> echo(text: \"inner\", foreign: \"1\")")
 | result r |> std/io:print.ln("FAIL t4 result")
 | validation-error v |> std/io:print.ln("t4 refused {{ v:s }}")
@@ -105,7 +105,7 @@ turn4 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found t |> echo(text
 
 // Turn 5 (ordering): a name outside the vocabulary is event-denied, not
 // a field complaint.
-tor turn5 { br: *std/bridge:Bridge }
+tor turn5 { br: *std/bridge:Bridge<session> }
 turn5 = std/bridge:run(br, source: "notaverb(bogus: \"1\")")
 | result r |> std/io:print.ln("FAIL t5 result")
 | validation-error v |> std/io:print.ln("FAIL t5 invalid {{ v:s }}")

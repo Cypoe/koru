@@ -38,7 +38,7 @@ const allocator = std.heap.c_allocator;
 // Same branch name "done" at multiple nesting levels
 // ============================================================
 
-~tor work-done { r: *Resource }
+~tor work-done { r: *Resource<*> }
 
 ~proc work-done|zig {
     r.data[0] +%= 1;

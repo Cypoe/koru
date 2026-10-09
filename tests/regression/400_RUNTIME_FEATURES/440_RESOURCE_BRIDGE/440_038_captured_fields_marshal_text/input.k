@@ -30,7 +30,7 @@ std/runtime:register(scope: "api") {
     render(1)
 }
 
-tor gated { br: *std/bridge:Bridge }
+tor gated { br: *std/bridge:Bridge<session> }
 gated = std/bridge:run(br, source: "calc(expr: \"2 + 3\")\nrender(src: \"hello world\")")
 | partial p |> std/io:print.ln("{{ p.report:s }}")
 | result r |> std/io:print.ln("FAIL result — a two-item turn reports per step")

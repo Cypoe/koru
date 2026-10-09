@@ -40,7 +40,7 @@ std/runtime:register(scope: "rec") {
     emit(1)
 }
 
-tor run-it { br: *std/bridge:Bridge, source: string }
+tor run-it { br: *std/bridge:Bridge<session>, source: string }
 run-it = std/bridge:run(br, source)
 | result r |> std/io:print.ln("  result")
 | unhandled-branch ub |> std/io:print.ln("  unhandled {{ ub.branch:s }}")

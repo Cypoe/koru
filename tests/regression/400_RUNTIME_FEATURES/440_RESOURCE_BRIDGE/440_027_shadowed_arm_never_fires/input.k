@@ -39,7 +39,7 @@ std/runtime:register(scope: "binds") {
 
 // Turn 1: the flat chain — a second unguarded `found` arm on `probe`
 // can never fire. Refused by name, with the nesting spelling taught.
-tor turn1 { br: *std/bridge:Bridge }
+tor turn1 { br: *std/bridge:Bridge<session> }
 turn1 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found h |> echo(text: \"one\")\n| found u |> echo(text: \"two\")")
 | result r |> std/io:print.ln("FAIL t1 result")
 | validation-error v |> std/io:print.ln("t1 refused {{ v:s }}")
@@ -55,7 +55,7 @@ turn1 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found h |> echo(text
 | scope-not-found s2 |> std/io:print.ln("FAIL t1 noscope {{ s2:s }}")
 
 // Turn 2: same shape on ONE line — inline arms are siblings too.
-tor turn2 { br: *std/bridge:Bridge }
+tor turn2 { br: *std/bridge:Bridge<session> }
 turn2 = std/bridge:run(br, source: "probe(path: \"hit\") | found h |> echo(text: \"one\") | found u |> echo(text: \"two\")")
 | result r |> std/io:print.ln("FAIL t2 result")
 | validation-error v |> std/io:print.ln("t2 refused {{ v:s }}")
@@ -72,7 +72,7 @@ turn2 = std/bridge:run(br, source: "probe(path: \"hit\") | found h |> echo(text:
 
 // Turn 3 (control): a guarded `found` arm narrows — the unguarded
 // fallback stays reachable and fires when the guard fails.
-tor turn3 { br: *std/bridge:Bridge }
+tor turn3 { br: *std/bridge:Bridge<session> }
 turn3 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found t when t == \"nope\" |> echo(text: \"guarded-t3\")\n| found u |> echo(text: \"fallback-t3\")")
 | result r |> std/io:print.ln("t3 result")
 | validation-error v |> std/io:print.ln("FAIL t3 invalid {{ v:s }}")
@@ -89,7 +89,7 @@ turn3 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found t when t == \"
 
 // Turn 4 (control): the spelling the model meant — the second arm
 // indented under the step it follows attaches to `echo`, not `probe`.
-tor turn4 { br: *std/bridge:Bridge }
+tor turn4 { br: *std/bridge:Bridge<session> }
 turn4 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found h |> echo(text: \"first\")\n    | ok |> echo(text: \"second\")")
 | result r |> std/io:print.ln("t4 result")
 | validation-error v |> std/io:print.ln("FAIL t4 invalid {{ v:s }}")
@@ -106,7 +106,7 @@ turn4 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found h |> echo(text
 
 // Turn 5 (control): distinct branch names as siblings — the legal use
 // of the flat shape the defect abused.
-tor turn5 { br: *std/bridge:Bridge }
+tor turn5 { br: *std/bridge:Bridge<session> }
 turn5 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found a |> echo(text: \"on-found\")\n| absent b |> echo(text: \"on-absent\")")
 | result r |> std/io:print.ln("t5 result")
 | validation-error v |> std/io:print.ln("FAIL t5 invalid {{ v:s }}")

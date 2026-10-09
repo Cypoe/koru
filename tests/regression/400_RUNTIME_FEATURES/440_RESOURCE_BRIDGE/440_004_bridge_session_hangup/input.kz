@@ -45,7 +45,7 @@ const std = @import("std");
 // Turn one opens a file on the bridge and walks away from it. auto_discharge is
 // off: a bridge-managed pool outlives the run by design, so nothing is released
 // here — that is the session's job.
-~tor turn-one { br: *std/bridge:Bridge } -> u32
+~tor turn-one { br: *std/bridge:Bridge<session> } -> u32
 
 ~proc turn-one|zig {
     const rt = @import("root").koru_std.koru_runtime;

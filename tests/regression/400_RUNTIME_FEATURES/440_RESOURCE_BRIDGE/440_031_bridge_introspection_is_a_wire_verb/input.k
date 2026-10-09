@@ -22,7 +22,7 @@ std/runtime:register(scope: "echo") {
     echo(1)
 }
 
-tor granted-vocab { br: *std/bridge:Bridge }
+tor granted-vocab { br: *std/bridge:Bridge<session> }
 granted-vocab = std/bridge:run(br, source: "vocabulary()")
 | result r |> std/interpreter:value.stringify(r.value): j |> std/io:print.ln("  vocab -> {{ j:s }}")
 | event-denied ev |> std/io:print.ln("  FAIL vocab DENIED {{ ev:s }}")
@@ -37,7 +37,7 @@ granted-vocab = std/bridge:run(br, source: "vocabulary()")
 | scope-not-found _ |> std/io:print.ln("  FAIL vocab NO SCOPE")
 | partial _ |> std/io:print.ln("  FAIL vocab PARTIAL")
 
-tor granted-chain { br: *std/bridge:Bridge }
+tor granted-chain { br: *std/bridge:Bridge<session> }
 granted-chain = std/bridge:run(br, source: "vocabulary()\n| ok v |> echo(text: v)")
 | result r |> std/interpreter:value.stringify(r.value): j |> std/io:print.ln("  chained -> {{ j:s }}")
 | event-denied ev |> std/io:print.ln("  FAIL chain DENIED {{ ev:s }}")
@@ -52,7 +52,7 @@ granted-chain = std/bridge:run(br, source: "vocabulary()\n| ok v |> echo(text: v
 | scope-not-found _ |> std/io:print.ln("  FAIL chain NO SCOPE")
 | partial _ |> std/io:print.ln("  FAIL chain PARTIAL")
 
-tor granted-args { br: *std/bridge:Bridge }
+tor granted-args { br: *std/bridge:Bridge<session> }
 granted-args = std/bridge:run(br, source: "vocabulary(extra: \"x\")")
 | result r |> std/io:print.ln("  FAIL args RESULT {{ r.value.branch:s }}")
 | event-denied ev |> std/io:print.ln("  FAIL args DENIED {{ ev:s }}")
@@ -67,12 +67,12 @@ granted-args = std/bridge:run(br, source: "vocabulary(extra: \"x\")")
 | scope-not-found _ |> std/io:print.ln("  FAIL args NO SCOPE")
 | partial _ |> std/io:print.ln("  FAIL args PARTIAL")
 
-tor do-define { br: *std/bridge:Bridge }
+tor do-define { br: *std/bridge:Bridge<session> }
 do-define = std/bridge:define(br, source: "tor shout { text: string }\nshout = echo(text)")
 | defined d |> std/io:print.ln("  defined {{ d:s }}")
 | parse-error e |> std/io:print.ln("  FAIL define PARSE {{ e.message:s }}")
 
-tor granted-post-define { br: *std/bridge:Bridge }
+tor granted-post-define { br: *std/bridge:Bridge<session> }
 granted-post-define = std/bridge:run(br, source: "vocabulary()")
 | result r |> std/interpreter:value.stringify(r.value): j |> std/io:print.ln("  vocab+def -> {{ j:s }}")
 | event-denied ev |> std/io:print.ln("  FAIL vocab2 DENIED {{ ev:s }}")
@@ -87,7 +87,7 @@ granted-post-define = std/bridge:run(br, source: "vocabulary()")
 | scope-not-found _ |> std/io:print.ln("  FAIL vocab2 NO SCOPE")
 | partial _ |> std/io:print.ln("  FAIL vocab2 PARTIAL")
 
-tor denied-vocab { br: *std/bridge:Bridge }
+tor denied-vocab { br: *std/bridge:Bridge<session> }
 denied-vocab = std/bridge:run(br, source: "vocabulary()")
 | result r |> std/io:print.ln("  FAIL denied RESULT {{ r.value.branch:s }}")
 | event-denied ev |> std/io:print.ln("  denied: event-denied {{ ev:s }}")

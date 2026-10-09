@@ -12,7 +12,7 @@ import app/state
 
 // One turn: dispatch must still reach ping — which writes and prints the
 // module's own name_len, the decl the generated local once shadowed.
-tor ping-turn { br: *std/bridge:Bridge }
+tor ping-turn { br: *std/bridge:Bridge<session> }
 ping-turn = std/bridge:run(br, source: "ping(text: \"hi\")")
 | result res |> std/io:print.ln("after ping, holds {{ res.handles:d }}")
 | unhandled-branch ub |> std/io:print.ln("FAIL unhandled {{ ub.branch:s }}")

@@ -86,7 +86,7 @@ commander = std/store:query(sentries)
     ! first s when s.awake == 1 |> std/io:print.ln("post {{ s.post:d }} holds the watch")
     | none |> std/io:print.ln("all asleep")
 
-tor rounds { left: i64 } -> i64
+tor rounds { left: i64<*> } -> i64
 rounds = patrol() |> collapse() |> commander() |> if(left <= 1)
     | then -> 1
     | else |> rounds(left: left - 1): r -> r + 1

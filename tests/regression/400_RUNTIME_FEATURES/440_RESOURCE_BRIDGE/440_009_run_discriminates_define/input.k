@@ -25,7 +25,7 @@ std/runtime:register(scope: "api") {
 }
 
 // Turn A: an invocation of a verb that does not exist yet — denied.
-tor turn-a { br: *std/bridge:Bridge }
+tor turn-a { br: *std/bridge:Bridge<session> }
 turn-a = std/bridge:run(br, source: "greet(text: \"hi\")")
 | unhandled-branch _ |> std/io:print.ln("  UNHANDLED (unexpected)")
 | result r |> std/io:print.ln("  A: DISPATCHED (unexpected): {{ r.value.branch:s }}")
@@ -40,7 +40,7 @@ turn-a = std/bridge:run(br, source: "greet(text: \"hi\")")
 | scope-not-found _ |> std/io:print.ln("  A: NO SCOPE")
 
 // Turn B: the same `run`, with a DECLARATION — installs.
-tor turn-b { br: *std/bridge:Bridge }
+tor turn-b { br: *std/bridge:Bridge<session> }
 turn-b = std/bridge:run(br, source: "tor greet { text: string }\ngreet = echo(text)")
 | unhandled-branch _ |> std/io:print.ln("  UNHANDLED (unexpected)")
 | defined d |> std/io:print.ln("  B: defined {{ d:s }} (expected)")
@@ -55,7 +55,7 @@ turn-b = std/bridge:run(br, source: "tor greet { text: string }\ngreet = echo(te
 | scope-not-found _ |> std/io:print.ln("  B: NO SCOPE")
 
 // Turn C: the invention dispatched through the same run — params bound.
-tor turn-c { br: *std/bridge:Bridge }
+tor turn-c { br: *std/bridge:Bridge<session> }
 turn-c = std/bridge:run(br, source: "greet(text: \"hi\")")
 | unhandled-branch _ |> std/io:print.ln("  UNHANDLED (unexpected)")
 | result r |> std/interpreter:value.stringify(r.value): j |> std/io:print.ln("  C: greet -> {{ j:s }} (expected)")
@@ -70,7 +70,7 @@ turn-c = std/bridge:run(br, source: "greet(text: \"hi\")")
 | scope-not-found _ |> std/io:print.ln("  C: NO SCOPE")
 
 // Turn D: the derived vocabulary carries the invention, typed.
-tor turn-d { br: *std/bridge:Bridge }
+tor turn-d { br: *std/bridge:Bridge<session> }
 turn-d = std/bridge:vocabulary(br)
 | ok v |> std/io:print.ln("  D: vocabulary contains greet: {{ v:s }}") |> std/io:print.ln("  D: (expected greet(text: string) present)")
 | not-found s |> std/io:print.ln("  D: NO SCOPE {{ s:s }}")

@@ -22,7 +22,7 @@ std/runtime:register(scope: "api") {
 
 // Turn 1: `|*` in the source text refuses at parse — surfaced as the
 // turn's parse-error outcome.
-tor residual-refused { br: *std/bridge:Bridge }
+tor residual-refused { br: *std/bridge:Bridge<session> }
 residual-refused = std/bridge:run(br, source: "risky()\n| ok v |> _\n|* b |> _")
 | result r |> std/io:print.ln("FAIL turn1 ran")
 | parse-error p |> std/io:print.ln("turn1 parse-error — the spelling refuses")
@@ -38,7 +38,7 @@ residual-refused = std/bridge:run(br, source: "risky()\n| ok v |> _\n|* b |> _")
 | scope-not-found s2 |> std/io:print.ln("FAIL turn1 noscope {{ s2:s }}")
 
 // Turn 2: control — named arms over the same dispatch still run.
-tor named-runs { br: *std/bridge:Bridge }
+tor named-runs { br: *std/bridge:Bridge<session> }
 named-runs = std/bridge:run(br, source: "risky()\n| ok v |> _\n| missing m |> _")
 | result r |> std/io:print.ln("turn2 named-arms result")
 | parse-error p |> std/io:print.ln("FAIL turn2 parse {{ p.message:s }}")

@@ -32,12 +32,12 @@ std/runtime:register(scope: "api") {
     exclaim(1)
 }
 
-tor do-define { br: *std/bridge:Bridge, source: string }
+tor do-define { br: *std/bridge:Bridge<session>, source: string }
 do-define = std/bridge:define(br, source)
 | defined d |> std/io:print.ln("  defined {{ d:s }}")
 | parse-error e |> std/io:print.ln("  define failed: {{ e.message:s }}")
 
-tor run-shout { br: *std/bridge:Bridge }
+tor run-shout { br: *std/bridge:Bridge<session> }
 run-shout = std/bridge:run(br, source: "shout(text: \"hi\")")
 | unhandled-branch _ |> std/io:print.ln("  UNHANDLED (unexpected)")
 | result r |> std/interpreter:value.stringify(r.value): j |> std/io:print.ln("  shout -> {{ j:s }}")

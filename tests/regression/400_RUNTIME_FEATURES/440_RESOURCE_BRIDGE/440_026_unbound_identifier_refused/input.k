@@ -43,7 +43,7 @@ std/runtime:register(scope: "binds") {
 
 // Turn 1 (control): `t` is bound by the arm that carries it — the
 // reference resolves and the body runs.
-tor turn1 { br: *std/bridge:Bridge }
+tor turn1 { br: *std/bridge:Bridge<session> }
 turn1 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found t |> echo(text: t)")
 | result r |> std/io:print.ln("t1 result")
 | validation-error v |> std/io:print.ln("FAIL t1 invalid {{ v:s }}")
@@ -61,7 +61,7 @@ turn1 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found t |> echo(text
 // Turn 2: item 1 binds `h`; item 2 names it. Bindings do not cross
 // items — and the wire parser refuses the bare value outright, so the
 // step dies as parse-error inside a `partial` outcome, item 1 intact.
-tor turn2 { br: *std/bridge:Bridge }
+tor turn2 { br: *std/bridge:Bridge<session> }
 turn2 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found h |> echo(text: \"one\")\necho(text: h)")
 | result r |> std/io:print.ln("FAIL t2 result")
 | validation-error v |> std/io:print.ln("FAIL t2 invalid {{ v:s }}")
@@ -78,7 +78,7 @@ turn2 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found h |> echo(text
 
 // Turn 3: a bare value on a top-level item — the wire parser's own
 // refusal, before validation or dispatch ever see it.
-tor turn3 { br: *std/bridge:Bridge }
+tor turn3 { br: *std/bridge:Bridge<session> }
 turn3 = std/bridge:run(br, source: "echo(text: nope)")
 | result r |> std/io:print.ln("FAIL t3 result")
 | validation-error v |> std/io:print.ln("t3 refused {{ v:s }}")
@@ -95,7 +95,7 @@ turn3 = std/bridge:run(br, source: "echo(text: nope)")
 
 // Turn 4: `t` is bound under `found` only — naming it under `absent`
 // is unbound on that path, whatever probe would have returned.
-tor turn4 { br: *std/bridge:Bridge }
+tor turn4 { br: *std/bridge:Bridge<session> }
 turn4 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found t |> echo(text: \"f\")\n| absent a |> echo(text: t)")
 | result r |> std/io:print.ln("FAIL t4 result")
 | validation-error v |> std/io:print.ln("t4 refused {{ v:s }}")
@@ -112,7 +112,7 @@ turn4 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found t |> echo(text
 
 // Turn 5: a dotted reference's base is the same question — `h.msg`
 // with no `h` in scope names `h`, not `<unbound:h>`.
-tor turn5 { br: *std/bridge:Bridge }
+tor turn5 { br: *std/bridge:Bridge<session> }
 turn5 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found t |> echo(text: h.msg)")
 | result r |> std/io:print.ln("FAIL t5 result")
 | validation-error v |> std/io:print.ln("t5 refused {{ v:s }}")

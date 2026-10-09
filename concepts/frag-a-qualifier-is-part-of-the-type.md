@@ -32,6 +32,21 @@ compiles; `<!*>` does not.
 
 Pinned: `330_137_wildcard_consume_refused`.
 
+Fallout shape, measured: the ruling's first board left 77 reds and every one
+was a callsite spelled for the loose world — none required weakening the
+matcher. Two lessons the stragglers taught:
+
+**Synthesized surfaces must spell their intent too.** Store write/apply hops,
+channel `send`, and `print.impl` all emitted bare params that borrowed in
+practice — each needed `<*>` to say so. Internal does not mean exempt: a hop
+that receives an already-owned pointer still sees the qualifier on the type.
+
+**`Field.phantom` is a separate carrier from `Field.type`.** The point-free
+selector (`bindThreadIntoStep`) compared only `f.type` and silently dropped
+`<!open>` — `*Pending<!open>` looked like `*Pending`. Any type comparison on
+`ast.Field` must splice the phantom back (`"{s}<{s}>"`); `PayloadField` keeps
+it inline instead, so the two carriers are NOT interchangeable.
+
 What would correct this: a concrete program that needs wildcard settle — a
 genuinely parametric disposer whose cleanup semantics are uniform across
 minting modules — would weaken "must name the contract" to "must name the
