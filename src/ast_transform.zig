@@ -1221,6 +1221,11 @@ fn phantomCompatible(param_phantom: []const u8, binding_phantom: []const u8) boo
     const b = phantomStateName(binding_phantom);
     var p_it = std.mem.splitScalar(u8, param_phantom, '|');
     while (p_it.next()) |p_member| {
+        // `*` — the catch-all member: matches every qualification. A `!`
+        // marker makes it a consume spelling (`!*`, `!foo:*`); the parser
+        // refuses those, and they never borrow-match here.
+        if (std.mem.indexOfScalar(u8, p_member, '!') == null and
+            std.mem.eql(u8, phantomStateName(p_member), "*")) return true;
         if (std.mem.eql(u8, phantomStateName(p_member), b)) return true;
     }
     return false;
@@ -1266,9 +1271,21 @@ fn typeCanFill(binding: []const u8, param: []const u8) bool {
     // stripped in name comparison, so `*Pending<app/lib/pend:open!>` and
     // `*Pending<!open>` meet here.
     if (!typeBasesEql(b.base, p.base)) return false;
-    // No param phantom = any state accepted (areCompatible(null, x) == true).
-    const p_ph = p.phantom orelse return true;
-    const b_ph = b.phantom orelse return false;
+    // No param phantom = the PLAIN type only — a qualifier is part of the
+    // type, so a marked binding cannot fill `string` (it is `string<state>`).
+    // `<*>` is the explicit any-qualification wildcard.
+    const p_ph = p.phantom orelse return b.phantom == null;
+    if (std.mem.eql(u8, p_ph, "*")) return true;
+    const b_ph = b.phantom orelse {
+        // `<a|*>` — the catch-all member accepts an unqualified binding.
+        // Consume-marked members (`!*`) are not wildcards — parser refuses.
+        var it = std.mem.splitScalar(u8, p_ph, '|');
+        while (it.next()) |mem| {
+            if (std.mem.indexOfScalar(u8, mem, '!') == null and
+                std.mem.eql(u8, phantomStateName(mem), "*")) return true;
+        }
+        return false;
+    };
     return phantomCompatible(p_ph, b_ph);
 }
 

@@ -1,0 +1,21 @@
+// PINS: `<!*>` is not a discharge spelling. `!` promises to settle a NAMED
+// obligation's contract — the discharger performs the minting module's
+// cleanup semantics — and `*` names nothing. Every spelling that marks a
+// wildcard member as consuming is refused with KORU033: `<!*>`,
+// `<!module:*>`, `<module:!*>`, and union members (`<!*|open>`,
+// `<open|!*>`). The borrow wildcard `<*>` remains legal — it makes no
+// settlement promise.
+const std = @import("std");
+const Handle = struct { n: i32 };
+
+~tor open {} -> *Handle<opened!>
+~proc open|zig {
+    const h = std.heap.page_allocator.create(Handle) catch unreachable;
+    h.* = .{ .n = 1 };
+    return h;
+}
+
+~tor dispose { h: *Handle<!*> }
+~proc dispose|zig { std.heap.page_allocator.destroy(h); }
+
+~open(): h1 |> dispose(h: h1)

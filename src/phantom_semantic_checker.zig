@@ -791,9 +791,6 @@ pub const PhantomSemanticChecker = struct {
     }
 
     fn validatePhantom(self: *PhantomSemanticChecker, phantom_str: []const u8, event_name: []const u8, location: errors.SourceLocation, is_input: bool) !bool {
-        var phantom = try phantom_parser.PhantomState.parse(self.allocator, phantom_str);
-        defer phantom.deinit(self.allocator);
-
         // `event_decl.location` is stored in USER coordinates
         // (parser.getUserDeclStartLocation — `--ast-json` reads it raw, pinned
         // by 210_164) while `addError` expects parser coordinates and
@@ -805,6 +802,36 @@ pub const PhantomSemanticChecker = struct {
             location.line + self.reporter.injection_line_count
         else
             location.line;
+
+        var phantom = phantom_parser.PhantomState.parse(self.allocator, phantom_str) catch |err| {
+            if (err == error.InvalidPhantomState) {
+                // `<!*>` (or any `!`-marked `*`) names a settlement promise
+                // with no named contract — refuse it here, by name. Other
+                // malformed spellings get the generic wording.
+                const wildcard_consume = std.mem.indexOfScalar(u8, phantom_str, '!') != null and
+                    std.mem.indexOfScalar(u8, phantom_str, '*') != null;
+                if (wildcard_consume) {
+                    try self.reporter.addError(
+                        .KORU033,
+                        report_line,
+                        location.column,
+                        "Invalid phantom annotation '<{s}>' (tor: {s}): '!' promises to settle a NAMED obligation's contract — '*' names none. Use '<!module:state>' to discharge, or '<*>' to borrow any qualification.",
+                        .{ phantom_str, event_name },
+                    );
+                } else {
+                    try self.reporter.addError(
+                        .KORU033,
+                        report_line,
+                        location.column,
+                        "Invalid phantom annotation '<{s}>' (tor: {s}).",
+                        .{ phantom_str, event_name },
+                    );
+                }
+                return false;
+            }
+            return err;
+        };
+        defer phantom.deinit(self.allocator);
 
         switch (phantom) {
             .concrete => |concrete| {
@@ -1026,6 +1053,9 @@ pub const PhantomSemanticChecker = struct {
         base_type_module: ?[]const u8,
     ) ![]const u8 {
         const bare_module = base_type_module orelse defining_module;
+        // `<*>` is the any-qualification wildcard, not a state — it has no
+        // home module and must survive canonicalization intact.
+        if (std.mem.eql(u8, phantom_str, "*")) return try self.allocator.dupe(u8, phantom_str);
         var phantom = try phantom_parser.PhantomState.parse(self.allocator, phantom_str);
         defer phantom.deinit(self.allocator);
 
@@ -1061,6 +1091,13 @@ pub const PhantomSemanticChecker = struct {
                     if (i > 0) try result.append(self.allocator, '|');
                     // Per-member ! prefix
                     if (member.consumes_obligation) try result.append(self.allocator, '!');
+
+                    // `*` is the catch-all, not a state — it has no home
+                    // module and carries verbatim.
+                    if (std.mem.eql(u8, member.name, "*")) {
+                        try result.append(self.allocator, '*');
+                        continue;
+                    }
 
                     const canonical_module = if (member.module_path) |mod_path| blk: {
                         if (try self.lookupModule(mod_path)) |canonical| {
@@ -3556,7 +3593,45 @@ pub const PhantomSemanticChecker = struct {
             expected_module_path = field.module_path;
         }
 
-        if (expected_phantom == null) {
+        // `<*>` — the any-qualification wildcard — takes the no-requirement
+        // path: marked or unmarked args accepted, nothing consumed.
+        const any_qualification = if (expected_phantom) |ep| std.mem.eql(u8, ep, "*") else false;
+        if (expected_phantom == null or any_qualification) {
+            if (!any_qualification and expected_base_type_raw != null) {
+                // A qualifier is part of the type: an unqualified param names
+                // the PLAIN type — `string` is not `string<state>`. A
+                // qualified argument is a type mismatch, not a satisfied
+                // absence of requirements; the param spells `<state>`,
+                // `<a|b>`, or `<*>` to accept qualified values.
+                var qualified_state: ?[]const u8 = null;
+                if (arg.phantom_type) |asserted| {
+                    qualified_state = asserted;
+                } else if (context.getInfo(arg.value)) |info| {
+                    qualified_state = info.phantom_state;
+                } else if (std.mem.indexOfScalar(u8, arg.value, '.')) |dot_idx| {
+                    // Field projections are tracked under their own key; a
+                    // renamed prefix falls back to field-name suffix, the
+                    // same lookup the state-required path performs.
+                    const suffix = arg.value[dot_idx..];
+                    var it = context.bindings.iterator();
+                    while (it.next()) |entry| {
+                        if (std.mem.endsWith(u8, entry.key_ptr.*, suffix)) {
+                            qualified_state = entry.value_ptr.phantom_state;
+                            break;
+                        }
+                    }
+                }
+                if (qualified_state) |qs| {
+                    try self.reporter.addError(
+                        .KORU030,
+                        location.line,
+                        location.column,
+                        "Type mismatch: argument '{s}' is qualified as '{s}<{s}>' but parameter '{s}' accepts only unqualified '{s}' — declare '<*>' to accept any qualification",
+                        .{ arg.value, expected_base_type_raw.?, qs, arg.name, expected_base_type_raw.? },
+                    );
+                    return false;
+                }
+            }
             // Nominal distinctness (registry rung 1): when BOTH the expected
             // param type and the provided binding's type are registered
             // declared types and differ, refuse at the Koru layer — pins
@@ -3801,7 +3876,12 @@ pub const PhantomSemanticChecker = struct {
                     // (or no state - the variable will be bound at the call site)
                     return true;
                 },
-                .state_union => {
+                .state_union => |u| {
+                    // A union carrying the `*` catch-all accepts any
+                    // qualification — including an unqualified value.
+                    for (u.members) |m| {
+                        if (std.mem.eql(u8, m.name, "*")) return true;
+                    }
                     // State union - the event accepts multiple states
                     // If the binding isn't tracked, we can't verify it's in one of those states
                     try self.reporter.addError(

@@ -73,6 +73,13 @@ pub const PhantomState = union(enum) {
                 return error.InvalidPhantomState;
             }
 
+            // `<!*>` is refused: `!` is a settlement promise to a NAMED
+            // contract — the discharger performs the minting module's
+            // semantics, and `*` names nothing. The borrow wildcard is `<*>`.
+            if (consumes and std.mem.eql(u8, state_name, "*")) {
+                return error.InvalidPhantomState;
+            }
+
             return .{ .concrete = .{
                 .module_path = try allocator.dupe(u8, module_path),
                 .name = try allocator.dupe(u8, state_name),
@@ -96,6 +103,11 @@ pub const PhantomState = union(enum) {
             return error.InvalidPhantomState;
         }
 
+        // `<!*>` refused — see the qualified branch above.
+        if (consumes_obligation and std.mem.eql(u8, state_name, "*")) {
+            return error.InvalidPhantomState;
+        }
+
         return .{ .concrete = .{
             .module_path = null,
             .name = try allocator.dupe(u8, state_name),
@@ -103,7 +115,7 @@ pub const PhantomState = union(enum) {
             .consumes_obligation = consumes_obligation,
         }};
     }
-    
+
     pub fn deinit(self: *PhantomState, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .concrete => |*c| c.deinit(allocator),
@@ -170,6 +182,8 @@ pub const StateUnion = struct {
     /// Check if a concrete state matches any member of this union
     pub fn matches(self: StateUnion, state: ConcreteState) bool {
         for (self.members) |member| {
+            // `*` — the catch-all member: matches every qualification.
+            if (std.mem.eql(u8, member.name, "*")) return true;
             // Module paths must match
             const module_match = if (member.module_path) |mem_mod|
                 if (state.module_path) |state_mod|
@@ -182,6 +196,15 @@ pub const StateUnion = struct {
             if (module_match and std.mem.eql(u8, member.name, state.name)) {
                 return true;
             }
+        }
+        return false;
+    }
+
+    /// Whether the union contains a `*` catch-all member — accepts any
+    /// qualification, including an unqualified value.
+    pub fn acceptsAnything(self: StateUnion) bool {
+        for (self.members) |member| {
+            if (std.mem.eql(u8, member.name, "*")) return true;
         }
         return false;
     }
@@ -253,6 +276,7 @@ fn parseUnionMember(allocator: std.mem.Allocator, str: []const u8) !ConcreteStat
         } else false;
 
         if (consumes and requires_cleanup) return error.InvalidPhantomState;
+        if (consumes and std.mem.eql(u8, state_name, "*")) return error.InvalidPhantomState;
 
         return .{
             .module_path = try allocator.dupe(u8, module_path),
@@ -270,6 +294,7 @@ fn parseUnionMember(allocator: std.mem.Allocator, str: []const u8) !ConcreteStat
     } else false;
 
     if (consumes_obligation and requires_cleanup) return error.InvalidPhantomState;
+    if (consumes_obligation and std.mem.eql(u8, state_name, "*")) return error.InvalidPhantomState;
 
     return .{
         .module_path = null,
@@ -281,22 +306,36 @@ fn parseUnionMember(allocator: std.mem.Allocator, str: []const u8) !ConcreteStat
 
 /// Check if two phantom states are compatible for shape checking
 pub fn areCompatible(allocator: std.mem.Allocator, required_str: ?[]const u8, provided_str: ?[]const u8) !bool {
-    // No phantom requirement = accepts any state
-    if (required_str == null) return true;
-    
-    // State required but not provided = incompatible
-    if (provided_str == null) return false;
-    
+    // A qualifier is part of the type: unqualified `T` accepts only
+    // unqualified `T` — `string` is not `string<state>`. Sites that accept
+    // any qualification spell it explicitly with `<*>`.
+    if (required_str == null) return provided_str == null;
+
     const req_str = required_str.?;
-    const prov_str = provided_str.?;
-    
-    // Parse both states
+
+    // `<*>` — the any-qualification wildcard: marked or unmarked, all
+    // accepted. Canonicalization keeps `*` bare (it has no home module);
+    // `module:*` is matched too for callers that canonicalize anyway.
+    // A `!` anywhere makes it a consume spelling — `!foo:*` is NOT a
+    // borrow wildcard; it must reach the parser, which refuses it.
+    if (std.mem.indexOfScalar(u8, req_str, '!') == null and
+        (std.mem.eql(u8, req_str, "*") or std.mem.endsWith(u8, req_str, ":*"))) return true;
+
+    // Parse the requirement — a union containing `*` (`<a|*>`) accepts any
+    // qualification, including an unqualified value.
     const required = try PhantomState.parse(allocator, req_str);
     defer {
         var req_copy = required;
         req_copy.deinit(allocator);
     }
-    
+    switch (required) {
+        .state_union => |u| if (u.acceptsAnything()) return true,
+        else => {},
+    }
+
+    // State required but not provided = incompatible
+    const prov_str = provided_str orelse return false;
+
     const provided = try PhantomState.parse(allocator, prov_str);
     defer {
         var prov_copy = provided;
@@ -490,9 +529,14 @@ test "compatibility checking" {
     // Wildcard accepts any state
     try std.testing.expect(try areCompatible(allocator, "F'_", "F'_"));
 
-    // No requirement accepts anything
-    try std.testing.expect(try areCompatible(allocator, null, "open"));
+    // An unqualified requirement accepts only unqualified values —
+    // `string` is not `string<state>`
+    try std.testing.expect(!try areCompatible(allocator, null, "open"));
     try std.testing.expect(try areCompatible(allocator, null, null));
+
+    // `<*>` accepts any qualification — marked or unmarked
+    try std.testing.expect(try areCompatible(allocator, "*", "open"));
+    try std.testing.expect(try areCompatible(allocator, "*", null));
 }
 
 test "parse cleanup marker - local state" {
