@@ -1635,6 +1635,7 @@ fn bindThreadIntoStep(
 /// the point-free desugar above instead, and a `[transform]` result is a struct
 /// the caller must field-access (`l.text`), never a value to pass whole.
 fn threadProducedBy(
+    allocator: std.mem.Allocator,
     table: *SymbolTable,
     node: *ast.Node,
 ) ?Thread {
@@ -1645,7 +1646,16 @@ fn threadProducedBy(
     if (info.input_is_compiler_supplied) return null;
     const rt = info.return_type orelse return null;
     if (isTransformResultReturn(rt)) return null;
-    return .{ .holder = .{ .ret = &node.invocation }, .type = rt };
+    // return_type carries the base only — `-> *T<state!>`'s phantom lives in
+    // return_phantom (ast.zig:469). Splice it back or the stage threads as bare
+    // `*T`, and typeCanFill rightly refuses it into every qualified param
+    // (`<!open>`, `<!empty|!open>`) — which is exactly the fill this thread
+    // exists to make.
+    const full: []const u8 = if (info.return_phantom) |rp|
+        std.fmt.allocPrint(allocator, "{s}<{s}>", .{ rt, rp }) catch unreachable
+    else
+        rt;
+    return .{ .holder = .{ .ret = &node.invocation }, .type = full };
 }
 
 /// The type an ARM's payload threads as, or null if it does not thread.
@@ -1656,13 +1666,20 @@ fn threadProducedBy(
 ///   - a WILDCARD payload (`| ok *`) has no declared shape to type;
 ///   - a MULTI-FIELD payload is a record, which the author reaches by
 ///     destructuring (`| ok { a, b }`), never by passing whole.
-fn armPayloadType(info: EventInfo, branch_name: []const u8) ?[]const u8 {
+fn armPayloadType(allocator: std.mem.Allocator, info: EventInfo, branch_name: []const u8) ?[]const u8 {
     if (branch_name.len == 0) return null;
     for (info.branches) |br| {
         if (!std.mem.eql(u8, br.name, branch_name)) continue;
         if (br.payload.is_wildcard) return null;
         if (br.payload.fields.len != 1) return null;
-        return br.payload.fields[0].type;
+        // Field.type carries the base stripped — the payload's `<state>` lives
+        // in Field.phantom. Splice it back or `| ok *R<open!>` threads as `*R`
+        // and cannot fill the consume param it was declared for.
+        const f = br.payload.fields[0];
+        return if (f.phantom) |ph|
+            std.fmt.allocPrint(allocator, "{s}<{s}>", .{ f.type, ph }) catch unreachable
+        else
+            f.type;
     }
     return null;
 }
@@ -2185,9 +2202,21 @@ fn punContinuationBinding(
     if (cont.node) |node| {
         if (node == .invocation) {
             const producer_ret: ?[]const u8 = if (table.getEventInfo(node.invocation.path)) |info| info.return_type else null;
+            const producer_phantom: ?[]const u8 = if (table.getEventInfo(node.invocation.path)) |info| info.return_phantom else null;
             if (node.invocation.return_binding) |rb| {
                 if (!std.mem.eql(u8, rb, "_") and !scopeHas(scope.items, rb)) {
-                    try scope.append(allocator, .{ .name = rb, .type = producer_ret, .producer_ret = producer_ret });
+                    // The bound name's TYPE carries the declared phantom —
+                    // `f(): x` yields `*T<state!>`, not bare `*T`, or a
+                    // downstream pun into a qualified param is refused.
+                    // `producer_ret` itself stays bare: it exists so a
+                    // transform result (SiteResult) can be told from a scalar.
+                    const bound_type: ?[]const u8 = if (producer_ret) |rt| blk: {
+                        break :blk if (producer_phantom) |rp|
+                            std.fmt.allocPrint(allocator, "{s}<{s}>", .{ rt, rp }) catch unreachable
+                        else
+                            rt;
+                    } else null;
+                    try scope.append(allocator, .{ .name = rb, .type = bound_type, .producer_ret = producer_ret });
                 }
             }
             for (node.invocation.return_destructure) |df| {
@@ -2202,7 +2231,7 @@ fn punContinuationBinding(
 
     // The thread this node hands on. Only an unnamed `|>` step receives it —
     // a branch arm, a guarded arm and an effect arm are not the chain.
-    const downstream: ?Thread = if (cont.node) |*node| threadProducedBy(table, node) else null;
+    const downstream: ?Thread = if (cont.node) |*node| threadProducedBy(allocator, table, node) else null;
 
     // The event whose branches this node's children are arms OF — the source of
     // each child's payload type, resolved here because only the parent knows
@@ -2216,7 +2245,7 @@ fn punContinuationBinding(
         const passed: ?Thread = if (downstream != null and isUnnamedStep(child)) downstream else null;
         const child_payload: ?[]const u8 = blk: {
             if (arm_source) |info| {
-                if (armPayloadType(info, child.branch)) |pt| break :blk pt;
+                if (armPayloadType(allocator, info, child.branch)) |pt| break :blk pt;
             }
             // A STORE-SYNTHESIZED arm (690_107/109): its branch lives on an
             // event `create` synthesizes after this Stage-A pass, so the event

@@ -1,0 +1,72 @@
+// PINS: a produced value threads INTO A CONSUME PARAM by type — the phantom
+// rides the thread, it is not dropped at the producer.
+//
+// Three produce sites hand `typeCanFill` the binding's type. Each carried the
+// base stripped of its phantom, so a `-> *Pending<empty!>` stage threaded as
+// bare `*Pending` and the strict rule refused every qualified slot
+// (KORU092 "nothing in 'open-up' accepts a *Pending"):
+//
+//   - threadProducedBy: a bare `-> T<state!>` return (`start() |>`);
+//   - armPayloadType: an unbound single-field arm payload (`| ok |>`), where
+//     Field.type strips the phantom to Field.phantom;
+//   - the return-bind scope entry: `f(): x` binds x at the full
+//     `*T<state!>` spelling so a downstream pun into a qualified param works.
+//
+// This is the koru-libs/curl multi chain spelled small — `multi.new() |>
+// multi.add() |> multi.start()` — and the kopium live-agent's send path. The
+// consume-side splice already existed (the param's own `<!empty|!open>` is
+// re-spliced for the match); what was missing was the phantom on the value.
+const std = @import("std");
+
+const Pending = struct { id: i32 };
+
+~pub tor start { } -> *Pending<empty!>
+~proc start|zig {
+    const p = std.heap.page_allocator.create(Pending) catch unreachable;
+    p.* = .{ .id = 3 };
+    return p;
+}
+
+~pub tor open-up { p: *Pending<!empty|!open> } -> *Pending<open!>
+~proc open-up|zig {
+    return p;
+}
+
+~pub tor cancel { p: *Pending<!open> } -> i64
+~proc cancel|zig {
+    const id = p.id;
+    std.heap.page_allocator.destroy(p);
+    return id;
+}
+
+~pub tor show { n: i64 }
+~proc show|zig {
+    std.debug.print("cancelled {d}\n", .{ n });
+}
+
+// bare `-> *Pending<empty!>` threads through the alternation param, then the
+// re-minted `<open!>` into the consume — no binder written anywhere.
+~start() |> open-up() |> cancel() |> show()
+
+// an unbound arm payload carrying `<open!>` threads into the same consume.
+~pub tor hand { }
+| ok *Pending<open!>
+| dead
+~proc hand|zig {
+    const p = std.heap.page_allocator.create(Pending) catch unreachable;
+    p.* = .{ .id = 7 };
+    return .{ .ok = p };
+}
+
+~pub tor say-dead { }
+~proc say-dead|zig {
+    std.debug.print("dead\n", .{});
+}
+
+~hand()
+| ok |> cancel() |> show()
+| dead |> say-dead()
+
+// the NAMED spelling: `start(): p` binds at `*Pending<empty!>` and the name
+// pun-fills the consume param two steps later.
+~start(): p |> open-up() |> cancel() |> show()
