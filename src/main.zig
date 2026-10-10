@@ -2124,9 +2124,10 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\        bo_argv[3] = "build_output.zig";
             \\        var bo_argc: usize = 4;
             \\        var opt_buf: [24]u8 = undefined;
-            \\        // Output Debug by default; --release=fast opts into ReleaseFast.
-            \\        // Passed as -Doptimize so build_output.zig's standardOptimizeOption honors it.
-            \\        const out_opt = if (CompilerEnv.hasFlag("release=fast") and !CompilerEnv.hasFlag("debug")) "ReleaseFast" else "Debug";
+            \\        // Output Debug by default; --release=<mode> or -O <Mode> opts
+            \\        // into a release build. Passed as -Doptimize so
+            \\        // build_output.zig's standardOptimizeOption honors it.
+            \\        const out_opt = if (CompilerEnv.hasFlag("debug")) "Debug" else if (CompilerEnv.hasFlag("release=fast")) "ReleaseFast" else if (CompilerEnv.hasFlag("release=safe")) "ReleaseSafe" else if (CompilerEnv.hasFlag("release=small")) "ReleaseSmall" else "Debug";
             \\        bo_argv[bo_argc] = __koru_std.fmt.bufPrint(&opt_buf, "-Doptimize={s}", .{out_opt}) catch "-Doptimize=Debug";
             \\        bo_argc += 1;
             \\        var dt_buf: [128]u8 = undefined;
@@ -2211,6 +2212,9 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\        const emit_path = try __koru_std.fmt.bufPrint(&emit_path_buf, "-femit-bin={s}", .{output_exe});
             \\        const debug = CompilerEnv.hasFlag("debug");
             \\        const release_fast = CompilerEnv.hasFlag("release=fast");
+            \\        const release_safe = CompilerEnv.hasFlag("release=safe");
+            \\        const release_small = CompilerEnv.hasFlag("release=small");
+            \\        const exe_opt = if (debug) "Debug" else if (release_fast) "ReleaseFast" else if (release_safe) "ReleaseSafe" else if (release_small) "ReleaseSmall" else "Debug";
             \\        // `Source`-typed fields emit `__koru_ast.Source` references into
             \\        // output_emitted.zig. When the emitted text uses them, the ast
             \\        // module (plus its errors and glob_pattern_matcher deps) must be
@@ -2233,10 +2237,10 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\        // The OUTPUT binary defaults to Debug: safety checks (bounds,
             \\        // overflow, unreachable) stay on, which is the mode the test suite
             \\        // should judge. The earlier ReleaseFast default was a benchmark
-            \\        // optimization that leaked into every output and hid UB. `--release=fast`
-            \\        // opts into ReleaseFast for shipping and benchmarks; `--debug` stays
-            \\        // an explicit Debug.
-            \\        exe_argv[exe_argc] = if (release_fast and !debug) "ReleaseFast" else "Debug"; exe_argc += 1;
+            \\        // optimization that leaked into every output and hid UB.
+            \\        // `--release=<mode>` or `-O <Mode>` opts into a release build;
+            \\        // `--debug` stays an explicit Debug and wins over release flags.
+            \\        exe_argv[exe_argc] = exe_opt; exe_argc += 1;
             \\        exe_argv[exe_argc] = emit_path; exe_argc += 1;
             \\        var ast_path_buf: [1024]u8 = undefined;
             \\        var errors_path_buf: [1024]u8 = undefined;
@@ -2281,7 +2285,7 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\        // Full Term union — same contract as the build-file path above.
             \\        switch (result.term) {
             \\            .Exited => |exit_code| if (exit_code == 0) {
-            \\                const msg2 = try __koru_std.fmt.bufPrint(&buf2, "✓ Compiled to {s} ({s})\n", .{ output_exe, if (release_fast and !debug) "ReleaseFast" else "Debug" });
+            \\                const msg2 = try __koru_std.fmt.bufPrint(&buf2, "✓ Compiled to {s} ({s})\n", .{ output_exe, exe_opt });
             \\                try stdout2.writeAll(msg2);
             \\            } else {
             \\                const msg2 = try __koru_std.fmt.bufPrint(&buf2, "✗ Compilation failed\n", .{});
@@ -4725,6 +4729,9 @@ const usage_header =
     \\
     \\Options:
     \\  -o, --output <file>   Output file (default: <input>.zig)
+    \\  -O <mode>            Optimization mode: Debug, ReleaseSafe, ReleaseFast,
+    \\                       ReleaseSmall (also -O<mode>, e.g. -OReleaseFast);
+    \\                       aliases for --release=<mode>. Default: Debug.
     \\  -c, --check          Check only, don't emit code
     \\  --deep-check         Full pipeline verdict without native codegen: parse,
     \\                       transforms, backend passes, and emission all run;
@@ -7310,6 +7317,31 @@ pub fn main() !void {
             fail_fast = true;
         } else if (std.mem.eql(u8, arg, "--install-packages")) {
             install_packages = true;
+        } else if (std.mem.eql(u8, arg, "-O") or std.mem.startsWith(u8, arg, "-O")) {
+            // Zig-conventional optimize flag: `-O ReleaseFast` or
+            // `-OReleaseFast`. Without this branch, `-O` fell into the
+            // pass-through bucket below as a dead flag and the next arg a
+            // stray positional — the build silently stayed Debug.
+            const mode: []const u8 = if (arg.len > 2) arg[2..] else blk: {
+                i += 1;
+                if (i >= args.len) {
+                    try printStderr(allocator, "Error: -O requires an optimization mode (Debug, ReleaseSafe, ReleaseFast, ReleaseSmall)\n", .{});
+                    return;
+                }
+                break :blk args[i];
+            };
+            if (std.ascii.eqlIgnoreCase(mode, "debug")) {
+                try compiler_config.addFlag("debug");
+            } else if (std.ascii.eqlIgnoreCase(mode, "releasefast") or std.ascii.eqlIgnoreCase(mode, "fast")) {
+                try compiler_config.addFlag("release=fast");
+            } else if (std.ascii.eqlIgnoreCase(mode, "releasesafe") or std.ascii.eqlIgnoreCase(mode, "safe")) {
+                try compiler_config.addFlag("release=safe");
+            } else if (std.ascii.eqlIgnoreCase(mode, "releasesmall") or std.ascii.eqlIgnoreCase(mode, "small")) {
+                try compiler_config.addFlag("release=small");
+            } else {
+                try printStderr(allocator, "Error: unknown optimization mode '{s}' — expected Debug, ReleaseSafe, ReleaseFast, or ReleaseSmall\n", .{mode});
+                return;
+            }
         } else if (std.mem.eql(u8, arg, "--verbose") or std.mem.eql(u8, arg, "-V")) {
             try compiler_config.addFlag("verbose");
         } else if (std.mem.startsWith(u8, arg, "--lang=")) {
@@ -9240,7 +9272,7 @@ pub fn main() !void {
             // deliberate (checks on for the suite to judge), but silent
             // is how a benchmark ends up timing a bounds-checked binary.
             const is_cs_target = std.mem.eql(u8, compiler_config.lang, "cs");
-            const exe_mode = if (is_cs_target) ".NET" else if (compiler_config.hasFlag("release=fast") and !compiler_config.hasFlag("debug")) "ReleaseFast" else "Debug";
+            const exe_mode = if (is_cs_target) ".NET" else if (compiler_config.hasFlag("debug")) "Debug" else if (compiler_config.hasFlag("release=fast")) "ReleaseFast" else if (compiler_config.hasFlag("release=safe")) "ReleaseSafe" else if (compiler_config.hasFlag("release=small")) "ReleaseSmall" else "Debug";
             try printStdout(allocator, "✓ Built executable: {s} ({s})\n", .{ exe_name, exe_mode });
         } else |_| {}
 
