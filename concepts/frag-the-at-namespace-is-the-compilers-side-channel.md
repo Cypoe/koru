@@ -71,7 +71,13 @@ marks serialize and clone like every other field.
   the moment the merge landed. No textual conflict; only a
   `base..main -G'<mark strings>'` sweep caught it. That grep is the
   manual stand-in for the unbuilt registry — run it on both sides of
-  any integration that crosses this channel's migration boundary.
+  any integration that crosses this channel's migration boundary. The
+  `cs_emitter.zig` twin (`flowIsNorunSite`, `preambleThenCall`) survived
+  that sweep and was caught by the board instead — `690_268`'s store
+  write vanished on the cs lane because the preamble mark arrived on
+  `.marks` while the emitter still looked in `.annotations`. Same-day,
+  same merge, second surface: the grep must enumerate *emitters*, not
+  just files touched by the branch.
 - Observed again, producer side, the day the merge landed (2026-10-10):
   six koru_std transform sites (`json.parse`, `json.emit`,
   `io.csprec`, `io.blkcs`, `fmt.csprec` ×2) still stamped

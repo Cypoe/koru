@@ -1041,7 +1041,7 @@ const Emitter = struct {
     /// is_norun twin).
     fn flowIsNorunSite(self: *Emitter, flow: *const ast.Flow) bool {
         if (flow.inline_body != null or flow.preamble_code != null) return false;
-        for (flow.inv().annotations) |ann| {
+        for (flow.inv().marks) |ann| {
             if (std.mem.startsWith(u8, ann, "@pass_ran")) return false;
         }
         const site = self.findDeclSiteIn(self.items, &flow.inv().path, null) orelse return false;
@@ -4409,7 +4409,7 @@ fn isIdentChar(c: u8) bool {
 /// True when the invocation asks for its preamble AND its handler call — the
 /// `@preamble_then_call` contract. Every other preamble REPLACES the call.
 fn preambleThenCall(inv: *const ast.Invocation) bool {
-    for (inv.annotations) |ann| {
+    for (inv.marks) |ann| {
         if (std.mem.eql(u8, ann, "@preamble_then_call")) return true;
     }
     return false;

@@ -296,9 +296,7 @@ pub const FormattedText = struct {
     };
 
     const new_marks = allocator.alloc([]const u8, flow.inv().marks.len + 1) catch unreachable;
-    for (flow.inv().annotations, 0..) |ann, idx| {
-        new_marks[idx] = ann;
-    }
+    for (flow.inv().marks, 0..) |m, idx| new_marks[idx] = m;
     new_marks[flow.inv().marks.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
 
     const new_invocation = ast.Invocation{
@@ -585,9 +583,7 @@ pub const FormattedText = struct {
     };
 
     const new_marks = allocator.alloc([]const u8, invocation.marks.len + 1) catch unreachable;
-    for (invocation.annotations, 0..) |ann, idx| {
-        new_marks[idx] = ann;
-    }
+    for (invocation.marks, 0..) |m, idx| new_marks[idx] = m;
     new_marks[invocation.marks.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
 
     const new_invocation = ast.Invocation{
@@ -794,9 +790,7 @@ pub const FormattedText = struct {
     };
 
     const new_marks = allocator.alloc([]const u8, invocation.marks.len + 1) catch unreachable;
-    for (invocation.annotations, 0..) |ann, idx| {
-        new_marks[idx] = ann;
-    }
+    for (invocation.marks, 0..) |m, idx| new_marks[idx] = m;
     new_marks[invocation.marks.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
 
     const new_invocation = ast.Invocation{
