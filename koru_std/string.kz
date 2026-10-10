@@ -242,7 +242,7 @@ pub const String = struct {
 // Write operations - require instance
 // ============================================
 
-~pub tor append { s: *String<instance>, text: string }
+~pub tor append { s: *String<instance>, text: string<*> }
 | ok
 | err string
 
