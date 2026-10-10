@@ -109,6 +109,9 @@ because "no mirror" is exactly the state this file exists to make expensive.
 | `pump:run` | `115_049_pump_run_in_module` |
 | `store:view` | `690_287_store_view_projects_shared_leaf` |
 | `types:proto` | `665_007_identity_crosses_doors` |
+| `types:enum` | `665_020_enum_mints_tag_set_resolves_in_compound` |
+| `json:parse` | `115_054_json_parse_in_module` |
+| `json:emit` | `115_055_json_emit_in_module` |
 | `sqlite3:query` | tested-in-koru-libs |
 | `vaxis:component` | tested-in-koru-libs |
 | `vaxis:default` | tested-in-koru-libs |

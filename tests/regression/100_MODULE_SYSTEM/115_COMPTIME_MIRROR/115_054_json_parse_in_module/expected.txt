@@ -1,0 +1,3 @@
+mod ada|36|2
+mod BAD 14: missing field 'age'
+mod valid [1,{"a":true},null]

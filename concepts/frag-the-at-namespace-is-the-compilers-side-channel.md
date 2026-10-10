@@ -1,8 +1,8 @@
 ---
 type: belief
 id: frag-the-at-namespace-is-the-compilers-side-channel
-provenance: koru session 2026-10-03 — Lars ruled on the marks-channel migration after auditing the four `@`-strings riding the user-writable annotations field (compiler-marks branch)
-ts: 2026-10-03
+provenance: koru session 2026-10-03 — Lars ruled on the marks-channel migration after auditing the four `@`-strings riding the user-writable annotations field (compiler-marks branch). Evolved 2026-10-10 with the producer-side straggler fallout: six koru_std transform sites still stamped `.annotations` post-merge
+ts: 2026-10-10
 tags: [koru, annotations, marks, architecture, language-design, ruling]
 ---
 
@@ -72,6 +72,18 @@ marks serialize and clone like every other field.
   `base..main -G'<mark strings>'` sweep caught it. That grep is the
   manual stand-in for the unbuilt registry — run it on both sides of
   any integration that crosses this channel's migration boundary.
+- Observed again, producer side, the day the merge landed (2026-10-10):
+  six koru_std transform sites (`json.parse`, `json.emit`,
+  `io.csprec`, `io.blkcs`, `fmt.csprec` ×2) still stamped
+  `@pass_ran` onto `.annotations`. A producer on the old channel does
+  not fail where it writes — the stamp lands on a field nobody reads
+  and the transform reports "did not run," surfacing as
+  `TransformDidNotReplace` *only* where the mark is load-bearing:
+  `json` keeps `flow.inv().path` so its invocation must carry the
+  witness, while the `io`/`fmt` sites escaped by rewriting the path
+  (a dropped invocation needs no mark). Half a migration is worse than
+  none — the sites that stayed green taught nothing and the sites that
+  broke looked like transform bugs, not channel drift.
 
 ## Boundaries of the ruling
 
