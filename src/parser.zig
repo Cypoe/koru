@@ -7590,11 +7590,13 @@ pub const Parser = struct {
 
     fn parseContinuationWithNested(self: *Parser, indent: usize, location: errors.SourceLocation) anyerror!ast.Continuation {
         const head = try self.parseContinuationHead(indent, location);
-        if (head.pipeline_step) return head.cont;
 
         var cont = head.cont;
         // Parse nested continuations - ONLY greater indentation means nesting
         // Same-indent continuations are siblings, period. No magic auto-nesting.
+        // Pipeline steps collect too: `|> if (c)` followed by a deeper `| then`
+        // arm nests the arm under the step — the flat-sibling fallback steals
+        // it for an earlier step and leaves this one unhandled.
         const multi_line_continuations = try self.parseNestedContinuationsForLevel(indent);
 
         // FIX: If we have inline chained continuations, attach multi-line ones to the deepest
