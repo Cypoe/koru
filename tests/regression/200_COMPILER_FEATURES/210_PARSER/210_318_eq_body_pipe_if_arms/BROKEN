@@ -1,0 +1,6 @@
+Pins a parser gap, not a regression: inside a `name =` flow-decl chain,
+a `|> if(cond)` step does not collect `| then` / `| else` arms on the
+following lines — they surface as KORU010 stray continuations. The same
+attachment works at a bare flow head (241) and inside `!` arm bodies
+(210_314); the hole is if-specific arm collection on `|>` steps in
+`=` bodies. Fix lives in src/parser.zig continuation collection.
