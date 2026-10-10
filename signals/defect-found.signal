@@ -1,0 +1,6 @@
+name: defect-found
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `defect-surface` — declare that name. (orphan drained 2026-10-11)
