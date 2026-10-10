@@ -1,0 +1,4 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS error[KORU107]
+CONTAINS borrows immutable binding 'r' into mutable parameter 'ptr'
+CONTAINS 'r[mutable]'

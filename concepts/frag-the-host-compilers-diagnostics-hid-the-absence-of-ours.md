@@ -210,3 +210,26 @@ not outcomes (210_189 and the pump `! ?polled` decls pin the legal mix).
 The census question generalises once more: **any two spellings the parser
 accepts independently owe a reconciliation site for the combination** — if
 none exists, the pair's verdict is whatever the host happens to say.
+
+## A feature can be honored end-to-end and still borrow its gate (2026-10-10)
+
+The strongest camouflage the family has produced is not a missing check but
+a *working* feature. `r[mutable]` parsed, sat on the binding, and was read
+at emission — `var r` instead of `const r`, the only thing the annotation
+exists to do. `ptr: &r` on an unannotated `r` passed all twenty pipeline
+passes; the refusal lived solely in Zig's `*const i32` → `*i32`
+const-discard, reported on emitted coordinates. Because the feature visibly
+worked, nobody asked whether it was guarded — honored surface hides a
+borrowed wall better than absent surface ever could.
+
+KORU107 now refuses in the frontend, naming the binding, the mutable
+parameter it fed, and the annotation to add (510_126; the annotated
+`ptr: &r` in 020_007 stays the control). The `&name` census is closed: the
+only green use was annotated; every other `&` in the suite is a host `var`
+or Zig-body code. Two edges stay delegated by choice: `&param` (tor
+parameters are not in the binding scope the walk builds) and `-> &binding`
+produce sites (no consumer to compare against at that site).
+
+The rule sharpens again: **the audit is not "does the feature behave" but
+"does its misuse refuse in our vocabulary."** Behavior can be completely
+correct while the gate is borrowed — correctness is exactly what hides it.

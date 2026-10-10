@@ -1,0 +1,21 @@
+// `&name` borrows a binding's storage. A binding without `[mutable]` emits
+// `const`, so its `&` is `*const` and can never reach a `*T` parameter.
+// Pin: the refusal is a pipeline diagnostic naming the param and the
+// annotation to add — not a Zig const-discard failure on emitted code.
+// The annotated spelling (020_007) stays the control.
+const std = @import("std");
+
+~tor get-data {} -> i32
+
+~proc get-data|zig {
+    return 42;
+}
+
+~tor mutate-and-print { ptr: *i32 }
+
+~proc mutate-and-print|zig {
+    ptr.* += 1;
+    std.debug.print("Value: {d}\n", .{ptr.*});
+}
+
+~get-data(): r |> mutate-and-print(ptr: &r)

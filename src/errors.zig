@@ -98,6 +98,7 @@ pub const ErrorCode = enum(u16) {
     KORU104, // Call inside an expression — calls are not expressions; use tor chaining (bind the result first)
     KORU105, // Nested branches under a bodiless `|` branch — nothing picks a branch there; branches continue from an invocation
     KORU106, // A bind shadows one already in scope on the same path — Koru has no shadowing, and the pun machinery depends on it (210_173)
+    KORU107, // `&name` borrows an immutable binding into a mutable `*T` parameter — the binding emits `const`, so `&` produces `*const` and never reaches the slot; annotate the bind `[mutable]` to lend it
 
     // Variant errors
     KORU110, // Event call site has only bare ~proc declarations (no variant tag)

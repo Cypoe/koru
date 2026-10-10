@@ -181,6 +181,21 @@ pub const FlowChecker = struct {
             try self.checkShadowing(&flow.body, &scope);
         }
 
+        // KORU107: the [mutable] gate on `&name` borrows. A binding emits
+        // `const` unless its bind site is annotated [mutable] (then `var`),
+        // so `&name` produces `*const` — a pointer that only ever reaches
+        // `*const` slots. Feeding it to a `*T` parameter sailed through every
+        // pass and died in Zig codegen on emitted coordinates (unannotated
+        // `ptr: &r` in 020_007's shape). Frontend only, and transform flows
+        // excluded: the rule judges user-authored bindings against
+        // user-authored arg text, and transform arguments carry `&` as DATA
+        // (regex/grammar text), not borrows.
+        if (self.mode == .frontend and !is_transformed and !is_transform_flow) {
+            var borrow_scope: std.ArrayList(BorrowScopeBind) = .empty;
+            defer borrow_scope.deinit(self.allocator);
+            try self.checkMutableBorrows(&flow.body, &borrow_scope);
+        }
+
         // KORU021 (source half): an unknown arm name is a misspelling wherever
         // it is spelled — but the `.all` pass only sees what transforms left
         // standing. A consuming transform (capture dissolving `| captured`
@@ -1462,6 +1477,126 @@ pub const FlowChecker = struct {
             }
         }
         try scope.append(self.allocator, .{ .name = name, .line = location.line });
+    }
+
+    const BorrowScopeBind = struct { name: []const u8, mutable: bool };
+
+    fn hasMutableAnnotation(annotations: []const []const u8) bool {
+        for (annotations) |ann| {
+            if (std.mem.eql(u8, ann, "mutable")) return true;
+        }
+        return false;
+    }
+
+    /// The [mutable]-borrow walk (KORU107). Mirrors checkShadowing's scope
+    /// discipline: an arm payload binding (`| ok x[mutable]`) is live when the
+    /// continuation's own node runs; a `: bind` (`inv.return_binding`) scopes
+    /// downstream only, so it is noted after the node's own args are checked.
+    fn checkMutableBorrows(self: *FlowChecker, cont: *const ast.Continuation, scope: *std.ArrayList(BorrowScopeBind)) anyerror!void {
+        if (cont.is_transformed_subtree) return;
+
+        const depth = scope.items.len;
+        defer scope.shrinkRetainingCapacity(depth);
+
+        if (cont.binding) |b| {
+            try scope.append(self.allocator, .{
+                .name = b,
+                .mutable = hasMutableAnnotation(cont.binding_annotations),
+            });
+        }
+
+        if (cont.node) |node| {
+            if (node == .invocation) {
+                const inv = node.invocation;
+                try self.checkMutableBorrowArgs(&inv, cont.location, scope);
+                if (!inv.inserted_by_tap and !inv.from_opaque_tap) {
+                    if (inv.return_binding) |rb| {
+                        try scope.append(self.allocator, .{
+                            .name = rb,
+                            .mutable = hasMutableAnnotation(inv.return_binding_annotations),
+                        });
+                    }
+                    for (inv.return_destructure) |f| {
+                        try self.noteBorrowDestructure(scope, f);
+                    }
+                }
+            }
+        }
+
+        for (cont.continuations) |*child| {
+            try self.checkMutableBorrows(child, scope);
+        }
+    }
+
+    fn noteBorrowDestructure(self: *FlowChecker, scope: *std.ArrayList(BorrowScopeBind), f: ast.DestructureField) anyerror!void {
+        if (f.sub.len > 0) {
+            for (f.sub) |sub| try self.noteBorrowDestructure(scope, sub);
+            return;
+        }
+        try scope.append(self.allocator, .{ .name = f.name, .mutable = hasMutableAnnotation(f.annotations) });
+    }
+
+    /// `&name` inside an arg (outside string literals) names a binding's
+    /// storage. A binding without [mutable] emits `const`, so its `&` is
+    /// `*const` — refuse only when the resolved parameter demands a mutable
+    /// `*T`. Anything unresolvable (host vars, params, unmatched slots) cannot
+    /// be proven wrong and passes.
+    fn checkMutableBorrowArgs(self: *FlowChecker, inv: *const ast.Invocation, location: errors.SourceLocation, scope: *const std.ArrayList(BorrowScopeBind)) anyerror!void {
+        const fields: []const ast.Field = if (self.findEventDecl(&inv.path)) |d| d.input.fields else &.{};
+        for (inv.args, 0..) |arg, i| {
+            const v = arg.value;
+            var in_string = false;
+            var j: usize = 0;
+            while (j < v.len) : (j += 1) {
+                const ch = v[j];
+                if (in_string) {
+                    if (ch == '\\') {
+                        j += 1;
+                    } else if (ch == '"') {
+                        in_string = false;
+                    }
+                    continue;
+                }
+                if (ch == '"') {
+                    in_string = true;
+                    continue;
+                }
+                if (ch != '&' or j + 1 >= v.len or !ast.isKebabIdentChar(v[j + 1])) continue;
+                var end = j + 1;
+                while (end < v.len and ast.isKebabIdentChar(v[end])) end += 1;
+                const name = v[j + 1 .. end];
+                j = end - 1;
+                if (name[0] == '_') continue;
+                const bind = findBorrowScope(scope.items, name) orelse continue;
+                if (bind.mutable) continue;
+                const fi = ast.resolveArgFieldIndex(arg, i, fields) orelse continue;
+                if (isMutablePointerType(fields[fi].type)) {
+                    try self.reporter.addErrorWithHint(
+                        .KORU107,
+                        location.line,
+                        location.column,
+                        "'&{s}' borrows immutable binding '{s}' into mutable parameter '{s}' ({s})",
+                        .{ name, name, fields[fi].name, fields[fi].type },
+                        "annotate '{s}[mutable]' at the bind site to lend it mutably",
+                        .{name},
+                    );
+                }
+            }
+        }
+    }
+
+    fn findBorrowScope(scope: []const BorrowScopeBind, name: []const u8) ?BorrowScopeBind {
+        for (scope) |b| {
+            if (std.mem.eql(u8, b.name, name)) return b;
+        }
+        return null;
+    }
+
+    fn isMutablePointerType(ty: []const u8) bool {
+        const t = std.mem.trim(u8, ty, " \t");
+        if (std.mem.startsWith(u8, t, "*")) return !std.mem.startsWith(u8, t, "*const");
+        if (std.mem.startsWith(u8, t, "[*")) return !(std.mem.startsWith(u8, t, "[*]const") or std.mem.startsWith(u8, t, "[*] const"));
+        return false;
     }
 
     fn isBindingUsed(self: *FlowChecker, cont: *const ast.Continuation, binding: []const u8) bool {
