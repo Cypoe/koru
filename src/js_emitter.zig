@@ -656,10 +656,12 @@ const Emitter = struct {
     /// parser's `source: <implicit_source>` marker verbatim into the file.
     /// A transform-rewritten flow (inline body / preamble / @pass_ran)
     /// emits its own residue and is exempt, same as the Zig side.
+    /// `@pass_ran` rides `marks` — the pass-produced channel — not
+    /// user-writable `annotations`.
     fn flowIsNorunSite(self: *Emitter, flow: *const ast.Flow) bool {
         if (flow.inline_body != null or flow.preamble_code != null) return false;
-        for (flow.inv().annotations) |ann| {
-            if (std.mem.startsWith(u8, ann, "@pass_ran")) return false;
+        for (flow.inv().marks) |mark| {
+            if (std.mem.startsWith(u8, mark, "@pass_ran")) return false;
         }
         const site = self.findDeclSiteIn(self.items, &flow.inv().path, null) orelse return false;
         return annotation_parser.hasPart(site.decl.annotations, "norun");
@@ -1814,8 +1816,8 @@ const Emitter = struct {
     /// other preamble REPLACES the call. Same annotation, same meaning, as
     /// emitter_helpers.zig:4911.
     fn preambleThenCall(inv: *const ast.Invocation) bool {
-        for (inv.annotations) |ann| {
-            if (std.mem.eql(u8, ann, "@preamble_then_call")) return true;
+        for (inv.marks) |mark| {
+            if (std.mem.eql(u8, mark, "@preamble_then_call")) return true;
         }
         return false;
     }

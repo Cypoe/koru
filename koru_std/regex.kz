@@ -235,14 +235,15 @@ const std = @import("std");
     // Rebuild the flow: same invocation marked @pass_ran (so it isn't
     // re-transformed), inline_body = the dispatch, continuations kept (the
     // markers resolve against them).
-    const new_anns = allocator.alloc([]const u8, flow.inv().annotations.len + 1) catch unreachable;
-    for (flow.inv().annotations, 0..) |an, k| new_anns[k] = an;
-    new_anns[flow.inv().annotations.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
+    const new_marks = allocator.alloc([]const u8, flow.inv().marks.len + 1) catch unreachable;
+    for (flow.inv().marks, 0..) |m, k| new_marks[k] = m;
+    new_marks[flow.inv().marks.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
 
     const new_inv = ast.Invocation{
         .path = flow.inv().path,
         .args = flow.inv().args,
-        .annotations = new_anns,
+        .annotations = flow.inv().annotations,
+        .marks = new_marks,
         .inserted_by_tap = flow.inv().inserted_by_tap,
         .from_opaque_tap = flow.inv().from_opaque_tap,
     };
@@ -444,14 +445,15 @@ const std = @import("std");
     }
     dispatch.appendSlice(allocator, " }") catch unreachable;
 
-    const new_anns = allocator.alloc([]const u8, flow.inv().annotations.len + 1) catch unreachable;
-    for (flow.inv().annotations, 0..) |an, k| new_anns[k] = an;
-    new_anns[flow.inv().annotations.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
+    const new_marks = allocator.alloc([]const u8, flow.inv().marks.len + 1) catch unreachable;
+    for (flow.inv().marks, 0..) |m, k| new_marks[k] = m;
+    new_marks[flow.inv().marks.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
 
     const new_inv = ast.Invocation{
         .path = flow.inv().path,
         .args = flow.inv().args,
-        .annotations = new_anns,
+        .annotations = flow.inv().annotations,
+        .marks = new_marks,
         .inserted_by_tap = flow.inv().inserted_by_tap,
         .from_opaque_tap = flow.inv().from_opaque_tap,
     };
