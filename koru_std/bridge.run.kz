@@ -23,7 +23,7 @@
 // - `auto_discharge` — always false, and it must be. A bridge-managed pool
 //   outlives the run BY DESIGN; `close` is what releases.
 
-~pub tor run { br: *Bridge<session>, source: string }
+~pub tor run { br: *Bridge<session>, source: string<*> }
 | result { value: @import("root").koru_std.koru_interpreter.Value, used: u64, handles: u32, bound: string, trace: string }
 | defined string
 | unhandled-branch { branch: string, payload: string, handles: string }
