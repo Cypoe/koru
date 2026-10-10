@@ -149,3 +149,33 @@ picks its slot as the sole unfilled field, whatever its type. The two
 mechanisms now sit side by side. Whether the branch thread should also narrow
 by type — which would let a stage with several unfilled fields thread where it
 cannot today — is unruled and untried.
+
+## The type it matches is the QUALIFIED type — the phantom rides the thread (2026-10-07)
+
+The rule as written was true and the machine that implemented it was reading a
+different type. `ast_transform` stores a declared `-> *T<state!>` in two fields
+— `return_type` (the base) and `return_phantom` (the obligation) — and the
+CONSUME side already knew to splice them back before matching: a param
+declared `<!empty|!open>` is re-spliced or the strict rule reads it bare. The
+PRODUCE side never got the splice. Three sites handed `typeCanFill` the base
+alone:
+
+- `threadProducedBy` returned `return_type` — a `-> *T<state!>` stage threaded
+  as bare `*T`;
+- `armPayloadType` returned `Field.type` — a `| ok *R<open!>` payload threaded
+  as bare `*R` (the payload's phantom lives in `Field.phantom`);
+- the `f(): x` return-bind scope entry stored the bare type, so even a NAMED
+  binding could not pun-fill a qualified param downstream.
+
+Every one of them met the strict rule honestly — bare `*T` rightly refuses
+into `<!open>` — and so the produce side of the language's own headline
+feature (`multi.new() |> multi.add() |> multi.start()`, the curl chain that
+motivated this belief) was refused by the compiler. Pin 210_319 threads all
+three spellings into consume params and runs them.
+
+The asymmetry is the thing worth keeping: a rule enforced on the param side
+and dropped on the value side fails in the direction of REFUSING legal code,
+which no negative test ever sees — the corpus that caught it was a consumer
+(kopium's live agent) doing the ordinary thing. Pins that exercise the
+produce side into qualified slots, not only qualified params refusing wrong
+args, are the coverage this class needs.
