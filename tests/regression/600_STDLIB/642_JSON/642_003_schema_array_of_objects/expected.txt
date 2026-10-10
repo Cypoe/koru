@@ -1,0 +1,3 @@
+ada:1 first bob:2 total=2 len=2
+empty len=0 total=0
+BAD3 25: expected a string

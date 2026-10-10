@@ -6,7 +6,7 @@
 
 ~part parse
 ~part emit
-
+~part parsehelpers
 const std = @import("std");
 
 // ============================================================================
