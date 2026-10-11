@@ -486,6 +486,137 @@ regression_check_cs_equivalence() {
     echo -e "${GREEN}  ✓ CS equivalence (.NET apphost output matches expected.txt)${NC}"
 }
 
+# Cross-target equivalence check for the C (CompCert) target — the K1 leg of
+# docs/koru-verification-path.md. If a test's LANGUAGES marker lists `c`, the
+# C emitter must produce a program whose stdout+rc match the SAME expected.txt
+# the Zig target just satisfied.
+#
+# The C lane's Stage D is not koruc's: `koruc --lang=c` emits
+# output_emitted.c next to the input, then the *oracle* builds it —
+# `ccomp` (CompCert), resolved via ${KORU_CC_ORACLE:-ccomp}. Gates per the
+# doc, folded into this one path:
+#   G-CC-2  missing oracle = FAIL naming the oracle path — never SKIP
+#   G-CC-3  a `C_REFUSES` file pins a clean, named refusal (emitter-side)
+#   G-CC-1  emitted .c + ccomp binary must reproduce stdout bytes and rc
+# A run under --lang=c that produced Zig output instead of C is a silent
+# fallback and fails as `c-noemit`, never as a pass.
+regression_check_c_equivalence() {
+    local test_dir="$1"
+    local TEST_NAME
+    TEST_NAME=$(basename "$test_dir")
+
+    [ -f "$test_dir/LANGUAGES" ] || return 0
+    grep -qiw 'c' "$test_dir/LANGUAGES" || return 0
+    [ -f "$test_dir/SUCCESS" ] && [ ! -f "$test_dir/FAILURE" ] || return 0
+    [ -f "$test_dir/MUST_RUN" ] && [ -f "$test_dir/expected.txt" ] || return 0
+    [ -f "$test_dir/EXPECT_TRAP" ] && return 0
+
+    local flags=""
+    [ -f "$test_dir/COMPILER_FLAGS" ] && flags=$(tr '\n' ' ' < "$test_dir/COMPILER_FLAGS")
+    local ccomp_bin="${KORU_CC_ORACLE:-ccomp}"
+
+    # Upsert the c row into TARGETS.json (same merge discipline as the cs row:
+    # other languages' rows from this run survive; only c/zig are rewritten).
+    _write_c_target() {
+        TGT_DIR="$test_dir" TGT_C_STATUS="$1" TGT_C_REASON="$2" node -e '
+            const fs = require("fs");
+            const d = process.env.TGT_DIR;
+            const rd = (f) => { try { return fs.readFileSync(d + "/" + f, "utf8"); } catch { return null; } };
+            let out = { expected: rd("expected.txt"), targets: [] };
+            try { out = JSON.parse(fs.readFileSync(d + "/TARGETS.json", "utf8")); } catch {}
+            out.targets = (out.targets || []).filter(t => t.lang !== "c" && t.lang !== "zig");
+            out.targets.unshift({ lang: "zig", label: "Zig", status: "success", actual: rd("actual.txt") });
+            out.targets.push({ lang: "c", label: "C (CompCert)", status: process.env.TGT_C_STATUS,
+                               reason: process.env.TGT_C_REASON || null, actual: rd("actual.c.txt") });
+            fs.writeFileSync(d + "/TARGETS.json", JSON.stringify(out, null, 2));
+        ' 2>/dev/null
+    }
+
+    _c_equiv_fail() {
+        rm -f "$test_dir/SUCCESS"
+        echo "$1" > "$test_dir/FAILURE"
+        FAILED_TESTS="$FAILED_TESTS $TEST_NAME($1)"
+        [ "${PASSED_TESTS:-0}" -gt 0 ] && PASSED_TESTS=$((PASSED_TESTS - 1))
+        echo -e "${RED}  ✗ C equivalence: $2${NC}"
+        _write_c_target "failure" "$1"
+    }
+
+    # Emit C. A refusal is pinnable via C_REFUSES (the emitter-side twin of
+    # JS_REFUSES/CS_REFUSES): the refusal must be the clean, named diagnostic,
+    # never a panic. The oracle is not consulted on the refusal path — a
+    # missing ccomp must not mask an emitter refusal that already named itself.
+    if ! "${KORUC:?KORUC is unset — the harness must snapshot the compiler before running a test}" "$(test_entry "$test_dir")" --lang=c $flags \
+            >"$test_dir/compile_c.err" 2>&1; then
+        if [ -f "$test_dir/C_REFUSES" ]; then
+            local want
+            want=$(cat "$test_dir/C_REFUSES")
+            if grep -qF "$want" "$test_dir/compile_c.err"; then
+                _write_c_target "refused" "$want"
+                echo -e "${GREEN}  ✓ C refused cleanly (C_REFUSES pinned)${NC}"
+                return 0
+            fi
+            _c_equiv_fail "c-compile" "C refused, but not with the pinned text (C_REFUSES)"
+            return 0
+        fi
+        _c_equiv_fail "c-compile" "koruc --lang=c failed (see compile_c.err)"
+        return 0
+    fi
+    local c_src="$test_dir/output_emitted.c"
+    if [ ! -s "$c_src" ]; then
+        # --lang=c exit-0 with no .c emitted means the dispatcher fell back to
+        # the Zig visitor under a foreign tag — the exact silent-miscompile
+        # shape KORU126 exists to kill. Refusal would have been honest; this is not.
+        _c_equiv_fail "c-noemit" "no output_emitted.c produced (silent fallback under --lang=c)"
+        return 0
+    fi
+
+    # G-CC-2: the oracle is required for the build+run legs. Absent = FAIL
+    # naming the resolved path — never SKIP, never a softer verdict.
+    if ! command -v "$ccomp_bin" >/dev/null 2>&1; then
+        _c_equiv_fail "c-oracle" "missing oracle: ccomp not found at '$ccomp_bin' (set KORU_CC_ORACLE; see tools/tools.json)"
+        return 0
+    fi
+
+    # Compile the emitted C with CompCert, then run and compare stdout+rc —
+    # the same expected.txt the Zig baseline satisfied (G-CC-1).
+    local c_app="$(cd "$test_dir" && pwd)/a_c_equiv"
+    if ! "$ccomp_bin" -o "$c_app" "$c_src" >"$test_dir/ccomp.err" 2>&1; then
+        _c_equiv_fail "c-ccomp" "ccomp refused the emitted C (see ccomp.err)"
+        return 0
+    fi
+    if [ ! -x "$c_app" ]; then
+        _c_equiv_fail "c-noexe" "ccomp produced no executable at $c_app"
+        return 0
+    fi
+    local c_actual="$test_dir/actual.c.txt"
+    local -a RUN_ARGS=()
+    if [ -f "$test_dir/ARGS" ]; then
+        while IFS= read -r _arg || [ -n "$_arg" ]; do
+            RUN_ARGS+=("$_arg")
+        done < "$test_dir/ARGS"
+    fi
+    if [ -f "$test_dir/STDIN" ]; then
+        timeout "${REGRESSION_TEST_TIMEOUT:-30}" "$c_app" "${RUN_ARGS[@]}" < "$test_dir/STDIN" >"$c_actual" 2>&1
+    else
+        timeout "${REGRESSION_TEST_TIMEOUT:-30}" "$c_app" "${RUN_ARGS[@]}" >"$c_actual" 2>&1
+    fi
+    local c_exit=$?
+    if [ "$c_exit" -ne 0 ]; then
+        _c_equiv_fail "c-runtime" "c binary exited $c_exit (see actual.c.txt)"
+        return 0
+    fi
+    local exp act
+    exp=$(sed 's/[[:space:]]*$//' "$test_dir/expected.txt")
+    act=$(sed 's/[[:space:]]*$//' "$c_actual")
+    if [ "$exp" != "$act" ]; then
+        _c_equiv_fail "c-mismatch" "C output != expected.txt"
+        diff -u "$test_dir/expected.txt" "$c_actual" 2>/dev/null | head -15 | sed 's/^/    /'
+        return 0
+    fi
+    _write_c_target "success" ""
+    echo -e "${GREEN}  ✓ C equivalence (ccomp binary output matches expected.txt)${NC}"
+}
+
 regression_run_one_test() {
     local test_dir="$1"
     local TEST_NAME
@@ -1996,6 +2127,8 @@ EOF
     regression_check_js_equivalence "$test_dir"
     # The C#/.NET twin — same opt-in, same expected.txt, real apphost.
     regression_check_cs_equivalence "$test_dir"
+    # The CompCert C leg — same opt-in, ccomp as Stage-D oracle (G-CC-1/2/3).
+    regression_check_c_equivalence "$test_dir"
 
     # Residual hygiene on a passed test: the JS-equivalence deposit (a JS-target
     # backend in zig-out/, output_emitted.js, js-run artifacts) must not linger —
@@ -2003,7 +2136,8 @@ EOF
     # Zig test as no-exe, and a concurrent js-sweep rebuilds into the same dirs
     # (010_001 class, 2026-08-19). Failures keep their artifacts for diagnosis.
     if [ -f "$test_dir/SUCCESS" ] && [ ! -f "$test_dir/FAILURE" ]; then
-        rm -rf "$test_dir/zig-out" "$test_dir/output_emitted.js" "$test_dir/actual.js.txt" "$test_dir/compile_js.err" "$test_dir/temp_build.zig" 2>/dev/null
+        rm -rf "$test_dir/zig-out" "$test_dir/output_emitted.js" "$test_dir/actual.js.txt" "$test_dir/compile_js.err" "$test_dir/temp_build.zig" \
+               "$test_dir/output_emitted.c" "$test_dir/actual.c.txt" "$test_dir/compile_c.err" "$test_dir/ccomp.err" "$test_dir/a_c_equiv" 2>/dev/null
     fi
 
     return 0

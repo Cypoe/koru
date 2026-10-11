@@ -1,0 +1,28 @@
+// PINS the C-lane refusal axis for `!`-effect arms — verification-path
+// refusal row 2: "`!`-effect arms | resume semantics out of oracle scope".
+//
+// `! pong string` declares an effect op on the tor; `! pong reply |> ...`
+// is the consumer-side handler that runs mid-callee — the resume
+// semantics the doc puts out of the CompCert oracle's scope.
+// Co-present axes: raw host lines (row 1) and zig-only procs with no `|c`
+// variant (NoCProcBody) — which reason an emitter reports first is a
+// design call; this pin asserts the effect-arms reason is the one named.
+// Open scope question (for Lars, pinned in the K1 test plan): the same
+// `!`-arm spelling covers `for ! each` / `capture ! as` idioms — whether
+// row 2 means all `!` arms or only resumable producer/consumer pairs
+// decides how large the K1 corpus can be.
+~import std/io
+
+const std = @import("std");
+
+~pub tor ping { msg: string }
+! pong string
+
+~proc ping|zig {
+    pong(msg);
+}
+
+~ping(msg: "hello effect branches")
+! pong reply |> std/io:print.blk {
+    {{ reply:s }}
+}

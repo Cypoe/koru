@@ -1,0 +1,12 @@
+// PINS the C-lane refusal axis for raw host lines — verification-path
+// refusal row 1: "host lines (raw Zig) | cannot lower to C".
+//
+// `const std = @import("std");` is a raw Zig host line; a C emitter must
+// refuse naming the axis rather than splice it or drop it silently.
+// Co-present axis: `~proc ping|zig` has no `|c` variant — which reason an
+// emitter reports first is a design call; this pin asserts host lines.
+const std = @import("std");
+
+~pub tor ping { msg: string }
+~proc ping|zig { std.debug.print("pong {s}\n", .{msg}); }
+~ping(msg: "hello")

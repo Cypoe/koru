@@ -1,0 +1,53 @@
+{
+  "pinned_at": "ccomp branch, measured 2026-10-11",
+  "tools": [
+    {
+      "tool": "zig",
+      "version": "0.15.1",
+      "path": "/home/cypoe/tools/zig-0.15.1/zig",
+      "sha256": "0ee27482eb2e7b19fad58579c107364aa93fbfb54be2d2b9c52cef5f955d6225",
+      "status": "READY",
+      "note": "matches ziglang.org archive sha256 c61c5da6edeea14ca51ecd5e4520c6f4189ef5250383db33d01848293bfafe05; Windows twin W:\\tools\\zig-0.15.1\\zig.exe verified against archive sha256 91e69e887ca8c943ce9a515df3af013d95a66a190a3df3f89221277ebad29e34"
+    },
+    {
+      "tool": "ccomp",
+      "version": "3.18",
+      "path": "/home/cypoe/.nix-profile/bin/ccomp",
+      "sha256": "5afafc28c4c001a0072c3cfbd7a0bc8b802d821afa73ba149c1c78302e29b84e",
+      "status": "READY",
+      "note": "CompCert C verified compiler 3.18 via nix profile (store path coq9.2-compcert-3.18); eval/non-commercial license; G-CC-4 pin recipe: ccomp -O -Wl,-s"
+    },
+    {
+      "tool": "lean",
+      "version": "4.31.0",
+      "path": "/home/cypoe/.elan/toolchains/leanprover--lean4---v4.31.0/bin/lean",
+      "sha256": "71815942a19c698f0e9b11bdfd93a619ff36d5a320dbbe07d67448bbdcf15fa5",
+      "status": "READY",
+      "note": "leanprover/lean4:v4.31.0 via elan 4.2.4; K3 oracle — version-probed (commit 68218e87)"
+    },
+    {
+      "tool": "llvm",
+      "version": "none",
+      "path": "",
+      "sha256": "",
+      "status": "DEFERRED",
+      "note": "K2 only. Exact commands: cmake -S llvm -B build -GNinja -DLLVM_ENABLE_RTTI=ON -DLLVM_ENABLE_EH=ON -DLLVM_ENABLE_ASSERTIONS=ON -DCMAKE_BUILD_TYPE=Release; cmake --build build"
+    },
+    {
+      "tool": "alive2",
+      "version": "none",
+      "path": "",
+      "sha256": "",
+      "status": "DEFERRED",
+      "note": "K2 only. Exact commands: cmake -S . -B build -GNinja -DBUILD_TV=1 -DCMAKE_PREFIX_PATH=<llvm-RTTI-build>; cmake --build build; verify with alive-tv --version"
+    },
+    {
+      "tool": "risc0",
+      "version": "none",
+      "path": "",
+      "sha256": "",
+      "status": "DEFERRED",
+      "note": "K4 zkVM attestation — explicitly deferred, not installed (per task instruction)"
+    }
+  ]
+}

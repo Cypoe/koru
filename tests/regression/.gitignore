@@ -45,6 +45,7 @@
 !**/LANGUAGES
 !**/JS_REFUSES
 !**/CS_REFUSES
+!**/C_REFUSES
 !**/ARGS
 !**/STDIN
 !**/input.txt
