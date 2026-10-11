@@ -159,6 +159,24 @@ sites' spelling barely changed (`ast.refusal(` → `ast.refuse(`), and no
 joiner line moved. When the fold's home seems to need an alias, that is
 the smell that says the helper is filed one shelf over from its type.
 
+**The collision class is enumerable, and it is systematic.** `deslop
+--names` inverts the census key — group decls by name, flag divergent
+fingerprints — and its first census over src/ (2026-10-10, HEAD
+b57b07a5f) found 55 file-scope groups where the matchGlob case had
+suggested an occasional decoy. The dominant shape is *vendored
+helpers*: `pathToString` is sixteen decls at ten distinct bodies with
+a `pub` canonical in `purity_helpers` that nobody routes to;
+`isIdentChar` carries five contracts across ten sites; `pathsEqual`,
+`jsonEscape`, `writeIndent`, `writeBranchName` follow. The sibling
+`--dead` pass measured the class nobody was counting at all: 54
+file-confined decls with zero references — dead imports recurring
+after the facet-sweep (another bare `const std`, four test-file
+`ast`s), seven `Parser` entry points superseded by their
+`*WithAnnotations` generalizations, and `tap_registry.globMatch`, a
+glob matcher the entire matchGlob saga never noticed because nothing
+looked. An instrument that cannot see a slop class does not bound it;
+these two were invisible to a body-keyed census by construction.
+
 **Open questions.** (1) Whether cluster ranking should prefer the superset
 member as canonical anchor rather than the first member — the census cannot
 yet order members by semantic coverage. (2) `copy count` is not `removal
