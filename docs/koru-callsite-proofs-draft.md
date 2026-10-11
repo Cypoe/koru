@@ -221,7 +221,7 @@ above, the resolution is recorded here.
   parsed). `std/witness` exists, but as the *vocabulary home*: the op
   set (mint/move/discharge) is declared there, not callable — calling
   them would be authoring, and authoring is forgery by construction.
-- **W2 — RESOLVED (Lars: explain participates, does not drive).**
+- **W2 — SURFACE RESOLVED, RENDERING DEFERRED (Lars).**
   `std/witness` owns its own command surface as `~[comptime|command]`
   tors — the same mechanism `explain` itself and `gate` ride — e.g.
   `koruc program.k witness` renders the witness picture. That absorbs
@@ -230,7 +230,10 @@ above, the resolution is recorded here.
   shared `explain` catalog gains a witness section (pattern:
   `koru_std/store.explain.kz`) — participation in the program-wide
   tour, not the driver of the module's surface. `explain json` stays
-  CI-consumable for coverage diffing.
+  CI-consumable for coverage diffing. What stays open: the literal
+  W2 — what a witness-check refusal renders (the failed obligation
+  id, the edge that broke, a rendered derivation) — resolves with the
+  commands, not before them.
 - **W7 — RESOLVED (absorb).** `enforce` injects the witness-check
   pass into the pipeline; the pass owns the verdict. Two
   verdict-issuers do not exist because the new pass *is* the checker —
