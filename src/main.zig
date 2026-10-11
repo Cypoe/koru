@@ -173,7 +173,21 @@ fn printStderr(allocator: std.mem.Allocator, comptime fmt: []const u8, args: any
 /// Name the signals a build subprocess plausibly dies by. Numbers-only for
 /// the rest — the number is always printed alongside.
 fn signalName(sig: u32) []const u8 {
+    const builtin = @import("builtin");
     const SIG = std.posix.SIG;
+    // The windows target's std.c.SIG carries only the ANSI subset; the rest
+    // have no member to switch on. A windows child cannot die by them anyway.
+    if (builtin.os.tag == .windows) {
+        return switch (sig) {
+            SIG.TERM => "SIGTERM",
+            SIG.INT => "SIGINT",
+            SIG.SEGV => "SIGSEGV",
+            SIG.ABRT => "SIGABRT",
+            SIG.FPE => "SIGFPE",
+            SIG.ILL => "SIGILL",
+            else => "unnamed signal",
+        };
+    }
     return switch (sig) {
         SIG.KILL => "SIGKILL",
         SIG.TERM => "SIGTERM",
