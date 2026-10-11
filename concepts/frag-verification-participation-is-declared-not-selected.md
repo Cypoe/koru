@@ -29,8 +29,11 @@ Once that is named, the surface rearranges:
 - `~[debug]std/witness:enforce` declares program-wide participation —
   a comptime tor invocation in the `std/build:variants` family whose
   presence injects the dual-arm pass into the pipeline.
-- `koruc program.k explain` is the lens — the module's explainer
-  renders which units route verified before any arm runs.
+- `std/witness`'s own `~[comptime|command]` tors are the lens —
+  `koruc program.k witness` renders the routing before any arm runs.
+  The module *also* ships an `[explainer]` tor so the shared
+  `explain` catalog shows a witness section — participation in the
+  tour, never the driver of the module's own surface.
 
 The consequence that matters: verification becomes a *property of the
 program*, not of how the compiler was invoked. A regression cell

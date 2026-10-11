@@ -221,14 +221,16 @@ above, the resolution is recorded here.
   parsed). `std/witness` exists, but as the *vocabulary home*: the op
   set (mint/move/discharge) is declared there, not callable — calling
   them would be authoring, and authoring is forgery by construction.
-- **W2 — RESOLVED.** Rendering is module-owned via the explain system,
-  not a flag: `std/witness` ships a `~[comptime|explainer]` event
-  (pattern: `koru_std/store.explain.kz`) and `koruc program.k explain`
-  renders the obligation picture — which obligations exist, which fall
-  inside the proven fragment, what `enforce` will do. Read-only by
-  architecture; text/json/html for free. Absorbs the proposed
-  `--show-witness` flag. `explain json` is CI-consumable (coverage
-  diffing in gates).
+- **W2 — RESOLVED (Lars: explain participates, does not drive).**
+  `std/witness` owns its own command surface as `~[comptime|command]`
+  tors — the same mechanism `explain` itself and `gate` ride — e.g.
+  `koruc program.k witness` renders the witness picture. That absorbs
+  the proposed `--show-witness` flag without adding a compiler flag.
+  Separately, the module ships a `~[comptime|explainer]` tor so the
+  shared `explain` catalog gains a witness section (pattern:
+  `koru_std/store.explain.kz`) — participation in the program-wide
+  tour, not the driver of the module's surface. `explain json` stays
+  CI-consumable for coverage diffing.
 - **W7 — RESOLVED (absorb).** `enforce` injects the witness-check
   pass into the pipeline; the pass owns the verdict. Two
   verdict-issuers do not exist because the new pass *is* the checker —
@@ -254,8 +256,9 @@ above, the resolution is recorded here.
   only**: no spelling may mean "don't check." Per-fragment levels
   wait until multiple proven fragments exist.
 - **Scope asymmetry — the standing rule.** The user surface may
-  *observe* (explain) and *invoke* (`witness-check`,
-  `enforce`); it may never *author* a witness or *suppress* a check.
+  *observe* (the module's own read commands + its `explain` section)
+  and *invoke* (`witness-check`, `enforce`); it may never *author* a
+  witness or *suppress* a check.
 
 ### Corrections to the record
 
