@@ -1,0 +1,351 @@
+# Koru Verification Path — C Emit, IR Congruence, Proof-Carrying Obligations, Attested CI
+
+Target branch: `Cypoe/koru:ccomp` (cut from updated upstream `korulang/koru`)
+Status: design note for co-review with Lars. Non-negotiables are marked **N**; shape questions are marked **S**.
+Working constraints honored: bring questions, never invent spellings; regression tests first; no builds while `run_regression` is live.
+
+---
+
+## 0. The trust pyramid
+
+Four layers, each certifying a different thing. No layer substitutes for another:
+
+1. **CompCert** — the *reference compiler* is correct (their theorem, their Coq proof).
+2. **Alive2** — each optimization *instance* on our code shapes was checked (bounded, SMT-backed witness — not a theorem).
+3. **Verified checker** — koru's obligation *verdicts* are correct (our theorem, in Lean, small).
+4. **zkVM receipt** — the battery *actually ran*, on pinned artifacts (attestation of process, not of semantics).
+
+A proof about semantics does not attest execution. An attestation of execution does not prove semantics. Every layer below is only as strong as the layer above it that it leans on — so each layer is pinned to the
+one thing it can actually certify.
+
+---
+
+## 1. K1 — C emit + ccomp oracle
+
+**Scope:** tier-1 runtime Koru, sequential, deterministic. This is a second independent realization of the
+semantic space, not a replacement backend. The Zig emission stays the product path.
+
+**Refusal table** (every entry refuses by name — silent acceptance is a red battery):
+
+| Construct | Reason out of scope |
+|---|---|
+| host lines (raw Zig) | cannot lower to C |
+| `!`-effect arms | resume semantics out of oracle scope |
+| `pump` / `rings` / `worker.spawn` | CompCert is a sequential C subset; no verified concurrency |
+| comptime/transform tors leaking runtime effects | tors vanish at compile time by definition |
+
+**Dialect:** CompCert C subset — ISO C99 minus VLA, minus `setjmp/longjmp`, minus `long double`,
+fixed-width integer types, CompCert C's defined evaluation order (use it — determinism of the reference
+is part of the oracle contract).
+
+**Lowering table:**
+
+| Koru | CompCert C |
+|---|---|
+| tor | dispatch function; branches = tagged result |
+| continuation arm | caller-side switch |
+| binding | single-assignment local (const-initialized) |
+| cell | module-scope array/struct (closed accessor set → static) |
+| transform/comptime tors | nothing emitted; refuse if effects leak |
+
+**Gates (canonical cells; missing oracle = FAIL, never SKIP):**
+
+- **G-CC-1** equivalence: both backends, stdout bytes + rc. First program class: a finite byte transducer
+  over `std/io`. Then prime-sieve parity.
+- **G-CC-2** missing `ccomp` = FAIL naming the oracle path.
+- **G-CC-3** refusal tests: every out-of-scope construct refuses with a named reason.
+- **G-CC-4** determinism pin: pinned ccomp version + flags; same input → byte-identical binary.
+
+**Acceptance**: G-CC-1 green on transducer fragment and sieve; refusal table complete; no upstream syntax
+invented (emitter mode + transform tor; placement questions go to Lars).
+
+---
+
+## 2. K2 — LLVM IR congruence (Alive2-style)
+
+**Mechanics:** `-fllvm` build leg; `getEmittedLlvmIr()`; Alive2 translation validation (requires an
+RTTI-enabled LLVM build).
+
+**Use A — instance checking:** validate LLVM's own optimization passes on koru-emitted IR.
+
+**Use B — transform congruence:** emit IR before and after a koru-level optimization transform; Alive2 as
+the per-instance equivalence witness.
+
+**Honesty clause:** Alive2 is sound up to its bounds. The `-fllvm` leg is not the product binary when the
+self-hosted x86_64 backend is the default — the ccomp oracle speaks for shipped artifacts. Document the
+coverage map per target, per backend, per layer.
+
+**Gates:** 
+- **G-LL-1** opt-TV clean over the corpus arm
+- **G-LL-2** negative control (two genuinely differing
+IRs → Alive2 must flag).
+
+---
+
+## 3. K3 — Proof-carrying obligations
+
+### 3.1 The argument (against Bend 2's published shape)
+
+Bend 2's public position: LAWS.bend is "AGENTS.md backed by proof," the AI writes PROOF.bend, the type
+checker is "a proof checker, as in Lean and Rocq" but takes under a second, and NeoGen synthesizes —
+"if it fails, an LLM is called," under the discipline of formal correctness. Three structural weaknesses:
+
+1. Laws are hand-authored. Bend 2 itself documents that it cannot prevent errors in the
+specifications — the laws are only as good as their author. Koru's obligations are grammar-derived:
+mint/move/discharge edges follow from the invocation shape. There is no law-authoring step to get wrong.
+
+2. Proofs enter via LLM drafting. At scale, LLM-drafted proofs are exactly the practice that produces
+plausible-but-wrong derivations; the design's integrity then rests entirely on the checker — which is
+proprietary, fast-by-claim code on an immature substrate (HVM2's own paper concedes the compiler is
+"extremely immature"; Bend 1 programs do not even carry over).
+
+3. Nothing in the chain carries a machine-checked soundness theorem. Speed of checking is claimed, not
+proven; correctness of the checker is trust in a company, not a kernel.
+
+Koru's design closes all three: grammar-derived obligations (no spec authoring), **algorithmic witness
+synthesis** (no LLM in the trust chain — and none needed, because the fragment is decidable), and a
+checker whose soundness is a Lean theorem. The checker is not fast because it is clever; it is fast
+because the obligation calculus is a tiny decidable fragment, and it is trustworthy because its soundness
+is machine-checked — the same reason CompCert's validators are trustworthy.
+
+### 3.2 Non-negotiables (the N-list)
+
+- **N1 — Solver ≠ checker.** No discharge on the solver's word; only the checker's verdict counts.
+  Disagreement → refusal naming both. koruc's obligation solver is untrusted, however good it is. A discharge is
+accepted only on the checker's verdict. Solver/checker disagreement → refusal naming both.
+- **N2 — The checker is small, stable, machine-trusted.** Calculus formalized in Lean; soundness: checked
+  witness ⇒ runtime obligation safety. Zig checker cross-checked batched against the Lean checker. The obligation calculus is formalized in Lean;
+soundness theorem: a checked witness implies runtime obligation safety (no leak, no double-discharge, no
+use-after-discharge) under the small-step semantics of flows. The in-tree Zig checker is cross-checked
+batched against the Lean checker (lean_eval pattern: one #eval per batch; missing Lean oracle = FAIL).
+- **N3 — Witnesses are data.** Synthesized at comptime, attached to flow records like FLOW/PROC/BRANCH
+  markers; never hand-authored; removal is a refusal. Synthesized at comptime, attached to the flow record like the existing
+FLOW/PROC/BRANCH source markers; never hand-authored; removing them is a refusal (load-bearing like
+sha256 digests in golden fixtures).
+- **N4 — Forged-witness gates are standing.** Known-bad witnesses must be rejected by both checkers. A checker that
+accepts a forged witness is a red battery, not a caveat. 
+- **N5 — No LLM in the trust chain.** The Lean kernel decides, nothing else does. Synthesis is algorithmic;
+  where it fails, refusal is the honest output. LLMs may draft Lean lemmas about the checker; the Lean kernel decides
+and nothing else does. Synthesis is algorithmic: grammar-bounded accessor sets make mint/move/discharge
+edges finite and statically enumerable. Where synthesis fails (recursion-depth walls — the
+liveness-interval ruling), refusal is the honest output, consistent with existing koru rulings.
+
+### 3.3 Shape questions for Lars (the S-list)
+
+- **S1** witness surface. - header annotation vs. sidecar vs. debug-build-only artifact.
+- **S2** refusal rendering of failed witnesses. - whether refusals render the failed witness (debuggability).
+- **S3** checker placement (RESOLVED, §3.5). - the checker is an additional comptime pass in the
+coordinate pipeline; the Lean artifact is the calculus + conformance oracle, not the pass runtime.
+- **S4** KORU code vocabulary. - for witness mismatches
+- **S5** first-calculus fragment: which obligation kinds (proposal: the one-label-one-disposer kinds —
+allocated!, taken-row custody, held handles — 690_007/690_015 territory).
+
+### 3.5 The checker as a comptime pass (S3, resolved)
+
+The verifier is an additional comptime pass in the coordinate pipeline — but precisely which part is
+"Lean-proven" matters, so the roles are kept distinct.
+
+Pipeline shape. Today the solver and the verdict-owner are blurred: auto_discharge_inserter
+transforms (a solver act) and phantom_semantic_checker issues verdicts (a checking act), with the
+ruling on record that "the obligation checker sees ordinary code and owns the verdict" (KORU030). N1
+splits this into two named stages:
+
+    elaborate |> analysis |> obligation-synthesis |> witness-check |> optimizer |> emission
+
+- `obligation-synthesis` — untrusted solver pass (today's auto-discharge family): mints witnesses, may
+  rewrite, does not own verdicts.
+- `witness-check` — trusted verdict pass: never rewrites, idempotent (re-run yields the identical verdict —
+  the one-contract-one-verdict rule). the trusted verdict pass: Program + Witnesses → Program + verdicts | refusals.
+Never rewrites; idempotent by construction (re-running yields the identical verdict — the property
+that satisfies the one-contract-one-verdict rule: silent divergence between runs is a red battery,
+not a quirk).
+
+**Lean's two roles:** 
+- **Role A (the theorem)** — the calculus + soundness lemma is a Lean artifact; the pass is its
+Zig implementation. The obligation calculus — mint/move/discharge rules plus the soundness lemma
+(checked witness ⇒ runtime obligation safety) — is a Lean artifact. This is what "proven" means. The
+witness-check pass implements these rules in Zig.
+- **Role B (the conformance oracle)** — batched cross-check with `lean_eval` pattern, verdicts must match. What Lean does
+not do: run inside the build — `lake env lean` is an oracle budget, not a comptime budget. This is the
+foundational-PCC discipline: smallest verifier over smallest axiom set, so drift is mechanically detectable. The Lean checker
+evaluates the standing witness corpus; verdicts must match the pass's on every batch; mismatch = red
+battery. Forged-witness gates (N4) run through both, and both must reject.
+
+**What Lean does not do:** run inside the build. A lake env lean batch costs ~25s and an external
+toolchain — that is an oracle budget, not a comptime budget. Comptime passes must be fast, deterministic,
+and hermetic; therefore the pass is a Zig implementation of the proven calculus, and the Lean artifact
+attests (a) the rules are sound and (b) the implementation conforms, gated on standing corpora. This is
+the foundational-PCC discipline: the trusted core is the smallest possible verifier plus the smallest
+possible axiom set — small enough that implementation drift is mechanically detectable, which is exactly
+what the conformance gates detect.
+
+**PCC accounting: (why this is the historical shape, not a novel one)**Proof-carrying code's whole
+viability rested on the certifying compiler: Touchstone generated the proofs automatically — nobody
+hand-wrote them; the original TCB accounting is "checker + proof-generating tools (for honest users)."
+Koru's mapping: producer = untrusted solver pass, proof = synthesized witness, host checker =
+`witness-check` pass, trusted core = pass + Lean calculus. The stdlib self-check option becomes:
+expose witness-check also as a callable comptime tor, so the store/list take-pop-watch rules gate their
+own discharge sites with the same pass — plug-in verifier over a trusted core, the open-verifier-framework
+shape.
+
+### 3.4 Estimator
+
+Why smaller than CompCert: Memory-model and aliasing chapters have no spelling in koru; the simulation invariant is a cell-valuation
+map plus binding environment, local per branch. First fragment: one obligation kind, the take/consume-or-give-back cell flow. The xdu-style equivalence cell from
+K1 is the executable shadow of the eventual simulation lemma.
+
+---
+
+## 4. K4 — Attested CI (zk receipts)
+
+ - **Battery-in-guest:** (RISC-V: koruc cross-builds; ccomp RISC-V port; fixtures + sha256 manifest). Receipt pins:
+  - **Receipt pins:** git tree hash, koruc digest, ccomp digest, fixture manifest, gate outcomes.
+  - **Tiering (declared schedule regimes, not moods):** fast native per commit, zk on releases.
+  - **New certificate tier:** `attested` between `witness` and `proof`.
+  - **Honesty clause:** Receipts attest process, not semantics — the pyramid stands.
+
+---
+
+## 5. Sequencing
+
+- **K1** now on `ccomp`
+- **K3's Lean calculus** starts in parallel (gates nothing until first fragment
+lands)
+- **K2** is opportunistic once K1's emitter stabilizes
+- **K4** after K1 (needs a stable battery); rides the agents-store certificate regime where convenient.
+
+**Foot-down summary:** N1–N5. Everything else is shape.
+
+---
+
+## 6. Academic provenance
+
+### 6.1 Where each idea comes from
+
+| Plan § | Idea | Pulled from | What it solves | Prior art / new synthesis |
+|---|---|---|---|---|
+| 0, 1 | Verified-compiler reference; semantic preservation by forward simulation | Leroy, *Formal verification of a realistic compiler* (CACM 2009); CompCert project | what makes an oracle's verdict trustworthy rather than test-suite-shaped | prior art (theirs); **NS-1**: CompCert as *emit-target behavioral oracle for a non-C language* — two realizations of one semantic space gated on stdout+rc — is new |
+| 1 | Loud refusal beats silent miscompile; differential oracle epistemics | Yang, Chen, Eide, Regehr, *Finding and understanding bugs in C compilers* (PLDI 2011) — CompCert's refusals were the healthy signal under Csmith testing | why G-CC-3 (refusal tests) is a first-class gate, not an error-reporting nicety | prior art (evidence), reused |
+| 1 | TCB honesty for the reference | Monniaux & Boulmé, *The Trusted Computing Base of the CompCert Verified Compiler* (ESOP 2022) | scope claims for what the oracle actually certifies (parser/typechecker unverified, external oracles) | prior art |
+| 2 | Translation validation: check one compilation instead of proving a compiler | Pnueli, Siegel, Singerman, *Translation validation* (TACAS 1998) | the very idea of per-instance checking (K2, and the N1 seam) | prior art |
+| 2 | Bounded SMT instance checking of LLVM IR | Lopes, Lee, Hur, Liu, Regehr, *Alive2* (PLDI 2021, Distinguished Paper) | the concrete mechanism for K2 | prior art |
+| 3.5 | Certifying compiler: proofs generated automatically, nobody hand-writes them | Necula & Lee, *Proof-carrying code* (POPL 1997); *The design and implementation of a certifying compiler* (PLDI 1998) | the feasibility argument for N3/N5 — "humans won't write proofs" has a 25-year-old solution shape | prior art (pattern); **NS-3**: the seam realized as *named comptime passes* in a metacircular compiler whose passes are library tors — new |
+| 3.5 | Smallest verifier + smallest axiom set; conformance gap closable | Appel, *Foundational proof-carrying code* (LICS 2001); Appel & Felty, *A semantic model of types and machine instructions for PCC* (POPL 2000) | why the Zig pass can be trusted despite being an implementation: rules small enough that drift is mechanically detectable | prior art |
+| 3.5 | Plug-in verifiers over a trusted core | Chang, Chlipala, Necula, Schneck, *The Open Verifier Framework for foundational verifiers* (TLDI 2005) | the stdlib self-check: `witness-check` as a callable comptime tor | prior art (shape), new instantiation |
+| 3 | Obligations as linear, erasable proof terms | Xi, *Applied Type System* (RTA 2003); ATS project | proof-carrying obligations — the K3 concept exists and has been built | prior art; **NS-2**: *grammar-derived* obligations (mint/move/discharge follow from the invocation shape) making witnesses algorithmically synthesizable is new — and is precisely where ATS's authoring burden dies |
+| 3 | Grammar-level refusal (no spelling for the error) | Armstrong, *The development of Erlang* (ICFP 1997) — single assignment at grammar level | precedent that a language can refuse a whole category structurally | prior art |
+| 3.1 | The counter-position (hand-authored laws, LLM-drafted proofs, unverified fast checker) | Bend 2 (bend-lang.com; bendlang/bend) — engineering position, not academic | delimits what N1–N5 foreclose | documented position; contrast, not citation-backed theory |
+| 3.2, 4 | Batched spot-oracle conformance gating | isar-proofs practice (lean_eval.py: one `#eval` batch per gate; missing oracle = FAIL) | N2's enforcement mechanism | internal practice; **NS-4**: applying it to gate a *compiler pass's verdicts* is new |
+| 4 | zk-attested provenance of compilation runs | *Verifiable Provenance of Software Artifacts with Zero-Knowledge Proofs* (arXiv:2602.11887, 2026); RISC Zero zkVM docs | process attestation for K4 — receipts pin toolchain digests | prior art (zk provenance); **NS-5**: the `attested` tier inside an obligation/certificate regime is new |
+| 0, 2 | Engineering facts: Zig self-hosted x86_64 backend default in Debug (0.15.x); LLVM leg via `-fllvm` | Zig 0.15.1 release notes; ziglang.org devlog | K2's coverage honesty clause | engineering citations |
+
+**The new-synthesis list, stated once:** 
+ - NS-1 CompCert as emit-target oracle for a non-C language;
+ - NS-2 grammar-derived (hence synthesizable) obligations; 
+ - NS-3 solver≠checker as named comptime pipeline stages in a metacircular compiler; 
+ - NS-4 batched spot-oracle gating of a compiler pass; 
+ - NS-5 zk receipts as a certificate tier. Each is a composition of prior art that is individually well-established — the honest
+claim is the composition, not any component.
+
+### 6.2 BibTeX
+
+```bibtex
+@article{leroy2009compcert,
+  author  = {Leroy, Xavier},
+  title   = {Formal verification of a realistic compiler},
+  journal = {Communications of the ACM},
+  volume  = {52}, number = {7}, pages = {107--115}, year = {2009},
+  doi     = {10.1145/1538788.1538814}
+}
+@inproceedings{rideau2010validating,
+  author    = {Rideau, Silvain and Leroy, Xavier},
+  title     = {Validating register allocation and spilling},
+  booktitle = {Compiler Construction (CC 2010)}, series = {LNCS}, volume = {6011},
+  year = {2010}, note = {the untrusted-oracle / verified-validator seam}
+}
+@inproceedings{pnueli1998translation,
+  author    = {Pnueli, Amir and Siegel, Michael and Singerman, Eli},
+  title     = {Translation validation},
+  booktitle = {Tools and Algorithms for the Construction and Analysis of Systems (TACAS'98)},
+  year = {1998}
+}
+@inproceedings{necula1997pcc,
+  author    = {Necula, George C. and Lee, Peter},
+  title     = {Proof-carrying code},
+  booktitle = {Proceedings of POPL'97}, year = {1997}
+}
+@inproceedings{necula1998certifying,
+  author    = {Necula, George C. and Lee, Peter},
+  title     = {The design and implementation of a certifying compiler},
+  booktitle = {Proceedings of PLDI'98}, year = {1998}
+}
+@inproceedings{appel2001fpcc,
+  author    = {Appel, Andrew W.},
+  title     = {Foundational proof-carrying code},
+  booktitle = {Proceedings of LICS'01}, year = {2001}
+}
+@inproceedings{appel2000semantic,
+  author    = {Appel, Andrew W. and Felty, Amy P.},
+  title     = {A semantic model of types and machine instructions for proof-carrying code},
+  booktitle = {Proceedings of POPL'00}, year = {2000}
+}
+@inproceedings{chang2005ovf,
+  author    = {Chang, Bor-Yuh Evan and Chlipala, Adam and Necula, George C. and Schneck, Robert R.},
+  title     = {The Open Verifier framework for foundational verifiers},
+  booktitle = {ACM SIGPLAN Workshop on Types in Language Design and Implementation (TLDI'05)},
+  year = {2005}
+}
+@inproceedings{lopes2021alive2,
+  author    = {Lopes, Nuno P. and Lee, Juneyoung and Hur, Chung-Kil and Liu, Zhengyang and Regehr, John},
+  title     = {Alive2: Bounded translation validation for {LLVM}},
+  booktitle = {Proceedings of PLDI 2021}, year = {2021},
+  note      = {Distinguished Paper Award; doi:10.1145/3453483.3454030}
+}
+@inproceedings{yang2011finding,
+  author    = {Yang, Xueyi and Chen, Yang and Eide, Eric and Regehr, John},
+  title     = {Finding and understanding bugs in {C} compilers},
+  booktitle = {Proceedings of PLDI 2011}, year = {2011}
+}
+@inproceedings{monniaux2022tcb,
+  author    = {Monniaux, David and Boulm{\'e}, Sylvain},
+  title     = {The Trusted Computing Base of the {CompCert} Verified Compiler},
+  booktitle = {ESOP 2022}, series = {LNCS}, volume = {13240}, year = {2022},
+  doi       = {10.1007/978-3-030-99336-8_8}
+}
+@inproceedings{xi2003ats,
+  author    = {Xi, Hongwei},
+  title     = {Applied Type System (extended abstract)},
+  booktitle = {Rewriting Techniques and Applications (RTA 2003)}, year = {2003}
+}
+@inproceedings{armstrong1997erlang,
+  author    = {Armstrong, Joe},
+  title     = {The development of {Erlang}},
+  booktitle = {Proceedings of ICFP 1997}, year = {1997},
+  note      = {single assignment at grammar level}
+}
+@misc{compcertmanual,
+  author = {{Inria -- CompCert project}},
+  title  = {The {CompCert} {C} verified compiler: documentation and user's manual},
+  note   = {compcert.org/man; supported {C} subset: ISO C99 minus VLA, setjmp/longjmp, long double}
+}
+@misc{zig0151,
+  author = {{Zig Software Foundation}},
+  title  = {Zig 0.15.1 Release Notes},
+  note   = {self-hosted x86_64 backend default in Debug mode; ziglang.org/download/0.15.1/release-notes.html}
+}
+@misc{bend2,
+  author = {{HigherOrderCO}},
+  title  = {Bend 2: laws, proofs, and a fast proof checker},
+  note   = {bend-lang.com; bendlang/bend on GitHub; engineering position — the K3 counter-position}
+}
+@misc{zkprovenance2026,
+  author = {[TODO: complete authors from arXiv page]},
+  title  = {Verifiable Provenance of Software Artifacts with Zero-Knowledge Proofs},
+  note   = {arXiv:2602.11887, 2026 — compiler runs inside a zkVM, provenance receipts}
+}
+@misc{risczero,
+  author = {{RISC Zero}},
+  title  = {RISC Zero zkVM: cryptographic security model},
+  note   = {dev.risczero.com — permissionless receipt verification}
+}
+```
