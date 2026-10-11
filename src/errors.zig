@@ -206,6 +206,15 @@ pub const ParseError = struct {
     }
 };
 
+/// Process-global "the reporter rendered at least one diagnostic" flag. The
+/// generated backend's `emit()` reads this before printing the
+/// `❌ Compiler coordination error:` line: a failure whose pass already
+/// delivered located diagnostics gets its quiet `exit(1)`, and the echo is
+/// reserved for failures that never spoke (user coordinator overrides,
+/// diagnostic-free internal errors). One compilation per backend process, so
+/// a plain global is the whole mechanism.
+pub var diagnostics_were_printed = false;
+
 pub const ErrorReporter = struct {
     allocator: std.mem.Allocator,
     errors: std.ArrayList(ParseError),
@@ -509,6 +518,7 @@ pub const ErrorReporter = struct {
 
             try writer.writeAll("\n");
         }
+        if (self.errors.items.len > 0) diagnostics_were_printed = true;
         self.printed_count = self.errors.items.len;
     }
 

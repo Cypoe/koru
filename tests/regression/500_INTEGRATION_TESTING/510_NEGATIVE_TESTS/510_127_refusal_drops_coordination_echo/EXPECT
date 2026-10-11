@@ -1,0 +1,4 @@
+BACKEND_RUNTIME_ERROR
+CONTAINS error[KORU040]
+NOT_CONTAINS Compiler coordination error
+NOT_CONTAINS ──── diagnostics

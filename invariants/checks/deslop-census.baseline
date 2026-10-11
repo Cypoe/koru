@@ -68,8 +68,14 @@
 # Re-pinned 2026-10-08: sampled roll fired under an invariants baseline
 # re-pin; members drift 903→908 is foreign (uncommitted cs_emitter.zig
 # work from another session — the census reads the working tree).
+# Re-pinned to 820/913 on the coordination-echo suppression commit: the roll
+# named containsTokenLocal x containsToken (continuation_codegen /
+# emitter_helpers) and emitter_test test_decl scaffolding — the same two
+# offenders documented in the 820/911 re-pin below, none of them in this
+# diff. This commit's own delta measured +0 (working tree 913 == HEAD-only
+# 913); the +2 members are foreign drift landed between re-pins.
 clusters=820
-members=911
+members=913
 # Re-pinned to 820/911 on the call-site |variant commit: the sampled roll
 # named containsTokenLocal x containsToken (continuation_codegen /
 # emitter_helpers) and an emitter_test test_decl pair — none of those

@@ -1,0 +1,1 @@
+Expected: backend refuses with error[KORU040] alone — no coordination echo, no diagnostics re-print.

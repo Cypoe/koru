@@ -1006,6 +1006,32 @@ fn reportAbnormalTerm(allocator: std.mem.Allocator, what: []const u8, term: std.
     }
 }
 
+/// Mirror one backend stderr line to our stderr and into the capture buffer —
+/// unless it is the coordination echo (`❌ Compiler coordination error:` or
+/// its trace hint) following a diagnostic that already streamed. A refusal
+/// that told the author something doesn't get the vaguer repeat; a
+/// diagnostic-free failure (user coordinator override, internal error)
+/// keeps the line because there it IS the message.
+fn mirrorBackendLine(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    saw_backend_diagnostic: *bool,
+    stderr_buf: *std.ArrayList(u8),
+    capture_cap: usize,
+) void {
+    const line = std.mem.trim(u8, raw, " \t\r\n");
+    const is_coord_echo = std.mem.startsWith(u8, line, "❌ Compiler coordination error:") or
+        std.mem.startsWith(u8, line, "(set KORU_BACKEND_TRACE=1");
+    if (saw_backend_diagnostic.* and is_coord_echo) return;
+    if (isDiagnosticLine(line)) saw_backend_diagnostic.* = true;
+    std.fs.File.stderr().writeAll(raw) catch {};
+    if (stderr_buf.items.len < capture_cap) {
+        const room = capture_cap - stderr_buf.items.len;
+        const take = @min(room, raw.len);
+        stderr_buf.appendSlice(allocator, raw[0..take]) catch {};
+    }
+}
+
 /// Scan a captured stderr buffer for compiler-diagnostic lines (Zig's
 /// `path:line:col: error:` / `path:line:col: note:` format, plus Koru's
 /// own `error[KORUxxx]:` lines) and re-emit them in a clean summary block.
@@ -1020,12 +1046,26 @@ fn emitDiagnosticsSummary(allocator: std.mem.Allocator, captured: []const u8) !v
     // Count first; only emit the summary block if there's at least one
     // line worth surfacing (otherwise we'd just add more noise).
     var count: usize = 0;
+    var noise: usize = 0;
     var line_iter = std.mem.splitScalar(u8, captured, '\n');
     while (line_iter.next()) |raw_line| {
         const line = std.mem.trim(u8, raw_line, " \t\r");
-        if (isDiagnosticLine(line)) count += 1;
+        if (line.len == 0) continue;
+        if (isDiagnosticLine(line)) {
+            count += 1;
+            continue;
+        }
+        // Diagnostic continuation lines — location arrows, source gutters,
+        // hints — are indented. A column-0 line that isn't a diagnostic
+        // headline is the noise this summary exists to unbury.
+        if (raw_line[0] == ' ' or raw_line[0] == '\t') continue;
+        noise += 1;
     }
     if (count == 0) return;
+    // A clean refusal: the diagnostics were the only output, so the live
+    // mirror already delivered them complete — re-printing would be a second
+    // copy of one message.
+    if (noise == 0) return;
 
     try printStderr(allocator, "\n──── diagnostics ({d}) ────\n", .{count});
 
@@ -1741,7 +1781,6 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\        const result = koru_coordinate(source_ast, &allocator);
             \\        if (result.is_error) {
             \\            const e = result.error_ptr[0..result.error_len];
-            \\            __koru_std.debug.print("❌ Compiler coordination error: {s}\n", .{e});
             \\            // A REFUSAL IS NOT A CRASH. The coordinate flow has already reported its
             \\            // diagnostic through the reporter by the time we reach here, so returning
             \\            // an error out of main would make Zig print `error.CompilerCoordinationFailed`
@@ -1752,6 +1791,16 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\            // reports the failure. Nothing is swallowed; one misleading rendering of an
             \\            // already-delivered diagnostic is dropped.
             \\            //
+            \\            // The coordination echo itself is gated the same way: when the reporter
+            \\            // already rendered a diagnostic (`errors.diagnostics_were_printed`), the
+            \\            // error-string summary is a vaguer, location-free repeat of it — one
+            \\            // refusal, one message. When NO diagnostic was rendered the print stays:
+            \\            // a user-authored coordinator override's error string or a
+            \\            // diagnostic-free internal failure IS the message.
+            \\            const reporter_spoke = @import("errors").diagnostics_were_printed;
+            \\            if (!reporter_spoke) {
+            \\                __koru_std.debug.print("❌ Compiler coordination error: {s}\n", .{e});
+            \\            }
             \\            // The trace stays REACHABLE on request, because for a genuine INTERNAL
             \\            // failure it is the useful output, and suppressing it unconditionally would
             \\            // trade this bug for its mirror — a compiler crash reported as a rejection,
@@ -1763,7 +1812,9 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\            const trace_requested: ?[]const u8 = __koru_std.process.getEnvVarOwned(allocator, "KORU_BACKEND_TRACE") catch null;
             \\            defer if (trace_requested) |v| allocator.free(v);
             \\            if (trace_requested != null) return error.CompilerCoordinationFailed;
-            \\            __koru_std.debug.print("   (set KORU_BACKEND_TRACE=1 for the backend return trace)\n", .{});
+            \\            if (!reporter_spoke) {
+            \\                __koru_std.debug.print("   (set KORU_BACKEND_TRACE=1 for the backend return trace)\n", .{});
+            \\            }
             \\            __koru_std.process.exit(1);
             \\        }
             \\        const metrics = result.metrics_ptr[0..result.metrics_len];
@@ -9373,26 +9424,38 @@ pub fn main() !void {
 
         try child.spawn();
 
-        // Drain stderr while the child runs. Writes everything to our own
-        // stderr unchanged AND keeps a copy in memory for post-failure
-        // filtering. Buffer is capped — beyond the cap we keep streaming
-        // but stop accumulating to bound memory.
+        // Drain stderr while the child runs. Complete lines are mirrored to
+        // our own stderr AND kept in memory for post-failure filtering —
+        // with one deliberate elision: once a diagnostic line has streamed,
+        // the backend's trailing `❌ Compiler coordination error:` line and
+        // its trace hint are the pipeline narrating its own plumbing over a
+        // refusal that already spoke — vaguer than the diagnostic, no
+        // location, and the summary string can contradict the diagnostic it
+        // follows. With no diagnostic seen, both lines pass through: for a
+        // user-authored coordinator override or a diagnostic-free internal
+        // error that print IS the message (430_001/012/013/014 pin it).
         const stderr_handle = child.stderr orelse @panic("child stderr was not piped");
         var stderr_buf = try std.ArrayList(u8).initCapacity(allocator, 8192);
         defer stderr_buf.deinit(allocator);
         const stderr_capture_cap: usize = 1024 * 1024; // 1 MiB
         var read_buf: [4096]u8 = undefined;
+        var pending = try std.ArrayList(u8).initCapacity(allocator, 256);
+        defer pending.deinit(allocator);
+        var saw_backend_diagnostic = false;
         while (true) {
             const n = stderr_handle.read(&read_buf) catch break;
             if (n == 0) break;
-            // Mirror to our stderr verbatim.
-            std.fs.File.stderr().writeAll(read_buf[0..n]) catch {};
-            if (stderr_buf.items.len < stderr_capture_cap) {
-                const room = stderr_capture_cap - stderr_buf.items.len;
-                const take = if (n < room) n else room;
-                stderr_buf.appendSlice(allocator, read_buf[0..take]) catch {};
+            for (read_buf[0..n]) |byte| {
+                pending.append(allocator, byte) catch {};
+                if (byte == '\n') {
+                    mirrorBackendLine(allocator, pending.items, &saw_backend_diagnostic, &stderr_buf, stderr_capture_cap);
+                    pending.clearRetainingCapacity();
+                }
             }
         }
+        // Trailing partial line (backend exited without a final newline).
+        if (pending.items.len > 0)
+            mirrorBackendLine(allocator, pending.items, &saw_backend_diagnostic, &stderr_buf, stderr_capture_cap);
 
         const term = try child.wait();
 
