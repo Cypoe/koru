@@ -48,7 +48,21 @@ required, never whether checking happens.
 - `enforce` body contents (empty = all proven fragments vs explicit
   list) and its outcome-branch vocabulary.
 - Whether any harness-internal spelling for "emit the oracle arm"
-  survives the collapse (plumbing, not surface).
+  survives the collapse (plumbing, not surface). (`--lang=c` as an
+  emitter toggle is fine as plumbing — the ruling barred `c` as a
+  shipping column, not as a build spelling.)
+
+## Deflated 2026-10-11 (Lars): whole-program first, partition parked
+
+The unit-partition shape — `|c[verified]` per-unit pins, per-tor
+routing, coverage maps — bought coverage granularity at the price of
+new language surface for a toolchain-QA need. Lars parked it: build
+the whole-program C lane for the sequential fragment first; `enforce`
+keeps its meaning ("verify this program" = emit the C twin, ccomp,
+diff) which is arm-shape-agnostic. The partition machinery returns
+only if measured refusal rates prove the wall costs too much — the
+lowering code carries over either way, whole-program being the
+degenerate case.
 
 ## Lineage
 

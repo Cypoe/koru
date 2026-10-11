@@ -192,7 +192,10 @@ name-every-axis diagnostics pay off at this density.
 - **C5 — RESOLVED (Lars).** `.kc` = the `.kcs` contract verbatim: C
   host lines spliced + `|c` proc bodies. `file_types.zig:58` already
   reserves the facet.
-- **C1 — DISSOLVED into the partition model.** The refusal table
+- **C1 — DISSOLVED into the partition model** *(partition now parked —
+  see "Deflated"; under milestone-1 whole-program, resumable `!` still
+  refuses the whole program, and the *eligibility* analysis below is
+  what keeps the fragment honest)*. The refusal table
   assumed whole-program lanes; under the unit-partition oracle nothing
   *refuses* for containing `!` — units route. Routing rule:
   resumable-coroutine `!` pairs → zig units (CompCert's sequential
@@ -201,7 +204,9 @@ name-every-axis diagnostics pay off at this density.
   pattern" makes them straight-line code at write sites) → verified-arm
   *eligible*; `for ! each` / `capture ! as` → empirical per-unit.
   `!` is a lane assignment, never a wall.
-- **`|c[verified]` — NEW RULING.** The bracket qualifier names the
+- **`|c[verified]` — RULING, NOW PARKED.** (See "Deflated" below:
+  milestone 1 is whole-program, where the qualifier has no work to
+  do.) The bracket qualifier names the
   *pipeline arm* (`|mlir[gpu]` precedent — `main.zig:3097` treats the
   bracketed form as the full tag with `mlir` as base). `|` names the
   language, `[]` names the pipeline: `|c[verified]` = route this unit
@@ -213,7 +218,9 @@ name-every-axis diagnostics pay off at this density.
   flow inside it — nothing to witness. `ccomp` was rejected as a
   tool-name; `verified` names the property demanded.
 - **No `--lang=c` product toggle.** `c` was never a language column —
-  the arm never ships a binary. `~std/witness:enforce` owns the
+  the arm never ships a binary. *(As harness plumbing `--lang=c` is
+  fine — the emitter toggle for development; the ruling stands only
+  against `c` as a shipping target.)* `~std/witness:enforce` owns the
   arm-switch (the declaration injects the dual-arm pipeline);
   `|c` stays the proc-body variant tag. Consequence: verification
   moves from test metadata (`LANGUAGES` marker) into source — a cell
@@ -225,6 +232,22 @@ name-every-axis diagnostics pay off at this density.
   correctly. `zig cc` is a usable extra arm but never *the* oracle —
   clang shares the LLVM middle-end with the zig product lane
   (correlated miscompile channel).
+
+### Deflated (Lars, session 2): whole-program first, partition parked
+
+The partition oracle bought per-unit coverage at the price of language
+surface: `|c[verified]` needed a new qualifier semantics, `enforce`
+needed pass-injection machinery, and per-unit routing made the
+compiler judge C-expressibility per tor — a coverage bet made before
+any emitter existed to measure with. Ruling: build the whole-program
+C lane for the sequential fragment first — `c` as a peer emitter
+beside zig/js/cs, `enforce` meaning "verify this program" (emit the C
+twin, ccomp it, diff vs the zig build). Programs outside the fragment
+get the refusal diagnostic naming every axis — the refusal table
+itself is the coverage instrument. `|c[verified]` and per-unit
+routing are parked, not repudiated: whole-program is the degenerate
+case of partition, the lowering code carries over, and they come back
+only if measured refusal rates prove the wall costs too much.
 
 ### Still open
 
