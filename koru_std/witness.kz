@@ -1,0 +1,156 @@
+// Koru Standard Library: std/witness — the proof-carrying obligation surface.
+//
+// Design: docs/koru-callsite-proofs-draft.md + docs/koru-c-lane-test-plan.md
+// (branch verify-path). One rule governs every surface in this module: the
+// user surface may *observe* and *invoke* — never author a witness, never
+// suppress a check. Witnesses themselves are solver-produced receipts
+// riding .marks; nothing here is a place to write one.
+//
+// Surfaces, scaffold rung:
+//   ~std/witness:enforce { } — program-wide [comptime] declaration in the
+//       std/build:variants family. Presence means "witnesses required for
+//       the proven fragment." This rung: validates the declaration and
+//       reports the program's obligation census. The pass-injection
+//       machinery lands with the checker — until then `enforced` reports
+//       what it measured, not what it verified.
+//   koruc <program> witness — the [command] rendering the obligation and
+//       routing census: `!` arms by family, |c / |c[verified] proc bodies,
+//       enforce declaration sites.
+
+~import std/compiler
+
+const ast_find = @import("ast");
+
+~std/compiler:command.declare {
+    "name": "witness",
+    "description": "Report the program's obligation + verified-lane census"
+}
+
+// ============================================================
+// The census fold — shared by `enforce` and the `witness` command.
+// Walks top-level items and module_decl children: `!` effect
+// continuations by arm name, proc_decl target tags, enforce sites.
+// ============================================================
+
+const WCensus = struct {
+    const std = @import("std");
+
+    discharge: usize = 0,
+    inserted: usize = 0,
+    removed: usize = 0,
+    step: usize = 0,
+    wait: usize = 0,
+    other_effect: usize = 0,
+    c_bodies: usize = 0,
+    c_verified: usize = 0,
+    other_tags: usize = 0,
+    enforce_sites: usize = 0,
+
+    fn obligationSites(self: *const WCensus) usize {
+        return self.discharge + self.inserted + self.removed +
+            self.step + self.wait + self.other_effect;
+    }
+
+    fn fold(self: *WCensus, items: []const ast_find.Item) void {
+        for (items) |*entry| {
+            switch (entry.*) {
+                .module_decl => |*m| self.fold(m.items),
+                .proc_decl => |*p| {
+                    const tag = p.target orelse continue;
+                    if (std.mem.eql(u8, tag, "c")) {
+                        self.c_bodies += 1;
+                    } else if (std.mem.eql(u8, tag, "c[verified]")) {
+                        self.c_verified += 1;
+                    } else if (!std.mem.eql(u8, tag, "zig")) {
+                        self.other_tags += 1;
+                    }
+                },
+                .flow => |*fl| {
+                    if (fl.body.node) |*node| {
+                        if (node.* == .invocation) {
+                            const inv = &node.invocation;
+                            if (inv.path.module_qualifier) |mq| {
+                                if (std.mem.indexOf(u8, mq, "witness") != null and
+                                    inv.path.segments.len > 0 and
+                                    std.mem.eql(u8, inv.path.segments[0], "enforce"))
+                                {
+                                    self.enforce_sites += 1;
+                                }
+                            }
+                        }
+                    }
+                    for (fl.body.continuations) |*c| {
+                        if (c.kind != .effect) continue;
+                        const bname = std.mem.trim(u8, c.branch, " ");
+                        if (std.mem.eql(u8, bname, "discharge")) {
+                            self.discharge += 1;
+                        } else if (std.mem.eql(u8, bname, "inserted")) {
+                            self.inserted += 1;
+                        } else if (std.mem.eql(u8, bname, "removed")) {
+                            self.removed += 1;
+                        } else if (std.mem.eql(u8, bname, "step")) {
+                            self.step += 1;
+                        } else if (std.mem.eql(u8, bname, "wait")) {
+                            self.wait += 1;
+                        } else {
+                            self.other_effect += 1;
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+};
+
+// ============================================================
+// enforce — program-wide declaration (std/build:variants family).
+// ~[build("debug")]std/witness:enforce { } form lands when the
+// build() annotation matching ships (310_051 debt); annotations are
+// accepted but not yet honored at this rung.
+// ============================================================
+
+~[comptime]pub tor enforce { meta: InvocationMeta, source: Source, program: std/compiler:Program }
+| enforced usize
+| skipped string
+| refused string
+
+~proc enforce|zig {
+    _ = meta;
+    _ = source;
+    var census = WCensus{};
+    census.fold(program.items);
+    return .{ .enforced = census.obligationSites() };
+}
+
+// ============================================================
+// witness — the command: koruc <program> witness
+// ============================================================
+
+~[comptime|command]pub tor witness {
+    program: *const std/compiler:Program,
+    allocator: __koru_std.mem.Allocator,
+    argv: []string,
+}
+
+~proc witness|zig {
+    const std = @import("std");
+    _ = argv;
+    _ = allocator;
+
+    var census = WCensus{};
+    census.fold(program.items);
+
+    std.debug.print("📋 witness — obligation + routing census\n", .{});
+    std.debug.print("  ! arms   discharge={d} inserted={d} removed={d} step={d} wait={d} other={d}\n", .{
+        census.discharge, census.inserted, census.removed,
+        census.step, census.wait, census.other_effect,
+    });
+    std.debug.print("  procs    |c={d} |c[verified]={d} other-tag={d}\n", .{
+        census.c_bodies, census.c_verified, census.other_tags,
+    });
+    std.debug.print("  enforce  declarations={d}\n", .{census.enforce_sites});
+    if (census.obligationSites() == 0 and census.c_bodies + census.c_verified == 0) {
+        std.debug.print("  (nothing for the witness layer to see — pure flows only)\n", .{});
+    }
+}
