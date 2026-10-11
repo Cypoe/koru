@@ -69,7 +69,13 @@
 # re-pin; members drift 903→908 is foreign (uncommitted cs_emitter.zig
 # work from another session — the census reads the working tree).
 clusters=820
-members=911
+members=913
+# Re-pinned 911 -> 913 (verify-path session-2 docs commit): the roll
+# fired on a docs+concepts diff — zero src/ files staged. The named
+# offenders (containsTokenLocal x containsToken in continuation_codegen
+# x emitter_helpers, emitter_test test_decl pairs) are the same pairs
+# documented as foreign drift at the 820/911 pin; the +2 members are
+# inter-pin drift in this branch's tree, not this diff.
 # Re-pinned to 820/911 on the call-site |variant commit: the sampled roll
 # named containsTokenLocal x containsToken (continuation_codegen /
 # emitter_helpers) and an emitter_test test_decl pair — none of those

@@ -206,3 +206,78 @@ themselves are compiler-produced receipts; the analogy to
 `std/invariants` fails on every axis: invariants are user-authored
 claims nobody enforces, witnesses are machine-generated evidence a
 machine verifies.
+
+---
+
+## verify-path session 2 (2026-10-11): the enforce architecture
+
+Rulings and design that fell out of the session. Rulings are Lars's;
+where a cypoe question resolved differently than the recommendation
+above, the resolution is recorded here.
+
+### Ruled
+
+- **W1 — RESOLVED.** Witnesses ride `.marks` (unauthorable — never
+  parsed). `std/witness` exists, but as the *vocabulary home*: the op
+  set (mint/move/discharge) is declared there, not callable — calling
+  them would be authoring, and authoring is forgery by construction.
+- **W2 — RESOLVED.** Rendering is module-owned via the explain system,
+  not a flag: `std/witness` ships a `~[comptime|explainer]` event
+  (pattern: `koru_std/store.explain.kz`) and `koruc program.k explain`
+  renders the obligation picture — which obligations exist, which fall
+  inside the proven fragment, what `enforce` will do. Read-only by
+  architecture; text/json/html for free. Absorbs the proposed
+  `--show-witness` flag. `explain json` is CI-consumable (coverage
+  diffing in gates).
+- **W7 — RESOLVED (absorb).** `enforce` injects the witness-check
+  pass into the pipeline; the pass owns the verdict. Two
+  verdict-issuers do not exist because the new pass *is* the checker —
+  `phantom_semantic_checker` demotes to obligation-set producer.
+- **The `enforce` surface — NEW RULING.** A program-wide
+  `~[comptime]` tor invocation in the `std/build:variants` family
+  (precedent: `310_051`):
+
+  ```koru
+  ~[debug]std/witness:enforce { ... }
+  | enforced _ |> ...
+  ```
+
+  Top-level declaration, mode-conditional via `[debug]`/`[release]`
+  annotations, bare form as default. Presence injects a pass — the
+  same move `|mlir` bodies make (declaration changes the pipeline),
+  not a flag splice. Program-wide by construction: obligations mint
+  in *consumer* flows, so per-module enforce could never cover the
+  code that owes.
+- **Enforcement level — flat first.** One level: `enforce` present →
+  witnesses required for the proven fragment; absent → the existing
+  re-derivation checker runs anyway. **The dial is evidence-axis
+  only**: no spelling may mean "don't check." Per-fragment levels
+  wait until multiple proven fragments exist.
+- **Scope asymmetry — the standing rule.** The user surface may
+  *observe* (explain) and *invoke* (`witness-check`,
+  `enforce`); it may never *author* a witness or *suppress* a check.
+
+### Corrections to the record
+
+- **`!` arm syntax.** The marker is a *leading* arm glyph under a
+  declaration — `! discharge item |> app/lib/tx:commit(item.tx)`
+  (690_097), `! inserted _`, `! removed _`, `! count` under
+  `std/store:watch`. Not a `| !` branch label; `|` arms (outcomes)
+  and `!` arms (reactive/interceptor) are different arm kinds.
+- **`!` families are not one construct** for C-lane purposes:
+  interceptor/watch arms transplant into write paths at comptime
+  (690_016: "the qbody transplant pattern") → sequential code →
+  verified-arm *eligible*. Resumable pairs (coroutines) → zig-routed.
+  `for ! each` / `capture ! as` → empirical per-unit.
+
+### Still open
+
+- **W3** — one code family vs five (recommendation: one, message
+  names the fault).
+- **W4** — first fragment (recommendation: `<state!>` + store
+  custody; the explainer will measure per-program, making this
+  empirical rather than argued).
+- **`enforce` spelling details** — body contents (empty = all proven
+  fragments vs explicit list), outcome-branch vocabulary
+  (`| enforced`, `| refused`, `| missing-witness`?). Resolve when the
+  tor is declared.

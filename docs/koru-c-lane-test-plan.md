@@ -182,3 +182,60 @@ name-every-axis diagnostics pay off at this density.
 - **C4 — keep 400_211 reserved.** No corpus test spells the leak.
 - **C5 — `.kc` = the `.kcs` contract, verbatim.** C host lines spliced
   + `|c` proc bodies; `file_types.zig:58` already reserves the slot.
+
+---
+
+## verify-path session 2 (2026-10-11): partition oracle + surface rulings
+
+### Ruled
+
+- **C5 — RESOLVED (Lars).** `.kc` = the `.kcs` contract verbatim: C
+  host lines spliced + `|c` proc bodies. `file_types.zig:58` already
+  reserves the facet.
+- **C1 — DISSOLVED into the partition model.** The refusal table
+  assumed whole-program lanes; under the unit-partition oracle nothing
+  *refuses* for containing `!` — units route. Routing rule:
+  resumable-coroutine `!` pairs → zig units (CompCert's sequential
+  subset cannot express suspend/resume); transplanted-sequential `!`
+  arms (store interceptors, watches — 690_016's "qbody transplant
+  pattern" makes them straight-line code at write sites) → verified-arm
+  *eligible*; `for ! each` / `capture ! as` → empirical per-unit.
+  `!` is a lane assignment, never a wall.
+- **`|c[verified]` — NEW RULING.** The bracket qualifier names the
+  *pipeline arm* (`|mlir[gpu]` precedent — `main.zig:3097` treats the
+  bracketed form as the full tag with `mlir` as base). `|` names the
+  language, `[]` names the pipeline: `|c[verified]` = route this unit
+  through the verified toolchain, refuse if absent (G-CC-2 expressed
+  per-unit). New semantic axis for the qualifier — `gpu` selects a
+  target, `verified` selects a toolchain property; recorded as a Lars
+  ruling, not a consequence of the existing grammar. `witnessed` was
+  rejected: witnesses are the K3 layer and a `|c` body has no Koru
+  flow inside it — nothing to witness. `ccomp` was rejected as a
+  tool-name; `verified` names the property demanded.
+- **No `--lang=c` product toggle.** `c` was never a language column —
+  the arm never ships a binary. `~std/witness:enforce` owns the
+  arm-switch (the declaration injects the dual-arm pipeline);
+  `|c` stays the proc-body variant tag. Consequence: verification
+  moves from test metadata (`LANGUAGES` marker) into source — a cell
+  *declares* `enforce` instead of relying on harness flags.
+- **Three-arm picture.** ccomp = the oracle (theorem-backed,
+  independent — shares no infrastructure with the product lane);
+  zig = the product; `clang -fsanitize=address,undefined` on the same
+  `output_emitted.c` = a third arm catching UB/leaks that print
+  correctly. `zig cc` is a usable extra arm but never *the* oracle —
+  clang shares the LLVM middle-end with the zig product lane
+  (correlated miscompile channel).
+
+### Still open
+
+- **C2** — name all co-present axes vs first-seen (recommendation:
+  all; nearly free once refusal machinery exists — the axes are in
+  hand at check time).
+- **C3** — `NoCProcBody` own axis (recommendation: yes; corpus's
+  dominant row, 801 dirs).
+- **C4** — row-4 leak exemplar; `400_211` stays reserved pending a
+  real spelling.
+- **Emitter-side questions that are empirical, not rulings** — which
+  lowering-class `!` constructs emit valid C; whether the emitted-C
+  dialect's struct-layout story stays accessor-clean at the
+  zig/ccomp seam ("calls cross, memory doesn't").
