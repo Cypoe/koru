@@ -107,21 +107,32 @@ g_cc_4() {
         fail_gate "G-CC-4" "same input+flags produced differing binaries ($h1 vs $h2)"
         return 1
     fi
-    # Pin the oracle binary digest against tools.json when a digest is on file.
-    if [ -f "$TOOLS_JSON" ]; then
-        local pinned actual
-        pinned=$(node -e 'const t=require(process.argv[1]);const r=(t.tools||[]).find(x=>x.tool==="ccomp");if(r&&r.sha256)console.log(r.sha256)' "$TOOLS_JSON" 2>/dev/null)
-        if [ -n "$pinned" ]; then
-            actual=$(sha256sum "$(command -v "$CCOMP_BIN")" | cut -d' ' -f1)
-            if [ "$actual" != "$pinned" ]; then
-                fail_gate "G-CC-4" "oracle digest drift: tools.json pins $pinned, $(command -v "$CCOMP_BIN") is $actual"
-                return 1
-            fi
-            pass_gate "G-CC-4" "byte-identical fixture binary ($h1); oracle digest matches tools.json pin"
-            return 0
-        fi
+    # Pin the oracle binary digest against tools.json. The pin must be READ,
+    # not assumed: if no JSON parser exists the check cannot verify itself
+    # and fails loudly rather than passing unverified.
+    if [ ! -f "$TOOLS_JSON" ]; then
+        fail_gate "G-CC-4" "missing pin manifest: $TOOLS_JSON"
+        return 1
     fi
-    pass_gate "G-CC-4" "byte-identical fixture binary ($h1); no oracle digest pinned in tools.json yet"
+    local pinned actual
+    if command -v python3 >/dev/null 2>&1; then
+        pinned=$(python3 -c 'import json,sys;t=json.load(open(sys.argv[1]));r=[x for x in t.get("tools",[]) if x.get("tool")=="ccomp"];print(r[0]["sha256"] if r and r[0].get("sha256") else "")' "$TOOLS_JSON" 2>/dev/null)
+    elif command -v node >/dev/null 2>&1; then
+        pinned=$(node -e 'const t=require(process.argv[1]);const r=(t.tools||[]).find(x=>x.tool==="ccomp");if(r&&r.sha256)console.log(r.sha256)' "$TOOLS_JSON" 2>/dev/null)
+    else
+        fail_gate "G-CC-4" "cannot verify oracle digest: neither python3 nor node available to read $TOOLS_JSON"
+        return 1
+    fi
+    if [ -z "$pinned" ]; then
+        fail_gate "G-CC-4" "no ccomp sha256 pinned in $TOOLS_JSON — the pin cannot be checked, the gate cannot be green"
+        return 1
+    fi
+    actual=$(sha256sum "$(command -v "$CCOMP_BIN")" | cut -d' ' -f1)
+    if [ "$actual" != "$pinned" ]; then
+        fail_gate "G-CC-4" "oracle digest drift: tools.json pins $pinned, $(command -v "$CCOMP_BIN") is $actual"
+        return 1
+    fi
+    pass_gate "G-CC-4" "byte-identical fixture binary ($h1); oracle digest matches tools.json pin ($pinned)"
     return 0
 }
 
