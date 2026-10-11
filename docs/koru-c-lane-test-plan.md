@@ -262,3 +262,43 @@ only if measured refusal rates prove the wall costs too much.
   lowering-class `!` constructs emit valid C; whether the emitted-C
   dialect's struct-layout story stays accessor-clean at the
   zig/ccomp seam ("calls cross, memory doesn't").
+
+### Measured (session 3, tree `bd6dc5638` + uncommitted lane, branch `ccomp`)
+
+The deflated milestone exists and the four cells are green:
+
+- `src/c_emitter.zig` — sequential-fragment whole-program emitter
+  (~977 lines). Census first, emission second: `axisRefusalItems` walks
+  the entry-module items and names **every applicable axis** (C2's
+  "name all" recommendation, implemented).
+- `koru --lang=c` → `output_emitted.c` → `ccomp -O -fstruct-passing
+  -Wl,-s` → run → stdout diff vs `expected.txt`.
+- `400_212_c_transducer_equiv` — PASS through the harness; stdout
+  byte-identical with the default zig lane (`prefix: hello :suffix\n`).
+- `400_208` / `400_209` / `400_210` — PASS; each refusal names its
+  pinned axis, co-present axes listed together.
+- `NoCProcBody` exists as a named error class at the point of meet
+  (proc reached with no `|c` body and no Koru impl) — C3's "own axis"
+  in error-class form, not yet a census row.
+
+Two detection subtleties that shaped the census:
+
+- **Concurrency is module-scoped, not invocation-scoped.** Transforms
+  *consume* their invocations before emission — a `std/pump:create`
+  call never reaches the emitter as an `.invocation` node (the whole
+  flow is rewritten). The durable evidence is the merged `module_decl`
+  (`std.pump`, `std.rings`, `std.threading`/`worker`): presence
+  refuses. Stricter than use-scoped — `import std/pump` unused still
+  refuses — but always sound.
+- **`!` arms DO survive transforms**, nested inside impl-of flows, so
+  the resumable axis detects at the continuation level.
+
+Known cosmetic wart: the refusal diagnostic pair prints twice —
+`emit` is invoked from two pipeline points and `std.process.exit(1)`
+does not dedupe. The `C_REFUSES` pins are substring matches, so it
+does not affect verdicts.
+
+`HostShape`'s exhaustive `switch`es carry no `.c` arm. They are
+lazily analyzed — never instantiated on the C path — so a future `.c`
+caller meets a compile-time error naming the missing arm rather than
+silently emitting a wrong tagged-result shape.

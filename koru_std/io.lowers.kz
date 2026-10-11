@@ -34,3 +34,12 @@ fn ioLowerCsExpr(alloc: std.mem.Allocator, text: []const u8) []const u8 {
     var d = codegen_utils_io.LowerDiag{};
     return codegen_utils_io.lowerKoruExpr(alloc, text, .cs, .koru_expr, &d) catch text;
 }
+
+/// The third door's c twin: a `{{ … }}` interpolation is a Koru expression,
+/// lowered through the `.c` vocabulary arm. Same swallowed-refusal contract
+/// as ioLowerJsExpr — an unmodelled operation falls back to raw text, and
+/// the emitted C refusing at the oracle is the fragment's honest gate.
+fn ioLowerCExpr(alloc: std.mem.Allocator, text: []const u8) []const u8 {
+    var d = codegen_utils_io.LowerDiag{};
+    return codegen_utils_io.lowerKoruExpr(alloc, text, .c, .koru_expr, &d) catch text;
+}

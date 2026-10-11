@@ -578,9 +578,14 @@ regression_check_c_equivalence() {
     fi
 
     # Compile the emitted C with CompCert, then run and compare stdout+rc —
-    # the same expected.txt the Zig baseline satisfied (G-CC-1).
+    # the same expected.txt the Zig baseline satisfied (G-CC-1). The recipe
+    # is pinned: -fstruct-passing is REQUIRED (the emitter passes the input
+    # record by value — without the flag CompCert refuses the call shape,
+    # which is an oracle-side verdict, not an emitter bug); -O -Wl,-s is the
+    # G-CC-4 reproducibility recipe (unstripped ccomp -O binaries carry a
+    # random tempfile name as STT_FILE — 6 bytes of nondeterminism).
     local c_app="$(cd "$test_dir" && pwd)/a_c_equiv"
-    if ! "$ccomp_bin" -o "$c_app" "$c_src" >"$test_dir/ccomp.err" 2>&1; then
+    if ! "$ccomp_bin" -O -fstruct-passing -Wl,-s -o "$c_app" "$c_src" >"$test_dir/ccomp.err" 2>&1; then
         _c_equiv_fail "c-ccomp" "ccomp refused the emitted C (see ccomp.err)"
         return 0
     fi

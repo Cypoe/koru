@@ -528,6 +528,19 @@ const Allocator = std.mem.Allocator;
     cs_emitter_module.addImport("struct_literal", struct_literal_module);
     cs_emitter_module.addImport("codegen_utils", codegen_utils_module);
     cs_emitter_module.addImport("emitter_helpers", emitter_helpers_module);
+    // C-target emitter — the verification lane (K1: CompCert is the
+    // independent semantic oracle). Same fail-loud contract as js/cs; gated
+    // behind --lang=c and narrow on purpose: the sequential fragment only,
+    // everything else refuses on a named axis.
+    const c_emitter_module = b.createModule(.{
+        .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/c_emitter.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    c_emitter_module.addImport("ast", ast_module);
+    c_emitter_module.addImport("errors", errors_module);
+    c_emitter_module.addImport("file_types", file_types_module);
+    c_emitter_module.addImport("codegen_utils", codegen_utils_module);
     // Build.zig emission
     const emit_build_zig_module = b.createModule(.{
         .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/emit_build_zig.zig" },
@@ -641,6 +654,7 @@ const Allocator = std.mem.Allocator;
     backend_output_module.addImport("visitor_emitter", visitor_emitter_module);
     backend_output_module.addImport("js_emitter", js_emitter_module);
     backend_output_module.addImport("cs_emitter", cs_emitter_module);
+    backend_output_module.addImport("c_emitter", c_emitter_module);
     backend_output_module.addImport("emit_build_zig", emit_build_zig_module);
     backend_output_module.addImport("post_transform_weld", post_transform_weld_module);
     backend_output_module.addImport("ast_serializer", ast_serializer_module);
@@ -1701,6 +1715,14 @@ const emitFlowWithMocks = struct {
         // falls back to the Zig visitor's output.
         break :blk cs_emitter.emit(ctx.allocator, ctx.ast, CompilerEnv.library) catch |err| {
             std.debug.print("error[KORU047]: CS emission failed: {s}\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+    } else if (@import("std").mem.eql(u8, CompilerEnv.lang, "c")) blk: {
+        const c_emitter = @import("c_emitter");
+        // Verification lane: same fail-loud contract — a refusal is a
+        // program outside the verified fragment, never a Zig fallback.
+        break :blk c_emitter.emit(ctx.allocator, ctx.ast, CompilerEnv.library) catch |err| {
+            std.debug.print("error[KORU047]: C emission failed: {s}\n", .{@errorName(err)});
             std.process.exit(1);
         };
     } else visitor_code;

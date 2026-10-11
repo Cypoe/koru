@@ -793,7 +793,7 @@ test "koruWrapperPrefix Phase 2" {
 // purpose. That is the next rung and it is a language ruling, not a refactor.
 
 /// Which host the expression is being rendered for.
-pub const HostTarget = enum { zig, js, cs };
+pub const HostTarget = enum { zig, js, cs, c };
 
 /// WHAT KIND OF TEXT THIS IS, which decides how much of the lowering applies.
 ///
@@ -868,6 +868,8 @@ pub fn lowerKoruExpr(
     errdefer out.deinit(allocator);
     if (target == .cs) {
         try lowerCsInto(&out, allocator, text, mode, diag);
+    } else if (target == .c) {
+        try lowerCInto(&out, allocator, text, mode, diag);
     } else {
         try lowerJsInto(&out, allocator, text, mode, diag);
     }
@@ -1610,7 +1612,7 @@ fn lowerJsInto(
         // `if` whose next token is `{` is a STATEMENT in the Koru modes too —
         // `if (c) {…} else {…}` inside a kernel op body — and is left alone.
         if (mode != .host_text and c == 'i') {
-            if (try jsInlineIf(out, allocator, text, i, mode, diag)) |after| {
+            if (try jsInlineIf(out, allocator, text, i, mode, diag, .js)) |after| {
                 i = after;
                 continue;
             }
@@ -1866,6 +1868,26 @@ fn jsWordAt(text: []const u8, at: usize, comptime word: []const u8) bool {
 /// pending ifs belongs to the innermost one. The else-branch ends at the
 /// first depth-0 `,` `)` `]` `}` `;` — the delimiters an expression text is
 /// embedded in — or at end of input.
+/// Dispatch inner recursion for the shared inline-if lowering — the emitted
+/// `(c ? a : b)` shape is valid on BOTH js and c, so the scanner is shared and
+/// only the nested-expression lowering differs. `target` is never `.zig` here:
+/// the `.zig` arm of lowerKoruExpr returns before reaching this.
+fn lowerExprForTarget(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    target: HostTarget,
+    mode: ExprMode,
+    diag: ?*LowerDiag,
+) LowerError!void {
+    switch (target) {
+        .js => try lowerJsInto(out, allocator, text, mode, diag),
+        .c => try lowerCInto(out, allocator, text, mode, diag),
+        .cs => try lowerCsInto(out, allocator, text, mode, diag),
+        .zig => try out.appendSlice(allocator, text),
+    }
+}
+
 fn jsInlineIf(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
@@ -1873,6 +1895,7 @@ fn jsInlineIf(
     at: usize,
     mode: ExprMode,
     diag: ?*LowerDiag,
+    target: HostTarget,
 ) LowerError!?usize {
     if (!jsWordAt(text, at, "if")) return null;
     var j = at + 2;
@@ -1964,11 +1987,11 @@ fn jsInlineIf(
     }
 
     try out.append(allocator, '(');
-    try lowerJsInto(out, allocator, text[cond_open + 1 .. cond_close], mode, diag);
+    try lowerExprForTarget(out, allocator, text[cond_open + 1 .. cond_close], target, mode, diag);
     try out.appendSlice(allocator, " ? ");
-    try lowerJsInto(out, allocator, text[m..else_pos], mode, diag);
+    try lowerExprForTarget(out, allocator, text[m..else_pos], target, mode, diag);
     try out.appendSlice(allocator, " : ");
-    try lowerJsInto(out, allocator, text[else_pos + 4 .. k], mode, diag);
+    try lowerExprForTarget(out, allocator, text[else_pos + 4 .. k], target, mode, diag);
     try out.append(allocator, ')');
     return k;
 }
@@ -3589,4 +3612,360 @@ test "intCast: a bare cast stays verbatim (no inferred type to feed it)" {
 test "intCast: @as with a non-intCast second argument is left alone" {
     try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "@as(i64, x + 1)"));
     try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "@as(i64, @bitCast(i))"));
+}
+
+// ============================================================================
+// C TARGET — lowerCInto and the first-fragment C expression surface
+// ============================================================================
+//
+// The C lane is the verification substrate (CompCert, docs/koru-verification-
+// path.md). Koru's arithmetic/comparison vocabulary is already C — `+ - * / %`,
+// `< <= == != >= >`, and `%` is C's truncated remainder, the same semantics
+// the `.zig` arm's @rem rewrite exists to recover. What C must rewrite is the
+// small set where Koru and C genuinely spell differently:
+//
+//   `a ++ b`            — concat is a runtime call: `__koru_concat(a, b)`.
+//                         Unlike the js `+` swap this needs operand capture —
+//                         `__koru_concat` is a call, not an infix spelling.
+//   `a and b`/`a or b`  — `&&`/`||` (word-boundary anchored, both modes).
+//   `not x`             — `!x` (same anchoring).
+//   `x.len`             — `__koru_len(x)`: there is no member trick on C, the
+//                         prelude getter the js lane uses has no analogue, so
+//                         the access lowers to the preamble's strlen helper.
+//   `if (c) a else b`   — `(c ? a : b)` — the SAME shape jsInlineIf emits;
+//                         C's ternary is spelled identically.
+//   `@builtin(…)`       — refused: the sequential fragment has no builtin
+//                         surface; the caller names it through LowerDiag.
+//   reserved words      — `.koru_expr` renames `x` → `x_` for C keywords.
+//
+// Deliberately NOT rewritten (each is a loud failure, never a silent wrong
+// answer):
+//   - `==` on strings. Koru's is value equality; C's on `char *` is pointer
+//     equality. The honest lowering is `__koru_streq` but choosing it needs
+//     operand types this pass doesn't carry — left verbatim, the gap is
+//     pinned in docs/koru-c-lane-test-plan.md.
+//   - `.{ }` branch constructors and `[_]T{ }` arrays — no C spelling; the
+//     verbatim text fails in ccomp, loudly.
+//   - `+` string promotion (`"" + n`) — there is no coercion in C; a bare
+//     number in string position is a ccomp type error, which is loud.
+
+/// C KEYWORDS a Koru binding may legally be named. `.koru_expr` mode renames
+/// `x` → `x_` at the REFERENCE site — the same discipline as the js `$`
+/// suffix: rename the declaration and every reference together or neither.
+/// `true`/`false` are absent on purpose — they are literals with the same
+/// meaning under <stdbool.h>.
+const C_RESERVED = [_][]const u8{
+    "auto",      "break",    "case",     "char",   "const",    "continue",
+    "default",   "do",       "double",   "else",   "enum",     "extern",
+    "float",     "for",      "goto",     "if",     "inline",   "int",
+    "long",      "register", "restrict", "return", "short",    "signed",
+    "sizeof",    "static",   "struct",   "switch", "typedef",  "union",
+    "unsigned",  "void",     "volatile", "while",
+};
+
+fn isCReserved(name: []const u8) bool {
+    for (C_RESERVED) |w| {
+        if (std.mem.eql(u8, name, w)) return true;
+    }
+    return false;
+}
+
+/// The start index of the operand at the TAIL of `out` — the text that will be
+/// the left operand of an infix→call lowering (`++`→`__koru_concat`,
+/// `.len`→`__koru_len`). Same capture shape jsWrapOp uses for `*%`/`+%`/`-%`,
+/// extended with the one class it didn't need: a string-literal operand
+/// (`"a" ++ b` is the common concat form — `+` never needed it as a call).
+/// Returns null when the tail isn't an operand shape; the caller then leaves
+/// the operator verbatim, which is a loud downstream error rather than a
+/// silently wrong lowering. NON-MUTATING: the caller shrinks `out` itself,
+/// and only after the right-hand side has also validated.
+fn trailingOperandStart(out: *const std.ArrayList(u8)) ?usize {
+    var l = out.items.len;
+    while (l > 0 and std.ascii.isWhitespace(out.items[l - 1])) l -= 1;
+    if (l == 0) return null;
+    const last = out.items[l - 1];
+    if (last == ')' or last == ']' or last == '}') {
+        const open: u8 = switch (last) {
+            ')' => '(',
+            ']' => '[',
+            '}' => '{',
+            else => unreachable,
+        };
+        var depth: usize = 0;
+        while (l > 0) {
+            l -= 1;
+            const ch = out.items[l];
+            if (ch == last) depth += 1;
+            if (ch == open) {
+                if (depth == 0) return null;
+                depth -= 1;
+                if (depth == 0) break;
+            }
+        }
+        if (depth != 0) return null;
+        // The group may be a call's argument list — `f(x) ++ y` wants the
+        // whole `f(x)`, and a nested `__koru_concat(...) ++ z` wants the
+        // whole call. Extend back over the callee identifier.
+        while (l > 0 and exprIdentChar(out.items[l - 1])) l -= 1;
+    } else if (last == '"' or last == '\'') {
+        // Closing quote at the tail — walk back to the matching opener,
+        // skipping escaped quotes (odd backslash run = escaped).
+        var k = l - 1;
+        var found = false;
+        while (k > 0) {
+            k -= 1;
+            if (out.items[k] == last) {
+                var bs: usize = 0;
+                var b = k;
+                while (b > 0 and out.items[b - 1] == '\\') {
+                    b -= 1;
+                    bs += 1;
+                }
+                if (bs % 2 == 0) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found) return null;
+        l = k;
+    } else if (exprIdentChar(last) or last == '.') {
+        while (l > 0 and (exprIdentChar(out.items[l - 1]) or out.items[l - 1] == '.')) l -= 1;
+    } else return null;
+    return l;
+}
+
+/// End index of the operand term starting at `text[j]` (leading whitespace
+/// skipped): a quoted literal, a balanced `(`/`[`/`{` group, or an atom
+/// (identifier/dotted path/number/`@`-name) optionally followed by a `()` call
+/// group. Returns null on unbalanced or empty shapes — the caller leaves the
+/// operator verbatim.
+fn scanOperandEnd(text: []const u8, j_start: usize) ?usize {
+    var j = j_start;
+    while (j < text.len and std.ascii.isWhitespace(text[j])) j += 1;
+    if (j >= text.len) return null;
+    const first = text[j];
+    if (first == '"' or first == '\'') {
+        // jsSkipQuoted returns text.len for BOTH an unterminated quote and
+        // one closing on the final byte — disambiguate on the last char.
+        const end = jsSkipQuoted(text, j);
+        return if (end > j + 1 and text[end - 1] == first) end else null;
+    }
+    if (first == '(' or first == '[' or first == '{') {
+        var depth: usize = 0;
+        var k = j;
+        while (k < text.len) {
+            const ch = text[k];
+            if (ch == '"' or ch == '\'' or ch == '`') {
+                k = jsSkipQuoted(text, k);
+                continue;
+            }
+            if (ch == '(' or ch == '[' or ch == '{') depth += 1;
+            if (ch == ')' or ch == ']' or ch == '}') {
+                depth -= 1;
+                if (depth == 0) return k + 1;
+            }
+            k += 1;
+        }
+        return null;
+    }
+    var k = j;
+    while (k < text.len and (exprIdentChar(text[k]) or text[k] == '.' or text[k] == '@')) k += 1;
+    if (k == j) return null;
+    if (k < text.len and text[k] == '(') {
+        var depth: usize = 0;
+        while (k < text.len) {
+            const ch = text[k];
+            if (ch == '"' or ch == '\'' or ch == '`') {
+                k = jsSkipQuoted(text, k);
+                continue;
+            }
+            if (ch == '(') depth += 1;
+            if (ch == ')') {
+                depth -= 1;
+                if (depth == 0) {
+                    k += 1;
+                    break;
+                }
+            }
+            k += 1;
+        }
+        if (depth != 0) return null;
+    }
+    return k;
+}
+
+/// `a ++ b` → `__koru_concat(a, b)`. Both operands are captured first — the
+/// rewrite commits only when both validate, so a shape it can't read falls
+/// through verbatim (a `++` in C is a postfix increment: still a syntax
+/// error, still loud). The RHS re-enters lowerCInto so a nested expression
+/// (`a ++ f(b)`) lowers inside the call.
+fn cConcat(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    at: usize,
+    mode: ExprMode,
+    diag: ?*LowerDiag,
+) LowerError!?usize {
+    const l_start = trailingOperandStart(out) orelse return null;
+    var l_end = out.items.len;
+    while (l_end > 0 and std.ascii.isWhitespace(out.items[l_end - 1])) l_end -= 1;
+    const r_end = scanOperandEnd(text, at + 2) orelse return null;
+    const lhs = try allocator.dupe(u8, out.items[l_start..l_end]);
+    defer allocator.free(lhs);
+    out.shrinkRetainingCapacity(l_start);
+    try out.appendSlice(allocator, "__koru_concat(");
+    try out.appendSlice(allocator, lhs);
+    try out.appendSlice(allocator, ", ");
+    var r_start = at + 2;
+    while (r_start < r_end and std.ascii.isWhitespace(text[r_start])) r_start += 1;
+    try lowerCInto(out, allocator, text[r_start..r_end], mode, diag);
+    try out.append(allocator, ')');
+    return r_end;
+}
+
+/// Render Koru expression text as C. See the block comment above for the
+/// rewrite set and the deliberate gaps — C is the oracle substrate, so the
+/// bias is verbatim-where-correct over cleverness.
+fn lowerCInto(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    mode: ExprMode,
+    diag: ?*LowerDiag,
+) LowerError!void {
+    var i: usize = 0;
+    var quote: ?u8 = null;
+    while (i < text.len) {
+        const c = text[i];
+        if (quote) |q| {
+            if (c == '\\' and i + 1 < text.len) {
+                try out.appendSlice(allocator, text[i .. i + 2]);
+                i += 2;
+                continue;
+            }
+            if (c == q) quote = null;
+            try out.append(allocator, c);
+            i += 1;
+            continue;
+        }
+        if (c == '"' or c == '\'') {
+            quote = c;
+            try out.append(allocator, c);
+            i += 1;
+            continue;
+        }
+        // `++` — Koru's concatenation, spelled Zig's way. In C it is the
+        // increment operator: unlowered it is a syntax error, not a wrong
+        // answer. Host text is already C, so its `++` is a genuine increment
+        // and stays — same mode rule as the js arm.
+        if (mode != .host_text and c == '+' and i + 1 < text.len and text[i + 1] == '+') {
+            if (try cConcat(out, allocator, text, i, mode, diag)) |after| {
+                i = after;
+                continue;
+            }
+        }
+        // `and`/`or`/`not` — word-boundary anchored, both modes (the js arm's
+        // reasoning carries: these are Koru's logical vocabulary wherever a
+        // Koru expression arrives, and never C keywords).
+        if ((c == 'a' or c == 'o' or c == 'n') and
+            (i == 0 or (!exprIdentChar(text[i - 1]) and text[i - 1] != '.')))
+        {
+            var rep: ?[]const u8 = null;
+            var wlen: usize = 0;
+            if (std.mem.startsWith(u8, text[i..], "and")) {
+                rep = "&&";
+                wlen = 3;
+            } else if (std.mem.startsWith(u8, text[i..], "or")) {
+                rep = "||";
+                wlen = 2;
+            } else if (std.mem.startsWith(u8, text[i..], "not")) {
+                rep = "!";
+                wlen = 3;
+            }
+            if (rep) |r| {
+                if (i + wlen >= text.len or !exprIdentChar(text[i + wlen])) {
+                    try out.appendSlice(allocator, r);
+                    i += wlen;
+                    continue;
+                }
+            }
+        }
+        // `@`-builtins have no C surface in the first fragment — refuse by
+        // name through LowerDiag rather than paste zig builtins into C.
+        if (c == '@' and i + 1 < text.len and exprIdentChar(text[i + 1])) {
+            var e = i + 1;
+            while (e < text.len and exprIdentChar(text[e])) e += 1;
+            if (diag) |d| d.unknown_builtin = text[i..e];
+            return LowerError.UnsupportedBuiltin;
+        }
+        // Inline conditional `if (c) a else b` → `(c ? a : b)` — the same
+        // shape jsInlineIf emits, and C spells the ternary identically.
+        if (mode != .host_text and c == 'i') {
+            if (try jsInlineIf(out, allocator, text, i, mode, diag, .c)) |after| {
+                i = after;
+                continue;
+            }
+        }
+        // `x.len` → `__koru_len(x)`. Koru's `.len` reads through a preamble
+        // getter on the js lane; C has no member trick, so the access lowers
+        // to a call on the operand. koru modes only — host_text `.len` is
+        // already-C text (a struct field) and stays.
+        if (mode != .host_text and c == '.' and
+            i + 4 <= text.len and std.mem.eql(u8, text[i + 1 .. i + 4], "len") and
+            (i + 4 >= text.len or !exprIdentChar(text[i + 4])))
+        {
+            if (trailingOperandStart(out)) |l_start| {
+                var l_end = out.items.len;
+                while (l_end > 0 and std.ascii.isWhitespace(out.items[l_end - 1])) l_end -= 1;
+                const lhs = try allocator.dupe(u8, out.items[l_start..l_end]);
+                defer allocator.free(lhs);
+                out.shrinkRetainingCapacity(l_start);
+                try out.appendSlice(allocator, "__koru_len(");
+                try out.appendSlice(allocator, lhs);
+                try out.append(allocator, ')');
+                i += 4;
+                continue;
+            }
+        }
+        // A binding reference C cannot spell. `.koru_expr` only — in host
+        // text the same words are genuine C keywords (`return`, `for`).
+        if (mode == .koru_expr and exprIdentChar(c) and !(c >= '0' and c <= '9') and
+            (i == 0 or (!exprIdentChar(text[i - 1]) and text[i - 1] != '.')))
+        {
+            var e = i;
+            while (e < text.len and exprIdentChar(text[e])) e += 1;
+            const word = text[i..e];
+            if (isCReserved(word)) {
+                try out.appendSlice(allocator, word);
+                try out.append(allocator, '_');
+                i = e;
+                continue;
+            }
+        }
+        try out.append(allocator, c);
+        i += 1;
+    }
+}
+
+test "lowerKoruExpr c: concat, len, booleans, inline if" {
+    const alloc = std.testing.allocator;
+    var diag: LowerDiag = .{};
+    const out = try lowerKoruExpr(alloc, "\"a\" ++ x ++ \"b\"", .c, .koru_expr, &diag);
+    defer alloc.free(out);
+    try std.testing.expectEqualStrings("__koru_concat(__koru_concat(\"a\", x), \"b\")", out);
+    const len_out = try lowerKoruExpr(alloc, "s.len + 1", .c, .koru_expr, &diag);
+    defer alloc.free(len_out);
+    try std.testing.expectEqualStrings("__koru_len(s) + 1", len_out);
+    const if_out = try lowerKoruExpr(alloc, "if (p and not q) a else b", .c, .koru_expr, &diag);
+    defer alloc.free(if_out);
+    try std.testing.expectEqualStrings("(p && ! q ? a  :  b)", if_out);
+}
+
+test "lowerKoruExpr c: @builtin refuses by name" {
+    const alloc = std.testing.allocator;
+    var diag: LowerDiag = .{};
+    try std.testing.expectError(LowerError.UnsupportedBuiltin, lowerKoruExpr(alloc, "@intCast(x)", .c, .koru_expr, &diag));
+    try std.testing.expectEqualStrings("@intCast", diag.unknown_builtin);
 }

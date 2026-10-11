@@ -1,0 +1,257 @@
+// Koru Standard Library: I/O — C placeholder operand + interpolation engine.
+// Joined via `~part cprec` in io.kz; merged into the io module at load.
+//
+// The C verification lane's print path. C has no `"" + x` auto-stringify, so
+// the engine does NOT build a concatenation — it emits one
+// __koru_stdout_write()/__koru_stderr_write() call per chunk: literal text
+// verbatim, a `{{ ... }}` placeholder lowered through the `.c` arm and
+// passed as the call's sole operand. A non-string operand (print.ln(42))
+// therefore emits a call the C type system itself refuses at the oracle —
+// argument type mismatch — which is the fragment's honest gate: faithful
+// emission, typed refusal, never a silent reinterpretation.
+//
+// `:.N` precision is refused outright rather than dropped: emitting the
+// operand unpadded would change output bytes silently, and a refusal is the
+// only honest answer while the lane has no printf-family formatter.
+
+// ============================================================================
+// C placeholder operand — the ioJsPlaceholderOperand twin.
+// ============================================================================
+/// Emit one `{{ … }}` placeholder's operand for `__printInterpolateC`.
+/// The spec after the first `:` is dropped — except a `:.N` precision tail,
+/// which is REFUSED (returns true) rather than silently unhonored.
+fn ioCPlaceholderOperand(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, raw: []const u8) bool {
+    var ws_start: usize = 0;
+    while (ws_start < raw.len and (raw[ws_start] == ' ' or raw[ws_start] == '\t')) : (ws_start += 1) {}
+    var ws_end = raw.len;
+    while (ws_end > ws_start and (raw[ws_end - 1] == ' ' or raw[ws_end - 1] == '\t')) : (ws_end -= 1) {}
+
+    var var_name = raw[ws_start..ws_end];
+    var precision: ?[]const u8 = null;
+    if (std.mem.indexOf(u8, var_name, ":")) |colon_pos| {
+        const spec = var_name[colon_pos + 1 ..];
+        var_name = var_name[0..colon_pos];
+        if (std.mem.indexOf(u8, spec, ":")) |p2| {
+            // `:.N` — the dot is the precision marker, digits after it are N.
+            const rest = spec[p2 + 1 ..];
+            if (rest.len > 1 and rest[0] == '.') {
+                const d = rest[1..];
+                var digits = true;
+                for (d) |c| digits = digits and c >= '0' and c <= '9';
+                if (digits) precision = d;
+            }
+        }
+    }
+    if (precision != null) return true;
+
+    buf.append(allocator, '(') catch unreachable;
+    buf.appendSlice(allocator, ioLowerCExpr(allocator, var_name)) catch unreachable;
+    buf.append(allocator, ')') catch unreachable;
+    return false;
+}
+
+// ============================================================================
+// C-target interpolation engine — the __printInterpolateCs twin. Same expr
+// surface, same reroute-to-print.impl surgery; what differs is the emitted
+// text shape (a statement LIST of write calls, not one concatenated arg).
+// ============================================================================
+fn __printInterpolateC(
+    expr: []const u8,
+    item: anytype,
+    reporter: anytype,
+    allocator: std.mem.Allocator,
+    comptime with_newline: bool,
+    to_fd: u8,
+) @import("ast").SiteResult {
+    const ast = @import("ast");
+
+    const flow = if (item.* == .flow)
+        &item.flow
+    else
+        return .{};
+
+    // Already transformed — don't re-run.
+    if (flow.inline_body != null) {
+        return .{};
+    }
+
+    const write_fn: []const u8 = if (to_fd == 2) "__koru_stderr_write" else "__koru_stdout_write";
+
+    var buf = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
+    var chunk = std.ArrayList(u8).initCapacity(allocator, 64) catch unreachable;
+
+    const flush = struct {
+        fn call(b: *std.ArrayList(u8), ch: *std.ArrayList(u8), a: std.mem.Allocator, w: []const u8) void {
+            if (ch.items.len == 0) return;
+            b.appendSlice(a, w) catch unreachable;
+            b.appendSlice(a, "(\"") catch unreachable;
+            b.appendSlice(a, ch.items) catch unreachable;
+            b.appendSlice(a, "\"); ") catch unreachable;
+            ch.clearRetainingCapacity();
+        }
+    }.call;
+
+    const is_string_literal = expr.len > 0 and expr[0] == '"';
+    var wrote_any = false;
+
+    if (is_string_literal) {
+        // Scan the INSIDE of the quotes — already-escaped, valid in a C "…".
+        const end: usize = if (expr[expr.len - 1] == '"') expr.len - 1 else expr.len;
+        const content = expr[1..end];
+        var i: usize = 0;
+        while (i < content.len) {
+            // {% if var %}body{% endif %} → write((var) ? "body" : "")
+            if (i + 1 < content.len and content[i] == '{' and content[i + 1] == '%') {
+                var ws_start = i + 2;
+                while (ws_start < content.len and (content[ws_start] == ' ' or content[ws_start] == '\t')) : (ws_start += 1) {}
+
+                if (ws_start + 3 <= content.len and std.mem.eql(u8, content[ws_start .. ws_start + 3], "if ")) {
+                    var var_pos = ws_start + 3;
+                    while (var_pos < content.len and (content[var_pos] == ' ' or content[var_pos] == '\t')) : (var_pos += 1) {}
+                    var var_end = var_pos;
+                    while (var_end < content.len and content[var_end] != ' ' and content[var_end] != '\t' and content[var_end] != '%') : (var_end += 1) {}
+                    const cond_var = content[var_pos..var_end];
+
+                    var tag_end = var_end;
+                    while (tag_end + 1 < content.len and !(content[tag_end] == '%' and content[tag_end + 1] == '}')) : (tag_end += 1) {}
+
+                    if (tag_end + 1 < content.len) {
+                        const body_start = tag_end + 2;
+                        const endif_marker = "{% endif %}";
+                        if (std.mem.indexOf(u8, content[body_start..], endif_marker)) |endif_offset| {
+                            const body_end = body_start + endif_offset;
+                            const body_content = content[body_start..body_end];
+
+                            flush(&buf, &chunk, allocator, write_fn);
+                            buf.appendSlice(allocator, write_fn) catch unreachable;
+                            buf.appendSlice(allocator, "((") catch unreachable;
+                            buf.appendSlice(allocator, ioLowerCExpr(allocator, cond_var)) catch unreachable;
+                            buf.appendSlice(allocator, ") ? \"") catch unreachable;
+                            buf.appendSlice(allocator, body_content) catch unreachable; // verbatim — already escaped
+                            buf.appendSlice(allocator, "\" : \"\"); ") catch unreachable;
+                            wrote_any = true;
+
+                            i = body_end + endif_marker.len;
+                            continue;
+                        }
+                    }
+                }
+                // Unrecognized {% — treat as literal.
+                chunk.append(allocator, content[i]) catch unreachable;
+                i += 1;
+            }
+            // {{ var:fmt }} → write((lowered)); :.N refuses (see header).
+            else if (i + 1 < content.len and content[i] == '{' and content[i + 1] == '{') {
+                var ws_start = i + 2;
+                while (ws_start < content.len and (content[ws_start] == ' ' or content[ws_start] == '\t')) : (ws_start += 1) {}
+
+                var j = ws_start;
+                while (j + 1 < content.len and !(content[j] == '}' and content[j + 1] == '}')) : (j += 1) {}
+
+                if (j + 1 < content.len) {
+                    var ws_end = j;
+                    while (ws_end > ws_start and (content[ws_end - 1] == ' ' or content[ws_end - 1] == '\t')) : (ws_end -= 1) {}
+
+                    flush(&buf, &chunk, allocator, write_fn);
+                    var operand = std.ArrayList(u8).initCapacity(allocator, 32) catch unreachable;
+                    if (ioCPlaceholderOperand(&operand, allocator, content[ws_start..ws_end])) {
+                        return ast.refuse(allocator, reporter, .KORU047, flow.location, flow.module, "std/io:print.ln|c: `:.N` precision has no C formatter yet — emitting the operand unpadded would change output bytes silently, so the lane refuses", .{});
+                    }
+                    buf.appendSlice(allocator, write_fn) catch unreachable;
+                    buf.append(allocator, '(') catch unreachable;
+                    buf.appendSlice(allocator, operand.items) catch unreachable;
+                    buf.appendSlice(allocator, "); ") catch unreachable;
+                    wrote_any = true;
+
+                    i = j + 2;
+                } else {
+                    chunk.append(allocator, content[i]) catch unreachable;
+                    i += 1;
+                }
+            } else {
+                chunk.append(allocator, content[i]) catch unreachable;
+                i += 1;
+            }
+        }
+        flush(&buf, &chunk, allocator, write_fn);
+        if (chunk.items.len > 0) wrote_any = true;
+    } else {
+        // Bare expression: the operand must already be `const char *` — a
+        // numeric arg emits a call the oracle's typecheck refuses (the
+        // fragment's typed gate, see header).
+        buf.appendSlice(allocator, write_fn) catch unreachable;
+        buf.appendSlice(allocator, "((") catch unreachable;
+        buf.appendSlice(allocator, ioLowerCExpr(allocator, expr)) catch unreachable;
+        buf.appendSlice(allocator, ")); ") catch unreachable;
+        wrote_any = true;
+    }
+
+    if (with_newline) {
+        buf.appendSlice(allocator, write_fn) catch unreachable;
+        buf.appendSlice(allocator, "(\"\\n\"); ") catch unreachable;
+    } else if (!wrote_any) {
+        // `print("")` — still one call, matching the other lanes' arity.
+        buf.appendSlice(allocator, write_fn) catch unreachable;
+        buf.appendSlice(allocator, "(\"\"); ") catch unreachable;
+    }
+
+    const inline_code = allocator.dupe(u8, buf.items) catch unreachable;
+
+    // Re-route to the [norun] print.impl tor for shape checking — the reroute
+    // is analysis-only; the spliced inline_body does the write. Mirrors the
+    // js/cs engines' whole-struct copy.
+    const impl_segments = allocator.alloc([]const u8, 2) catch unreachable;
+    impl_segments[0] = allocator.dupe(u8, "print") catch unreachable;
+    impl_segments[1] = allocator.dupe(u8, "impl") catch unreachable;
+    const impl_path = ast.DottedPath{
+        .module_qualifier = flow.inv().path.module_qualifier,
+        .segments = impl_segments,
+    };
+
+    const new_marks = allocator.alloc([]const u8, flow.inv().marks.len + 1) catch unreachable;
+    for (flow.inv().marks, 0..) |m, idx| new_marks[idx] = m;
+    new_marks[flow.inv().marks.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
+
+    const new_invocation = ast.Invocation{
+        .path = impl_path,
+        .args = flow.inv().args,
+        .annotations = flow.inv().annotations,
+        .marks = new_marks,
+        .inserted_by_tap = flow.inv().inserted_by_tap,
+        .from_opaque_tap = flow.inv().from_opaque_tap,
+    };
+
+    var transformed_flow = flow.*;
+    transformed_flow.body = ast.rootSite(new_invocation, flow.body.continuations, flow.location);
+    transformed_flow.inline_body = inline_code;
+
+    const new_item = ast.Item{ .flow = transformed_flow };
+    return .{ .replacement = new_item };
+}
+
+// C variants of the print family — selected under --lang=c the way print|js
+// is under --lang=js; same fd + newline semantics, routed through
+// __printInterpolateC.
+~proc print.ln|c {
+    _ = invocation;
+    _ = program;
+    return __printInterpolateC(expr, item, reporter, allocator, true, 1);
+}
+
+~proc print|c {
+    _ = invocation;
+    _ = program;
+    return __printInterpolateC(expr, item, reporter, allocator, false, 1);
+}
+
+~proc eprint.ln|c {
+    _ = invocation;
+    _ = program;
+    return __printInterpolateC(expr, item, reporter, allocator, true, 2);
+}
+
+~proc eprint|c {
+    _ = invocation;
+    _ = program;
+    return __printInterpolateC(expr, item, reporter, allocator, false, 2);
+}

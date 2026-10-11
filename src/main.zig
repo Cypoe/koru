@@ -2062,6 +2062,8 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\        "output_emitted.js"
             \\    else if (__koru_std.mem.eql(u8, CompilerEnv.lang, "cs"))
             \\        "output_emitted.cs"
+            \\    else if (__koru_std.mem.eql(u8, CompilerEnv.lang, "c"))
+            \\        "output_emitted.c"
             \\    else
             \\        "output_emitted.zig";
             \\
@@ -2186,7 +2188,10 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\    // JS-target spike: the JS path stops here. node runs output_emitted.js
             \\    // directly — there is no Stage D (`zig build` of the emitted output) and
             \\    // no a.out. Gated on CompilerEnv.lang so the Zig path below is untouched.
-            \\    if (__koru_std.mem.eql(u8, CompilerEnv.lang, "js")) return;
+            \\    // Same for the C lane: ccomp is the Stage-D oracle, invoked by the
+            \\    // regression check — koruc's job ends at output_emitted.c.
+            \\    if (__koru_std.mem.eql(u8, CompilerEnv.lang, "js") or
+            \\        __koru_std.mem.eql(u8, CompilerEnv.lang, "c")) return;
             \\
             \\    // --deep-check: the koruc-level verdict is already final — every
             \\    // pass ran, emission succeeded, output_emitted.zig is on disk.
@@ -3104,7 +3109,8 @@ fn enforceLangNamespace(
     lang: []const u8,
 ) !void {
     // Emitters wired into the stage-C dispatch (koru_std/compiler.kz).
-    if (std.mem.eql(u8, lang, "zig") or std.mem.eql(u8, lang, "js")) return;
+    if (std.mem.eql(u8, lang, "zig") or std.mem.eql(u8, lang, "js") or
+        std.mem.eql(u8, lang, "cs") or std.mem.eql(u8, lang, "c")) return;
 
     var declared = std.StringHashMap(void).init(allocator);
     defer declared.deinit();
@@ -3128,7 +3134,7 @@ fn enforceLangNamespace(
         try lw.writeAll(n);
     }
 
-    try printStderr(allocator, "error[KORU126]: --lang='{s}' names no emitter and no proc variant declared in this program\n  emitters: zig, js\n  declared variant tags: {s}\n  `--lang=<tag>` selects which `~proc <tor>|<tag>` bodies get emitted — a tag nothing declares still compiles, under a name that selects nothing\n  fix: pass one of the declared tags, or declare `~proc <tor>|{s} {{ ... }}` bodies for the target first\n", .{ lang, if (names.items.len == 0) "(none)" else list.items, lang });
+    try printStderr(allocator, "error[KORU126]: --lang='{s}' names no emitter and no proc variant declared in this program\n  emitters: zig, js, cs, c\n  declared variant tags: {s}\n  `--lang=<tag>` selects which `~proc <tor>|<tag>` bodies get emitted — a tag nothing declares still compiles, under a name that selects nothing\n  fix: pass one of the declared tags, or declare `~proc <tor>|{s} {{ ... }}` bodies for the target first\n", .{ lang, if (names.items.len == 0) "(none)" else list.items, lang });
     std.process.exit(1);
 }
 
@@ -9432,8 +9438,11 @@ pub fn main() !void {
         // skipped Stage D — there is no native executable. Report the real
         // artifact and do NOT try to exec a binary that was never built.
         const is_js_target = std.mem.eql(u8, compiler_config.lang, "js");
+        const is_c_target = std.mem.eql(u8, compiler_config.lang, "c");
         if (is_js_target) {
             try printStdout(allocator, "✓ Generated output_emitted.js (run with: node output_emitted.js)\n", .{});
+        } else if (is_c_target) {
+            try printStdout(allocator, "✓ Generated output_emitted.c (compile with: ccomp output_emitted.c)\n", .{});
         } else if (deep_check) {
             try printStdout(allocator, "✓ Deep check passed (emission written; native build skipped)\n", .{});
         } else if (detected_comptime_command) |cmd| {
@@ -9450,7 +9459,7 @@ pub fn main() !void {
         } else |_| {}
 
         // If run command, execute the binary
-        if (run_after_build and !is_js_target and !deep_check) {
+        if (run_after_build and !is_js_target and !is_c_target and !deep_check) {
             try printStdout(allocator, "Running {s}...\n\n", .{exe_name});
 
             const exe_path = try std.fs.path.join(allocator, &.{ ".", exe_name });
