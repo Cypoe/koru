@@ -1,0 +1,6 @@
+name: scope-deflation
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a design's scope was deliberately narrowed before implementation — the wider form parked or deferred, not repudiated. Use when a commit shrinks the buildable surface on evidence-cost grounds; if a durable *belief* was repudiated, declare a correction instead. First declared: verify-path partition-oracle deflation, 2026-10-11.
