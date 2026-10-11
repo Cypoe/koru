@@ -138,3 +138,71 @@ bring data. **[either]** = design discussion.
 - **C6 [survey]** — I can produce the co-presence matrix (which
   construct families co-occur with which refusal rows across the corpus)
   before C2 is decided, so the ruling sees the real collision rate.
+
+---
+
+## verify-path session (2026-10-11) — surveys + recommendations
+
+Measured at `ce877ccd3` (branch `verify-path`, cut from ccomp tip).
+Survey items filled with corpus numbers; the [Lars] items carry
+**recommendations, not rulings** — Lars decides each.
+
+### W5 — obligation-kind census (resolved, measured)
+
+Counted over `tests/regression/**/input.*` (2309 test dirs):
+
+| kind | spelling | count | notes |
+|---|---|---|---|
+| cleanup phantoms | `*T<state!>` | **561 occurrences, 59 distinct labels, 263 files** | dominant kind; top labels `owned!` 149, `open!` 46, `active!` 42, `opened!` 39, `live!` 31 |
+| borrows | `*T<state>` (no `!`) | 594 occurrences | read borrows — no discharge obligation |
+| store custody | `std/store:take|insert|discharge` | 261 files | take = mint, insert/discharge = settle; `! discharge` arms in 18 files |
+| panic branches | `\| ?!name T` | 88 occurrences | let-it-crash family (830_*); an obligation to *handle or declare*, not to discharge a resource |
+| effect `!` arms | `! arm |> ...` | ~1547 arms, 636 files | resumable continuations — different grammar than phantoms, C1 territory |
+| claims | `x = mod:tor(args) ! ...` | present (400_207 pins the shape) | impl-override binding head — cross-module custody claims |
+
+W4 consequence: the corpus's center of gravity is exactly the proposed
+seed — one-label-one-disposer kinds (`allocated!`/`owned!`-family +
+store take/insert). A first fragment covering `<state!>` phantoms +
+store custody covers the corpus's majority case.
+
+### Recommended rulings (Lars decides each)
+
+- **W1 — `.marks`.** Verified `src/ast.zig:1619` — "pass-produced only,
+  never parsed from surface syntax" on Invocation/Flow/binding marks,
+  and `auto_discharge_inserter` already stamps them in production. It is
+  the only channel where N3's "never hand-authored" is enforced by
+  grammar. Recommendation stands: `.marks`.
+- **W2 — stderr diagnostic + `--show-witness`.** The refusal names the
+  obligation id and the failed edge, KORU030-style; the flag dumps the
+  edge list. `proof(){}` may exist as a *rendered* debug form — the
+  parser must never accept it as input.
+- **W3 — one code, message names the fault.** KORU160–178 convention:
+  one code per class, the message carries {missing, malformed, forged,
+  stale, disagreement}. Reserve a single witness-refusal code rather
+  than five.
+- **W4 — yes, one-label-one-disposer.** Census above: `<state!>` +
+  store custody is the corpus's center of mass.
+- **W6 — ordered edge list + obligation ids.** Concretely: each mark
+  carries `op(mint|move|discharge), obligation_id, site`; the solver's
+  claim is "this list covers the obligation set." Encoding detail is
+  implementation work after W1; `marks` being `[]const []const u8`
+  means either a serialized form inside the string or marks growing a
+  typed payload — cheap either way, name it when W1 lands.
+- **W7 — absorb, don't wrap.** `phantom_semantic_checker` becomes the
+  obligation-set *producer* (untrusted enumeration is fine — it is data
+  the verifier checks completeness against); `witness-check` owns the
+  verdict via edge replay. Keeping two verdict-issuers means every
+  solver/checker disagreement is a refusal naming both — which under N1
+  is the cross-check working, not a bug.
+
+### One clarification worth making explicit
+
+`std/witness` as a *user-authored surface* would be the anti-goal —
+W1's forge-attempt class by construction. The name is only defensible
+as the **checker service** (the §3.5 "stdlib self-check" idea:
+`witness-check` exposed as a callable comptime tor so library code
+gates its own discharge sites — the Open Verifier shape). Witnesses
+themselves are compiler-produced receipts; the analogy to
+`std/invariants` fails on every axis: invariants are user-authored
+claims nobody enforces, witnesses are machine-generated evidence a
+machine verifies.

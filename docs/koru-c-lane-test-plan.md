@@ -100,3 +100,85 @@ tempfile `compcert<rand>.o` whose name lands in the output as an
 `STT_FILE` symbol (measured: 6 differing bytes at ~0x3459, two runs).
 Pinned recipe `ccomp -O -Wl,-s` (strip symtab) yields byte-identical
 binaries and identical stdout — the pin now lives in `g_cc_4`.
+
+---
+
+## verify-path session (2026-10-11)
+
+Measured at `ce877ccd3` (branch `verify-path`, cut from ccomp tip). Two
+pieces of ground established, one architectural consequence drawn, and
+recommended rulings for C1–C5 — **recommendations, not rulings**; Lars
+decides each.
+
+### The link seam is demonstrated, and already precedented twice
+
+Receipt (aarch64-linux container; `ccomp` = CompCert 3.18 via nixpkgs,
+`zig` 0.16.0): `ccomp -O -c part.c` produced a standard ELF `.o`;
+`zig build-exe main.zig part.o -lc` linked it; the binary ran, zig
+`main` called into CompCert-compiled code, correct results, rc 0.
+**Zig links ccomp-produced objects — demonstrated, not asserted.**
+
+The mechanism is already in the pipeline twice:
+
+- `~std/build:requires { exe.addObjectFile(...) }` — user-declared
+  splice into generated `build_output.zig` for the output binary
+  (310_021_build_requires_basic).
+- The `|mlir` seam — `src/main.zig` synthesizes build requirements on
+  sight of a `|mlir` proc body: Stage A writes `<sym>.mlir`,
+  `build_output.zig` globs, invokes the toolchain
+  (mlir-opt → mlir-translate → `clang -c`), `exe.addObjectFile`s the
+  result into the OUTPUT binary. GPU twin included. A `|c` variant is a
+  **new tag on this seam** with `ccomp -c` as the toolchain step —
+  sibling mechanism, not new architecture.
+
+### Partition oracle — the link's architectural consequence
+
+Whole-program parity (arm A = zig-all, arm B = ccomp-all) is the
+milestone, not the end state. The link enables **per-unit lanes**:
+
+- arm A: zig compiles every unit.
+- arm B: zig compiles the non-C units; ccomp compiles the C-expressible
+  units.
+- A/B divergence can only originate in the C-expressible fragment — the
+  non-C units are identical objects in both arms, so a zig miscompile
+  cancels out of the comparison. Oracle coverage becomes each program's
+  **C-fraction** instead of requiring C-fraction == 1.
+- Refusals downgrade from program verdicts to lane assignments; the
+  refusal table becomes a coverage map.
+- Seam rule: **calls cross, memory doesn't.** Shared state goes through
+  accessor functions (the lowering table's "closed accessor set" is the
+  boundary); zig and C share no struct-layout guarantee.
+
+Sequencing unchanged: whole-program first (400_212 needs zero
+partitioning machinery), partition second.
+
+### C6 — refusal co-presence, measured (2309 test dirs)
+
+| axis | dirs |
+|---|---|
+| R5 zig-only procs (no other variant) | 801 |
+| R1 host lines (top-level zig decls in `.kz`) | 561 |
+| R2 resumable `!` arms (not `! each`/`! as`) | 414 |
+| R2 lowering-class `!` arms (`for ! each`, `capture ! as`) | 223 |
+| R3 pump/rings/worker | 51 |
+
+Top combinations: **910 dirs (39%) present no refusal axis**; the
+commonest collision is R1+R5 (402 dirs); ~25% of the corpus presents
+two or more axes. C2's ordering question has a real collision rate:
+name-every-axis diagnostics pay off at this density.
+
+### Recommended rulings (Lars decides)
+
+- **C1 — resumption, not glyph.** Row 2 should read "resumable `!`
+  pairs" — coroutines are what CompCert cannot express. `for ! each` /
+  `capture ! as` are bounded iteration (223 corpus dirs use them);
+  refusing them keeps G-CC-1's sieve class out for no semantic reason.
+- **C2 — name every axis.** At ~25% co-presence, first-seen ordering
+  costs users one compile per axis. The emitter knows all axes at check
+  time; enumerate them in one diagnostic.
+- **C3 — NoCProcBody is its own axis.** R5 is the corpus's dominant row
+  (801 dirs) and a `.k` file hits it with zero host lines — folding it
+  into row 1 is the wrong shape. Mirror `NoJsProcBody` (400_191).
+- **C4 — keep 400_211 reserved.** No corpus test spells the leak.
+- **C5 — `.kc` = the `.kcs` contract, verbatim.** C host lines spliced
+  + `|c` proc bodies; `file_types.zig:58` already reserves the slot.
