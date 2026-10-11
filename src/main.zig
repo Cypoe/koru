@@ -300,7 +300,7 @@ fn runPackageStep(
 /// and silently emitted JS for zig programs. Proof: `koruc input.k --lang=js`
 /// then `koruc input.k` with a shared cache produced output_emitted.js from
 /// the zig invocation.)
-fn backendCacheKey(allocator: std.mem.Allocator, koru_home: []const u8, output_dir: []const u8) ?[]const u8 {
+fn backendCacheKey(allocator: std.mem.Allocator, koru_home: []const u8, output_dir: []const u8, emitted_source: []const u8) ?[]const u8 {
     var h = std.hash.Fnv1a_64.init();
     var count: usize = 0;
     const roots = [_][]const u8{ "src", "koru_std" };
@@ -343,6 +343,29 @@ fn backendCacheKey(allocator: std.mem.Allocator, koru_home: []const u8, output_d
     h.update("backend_output_emitted.zig");
     h.update(embedded_contents);
     count += 1;
+    // The emitted backend source and its build file are generated per-compile
+    // by THIS koruc binary — the src+koru_std hash above only sees the tree,
+    // not the emitter. A stale koruc over a current tree emits a stale
+    // backend and would otherwise cache it under a current-src key,
+    // poisoning every later build that hits it (measured 2026-10-11: a
+    // post-overlay koruc was served a pre-overlay backend; the emitted
+    // program silently compiled against stock zig std). Hashing the emitted
+    // files keys on the actual zig-build inputs. `emitted_source` is the
+    // caller's own output path so a renamed emit is keyed too. Same
+    // FAIL-LOUD rule: unreadable means disable the cache, never serve a
+    // mismatch.
+    for ([_][]const u8{ emitted_source, "build_backend.zig" }) |emitted| {
+        const emitted_path = if (std.fs.path.dirname(emitted)) |_|
+            emitted
+        else
+            std.fs.path.join(allocator, &[_][]const u8{ output_dir, emitted }) catch return null;
+        defer if (std.fs.path.dirname(emitted) == null) allocator.free(emitted_path);
+        const emitted_contents = std.fs.cwd().readFileAlloc(allocator, emitted_path, 64 * 1024 * 1024) catch return null;
+        defer allocator.free(emitted_contents);
+        h.update(emitted);
+        h.update(emitted_contents);
+        count += 1;
+    }
     if (count == 0) return null;
     return std.fmt.allocPrint(allocator, "{x}", .{h.final()}) catch null;
 }
@@ -9216,7 +9239,7 @@ pub fn main() !void {
         // the full build. The key covers every compiler-side input file.
         var backend_cached = false;
         if (minted_backend_path == null) {
-            if (backendCacheKey(allocator, koru_lib_path, output_dir_for_build)) |bkey| {
+            if (backendCacheKey(allocator, koru_lib_path, output_dir_for_build, output)) |bkey| {
             defer allocator.free(bkey);
             const cache_dir_path = backendCacheDir(allocator);
             defer allocator.free(cache_dir_path);
@@ -9277,7 +9300,7 @@ pub fn main() !void {
 
             // Store the freshly built backend into the cache so the next run
             // skips this build. Failure to store only costs a future rebuild.
-            if (backendCacheKey(allocator, koru_lib_path, output_dir_for_build)) |bkey2| {
+            if (backendCacheKey(allocator, koru_lib_path, output_dir_for_build, output)) |bkey2| {
                 defer allocator.free(bkey2);
                 const cache_dir_path = backendCacheDir(allocator);
                 defer allocator.free(cache_dir_path);

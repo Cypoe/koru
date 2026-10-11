@@ -66,8 +66,14 @@
 # codegen_utils.zig drift (+16 clusters / +33 members), the documented
 # per-target twin residual. Measured at HEAD: 1807/2288; full working
 # tree: 1828/2319. Clusters stay under pin.
-clusters=1831
-members=2346
+# Re-pinned in "backend: hash the emitted backend.zig into the backend
+# cache key": the roll fired on 1849/2373 vs pin 1831/2346 — decomposed
+# by stashing the commit's only src/ change (main.zig backendCacheKey):
+# HEAD alone measures the identical 1849/2373 and main.zig appears 0
+# times in the census. +18 clusters / +27 members of foreign drift
+# accumulated since the last pin; this commit's delta is zero.
+clusters=1849
+members=2373
 # Re-pinned to 1817/2276 on the cs builtin-table commit: lowerCsBuiltin's
 # scan/table arms twin lowerBuiltin's at the small-idiom tier too (per-target
 # lowering vocabularies — sanctioned twin class), plus the jsLowerFilter/

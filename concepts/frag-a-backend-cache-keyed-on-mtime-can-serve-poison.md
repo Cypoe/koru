@@ -5,6 +5,7 @@ provenance: 2026-08-15 — koru 172be12d backend cache; the airline bench gate b
 ts: 2026-08-15
 evolved: 2026-08-16 — content hash landed, THEN the key's COVERAGE missed the per-invocation generated compiler_env.zig; --lang=js backend served to zig builds (koru b90be9be → main.zig backendCacheKey fix)
 evolved: 2026-10-05 — Fail 3: the key cannot see the koruc binary's own embedded backend template; a stale generator keys correct, poisons completely (K# vertical, cs stage-D)
+evolved: 2026-10-11 — Fail 3 struck again: a pre-overlay koruc cached a stale-template backend under a current-src key; every later build's emitted program silently linked stock zig std. Fixed by hashing the emitted backend.zig + build_backend.zig into the key
 ---
 
 # A backend binary cache can serve a poisoned kernel (belief)
@@ -60,11 +61,17 @@ apphost demanding a runtime the box does not have. The failure surface was
 `.NET location:` complaining — three indirections from the actual cause,
 which was *which binary ran an hour ago*. Same family tell: the symptom
 names something (a missing framework) that no file in the key can explain.
-Mitigations, none landed: hash the embedded template's rendered bytes into
-the key (the template is inspectable — generateBackendCode could emit a
-self-hash comment into backend.zig and the frontend could compare it before
-trusting a hit), or treat `zig build` as a cache epoch and let the binary's
-own build id ride the key.
+Mitigation landed 2026-10-11 — and proven necessary by a second instance:
+a pre-overlay koruc (no `__koruEnsureZigLibOverlay` in its template) cached
+its stale backend under a post-overlay `src/` key; every later emitted
+program was then compiled by that backend and silently linked **stock**
+`std.json.Stringify` — the `--zig-lib-dir` overlay simply never ran, with
+no error anywhere; the only tells were symbol tables and disassembly. The
+fix is the simpler form of the self-hash idea: hash the emitted
+`backend.zig` + `build_backend.zig` themselves into the key. The emitted
+text IS the template's rendered bytes — keying on it captures emitter
+version by construction, so a stale generator can only ever mint a key a
+fresh one never looks up.
 
 The discipline that catches all three, retroactively: **enumerate what the
 binary actually embeds — every file the compilation unit imports, every file
