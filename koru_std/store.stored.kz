@@ -213,6 +213,8 @@
                     // index position in the emitted text.
                     env_row = if (storeHostTarget() == .cs)
                         std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_read_{s}({s})", .{ env_store, codegen_utils_store.HostShape.csFolded(allocator, ref_field), base }) catch unreachable
+                    else if (storeHostTarget() == .c)
+                        std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_resolve_{s}({s})]", .{ env_store, codegen_utils_store.cMemberName(allocator, ref_field), env_store, base }) catch unreachable
                     else
                         std.fmt.allocPrint(allocator, "(&__koru_store_{s}.{s})[__koru_store_{s}.__koru_resolve({s})]", .{ env_store, ref_field, env_store, base }) catch unreachable;
                 } else {
@@ -268,6 +270,8 @@
             const re = env_row.?;
             const env_row_arg = if (std.mem.startsWith(u8, re, "__koru_sdix_"))
                 re
+            else if (storeHostTarget() == .c)
+                std.fmt.allocPrint(allocator, "__koru_resolve_{s}({s})", .{ env_store, re }) catch unreachable
             else
                 std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_resolve({s})", .{ env_store, re }) catch unreachable;
             // THE SPECIALISED UNIT IF `new` EMITTED ONE, else the general
@@ -304,7 +308,7 @@
             } else {
                 const a1 = allocator.alloc(ast.Arg, env_col_types.len + 2) catch unreachable;
                 a1[0] = ast.Arg{ .name = allocator.dupe(u8, "row") catch unreachable, .value = allocator.dupe(u8, env_row_arg) catch unreachable };
-                a1[1] = ast.Arg{ .name = allocator.dupe(u8, "field") catch unreachable, .value = std.fmt.allocPrint(allocator, "@as(i64, @bitCast(@as(u64, {d})))", .{mask}) catch unreachable };
+                a1[1] = ast.Arg{ .name = allocator.dupe(u8, "field") catch unreachable, .value = if (storeHostTarget() == .c) std.fmt.allocPrint(allocator, "0x{X}ull", .{mask}) catch unreachable else std.fmt.allocPrint(allocator, "@as(i64, @bitCast(@as(u64, {d})))", .{mask}) catch unreachable };
                 for (env_col_types, 0..) |ct, ci| {
                     const is_float = std.mem.eql(u8, ct, "f64") or std.mem.eql(u8, ct, "f32");
                     const is_string = std.mem.eql(u8, ct, "string") or std.mem.eql(u8, ct, "[]const u8");
@@ -338,7 +342,7 @@
                 const a1 = allocator.alloc(ast.Arg, 2) catch unreachable;
                 // A BIT, not an index — the singleton envwrite reads `field` as
                 // a mask, same contract as the plural one.
-                a1[0] = ast.Arg{ .name = allocator.dupe(u8, "field") catch unreachable, .value = std.fmt.allocPrint(allocator, "@as(i64, @bitCast(@as(u64, 1) << {d}))", .{env_idx[wi]}) catch unreachable };
+                a1[0] = ast.Arg{ .name = allocator.dupe(u8, "field") catch unreachable, .value = if (storeHostTarget() == .c) std.fmt.allocPrint(allocator, "0x{X}ull", .{@as(u64, 1) << @intCast(env_idx[wi])}) catch unreachable else std.fmt.allocPrint(allocator, "@as(i64, @bitCast(@as(u64, 1) << {d}))", .{env_idx[wi]}) catch unreachable };
                 a1[1] = ast.Arg{ .name = allocator.dupe(u8, "value") catch unreachable, .value = env_values[wi] };
                 invs[wi] = ast.Invocation{
                     .path = H.mkPathH2(allocator, env_home, envw_name),
@@ -504,6 +508,8 @@
                 // index position in the emitted text.
                 row_expr = if (storeHostTarget() == .cs)
                     std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_read_{s}({s})", .{ target_store, codegen_utils_store.HostShape.csFolded(allocator, ref_field), base }) catch unreachable
+                else if (storeHostTarget() == .c)
+                    std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_resolve_{s}({s})]", .{ target_store, codegen_utils_store.cMemberName(allocator, ref_field), target_store, base }) catch unreachable
                 else
                     std.fmt.allocPrint(allocator, "(&__koru_store_{s}.{s})[__koru_store_{s}.__koru_resolve({s})]", .{ target_store, ref_field, target_store, base }) catch unreachable;
             } else {
@@ -523,6 +529,8 @@
     const row_arg: ?[]const u8 = if (row_expr) |re|
         (if (std.mem.startsWith(u8, re, "__koru_sdix_"))
             re
+        else if (storeHostTarget() == .c)
+            std.fmt.allocPrint(allocator, "__koru_resolve_{s}({s})", .{ target_store, re }) catch unreachable
         else
             std.fmt.allocPrint(allocator, "__koru_store_{s}.__koru_resolve({s})", .{ target_store, re }) catch unreachable)
     else

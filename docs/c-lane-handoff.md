@@ -464,3 +464,95 @@ is future work), effect `!` arms under tagged calls, `|*` catchall,
 **Next:** plural stored-write + indexed write targets (`__store_write_*`,
 `__store_envwrite_*` — the largest remaining mass), apply/`stored`, then
 watches/guards, then the borrow/container/record-return buckets.
+
+
+---
+
+## Stored-write tranche (this session, HEAD)
+
+`stored` writes lower on C now — the same generated event chain zig
+uses, no shortcut: `__store_apply_<s>` (field-index switch, one named
+branch per column, payload = written value), `__store_write_<s>` as an
+impl *flow* whose body is the apply invocation + `| <field> _` no-op
+arms (a `|c` proc would hide the call inside opaque text and apply's
+decl would never be reached — the flow mint keeps reachability honest
+and lands the discard-switch through the tagged machinery for free),
+`__store_envwrite_<s>` (one call per multi-field block, `field` rides a
+bit mask so every rhs reads pre-state — 690_126/690_251/697_007 pin it),
+`__store_announce_<s>` (post-write dispatch; a named no-op here because
+watch/interceptor presence already refuses the store), and the
+singleton envelope twins (`field: mask, value` per field + no-op
+announce). Indexed row-reference writes resolve at the write site via
+`__koru_resolve_<s>` — stale handle write traps identically to zig
+(690_115 prints `took 100` then the stale message), and a foreign-store
+handle is rejected by brand check (690_196).
+
+**Surgical fixes this tranche surfaced:**
+
+1. **The void `insert` never bumped `__koru_hslot_next`.** `c_append`
+   carried the hslot mint for insertf/inserth/take, but `cap_text` — the
+   void insert built a tranche earlier — never got it. A store fed only
+   `insert` minted `[id]`/`store[h]` handles that `row_of` rejected
+   (`slot >= hslot_next` == 0). Fourth instance of
+   `frag-a-fix-lands-in-one-lowering-path`, its narrowest yet — two
+   sibling text builders 60 lines apart, one host. Fixed by hoisting to
+   a shared `c_hmint`. (690_246)
+2. `store.query`'s `[id]` capture spelled
+   `__koru_store_<s>.__koru_handle_of(__koru_si)` unconditionally — the
+   host-switch frag's limit case, no branch at all. `.c` arm:
+   `__koru_handle_of_<s>(__koru_si)`.
+3. `stored`'s envwrite mask arg spelled `@as(i64, @bitCast(...))` for
+   every host — `.c` arm emits `0xN ull`. (First attempt used a
+   `(long long)` cast; arg text passes through a koru-identifier
+   escaper, which underscored the space into `long_ long_` — minted arg
+   text is not verbatim.)
+4. Singleton C return path dropped `stripe_items` entirely — envwrite /
+   announce decls+procs now ride the `c_appended` array (grew 4 → 8).
+5. `__koru_unreachable` is `_Noreturn`; apply tails end in a dead
+   `return {0}` because ccomp's return-path analysis does not read
+   `_Noreturn` (warning discipline, not semantics).
+
+**Acceptance — 51 new `c` pins through `ccomp -fstruct-passing`:** the
+stored-write heads (690_115 stale-write trap, 690_092
+remove-surviving row index, 690_196 foreign-handle trap, 690_246 `[id]`
+intrusive chain + singleton+plural envelopes), the pre-state pins
+(690_126, 690_251, 697_007), multi-field blocks (690_043, 690_125,
+690_128), chain binds (690_130, 690_131), self/foreign keys (690_048,
+690_075, 690_117), sweeps and row-addressed reads/writes (690_076,
+690_083, 690_087, 690_111, 690_112, 690_114, 690_118, 690_120,
+690_121, 690_122, 690_123, 690_127, 690_129, 690_242, 690_243,
+690_244, 690_245, 690_249, 690_339), grids (697_003, 697_004, 697_007,
+697_008, 697_010, 697_012, 697_013, 697_014; also 697_001/697_002 trap cells),
+the raft/orleans world cells (849_raft_quorum_commit,
+851_raft_identity_is_not_linearity, 852_orleans_turn_exclusivity,
+855_orleans_stale_read_survives_the_interleave), and cross-module
+(115_017, 115_040, 115_044, 115_046) — all byte-identical or
+pattern-matched
+against zig. Harness note: EXPECT_TRAP cells skip the c-check; their
+pins mark verified-by-hand evidence.
+
+**Known boundary (documented, not hidden):** minted write args are
+untyped text — the no-narrowing refusal lives in *zig's backend
+typecheck* (690_160 pins `expected type 'f32', found 'f64'` quoted from
+emitted Zig). C's implicit conversions compile what zig rejects, so a
+cross-width write narrows silently on the C lane. Same class JS already
+has (one number type). No honest wall exists at this rung — the fix is
+typed args / a typed emit check, K3 territory. Until then: cross-width
+writes are outside what the C lane guarantees; 690_160 stays a
+zig-only MUST_ERROR pin rather than laundering the absence into a green
+C cell. Evolved `frag-a-numeric-guarantee-does-not-port-between-hosts`
+with the instance.
+
+**Refusal surface (named):** rule/preorder/drain sweeps, lifecycle
+interceptors/watches, [tree], owned columns (+ `__store_fwrite_*`
+de-bundle), [entity], char[N], `std/indexes`, ref() homes, refine
+facets, drain/stripe verbs, `__store_envwrite_<s>_c<i>` specializations
+(the general masked unit covers them; specs are a speed elision, not a
+correctness one), cross-width writes (documented boundary above),
+effect `!` arms under tagged calls, `|*` catchall, `| b when` guarded
+dispatch.
+
+**Next:** watches/interceptors (the announce dispatch point exists —
+minting the arms is the tranche), owned-column `__store_fwrite_*`, then
+the borrow/container/record-return buckets; K3 Lean scaffold in
+parallel.

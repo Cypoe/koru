@@ -47,3 +47,24 @@ blind. The method-call spelling reached a stored-write *argument*, inside
 text the transform mints and the emitter passes through `writeExpr`
 verbatim, so nothing downstream could flag `.__koru_resolve(` as foreign.
 `.c => cell.col[__koru_resolve_<s>(h)]` names the host that was missing.
+
+Fourth occurrence, and the limit case: **no switch at all.** The `[id]`
+capture in `store.query.kz` spelled its value
+`{q}__koru_store_<s>.__koru_handle_of(__koru_si)` unconditionally — no
+`if (host_is_*)` anywhere near it — because when it was written there was
+one host whose cell carried `__koru_handle_of` as a method, and a spelling
+with no branch *is* the blind else taken to zero. The C arm
+(`__koru_handle_of_<s>(__koru_si)`, the flat-helper twin the cell already
+mints) names the host that was missing.
+
+Same sitting, two more of the same shape: the `stored` transform's
+envwrite mask literal `@as(i64, @bitCast(@as(u64, N)))` had no host branch
+either — a zig spelling minted verbatim into every lane's arg text (on C
+it needed `0xN ull`; the bare `(long long)` cast that was tried first also
+failed, because arg text passes through a koru-identifier escaper that
+underscored the space into `long_ long_` — *host text is not verbatim
+text*, a related trap). And the `690_160` boundary is the same belief one
+level down: zig's *backend* refuses a narrowing write for free, so no
+transform anywhere spells the check — the refusal lives in a switch that
+does not exist. C's implicit conversions compile what zig rejects; the
+guarantee was inside a host's spelling of "compile" all along.

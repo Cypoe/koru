@@ -459,7 +459,10 @@
         captures.append(allocator, .{
             .name = allocator.dupe(u8, idn) catch unreachable,
             .type = allocator.dupe(u8, "i64") catch unreachable,
-            .value = std.fmt.allocPrint(allocator, "{s}__koru_store_{s}.__koru_handle_of(__koru_si)", .{ storeCellQualifier(allocator, home_ns, program.main_module_name), store_name }) catch unreachable,
+            .value = if (host_is_c)
+                std.fmt.allocPrint(allocator, "__koru_handle_of_{s}(__koru_si)", .{store_name}) catch unreachable
+            else
+                std.fmt.allocPrint(allocator, "{s}__koru_store_{s}.__koru_handle_of(__koru_si)", .{ storeCellQualifier(allocator, home_ns, program.main_module_name), store_name }) catch unreachable,
             .lexical = false,
         }) catch unreachable;
     }

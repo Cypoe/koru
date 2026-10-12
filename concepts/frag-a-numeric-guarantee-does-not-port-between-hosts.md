@@ -80,3 +80,32 @@ includes *storage width*, and on JS the promise silently upgrades. The honest
 fix is type-directed `Math.fround` discipline in the lowerer — unbuilt — so
 the JS lane is a correctness surface for integer programs only, and float
 sinks across targets remain a named gap, not a bug report.
+
+## Second instance — the guarantee can live in a *backend's* typecheck (2026-10-13)
+
+690_160 asks the language to refuse `b.x: b.x + b.big` — an f64-valued
+expression stored into an f32 column. It does refuse, on the zig lane.
+But nothing in Koru refuses it: the stored transform mints host *text*
+args, no typed check ever runs on them, and the pinned diagnostic
+(`expected type 'f32', found 'f64'`) is quoted from the *emitted Zig*
+— the refusal is a property of zig-the-compiler, borrowed for free.
+
+Port that write to a host whose backend does not borrow the guarantee
+and it is gone silently. C's implicit conversions compile `float_slot =
+double_expr` without a word — the emitted program *runs*, producing the
+narrowed value zig refuses to produce. JS does not even have the
+distinction: one number type, nothing to narrow. Two lanes, two ways to
+miss the same refusal — and only the zig lane ever had it, which is the
+tell: **a guarantee that was never spelled in the transform lives
+inside whichever host backend happens to be strict, and ports to no
+other host for free.**
+
+The honest boundary this produces for the C fragment: minted write args
+are untyped text, so no C-side check can distinguish `x: 1.5` (a literal
+zig comptime-coerces, and C narrows to the *same* value — legal on both
+lanes) from `x: f64_expr` (refused on zig, silently narrowed on C). A
+wall that cannot see the difference cannot be built at this rung; the
+correct wall is typed args or a typed emit check — K3 territory. Until
+then the fragment's contract says it plainly: cross-width writes are
+outside what the C lane guarantees, and 690_160 stays a zig-only pin
+rather than laundering the absence into a green C cell.

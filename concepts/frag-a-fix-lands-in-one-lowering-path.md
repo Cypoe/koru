@@ -673,3 +673,92 @@ What this adds that the earlier instances did not have:
   only at fold-arm depth 0", which neither path currently states — one side
   over-suppresses nothing (correct by accident), the other under-scopes the
   label (the pin).
+
+## Fourth instance — same function, sixty lines apart, one host (2026-10-13)
+
+The narrowest instance yet, and the one that shows the class needs no
+lowering *boundary* at all. The C lane mints the void `__store_insert_<s>`
+body in `cap_text` and the tagged `insertf`/`inserth`/`take` bodies from a
+shared `c_append` block — two text builders for the same insert semantics,
+about sixty lines apart inside the same `host_is_c` block of the same
+transform.
+
+`c_append` carries the hslot mint — freelist pop or `hslot_next++`, the
+indirection row write under `!ident` — because `handle_of` and `row_of`
+count issued slots. `cap_text` was built a tranche earlier, before the
+handle machinery existed, and was never revisited: **the void insert —
+the most common path in the corpus — minted handles nothing could
+resolve.** A store fed only `insert` and read through `[id]` or
+`store[h]` produced a handle `row_of` rejected for `slot >= hslot_next`,
+whose value stayed zero. insertf/inserth/take programs were correct; the
+divergence surfaced only when 690_246's `[id]` chain read a plain-insert
+store — the first cell to combine the two.
+
+- **The sibling paths were not even two hosts.** Prior instances split
+  across languages, or across two driver positions of one construct. This
+  one is two `ArrayList(u8)` builders in one `if` — the "lowering paths"
+  of this belief bottom out at *duplicated emit text for one surface*,
+  which is the smallest unit the class can take. The fix that followed is
+  the convergence this belief keeps recommending: one `c_hmint`, shared.
+- **Age is the tell.** `cap_text` predated the machinery it needed. When
+  a later tranche adds a mechanism to a shared block, every older builder
+  of the same semantics is a suspect — "sibling" includes *earlier* and
+  *simpler*, not just *parallel*.
+- **The probe that found it was a feature, not a test written for it.**
+  `[id]` existed as a request before it existed as a cell; the first
+  program to run it on the C lane named the gap. Demand-driven machinery
+  tests itself only when the demand shows up.
+
+## Fourth instance — same function, sixty lines apart, one host (2026-10-13)
+
+The narrowest instance yet, and the one that shows the class needs no
+lowering *boundary* at all. The C lane mints the void 
+body in  and the tagged // bodies from a
+shared  block — two text builders for the same insert semantics,
+about sixty lines apart inside the same  block of the same
+transform.
+
+ carries the hslot mint — freelist pop or , the
+indirection row write under  — because  and 
+count issued slots.  was built a tranche earlier, before the
+handle machinery existed, and was never revisited: **the void insert —
+the most common path in the corpus — minted handles nothing could
+resolve.** A store fed only  and read through  or
+ produced a handle  rejected for ,
+whose value stayed zero. insertf/inserth/take programs were correct; the
+divergence surfaced only when 690_246s
+
+## Fourth instance — same function, sixty lines apart, one host (2026-10-13)
+
+The narrowest instance yet, and the one that shows the class needs no
+lowering *boundary* at all. The C lane mints the void `__store_insert_<s>`
+body in `cap_text` and the tagged `insertf`/`inserth`/`take` bodies from a
+shared `c_append` block — two text builders for the same insert semantics,
+about sixty lines apart inside the same `host_is_c` block of the same
+transform.
+
+`c_append` carries the hslot mint — freelist pop or `hslot_next++`, the
+indirection row write under `!ident` — because `handle_of` and `row_of`
+count issued slots. `cap_text` was built a tranche earlier, before the
+handle machinery existed, and was never revisited: **the void insert —
+the most common path in the corpus — minted handles nothing could
+resolve.** A store fed only `insert` and read through `[id]` or
+`store[h]` produced a handle `row_of` rejected for `slot >= hslot_next`,
+whose value stayed zero. insertf/inserth/take programs were correct; the
+divergence surfaced only when 690_246's `[id]` chain read a plain-insert
+store — the first cell to combine the two.
+
+- **The sibling paths were not even two hosts.** Prior instances split
+  across languages, or across two driver positions of one construct. This
+  one is two `ArrayList(u8)` builders in one `if` — the "lowering paths"
+  of this belief bottom out at *duplicated emit text for one surface*,
+  which is the smallest unit the class can take. The fix that followed is
+  the convergence this belief keeps recommending: one `c_hmint`, shared.
+- **Age is the tell.** `cap_text` predated the machinery it needed. When
+  a later tranche adds a mechanism to a shared block, every older builder
+  of the same semantics is a suspect — "sibling" includes *earlier* and
+  *simpler*, not just *parallel*.
+- **The probe that found it was a feature, not a test written for it.**
+  `[id]` existed as a request before it existed as a cell; the first
+  program to run it on the C lane named the gap. Demand-driven machinery
+  tests itself only when the demand shows up.
