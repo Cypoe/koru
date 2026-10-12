@@ -123,10 +123,19 @@
         // proven class cannot land in the column is refused here, before
         // any host sees it — the check lives in the transform, not in
         // whatever backend happens to typecheck emitted text.
-        for (env_fields, env_raw_values) |ef, rv| {
-            if (storedWriteNarrowing(allocator, program, env_store, ef, rv)) |m| {
+        // The verdicts are kept: each becomes a @witness mark on the
+        // lowered envwrite invocation (prepared-witness channel).
+        const env_checks = allocator.alloc(StoredWriteVerdict, env_fields.len) catch unreachable;
+        for (env_fields, env_raw_values, 0..) |ef, rv, k| {
+            env_checks[k] = storedWriteCheck(allocator, program, env_store, ef, rv);
+            if (env_checks[k].narrows) {
+                const m = storedWriteNarrowing(allocator, program, env_store, ef, rv).?;
                 return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "{s}", .{m}) };
             }
+        }
+        const env_wmarks = allocator.alloc([]const u8, env_checks.len) catch unreachable;
+        for (env_checks, 0..) |chk, k| {
+            env_wmarks[k] = storedWriteWitnessMark(allocator, chk);
         }
         // The head form must match the store's shape — the same two walls as
         // the single-write path.
@@ -313,7 +322,7 @@
                         .value = slot,
                     };
                 }
-                invs[0] = ast.Invocation{ .path = H.mkPathH2(allocator, env_home, spec_name), .args = a1, .marks = preambleAnn(allocator, invocation, &[_][]const u8{}) };
+                invs[0] = ast.Invocation{ .path = H.mkPathH2(allocator, env_home, spec_name), .args = a1, .marks = preambleAnn(allocator, invocation, env_wmarks) };
             } else {
                 const a1 = allocator.alloc(ast.Arg, env_col_types.len + 2) catch unreachable;
                 a1[0] = ast.Arg{ .name = allocator.dupe(u8, "row") catch unreachable, .value = allocator.dupe(u8, env_row_arg) catch unreachable };
@@ -330,7 +339,7 @@
                         .value = slot,
                     };
                 }
-                invs[0] = ast.Invocation{ .path = H.mkPathH2(allocator, env_home, envw_name), .args = a1, .marks = preambleAnn(allocator, invocation, &[_][]const u8{}) };
+                invs[0] = ast.Invocation{ .path = H.mkPathH2(allocator, env_home, envw_name), .args = a1, .marks = preambleAnn(allocator, invocation, env_wmarks) };
             }
             for (writes, 0..) |_, wi| {
                 const a2 = allocator.alloc(ast.Arg, 2) catch unreachable;
@@ -356,6 +365,7 @@
                 invs[wi] = ast.Invocation{
                     .path = H.mkPathH2(allocator, env_home, envw_name),
                     .args = a1,
+                    .marks = env_wmarks[wi .. wi + 1],
                 };
                 const a2 = allocator.alloc(ast.Arg, 1) catch unreachable;
                 a2[0] = ast.Arg{ .name = allocator.dupe(u8, "field") catch unreachable, .value = std.fmt.allocPrint(allocator, "{d}", .{env_idx[wi]}) catch unreachable };
@@ -476,8 +486,11 @@
         }
     }
 
-    // Same koru-owned narrowing refusal as the envelope path (690_160).
-    if (storedWriteNarrowing(allocator, program, target_store, target_field, w.value)) |m| {
+    // Same koru-owned narrowing refusal as the envelope path (690_160) —
+    // and the verdict becomes the @witness mark on the lowered write call.
+    const write_check = storedWriteCheck(allocator, program, target_store, target_field, w.value);
+    if (write_check.narrows) {
+        const m = storedWriteNarrowing(allocator, program, target_store, target_field, w.value).?;
         return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "{s}", .{m}) };
     }
 
@@ -739,13 +752,15 @@
     // user-facing case to paper over.
     const write_home = H.storeHomeModule(allocator, program, target_store) orelse
         std.debug.panic("std/store: store '{s}' resolved a field order but no declaring module", .{target_store});
+    const write_wmark = allocator.alloc([]const u8, 1) catch unreachable;
+    write_wmark[0] = storedWriteWitnessMark(allocator, write_check);
     const write_inv = ast.Invocation{
         .path = ast.DottedPath{
             .module_qualifier = allocator.dupe(u8, write_home) catch unreachable,
             .segments = segs,
         },
         .args = call_args,
-        .marks = preambleAnn(allocator, invocation, &[_][]const u8{}),
+        .marks = preambleAnn(allocator, invocation, write_wmark),
     };
 
     return .{ .transformed = .{ .replacement = ast.Item{ .flow = ast.Flow{

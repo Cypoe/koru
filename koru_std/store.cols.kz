@@ -385,18 +385,56 @@ fn writeExprNumInfo(alloc: std.mem.Allocator, prog: *const ast_find.Program, exp
     }
 }
 
+// The numeric verdict for one stored write — the solver's receipt for the
+// site: which column type it resolved, which RHS type it could prove, and
+// whether the write is thereby refused. Callers mint a @witness mark from
+// this record, so the verdict rides the lowered invocation instead of being
+// reconstructed from emitted text downstream (prepared-witness channel).
+pub const StoredWriteVerdict = struct {
+    site: []const u8 = "", // "store.field" — identifies the obligation inside the mark
+    dest: ?[]const u8 = null, // column numeric type name; null = non-numeric or unresolved column
+    src: ?[]const u8 = null, // proven RHS numeric type name; null = unproven
+    narrows: bool = false, // proven lossy — the write refuses
+
+    // The mark payload's verdict token. `refused` never survives minting —
+    // the program dies at the refusal — but the vocabulary stays uniform.
+    pub fn tag(self: StoredWriteVerdict) []const u8 {
+        if (self.narrows) return "refused";
+        if (self.dest == null) return "non-numeric";
+        if (self.src == null) return "deferred";
+        return "lossless";
+    }
+};
+
+// Runs the numeric check and returns the verdict record — never refuses on
+// its own. Unproven stays unproven: neither safe nor refused.
+fn storedWriteCheck(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8, field: []const u8, value_text: []const u8) StoredWriteVerdict {
+    var v = StoredWriteVerdict{ .site = std.fmt.allocPrint(alloc, "{s}.{s}", .{ store, field }) catch unreachable };
+    const tinfo = writeColNumInfo(alloc, prog, store, field) orelse return v;
+    v.dest = tinfo.name;
+    var parser = expression_parser_wc.ExpressionParser.init(alloc, value_text);
+    const expr = parser.parseAll() catch return v;
+    const rinfo = writeExprNumInfo(alloc, prog, expr) orelse return v;
+    v.src = rinfo.name;
+    v.narrows = if (rinfo.cls == tinfo.cls)
+        rinfo.rank > tinfo.rank
+    else
+        true;
+    return v;
+}
+
 // The write-side refusal: the diagnostic text when the RHS's proven class
 // cannot land in the column, null when it can or nothing is proven.
 // Cross-class is refused both ways — no host coerces float↔int silently.
 fn storedWriteNarrowing(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8, field: []const u8, value_text: []const u8) ?[]const u8 {
-    const tinfo = writeColNumInfo(alloc, prog, store, field) orelse return null;
-    var parser = expression_parser_wc.ExpressionParser.init(alloc, value_text);
-    const expr = parser.parseAll() catch return null;
-    const rinfo = writeExprNumInfo(alloc, prog, expr) orelse return null;
-    const narrows = if (rinfo.cls == tinfo.cls)
-        rinfo.rank > tinfo.rank
-    else
-        true;
-    if (!narrows) return null;
-    return std.fmt.allocPrint(alloc, "std/store:stored: column '{s}.{s}' is {s} but the write is provably {s} — a write that loses bits is refused, never silently rounded (690_160)", .{ store, field, tinfo.name, rinfo.name }) catch unreachable;
+    const v = storedWriteCheck(alloc, prog, store, field, value_text);
+    if (!v.narrows) return null;
+    return std.fmt.allocPrint(alloc, "std/store:stored: column '{s}.{s}' is {s} but the write is provably {s} — a write that loses bits is refused, never silently rounded (690_160)", .{ store, field, v.dest.?, v.src.? }) catch unreachable;
+}
+
+// The prepared-witness spelling for one checked write. Rides `.marks` —
+// compiler-internal, unauthorable by surface syntax — on the lowered write
+// invocation, which is the obligation site the emitters actually see.
+fn storedWriteWitnessMark(alloc: std.mem.Allocator, v: StoredWriteVerdict) []const u8 {
+    return std.fmt.allocPrint(alloc, "@witness(\"stored-write-numeric\",\"{s}\",\"{s}<-{s}\",\"{s}\")", .{ v.site, v.dest orelse "unresolved", v.src orelse "unproven", v.tag() }) catch unreachable;
 }

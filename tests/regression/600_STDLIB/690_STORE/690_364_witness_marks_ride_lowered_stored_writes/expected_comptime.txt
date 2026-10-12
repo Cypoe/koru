@@ -1,0 +1,1 @@
+[witness] stored-write-numeric: lossless=1 deferred=1 non-numeric=0 refused=0

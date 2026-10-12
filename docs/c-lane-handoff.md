@@ -660,3 +660,57 @@ land in TARGETS.json on this host. Verdict path itself is unaffected.
 filtered slice (all prior C pins on the stored surface + 690_160):
 zig lanes green, C legs green or refused-as-pinned; only env-gap reds
 (`cs-compile` on missing dotnet, `js-runtime` on the node shim).
+
+## Tranche: prepared-witness channel, rung 1 (session, cont.)
+
+**What landed.** The narrowing wall's verdict now *survives* the transform
+that computes it. `storedWriteNarrowing` (which returned `?[]const u8` —
+the diagnostic or nothing, discarding the proof) is split into
+`storedWriteCheck`, returning a `StoredWriteVerdict` record
+`{site, dest, src, narrows}` plus `storedWriteWitnessMark`, which renders
+the verdict as a `.marks` entry:
+
+    @witness("stored-write-numeric","bodies.x","f32<-f64","lossless")
+
+`stored|zig` mints one mark per write onto the **lowered** write
+invocations — `__store_envwrite_*` (plural+singleton envelope paths) and
+`__store_write_*` (single-write path) — i.e. onto the obligation site the
+emitters actually see, not the `stored` surface call that dissolves.
+`.marks` is compiler-internal, never parsed from surface syntax: a
+witness is unauthorable by grammar, which is the property the
+callsite-proofs draft (W1) recommends for the whole witness surface.
+
+**Verdict vocabulary:** `lossless` | `deferred` | `non-numeric` |
+`refused`. `deferred` is the new enumerable fact — an unproven write
+previously vanished into the same silence as a proven one; now it leaves
+a mark a checker can count. `refused` marks are minted but never survive
+(the program dies at the refusal — the refusal itself is the receipt).
+
+**Consumer rung.** `std/witness:enforce` runs in Phase 2.5 `comptime_main`
+on the post-transform AST, so it sees the minted marks for free. Its
+census now walks continuations recursively, parses `@witness(` marks, and
+prints one stable line during backend execution:
+
+    [witness] stored-write-numeric: lossless=1 deferred=1 non-numeric=0 refused=0
+
+The `witness` *command* dispatches on `seed_ast` before the transform
+pass — it cannot see marks and was left unchanged rather than printing a
+zero-row lie. `comptime_main` also runs at Phase 2.3.5 (pre-transform
+prime), so the enforce print is gated on `witnessSites() > 0`.
+
+**Pinned:** `690_364_witness_marks_ride_lowered_stored_writes` — an
+`enforce`-declared program with one proven-lossless write and one
+unproven write; `expected_comptime.txt` pins the census line. 690_160
+still refuses identically (KORU161, f64→f32). Control slice over the
+`stored` surface: zig lanes green, only env-gap reds (dotnet/node
+shims); no KORU161 anywhere unexpected.
+
+**Frag:** `frag-a-verdict-not-minted-onto-the-lowered-site-evaporates` —
+the belief this tranche proves: a computed verdict dies with the call
+unless minted onto the node that survives the rewrite.
+
+**Deferred to next rungs:** W1/W6 Lars rulings now have a concrete
+instance to point at; a sidecar witness artifact for K3 (the `[witness]`
+lines are already the greppable record); `enforce`-contract refusals on
+nonzero `deferred` counts; witness minting for the other obligation
+families the draft enumerates (mint/move/discharge edges).
