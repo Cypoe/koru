@@ -1039,6 +1039,7 @@ pub const HostShape = struct {
             // is the declared Output struct, and `new {…}` cannot convert.
             .cs => std.fmt.allocPrint(alloc, "new Output {{ tag = \"{s}\", {s} = {s} }}", .{ name, csPayloadMember(alloc, name), value }) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, ".{{ .{s} = {s} }}", .{ esc_name, value }) catch unreachable,
+            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
         };
     }
 
@@ -1049,6 +1050,7 @@ pub const HostShape = struct {
             .js => std.fmt.allocPrint(alloc, "{{ tag: \"{s}\", {s}: {{}} }}", .{ name, name }) catch unreachable,
             .cs => std.fmt.allocPrint(alloc, "new Output {{ tag = \"{s}\", {s} = new {{ }} }}", .{ name, csPayloadMember(alloc, name) }) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, ".{{ .{s} = .{{}} }}", .{esc_name}) catch unreachable,
+            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
         };
     }
 
@@ -1067,6 +1069,7 @@ pub const HostShape = struct {
             else
                 std.fmt.allocPrint(alloc, "new Output {{ tag = \"{s}\", {s} = ({s}) }}", .{ name, csPayloadMember(alloc, name), body }) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, ".{{ .{s} = .{{ {s} }} }}", .{ esc_name, body }) catch unreachable,
+            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
         };
     }
 
@@ -1082,6 +1085,7 @@ pub const HostShape = struct {
             .js => std.fmt.allocPrint(alloc, "{s}: {s}", .{ name, value }) catch unreachable,
             .cs => std.fmt.allocPrint(alloc, "{s} = {s}", .{ cs_name, value }) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, ".{s} = {s}", .{ esc_name, value }) catch unreachable,
+            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
         };
     }
 
@@ -1094,11 +1098,13 @@ pub const HostShape = struct {
             .js => "{}",
             .cs => "new { }",
             .zig => ".{}",
+            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
         };
         return switch (t) {
             .js => std.fmt.allocPrint(alloc, "{{ {s} }}", .{body}) catch unreachable,
             .cs => std.fmt.allocPrint(alloc, "new {{ {s} }}", .{body}) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, ".{{ {s} }}", .{body}) catch unreachable,
+            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
         };
     }
 
@@ -1113,6 +1119,7 @@ pub const HostShape = struct {
             .js => std.fmt.allocPrint(alloc, "{s}: {s}", .{ name, value }) catch unreachable,
             .cs => std.fmt.allocPrint(alloc, "{s}: {s}", .{ csMember(alloc, name), value }) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, ".{s} = {s}", .{ esc_name, value }) catch unreachable,
+            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
         };
     }
 
@@ -1135,6 +1142,7 @@ pub const HostShape = struct {
                 std.fmt.allocPrint(alloc, "new {{ {s} }}", .{body}) catch unreachable
             else
                 std.fmt.allocPrint(alloc, "({s})", .{body}) catch unreachable,
+            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
         };
     }
 
@@ -1148,6 +1156,7 @@ pub const HostShape = struct {
         return switch (t) {
             .js, .zig => argRec(alloc, t, body),
             .cs => std.fmt.allocPrint(alloc, "new {s}{s}_event.Input {{ {s} }}", .{ ns, ev, body }) catch unreachable,
+            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
         };
     }
 
@@ -1162,6 +1171,7 @@ pub const HostShape = struct {
         return switch (t) {
             .js, .cs => "switch (field) {\n",
             .zig => "return switch (field) {\n",
+            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
         };
     }
 
@@ -1169,6 +1179,7 @@ pub const HostShape = struct {
         return switch (t) {
             .js, .cs => std.fmt.allocPrint(alloc, "  case {d}: {{ ", .{ordinal}) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, "    {d} => blk: {{ ", .{ordinal}) catch unreachable,
+            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
         };
     }
 
@@ -1176,6 +1187,7 @@ pub const HostShape = struct {
         return switch (t) {
             .js, .cs => std.fmt.allocPrint(alloc, "return {s}; }}\n", .{value}) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, "break :blk {s}; }},\n", .{value}) catch unreachable,
+            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
         };
     }
 
@@ -1184,6 +1196,7 @@ pub const HostShape = struct {
             .js => std.fmt.allocPrint(alloc, "}}\nthrow new Error(\"{s}: field index \" + field + \" is not a column of store '{s}'\");", .{ unit, store }) catch unreachable,
             .cs => std.fmt.allocPrint(alloc, "}}\nthrow new global::System.Exception(\"{s}: field index \" + field + \" is not a column of store '{s}'\");", .{ unit, store }) catch unreachable,
             .zig => "    else => unreachable,\n};",
+            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
         };
     }
 
@@ -1194,6 +1207,7 @@ pub const HostShape = struct {
             .js => "const __koru_r = row;\n",
             .cs => "var __koru_r = row;\n",
             .zig => "const __koru_r: usize = row;\n",
+            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
         };
     }
 
@@ -1205,6 +1219,7 @@ pub const HostShape = struct {
             .js => std.fmt.allocPrint(alloc, "for (let {s} = 0; {s} < {s}; {s}++) {{\n", .{ cursor, cursor, limit, cursor }) catch unreachable,
             .cs => std.fmt.allocPrint(alloc, "for (var {s} = 0; {s} < {s}; {s}++) {{\n", .{ cursor, cursor, limit, cursor }) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, "for (0..{s}) |{s}| {{\n", .{ limit, cursor }) catch unreachable,
+            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
         };
     }
 
@@ -1217,6 +1232,7 @@ pub const HostShape = struct {
             .js => std.fmt.allocPrint(alloc, "const {s} = {s};\n", .{ name, value }) catch unreachable,
             .cs => std.fmt.allocPrint(alloc, "var {s} = {s};\n", .{ name, value }) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, "const {s} = {s};\n_ = &{s};\n", .{ name, value, name }) catch unreachable,
+            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
         };
     }
 
@@ -1229,6 +1245,7 @@ pub const HostShape = struct {
             .js => alloc.dupe(u8, expr) catch unreachable,
             .cs => std.fmt.allocPrint(alloc, "((long)({s}))", .{expr}) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, "__koru_intcast(i64, {s})", .{expr}) catch unreachable,
+            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
         };
     }
 
@@ -1238,6 +1255,7 @@ pub const HostShape = struct {
             .js => alloc.dupe(u8, expr) catch unreachable,
             .cs => std.fmt.allocPrint(alloc, "((int)({s}))", .{expr}) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, "__koru_intcast(usize, {s})", .{expr}) catch unreachable,
+            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
         };
     }
 };
