@@ -1,0 +1,1 @@
+'bodies.x' (f32) is written from literal 0.1, which rounds in f32

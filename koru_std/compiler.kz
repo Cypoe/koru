@@ -1015,6 +1015,7 @@ const Allocator = std.mem.Allocator;
   |> check-phantom-signatures
   |> check-phantom-args
   |> pass-auto-discharge
+  |> pass-witness-check
   |> check-flow
   |> check-phantom-semantic
   |> check-purity
@@ -1604,6 +1605,14 @@ const emitFlowWithMocks = struct {
 // Auto-discharge insertion - inserts disposal calls before terminators
 // Runs BEFORE check-phantom-semantic so checker validates the inserted calls
 ~pub tor pass-auto-discharge { ctx: CompilerContext }
+| ctx CompilerContext
+| failed { ctx: CompilerContext, message: string }
+
+// Witness check - the trusted consumer pass after every solver
+// (docs/koru-verification-path.md §3.5: obligation-synthesis |> witness-check).
+// Prints the marks census for enforced programs; under [strict] it refuses
+// stored writes the numeric check left unproven or rounding.
+~pub tor pass-witness-check { ctx: CompilerContext }
 | ctx CompilerContext
 | failed { ctx: CompilerContext, message: string }
 
@@ -2647,6 +2656,213 @@ const emitFlowWithMocks = struct {
 
     // Update AST with potentially modified version
     mutable_ctx.ast = new_ast;
+    mutable_ctx.passes_completed += 1;
+    return .{ .ctx = mutable_ctx };
+}
+
+// ── pass-witness-check helpers ──────────────────────────────────────────
+// One parsed mark plus the enclosing flow's location — strict refusals
+// point at the flow, not the mark.
+const WitnessSiteMark = struct {
+    kind: []const u8,
+    site: []const u8,
+    arrow: []const u8,
+    verdict: []const u8,
+    line: usize,
+    column: usize,
+};
+
+// @witness("kind","site","d<-s","verdict") — parsed strictly: four quoted
+// fields in a parenthesised list. A malformed mark is not a witness:
+// counted nowhere, printed nowhere. (Twin of WCensus.witnessMark in
+// koru_std/witness.kz — the command-side census and this pass are separate
+// generated units, so the parser lives in both.)
+fn witnessCheckParseMark(mark: []const u8, line: usize, column: usize) ?WitnessSiteMark {
+    if (!std.mem.startsWith(u8, mark, "@witness(")) return null;
+    var fields: [4][]const u8 = undefined;
+    var rest = mark["@witness(".len..];
+    for (0..4) |i| {
+        if (rest.len == 0 or rest[0] != '"') return null;
+        const end = std.mem.indexOfScalar(u8, rest[1..], '"') orelse return null;
+        fields[i] = rest[1 .. 1 + end];
+        rest = rest[2 + end ..];
+        if (i < 3) {
+            if (rest.len == 0 or rest[0] != ',') return null;
+            rest = rest[1..];
+        }
+    }
+    if (!std.mem.eql(u8, rest, ")")) return null;
+    return .{ .kind = fields[0], .site = fields[1], .arrow = fields[2], .verdict = fields[3], .line = line, .column = column };
+}
+
+fn witnessCheckCollectCont(
+    out: *std.ArrayList(WitnessSiteMark),
+    alloc: Allocator,
+    cont: *const ast.Continuation,
+    line: usize,
+    column: usize,
+) Allocator.Error!void {
+    if (cont.node) |*node| {
+        switch (node.*) {
+            .invocation => |*inv| {
+                for (inv.marks) |m| {
+                    if (witnessCheckParseMark(m, line, column)) |wm| try out.append(alloc, wm);
+                }
+            },
+            .label_with_invocation => |*lwi| {
+                for (lwi.invocation.marks) |m| {
+                    if (witnessCheckParseMark(m, line, column)) |wm| try out.append(alloc, wm);
+                }
+            },
+            .foreach => |*fe| for (fe.branches) |*b| try witnessCheckCollectConts(out, alloc, b.body, line, column),
+            .conditional => |*c| for (c.branches) |*b| try witnessCheckCollectConts(out, alloc, b.body, line, column),
+            .switch_result => |*sr| for (sr.branches) |*b| try witnessCheckCollectConts(out, alloc, b.body, line, column),
+            .conditional_block => |*cb| for (cb.nodes) |*n| {
+                if (n.* == .invocation) {
+                    for (n.invocation.marks) |m| {
+                        if (witnessCheckParseMark(m, line, column)) |wm| try out.append(alloc, wm);
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+    try witnessCheckCollectConts(out, alloc, cont.continuations, line, column);
+}
+
+fn witnessCheckCollectConts(
+    out: *std.ArrayList(WitnessSiteMark),
+    alloc: Allocator,
+    conts: []const ast.Continuation,
+    line: usize,
+    column: usize,
+) Allocator.Error!void {
+    for (conts) |*cont| try witnessCheckCollectCont(out, alloc, cont, line, column);
+}
+
+fn witnessCheckCollectItems(
+    out: *std.ArrayList(WitnessSiteMark),
+    alloc: Allocator,
+    items: []const ast.Item,
+) Allocator.Error!void {
+    for (items) |*item| {
+        switch (item.*) {
+            .module_decl => |*m| try witnessCheckCollectItems(out, alloc, m.items),
+            .flow => |*fl| try witnessCheckCollectCont(out, alloc, &fl.body, fl.location.line, fl.location.column),
+            else => {},
+        }
+    }
+}
+
+~proc pass-witness-check|zig {
+    // No-op unless the program declared std/witness:enforce — registration
+    // happens in enforce|zig during comptime_main (Phase 3 strips the
+    // enforce flow, so process state is the only channel reaching here).
+    const emitter_helpers = @import("emitter_helpers");
+    if (!emitter_helpers.witness_enforced) return .{ .ctx = ctx };
+
+    var mutable_ctx = ctx;
+    mutable_ctx.current_pass = "witness_check";
+
+    const reporter = mutable_ctx.reporter orelse {
+        @panic("pass-witness-check: the compilation carries no diagnostic reporter");
+    };
+    const err_base = reporter.errors.items.len;
+
+    var marks = std.ArrayList(WitnessSiteMark).initCapacity(mutable_ctx.allocator, 8) catch {
+        return .{ .failed = .{ .ctx = mutable_ctx, .message = "witness check: out of memory" } };
+    };
+    witnessCheckCollectItems(&marks, mutable_ctx.allocator, mutable_ctx.ast.items) catch {
+        return .{ .failed = .{ .ctx = mutable_ctx, .message = "witness check: out of memory" } };
+    };
+
+    // One site line per mark in walk order (all kinds interleaved), then
+    // one census line per kind that appeared — the verbatim record a later
+    // checker consumes from backend output (pinned by expected_comptime.txt).
+    if (marks.items.len > 0) {
+        var w_lossless: usize = 0;
+        var w_deferred: usize = 0;
+        var w_rounds: usize = 0;
+        var w_non_numeric: usize = 0;
+        var w_refused: usize = 0;
+        var d_sole: usize = 0;
+        var d_preferred: usize = 0;
+        for (marks.items) |wm| {
+            std.debug.print("[witness] site {s} {s} {s} {s}\n", .{ wm.kind, wm.site, wm.arrow, wm.verdict });
+            if (std.mem.eql(u8, wm.kind, "stored-write-numeric")) {
+                if (std.mem.eql(u8, wm.verdict, "lossless")) {
+                    w_lossless += 1;
+                } else if (std.mem.eql(u8, wm.verdict, "deferred")) {
+                    w_deferred += 1;
+                } else if (std.mem.eql(u8, wm.verdict, "rounds")) {
+                    w_rounds += 1;
+                } else if (std.mem.eql(u8, wm.verdict, "non-numeric")) {
+                    w_non_numeric += 1;
+                } else if (std.mem.eql(u8, wm.verdict, "refused")) {
+                    w_refused += 1;
+                }
+            } else if (std.mem.eql(u8, wm.kind, "auto-discharge")) {
+                const colon = std.mem.indexOfScalar(u8, wm.verdict, ':') orelse wm.verdict.len;
+                const rule = wm.verdict[0..colon];
+                if (std.mem.eql(u8, rule, "sole")) {
+                    d_sole += 1;
+                } else if (std.mem.eql(u8, rule, "preferred")) {
+                    d_preferred += 1;
+                }
+            }
+        }
+        const n_numeric = w_lossless + w_deferred + w_rounds + w_non_numeric + w_refused;
+        if (n_numeric > 0) {
+            std.debug.print("[witness] stored-write-numeric: lossless={d} deferred={d} rounds={d} non-numeric={d} refused={d}\n", .{ w_lossless, w_deferred, w_rounds, w_non_numeric, w_refused });
+        }
+        if (d_sole + d_preferred > 0) {
+            std.debug.print("[witness] auto-discharge: sole={d} preferred={d}\n", .{ d_sole, d_preferred });
+        }
+    }
+
+    // `strict` is an opaque annotation word, not a fixed semantics: each
+    // pass that cares reads it and renders it into its own domain (the
+    // [strict] convention at ~pass-auto-discharge). For the witness pass
+    // strict means every stored write must be PROVEN lossless — a write the
+    // numeric check left deferred, or a literal that rounds, is a refusal.
+    // Discharge marks never trigger strict: under [strict] auto-discharge
+    // doesn't insert, so none exist.
+    var strict_module = false;
+    for (mutable_ctx.ast.module_annotations) |ann| {
+        if (std.mem.eql(u8, ann, "strict")) strict_module = true;
+    }
+    if (strict_module) {
+        var refused = false;
+        for (marks.items) |wm| {
+            if (!std.mem.eql(u8, wm.kind, "stored-write-numeric")) continue;
+            const arrow_dest_end = std.mem.indexOf(u8, wm.arrow, "<-") orelse continue;
+            const dest = wm.arrow[0..arrow_dest_end];
+            if (std.mem.eql(u8, wm.verdict, "rounds")) {
+                const lit_src = wm.arrow[arrow_dest_end + 2 ..];
+                const lit_text = if (std.mem.startsWith(u8, lit_src, "literal:")) lit_src["literal:".len..] else lit_src;
+                reporter.addError(.KORU161, wm.line, wm.column, "std/witness: [strict] requires every stored write to be proven lossless — '{s}' ({s}) is written from literal {s}, which rounds in {s}", .{ wm.site, dest, lit_text, dest }) catch {};
+                refused = true;
+            } else if (std.mem.eql(u8, wm.verdict, "deferred")) {
+                reporter.addError(.KORU161, wm.line, wm.column, "std/witness: [strict] requires every stored write to be proven lossless — '{s}' ({s}) is written from an unproven value (deferred)", .{ wm.site, dest }) catch {};
+                refused = true;
+            }
+        }
+        if (refused) {
+            reporter.printErrors(@import("errors").FileSink.stderr()) catch {};
+            for (reporter.errors.items[err_base..]) |reporter_err| {
+                mutable_ctx.errors.append(mutable_ctx.allocator, .{
+                    .message = mutable_ctx.allocator.dupe(u8, reporter_err.message) catch reporter_err.message,
+                    .location = .{
+                        .file = mutable_ctx.allocator.dupe(u8, reporter_err.location.file) catch reporter_err.location.file,
+                        .line = @intCast(reporter_err.location.line),
+                        .column = @intCast(reporter_err.location.column),
+                    },
+                }) catch {};
+            }
+            return .{ .failed = .{ .ctx = mutable_ctx, .message = "witness check: [strict] stored writes not proven lossless" } };
+        }
+    }
+
     mutable_ctx.passes_completed += 1;
     return .{ .ctx = mutable_ctx };
 }

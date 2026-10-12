@@ -757,3 +757,39 @@ the gate to FAIL; restored, PASS. Measured: real corpus 4/4 MATCH.
 an external toolchain — an oracle budget, per §3.5); the first *obligation*
 fragment (S5, custody kinds) is Lars's ruling; marks from the
 auto-discharge family.
+
+## Tranche: witness rung 3 — pass-witness-check, discharge witnesses, [strict]
+
+**Pipeline.** `pass-witness-check` sits immediately after `pass-auto-discharge`
+in `~analysis` (koru_std/compiler.kz) — the §3.5 `obligation-synthesis |>
+witness-check` split. It is a no-op unless the program declared
+`std/witness:enforce`; since Phase 3 strips comptime flows, `enforce|zig` now
+only registers `emitter_helpers.witness_enforced = true` (build:variants
+registry shape) and the pass owns all printing: site lines in walk order,
+then per-kind census lines (`stored-write-numeric: …` byte-identical to
+before; `auto-discharge: sole=N preferred=N`). 690_364 passes unchanged —
+the numeric marks survive from transform to analysis.
+
+**Discharge witnesses.** `selectWithWitness` (src/auto_discharge_inserter.zig)
+wraps `selectDisposal` at all three selection sites and mints
+`@witness("auto-discharge","<binding>","<state>-><disposer>","<rule>:<cands>")`
+onto the inserted disposal invocation's `.marks`; rule is `sole` or
+`preferred`, cands carry `!` for `[!]`. Fields containing a space, `"` (or
+`,` in a candidate) mint nothing rather than a malformed mark. 330_138 pins a
+preferred and a sole pick.
+
+**[strict].** Mirrors the module-word convention (compiler.kz ~2541): under
+`[strict]` + enforce, every `stored-write-numeric` mark verdicted `rounds` or
+`deferred` is a KORU161 refusal at the write's flow:
+`std/witness: [strict] requires every stored write to be proven lossless —
+'bodies.x' (f32) is written from literal 0.1, which rounds in f32`. 690_365
+pins the refusal, 690_366 the admitted case. KORU161 because no witness-family
+code is reserved (scripts/registry_reserved.txt) and this is the store's
+write-refusal class — a W3 code decision for Lars.
+
+**K3.** The Lean file gained the `auto-discharge` kind: `pick` re-runs the
+policy over the recorded candidates, `pick_sound` proves a pick is a
+candidate and forced (only candidate, or only `[!]`). Golden +3, forged +7.
+Real corpora: 330_138 2/2 MATCH, 690_365 1/1, 690_364 4/4, 690_366 2/2.
+330_138 and 690_366 carry K3_WITNESS. Stated limit: the checker cannot see
+whether the recorded candidate list is complete.

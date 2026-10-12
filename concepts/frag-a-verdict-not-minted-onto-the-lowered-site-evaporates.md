@@ -86,6 +86,34 @@ caught it. An oracle gate needs its own negative probe for the same reason
 the harness's `*_REFUSES` legs did: a check that cannot fail looks exactly
 like a check that passes.
 
+## Rung 3: the consumer must sit after the last solver
+
+`enforce` was a fine consumer while the only solver was a transform: it runs
+in comptime_main after the transform pass. The auto-discharge inserter runs
+later, in `analysis`, so its receipts would have been minted after the only
+reader had already spoken. The resolved §3.5 pipeline says where the reader
+belongs — `obligation-synthesis |> witness-check` — and building it settled
+three things:
+
+- **Declaration and checking split across the pipeline.** Phase 3 strips the
+  comptime `enforce` flow before analysis, so the declaration reaches the
+  pass through process state (`emitter_helpers.witness_enforced`, the
+  build:variants registry shape). `enforce` declares; `pass-witness-check`
+  rules. One consumer for every witness kind.
+- **`[strict]` needed no new spelling.** The module word is opaque by design
+  ("each pass that cares reads it and renders it into its own domain");
+  for the witness pass it renders as "every stored write proven lossless",
+  so `rounds`/`deferred` marks refuse as KORU161 at the write's flow. The
+  discharge kind never meets strict — `[strict]` already turns insertion
+  off, so no discharge receipt exists to judge.
+- **A discharge witness records the policy's inputs, not just its output.**
+  `opened!->close  preferred:close!,flush-close` carries the candidate set
+  and the `[!]` flags, so the Lean checker re-runs `pickUnattendedDischarge`
+  and `pick_sound` proves the choice was forced. What the mark cannot carry
+  is the completeness of that candidate set — re-deciding that needs the
+  event declarations, which is the boundary of this fragment, stated rather
+  than implied.
+
 ## What follows
 
 - K3 stops being a checker bolted on afterwards: the witness is data the

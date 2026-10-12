@@ -212,27 +212,107 @@ def splitOnArrow : List Char → Option (List Char × List Char)
 structure SiteLine where
   kind    : String
   site    : String
-  dest    : String
-  src     : String
+  arrow   : String
   verdict : String
 
-/-- `[witness] site <kind> <site> <dest><-<src> <verdict>` -/
+/-- `[witness] site <kind> <site> <arrow> <verdict>` — the arrow and verdict
+are interpreted per kind. -/
 def parseSiteLine (line : String) : Option SiteLine :=
   match (line.splitOn " ").filter (· ≠ "") with
-  | ["[witness]", "site", kind, site, ds, verdict] =>
-    (splitOnArrow ds.toList).map fun (d, s) =>
-      ⟨kind, site, String.ofList d, String.ofList s, verdict⟩
+  | ["[witness]", "site", kind, site, arrow, verdict] => some ⟨kind, site, arrow, verdict⟩
   | _ => none
 
 inductive Ruling where
   | match_ | mismatch (want : String) | malformed
 deriving Repr
 
-def rule (s : SiteLine) : Ruling :=
-  if s.kind ≠ "stored-write-numeric" then .malformed
-  else match decideWitness s.dest s.src, Verdict.ofTag s.verdict with
+/-! ## Kind `auto-discharge` — the unattended-discharge policy
+
+The inserter (src/auto_discharge_inserter.zig, `pickUnattendedDischarge`)
+splices a disposer at a scope exit only when the choice is forced: exactly
+one candidate (`sole`), or several of which exactly one carries `[!]`
+(`preferred`). The mark records the obligation's state, the chosen
+disposer, the rule, and the full candidate list with `[!]` flags:
+
+    <state>-><chosen>   <rule>:<cand>[!],<cand>[!],...
+
+The checker re-runs the policy over the recorded candidates. What it cannot
+see is whether the candidate list is complete — that needs the event
+declarations, which the mark does not carry; a witness over an incomplete
+list is outside this fragment's reach. -/
+
+structure Cand where
+  name : String
+  dflt : Bool
+deriving DecidableEq, Repr
+
+def parseCand (s : String) : Option Cand :=
+  if s.isEmpty then none
+  else if s.endsWith "!" then
+    let n := String.ofList (s.toList.dropLast)
+    if n.isEmpty then none else some ⟨n, true⟩
+  else some ⟨s, false⟩
+
+def parseCands (s : String) : Option (List Cand) :=
+  (s.splitOn ",").mapM parseCand
+
+/-- The policy. `none` = not unattended-dischargeable: nothing may be inserted. -/
+def pick (cs : List Cand) : Option (String × String) :=
+  match cs with
+  | [c] => some ("sole", c.name)
+  | _ => match cs.filter (·.dflt) with
+    | [c] => some ("preferred", c.name)
+    | _ => none
+
+/-- Role A for the policy: whatever `pick` returns was a candidate, and the
+choice was forced — the only candidate, or the only `[!]` one. -/
+theorem pick_sound (cs : List Cand) (r n : String) (h : pick cs = some (r, n)) :
+    ∃ c ∈ cs, c.name = n ∧
+      ((r = "sole" ∧ cs = [c]) ∨ (r = "preferred" ∧ c.dflt = true ∧ cs.filter (·.dflt) = [c])) := by
+  unfold pick at h
+  split at h
+  · rename_i c
+    simp only [Option.some.injEq, Prod.mk.injEq] at h
+    exact ⟨c, by simp, h.2, Or.inl ⟨h.1.symm, rfl⟩⟩
+  · split at h
+    · rename_i c hf
+      simp only [Option.some.injEq, Prod.mk.injEq] at h
+      have hmem : c ∈ cs.filter (·.dflt) := by rw [hf]; simp
+      have hc := List.mem_filter.mp hmem
+      exact ⟨c, hc.1, h.2, Or.inr ⟨h.1.symm, by simpa using hc.2, hf⟩⟩
+    · exact absurd h (by simp)
+
+def splitOnRight : List Char → Option (List Char × List Char)
+  | '-' :: '>' :: rest => some ([], rest)
+  | c :: rest => (splitOnRight rest).map fun (a, b) => (c :: a, b)
+  | [] => none
+
+def ruleDischarge (s : SiteLine) : Ruling :=
+  match splitOnRight s.arrow.toList, s.verdict.splitOn ":" with
+  | some (st, chosen), claimed :: rest =>
+    if st.isEmpty then .malformed else
+    match parseCands (":".intercalate rest) with
+    | none => .malformed
+    | some cs =>
+      match pick cs with
+      | none => .mismatch "not-dischargeable"
+      | some (r, n) =>
+        if r == claimed && n == String.ofList chosen then .match_
+        else .mismatch s!"{r}->{n}"
+  | _, _ => .malformed
+
+def ruleNumeric (s : SiteLine) : Ruling :=
+  match splitOnArrow s.arrow.toList with
+  | none => .malformed
+  | some (d, src) =>
+    match decideWitness (String.ofList d) (String.ofList src), Verdict.ofTag s.verdict with
     | some v, some claimed => if v == claimed then .match_ else .mismatch v.tag
     | _, _ => .malformed
+
+def rule (s : SiteLine) : Ruling :=
+  if s.kind == "stored-write-numeric" then ruleNumeric s
+  else if s.kind == "auto-discharge" then ruleDischarge s
+  else .malformed
 
 def isSiteLine (line : String) : Bool :=
   line.startsWith "[witness] site "

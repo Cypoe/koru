@@ -1,0 +1,3 @@
+[witness] site auto-discharge _auto_6 input:opened!->input:close preferred:input:close!,input:flush-close
+[witness] site auto-discharge _auto_7 input:live!->input:shutdown sole:input:shutdown
+[witness] auto-discharge: sole=1 preferred=1

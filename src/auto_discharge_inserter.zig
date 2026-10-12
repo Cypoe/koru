@@ -238,6 +238,7 @@ pub const AutoDischargeInserter = struct {
         event_decl: *const ast.EventDecl,
         field_name: []const u8,
         is_default: bool, // Has [!] annotation - preferred for auto-discharge
+        witness: []const u8 = "", // @witness mark minted at selection; "" = none
     };
 
     /// Check if a continuation has the @scope mark (marks scope boundary)
@@ -366,6 +367,12 @@ pub const AutoDischargeInserter = struct {
             .source_value = null,
         };
 
+        var marks: [][]const u8 = &.{};
+        if (disposal.witness.len > 0) {
+            marks = try self.allocator.alloc([]const u8, 1);
+            marks[0] = disposal.witness;
+        }
+
         return .{
             .path = .{
                 .segments = segments,
@@ -373,6 +380,7 @@ pub const AutoDischargeInserter = struct {
             },
             .args = args,
             .annotations = annotations,
+            .marks = marks,
         };
     }
 
@@ -1979,7 +1987,7 @@ pub const AutoDischargeInserter = struct {
                 if (entry.info.not_auto_dischargeable) continue;
                 const disposals = try self.findDisposalEvents(entry.info.phantom_state, entry.info.base_type);
                 defer self.allocator.free(disposals);
-                const disposal = selectDisposal(disposals) orelse continue;
+                const disposal = try self.selectWithWitness(entry.binding_path, entry.info.phantom_state, disposals) orelse continue;
                 // IDEMPOTENCE GUARD: the flow-level context is re-seeded from
                 // the head bind every sweep and never sees the walk's internal
                 // crediting (that happens on discarded clones), so without this
@@ -3188,7 +3196,7 @@ pub const AutoDischargeInserter = struct {
             defer self.allocator.free(disposals);
 
             // Use selectDisposal to handle [!] default annotation
-            const disposal = selectDisposal(disposals) orelse {
+            const disposal = try self.selectWithWitness(binding_path, info.phantom_state, disposals) orelse {
                 // Ambiguous or no disposal found
                 const display_name = formatBindingForError(binding_path, info.field_name, info.base_type);
                 const display_state = formatStateForError(info.phantom_state);
@@ -3296,6 +3304,51 @@ pub const AutoDischargeInserter = struct {
         }.declOf);
     }
 
+    /// selectDisposal plus the witness receipt: on a pick, mint the
+    /// @witness mark onto the chosen event so it rides `.marks` onto the
+    /// lowered disposal invocation — the obligation site the witness
+    /// census reads downstream (prepared-witness channel, same rule as
+    /// the stored-write marks). The verdict field records WHY this pick:
+    /// `sole` when one candidate stood, `preferred` when [!] settled it —
+    /// pickUnattendedDischarge's two accept paths — followed by every
+    /// candidate's qualified_name in order, `!`-suffixed when default.
+    /// Mark fields carry no spaces and no `"`; a site whose names cannot
+    /// be spelled that way mints no mark rather than a malformed one.
+    fn selectWithWitness(
+        self: *AutoDischargeInserter,
+        binding_path: []const u8,
+        phantom_state: []const u8,
+        disposals: []const DisposalEvent,
+    ) !?DisposalEvent {
+        var chosen = selectDisposal(disposals) orelse return null;
+        var clean = true;
+        for ([_][]const u8{ binding_path, phantom_state, chosen.qualified_name }) |f| {
+            if (std.mem.indexOfAny(u8, f, " \"") != null) clean = false;
+        }
+        var cands = try std.ArrayList(u8).initCapacity(self.allocator, 64);
+        defer cands.deinit(self.allocator);
+        for (disposals) |d| {
+            if (std.mem.indexOfAny(u8, d.qualified_name, " ,\"") != null) clean = false;
+            if (cands.items.len > 0) try cands.append(self.allocator, ',');
+            try cands.appendSlice(self.allocator, d.qualified_name);
+            if (d.is_default) try cands.append(self.allocator, '!');
+        }
+        if (clean) {
+            chosen.witness = try std.fmt.allocPrint(
+                self.allocator,
+                "@witness(\"auto-discharge\",\"{s}\",\"{s}->{s}\",\"{s}:{s}\")",
+                .{
+                    binding_path,
+                    phantom_state,
+                    chosen.qualified_name,
+                    if (disposals.len == 1) "sole" else "preferred",
+                    cands.items,
+                },
+            );
+        }
+        return chosen;
+    }
+
     /// Zero single-state dischargers — widen to every multi-branch
     /// discharger that accepts the state and report the `Call:` choice
     /// set. Returns true when it reported; false leaves the caller to
@@ -3365,7 +3418,7 @@ pub const AutoDischargeInserter = struct {
             try self.findDisposalEvents(info.phantom_state, info.base_type);
         defer self.allocator.free(disposals);
 
-        return selectDisposal(disposals) orelse {
+        return try self.selectWithWitness(binding_name, info.phantom_state, disposals) orelse {
             const display_name = formatBindingForError(binding_name, info.field_name, info.base_type);
             const display_state = formatStateForError(info.phantom_state);
             if (disposals.len == 0) {

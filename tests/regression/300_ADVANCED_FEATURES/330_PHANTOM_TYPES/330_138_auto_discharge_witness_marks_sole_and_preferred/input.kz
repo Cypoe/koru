@@ -1,0 +1,58 @@
+// PINS: the auto-discharge prepared-witness channel — pass-auto-discharge
+// mints an @witness mark onto every disposal call it splices in, and the
+// enforced program's witness-check pass (running AFTER insertion, where
+// comptime enforce could never see them) prints one site line per mark
+// plus the auto-discharge census.
+//
+//   conn  — *Conn<live!> has exactly one disposer: sole
+//   file  — *File<opened!> has two; [!] on close settles it: preferred
+//
+// The verdict field records the pick's rule and the full candidate set,
+// `!`-suffixed on defaults — the receipt a checker can re-decide without
+// redoing the selection.
+
+~import std/io
+~import std/witness
+
+const std = @import("std");
+const File = struct { handle: i32 };
+const Conn = struct { fd: i32 };
+
+~tor open { path: string } -> *File<opened!>
+~proc open|zig {
+    std.debug.print("opened\n", .{});
+    const f = std.heap.page_allocator.create(File) catch unreachable;
+    f.* = File{ .handle = 42 };
+    return f;
+}
+
+~tor connect { addr: string } -> *Conn<live!>
+~proc connect|zig {
+    std.debug.print("connected\n", .{});
+    const c = std.heap.page_allocator.create(Conn) catch unreachable;
+    c.* = Conn{ .fd = 7 };
+    return c;
+}
+
+~[!]tor close { file: *File<!opened> }
+~proc close|zig {
+    std.debug.print("closed\n", .{});
+    std.heap.page_allocator.destroy(file);
+}
+
+~tor flush-close { file: *File<!opened> }
+~proc flush-close|zig {
+    std.debug.print("flushing...\n", .{});
+    std.heap.page_allocator.destroy(file);
+}
+
+~tor shutdown { conn: *Conn<!live> }
+~proc shutdown|zig {
+    std.debug.print("shutdown\n", .{});
+    std.heap.page_allocator.destroy(conn);
+}
+
+~std/witness:enforce { }
+
+~open(path: "test.txt")
+~connect(addr: "localhost")

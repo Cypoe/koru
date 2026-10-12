@@ -185,23 +185,16 @@ const WCensus = struct {
 | refused string
 
 ~proc enforce|zig {
-    const std = @import("std");
     _ = meta;
     _ = source;
-    var census = WCensus{ .alloc = std.heap.page_allocator };
+    var census = WCensus{};
     census.fold(program.items);
-    // The marks census — the prepared-witness channel made enumerable. One
-    // site line per mark in AST walk order, then one stable census line,
-    // pinned by expected_comptime.txt: it is the verbatim record a later
-    // checker consumes from backend output. comptime_main runs twice per
-    // compile (2.3.5 pre-transform prime, 2.5 post-transform) — silence
-    // the zero row so the only lines emitted are the real census.
-    if (census.witnessSites() > 0) {
-        for (census.marks.items) |wm| {
-            std.debug.print("[witness] site {s} {s} {s} {s}\n", .{ wm.kind, wm.site, wm.arrow, wm.verdict });
-        }
-        std.debug.print("[witness] stored-write-numeric: lossless={d} deferred={d} rounds={d} non-numeric={d} refused={d}\n", .{ census.w_lossless, census.w_deferred, census.w_rounds, census.w_non_numeric, census.w_refused });
-    }
+    // Register the declaration into process state: Phase 3 strips comptime
+    // flows, so the post-transform pass-witness-check — the marks' trusted
+    // consumer, which runs after pass-auto-discharge mints discharge marks —
+    // can only learn "this program enforced" here. Same registry shape as
+    // build:config / build:variants → emitter_helpers.
+    @import("emitter_helpers").witness_enforced = true;
     return .{ .enforced = census.obligationSites() };
 }
 

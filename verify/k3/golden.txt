@@ -16,3 +16,6 @@
 [witness] site stored-write-numeric bodies.n i32<-literal:2.5 rounds
 [witness] site stored-write-numeric bodies.x f32<-unproven deferred
 [witness] site stored-write-numeric bodies.s unresolved<-unproven non-numeric
+[witness] site auto-discharge f opened!->std/fs:close sole:std/fs:close
+[witness] site auto-discharge f opened!->std/fs:close preferred:std/fs:close!,std/fs:drop
+[witness] site auto-discharge conn.h live!->db:release preferred:db:abort,db:release!,db:flush

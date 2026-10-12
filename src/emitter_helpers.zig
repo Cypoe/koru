@@ -54,6 +54,14 @@ pub const VariantMapping = struct {
 pub var variant_mappings: [64]VariantMapping = undefined;
 pub var variant_count: usize = 0;
 
+/// Whether the program declared `std/witness:enforce` — the same registry
+/// shape as variants: the comptime enforce tor sets it during
+/// comptime_main, and pass-witness-check reads it at analysis time (Phase 3
+/// strips the enforce flow from the AST, so the declaration can only reach
+/// the pass through process state). comptime_main runs twice per compile;
+/// setting a bool twice is fine.
+pub var witness_enforced: bool = false;
+
 /// Register a variant mapping (called by build:variants or other mechanisms)
 pub fn registerVariant(event_name: []const u8, variant_name: []const u8) bool {
     if (variant_count >= variant_mappings.len) {
