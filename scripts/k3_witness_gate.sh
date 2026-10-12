@@ -1,7 +1,7 @@
 #!/bin/bash
-# K3 Role B gate for the stored-write-numeric witness fragment.
+# K3 Role B gate for the witness checker.
 #
-# The Lean checker (verify/k3/StoredWriteNumeric.lean) re-decides every
+# The Lean checker (verify/k3/WitnessCheck.lean) re-decides every
 # `[witness] site …` line the compiler printed; verdicts must match on every
 # line. The forged corpus must be rejected line-for-line (N4). A missing Lean
 # toolchain is a FAIL, never a skip: an oracle that did not run did not pass.
@@ -21,22 +21,22 @@ if [ $# -eq 0 ]; then
 fi
 cd "$K3" || exit 1
 fail=0
-"$LEAN" StoredWriteNumeric.lean >/dev/null 2>"$K3/.theorems.err" || fail=1
+"$LEAN" WitnessCheck.lean >/dev/null 2>"$K3/.theorems.err" || fail=1
 if [ -s "$K3/.theorems.err" ]; then
-    echo "FAIL: Role A — StoredWriteNumeric.lean does not check:"
+    echo "FAIL: Role A — WitnessCheck.lean does not check:"
     cat "$K3/.theorems.err"
     fail=1
 fi
 rm -f "$K3/.theorems.err"
-"$LEAN" --run StoredWriteNumeric.lean golden.txt | tail -1 || fail=1
+"$LEAN" --run WitnessCheck.lean golden.txt | tail -1 || fail=1
 for corpus in "$@"; do
     if [ ! -f "$corpus" ]; then
         echo "FAIL: corpus missing: $corpus"
         fail=1
         continue
     fi
-    "$LEAN" --run StoredWriteNumeric.lean "$corpus" || fail=1
+    "$LEAN" --run WitnessCheck.lean "$corpus" || fail=1
 done
-"$LEAN" --run StoredWriteNumeric.lean --forged forged.txt | tail -1 || fail=1
+"$LEAN" --run WitnessCheck.lean --forged forged.txt | tail -1 || fail=1
 if [ $fail -eq 0 ]; then echo "K3 witness gate: PASS"; else echo "K3 witness gate: FAIL"; fi
 exit $fail

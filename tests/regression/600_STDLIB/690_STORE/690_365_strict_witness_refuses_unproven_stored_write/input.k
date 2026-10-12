@@ -2,7 +2,7 @@
 // marked [strict] refuses every stored write the numeric check could not
 // prove lossless. `0.1` is a decimal literal with no exact f32 value, so
 // its mark is `f32<-literal:0.1 rounds` and the write dies at analysis
-// with a per-site KORU161 naming the column, the literal, and the
+// with a per-site KORU179 naming the column, the literal, and the
 // rounding.
 
 [strict]

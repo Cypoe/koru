@@ -153,6 +153,7 @@ pub const ErrorCode = enum(u16) {
     KORU176, // A std/declarations:const call site is malformed — the `const { … }` field list refused by the shared field-list rules (a nameless entry, `name:` with no value, a fused line that dropped its comma, a name bound twice). One code for the class; the message names the fault. Emitted by src/template_processor.zig at template render — const is a [template] proc, so its refusal surfaces through the render path rather than a transform's ast.refusal.
     KORU177, // A call-site `|variant` names no declared proc target — the emitter would write a handler__<variant> call that resolves to nothing and surface it as a Zig backend 'no member' error. Emitted by src/flow_checker.zig (370_015).
     KORU178, // A std/json:parse call site is malformed — missing input, a branch outside ok/malformed, an empty or untypeable schema, an unsupported field type, or a destructure annotation a parse does not implement. One code for the class; the message names the fault. Emitted by koru_std/json.parse.kz — reserved in scripts/registry_reserved.txt.
+    KORU179, // A witness-check refusal — pass-witness-check (koru_std/compiler.kz) rejected a program whose prepared witnesses do not meet the contract it declared: under [strict] + std/witness:enforce, a stored write whose stored-write-numeric witness is rounds or deferred. One code for the witness-check family; the message names the site, the kind and the verdict.
 
     // Module structure errors
     KORU200, // Ambiguous module structure (both foo.kz and foo/ exist)

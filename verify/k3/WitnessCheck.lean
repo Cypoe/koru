@@ -1,24 +1,26 @@
 /-
-K3 — stored-write-numeric witness fragment.
+K3 — witness checker.
 
 Role A (calculus + soundness) and Role B (conformance oracle) for the
-`@witness("stored-write-numeric", …)` marks the `stored` transform mints
-onto lowered write invocations (koru_std/store.cols.kz, storedWriteCheck).
-The pass is the untrusted solver; this file re-decides every witness from
-its own definitions and rules on agreement (N1: solver ≠ checker).
+witness kinds pass-witness-check consumes — `stored-write-numeric` (marks
+the `stored` transform mints onto lowered write invocations,
+koru_std/store.cols.kz, storedWriteCheck) and `auto-discharge` (marks the
+inserter mints onto lowered disposals, src/auto_discharge_inserter.zig).
+The passes are the untrusted solvers; this file re-decides every witness
+from its own definitions and rules on agreement (N1: solver ≠ checker).
 
 Independence: the float literal rule here is a direct search for an exact
 `m·2^e` witness over the format's whole exponent range — a different
 derivation from the solver's odd-part/bit-length formula, so drift in
 either one surfaces as a mismatch rather than agreeing by construction.
 
-Run (Role B):  lean --run StoredWriteNumeric.lean <corpus>            — every site line must MATCH
-               lean --run StoredWriteNumeric.lean --forged <corpus>   — every line must be REJECTED (N4)
+Run (Role B):  lean --run WitnessCheck.lean <corpus>            — every site line must MATCH
+               lean --run WitnessCheck.lean --forged <corpus>   — every line must be REJECTED (N4)
 A corpus is backend output; only `[witness] site …` lines are read. A
 corpus with zero site lines FAILs: an empty batch is not a passed batch.
 -/
 
-namespace Koru.K3.StoredWriteNumeric
+namespace Koru.K3.WitnessCheck
 
 /-! ## The type table — mirrors `writeNumInfoOf` -/
 
@@ -324,7 +326,7 @@ def parseArgs : List String → Option (Bool × String)
 
 def main (args : List String) : IO UInt32 := do
   let some (forged, path) := parseArgs args
-    | do IO.eprintln "usage: StoredWriteNumeric [--forged] <corpus>"; return 2
+    | do IO.eprintln "usage: WitnessCheck [--forged] <corpus>"; return 2
   let lines := (← IO.FS.lines path).toList.filter isSiteLine
   if lines.isEmpty then
     IO.println s!"FAIL: no [witness] site lines in {path}"
@@ -347,6 +349,6 @@ def main (args : List String) : IO UInt32 := do
   IO.println s!"{mode}: {lines.length} lines, {bad} bad"
   return (if bad == 0 then 0 else 1)
 
-end Koru.K3.StoredWriteNumeric
+end Koru.K3.WitnessCheck
 
-def main (args : List String) : IO UInt32 := Koru.K3.StoredWriteNumeric.main args
+def main (args : List String) : IO UInt32 := Koru.K3.WitnessCheck.main args

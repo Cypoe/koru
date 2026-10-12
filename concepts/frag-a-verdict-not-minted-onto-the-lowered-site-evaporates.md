@@ -70,7 +70,7 @@ from the mark alone. Two changes made that true:
   semantics did not move.
 - **The checker shares no derivation with the solver.** The Zig side
   decides float exactness by the odd-part/bit-length formula over u128;
-  `verify/k3/StoredWriteNumeric.lean` searches the format's whole exponent
+  `verify/k3/WitnessCheck.lean` searches the format's whole exponent
   range for an exact `m·2^e` with unbounded naturals. Agreement between two
   derivations is evidence; agreement of one derivation with itself is not.
   Role A holds three soundness theorems (typed widening embeds the value

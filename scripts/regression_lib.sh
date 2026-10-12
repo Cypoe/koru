@@ -634,7 +634,7 @@ regression_check_c_equivalence() {
 }
 
 # K3 witness oracle leg — opt-in via a `K3_WITNESS` marker AND KORU_K3=1.
-# The Lean checker (verify/k3/StoredWriteNumeric.lean) re-decides every
+# The Lean checker (verify/k3/WitnessCheck.lean) re-decides every
 # `[witness] site` verdict the compiler printed into backend.err; the gate
 # script also self-checks against its golden/forged corpora. Opt-in because
 # the oracle needs an external Lean toolchain: a marker without KORU_K3 is a

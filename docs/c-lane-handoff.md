@@ -737,7 +737,7 @@ Mark parsing is strict (four quoted fields); a malformed mark is counted
 and printed nowhere. 690_364 pins four writes (f64<-f32, literal 1.5,
 literal 0.1, literal 16777217 into f64).
 
-**K3 — `verify/k3/StoredWriteNumeric.lean` (Lean 4.31.0, pinned in
+**K3 — `verify/k3/WitnessCheck.lean` (Lean 4.31.0, pinned in
 tools/tools.json).** Role A: `typed_lossless_sound`, `int_literal_sound`,
 `float_literal_sound` — a lossless verdict implies the value lands
 unchanged under the integer-range / `m·2^e` value semantics. Role B: the
