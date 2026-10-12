@@ -1,7 +1,7 @@
 ---
 type: belief
 id: frag-a-host-switch-else-is-zigs-answer-not-a-default
-provenance: C-lane plural-store tranche, 2026-10-12 — `main_module___store_sweepbody_*` emitted as a C call name (the zig qualifier leaked through a host-relative helper) and `@as(i64, @intCast(__koru_si))` reached C output through a `[ordinal]` capture; both were `else` arms that were really `.zig` arms
+provenance: C-lane plural-store tranche, 2026-10-12 — `main_module___store_sweepbody_*` emitted as a C call name (the zig qualifier leaked through a host-relative helper) and `@as(i64, @intCast(__koru_si))` reached C output through a `[ordinal]` capture; tagged-lifecycle tranche same day — `store.ixrefs`'s `(&cell.col)[cell.__koru_resolve(h)]` reached a stored-write argument through a `.cs`-or-else chain; all three were `else` arms that were really `.zig` arms
 ts: 2026-10-12
 tags: [koru, c-lane, host-shape, qualifiers, else-arms, ports]
 ---
@@ -39,3 +39,11 @@ Cousin to `frag-the-inline-body-is-a-marker-carrying-contract`: the
 `else`-spelling class is how a contract violation *arrives* — a host text
 reaching the wrong lane unflagged until a gate downstream (validator,
 oracle, segfault) names it.
+
+Third occurrence, same day, different shape: `store.ixrefs` spelled its
+indexed-read `(&__koru_store_<s>.<col>)[__koru_store_<s>.__koru_resolve(h)]`
+for "not cs" — a two-case switch (`cs` else zig) whose `else` was just as
+blind. The method-call spelling reached a stored-write *argument*, inside
+text the transform mints and the emitter passes through `writeExpr`
+verbatim, so nothing downstream could flag `.__koru_resolve(` as foreign.
+`.c => cell.col[__koru_resolve_<s>(h)]` names the host that was missing.

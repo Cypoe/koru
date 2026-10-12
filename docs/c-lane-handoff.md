@@ -347,3 +347,120 @@ record returns (~66), wider scalars (i128 ~10). The proto-alias class
 largest single mass — every `stored` write and `| row` site),
 watches/guards, row-layout grids, pointer/borrow types (~95 dirs),
 containers (~31), anonymous record returns (~66), `:.N`/`:S`.
+
+---
+
+## Tagged lifecycle tranche (this session, HEAD)
+
+Named terminal branches lower to a flat tagged result — the js lane's
+ shape, C-spelled: an anonymous enum of
+ constants +  + optional  for record payloads. Call
+sites with  continuations bind  and
+ on ; bindings lower to ,
+destructures to member reads; the synthesized panic arm reaches
+. Unhandled optional arms fall through .
+
+The plural path mints the full lifecycle on C now: SoA cell (+ hslot
+arrays/generation/freelist/ident+gen0 flags *only when* the store issues
+handles — 690_333's gate holds), void insert,  (/, exhaustion is a branch),  (), 
+(/, swap-remove + generation bump + freelist push), and
+the  decl (probe-visible, still refuses on reach).
+
+**Surgical fixes this tranche surfaced:**
+
+1.  indexed-read lowering was  + zig-else — the
+    zig method spelling reached C
+   verbatim.  arm: ,
+   and the cell block mints  mirroring zig's
+   two-phase trap — brand/gen mismatch panics *before* , with
+    falling to the not-a-handle message.  does not
+   flush stdio —  now  first or
+   buffered stdout dies with the trap (690_116 prints  then
+   the stale message).
+2.  had / arms and a zig else —  arm
+   emits  (355_012's declined-panic-in-arm fires identically).
+3. Auto-discharge names panic arms  even over empty payloads —
+   the binding is a no-op in zig; C skips it rather than refusing.
+
+**Acceptance — 22 new cells, all through :**
+690_011 (/, C_REFUSES removed — emits now), 690_333
+(inserth  + take + lean-gate), 690_116 (stale-handle read trap
++ singleton stored-write), 690_070 (take /), 690_085
+( optional), 355_012 (declined panic inside an arm), plus
+690_022, 690_074, 690_078, 690_079, 690_080, 690_081, 690_084, 690_088,
+690_100, 690_101, 690_192, 690_234, 690_250 (indexed read), 690_256,
+690_257, 690_273 — all byte-identical or pattern-matched. 690_336 pins
+the rules/drain refusal via C_REFUSES +  in LANGUAGES. Harness note:
+the c-equivalence check skips EXPECT_TRAP tests, so 690_116/355_012 carry
+the  pin as evidence-of-verification rather than harness coverage.
+
+**Refusal surface (named):** rule/preorder/drain sweeps, lifecycle
+interceptors/watches, [tree], owned columns, [entity], char[N],
+, ref() homes, refine facets, plural stored-write
+( — honest but unnamed, better diagnostic
+is future work), effect  arms under tagged calls,  catchall,
+ guarded dispatch, wildcard/nested-destructure payloads.
+
+**Next:** plural stored-write + indexed write targets (,
+ — the largest remaining mass), apply/, then
+watches/guards, then the borrow/container/record-return buckets.
+
+---
+
+## Tagged lifecycle tranche (this session, HEAD)
+
+Named terminal branches lower to a flat tagged result — the js lane's
+`{ tag, <branch>: payload }` shape, C-spelled: an anonymous enum of
+`<ev>_tag_<branch>` constants + `struct <ev>_res { int tag; <payload
+members> }` + optional `struct <ev>_<branch>_t` for record payloads. Call
+sites with `| arm` continuations bind `struct <ev>_res __koru_res_N` and
+`switch` on `.tag`; bindings lower to `const <ct> <b> = __koru_res_N.<m>`,
+destructures to member reads; the synthesized panic arm reaches
+`__koru_unreachable`. Unhandled optional arms fall through `default:`.
+
+The plural path mints the full lifecycle on C now: SoA cell (+ hslot
+arrays/generation/freelist/ident+gen0 flags *only when* the store issues
+handles — 690_333's gate holds), void insert, `insertf` (`| row`/`|
+full`, exhaustion is a branch), `inserth` (`| row <handle>`), `take`
+(`| item`/`| empty`, swap-remove + generation bump + freelist push), and
+the `apply` decl (probe-visible, still refuses on reach).
+
+**Surgical fixes this tranche surfaced:**
+
+1. `store.ixrefs` indexed-read lowering was `.cs` + zig-else — the
+   `(&cell.col)[cell.__koru_resolve(h)]` zig method spelling reached C
+   verbatim. `.c` arm: `__koru_store_<s>.<col>[__koru_resolve_<s>(h)]`,
+   and the cell block mints `__koru_resolve_<s>` mirroring zig's
+   two-phase trap — brand/gen mismatch panics *before* `row_of`, with
+   `row < 0` falling to the not-a-handle message. `abort()` does not
+   flush stdio — `__koru_unreachable` now `fflush(NULL)` first or
+   buffered stdout dies with the trap (690_116 prints `took 100` then
+   the stale message).
+2. `synthPanicBody` had `is_js`/`is_cs` arms and a zig else — `.c` arm
+   emits `__koru_unreachable("<ev>: unhandled panic branch '<b>' fired
+   at runtime")` (355_012's declined-panic-in-arm fires identically).
+3. Auto-discharge names panic arms `_auto_N` even over empty payloads —
+   the binding is a no-op in zig; C skips it rather than refusing.
+
+**Acceptance — 22 new cells, all through `ccomp -fstruct-passing`:**
+690_011 (`| row`/`| full`, C_REFUSES removed — emits now), 690_333
+(inserth `| row k` + take + lean-gate), 690_116 (stale-handle read trap
++ singleton stored-write), 690_070 (take `| item`/`| empty`), 690_085
+(`| row` optional), 355_012 (declined panic inside an arm), plus
+690_022, 690_074, 690_078, 690_079, 690_080, 690_081, 690_084, 690_088,
+690_100, 690_101, 690_192, 690_234, 690_250 (indexed read), 690_256,
+690_257, 690_273 — all byte-identical or pattern-matched. 690_336 pins
+the rules/drain refusal via C_REFUSES + `c` in LANGUAGES. Harness note:
+the c-equivalence check skips EXPECT_TRAP tests, so 690_116/355_012 carry
+the `c` pin as evidence-of-verification rather than harness coverage.
+
+**Refusal surface (named):** rule/preorder/drain sweeps, lifecycle
+interceptors/watches, [tree], owned columns, [entity], char[N],
+`std/indexes`, ref() homes, refine facets, plural stored-write
+(`unknown tor __store_write_*` — honest but unnamed, better diagnostic
+is future work), effect `!` arms under tagged calls, `|*` catchall,
+`| b when` guarded dispatch, wildcard/nested-destructure payloads.
+
+**Next:** plural stored-write + indexed write targets (`__store_write_*`,
+`__store_envwrite_*` — the largest remaining mass), apply/`stored`, then
+watches/guards, then the borrow/container/record-return buckets.

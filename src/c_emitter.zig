@@ -423,6 +423,13 @@ const Emitter = struct {
     /// spelling, so a declared terminal resolves to itself.
     aliases: *const std.StringHashMap([]const u8),
 
+    /// Monotonic result-temp counter — `__koru_res_N` at tagged-dispatch
+    /// call sites.
+    res_counter: usize = 0,
+    /// The event whose handler body is emitting — `=> name` produce nodes
+    /// build its `struct <name>_res` literal.
+    cur_event: ?*const ast.EventDecl = null,
+
     fn write(self: *Emitter, text: []const u8) CEmitError!void {
         try self.buf.appendSlice(self.allocator, text);
     }
@@ -481,8 +488,30 @@ const Emitter = struct {
             try self.writeFmt("static void {s}(void);\n", .{name});
             return;
         }
-        if (event.branches.len > 0) return; // definition pass refuses
         if (event.input.is_wildcard) return;
+
+        if (event.branches.len > 0) {
+            try self.emitTaggedResultDecl(event, name, key);
+            if (event.input.fields.len > 0) {
+                try self.writeFmt("struct {s}_in {{\n", .{name});
+                for (event.input.fields) |f| {
+                    const ct = self.cTypeOfResolved(f.type) orelse {
+                        std.debug.print("error[KORU047]: C lane: {s} field {s} has type {s} — no C type in the first fragment\n", .{ key, f.name, f.type });
+                        return CEmitError.UnsupportedConstruct;
+                    };
+                    try self.writeFmt("    {s} {s};\n", .{ ct, f.name });
+                }
+                try self.write("};\n");
+            }
+            try self.writeFmt("static struct {s}_res {s}(", .{ name, name });
+            if (event.input.fields.len == 0) {
+                try self.write("void");
+            } else {
+                try self.writeFmt("struct {s}_in {s}", .{ name, INPUT_PARAM });
+            }
+            try self.write(");\n");
+            return;
+        }
 
         const ret = try self.eventReturnType(event, key);
         if (event.input.fields.len > 0) {
@@ -530,16 +559,18 @@ const Emitter = struct {
             return;
         }
 
-        if (event.branches.len > 0) {
-            std.debug.print("error[KORU047]: C lane: {s} declares named branches — tagged results are outside the first fragment\n", .{key});
-            return CEmitError.UnsupportedConstruct;
-        }
         if (event.input.is_wildcard) {
             std.debug.print("error[KORU047]: C lane: {s} wildcard input — outside the first fragment\n", .{key});
             return CEmitError.UnsupportedConstruct;
         }
 
-        const ret = try self.eventReturnType(event, key);
+        const ret = if (event.branches.len > 0)
+            try std.fmt.allocPrint(self.allocator, "struct {s}_res", .{name})
+        else
+            try self.eventReturnType(event, key);
+        const saved_event = self.cur_event;
+        self.cur_event = event;
+        defer self.cur_event = saved_event;
         try self.writeFmt("static {s} {s}(", .{ ret, name });
         if (event.input.fields.len == 0) {
             try self.write("void");
@@ -600,6 +631,80 @@ const Emitter = struct {
         }
         std.debug.print("error[KORU047]: C lane: {s} has no |c proc body and no Koru impl (NoCProcBody)\n", .{key});
         return CEmitError.NoCProcBody;
+    }
+
+    fn findBranch(event: *const ast.EventDecl, name: []const u8) ?*const ast.Branch {
+        for (event.branches) |*b| {
+            if (std.mem.eql(u8, b.name, name)) return b;
+        }
+        return null;
+    }
+
+    /// The payload member's C spelling for a branch: null for an empty
+    /// payload, the scalar's C type for a `__type_ref` single, the named
+    /// payload struct `struct <name>_<branch>_t` for a record payload.
+    fn branchPayloadCType(self: *Emitter, event_name: []const u8, key: []const u8, b: *const ast.Branch) CEmitError!?[]const u8 {
+        if (b.payload.is_wildcard) {
+            std.debug.print("error[KORU047]: C lane: {s} branch `| {s}` wildcard payload — outside the first fragment\n", .{ key, b.name });
+            return CEmitError.UnsupportedConstruct;
+        }
+        const fs = b.payload.fields;
+        if (fs.len == 0) return null;
+        if (fs.len == 1 and std.mem.eql(u8, fs[0].name, "__type_ref")) {
+            const ct = self.cTypeOfResolved(fs[0].type) orelse {
+                std.debug.print("error[KORU047]: C lane: {s} branch `| {s}` payload type {s} — no C type in the first fragment\n", .{ key, b.name, fs[0].type });
+                return CEmitError.UnsupportedConstruct;
+            };
+            return ct;
+        }
+        for (fs) |f| {
+            if (std.mem.eql(u8, f.name, "__type_ref")) {
+                std.debug.print("error[KORU047]: C lane: {s} branch `| {s}` mixes `__type_ref` with named fields — outside the first fragment\n", .{ key, b.name });
+                return CEmitError.UnsupportedConstruct;
+            }
+            if (self.cTypeOfResolved(f.type) == null) {
+                std.debug.print("error[KORU047]: C lane: {s} branch `| {s}` payload field {s} has type {s} — no C type in the first fragment\n", .{ key, b.name, f.name, f.type });
+                return CEmitError.UnsupportedConstruct;
+            }
+        }
+        return try std.fmt.allocPrint(self.allocator, "struct {s}_{s}_t", .{ event_name, codegen_utils.cMemberName(self.allocator, b.name) });
+    }
+
+    /// `enum { <name>_tag_<b>, … };` + record payload struct types +
+    /// `struct <name>_res { int tag; <members> };` — the tagged-result
+    /// machinery an event's named `|` branches lower to (the union(enum)
+    /// the zig lane emits, spelled flat the way the js record is).
+    fn emitTaggedResultDecl(self: *Emitter, event: *const ast.EventDecl, name: []const u8, key: []const u8) CEmitError!void {
+        for (event.branches) |*b| {
+            if (b.kind == .effect) {
+                std.debug.print("error[KORU047]: C lane: {s} declares effect branch `! {s}` — handler dispatch is outside the first fragment\n", .{ key, b.name });
+                return CEmitError.UnsupportedConstruct;
+            }
+            _ = try self.branchPayloadCType(name, key, b);
+        }
+        try self.write("enum {\n");
+        for (event.branches) |*b| {
+            try self.writeFmt("    {s},\n", .{codegen_utils.cResTagConst(self.allocator, name, b.name)});
+        }
+        try self.write("};\n");
+        for (event.branches) |*b| {
+            const fs = b.payload.fields;
+            const is_rec = fs.len > 0 and !std.mem.eql(u8, fs[0].name, "__type_ref");
+            if (!is_rec) continue;
+            try self.writeFmt("struct {s}_{s}_t {{\n", .{ name, codegen_utils.cMemberName(self.allocator, b.name) });
+            for (fs) |f| {
+                const ct = self.cTypeOfResolved(f.type).?;
+                try self.writeFmt("    {s} {s};\n", .{ ct, codegen_utils.cMemberName(self.allocator, f.name) });
+            }
+            try self.write("};\n");
+        }
+        try self.writeFmt("struct {s}_res {{\n", .{name});
+        try self.write("    int tag;\n");
+        for (event.branches) |*b| {
+            const ptype = (try self.branchPayloadCType(name, key, b)) orelse continue;
+            try self.writeFmt("    {s} {s};\n", .{ ptype, codegen_utils.cPayloadMember(self.allocator, b.name) });
+        }
+        try self.write("};\n");
     }
 
     /// `const <ct> <field> = __koru_in.<field>;` — the |c proc binding
@@ -856,6 +961,12 @@ const Emitter = struct {
                     try self.emitInlineBodyResolvingContinuations(stripInlineStmtMarker(body), site.continuations, indent, ctx, &consumed);
                     return consumed;
                 } else {
+                    for (site.continuations) |*c| {
+                        if (c.kind == .terminal and (c.branch.len != 0 or c.is_catchall)) {
+                            try self.emitTaggedCall(site, inv, indent, ctx);
+                            return ~@as(u64, 0);
+                        }
+                    }
                     try self.emitCall(inv, indent);
                     return 0;
                 }
@@ -888,8 +999,49 @@ const Emitter = struct {
     fn emitProduce(self: *Emitter, bc: *const ast.BranchConstructor, indent: []const u8) CEmitError!void {
         try self.write(indent);
         if (!bc.is_bare_return and bc.branch_name.len != 0) {
-            std.debug.print("error[KORU047]: C lane: named branch `=> {s}` needs tagged results — outside the first fragment\n", .{bc.branch_name});
-            return CEmitError.UnsupportedConstruct;
+            const ev = self.cur_event orelse {
+                std.debug.print("error[KORU047]: C lane: named branch `=> {s}` outside an event body\n", .{bc.branch_name});
+                return CEmitError.UnsupportedConstruct;
+            };
+            const bname = try mangle(self.allocator, ev.path);
+            defer self.allocator.free(bname);
+            const b = findBranch(ev, bc.branch_name) orelse {
+                std.debug.print("error[KORU047]: C lane: `=> {s}` names no declared branch\n", .{bc.branch_name});
+                return CEmitError.UnsupportedConstruct;
+            };
+            const tagc = codegen_utils.cResTagConst(self.allocator, bname, b.name);
+            const pmem = codegen_utils.cPayloadMember(self.allocator, b.name);
+            if (bc.fields.len != 0) {
+                try self.writeFmt("return (struct {s}_res){{ .tag = {s}, .{s} = (struct {s}_{s}_t){{ ", .{ bname, tagc, pmem, bname, codegen_utils.cMemberName(self.allocator, b.name) });
+                for (bc.fields, 0..) |f, fi| {
+                    const fexpr = f.expression_str orelse {
+                        std.debug.print("error[KORU047]: C lane: `=> {s}` field {s} carries no expression text\n", .{ bc.branch_name, f.name });
+                        return CEmitError.UnsupportedConstruct;
+                    };
+                    if (fi > 0) try self.write(", ");
+                    try self.writeFmt(".{s} = ", .{codegen_utils.cMemberName(self.allocator, f.name)});
+                    try self.writeExpr(fexpr);
+                }
+                try self.write(" } };\n");
+                return;
+            }
+            const fs = b.payload.fields;
+            if (bc.plain_value) |pv| {
+                if (fs.len != 1 or !std.mem.eql(u8, fs[0].name, "__type_ref")) {
+                    std.debug.print("error[KORU047]: C lane: `=> {s}` scalar produce against a non-scalar payload\n", .{bc.branch_name});
+                    return CEmitError.UnsupportedConstruct;
+                }
+                try self.writeFmt("return (struct {s}_res){{ .tag = {s}, .{s} = ", .{ bname, tagc, pmem });
+                try self.writeExpr(pv);
+                try self.write(" };\n");
+            } else {
+                if (fs.len != 0) {
+                    std.debug.print("error[KORU047]: C lane: `=> {s}` produces no value for a payload-carrying branch\n", .{bc.branch_name});
+                    return CEmitError.UnsupportedConstruct;
+                }
+                try self.writeFmt("return {s};\n", .{codegen_utils.cResCtorEmpty(self.allocator, bname, b.name)});
+            }
+            return;
         }
         if (bc.fields.len != 0) {
             std.debug.print("error[KORU047]: C lane: fielded produce — outside the first fragment\n", .{});
@@ -961,6 +1113,16 @@ const Emitter = struct {
             try self.writeFmt("{s}();\n", .{name});
             return;
         }
+        try self.emitCallExpr(inv, event);
+        try self.write(";\n");
+    }
+
+    /// `name((struct <name>_in){ .f = v, … })` — the call itself, no
+    /// statement machinery: the tagged-dispatch path embeds it in the
+    /// `__koru_res_N` declaration.
+    fn emitCallExpr(self: *Emitter, inv: *const ast.Invocation, event: *const ast.EventDecl) CEmitError!void {
+        const name = try mangle(self.allocator, inv.path);
+        defer self.allocator.free(name);
         try self.write(name);
         try self.write("(");
         if (event.input.fields.len > 0) {
@@ -972,7 +1134,141 @@ const Emitter = struct {
             }
             try self.write(" }");
         }
-        try self.write(");\n");
+        try self.write(")");
+    }
+
+    /// A call site carrying `| branch` arms: bind the tagged result and
+    /// switch-dispatch each arm — the `switch (result)` the zig lane emits
+    /// around `.{ .row = …, .full = … }`.
+    ///
+    /// Fragment: terminal arms only, every arm naming a declared branch, no
+    /// `when` guards, no `|*` catchall — each is a named refusal, never a
+    /// silent skip. Unnamed terminal continuations are the post-call sequel
+    /// and emit after the switch.
+    fn emitTaggedCall(
+        self: *Emitter,
+        site: *const ast.Continuation,
+        inv: *const ast.Invocation,
+        indent: []const u8,
+        ctx: SiteCtx,
+    ) CEmitError!void {
+        const key = try pathKey(self.allocator, inv.path);
+        defer self.allocator.free(key);
+        const event = self.events.get(key) orelse {
+            std.debug.print("error[KORU047]: C lane: cannot resolve invocation {s} to an event\n", .{key});
+            return CEmitError.UnresolvedEvent;
+        };
+        const name = try mangle(self.allocator, inv.path);
+        defer self.allocator.free(name);
+
+        if (eventIsStub(event)) {
+            std.debug.print("error[KORU047]: C lane: {s} — tagged call against a transform/comptime tor\n", .{key});
+            return CEmitError.UnsupportedConstruct;
+        }
+        if (inv.inline_body != null) {
+            std.debug.print("error[KORU047]: C lane: {s} — tagged call under a transform-rendered inline body is outside the first fragment\n", .{key});
+            return CEmitError.UnsupportedConstruct;
+        }
+        if (inv.return_destructure.len != 0) {
+            std.debug.print("error[KORU047]: C lane: {s} destructure at the tagged bind — outside the first fragment\n", .{key});
+            return CEmitError.UnsupportedConstruct;
+        }
+        for (event.branches) |*b| {
+            if (b.kind == .effect) {
+                std.debug.print("error[KORU047]: C lane: {s} declares effect branch `! {s}` — handler dispatch is outside the first fragment\n", .{ key, b.name });
+                return CEmitError.UnsupportedConstruct;
+            }
+        }
+        for (site.continuations) |*c| {
+            if (c.kind != .terminal) {
+                std.debug.print("error[KORU047]: C lane: {s} — `!` handler arm under a tagged call is outside the first fragment\n", .{key});
+                return CEmitError.UnsupportedConstruct;
+            }
+            if (c.is_catchall) {
+                std.debug.print("error[KORU047]: C lane: {s} — `|*` catchall arm is outside the first fragment\n", .{key});
+                return CEmitError.UnsupportedConstruct;
+            }
+            if (c.branch.len != 0) {
+                if (c.condition != null) {
+                    std.debug.print("error[KORU047]: C lane: {s} arm `| {s} when` — guarded dispatch is outside the first fragment\n", .{ key, c.branch });
+                    return CEmitError.UnsupportedConstruct;
+                }
+                if (findBranch(event, c.branch) == null) {
+                    std.debug.print("error[KORU047]: C lane: {s} arm `| {s}` names no declared branch\n", .{ key, c.branch });
+                    return CEmitError.UnsupportedConstruct;
+                }
+            }
+        }
+
+        self.res_counter += 1;
+        const rn = if (inv.return_binding) |bind|
+            bind
+        else
+            try std.fmt.allocPrint(self.allocator, "__koru_res_{d}", .{self.res_counter});
+
+        try self.write(indent);
+        try self.writeFmt("struct {s}_res {s} = ", .{ name, rn });
+        try self.emitCallExpr(inv, event);
+        try self.write(";\n");
+        try self.writeFmt("{s}switch ({s}.tag) {{\n", .{ indent, rn });
+        const inner = try std.fmt.allocPrint(self.allocator, "{s}    ", .{indent});
+        defer self.allocator.free(inner);
+        for (site.continuations) |*cont| {
+            if (cont.kind != .terminal or cont.branch.len == 0) continue;
+            try self.writeFmt("{s}case {s}: {{\n", .{ indent, codegen_utils.cResTagConst(self.allocator, name, cont.branch) });
+            try self.emitBranchBinding(event, cont, rn, inner);
+            const consumed = try self.emitSiteNode(cont, inner, ctx);
+            try self.emitUnconsumedContinuations(cont.continuations, consumed, inner, ctx);
+            try self.writeFmt("{s}break; }}\n", .{inner});
+        }
+        try self.writeFmt("{s}default: break;\n", .{indent});
+        try self.writeFmt("{s}}}\n", .{indent});
+        // The post-call sequel: unnamed terminal continuations always run.
+        for (site.continuations) |*cont| {
+            if (cont.kind != .terminal or cont.branch.len != 0) continue;
+            try self.emitSite(cont, indent, ctx);
+        }
+    }
+
+    /// `const <ct> <bind> = <rn>.<member>;` — the arm's payload bind, or the
+    /// shape-destructure `| item {{ hp }}` spelled as one field copy each.
+    fn emitBranchBinding(
+        self: *Emitter,
+        event: *const ast.EventDecl,
+        cont: *const ast.Continuation,
+        rn: []const u8,
+        indent: []const u8,
+    ) CEmitError!void {
+        const ename = try mangle(self.allocator, event.path);
+        defer self.allocator.free(ename);
+        if (cont.binding) |bind| {
+            if (!std.mem.eql(u8, bind, "_")) {
+                const b = findBranch(event, cont.branch).?;
+                // An empty-payload arm may still carry a synthesized binding
+                // (auto-discharge names panic arms `_auto_N`); zig binds it to
+                // nothing, C emits nothing.
+                if ((try self.branchPayloadCType(ename, "", b))) |pt| {
+                    try self.writeFmt("{s}{s} const {s} = {s}.{s};\n", .{ indent, pt, bind, rn, codegen_utils.cPayloadMember(self.allocator, cont.branch) });
+                }
+            }
+        }
+        for (cont.destructure) |df| {
+            if (std.mem.eql(u8, df.name, "_")) continue;
+            if (df.sub.len != 0) {
+                std.debug.print("error[KORU047]: C lane: nested destructure at `| {s}` — outside the first fragment\n", .{cont.branch});
+                return CEmitError.UnsupportedConstruct;
+            }
+            const b = findBranch(event, cont.branch).?;
+            var ftype: ?[]const u8 = null;
+            for (b.payload.fields) |pf| {
+                if (std.mem.eql(u8, pf.name, df.name)) ftype = self.cTypeOfResolved(pf.type);
+            }
+            const ct = ftype orelse {
+                std.debug.print("error[KORU047]: C lane: `| {s} {{ {s} }}` names no payload field with a C type\n", .{ cont.branch, df.name });
+                return CEmitError.UnsupportedConstruct;
+            };
+            try self.writeFmt("{s}{s} const {s} = {s}.{s}.{s};\n", .{ indent, ct, df.name, rn, codegen_utils.cPayloadMember(self.allocator, cont.branch), codegen_utils.cMemberName(self.allocator, df.name) });
+        }
     }
 
     /// The value for declared field `f` (ordinal `fi`) at a call site: the
@@ -1282,6 +1578,7 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         \\static void __koru_stdout_write_f64(double v) { printf("%g", v); }
         \\static void __koru_stderr_write_f64(double v) { fprintf(stderr, "%g", v); }
         \\static void __koru_unreachable(const char *what) {
+        \\    fflush(NULL); // buffered stdout must land before the trap (zig flushes; abort does not)
         \\    fprintf(stderr, "koru: %s\n", what);
         \\    abort();
         \\}

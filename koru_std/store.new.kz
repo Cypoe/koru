@@ -1981,9 +1981,6 @@
             if (inserted_arms.items.len + removed_arms.items.len + updated_arms.items.len + pwatch_arms.items.len > 0) {
                 return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): lifecycle interceptors and watches are outside the C lane's first fragment", .{store_name}) } };
             }
-            if (needs_handles) {
-                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): generational handle slots (take / `| row` / `[id]` / watch) are outside the C lane's first fragment", .{store_name}) } };
-            }
             if (is_tree) {
                 return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): [tree] stores are outside the C lane's first fragment", .{store_name}) } };
             }
@@ -5077,7 +5074,77 @@
             for (0..user_field_count) |fci| {
                 cc.appendSlice(allocator, std.fmt.allocPrint(allocator, "    {s} {s}[{d}];\n", .{ c_col_types[fci], codegen_utils_store.cMemberName(allocator, field_names[fci]), CAP }) catch unreachable) catch unreachable;
             }
-            cc.appendSlice(allocator, std.fmt.allocPrint(allocator, "    long long len;\n}} __koru_store_{s} = {{0}};\n", .{store_name}) catch unreachable) catch unreachable;
+            if (needs_handles) {
+                // The kept-store handle table — same slot layout the zig
+                // cell carries (dense row, generation, freelist, ident/gen0
+                // shortcut flags). `int` for the flags matches the lane's
+                // `bool -> int` lowering; both flags start TRUE so the {0}
+                // zero-init would lie — init them explicitly.
+                cc.appendSlice(allocator, std.fmt.allocPrint(allocator,
+                    "    long long __koru_hslot_row[{d}];\n    unsigned int __koru_hslot_gen[{d}];\n    long long __koru_row_hslot[{d}];\n    long long __koru_hslot_free[{d}];\n    long long __koru_hslot_free_len;\n    long long __koru_hslot_next;\n    int __koru_ident;\n    int __koru_gen0;\n",
+                    .{ CAP, CAP, CAP, CAP }) catch unreachable) catch unreachable;
+            }
+            if (needs_handles) {
+                cc.appendSlice(allocator, std.fmt.allocPrint(allocator, "    long long len;\n}} __koru_store_{s} = {{ .__koru_ident = 1, .__koru_gen0 = 1 }};\n", .{store_name}) catch unreachable) catch unreachable;
+            } else {
+                cc.appendSlice(allocator, std.fmt.allocPrint(allocator, "    long long len;\n}} __koru_store_{s} = {{0}};\n", .{store_name}) catch unreachable) catch unreachable;
+            }
+            if (needs_handles) {
+                // brand + the three helpers zig mints as cell methods:
+                // materialize (first take flips `ident`), row_of (-1 = zig's
+                // null), handle_of (slot|brand<<24|gen<<32 packing).
+                cc.appendSlice(allocator, std.fmt.allocPrint(allocator,
+                    "static const long long __koru_brand_{s} = {d};\n",
+                    .{ store_name, store_ordinal }) catch unreachable) catch unreachable;
+                const ch_text = std.mem.replaceOwned(u8, allocator,
+                    \\static void __koru_materialize_{s}(void) {
+                    \\    if (!__koru_store_{s}.__koru_ident) return;
+                    \\    for (long long __koru_i = 0; __koru_i < __koru_store_{s}.len; __koru_i++) {
+                    \\        __koru_store_{s}.__koru_hslot_row[__koru_i] = __koru_i;
+                    \\        __koru_store_{s}.__koru_row_hslot[__koru_i] = __koru_i;
+                    \\    }
+                    \\    __koru_store_{s}.__koru_ident = 0;
+                    \\}
+                    \\static long long __koru_row_of_{s}(long long h) {
+                    \\    if (h < 0) return -1;
+                    \\    const unsigned long long u = (unsigned long long)h;
+                    \\    const unsigned int slot32 = (unsigned int)u;
+                    \\    if ((slot32 >> 24) != (unsigned int)__koru_brand_{s}) return -1;
+                    \\    const long long slot = (long long)(slot32 & 0xFFFFFFu);
+                    \\    if (slot >= __koru_store_{s}.__koru_hslot_next) return -1;
+                    \\    if (__koru_store_{s}.__koru_gen0) { if ((u >> 32) != 0) return -1; return slot; }
+                    \\    if ((unsigned int)(u >> 32) != __koru_store_{s}.__koru_hslot_gen[slot]) return -1;
+                    \\    if (__koru_store_{s}.__koru_ident) return slot;
+                    \\    const long long r = __koru_store_{s}.__koru_hslot_row[slot];
+                    \\    if (r >= __koru_store_{s}.len) return -1;
+                    \\    return r;
+                    \\}
+                    \\static long long __koru_handle_of_{s}(long long dense) {
+                    \\    if (__koru_store_{s}.__koru_gen0) return dense | (__koru_brand_{s} << 24);
+                    \\    long long slot = dense;
+                    \\    if (!__koru_store_{s}.__koru_ident) slot = __koru_store_{s}.__koru_row_hslot[dense];
+                    \\    return (slot | (__koru_brand_{s} << 24)) | (((long long)__koru_store_{s}.__koru_hslot_gen[slot]) << 32);
+                    \\}
+                    \\static long long __koru_resolve_{s}(long long h) {
+                    \\    if (h >= 0) {
+                    \\        const unsigned long long u = (unsigned long long)h;
+                    \\        const unsigned int slot32 = (unsigned int)u;
+                    \\        if ((slot32 >> 24) != (unsigned int)__koru_brand_{s}) __koru_unreachable("std/store: '{s}[...]' does not address a row - the value is not a handle this store issued (handles come from `| row` and row cursors)");
+                    \\        const long long slot = (long long)(slot32 & 0xFFFFFFu);
+                    \\        if (__koru_store_{s}.__koru_gen0) {
+                    \\            if ((u >> 32) != 0 && slot < __koru_store_{s}.__koru_hslot_next) __koru_unreachable("std/store: stale row handle into store '{s}' - the row it addressed was removed (stale-handle trap pinned at 690_115)");
+                    \\        } else if (slot < __koru_store_{s}.__koru_hslot_next && (unsigned int)(u >> 32) != __koru_store_{s}.__koru_hslot_gen[slot]) {
+                    \\            __koru_unreachable("std/store: stale row handle into store '{s}' - the row it addressed was removed (stale-handle trap pinned at 690_115)");
+                    \\        }
+                    \\    }
+                    \\    const long long r = __koru_row_of_{s}(h);
+                    \\    if (r < 0) __koru_unreachable("std/store: '{s}[...]' does not address a row - the value is not a handle this store issued (handles come from `| row` and row cursors)");
+                    \\    return r;
+                    \\}
+                    \\
+                , "{s}", store_name) catch unreachable;
+                cc.appendSlice(allocator, ch_text) catch unreachable;
+            }
             c_appended.append(allocator, ast.Item{ .inline_code = ast.InlineCode{
                 .code = cc.toOwnedSlice(allocator) catch unreachable,
                 .location = flow.location,
@@ -5157,7 +5224,195 @@
                 .module = allocator.dupe(u8, flow.module) catch unreachable,
             } }) catch unreachable;
 
-            const cconsumed = std.fmt.allocPrint(allocator, "// std/store: plural store '{s}' created (C lane: SoA cell + void insert + apply decl; take/inserth/stored-write are the named-refusal surface){s}", .{ store_name, StoreRefHome.marker(allocator, cell_fields) }) catch unreachable;
+            // units 2b/2c/3 — the tagged lifecycle: insertf (`| row`/`|
+            // full`), inserth (`| row <handle>`), take (`| item`/`| empty`).
+            // All three mint as `struct <ev>_res` returns — the emitter's
+            // tagged-result machinery. The shared append block is hslot mint
+            // (kept stores) + column writes + len++.
+            var c_append = std.ArrayList(u8).initCapacity(allocator, 256 + user_field_count * 48) catch unreachable;
+            if (needs_handles) {
+                const hmint = std.mem.replaceOwned(u8, allocator,
+                    \\long long __koru_hslot;
+                    \\if (__koru_store_{s}.__koru_hslot_free_len > 0) {
+                    \\    __koru_store_{s}.__koru_hslot_free_len -= 1;
+                    \\    __koru_hslot = __koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len];
+                    \\} else {
+                    \\    __koru_hslot = __koru_store_{s}.__koru_hslot_next;
+                    \\    __koru_store_{s}.__koru_hslot_next += 1;
+                    \\}
+                    \\if (!__koru_store_{s}.__koru_ident) {
+                    \\    __koru_store_{s}.__koru_hslot_row[__koru_hslot] = __koru_new_row;
+                    \\    __koru_store_{s}.__koru_row_hslot[__koru_new_row] = __koru_hslot;
+                    \\}
+                    \\
+                , "{s}", store_name) catch unreachable;
+                c_append.appendSlice(allocator, hmint) catch unreachable;
+            }
+            for (0..user_field_count) |fci| {
+                c_append.appendSlice(allocator, std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_new_row] = {s};\n", .{ store_name, codegen_utils_store.cMemberName(allocator, field_names[fci]), field_names[fci] }) catch unreachable) catch unreachable;
+            }
+            c_append.appendSlice(allocator, std.fmt.allocPrint(allocator, "__koru_store_{s}.len += 1;\n", .{store_name}) catch unreachable) catch unreachable;
+            const c_new_row = "const long long __koru_new_row = __koru_store_";
+
+            // insertf: `| row` (optional, dense i64 or packed handle) +
+            // `| full` — exhaustion is a branch (O10, 690_011).
+            const c_insertf_name = std.fmt.allocPrint(allocator, "__store_insertf_{s}", .{store_name}) catch unreachable;
+            const c_insertf_cname = std.fmt.allocPrint(allocator, "{s}{s}", .{ codegen_utils_store.cEventPrefix(allocator, home_ns), c_insertf_name }) catch unreachable;
+            const c_f_branches = allocator.alloc(ast.Branch, 2) catch unreachable;
+            const c_f_row_pf = allocator.alloc(ast.Field, 1) catch unreachable;
+            c_f_row_pf[0] = ast.Field{ .name = allocator.dupe(u8, "__type_ref") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
+            c_f_branches[0] = ast.Branch{
+                .name = allocator.dupe(u8, "row") catch unreachable,
+                .payload = ast.Shape{ .fields = c_f_row_pf },
+                .kind = .terminal,
+                .is_optional = true,
+                .annotations = &[_][]const u8{},
+            };
+            c_f_branches[1] = ast.Branch{
+                .name = allocator.dupe(u8, "full") catch unreachable,
+                .payload = ast.Shape{ .fields = &[_]ast.Field{} },
+                .kind = .terminal,
+                .annotations = &[_][]const u8{},
+            };
+            c_appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
+                .path = H.mkPathH(allocator, home_ns, c_insertf_name),
+                .input = ast.Shape{ .fields = c_ins_fields },
+                .branches = c_f_branches,
+                .is_public = false,
+                .is_implicit_flow = false,
+                .annotations = &[_][]const u8{},
+                .location = flow.location,
+                .module = allocator.dupe(u8, flow.module) catch unreachable,
+            } }) catch unreachable;
+            var cf = std.ArrayList(u8).initCapacity(allocator, 384 + c_append.items.len) catch unreachable;
+            cf.appendSlice(allocator, std.fmt.allocPrint(allocator,
+                "if (__koru_store_{s}.len >= {d}) return {s};\n{s}{s}.len;\n{s}return {s};\n",
+                .{ store_name, CAP, codegen_utils_store.cResCtorEmpty(allocator, c_insertf_cname, "full"), c_new_row, store_name, c_append.items, codegen_utils_store.cResCtorOne(allocator, c_insertf_cname, "row", if (needs_handles) std.fmt.allocPrint(allocator, "__koru_handle_of_{s}(__koru_new_row)", .{store_name}) catch unreachable else "__koru_new_row") }) catch unreachable) catch unreachable;
+            c_appended.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
+                .path = H.mkPathH(allocator, home_ns, c_insertf_name),
+                .body = ast.Source{ .text = cf.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
+                .annotations = &[_][]const u8{},
+                .target = allocator.dupe(u8, "c") catch unreachable,
+                .location = flow.location,
+                .module = allocator.dupe(u8, flow.module) catch unreachable,
+            } }) catch unreachable;
+
+            // inserth: `| row <handle>` only — full without a `| full` arm is
+            // the pinned panic, same as the void insert.
+            const c_inserth_name = std.fmt.allocPrint(allocator, "__store_inserth_{s}", .{store_name}) catch unreachable;
+            const c_inserth_cname = std.fmt.allocPrint(allocator, "{s}{s}", .{ codegen_utils_store.cEventPrefix(allocator, home_ns), c_inserth_name }) catch unreachable;
+            const c_h_branches = allocator.alloc(ast.Branch, 1) catch unreachable;
+            const c_h_row_pf = allocator.alloc(ast.Field, 1) catch unreachable;
+            c_h_row_pf[0] = ast.Field{ .name = allocator.dupe(u8, "__type_ref") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
+            c_h_branches[0] = ast.Branch{
+                .name = allocator.dupe(u8, "row") catch unreachable,
+                .payload = ast.Shape{ .fields = c_h_row_pf },
+                .kind = .terminal,
+                .is_optional = true,
+                .annotations = &[_][]const u8{},
+            };
+            c_appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
+                .path = H.mkPathH(allocator, home_ns, c_inserth_name),
+                .input = ast.Shape{ .fields = c_ins_fields },
+                .branches = c_h_branches,
+                .is_public = false,
+                .is_implicit_flow = false,
+                .annotations = &[_][]const u8{},
+                .location = flow.location,
+                .module = allocator.dupe(u8, flow.module) catch unreachable,
+            } }) catch unreachable;
+            var ch = std.ArrayList(u8).initCapacity(allocator, 384 + c_append.items.len) catch unreachable;
+            ch.appendSlice(allocator, std.fmt.allocPrint(allocator,
+                "if (__koru_store_{s}.len >= {d}) __koru_unreachable(\"std/store: store '{s}' is full (capacity {d}) - declared capacity and the `| full` branch are pinned at 690_011\");\n{s}{s}.len;\n{s}return {s};\n",
+                .{ store_name, CAP, store_name, CAP, c_new_row, store_name, c_append.items, codegen_utils_store.cResCtorOne(allocator, c_inserth_cname, "row", if (needs_handles) std.fmt.allocPrint(allocator, "__koru_handle_of_{s}(__koru_new_row)", .{store_name}) catch unreachable else "__koru_new_row") }) catch unreachable) catch unreachable;
+            c_appended.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
+                .path = H.mkPathH(allocator, home_ns, c_inserth_name),
+                .body = ast.Source{ .text = ch.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
+                .annotations = &[_][]const u8{},
+                .target = allocator.dupe(u8, "c") catch unreachable,
+                .location = flow.location,
+                .module = allocator.dupe(u8, flow.module) catch unreachable,
+            } }) catch unreachable;
+
+            // take: `| item {fields}` + `| empty` (panic-flagged) — the
+            // swap-remove through the handle head. A handle-carrying store
+            // only; a lean take site is impossible (nothing resolves the
+            // handle the gate kept out).
+            if (needs_handles) {
+                const c_take_name = std.fmt.allocPrint(allocator, "__store_take_{s}", .{store_name}) catch unreachable;
+                const c_take_cname = std.fmt.allocPrint(allocator, "{s}{s}", .{ codegen_utils_store.cEventPrefix(allocator, home_ns), c_take_name }) catch unreachable;
+                const c_t_in = allocator.alloc(ast.Field, 1) catch unreachable;
+                c_t_in[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
+                const c_t_branches = allocator.alloc(ast.Branch, 2) catch unreachable;
+                const c_t_item_pf = allocator.alloc(ast.Field, user_field_count) catch unreachable;
+                for (field_names[0..user_field_count], field_types[0..user_field_count], 0..) |fnm, ft, fci| {
+                    c_t_item_pf[fci] = ast.Field{ .name = allocator.dupe(u8, fnm) catch unreachable, .type = allocator.dupe(u8, ft) catch unreachable };
+                }
+                c_t_branches[0] = ast.Branch{
+                    .name = allocator.dupe(u8, "item") catch unreachable,
+                    .payload = ast.Shape{ .fields = c_t_item_pf },
+                    .kind = .terminal,
+                    .annotations = &[_][]const u8{},
+                };
+                c_t_branches[1] = ast.Branch{
+                    .name = allocator.dupe(u8, "empty") catch unreachable,
+                    .payload = ast.Shape{ .fields = &[_]ast.Field{} },
+                    .kind = .terminal,
+                    .is_panic = true,
+                    .annotations = &[_][]const u8{},
+                };
+                c_appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
+                    .path = H.mkPathH(allocator, home_ns, c_take_name),
+                    .input = ast.Shape{ .fields = c_t_in },
+                    .branches = c_t_branches,
+                    .is_public = false,
+                    .is_implicit_flow = false,
+                    .annotations = &[_][]const u8{},
+                    .location = flow.location,
+                    .module = allocator.dupe(u8, flow.module) catch unreachable,
+                } }) catch unreachable;
+                var ct = std.ArrayList(u8).initCapacity(allocator, 512 + user_field_count * 64) catch unreachable;
+                ct.appendSlice(allocator, std.fmt.allocPrint(allocator,
+                    "__koru_materialize_{s}();\nconst long long __koru_r = __koru_row_of_{s}(row);\nif (__koru_r < 0) return {s};\nconst long long __koru_gone_slot = __koru_store_{s}.__koru_row_hslot[__koru_r];\n",
+                    .{ store_name, store_name, codegen_utils_store.cResCtorEmpty(allocator, c_take_cname, "empty"), store_name }) catch unreachable) catch unreachable;
+                for (0..user_field_count) |fci| {
+                    ct.appendSlice(allocator, std.fmt.allocPrint(allocator, "const {s} __koru_out_{s} = __koru_store_{s}.{s}[__koru_r];\n", .{ c_col_types[fci], codegen_utils_store.cMemberName(allocator, field_names[fci]), store_name, codegen_utils_store.cMemberName(allocator, field_names[fci]) }) catch unreachable) catch unreachable;
+                }
+                ct.appendSlice(allocator, std.fmt.allocPrint(allocator, "const long long __koru_last = __koru_store_{s}.len - 1;\nif (__koru_r != __koru_last) {{\n", .{store_name}) catch unreachable) catch unreachable;
+                for (0..user_field_count) |fci| {
+                    ct.appendSlice(allocator, std.fmt.allocPrint(allocator, "    __koru_store_{s}.{s}[__koru_r] = __koru_store_{s}.{s}[__koru_last];\n", .{ store_name, codegen_utils_store.cMemberName(allocator, field_names[fci]), store_name, codegen_utils_store.cMemberName(allocator, field_names[fci]) }) catch unreachable) catch unreachable;
+                }
+                const ctswap = std.mem.replaceOwned(u8, allocator,
+                    \\    const long long __koru_mv_slot = __koru_store_{s}.__koru_row_hslot[__koru_last];
+                    \\    __koru_store_{s}.__koru_hslot_row[__koru_mv_slot] = __koru_r;
+                    \\    __koru_store_{s}.__koru_row_hslot[__koru_r] = __koru_mv_slot;
+                    \\}
+                    \\__koru_store_{s}.__koru_hslot_row[__koru_gone_slot] = -1;
+                    \\__koru_store_{s}.len = __koru_last;
+                    \\__koru_store_{s}.__koru_hslot_gen[__koru_gone_slot] += 1;
+                    \\__koru_store_{s}.__koru_hslot_free[__koru_store_{s}.__koru_hslot_free_len] = __koru_gone_slot;
+                    \\__koru_store_{s}.__koru_hslot_free_len += 1;
+                    \\__koru_store_{s}.__koru_gen0 = 0;
+                    \\
+                , "{s}", store_name) catch unreachable;
+                ct.appendSlice(allocator, ctswap) catch unreachable;
+                var ctrec = std.ArrayList(u8).initCapacity(allocator, user_field_count * 32) catch unreachable;
+                for (0..user_field_count) |fci| {
+                    if (fci > 0) ctrec.appendSlice(allocator, ", ") catch unreachable;
+                    ctrec.appendSlice(allocator, std.fmt.allocPrint(allocator, ".{s} = __koru_out_{s}", .{ codegen_utils_store.cMemberName(allocator, field_names[fci]), codegen_utils_store.cMemberName(allocator, field_names[fci]) }) catch unreachable) catch unreachable;
+                }
+                ct.appendSlice(allocator, std.fmt.allocPrint(allocator, "return {s};\n", .{codegen_utils_store.cResCtorRec(allocator, c_take_cname, "item", ctrec.items)}) catch unreachable) catch unreachable;
+                c_appended.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
+                    .path = H.mkPathH(allocator, home_ns, c_take_name),
+                    .body = ast.Source{ .text = ct.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
+                    .annotations = &[_][]const u8{},
+                    .target = allocator.dupe(u8, "c") catch unreachable,
+                    .location = flow.location,
+                    .module = allocator.dupe(u8, flow.module) catch unreachable,
+                } }) catch unreachable;
+            }
+
+            const cconsumed = std.fmt.allocPrint(allocator, "// std/store: plural store '{s}' created (C lane: SoA cell + insert/insertf/inserth + take + apply decl; stored-write/rules/views are the named-refusal surface){s}", .{ store_name, StoreRefHome.marker(allocator, cell_fields) }) catch unreachable;
             return .{ .transformed = .{
                 .replacement = ast.Item{ .inline_code = ast.InlineCode{
                     .code = cconsumed,

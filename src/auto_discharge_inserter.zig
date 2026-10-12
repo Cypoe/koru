@@ -116,10 +116,16 @@ fn synthPanicBody(
 ) ![]const u8 {
     const is_js = std.mem.eql(u8, lang, "js");
     const is_cs = std.mem.eql(u8, lang, "cs");
+    const is_c = std.mem.eql(u8, lang, "c");
     if (!panicHasPayload(branch)) {
         if (is_cs) return std.fmt.allocPrint(
             allocator,
             "throw new global::System.Exception(\"{s}: unhandled panic branch '{s}' fired at runtime\");",
+            .{ event_name, branch.name },
+        );
+        if (is_c) return std.fmt.allocPrint(
+            allocator,
+            "__koru_unreachable(\"{s}: unhandled panic branch '{s}' fired at runtime\");",
             .{ event_name, branch.name },
         );
         return if (is_js)
@@ -157,6 +163,17 @@ fn synthPanicBody(
             allocator,
             "__koru_stderr_write(\"{s}: panic branch '{s}' fired — payload: \" + {s} + \"\\n\");\nthrow new Error(\"{s}: unhandled panic branch '{s}' fired at runtime\");",
             .{ event_name, branch.name, if (is_str) "v" else "JSON.stringify(v)", event_name, branch.name },
+        );
+    }
+    if (is_c) {
+        // __koru_unreachable prints `koru: <what>` and aborts — the C lane's
+        // panic. The payload itself is not interpolated on this lane (no
+        // type-directed formatter in the fragment); the message still names
+        // the event and branch, and the arm still aborts.
+        return std.fmt.allocPrint(
+            allocator,
+            "__koru_stderr_write(\"{s}: panic branch '{s}' fired\\n\");\n__koru_unreachable(\"{s}: unhandled panic branch '{s}' fired at runtime\");",
+            .{ event_name, branch.name, event_name, branch.name },
         );
     }
     return std.fmt.allocPrint(

@@ -51,6 +51,11 @@ fn storeIndexedRefs(alloc: std.mem.Allocator, prog: *const ast_find.Program, tex
                     // index position in the emitted text.
                     const piece = if (storeHostTarget() == .cs)
                         std.fmt.allocPrint(alloc, "{s}__koru_store_{s}.__koru_read_{s}({s})", .{ prefix, store, codegen_utils_store.HostShape.csFolded(alloc, fname), inner }) catch unreachable
+                    else if (storeHostTarget() == .c)
+                        // C globals are flat — no module prefix — and the
+                        // resolve helper traps like the zig method does
+                        // (stale-gen vs not-a-handle are distinct messages).
+                        std.fmt.allocPrint(alloc, "__koru_store_{s}.{s}[__koru_resolve_{s}({s})]", .{ store, codegen_utils_store.cMemberName(alloc, fname), store, inner }) catch unreachable
                     else
                         std.fmt.allocPrint(alloc, "(&{s}__koru_store_{s}.{s})[{s}__koru_store_{s}.__koru_resolve({s})]", .{ prefix, store, fname, prefix, store, inner }) catch unreachable;
                     out.appendSlice(alloc, piece) catch unreachable;

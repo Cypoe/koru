@@ -285,6 +285,45 @@ pub fn cMemberName(allocator: std.mem.Allocator, name: []const u8) []const u8 {
     return out;
 }
 
+/// Branch-payload member spelling in a C tagged-result struct — `cMemberName`
+/// plus the one collision the `int tag` discriminator creates: a branch
+/// literally named `tag` carries its payload as `__ktag` (the cs lane's same
+/// ruling at csPayloadMember).
+pub fn cPayloadMember(allocator: std.mem.Allocator, name: []const u8) []const u8 {
+    const m = cMemberName(allocator, name);
+    return if (std.mem.eql(u8, m, "tag")) "__ktag" else m;
+}
+
+/// The tag constant a C tagged-result struct switches on:
+/// `<cname>_tag_<branch>` where `cname` is the event's mangled C name
+/// (`cEventPrefix(home)` + basename). Emitted as an anonymous enum member
+/// ahead of `struct <cname>_res`.
+pub fn cResTagConst(allocator: std.mem.Allocator, cname: []const u8, branch: []const u8) []const u8 {
+    return std.fmt.allocPrint(allocator, "{s}_tag_{s}", .{ cname, cMemberName(allocator, branch) }) catch unreachable;
+}
+
+/// `(struct <cname>_res){ .tag = <cname>_tag_<branch> }` — a C branch
+/// constructor carrying no payload. `HostShape.branchEmpty` has no `.c` arm
+/// because the C literal must name its own result type — the event's mangled
+/// name is context the shared host-shape helpers do not carry.
+pub fn cResCtorEmpty(allocator: std.mem.Allocator, cname: []const u8, branch: []const u8) []const u8 {
+    return std.fmt.allocPrint(allocator, "(struct {s}_res){{ .tag = {s} }}", .{ cname, cResTagConst(allocator, cname, branch) }) catch unreachable;
+}
+
+/// `(struct <cname>_res){ .tag = <cname>_tag_<branch>, .<branch> = <value> }`
+/// — a single-payload constructor (`| row v`, `| item <scalar>`).
+pub fn cResCtorOne(allocator: std.mem.Allocator, cname: []const u8, branch: []const u8, value: []const u8) []const u8 {
+    return std.fmt.allocPrint(allocator, "(struct {s}_res){{ .tag = {s}, .{s} = {s} }}", .{ cname, cResTagConst(allocator, cname, branch), cPayloadMember(allocator, branch), value }) catch unreachable;
+}
+
+/// `(struct <cname>_res){ .tag = <cname>_tag_<branch>, .<branch> = (struct
+/// <cname>_<branch>_t){ <body> } }` — a record-payload constructor where
+/// `body` is the `.f = v` pair list `recField` produces and the member type is
+/// the named payload struct the emitter mints beside the res struct.
+pub fn cResCtorRec(allocator: std.mem.Allocator, cname: []const u8, branch: []const u8, body: []const u8) []const u8 {
+    return std.fmt.allocPrint(allocator, "(struct {s}_res){{ .tag = {s}, .{s} = (struct {s}_{s}_t){{ {s} }} }}", .{ cname, cResTagConst(allocator, cname, branch), cPayloadMember(allocator, branch), cname, cMemberName(allocator, branch), body }) catch unreachable;
+}
+
 /// `main_module.` -> `main_module_` — the C event-name prefix a dotted-path
 /// qualifier folds to (`mangle` in c_emitter joins `mq` + `_` + segment).
 /// An empty qualifier yields an empty prefix.
