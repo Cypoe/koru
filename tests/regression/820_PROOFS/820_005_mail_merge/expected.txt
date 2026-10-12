@@ -1,0 +1,3 @@
+Dear ada, your balance is 420 credits. Ref: {{mystery}}.
+Dear grace, your balance is 1337 credits. Ref: {{mystery}}.
+Dear edsger, your balance is 7 credits. Ref: {{mystery}}.

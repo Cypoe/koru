@@ -1,0 +1,6 @@
+requests 12 bytes 6144 errors 2 posts 2
+endpoint /index hits 4 bytes 2048
+endpoint /style hits 2 bytes 1024
+endpoint /login hits 2 bytes 384
+endpoint /missing hits 2 bytes 128
+endpoint /api/data hits 2 bytes 2560

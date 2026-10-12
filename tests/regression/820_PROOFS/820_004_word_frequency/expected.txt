@@ -1,0 +1,10 @@
+words: 62
+distinct: 36
+the: 9
+of: 6
+a: 4
+it: 4
+and: 3
+is: 3
+in: 1
+to: 0
