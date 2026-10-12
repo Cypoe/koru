@@ -278,3 +278,12 @@ invocation-head lines by construction). The report's advice is
 re-emission, not name-passing: "re-emit your text in that shape." A
 teaching message whose own instruction cannot be obeyed is worse than
 silence — it manufactures a second failure out of the first.
+
+2026-10-12 — the grammar text leaked a shape that is not the wire's.
+`name<!x>` (the consume-annotation) sat in WIRE_GRAMMAR_TEXT as if it were
+spelling the model could meet or write; it is a declaration-layer type —
+the schema may carry it, the wire language cannot. The model only ever
+emits `rN`; teaching "spends it" priced phantom internals into 8.5k of
+front-loaded prompt that already buries the domain policy. The line now
+describes the field, not the consumption marker — the marker stays where
+the type system enforces it.
