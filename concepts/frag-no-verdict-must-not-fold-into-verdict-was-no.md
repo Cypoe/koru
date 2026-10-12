@@ -65,3 +65,20 @@ must distinguish "the state never arrived" from "the state was empty."
 "never ran" is routine and expected, and forcing the gate to fail on it trains
 everyone to ignore the exit code. Then the third state has become decoration and
 the honest move is to fix the enumerator instead of reporting the gap.
+
+## Third instance — the pin nobody could reach (2026-10-12)
+
+`*_REFUSES` markers on error-expected tests were dead text. The equivalence
+legs (js/cs/c) sit at the tail of `regression_run_one_test`, but every
+error-pin branch — frontend *and* backend — exits through an early
+`return 0`, so a test whose expected outcome IS a refusal returned before
+any leg could check the contract. The pin was enumerated, the file existed,
+the suite reported green — and the verdict was never produced. Measured on
+690_160: a corrupted `C_REFUSES` still passed until the legs were wired
+before the early returns.
+
+Same shape as the migration gate: the marker's absence-of-red read as
+"contract satisfied" when nothing had ever run it. The repair is uniform —
+call all three legs at every early exit and let each self-gate on the
+markers — and it repairs the latent hole for JS_REFUSES/CS_REFUSES too, not
+just the C twin that exposed it.

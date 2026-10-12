@@ -508,7 +508,11 @@ regression_check_c_equivalence() {
     [ -f "$test_dir/LANGUAGES" ] || return 0
     grep -qiw 'c' "$test_dir/LANGUAGES" || return 0
     [ -f "$test_dir/SUCCESS" ] && [ ! -f "$test_dir/FAILURE" ] || return 0
-    [ -f "$test_dir/MUST_RUN" ] && [ -f "$test_dir/expected.txt" ] || return 0
+    # A C_REFUSES test needs neither MUST_RUN nor expected.txt — the pinned
+    # refusal IS the contract, and it fires before any output exists.
+    if [ ! -f "$test_dir/C_REFUSES" ]; then
+        [ -f "$test_dir/MUST_RUN" ] && [ -f "$test_dir/expected.txt" ] || return 0
+    fi
     [ -f "$test_dir/EXPECT_TRAP" ] && return 0
 
     local flags=""
@@ -545,8 +549,16 @@ regression_check_c_equivalence() {
     # JS_REFUSES/CS_REFUSES): the refusal must be the clean, named diagnostic,
     # never a panic. The oracle is not consulted on the refusal path — a
     # missing ccomp must not mask an emitter refusal that already named itself.
-    if ! "${KORUC:?KORUC is unset — the harness must snapshot the compiler before running a test}" "$(test_entry "$test_dir")" --lang=c $flags \
-            >"$test_dir/compile_c.err" 2>&1; then
+    # koruc exits 0 even when the backend run refuses — the KORU diagnostic is
+    # the program's verdict, not a driver crash. So the refusal signal is "no
+    # output_emitted.c produced", checked against compile_c.err, with the exit
+    # code kept for the crash case.
+    local c_src="$test_dir/output_emitted.c"
+    rm -f "$c_src"
+    local koruc_rc=0
+    "${KORUC:?KORUC is unset — the harness must snapshot the compiler before running a test}" "$(test_entry "$test_dir")" --lang=c $flags \
+            >"$test_dir/compile_c.err" 2>&1 || koruc_rc=1
+    if [ ! -s "$c_src" ]; then
         if [ -f "$test_dir/C_REFUSES" ]; then
             local want
             want=$(cat "$test_dir/C_REFUSES")
@@ -558,11 +570,10 @@ regression_check_c_equivalence() {
             _c_equiv_fail "c-compile" "C refused, but not with the pinned text (C_REFUSES)"
             return 0
         fi
-        _c_equiv_fail "c-compile" "koruc --lang=c failed (see compile_c.err)"
-        return 0
-    fi
-    local c_src="$test_dir/output_emitted.c"
-    if [ ! -s "$c_src" ]; then
+        if [ "$koruc_rc" -ne 0 ]; then
+            _c_equiv_fail "c-compile" "koruc --lang=c failed (see compile_c.err)"
+            return 0
+        fi
         # --lang=c exit-0 with no .c emitted means the dispatcher fell back to
         # the Zig visitor under a foreign tag — the exact silent-miscompile
         # shape KORU126 exists to kill. Refusal would have been honest; this is not.
@@ -1065,6 +1076,13 @@ regression_run_one_test() {
                             echo "error-output" > "$test_dir/FAILURE"
                             FAILED_TESTS="$FAILED_TESTS $TEST_NAME(error-output)"
                         fi
+                        # Host equivalence legs: a *_REFUSES pin is a contract that
+                        # must be checked even when the refusal fired in the shared
+                        # frontend transform. Each function self-gates: no marker,
+                        # no SUCCESS, or a FAILURE record -> immediate no-op.
+                        regression_check_js_equivalence "$test_dir"
+                        regression_check_cs_equivalence "$test_dir"
+                        regression_check_c_equivalence "$test_dir"
                         return 0
                     fi
                     # Check for expected_patterns.txt - if present, every regex must match
@@ -1090,6 +1108,13 @@ regression_run_one_test() {
                             echo "error-output" > "$test_dir/FAILURE"
                             FAILED_TESTS="$FAILED_TESTS $TEST_NAME(error-output)"
                         fi
+                        # Host equivalence legs: a *_REFUSES pin is a contract that
+                        # must be checked even when the refusal fired in the shared
+                        # frontend transform. Each function self-gates: no marker,
+                        # no SUCCESS, or a FAILURE record -> immediate no-op.
+                        regression_check_js_equivalence "$test_dir"
+                        regression_check_cs_equivalence "$test_dir"
+                        regression_check_c_equivalence "$test_dir"
                         return 0
                     fi
                     # Check for EXPECT assertions (CONTAINS / NOT_CONTAINS) against compile_kz.err
@@ -1115,6 +1140,13 @@ regression_run_one_test() {
                             echo "error-output" > "$test_dir/FAILURE"
                             FAILED_TESTS="$FAILED_TESTS $TEST_NAME(error-output)"
                         fi
+                        # Host equivalence legs: a *_REFUSES pin is a contract that
+                        # must be checked even when the refusal fired in the shared
+                        # frontend transform. Each function self-gates: no marker,
+                        # no SUCCESS, or a FAILURE record -> immediate no-op.
+                        regression_check_js_equivalence "$test_dir"
+                        regression_check_cs_equivalence "$test_dir"
+                        regression_check_c_equivalence "$test_dir"
                         return 0
                     fi
                     # Check for expected_error.txt (literal substring pin) — mirror of
@@ -1142,6 +1174,13 @@ regression_run_one_test() {
                             echo "error-output" > "$test_dir/FAILURE"
                             FAILED_TESTS="$FAILED_TESTS $TEST_NAME(error-output)"
                         fi
+                        # Host equivalence legs: a *_REFUSES pin is a contract that
+                        # must be checked even when the refusal fired in the shared
+                        # frontend transform. Each function self-gates: no marker,
+                        # no SUCCESS, or a FAILURE record -> immediate no-op.
+                        regression_check_js_equivalence "$test_dir"
+                        regression_check_cs_equivalence "$test_dir"
+                        regression_check_c_equivalence "$test_dir"
                         return 0
                     fi
                     # No pin matched above (expected.txt / expected_patterns.txt /
@@ -1175,6 +1214,13 @@ regression_run_one_test() {
                             LEAKED_TESTS=$((LEAKED_TESTS + 1))
                         fi
                     fi
+                        # Host equivalence legs: a *_REFUSES pin is a contract that
+                        # must be checked even when the refusal fired in the shared
+                        # frontend transform. Each function self-gates: no marker,
+                        # no SUCCESS, or a FAILURE record -> immediate no-op.
+                        regression_check_js_equivalence "$test_dir"
+                        regression_check_cs_equivalence "$test_dir"
+                        regression_check_c_equivalence "$test_dir"
                     return 0
                 fi
                 # Fall through to PARSER_TEST section for AST validation
@@ -1676,6 +1722,13 @@ EOF
                     echo "backend-exec" > "$test_dir/FAILURE"
                     FAILED_TESTS="$FAILED_TESTS $TEST_NAME(backend-exec)"
                 fi
+                # Host equivalence legs: a *_REFUSES pin is a contract that must
+                # be checked even when the refusal fired during the shared
+                # transform/backend run. Each function self-gates: no marker,
+                # no SUCCESS, or a FAILURE record -> immediate no-op.
+                regression_check_js_equivalence "$test_dir"
+                regression_check_cs_equivalence "$test_dir"
+                regression_check_c_equivalence "$test_dir"
                 # Clean up zig build artifacts
                 rm -rf "$test_dir/zig-out" "$test_dir/temp_build.zig"
                 return 0

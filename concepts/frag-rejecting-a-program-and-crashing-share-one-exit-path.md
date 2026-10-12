@@ -134,3 +134,20 @@ Pinned by `510_118` (`CONTAINS error[KORU030]`,
 - `430_001` pins that a user coordinator's message reaches the user through this
   same print. Any change to (2) has to keep that path — a user-authored
   coordination error is a real message, not plumbing.
+
+## Rejecting and *succeeding* also share the exit path (2026-10-12)
+
+New instance, same door, from the harness side: `koruc` exits 0 even when the
+backend run refuses — a `KORU161` transform verdict ("the write is provably
+f64") lands in the diagnostics channel, no artifact is produced, and the
+process still returns success. Refusal and acceptance share an exit code, not
+just refusal and crash.
+
+The consequence is measured: the C-equivalence leg's `if ! koruc --lang=c`
+test could never see a refusal — it took rc=0 as "compiled" and proceeded to
+diff a `output_emitted.c` that did not exist. The refusal signal had to be
+moved to where the verdict actually lives: absence of the emitted artifact,
+matched against the pinned refusal text in the diagnostics stream. Any
+consumer keying on koruc's exit code alone will misread a clean refusal as a
+clean compile.
+

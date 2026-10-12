@@ -109,3 +109,27 @@ correct wall is typed args or a typed emit check — K3 territory. Until
 then the fragment's contract says it plainly: cross-width writes are
 outside what the C lane guarantees, and 690_160 stays a zig-only pin
 rather than laundering the absence into a green C cell.
+
+## The second instance resolved — the guarantee moved into the compiler (2026-10-12, cont.)
+
+The earlier paragraph called the wall unbuildable at this rung — "a wall that
+cannot see the difference cannot be built." That held only while the writes
+
+## The second instance resolved — the guarantee moved into the compiler (2026-10-12, cont.)
+
+The earlier paragraph called the wall unbuildable at this rung — "a wall that
+cannot see the difference cannot be built." That held only while the write's
+RHS was treated as opaque emit text. `storedWriteNarrowing` (in the shared
+`stored` transform) re-parses the RHS through `expression_parser`, proves the
+numeric class/rank against the destination column from `storeMemberColumns`,
+and refuses cross-class or rank-losing writes with KORU161 — before any host
+emitter runs. Verified identical under `--lang=c`: no `.c` is produced.
+
+So the belief stands but sharpens: the guarantee was never *un*buildable at
+koru level — it was un-**located**. The moment the verdict is decided once in
+the shared transform, every emitter inherits it; the cost is that the fact is
+reconstructed from lowered text per site rather than arriving as a typed
+payload. "Unproven defers" is the load-bearing half — unknown is not safe and
+not refused. The remaining typed-args/witness seam is about carrying the fact,
+not about where the verdict lives.
+

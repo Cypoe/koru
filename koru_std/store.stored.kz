@@ -119,6 +119,15 @@
             env_fields[wi] = fld;
             env_raw_values[wi] = wm.value;
         }
+        // Koru owns the narrowing refusal now (690_160): a write whose
+        // proven class cannot land in the column is refused here, before
+        // any host sees it — the check lives in the transform, not in
+        // whatever backend happens to typecheck emitted text.
+        for (env_fields, env_raw_values) |ef, rv| {
+            if (storedWriteNarrowing(allocator, program, env_store, ef, rv)) |m| {
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "{s}", .{m}) };
+            }
+        }
         // The head form must match the store's shape — the same two walls as
         // the single-write path.
         const env_is_plural = blk: {
@@ -465,6 +474,11 @@
         if (has_teardown and !has_apply) {
             return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: store '{s}' is a DRAIN store (ambiguous discharger) - a stored write must evict the old value through the canonical discharger, which its owned column does not have; declare exactly one void discharger for the column type (690_062 pins the write; 690_057/058 pin the drain)", .{target_store}) };
         }
+    }
+
+    // Same koru-owned narrowing refusal as the envelope path (690_160).
+    if (storedWriteNarrowing(allocator, program, target_store, target_field, w.value)) |m| {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "{s}", .{m}) };
     }
 
     const order = H.fieldOrder(allocator, program, target_store) orelse {

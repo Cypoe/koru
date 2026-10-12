@@ -1,1 +1,1 @@
-expected type 'f32', found 'f64'
+is f32 but the write is provably f64

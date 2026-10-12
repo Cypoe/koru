@@ -281,3 +281,122 @@ fn fireRow(
     loop.appendSlice(alloc, codegen_utils_store.HostShape.callArg(alloc, host_target, callq, sbody_name, argb)) catch unreachable;
     return true;
 }
+
+
+// ============================================================================
+// proven-width check — koru owns the narrowing refusal (690_160)
+// ============================================================================
+//
+// A stored write's target column type is declared; its RHS is minted text.
+// Until this check, EVERY expression's type discipline was borrowed from
+// whichever backend happened to typecheck the emitted host text — zig
+// refused f64→f32 ("expected type 'f32', found 'f64'") while C's implicit
+// conversions silently compiled it and js never saw the difference. Koru's
+// semantics have to stand upright on every host, so the refusal lives
+// here, in the transform, before any host sees the write.
+//
+// Conservative by construction: it fires only when it can PROVE the
+// value's class cannot land in the column — same-class narrowing or a
+// float↔int crossing. Everything unproven defers to the backend exactly
+// as before: literals coerce at comptime, and calls, bindings, and
+// non-store heads carry no type this rung. It can only refuse what every
+// host already refused.
+
+const expression_parser_wc = @import("expression_parser");
+
+const WriteNumClass = enum { si, fl };
+const WriteNumInfo = struct { cls: WriteNumClass, rank: u8, name: []const u8 };
+
+fn writeNumInfoOf(ftype: []const u8) ?WriteNumInfo {
+    if (std.mem.eql(u8, ftype, "i64")) return .{ .cls = .si, .rank = 2, .name = "i64" };
+    if (std.mem.eql(u8, ftype, "i32")) return .{ .cls = .si, .rank = 1, .name = "i32" };
+    if (std.mem.eql(u8, ftype, "f64")) return .{ .cls = .fl, .rank = 2, .name = "f64" };
+    if (std.mem.eql(u8, ftype, "f32")) return .{ .cls = .fl, .rank = 1, .name = "f32" };
+    return null;
+}
+
+fn writeColNumInfo(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8, field: []const u8) ?WriteNumInfo {
+    const cols = storeMemberColumns(alloc, prog, store) orelse return null;
+    for (cols) |c| {
+        if (std.mem.eql(u8, c.name, field)) return writeNumInfoOf(c.type);
+    }
+    return null;
+}
+
+// The store a `x.f` / `x[r].f` / `__koru_store_x.f` head reads — the
+// lowered spelling (a sweep arm's `.live` rewrite mints it) and the
+// source spelling both land here. Anything else is not a store read.
+fn writeStoreNameOf(alloc: std.mem.Allocator, prog: *const ast_find.Program, obj: *const ast_find.Expression) ?[]const u8 {
+    const nm: []const u8 = switch (obj.node) {
+        .identifier => |n| n,
+        .array_index => |ai| switch (ai.object.node) {
+            .identifier => |n| n,
+            else => return null,
+        },
+        else => return null,
+    };
+    if (std.mem.startsWith(u8, nm, "__koru_store_")) return nm["__koru_store_".len..];
+    for (storeAllNames(alloc, prog)) |sn| {
+        if (std.mem.eql(u8, sn, nm)) return sn;
+    }
+    return null;
+}
+
+// The proven numeric class of a value expression, or null = unknown.
+// `null` is never a verdict — it is "defer to the host backend".
+fn writeExprNumInfo(alloc: std.mem.Allocator, prog: *const ast_find.Program, expr: *const ast_find.Expression) ?WriteNumInfo {
+    switch (expr.node) {
+        .literal => return null,
+        .identifier => return null,
+        .unary => |u| return writeExprNumInfo(alloc, prog, u.operand),
+        .grouped => |g| return writeExprNumInfo(alloc, prog, g),
+        .binary => |b| {
+            switch (b.op) {
+                .add, .subtract, .multiply, .divide, .modulo => {},
+                else => return null, // comparisons and logic yield bool
+            }
+            const l = writeExprNumInfo(alloc, prog, b.left) orelse return null;
+            const r = writeExprNumInfo(alloc, prog, b.right) orelse return null;
+            if (l.cls != r.cls) return null; // mixed family — defer
+            return if (l.rank >= r.rank) l else r;
+        },
+        .field_access => |fa| {
+            if (writeStoreNameOf(alloc, prog, fa.object)) |sn| {
+                return writeColNumInfo(alloc, prog, sn, fa.field);
+            }
+            return null;
+        },
+        .array_index => |ai| {
+            // `s.f[row]` parses as the index over the field access; a bare
+            // `s[row]` is a row value, not a column read — defer. The
+            // `(&s.f)[r]` shape (zig's handle-read spelling) unwraps through
+            // its grouping to the same field access.
+            var obj = ai.object;
+            if (obj.node == .grouped) obj = obj.node.grouped;
+            if (obj.node == .unary) obj = obj.node.unary.operand;
+            if (obj.node == .field_access) {
+                if (writeStoreNameOf(alloc, prog, obj.node.field_access.object)) |sn| {
+                    return writeColNumInfo(alloc, prog, sn, obj.node.field_access.field);
+                }
+            }
+            return null;
+        },
+        else => return null,
+    }
+}
+
+// The write-side refusal: the diagnostic text when the RHS's proven class
+// cannot land in the column, null when it can or nothing is proven.
+// Cross-class is refused both ways — no host coerces float↔int silently.
+fn storedWriteNarrowing(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8, field: []const u8, value_text: []const u8) ?[]const u8 {
+    const tinfo = writeColNumInfo(alloc, prog, store, field) orelse return null;
+    var parser = expression_parser_wc.ExpressionParser.init(alloc, value_text);
+    const expr = parser.parseAll() catch return null;
+    const rinfo = writeExprNumInfo(alloc, prog, expr) orelse return null;
+    const narrows = if (rinfo.cls == tinfo.cls)
+        rinfo.rank > tinfo.rank
+    else
+        true;
+    if (!narrows) return null;
+    return std.fmt.allocPrint(alloc, "std/store:stored: column '{s}.{s}' is {s} but the write is provably {s} — a write that loses bits is refused, never silently rounded (690_160)", .{ store, field, tinfo.name, rinfo.name }) catch unreachable;
+}

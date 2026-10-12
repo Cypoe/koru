@@ -531,17 +531,13 @@ pattern-matched
 against zig. Harness note: EXPECT_TRAP cells skip the c-check; their
 pins mark verified-by-hand evidence.
 
-**Known boundary (documented, not hidden):** minted write args are
-untyped text — the no-narrowing refusal lives in *zig's backend
-typecheck* (690_160 pins `expected type 'f32', found 'f64'` quoted from
-emitted Zig). C's implicit conversions compile what zig rejects, so a
-cross-width write narrows silently on the C lane. Same class JS already
-has (one number type). No honest wall exists at this rung — the fix is
-typed args / a typed emit check, K3 territory. Until then: cross-width
-writes are outside what the C lane guarantees; 690_160 stays a
-zig-only MUST_ERROR pin rather than laundering the absence into a green
-C cell. Evolved `frag-a-numeric-guarantee-does-not-port-between-hosts`
-with the instance.
+**Known boundary — now a wall, not a gap:** minted write args are still
+untyped text, but the no-narrowing verdict moved *into the compiler*
+(see "Tranche: shared narrowing wall" below). `storedWriteNarrowing`
+fires KORU161 in the shared `stored` transform before any emitter sees
+the write — identical diagnostic under `--lang=c`, no `.c` emitted.
+690_160's pin flipped to the wall's own text (the header invited it)
+and carries `C_REFUSES`.
 
 **Core-surface audit (for Lars' review):** verified against
 `git diff HEAD~1` — every change this tranche is `.c`-gated emit text:
@@ -565,11 +561,74 @@ interceptors/watches, [tree], owned columns (+ `__store_fwrite_*`
 de-bundle), [entity], char[N], `std/indexes`, ref() homes, refine
 facets, drain/stripe verbs, `__store_envwrite_<s>_c<i>` specializations
 (the general masked unit covers them; specs are a speed elision, not a
-correctness one), cross-width writes (documented boundary above),
-effect `!` arms under tagged calls, `|*` catchall, `| b when` guarded
-dispatch.
+correctness one), effect `!` arms under tagged calls, `|*` catchall,
+`| b when` guarded dispatch.
 
 **Next:** watches/interceptors (the announce dispatch point exists —
 minting the arms is the tranche), owned-column `__store_fwrite_*`, then
 the borrow/container/record-return buckets; K3 Lean scaffold in
 parallel.
+
+---
+
+## Tranche: shared narrowing wall + harness refusal legs (session, cont.)
+
+This tranche deliberately crossed the emitter boundary into a shared
+path — that is the point, and it is called out here for review rather
+than buried.
+
+**`storedWriteNarrowing` (`koru_std/store.cols.kz`)** — a
+compiler-owned check inside the `stored` transform: for each
+`stored { s.f: v }` write it resolves the destination column's numeric
+type via `storeMemberColumns`, parses the RHS text through
+`expression_parser`, proves the RHS numeric class/rank
+(identifiers bound to store columns — including the post-`SRewrite`
+`__koru_store_<s>.<col>[<row>]` spellings — literals, binary/unary
+ops), and refuses cross-class or rank-losing writes with a named
+KORU161 diagnostic quoting column, destination type, and proven
+source type. **Unproven defers** — unknown is not safe, and not a
+refusal either. This is the first verdict of the prepared-witness
+shape: the semantic fact (dest type × proven src type ×
+conversion class) is decided once, in the shared transform, so every
+emitter inherits the verdict instead of each silently re-deciding it
+in a host typecheck. Verified host-agnostic: `koruc --lang=c` produces
+the identical diagnostic and emits no `.c`.
+
+Honest warts on this change, stated not absorbed: (1) the check
+re-parses RHS *text* — the elaborated value arrives lowered
+(`__koru_store_*` spellings), so the fact is reconstructed per site
+rather than arriving as a typed payload; the witness-channel work
+(`ast.Arg` carries `parsed_expression`/`source_value` already) is the
+real seam. (2) Coverage is numeric columns only — same-type
+mismatches elsewhere still fall to host backends.
+
+**`scripts/regression_lib.sh`** — three harness changes, each an
+agnostic fix rather than a bandaid:
+1. C leg gate widened: `C_REFUSES` alone is a complete contract (the
+   pinned refusal *is* the expected outcome) — no `MUST_RUN`/
+   `expected.txt` required. Only 690_160 carries MUST_ERROR+C_REFUSES;
+   zero of the 532 error-expected tests carry MUST_RUN, so no other
+   test's behavior changed.
+2. Refusal detection keys on "no `output_emitted.c` produced" plus the
+   pinned text — measured fact: koruc exits 0 when the backend run
+   refuses (the KORU diagnostic is the program's verdict, not a driver
+   crash). A stale `output_emitted.c` from a prior run is `rm`'d first
+   so it cannot mask a fresh refusal.
+3. The three equivalence legs (js/cs/c) are now invoked before the
+   early `return 0`s in the frontend-error block (5 pin-branch sites)
+   and the backend-exec-error tail — previously any test whose expected
+   outcome was *a refusal* exited before the legs ran, so a `*_REFUSES`
+   marker on a MUST_ERROR test was dead text. This repairs the same
+   latent hole for JS_REFUSES/CS_REFUSES, not just C. Verified by
+   negative probe: a corrupted `C_REFUSES` flips 690_160 to
+   `c-compile` FAIL; the real pin prints `✓ C refused cleanly`.
+
+**Known env artifact:** `_write_c_target`/`TARGETS.json` needs `node`,
+which resolves to a broken Windows npm shim under WSL — the write
+silently no-ops (`2>/dev/null`), so the `refused` verdict does not
+land in TARGETS.json on this host. Verdict path itself is unaffected.
+
+**Unit/regression state:** `zig build test` Foundation PROVEN;
+filtered slice (all prior C pins on the stored surface + 690_160):
+zig lanes green, C legs green or refused-as-pinned; only env-gap reds
+(`cs-compile` on missing dotnet, `js-runtime` on the node shim).
