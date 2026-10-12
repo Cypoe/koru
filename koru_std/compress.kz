@@ -6,7 +6,8 @@
 // block boundaries. Dynamic Huffman with a per-worker cached tree reused
 // while a used-symbol mask stays inside the tree's coverage; fixed
 // Huffman below 64 bytes where the tree header costs more than it saves.
-// The trailer is a slicing-by-8 CRC32.
+// The trailer folds through PMULL on aarch64-crypto targets and a
+// slicing-by-8 table elsewhere.
 //
 //   const n = std_compress.gzipInto(body, out_buf);
 //   if (n == 0) // out buffer too small
@@ -240,8 +241,15 @@ inline fn ffDistSymIdx(dist: usize) usize {
 
 // CRC32 for the gzip trailer — std.hash.Crc32 walks a table one byte at a
 // time and on this box costs more than the entire match+emit pass combined.
-// The ARM CRC32 extension does 8 bytes per instruction when the target
-// advertises it; everywhere else a slicing-by-8 table still beats std ~8x.
+// aarch64 with the crypto extension folds 64 bytes per step through PMULL
+// (the Gopal/Ozturk PCLMUL scheme, ported to pmull/pmull2 — constants from
+// Chromium's zlib). crc32x itself is unreachable: Zig's `r` constraint binds
+// x-registers and the instruction wants w-regs for its accumulator — but the
+// fold never needs it. Everywhere else a slicing-by-8 table still beats std
+// ~8x.
+const ff_have_pmull = @import("builtin").cpu.arch == .aarch64 and
+    std.Target.aarch64.featureSetHas(@import("builtin").cpu.features, .aes);
+
 const ff_crc_tab = blk: {
     @setEvalBranchQuota(20000);
     var t: [8][256]u32 = undefined;
@@ -256,13 +264,110 @@ const ff_crc_tab = blk: {
     break :blk t;
 };
 
+const FfVec = @Vector(2, u64);
+const FfVec4 = @Vector(4, u32);
+
+inline fn ffPmullLo(a: FfVec, b: FfVec) FfVec {
+    var r: FfVec = undefined;
+    asm volatile ("pmull %[o].1q, %[a].1d, %[b].1d"
+        : [o] "=w" (r),
+        : [a] "w" (a),
+          [b] "w" (b),
+    );
+    return r;
+}
+
+inline fn ffPmullHi(a: FfVec, b: FfVec) FfVec {
+    var r: FfVec = undefined;
+    asm volatile ("pmull2 %[o].1q, %[a].2d, %[b].2d"
+        : [o] "=w" (r),
+        : [a] "w" (a),
+          [b] "w" (b),
+    );
+    return r;
+}
+
+inline fn ffPmull01(a: FfVec, b: FfVec) FfVec {
+    return ffPmullLo(a, .{ b[1], 0 });
+}
+
+// Consumes a multiple-of-16 byte count, >= 64. Runs in the internal
+// complemented state: pass the running crc in, continue with what comes out.
+fn ffCrcPmull(src: []const u8, crc: u32) u32 {
+    const k12 = FfVec{ 0x0154442bd4, 0x01c6e41596 };
+    const k34 = FfVec{ 0x01751997d0, 0x00ccaa009e };
+    const k50 = FfVec{ 0x0163cd6124, 0x0000000000 };
+    const poly = FfVec{ 0x01db710641, 0x01f7011641 };
+
+    var buf = src.ptr;
+    var len = src.len;
+
+    var x1: FfVec = @bitCast(buf[0..16].*);
+    var x2: FfVec = @bitCast(buf[16..32].*);
+    var x3: FfVec = @bitCast(buf[32..48].*);
+    var x4: FfVec = @bitCast(buf[48..64].*);
+
+    x1 ^= @bitCast(FfVec4{ crc, 0, 0, 0 });
+    buf += 64;
+    len -= 64;
+
+    while (len >= 64) {
+        const x5 = ffPmullLo(x1, k12);
+        const x6 = ffPmullLo(x2, k12);
+        const x7 = ffPmullLo(x3, k12);
+        const x8 = ffPmullLo(x4, k12);
+        const y5: FfVec = @bitCast(buf[0..16].*);
+        const y6: FfVec = @bitCast(buf[16..32].*);
+        const y7: FfVec = @bitCast(buf[32..48].*);
+        const y8: FfVec = @bitCast(buf[48..64].*);
+        x1 = ffPmullHi(x1, k12) ^ x5 ^ y5;
+        x2 = ffPmullHi(x2, k12) ^ x6 ^ y6;
+        x3 = ffPmullHi(x3, k12) ^ x7 ^ y7;
+        x4 = ffPmullHi(x4, k12) ^ x8 ^ y8;
+        buf += 64;
+        len -= 64;
+    }
+
+    x1 = ffPmullHi(x1, k34) ^ x2 ^ ffPmullLo(x1, k34);
+    x1 = ffPmullHi(x1, k34) ^ x3 ^ ffPmullLo(x1, k34);
+    x1 = ffPmullHi(x1, k34) ^ x4 ^ ffPmullLo(x1, k34);
+
+    while (len >= 16) {
+        x2 = @bitCast(buf[0..16].*);
+        x1 = ffPmullHi(x1, k34) ^ x2 ^ ffPmullLo(x1, k34);
+        buf += 16;
+        len -= 16;
+    }
+
+    // 128 -> 64, then Barrett-reduce to 32. vext-by-n over a zero vector is a
+    // u128 shift; lane masks and xors are plain vector ops.
+    const mask: FfVec4 = .{ ~@as(u32, 0), 0, ~@as(u32, 0), 0 };
+    x2 = ffPmull01(x1, k34);
+    x1 = @bitCast(@as(u128, @bitCast(x1)) >> 64);
+    x1 ^= x2;
+
+    x2 = @bitCast(@as(u128, @bitCast(x1)) >> 32);
+    x1 &= @bitCast(mask);
+    x1 = ffPmullLo(x1, k50);
+    x1 ^= x2;
+
+    x2 = x1 & @as(FfVec, @bitCast(mask));
+    x2 = ffPmull01(x2, poly);
+    x2 &= @bitCast(mask);
+    x2 = ffPmullLo(x2, poly);
+    x1 ^= x2;
+
+    return @as(FfVec4, @bitCast(x1))[1];
+}
+
 fn ffCrc32(src: []const u8) u32 {
-    // Slicing-by-8: ~5x the byte-table walk and the whole reason the trailer
-    // stopped out-costing the codec. Hardware crc32x needs a w-register
-    // operand Zig's `r` constraint can't spell (it binds GPR64) — unwritten,
-    // not broken: pmull folding is the real endgame there anyway.
     var crc: u32 = 0xFFFFFFFF;
     var i: usize = 0;
+    if (ff_have_pmull and src.len >= 64) {
+        const bulk = src.len & ~@as(usize, 15);
+        crc = ffCrcPmull(src[0..bulk], crc);
+        i = bulk;
+    }
     while (i + 8 <= src.len) : (i += 8) {
         const lo = std.mem.readInt(u32, src[i..][0..4], .little) ^ crc;
         const hi = std.mem.readInt(u32, src[i + 4 ..][0..4], .little);
