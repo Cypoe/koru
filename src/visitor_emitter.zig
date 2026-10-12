@@ -2265,7 +2265,7 @@ pub const VisitorEmitter = struct {
             try self.code_emitter.writeIndent();
             try self.code_emitter.write("return ");
             if (bc.plain_value) |pv| {
-                try emitter.emitValue(self.code_emitter, &value_ctx, pv);
+                try emitter.emitBareReturnProduce(self.code_emitter, &value_ctx, pv, event.return_type);
             } else {
                 try self.code_emitter.write("undefined");
             }
@@ -4010,21 +4010,28 @@ pub const VisitorEmitter = struct {
                                         // to the call-site binding so downstream steps reference
                                         // it. The head stays `result` for the continuation
                                         // machinery; the alias also marks `result` used.
+                                        // A `: _` head capture is a discard, not an alias —
+                                        // `const _ = result` is not legal Zig, and `_ = result`
+                                        // fights the mark-used below, so it emits nothing.
                                         if (flow.inv().return_binding) |rb| {
-                                            try self.code_emitter.writeIndent();
-                                            try self.code_emitter.write("const ");
-                                            try emitter.writeBranchName(self.code_emitter, rb);
-                                            try self.code_emitter.write(" = result;\n");
+                                            if (!std.mem.eql(u8, rb, "_")) {
+                                                try self.code_emitter.writeIndent();
+                                                try self.code_emitter.write("const ");
+                                                try emitter.writeBranchName(self.code_emitter, rb);
+                                                try self.code_emitter.write(" = result;\n");
+                                            }
                                         }
 
                                         // The other spelling of the same head bind — see
                                         // headLabelBindOnBareReturn.
                                         var sf_head_label_conts: ?[]ast.Continuation = null;
                                         if (headLabelBindOnBareReturn(&flow, items_to_search)) |label_bind| {
-                                            try self.code_emitter.writeIndent();
-                                            try self.code_emitter.write("const ");
-                                            try emitter.writeBranchName(self.code_emitter, label_bind);
-                                            try self.code_emitter.write(" = result;\n");
+                                            if (!std.mem.eql(u8, label_bind, "_")) {
+                                                try self.code_emitter.writeIndent();
+                                                try self.code_emitter.write("const ");
+                                                try emitter.writeBranchName(self.code_emitter, label_bind);
+                                                try self.code_emitter.write(" = result;\n");
+                                            }
                                             sf_head_label_conts = try voidifyHeadLabel(self.allocator, flow.body.continuations);
                                         }
 

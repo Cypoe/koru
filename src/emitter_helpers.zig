@@ -2918,6 +2918,9 @@ fn emitParentResultDiscard(
 ) !void {
     try emitter.write(indent);
     if (parent_result_name) |prn| {
+        // A `: _` discard bound no const — nothing to re-discard. `_ = &_;`
+        // would be an illegal identifier reference, not a discard.
+        if (std.mem.eql(u8, prn, "_")) return;
         try emitter.write("_ = &");
         try writeBranchName(emitter, prn);
         try emitter.write(";\n");
@@ -3050,6 +3053,17 @@ fn emitSubflowContinuationsWithDepth(
 ) !void {
     if (start_idx >= continuations.len) return;
 
+    // A `: _` discard is not a name — callers can propagate `return_binding`
+    // verbatim, and "_" here would mint `_ = &_;`, which is not legal Zig.
+    const parent_result_name_norm = if (parent_result_name) |p|
+        (if (std.mem.eql(u8, p, "_")) null else p)
+    else
+        null;
+    const head_binding_norm = if (head_binding) |h|
+        (if (std.mem.eql(u8, h, "_")) null else h)
+    else
+        null;
+
     const bindings_alloc = emitter.allocator orelse std.heap.page_allocator;
     var local_bindings: std.ArrayList([]const u8) = .empty;
     defer local_bindings.deinit(bindings_alloc);
@@ -3057,10 +3071,10 @@ fn emitSubflowContinuationsWithDepth(
         try local_bindings.appendSlice(bindings_alloc, ab.items);
     }
     try collectBoundNames(bindings_alloc, continuations, &local_bindings);
-    if (parent_result_name) |prn| {
+    if (parent_result_name_norm) |prn| {
         try local_bindings.append(bindings_alloc, prn);
     }
-    if (head_binding) |hb| {
+    if (head_binding_norm) |hb| {
         try local_bindings.append(bindings_alloc, hb);
     }
     var local_ctx = EmissionContext{
@@ -3096,7 +3110,7 @@ fn emitSubflowContinuationsWithDepth(
         // continuations (the `@loop`/terminal arms), so we must NOT recurse below.
         if (cont.node) |label_step| {
             if (label_step == .label_with_invocation) {
-                try emitVoidStepViaContinuationBody(emitter, cont, indent, all_items, program_items, depth, tap_registry, type_registry, main_module_name, source_event_name, enclosing_bare_return, enclosing_event, self_loop_canonical, &local_bindings, parent_result_name);
+                try emitVoidStepViaContinuationBody(emitter, cont, indent, all_items, program_items, depth, tap_registry, type_registry, main_module_name, source_event_name, enclosing_bare_return, enclosing_event, self_loop_canonical, &local_bindings, parent_result_name_norm);
                 return;
             }
         }
@@ -3111,7 +3125,7 @@ fn emitSubflowContinuationsWithDepth(
         // query/watch handler body (690_060): the print was transformed and the
         // `__kw` interpolation attached, but the void-chain emitter never emitted it.
         if (continuationsHaveReturnSwitchUnemittable(remaining_conts)) {
-            try emitVoidStepViaContinuationBody(emitter, cont, indent, all_items, program_items, depth, tap_registry, type_registry, main_module_name, source_event_name, enclosing_bare_return, enclosing_event, self_loop_canonical, &local_bindings, parent_result_name);
+            try emitVoidStepViaContinuationBody(emitter, cont, indent, all_items, program_items, depth, tap_registry, type_registry, main_module_name, source_event_name, enclosing_bare_return, enclosing_event, self_loop_canonical, &local_bindings, parent_result_name_norm);
             return;
         }
 
@@ -3147,7 +3161,7 @@ fn emitSubflowContinuationsWithDepth(
                     break :blk false;
                 };
                 if (target_declares_effect) {
-                    try emitVoidStepViaContinuationBody(emitter, cont, indent, all_items, program_items, depth, tap_registry, type_registry, main_module_name, source_event_name, enclosing_bare_return, enclosing_event, self_loop_canonical, &local_bindings, parent_result_name);
+                    try emitVoidStepViaContinuationBody(emitter, cont, indent, all_items, program_items, depth, tap_registry, type_registry, main_module_name, source_event_name, enclosing_bare_return, enclosing_event, self_loop_canonical, &local_bindings, parent_result_name_norm);
                     return;
                 }
             }
@@ -3177,7 +3191,7 @@ fn emitSubflowContinuationsWithDepth(
         // increments via `next_needs_switch`, which emits `const nested_result_
         // {depth}` — so it can never name a nonexistent variable. `_ = &x;` is
         // idempotent, so re-discarding a parent a later step also uses is safe.
-        try emitParentResultDiscard(emitter, indent, parent_result_name, depth);
+        try emitParentResultDiscard(emitter, indent, parent_result_name_norm, depth);
 
         // Emit the step if present
         if (cont.node) |step| {
@@ -3187,10 +3201,15 @@ fn emitSubflowContinuationsWithDepth(
                     if (inv.return_binding) |rb| {
                         // Bare-return mid-chain bind (`mk(): v |> consume(v)`): bind
                         // the produced value so downstream steps can reference it,
-                        // instead of discarding the result with `_ =`.
-                        try emitter.write("const ");
-                        try writeBranchName(emitter, rb);
-                        try emitter.write(" = ");
+                        // instead of discarding the result with `_ =`. A `: _`
+                        // capture IS that discard — `const _ = ` is not legal Zig.
+                        if (std.mem.eql(u8, rb, "_")) {
+                            try emitter.write("_ = ");
+                        } else {
+                            try emitter.write("const ");
+                            try writeBranchName(emitter, rb);
+                            try emitter.write(" = ");
+                        }
                     } else if (next_needs_switch) {
                         var buf: [32]u8 = undefined;
                         const decl = try std.fmt.bufPrint(&buf, "const nested_result_{d} = ", .{depth});
@@ -3313,7 +3332,7 @@ fn emitSubflowContinuationsWithDepth(
                                 .type_registry = type_registry,
                             };
                             val_ctx.zig_scope_bindings.items = local_bindings.items;
-                            try emitValue(emitter, &val_ctx, pv);
+                            try emitBareReturnProduce(emitter, &val_ctx, pv, if (enclosing_event) |ee| ee.return_type else null);
                         } else {
                             try emitter.write("undefined");
                         }
@@ -3354,7 +3373,7 @@ fn emitSubflowContinuationsWithDepth(
                 // A bind-named step is the new parent; a switch-assigned step
                 // follows the formula (pass null); otherwise the parent is
                 // unchanged at this level.
-                step_bind orelse (if (next_needs_switch) null else parent_result_name),
+                step_bind orelse (if (next_needs_switch) null else parent_result_name_norm),
                 self_loop_canonical,
                 null,
                 &local_bindings,
@@ -3790,7 +3809,7 @@ fn emitSubflowContinuationsWithDepth(
                     if (arm_step == .invocation) {
                         for (cont.continuations) |c| {
                             if (c.kind == .effect) {
-                                try emitVoidStepViaContinuationBody(emitter, &cont, indent, all_items, program_items, depth, tap_registry, type_registry, main_module_name, source_event_name, enclosing_bare_return, enclosing_event, self_loop_canonical, &local_bindings, parent_result_name);
+                                try emitVoidStepViaContinuationBody(emitter, &cont, indent, all_items, program_items, depth, tap_registry, type_registry, main_module_name, source_event_name, enclosing_bare_return, enclosing_event, self_loop_canonical, &local_bindings, parent_result_name_norm);
                                 step_effect_routed = true;
                                 break;
                             }
@@ -3842,9 +3861,14 @@ fn emitSubflowContinuationsWithDepth(
                                 // Bare-return bind on the arm's step (`| tag b |> f(): v |> ...`):
                                 // downstream chain steps reference `v`, so the result
                                 // must be declared under the bind name, not nested_result_N.
-                                try emitter.write("        const ");
-                                try writeBranchName(emitter, rb);
-                                try emitter.write(" = ");
+                                // A `: _` capture IS the discard — `const _ = ` is not legal Zig.
+                                if (std.mem.eql(u8, rb, "_")) {
+                                    try emitter.write("        _ = ");
+                                } else {
+                                    try emitter.write("        const ");
+                                    try writeBranchName(emitter, rb);
+                                    try emitter.write(" = ");
+                                }
                             } else {
                                 const var_name = try std.fmt.bufPrint(&buf, "        const nested_result_{d} = ", .{depth + step_idx});
                                 try emitter.write(var_name);
@@ -3962,9 +3986,13 @@ fn emitSubflowContinuationsWithDepth(
                             // Suppress unused variable warning (result might not be used, e.g., for taps)
                             try emitter.write(indent);
                             if (inv.return_binding) |rb| {
-                                try emitter.write("        _ = &");
-                                try writeBranchName(emitter, rb);
-                                try emitter.write(";\n");
+                                // `: _` already discarded the call result inline
+                                // — there is no const to mark used.
+                                if (!std.mem.eql(u8, rb, "_")) {
+                                    try emitter.write("        _ = &");
+                                    try writeBranchName(emitter, rb);
+                                    try emitter.write(";\n");
+                                }
                             } else {
                                 const suppress_unused = try std.fmt.bufPrint(&buf, "        _ = &nested_result_{d};\n", .{depth + step_idx});
                                 try emitter.write(suppress_unused);
@@ -7267,11 +7295,17 @@ fn emitInlineEffectfulCall(
     // takes no trailing semicolon. (The const form always has breaks —
     // eligibility requires a `return` when terminals exist.)
     const typed_discard = result_name == null and rewritten.has_break;
+    // A `: _` capture on the spliced call is a discard, not a binding —
+    // `const _: T =` is not legal Zig. It still needs the typed const so
+    // anonymous break literals have a result type; discarded after the block.
+    const bind_is_discard = if (inv.return_binding) |rb| std.mem.eql(u8, rb, "_") else false;
+    const uses_disc_name = typed_discard or (result_name != null and bind_is_discard);
     var disc_buf: [64]u8 = undefined;
     const disc_name = std.fmt.bufPrint(&disc_buf, "__koru_eff_disc_{d}", .{proc_uniq}) catch "__koru_eff_disc";
     const labeled = result_name != null or rewritten.has_break;
     try emitter.writeIndent();
-    if (result_name) |rn| {
+    if (result_name != null and !bind_is_discard) {
+        const rn = result_name.?;
         // A `-> T` bare-return call binds its result to the call-site `: name`
         // (return_binding) — the same rule `emitInvocation` follows on the
         // handler-call path. The splice must not drop it, or the author's own
@@ -7281,7 +7315,7 @@ fn emitInlineEffectfulCall(
         try emitter.write(": ");
         try emitInvocationTarget(emitter, ctx, &inv.path);
         try emitter.write(".Output = ");
-    } else if (typed_discard) {
+    } else if (uses_disc_name) {
         // A value-breaking block with no consumer still needs a typed const
         // so anonymous break literals have a result type; discard after.
         try emitter.write("const ");
@@ -7425,8 +7459,8 @@ fn emitInlineEffectfulCall(
 
     emitter.dedent();
     try emitter.writeIndent();
-    try emitter.write(if (result_name != null or typed_discard) "};\n" else "}\n");
-    if (typed_discard) {
+    try emitter.write(if (result_name != null or uses_disc_name) "};\n" else "}\n");
+    if (uses_disc_name) {
         try emitter.writeIndent();
         try emitter.write("_ = ");
         try emitter.write(disc_name);
@@ -8116,7 +8150,9 @@ pub fn emitHandlersStruct(
             } else if (resume_expr) |expr| {
                 try emitter.writeIndent();
                 try emitter.write("return ");
-                try emitter.write(expr);
+                if (!try writeRepackedRecordProduce(emitter, expr, branch.resume_type)) {
+                    try emitter.write(expr);
+                }
                 try emitter.write(";\n");
             } else {
                 var result_counter: usize = 0;
@@ -11417,7 +11453,9 @@ fn emitStep(
             try emitter.writeIndent();
             if (ctx.bare_return_active and !std.mem.eql(u8, std.mem.trim(u8, code, " \t"), "_")) {
                 try emitter.write("return ");
-                try emitter.write(code);
+                if (!try writeRepackedRecordProduce(emitter, code, produceReturnType(ctx, null))) {
+                    try emitter.write(code);
+                }
                 try emitter.write(";\n");
             } else if (try emitBranchProduce(emitter, ctx, code)) {
                 // Handled: the produce named one of the implemented event's own
@@ -12365,21 +12403,108 @@ pub fn writeBareReturnType(
     try writeTypeNameQuoted(emitter, trimmed);
 }
 
+/// `pv` is an identifier path (`r`, `outer.inner`)? The bare-return record
+/// repack applies only to these — a call or computed expression in the
+/// produce slot would be evaluated once per field if repacked, duplicating
+/// side effects.
+fn isIdentPath(s: []const u8) bool {
+    if (s.len == 0) return false;
+    var need_start = true;
+    for (s) |c| {
+        if (c == '.') {
+            if (need_start) return false;
+            need_start = true;
+            continue;
+        }
+        const alpha = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_';
+        const digit = c >= '0' and c <= '9';
+        if (need_start and !alpha) return false;
+        if (!alpha and !digit) return false;
+        need_start = false;
+    }
+    return !need_start;
+}
+
+/// Emit `.{ .f = <pv>.f, ... }` — the fieldwise repack of a non-literal
+/// record produce into the enclosing tor's declared `-> {record}` Output —
+/// when `return_type` is a record shape and `pv` is a bare identifier path.
+/// Returns true when it wrote the repack, false when the produce does not
+/// qualify (scalar return, literal produce, computed expression) — callers
+/// then lower `pv` through emitValue as before.
+///
+/// Why the repack exists: a produce `-> r` yields r's OWN anonymous struct
+/// type (`__koru_handler_impl__struct_N`), while the fn's result type is the
+/// tor's `Output` — two `struct { f: T }` declarations are distinct types
+/// in Zig even when identical in shape, so `return r;` refuses with
+/// "expected type 'X.Output', found 'Y.struct_N'" (the producing-`if`
+/// frontier 800_010 surfaced). The literal produce `-> { a, b }` never hit
+/// this — the `.{ }` literal coerces at the result location.
+fn writeRepackedRecordProduce(
+    emitter: *CodeEmitter,
+    pv: []const u8,
+    return_type: ?[]const u8,
+) !bool {
+    const rt_raw = return_type orelse return false;
+    const rt = std.mem.trim(u8, rt_raw, " \t");
+    if (rt.len == 0 or rt[0] != '{') return false;
+    const pv_t = std.mem.trim(u8, pv, " \t");
+    if (!isIdentPath(pv_t) or std.mem.eql(u8, pv_t, "_")) return false;
+    const a = emitter.allocator orelse std.heap.page_allocator;
+    const fields = struct_literal.parseFields(a, rt) catch return false;
+    if (fields.len == 0) return false;
+    try emitter.write(".{");
+    for (fields, 0..) |f, i| {
+        if (i > 0) try emitter.write(",");
+        try emitter.write(" .");
+        try writeBranchName(emitter, f.name);
+        try emitter.write(" = ");
+        try emitter.write(pv_t);
+        try emitter.write(".");
+        try writeBranchName(emitter, f.name);
+    }
+    try emitter.write(" }");
+    return true;
+}
+
+/// The record return type a bare `-> expr` produce must land in: explicit
+/// override first (call sites holding the EventDecl/EventType in hand), else
+/// the armed produce context.
+fn produceReturnType(ctx: *EmissionContext, override: ?[]const u8) ?[]const u8 {
+    if (override) |t| return t;
+    const decl = ctx.produce_event orelse ctx.impl_event_decl orelse return null;
+    return decl.return_type;
+}
+
+/// Emit a `-> <expr>` produce: repack into the declared record shape when it
+/// applies, else lower the expression through emitValue.
+pub fn emitBareReturnProduce(
+    emitter: *CodeEmitter,
+    ctx: *EmissionContext,
+    pv: []const u8,
+    return_type: ?[]const u8,
+) !void {
+    if (try writeRepackedRecordProduce(emitter, pv, produceReturnType(ctx, return_type))) return;
+    try emitValue(emitter, ctx, pv);
+}
+
 /// Emit `.{ .<branch> = <payload> }` (or the bare `-> T` value) for a
 /// branch constructor, resolving `[...]` literals against the branch's
 /// declared field types via `find_field(target, branch_name, field_name)`.
 /// `target` is whatever the lookup needs — an `EventType` for registry
 /// sites or an `EventDecl` where the decl is in hand.
+/// `bare_return_type` is the declared `-> T` the produce lands in — the
+/// tor's return_type from whichever form the caller holds.
 fn emitBranchConstructorWithLookup(
     emitter: *CodeEmitter,
     ctx: *EmissionContext,
     bc: *const ast.BranchConstructor,
     target: anytype,
     comptime find_field: anytype,
+    bare_return_type: ?[]const u8,
 ) EmitError!void {
     if (bc.is_bare_return) {
         if (bc.plain_value) |pv| {
-            try emitValue(emitter, ctx, pv);
+            try emitBareReturnProduce(emitter, ctx, pv, bare_return_type);
         } else {
             try emitter.write("undefined");
         }
@@ -12432,7 +12557,7 @@ fn emitBranchConstructorWithEventType(
     bc: *const ast.BranchConstructor,
     event_type: type_registry_module.EventType,
 ) EmitError!void {
-    return emitBranchConstructorWithLookup(emitter, ctx, bc, event_type, findBranchFieldForEventType);
+    return emitBranchConstructorWithLookup(emitter, ctx, bc, event_type, findBranchFieldForEventType, event_type.return_type);
 }
 
 fn emitBranchConstructorWithEvent(
@@ -12441,7 +12566,7 @@ fn emitBranchConstructorWithEvent(
     bc: *const ast.BranchConstructor,
     event: *const ast.EventDecl,
 ) EmitError!void {
-    return emitBranchConstructorWithLookup(emitter, ctx, bc, event, findBranchFieldForEvent);
+    return emitBranchConstructorWithLookup(emitter, ctx, bc, event, findBranchFieldForEvent, event.return_type);
 }
 
 /// Emit a branch constructor (.branch = .{ fields })
@@ -12455,7 +12580,7 @@ pub fn emitBranchConstructor(
     if (bc.is_bare_return) {
         // `-> T` bare return: yield the value directly, no `.{ .name = ... }` wrap.
         if (bc.plain_value) |pv| {
-            try emitValue(emitter, ctx, pv);
+            try emitBareReturnProduce(emitter, ctx, pv, null);
         } else {
             try emitter.write("undefined");
         }
