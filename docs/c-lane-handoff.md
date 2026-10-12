@@ -1,5 +1,33 @@
 # c-lane — return handoff (2026-10-12)
 
+## Checkout topology (the bridge discipline)
+
+Two independent clones, not worktrees — nothing propagates on its own:
+
+- **`/home/cypoe/src/koru-ccomp` (WSL ext4)** — the work site. All edits,
+  `zig build`, the regression suite, and `git commit` happen here. The
+  suite cannot live on `/mnt/w`: a `git status` enumeration there costs
+  ~52s vs instant on ext4, and backend-cache stat semantics get fuzzy.
+- **`W:\src\koru` (Windows/NTFS)** — editor checkout + native
+  `koruc.exe` build + the push bridge (WSL DNS cannot reach github).
+
+The bridge between them, per tranche:
+
+1. Commit on WSL (`Fabian Schindler <39304197+Cypoe@…>` author,
+   `Co-Authored-By: Devin` trailer — the convention through `81fe5c598`).
+2. From the **Windows side**: `git fetch //wsl.localhost/Ubuntu/home/cypoe/src/koru-ccomp ccomp`.
+3. `git update-ref refs/heads/ccomp <sha>` — moves the branch without a
+   checkout (that's why W:'s worktree lags its own HEAD until step 4).
+4. `cp` the changed files into the W: worktree so the editor sees them.
+5. `git push https://github.com/Cypoe/koru.git ccomp` from Windows.
+
+EOL state: repo blobs are LF. Both checkouts now run `core.autocrlf
+true` — CRLF worktrees are converted on compare/commit, which is what
+silences W:'s ~8.7k-file phantom diff. Files `cp`'d between checkouts
+keep their stat records confused on drvfs ("needs update" that survives
+`update-index --refresh`); `git checkout HEAD -- <file>` rewrites the
+stat record cleanly when content is already identical.
+
 Branch `ccomp`, commit `900769b60`, 1 commit of session work on top of
 `verify-path`'s tip (`bd6dc5638`). This note is the map; the measured
 detail sits in the appended "Measured (session 3)" section of
