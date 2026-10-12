@@ -251,10 +251,16 @@ variant when `CompilerEnv.lang == "c"`:
    touched nothing else — same appended items (reusing
    `apply_event_item`/`write_event_item`), same semantics.
 
-**Environment note.** cs-compile steps fail in this WSL env with
-`dotnet: FileNotFound` (no .NET SDK) — observed on
-`110_022_store_across_module_boundary` and `020_021`; the C# emission
-itself succeeds. Not a code regression; verify cs on Windows.
+**Environment note — resolved.** cs-compile fails in WSL only because
+no .NET SDK is installed there. Verified on the Windows host
+(koruc.exe rebuilt from this tree, `W:	ools\zig-0.15.1`, .NET SDK
+8.0.425 installed): `110_022` cs prints `v=42`, `020_021` cs prints
+`42`, `2105` zig prints `78498` — all byte-identical. The run surfaced
+and fixed three POSIX-isms that broke koruc on Windows outright:
+raw `.file` path literals in `emitInvocationMetaFields`,
+`std.posix.getenv` (auto_discharge_inserter, std/env, gate.helpers),
+and an open `koru.csproj` handle passed to `dotnet build` (MSB4025).
+See frag-a-posix-hides-in-the-toolchains-own-paths.
 
 **Unmeasured/next:** plural stores (`store.new` plural path is still
 zig-stamped — refuses NoCProcBody by name), watches/guards on C,
