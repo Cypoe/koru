@@ -83,19 +83,9 @@ fn mangle(allocator: std.mem.Allocator, path: ast.DottedPath) ![]const u8 {
 }
 
 /// Koru type → C type spelling, or null outside the first fragment.
+/// The map itself lives in codegen_utils so koru_std C-minted decls agree.
 fn cTypeOf(koru_type: []const u8) ?[]const u8 {
-    const t = std.mem.trim(u8, koru_type, " \t");
-    if (std.mem.eql(u8, t, "string") or std.mem.eql(u8, t, "[]const u8")) return "const char *";
-    if (std.mem.eql(u8, t, "i64") or std.mem.eql(u8, t, "i32") or
-        std.mem.eql(u8, t, "i16") or std.mem.eql(u8, t, "i8") or
-        std.mem.eql(u8, t, "u64") or std.mem.eql(u8, t, "u32") or
-        std.mem.eql(u8, t, "u16") or std.mem.eql(u8, t, "u8") or
-        std.mem.eql(u8, t, "usize") or std.mem.eql(u8, t, "isize") or
-        std.mem.eql(u8, t, "int") or std.mem.eql(u8, t, "number")) return "long long";
-    if (std.mem.eql(u8, t, "f64") or std.mem.eql(u8, t, "f32") or
-        std.mem.eql(u8, t, "float")) return "double";
-    if (std.mem.eql(u8, t, "bool")) return "int";
-    return null;
+    return codegen_utils.cTypeOf(koru_type);
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +305,36 @@ fn markReachedCalls(
         if (f.impl_of != null) continue;
         if (!std.mem.eql(u8, f.module, main_module)) continue;
         try reachSite(allocator, &f.body, reached, worklist);
+    }
+}
+
+/// `retain` marks an event a synthesized host-text body calls by name —
+/// raw proc text is invisible to AST reachability (that is the same
+/// contract dead_strip honors: the sweep's |c loop calls `__grid_body_*`
+/// from C text). Seed them reached and onto the worklist so their impl
+/// flows reach transitively.
+fn markRetainedEvents(
+    allocator: std.mem.Allocator,
+    items: []const ast.Item,
+    reached: *Reached,
+    worklist: *std.ArrayList([]const u8),
+) CEmitError!void {
+    for (items) |*item| {
+        switch (item.*) {
+            .module_decl => |*m| try markRetainedEvents(allocator, m.items, reached, worklist),
+            .event_decl => |*e| {
+                for (e.annotations) |ann| {
+                    if (std.mem.eql(u8, ann, "retain")) {
+                        const key = try pathKey(allocator, e.path);
+                        if (!reached.contains(key)) {
+                            try reached.put(key, {});
+                            try worklist.append(allocator, key);
+                        }
+                    }
+                }
+            },
+            else => {},
+        }
     }
 }
 
@@ -1158,6 +1178,7 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     var worklist: std.ArrayList([]const u8) = .empty;
     defer worklist.deinit(allocator);
     try markReachedCalls(allocator, program.items, program.main_module_name, &reached, &worklist);
+    try markRetainedEvents(allocator, program.items, &reached, &worklist);
     try reachImplFlows(allocator, &impl_flows, &reached, &worklist);
 
     var seen = std.StringHashMap(void).init(allocator);

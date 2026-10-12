@@ -93,6 +93,11 @@
         // widening the read path uses, not a second spelling of it.
         const widen = struct {
             fn at(alloc: std.mem.Allocator, ns: []const u8, grid: []const u8, text: []const u8) []const u8 {
+                // C widens nothing: every Koru integer lowers to `long long`,
+                // so the call-site argument already IS the check's parameter
+                // type. The parens keep a composite expression argument-bound.
+                if (std.mem.eql(u8, CompilerEnv.lang, "c"))
+                    return std.fmt.allocPrint(alloc, "({s})", .{text}) catch unreachable;
                 return std.fmt.allocPrint(alloc, "{s}__KoruGridT_{s}.__koru_wide({s})", .{ ns, grid, text }) catch unreachable;
             }
         };
@@ -187,10 +192,10 @@
         .path = mk.path(allocator, home_ns, unit),
         .body = ast.Source{ .text = body.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
         .annotations = &[_][]const u8{},
-        // The body (`<lvalue> = <param>;`) is the same statement on both
-        // targets once `grid_read.lower` drops the `&` for JS — only the
+        // The body (`<lvalue> = <param>;`) is the same statement on every
+        // target once `grid_read.lower` spells the lvalue per host — only the
         // proc's TARGET tag selects which emitter owns it.
-        .target = allocator.dupe(u8, if (std.mem.eql(u8, CompilerEnv.lang, "js")) "js" else "zig") catch unreachable,
+        .target = allocator.dupe(u8, if (std.mem.eql(u8, CompilerEnv.lang, "js")) "js" else if (std.mem.eql(u8, CompilerEnv.lang, "c")) "c" else "zig") catch unreachable,
         .location = flow.location,
         .module = allocator.dupe(u8, flow.module) catch unreachable,
     } };

@@ -277,7 +277,19 @@
     // tors dispatched through the flat `main_module` object (the JS emitter
     // flattens every module's tors into it — store.kz:100's rule).
     const sweep_is_js = std.mem.eql(u8, CompilerEnv.lang, "js");
-    const loop = if (sweep_is_js)
+    const sweep_is_c = std.mem.eql(u8, CompilerEnv.lang, "c");
+    // The C handler name is the emitter's mangle of the event path:
+    // module qualifier char-for-char (non-alnum → `_`) + '_' + segments.
+    const c_body_fn = blk_cfn: {
+        var cn = std.ArrayList(u8).initCapacity(allocator, 64) catch unreachable;
+        for (home_ns) |ch| cn.append(allocator, if (std.ascii.isAlphanumeric(ch) or ch == '_') ch else '_') catch unreachable;
+        cn.append(allocator, '_') catch unreachable;
+        cn.appendSlice(allocator, body_name) catch unreachable;
+        break :blk_cfn cn.toOwnedSlice(allocator) catch unreachable;
+    };
+    const loop = if (sweep_is_c)
+        std.fmt.allocPrint(allocator, "for (long long {s} = 0; {s} < __koru_grid_{s}_size; {s}++) {{\n{s}    {s}((struct {s}_in){{ .{s} = {s} }});\n}}\nreturn;", .{ cur, cur, grid_name, cur, guard_line, c_body_fn, c_body_fn, cur, cur }) catch unreachable
+    else if (sweep_is_js)
         std.fmt.allocPrint(allocator, "for (let {s} = 0; {s} < {s}__KoruGridT_{s}.__koru_size; {s}++) {{\n{s}    main_module.{s}_event.handler({{ {s}: {s} }});\n}}\nreturn;", .{ cur, cur, grid_ns, grid_name, cur, guard_line, body_name, cur, cur }) catch unreachable
     else
         std.fmt.allocPrint(allocator, "for (0..{s}__KoruGridT_{s}.__koru_size) |{s}| {{\n{s}    {s}{s}_event.handler(.{{ .{s} = @as(i64, @intCast({s})) }});\n}}\nreturn;", .{ grid_ns, grid_name, cur, guard_line, emit_ns, body_name, cur, cur }) catch unreachable;
@@ -285,7 +297,7 @@
         .path = mk.path(allocator, home_ns, sweep_name),
         .body = ast.Source{ .text = loop, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
         .annotations = &[_][]const u8{},
-        .target = allocator.dupe(u8, if (sweep_is_js) "js" else "zig") catch unreachable,
+        .target = allocator.dupe(u8, if (sweep_is_js) "js" else if (sweep_is_c) "c" else "zig") catch unreachable,
         .location = flow.location,
         .module = allocator.dupe(u8, flow.module) catch unreachable,
     } }) catch unreachable;

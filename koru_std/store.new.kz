@@ -42,6 +42,7 @@
     // lines; the singleton is a separable rung reached by its own tests.
     const host_is_js = std.mem.eql(u8, CompilerEnv.lang, "js");
     const host_is_cs = std.mem.eql(u8, CompilerEnv.lang, "cs");
+    const host_is_c = std.mem.eql(u8, CompilerEnv.lang, "c");
     const proc_target = if (host_is_js) "js" else if (host_is_cs) "cs" else "zig";
 
     // The host-shape helpers live in `codegen_utils` beside `lowerKoruExpr`,
@@ -5513,6 +5514,34 @@
         jp.appendSlice(allocator, " };") catch unreachable;
         jp.appendSlice(allocator, refhome.js) catch unreachable;
         break :blk_js jp.toOwnedSlice(allocator) catch unreachable;
+    } else if (host_is_c) blk_cc: {
+        // THE C CELL — one anonymous-struct global, flat name. The lowered
+        // read `__koru_store_<s>.<f>` is already valid C against it, which
+        // is the point of keeping the dotted spelling shared with Zig.
+        // Fields must have a first-fragment type AND be C identifiers — a
+        // kebab or domain field is a refusal, not a spelling.
+        var cp2 = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
+        cp2.appendSlice(allocator, "static struct { ") catch unreachable;
+        for (cell_fields, 0..) |cf, i| {
+            const ct = codegen_utils_store.cTypeOf(field_types[i]) orelse
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): field '{s}' type '{s}' has no C spelling in the first fragment", .{ store_name, cf.name, field_types[i] }) };
+            for (cf.name) |ch| {
+                if (!std.ascii.isAlphanumeric(ch) and ch != '_')
+                    return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): field '{s}' is not a C identifier - the first fragment does not mangle store fields", .{ store_name, cf.name }) };
+            }
+            cp2.appendSlice(allocator, std.fmt.allocPrint(allocator, "{s} {s}; ", .{ ct, cf.name }) catch unreachable) catch unreachable;
+        }
+        cp2.appendSlice(allocator, "} __koru_store_") catch unreachable;
+        cp2.appendSlice(allocator, store_name) catch unreachable;
+        cp2.appendSlice(allocator, " = {") catch unreachable;
+        for (cell_fields, 0..) |cf, i| {
+            const dflt = field_defaults[i] orelse "0";
+            const dl = codegen_utils_store.lowerKoruExpr(allocator, dflt, .c, .koru_expr, null) catch
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): field '{s}' default '{s}' is outside the C lane's expression fragment", .{ store_name, cf.name, dflt }) };
+            cp2.appendSlice(allocator, std.fmt.allocPrint(allocator, "{s} .{s} = {s}", .{ if (i > 0) "," else "", cf.name, dl }) catch unreachable) catch unreachable;
+        }
+        cp2.appendSlice(allocator, " };") catch unreachable;
+        break :blk_cc cp2.toOwnedSlice(allocator) catch unreachable;
     } else blk_zig: {
         var p = std.ArrayList(u8).initCapacity(allocator, 512) catch unreachable;
         p.appendSlice(allocator, "const __KoruStoreT_") catch unreachable;
@@ -5540,6 +5569,47 @@
         p.appendSlice(allocator, refhome.zig) catch unreachable;
         break :blk_zig p.toOwnedSlice(allocator) catch unreachable;
     };
+
+    // ------------------------------------------------------------------
+    // C SINGLETON — a flat cell plus ONE direct write tor.
+    //
+    // The general shape below routes a write through `__store_apply_<s>` —
+    // an event with one NAMED BRANCH per field — and an impl flow whose
+    // arms carry the transplanted watches/interceptors. Named branches are
+    // tagged results: outside the C lane's first fragment, so the store's
+    // C path is a write event + a `|c` proc doing the field dispatch
+    // directly, and that is sound ONLY while no arm machinery exists —
+    // a watch that silently never fired would be a semantic lie, so any
+    // interceptor/watch/guard presence REFUSES the declaration.
+    // `__store_apply_<s>` is still minted (decl only): `stored`'s drain
+    // probe keys on it, and `storeAllNames` re-discovers the store from it.
+    // ------------------------------------------------------------------
+    var c_write_body: []const u8 = "";
+    if (host_is_c) {
+        if (watch_arms.items.len != 0 or field_iceptors.items.len != 0 or
+            updated_iceptors.items.len != 0 or foreign_guards.items.len != 0)
+        {
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): watches, interceptors and dischargers are outside the C lane's first fragment - the write subflow's named-branch dispatch has no C lowering this rung", .{store_name}) };
+        }
+        // The write surface is one `value` slot — every column must share
+        // the C type it binds, or a write lands through the wrong width.
+        const vct = codegen_utils_store.cTypeOf(value_type) orelse
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): value type '{s}' has no C spelling in the first fragment", .{ store_name, value_type }) };
+        for (field_types) |ft| {
+            const fct = codegen_utils_store.cTypeOf(ft) orelse
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): column type '{s}' has no C spelling in the first fragment", .{ store_name, ft }) };
+            if (!std.mem.eql(u8, fct, vct)) {
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): mixed-width columns are outside the C lane's first fragment - the single `value` slot is '{s}' but a column is '{s}'", .{ store_name, vct, fct }) };
+            }
+        }
+
+        var cpb = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
+        for (field_names, 0..) |fname, i| {
+            cpb.appendSlice(allocator, std.fmt.allocPrint(allocator, "    if (field == {d}) {{ __koru_store_{s}.{s} = value; return; }}\n", .{ i, store_name, fname }) catch unreachable) catch unreachable;
+        }
+        cpb.appendSlice(allocator, std.fmt.allocPrint(allocator, "    __koru_unreachable(\"__store_write_{s}: field index is not a column of store '{s}'\");", .{ store_name, store_name }) catch unreachable) catch unreachable;
+        c_write_body = cpb.toOwnedSlice(allocator) catch unreachable;
+    }
 
     // Unit 2+3: the apply event (one terminal branch per field) + its
     // |zig proc (write the cell, announce the field).
@@ -6130,6 +6200,13 @@
             const Home = struct { file: ?[]const u8, logical: ?[]const u8 };
             fn prefixesFor(alloc: std.mem.Allocator, prog: *const ast.Program, names: []const []const u8, homes: []const Home, reader: []const u8) []const []const u8 {
                 const px = alloc.alloc([]const u8, names.len) catch unreachable;
+                // C: the cell is a flat global — no module struct to qualify
+                // through, and store names are program-global, so the read is
+                // `__koru_store_<s>.<f>` from every module.
+                if (std.mem.eql(u8, CompilerEnv.lang, "c")) {
+                    for (px) |*p| p.* = "";
+                    return px;
+                }
                 for (names, 0..) |_, i| {
                     // FILE-derived: `reader` is a `Flow.module`, same domain.
                     const home = homes[i].file orelse "";
@@ -6195,6 +6272,33 @@
         .location = flow.location,
         .module = allocator.dupe(u8, flow.module) catch unreachable,
     } };
+
+    if (host_is_c) {
+        // The C unit set: flat cell + the two event decls (`stored`'s
+        // drain probe and `storeAllNames` key on `__store_apply_*`) +
+        // ONE direct write proc. No impl flow — named branches are
+        // outside the first fragment. This return site sits AFTER the
+        // whole-program `Walk` above so the store's own whole-text
+        // lowering (`acc.n` -> `__koru_store_acc.n`, including inside
+        // `{{ ... }}` interpolation payloads) has already run.
+        const c_appended = allocator.alloc(ast.Item, 4) catch unreachable;
+        c_appended[0] = ast.Item{ .inline_code = ast.InlineCode{
+            .code = cell_decl,
+            .location = flow.location,
+            .module = allocator.dupe(u8, home_ns) catch unreachable,
+        } };
+        c_appended[1] = apply_event_item;
+        c_appended[2] = write_event_item;
+        c_appended[3] = ast.Item{ .proc_decl = ast.ProcDecl{
+            .path = mkPath(allocator, home_ns, write_name),
+            .body = ast.Source{ .text = c_write_body, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
+            .annotations = &[_][]const u8{},
+            .target = allocator.dupe(u8, "c") catch unreachable,
+            .location = flow.location,
+            .module = allocator.dupe(u8, flow.module) catch unreachable,
+        } };
+        return .{ .transformed = .{ .replacement = replacement, .appended = c_appended } };
+    }
 
     const appended = allocator.alloc(ast.Item, 5 + stripe_items.items.len + fg_each_items.items.len) catch unreachable;
     // The cell rides the SAME namespace as the accessors that read it. A cell

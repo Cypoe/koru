@@ -325,7 +325,50 @@
     // `__koru_row: [...Array(N)]` so the re-collection's layout test
     // (`__koru_row: [`) reads the same on both targets.
     const host_is_js = std.mem.eql(u8, CompilerEnv.lang, "js");
-    const gdecl = if (host_is_js) blk_gjs: {
+    const host_is_c = std.mem.eql(u8, CompilerEnv.lang, "c");
+    const gdecl = if (host_is_c) blk_gc: {
+        // THE C RENDERING — flat names, C spellings. The type object's
+        // callable members become free functions: `__koru_at_<g>` /
+        // `__koru_at2_<g>` carry the bounds floor verbatim (same messages,
+        // `__koru_unreachable` where Zig has @panic), `__koru_wide` drops
+        // because every Koru integer is already `long long`, and
+        // `__koru_size` is a const the sweep's loop bound names. Field
+        // types must be inside codegen_utils.cTypeOf's first fragment —
+        // a domain-typed column is refused here rather than emitted as a
+        // type that does not exist.
+        var cg = std.ArrayList(u8).initCapacity(allocator, 512) catch unreachable;
+        cg.appendSlice(allocator, std.fmt.allocPrint(allocator, "static const long long __koru_grid_{s}_size = {d};\n", .{ grid_name, SIZE }) catch unreachable) catch unreachable;
+        if (unchecked) {
+            cg.appendSlice(allocator, std.fmt.allocPrint(allocator, "static long long __koru_at_{s}(long long i) {{ return i; }}\n", .{grid_name}) catch unreachable) catch unreachable;
+        } else {
+            cg.appendSlice(allocator, std.fmt.allocPrint(allocator, "static long long __koru_at_{s}(long long i) {{ if (i < 0 || i >= {d}) {{ __koru_unreachable(\"std/grid: index out of range for grid '{s}' (size {d}) - a grid is addressed by position, and wrapping is the program's to write as `% {d}`\"); }} return i; }}\n", .{ grid_name, SIZE, grid_name, SIZE, SIZE }) catch unreachable) catch unreachable;
+        }
+        if (dims_text != null) {
+            if (unchecked) {
+                cg.appendSlice(allocator, std.fmt.allocPrint(allocator, "static long long __koru_at2_{s}(long long x, long long y) {{ return y * {d} + x; }}\n", .{ grid_name, COLS }) catch unreachable) catch unreachable;
+            } else {
+                cg.appendSlice(allocator, std.fmt.allocPrint(allocator, "static long long __koru_at2_{s}(long long x, long long y) {{ if (x < 0 || x >= {d}) {{ __koru_unreachable(\"std/grid: x out of range for grid '{s}' (cols {d})\"); }} if (y < 0 || y >= {d}) {{ __koru_unreachable(\"std/grid: y out of range for grid '{s}' (rows {d})\"); }} return y * {d} + x; }}\n", .{ grid_name, COLS, grid_name, COLS, ROWS, grid_name, ROWS, COLS }) catch unreachable) catch unreachable;
+            }
+        }
+        if (row_layout) {
+            cg.appendSlice(allocator, "static struct { struct { ") catch unreachable;
+            for (fields.items, 0..) |f, fi| {
+                const ct = codegen_utils_grid.cTypeOf(f.ty) orelse
+                    return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): field '{s}' type '{s}' has no C spelling in the first fragment", .{ grid_name, f.name, f.ty }) };
+                cg.appendSlice(allocator, std.fmt.allocPrint(allocator, "{s}{s} {s};", .{ if (fi > 0) " " else "", ct, f.name }) catch unreachable) catch unreachable;
+            }
+            cg.appendSlice(allocator, std.fmt.allocPrint(allocator, " }} __koru_row[{d}]; }} __koru_grid_{s} = {{{{0}}}};", .{ SIZE, grid_name }) catch unreachable) catch unreachable;
+        } else {
+            cg.appendSlice(allocator, "static struct { ") catch unreachable;
+            for (fields.items, 0..) |f, fi| {
+                const ct = codegen_utils_grid.cTypeOf(f.ty) orelse
+                    return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:new({s}): field '{s}' type '{s}' has no C spelling in the first fragment", .{ grid_name, f.name, f.ty }) };
+                cg.appendSlice(allocator, std.fmt.allocPrint(allocator, "{s}{s} {s}[{d}];", .{ if (fi > 0) " " else "", ct, f.name, SIZE }) catch unreachable) catch unreachable;
+            }
+            cg.appendSlice(allocator, std.fmt.allocPrint(allocator, " }} __koru_grid_{s} = {{{{0}}}};", .{grid_name}) catch unreachable) catch unreachable;
+        }
+        break :blk_gc cg.toOwnedSlice(allocator) catch unreachable;
+    } else if (host_is_js) blk_gjs: {
         var jg = std.ArrayList(u8).initCapacity(allocator, 512) catch unreachable;
         const jhead = std.fmt.allocPrint(allocator, "const __KoruGridT_{s} = {{\n  __koru_size: {d},\n  __koru_wide: (v) => v,\n", .{ grid_name, SIZE }) catch unreachable;
         jg.appendSlice(allocator, jhead) catch unreachable;
@@ -400,7 +443,10 @@
     // text for a write's column type, `collect` re-finds the grid and its
     // layout from it. On JS it is never emitted (the facet filter drops it);
     // it is the declaration's memory, not its artifact.
-    if (host_is_js) {
+    if (host_is_js or host_is_c) {
+        // JS and C both ride `.inline_code`: the host_line keeps the Zig
+        // text as the declaration's record (columnType/collect re-parse it),
+        // and the appended item carries the target's own decl to top level.
         const jappended = allocator.alloc(ast.Item, 1) catch unreachable;
         jappended[0] = ast.Item{ .inline_code = ast.InlineCode{
             .code = gdecl,

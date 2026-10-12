@@ -99,6 +99,10 @@ const grid_read = struct {
         // reached BARE from every handler via closure — the store's cell
         // qualifier makes the same call (store.kz:109).
         if (std.mem.eql(u8, CompilerEnv.lang, "js")) return "";
+        // C: every global is flat — no `main_module.` struct exists to
+        // qualify through. Grid names are program-global (the declaration's
+        // same-name check), so `__koru_grid_<g>` needs no prefix.
+        if (std.mem.eql(u8, CompilerEnv.lang, "c")) return "";
         const h = home orelse return "main_module.";
         if (h.len == 0 or std.mem.eql(u8, h, prog.main_module_name)) return "main_module.";
         return std.fmt.allocPrint(alloc, "{s}.", .{codegen_utils_grid.buildKoruModulePath(alloc, h) catch unreachable}) catch unreachable;
@@ -358,7 +362,30 @@ const grid_read = struct {
                         // a proc-body splice (the write unit) never gets that
                         // pass, so the `&` is dropped at the source instead.
                         const amp: []const u8 = if (std.mem.eql(u8, CompilerEnv.lang, "js")) "" else "&";
-                        const piece = if (comma) |cm| blk_two: {
+                        // The C spelling drops BOTH wrappers: `&` has no
+                        // meaning against a static array (it would type the
+                        // base as pointer-to-array), and `__KoruGridT_<g>`
+                        // is a Zig namespace a C struct cannot carry — the
+                        // bounds check moves to a flat `__koru_at_<g>(i)`
+                        // (and `__koru_at2_<g>(x, y)` for dimensions) minted
+                        // beside the storage by `new`. `ns` is "" on this
+                        // lane, so the grid name stands alone.
+                        const is_c = std.mem.eql(u8, CompilerEnv.lang, "c");
+                        const piece = if (is_c) blk_c: {
+                            if (comma) |cm| {
+                                const xs = lower(alloc, std.mem.trim(u8, idx_raw[0..cm], " "), refs);
+                                const ys = lower(alloc, std.mem.trim(u8, idx_raw[cm + 1 ..], " "), refs);
+                                break :blk_c if (gref.row)
+                                    std.fmt.allocPrint(alloc, "{s}__koru_grid_{s}.__koru_row[__koru_at2_{s}({s}, {s})].{s}", .{ ns, gname, gname, xs, ys, fname }) catch unreachable
+                                else
+                                    std.fmt.allocPrint(alloc, "{s}__koru_grid_{s}.{s}[__koru_at2_{s}({s}, {s})]", .{ ns, gname, fname, gname, xs, ys }) catch unreachable;
+                            }
+                            const idx = lower(alloc, idx_raw, refs);
+                            break :blk_c if (gref.row)
+                                std.fmt.allocPrint(alloc, "{s}__koru_grid_{s}.__koru_row[__koru_at_{s}({s})].{s}", .{ ns, gname, gname, idx, fname }) catch unreachable
+                            else
+                                std.fmt.allocPrint(alloc, "{s}__koru_grid_{s}.{s}[__koru_at_{s}({s})]", .{ ns, gname, fname, gname, idx }) catch unreachable;
+                        } else if (comma) |cm| blk_two: {
                             const xs = lower(alloc, std.mem.trim(u8, idx_raw[0..cm], " "), refs);
                             const ys = lower(alloc, std.mem.trim(u8, idx_raw[cm + 1 ..], " "), refs);
                             break :blk_two if (gref.row)

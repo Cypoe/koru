@@ -48,3 +48,20 @@ lowered through `grid_read.lower` into Zig spellings. The store/grid
 synthesis tranche is the same kind of work one layer down: not user
 `|c` impls, but transforms minting `|c` variants of the procs they
 synthesize.
+
+Resolved 2026-10-12 (session 5): the prediction held one layer down.
+`grid.new`/`grid.stored`/`grid.sweep`/`store.new` now mint `|c`
+variants of their synthesized units, and `2105_prime_sieve` — the
+flagship cell — runs `zig c` byte-identical (`78498`, ccomp
+`-fstruct-passing`). The wall that looked like "users need |c impls"
+was, again, transforms stamping zig on the compilers
+
+
+Resolved 2026-10-12 (session 5): the prediction held one layer down.
+`grid.new`/`grid.stored`/`grid.sweep`/`store.new` now mint `|c`
+variants of their synthesized units, and `2105_prime_sieve` — the
+flagship cell — runs `zig c` byte-identical (`78498`, ccomp
+`-fstruct-passing`). The wall that looked like "users need |c impls"
+was, again, transforms stamping zig on the compiler's own output. The
+remaining mass is the same shape one more layer down: plural stores,
+watches/guards, row-layout grids.

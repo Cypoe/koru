@@ -253,6 +253,25 @@ pub fn scanDecimalIndex(text: []const u8, pos: *usize) ?usize {
     return if (saw_digit) idx else null;
 }
 
+/// Koru type to C type spelling, or null outside the C lane first fragment.
+/// The C emitter and koru_std C-minted declarations (grid.new, store.new)
+/// share this one map - two copies drifting is how a minted `i64` field and
+/// an emitted `long long` param would stop agreeing.
+pub fn cTypeOf(koru_type: []const u8) ?[]const u8 {
+    const t = std.mem.trim(u8, koru_type, " \t");
+    if (std.mem.eql(u8, t, "string") or std.mem.eql(u8, t, "[]const u8")) return "const char *";
+    if (std.mem.eql(u8, t, "i64") or std.mem.eql(u8, t, "i32") or
+        std.mem.eql(u8, t, "i16") or std.mem.eql(u8, t, "i8") or
+        std.mem.eql(u8, t, "u64") or std.mem.eql(u8, t, "u32") or
+        std.mem.eql(u8, t, "u16") or std.mem.eql(u8, t, "u8") or
+        std.mem.eql(u8, t, "usize") or std.mem.eql(u8, t, "isize") or
+        std.mem.eql(u8, t, "int") or std.mem.eql(u8, t, "number")) return "long long";
+    if (std.mem.eql(u8, t, "f64") or std.mem.eql(u8, t, "f32") or
+        std.mem.eql(u8, t, "float")) return "double";
+    if (std.mem.eql(u8, t, "bool")) return "int";
+    return null;
+}
+
 // ============================================================================
 // STRUCT LITERAL CONVERSION
 // ============================================================================

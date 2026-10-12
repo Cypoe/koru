@@ -150,3 +150,113 @@ lowering story: `grid.new` (the static cell array), `grid_read.lower`
   `:S` refuses (handle form), `:.N` refuses (no C formatter). The
   `020_021` segfault is a DIFFERENT funnel (arrow-return lowering) —
   still open, still crashes, needs a pinned repro.
+
+
+## Review questions raised + answered (session 4 tail)
+
+**Port basis — js vs cs emitter.** The marker-resolution contract is one
+contract shared by all three emitters (the Zig reference is
+`emitter_helpers.zig`; js and cs emitters carry the same
+`__koru_continue[_bare_]_N` + `__koru_inline_[scoped]_N` scanner
+verbatim). Where they differ is host *rendering*, and there C sits on
+the C# side: the splice binds a typed local (`long long i = arg`, the
+fragment's int spelling — `for|c` only mints splices for counted
+ranges), and destructured bindings refuse rather than emit payload
+temps. One wart found while comparing: cs_emitter.zig:2133's comment
+still says "the vertical refuses these (effects are unmodelled)" —
+stale; the code below it implements the splice. Cosmetic, but it
+misstates the contract for the next reader.
+
+**Ordering — should K3 (Lean) come before K1 finishes?** No, and the
+reason is what each layer certifies. The bugs the census keeps
+surfacing (zig-stamped synthesized procs, un-emitted domain types) are
+emission *coverage* gaps — the instrument for them is the oracle plus
+the equivalence cells, which is exactly what ccomp is. A Lean model of
+the emitter would not catch them faster than `ccomp | run | diff`
+already does, and would be a bigger artifact than the emitter.
+K3's actual scope — a verified checker for obligation *verdicts* — is
+orthogonal to C emission and gates nothing today; it stays a parallel
+track. If a small formal model is wanted, the honest candidate is the
+marker-resolution/drain contract itself (consumed-mask ⊆ continuations,
+no terminal dropped), as a K3 warm-up — not a prerequisite.
+
+**Surgical fixes status.** `020_021` (the census's segfault exemplar)
+now PASSES — `42` byte-identical — the `:d` spec routing closed that
+instance of int→pointer. Still open: (a) domain/record types declared
+in non-input modules never reach `output_emitted.c` (10 dirs, mostly
+`665_PROTO`); (b) bare (non-`{{ }}`) print args still funnel any type
+into `const char *` — the header comment claims "the oracle's
+typecheck refuses" but ccomp only *warns* and the binary segfaults, so
+that gate is weaker than documented. Right fix when it matters: refuse
+non-string-literal bare args by name.
+
+
+## Session 5 — grid/store synthesis landed; the sieve is the acceptance cell
+
+**`NoCProcBody` is cleared.** `2105_prime_sieve` now runs under
+`LANGUAGES: zig c`: ccomp (`-fstruct-passing`, the pinned flag) compiles
+the emitted C, the binary prints `78498`, byte-identical to
+`expected.txt`. The previous wall section above (grid.stored stamping
+`.target = "zig"`) is resolved — all synthesized units now mint a `|c`
+variant when `CompilerEnv.lang == "c"`:
+
+- `grid.new` — C arm emits a static struct cell at file scope
+  (`static struct { long long composite[1000001]; } __koru_grid_sieve = {{0}};`),
+  `__koru_grid_<g>_size`, and a per-grid `__koru_at_<g>` bounds helper.
+- `grid_read.lower` — `.c` arm lowers `sieve[i].composite` to
+  `__koru_grid_sieve.composite[__koru_at_sieve(i)]` (flat member access,
+  no Zig `&`/type-name spellings).
+- `grid.stored` — write procs mint `.target = "c"` with a C lvalue body.
+- `grid.sweep` — mints a counted `for` calling the body event through
+  the emitters
+
+
+## Session 5 — grid/store synthesis landed; the sieve is the acceptance cell
+
+**`NoCProcBody` is cleared.** `2105_prime_sieve` now runs under
+`LANGUAGES: zig c`: ccomp (`-fstruct-passing`, the pinned flag) compiles
+the emitted C, the binary prints `78498`, byte-identical to
+`expected.txt`. The previous wall section above (grid.stored stamping
+`.target = "zig"`) is resolved — all synthesized units now mint a `|c`
+variant when `CompilerEnv.lang == "c"`:
+
+- `grid.new` — C arm emits a static struct cell at file scope
+  (`static struct { long long composite[1000001]; } __koru_grid_sieve = {{0}};`),
+  `__koru_grid_<g>_size`, and a per-grid `__koru_at_<g>` bounds helper.
+- `grid_read.lower` — `.c` arm lowers `sieve[i].composite` to
+  `__koru_grid_sieve.composite[__koru_at_sieve(i)]` (flat member access,
+  no Zig `&`/type-name spellings).
+- `grid.stored` — write procs mint `.target = "c"` with a C lvalue body.
+- `grid.sweep` — mints a counted `for` calling the body event through
+  the emitter's `input___grid_body_L40`/`struct ..._in` convention.
+- `store.new` (singleton path) — flat cell
+  (`static struct { long long n; } __koru_store_acc = { .n = 0 };`) +
+  ONE direct `|c` write proc dispatching on the field index. No
+  apply/impl named-branch flow; the apply event decl still mints so
+  `stored`'s drain probe and `storeAllNames` keep resolving the store.
+  Watches/interceptors/dischargers refuse by name (KORU161).
+
+**Two surgical fixes this tranche surfaced:**
+
+1. `retain` seeds reachability. `__grid_sweep`'s raw C loop text calls
+   the body event, but raw host text is invisible to AST reachability —
+   the event never emitted and ccomp refused the implicit decl. The
+   emitter now seeds `reached` from `@koru:retain`-annotated events
+   (the same flag dead_strip already honors).
+2. `acc.n` lowering ordering — a real bug, fixed surgically. The first
+   C arm in `store.new` returned before the transform's whole-program
+   `Walk.items` rewrite ran, so `acc.n` inside the `{{ acc.n:d }}`
+   interpolation payload stayed raw while the cell declared
+   `__koru_store_acc`. The C return now sits after the walk; the fix
+   touched nothing else — same appended items (reusing
+   `apply_event_item`/`write_event_item`), same semantics.
+
+**Environment note.** cs-compile steps fail in this WSL env with
+`dotnet: FileNotFound` (no .NET SDK) — observed on
+`110_022_store_across_module_boundary` and `020_021`; the C# emission
+itself succeeds. Not a code regression; verify cs on Windows.
+
+**Unmeasured/next:** plural stores (`store.new` plural path is still
+zig-stamped — refuses NoCProcBody by name), watches/guards on C,
+row-layout grids, `:.N` precision, `:S` handles, domain-type emission
+(the 10-dir `const Health` class).
