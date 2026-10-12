@@ -1,8 +1,8 @@
 ---
 type: belief
 id: frag-a-bare-return-produce-is-an-escape-not-a-discharge-point
-provenance: surfaced 2026-08-23 fixing 330_076/330_085 — auto_discharge_inserter read a subflow impl's bare-return produce as an "implicit terminator", appended the caller's disposer after its own `return r`, and emitted unreachable code naming an undeclared result
-ts: 2026-08-23
+provenance: surfaced 2026-08-23 fixing 330_076/330_085 — auto_discharge_inserter read a subflow impl's bare-return produce as an "implicit terminator", appended the caller's disposer after its own `return r`, and emitted unreachable code naming an undeclared result. Evolved 2026-11-04: the escape now carries record-FIELD obligations across the produce boundary — the produce edge verifies the feed, the caller is seeded `res.<field>` debts.
+ts: 2026-11-04
 ---
 
 # A bare-return produce is an escape, not a discharge point (belief)
@@ -60,3 +60,28 @@ The free-half residue is recorded, not fixed here: an `allocated!` bind that
 is neither returned nor switched on still has no discharge path on the
 router-lowered arm — the inserter owns that decision and it never sees the
 arm.
+
+## The escape now carries record-field obligations (2026-11-04)
+
+The original escape credited whole bindings. Record-field obligations
+(`res.h` where `h: *Handle<owned!>`) died at the subflow boundary anyway —
+the caller was seeded nothing, while the field still counted as a drop-debt,
+so an explicit `dispose(res.h)` was refused as a phantom-state mismatch at
+the CALL site (330_100 pinned the misdiagnosis; deadbolt frontier 1 named
+the wall).
+
+Three coordinated changes carry the obligation across:
+
+- **The produce edge verifies the feed.** Packing a declared `<state!>`
+  field from a dead or phantom-less binding refuses at the produce site
+  with KORU030 (330_139/330_140) — the pack site is where the ledger can
+  still see the truth, so that is where the wall lives.
+- **The caller is seeded field debts.** `buildSubflowImplMap`'s whole
+  exemption — subflow impls do not thread field obligations — is deleted;
+  subflow-impl'd events seed `res.<field>` identically to direct calls.
+- **The produce repacks.** `-> r` hands back a record repacked fieldwise
+  into the CALLER's `Output` (its own frag) — the type boundary that used
+  to be the second half of the same wall.
+
+330_100 flipped MUST_ERROR → green; `dispose(res.h)` now pays the field
+exactly as a direct call does (330_138 is the literal-produce twin).

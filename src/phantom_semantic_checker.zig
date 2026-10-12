@@ -46,11 +46,6 @@ pub const PhantomSemanticChecker = struct {
     /// "was not discharged" wall (330_040/330_100 — the diagnostic-precision
     /// half of the signature-pass reordering, see checkSignatures).
     check_mode: CheckMode = .full,
-    /// Events implemented by a SUBFLOW (`~spin = ...`), keyed `module:event`.
-    /// A subflow-implemented event's declared record return does not (yet)
-    /// thread its field obligations across the call boundary — see
-    /// seedRecordFieldObligations' caller in validateFlow.
-    subflow_impl_map: std.StringHashMap(void),
     /// Declared-type identities (registry rung 1): names minted by std/types
     /// declaration tors. Same rule as type_registry.populateFromItem's
     /// declared-type scan — a small consumer-side copy until the gray-zone
@@ -104,7 +99,6 @@ pub const PhantomSemanticChecker = struct {
             .module_map = std.StringHashMap([]const u8).init(allocator),
             .label_map = std.StringHashMap(LabelTarget).init(allocator),
             .disposal_event_map = std.StringHashMap(DisposalEventInfo).init(allocator),
-            .subflow_impl_map = std.StringHashMap(void).init(allocator),
             .declared_types = std.StringHashMap(void).init(allocator),
         };
     }
@@ -118,11 +112,6 @@ pub const PhantomSemanticChecker = struct {
         self.disposal_event_map.deinit();
         self.module_map.deinit();
         self.label_map.deinit();
-        var subflow_iter = self.subflow_impl_map.keyIterator();
-        while (subflow_iter.next()) |key| {
-            self.allocator.free(key.*);
-        }
-        self.subflow_impl_map.deinit();
         var declared_iter = self.declared_types.keyIterator();
         while (declared_iter.next()) |key| {
             self.allocator.free(key.*);
@@ -323,10 +312,6 @@ pub const PhantomSemanticChecker = struct {
         // Build event map for disposal suggestions
         try self.buildDisposalEventMap(source_ast);
 
-        // Subflow-implemented events (their record returns don't seed field
-        // obligations — see validateFlow)
-        try self.buildSubflowImplMap(source_ast);
-
         // Declared-type identities for the nominal-distinctness check — from
         // the PRE-TRANSFORM ast: the struct declaration flows are consumed
         // into inline_code before this pass runs, so only the original sees them.
@@ -399,7 +384,6 @@ pub const PhantomSemanticChecker = struct {
         defer self.check_mode = .full;
         try self.buildModuleMap(source_ast);
         try self.buildDisposalEventMap(source_ast);
-        try self.buildSubflowImplMap(source_ast);
         try self.buildDeclaredTypes(declared_types_ast);
         self.label_map.clearRetainingCapacity();
         const flows_valid = try self.validatePhantomFlows(source_ast);
@@ -408,34 +392,6 @@ pub const PhantomSemanticChecker = struct {
             return error.ValidationFailed;
         }
         log.debug("[PHANTOM] Argument validation passed\n", .{});
-    }
-
-    /// Record every event implemented by a SUBFLOW (`~spin = ...`, Flow.impl_of),
-    /// keyed `module:event`, at both the top level and inside module decls.
-    fn buildSubflowImplMap(self: *PhantomSemanticChecker, source_ast: *const ast.Program) !void {
-        for (source_ast.items) |item| {
-            switch (item) {
-                .flow => |*flow| try self.recordSubflowImpl(flow),
-                .module_decl => |module| {
-                    for (module.items) |*mod_item| {
-                        if (mod_item.* == .flow) {
-                            try self.recordSubflowImpl(&mod_item.flow);
-                        }
-                    }
-                },
-                else => {},
-            }
-        }
-    }
-
-    fn recordSubflowImpl(self: *PhantomSemanticChecker, flow: *const ast.Flow) !void {
-        const impl_path = flow.impl_of orelse return;
-        const event_name = try self.pathToString(impl_path);
-        defer self.allocator.free(event_name);
-        const module = impl_path.module_qualifier orelse flow.module;
-        const qualified = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ module, event_name });
-        const gop = try self.subflow_impl_map.getOrPut(qualified);
-        if (gop.found_existing) self.allocator.free(qualified);
     }
 
     fn buildModuleMap(self: *PhantomSemanticChecker, source_ast: *const ast.Program) !void {
@@ -1769,17 +1725,13 @@ pub const PhantomSemanticChecker = struct {
                 // is credited (challenge 007). Uses the head's destructure (if
                 // any) to key destructured obligation fields by scalar name.
                 //
-                // NOT for a SUBFLOW-implemented event (`~spin = make(id): r -> r`):
-                // subflow field threading is unbuilt, so a record routed through a
-                // subflow's declared return type does not carry its field
-                // obligations to the caller. Seeding here would silently credit an
-                // explicit `dispose(res.h)` against an obligation the value does
-                // not hold — the precise argument-located mismatch must fire
-                // instead (330_100; direct-call crediting pins 330_101-109 are
-                // proc-implemented and keep seeding).
-                if (!self.subflow_impl_map.contains(qualified_name)) {
-                    try self.seedRecordFieldObligations(rb, rt, module_name, flow.inv().return_destructure, &root_context);
-                }
+                // Subflow-implemented tors seed identically: the produce edge
+                // verifies every `<state!>` field of the declared record is fed
+                // by a live obligation before it escapes (auto_discharge_inserter's
+                // verifyProducedFieldObligations), so the declared record type is
+                // a checked contract, not a claim — `dispose(res.h)` on a subflow-
+                // returned record is credited exactly like a proc-returned one.
+                try self.seedRecordFieldObligations(rb, rt, module_name, flow.inv().return_destructure, &root_context);
                 // Registry rung 1: a phantom-less bare return whose type is a
                 // declared identity (not a record) records its base type so
                 // the nominal-distinctness check can compare it downstream
@@ -1822,11 +1774,10 @@ pub const PhantomSemanticChecker = struct {
         inv: *const ast.Invocation,
         step_decl: *const ast.EventDecl,
         step_module: []const u8,
-        step_qualified: []const u8,
         context: *BindingContext,
     ) anyerror!void {
         const rb = inv.return_binding orelse return;
-        try self.recordReturnObligationAs(rb, inv.return_destructure, step_decl, step_module, step_qualified, context);
+        try self.recordReturnObligationAs(rb, inv.return_destructure, step_decl, step_module, context);
     }
 
     /// Record a bare-return call's `-> T<phantom>` obligation against an
@@ -1843,7 +1794,6 @@ pub const PhantomSemanticChecker = struct {
         destructure: []const ast.DestructureField,
         step_decl: *const ast.EventDecl,
         step_module: []const u8,
-        step_qualified: []const u8,
         context: *BindingContext,
     ) anyerror!void {
         if (step_decl.return_phantom) |rp| {
@@ -1867,14 +1817,12 @@ pub const PhantomSemanticChecker = struct {
         // field obligation and reports KORU030 against valid code (330_116).
         // Chain position has no bearing on whether a field carries a debt.
         if (step_decl.return_type) |rt| {
-            // Same subflow carve-out as the head: subflow field threading is
-            // unbuilt, so a record routed through a subflow's declared return
-            // type does not carry its field obligations to the caller, and
-            // seeding would silently credit a discharge against a debt the
-            // value does not hold (330_100).
-            if (!self.subflow_impl_map.contains(step_qualified)) {
-                try self.seedRecordFieldObligations(rb, rt, step_module, destructure, context);
-            }
+            // Same seeding as the head — subflow-implemented producers thread
+            // their field obligations across the boundary now that the produce
+            // edge verifies them (auto_discharge_inserter's
+            // verifyProducedFieldObligations); chain position says nothing
+            // about whether a field carries a debt.
+            try self.seedRecordFieldObligations(rb, rt, step_module, destructure, context);
         }
     }
 
@@ -1988,6 +1936,102 @@ pub const PhantomSemanticChecker = struct {
             defer self.allocator.free(key);
 
             try context.setWithType(key, canonical, canonical_base_type);
+        }
+    }
+
+    /// A bare-return produce (`-> expr` under a subflow impl, parsed as a
+    /// `.branch_constructor` with `is_bare_return`) must feed each declared
+    /// `<state!>` field a LIVE obligation of that state — the caller is seeded
+    /// `result.<field>` debts on the declared type alone (deadbolt frontier 1).
+    /// The inserter's obligation context cannot reliably see a mid-body
+    /// consume through its sibling-clone walks, but THIS context's
+    /// `disposed_bindings` poisons a consumed feeder on every path, so the
+    /// discharge check lives here: a field fed by a discharged or never-owned
+    /// binding refuses at the pack rather than crossing as a debt the caller
+    /// cannot pay — including the caller's own `dispose(result.field)`.
+    fn verifyProduceFieldFeeders(
+        self: *PhantomSemanticChecker,
+        bc: *const ast.BranchConstructor,
+        return_type: []const u8,
+        context: *BindingContext,
+        location: errors.SourceLocation,
+    ) !void {
+        const declared = (try ast_functional.recordFieldTexts(self.allocator, return_type)) orelse return;
+        defer self.allocator.free(declared);
+        for (declared) |df| {
+            // Only a cleanup-carrying field (`<state!>`) is a debt to verify;
+            // borrow (`<state>`) and plain fields are the shape checker's.
+            const lt = std.mem.indexOfScalar(u8, df.value, '<') orelse continue;
+            var ph_depth: usize = 0;
+            var close: ?usize = null;
+            for (df.value[lt..], lt..) |pc, pj| {
+                if (pc == '<') ph_depth += 1 else if (pc == '>') {
+                    ph_depth -= 1;
+                    if (ph_depth == 0) {
+                        close = pj;
+                        break;
+                    }
+                }
+            }
+            const gt = close orelse continue;
+            if (!std.mem.endsWith(u8, std.mem.trim(u8, df.value[lt + 1 .. gt], " \t"), "!")) continue;
+
+            // The feeder spelling: a literal field's value, or `<expr>.<field>`
+            // for a path produce (`-> r` carries `r.h`-shaped keys).
+            var owned_feeder: ?[]u8 = null;
+            defer if (owned_feeder) |f| self.allocator.free(f);
+            const feeder: ?[]const u8 = if (bc.plain_value) |plain| blk: {
+                const t = std.mem.trim(u8, plain, " \t");
+                // `-> f(...)` forwards the inner call's declared return —
+                // its boundary already guarantees the fields.
+                if (std.mem.indexOfScalar(u8, t, '(') != null) return;
+                if (try ast_functional.recordFieldTexts(self.allocator, t)) |segs| {
+                    defer self.allocator.free(segs);
+                    var v: ?[]const u8 = null;
+                    for (segs) |seg| {
+                        if (std.mem.eql(u8, seg.name, df.name)) {
+                            v = seg.value;
+                            break;
+                        }
+                    }
+                    break :blk v;
+                }
+                owned_feeder = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ t, df.name });
+                break :blk owned_feeder.?;
+            } else blk: {
+                var v: ?[]const u8 = null;
+                for (bc.fields) |f| {
+                    if (std.mem.eql(u8, f.name, df.name)) {
+                        v = f.expression_str orelse f.name;
+                        break;
+                    }
+                }
+                break :blk v;
+            };
+            // A missing literal field is the shape checker's find; a call
+            // in the value forwards that call's own declared return.
+            const v = feeder orelse continue;
+            if (std.mem.indexOfScalar(u8, v, '(') != null) continue;
+            if (context.isDisposed(v)) {
+                try self.reporter.addError(
+                    .KORU030,
+                    location.line,
+                    location.column,
+                    "Produced record field '{s}' is fed '{s}', which was already discharged — a produced obligation must still be live at the produce.",
+                    .{ df.name, v },
+                );
+                return error.ValidationFailed;
+            }
+            if (!context.cleanup_obligations.contains(v)) {
+                try self.reporter.addError(
+                    .KORU030,
+                    location.line,
+                    location.column,
+                    "Produced record field '{s}' is fed '{s}', which holds no live obligation to hand the caller — it was never acquired or is phantom-less.",
+                    .{ df.name, v },
+                );
+                return error.ValidationFailed;
+            }
         }
     }
 
@@ -2145,7 +2189,6 @@ pub const PhantomSemanticChecker = struct {
         // head the caller threaded down (fa026be34's convention: the arm's own
         // location, falling back to the caller's when the parser left line 0).
         const location = if (cont.location.line != 0) cont.location else caller_location;
-
         log.debug("[PHANTOM-FLOW]   Continuation branch: '{s}'\n", .{cont.branch});
 
         // Debug: print event path and branches
@@ -2183,9 +2226,7 @@ pub const PhantomSemanticChecker = struct {
                 if (cont.binding) |cb| {
                     if (!std.mem.eql(u8, cb, "_")) {
                         const callee_module = event_module orelse flow_module;
-                        const callee_qualified = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ callee_module, event_path });
-                        defer self.allocator.free(callee_qualified);
-                        try self.recordReturnObligationAs(cb, cont.destructure, event_decl, callee_module, callee_qualified, &void_context);
+                        try self.recordReturnObligationAs(cb, cont.destructure, event_decl, callee_module, &void_context);
                     }
                 }
             }
@@ -2233,7 +2274,7 @@ pub const PhantomSemanticChecker = struct {
                         // Record this step's bare-return bind so a chained
                         // consumer (`make(): h |> t1(h): a |> fin(h: a)`) sees `a`'s
                         // obligation — the intermediate-step twin of the flow-head bind.
-                        try self.recordBareReturnBind(inv, step_event_info.decl, step_module, step_qualified, &void_context);
+                        try self.recordBareReturnBind(inv, step_event_info.decl, step_module, &void_context);
                         // Validate nested continuations against the step's event
                         if (!try self.validateNestedContinuations(cont, step_event_info.decl, step_module, flow_module, event_map, location, &void_context, implementing_event)) {
                             return false;
@@ -2273,6 +2314,20 @@ pub const PhantomSemanticChecker = struct {
                 if (exit_node == .terminal) {
                     if (try self.reportLeaksAtHardTerminal(&void_context, location)) {
                         return false;
+                    }
+                }
+                // A `-> expr` produce under a void-produce chain exits here, not
+                // through the is_terminator block below — the same
+                // live-obligation-into-`<state!>`-field rule applies (deadbolt
+                // frontier 1: `dispose(h) -> { h }` must refuse at the pack).
+                if (exit_node == .branch_constructor) {
+                    const exit_bc = &exit_node.branch_constructor;
+                    if (exit_bc.is_bare_return) {
+                        if (implementing_event) |impl_ev| {
+                            if (impl_ev.return_type) |rt| {
+                                if (self.check_mode == .full) try self.verifyProduceFieldFeeders(exit_bc, rt, &void_context, location);
+                            }
+                        }
                     }
                 }
             }
@@ -2324,7 +2379,7 @@ pub const PhantomSemanticChecker = struct {
                             // Record this step's bare-return bind so a chained
                             // consumer sees its obligation (intermediate-step twin
                             // of the flow-head bind).
-                            try self.recordBareReturnBind(inv, step_event_info.decl, step_module, step_qualified, &void_chain_context);
+                            try self.recordBareReturnBind(inv, step_event_info.decl, step_module, &void_chain_context);
                             // Validate nested continuations against the step's event
                             return self.validateNestedContinuations(cont, step_event_info.decl, step_module, flow_module, event_map, location, &void_chain_context, implementing_event);
                         }
@@ -2573,6 +2628,23 @@ pub const PhantomSemanticChecker = struct {
             // as a leak.
             const terminator_type = if (cont.node) |n| @tagName(n) else "empty";
             log.debug("[CLEANUP] Terminator detected ({s}), checking for uncleaned resources\n", .{terminator_type});
+
+            // A bare-return produce must hand a live obligation into every
+            // declared `<state!>` field — independent of whether anything is
+            // left uncleaned (a consumed feeder leaves NOTHING to leak).
+            if (cont.node) |node| {
+                if (node == .branch_constructor) {
+                    const bc = &node.branch_constructor;
+                    if (bc.is_bare_return) {
+                        if (implementing_event) |impl_ev| {
+                            if (impl_ev.return_type) |rt| {
+                                try self.verifyProduceFieldFeeders(bc, rt, &context, location);
+                            }
+                        }
+                    }
+                }
+            }
+
             if (context.hasUncleanedResources()) {
                 const uncleaned = try context.getUncleanedResources(self.allocator);
                 defer self.allocator.free(uncleaned);
@@ -2653,6 +2725,28 @@ pub const PhantomSemanticChecker = struct {
                                                 break;
                                             }
                                         }
+                                    } else if (std.mem.startsWith(u8, resource, plain) and resource.len > plain.len and resource[plain.len] == '.') {
+                                        // `-> r` pass-through: the produced record's `r.<field>`
+                                        // keys escape through the impl's declared `<state!>`
+                                        // return-record fields (return_branch_fields is only
+                                        // populated from impl branches — a `->` record return
+                                        // has none, so the field list is parsed off the type).
+                                        if (implementing_event) |impl_ev| {
+                                            if (impl_ev.return_type) |rt| {
+                                                if (try ast_functional.recordFieldTexts(self.allocator, rt)) |declared| {
+                                                    defer self.allocator.free(declared);
+                                                    const fname = resource[plain.len + 1 ..];
+                                                    for (declared) |df| {
+                                                        if (!std.mem.eql(u8, df.name, fname)) continue;
+                                                        if (std.mem.indexOfScalar(u8, df.value, '<') != null and std.mem.indexOfScalar(u8, df.value, '!') != null) {
+                                                            documented_escape = true;
+                                                            log.debug("[CLEANUP]   '{s}' escapes through `-> {s}` field '{s}' with [!]\n", .{ resource, plain, df.name });
+                                                        }
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 } else {
                                     // Check each field in the constructor
@@ -2675,6 +2769,53 @@ pub const PhantomSemanticChecker = struct {
                                                     }
                                                 }
                                                 if (documented_escape) break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else if (cont.node != null and cont.node.? == .expression) {
+                            // A bare-return produce (`-> expr`) under a subflow
+                            // impl hands each declared `<state!>` field's
+                            // obligation to the caller — the inserter verifies
+                            // the fields are actually fed live obligations at
+                            // the pack, so a resource routed into a cleanup-
+                            // carrying field escapes by name.
+                            if (implementing_event) |impl_ev| {
+                                if (impl_ev.return_type) |rt| {
+                                    if (cont.node) |node| {
+                                        const expr = std.mem.trim(u8, node.expression, " \t");
+                                        if (std.mem.indexOfScalar(u8, expr, '(') == null) {
+                                            if (try ast_functional.recordFieldTexts(self.allocator, expr)) |produced| {
+                                                defer self.allocator.free(produced);
+                                                if (try ast_functional.recordFieldTexts(self.allocator, rt)) |declared| {
+                                                    defer self.allocator.free(declared);
+                                                    for (produced) |seg| {
+                                                        if (!std.mem.eql(u8, seg.value, resource)) continue;
+                                                        for (declared) |df| {
+                                                            if (!std.mem.eql(u8, df.name, seg.name)) continue;
+                                                            if (std.mem.indexOfScalar(u8, df.value, '<') != null and std.mem.indexOfScalar(u8, df.value, '!') != null) {
+                                                                documented_escape = true;
+                                                            }
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                // `-> r` pass-through: the record's `r.<field>` keys escape
+                                                // through the declared cleanup fields.
+                                                if (try ast_functional.recordFieldTexts(self.allocator, rt)) |declared| {
+                                                    defer self.allocator.free(declared);
+                                                    for (declared) |df| {
+                                                        if (std.mem.indexOfScalar(u8, df.value, '<') == null or std.mem.indexOfScalar(u8, df.value, '!') == null) continue;
+                                                        const key = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ expr, df.name });
+                                                        defer self.allocator.free(key);
+                                                        if (std.mem.eql(u8, key, resource)) {
+                                                            documented_escape = true;
+                                                            break;
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -2856,7 +2997,7 @@ pub const PhantomSemanticChecker = struct {
                     // per-FIELD obligations seed too — whole-value-only
                     // seeding left `make(): r` under a `! each` arm holding an
                     // untracked `r.h` (330_135).
-                    try self.recordReturnObligationAs(rb, inv.return_destructure, nested_event_info.decl, module_name, qualified_name, &context);
+                    try self.recordReturnObligationAs(rb, inv.return_destructure, nested_event_info.decl, module_name, &context);
                 }
 
                 // Validate nested continuations against the invoked event (not parent event)

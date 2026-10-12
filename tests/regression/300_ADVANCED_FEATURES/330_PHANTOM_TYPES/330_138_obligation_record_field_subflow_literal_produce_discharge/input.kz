@@ -1,0 +1,24 @@
+// Record-field obligation packed inside a PURE-KORU subflow's literal produce
+// (`-> { h, n: 7 }`), carried across the call boundary, and discharged by the
+// caller through the field — the 800_010 deadbolt frontier-1 shape. The
+// declared `<state!>` record return is a checked contract: the produce edge
+// verifies `h` is live before it crosses (330_139/330_140 pin the refusals),
+// the caller is then seeded `s.h`'s debt, and `dispose(s.h)` pays it. Before
+// the frontier was closed this shape was charged-but-unpayable — the debt
+// reached the drop scan but `dispose(s.h)` found no tracked state — and an
+// even earlier inserter gap minted a spurious `dispose(h)` INSIDE the callee
+// (an emitted double-free: the produce escaped, the obligation didn't).
+~import std/io
+const std = @import("std");
+const Handle = struct { n: i32 };
+
+~tor mint { id: usize } -> *Handle<owned!>
+~proc mint|zig { const h = std.heap.page_allocator.create(Handle) catch unreachable; h.* = .{ .n = 5 }; return h; }
+
+~tor dispose { h: *Handle<!owned> }
+~proc dispose|zig { std.debug.print("disposed\n", .{}); std.heap.page_allocator.destroy(h); }
+
+~tor pack { id: usize } -> { h: *Handle<owned!>, n: i64 }
+~pack = mint(id): h -> { h, n: 7 }
+
+~pack(id: 1): s |> dispose(s.h): _ |> std/io:print.ln("n={{ s.n:d }}")

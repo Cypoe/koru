@@ -1,20 +1,17 @@
 // Same shape as 330_099 (record-field obligation routed through a subflow's
 // bare-return boundary), but this time the caller DOES issue an explicit
-// discharge on the field: `dispose(res.h)`. A direct (non-subflow) call to
-// `make` with the identical explicit `dispose(res.h)` is rejected by the
-// phantom semantic checker with a precise, argument-located diagnostic:
-// "Phantom state mismatch: argument 'h' carries no obligation here...".
+// discharge on the field: `dispose(res.h)`. This pin used to EXPECT the
+// charged-but-unpayable misdiagnosis — a "Phantom state mismatch" refusal at
+// the explicit dispose, since the field's obligation died at the subflow
+// boundary while still counting as a drop-debt (800_010 deadbolt frontier 1).
 //
-// Compositionality predicts: routing the same record through a subflow's
-// declared return type must not change WHICH checker's diagnostic the caller
-// sees, or degrade its precision — a rejection is only correct per the
-// challenge's own oracle when it "carries a correct, specific, koru-level
-// diagnostic naming why" (007 brief). This pins that the subflow-routed form
-// keeps the same argument-located "Phantom state mismatch" diagnostic that
-// the direct-call sibling produces, rather than falling through to the
-// auto-discharge inserter's generic "was not discharged" / "no disposal
-// event" wall, which never acknowledges the explicit dispose() call already
-// present in the source.
+// That misdiagnosis is FIXED: the subflow produce edge now verifies each
+// declared `<state!>` field is fed a live obligation (330_139/330_140 pin the
+// refusals), the caller is seeded `res.<field>` debts, and `dispose(res.h)`
+// pays the field exactly as a direct call does (330_138 is the literal-produce
+// twin). The pass-through produce `-> r` also repacks the record field-wise —
+// two tors' record returns are nominally distinct Zig types — which is what
+// lets this program reach codegen at all.
 ~import std/io
 const std = @import("std");
 const Handle = struct { n: i32 };

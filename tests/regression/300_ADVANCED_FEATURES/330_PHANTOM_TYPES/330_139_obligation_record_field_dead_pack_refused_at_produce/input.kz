@@ -1,0 +1,22 @@
+// A subflow produce cannot pack a field whose obligation was ALREADY
+// discharged — `dispose(h) -> { h }` hands the caller a corpse under a
+// `<state!>`-declared field, and the caller's own `dispose(s.h)` would then
+// be a checker-blessed double-free. The produce edge is the correct refusal
+// site: the feeder binding is poisoned in `disposed_bindings`, which survives
+// the context clones that blind the inserter-side obligation map (800_010
+// deadbolt frontier 1's "dies across the boundary" reading). Before the
+// produce-feeder check this program compiled GREEN — the escaped dead field
+// then counted as a live debt on the caller's drop AND accepted a second
+// consume.
+~import std/io
+const std = @import("std");
+const Handle = struct { n: i32 };
+
+~tor mint { id: usize } -> *Handle<owned!>
+~proc mint|zig { const h = std.heap.page_allocator.create(Handle) catch unreachable; h.* = .{ .n = 5 }; return h; }
+
+~tor dispose { h: *Handle<!owned> }
+~proc dispose|zig { std.heap.page_allocator.destroy(h); }
+
+~tor pack { id: usize } -> { h: *Handle<owned!>, n: i64 }
+~pack = mint(id): h |> dispose(h) -> { h, n: 7 }

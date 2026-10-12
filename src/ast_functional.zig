@@ -3463,3 +3463,52 @@ pub const facets = struct {
         return out.items;
     }
 };
+
+/// One segment of a record `{ ... }` text — a record type's `name: type`
+/// pair or a produce literal's `name: value` / pun `name`.
+pub const RecordFieldText = struct {
+    name: []const u8,
+    value: []const u8,
+};
+
+/// Split a `{ ... }` text — a record type (`{ h: *H<owned!>, n: i64 }`) or a
+/// produce literal (`{ h, f: x }`) — into top-level `name: value` segments.
+/// A segment with no `:` is a pun: the field takes the trailing identifier
+/// (`{ rec.moved }` is field `moved` fed by `rec.moved`). Commas nested
+/// inside `<...>`, `{...}`, `[...]`, `(...)` do not split. Returns null when
+/// the text is not a `{...}` group. The returned slice is caller-owned; the
+/// segment strings borrow from `record_text`.
+pub fn recordFieldTexts(allocator: std.mem.Allocator, record_text: []const u8) !?[]RecordFieldText {
+    const trimmed = std.mem.trim(u8, record_text, " \t");
+    if (trimmed.len < 2 or trimmed[0] != '{' or trimmed[trimmed.len - 1] != '}') return null;
+    const inner = trimmed[1 .. trimmed.len - 1];
+    var fields = std.ArrayList(RecordFieldText).empty;
+    errdefer fields.deinit(allocator);
+    var seg_start: usize = 0;
+    var depth: i32 = 0;
+    var i: usize = 0;
+    while (i <= inner.len) : (i += 1) {
+        const at_end = i == inner.len;
+        const c = if (at_end) ',' else inner[i];
+        switch (c) {
+            '<', '{', '[', '(' => depth += 1,
+            '>', '}', ']', ')' => depth -= 1,
+            else => {},
+        }
+        if (!(at_end or (c == ',' and depth == 0))) continue;
+        const seg = std.mem.trim(u8, inner[seg_start..i], " \t");
+        seg_start = i + 1;
+        if (seg.len == 0) continue;
+        if (std.mem.indexOfScalar(u8, seg, ':')) |colon| {
+            try fields.append(allocator, .{
+                .name = std.mem.trim(u8, seg[0..colon], " \t"),
+                .value = std.mem.trim(u8, seg[colon + 1 ..], " \t"),
+            });
+        } else {
+            var name = seg;
+            if (std.mem.lastIndexOfScalar(u8, seg, '.')) |dot| name = seg[dot + 1 ..];
+            try fields.append(allocator, .{ .name = name, .value = seg });
+        }
+    }
+    return try fields.toOwnedSlice(allocator);
+}
