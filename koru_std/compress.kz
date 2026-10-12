@@ -247,8 +247,38 @@ inline fn ffDistSymIdx(dist: usize) usize {
 // x-registers and the instruction wants w-regs for its accumulator — but the
 // fold never needs it. Everywhere else a slicing-by-8 table still beats std
 // ~8x.
-const ff_have_pmull = @import("builtin").cpu.arch == .aarch64 and
-    std.Target.aarch64.featureSetHas(@import("builtin").cpu.features, .aes);
+// Capability is a runtime read, not a compile-time feature flag: under a
+// VM or a conservatively-detected target, builtin.cpu.features can report
+// aes=false on silicon whose kernel auxv carries AES+PMULL (measured:
+// docker-on-darwin aarch64, hwcap=0xefb3ffff, native detect off). The auxv
+// is the oracle that cannot lie about the running machine. Linux reads it
+// once at startup; darwin is unconditionally true (every Apple chip has
+// AES+PMULL); freestanding and the rest answer from the target's declared
+// feature set — the only oracle those targets have.
+var ff_pmull_state = std.atomic.Value(u8).init(0); // 0 unknown, 1 absent, 2 present
+
+fn ffHavePmull() bool {
+    switch (ff_pmull_state.load(.monotonic)) {
+        1 => return false,
+        2 => return true,
+        else => {},
+    }
+    const builtin = @import("builtin");
+    // Each arm is that platform's capability oracle: linux asks the running
+    // kernel, darwin's silicon contract is unconditional, and kernel-less
+    // targets declare their features at compile time — the only oracle
+    // they have.
+    const v = if (builtin.cpu.arch != .aarch64)
+        false
+    else switch (builtin.os.tag) {
+        // HWCAP_AES = 1<<3, HWCAP_PMULL = 1<<4 — kernel ABI bits.
+        .linux => std.os.linux.getauxval(std.elf.AT_HWCAP) & ((1 << 3) | (1 << 4)) == ((1 << 3) | (1 << 4)),
+        .macos => true,
+        else => std.Target.aarch64.featureSetHas(builtin.cpu.features, .aes),
+    };
+    ff_pmull_state.store(if (v) 2 else 1, .monotonic);
+    return v;
+}
 
 const ff_crc_tab = blk: {
     @setEvalBranchQuota(20000);
@@ -269,7 +299,9 @@ const FfVec4 = @Vector(4, u32);
 
 inline fn ffPmullLo(a: FfVec, b: FfVec) FfVec {
     var r: FfVec = undefined;
-    asm volatile ("pmull %[o].1q, %[a].1d, %[b].1d"
+    asm volatile (
+        \\ .arch_extension aes
+        \\ pmull %[o].1q, %[a].1d, %[b].1d
         : [o] "=w" (r),
         : [a] "w" (a),
           [b] "w" (b),
@@ -279,7 +311,9 @@ inline fn ffPmullLo(a: FfVec, b: FfVec) FfVec {
 
 inline fn ffPmullHi(a: FfVec, b: FfVec) FfVec {
     var r: FfVec = undefined;
-    asm volatile ("pmull2 %[o].1q, %[a].2d, %[b].2d"
+    asm volatile (
+        \\ .arch_extension aes
+        \\ pmull2 %[o].1q, %[a].2d, %[b].2d
         : [o] "=w" (r),
         : [a] "w" (a),
           [b] "w" (b),
@@ -363,10 +397,12 @@ fn ffCrcPmull(src: []const u8, crc: u32) u32 {
 fn ffCrc32(src: []const u8) u32 {
     var crc: u32 = 0xFFFFFFFF;
     var i: usize = 0;
-    if (ff_have_pmull and src.len >= 64) {
-        const bulk = src.len & ~@as(usize, 15);
-        crc = ffCrcPmull(src[0..bulk], crc);
-        i = bulk;
+    if (comptime @import("builtin").cpu.arch == .aarch64) {
+        if (ffHavePmull() and src.len >= 64) {
+            const bulk = src.len & ~@as(usize, 15);
+            crc = ffCrcPmull(src[0..bulk], crc);
+            i = bulk;
+        }
     }
     while (i + 8 <= src.len) : (i += 8) {
         const lo = std.mem.readInt(u32, src[i..][0..4], .little) ^ crc;
