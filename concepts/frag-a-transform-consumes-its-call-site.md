@@ -42,3 +42,14 @@ pipeline *produces*, not the set of things the user *wrote*. Any axis
 that needs use-site precision about consumed syntax must be measured
 pre-transform — in a pass, not in an emitter — or accept the
 presence-scoped approximation and say so.
+
+Evolved 2026-10-12 (session 4): the same production-side reading is now
+also the *eligibility* signal, not just the detection signal. A `!`
+continuation whose parent invocation (or flow) carries `inline_body`
+was dispatched by a template — it is transplant vocabulary (`for`s
+`! each`), not a resumable pair, and the C lane's resumable census
+walks past it. `inline_body != null` IS the census's test for "the
+transform consumed this call site": cheap, structural, and it asks the
+pipeline's own product rather than re-deriving which transform ran.
+Deliberately not inherited past the direct parent — a nested event's
+`!` arm inside a rendered arm is governed only by its own invocation.

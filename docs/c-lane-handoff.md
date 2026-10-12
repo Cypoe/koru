@@ -110,3 +110,43 @@ pattern. That is the smallest increment that widens the fragment
 without new language surface: std gains `|c` bodies for the procs the
 corpus actually reaches, and the refusal census measures the
 remainder.
+
+
+---
+
+# session-4 addendum — control-flow templates landed (2026-10-12)
+
+First widening tranche, measured against the census (`docs/c-lane-census.md`
+"Delta" section has the reprobe table): `for|c`, `if|c`, `const|c` +
+the marker resolver they require. Zero `~for`/`~if` `no-c-template`
+refusals remain of the 277.
+
+## What the prime sieve now dies on
+
+`NoCProcBody: input:__grid_write_L32_1056` — `std/grid:stored`
+(grid.stored.kz:~176) synthesizes a per-site `ProcDecl` with
+`.target = "js" else "zig"` — the `lang == "c"` case stamps `zig`.
+Fixing it is NOT flipping the tag: the proc body and the synthesized
+call's arg text are lowered through `grid_read.lower`, which produces
+Zig spellings (`__KoruGridT_{grid}.__koru_wide(...)`, `sieve[i].composite`
+on a Zig-minted type). The whole grid/store synthesis path needs a C
+lowering story: `grid.new` (the static cell array), `grid_read.lower`
+→ C index spellings, `stored`/`sweep`/`store:stored` variants.
+
+## Design notes for the next reader
+
+- `//@koru:file_scope` is a new template flag line (minted by `const|c`,
+  resolved by `emitFileScopeBodies` + the emitFlow empty-shell path).
+  If a future `|c` template renders module-scope text, mint the same
+  flag — do not widen the marker scan.
+- The marker resolver intercepts exactly three prefixes
+  (`__koru_continue_`, `__koru_inline_`, `__koru_c_refuse_`). All other
+  `__koru_*` tokens are prelude runtime names — the prelude, not the
+  scanner, owns that namespace.
+- `governed` in `axisRefusalSite` is the transplant test: parent
+  `inline_body != null` ⇒ children `!` arms are template vocabulary.
+  It deliberately does NOT inherit past the direct parent.
+- `io.cprec`'s `{{ x:spec }}` routes on the spec (`d`/`f`/`s`/`S`) —
+  `:S` refuses (handle form), `:.N` refuses (no C formatter). The
+  `020_021` segfault is a DIFFERENT funnel (arrow-return lowering) —
+  still open, still crashes, needs a pinned repro.

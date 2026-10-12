@@ -34,6 +34,17 @@ Two durable consequences:
   row by another code. An instrument that only counts KORU047
   under-reports the true wall by a fifth.
 
-Open: whether `effect arms` (163) splits cleanly into `~for`-governed
-transplants (eligible once `for|c` exists) versus genuine resumables —
-the census counts them together today.
+Open (resolved 2026-10-12): the `effect arms` class DOES split cleanly —
+`!` under a parent carrying `inline_body` is transplant vocabulary; the
+census now walks past it and genuine resumables still refuse (400_209
+holds). Session 4 measured the prediction out: `for|c`/`if|c`/`const|c`
+plus the marker resolver landed, and the `~for`/`~if` `no-c-template`
+wall went 277 → 0 in one tranche — with only 13 dirs newly emitted,
+because the same dirs carried the *other* measured axes. The widening
+thesis holds harder than predicted: the next wall for the prime sieve
+is again compiler-side — `grid.stored` synthesizes `__grid_write_*`
+procs with `.target = "zig"` unconditionally, and their bodies are
+lowered through `grid_read.lower` into Zig spellings. The store/grid
+synthesis tranche is the same kind of work one layer down: not user
+`|c` impls, but transforms minting `|c` variants of the procs they
+synthesize.

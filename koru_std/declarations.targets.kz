@@ -23,3 +23,17 @@
 {% const fields = parse_fields(source) %}{% for f in fields %}{% const n = cs_lower(f.name) %}public static readonly dynamic {{ n }} = {{ f.value }};
 {% endfor %}
 }
+
+// C variant of const — module-scope `static const` declarations. `ctype` is
+// computed per-field by parse_fields (annotation mapped, else inferred);
+// `cval` is the value through c_lower. The `//@koru:file_scope` flag line
+// tells the C emitter to hoist the whole body out of the flow function —
+// C flows are one `static void` fn each, and a decl inside one would be
+// invisible to sibling flows (the zig lane survives it because every flow
+// shares main's scope). A field the fragment cannot spell renders the
+// `__koru_c_refuse_*` marker — a named refusal, never an ill-formed decl.
+~[template]proc const|c {
+//@koru:file_scope
+{% const fields = parse_fields(source) %}{% for f in fields %}static const {{ f.ctype }} {{ f.name }} = {{ f.cval }};
+{% endfor %}
+}

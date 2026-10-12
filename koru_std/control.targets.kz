@@ -118,3 +118,31 @@
     }
     {{ continuations["done"].continue }}
 }
+
+// C variant of if — the sequential-fragment vertical. Same `if/else` surface
+// as the other hosts; the ONE divergence is `c_lower(expr)` — the C lane's
+// writeHostText is verbatim, so the condition must arrive already-lowered
+// (Koru `and`/`or`/`not` would leak otherwise). The continuation markers are
+// resolved by c_emitter's emitInlineBodyResolvingContinuations.
+~[template]proc if|c {
+    {% const __koru_cond = c_lower(expr) %}if ({{ __koru_cond }}) {
+        {{ continuations["then"].continue }}
+    } else {
+        {{ continuations["else"].continue }}
+    }
+}
+
+// C variant of for — the sequential-fragment vertical. `parse_range` on the
+// c_lowered iterable: `lo..hi` becomes the counting loop every C backend
+// wants (the trip count is known); a NON-range iterable has no sequential-C
+// lowering in the first fragment, so the else arm emits a `__koru_c_refuse_*`
+// marker the emitter refuses by name (KORU047) rather than silently emitting
+// wrong C. `long long` is the fragment's int spelling.
+~[template]proc for|c {
+    {% const __koru_iter = c_lower(expr) %}{% const __koru_range = parse_range(__koru_iter) %}{% if __koru_range.is_range %}for (long long __koru_item{{ __site }} = {{ __koru_range.lo }}; __koru_item{{ __site }} < {{ __koru_range.hi }}; __koru_item{{ __site }}++) {% else %}__koru_c_refuse_non_range_for{% endif %}{
+        {% if keep != "" %}{% const __koru_keep = c_lower(keep) %}if (!({{ __koru_keep }})) break;
+        {% endif %}{% for h in effects["each"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});
+        {% endfor %}
+    }
+    {{ continuations["done"].continue }}
+}

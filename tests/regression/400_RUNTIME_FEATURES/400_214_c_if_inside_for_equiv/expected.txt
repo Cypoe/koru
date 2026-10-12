@@ -1,0 +1,5 @@
+small 0
+small 1
+big 2
+big 3
+done

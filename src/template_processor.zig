@@ -179,6 +179,18 @@ fn csLowerFilter(allocator: std.mem.Allocator, args: []const liquid.Value) anyer
     return liquid.Value{ .string = s };
 }
 
+/// `c_lower(expr)` filter: the `c` target's twin of `js_lower` — a
+/// Zig-spelled term in a `|c` template splice arrives as C or fails loudly.
+fn cLowerFilter(allocator: std.mem.Allocator, args: []const liquid.Value) anyerror!liquid.Value {
+    if (args.len != 1 or args[0] != .string) return error.BadArgs;
+    var d = codegen_utils.LowerDiag{};
+    const s = codegen_utils.lowerKoruExpr(allocator, args[0].string, .c, .koru_expr, &d) catch |err| {
+        if (err == error.UnsupportedBuiltin) lower_diag = .{ .name = d.unknown_builtin, .lang = "c" };
+        return err;
+    };
+    return liquid.Value{ .string = s };
+}
+
 /// Return the index of the next top-level `,` (or end / closing `}`) at or
 /// after `start`, treating `{}`/`()`/`[]` nesting and `"…"` string literals as
 /// opaque. Mirrors codegen_utils.parseValue's depth tracking — the value of a
@@ -239,6 +251,33 @@ fn inferElemType(inner: []const u8) ?[]const u8 {
     if (t.len == 0) return null;
     if (t[0] == '"') return "[]const u8";
     if (t[0] == '-' or std.ascii.isDigit(t[0])) return "i64";
+    return null;
+}
+
+/// C spelling of a `const {}` field's declaration type. The optional Koru
+/// `[type]` annotation maps onto the fragment's C types; absent an annotation
+/// the literal itself says (string -> char*, bool -> int, else long long).
+/// Returns null for what the fragment cannot spell (arrays, records, unknown
+/// annotations) — the caller renders the emitter's refuse marker.
+fn cConstFieldType(value: []const u8, type_ann: []const u8) ?[]const u8 {
+    if (type_ann.len > 0) {
+        const map = .{
+            .{ "i8", "signed char" },      .{ "i16", "short" },
+            .{ "i32", "long" },           .{ "i64", "long long" },
+            .{ "u8", "unsigned char" },   .{ "u16", "unsigned short" },
+            .{ "u32", "unsigned long" },  .{ "u64", "unsigned long long" },
+            .{ "usize", "size_t" },       .{ "isize", "ptrdiff_t" },
+            .{ "f32", "float" },          .{ "f64", "double" },
+            .{ "bool", "int" },
+        };
+        inline for (map) |m| if (std.mem.eql(u8, type_ann, m[0])) return m[1];
+        return null;
+    }
+    const v = std.mem.trim(u8, value, " \t\n\r");
+    if (v.len == 0) return null;
+    if (v[0] == '"') return "const char *";
+    if (std.mem.eql(u8, v, "true") or std.mem.eql(u8, v, "false")) return "int";
+    if (v[0] == '-' or std.ascii.isDigit(v[0])) return "long long";
     return null;
 }
 
@@ -370,6 +409,15 @@ fn parseFieldsFilter(allocator: std.mem.Allocator, args: []const liquid.Value) a
         // typed scalars → `@as(T, v)`). JS keeps using `value` verbatim.
         const zig_rendered = renderZigConstValue(allocator, peeled.value, peeled.type) catch peeled.value;
         try node.put("zig", .{ .string = zig_rendered });
+
+        // `ctype`/`cval` for the |c variant: a C declaration needs a type,
+        // which the JS/Zig splices never had to say. The refuse markers are
+        // text the C emitter names as KORU047 — a const a template cannot
+        // lower is a named refusal, not an ill-formed declaration.
+        const ctype = cConstFieldType(peeled.value, peeled.type) orelse "__koru_c_refuse_const_type";
+        const cval = codegen_utils.lowerKoruExpr(allocator, peeled.value, .c, .koru_expr, null) catch "__koru_c_refuse_const_value";
+        try node.put("ctype", .{ .string = ctype });
+        try node.put("cval", .{ .string = cval });
         try nodes.append(allocator, node);
     }
 
@@ -1070,6 +1118,7 @@ pub fn renderTemplateInvocation(
     try filters.put("parse_range", parseRangeFilter);
     try filters.put("js_lower", jsLowerFilter);
     try filters.put("cs_lower", csLowerFilter);
+    try filters.put("c_lower", cLowerFilter);
     try filters.put("parse_fields", parseFieldsFilter);
     try filters.put("table_from", tableFromFilter);
     try filters.put("table_gaps", tableGapsFilter);

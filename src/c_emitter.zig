@@ -180,7 +180,13 @@ fn axisRefusalItems(
             },
             .flow => |*f| {
                 if (!std.mem.eql(u8, f.module, main_module)) continue;
-                try axisRefusalSite(&f.body, census);
+                // The flow's own head node still carries evidence (a pump
+                // invocation, host text); its ARM LIST is template
+                // vocabulary exactly when the flow itself was rendered —
+                // `flow.inline_body` resolves markers against
+                // `flow.body.continuations`.
+                if (f.body.node) |*node| _ = try axisRefusalNode(node, f.body.location, census);
+                for (f.body.continuations) |*cont| try axisRefusalSite(cont, census, f.inline_body != null);
             },
             .module_decl => |*m| {
                 // Transforms consume their invocations before emission (pump flows are
@@ -198,27 +204,44 @@ fn axisRefusalItems(
     }
 }
 
-fn axisRefusalSite(site: *const ast.Continuation, census: *AxisCensus) CEmitError!void {
-    if (site.kind == .effect and census.resumable == null) census.resumable = site.location;
+/// `governed` — the parent (invocation or flow) carried an inline body,
+/// i.e. a transform/template already dispatched this site. Its `!` kind is
+/// then transplant vocabulary (for's `! each`, capture's `! as`) — the
+/// template's own body runs it — not a resumable pair. A `!` arm with NO
+/// governing parent is a genuine resumable: the event it names suspends and
+/// resumes, which CompCert's sequential subset cannot model. Governance is
+/// NOT inherited past the direct parent: a nested event's `!` arm inside a
+/// rendered arm is governed only by its own invocation.
+fn axisRefusalSite(site: *const ast.Continuation, census: *AxisCensus, governed: bool) CEmitError!void {
+    if (site.kind == .effect and !governed and census.resumable == null) census.resumable = site.location;
+    var children_governed = false;
     if (site.node) |*node| {
-        switch (node.*) {
-            .invocation => |*inv| {
-                if (isConcurrencyPath(inv.path) and census.concurrency == null) {
-                    census.concurrency = site.location;
-                }
-            },
-            .conditional => |*c| try axisRefusalBranches(c.branches, census),
-            .foreach => |*f| try axisRefusalBranches(f.branches, census),
-            .switch_result => |*s| try axisRefusalBranches(s.branches, census),
-            else => {},
-        }
+        children_governed = try axisRefusalNode(node, site.location, census);
     }
-    for (site.continuations) |*cont| try axisRefusalSite(cont, census);
+    for (site.continuations) |*cont| try axisRefusalSite(cont, census, children_governed);
+}
+
+/// Walk a site's node for axis evidence; returns whether the node dispatched
+/// a template (its children are template vocabulary).
+fn axisRefusalNode(node: *const ast.Node, loc: errors.SourceLocation, census: *AxisCensus) CEmitError!bool {
+    switch (node.*) {
+        .invocation => |*inv| {
+            if (isConcurrencyPath(inv.path) and census.concurrency == null) {
+                census.concurrency = loc;
+            }
+            return inv.inline_body != null;
+        },
+        .conditional => |*c| try axisRefusalBranches(c.branches, census),
+        .foreach => |*f| try axisRefusalBranches(f.branches, census),
+        .switch_result => |*sw| try axisRefusalBranches(sw.branches, census),
+        else => {},
+    }
+    return false;
 }
 
 fn axisRefusalBranches(branches: []const ast.NamedBranch, census: *AxisCensus) CEmitError!void {
     for (branches) |*b| {
-        for (b.body) |*site| try axisRefusalSite(site, census);
+        for (b.body) |*site| try axisRefusalSite(site, census, false);
     }
 }
 
@@ -561,33 +584,236 @@ const Emitter = struct {
             std.debug.print("error[KORU047]: C lane: branch-arm binding — tagged payloads are outside the first fragment\n", .{});
             return CEmitError.UnsupportedConstruct;
         }
+        var consumed: u64 = 0;
         if (site.condition) |cond| {
             try self.write(indent);
             try self.write("if (");
             try self.writeExpr(cond);
             try self.write(") {\n");
-            try self.emitSiteNode(site, indent, ctx);
+            consumed = try self.emitSiteNode(site, indent, ctx);
             try self.write(indent);
             try self.write("}\n");
         } else {
-            try self.emitSiteNode(site, indent, ctx);
+            consumed = try self.emitSiteNode(site, indent, ctx);
         }
-        for (site.continuations) |*cont| {
-            try self.emitSite(cont, indent, ctx);
+        try self.emitUnconsumedContinuations(site.continuations, consumed, indent, ctx);
+    }
+
+    /// The arms an inline body resolved NO marker for — the js emitter's drain
+    /// semantics: an unmarked effect was never installed, a consumed arm was
+    /// emitted at its marker, and under a DISPATCHER body (consumed != 0) a
+    /// named leftover is the template's own dispatch vocabulary (skip it)
+    /// while an unnamed one is the caller's sequel (drain body-only). Under a
+    /// rendered-statement body (consumed == 0) every terminal drains through
+    /// the normal refusal gates.
+    fn emitUnconsumedContinuations(
+        self: *Emitter,
+        continuations: []const ast.Continuation,
+        consumed: u64,
+        indent: []const u8,
+        ctx: SiteCtx,
+    ) CEmitError!void {
+        for (continuations, 0..) |*cont, ci| {
+            if (cont.kind != .terminal) continue;
+            if (ci < 64 and (consumed & (@as(u64, 1) << @intCast(ci))) != 0) continue;
+            if (consumed != 0) {
+                if (cont.branch.len != 0) continue;
+                try self.emitInlineContinuationBody(cont, indent, ctx);
+            } else {
+                try self.emitSite(cont, indent, ctx);
+            }
         }
     }
 
-    fn emitSiteNode(self: *Emitter, site: *const ast.Continuation, indent: []const u8, ctx: SiteCtx) CEmitError!void {
-        const node = site.node orelse return;
+    /// One marker-resolved arm's body: the node plus its sequel, without
+    /// emitSite's gates — a template already dispatched this arm, so `!`
+    /// effect handlers and arm bindings land here by design.
+    fn emitInlineContinuationBody(self: *Emitter, cont: *const ast.Continuation, indent: []const u8, ctx: SiteCtx) CEmitError!void {
+        const consumed = try self.emitSiteNode(cont, indent, ctx);
+        try self.emitUnconsumedContinuations(cont.continuations, consumed, indent, ctx);
+    }
+
+    /// Scan template-authored body text for the hand-off markers
+    /// `__koru_continue[_bare_]_N` (terminal arm splice) and
+    /// `__koru_inline_[scoped_]_N(arg)` (effect-handler splice with the
+    /// iterated value bound). The scaffolding between markers is C the |c
+    /// templates authored — verbatim through writeHostText. Any other
+    /// `__koru_` token is a refusal the template named (`__koru_c_refuse_*`)
+    /// or a marker this fragment does not know — either way KORU047, never
+    /// leaked into the output. Port of js_emitter's
+    /// emitInlineBodyResolvingContinuations.
+    fn emitInlineBodyResolvingContinuations(
+        self: *Emitter,
+        body: []const u8,
+        continuations: []const ast.Continuation,
+        indent: []const u8,
+        ctx: SiteCtx,
+        consumed: ?*u64,
+    ) CEmitError!void {
+        if (consumed) |c| {
+            if (continuations.len > 64) c.* = ~@as(u64, 0);
+        }
+        const body_indent = try std.fmt.allocPrint(self.allocator, "{s}    ", .{indent});
+        defer self.allocator.free(body_indent);
+
+        const SPLICE_PREFIX = "__koru_inline_";
+        const CONTINUE_PREFIX = "__koru_continue_";
+        const REFUSE_PREFIX = "__koru_c_refuse_";
+        const SCOPED_INFIX = "scoped_";
+        const BARE_INFIX = "bare_";
+
+        const trimmed = std.mem.trim(u8, body, " \t\r\n");
+        var pos: usize = 0;
+        while (true) {
+            // Only the three marker families are intercepted; every other
+            // `__koru_*` token is a runtime helper the file prelude defines
+            // (__koru_stdout_write, __koru_concat, ...) and passes through as
+            // ordinary host text — an undefined one fails loudly at the C
+            // compiler downstream, never silently.
+            const splice_at = std.mem.indexOfPos(u8, trimmed, pos, SPLICE_PREFIX);
+            const continue_at = std.mem.indexOfPos(u8, trimmed, pos, CONTINUE_PREFIX);
+            const refuse_at = std.mem.indexOfPos(u8, trimmed, pos, REFUSE_PREFIX);
+            var m: usize = undefined;
+            var kind: enum { splice, cont, refuse } = undefined;
+            if (splice_at) |s| {
+                m = s;
+                kind = .splice;
+            } else {
+                m = trimmed.len;
+                kind = .cont;
+            }
+            if (continue_at) |c| {
+                if (c < m) {
+                    m = c;
+                    kind = .cont;
+                }
+            }
+            if (refuse_at) |r| {
+                if (r < m) {
+                    m = r;
+                    kind = .refuse;
+                }
+            }
+            if (m == trimmed.len) break;
+            try self.writeHostText(trimmed[pos..m]);
+
+            if (kind == .refuse) {
+                var j = m + REFUSE_PREFIX.len;
+                while (j < trimmed.len and (std.ascii.isAlphanumeric(trimmed[j]) or trimmed[j] == '_')) j += 1;
+                std.debug.print("error[KORU047]: C lane: `{s}` is outside the first fragment\n", .{trimmed[m..j]});
+                return CEmitError.UnsupportedConstruct;
+            }
+
+            if (kind == .cont) {
+                var i = m + CONTINUE_PREFIX.len;
+                const is_bare = std.mem.startsWith(u8, trimmed[i..], BARE_INFIX);
+                if (is_bare) i += BARE_INFIX.len;
+                const idx = codegen_utils.scanDecimalIndex(trimmed, &i) orelse {
+                    std.debug.print("error[KORU047]: C lane: malformed __koru_continue marker\n", .{});
+                    return CEmitError.UnsupportedConstruct;
+                };
+                if (idx >= continuations.len) {
+                    std.debug.print("error[KORU047]: C lane: __koru_continue_{d} has no matching continuation (have {d})\n", .{ idx, continuations.len });
+                    return CEmitError.UnsupportedConstruct;
+                }
+                if (consumed) |c| {
+                    if (idx < 64) c.* |= @as(u64, 1) << @intCast(idx);
+                }
+                const cont = &continuations[idx];
+                const guarded = !is_bare and cont.condition != null;
+                try self.write("{ ");
+                if (guarded) {
+                    try self.write("if (");
+                    try self.writeExpr(cont.condition.?);
+                    try self.write(") { ");
+                }
+                try self.emitInlineContinuationBody(cont, body_indent, ctx);
+                if (guarded) try self.write(" }");
+                try self.write(" }\n");
+                pos = i;
+                continue;
+            }
+
+            if (kind == .splice) {
+                var i = m + SPLICE_PREFIX.len;
+                if (std.mem.startsWith(u8, trimmed[i..], SCOPED_INFIX)) i += SCOPED_INFIX.len;
+                const maybe_idx = codegen_utils.scanDecimalIndex(trimmed, &i);
+
+                var arg: []const u8 = "";
+                if (maybe_idx != null and i < trimmed.len and trimmed[i] == '(') {
+                    const arg_start = i + 1;
+                    var depth: usize = 1;
+                    var j = arg_start;
+                    while (j < trimmed.len and depth > 0) : (j += 1) {
+                        if (trimmed[j] == '(') {
+                            depth += 1;
+                        } else if (trimmed[j] == ')') {
+                            depth -= 1;
+                        }
+                    }
+                    arg = std.mem.trim(u8, trimmed[arg_start .. j - 1], " \t");
+                    i = j;
+                    if (i < trimmed.len and trimmed[i] == ';') i += 1;
+                }
+
+                const idx = maybe_idx orelse {
+                    std.debug.print("error[KORU047]: C lane: malformed __koru_inline marker\n", .{});
+                    return CEmitError.UnsupportedConstruct;
+                };
+                if (idx >= continuations.len) {
+                    std.debug.print("error[KORU047]: C lane: __koru_inline_{d} has no matching continuation (have {d})\n", .{ idx, continuations.len });
+                    return CEmitError.UnsupportedConstruct;
+                }
+                if (consumed) |c| {
+                    if (idx < 64) c.* |= @as(u64, 1) << @intCast(idx);
+                }
+                const cont = &continuations[idx];
+                if (cont.destructure.len != 0) {
+                    std.debug.print("error[KORU047]: C lane: destructured effect binding — outside the first fragment\n", .{});
+                    return CEmitError.UnsupportedConstruct;
+                }
+                try self.write("{ ");
+                if (cont.binding) |binding| {
+                    if (!std.mem.eql(u8, binding, "_")) {
+                        // `long long` is the fragment's int — for|c only mints
+                        // this splice for a range item, which is one.
+                        try self.writeFmt("long long {s} = {s}; ", .{ binding, arg });
+                    }
+                }
+                const guarded = cont.condition != null;
+                if (guarded) {
+                    try self.write("if (");
+                    try self.writeExpr(cont.condition.?);
+                    try self.write(") { ");
+                }
+                try self.emitInlineContinuationBody(cont, body_indent, ctx);
+                if (guarded) try self.write(" }");
+                try self.write(" }\n");
+                pos = i;
+                continue;
+            }
+
+        }
+        try self.writeHostText(trimmed[pos..]);
+    }
+
+    /// Emit the arm's own node; returns the marker-consumed mask of the
+    /// site's continuation list (0 when the node installed nothing — the
+    /// caller drains the rest).
+    fn emitSiteNode(self: *Emitter, site: *const ast.Continuation, indent: []const u8, ctx: SiteCtx) CEmitError!u64 {
+        const node = site.node orelse return 0;
         switch (node) {
             .invocation => |*inv| {
                 if (inv.preamble_code) |pre| {
                     try self.emitVerbatimLines(pre, indent);
                 }
                 if (inv.inline_body) |body| {
-                    try self.emitVerbatimLines(body, indent);
+                    var consumed: u64 = 0;
+                    try self.emitInlineBodyResolvingContinuations(stripInlineStmtMarker(body), site.continuations, indent, ctx, &consumed);
+                    return consumed;
                 } else {
                     try self.emitCall(inv, indent);
+                    return 0;
                 }
             },
             .inline_code => |text| try self.emitVerbatimLines(text, indent),
@@ -610,6 +836,7 @@ const Emitter = struct {
                 return CEmitError.UnsupportedConstruct;
             },
         }
+        return 0;
     }
 
     /// A `->`/produce: `return <value>;` — bare value only; named or fielded
@@ -641,6 +868,14 @@ const Emitter = struct {
         while (it.next()) |line| {
             const t = std.mem.trim(u8, line, " \t\r");
             if (t.len == 0) continue;
+            for ([_][]const u8{ "__koru_continue_", "__koru_inline_", "__koru_c_refuse_" }) |pfx| {
+                if (std.mem.indexOf(u8, t, pfx)) |mi| {
+                    var j = mi + pfx.len;
+                    while (j < t.len and (std.ascii.isAlphanumeric(t[j]) or t[j] == '_')) j += 1;
+                    std.debug.print("error[KORU047]: C lane: `{s}` is outside the first fragment\n", .{t[mi..j]});
+                    return CEmitError.UnsupportedConstruct;
+                }
+            }
             try self.write(indent);
             try self.writeHostText(t);
             try self.write("\n");
@@ -725,21 +960,49 @@ const Emitter = struct {
     // -- flow emission ------------------------------------------------------
 
     fn emitFlow(self: *Emitter, flow: *const ast.Flow, flow_num: usize) CEmitError!void {
-        try self.writeFmt("static void koru_flow_{d}(void) {{\n", .{flow_num});
+        // Flow preamble at FILE scope: the only preamble a |c transform
+        // writes today is `const|c`'s `static const` declarations, which are
+        // module-scope values — inside the fn they would be invisible to
+        // sibling flows. A non-declaration preamble has no |c author yet
+        // (KORU121 guards the rest) and would fail loudly at the oracle.
         if (flow.preamble_code) |pre| {
-            try self.emitVerbatimLines(pre, "    ");
+            try self.emitVerbatimLines(pre, "");
         }
+        try self.writeFmt("static void koru_flow_{d}(void) {{\n", .{flow_num});
         if (flow.inline_body) |body| {
-            try self.emitVerbatimLines(body, "    ");
-            for (flow.body.continuations) |*cont| {
-                try self.emitSite(cont, "    ", .in_flow);
+            if (stripFileScopeMarker(stripInlineStmtMarker(body)) == null) {
+                var consumed: u64 = 0;
+                try self.emitInlineBodyResolvingContinuations(stripInlineStmtMarker(body), flow.body.continuations, "    ", .in_flow, &consumed);
+                try self.emitUnconsumedContinuations(flow.body.continuations, consumed, "    ", .in_flow);
             }
+            // else: `//@koru:file_scope` — the decl text already landed via
+            // emitFileScopeBodies; the empty shell keeps main()'s call list
+            // uniform.
         } else {
             try self.emitSite(&flow.body, "    ", .in_flow);
         }
         try self.write("}\n\n");
     }
 };
+
+/// Transform-rendered inline bodies arrive with a `//@koru:inline_stmt` flag
+/// line; the flag is for the dispatch machinery, not for C output.
+fn stripInlineStmtMarker(text: []const u8) []const u8 {
+    const marker = "//@koru:inline_stmt\n";
+    if (std.mem.startsWith(u8, text, marker)) return text[marker.len..];
+    return text;
+}
+
+/// `//@koru:file_scope` — the declaration hoist flag a |c template mints
+/// (const|c today): the rendered body is module-scope C, not a statement
+/// inside a flow fn. Returns the body past the flag line, or null when the
+/// flag is absent.
+fn stripFileScopeMarker(text: []const u8) ?[]const u8 {
+    const marker = "//@koru:file_scope\n";
+    const t = std.mem.trimLeft(u8, text, " \t\r\n");
+    if (std.mem.startsWith(u8, t, marker)) return t[marker.len..];
+    return null;
+}
 
 // ---------------------------------------------------------------------------
 // Host lines + top-level inline code
@@ -756,6 +1019,22 @@ fn emitCHostLines(em: *Emitter, items: []const ast.Item) CEmitError!void {
             },
             .module_decl => |*m| try emitCHostLines(em, m.items),
             else => {},
+        }
+    }
+}
+
+/// `//@koru:file_scope` bodies land here, in source order, before every
+/// flow fn and event decl that could reference them. `const|c` is the only
+/// minter; an empty shell remains in the flow fns so main()'s call list
+/// stays uniform.
+fn emitFileScopeBodies(em: *Emitter, items: []const ast.Item) CEmitError!void {
+    for (items) |*item| {
+        if (item.* != .flow) continue;
+        const f = &item.flow;
+        if (f.inline_body) |body| {
+            const hoisted = stripFileScopeMarker(stripInlineStmtMarker(body)) orelse continue;
+            try em.emitVerbatimLines(hoisted, "");
+            try em.write("\n");
         }
     }
 }
@@ -934,6 +1213,7 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
 
     try emitCHostLines(&em, program.items);
     try emitTopLevelInlineCode(&em, program.items);
+    try emitFileScopeBodies(&em, program.items);
 
     for (reached_events.items) |event| {
         try em.emitEventDeclaration(event);
