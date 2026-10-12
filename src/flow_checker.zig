@@ -1631,6 +1631,10 @@ pub const FlowChecker = struct {
         // (`for` resolves to a decl for its `! each` interface, so
         // the decl's own annotations do not carry "template".)
         if (self.invocationResolvesToTemplateProc(&flow.inv().path)) return;
+        // The declaration-side spelling of the same claim: `capture`/`for`/
+        // the transform tors carry [transform] — their `!` arms are consumed
+        // by the transform, not partitioned into Handlers_*.
+        if (annotation_parser.hasPart(invoked.annotations, "transform")) return;
         var head_effectful = false;
         for (invoked.branches) |b| {
             if (b.kind == .effect) head_effectful = true;
@@ -1638,6 +1642,10 @@ pub const FlowChecker = struct {
         if (!head_effectful) return;
         for (flow.body.continuations) |*cont| {
             if (cont.kind != .effect) continue;
+            // Transform-grafted arms (`for`/`split` accumulators ride
+            // is_transformed_subtree) are consumed before the partition —
+            // they never reach a Handlers_* fn, so their params cross fine.
+            if (cont.is_transformed_subtree) continue;
             var scope = ArmScope.init(self.allocator);
             defer scope.deinit();
             try collectArmScope(cont, &scope, self.allocator);
