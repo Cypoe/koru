@@ -1,1 +1,0 @@
-cap std/compress: input exceeds single-block cap

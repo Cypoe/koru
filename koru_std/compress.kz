@@ -1,28 +1,30 @@
 // std/compress - owned gzip encoding: pure Zig, no libc, freestanding-safe.
 //
-// Single-shot gzip for bodies up to INPUT_CAP (65535 bytes — one DEFLATE
-// block). Dynamic Huffman with a per-worker cached tree reused while the
-// request's used-symbol mask stays inside the tree's coverage; fixed
-// Huffman below DYN_MIN_LEN where the tree header costs more than it saves.
-// The trailer uses ARM crc32x where the CPU advertises it, slicing-by-8
-// tables otherwise.
-//
-// Bodies past the cap need a caller-side fallback (zlib, or multi-block —
-// not yet owned). gzipInto returns 0 on out-buffer overflow.
+// One-shot gzip for bodies of any size: input chunks at FF_BLOCK_CAP
+// (65535 bytes — the ff_tok capacity bound) into a multi-block DEFLATE
+// stream, absolute positions keeping the 32KB match window live across
+// block boundaries. Dynamic Huffman with a per-worker cached tree reused
+// while a used-symbol mask stays inside the tree's coverage; fixed
+// Huffman below 64 bytes where the tree header costs more than it saves.
+// The trailer is a slicing-by-8 CRC32.
 //
 //   const n = std_compress.gzipInto(body, out_buf);
-//   if (n == 0) // fallback or bail
+//   if (n == 0) // out buffer too small
 
 const std = @import("std");
 const FF_HASH_BITS = 13;
 const FF_HASH_SIZE = 1 << FF_HASH_BITS;
 const FF_MIN_MATCH = 4;
 const FF_MAX_MATCH = 258;
-const FF_INPUT_CAP = 65535;
+const FF_BLOCK_CAP = 65535;
 const FF_WRAP_SLACK = 64;
 
 fn gzipFastBound(input_len: usize) usize {
-    return input_len + input_len / 8 + FF_WRAP_SLACK;
+    // Per-block worst case rides on top of the ~12.5% literal expansion:
+    // a dynamic tree header can cost ~900 bytes (RLE'd code lengths plus
+    // the BL tree itself). One KB of slack per block covers it honestly.
+    const n_blocks = input_len / FF_BLOCK_CAP + 2;
+    return input_len + input_len / 8 + n_blocks * 1024 + FF_WRAP_SLACK;
 }
 
 fn bitReverse(value: u16, bits: u4) u16 {
@@ -185,7 +187,7 @@ const FfBitWriter = struct {
 // the table is never memset — zlib's stream-reset does no equivalent work,
 // and at 1M+ req/s a 16 KiB clear per request is a measurable share of the
 // encode. Wraparound (every ~32K calls) is the one place the memset returns.
-threadlocal var ff_head: [FF_HASH_SIZE]u32 = std.mem.zeroes([FF_HASH_SIZE]u32);
+threadlocal var ff_head: [FF_HASH_SIZE]u64 = std.mem.zeroes([FF_HASH_SIZE]u64);
 threadlocal var ff_epoch: u32 = 0;
 
 inline fn ffHash4(word: u32) u16 {
@@ -375,7 +377,7 @@ fn ffAssignCodes(lengths: []const u8, codes: []FfLitCode) void {
 // One token per matcher decision: literal byte (0-255), or a match packed
 // as bit31 | (len-3) << 15 | (dist-1).
 const FF_TOK_MATCH = 0x8000_0000;
-threadlocal var ff_tok: [FF_INPUT_CAP]u32 = undefined;
+threadlocal var ff_tok: [FF_BLOCK_CAP]u32 = undefined;
 
 // The cached dynamic tree — lengths, assigned codes, the packed code-length
 // stream, and the frequency vector that produced it (for the drift check).
@@ -459,79 +461,95 @@ fn gzipFastInto(src: []const u8, dst: []u8) usize {
         @memset(&ff_head, 0);
         ff_epoch = 1;
     }
-    const epoch_tag = ff_epoch << 17;
+    const epoch_tag = @as(u64, ff_epoch) << 33;
 
-    // Tokenize once, tracking only which symbols appear — the 286-bit
-    // literal/length mask plus a 30-bit distance mask answer the only
-    // question the hot path asks (does the cached tree cover every symbol
-    // this request emits?). The full frequency histogram is built lazily,
-    // only on the rare calls that actually rebuild a tree.
-    var n_tok: usize = 0;
-    var lit_mask: [5]u64 = .{ 0, 0, 0, 0, 0 };
-    var dist_mask: u64 = 0;
+    var bit_writer = FfBitWriter{ .out = dst.ptr + header.len, .start = dst.ptr + header.len };
 
-    var pos: usize = 0;
-    const limit = if (src.len >= FF_MIN_MATCH) src.len - FF_MIN_MATCH + 1 else 0;
-    while (pos < limit) {
-        const word = std.mem.readInt(u32, src[pos..][0..4], .little);
-        const slot = ffHash4(word);
-        const candidate = ff_head[slot];
-        ff_head[slot] = epoch_tag | @as(u32, @intCast(pos + 1));
+    // Multi-block: the stream is chunked at FF_BLOCK_CAP source bytes per
+    // DEFLATE block (the ff_tok capacity bound); only the last block sets
+    // BFINAL. Positions stay absolute across blocks, so the hash table's
+    // 32KB window reach-back works across boundaries — a match in block k
+    // may reference block k-1's bytes within the DEFLATE window, while a
+    // match's LENGTH is bounded to its own block (a token may not spill
+    // output past the block it is emitted in). Empty input still emits
+    // exactly one block.
+    var off: usize = 0;
+    while (true) {
+        const chunk_end = @min(off + FF_BLOCK_CAP, src.len);
+        const chunk_len = chunk_end - off;
+        const final = chunk_end == src.len;
 
-        if (candidate >= epoch_tag) {
-            const candidate_pos = candidate - epoch_tag - 1;
-            // DEFLATE's window is 32768: a farther candidate is not encodable.
-            if (pos - candidate_pos <= 32768 and
-                std.mem.readInt(u32, src[candidate_pos..][0..4], .little) == word)
-            {
-                var len: usize = FF_MIN_MATCH;
-                const max_len = @min(FF_MAX_MATCH, src.len - pos);
-                while (len + 8 <= max_len) {
-                    const ahead = std.mem.readInt(u64, src[pos + len ..][0..8], .little);
-                    const behind = std.mem.readInt(u64, src[candidate_pos + len ..][0..8], .little);
-                    const diff = ahead ^ behind;
-                    if (diff != 0) {
-                        len += @ctz(diff) / 8;
-                        break;
+        // Tokenize once, tracking only which symbols appear — the 286-bit
+        // literal/length mask plus a 30-bit distance mask answer the only
+        // question the hot path asks (does the cached tree cover every symbol
+        // this request emits?). The full frequency histogram is built lazily,
+        // only on the rare calls that actually rebuild a tree.
+        var n_tok: usize = 0;
+        var lit_mask: [5]u64 = .{ 0, 0, 0, 0, 0 };
+        var dist_mask: u64 = 0;
+
+        var pos: usize = off;
+        const limit = if (chunk_len >= FF_MIN_MATCH) chunk_end - FF_MIN_MATCH + 1 else off;
+        while (pos < limit) {
+            const word = std.mem.readInt(u32, src[pos..][0..4], .little);
+            const slot = ffHash4(word);
+            const candidate = ff_head[slot];
+            ff_head[slot] = epoch_tag | @as(u64, @intCast(pos + 1));
+
+            if (candidate >= epoch_tag) {
+                const candidate_pos: usize = @intCast(candidate - epoch_tag - 1);
+                // DEFLATE's window is 32768: a farther candidate is not encodable.
+                if (pos - candidate_pos <= 32768 and
+                    std.mem.readInt(u32, src[candidate_pos..][0..4], .little) == word)
+                {
+                    var len: usize = FF_MIN_MATCH;
+                    const max_len = @min(FF_MAX_MATCH, chunk_end - pos);
+                    while (len + 8 <= max_len) {
+                        const ahead = std.mem.readInt(u64, src[pos + len ..][0..8], .little);
+                        const behind = std.mem.readInt(u64, src[candidate_pos + len ..][0..8], .little);
+                        const diff = ahead ^ behind;
+                        if (diff != 0) {
+                            len += @ctz(diff) / 8;
+                            break;
+                        }
+                        len += 8;
+                    } else {
+                        while (len < max_len and src[pos + len] == src[candidate_pos + len]) len += 1;
                     }
-                    len += 8;
-                } else {
-                    while (len < max_len and src[pos + len] == src[candidate_pos + len]) len += 1;
+                    if (len > max_len) len = max_len;
+
+                    const dist = pos - candidate_pos;
+                    ff_tok[n_tok] = FF_TOK_MATCH | @as(u32, @intCast(len - FF_MIN_MATCH)) << 15 | @as(u32, @intCast(dist - 1));
+                    n_tok += 1;
+                    const lsym = 257 + @as(usize, ff_len_sym[len]);
+                    lit_mask[lsym >> 6] |= @as(u64, 1) << @intCast(lsym & 63);
+                    dist_mask |= @as(u64, 1) << @intCast(ffDistSymIdx(dist));
+
+                    var insert_pos = pos + 1;
+                    const insert_end = @min(pos + len, limit);
+                    while (insert_pos < insert_end) : (insert_pos += 2) {
+                        ff_head[ffHash4(std.mem.readInt(u32, src[insert_pos..][0..4], .little))] = epoch_tag | @as(u64, @intCast(insert_pos + 1));
+                    }
+
+                    pos += len;
+                    continue;
                 }
-                if (len > max_len) len = max_len;
-
-                const dist = pos - candidate_pos;
-                ff_tok[n_tok] = FF_TOK_MATCH | @as(u32, @intCast(len - FF_MIN_MATCH)) << 15 | @as(u32, @intCast(dist - 1));
-                n_tok += 1;
-                const lsym = 257 + @as(usize, ff_len_sym[len]);
-                lit_mask[lsym >> 6] |= @as(u64, 1) << @intCast(lsym & 63);
-                dist_mask |= @as(u64, 1) << @intCast(ffDistSymIdx(dist));
-
-                var insert_pos = pos + 1;
-                const insert_end = @min(pos + len, limit);
-                while (insert_pos < insert_end) : (insert_pos += 2) {
-                    ff_head[ffHash4(std.mem.readInt(u32, src[insert_pos..][0..4], .little))] = epoch_tag | @as(u32, @intCast(insert_pos + 1));
-                }
-
-                pos += len;
-                continue;
             }
+
+            ff_tok[n_tok] = src[pos];
+            n_tok += 1;
+            lit_mask[src[pos] >> 6] |= @as(u64, 1) << @intCast(src[pos] & 63);
+            pos += 1;
         }
 
-        ff_tok[n_tok] = src[pos];
-        n_tok += 1;
-        lit_mask[src[pos] >> 6] |= @as(u64, 1) << @intCast(src[pos] & 63);
-        pos += 1;
-    }
+        while (pos < chunk_end) : (pos += 1) {
+            ff_tok[n_tok] = src[pos];
+            n_tok += 1;
+            lit_mask[src[pos] >> 6] |= @as(u64, 1) << @intCast(src[pos] & 63);
+        }
 
-    while (pos < src.len) : (pos += 1) {
-        ff_tok[n_tok] = src[pos];
-        n_tok += 1;
-        lit_mask[src[pos] >> 6] |= @as(u64, 1) << @intCast(src[pos] & 63);
-    }
-
-    // EOB is part of the literal alphabet — every block ends on it.
-    lit_mask[256 >> 6] |= @as(u64, 1) << (256 & 63);
+        // EOB is part of the literal alphabet — every block ends on it.
+        lit_mask[256 >> 6] |= @as(u64, 1) << (256 & 63);
 
     // Tree reuse: the Huffman tree is a function of body SHAPE, and bodies
     // from one route share it — same keys, same structure, different values.
@@ -620,9 +638,10 @@ fn gzipFastInto(src: []const u8, dst: []u8) usize {
     }
     ff_ctree_age += 1;
 
-    var bit_writer = FfBitWriter{ .out = dst.ptr + header.len, .start = dst.ptr + header.len };
-    if (dyn_ok and src.len >= 64) {
-        bit_writer.put(0b101, 3);
+        // BFINAL rides bit 0 of the 3-bit lead: 0b101/0b011 are the final
+        // dynamic/fixed blocks, 0b100/0b010 the same block types mid-stream.
+        if (dyn_ok and chunk_len >= 64) {
+            bit_writer.put(if (final) 0b101 else 0b100, 3);
         bit_writer.put(@intCast(ff_hlit - 257), 5);
         bit_writer.put(@intCast(ff_ndist - 1), 5);
         bit_writer.put(@intCast(ff_hclen - 4), 4);
@@ -654,8 +673,8 @@ fn gzipFastInto(src: []const u8, dst: []u8) usize {
         }
         const eob = ff_dlit_codes[256];
         bit_writer.put(eob.code, eob.bits);
-    } else {
-        bit_writer.put(0b011, 3);
+        } else {
+            bit_writer.put(if (final) 0b011 else 0b010, 3);
         for (ff_tok[0..n_tok]) |t| {
             if (t & FF_TOK_MATCH != 0) {
                 const mlen = ((t >> 15) & 0xFF) + FF_MIN_MATCH;
@@ -670,6 +689,10 @@ fn gzipFastInto(src: []const u8, dst: []u8) usize {
             }
         }
         bit_writer.put(0, 7);
+        }
+
+        off = chunk_end;
+        if (final) break;
     }
     bit_writer.finishByteAlign();
 
@@ -682,18 +705,20 @@ fn gzipFastInto(src: []const u8, dst: []u8) usize {
     return header.len + deflate_len + 8;
 }
 
-// Public surface: INPUT_CAP documents the single-block limit; gzipBound sizes
-// the out buffer; gzipInto writes a complete RFC 1952 stream and returns the
-// byte count (0 on overflow). crc32 is the trailer's CRC — exported because
-// it is the correct CRC32C-free gzip CRC and already the fastest one we own.
-pub const INPUT_CAP = FF_INPUT_CAP;
+// Public surface: gzipBound sizes the out buffer; gzipInto writes a
+// complete RFC 1952 stream and returns the byte count (0 on overflow).
+// BLOCK_CAP is the per-block chunk the stream splits at — callers never
+// size against it, it exists for readers of the token buffer.
+// crc32 is the trailer's CRC — exported because it is the correct
+// CRC32C-free gzip CRC and already the fastest one we own.
+pub const BLOCK_CAP = FF_BLOCK_CAP;
 
 pub fn gzipBound(input_len: usize) usize {
     return gzipFastBound(input_len);
 }
 
 pub fn gzipInto(src: []const u8, dst: []u8) usize {
-    if (src.len >= FF_INPUT_CAP or dst.len < gzipFastBound(src.len)) return 0;
+    if (dst.len < gzipFastBound(src.len)) return 0;
     return gzipFastInto(src, dst);
 }
 
@@ -701,10 +726,9 @@ pub fn crc32(src: []const u8) u32 {
     return ffCrc32(src);
 }
 
-// Koru-level entry: `~std/compress:gzip(data, allocator)` — allocates into the
-// caller's allocator and returns a shrunk slice. Bodies past INPUT_CAP take
-// the error branch honestly rather than truncating; a multi-block or zlib
-// path is the caller's to choose until std owns one.
+// Koru-level entry: `~std/compress:gzip(data)` — allocates into the
+// program's allocator and returns a shrunk slice. Any input size compresses:
+// the stream chunks into as many DEFLATE blocks as it needs.
 ~pub tor gzip {
     data: string<*>
 }
@@ -722,9 +746,6 @@ pub fn crc32(src: []const u8) u32 {
 }
 
 ~proc gzip|zig {
-    if (data.len >= FF_INPUT_CAP) {
-        return .{ .error = "std/compress: input exceeds single-block cap" };
-    }
     // Freestanding has no allocator a bare tor can name — page_allocator
     // pulls posix.MAP which doesn't exist there. The comptime gate keeps the
     // allocating body out of freestanding emission entirely; callers on the
