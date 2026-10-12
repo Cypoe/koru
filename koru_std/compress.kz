@@ -706,10 +706,20 @@ pub fn crc32(src: []const u8) u32 {
 // the error branch honestly rather than truncating; a multi-block or zlib
 // path is the caller's to choose until std owns one.
 ~pub tor gzip {
-    data: string
+    data: string<*>
 }
 | compressed { data: string, original_size: usize }
 | error string
+
+// CRC32 of arbitrary bytes — the trailer's checksum exposed as its own
+// surface: wire receivers verify gzip streams, tests pin compressed output
+// without an inflater, and callers on the buffer API can stamp their own
+// trailers. `string<*>` admits borrowed views and obligated buffers alike.
+~pub tor crc32 { data: string<*> } -> usize
+
+~proc crc32|zig {
+    return ffCrc32(data);
+}
 
 ~proc gzip|zig {
     if (data.len >= FF_INPUT_CAP) {
