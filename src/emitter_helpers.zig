@@ -9100,9 +9100,11 @@ fn emitInvocationMetaFields(
     try emitter.writeIndent();
     try emitter.write(".location = ");
     if (ctx.current_flow_location) |loc| {
-        try emitter.write(".{ .file = \"");
-        try emitter.write(loc.file);
-        try emitter.write("\", .line = ");
+        try emitter.write(".{ .file = ");
+        // The file is a host path — Windows spellings carry backslashes, so
+        // route through the Zig-literal writer rather than splicing raw.
+        try emitter.writeZigStringLiteral(loc.file);
+        try emitter.write(", .line = ");
         var line_buf: [16]u8 = undefined;
         const line_str = std.fmt.bufPrint(&line_buf, "{d}", .{loc.line}) catch "0";
         try emitter.write(line_str);

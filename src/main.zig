@@ -2229,8 +2229,12 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\        };
             \\        defer allocator.free(csproj_text);
             \\        const csproj_file = try __koru_std.fs.cwd().createFile("koru.csproj", .{});
-            \\        defer csproj_file.close();
             \\        try csproj_file.writeAll(csproj_text);
+            \\        // Close BEFORE spawning dotnet: on Windows a file held
+            \\        // open by this process refuses the child's open
+            \\        // (MSB4025, "being used by another process"); POSIX
+            \\        // tolerated the shared handle.
+            \\        csproj_file.close();
             \\
             \\        const cs_result = __koru_std.process.Child.run(.{
             \\            .allocator = allocator,

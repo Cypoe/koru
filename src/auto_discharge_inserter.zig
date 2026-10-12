@@ -97,6 +97,16 @@ fn panicHasPayload(branch: *const ast.Branch) bool {
 /// name reaches the crash log instead of being bound to `_` and dropped.
 /// The body is born in the target's own language: Zig gets `@panic` behind
 /// a comptime freestanding guard, JS gets `throw` behind the emitted
+/// KORU_OBS_EXIT_DEBUG is a presence-gated debug flag. `std.posix.getenv`
+/// does not exist on Windows (env strings are WTF-16 there) — the
+/// cross-platform door is `std.process.getEnvVarOwned`, the same call
+/// main.zig's emitted backend templates use.
+fn obsExitDebug(allocator: std.mem.Allocator) bool {
+    const v = std.process.getEnvVarOwned(allocator, "KORU_OBS_EXIT_DEBUG") catch return false;
+    allocator.free(v);
+    return true;
+}
+
 /// runtime's own `__koru_stderr_write` helper.
 fn synthPanicBody(
     allocator: std.mem.Allocator,
@@ -1612,7 +1622,7 @@ pub const AutoDischargeInserter = struct {
             switch (item.*) {
                 .flow => {
                     const flow = &item.flow;
-                    if (std.posix.getenv("KORU_OBS_EXIT_DEBUG") != null) {
+                    if (obsExitDebug(self.allocator)) {
                         const en = try self.pathToString(flow.inv().path);
                         defer self.allocator.free(en);
                         std.debug.print("[obs-exit] item flow[{d}] {s}\n", .{ item_idx, en });
@@ -1627,7 +1637,7 @@ pub const AutoDischargeInserter = struct {
                         _ = mod_item_idx;
                         if (mod_item.* == .flow) {
                             const flow = &mod_item.flow;
-                            if (std.posix.getenv("KORU_OBS_EXIT_DEBUG") != null) {
+                            if (obsExitDebug(self.allocator)) {
                                 const en2 = try self.pathToString(flow.inv().path);
                                 defer self.allocator.free(en2);
                                 std.debug.print("[obs-exit] moddecl flow[{d}] {s}\n", .{ item_idx, en2 });
@@ -1638,7 +1648,7 @@ pub const AutoDischargeInserter = struct {
                     }
                 },
                 else => {
-                    if (std.posix.getenv("KORU_OBS_EXIT_DEBUG") != null) {
+                    if (obsExitDebug(self.allocator)) {
                         std.debug.print("[obs-exit] item[{d}] other: {s}\n", .{ item_idx, @tagName(item.*) });
                     }
                 },
@@ -1661,7 +1671,7 @@ pub const AutoDischargeInserter = struct {
         const event_name = try self.pathToString(flow.inv().path);
         defer self.allocator.free(event_name);
 
-        if (std.posix.getenv("KORU_OBS_EXIT_DEBUG") != null) {
+        if (obsExitDebug(self.allocator)) {
             std.debug.print("[obs-exit] enter mode={s} flow={s} conts={d}\n", .{ @tagName(mode), event_name, flow.body.continuations.len });
         }
 
@@ -1772,7 +1782,7 @@ pub const AutoDischargeInserter = struct {
         var context = BindingContext.init(self.allocator);
         defer context.deinit();
 
-        if (std.posix.getenv("KORU_OBS_EXIT_DEBUG") != null and std.mem.eql(u8, event_name, "open")) {
+        if (obsExitDebug(self.allocator) and std.mem.eql(u8, event_name, "open")) {
             std.debug.print("[obs-exit] open reached bodywalk mode={s} rb={s} obligations-seeded-next\n", .{ @tagName(mode), flow.inv().return_binding orelse "(null)" });
         }
 

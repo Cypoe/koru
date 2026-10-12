@@ -353,10 +353,17 @@ const KORU_OUT_UNESCAPED: []const u8 =
     "@memcpy(__kt[0..__kn], __b[__ki * (__kt.len - 1)..][0..__kn]); __kt[__kn] = 0; " ++
     "@import(\"std\").mem.doNotOptimizeAway(__kc.fputs(@as([*:0]const u8, @ptrCast(&__kt)), " ++
     "if (__fd == 2) __kc.stderr else __kc.stdout)); } " ++
-    "} else { @import(\"std\").mem.doNotOptimizeAway(@import(\"std\").posix.write(__fd, __b) catch @as(usize, 0)); } } ";
+    "} else if (@import(\"builtin\").os.tag == .windows) { "
+    // fd_t is a HANDLE on Windows, not an int — resolve 1/2 through
+    // GetStdHandle and write via WriteFile (the same call std.posix.write
+    // makes, once the fd is already a handle).
+    ++ "const __wh = @import(\"std\").os.windows.GetStdHandle(if (__fd == 2) @import(\"std\").os.windows.STD_ERROR_HANDLE else @import(\"std\").os.windows.STD_OUTPUT_HANDLE) catch return; "
+    ++ "@import(\"std\").mem.doNotOptimizeAway(@import(\"std\").os.windows.WriteFile(__wh, __b, null) catch @as(usize, 0)); "
+    ++ "} else { @import(\"std\").mem.doNotOptimizeAway(@import(\"std\").posix.write(__fd, __b) catch @as(usize, 0)); } } ";
 
 fn __doubleBraces(comptime s: []const u8) []const u8 {
     comptime {
+        @setEvalBranchQuota(100000);
         var out: []const u8 = "";
         for (s) |c| {
             out = out ++ switch (c) {
