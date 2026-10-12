@@ -6,8 +6,8 @@
 // block boundaries. Dynamic Huffman with a per-worker cached tree reused
 // while a used-symbol mask stays inside the tree's coverage; fixed
 // Huffman below 64 bytes where the tree header costs more than it saves.
-// The trailer folds through PMULL on aarch64-crypto targets and a
-// slicing-by-8 table elsewhere.
+// The trailer folds through PMULL on aarch64-crypto targets, PCLMULQDQ
+// on x86_64 where CPUID reports it, and a slicing-by-8 table elsewhere.
 //
 //   const n = std_compress.gzipInto(body, out_buf);
 //   if (n == 0) // out buffer too small
@@ -243,10 +243,11 @@ inline fn ffDistSymIdx(dist: usize) usize {
 // time and on this box costs more than the entire match+emit pass combined.
 // aarch64 with the crypto extension folds 64 bytes per step through PMULL
 // (the Gopal/Ozturk PCLMUL scheme, ported to pmull/pmull2 — constants from
-// Chromium's zlib). crc32x itself is unreachable: Zig's `r` constraint binds
-// x-registers and the instruction wants w-regs for its accumulator — but the
-// fold never needs it. Everywhere else a slicing-by-8 table still beats std
-// ~8x.
+// Chromium's zlib); x86_64 runs the same fold through PCLMULQDQ, the ISA the
+// scheme was named for. crc32x itself is unreachable: Zig's `r` constraint
+// binds x-registers and the instruction wants w-regs for its accumulator —
+// but the fold never needs it. Everywhere else a slicing-by-8 table still
+// beats std ~8x.
 // Capability is a runtime read, not a compile-time feature flag: under a
 // VM or a conservatively-detected target, builtin.cpu.features can report
 // aes=false on silicon whose kernel auxv carries AES+PMULL (measured:
@@ -254,8 +255,11 @@ inline fn ffDistSymIdx(dist: usize) usize {
 // is the oracle that cannot lie about the running machine. Linux reads it
 // once at startup; darwin is unconditionally true (every Apple chip has
 // AES+PMULL); freestanding and the rest answer from the target's declared
-// feature set — the only oracle those targets have.
+// feature set — the only oracle those targets have. x86 needs no auxv:
+// CPUID leaf 1 is the silicon's own answer, and unprivileged everywhere the
+// arch runs.
 var ff_pmull_state = std.atomic.Value(u8).init(0); // 0 unknown, 1 absent, 2 present
+var ff_pclmul_state = std.atomic.Value(u8).init(0);
 
 fn ffHavePmull() bool {
     switch (ff_pmull_state.load(.monotonic)) {
@@ -277,6 +281,34 @@ fn ffHavePmull() bool {
         else => std.Target.aarch64.featureSetHas(builtin.cpu.features, .aes),
     };
     ff_pmull_state.store(if (v) 2 else 1, .monotonic);
+    return v;
+}
+
+fn ffHavePclmul() bool {
+    switch (ff_pclmul_state.load(.monotonic)) {
+        1 => return false,
+        2 => return true,
+        else => {},
+    }
+    const builtin = @import("builtin");
+    const v = if (builtin.cpu.arch != .x86_64) false else blk: {
+        // CPUID.01H:ECX bit 1 — PCLMULQDQ. rbx is cpuid-clobbered, so it
+        // comes out as a bound output and LLVM spills around it itself.
+        var eax: u32 = undefined;
+        var ebx: u32 = undefined;
+        var ecx: u32 = undefined;
+        var edx: u32 = undefined;
+        asm volatile ("cpuid"
+            : [_] "={eax}" (eax),
+              [_] "={ebx}" (ebx),
+              [_] "={ecx}" (ecx),
+              [_] "={edx}" (edx),
+            : [_] "{eax}" (@as(u32, 1)),
+              [_] "{ecx}" (@as(u32, 0)),
+        );
+        break :blk ecx & 2 != 0;
+    };
+    ff_pclmul_state.store(if (v) 2 else 1, .monotonic);
     return v;
 }
 
@@ -325,9 +357,40 @@ inline fn ffPmull01(a: FfVec, b: FfVec) FfVec {
     return ffPmullLo(a, .{ b[1], 0 });
 }
 
+// The same three products through pclmulqdq — imm8 bit 0 picks the dest
+// lane, bit 4 the src lane: 0x00 lo.lo, 0x11 hi.hi, 0x10 lo.hi.
+inline fn ffPclmulLo(a: FfVec, b: FfVec) FfVec {
+    var r: FfVec = a;
+    asm volatile ("pclmulqdq $0x00, %[b], %[r]"
+        : [r] "+x" (r),
+        : [b] "x" (b),
+    );
+    return r;
+}
+
+inline fn ffPclmulHi(a: FfVec, b: FfVec) FfVec {
+    var r: FfVec = a;
+    asm volatile ("pclmulqdq $0x11, %[b], %[r]"
+        : [r] "+x" (r),
+        : [b] "x" (b),
+    );
+    return r;
+}
+
+inline fn ffPclmul01(a: FfVec, b: FfVec) FfVec {
+    var r: FfVec = a;
+    asm volatile ("pclmulqdq $0x10, %[b], %[r]"
+        : [r] "+x" (r),
+        : [b] "x" (b),
+    );
+    return r;
+}
+
 // Consumes a multiple-of-16 byte count, >= 64. Runs in the internal
 // complemented state: pass the running crc in, continue with what comes out.
-fn ffCrcPmull(src: []const u8, crc: u32) u32 {
+// Generic over the carryless-multiply ops so aarch64 and x86_64 share the
+// one fold — the scheme is arch-neutral, only the multiply spelling differs.
+fn ffCrcFold(comptime lo: anytype, comptime hi: anytype, comptime o1: anytype, src: []const u8, crc: u32) u32 {
     const k12 = FfVec{ 0x0154442bd4, 0x01c6e41596 };
     const k34 = FfVec{ 0x01751997d0, 0x00ccaa009e };
     const k50 = FfVec{ 0x0163cd6124, 0x0000000000 };
@@ -346,29 +409,29 @@ fn ffCrcPmull(src: []const u8, crc: u32) u32 {
     len -= 64;
 
     while (len >= 64) {
-        const x5 = ffPmullLo(x1, k12);
-        const x6 = ffPmullLo(x2, k12);
-        const x7 = ffPmullLo(x3, k12);
-        const x8 = ffPmullLo(x4, k12);
+        const x5 = lo(x1, k12);
+        const x6 = lo(x2, k12);
+        const x7 = lo(x3, k12);
+        const x8 = lo(x4, k12);
         const y5: FfVec = @bitCast(buf[0..16].*);
         const y6: FfVec = @bitCast(buf[16..32].*);
         const y7: FfVec = @bitCast(buf[32..48].*);
         const y8: FfVec = @bitCast(buf[48..64].*);
-        x1 = ffPmullHi(x1, k12) ^ x5 ^ y5;
-        x2 = ffPmullHi(x2, k12) ^ x6 ^ y6;
-        x3 = ffPmullHi(x3, k12) ^ x7 ^ y7;
-        x4 = ffPmullHi(x4, k12) ^ x8 ^ y8;
+        x1 = hi(x1, k12) ^ x5 ^ y5;
+        x2 = hi(x2, k12) ^ x6 ^ y6;
+        x3 = hi(x3, k12) ^ x7 ^ y7;
+        x4 = hi(x4, k12) ^ x8 ^ y8;
         buf += 64;
         len -= 64;
     }
 
-    x1 = ffPmullHi(x1, k34) ^ x2 ^ ffPmullLo(x1, k34);
-    x1 = ffPmullHi(x1, k34) ^ x3 ^ ffPmullLo(x1, k34);
-    x1 = ffPmullHi(x1, k34) ^ x4 ^ ffPmullLo(x1, k34);
+    x1 = hi(x1, k34) ^ x2 ^ lo(x1, k34);
+    x1 = hi(x1, k34) ^ x3 ^ lo(x1, k34);
+    x1 = hi(x1, k34) ^ x4 ^ lo(x1, k34);
 
     while (len >= 16) {
         x2 = @bitCast(buf[0..16].*);
-        x1 = ffPmullHi(x1, k34) ^ x2 ^ ffPmullLo(x1, k34);
+        x1 = hi(x1, k34) ^ x2 ^ lo(x1, k34);
         buf += 16;
         len -= 16;
     }
@@ -376,22 +439,30 @@ fn ffCrcPmull(src: []const u8, crc: u32) u32 {
     // 128 -> 64, then Barrett-reduce to 32. vext-by-n over a zero vector is a
     // u128 shift; lane masks and xors are plain vector ops.
     const mask: FfVec4 = .{ ~@as(u32, 0), 0, ~@as(u32, 0), 0 };
-    x2 = ffPmull01(x1, k34);
+    x2 = o1(x1, k34);
     x1 = @bitCast(@as(u128, @bitCast(x1)) >> 64);
     x1 ^= x2;
 
     x2 = @bitCast(@as(u128, @bitCast(x1)) >> 32);
     x1 &= @bitCast(mask);
-    x1 = ffPmullLo(x1, k50);
+    x1 = lo(x1, k50);
     x1 ^= x2;
 
     x2 = x1 & @as(FfVec, @bitCast(mask));
-    x2 = ffPmull01(x2, poly);
+    x2 = o1(x2, poly);
     x2 &= @bitCast(mask);
-    x2 = ffPmullLo(x2, poly);
+    x2 = lo(x2, poly);
     x1 ^= x2;
 
     return @as(FfVec4, @bitCast(x1))[1];
+}
+
+fn ffCrcPmull(src: []const u8, crc: u32) u32 {
+    return ffCrcFold(ffPmullLo, ffPmullHi, ffPmull01, src, crc);
+}
+
+fn ffCrcPclmul(src: []const u8, crc: u32) u32 {
+    return ffCrcFold(ffPclmulLo, ffPclmulHi, ffPclmul01, src, crc);
 }
 
 fn ffCrc32(src: []const u8) u32 {
@@ -401,6 +472,12 @@ fn ffCrc32(src: []const u8) u32 {
         if (ffHavePmull() and src.len >= 64) {
             const bulk = src.len & ~@as(usize, 15);
             crc = ffCrcPmull(src[0..bulk], crc);
+            i = bulk;
+        }
+    } else if (comptime @import("builtin").cpu.arch == .x86_64) {
+        if (ffHavePclmul() and src.len >= 64) {
+            const bulk = src.len & ~@as(usize, 15);
+            crc = ffCrcPclmul(src[0..bulk], crc);
             i = bulk;
         }
     }

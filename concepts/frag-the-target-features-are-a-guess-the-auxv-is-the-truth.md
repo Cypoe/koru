@@ -39,6 +39,18 @@ moment a gate stands in for "does the running machine have the unit," it
 has been promoted past its evidence, and the failure mode is silent:
 everything works, just slower, forever.
 
+x86 sharpens the same ruling: there is no auxv to ask — `AT_HWCAP` on
+that arch is nearly empty — so the oracle is `CPUID.01H:ECX[1]`, read
+directly. Unprivileged everywhere, honest everywhere, no OS arm needed.
+And the fold itself turned out to be arch-neutral: the PCLMULQDQ port is
+the same Gopal/Ozturk scheme with three immediates swapped for three
+mnemonics — `ffCrcFold(lo, hi, o1)` takes the multiplies as comptime
+parameters, so the bodies aarch64 and x86_64 share one proof instead of
+two drifting copies. Verified on qemu-x86_64 (gate=PCLMUL, fold==table
+at every bulk size 64..8992); Rosetta's ELF loader refuses Zig's segment
+layout (`bss_size overflow`), so the execution oracle was qemu's TCG,
+not the translator.
+
 ## Related
 
 frag-the-assembly-grammar-decides-which-hardware-exists.md
