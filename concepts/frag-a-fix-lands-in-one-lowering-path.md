@@ -762,3 +762,30 @@ store — the first cell to combine the two.
   `[id]` existed as a request before it existed as a cell; the first
   program to run it on the C lane named the gap. Demand-driven machinery
   tests itself only when the demand shows up.
+
+## Fifth instance — a check with one type source, and a widened enum (2026-10-13)
+
+Found by counting, not by the suite: a corpus harvest of 357 store/grid
+programs with witnesses injected showed 225 of 473 stored-write verdicts as
+`non-numeric` with an `unresolved` column. Two drift shapes fell out:
+
+- **The narrowing wall read column types from one of three sources.** It
+  asked the plural store's synthesized insert decl; capacity-1 stores have
+  none, so every singleton column was "not numeric" and a provably-f64
+  write into an f32 singleton crossed the wall, caught only by Zig's
+  typecheck (the C host would have rounded). `storeFieldOrder` already
+  knew the three-source cascade (insert decl, apply decl, seed block);
+  the check had copied the first leg only. After unifying: 225 → 7
+  non-numeric, 72 → 309 lossless, zero new reds on the 174-test surface.
+- **An enum gained a member; two exhaustive switches downstream did not.**
+  The C lane added `.c` to `HostTarget`; the refine-facet path in
+  `std/store:new` switched exhaustively over the old three. Zig rejects a
+  non-exhaustive switch at comptime whether or not the value can occur, so
+  the *generated backend* failed to compile for every refine-checked insert
+  on every host — eight MUST_RUN tests, invisible to the C lane's own
+  controls because they ran the surface the tranche touched. The sixth
+  tell (enumerated member list) at the type level: widening an enum is a
+  fix landing in one place for every switch over it.
+
+The measurement that found both was not looking for either. A witness
+census is a coverage instrument for the checks behind it.

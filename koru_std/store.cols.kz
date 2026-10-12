@@ -11,6 +11,7 @@
 //
 //   storeMemberColumns  — name/type/module_path/phantom per column
 //   storeFieldOrder     — every SoA column, declaration order (incl. parent)
+//   storeColType        — one column's declared type (insert/apply/seed)
 //   storeInsertOrder    — the insert surface (excl. a [tree] parent)
 //   charCap             — is a column `char[N]`, and what is N
 //   cellRead            — one column's projected read at `__koru_si`
@@ -88,6 +89,21 @@ fn storeFieldOrder(alloc: std.mem.Allocator, prog: *const ast_find.Program, stor
         for (ed.branches, 0..) |b, i| names[i] = b.name;
         return names;
     }
+    const seed = storeSeedBlock(alloc, prog, store) orelse return null;
+    const braced = std.fmt.allocPrint(alloc, "{{{s}}}", .{seed}) catch unreachable;
+    const cf = struct_literal.parseFields(alloc, braced) catch &[_]struct_literal.StructField{};
+    if (cf.len == 0) return null;
+    const names = alloc.alloc([]const u8, cf.len) catch unreachable;
+    for (cf, 0..) |c, i| names[i] = c.name;
+    return names;
+}
+
+/// The untransformed create's seed block text for `store` — the `{ … }`
+/// `source:` arg of its `std/store:new` flow, or null when no
+/// untransformed create names it (already transformed, or not a store).
+/// The seed is the only column surface a capacity-1 store has: no
+/// `__store_insert_<s>` / `__store_apply_<s>` is synthesized for it.
+fn storeSeedBlock(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8) ?[]const u8 {
     for (flatItems(alloc, prog.items)) |pi| {
         if (pi.* != .flow) continue;
         const f = &pi.flow;
@@ -105,12 +121,46 @@ fn storeFieldOrder(alloc: std.mem.Allocator, prog: *const ast_find.Program, stor
             }
         }
         if (!name_matches or seed == null) continue;
-        const braced = std.fmt.allocPrint(alloc, "{{{s}}}", .{seed.?}) catch unreachable;
-        const cf = struct_literal.parseFields(alloc, braced) catch &[_]struct_literal.StructField{};
-        if (cf.len == 0) return null;
-        const names = alloc.alloc([]const u8, cf.len) catch unreachable;
-        for (cf, 0..) |c, i| names[i] = c.name;
-        return names;
+        return seed.?;
+    }
+    return null;
+}
+
+/// A column's declared TYPE — the question the stored-write check asks.
+/// Same source cascade as storeFieldOrder, tightened to types: the
+/// generated insert decl (plural stores), else the generated apply tor's
+/// branch payload (the read env_col_types makes in store.stored.kz), else
+/// the untransformed create's seed block — `x: 0.0[f32]`, the only
+/// column surface a capacity-1 store has. View stores stay out of scope:
+/// they answer no type here, as before.
+fn storeColType(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8, field: []const u8) ?[]const u8 {
+    if (storeViewMembers(alloc, prog, store) != null) return null;
+    if (storeMemberColumns(alloc, prog, store)) |cols| {
+        for (cols) |c| {
+            if (std.mem.eql(u8, c.name, field)) return c.type;
+        }
+    }
+    const apply_name = std.fmt.allocPrint(alloc, "__store_apply_{s}", .{store}) catch unreachable;
+    if (findSynthDecl(prog.items, apply_name)) |ed| {
+        for (ed.branches) |b| {
+            if (b.payload.fields.len > 0 and std.mem.eql(u8, b.name, field)) return b.payload.fields[0].type;
+        }
+    }
+    const struct_literal = @import("struct_literal");
+    const seed = storeSeedBlock(alloc, prog, store) orelse return null;
+    const braced = std.fmt.allocPrint(alloc, "{{{s}}}", .{seed}) catch unreachable;
+    const cf = struct_literal.parseFields(alloc, braced) catch return null;
+    for (cf) |c| {
+        if (!std.mem.eql(u8, c.name, field)) continue;
+        const v = std.mem.trim(u8, c.value, " ");
+        if (v.len > 2 and v[v.len - 1] == ']') {
+            if (std.mem.lastIndexOfScalar(u8, v[0 .. v.len - 1], '[')) |ob| {
+                const t = std.mem.trim(u8, v[ob + 1 .. v.len - 1], " ");
+                if (t.len > 0) return t;
+            }
+        }
+        if (writeNumInfoOf(v) != null) return v;
+        return null;
     }
     return null;
 }
@@ -316,11 +366,8 @@ fn writeNumInfoOf(ftype: []const u8) ?WriteNumInfo {
 }
 
 fn writeColNumInfo(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8, field: []const u8) ?WriteNumInfo {
-    const cols = storeMemberColumns(alloc, prog, store) orelse return null;
-    for (cols) |c| {
-        if (std.mem.eql(u8, c.name, field)) return writeNumInfoOf(c.type);
-    }
-    return null;
+    const ty = storeColType(alloc, prog, store, field) orelse return null;
+    return writeNumInfoOf(ty);
 }
 
 // The store a `x.f` / `x[r].f` / `__koru_store_x.f` head reads — the
@@ -355,10 +402,21 @@ fn writeExprNumInfo(alloc: std.mem.Allocator, prog: *const ast_find.Program, exp
                 .add, .subtract, .multiply, .divide, .modulo => {},
                 else => return null, // comparisons and logic yield bool
             }
-            const l = writeExprNumInfo(alloc, prog, b.left) orelse return null;
-            const r = writeExprNumInfo(alloc, prog, b.right) orelse return null;
-            if (l.cls != r.cls) return null; // mixed family — defer
-            return if (l.rank >= r.rank) l else r;
+            const l = writeExprNumInfo(alloc, prog, b.left);
+            const r = writeExprNumInfo(alloc, prog, b.right);
+            if (l != null and r != null) {
+                if (l.?.cls != r.?.cls) return null; // mixed family — defer
+                return if (l.?.rank >= r.?.rank) l.? else r.?;
+            }
+            if (l == null and r == null) return null;
+            // A lone literal operand adopts its typed peer — Zig's own peer
+            // resolution: the comptime literal coerces iff the value is
+            // exactly representable there, so a host refuses anything else.
+            const lit_expr = if (l == null) b.left else b.right;
+            const peer = if (l == null) r.? else l.?;
+            const text = numericLiteralText(alloc, lit_expr) orelse return null;
+            const exact = literalExactIn(text, peer.name) orelse return null;
+            return if (exact) peer else null;
         },
         .field_access => |fa| {
             if (writeStoreNameOf(alloc, prog, fa.object)) |sn| {

@@ -1,0 +1,1 @@
+column 'gauge.x' is f32 but the write is provably f64
