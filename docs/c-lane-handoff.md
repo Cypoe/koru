@@ -543,6 +543,23 @@ zig-only MUST_ERROR pin rather than laundering the absence into a green
 C cell. Evolved `frag-a-numeric-guarantee-does-not-port-between-hosts`
 with the instance.
 
+**Core-surface audit (for Lars' review):** verified against
+`git diff HEAD~1` — every change this tranche is `.c`-gated emit text:
+one `if (host_is_c)` else-arm in `store.query`, five `.c` arms /
+host-switched literals in `store.stored`, all `store.new` additions
+inside the existing `host_is_c` mint block, one `_Noreturn` keyword in
+`c_emitter`'s emitted text. **Zero shared-path changes** — no zig/js/cs
+arm moved, no AST contract changed. Honest warts, stated not absorbed:
+(1) the apply tails carry a dead `return {0}` — a workaround for ccomp
+ignoring `_Noreturn` in return-path analysis, contained in emitted
+text, not semantics; (2) minted args remain *untyped text* — the
+escaper that ate `(long long)` into `long_ long_` is a symptom of the
+same thing 690_160 exposes: transforms mint host syntax as strings, so
+every host spelling is a per-site intercept and no typed check can run
+on them. A typed/witness-carrying arg would let each emitter discharge
+its own obligation (no-narrowing, mask widths) instead of borrowing
+zig's — the natural seam for the PCC/prepared-witness work.
+
 **Refusal surface (named):** rule/preorder/drain sweeps, lifecycle
 interceptors/watches, [tree], owned columns (+ `__store_fwrite_*`
 de-bundle), [entity], char[N], `std/indexes`, ref() homes, refine
