@@ -633,6 +633,46 @@ regression_check_c_equivalence() {
     echo -e "${GREEN}  ✓ C equivalence (ccomp binary output matches expected.txt)${NC}"
 }
 
+# K3 witness oracle leg — opt-in via a `K3_WITNESS` marker AND KORU_K3=1.
+# The Lean checker (verify/k3/StoredWriteNumeric.lean) re-decides every
+# `[witness] site` verdict the compiler printed into backend.err; the gate
+# script also self-checks against its golden/forged corpora. Opt-in because
+# the oracle needs an external Lean toolchain: a marker without KORU_K3 is a
+# noted skip, never a verdict — the normal board must not redden on machines
+# without Lean. With KORU_K3=1 a missing Lean is FAIL: the gate already
+# refuses an absent oracle (set KORU_LEAN to point at one).
+regression_check_k3_witness() {
+    local test_dir="$1"
+    local TEST_NAME
+    TEST_NAME=$(basename "$test_dir")
+
+    [ -f "$test_dir/K3_WITNESS" ] || return 0
+    [ -f "$test_dir/SUCCESS" ] && [ ! -f "$test_dir/FAILURE" ] || return 0
+
+    if [ "${KORU_K3:-0}" != "1" ]; then
+        echo -e "${BLUE}  (K3 witness oracle not run — set KORU_K3=1)${NC}"
+        return 0
+    fi
+
+    _k3_witness_fail() {
+        rm -f "$test_dir/SUCCESS"
+        echo "$1" > "$test_dir/FAILURE"
+        FAILED_TESTS="$FAILED_TESTS $TEST_NAME($1)"
+        [ "${PASSED_TESTS:-0}" -gt 0 ] && PASSED_TESTS=$((PASSED_TESTS - 1))
+        echo -e "${RED}  ✗ K3 witness oracle: $2${NC}"
+    }
+
+    # The gate cds into verify/k3 before reading its corpus args — the
+    # backend.err path must be absolute to survive that cd.
+    local k3_corpus="$(cd "$test_dir" && pwd)/backend.err"
+    if ! "$SCRIPT_DIR/scripts/k3_witness_gate.sh" "$k3_corpus" >"$test_dir/k3_witness.out" 2>&1; then
+        _k3_witness_fail "k3-witness" "gate failed (see k3_witness.out)"
+        tail -15 "$test_dir/k3_witness.out" | sed 's/^/    /'
+        return 0
+    fi
+    echo -e "${GREEN}  ✓ K3 witness oracle: all site verdicts match (Lean)${NC}"
+}
+
 regression_run_one_test() {
     local test_dir="$1"
     local TEST_NAME
@@ -955,6 +995,7 @@ regression_run_one_test() {
           "$test_dir/backend.err" \
           "$test_dir/compile_kz.err" \
           "$test_dir/backend.out" \
+          "$test_dir/k3_witness.out" \
           "$test_dir/post.log" \
           "$test_dir/ast.err" \
           "$test_dir/actual.json" \
@@ -2187,6 +2228,9 @@ EOF
     regression_check_cs_equivalence "$test_dir"
     # The CompCert C leg — same opt-in, ccomp as Stage-D oracle (G-CC-1/2/3).
     regression_check_c_equivalence "$test_dir"
+    # The K3 witness oracle leg — opt-in via K3_WITNESS + KORU_K3=1; the Lean
+    # checker re-decides the [witness] site verdicts in backend.err.
+    regression_check_k3_witness "$test_dir"
 
     # Residual hygiene on a passed test: the JS-equivalence deposit (a JS-target
     # backend in zig-out/, output_emitted.js, js-run artifacts) must not linger —
@@ -2195,7 +2239,8 @@ EOF
     # (010_001 class, 2026-08-19). Failures keep their artifacts for diagnosis.
     if [ -f "$test_dir/SUCCESS" ] && [ ! -f "$test_dir/FAILURE" ]; then
         rm -rf "$test_dir/zig-out" "$test_dir/output_emitted.js" "$test_dir/actual.js.txt" "$test_dir/compile_js.err" "$test_dir/temp_build.zig" \
-               "$test_dir/output_emitted.c" "$test_dir/actual.c.txt" "$test_dir/compile_c.err" "$test_dir/ccomp.err" "$test_dir/a_c_equiv" 2>/dev/null
+               "$test_dir/output_emitted.c" "$test_dir/actual.c.txt" "$test_dir/compile_c.err" "$test_dir/ccomp.err" "$test_dir/a_c_equiv" \
+               "$test_dir/k3_witness.out" 2>/dev/null
     fi
 
     return 0
