@@ -2339,14 +2339,14 @@
                     if (!std.mem.eql(u8, mf.name, pv.field)) continue;
                     if (!ast_functional.facets.hasTerms(mf) and mf.clamp == null) break;
                     const pexpr = if (host_is_js) pv.col else if (host_is_cs) codegen_utils_store.HostShape.csMember(allocator, pv.col) else (codegen_utils_store.escapeZigIdentifier(allocator, pv.col) catch pv.col);
-                    const vexpr = ast_functional.facets.normExprFor(allocator, mf, pexpr, switch (host_target) { .zig => .zig, .js => .js, .cs => .cs });
+                    const vexpr = ast_functional.facets.normExprFor(allocator, mf, pexpr, switch (host_target) { .zig => .zig, .js => .js, .cs => .cs, .c => unreachable });
                     for (field_names[0..user_field_count], 0..) |fname, fci| {
                         if (std.mem.eql(u8, fname, pv.col)) {
                             facet_norms[fci] = vexpr;
                             break;
                         }
                     }
-                    const cond = ast_functional.facets.predicate(allocator, mf, vexpr, switch (host_target) { .zig => .zig, .js => .js, .cs => .cs }) orelse break;
+                    const cond = ast_functional.facets.predicate(allocator, mf, vexpr, switch (host_target) { .zig => .zig, .js => .js, .cs => .cs, .c => unreachable }) orelse break;
                     const payload = std.fmt.allocPrint(allocator, "\"{s}\"", .{pv.col}) catch unreachable;
                     const g = std.fmt.allocPrint(allocator, "if (!({s})) return {s};\n", .{ cond, HS.branchOne(allocator, host_target, ast_functional.facets.violated, payload) }) catch unreachable;
                     facet_prelude.appendSlice(allocator, g) catch unreachable;
