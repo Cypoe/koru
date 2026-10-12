@@ -1,1 +1,5 @@
-[witness] stored-write-numeric: lossless=1 deferred=1 non-numeric=0 refused=0
+[witness] site stored-write-numeric bodies.big f64<-f32 lossless
+[witness] site stored-write-numeric bodies.x f32<-literal:1.5 lossless
+[witness] site stored-write-numeric bodies.x f32<-literal:0.1 rounds
+[witness] site stored-write-numeric bodies.big f64<-literal:16777217 lossless
+[witness] stored-write-numeric: lossless=3 deferred=0 rounds=1 non-numeric=0 refused=0

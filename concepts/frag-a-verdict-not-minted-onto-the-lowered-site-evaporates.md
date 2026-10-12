@@ -57,6 +57,35 @@ each lowered write call; `enforce` prints
 — one stable line, pinned by `expected_comptime.txt` (690_364), greppable
 from `backend.err` as the verbatim record a Lean checker consumes.
 
+## Rung 2: the receipt is re-decidable, and something re-decides it
+
+A witness only earns the name once an independent checker can rule on it
+from the mark alone. Two changes made that true:
+
+- **The mark carries enough to re-decide.** A literal write mints
+  `f32<-literal:0.1`, not `f32<-literal` — a checker given only the kind
+  token could not tell `1.5` (exact in f32) from `0.1` (exact in neither
+  float). The verdict set gained `rounds`: a decimal that no float of the
+  column holds exactly. It is a recorded fact, not a refusal — refusal
+  semantics did not move.
+- **The checker shares no derivation with the solver.** The Zig side
+  decides float exactness by the odd-part/bit-length formula over u128;
+  `verify/k3/StoredWriteNumeric.lean` searches the format's whole exponent
+  range for an exact `m·2^e` with unbounded naturals. Agreement between two
+  derivations is evidence; agreement of one derivation with itself is not.
+  Role A holds three soundness theorems (typed widening embeds the value
+  set; a lossless int literal is in range; a lossless float literal has an
+  exact representation in the format). Role B rules MATCH / MISMATCH /
+  MALFORMED per site line; N4's forged corpus must be rejected line for
+  line; an empty corpus FAILs.
+
+The gate (`scripts/k3_witness_gate.sh`) was itself wrong on first draft:
+`lean … | tail -1 || fail=1` takes `tail`'s exit status, so a failing
+batch passed. A negative probe (corrupt one golden verdict, expect FAIL)
+caught it. An oracle gate needs its own negative probe for the same reason
+the harness's `*_REFUSES` legs did: a check that cannot fail looks exactly
+like a check that passes.
+
 ## What follows
 
 - K3 stops being a checker bolted on afterwards: the witness is data the

@@ -714,3 +714,46 @@ instance to point at; a sidecar witness artifact for K3 (the `[witness]`
 lines are already the greppable record); `enforce`-contract refusals on
 nonzero `deferred` counts; witness minting for the other obligation
 families the draft enumerates (mint/move/discharge edges).
+
+## Tranche: witness rung 2 + K3 Role A/B for the numeric fragment
+
+**Re-decidable marks.** Literal writes now mint the literal itself:
+`@witness("stored-write-numeric","bodies.x","f32<-literal:0.1","rounds")`.
+`literalExactIn` (store.cols.kz) decides exact representability with u128
+integer arithmetic only — int columns by range after `/10^k`, float columns
+by `N = M·5^k`, `M = odd·2^t`, fit of bit length and exponent window. New
+verdict `rounds` (a decimal no value of the column holds exactly) — a
+recorded fact, never a refusal; writeExprNumInfo and the KORU161 wall are
+untouched. Unrecognized literal text (exponent, hex, `_`) or u128 overflow
+stays `deferred`.
+
+**Per-site records.** `enforce` prints one line per mark, AST walk order,
+before the census:
+
+    [witness] site stored-write-numeric bodies.x f32<-literal:0.1 rounds
+    [witness] stored-write-numeric: lossless=3 deferred=0 rounds=1 non-numeric=0 refused=0
+
+Mark parsing is strict (four quoted fields); a malformed mark is counted
+and printed nowhere. 690_364 pins four writes (f64<-f32, literal 1.5,
+literal 0.1, literal 16777217 into f64).
+
+**K3 — `verify/k3/StoredWriteNumeric.lean` (Lean 4.31.0, pinned in
+tools/tools.json).** Role A: `typed_lossless_sound`, `int_literal_sound`,
+`float_literal_sound` — a lossless verdict implies the value lands
+unchanged under the integer-range / `m·2^e` value semantics. Role B: the
+same file as `lean --run`, ruling on every `[witness] site` line. Float
+exactness is decided by exhaustive exponent search over unbounded naturals,
+a deliberately different derivation from the Zig formula. `golden.txt`
+(18 hand-derived lines: boundary ints, 2^24 / 2^24+1, -0.375, 0, 3.0 vs 2.5)
+must all MATCH; `forged.txt` (15 lines: wrong verdicts, narrowing claimed
+lossless, unknown tokens, unknown kind) must all be rejected (N4).
+
+**Gate: `scripts/k3_witness_gate.sh`** — Role A check, golden, real
+corpus (default: 690_364's backend.err, so run that test first), forged.
+Missing Lean is FAIL. Negative-probed: one corrupted golden verdict flips
+the gate to FAIL; restored, PASS. Measured: real corpus 4/4 MATCH.
+
+**Still open:** the gate is not yet wired into run_regression.sh (it costs
+an external toolchain — an oracle budget, per §3.5); the first *obligation*
+fragment (S5, custody kinds) is Lars's ruling; marks from the
+auto-discharge family.

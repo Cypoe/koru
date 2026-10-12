@@ -394,6 +394,8 @@ pub const StoredWriteVerdict = struct {
     site: []const u8 = "", // "store.field" — identifies the obligation inside the mark
     dest: ?[]const u8 = null, // column numeric type name; null = non-numeric or unresolved column
     src: ?[]const u8 = null, // proven RHS numeric type name; null = unproven
+    literal: ?[]const u8 = null, // RHS literal text (leading '-' when negated); null = not a bare literal
+    literal_exact: bool = false, // literal is exactly representable in dest
     narrows: bool = false, // proven lossy — the write refuses
 
     // The mark payload's verdict token. `refused` never survives minting —
@@ -401,10 +403,123 @@ pub const StoredWriteVerdict = struct {
     pub fn tag(self: StoredWriteVerdict) []const u8 {
         if (self.narrows) return "refused";
         if (self.dest == null) return "non-numeric";
+        if (self.literal != null) return if (self.literal_exact) "lossless" else "rounds";
         if (self.src == null) return "deferred";
         return "lossless";
     }
 };
+
+// A bare numeric literal the checker cannot type: the literal text (with a
+// leading '-' when it arrived wrapped in unary minus), or null. Only
+// digits[.digits] text counts — anything richer (exponent, hex, '_',
+// suffix) stays "unproven" and defers exactly as before.
+fn numericLiteralText(alloc: std.mem.Allocator, expr: *const ast_find.Expression) ?[]const u8 {
+    switch (expr.node) {
+        .literal => |l| switch (l) {
+            .number => |n| return if (validLiteralDigits(n)) n else null,
+            else => return null,
+        },
+        .unary => |u| {
+            if (u.op != .negate) return null;
+            switch (u.operand.node) {
+                .literal => |l| switch (l) {
+                    .number => |n| return if (validLiteralDigits(n))
+                        std.fmt.allocPrint(alloc, "-{s}", .{n}) catch unreachable
+                    else
+                        null,
+                    else => return null,
+                },
+                else => return null,
+            }
+        },
+        else => return null,
+    }
+}
+
+fn validLiteralDigits(n: []const u8) bool {
+    var dots: usize = 0;
+    var digits: usize = 0;
+    for (n) |c| {
+        if (c == '.') {
+            dots += 1;
+        } else if (std.ascii.isDigit(c)) {
+            digits += 1;
+        } else {
+            return false;
+        }
+    }
+    if (dots > 1 or digits == 0) return false;
+    if (dots == 1 and (n[0] == '.' or n[n.len - 1] == '.')) return false;
+    return true;
+}
+
+// Exact representability of a digits[.digits] literal in a numeric
+// destination, decided with integer arithmetic only — no float casts,
+// because a decimal that happens to roundtrip through f64/f32 is not
+// thereby exact (Zig literals are arbitrary-precision; 0.1 is not exact
+// in f64 either). Returns null when the text is not a recognized literal
+// or its digits overflow u128 — the caller then leaves the site deferred.
+//
+// Let N = all digits as one integer, k = fraction digit count, neg = sign:
+//   int dest width w:  exact iff N = q·10^k with q ≤ 2^(w-1)-1 (!neg)
+//                      or q ≤ 2^(w-1) (neg).
+//   float dest (p, emin, emax; value form m·2^e, |m| < 2^p):  exact iff
+//                      N = M·5^k; writing M = odd·2^t, e0 = t - k and
+//                      b = bit length of odd, some e in [emin, emax] fits:
+//                      max(0, e0-emax) ≤ min(p-b, e0-emin).
+fn literalExactIn(text: []const u8, dest_name: []const u8) ?bool {
+    const tinfo = writeNumInfoOf(dest_name) orelse return null;
+    var s = text;
+    var neg = false;
+    if (s.len > 0 and s[0] == '-') {
+        neg = true;
+        s = s[1..];
+    }
+    if (!validLiteralDigits(s)) return null;
+    var int_part = s;
+    var frac_part: []const u8 = "";
+    if (std.mem.indexOfScalar(u8, s, '.')) |d| {
+        int_part = s[0..d];
+        frac_part = s[d + 1 ..];
+    }
+    var n: u128 = 0;
+    for (int_part) |c| {
+        n = std.math.mul(u128, n, 10) catch return null;
+        n = std.math.add(u128, n, c - '0') catch return null;
+    }
+    for (frac_part) |c| {
+        n = std.math.mul(u128, n, 10) catch return null;
+        n = std.math.add(u128, n, c - '0') catch return null;
+    }
+    if (n == 0) return true;
+    const k: u32 = @intCast(frac_part.len);
+    switch (tinfo.cls) {
+        .si => {
+            const p10 = std.math.powi(u128, 10, k) catch return false;
+            if (n % p10 != 0) return false;
+            const q = n / p10;
+            const w: u7 = if (tinfo.rank == 1) 32 else 64;
+            const pos_lim = (@as(u128, 1) << (w - 1)) - 1;
+            const neg_lim = @as(u128, 1) << (w - 1);
+            return if (neg) q <= neg_lim else q <= pos_lim;
+        },
+        .fl => {
+            const p5 = std.math.powi(u128, 5, k) catch return false;
+            if (n % p5 != 0) return false;
+            const m = n / p5;
+            const t: i64 = @intCast(@ctz(m));
+            const odd = m >> @intCast(t);
+            const e0 = t - @as(i64, k);
+            const b: i64 = @intCast(128 - @clz(odd));
+            const p: i64 = if (tinfo.rank == 1) 24 else 53;
+            const emin: i64 = if (tinfo.rank == 1) -149 else -1074;
+            const emax: i64 = if (tinfo.rank == 1) 104 else 971;
+            const lo = @max(0, e0 - emax);
+            const hi = @min(p - b, e0 - emin);
+            return lo <= hi;
+        },
+    }
+}
 
 // Runs the numeric check and returns the verdict record — never refuses on
 // its own. Unproven stays unproven: neither safe nor refused.
@@ -414,7 +529,17 @@ fn storedWriteCheck(alloc: std.mem.Allocator, prog: *const ast_find.Program, sto
     v.dest = tinfo.name;
     var parser = expression_parser_wc.ExpressionParser.init(alloc, value_text);
     const expr = parser.parseAll() catch return v;
-    const rinfo = writeExprNumInfo(alloc, prog, expr) orelse return v;
+    const rinfo = writeExprNumInfo(alloc, prog, expr) orelse {
+        // A lone literal's representability is decidable from its text;
+        // the mark carries it verbatim so a downstream checker can re-decide.
+        if (numericLiteralText(alloc, expr)) |text| {
+            if (literalExactIn(text, tinfo.name)) |exact| {
+                v.literal = text;
+                v.literal_exact = exact;
+            }
+        }
+        return v;
+    };
     v.src = rinfo.name;
     v.narrows = if (rinfo.cls == tinfo.cls)
         rinfo.rank > tinfo.rank
@@ -436,5 +561,9 @@ fn storedWriteNarrowing(alloc: std.mem.Allocator, prog: *const ast_find.Program,
 // compiler-internal, unauthorable by surface syntax — on the lowered write
 // invocation, which is the obligation site the emitters actually see.
 fn storedWriteWitnessMark(alloc: std.mem.Allocator, v: StoredWriteVerdict) []const u8 {
-    return std.fmt.allocPrint(alloc, "@witness(\"stored-write-numeric\",\"{s}\",\"{s}<-{s}\",\"{s}\")", .{ v.site, v.dest orelse "unresolved", v.src orelse "unproven", v.tag() }) catch unreachable;
+    const src = if (v.literal) |l|
+        std.fmt.allocPrint(alloc, "literal:{s}", .{l}) catch unreachable
+    else
+        v.src orelse "unproven";
+    return std.fmt.allocPrint(alloc, "@witness(\"stored-write-numeric\",\"{s}\",\"{s}<-{s}\",\"{s}\")", .{ v.site, v.dest orelse "unresolved", src, v.tag() }) catch unreachable;
 }

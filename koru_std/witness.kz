@@ -52,8 +52,14 @@ const WCensus = struct {
     // seed-AST census does not.
     w_lossless: usize = 0,
     w_deferred: usize = 0,
+    w_rounds: usize = 0,
     w_non_numeric: usize = 0,
     w_refused: usize = 0,
+    // The parsed marks themselves, in AST walk order — `enforce` prints
+    // one site line per mark. Collection is opt-in (alloc null = counts
+    // only) so the `witness` command's census pays nothing for it.
+    marks: std.ArrayListUnmanaged(WMark) = .{},
+    alloc: ?std.mem.Allocator = null,
 
     fn obligationSites(self: *const WCensus) usize {
         return self.discharge + self.inserted + self.removed +
@@ -61,28 +67,46 @@ const WCensus = struct {
     }
 
     fn witnessSites(self: *const WCensus) usize {
-        return self.w_lossless + self.w_deferred + self.w_non_numeric + self.w_refused;
+        return self.w_lossless + self.w_deferred + self.w_rounds + self.w_non_numeric + self.w_refused;
     }
 
-    // @witness("kind","site","d<-s","verdict") — the verdict is the last
-    // quoted field. Anything not carrying the prefix is not a witness.
-    fn witnessVerdict(mark: []const u8) ?[]const u8 {
+    // The four quoted fields of one mark.
+    const WMark = struct { kind: []const u8, site: []const u8, arrow: []const u8, verdict: []const u8 };
+
+    // @witness("kind","site","d<-s","verdict") — parsed strictly: four
+    // quoted fields in a parenthesised list. A malformed mark is not a
+    // witness: counted nowhere, printed nowhere.
+    fn witnessMark(mark: []const u8) ?WMark {
         if (!std.mem.startsWith(u8, mark, "@witness(")) return null;
-        const close = std.mem.lastIndexOf(u8, mark, "\")") orelse return null;
-        const open = std.mem.lastIndexOf(u8, mark[0..close], "\"") orelse return null;
-        return mark[open + 1 .. close];
+        var fields: [4][]const u8 = undefined;
+        var rest = mark["@witness(".len..];
+        for (0..4) |i| {
+            if (rest.len == 0 or rest[0] != '"') return null;
+            const end = std.mem.indexOfScalar(u8, rest[1..], '"') orelse return null;
+            fields[i] = rest[1 .. 1 + end];
+            rest = rest[2 + end ..];
+            if (i < 3) {
+                if (rest.len == 0 or rest[0] != ',') return null;
+                rest = rest[1..];
+            }
+        }
+        if (!std.mem.eql(u8, rest, ")")) return null;
+        return .{ .kind = fields[0], .site = fields[1], .arrow = fields[2], .verdict = fields[3] };
     }
 
     fn foldMarks(self: *WCensus, inv: *const ast_find.Invocation) void {
         for (inv.marks) |m| {
-            const v = witnessVerdict(m) orelse continue;
-            if (std.mem.eql(u8, v, "lossless")) {
+            const wm = witnessMark(m) orelse continue;
+            if (self.alloc) |a| self.marks.append(a, wm) catch unreachable;
+            if (std.mem.eql(u8, wm.verdict, "lossless")) {
                 self.w_lossless += 1;
-            } else if (std.mem.eql(u8, v, "deferred")) {
+            } else if (std.mem.eql(u8, wm.verdict, "deferred")) {
                 self.w_deferred += 1;
-            } else if (std.mem.eql(u8, v, "non-numeric")) {
+            } else if (std.mem.eql(u8, wm.verdict, "rounds")) {
+                self.w_rounds += 1;
+            } else if (std.mem.eql(u8, wm.verdict, "non-numeric")) {
                 self.w_non_numeric += 1;
-            } else if (std.mem.eql(u8, v, "refused")) {
+            } else if (std.mem.eql(u8, wm.verdict, "refused")) {
                 self.w_refused += 1;
             }
         }
@@ -164,15 +188,19 @@ const WCensus = struct {
     const std = @import("std");
     _ = meta;
     _ = source;
-    var census = WCensus{};
+    var census = WCensus{ .alloc = std.heap.page_allocator };
     census.fold(program.items);
     // The marks census — the prepared-witness channel made enumerable. One
-    // stable line, pinned by expected_comptime.txt: it is the verbatim
-    // record a later checker consumes from backend output. comptime_main
-    // runs twice per compile (2.3.5 pre-transform prime, 2.5 post-transform)
-    // — silence the zero row so the only line emitted is the real census.
+    // site line per mark in AST walk order, then one stable census line,
+    // pinned by expected_comptime.txt: it is the verbatim record a later
+    // checker consumes from backend output. comptime_main runs twice per
+    // compile (2.3.5 pre-transform prime, 2.5 post-transform) — silence
+    // the zero row so the only lines emitted are the real census.
     if (census.witnessSites() > 0) {
-        std.debug.print("[witness] stored-write-numeric: lossless={d} deferred={d} non-numeric={d} refused={d}\n", .{ census.w_lossless, census.w_deferred, census.w_non_numeric, census.w_refused });
+        for (census.marks.items) |wm| {
+            std.debug.print("[witness] site {s} {s} {s} {s}\n", .{ wm.kind, wm.site, wm.arrow, wm.verdict });
+        }
+        std.debug.print("[witness] stored-write-numeric: lossless={d} deferred={d} rounds={d} non-numeric={d} refused={d}\n", .{ census.w_lossless, census.w_deferred, census.w_rounds, census.w_non_numeric, census.w_refused });
     }
     return .{ .enforced = census.obligationSites() };
 }
