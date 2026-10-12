@@ -34,6 +34,14 @@ fn mintTerminal(allocator: std.mem.Allocator, item: *const astz.Item, expr: []co
     const host = if (std.mem.eql(u8, scalar, "string")) "[]const u8" else scalar;
     const code = if (std.mem.eql(u8, CompilerEnv.lang, "js") or std.mem.eql(u8, CompilerEnv.lang, "cs"))
         std.fmt.allocPrint(allocator, "// proto-terminal {s}: {s}", .{ type_name, scalar }) catch unreachable
+    else if (std.mem.eql(u8, CompilerEnv.lang, "c"))
+        // `typedef <ct> <Name>;` — the alias name stays the C spelling at
+        // every use site; the typedef binds it. An unmapped scalar mints the
+        // marker alone so the use-site refusal stays honest.
+        if (codegen_utils_proto.cTypeOf(host)) |ct|
+            std.fmt.allocPrint(allocator, "// proto-terminal {s}: {s}\ntypedef {s} {s};", .{ type_name, scalar, ct, type_name }) catch unreachable
+        else
+            std.fmt.allocPrint(allocator, "// proto-terminal {s}: {s}", .{ type_name, scalar }) catch unreachable
     else
         std.fmt.allocPrint(allocator, "// proto-terminal {s}: {s}\n{s}const {s} = {s};", .{ type_name, scalar, pub_prefix, type_name, host }) catch unreachable;
 

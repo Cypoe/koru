@@ -55,3 +55,14 @@ surface vocabulary was mistaken for output; here, one emit path's fidelity was
 mistaken for all emit paths' fidelity. Both fail the same way — judging a
 transform's emission by reading the convenient path instead of the one the
 program actually takes.
+
+**Evolved 2026-10-12 — the contract applies to `flow.inline_body` too, and
+impl flows are flows.** The C emitter's impl-resolution branch walked
+`flist.items[0].body` directly — the only emit path that skipped
+`flow.inline_body`, which is where the print family lands its lowered text
+(reroute to `print.impl` + body on the flow). Any transplanted body that
+prints inside a minted impl flow — the sweepbody is the common one —
+emitted a call to the [norun] stub and aborted at runtime, not compile
+time. Third path, same contract: an emit path that honours inline_body on
+one item kind and walks the body raw on another is a broken emitter for
+every program that routes through the unhonoured kind.

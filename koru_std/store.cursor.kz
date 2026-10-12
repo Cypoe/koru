@@ -30,7 +30,7 @@ const SCursor = struct {
             captures.append(allocator, .{
                 .name = allocator.dupe(u8, on) catch unreachable,
                 .type = allocator.dupe(u8, "i64") catch unreachable,
-                .value = allocator.dupe(u8, if (storeHostTarget() == .cs) "(long)(__koru_si)" else "@as(i64, @intCast(__koru_si))") catch unreachable, // cs: the cursor is `long` already
+                .value = allocator.dupe(u8, switch (storeHostTarget()) { .cs => "(long)(__koru_si)", .c => "((long long)(__koru_si))", else => "@as(i64, @intCast(__koru_si))" }) catch unreachable, // cs: the cursor is `long` already
                 .lexical = false,
             }) catch unreachable;
         }

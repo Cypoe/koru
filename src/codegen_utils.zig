@@ -272,6 +272,34 @@ pub fn cTypeOf(koru_type: []const u8) ?[]const u8 {
     return null;
 }
 
+/// Koru member name -> C struct member spelling: every byte outside
+/// [A-Za-z0-9_] folds to `_` (a dotted union-folded column `a.b` -> `a_b`,
+/// matching the C# fold at the identifier level).
+pub fn cMemberName(allocator: std.mem.Allocator, name: []const u8) []const u8 {
+    const out = allocator.dupe(u8, name) catch unreachable;
+    for (out) |*c| {
+        const ok = (c.* >= 'a' and c.* <= 'z') or (c.* >= 'A' and c.* <= 'Z') or
+            (c.* >= '0' and c.* <= '9') or c.* == '_';
+        if (!ok) c.* = '_';
+    }
+    return out;
+}
+
+/// `main_module.` -> `main_module_` — the C event-name prefix a dotted-path
+/// qualifier folds to (`mangle` in c_emitter joins `mq` + `_` + segment).
+/// An empty qualifier yields an empty prefix.
+pub fn cEventPrefix(allocator: std.mem.Allocator, ns: []const u8) []const u8 {
+    var t = ns;
+    if (t.len > 0 and t[t.len - 1] == '.') t = t[0 .. t.len - 1];
+    if (t.len == 0) return "";
+    const out = allocator.alloc(u8, t.len + 1) catch unreachable;
+    for (t, 0..) |c, i| {
+        out[i] = if (std.ascii.isAlphanumeric(c) or c == '_') c else '_';
+    }
+    out[t.len] = '_';
+    return out;
+}
+
 // ============================================================================
 // STRUCT LITERAL CONVERSION
 // ============================================================================
@@ -1104,7 +1132,7 @@ pub const HostShape = struct {
             .js => std.fmt.allocPrint(alloc, "{s}: {s}", .{ name, value }) catch unreachable,
             .cs => std.fmt.allocPrint(alloc, "{s} = {s}", .{ cs_name, value }) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, ".{s} = {s}", .{ esc_name, value }) catch unreachable,
-            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
+            .c => std.fmt.allocPrint(alloc, ".{s} = {s}", .{ cMemberName(alloc, name), value }) catch unreachable,
         };
     }
 
@@ -1175,7 +1203,16 @@ pub const HostShape = struct {
         return switch (t) {
             .js, .zig => argRec(alloc, t, body),
             .cs => std.fmt.allocPrint(alloc, "new {s}{s}_event.Input {{ {s} }}", .{ ns, ev, body }) catch unreachable,
-            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
+            .c => std.fmt.allocPrint(alloc, "(struct {s}{s}_in){{ {s} }}", .{ cEventPrefix(alloc, ns), ev, body }) catch unreachable,
+        };
+    }
+
+    /// Invocation head shared by the raw-text call sites: zig/js/cs write
+    /// `<ns><ev>_event.handler(`, the C lane calls the mangled fn directly.
+    pub fn eventCallHead(alloc: std.mem.Allocator, t: HostTarget, ns: []const u8, ev: []const u8) []const u8 {
+        return switch (t) {
+            .js, .cs, .zig => std.fmt.allocPrint(alloc, "{s}{s}_event.handler(", .{ ns, ev }) catch unreachable,
+            .c => std.fmt.allocPrint(alloc, "{s}{s}(", .{ cEventPrefix(alloc, ns), ev }) catch unreachable,
         };
     }
 
@@ -1238,7 +1275,7 @@ pub const HostShape = struct {
             .js => std.fmt.allocPrint(alloc, "for (let {s} = 0; {s} < {s}; {s}++) {{\n", .{ cursor, cursor, limit, cursor }) catch unreachable,
             .cs => std.fmt.allocPrint(alloc, "for (var {s} = 0; {s} < {s}; {s}++) {{\n", .{ cursor, cursor, limit, cursor }) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, "for (0..{s}) |{s}| {{\n", .{ limit, cursor }) catch unreachable,
-            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
+            .c => std.fmt.allocPrint(alloc, "for (long long {s} = 0; {s} < {s}; {s}++) {{\n", .{ cursor, cursor, limit, cursor }) catch unreachable,
         };
     }
 
@@ -1251,7 +1288,16 @@ pub const HostShape = struct {
             .js => std.fmt.allocPrint(alloc, "const {s} = {s};\n", .{ name, value }) catch unreachable,
             .cs => std.fmt.allocPrint(alloc, "var {s} = {s};\n", .{ name, value }) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, "const {s} = {s};\n_ = &{s};\n", .{ name, value, name }) catch unreachable,
-            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
+            .c => @panic("HostShape: c target needs typedConstBind — an untyped const has no C spelling"),
+        };
+    }
+
+    /// constBind with an explicit C type: the other hosts ignore `ctype`.
+    /// C has no `auto`, so every bind site must carry the type it binds.
+    pub fn typedConstBind(alloc: std.mem.Allocator, t: HostTarget, ctype: []const u8, name: []const u8, value: []const u8) []const u8 {
+        return switch (t) {
+            .c => std.fmt.allocPrint(alloc, "{s} const {s} = {s};\n", .{ ctype, name, value }) catch unreachable,
+            else => constBind(alloc, t, name, value),
         };
     }
 
@@ -1264,7 +1310,7 @@ pub const HostShape = struct {
             .js => alloc.dupe(u8, expr) catch unreachable,
             .cs => std.fmt.allocPrint(alloc, "((long)({s}))", .{expr}) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, "__koru_intcast(i64, {s})", .{expr}) catch unreachable,
-            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
+            .c => std.fmt.allocPrint(alloc, "((long long)({s}))", .{expr}) catch unreachable,
         };
     }
 
@@ -1274,7 +1320,7 @@ pub const HostShape = struct {
             .js => alloc.dupe(u8, expr) catch unreachable,
             .cs => std.fmt.allocPrint(alloc, "((int)({s}))", .{expr}) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, "__koru_intcast(usize, {s})", .{expr}) catch unreachable,
-            .c => @panic("HostShape: c target has no tagged-result shapes — outside the first fragment"),
+            .c => std.fmt.allocPrint(alloc, "((long long)({s}))", .{expr}) catch unreachable,
         };
     }
 };

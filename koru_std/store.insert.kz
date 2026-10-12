@@ -379,6 +379,13 @@
         }
     }
 
+    // C lane: only the void append path is minted. `| row`/`| full` route to
+    // inserth/insertf — units the fragment does not carry — and `unknown tor`
+    // names the symptom, not the wall.
+    if (std.mem.eql(u8, CompilerEnv.lang, "c") and (has_row_cont or has_full_cont)) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): `| row` and `| full` insert arms are outside the C lane's first fragment — only the bare void append lowers", .{store_name}) };
+    }
+
     // Owned-store `| full` routes to insertf, which reissues column ownership
     // on the full arm (690_077). Sites without `| full` still panic via the
     // void/inserth append path.

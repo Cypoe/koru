@@ -112,6 +112,14 @@ fn storeEventQualifier(alloc: std.mem.Allocator, home: []const u8, main_module_n
         }
         return std.fmt.allocPrint(alloc, "main_module.{s}_", .{folded}) catch unreachable;
     }
+    // C folds like nobody else: the emitter flat-mangles each event decl as
+    // <home>_<name> (its path qualifier verbatim), so the qualifier handed
+    // to HostShape is `home.` — cEventPrefix strips the dot and appends the
+    // underscore. `main_module.` would name nothing the emitter wrote.
+    if (std.mem.eql(u8, CompilerEnv.lang, "c")) {
+        if (home.len == 0) return "";
+        return std.fmt.allocPrint(alloc, "{s}.", .{home}) catch unreachable;
+    }
     return storeEmitQualifier(alloc, home, main_module_name);
 }
 /// The CELL, on the other hand, is a module-scope `let` written above
@@ -122,7 +130,7 @@ fn storeCellQualifier(alloc: std.mem.Allocator, home: []const u8, main_module_na
     // The cs cell is a `static class` nested inside `main_module` via
     // `.inline_code` — reachable bare from every handler, same as the JS
     // module-scope `let`.
-    if (std.mem.eql(u8, CompilerEnv.lang, "js") or std.mem.eql(u8, CompilerEnv.lang, "cs")) return "";
+    if (std.mem.eql(u8, CompilerEnv.lang, "js") or std.mem.eql(u8, CompilerEnv.lang, "cs") or std.mem.eql(u8, CompilerEnv.lang, "c")) return "";
     return storeEmitQualifier(alloc, home, main_module_name);
 }
 /// THE BUILD'S TARGET, readable from anywhere in this module. A transform's
@@ -131,7 +139,7 @@ fn storeCellQualifier(alloc: std.mem.Allocator, home: []const u8, main_module_na
 /// two index casts is more surface than reading the one global the answer comes
 /// from anyway.
 fn storeHostTarget() codegen_utils_store.HostTarget {
-    return if (std.mem.eql(u8, CompilerEnv.lang, "js")) .js else if (std.mem.eql(u8, CompilerEnv.lang, "cs")) .cs else .zig;
+    return if (std.mem.eql(u8, CompilerEnv.lang, "js")) .js else if (std.mem.eql(u8, CompilerEnv.lang, "cs")) .cs else if (std.mem.eql(u8, CompilerEnv.lang, "c")) .c else .zig;
 }
 /// A `stored` WRITE TARGET, parsed. Two spellings reach here — the dotted
 /// singleton head `store.field` and the bracket row head `store[handle].field`,

@@ -266,3 +266,84 @@ See frag-a-posix-hides-in-the-toolchains-own-paths.
 zig-stamped — refuses NoCProcBody by name), watches/guards on C,
 row-layout grids, `:.N` precision, `:S` handles, domain-type emission
 (the 10-dir `const Health` class).
+
+
+## Session 6 — plural stores + proto-terminal aliases land; 11 cells green
+
+The plural-store tranche landed two coupled mechanisms:
+
+**1. Proto-terminal aliases — `typedef`, not folding.** `std/proto:f64(Health)`
+mints `// proto-terminal Health: f64` + `typedef double Health;` on the C
+lane (zig keeps `const Health = f64`; js/cs keep the marker alone, aliases
+have no runtime repr there). The emitter scans `// proto-terminal` markers
+into an alias table (`seedProtoTerminals`) and `cTypeOfResolved` resolves a
+declared terminal to *itself* — the name stays the C spelling at every use
+site and the typedef binds it. This is the same registry channel
+`SL.TermRef.isDeclared` already read for the other hosts; store columns of
+proto-terminal type emit `Health health[CAP];` verbatim.
+
+**2. Plural SoA + insert + query-sweep.** `store.new`'s plural path mints on C:
+the SoA cell (`static struct { <ct> <f>[CAP]; ...; long long len; }
+__koru_store_<s> = {0};`), the void `__store_insert_<s>` event + `|c` proc
+(same statements the zig arm writes: capacity check -> `__koru_unreachable`,
+column stores, len bump), and the `__store_apply_<s>` event *decl only* —
+`pstore_names` discovery scans apply decls for sibling-store names, so the
+decl exists for the probe while a `stored` write that reaches it refuses on
+the named branches. The `! query` sweep lowers through `HostShape`'s `.c`
+arms (`eventCallHead`/`callArg`/`loopHead`/`typedConstBind`/`cellRead`) in
+`store.query`/`store.cols`: per-row binds, `for (long long __koru_si = 0;
+...)`, `input___store_sweepbody_*( (struct ..._in){ .f = v } )`.
+
+**Refusal surface (all named, none silent):** rule/preorder sweeps,
+lifecycle interceptors/watches, generational handles (take / `| row` /
+`[id]` / watch), [tree], owned columns, drain, [entity], char[N],
+`std/indexes`, ref() homes, refine facets, non-identifier field names,
+non-scalar column types, view sweeps, index lookups, `| row`/`| full`
+insert arms (store.insert names them itself rather than letting
+`unknown tor __store_insertf_*` leak).
+
+**Three surgical fixes this tranche surfaced:**
+
+1. `storeEventQualifier` needed a C arm. The zig qualifier `main_module.`
+   names a zig namespace nothing in C emits; the C emitter flat-mangles
+   decls as `<home>_<name>`, so the C qualifier is `home.` through
+   `cEventPrefix`. Without it the sweep call spelled
+   `main_module___store_sweepbody_*` — a name that exists on no lane.
+   115_020 (cross-module sweep, store homed in `app/lib`) is the proof
+   cell — `app_lib___store_sweepbody_*` resolves.
+2. Impl flows carry `flow.inline_body` too. The print transform reroutes
+   `print.ln` -> `print.impl` + sets `inline_body` on the FLOW; the impl
+   branch of emitEventBody walked `flist.items[0].body` directly and
+   emitted `std_io_print_impl()` — a call to the [norun] stub. Now splices
+   like emitFlow (continuations resolved). Any transplanted body that
+   prints inside a sweepbody hit this — not an edge case.
+3. `[ordinal]` cast was zig-spelled for every non-cs target
+   (`@as(i64, @intCast(__koru_si))`) — `store.cursor` now spells
+   `((long long)(__koru_si))` for C.
+
+**Acceptance — 11 cells `LANGUAGES: zig c cs`, all byte-identical through
+`ccomp -fstruct-passing`:** 690_049 (mixed i64+f64 columns), 690_067
+(nested sweep), 690_069 ([ordinal]+[row]), 690_086 (arm binds row),
+690_090 (row binding shadows store name), 690_110 (nested outer row
+read), 690_113 (rebound name shadows), 690_119 (flattened mat4 vec3
+row), 690_124 (rebuild row-by-row), 690_272 (shared Health column — the
+proto-terminal cell), 115_020 (cross-module). 690_011 pins the
+`| row`/`| full` insert-arm refusal via C_REFUSES.
+
+**Verified:** zig lane byte-identical on all pinned cells (controls);
+`store.stored`/take/inserth/apply stay refused by name. cs-compile in
+WSL remains the dotnet-not-installed environment gap (proven on the
+Windows host last session).
+
+**Census delta (219-dir no-C-type bucket, re-probed same instrument):**
+2 EMITTED (665_001 proto terminal, 690_272 shared Health column);
+30 moved to named KORU161 refusals — the proto-name dirs unmasking their
+real walls (take/entity/owned/view/dotted-leaf); 187 still refuse,
+dominated by borrow types (`*X`, ~95 dirs), containers (~31), anonymous
+record returns (~66), wider scalars (i128 ~10). The proto-alias class
+(~15 dirs) is fully resolved out of the bucket.
+
+**Unmeasured/next:** take/inserth/apply + named-branch dispatch (the
+largest single mass — every `stored` write and `| row` site),
+watches/guards, row-layout grids, pointer/borrow types (~95 dirs),
+containers (~31), anonymous record returns (~66), `:.N`/`:S`.

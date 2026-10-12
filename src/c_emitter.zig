@@ -419,6 +419,9 @@ const Emitter = struct {
     procs: *const ProcIndex,
     impls: *const ImplIndex,
     impl_flows: *const ImplFlowIndex,
+    /// `// proto-terminal Name: scalar` registry — Name is a typedef'd C
+    /// spelling, so a declared terminal resolves to itself.
+    aliases: *const std.StringHashMap([]const u8),
 
     fn write(self: *Emitter, text: []const u8) CEmitError!void {
         try self.buf.appendSlice(self.allocator, text);
@@ -450,6 +453,15 @@ const Emitter = struct {
         try self.write(text);
     }
 
+    /// Primitives map directly; a declared proto terminal IS its C spelling
+    /// (the minted `typedef` binds it). Everything else stays refused.
+    fn cTypeOfResolved(self: *Emitter, koru_type: []const u8) ?[]const u8 {
+        const t = std.mem.trim(u8, koru_type, " \t");
+        if (cTypeOf(t)) |ct| return ct;
+        if (self.aliases.contains(t)) return t;
+        return null;
+    }
+
     // -- event emission ----------------------------------------------------
 
     fn eventIsStub(event: *const ast.EventDecl) bool {
@@ -476,7 +488,7 @@ const Emitter = struct {
         if (event.input.fields.len > 0) {
             try self.writeFmt("struct {s}_in {{\n", .{name});
             for (event.input.fields) |f| {
-                const ct = cTypeOf(f.type) orelse {
+                const ct = self.cTypeOfResolved(f.type) orelse {
                     std.debug.print("error[KORU047]: C lane: {s} field {s} has type {s} — no C type in the first fragment\n", .{ key, f.name, f.type });
                     return CEmitError.UnsupportedConstruct;
                 };
@@ -494,9 +506,8 @@ const Emitter = struct {
     }
 
     fn eventReturnType(self: *Emitter, event: *const ast.EventDecl, key: []const u8) CEmitError![]const u8 {
-        _ = self;
         if (event.return_type) |rt| {
-            return cTypeOf(rt) orelse {
+            return self.cTypeOfResolved(rt) orelse {
                 std.debug.print("error[KORU047]: C lane: {s} returns {s} — no C type in the first fragment\n", .{ key, rt });
                 return CEmitError.UnsupportedConstruct;
             };
@@ -570,7 +581,20 @@ const Emitter = struct {
                 return CEmitError.UnsupportedConstruct;
             }
             try self.emitFieldBindings(event);
-            try self.emitSite(&flist.items[0].body, "    ", .in_impl);
+            // An impl flow carries transform output the same way a top-level
+            // flow does: `flow.inline_body` — the print family's reroute lands
+            // here too, and emitSite alone would miss it and call the [norun]
+            // stub. Splice like emitFlow does, continuations resolved.
+            const implf = flist.items[0];
+            if (implf.inline_body) |body| {
+                if (stripFileScopeMarker(stripInlineStmtMarker(body)) == null) {
+                    var consumed: u64 = 0;
+                    try self.emitInlineBodyResolvingContinuations(stripInlineStmtMarker(body), implf.body.continuations, "    ", .in_impl, &consumed);
+                    try self.emitUnconsumedContinuations(implf.body.continuations, consumed, "    ", .in_impl);
+                }
+            } else {
+                try self.emitSite(&implf.body, "    ", .in_impl);
+            }
             try self.write("}\n\n");
             return;
         }
@@ -582,7 +606,7 @@ const Emitter = struct {
     /// convention, same as the js/cs prologue off their input param.
     fn emitFieldBindings(self: *Emitter, event: *const ast.EventDecl) CEmitError!void {
         for (event.input.fields) |f| {
-            const ct = cTypeOf(f.type) orelse {
+            const ct = self.cTypeOfResolved(f.type) orelse {
                 std.debug.print("error[KORU047]: C lane: field {s} has type {s} — no C type in the first fragment\n", .{ f.name, f.type });
                 return CEmitError.UnsupportedConstruct;
             };
@@ -925,7 +949,7 @@ const Emitter = struct {
                 std.debug.print("error[KORU047]: C lane: {s} bound to `{s}` but the event has no `-> T` return\n", .{ key, bind });
                 return CEmitError.UnsupportedConstruct;
             };
-            const ct = cTypeOf(rt) orelse {
+            const ct = self.cTypeOfResolved(rt) orelse {
                 std.debug.print("error[KORU047]: C lane: {s} returns {s} — no C type in the first fragment\n", .{ key, rt });
                 return CEmitError.UnsupportedConstruct;
             };
@@ -1027,6 +1051,33 @@ fn stripFileScopeMarker(text: []const u8) ?[]const u8 {
 // ---------------------------------------------------------------------------
 // Host lines + top-level inline code
 // ---------------------------------------------------------------------------
+
+/// `// proto-terminal <Name>: <scalar>` markers are the terminal registry —
+/// the same channel `TerminalRef` reads for the other hosts. Records the
+/// names the typedef arm of `mintTerminal` will bind.
+fn seedProtoTerminals(items: []const ast.Item, aliases: *std.StringHashMap([]const u8)) CEmitError!void {
+    for (items) |*item| {
+        switch (item.*) {
+            .inline_code => |*ic| {
+                var lines = std.mem.splitScalar(u8, ic.code, '\n');
+                while (lines.next()) |line| {
+                    const rest = std.mem.trim(u8, line, " \t\r");
+                    const body = std.mem.trimLeft(u8, rest, "/");
+                    const after = std.mem.trim(u8, body, " \t");
+                    if (!std.mem.startsWith(u8, after, "proto-terminal ")) continue;
+                    const spec = after["proto-terminal ".len..];
+                    const colon = std.mem.indexOfScalar(u8, spec, ':') orelse continue;
+                    const name = std.mem.trim(u8, spec[0..colon], " \t");
+                    const scalar = std.mem.trim(u8, spec[colon + 1 ..], " \t");
+                    if (name.len == 0 or scalar.len == 0) continue;
+                    try aliases.put(name, scalar);
+                }
+            },
+            .module_decl => |*m| try seedProtoTerminals(m.items, aliases),
+            else => {},
+        }
+    }
+}
 
 fn emitCHostLines(em: *Emitter, items: []const ast.Item) CEmitError!void {
     for (items) |*item| {
@@ -1187,6 +1238,10 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     defer reached_events.deinit(allocator);
     try collectReachedInOrder(allocator, program.items, &events, &reached, &reached_events, &seen);
 
+    var aliases = std.StringHashMap([]const u8).init(allocator);
+    defer aliases.deinit();
+    try seedProtoTerminals(program.items, &aliases);
+
     var em = Emitter{
         .allocator = allocator,
         .buf = &buf,
@@ -1194,6 +1249,7 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         .procs = &procs,
         .impls = &impls,
         .impl_flows = &impl_flows,
+        .aliases = &aliases,
     };
 
     // Preamble — includes plus the runtime surface the lowering and the |c

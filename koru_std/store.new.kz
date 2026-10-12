@@ -1967,6 +1967,63 @@
                 return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): the `updated` interceptor over an owned column is a later rung - it carries TWO owned images (old and new) of the written field; `inserted`/`removed`/`watch` over owned are built (690_061/065/063)", .{store_name}) } };
             }
         }
+        // ---- C lane: the lean SoA fragment ----
+        // Cell + void insert + the apply decl own the plural C surface this
+        // rung; the `! query` sweep lowers through HostShape's .c arms in
+        // store.query. The refusal cascade below names every surface that
+        // still carries a zig-only body — a program reaching take/inserth/
+        // apply hits `cannot resolve invocation` or the named-branch wall,
+        // never a zig-spelled |c proc.
+        if (host_is_c) {
+            if (qsites.items.len > 0) {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): rule/preorder sweeps are outside the C lane's first fragment — `std/store:query` is the sweep that lowers", .{store_name}) } };
+            }
+            if (inserted_arms.items.len + removed_arms.items.len + updated_arms.items.len + pwatch_arms.items.len > 0) {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): lifecycle interceptors and watches are outside the C lane's first fragment", .{store_name}) } };
+            }
+            if (needs_handles) {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): generational handle slots (take / `| row` / `[id]` / watch) are outside the C lane's first fragment", .{store_name}) } };
+            }
+            if (is_tree) {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): [tree] stores are outside the C lane's first fragment", .{store_name}) } };
+            }
+            if (has_owned) {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): owned columns are outside the C lane's first fragment", .{store_name}) } };
+            }
+            if (drain_required) {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): drain stores are outside the C lane's first fragment", .{store_name}) } };
+            }
+            if (entity_type != null) {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): [entity] stores are outside the C lane's first fragment", .{store_name}) } };
+            }
+            for (field_char_caps[0..user_field_count]) |fcc| {
+                if (fcc != null) {
+                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): char[N] columns are outside the C lane's first fragment", .{store_name}) } };
+                }
+            }
+            switch (StoreIndexDecls.fieldSpec(allocator, reporter, program, store_name, field_names, field_types, field_char_caps, field_owned_info)) {
+                .refuse => |r| return .{ .transformed = .{ .replacement = r } },
+                .indexed => return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): `std/indexes` columns are outside the C lane's first fragment", .{store_name}) } },
+                .none => {},
+            }
+            for (0..user_field_count) |fci| {
+                if (StoreRefHome.colTarget(cell_fields, fci) != null) {
+                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): ref() home columns are outside the C lane's first fragment", .{store_name}) } };
+                }
+            }
+            if (@hasDecl(koru_std, "koru_refine")) {
+                for (leaf_provs.items) |pv| {
+                    const met = koru_std.koru_refine.metFields(allocator, program, pv.scope, pv.proto, null);
+                    for (met) |*mf| {
+                        if (!std.mem.eql(u8, mf.name, pv.field)) continue;
+                        if (ast_functional.facets.hasTerms(mf) or mf.clamp != null) {
+                            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): refine facets on column '{s}' are outside the C lane's first fragment", .{ store_name, pv.col }) } };
+                        }
+                    }
+                }
+            }
+        }
+
         // ---- unit 1: the SoA cell ----
         var pc = std.ArrayList(u8).initCapacity(allocator, 512) catch unreachable;
         pc.appendSlice(allocator, "const __KoruStoreT_") catch unreachable;
@@ -4980,6 +5037,135 @@
                 }
             };
             Walk.items(allocator, program, @constCast(program.items), pscope, pstore_identity.items);
+        }
+
+        // ---- C lane: mint cell + void insert + apply decl ----
+        // The zig mint above ran to keep every collection/probe honest (its
+        // items are discarded here — the C surface carries only what the
+        // fragment owns). Insert's body is the same statements the zig arm
+        // writes: capacity check, column stores, len bump — spelled for C.
+        if (host_is_c) {
+            var c_appended = std.ArrayList(ast.Item).initCapacity(allocator, 4) catch unreachable;
+
+            // Column types: the scalar map, else a declared proto terminal —
+            // `std/proto:<scalar>(Name)` mints `typedef <ct> Name;`, so the
+            // NAME is the C spelling at every use site.
+            const c_col_types = allocator.alloc([]const u8, user_field_count) catch unreachable;
+            for (field_names[0..user_field_count], field_types[0..user_field_count], 0..) |fnm, ft, fci| {
+                c_col_types[fci] = codegen_utils_store.cTypeOf(ft) orelse blk: {
+                    if (SL.TermRef.isDeclared(program, ft, store_scope_home)) break :blk ft;
+                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): column '{s}' type '{s}' has no C spelling in the first fragment", .{ store_name, fnm, ft }) } };
+                };
+            }
+            // Field names must be C identifiers — the event's input struct
+            // binds them verbatim, and the first fragment does not mangle
+            // (same refusal the singleton carries).
+            for (field_names[0..user_field_count]) |fnm| {
+                var ident = fnm.len > 0 and ((fnm[0] >= 'a' and fnm[0] <= 'z') or (fnm[0] >= 'A' and fnm[0] <= 'Z') or fnm[0] == '_');
+                if (ident) for (fnm) |ch| {
+                    if (!((ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_')) ident = false;
+                };
+                if (!ident) {
+                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): field '{s}' is not a C identifier - the first fragment does not mangle store fields", .{ store_name, fnm }) } };
+                }
+            }
+
+            // unit 1 — the SoA cell: `static struct { <ct> <f>[CAP]; ...;
+            // long long len; } __koru_store_<s> = {0};`
+            var cc = std.ArrayList(u8).initCapacity(allocator, 64 + user_field_count * 32) catch unreachable;
+            cc.appendSlice(allocator, "static struct {\n") catch unreachable;
+            for (0..user_field_count) |fci| {
+                cc.appendSlice(allocator, std.fmt.allocPrint(allocator, "    {s} {s}[{d}];\n", .{ c_col_types[fci], codegen_utils_store.cMemberName(allocator, field_names[fci]), CAP }) catch unreachable) catch unreachable;
+            }
+            cc.appendSlice(allocator, std.fmt.allocPrint(allocator, "    long long len;\n}} __koru_store_{s} = {{0}};\n", .{store_name}) catch unreachable) catch unreachable;
+            c_appended.append(allocator, ast.Item{ .inline_code = ast.InlineCode{
+                .code = cc.toOwnedSlice(allocator) catch unreachable,
+                .location = flow.location,
+                .module = allocator.dupe(u8, flow.module) catch unreachable,
+            } }) catch unreachable;
+
+            // unit 2 — insert (void): same input surface as zig (user columns
+            // + `__site_line`); no branches — `| full`/`| row` sites route to
+            // insertf/inserth and refuse by name there.
+            const c_insert_name = std.fmt.allocPrint(allocator, "__store_insert_{s}", .{store_name}) catch unreachable;
+            const c_ins_fields = allocator.alloc(ast.Field, user_field_count + 1) catch unreachable;
+            for (field_names[0..user_field_count], field_types[0..user_field_count], 0..) |fnm, ft, fci| {
+                c_ins_fields[fci] = ast.Field{ .name = allocator.dupe(u8, fnm) catch unreachable, .type = allocator.dupe(u8, ft) catch unreachable };
+            }
+            c_ins_fields[user_field_count] = ast.Field{ .name = allocator.dupe(u8, "__site_line") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
+            c_appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
+                .path = H.mkPathH(allocator, home_ns, c_insert_name),
+                .input = ast.Shape{ .fields = c_ins_fields },
+                .branches = &[_]ast.Branch{},
+                .is_public = false,
+                .is_implicit_flow = false,
+                .annotations = &[_][]const u8{},
+                .location = flow.location,
+                .module = allocator.dupe(u8, flow.module) catch unreachable,
+            } }) catch unreachable;
+            var cap_text = std.ArrayList(u8).initCapacity(allocator, 128 + user_field_count * 48) catch unreachable;
+            cap_text.appendSlice(allocator, std.fmt.allocPrint(allocator,
+                "if (__koru_store_{s}.len >= {d}) __koru_unreachable(\"std/store: store '{s}' is full (capacity {d}) - declared capacity and the `| full` branch are pinned at 690_011\");\nconst long long __koru_new_row = __koru_store_{s}.len;\n",
+                .{ store_name, CAP, store_name, CAP, store_name }) catch unreachable) catch unreachable;
+            for (0..user_field_count) |fci| {
+                cap_text.appendSlice(allocator, std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_new_row] = {s};\n", .{ store_name, codegen_utils_store.cMemberName(allocator, field_names[fci]), field_names[fci] }) catch unreachable) catch unreachable;
+            }
+            cap_text.appendSlice(allocator, std.fmt.allocPrint(allocator, "__koru_store_{s}.len += 1;\nreturn;\n", .{store_name}) catch unreachable) catch unreachable;
+            c_appended.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
+                .path = H.mkPathH(allocator, home_ns, c_insert_name),
+                .body = ast.Source{ .text = cap_text.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
+                .annotations = &[_][]const u8{},
+                .target = allocator.dupe(u8, "c") catch unreachable,
+                .location = flow.location,
+                .module = allocator.dupe(u8, flow.module) catch unreachable,
+            } }) catch unreachable;
+
+            // unit 4 — the apply decl only: `pstore_names` discovery scans
+            // `__store_apply_*` decls to learn sibling store names, so the
+            // decl exists for the probe while its proc stays unminted — a
+            // `stored` write reaches it and refuses on the named branches.
+            const c_apply_name = std.fmt.allocPrint(allocator, "__store_apply_{s}", .{store_name}) catch unreachable;
+            const capp_in = allocator.alloc(ast.Field, user_field_count + 2) catch unreachable;
+            capp_in[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "usize") catch unreachable };
+            capp_in[1] = ast.Field{ .name = allocator.dupe(u8, "field") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
+            for (field_types[0..user_field_count], 0..) |ft, fci| {
+                capp_in[2 + fci] = ast.Field{
+                    .name = std.fmt.allocPrint(allocator, "value_{d}", .{fci}) catch unreachable,
+                    .type = allocator.dupe(u8, ft) catch unreachable,
+                    .phantom = allocator.dupe(u8, "*") catch unreachable,
+                };
+            }
+            const capp_branches = allocator.alloc(ast.Branch, user_field_count) catch unreachable;
+            for (field_names[0..user_field_count], field_types[0..user_field_count], 0..) |fnm, ft, fci| {
+                const pf = allocator.alloc(ast.Field, 1) catch unreachable;
+                pf[0] = ast.Field{ .name = allocator.dupe(u8, "__type_ref") catch unreachable, .type = allocator.dupe(u8, ft) catch unreachable };
+                capp_branches[fci] = ast.Branch{
+                    .name = allocator.dupe(u8, fnm) catch unreachable,
+                    .payload = ast.Shape{ .fields = pf },
+                    .kind = .terminal,
+                    .annotations = &[_][]const u8{},
+                };
+            }
+            c_appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
+                .path = H.mkPathH(allocator, home_ns, c_apply_name),
+                .input = ast.Shape{ .fields = capp_in },
+                .branches = capp_branches,
+                .is_public = false,
+                .is_implicit_flow = false,
+                .annotations = &[_][]const u8{},
+                .location = flow.location,
+                .module = allocator.dupe(u8, flow.module) catch unreachable,
+            } }) catch unreachable;
+
+            const cconsumed = std.fmt.allocPrint(allocator, "// std/store: plural store '{s}' created (C lane: SoA cell + void insert + apply decl; take/inserth/stored-write are the named-refusal surface){s}", .{ store_name, StoreRefHome.marker(allocator, cell_fields) }) catch unreachable;
+            return .{ .transformed = .{
+                .replacement = ast.Item{ .inline_code = ast.InlineCode{
+                    .code = cconsumed,
+                    .location = flow.location,
+                    .module = allocator.dupe(u8, flow.module) catch unreachable,
+                } },
+                .appended = c_appended.toOwnedSlice(allocator) catch unreachable,
+            } };
         }
 
         const pconsumed = std.fmt.allocPrint(allocator, "// std/store: plural store '{s}' created (SoA cell + insert/query/write/take/stripe units){s}", .{ store_name, StoreRefHome.marker(allocator, cell_fields) }) catch unreachable;

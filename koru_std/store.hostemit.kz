@@ -238,6 +238,8 @@ fn cellRead(alloc: std.mem.Allocator, host_target: codegen_utils_store.HostTarge
     // carries a dot Zig quotes away (`@"…"`) and cs folds (`creature_alive`).
     const mem = if (host_target == .cs)
         codegen_utils_store.HostShape.csMember(alloc, col)
+    else if (host_target == .c)
+        codegen_utils_store.cMemberName(alloc, col)
     else
         esc_col;
     if (host_target == .zig and charCap(alloc, prog, store, col) != null)

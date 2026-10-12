@@ -30,8 +30,9 @@
     const HS = codegen_utils_store.HostShape;
     const host_is_js = std.mem.eql(u8, CompilerEnv.lang, "js");
     const host_is_cs = std.mem.eql(u8, CompilerEnv.lang, "cs");
-    const host_target: codegen_utils_store.HostTarget = if (host_is_js) .js else if (host_is_cs) .cs else .zig;
-    const proc_target = if (host_is_js) "js" else if (host_is_cs) "cs" else "zig";
+    const host_is_c = std.mem.eql(u8, CompilerEnv.lang, "c");
+    const host_target: codegen_utils_store.HostTarget = if (host_is_js) .js else if (host_is_cs) .cs else if (host_is_c) .c else .zig;
+    const proc_target = if (host_is_js) "js" else if (host_is_cs) "cs" else if (host_is_c) "c" else "zig";
 
     if (item.* != .flow) @panic("store:query transform: containing item is not a flow - walker dispatch contract broken");
     const flow = &item.flow;
@@ -599,15 +600,21 @@
     // member loops) — the same `break firstblk`/`break :firstblk` split as
     // every other Zig/JS divergence here.
     const found_decl: []const u8 = if (none_arm != null)
-        (if (host_is_js) "let __koru_found = false;\n" else "var __koru_found = false;\n")
+        (if (host_is_js) "let __koru_found = false;\n" else if (host_is_c) "int __koru_found = 0;\n" else "var __koru_found = false;\n")
     else
         "";
     const none_call: []const u8 = if (none_arm != null) blk: {
         const nq = storeEventQualifier(allocator, home_ns, program.main_module_name);
-        break :blk std.fmt.allocPrint(allocator, "if (!__koru_found) {{\n{s}{s}_event.handler({s});\n}}\n", .{ nq, nbody_name, HS.callArg(allocator, host_target, nq, nbody_name, nargb_text) }) catch unreachable;
+        break :blk std.fmt.allocPrint(allocator, "if (!__koru_found) {{\n{s}{s});\n}}\n", .{ HS.eventCallHead(allocator, host_target, nq, nbody_name), HS.callArg(allocator, host_target, nq, nbody_name, nargb_text) }) catch unreachable;
     } else "";
 
     var loop = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
+    if (is_view and host_is_c) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): view sweeps are outside the C lane's first fragment", .{store_name}) };
+    }
+    if (host_is_c and (index_rhs != null or q_index_rhs != null)) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): index lookups are outside the C lane's first fragment", .{store_name}) };
+    }
     if (is_view) {
         loop.appendSlice(allocator, "{\n") catch unreachable;
         loop.appendSlice(allocator, found_decl) catch unreachable;
@@ -668,9 +675,7 @@
             }
             if (is_first and none_arm != null) loop.appendSlice(allocator, "__koru_found = true;\n") catch unreachable;
             const sq = storeEventQualifier(allocator, home_ns, program.main_module_name);
-            loop.appendSlice(allocator, sq) catch unreachable;
-            loop.appendSlice(allocator, sbody_name) catch unreachable;
-            loop.appendSlice(allocator, "_event.handler(") catch unreachable;
+            loop.appendSlice(allocator, HS.eventCallHead(allocator, host_target, sq, sbody_name)) catch unreachable;
             loop.appendSlice(allocator, HS.callArg(allocator, host_target, sq, sbody_name, argb.items)) catch unreachable;
             if (is_first) {
                 const brk: []const u8 = if (host_is_cs) ");\ngoto __koru_firstblk_done;\n" else if (host_is_js) ");\nbreak firstblk;\n" else ");\nbreak :firstblk;\n";
@@ -697,13 +702,13 @@
         else if (q_may_remove) {
             // Removal-tolerant sweep: len is re-read each iteration and the
             // cursor only advances when the body left len unchanged (690_031).
-            loop.appendSlice(allocator, if (host_is_js) "let __koru_si = 0;\n" else if (host_is_cs) "var __koru_si = 0;\n" else "var __koru_si: usize = 0;\n") catch unreachable;
-            loop.appendSlice(allocator, std.fmt.allocPrint(allocator, "while (__koru_si < {s}) {{\n{s} __koru_len_before = {s};\n", .{ cell_len, if (host_is_cs) "var" else "const", cell_len }) catch unreachable) catch unreachable;
+            loop.appendSlice(allocator, if (host_is_js) "let __koru_si = 0;\n" else if (host_is_cs) "var __koru_si = 0;\n" else if (host_is_c) "long long __koru_si = 0;\n" else "var __koru_si: usize = 0;\n") catch unreachable;
+            loop.appendSlice(allocator, std.fmt.allocPrint(allocator, "while (__koru_si < {s}) {{\n{s} __koru_len_before = {s};\n", .{ cell_len, if (host_is_cs) "var" else if (host_is_c) "const long long" else "const", cell_len }) catch unreachable) catch unreachable;
         } else {
             loop.appendSlice(allocator, HS.loopHead(allocator, host_target, "__koru_si", cell_len)) catch unreachable;
         }
         var bad_op: []const u8 = "";
-        if (!fireRow(allocator, &loop, host_target, program, proj_names, proj_cols, col_names, cellq, store_name, scan_guard, q_may_remove, is_first and none_arm != null, home_ns, sbody_name, program.main_module_name, argb.items, &bad_op))
+        if (!fireRow(allocator, &loop, host_target, program, proj_names, proj_cols, col_names, col_types, cellq, store_name, scan_guard, q_may_remove, is_first and none_arm != null, home_ns, sbody_name, program.main_module_name, argb.items, &bad_op))
             return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): the sweep guard names `@{s}`, and that operation has no lowering for this target - a store guard is a Koru expression, and the operations Koru names with `@` are the shared table in codegen_utils.lowerBuiltin", .{ store_name, bad_op }) };
         if (index_rhs != null)
             loop.appendSlice(allocator, StoreIndex.firstClose(allocator, host_is_js, none_call)) catch unreachable

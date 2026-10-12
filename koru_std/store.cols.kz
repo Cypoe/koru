@@ -247,6 +247,7 @@ fn fireRow(
     proj_names: []const []const u8,
     proj_cols: []const usize,
     col_names: []const []const u8,
+    col_types: []const []const u8,
     cellq: []const u8,
     store_name: []const u8,
     scan_guard: ?[]const u8,
@@ -261,7 +262,10 @@ fn fireRow(
     for (proj_names, proj_cols) |pn, ci| {
         const esc_cn = codegen_utils_store.escapeZigIdentifier(alloc, col_names[ci]) catch col_names[ci];
         const read = cellRead(alloc, host_target, prog, cellq, store_name, col_names[ci], esc_cn);
-        loop.appendSlice(alloc, codegen_utils_store.HostShape.constBind(alloc, host_target, pn, read)) catch unreachable;
+        // C has no `auto` — the bind carries the column's C spelling (a
+        // declared proto terminal binds as its own typedef'd name).
+        const ctype = codegen_utils_store.cTypeOf(col_types[ci]) orelse col_types[ci];
+        loop.appendSlice(alloc, codegen_utils_store.HostShape.typedConstBind(alloc, host_target, ctype, pn, read)) catch unreachable;
     }
     if (scan_guard) |cond| {
         const lowered_c = storeLowerExpr(alloc, cond, bad_op) orelse return false;
@@ -273,9 +277,7 @@ fn fireRow(
     }
     if (mark_found) loop.appendSlice(alloc, "__koru_found = true;\n") catch unreachable;
     const callq = storeEventQualifier(alloc, home_ns, main_module_name);
-    loop.appendSlice(alloc, callq) catch unreachable;
-    loop.appendSlice(alloc, sbody_name) catch unreachable;
-    loop.appendSlice(alloc, "_event.handler(") catch unreachable;
+    loop.appendSlice(alloc, codegen_utils_store.HostShape.eventCallHead(alloc, host_target, callq, sbody_name)) catch unreachable;
     loop.appendSlice(alloc, codegen_utils_store.HostShape.callArg(alloc, host_target, callq, sbody_name, argb)) catch unreachable;
     return true;
 }
