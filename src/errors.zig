@@ -162,6 +162,7 @@ pub const ErrorCode = enum(u16) {
     KORU204, // part declared inside a part file — parts are flat; promote to a directory module when a part outgrows its file (140_028)
     KORU205, // std/refine refusal — malformed field line, non-int bound, or a meet that lands empty (671_*)
     KORU206, // A `#L` fold where every terminal arm re-dispatches `@L` can never exit — statically infinite (an external fuzzer watched `| done` re-fire 14.5M times; the corpus exit is `->` produce or a `|>` continuation)
+    KORU207, // A `!` arm at an impl flow's head references the implementing tor's params — the arm lowers to a context-free `Handlers_*` fn that sees module scope only, so the reference dies in emitted Zig ('x' not accessible from inner function). Emitted by src/flow_checker.zig.
 };
 
 pub const SourceLocation = struct {
