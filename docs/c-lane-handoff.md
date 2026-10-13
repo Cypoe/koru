@@ -793,3 +793,40 @@ candidate and forced (only candidate, or only `[!]`). Golden +3, forged +7.
 Real corpora: 330_138 2/2 MATCH, 690_365 1/1, 690_364 4/4, 690_366 2/2.
 330_138 and 690_366 carry K3_WITNESS. Stated limit: the checker cannot see
 whether the recorded candidate list is complete.
+
+## Tranche: numeric check reaches the honest floor (commits 47500f627..a410df5e2)
+
+**Column types for every store shape.** `storeColType` uses the
+`storeFieldOrder` cascade (insert decl -> apply decl -> seed block) so
+capacity-1 stores stop leaking writes past the wall; a lone literal operand
+adopts its typed peer when exactly representable there (mirrors Zig peer
+resolution). Harvest: non-numeric 225->7, lossless 72->309.
+
+**Scope env.** `writeExprNumInfo` types bound names through
+`emitter_helpers.scopeAtSite` (empty env -> deferred, never a refusal) and
+`@as(T, _)` counts as the author's own coercion. deferred 95->74,
+lossless 309->334.
+
+**Row bindings + lifecycle payloads.** `| row r` binds the index, `! row e`
+the record — same word, split by sigil; the record arm inherits the
+terminal's `usize` payload on the decl, so `rowBindStoreAtSite` re-checks
+arm kind over the site ancestry instead of trusting the stamped type.
+`! inserted|removed { f }` destructure fields pun columns (user type text
+there is refused — untyped is the only shape); `! updated { old, new }`
+binds the written field's images under the decl's uniform-column
+enforcement — `lifecyclePunAtSite` covers both. The lowered read
+`(&__koru_store_S.f)[i]` is compiler-internal text (`&` has no unary form,
+a grouped primary takes no postfix) and is normalized to `S.f[i]` before
+the surface parser sees it. deferred 74->54, lossless 334->354.
+
+**The floor is honest.** The remaining 54 deferreds are dominated by
+`| row`/`[id]`/`! cleared` handle writes — `usize` sources into `i64`
+columns. usize->i64 is not provably lossless at type level (values >= 2^63
+reinterpret), so `deferred` is the correct verdict, and the Lean checker
+independently agrees: 481/481 MATCH on the re-harvested corpus. Fixing
+them means a host-width pin (usize==u64) — a semantics question for Lars,
+not a decode gap. Small residual: builtin result typing (`@divTrunc`
+etc.), `e.str`-class non-numeric columns.
+
+Measured: corpus harvest 359 tests / 342 clean / 481 witness sites /
+180 tests with >=1 witness; injection caused 0 of the 17 non-clean.
