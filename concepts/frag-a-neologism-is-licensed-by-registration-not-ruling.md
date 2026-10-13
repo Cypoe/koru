@@ -44,3 +44,23 @@ real and the license is theater, and that is a different doc's problem.
 Related: [[frag-synthesis-is-licensed-by-how-little-it-invents]] — the sibling
 license on the synthesis axis; [[frag-the-vocabulary-wall-guards-drift-not-defiance]]
 — the first vocabulary wall, guarding the wrong threat on the other axis.
+
+
+## Evolved 2026-10-12: registration caught three kinds of drift the same day
+
+Within a day of the first seeding, acting on the matrix produced three
+corrections the unregistered flow would never have surfaced. `move` ruled
+dead — the settle paths it named shipped as `held`/`issued`, so the draft's
+vocabulary had quietly diverged from the implementation and nobody had
+noticed. `attendant` removed — a row minted from session memory with zero
+tree hits; the registry caught a term that never existed in the tree at
+all, which is the audit's cheapest possible win. And `K3` demoted from
+filesystem name to doc-layer vocabulary (`verify/k3` → `verify/witness`,
+`K3_WITNESS` → `WITNESS_CHECK`, `KORU_K3` → `KORU_WITNESS`): session
+ordinals fossilizing into filenames is exactly the drift this matrix
+exists to catch, and it was already days deep — in six test markers, two
+scripts, an env var, and a Lean namespace.
+
+The falsifiable edge sharpens: a registry that catches a dead term, an
+invented term, and a fossilized session name in its first pass is doing
+work. One that merely recorded would not have.

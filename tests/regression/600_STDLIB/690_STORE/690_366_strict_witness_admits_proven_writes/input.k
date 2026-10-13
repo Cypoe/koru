@@ -2,8 +2,8 @@
 // the numeric check proves lossless — a proven f32 column read widening
 // into f64, and a decimal literal with an exact f32 value. Both marks
 // ride the lowered writes to the witness-check pass, which prints the
-// site lines and the census instead of refusing. K3_WITNESS opts the
-// Lean oracle leg in under KORU_K3=1.
+// site lines and the census instead of refusing. WITNESS_CHECK opts the
+// Lean oracle leg in under KORU_WITNESS=1.
 //
 //   b.big: b.x   — f32 proven source into an f64 column: lossless
 //   b.x: 1.5     — decimal literal exactly representable in f32:

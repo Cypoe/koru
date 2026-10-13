@@ -28,8 +28,8 @@ fn ownName(name: []const u8) []const u8 {
 /// `discharge` where a consume settles one. Set by `std/witness:enforce`
 /// (koru_std/witness.kz) through process state; Phase 3 strips the decl
 /// before this pass runs, so a module flag is the only channel. Lines land
-/// in backend.err alongside the marks census — the K3 checker replays the
-/// list and refuses an unbalanced one.
+/// in backend.err alongside the marks census — the Lean witness checker
+/// replays the list and refuses an unbalanced one.
 pub var custody_edges_enabled: bool = false;
 
 /// Per-op census — the custody counterpart of the marks censuses

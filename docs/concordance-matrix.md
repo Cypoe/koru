@@ -69,11 +69,10 @@ other → the composite is a warranted coinage.
 | `held` | `b10de5caf` | borrowed-in obligation / context parameter | contract-seeded debt: enters live, minted at bind time not at a call | warranted neologism (p) |
 | `discharge` | language core | consume / dispose / drop | ledger close edge; explicit settle | canon-alias (p) |
 | `issued` | `b10de5caf` | ownership transfer to caller (escape) | closes a local interval by documenting the escape — Rust `->` of an owned value | warranted neologism (p) |
-| `move` | draft only — never minted | move semantics | W6 vocabulary; implementation found no move settle path | unplaced (dead?) |
+| `move` | draft only — never minted | move semantics | dead: the settle paths the draft imagined as `move` shipped as `held` (in) / `issued` (out); per-binding mint/settle model, no transfer op exists | dead |
 | `settle` | handoff prose | obligation resolution | umbrella over discharge + issued | canon-alias (p) |
 | `leak` / `escape` | phantom checker | resource leak / escaping reference | leak = unclosed interval; escape = closed-by-issue | canon-alias (p) |
 | `live` | phantom checker | liveness (dataflow) | same word, obligation-flavored | canon-alias (p) |
-| `attendant` | phantom checker | — (check usage) | binding that accompanies an obligation? | unplaced |
 
 ## 3. Verification vocabulary (the K-tranche mints)
 
@@ -91,19 +90,25 @@ other → the composite is a warranted coinage.
 | `sole`/`preferred` | auto-discharge marks | unique-match / priority-picked | resolver verdicts over the candidate set | canon-alias (p) |
 | `unauthorable` / `forgeable` | callsite draft N3 | not constructible in object language | enforced by grammar (`.marks`), not policy | warranted neologism (p) |
 | `candidate-set` | auto-discharge | feasible solution set / candidate enumeration | solver-reported list; completeness needs decl data (open) | canon-alias (p) |
-| `K3 ledger replay` | `b10de5caf` | model checking / event-trace verification | Lean replays the edge list as an interval ledger | unplaced |
+| `ledger` | 699_*/810_* test ledgers → custody arc | transaction/event log | the replayable record an oracle re-decides (`custodyBalance` is its checker) | canon-alias (p) |
 
 ## 4. Known drift risks — watch these
 
-- **`move`** — draft vocabulary, never implemented; either mint or
-  mark dead. Currently `unplaced`.
+- **`move`** — dead: draft vocabulary, the real settle paths shipped as
+  `held`/`issued`. Kept as a row so nobody re-mints it.
 - **`obligation` vs `!` arm** — `!` arms (interceptors) and `<state!>`
   (obligation states) share a glyph but are different constructs;
   concordance treats them separately (grammar table).
 - **`custody` vs `ownership`** — if Rust/CS `ownership` suffices,
   `custody` is an alias; the interval-ledger reading may warrant the
   coinage. Lars rules.
-- **`attendant`** — needs a usage survey before placement.
+- **Layer ordinals are doc vocabulary, not filesystem names** —
+  `K1`–`K4` name architecture layers in `koru-verification-path.md`;
+  concrete artifacts take boring names (`verify/witness/`,
+  `WITNESS_CHECK`, `KORU_WITNESS`), not `k3/`, `K3_WITNESS`, `KORU_K3`.
+- **Misregistration precedent** — `attendant` was seeded from session
+  memory with zero tree hits and removed; a concordance row is a claim
+  about the tree, verify before registering.
 
 ## 5. Gate mechanics (proposed)
 

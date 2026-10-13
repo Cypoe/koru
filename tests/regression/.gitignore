@@ -46,7 +46,7 @@
 !**/JS_REFUSES
 !**/CS_REFUSES
 !**/C_REFUSES
-!**/K3_WITNESS
+!**/WITNESS_CHECK
 !**/ARGS
 !**/STDIN
 !**/input.txt

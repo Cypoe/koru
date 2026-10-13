@@ -737,7 +737,7 @@ Mark parsing is strict (four quoted fields); a malformed mark is counted
 and printed nowhere. 690_364 pins four writes (f64<-f32, literal 1.5,
 literal 0.1, literal 16777217 into f64).
 
-**K3 — `verify/k3/WitnessCheck.lean` (Lean 4.31.0, pinned in
+**K3 — `verify/witness/WitnessCheck.lean` (Lean 4.31.0, pinned in
 tools/tools.json).** Role A: `typed_lossless_sound`, `int_literal_sound`,
 `float_literal_sound` — a lossless verdict implies the value lands
 unchanged under the integer-range / `m·2^e` value semantics. Role B: the
@@ -748,7 +748,7 @@ a deliberately different derivation from the Zig formula. `golden.txt`
 must all MATCH; `forged.txt` (15 lines: wrong verdicts, narrowing claimed
 lossless, unknown tokens, unknown kind) must all be rejected (N4).
 
-**Gate: `scripts/k3_witness_gate.sh`** — Role A check, golden, real
+**Gate: `scripts/witness_gate.sh`** — Role A check, golden, real
 corpus (default: 690_364's backend.err, so run that test first), forged.
 Missing Lean is FAIL. Negative-probed: one corrupted golden verdict flips
 the gate to FAIL; restored, PASS. Measured: real corpus 4/4 MATCH.
@@ -791,7 +791,7 @@ write-refusal class — a W3 code decision for Lars.
 policy over the recorded candidates, `pick_sound` proves a pick is a
 candidate and forced (only candidate, or only `[!]`). Golden +3, forged +7.
 Real corpora: 330_138 2/2 MATCH, 690_365 1/1, 690_364 4/4, 690_366 2/2.
-330_138 and 690_366 carry K3_WITNESS. Stated limit: the checker cannot see
+330_138 and 690_366 carry WITNESS_CHECK. Stated limit: the checker cannot see
 whether the recorded candidate list is complete.
 
 ## Tranche: numeric check reaches the honest floor (commits 47500f627..a410df5e2)
