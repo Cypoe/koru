@@ -80,6 +80,25 @@ coverage map per target, per backend, per layer.
 - **G-LL-2** negative control (two genuinely differing
 IRs → Alive2 must flag).
 
+**Landed (2026-10-13, 6aff63be6) — different shape than the sketch.** No
+`-fllvm` leg exists; what shipped verifies *emitted-C optimization
+congruence* instead: `scripts/alive2_gate.sh` clang -O0's a test's
+`output_emitted.c` to reference IR and `alive-tv --passes=` proves each
+intra-procedural optimization instance is a refinement of it. That is a
+related but distinct claim from Use A — it establishes that the emitted
+C holds no UB a mainstream optimizer can diverge on, which is exactly
+the K1-complementary property: ccomp validates its own pipeline, alive2
+validates arbitrary-pipeline safety of the artifact itself.
+`ALIVE2_CHECK` marker + `KORU_ALIVE2=1` opt a regression test in (needs
+clang + alive-tv on PATH); 12 tests marked. Verdict discipline is strict
+— incorrect/timeout/undecided fail — with named, counted scope
+exclusions for alive2's structural limits (unmodeled libcalls,
+sret/untranslatable signatures, unroll-bound loops); the parser's counts
+are cross-checked against alive-tv's own summary. G-LL-2 measured live:
+a same-signature `mul`→`add` IR forge reports `incorrect input_wmul`.
+Use B (koru-transform congruence) stays unlanded — it needs the emitter
+to expose pre/post IR, not a `.ll` from clang.
+
 ---
 
 ## 3. K3 — Proof-carrying obligations
