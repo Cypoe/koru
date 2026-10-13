@@ -7,9 +7,9 @@ step 2/2 result: {"branch":""} bound: r2
 
 render:a
 step 1/2 result: {"branch":""} bound: r3
-step 2/2 residue bound: r4 — your reply was not wire; nothing reached the user, but the observer kept it. Prose meant for the user wants `say:` up front (no quoting needed), `note:` for thinking out loud — re-emit that text in that shape
+step 2/2 residue bound: r4 — '| ok u |>' is not wire; nothing reached the user, but the observer kept it. `say:` reaches the user, `note:` thinks, `verb(field: ...)` calls — `vocabulary()` lists every verb
 
 render:b
 step 1/2 result: {"branch":""} bound: r5
-step 2/2 residue bound: r6 — your reply was not wire; nothing reached the user, but the observer kept it. Prose meant for the user wants `say:` up front (no quoting needed), `note:` for thinking out loud — re-emit that text in that shape
+step 2/2 residue bound: r6 — 'Note: ends it' is not wire; nothing reached the user, but the observer kept it. `say:` reaches the user, `note:` thinks, `verb(field: ...)` calls — `vocabulary()` lists every verb
 

@@ -14,6 +14,7 @@ const WIRE_GRAMMAR_TEXT =
     \\- A field typed `name<x>` takes only a bound name the session minted `<x!>` — an `rN` from an earlier verb or an arm binding, never literal text.
     \\- A bound name keeps its fields: `r3.user_id` reads that field out of the value r3 bound — the whole result stays readable in the session, not just its name.
     \\- A second invocation starts a second item: one invocation per line runs each in order — to think out loud, `note: the reasoning` on its own line, then the call that acts on the next.
+    \\- Invent a verb: `tor name { field: type }` declares it, `name = a call or chain` defines it — `tor greet { msg: string }` + `greet = say(text: msg)` — callable in the same reply and in your vocabulary thereafter.
     \\- Prose is not wire — it binds as residue: "residue bound: rN — your reply was not wire; nothing reached the user" keeps YOUR reply at rN — and a reply that is only prose is a turn spent reaching nobody.
 ;
 
@@ -23,9 +24,8 @@ const WIRE_GRAMMAR_TEXT =
 // session value it can re-emit through a real verb.
 const WireRejection = struct { message: []const u8, byte: usize, not_invocation: bool };
 
-// The character predicates (`wireIdentStart`/`wireIdentChar`/
-// `wireBareValueChar`), rejection builders (`wireReject`/`wireRejectResidue`),
-// and `wireLineColumn` live in runtime.wirelex.kz (the `wirelex` part). The
-// scanner is the `wirescan` part — type-directed there, scope-blind when
-// called without lookups; the arms commentary lives with the code.
+// The character predicates (`wireIdentStart`/`wireIdentChar`/`wireBareValueChar`),
+// rejection builders (`wireReject`/`wireRejectResidue`), and `wireLineColumn` live
+// in runtime.wirelex.kz (the `wirelex` part). The scanner is the `wirescan` part —
+// type-directed there, scope-blind when called without lookups.
 

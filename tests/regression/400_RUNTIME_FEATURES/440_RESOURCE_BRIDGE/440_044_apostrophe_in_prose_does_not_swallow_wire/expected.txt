@@ -1,7 +1,7 @@
 hi
-step 1/2 residue bound: r1 — your reply was not wire; nothing reached the user, but the observer kept it. Prose meant for the user wants `say:` up front (no quoting needed), `note:` for thinking out loud — re-emit that text in that shape
+step 1/2 residue bound: r1 — 'I'll echo the greeting next.' is not wire; nothing reached the user, but the observer kept it. `say:` reaches the user, `note:` thinks, `verb(field: ...)` calls — `vocabulary()` lists every verb
 step 2/2 result: {"branch":""} bound: r2
 
-RESIDUE residue bound: r3 — your reply was not wire; nothing reached the user, but the observer kept it. Prose meant for the user wants `say:` up front (no quoting needed), `note:` for thinking out loud — re-emit your text in that shape
+RESIDUE residue bound: r3 — 'it's just prose' is not wire; nothing reached the user, but the observer kept it. `say:` reaches the user, `note:` thinks, `verb(field: ...)` calls — `vocabulary()` lists every verb
 it's quoted fine
 RESULT bound=r4

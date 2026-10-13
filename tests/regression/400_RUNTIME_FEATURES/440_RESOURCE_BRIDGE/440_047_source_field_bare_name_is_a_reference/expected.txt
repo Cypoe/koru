@@ -1,0 +1,12 @@
+RESULT bound=r1
+sink:[{"flight_number": "H1001", "date": "2024-05-01"}]
+RESULT bound=r2
+sink:payload-7
+RESULT bound=r3
+calc:7
+RESULT bound=r4
+REFUSED unbound 'ghost' on 'sink' — bind it with an arm (`| <branch> ghost |>`) or quote it for a literal
+sink:hello world
+RESULT bound=r5
+sink:a colon line stays prose
+RESULT bound=r6

@@ -198,6 +198,7 @@ koru_std/runtime.registry.kz	809
 koru_std/runtime.run.kz	89
 koru_std/runtime.runcached.kz	69
 koru_std/runtime.specs.kz	53
+koru_std/runtime.wirecap.kz	69
 koru_std/runtime.wirelex.kz	44
 koru_std/runtime.wirescan.kz	266
 koru_std/runtime.wiretext.kz	38

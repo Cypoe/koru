@@ -59,7 +59,7 @@
             if (e.not_invocation or isNoteAttempt(br, source)) {
                 const prose = std.mem.trim(u8, source, " \t\r\n");
                 const rn = bindResidue(br, prose);
-                if (rn.len > 0) return .{ .residue = .{ .report = residueNote(rn),
+                if (rn.len > 0) return .{ .residue = .{ .report = residueNote(rn, prose),
                     .observer = !e.not_invocation, .bound = rn, .text = prose } };
             }
             return .{ .parse_error = .{
@@ -103,7 +103,7 @@
     if (all_prose) {
         const trimmed = std.mem.trim(u8, source, " \t\r\n");
         const rn = bindResidue(br, trimmed);
-        if (rn.len > 0) return .{ .residue = .{ .report = residueNote(rn),
+        if (rn.len > 0) return .{ .residue = .{ .report = residueNote(rn, trimmed),
             .observer = isNoteAttempt(br, trimmed), .bound = rn, .text = trimmed } };
         // Bind failed — fall through to the per-item loop, which reports
         // per-step refusals instead of lying about a single binding.
