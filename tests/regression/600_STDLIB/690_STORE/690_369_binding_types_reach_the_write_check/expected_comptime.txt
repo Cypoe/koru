@@ -1,0 +1,5 @@
+[witness] site stored-write-numeric stats.hits i64<-unproven deferred
+[witness] site stored-write-numeric stats.total i64<-i64 lossless
+[witness] site stored-write-numeric stats.total i64<-i64 lossless
+[witness] site stored-write-numeric players.hp i64<-i64 lossless
+[witness] stored-write-numeric: lossless=3 deferred=1 rounds=0 non-numeric=0 refused=0

@@ -389,21 +389,35 @@ fn writeStoreNameOf(alloc: std.mem.Allocator, prog: *const ast_find.Program, obj
     return null;
 }
 
+// A bound name to proven numeric info. Phantom (`<...>`) and pointer (`*`)
+// types are never a numeric column; "unknown" is the parser placeholder -
+// all defer, they never refuse.
+fn writeScopeNumInfo(scope: []const ast_find.ScopeBinding, name: []const u8) ?WriteNumInfo {
+    for (scope) |b| {
+        if (!std.mem.eql(u8, b.name, name) and !std.mem.eql(u8, b.value_ref, name)) continue;
+        const ty = std.mem.trim(u8, b.type, " ");
+        if (ty.len == 0 or std.mem.eql(u8, ty, "unknown")) return null;
+        if (std.mem.indexOfAny(u8, ty, "<*") != null) return null;
+        return writeNumInfoOf(ty);
+    }
+    return null;
+}
+
 // The proven numeric class of a value expression, or null = unknown.
 // `null` is never a verdict — it is "defer to the host backend".
-fn writeExprNumInfo(alloc: std.mem.Allocator, prog: *const ast_find.Program, expr: *const ast_find.Expression) ?WriteNumInfo {
+fn writeExprNumInfo(alloc: std.mem.Allocator, prog: *const ast_find.Program, expr: *const ast_find.Expression, scope: []const ast_find.ScopeBinding) ?WriteNumInfo {
     switch (expr.node) {
         .literal => return null,
-        .identifier => return null,
-        .unary => |u| return writeExprNumInfo(alloc, prog, u.operand),
-        .grouped => |g| return writeExprNumInfo(alloc, prog, g),
+        .identifier => |n| return writeScopeNumInfo(scope, n),
+        .unary => |u| return writeExprNumInfo(alloc, prog, u.operand, scope),
+        .grouped => |g| return writeExprNumInfo(alloc, prog, g, scope),
         .binary => |b| {
             switch (b.op) {
                 .add, .subtract, .multiply, .divide, .modulo => {},
                 else => return null, // comparisons and logic yield bool
             }
-            const l = writeExprNumInfo(alloc, prog, b.left);
-            const r = writeExprNumInfo(alloc, prog, b.right);
+            const l = writeExprNumInfo(alloc, prog, b.left, scope);
+            const r = writeExprNumInfo(alloc, prog, b.right, scope);
             if (l != null and r != null) {
                 if (l.?.cls != r.?.cls) return null; // mixed family — defer
                 return if (l.?.rank >= r.?.rank) l.? else r.?;
@@ -421,6 +435,16 @@ fn writeExprNumInfo(alloc: std.mem.Allocator, prog: *const ast_find.Program, exp
         .field_access => |fa| {
             if (writeStoreNameOf(alloc, prog, fa.object)) |sn| {
                 return writeColNumInfo(alloc, prog, sn, fa.field);
+            }
+            return null;
+        },
+        .builtin_call => |bc| {
+            // @as(T, e) is the author's own coercion - Zig refuses a lossy
+            // one, so a numeric T here is proven. Any other builtin defers.
+            if (std.mem.eql(u8, bc.name, "as") and bc.args.len == 2) {
+                if (bc.args[0].node == .identifier) {
+                    return writeNumInfoOf(bc.args[0].node.identifier);
+                }
             }
             return null;
         },
@@ -581,13 +605,13 @@ fn literalExactIn(text: []const u8, dest_name: []const u8) ?bool {
 
 // Runs the numeric check and returns the verdict record — never refuses on
 // its own. Unproven stays unproven: neither safe nor refused.
-fn storedWriteCheck(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8, field: []const u8, value_text: []const u8) StoredWriteVerdict {
+fn storedWriteCheck(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8, field: []const u8, value_text: []const u8, scope: []const ast_find.ScopeBinding) StoredWriteVerdict {
     var v = StoredWriteVerdict{ .site = std.fmt.allocPrint(alloc, "{s}.{s}", .{ store, field }) catch unreachable };
     const tinfo = writeColNumInfo(alloc, prog, store, field) orelse return v;
     v.dest = tinfo.name;
     var parser = expression_parser_wc.ExpressionParser.init(alloc, value_text);
     const expr = parser.parseAll() catch return v;
-    const rinfo = writeExprNumInfo(alloc, prog, expr) orelse {
+    const rinfo = writeExprNumInfo(alloc, prog, expr, scope) orelse {
         // A lone literal's representability is decidable from its text;
         // the mark carries it verbatim so a downstream checker can re-decide.
         if (numericLiteralText(alloc, expr)) |text| {
@@ -609,8 +633,8 @@ fn storedWriteCheck(alloc: std.mem.Allocator, prog: *const ast_find.Program, sto
 // The write-side refusal: the diagnostic text when the RHS's proven class
 // cannot land in the column, null when it can or nothing is proven.
 // Cross-class is refused both ways — no host coerces float↔int silently.
-fn storedWriteNarrowing(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8, field: []const u8, value_text: []const u8) ?[]const u8 {
-    const v = storedWriteCheck(alloc, prog, store, field, value_text);
+fn storedWriteNarrowing(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8, field: []const u8, value_text: []const u8, scope: []const ast_find.ScopeBinding) ?[]const u8 {
+    const v = storedWriteCheck(alloc, prog, store, field, value_text, scope);
     if (!v.narrows) return null;
     return std.fmt.allocPrint(alloc, "std/store:stored: column '{s}.{s}' is {s} but the write is provably {s} — a write that loses bits is refused, never silently rounded (690_160)", .{ store, field, v.dest.?, v.src.? }) catch unreachable;
 }

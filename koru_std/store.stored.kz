@@ -49,6 +49,31 @@
     if (item.* != .flow) @panic("store:stored transform: containing item is not a flow - walker dispatch contract broken");
     const flow = &item.flow;
 
+    // The binding env the write's RHS sees: who is `r` in `b.hp: r`?
+    // scopeAtSite walks the site's continuation path and collects every
+    // bound name; at a flow root (site_of null) an impl flow's input fields
+    // are the scope. On any env error the check degrades to "unproven" -
+    // it defers, it never refuses because the env failed.
+    const write_scope: []const ast.ScopeBinding = blk: {
+        const eh = @import("emitter_helpers");
+        if (flow.site_of) |site| break :blk eh.scopeAtSite(allocator, program.items, site) catch &.{};
+        if (flow.impl_of) |impl_path| {
+            var p = impl_path;
+            if (eh.findEventDeclByPath(program.items, &p)) |decl| {
+                var out = std.ArrayList(ast.ScopeBinding){};
+                for (decl.input.fields) |f| {
+                    const ty = if (f.phantom) |ph|
+                        std.fmt.allocPrint(allocator, "{s}<{s}>", .{ f.type, ph }) catch f.type
+                    else
+                        f.type;
+                    out.append(allocator, .{ .name = f.name, .type = ty, .value_ref = f.name }) catch unreachable;
+                }
+                break :blk out.items;
+            }
+        }
+        break :blk &.{};
+    };
+
     const H = StoredScan;
 
     var block_text: ?[]const u8 = null;
@@ -127,9 +152,9 @@
         // lowered envwrite invocation (prepared-witness channel).
         const env_checks = allocator.alloc(StoredWriteVerdict, env_fields.len) catch unreachable;
         for (env_fields, env_raw_values, 0..) |ef, rv, k| {
-            env_checks[k] = storedWriteCheck(allocator, program, env_store, ef, rv);
+            env_checks[k] = storedWriteCheck(allocator, program, env_store, ef, rv, write_scope);
             if (env_checks[k].narrows) {
-                const m = storedWriteNarrowing(allocator, program, env_store, ef, rv).?;
+                const m = storedWriteNarrowing(allocator, program, env_store, ef, rv, write_scope).?;
                 return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "{s}", .{m}) };
             }
         }
@@ -488,9 +513,9 @@
 
     // Same koru-owned narrowing refusal as the envelope path (690_160) —
     // and the verdict becomes the @witness mark on the lowered write call.
-    const write_check = storedWriteCheck(allocator, program, target_store, target_field, w.value);
+    const write_check = storedWriteCheck(allocator, program, target_store, target_field, w.value, write_scope);
     if (write_check.narrows) {
-        const m = storedWriteNarrowing(allocator, program, target_store, target_field, w.value).?;
+        const m = storedWriteNarrowing(allocator, program, target_store, target_field, w.value, write_scope).?;
         return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "{s}", .{m}) };
     }
 
