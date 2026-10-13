@@ -2114,6 +2114,20 @@ fn punContinuationBinding(
                         if (claimed) continue;
                     }
 
+                    // A `|>` produce is the NEAREST binding of its type — the
+                    // value that just arrived — so every open slot it can fill
+                    // is reserved for the election in step 1b, the same way
+                    // own_payload_type reserves the arm's payload above. Let
+                    // the fill run first on these slots and the nearer value
+                    // loses purely by pass order (same defect shape as
+                    // 690_090): a stale bind takes the slot, the produce is
+                    // computed and discarded, and KORU093's election dissolves
+                    // into a silent fill whenever a compatible binding is in
+                    // scope. The arm guard never reached this thread.
+                    if (thread) |th| {
+                        if (typeCanFill(th.type, f_type)) continue;
+                    }
+
                     // TEACHING GUARD (KORU038), kept alive across the selector
                     // change. A `std/fmt:ln(...): text` bind is a RESULT STRUCT,
                     // so it can never type-match a `string` slot — the fill below
