@@ -423,6 +423,13 @@ const Emitter = struct {
     /// spelling, so a declared terminal resolves to itself.
     aliases: *const std.StringHashMap([]const u8),
 
+    /// Minted binding name → its declared C type — the wrap-op lowering's
+    /// width registry (`*%` `+%` `-%` wrap at the DECLARED int width).
+    /// Populated wherever a `{ct} const {name}` or `long long {name}` is
+    /// minted; names that never minted (store member reads, call results)
+    /// do not resolve, and an unresolved wrap op refuses.
+    int_bindings: *std.StringHashMap([]const u8),
+
     /// Monotonic result-temp counter — `__koru_res_N` at tagged-dispatch
     /// call sites.
     res_counter: usize = 0,
@@ -438,15 +445,24 @@ const Emitter = struct {
         try self.buf.writer(self.allocator).print(fmt, args);
     }
 
+    /// `resolve_int_ctype` entry for LowerDiag — the minted-cell registry.
+    fn resolveIntCtype(ctx: ?*anyopaque, name: []const u8) ?[]const u8 {
+        const c = ctx orelse return null;
+        const self: *Emitter = @ptrCast(@alignCast(c));
+        return self.int_bindings.get(name);
+    }
+
     /// Lower Koru expression text through the ONE shared lowering (the C
     /// target arm of codegen_utils.lowerKoruExpr), or refuse the builtin it
     /// names.
     fn writeExpr(self: *Emitter, text: []const u8) CEmitError!void {
         var diag: codegen_utils.LowerDiag = .{};
+        diag.resolve_int_ctype = resolveIntCtype;
+        diag.int_width_ctx = self;
         const lowered = codegen_utils.lowerKoruExpr(self.allocator, text, .c, .koru_expr, &diag) catch |err| {
             if (err == error.UnsupportedBuiltin) {
                 if (diag.unsupported_op.len != 0) {
-                    std.debug.print("error[KORU047]: C lane: wrapping operator `{s}` in expression `{s}` — wrap width is the operand's declared int width, which the C lane's uniform i64 cell does not carry\n", .{ diag.unsupported_op, text });
+                    std.debug.print("error[KORU047]: C lane: wrapping operator `{s}` in expression `{s}` — wrap width is the operand's declared int width, which neither operand resolves to in this scope\n", .{ diag.unsupported_op, text });
                 } else {
                     std.debug.print("error[KORU047]: C lane: unsupported builtin {s} in expression `{s}`\n", .{ diag.unknown_builtin, text });
                 }
@@ -719,6 +735,7 @@ const Emitter = struct {
                 std.debug.print("error[KORU047]: C lane: field {s} has type {s} — no C type in the first fragment\n", .{ f.name, f.type });
                 return CEmitError.UnsupportedConstruct;
             };
+            try self.int_bindings.put(f.name, ct);
             try self.writeFmt("    {s} const {s} = {s}.{s};\n", .{ ct, f.name, INPUT_PARAM, f.name });
         }
     }
@@ -930,6 +947,7 @@ const Emitter = struct {
                     if (!std.mem.eql(u8, binding, "_")) {
                         // `long long` is the fragment's int — for|c only mints
                         // this splice for a range item, which is one.
+                        try self.int_bindings.put(binding, "long long");
                         try self.writeFmt("long long {s} = {s}; ", .{ binding, arg });
                     }
                 }
@@ -1109,6 +1127,7 @@ const Emitter = struct {
                 std.debug.print("error[KORU047]: C lane: {s} returns {s} — no C type in the first fragment\n", .{ key, rt });
                 return CEmitError.UnsupportedConstruct;
             };
+            try self.int_bindings.put(bind, ct);
             try self.writeFmt("{s} const {s} = ", .{ ct, bind });
         }
         if (eventIsStub(event)) {
@@ -1252,6 +1271,7 @@ const Emitter = struct {
                 // (auto-discharge names panic arms `_auto_N`); zig binds it to
                 // nothing, C emits nothing.
                 if ((try self.branchPayloadCType(ename, "", b))) |pt| {
+                    try self.int_bindings.put(bind, pt);
                     try self.writeFmt("{s}{s} const {s} = {s}.{s};\n", .{ indent, pt, bind, rn, codegen_utils.cPayloadMember(self.allocator, cont.branch) });
                 }
             }
@@ -1271,6 +1291,7 @@ const Emitter = struct {
                 std.debug.print("error[KORU047]: C lane: `| {s} {{ {s} }}` names no payload field with a C type\n", .{ cont.branch, df.name });
                 return CEmitError.UnsupportedConstruct;
             };
+            try self.int_bindings.put(df.name, ct);
             try self.writeFmt("{s}{s} const {s} = {s}.{s}.{s};\n", .{ indent, ct, df.name, rn, codegen_utils.cPayloadMember(self.allocator, cont.branch), codegen_utils.cMemberName(self.allocator, df.name) });
         }
     }
@@ -1542,6 +1563,8 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     defer aliases.deinit();
     try seedProtoTerminals(program.items, &aliases);
 
+    var int_bindings = std.StringHashMap([]const u8).init(allocator);
+    defer int_bindings.deinit();
     var em = Emitter{
         .allocator = allocator,
         .buf = &buf,
@@ -1550,6 +1573,7 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         .impls = &impls,
         .impl_flows = &impl_flows,
         .aliases = &aliases,
+        .int_bindings = &int_bindings,
     };
 
     // Preamble — includes plus the runtime surface the lowering and the |c

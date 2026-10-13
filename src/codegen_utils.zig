@@ -260,12 +260,22 @@ pub fn scanDecimalIndex(text: []const u8, pos: *usize) ?usize {
 pub fn cTypeOf(koru_type: []const u8) ?[]const u8 {
     const t = std.mem.trim(u8, koru_type, " \t");
     if (std.mem.eql(u8, t, "string") or std.mem.eql(u8, t, "[]const u8")) return "const char *";
-    if (std.mem.eql(u8, t, "i64") or std.mem.eql(u8, t, "i32") or
-        std.mem.eql(u8, t, "i16") or std.mem.eql(u8, t, "i8") or
-        std.mem.eql(u8, t, "u64") or std.mem.eql(u8, t, "u32") or
-        std.mem.eql(u8, t, "u16") or std.mem.eql(u8, t, "u8") or
-        std.mem.eql(u8, t, "usize") or std.mem.eql(u8, t, "isize") or
-        std.mem.eql(u8, t, "int") or std.mem.eql(u8, t, "number")) return "long long";
+    // Declared-width ints carry their width into C — `i32` is `int32_t`,
+    // not the generic cell — so `*%` `+%` `-%` can wrap at the width the
+    // declaration promised. `i64`/`int`/`number` stay `long long`: the
+    // unadorned-int cell (i64 IS long long on the ccomp targets, so nothing
+    // already emitted changes representation).
+    if (std.mem.eql(u8, t, "i64") or std.mem.eql(u8, t, "int") or
+        std.mem.eql(u8, t, "number")) return "long long";
+    if (std.mem.eql(u8, t, "i32")) return "int32_t";
+    if (std.mem.eql(u8, t, "i16")) return "int16_t";
+    if (std.mem.eql(u8, t, "i8")) return "int8_t";
+    if (std.mem.eql(u8, t, "u64")) return "uint64_t";
+    if (std.mem.eql(u8, t, "u32")) return "uint32_t";
+    if (std.mem.eql(u8, t, "u16")) return "uint16_t";
+    if (std.mem.eql(u8, t, "u8")) return "uint8_t";
+    if (std.mem.eql(u8, t, "usize")) return "uintptr_t";
+    if (std.mem.eql(u8, t, "isize")) return "intptr_t";
     if (std.mem.eql(u8, t, "f64") or std.mem.eql(u8, t, "f32") or
         std.mem.eql(u8, t, "float")) return "double";
     if (std.mem.eql(u8, t, "bool")) return "int";
@@ -919,6 +929,12 @@ pub const LowerDiag = struct {
     /// Set instead of `unknown_builtin` when what refused is an operator
     /// (`*%` `+%` `-%`), not a builtin — the caller picks the wording.
     unsupported_op: []const u8 = "",
+    /// INPUT side, consulted only by the C arm's wrapping-op lowering:
+    /// resolve a binding name to its declared C int type so `*%` `+%` `-%`
+    /// can wrap at the DECLARED width. Null resolver — or a name it does
+    /// not resolve — leaves the op refused: no width, no wrap.
+    resolve_int_ctype: ?*const fn (ctx: ?*anyopaque, name: []const u8) ?[]const u8 = null,
+    int_width_ctx: ?*anyopaque = null,
 };
 
 /// Render Koru expression text for `target`. Caller owns the result.
@@ -1843,27 +1859,21 @@ fn lowerJsInto(
     }
 }
 
-/// Operand capture for the `*%` `+%` `-%` lowerings in `lowerJsInto`.
-/// `text[at]` is the operator's first character (the `%` follows it). The LHS
-/// sits at the END of `out` — already appended — and is pulled back off; the
-/// RHS is the next term in `text`. A term is a balanced `(...)`/`[...]`/`{...}`
-/// group or an atom: identifier/dotted path, numeric literal, or a call.
-/// Returns the source index just past the RHS, or null when either side is not
-/// a shape this can capture — the op then falls through verbatim, a loud syntax
-/// error downstream rather than a silent wrong answer.
-fn jsWrapOp(
-    out: *std.ArrayList(u8),
-    allocator: std.mem.Allocator,
-    text: []const u8,
-    at: usize,
-    diag: ?*LowerDiag,
-) LowerError!?usize {
-    // --- LHS: trailing operand of the already-emitted text.
-    var l = out.items.len;
-    while (l > 0 and std.ascii.isWhitespace(out.items[l - 1])) l -= 1;
+/// Operand capture for the `*%` `+%` `-%` lowerings — shared by the js
+/// and C arms. `text[at]` is the operator's first character (the `%`
+/// follows it). A term is a balanced `(...)`/`[...]`/`{...}` group or an
+/// atom: identifier/dotted path, numeric literal, or a call.
+
+const WrapLhs = struct { start: usize, end: usize };
+
+/// LHS: the trailing operand of the already-emitted `out`, as a span.
+/// Null when the tail is not a capturable term.
+fn wrapLhsSpan(items: []const u8) ?WrapLhs {
+    var l = items.len;
+    while (l > 0 and std.ascii.isWhitespace(items[l - 1])) l -= 1;
     if (l == 0) return null;
     const l_end = l;
-    const last = out.items[l - 1];
+    const last = items[l - 1];
     if (last == ')' or last == ']' or last == '}') {
         const open: u8 = switch (last) {
             ')' => '(',
@@ -1874,7 +1884,7 @@ fn jsWrapOp(
         var depth: usize = 0;
         while (l > 0) {
             l -= 1;
-            const ch = out.items[l];
+            const ch = items[l];
             if (ch == last) depth += 1;
             if (ch == open) {
                 if (depth == 0) return null;
@@ -1884,13 +1894,14 @@ fn jsWrapOp(
         }
         if (depth != 0) return null;
     } else if (exprIdentChar(last) or last == '.') {
-        while (l > 0 and (exprIdentChar(out.items[l - 1]) or out.items[l - 1] == '.')) l -= 1;
+        while (l > 0 and (exprIdentChar(items[l - 1]) or items[l - 1] == '.')) l -= 1;
     } else return null;
-    const lhs = try allocator.dupe(u8, out.items[l..l_end]);
-    defer allocator.free(lhs);
-    out.shrinkRetainingCapacity(l);
+    return .{ .start = l, .end = l_end };
+}
 
-    // --- RHS: next term in the source text.
+/// RHS: the index just past the next term in `text` after the operator
+/// at `at`, or null when the next text is not a capturable term.
+fn wrapRhsEnd(text: []const u8, at: usize) ?usize {
     var j = at + 2;
     while (j < text.len and std.ascii.isWhitespace(text[j])) j += 1;
     if (j >= text.len) return null;
@@ -1900,7 +1911,7 @@ fn jsWrapOp(
         while (r_end < text.len) {
             const ch = text[r_end];
             if (ch == '"' or ch == '\'' or ch == '`') {
-                r_end = jsSkipQuoted(text, r_end);
+                r_end = exprSkipQuoted(text, r_end);
                 continue;
             }
             if (ch == '(' or ch == '[' or ch == '{') depth += 1;
@@ -1923,7 +1934,7 @@ fn jsWrapOp(
             while (k < text.len) {
                 const ch = text[k];
                 if (ch == '"' or ch == '\'' or ch == '`') {
-                    k = jsSkipQuoted(text, k);
+                    k = exprSkipQuoted(text, k);
                     continue;
                 }
                 if (ch == '(') depth += 1;
@@ -1941,6 +1952,46 @@ fn jsWrapOp(
         }
     }
     if (r_end == j) return null;
+    return r_end;
+}
+
+/// Skip a quoted literal opening at `text[i]` (`"`, `'`, or backtick).
+/// Returns the index just past the closer, or `text.len` if unterminated.
+fn exprSkipQuoted(text: []const u8, i: usize) usize {
+    const q = text[i];
+    var j = i + 1;
+    while (j < text.len) {
+        if (text[j] == '\\') {
+            j += 2;
+            continue;
+        }
+        if (text[j] == q) return j + 1;
+        j += 1;
+    }
+    return text.len;
+}
+
+/// Operand capture for the `*%` `+%` `-%` lowerings in `lowerJsInto`.
+/// The LHS sits at the END of `out` — already appended — and is pulled
+/// back off; the RHS is the next term in `text`. Returns the source index
+/// just past the RHS, or null when either side is not a shape this can
+/// capture — the op then falls through verbatim, a loud syntax error
+/// downstream rather than a silent wrong answer.
+fn jsWrapOp(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    at: usize,
+    diag: ?*LowerDiag,
+) LowerError!?usize {
+    const lspan = wrapLhsSpan(out.items) orelse return null;
+    const r_end = wrapRhsEnd(text, at) orelse return null;
+    var j = at + 2;
+    while (j < text.len and std.ascii.isWhitespace(text[j])) j += 1;
+
+    const lhs = try allocator.dupe(u8, out.items[lspan.start..lspan.end]);
+    defer allocator.free(lhs);
+    out.shrinkRetainingCapacity(lspan.start);
 
     if (text[at] == '*') {
         try out.appendSlice(allocator, "Math.imul(");
@@ -1958,20 +2009,82 @@ fn jsWrapOp(
     return r_end;
 }
 
-/// Skip a quoted literal opening at `text[i]` (`"`, `'`, or backtick).
-/// Returns the index just past the closer, or `text.len` if unterminated.
-fn jsSkipQuoted(text: []const u8, i: usize) usize {
-    const q = text[i];
-    var j = i + 1;
-    while (j < text.len) {
-        if (text[j] == '\\') {
-            j += 2;
-            continue;
-        }
-        if (text[j] == q) return j + 1;
-        j += 1;
+const CWrapPair = struct { ct: []const u8, uct: []const u8 };
+
+/// Signed C int spelling -> its unsigned twin for the defined-wrap
+/// computation; unsigned spellings map to themselves --- EXCEPT widths
+/// narrower than `int`, which compute in `unsigned int`: C integer
+/// promotion would run a `uint16_t` multiply in signed `int`, where
+/// overflow is strict-ISO UB (CompCert defines it, but the emitted C
+/// should be conforming for any compiler). Anything else --- `double`,
+/// `const char *`, a typedef'd proto --- is not an int cell and returns
+/// null, which the caller turns into a refusal.
+fn cIntWrapPair(ct: []const u8) ?CWrapPair {
+    const pairs = [_]CWrapPair{
+        .{ .ct = "int8_t", .uct = "unsigned int" },
+        .{ .ct = "int16_t", .uct = "unsigned int" },
+        .{ .ct = "int32_t", .uct = "uint32_t" },
+        .{ .ct = "intptr_t", .uct = "uintptr_t" },
+        .{ .ct = "long long", .uct = "unsigned long long" },
+        .{ .ct = "uint8_t", .uct = "unsigned int" },
+        .{ .ct = "uint16_t", .uct = "unsigned int" },
+        .{ .ct = "uint32_t", .uct = "uint32_t" },
+        .{ .ct = "uint64_t", .uct = "uint64_t" },
+        .{ .ct = "uintptr_t", .uct = "uintptr_t" },
+        .{ .ct = "unsigned long long", .uct = "unsigned long long" },
+    };
+    for (pairs) |p| {
+        if (std.mem.eql(u8, p.ct, ct)) return p;
     }
-    return text.len;
+    return null;
+}
+
+/// C arm of the `*%` `+%` `-%` lowering: `((ct)((uct)(L) op (uct)(R)))` —
+/// the unsigned recomputation is defined wrap at the declared width, the
+/// cast back is the two's-complement re-read every target implements
+/// (CompCert specifies it). Width comes from the caller's
+/// `resolve_int_ctype` over a plain-name operand, LHS first — operands of
+/// a wrap op share one declared type, so either side answers it. Returns
+/// null when the resolver is absent, no operand resolves, or the
+/// resolved type is not an int cell — the caller then refuses.
+fn cWrapOp(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    at: usize,
+    diag: ?*LowerDiag,
+) LowerError!?usize {
+    const d = diag orelse return null;
+    const resolve = d.resolve_int_ctype orelse return null;
+
+    const lspan = wrapLhsSpan(out.items) orelse return null;
+    const r_end = wrapRhsEnd(text, at) orelse return null;
+    var j = at + 2;
+    while (j < text.len and std.ascii.isWhitespace(text[j])) j += 1;
+
+    const lhs_name = std.mem.trim(u8, out.items[lspan.start..lspan.end], " \t");
+    const rhs_name = std.mem.trim(u8, text[j..r_end], " \t");
+    const ct = resolve(d.int_width_ctx, lhs_name) orelse
+        resolve(d.int_width_ctx, rhs_name) orelse return null;
+    const pair = cIntWrapPair(ct) orelse return null;
+
+    const lhs = try allocator.dupe(u8, lhs_name);
+    defer allocator.free(lhs);
+    out.shrinkRetainingCapacity(lspan.start);
+    try out.appendSlice(allocator, "((");
+    try out.appendSlice(allocator, pair.ct);
+    try out.appendSlice(allocator, ")((");
+    try out.appendSlice(allocator, pair.uct);
+    try out.appendSlice(allocator, ")(");
+    try out.appendSlice(allocator, lhs);
+    try out.appendSlice(allocator, ") ");
+    try out.append(allocator, text[at]);
+    try out.appendSlice(allocator, " (");
+    try out.appendSlice(allocator, pair.uct);
+    try out.appendSlice(allocator, ")(");
+    try lowerCInto(out, allocator, text[j..r_end], .koru_expr, diag);
+    try out.appendSlice(allocator, ")))");
+    return r_end;
 }
 
 /// Word at `text[at]` — boundary-checked on both sides, so `ifdef` and
@@ -2035,7 +2148,7 @@ fn jsInlineIf(
     while (k < text.len) {
         const ch = text[k];
         if (ch == '"' or ch == '\'' or ch == '`') {
-            k = jsSkipQuoted(text, k);
+            k = exprSkipQuoted(text, k);
             continue;
         }
         if (ch == '(') depth += 1;
@@ -2059,7 +2172,7 @@ fn jsInlineIf(
     scan: while (k < text.len) {
         const ch = text[k];
         if (ch == '"' or ch == '\'' or ch == '`') {
-            k = jsSkipQuoted(text, k);
+            k = exprSkipQuoted(text, k);
             continue;
         }
         switch (ch) {
@@ -2098,7 +2211,7 @@ fn jsInlineIf(
     while (k < text.len) {
         const ch = text[k];
         if (ch == '"' or ch == '\'' or ch == '`') {
-            k = jsSkipQuoted(text, k);
+            k = exprSkipQuoted(text, k);
             continue;
         }
         switch (ch) {
@@ -2156,7 +2269,7 @@ fn jsTypedDecl(
             while (k < text.len) {
                 const ch = text[k];
                 if (ch == '"' or ch == '\'' or ch == '`') {
-                    k = jsSkipQuoted(text, k);
+                    k = exprSkipQuoted(text, k);
                     continue;
                 }
                 switch (ch) {
@@ -3873,9 +3986,9 @@ fn scanOperandEnd(text: []const u8, j_start: usize) ?usize {
     if (j >= text.len) return null;
     const first = text[j];
     if (first == '"' or first == '\'') {
-        // jsSkipQuoted returns text.len for BOTH an unterminated quote and
+        // exprSkipQuoted returns text.len for BOTH an unterminated quote and
         // one closing on the final byte — disambiguate on the last char.
-        const end = jsSkipQuoted(text, j);
+        const end = exprSkipQuoted(text, j);
         return if (end > j + 1 and text[end - 1] == first) end else null;
     }
     if (first == '(' or first == '[' or first == '{') {
@@ -3884,7 +3997,7 @@ fn scanOperandEnd(text: []const u8, j_start: usize) ?usize {
         while (k < text.len) {
             const ch = text[k];
             if (ch == '"' or ch == '\'' or ch == '`') {
-                k = jsSkipQuoted(text, k);
+                k = exprSkipQuoted(text, k);
                 continue;
             }
             if (ch == '(' or ch == '[' or ch == '{') depth += 1;
@@ -3904,7 +4017,7 @@ fn scanOperandEnd(text: []const u8, j_start: usize) ?usize {
         while (k < text.len) {
             const ch = text[k];
             if (ch == '"' or ch == '\'' or ch == '`') {
-                k = jsSkipQuoted(text, k);
+                k = exprSkipQuoted(text, k);
                 continue;
             }
             if (ch == '(') depth += 1;
@@ -3994,12 +4107,17 @@ fn lowerCInto(
             }
         }
         // Zig WRAPPING operators `*%` `+%` `-%`. Wrapping is defined at the
-        // operand's DECLARED int width (i32 `*%` wraps at 2^32), and the C
-        // lane's uniform `long long` cell has already lost that width — the
-        // js lane can hardcode i32 because its int model IS i32, but a
-        // wrap-at-i64 lowering here would be a silent wrong answer, not a
-        // syntax error. Refuse by name rather than emit either.
+        // operand's DECLARED int width (i32 `*%` wraps at 2^32) — cWrapOp
+        // resolves that width from the caller's binding registry (the
+        // emitter's minted cells carry it now) and emits the defined
+        // unsigned-compute-cast-back form. Unresolvable width — a call
+        // result, a member read, a non-int cell — stays a named refusal:
+        // a wrap-at-i64 guess would be a silent wrong answer.
         if ((c == '*' or c == '+' or c == '-') and i + 1 < text.len and text[i + 1] == '%') {
+            if (try cWrapOp(out, allocator, text, i, diag)) |after| {
+                i = after;
+                continue;
+            }
             if (diag) |d| d.unsupported_op = text[i .. i + 2];
             return LowerError.UnsupportedBuiltin;
         }

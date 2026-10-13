@@ -166,11 +166,19 @@ expected.txt, 2 exposed emitter gaps** — both now closed:
   the free fn `__koru_handle_of_<S>(...)`. One-site fix, now `zig cs c`
   and green under the harness c-leg.
 - `230_005` — `*%`/`+%`/`-%` leaked verbatim (the js lane lowers them;
-  `lowerCInto` had no arm). Wrapping is defined at the operand's
-  DECLARED width and the C lane carries a uniform `long long` cell —
-  wrap-at-i64 would be a silent wrong answer, so `lowerCInto` now
-  refuses by name through `LowerDiag.unsupported_op` (KORU047). Pinned
-  via `C_REFUSES`.
+  `lowerCInto` had no arm). First refused (wrap-at-i64 would be a
+  silent wrong answer), then resolved by carrying DECLARED int widths
+  into C cells: `cTypeOf` maps `i32`→`int32_t`, `u8`→`uint8_t`,
+  `usize`→`uintptr_t`, … (`i64`/`int`/`number` stay `long long` — the
+  unadorned cell). The emitter records each minted binding's declared
+  C type (`int_bindings`, wired through `LowerDiag.resolve_int_ctype`)
+  and `cWrapOp` lowers `a *% b` to
+  `((int32_t)((uint32_t)(a) * (uint32_t)(b)))` — unsigned compute at
+  the declared width (`unsigned int` for sub-int widths, so integer
+  promotion can't overflow signed `int`), cast back. Operands whose
+  width doesn't resolve — member reads, call results — still refuse
+  (pinned `230_007`). `230_005` is `zig js c` now, byte-identical
+  under ccomp.
 
 The 14 survivors gained `c` in LANGUAGES: 7 module/import/comptime-mirror
 tests, 2 parser tests, and 5 store tests including the three witness-mark

@@ -846,17 +846,20 @@ already existed and the insert path already used it — the rewrite was the
 only site still on the member spelling). Fixed by branching on
 `storeHostTarget()` at the one mint site. Test is `zig cs c` now.
 
-**Gap 2 — `230_005`: wrap ops leaked verbatim.** `lowerCInto` had no
-`*%`/`+%`/`-%` arm — the js lane lowers them (`Math.imul`, `| 0`) because
-its int model IS i32. C cannot copy that: wrapping is defined at the
-operand's DECLARED width (`i32 *%` wraps at 2^32) and the C lane's
-uniform `long long` cell has already lost the width — a wrap-at-i64
-lowering returns `6000000000` where `1705032704` was pinned: a silent
-wrong answer, strictly worse than the syntax error it replaces. So
-`LowerDiag` gained `unsupported_op` and `lowerCInto` refuses the three
-ops by name (KORU047). Pinned via `C_REFUSES`. The honest fix — carrying
-declared int widths into C cells — is a type-representation tranche, not
-a lowering patch.
+**Gap 2 — `230_005`: wrap ops — RESOLVED by the declared-width tranche.**
+`lowerCInto` had no `*%`/`+%`/`-%` arm; the interim answer was a named
+refusal (wrap-at-i64 returns `6000000000` where `1705032704` was pinned).
+The honest fix named here — carrying declared int widths into C cells —
+landed: `cTypeOf` maps declared widths to `<stdint.h>` spellings
+(`i32`→`int32_t`, `usize`→`uintptr_t`; `i64`/`int`/`number` keep
+`long long`), the emitter records every minted binding's declared C type
+in `int_bindings` (field bindings, return binds, `for|c` items, branch
+payloads), and `writeExpr` wires it through `LowerDiag.resolve_int_ctype`.
+`cWrapOp` emits `((ct)((uct)(L) op (uct)(R)))` — unsigned compute, cast
+back; sub-`int` widths compute in `unsigned int` so C's integer
+promotion cannot overflow a signed type. Unresolvable operands (member
+reads, call results) still refuse — pinned `230_007`. `230_005` runs
+`zig js c`, byte-identical under ccomp.
 
 **The pins.** 15 tests gained `c` (the 14 survivors + `690_363`): module/
 import/comptime-mirror, parser, and store tests — including the three

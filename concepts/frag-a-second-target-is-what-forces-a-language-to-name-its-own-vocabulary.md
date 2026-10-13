@@ -196,3 +196,21 @@ permissiveness runs out. C's layer is not expressivity — it is
 *representation*: a target whose cell erases type detail forces
 refusals that richer cells never reach. The surface is still not
 finished being named.
+
+**Evolution (declared-width tranche):** the wrap-op refusal above was
+pinned as if C's representation erased the width — true, but the erasure
+was the C lane's OWN cell choice, not C's. `cTypeOf` now carries declared
+widths (`i32`→`int32_t`, `usize`→`uintptr_t`; only the unadorned
+`i64`/`int`/`number` cell keeps `long long`), `int_bindings` records each
+minted binding's declared C type, and `cWrapOp` emits the defined-wrap
+form `((int32_t)((uint32_t)(a) * (uint32_t)(b)))` — `unsigned int`
+compute for sub-int widths, where C's integer promotion would otherwise
+make a `uint16_t` multiply signed-`int` UB. The refusal did not
+disappear; it shrank to the operands that genuinely carry no width
+(member reads, call results — pinned `230_007`). The corrected layer:
+*what a target cannot express is bounded by its own representation
+choices — a refusal diagnosed at the host boundary may belong to the
+cell model instead, and fixing the cell is the honest expansion.* The
+uniform cell was a defensible first approximation because it could only
+over-approximate width, never under-; it stopped being defensible the
+day an operator's semantics were indexed by the width it discarded.
