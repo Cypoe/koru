@@ -627,6 +627,24 @@ fn backendHashComponents(allocator: std.mem.Allocator, koru_home: []const u8, re
         ch.update(std.mem.asBytes(&k));
     }
     ch.update(std.mem.asBytes(&emitted));
+    // ABI identity: backend binaries are dynamically linked, and a binary
+    // minted under one host glibc (or an explicit KORU_BACKEND_TARGET)
+    // hard-fails on another via versioned symbols — the key must refuse
+    // that replay instead of trusting it.
+    const builtin = @import("builtin");
+    const backend_target_env: ?[]const u8 = std.process.getEnvVarOwned(allocator, "KORU_BACKEND_TARGET") catch null;
+    defer if (backend_target_env) |t| allocator.free(t);
+    if (backend_target_env) |t| {
+        ch.update("KORU_BACKEND_TARGET");
+        ch.update(t);
+    } else {
+        ch.update("native");
+        ch.update(@tagName(builtin.target.abi));
+        if (builtin.target.os.versionRange().gnuLibCVersion()) |v| {
+            ch.update(std.mem.asBytes(&v.major));
+            ch.update(std.mem.asBytes(&v.minor));
+        }
+    }
     return .{ .src = src, .libs = libs, .emitted = emitted, .iface = iface, .combined = ch.final() };
 }
 
@@ -2270,8 +2288,12 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\    }
             \\
             \\    // Now compile the emitted code
-            \\    // Check for cross-compilation target from build:config
-            \\    const build_target = emitter_helpers.getBuildConfig("target");
+            \\    // Check for cross-compilation target from build:config;
+            \\    // KORU_BACKEND_TARGET fills the gap for hosts whose glibc
+            \\    // predates zig's native baseline — a program's declared
+            \\    // target always wins.
+            \\    const build_target = emitter_helpers.getBuildConfig("target") orelse
+            \\        __koru_std.posix.getenv("KORU_BACKEND_TARGET");
             \\
             \\    // --zig-lib-dir overlay: koru's optimized-but-byte-identical
             \\    // std/json/Stringify.zig for every @import("std") the emitted
@@ -9289,18 +9311,29 @@ pub fn main() !void {
         }
 
         // When running with cwd set to output_dir, build-file should be relative to that dir
-        const zig_build_args = [_][]const u8{
-            "zig",
-            "build",
-            "--build-file",
-            "build_backend.zig", // Relative to cwd (output_dir_for_build)
-        };
+        // KORU_BACKEND_TARGET=<triple>.<glibc> appends -Dtarget for hosts whose
+        // glibc predates zig's native baseline (e.g. Ubuntu 20.04, glibc 2.31);
+        // absent -> native resolution as before.
+        const backend_target_env: ?[]const u8 = std.process.getEnvVarOwned(allocator, "KORU_BACKEND_TARGET") catch null;
+        defer if (backend_target_env) |t| allocator.free(t);
+        var backend_target_buf: [256]u8 = undefined;
+        var args_buf: [5][]const u8 = undefined;
+        var args_len: usize = 0;
+        for ([_][]const u8{ "zig", "build", "--build-file", "build_backend.zig" }) |a| {
+            args_buf[args_len] = a;
+            args_len += 1;
+        }
+        if (backend_target_env) |t| {
+            args_buf[args_len] = std.fmt.bufPrint(&backend_target_buf, "-Dtarget={s}", .{t}) catch unreachable;
+            args_len += 1;
+        }
+        const zig_build_args = args_buf[0..args_len];
 
         // Run zig build in the output directory so zig-out/ is created there
         if (!backend_cached) {
             const compile_result = try std.process.Child.run(.{
                 .allocator = allocator,
-                .argv = &zig_build_args,
+                .argv = zig_build_args,
                 .cwd = output_dir_for_build,
                 .max_output_bytes = 10 * 1024 * 1024,
             });

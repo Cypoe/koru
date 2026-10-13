@@ -53,7 +53,12 @@ backend_stage_or_build() {
         fi
     fi
     BACKEND_CACHE_HIT=false
-    ( cd "$td" && zig build --build-file "$bf" --global-cache-dir "$ZIG_GLOBAL_CACHE" 2>"compile_backend.err" )
+    # KORU_BACKEND_TARGET=<triple>.<glibc> forwards -Dtarget for hosts whose
+    # glibc predates zig's native baseline (e.g. Ubuntu 20.04, glibc 2.31);
+    # unset -> native resolution as before.
+    local target_arg=()
+    [ -n "${KORU_BACKEND_TARGET:-}" ] && target_arg=("-Dtarget=$KORU_BACKEND_TARGET")
+    ( cd "$td" && zig build --build-file "$bf" --global-cache-dir "$ZIG_GLOBAL_CACHE" "${target_arg[@]}" 2>"compile_backend.err" )
 }
 
 # Store a freshly-built backend binary into the cache (atomic via tmp+mv so
@@ -673,6 +678,49 @@ regression_check_witness_oracle() {
     echo -e "${GREEN}  ✓ witness oracle: all site verdicts match (Lean)${NC}"
 }
 
+# Alive2 congruence leg — opt-in via an `ALIVE2_CHECK` marker AND
+# KORU_ALIVE2=1. The gate (scripts/alive2_gate.sh) clang -O0's the emitted
+# output_emitted.c to reference IR and proves every intra-procedural
+# optimization instance is a refinement — a different axis than ccomp:
+# K1 says the verified compiler was faithful; K2 says the emitted C holds
+# no UB a mainstream optimizer can diverge on. Opt-in because it needs
+# clang + alive-tv: a marker without KORU_ALIVE2 is a noted skip, never a
+# verdict. With KORU_ALIVE2=1 a marked test that produced no emitted C is
+# a FAIL — the pin is only meaningful when the artifact exists (don't
+# mark C_REFUSES tests).
+regression_check_alive2_oracle() {
+    local test_dir="$1"
+    local TEST_NAME
+    TEST_NAME=$(basename "$test_dir")
+
+    [ -f "$test_dir/ALIVE2_CHECK" ] || return 0
+    [ -f "$test_dir/SUCCESS" ] && [ ! -f "$test_dir/FAILURE" ] || return 0
+
+    if [ "${KORU_ALIVE2:-0}" != "1" ]; then
+        echo -e "${BLUE}  (alive2 oracle not run — set KORU_ALIVE2=1)${NC}"
+        return 0
+    fi
+
+    _alive2_oracle_fail() {
+        rm -f "$test_dir/SUCCESS"
+        echo "$1" > "$test_dir/FAILURE"
+        FAILED_TESTS="$FAILED_TESTS $TEST_NAME($1)"
+        [ "${PASSED_TESTS:-0}" -gt 0 ] && PASSED_TESTS=$((PASSED_TESTS - 1))
+        echo -e "${RED}  ✗ alive2 oracle: $2${NC}"
+    }
+
+    if [ ! -s "$test_dir/output_emitted.c" ]; then
+        _alive2_oracle_fail "alive2-check" "no output_emitted.c — c leg did not emit (env-skipped or refusal)"
+        return 0
+    fi
+    if ! "$SCRIPT_DIR/scripts/alive2_gate.sh" "$test_dir/output_emitted.c" >"$test_dir/alive2_check.out" 2>&1; then
+        _alive2_oracle_fail "alive2-check" "gate failed (see alive2_check.out)"
+        tail -15 "$test_dir/alive2_check.out" | sed 's/^/    /'
+        return 0
+    fi
+    echo -e "${GREEN}  ✓ alive2 oracle: optimization instances verified${NC}"
+}
+
 regression_run_one_test() {
     local test_dir="$1"
     local TEST_NAME
@@ -996,6 +1044,7 @@ regression_run_one_test() {
           "$test_dir/compile_kz.err" \
           "$test_dir/backend.out" \
           "$test_dir/witness_check.out" \
+          "$test_dir/alive2_check.out" \
           "$test_dir/post.log" \
           "$test_dir/ast.err" \
           "$test_dir/actual.json" \
@@ -2231,6 +2280,9 @@ EOF
     # The witness oracle leg — opt-in via WITNESS_CHECK + KORU_WITNESS=1; the
     # Lean checker re-decides the [witness] site verdicts in backend.err.
     regression_check_witness_oracle "$test_dir"
+    # The Alive2 congruence leg — opt-in via ALIVE2_CHECK + KORU_ALIVE2=1;
+    # optimization instances on the emitted C must all refine the O0 IR.
+    regression_check_alive2_oracle "$test_dir"
 
     # Residual hygiene on a passed test: the JS-equivalence deposit (a JS-target
     # backend in zig-out/, output_emitted.js, js-run artifacts) must not linger —

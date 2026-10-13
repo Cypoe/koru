@@ -6,6 +6,7 @@ ts: 2026-08-15
 evolved: 2026-08-16 — content hash landed, THEN the key's COVERAGE missed the per-invocation generated compiler_env.zig; --lang=js backend served to zig builds (koru b90be9be → main.zig backendCacheKey fix)
 evolved: 2026-10-05 — Fail 3: the key cannot see the koruc binary's own embedded backend template; a stale generator keys correct, poisons completely (K# vertical, cs stage-D)
 evolved: 2026-10-11 — Fail 3 struck again: a pre-overlay koruc cached a stale-template backend under a current-src key; every later build's emitted program silently linked stock zig std. Fixed by hashing the emitted backend.zig + build_backend.zig into the key
+evolved: 2026-10-13 — Fail 4: the closure was content-complete but host-blind; a 140GB cache migrated from a glibc-2.34 image replayed binaries that hard-fail on a 2.31 host. Fixed by salting the key with the ABI the binary was built for
 ---
 
 # A backend binary cache can serve a poisoned kernel (belief)
@@ -73,7 +74,25 @@ text IS the template's rendered bytes — keying on it captures emitter
 version by construction, so a stale generator can only ever mint a key a
 fresh one never looks up.
 
-The discipline that catches all three, retroactively: **enumerate what the
+**Fail 4 — the host is not a file either (2026-10-13, the Ubuntu image
+move).** The key had become genuinely complete over *inputs*: linked
+closure, generated files, embedded template. It still assumed equal inputs
+=> equal binary — false the moment the same source links against a
+different host ABI. A backend minted on a glibc-2.34 host stamps
+`__libc_start_main@GLIBC_2.34` and hard-fails on exec under 2.31 — no
+compile error, no diagnostic the tree can explain, just `version not
+found` at runtime, four indirections from *which image the cache was
+born on*. The cache was content-complete and **environment-blind**.
+Fixed two ways: `KORU_BACKEND_TARGET` now forwards an explicit
+`-Dtarget` through both zig-build spawn sites (koruc's backend build,
+the emitted backend's own `output` build — a program's declared
+`build:config target` still wins) and the harness's own build call;
+and both cache keys (koruc-side `combined`, harness-side sha256)
+fold the ABI identity in — env override when set, else the host's
+detected glibc. A replay across ABI boundaries is now a key miss,
+never a wrong binary.
+
+The discipline that catches all four, retroactively: **enumerate what the
 binary actually embeds — every file the compilation unit imports, every file
 the build generates, AND every byte the generating binary itself carries —
 and put each one in the key by construction, not by faith.** A cache entry
