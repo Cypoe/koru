@@ -152,6 +152,18 @@ splits this into two named stages:
 
     elaborate |> analysis |> obligation-synthesis |> witness-check |> optimizer |> emission
 
+As wired today (`koru_std/compiler.kz`), the two abstract stages are four concrete passes:
+
+    check-phantom-args |> pass-auto-discharge |> pass-witness-check |> check-phantom-semantic
+
+- `check-phantom-args` — pre-insertion call-site checks (`.args_only` mode).
+- `pass-auto-discharge` — the "obligation-synthesis" stage: untrusted solver, rewrites, mints
+  `@witness` marks onto inserted disposals (`.marks` — pass-produced, unauthorable).
+- `pass-witness-check` — the "witness-check" stage: consumes prepared marks, owns the verdict,
+  prints `[witness] site` lines under `std/witness:enforce`.
+- `check-phantom-semantic` — post-insertion walls (`.full` mode); emits `custody-edge` witness
+  lines over the real settle paths (mint|held|discharge|issued).
+
 - `obligation-synthesis` — untrusted solver pass (today's auto-discharge family): mints witnesses, may
   rewrite, does not own verdicts.
 - `witness-check` — trusted verdict pass: never rewrites, idempotent (re-run yields the identical verdict —
@@ -169,7 +181,10 @@ witness-check pass implements these rules in Zig.
 not do: run inside the build — `lake env lean` is an oracle budget, not a comptime budget. This is the
 foundational-PCC discipline: smallest verifier over smallest axiom set, so drift is mechanically detectable. The Lean checker
 evaluates the standing witness corpus; verdicts must match the pass's on every batch; mismatch = red
-battery. Forged-witness gates (N4) run through both, and both must reject.
+battery. Forged-witness gates (N4) run through both, and both must reject. **Live since the witness
+tranche:** `verify/witness/WitnessCheck.lean` re-decides `stored-write-numeric`, `auto-discharge`
+(incl. the `all:` completeness commitment), and `custody-edge` site lines; `scripts/witness_gate.sh`
+gates golden/forged/real corpora under the `WITNESS_CHECK` test marker + `KORU_WITNESS=1`.
 
 **What Lean does not do:** run inside the build. A lake env lean batch costs ~25s and an external
 toolchain — that is an oracle budget, not a comptime budget. Comptime passes must be fast, deterministic,

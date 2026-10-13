@@ -287,3 +287,81 @@ above, the resolution is recorded here.
   fragments vs explicit list), outcome-branch vocabulary
   (`| enforced`, `| refused`, `| missing-witness`?). Resolve when the
   tor is declared.
+
+---
+
+## verify-path session 3 (2026-10-15): what landed
+
+Sections 1–6 above are the pre-implementation record; this section is
+the reconciliation against what actually shipped, measured at
+`a8c080def` on `ccomp`. "Nothing here is implemented" (the header) is
+now historical — the `.marks` channel, the `enforce` surface, the
+verdict pass, and the Lean oracle are all in the tree.
+
+### Shipped
+
+- **W1 — `.marks`, shipped.** `pass-auto-discharge` mints
+  `@witness("auto-discharge","<binding>","<state>-><chosen>",
+  "<rule>:<cands>", "all:<decl-universe>")` onto every inserted disposal
+  invocation; `pass-witness-check` consumes the marks and prints
+  `[witness] site auto-discharge …` lines. `check-phantom-semantic`
+  (post-insertion, `.full` mode) mints `[witness] site custody-edge`
+  lines. Marks are unauthorable — never parsed from surface.
+- **W3 — RESOLVED: KORU179** for the witness-check family (one code,
+  message names the fault — the recommended shape won).
+- **W7 — absorb, shipped.** `pass-witness-check` is the verdict pass;
+  `phantom_semantic_checker` demoted to producer exactly as recommended.
+- **`enforce`, shipped.** `std/witness:enforce` arms
+  `witness_enforced` + `custody_edges_enabled` — a `~[comptime]`
+  declaration that changes the pipeline, as ruled.
+- **Lean oracle (Role B), live.** `verify/witness/WitnessCheck.lean`
+  re-decides every site line; `scripts/witness_gate.sh` runs
+  golden/forged/real corpora; `WITNESS_CHECK` test marker +
+  `KORU_WITNESS=1` env gate the leg. Golden 21/0, forged 27/0.
+  Missing Lean under `KORU_WITNESS=1` is FAIL, never a silent pass.
+
+### Corrections to the record
+
+- **The pass split is four names, not §3.5's two.** Actual pipeline
+  (`koru_std/compiler.kz`):
+  `check-phantom-args` (pre-insertion call-site checks) →
+  `pass-auto-discharge` (the "obligation-synthesis" — rewrites, mints
+  marks) → `pass-witness-check` (the "witness-check" — verdicts on
+  prepared marks) → `check-phantom-semantic` (post-insertion walls +
+  custody-edge emission). §3.5's `obligation-synthesis |> witness-check`
+  was the discipline; these are its names.
+- **W6 diverged — the draft's `mint|move|discharge` was wrong.** The
+  real settle paths, enumerated from the checker's own code:
+  `mint` (ordinary lifecycle entry), `held` (obligation arrives via a
+  declared `<!state>` consume param — contract-visible debt, never in
+  the leak audit), `discharge` (consume call / field suffix settles),
+  `issued` (live obligation exits a declared `[!]` output — custody
+  transfers to the caller). `move` exists nowhere; it is dead draft
+  vocabulary, tombstoned in `docs/concordance-matrix.md` §4.
+- **Two-level completeness is now explicit.** The `all:` field commits
+  the solver's declaration enumeration in-band (`(x)` marks
+  enumerated-but-ineligible — unfillable args, output-carrying,
+  re-issuing). Lean enforces *cands == all minus (x)* as MALFORMED-or-
+  not. What remains solver-reported: the enumeration itself — an event
+  the solver never saw is invisible in-band. Declaration-corpus
+  independence is the deeper tranche, not this one.
+- **Compound `-> expr` returns emit no `issued`** (identifier-only
+  matcher). An unmatched mint reports `UNBALANCED` — flagged, not
+  smoothed.
+- **Boring names landed.** `verify/k3/` → `verify/witness/`,
+  `K3_WITNESS` → `WITNESS_CHECK`, `KORU_K3` → `KORU_WITNESS`,
+  `k3_witness_gate.sh` → `witness_gate.sh`. `K1–K4` remain the
+  architecture-layer names in `koru-verification-path.md`; filesystem
+  and harness names the thing, not the session.
+
+### Still open (carried)
+
+- **W2 rendering** — what a witness-check refusal renders (obligation
+  id, broken edge, derivation) — still resolves with the command
+  surface.
+- **`enforce` outcome vocabulary** — `| enforced` / `| refused` /
+  `| missing-witness` branch spellings — still undeclared.
+- **W4 in spirit** — the first fragments shipped as
+  `stored-write-numeric`, `auto-discharge`, `custody-edge`; the census's
+  one-label-one-disposer center held. Next kind under discussion:
+  `descriptor` (registry-transform fidelity).
