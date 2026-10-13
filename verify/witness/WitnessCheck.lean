@@ -218,12 +218,15 @@ structure SiteLine where
   site    : String
   arrow   : String
   verdict : String
+  extra   : String      -- optional fifth payload token ("" when absent)
 
-/-- `[witness] site <kind> <site> <arrow> <verdict>` — the arrow and verdict
-are interpreted per kind. -/
+/-- `[witness] site <kind> <site> <arrow> <verdict> [extra]` — the arrow and
+verdict are interpreted per kind; `extra` is per-kind optional payload
+(auto-discharge carries `all:` — the enumeration commitment). -/
 def parseSiteLine (line : String) : Option SiteLine :=
   match (line.splitOn " ").filter (· ≠ "") with
-  | ["[witness]", "site", kind, site, arrow, verdict] => some ⟨kind, site, arrow, verdict⟩
+  | ["[witness]", "site", kind, site, arrow, verdict] => some ⟨kind, site, arrow, verdict, ""⟩
+  | ["[witness]", "site", kind, site, arrow, verdict, extra] => some ⟨kind, site, arrow, verdict, extra⟩
   | _ => none
 
 inductive Ruling where
@@ -240,10 +243,20 @@ disposer, the rule, and the full candidate list with `[!]` flags:
 
     <state>-><chosen>   <rule>:<cand>[!],<cand>[!],...
 
-The checker re-runs the policy over the recorded candidates. What it cannot
-see is whether the candidate list is complete — that needs the event
-declarations, which the mark does not carry; a witness over an incomplete
-list is outside this fragment's reach. -/
+The checker re-runs the policy over the recorded candidates. The optional
+fifth token is the completeness commitment — `all:` followed by EVERY decl
+the solver enumerated for this (state, base) pair, `(x)`-suffixed on the
+enumerated-but-ineligible (output-carrying, re-issuing, unfillable input):
+
+    <state>-><chosen>   <rule>:<cand>[!],...   all:<name>[!][(x)],...
+
+The checkable contract: the recorded candidate list must BE exactly the
+non-`(x)` members of the enumeration — the solver commits to its universe,
+so a candidate outside `all` or an eligible `all` member dropped from the
+candidates is internally inconsistent data, not a judgment call. What
+remains solver-reported is the enumeration itself: an event the solver
+never saw is invisible to this fragment — that completeness needs the
+declaration corpus, not the mark. -/
 
 structure Cand where
   name : String
@@ -291,18 +304,34 @@ def splitOnRight : List Char → Option (List Char × List Char)
   | c :: rest => (splitOnRight rest).map fun (a, b) => (c :: a, b)
   | [] => none
 
+/-- A member of the `all:` enumeration — `(x)` suffix marks a consumer the
+solver enumerated but could not auto-insert (output-carrying, re-issuing,
+or unfillable inputs). Returns (cand, excluded). -/
+def parseAllEntry (s : String) : Option (Cand × Bool) :=
+  let excluded := s.endsWith "(x)"
+  let base := if excluded then String.ofList (s.toList.take (s.toList.length - 3)) else s
+  (parseCand base).map (·, excluded)
+
 def ruleDischarge (s : SiteLine) : Ruling :=
+  if !s.extra.startsWith "all:" then .malformed else
   match splitOnRight s.arrow.toList, s.verdict.splitOn ":" with
   | some (st, chosen), claimed :: rest =>
     if st.isEmpty then .malformed else
-    match parseCands (":".intercalate rest) with
-    | none => .malformed
-    | some cs =>
+    match (String.ofList (s.extra.toList.drop 4)).splitOn "," |>.mapM parseAllEntry,
+          parseCands (":".intercalate rest) with
+    | some entries, some cs =>
+      let names := entries.map (·.1.name)
+      if names.length != names.eraseDups.length then .malformed else
+      let eligible := entries.filterMap fun (c, ex) => if ex then none else some c
+      -- completeness: the candidate list is exactly the eligible slice —
+      -- names AND `!` flags must agree (Cand equality carries `dflt`)
+      if !(cs.length == eligible.length && cs.all fun c => eligible.contains c) then .malformed else
       match pick cs with
       | none => .mismatch "not-dischargeable"
       | some (r, n) =>
         if r == claimed && n == String.ofList chosen then .match_
         else .mismatch s!"{r}->{n}"
+    | _, _ => .malformed
   | _, _ => .malformed
 
 def ruleNumeric (s : SiteLine) : Ruling :=

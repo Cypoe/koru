@@ -1,0 +1,40 @@
+// PINS: candidate-set completeness on the auto-discharge witness — the
+// mark's fifth field `all:` enumerates EVERY consumer the solver saw for
+// the (state, base) pair, `(x)`-suffixed when it is declared but cannot
+// be inserted unattended.
+//
+//   audit is a real consumer of *File<opened!> but its required `sink`
+//   param has no auto-fill — it is enumeration-visible and ineligible.
+//   The `all:` field commits the solver's universe so a checker can
+//   verify the pick ran over the complete enumeration, not a trimmed
+//   subset — cands must equal all minus its `(x)` members.
+
+~import std/io
+~import std/witness
+
+const std = @import("std");
+const File = struct { handle: i32 };
+
+~tor open { path: string } -> *File<opened!>
+~proc open|zig {
+    std.debug.print("opened\n", .{});
+    const f = std.heap.page_allocator.create(File) catch unreachable;
+    f.* = File{ .handle = 42 };
+    return f;
+}
+
+~[!]tor close { file: *File<!opened> }
+~proc close|zig {
+    std.debug.print("closed\n", .{});
+    std.heap.page_allocator.destroy(file);
+}
+
+~tor audit { file: *File<!opened>, sink: i32 }
+~proc audit|zig {
+    std.debug.print("audited to {}\n", .{sink});
+    std.heap.page_allocator.destroy(file);
+}
+
+~std/witness:enforce { }
+
+~open(path: "test.txt")

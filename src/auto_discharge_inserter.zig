@@ -1987,7 +1987,7 @@ pub const AutoDischargeInserter = struct {
                 if (entry.info.not_auto_dischargeable) continue;
                 const disposals = try self.findDisposalEvents(entry.info.phantom_state, entry.info.base_type);
                 defer self.allocator.free(disposals);
-                const disposal = try self.selectWithWitness(entry.binding_path, entry.info.phantom_state, disposals) orelse continue;
+                const disposal = try self.selectWithWitness(entry.binding_path, entry.info.phantom_state, entry.info.base_type, disposals) orelse continue;
                 // IDEMPOTENCE GUARD: the flow-level context is re-seeded from
                 // the head bind every sweep and never sees the walk's internal
                 // crediting (that happens on discarded clones), so without this
@@ -3196,7 +3196,7 @@ pub const AutoDischargeInserter = struct {
             defer self.allocator.free(disposals);
 
             // Use selectDisposal to handle [!] default annotation
-            const disposal = try self.selectWithWitness(binding_path, info.phantom_state, disposals) orelse {
+            const disposal = try self.selectWithWitness(binding_path, info.phantom_state, info.base_type, disposals) orelse {
                 // Ambiguous or no disposal found
                 const display_name = formatBindingForError(binding_path, info.field_name, info.base_type);
                 const display_state = formatStateForError(info.phantom_state);
@@ -3312,15 +3312,26 @@ pub const AutoDischargeInserter = struct {
     /// `sole` when one candidate stood, `preferred` when [!] settled it —
     /// pickUnattendedDischarge's two accept paths — followed by every
     /// candidate's qualified_name in order, `!`-suffixed when default.
+    /// The fifth field is the completeness commitment: `all:` followed by
+    /// EVERY decl that consumes this (state, base_type) — not just the
+    /// eligible subset — with `(x)` suffixed on the enumerated-but-
+    /// ineligible (branch/output-carrying, re-issuing, or unfillable-input
+    /// events). A checker can then re-decide the pick against the declared
+    /// enumeration and verify candidates == all minus excluded. What it
+    /// still cannot see is an event the solver never enumerated — that
+    /// completeness needs the declaration corpus, not the mark.
     /// Mark fields carry no spaces and no `"`; a site whose names cannot
     /// be spelled that way mints no mark rather than a malformed one.
     fn selectWithWitness(
         self: *AutoDischargeInserter,
         binding_path: []const u8,
         phantom_state: []const u8,
+        base_type: []const u8,
         disposals: []const DisposalEvent,
     ) !?DisposalEvent {
         var chosen = selectDisposal(disposals) orelse return null;
+        const universe = try self.findDisposalConsumers(phantom_state, base_type);
+        defer self.allocator.free(universe);
         var clean = true;
         for ([_][]const u8{ binding_path, phantom_state, chosen.qualified_name }) |f| {
             if (std.mem.indexOfAny(u8, f, " \"") != null) clean = false;
@@ -3333,16 +3344,37 @@ pub const AutoDischargeInserter = struct {
             try cands.appendSlice(self.allocator, d.qualified_name);
             if (d.is_default) try cands.append(self.allocator, '!');
         }
+        var all = try std.ArrayList(u8).initCapacity(self.allocator, 64);
+        defer all.deinit(self.allocator);
+        var seen = std.StringHashMap(void).init(self.allocator);
+        defer seen.deinit();
+        for (universe) |u| {
+            if (seen.contains(u.qualified_name)) continue;
+            try seen.put(u.qualified_name, {});
+            if (std.mem.indexOfAny(u8, u.qualified_name, " ,\"()") != null) clean = false;
+            if (all.items.len > 0) try all.append(self.allocator, ',');
+            try all.appendSlice(self.allocator, u.qualified_name);
+            if (u.is_default) try all.append(self.allocator, '!');
+            var eligible = false;
+            for (disposals) |d| {
+                if (std.mem.eql(u8, d.qualified_name, u.qualified_name)) {
+                    eligible = true;
+                    break;
+                }
+            }
+            if (!eligible) try all.appendSlice(self.allocator, "(x)");
+        }
         if (clean) {
             chosen.witness = try std.fmt.allocPrint(
                 self.allocator,
-                "@witness(\"auto-discharge\",\"{s}\",\"{s}->{s}\",\"{s}:{s}\")",
+                "@witness(\"auto-discharge\",\"{s}\",\"{s}->{s}\",\"{s}:{s}\",\"all:{s}\")",
                 .{
                     binding_path,
                     phantom_state,
                     chosen.qualified_name,
                     if (disposals.len == 1) "sole" else "preferred",
                     cands.items,
+                    all.items,
                 },
             );
         }
@@ -3418,7 +3450,7 @@ pub const AutoDischargeInserter = struct {
             try self.findDisposalEvents(info.phantom_state, info.base_type);
         defer self.allocator.free(disposals);
 
-        return try self.selectWithWitness(binding_name, info.phantom_state, disposals) orelse {
+        return try self.selectWithWitness(binding_name, info.phantom_state, info.base_type, disposals) orelse {
             const display_name = formatBindingForError(binding_name, info.field_name, info.base_type);
             const display_state = formatStateForError(info.phantom_state);
             if (disposals.len == 0) {
@@ -3440,10 +3472,18 @@ pub const AutoDischargeInserter = struct {
         };
     }
 
+    /// How much of the decl universe a disposal scan reports.
+    ///   .eligible  — auto-insertable only (the pick list)
+    ///   .suggest   — eligible plus output-carrying events, minus
+    ///                self-re-issuers (the "Call: ..." suggestion list)
+    ///   .enumerate — every decl that consumes the (state, base) pair,
+    ///                no exclusions: the completeness commitment the
+    ///                witness `all:` field mints
+    const DisposalScanMode = enum { eligible, suggest, enumerate };
+
     /// Find all events that can dispose a given phantom state for a given base type
-    /// If include_multi_branch is true, includes events with multiple branches (for error reporting)
     /// base_type filters to events where the parameter type matches (e.g., "*Connection")
-    fn findDisposalEventsEx(self: *AutoDischargeInserter, phantom_state: []const u8, base_type: []const u8, include_multi_branch: bool) ![]DisposalEvent {
+    fn findDisposalEventsEx(self: *AutoDischargeInserter, phantom_state: []const u8, base_type: []const u8, mode: DisposalScanMode) ![]DisposalEvent {
         var results = try std.ArrayList(DisposalEvent).initCapacity(self.allocator, 4);
 
         // Strip the ! suffix to get base state
@@ -3493,7 +3533,7 @@ pub const AutoDischargeInserter = struct {
             // unhandled it synthesizes a silent no-op, so a disposer could
             // report "I did not release" into nothing.
             const admit_panic_only_branches = false;
-            if (!include_multi_branch) {
+            if (mode == .eligible) {
                 if (event_decl.return_type != null and !returnIsReleasedBorrow(event_decl)) continue;
                 var has_bindable_output = false;
                 for (event_decl.branches) |b| {
@@ -3511,7 +3551,7 @@ pub const AutoDischargeInserter = struct {
             // hands back another one (`tx.exec`: active! -> active!). It must never
             // be named as a disposer. Only the suggestion path needs this; the
             // auto-insert path already excludes such events via the void filter.
-            if (include_multi_branch and self.eventReIssuesObligation(event_decl, base_state, base_type)) continue;
+            if (mode == .suggest and self.eventReIssuesObligation(event_decl, base_state, base_type)) continue;
 
             const is_default = eventHasDefaultAnnotation(event_decl);
 
@@ -3534,7 +3574,7 @@ pub const AutoDischargeInserter = struct {
                                 defer self.allocator.free(consumer_state);
 
                                 if (std.mem.eql(u8, consumer_state, base_state)) {
-                                    if (!include_multi_branch and !eventCanBeAutoInserted(event_decl, field.name)) {
+                                    if (mode == .eligible and !eventCanBeAutoInserted(event_decl, field.name)) {
                                         continue;
                                     }
                                     try results.append(self.allocator, .{
@@ -3566,12 +3606,12 @@ pub const AutoDischargeInserter = struct {
                                 }
                             }
                             for (u.members) |member| {
-                                if (!member.consumes_obligation and !(include_multi_branch and any_consumes)) continue;
+                                if (!member.consumes_obligation and !(mode != .eligible and any_consumes)) continue;
                                 const consumer_state = try ast_functional.qualifiedStateName(self.allocator, member.module_path, entry.value_ptr.module_name, member.name);
                                 defer self.allocator.free(consumer_state);
 
                                 if (std.mem.eql(u8, consumer_state, base_state)) {
-                                    if (!include_multi_branch and !eventCanBeAutoInserted(event_decl, field.name)) {
+                                    if (mode == .eligible and !eventCanBeAutoInserted(event_decl, field.name)) {
                                         break;
                                     }
                                     try results.append(self.allocator, .{
@@ -3700,12 +3740,19 @@ pub const AutoDischargeInserter = struct {
 
     /// Find all events that can dispose a given phantom state (auto-dischargeable only)
     pub fn findDisposalEvents(self: *AutoDischargeInserter, phantom_state: []const u8, base_type: []const u8) ![]DisposalEvent {
-        return self.findDisposalEventsEx(phantom_state, base_type, false);
+        return self.findDisposalEventsEx(phantom_state, base_type, .eligible);
     }
 
     /// Find all events that accept a given phantom state (including multi-branch, for error messages)
     fn findAllDisposalEvents(self: *AutoDischargeInserter, phantom_state: []const u8, base_type: []const u8) ![]DisposalEvent {
-        return self.findDisposalEventsEx(phantom_state, base_type, true);
+        return self.findDisposalEventsEx(phantom_state, base_type, .suggest);
+    }
+
+    /// Find every decl that consumes a given phantom state on a given base
+    /// type — no eligibility or re-issue exclusion: the decl-universe slice
+    /// the witness `all:` field commits to.
+    fn findDisposalConsumers(self: *AutoDischargeInserter, phantom_state: []const u8, base_type: []const u8) ![]DisposalEvent {
+        return self.findDisposalEventsEx(phantom_state, base_type, .enumerate);
     }
 
     /// Clone a terminal arm's branch metadata onto a new continuation whose

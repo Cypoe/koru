@@ -13,10 +13,15 @@
 [witness] site stored-write-numeric bodies.x f32<-float lossless
 [witness] site stored-write-numeric bodies.x f32<-f32 certified
 [witness] site stored-write-totally-other bodies.x f32<-f32 lossless
-[witness] site auto-discharge f opened!->std/fs:drop preferred:std/fs:close!,std/fs:drop
-[witness] site auto-discharge f opened!->std/fs:close preferred:std/fs:close!,std/fs:drop!
-[witness] site auto-discharge f opened!->std/fs:close preferred:std/fs:close,std/fs:drop
-[witness] site auto-discharge f opened!->std/fs:close sole:std/fs:close,std/fs:drop!
-[witness] site auto-discharge f opened!->std/fs:close preferred:std/fs:close
-[witness] site auto-discharge f opened!->std/fs:close sole:
-[witness] site auto-discharge f ->std/fs:close sole:std/fs:close
+[witness] site auto-discharge f opened!->std/fs:drop preferred:std/fs:close!,std/fs:drop all:std/fs:close!,std/fs:drop
+[witness] site auto-discharge f opened!->std/fs:close preferred:std/fs:close!,std/fs:drop! all:std/fs:close!,std/fs:drop!
+[witness] site auto-discharge f opened!->std/fs:close preferred:std/fs:close,std/fs:drop all:std/fs:close,std/fs:drop
+[witness] site auto-discharge f opened!->std/fs:close sole:std/fs:close,std/fs:drop! all:std/fs:close,std/fs:drop!
+[witness] site auto-discharge f opened!->std/fs:close preferred:std/fs:close all:std/fs:close
+[witness] site auto-discharge f opened!->std/fs:close sole: all:std/fs:close
+[witness] site auto-discharge f ->std/fs:close sole:std/fs:close all:std/fs:close
+[witness] site auto-discharge f opened!->std/fs:close sole:std/fs:close
+[witness] site auto-discharge f opened!->std/fs:close preferred:std/fs:close!,std/fs:drop all:std/fs:close!,std/fs:drop,std/fs:audit
+[witness] site auto-discharge f opened!->std/fs:close sole:std/fs:close all:std/fs:close(x)
+[witness] site auto-discharge f opened!->std/fs:close sole:std/fs:close all:std/fs:close,std/fs:close
+[witness] site auto-discharge f opened!->std/fs:close preferred:std/fs:close!,std/fs:drop all:std/fs:close,std/fs:drop

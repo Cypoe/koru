@@ -1,0 +1,2 @@
+[witness] site auto-discharge _auto_6 input:opened!->input:close sole:input:close! all:input:close!,input:audit(x)
+[witness] auto-discharge: sole=1 preferred=0

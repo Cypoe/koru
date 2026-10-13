@@ -2668,31 +2668,38 @@ const WitnessSiteMark = struct {
     site: []const u8,
     arrow: []const u8,
     verdict: []const u8,
+    extra: []const u8, // optional fifth field (e.g. auto-discharge's `all:` enumeration); "" when absent
     line: usize,
     column: usize,
 };
 
-// @witness("kind","site","d<-s","verdict") — parsed strictly: four quoted
-// fields in a parenthesised list. A malformed mark is not a witness:
+// @witness("kind","site","d<-s","verdict","extra"?) — parsed strictly: four
+// or five quoted fields in a parenthesised list; the fifth is optional
+// per-kind payload (auto-discharge carries `all:` — the completeness
+// commitment). A malformed mark is not a witness:
 // counted nowhere, printed nowhere. (Twin of WCensus.witnessMark in
 // koru_std/witness.kz — the command-side census and this pass are separate
 // generated units, so the parser lives in both.)
 fn witnessCheckParseMark(mark: []const u8, line: usize, column: usize) ?WitnessSiteMark {
     if (!std.mem.startsWith(u8, mark, "@witness(")) return null;
-    var fields: [4][]const u8 = undefined;
+    var fields: [5][]const u8 = .{ "", "", "", "", "" };
     var rest = mark["@witness(".len..];
-    for (0..4) |i| {
+    var i: usize = 0;
+    while (i < 5) : (i += 1) {
         if (rest.len == 0 or rest[0] != '"') return null;
         const end = std.mem.indexOfScalar(u8, rest[1..], '"') orelse return null;
         fields[i] = rest[1 .. 1 + end];
         rest = rest[2 + end ..];
-        if (i < 3) {
-            if (rest.len == 0 or rest[0] != ',') return null;
+        if (rest.len == 0) return null;
+        if (rest[0] == ',') {
             rest = rest[1..];
+            continue;
         }
+        break;
     }
+    if (i < 3) return null;
     if (!std.mem.eql(u8, rest, ")")) return null;
-    return .{ .kind = fields[0], .site = fields[1], .arrow = fields[2], .verdict = fields[3], .line = line, .column = column };
+    return .{ .kind = fields[0], .site = fields[1], .arrow = fields[2], .verdict = fields[3], .extra = fields[4], .line = line, .column = column };
 }
 
 fn witnessCheckCollectCont(
@@ -2788,7 +2795,11 @@ fn witnessCheckCollectItems(
         var d_sole: usize = 0;
         var d_preferred: usize = 0;
         for (marks.items) |wm| {
-            std.debug.print("[witness] site {s} {s} {s} {s}\n", .{ wm.kind, wm.site, wm.arrow, wm.verdict });
+            if (wm.extra.len > 0) {
+                std.debug.print("[witness] site {s} {s} {s} {s} {s}\n", .{ wm.kind, wm.site, wm.arrow, wm.verdict, wm.extra });
+            } else {
+                std.debug.print("[witness] site {s} {s} {s} {s}\n", .{ wm.kind, wm.site, wm.arrow, wm.verdict });
+            }
             if (std.mem.eql(u8, wm.kind, "stored-write-numeric")) {
                 if (std.mem.eql(u8, wm.verdict, "lossless")) {
                     w_lossless += 1;

@@ -70,26 +70,31 @@ const WCensus = struct {
         return self.w_lossless + self.w_deferred + self.w_rounds + self.w_non_numeric + self.w_refused;
     }
 
-    // The four quoted fields of one mark.
+    // The four quoted fields of one mark (a fifth is parsed and ignored:
+    // per-kind payload like auto-discharge's `all:` enumeration).
     const WMark = struct { kind: []const u8, site: []const u8, arrow: []const u8, verdict: []const u8 };
 
-    // @witness("kind","site","d<-s","verdict") — parsed strictly: four
-    // quoted fields in a parenthesised list. A malformed mark is not a
-    // witness: counted nowhere, printed nowhere.
+    // @witness("kind","site","d<-s","verdict","extra"?) — parsed strictly:
+    // four or five quoted fields in a parenthesised list. A malformed mark
+    // is not a witness: counted nowhere, printed nowhere.
     fn witnessMark(mark: []const u8) ?WMark {
         if (!std.mem.startsWith(u8, mark, "@witness(")) return null;
-        var fields: [4][]const u8 = undefined;
+        var fields: [5][]const u8 = .{ "", "", "", "", "" };
         var rest = mark["@witness(".len..];
-        for (0..4) |i| {
+        var i: usize = 0;
+        while (i < 5) : (i += 1) {
             if (rest.len == 0 or rest[0] != '"') return null;
             const end = std.mem.indexOfScalar(u8, rest[1..], '"') orelse return null;
             fields[i] = rest[1 .. 1 + end];
             rest = rest[2 + end ..];
-            if (i < 3) {
-                if (rest.len == 0 or rest[0] != ',') return null;
+            if (rest.len == 0) return null;
+            if (rest[0] == ',') {
                 rest = rest[1..];
+                continue;
             }
+            break;
         }
+        if (i < 3) return null;
         if (!std.mem.eql(u8, rest, ")")) return null;
         return .{ .kind = fields[0], .site = fields[1], .arrow = fields[2], .verdict = fields[3] };
     }
