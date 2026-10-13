@@ -172,3 +172,19 @@ silence.
 One honest gap recorded rather than filled: a `?` proto (discharge with no
 binding record) rules MALFORMED — the checker losing track of its own
 binding table is a fact worth surfacing, not smoothing over.
+
+Evolution (2026-10-13, `-> expr` leaf audit): the paragraph above called
+`issued`-on-`.expression` "a legal exit the ledger could not otherwise
+distinguish from a leak" and explicitly declined a wall. Measured against
+the leaf, that asymmetry was the belief's own hole: the checker never ran
+ANY audit there, so a live obligation in `-> f(r)` or `-> (0)` evaporated
+in silence — not even UNBALANCED-visible to a corpus the edges never
+reached when enforcement was off. The leaf now asks the question the rest
+of the checker already answers: does the flow's declared `-> T<state!>`
+return carry this obligation's (type, state)? Identifier exit and unique
+compound mention both mint `issued` iff the declared return matches; every
+other shape — no `!` channel, wrong channel, ambiguous multi-mention,
+obligation live-but-unmentioned — is the same KORU030 evaporation the
+terminators already refuse. The surprise is that "identifier-match only"
+was never a modesty the ledger needed: the declared carrier was already
+visible; what was missing was asking.

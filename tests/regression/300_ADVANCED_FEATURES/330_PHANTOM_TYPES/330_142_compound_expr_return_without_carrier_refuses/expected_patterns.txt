@@ -1,0 +1,4 @@
+error\[KORU030\]
+r.*owned!
+was not discharged
+input\.kz

@@ -1,0 +1,28 @@
+// PINS: `-> (0)` at an arm leaf names no obligation — r stays live with no
+// settlement in sight. The leaf is an exit; the obligation evaporates, and
+// the refusal lands (auto-discharge finds no disposer for <owned!>).
+~import std/io
+
+const std = @import("std");
+const Handle = struct { n: i32 };
+
+~tor pass { h: *Handle<!owned> }
+| stop *Handle<owned!>
+| drop *Handle<owned!>
+~proc pass|zig {
+    return .{ .stop = h };
+}
+
+~tor spin { h: *Handle<!owned> } -> *Handle<owned!>
+~spin = pass(h)
+| stop r -> (0)
+| drop r -> (0)
+
+~tor make {} -> *Handle<owned!>
+~proc make|zig {
+    const h = std.heap.page_allocator.create(Handle) catch unreachable;
+    h.* = .{ .n = 0 };
+    return h;
+}
+
+~make(): h0 |> spin(h: h0)

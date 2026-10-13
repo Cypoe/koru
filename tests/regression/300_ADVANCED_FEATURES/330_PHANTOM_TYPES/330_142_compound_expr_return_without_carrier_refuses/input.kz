@@ -1,0 +1,30 @@
+// PINS: `-> (r)` names the live obligation r, but spin's declared return is
+// the bare `-> *Handle` — no `!` channel. Custody would evaporate into a
+// plain value the caller can't settle, so the checker refuses: the same
+// KORU030 leak wall the terminators enforce, applied at the `.expression`
+// leaf the old audit never saw.
+~import std/io
+
+const std = @import("std");
+const Handle = struct { n: i32 };
+
+~tor pass { h: *Handle<!owned> }
+| stop *Handle<owned!>
+| drop *Handle<owned!>
+~proc pass|zig {
+    return .{ .stop = h };
+}
+
+~tor spin { h: *Handle<!owned> } -> *Handle
+~spin = pass(h)
+| stop r -> (r)
+| drop r -> (r)
+
+~tor make {} -> *Handle<owned!>
+~proc make|zig {
+    const h = std.heap.page_allocator.create(Handle) catch unreachable;
+    h.* = .{ .n = 0 };
+    return h;
+}
+
+~make(): h0 |> spin(h: h0)

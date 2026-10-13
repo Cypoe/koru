@@ -44,6 +44,71 @@ var custody_issueds: usize = 0;
 /// stays atomic against the `[witness] site <kind> <id> <id><-<proto> <op>`
 /// grammar. A `?` proto means the discharge saw no live binding record —
 /// Lean counts the edge but cannot re-check its proto.
+
+/// Identifier chars in source expressions: `.` rides inside the token so a
+/// dotted spelling like `_.conn` scans whole.
+fn isExprIdentChar(ch: u8) bool {
+    return (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or
+        (ch >= '0' and ch <= '9') or ch == '_' or ch == '.';
+}
+
+/// Does the `-> expr` text name `resource` as an identifier token? Scans the
+/// token stream, skipping quoted spans — `"conn"` or `reconnect` is not a
+/// mention of `conn`. Obligation keys can carry a scope prefix the author
+/// never spells (`_.conn` is written `conn`); `_`-prefixed keys match on
+/// their bare suffix too. A prefixed key the author can't shorten
+/// (`alice.conn`) still requires its full spelling — no fuzzy carries.
+fn exprMentionsResource(expr: []const u8, resource: []const u8) bool {
+    const bare = if (resource.len > 0 and resource[0] == '_')
+        (if (std.mem.indexOfScalar(u8, resource, '.')) |dot| resource[dot + 1 ..] else resource)
+    else
+        resource;
+    var i: usize = 0;
+    while (i < expr.len) {
+        const ch = expr[i];
+        if (ch == '"' or ch == '`') {
+            i += 1;
+            while (i < expr.len and expr[i] != ch) : (i += 1) {
+                if (expr[i] == '\\') i += 1;
+            }
+            if (i < expr.len) i += 1;
+            continue;
+        }
+        if (isExprIdentChar(ch)) {
+            const start = i;
+            while (i < expr.len and isExprIdentChar(expr[i])) : (i += 1) {}
+            const tok = expr[start..i];
+            if (std.mem.eql(u8, tok, resource) or std.mem.eql(u8, tok, bare)) return true;
+            if (std.mem.lastIndexOfScalar(u8, tok, '.')) |dot| {
+                if (std.mem.eql(u8, tok[dot + 1 ..], bare)) return true;
+            }
+            continue;
+        }
+        i += 1;
+    }
+    return false;
+}
+
+
+/// Last identifier run in a type spelling — `*Handle` → `Handle`,
+/// `[]const u8` → `u8`, `mod.Type` → `Type`. Used to compare an
+/// obligation's recorded base type against a signature field's.
+fn lastIdentToken(s: []const u8) []const u8 {
+    var end = s.len;
+    while (end > 0 and !isExprIdentChar(s[end - 1])) end -= 1;
+    var start = end;
+    while (start > 0 and isExprIdentChar(s[start - 1])) start -= 1;
+    const tok = s[start..end];
+    if (std.mem.lastIndexOfScalar(u8, tok, '.')) |dot| return tok[dot + 1 ..];
+    return tok;
+}
+
+/// Phantom states may carry a `module:` prefix — compare the tail.
+fn phantomStateTail(state: []const u8) []const u8 {
+    if (std.mem.lastIndexOfScalar(u8, state, ':')) |c| return state[c + 1 ..];
+    return state;
+}
+
 fn emitCustodyEdge(op: []const u8, name: []const u8, phantom_state: []const u8, base_type: []const u8) void {
     if (!custody_edges_enabled) return;
     if (std.mem.eql(u8, op, "mint")) custody_mints += 1 else if (std.mem.eql(u8, op, "held")) custody_helds += 1 else if (std.mem.eql(u8, op, "discharge")) custody_discharges += 1 else if (std.mem.eql(u8, op, "issued")) custody_issueds += 1;
@@ -2888,21 +2953,92 @@ pub const PhantomSemanticChecker = struct {
         // the return value — `| stop r -> r` walks in as expression "r".
         // `.expression` is not a terminator kind, so the audit above never
         // sees this escape — which is exactly what makes returning a live
-        // obligation legal (the declared return carries the `!`). Emit the
-        // `issued` edge for each live obligation the expression names
-        // directly; compound expressions stay invisible to the ledger
-        // rather than guessed at.
+        // obligation legal (the declared return carries the `!`). A live
+        // obligation settles here exactly when the flow's declared
+        // `-> T<state!>` return carries it: the identifier case (`-> r`),
+        // or a compound expression that names it and whose declared return
+        // matches its (type, state). Anything else — an obligation read by
+        // an expression the signature doesn't carry, or one left live and
+        // untouched — evaporates at the leaf: KORU030, the same leak wall
+        // the terminators enforce.
         if (cont.node) |step| {
-            if (step == .expression and cont.continuations.len == 0 and context.emit_edges) {
+            if (step == .expression and cont.continuations.len == 0) {
+                // Two passes: first count how many live obligations the
+                // expression text mentions — a declared `!` return carries
+                // one obligation channel, so an `issued` edge is honest
+                // only for a unique mention whose (type, state) matches the
+                // declared return.
+                var mentioned_count: usize = 0;
+                var count_it = context.cleanup_obligations.keyIterator();
+                while (count_it.next()) |k| {
+                    const resource = k.*;
+                    if (context.isOuterScope(resource) or context.isJoinLive(resource)) continue;
+                    if (std.mem.eql(u8, resource, step.expression)) continue;
+                    if (exprMentionsResource(step.expression, resource)) mentioned_count += 1;
+                }
+                var expr_leak = false;
                 var exit_it = context.cleanup_obligations.keyIterator();
                 while (exit_it.next()) |k| {
-                    if (!std.mem.eql(u8, k.*, step.expression)) continue;
-                    if (context.getInfo(k.*)) |info| {
-                        emitCustodyEdge("issued", k.*, info.phantom_state, info.base_type);
-                    } else {
-                        emitCustodyEdge("issued", k.*, "?", "?");
+                    const resource = k.*;
+                    if (context.isOuterScope(resource)) continue;
+                    if (context.isJoinLive(resource)) continue;
+                    const is_ident = std.mem.eql(u8, resource, step.expression);
+                    const named_in_expr = is_ident or
+                        (mentioned_count == 1 and exprMentionsResource(step.expression, resource));
+                    var carried = false;
+                    var no_record = false;
+                    if (named_in_expr) {
+                        if (context.getInfo(resource)) |info| {
+                            // Honest `issued` requires the flow's declared
+                            // `-> T<state!>` return to carry exactly this
+                            // obligation's (type, state).
+                            if (implementing_event) |impl_ev| {
+                                if (impl_ev.return_phantom) |rph| {
+                                    if (impl_ev.return_type) |rt| {
+                                        if ((try self.phantomRequiresCleanup(rph)) and
+                                            std.mem.eql(u8, phantomStateTail(rph), phantomStateTail(info.phantom_state)) and
+                                            std.mem.eql(u8, lastIdentToken(rt), lastIdentToken(info.base_type)))
+                                        {
+                                            carried = true;
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            // No binding record — the checker's bookkeeping
+                            // lost this one; the `?`-proto edge is how the
+                            // ledger learns the record is missing.
+                            no_record = true;
+                        }
+                    }
+                    if (carried or no_record) {
+                        if (context.emit_edges) {
+                            if (context.getInfo(resource)) |info| {
+                                emitCustodyEdge("issued", resource, info.phantom_state, info.base_type);
+                            } else {
+                                emitCustodyEdge("issued", resource, "?", "?");
+                            }
+                        }
+                        continue;
+                    }
+                    // The obligation isn't carried out — it dies unreferenced
+                    // at the arm leaf. Full pass only: pre-insertion the
+                    // auto-discharger hasn't placed its disposals yet.
+                    if (self.check_mode != .args_only) {
+                        const binding_info = context.getInfo(resource);
+                        const phantom_state = if (binding_info) |bi| bi.phantom_state else "?";
+                        const base_type = if (binding_info) |bi| bi.base_type else "";
+                        const display_name = if (std.mem.indexOf(u8, resource, ".")) |dot_idx|
+                            resource[dot_idx + 1 ..]
+                        else if (std.mem.startsWith(u8, resource, "_auto_") and base_type.len > 0)
+                            base_type
+                        else
+                            resource;
+                        try self.reportUndischargedObligation(display_name, phantom_state, base_type, location);
+                        expr_leak = true;
                     }
                 }
+                if (expr_leak) return false;
             }
         }
 

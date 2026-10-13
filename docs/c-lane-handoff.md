@@ -911,11 +911,16 @@ reversible part; the semantics calls are flagged.
   `330_139_custody_edge_witnesses_mint_held_issued` (10 edges, all
   four ops, K3 gate green); 330_138's auto-discharges corroborate
   cross-kind (auto-discharge pick vs custody mint/discharge on the
-  same `_auto_N` bindings). Deferred deliberately: `?`-proto lines
-  (discharge with no binding record) rule MALFORMED — the checker
-  losing a record is itself worth flagging; compound `-> expr`
-  returns emit no `issued` (identifier-match only) — an unmatched
-  mint flags UNBALANCED rather than guessing.
+  same `_auto_N` bindings). `-> expr` leaf semantics (330_141/142/143):
+  a live obligation settles as `issued` when the expression names it
+  AND the flow's declared `-> T<state!>` return matches its
+  (type, state) — identifier or unique compound mention alike;
+  anything else (no `!` channel, wrong channel, ambiguous multi-
+  mention, or an unmentioned live obligation at the leaf) is the same
+  KORU030 evaporation the terminators refuse. `?`-proto lines stay
+  MALFORMED by design: a `?` is emitted only when the checker itself
+  lost the binding record, and the ledger flags it rather than
+  pretending a carrier was verified.
 - **usize width — RULED: pin usize = u64 on the zig/c lanes, and
   `usize→i64` stays `deferred`.** The 40-odd deferred handle writes are
   CORRECT at type level: a u64 value ≥ 2^63 reinterprets in i64. The
