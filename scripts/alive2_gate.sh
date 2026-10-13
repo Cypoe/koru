@@ -74,10 +74,10 @@ classify_stream() {
             match($0, /@[A-Za-z_.$0-9]+/); fn = substr($0, RSTART+1, RLENGTH-1)
             next
         }
-        /^-{10,}$/ { has_extcall=0; if (pending != "") { print pending; pending = "" } next }
+        /^-{10,}$/ { saw_call=0; has_intcall=0; if (pending != "") { print pending; pending = "" } next }
         /call[^@]*@[A-Za-z_.$0-9]+/ {
             match($0, /@[A-Za-z_.$0-9]+/)
-            if (substr($0, RSTART+1, RLENGTH-1) in ext) has_extcall=1
+            if (substr($0, RSTART+1, RLENGTH-1) in ext) saw_call=1; else has_intcall=1
         }
         /Summary:/ { if (pending != "") { print pending; pending = "" } in_summary=1; next }
         in_summary { next }
@@ -101,7 +101,12 @@ classify_stream() {
         }
         /ERROR: Timeout/ {
             if (pending != "") { print pending; pending = "" }
-            if (has_extcall) {
+            # Timeout on a region whose calls are ALL declared-only
+            # externals is the unmodeled-libcall approximation grinding —
+            # proven 2026-10-13: stubbing the same libcalls lets the same
+            # function verify. A timeout with ANY internal call in the
+            # region stays fail:timeout — causation unproven there.
+            if (saw_call && !has_intcall) {
                 print "scope:libcall-timeout", fn
             } else {
                 print "fail:timeout", fn
