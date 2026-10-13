@@ -127,3 +127,48 @@ three things:
 - W1/W6 from `docs/koru-callsite-proofs-draft.md` now have a concrete
   instance: `.marks` with a `kind,site,d<-s,verdict` encoding is what the
   recommendation looks like in code. Lars's ruling can point at it.
+## Evolved 2026-10-13: the interval, not just the site — custody edges are a replayable ledger
+
+The frag above minted *verdicts* onto lowered sites: a fact the pass already
+held, serialized where downstream can read it. The custody-edge channel turns
+the same move on a different axis — not the verdict AT a site but the EVENTS
+OVER an obligation's life. An obligation is a liveness interval (mint site,
+live span, settle site); the phantom checker already walks every one of those
+transitions in its post-insertion `.full` pass. Emitting each as a
+`[witness] site custody-edge` line makes the interval itself a witness: an
+edge list an independent oracle replays, rather than a summary the checker
+asserts.
+
+The vocabulary had to come from the checker's real settle paths, not the
+draft's guessed one. Enumerating them surfaced four ops, two of which only
+exist because the audit had silent exits:
+
+- `mint` — a `state!` binding enters the cleanup audit
+  (`setWithType`, `requires_cleanup`).
+- `held` — an obligation arrives through a declared `<!state>` consume
+  input. The seed records the debt live (directionality needs it) but the
+  contract, not the leak audit, settles it — the only path that mints a
+  tracked binding and immediately clears the audit flag. Without a `held`
+  edge it reads as a mint that never settles.
+- `discharge` — `markDisposed`: a consume call or field-suffix settles the
+  obligation, including every disposal the auto-discharge inserter spliced
+  in (the `.full` pass sees them as ordinary calls — the edge stream
+  corroborates the `auto-discharge` marks on the same `_auto_N` bindings).
+- `issued` — custody exits live through a declared `[!]` output. The
+  documented-escape audit covers branch-constructor and signature-field
+  spellings, but `| stop r -> r` lowers to an `.expression` terminator that
+  was NEVER audited — the obligation escaped through a path no wall
+  watched. Emitting `issued` there does not add a wall; it names a legal
+  exit the ledger could not otherwise distinguish from a leak.
+
+The corpus-level rule the Lean side replays: per arrow-label, `mint`
+demands exactly one settle (`discharge` or `issued`), `held` permits at
+most one `discharge` (a contract-settled obligation may end live), and a
+settle demands an outstanding mint or held. That is the witness-level twin
+of the leak walls — but re-decided from the edge list alone, so a checker
+walk that drops an event unbalances the corpus instead of agreeing by
+silence.
+
+One honest gap recorded rather than filled: a `?` proto (discharge with no
+binding record) rules MALFORMED — the checker losing track of its own
+binding table is a fact worth surfacing, not smoothing over.

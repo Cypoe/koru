@@ -867,3 +867,63 @@ green on all of them (`FAILURE` shows the env leg, not `c-*`).
 
 **Prime sieve stands.** Full K1 path re-verified this session: emitted C
 -> ccomp -> run -> `78498`, byte-identical.
+
+## Preemptive rulings (session, cont. — taken by the agent, Lars may override)
+
+The four open rulings were blocking work; decided here with the
+justification and the cheap-reversal note for each. Spellings are the
+reversible part; the semantics calls are flagged.
+
+- **W3 / witness KORU code — RESOLVED (already landed): KORU179.**
+  `src/errors.zig:156` reserves it for the witness-check family and
+  `koru_std/compiler.kz:2843,2846` emits it for `[strict]` refusals.
+  KORU161 stays the store-machinery code — the classes were never
+  actually merged. No reversal needed.
+- **W4 / S5 first custody fragment — RULED: one-label-one-disposer.**
+  `<state!>` phantom kinds (`allocated!`/`owned!`/`open!` family) plus
+  store take/insert custody. The W5 census backs it: 561 `<state!>`
+  occurrences / 59 labels / 263 files, store custody 261 files — the
+  corpus's center of mass. Reversal cost: the fragment is the SEED, not
+  the language — widening later adds kinds, never changes the calculus.
+- **W6 / .marks encoding — CONFIRMED as minted.** Each mark carries
+  {kind, site, dest/transition, verdict, provenance (rule + candidate
+  set)} as a serialized string. The custody fragment as IMPLEMENTED
+  extends the site-line grammar with `op(mint|held|discharge|issued)`
+  — `held` = obligation arrived via a declared `<!state>` input
+  (contract-settled), `issued` = obligation exited live through a
+  declared `[!]` output. The draft `move` op became these two once
+  the checker's real settle paths were enumerated — the vocabulary
+  names WHERE custody went, which is what the Lean ledger replays.
+- **custody-edge channel — LANDED this session.** `witness.kz` sets
+  `phantom_semantic_checker.custody_edges_enabled` alongside
+  `witness_enforced`; `check-phantom-semantic` (the post-insertion
+  .full pass only — `.args_only` is gated out via
+  `BindingContext.emit_edges` or every edge prints twice) emits
+  `[witness] site custody-edge <name> <name><-<T<state!>> <op>` per
+  mint/held/discharge/issued, then a `custody-edge: mint=... held=...
+  discharge=... issued=...` census at check() exit. `WitnessCheck.lean`
+  gained `ruleCustody` (per-line well-formedness) + `custodyBalance`
+  (per-arrow ledger replay: mint => exactly one settle, held => at
+  most one discharge, settle => outstanding mint/held). Pin:
+  `330_139_custody_edge_witnesses_mint_held_issued` (10 edges, all
+  four ops, K3 gate green); 330_138's auto-discharges corroborate
+  cross-kind (auto-discharge pick vs custody mint/discharge on the
+  same `_auto_N` bindings). Deferred deliberately: `?`-proto lines
+  (discharge with no binding record) rule MALFORMED — the checker
+  losing a record is itself worth flagging; compound `-> expr`
+  returns emit no `issued` (identifier-match only) — an unmatched
+  mint flags UNBALANCED rather than guessing.
+- **usize width — RULED: pin usize = u64 on the zig/c lanes, and
+  `usize→i64` stays `deferred`.** The 40-odd deferred handle writes are
+  CORRECT at type level: a u64 value ≥ 2^63 reinterprets in i64. The
+  provable claim is narrower — that handle-minted values
+  (slot|brand<<24|gen<<32) are bounded — and that is a value-provenance
+  fact, a future `bounded` verdict kind, not something the type check
+  may assert now. Asserting it would be the compiler lying to its own
+  oracle.
+- **W7 / verdict ownership — RULED: absorb, don't wrap.**
+  `phantom_semantic_checker` becomes the obligation-set producer (its
+  enumeration is untrusted data the verifier checks completeness
+  against); `witness-check` owns the verdict via edge replay. A
+  solver/checker disagreement is then a refusal naming both — the
+  cross-check working, not a bug.

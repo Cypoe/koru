@@ -311,9 +311,98 @@ def ruleNumeric (s : SiteLine) : Ruling :=
     | some v, some claimed => if v == claimed then .match_ else .mismatch v.tag
     | _, _ => .malformed
 
+/-! ## Kind `custody-edge` — obligation mint/settle edges
+
+The phantom semantic checker (src/phantom_semantic_checker.zig) walks the
+post-insertion flow and prints one edge per custody event it observes:
+
+    [witness] site custody-edge <name> <name><-<T<state!>> <op>
+
+`<name>` is the binding; the arrow repeats it and carries the obligation's
+proto (`base_type<phantom_state>`). The ops:
+
+  - `mint`      — a `state!` binding entered the cleanup audit
+                  (BindingContext.setWithType, requires_cleanup).
+  - `held`      — an obligation arrived through a declared consume input
+                  (`<!state>`): the debt is real but settled by the event's
+                  contract, so it never enters the leak audit.
+  - `discharge` — a consume call or field-suffix settled the obligation
+                  (BindingContext.markDisposed).
+  - `issued`    — the obligation exited live through a declared `[!]`
+                  output; custody transferred to the caller.
+
+Per line the checker can only re-decide well-formedness: the site name must
+be the arrow's name, the proto must carry a `!`-state, and the op must be in
+vocabulary. The real verdict is corpus-level — `custodyBalance` replays the
+edge list per arrow and requires
+
+    mint      ⇒ exactly one settle (discharge or issued) before re-bind/end
+    held      ⇒ at most one discharge (settlement may be contract-invisible)
+    discharge/issued ⇒ an outstanding mint or held must precede them
+
+— the witness-level twin of the checker's own leak walls. -/
+
+def protoHasBang (proto : String) : Bool :=
+  -- the proto's trailing `<state>` group must end in `!`: `...<...!>`
+  proto.endsWith "!>" || proto.endsWith "!"
+
+def ruleCustody (s : SiteLine) : Ruling :=
+  match splitOnArrow s.arrow.toList with
+  | none => .malformed
+  | some (nm, proto) =>
+    let name := String.ofList nm
+    if name.isEmpty || s.site != name then .malformed
+    else if !protoHasBang (String.ofList proto) then .malformed
+    else match s.verdict with
+      | "mint" | "held" | "discharge" | "issued" => .match_
+      | _ => .malformed
+
+/-- Ledger state for one arrow's edge sequence. -/
+inductive CustodySt where
+  | clean    -- no outstanding obligation
+  | minted   -- a mint awaits its settle
+  | heldSt   -- a held obligation may discharge or end contract-settled
+deriving DecidableEq, Repr
+
+/-- One transition; `none` = the edge is illegal here. -/
+def custodyStep : CustodySt → String → Option CustodySt
+  | .clean,   "mint"      => some .minted
+  | .clean,   "held"      => some .heldSt
+  | .minted,  "discharge" => some .clean
+  | .minted,  "issued"    => some .clean
+  | .heldSt,  "discharge" => some .clean
+  | _,        _           => none
+
+/-- An arrow's ledger closes iff every mint settled. A live `held` may end
+open — a host impl's contract settles it invisibly. -/
+def custodyClosed : CustodySt → Bool
+  | .clean | .heldSt => true
+  | .minted => false
+
+/-- Replay one arrow's ops; `none` = an illegal edge occurred. -/
+def custodyRun : List String → CustodySt → Option CustodySt
+  | [], st => some st
+  | op :: rest, st => match custodyStep st op with
+    | some st' => custodyRun rest st'
+    | none => none
+
+/-- Corpus-level balance: group custody-edge lines by arrow, replay each
+group's ops in file order, every ledger must close. Returns the failing
+arrows (empty list = balanced). Lines that failed per-line parse are
+skipped — the per-line pass already flags them. -/
+def custodyBalance (sites : List SiteLine) : List String :=
+  let edges := sites.filter (·.kind == "custody-edge")
+  let arrows := (edges.map (·.arrow)).eraseDups
+  arrows.filter fun a =>
+    let ops := (edges.filter (·.arrow == a)).map (·.verdict)
+    match custodyRun ops CustodySt.clean with
+    | some st => !custodyClosed st
+    | none => true
+
 def rule (s : SiteLine) : Ruling :=
   if s.kind == "stored-write-numeric" then ruleNumeric s
   else if s.kind == "auto-discharge" then ruleDischarge s
+  else if s.kind == "custody-edge" then ruleCustody s
   else .malformed
 
 def isSiteLine (line : String) : Bool :=
@@ -332,8 +421,11 @@ def main (args : List String) : IO UInt32 := do
     IO.println s!"FAIL: no [witness] site lines in {path}"
     return 1
   let mut bad := 0
+  let mut sites : List SiteLine := []
   for line in lines do
-    let ruling := match parseSiteLine line with
+    let sOpt := parseSiteLine line
+    if let some s := sOpt then sites := s :: sites
+    let ruling := match sOpt with
       | none => Ruling.malformed
       | some s => rule s
     let accepted := match ruling with | .match_ => true | _ => false
@@ -345,6 +437,12 @@ def main (args : List String) : IO UInt32 := do
     let ok := if forged then !accepted else accepted
     if !ok then bad := bad + 1
     IO.println s!"{if ok then "ok  " else "BAD "} {label}  {line}"
+  -- Corpus-level custody balance: replay each arrow's edge ledger. An
+  -- unclosed mint is a leaked obligation; an illegal edge is a ledger the
+  -- checker itself could not have walked — both fail the batch either way.
+  for a in custodyBalance sites.reverse do
+    bad := bad + 1
+    IO.println s!"BAD  UNBALANCED  {a}"
   let mode := if forged then "forged (all must reject)" else "conformance (all must match)"
   IO.println s!"{mode}: {lines.length} lines, {bad} bad"
   return (if bad == 0 then 0 else 1)

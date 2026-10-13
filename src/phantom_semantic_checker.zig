@@ -22,6 +22,34 @@ fn ownName(name: []const u8) []const u8 {
     return name;
 }
 
+/// Witness channel (the W4 custody fragment): under `std/witness:enforce`
+/// the checker prints one `[witness] site custody-edge` line per obligation
+/// edge it walks — `mint` where a binding acquires a `<state!>` debt,
+/// `discharge` where a consume settles one. Set by `std/witness:enforce`
+/// (koru_std/witness.kz) through process state; Phase 3 strips the decl
+/// before this pass runs, so a module flag is the only channel. Lines land
+/// in backend.err alongside the marks census — the K3 checker replays the
+/// list and refuses an unbalanced one.
+pub var custody_edges_enabled: bool = false;
+
+/// Per-op census — the custody counterpart of the marks censuses
+/// pass-witness-check prints. Totals accumulate across the whole check()
+/// run and print once at its end.
+var custody_mints: usize = 0;
+var custody_helds: usize = 0;
+var custody_discharges: usize = 0;
+var custody_issueds: usize = 0;
+
+/// One edge line. `<`/`>`/`:`/`!` are all non-space, so the proto token
+/// stays atomic against the `[witness] site <kind> <id> <id><-<proto> <op>`
+/// grammar. A `?` proto means the discharge saw no live binding record —
+/// Lean counts the edge but cannot re-check its proto.
+fn emitCustodyEdge(op: []const u8, name: []const u8, phantom_state: []const u8, base_type: []const u8) void {
+    if (!custody_edges_enabled) return;
+    if (std.mem.eql(u8, op, "mint")) custody_mints += 1 else if (std.mem.eql(u8, op, "held")) custody_helds += 1 else if (std.mem.eql(u8, op, "discharge")) custody_discharges += 1 else if (std.mem.eql(u8, op, "issued")) custody_issueds += 1;
+    std.debug.print("[witness] site custody-edge {s} {s}<-{s}<{s}> {s}\n", .{ name, name, base_type, phantom_state, op });
+}
+
 /// Checks that module-qualified phantom states reference valid imported modules
 pub const PhantomSemanticChecker = struct {
     allocator: std.mem.Allocator,
@@ -355,6 +383,12 @@ pub const PhantomSemanticChecker = struct {
         if (has_errors) {
             log.debug("[PHANTOM] Returning ValidationFailed - annotations_valid={}, flows_valid={}\n", .{ annotations_valid, flows_valid });
             return error.ValidationFailed;
+        }
+        // The custody census — printed here, not in pass-witness-check: the
+        // edge lines emit during THIS walk, which runs after the marks
+        // consumer in the pipeline. One line per enforced compile.
+        if (custody_edges_enabled) {
+            std.debug.print("[witness] custody-edge: mint={d} held={d} discharge={d} issued={d}\n", .{ custody_mints, custody_helds, custody_discharges, custody_issueds });
         }
         log.debug("[PHANTOM] All validation passed!\n", .{});
     }
@@ -1131,6 +1165,11 @@ pub const PhantomSemanticChecker = struct {
 
         bindings: std.StringHashMap(BindingInfo), // variable name → full type info
         cleanup_obligations: std.StringHashMap(void), // track bindings with ! states that need cleanup
+        /// Custody-edge emission gate (the W4 witness fragment): set by the
+        /// checker only on contexts of a `.full` run — check-phantom-args
+        /// walks the same bindings in `.args_only` and would double every
+        /// edge. Child contexts inherit the flag from their parent.
+        emit_edges: bool = false,
         disposed_bindings: std.StringHashMap([]const u8), // binding name -> the SITE that disposed it (event#arg=value), so re-validation of the same consuming site passes while a second consume from a DIFFERENT site is use-after-discharge
         outer_scope_obligations: std.StringHashMap(void), // track obligations from outside @scope boundary
         join_live_obligations: std.StringHashMap(void), // obligations inherited by a named arm that a join continuation follows — live-through the arm, settle at the join (twin of auto_discharge_inserter's join_watermark)
@@ -1224,6 +1263,7 @@ pub const PhantomSemanticChecker = struct {
                         // Track this binding as requiring cleanup
                         const obligation_key = try self.allocator.dupe(u8, name);
                         try self.cleanup_obligations.put(obligation_key, {});
+                        if (self.emit_edges) emitCustodyEdge("mint", name, phantom_state, base_type);
                         log.debug("[CLEANUP] Tracking cleanup obligation for '{s}' with type '{s}[{s}]'\n", .{ name, base_type, phantom_state });
                     }
                 },
@@ -1287,6 +1327,7 @@ pub const PhantomSemanticChecker = struct {
         /// Create a child context that inherits parent's state
         fn inherit(parent: *const BindingContext, allocator: std.mem.Allocator) !BindingContext {
             var child = BindingContext.init(allocator);
+            child.emit_edges = parent.emit_edges;
 
             // Inherit all bindings (copy full BindingInfo)
             try dupeBindingsInto(allocator, parent.bindings, &child.bindings);
@@ -1314,6 +1355,7 @@ pub const PhantomSemanticChecker = struct {
         /// Used when entering a @scope boundary - these obligations cannot be satisfied inside the scope
         fn inheritWithScope(parent: *const BindingContext, allocator: std.mem.Allocator) !BindingContext {
             var child = BindingContext.init(allocator);
+            child.emit_edges = parent.emit_edges;
 
             // Inherit all bindings (copy full BindingInfo)
             try dupeBindingsInto(allocator, parent.bindings, &child.bindings);
@@ -1359,6 +1401,17 @@ pub const PhantomSemanticChecker = struct {
             const disposed_key = try self.allocator.dupe(u8, name);
             const site_copy = try self.allocator.dupe(u8, site);
             try self.disposed_bindings.put(disposed_key, site_copy);
+            // The discharge edge. The consume path clears the obligation
+            // before poisoning, but the BINDING record survives — read the
+            // proto from it so the line carries the same `<T<state!>>` the
+            // mint did. A missing record (a disposal site the binding table
+            // never held) emits `?` and Lean counts the edge without a
+            // proto to re-check.
+            if (!self.emit_edges) {} else if (self.bindings.get(name)) |info| {
+                emitCustodyEdge("discharge", name, info.phantom_state, info.base_type);
+            } else {
+                emitCustodyEdge("discharge", name, "?", "?");
+            }
             log.debug("[CLEANUP] Marked '{s}' as discharged (poisoned) at site '{s}'\n", .{ name, site });
         }
 
@@ -1649,6 +1702,7 @@ pub const PhantomSemanticChecker = struct {
         // Validate root invocation args (e.g. bare literals at phantom-required params).
         // Continuation validation only covers args on nested steps, not the flow head.
         var root_context = BindingContext.init(self.allocator);
+        root_context.emit_edges = custody_edges_enabled and self.check_mode == .full;
         defer root_context.deinit();
 
         // Seed the implementing event's phantom-carrying parameters into the root
@@ -1720,7 +1774,15 @@ pub const PhantomSemanticChecker = struct {
                     if (concrete.consumes_obligation) {
                         const held = try std.fmt.allocPrint(self.allocator, "{s}!", .{canonical_phantom});
                         defer self.allocator.free(held);
+                        // The debt arrived with the call; it was not minted
+                        // here. Suppress the mint edge the set would emit and
+                        // record the real event: `held` — custody entered via
+                        // the declared `<!state>` input.
+                        const saved_edges = root_context.emit_edges;
+                        root_context.emit_edges = false;
                         try root_context.setWithType(field.name, held, canonical_base_type);
+                        root_context.emit_edges = saved_edges;
+                        if (root_context.emit_edges) emitCustodyEdge("held", field.name, held, canonical_base_type);
                         // The marker exists so CONSUME SITES can tell "I was
                         // given this" from "I was only shown this" (the
                         // debt-exists wall reads the binding's recorded state).
@@ -2165,6 +2227,7 @@ pub const PhantomSemanticChecker = struct {
                 try BindingContext.inherit(parent, self.allocator)
             else
                 BindingContext.init(self.allocator);
+            void_context.emit_edges = custody_edges_enabled and self.check_mode == .full;
             defer void_context.deinit();
 
             // A named arm followed by a join continuation keeps its inherited
@@ -2299,6 +2362,7 @@ pub const PhantomSemanticChecker = struct {
                 try BindingContext.inherit(parent, self.allocator)
             else
                 BindingContext.init(self.allocator);
+            void_chain_context.emit_edges = custody_edges_enabled and self.check_mode == .full;
             defer void_chain_context.deinit();
 
             // Validate the step if present
@@ -2445,6 +2509,7 @@ pub const PhantomSemanticChecker = struct {
                 try BindingContext.inherit(parent, self.allocator)
         else
             BindingContext.init(self.allocator);
+        context.emit_edges = custody_edges_enabled and self.check_mode == .full;
         defer context.deinit();
 
         // A named arm followed by a join continuation keeps its inherited
@@ -2708,6 +2773,15 @@ pub const PhantomSemanticChecker = struct {
                             first_lost = resource;
                         }
                         lost_count += 1;
+                    } else if (context.emit_edges) {
+                        // `issued`: the obligation exits live through a
+                        // declared `[!]` output — custody transfers to the
+                        // caller, it does not discharge here.
+                        if (context.getInfo(resource)) |info| {
+                            emitCustodyEdge("issued", resource, info.phantom_state, info.base_type);
+                        } else {
+                            emitCustodyEdge("issued", resource, "?", "?");
+                        }
                     }
                 }
 
@@ -2807,6 +2881,28 @@ pub const PhantomSemanticChecker = struct {
                 }
             } else {
                 log.debug("[CLEANUP] ✓ No uncleaned resources at terminator\n", .{});
+            }
+        }
+
+        // `-> expr` arm exits: an `.expression` node closing a named arm IS
+        // the return value — `| stop r -> r` walks in as expression "r".
+        // `.expression` is not a terminator kind, so the audit above never
+        // sees this escape — which is exactly what makes returning a live
+        // obligation legal (the declared return carries the `!`). Emit the
+        // `issued` edge for each live obligation the expression names
+        // directly; compound expressions stay invisible to the ledger
+        // rather than guessed at.
+        if (cont.node) |step| {
+            if (step == .expression and cont.continuations.len == 0 and context.emit_edges) {
+                var exit_it = context.cleanup_obligations.keyIterator();
+                while (exit_it.next()) |k| {
+                    if (!std.mem.eql(u8, k.*, step.expression)) continue;
+                    if (context.getInfo(k.*)) |info| {
+                        emitCustodyEdge("issued", k.*, info.phantom_state, info.base_type);
+                    } else {
+                        emitCustodyEdge("issued", k.*, "?", "?");
+                    }
+                }
             }
         }
 
@@ -2930,6 +3026,7 @@ pub const PhantomSemanticChecker = struct {
             try BindingContext.inherit(parent, self.allocator)
         else
             BindingContext.init(self.allocator);
+        context.emit_edges = custody_edges_enabled and self.check_mode == .full;
         defer context.deinit();
 
         // Empty branch is valid in void chains

@@ -195,6 +195,10 @@ const WCensus = struct {
     // can only learn "this program enforced" here. Same registry shape as
     // build:config / build:variants → emitter_helpers.
     @import("emitter_helpers").witness_enforced = true;
+    // Same channel for the custody fragment (W4): check-phantom-semantic —
+    // which runs after this registration in the same process — prints one
+    // `custody-edge` line per mint/discharge it walks.
+    @import("phantom_semantic_checker").custody_edges_enabled = true;
     return .{ .enforced = census.obligationSites() };
 }
 
