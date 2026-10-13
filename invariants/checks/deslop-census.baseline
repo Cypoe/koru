@@ -74,8 +74,14 @@
 # offenders documented in the 820/911 re-pin below, none of them in this
 # diff. This commit's own delta measured +0 (working tree 913 == HEAD-only
 # 913); the +2 members are foreign drift landed between re-pins.
-clusters=820
-members=913
+# Re-pinned to 822/927 on the dead-produce audit commit: measured against
+# HEAD-only src/ (819/923), this diff's own delta is +1 cluster/+2 members
+# — audit scaffolding below the top-200 weight floor; the diff's real twin
+# (auditDeadThreadItems x punThreadItems) was folded into a shared
+# comptime-parameterized walker before this re-pin. The remaining +2/+2 is
+# foreign working-tree drift in uncommitted parser.zig/errors.zig work.
+clusters=822
+members=927
 # Re-pinned to 820/911 on the call-site |variant commit: the sampled roll
 # named containsTokenLocal x containsToken (continuation_codegen /
 # emitter_helpers) and an emitter_test test_decl pair — none of those

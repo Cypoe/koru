@@ -52,6 +52,7 @@ koru_std/compiler_visitor.kz	505
 koru_std/compiler.ccp.kz	58
 koru_std/compiler.context.kz	57
 koru_std/compiler.control.kz	31
+koru_std/compiler.desugars.kz	70
 koru_std/compiler.directives.kz	15
 koru_std/compiler.dump.kz	24
 koru_std/compiler.flags.kz	6

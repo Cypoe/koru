@@ -208,3 +208,31 @@ the thread — the author writes `x: o` to say which slot the scope value takes.
 Written arguments narrow; filled arguments do not. The produce is the nearest
 binding of its type in every `|>` step, because "the value that just arrived"
 is what `|>` means.
+
+## A produce nobody can reach is a refusal, not a discard (2026-10-13)
+
+The reservation fixed WHO takes the slot; it said nothing about a produce
+that arrives where nothing can take it at all. `produce() |> consume(a: "A",
+b: "B")` — every slot written — compiled, emitted `const result_1 =
+produce()`, and dropped the value where nothing could ever read it. The
+checker's own comment ruled it legal: "Complete is never an error." A call
+with no unfilled parameters never even looked at the thread — the conveyor
+lost its cargo and stayed silent.
+
+An in-election refusal could not carry it: `210_172`'s running-value chain
+(`seed(): n |> bump(n) |> bump(n)`) mints its `__thread_pun` holders in the
+pun-advance pass, AFTER the election — an election-time refusal condemned a
+produce that was about to be named. So the check is a post-pass AUDIT
+(`auditDeadThreads`, KORU092: "the {T} produced by '{tor}' has nowhere to
+land — every parameter downstream that could take it is already written").
+A produce survives unnamed only where it honestly can: at the chain's end,
+bound and written (`produce(): s |> consume(a: s)` is landing, not discarding
+— 210_323), destructured, or deliberately dropped with `: _`. Union payloads
+are eaten by their arms, not offered to the election.
+
+The audit's verdict is stage-relative like the threading it audits: a child
+whose callee this stage cannot resolve (a `[with]`-scoped bare name before
+resolve-with-scopes) was never offered the thread, so "nowhere to land"
+defers to the elaborate segment, where `auditDeadThreadsInProgram` runs after
+the names resolve and the verdict is final (641_015 keeps passing; a
+`[with]`-scoped dead produce refuses).
