@@ -403,21 +403,126 @@ fn writeScopeNumInfo(scope: []const ast_find.ScopeBinding, name: []const u8) ?Wr
     return null;
 }
 
+/// `name` binds a row record of which store? Two decodes, each honest:
+/// the binding's declared type names `__KoruStoreRow_<S>` or an
+/// `[entity(Alias)]` alias (take `| item`, impl inputs), or — when the
+/// type is empty, a multi-field record payload — the bind's origin is a
+/// `| row`/`inserted`/`removed` arm under a store op, resolved by
+/// emitter_helpers.rowBindStoreAtSite over the same site scopeAtSite
+/// walked.
+fn writeRowStoreOf(
+    alloc: std.mem.Allocator,
+    prog: *const ast_find.Program,
+    scope: []const ast_find.ScopeBinding,
+    row_flow: ?*const ast_find.Flow,
+    name: []const u8,
+) ?[]const u8 {
+    for (scope) |b| {
+        if (!std.mem.eql(u8, b.name, name) and !std.mem.eql(u8, b.value_ref, name)) continue;
+        var ty = std.mem.trim(u8, b.type, " ");
+        while (ty.len > 0 and ty[0] == '*') ty = ty[1..];
+        if (std.mem.indexOfScalar(u8, ty, '<')) |lt| ty = ty[0..lt];
+        if (std.mem.lastIndexOfScalar(u8, ty, ':')) |c| ty = ty[c + 1 ..];
+        if (std.mem.startsWith(u8, ty, "__KoruStoreRow_")) return ty["__KoruStoreRow_".len..];
+        if (ty.len > 0) {
+            if (entityStoreOf(alloc, prog, ty)) |s| return s;
+        }
+        // A scalar type here is not a verdict: the same-named `| row`
+        // index branch's payload shadows `! row`'s record bind on the
+        // decl, so `e` can wear `usize` while binding a record. The
+        // origin walk re-checks arm kind — it cannot map a name no row
+        // arm ever bound.
+        break;
+    }
+    const fl = row_flow orelse return null;
+    const eh = @import("emitter_helpers");
+    return eh.rowBindStoreAtSite(alloc, prog.items, fl, fl.inv(), name);
+}
+
+/// Which store's `[entity(Alias)]` declares `alias`? store.new.kz mints
+/// `pub const Alias = __KoruStoreRow_<S>` from the `new` flow's
+/// `entity(<raw>)` annotation (first letter capitalized).
+fn entityStoreOf(alloc: std.mem.Allocator, prog: *const ast_find.Program, alias: []const u8) ?[]const u8 {
+    for (storeAllNames(alloc, prog)) |sn| {
+        if (storeEntityAlias(alloc, prog, sn)) |a| {
+            if (std.mem.eql(u8, a, alias)) return sn;
+        }
+    }
+    return null;
+}
+
+/// The capitalized `entity(<raw>)` text on store `sn`'s `new` flow.
+fn storeEntityAlias(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8) ?[]const u8 {
+    const stripQuotes2 = @import("emitter_helpers").stripQuotes;
+    for (flatItems(alloc, prog.items)) |pi| {
+        if (pi.* != .flow) continue;
+        const f = &pi.flow;
+        const inv = f.inv();
+        if (inv.path.segments.len != 1 or !std.mem.eql(u8, inv.path.segments[0], "new")) continue;
+        const mq = inv.path.module_qualifier orelse continue;
+        if (!std.mem.eql(u8, mq, "std.store")) continue;
+        var matches = false;
+        for (inv.args) |a| {
+            if (std.mem.eql(u8, a.name, "expr") and std.mem.eql(u8, stripQuotes2(a.value), store)) matches = true;
+        }
+        if (!matches) continue;
+        for (f.annotations) |ann| {
+            if (std.mem.startsWith(u8, ann, "entity(") and ann.len > "entity(".len + 1 and ann[ann.len - 1] == ')') {
+                const raw = ann["entity(".len .. ann.len - 1];
+                const cap = alloc.alloc(u8, raw.len) catch unreachable;
+                @memcpy(cap, raw);
+                cap[0] = std.ascii.toUpper(cap[0]);
+                return cap;
+            }
+        }
+        return null;
+    }
+    return null;
+}
+
 // The proven numeric class of a value expression, or null = unknown.
 // `null` is never a verdict — it is "defer to the host backend".
-fn writeExprNumInfo(alloc: std.mem.Allocator, prog: *const ast_find.Program, expr: *const ast_find.Expression, scope: []const ast_find.ScopeBinding) ?WriteNumInfo {
+fn writeExprNumInfo(alloc: std.mem.Allocator, prog: *const ast_find.Program, expr: *const ast_find.Expression, scope: []const ast_find.ScopeBinding, row_flow: ?*const ast_find.Flow) ?WriteNumInfo {
     switch (expr.node) {
         .literal => return null,
-        .identifier => |n| return writeScopeNumInfo(scope, n),
-        .unary => |u| return writeExprNumInfo(alloc, prog, u.operand, scope),
-        .grouped => |g| return writeExprNumInfo(alloc, prog, g, scope),
+        .identifier => |n| {
+            if (writeScopeNumInfo(scope, n)) |info| return info;
+            // `! inserted|removed { f }` binds by pun — `f` IS column `S.f`
+            // of the arm's store (user type text on these fields is
+            // refused, so the binding always arrives untyped). `! updated
+            // { old, new }` binds the written field's images — the decl
+            // enforces uniform columns before that arm may bind, so both
+            // names take the store's column type. emitter_helpers walks
+            // the same site ancestry scopeAtSite walked.
+            if (row_flow) |fl| {
+                const eh = @import("emitter_helpers");
+                if (eh.lifecyclePunAtSite(alloc, prog.items, fl, fl.inv(), n)) |pun| {
+                    switch (pun) {
+                        .col_pun => |sn| return writeColNumInfo(alloc, prog, sn, n),
+                        .updated_image => |sn| {
+                            // The decl enforces uniform columns, so any
+                            // column's type is the image type — take the
+                            // first in declaration order (apply branches or
+                            // seed block, whichever transform ran).
+                            if (storeFieldOrder(alloc, prog, sn)) |flds| {
+                                if (flds.len > 0) return writeColNumInfo(alloc, prog, sn, flds[0]);
+                            }
+                            return null;
+                        },
+                    }
+                }
+            }
+            return null;
+        },
+        .unary => |u| return writeExprNumInfo(alloc, prog, u.operand, scope, row_flow),
+        .grouped => |g| return writeExprNumInfo(alloc, prog, g, scope, row_flow),
         .binary => |b| {
             switch (b.op) {
                 .add, .subtract, .multiply, .divide, .modulo => {},
                 else => return null, // comparisons and logic yield bool
             }
-            const l = writeExprNumInfo(alloc, prog, b.left, scope);
-            const r = writeExprNumInfo(alloc, prog, b.right, scope);
+            const l = writeExprNumInfo(alloc, prog, b.left, scope, row_flow);
+            const r = writeExprNumInfo(alloc, prog, b.right, scope, row_flow);
             if (l != null and r != null) {
                 if (l.?.cls != r.?.cls) return null; // mixed family — defer
                 return if (l.?.rank >= r.?.rank) l.? else r.?;
@@ -435,6 +540,15 @@ fn writeExprNumInfo(alloc: std.mem.Allocator, prog: *const ast_find.Program, exp
         .field_access => |fa| {
             if (writeStoreNameOf(alloc, prog, fa.object)) |sn| {
                 return writeColNumInfo(alloc, prog, sn, fa.field);
+            }
+            // `e.f` on a bound row: the binding's type names the row record
+            // (take/impl payloads), or the bind's origin is a `| row e`/
+            // interceptor arm under a store op (query/sweep bodies).
+            if (fa.object.node == .identifier) {
+                const rn = fa.object.node.identifier;
+                if (writeRowStoreOf(alloc, prog, scope, row_flow, rn)) |sn| {
+                    return writeColNumInfo(alloc, prog, sn, fa.field);
+                }
             }
             return null;
         },
@@ -454,8 +568,17 @@ fn writeExprNumInfo(alloc: std.mem.Allocator, prog: *const ast_find.Program, exp
             // `(&s.f)[r]` shape (zig's handle-read spelling) unwraps through
             // its grouping to the same field access.
             var obj = ai.object;
-            if (obj.node == .grouped) obj = obj.node.grouped;
-            if (obj.node == .unary) obj = obj.node.unary.operand;
+            while (true) {
+                if (obj.node == .grouped) {
+                    obj = obj.node.grouped;
+                    continue;
+                }
+                if (obj.node == .unary) {
+                    obj = obj.node.unary.operand;
+                    continue;
+                }
+                break;
+            }
             if (obj.node == .field_access) {
                 if (writeStoreNameOf(alloc, prog, obj.node.field_access.object)) |sn| {
                     return writeColNumInfo(alloc, prog, sn, obj.node.field_access.field);
@@ -605,13 +728,52 @@ fn literalExactIn(text: []const u8, dest_name: []const u8) ?bool {
 
 // Runs the numeric check and returns the verdict record — never refuses on
 // its own. Unproven stays unproven: neither safe nor refused.
-fn storedWriteCheck(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8, field: []const u8, value_text: []const u8, scope: []const ast_find.ScopeBinding) StoredWriteVerdict {
+fn storedWriteCheck(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8, field: []const u8, value_text: []const u8, scope: []const ast_find.ScopeBinding, row_flow: ?*const ast_find.Flow) StoredWriteVerdict {
     var v = StoredWriteVerdict{ .site = std.fmt.allocPrint(alloc, "{s}.{s}", .{ store, field }) catch unreachable };
     const tinfo = writeColNumInfo(alloc, prog, store, field) orelse return v;
     v.dest = tinfo.name;
-    var parser = expression_parser_wc.ExpressionParser.init(alloc, value_text);
+    // The lowered row read `(&__koru_store_S.f)[i]` is a compiler-internal
+    // spelling, not expression grammar: `&` has no unary form here and a
+    // grouped primary takes no postfix, so `(x)[i]` cannot parse. Both
+    // artifacts are normalized away — the address-of wrapper and the
+    // parens that exist only to parenthesize it — leaving `S.f[i]`.
+    // `&&` is preserved verbatim.
+    var cleaned = value_text;
+    if (std.mem.indexOfScalar(u8, value_text, '&') != null) {
+        var cb = std.ArrayList(u8).initCapacity(alloc, value_text.len) catch unreachable;
+        var ci: usize = 0;
+        var drop_close_depth: i32 = 0;
+        while (ci < value_text.len) : (ci += 1) {
+            const ch = value_text[ci];
+            if (ch == '&') {
+                if (ci + 1 < value_text.len and value_text[ci + 1] == '&') {
+                    cb.appendSlice(alloc, "&&") catch unreachable;
+                    ci += 1;
+                    continue;
+                }
+                // `(&` — the paren only groups the address-of artifact:
+                // both go, and the group close is dropped on the way out.
+                if (cb.items.len > 0 and cb.items[cb.items.len - 1] == '(') {
+                    _ = cb.pop();
+                    drop_close_depth = 1;
+                }
+                continue;
+            }
+            if (drop_close_depth > 0) {
+                if (ch == '(') {
+                    drop_close_depth += 1;
+                } else if (ch == ')') {
+                    drop_close_depth -= 1;
+                    if (drop_close_depth == 0) continue;
+                }
+            }
+            cb.append(alloc, ch) catch unreachable;
+        }
+        cleaned = cb.items;
+    }
+    var parser = expression_parser_wc.ExpressionParser.init(alloc, cleaned);
     const expr = parser.parseAll() catch return v;
-    const rinfo = writeExprNumInfo(alloc, prog, expr, scope) orelse {
+    const rinfo = writeExprNumInfo(alloc, prog, expr, scope, row_flow) orelse {
         // A lone literal's representability is decidable from its text;
         // the mark carries it verbatim so a downstream checker can re-decide.
         if (numericLiteralText(alloc, expr)) |text| {
@@ -633,8 +795,8 @@ fn storedWriteCheck(alloc: std.mem.Allocator, prog: *const ast_find.Program, sto
 // The write-side refusal: the diagnostic text when the RHS's proven class
 // cannot land in the column, null when it can or nothing is proven.
 // Cross-class is refused both ways — no host coerces float↔int silently.
-fn storedWriteNarrowing(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8, field: []const u8, value_text: []const u8, scope: []const ast_find.ScopeBinding) ?[]const u8 {
-    const v = storedWriteCheck(alloc, prog, store, field, value_text, scope);
+fn storedWriteNarrowing(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8, field: []const u8, value_text: []const u8, scope: []const ast_find.ScopeBinding, row_flow: ?*const ast_find.Flow) ?[]const u8 {
+    const v = storedWriteCheck(alloc, prog, store, field, value_text, scope, row_flow);
     if (!v.narrows) return null;
     return std.fmt.allocPrint(alloc, "std/store:stored: column '{s}.{s}' is {s} but the write is provably {s} — a write that loses bits is refused, never silently rounded (690_160)", .{ store, field, v.dest.?, v.src.? }) catch unreachable;
 }

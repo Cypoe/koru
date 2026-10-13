@@ -4761,6 +4761,288 @@ fn armBodyTakePath(body: []const ast.Continuation, ctx: TakePathCtx) bool {
     return false;
 }
 
+/// The store whose row `name` binds at `target`'s site, or null. A
+/// `| row`/`| preorder`/`| item`/`| inserted`/`| removed`/`| full` arm
+/// ancestor on the path to the site whose parent invocation is a store op
+/// (`__store_<op>_<S>…` or the surface `take(S)`/`query(S)`/… spelling)
+/// binds a record of S's columns — the stored-write check uses this to
+/// type `e.f` reads. Arm names that bind a SCALAR (the inserted handle
+/// `| row h`, a single-column take's value) are excluded by checking the
+/// arm's declared payload type: only record-shaped payloads map.
+pub fn rowBindStoreAtSite(
+    allocator: std.mem.Allocator,
+    items: []const ast.Item,
+    flow: *const ast.Flow,
+    target: *const ast.Invocation,
+    name: []const u8,
+) ?[]const u8 {
+    const site: *const ast.Continuation = flow.site_of orelse
+        (siteContOf(&flow.body, target) orelse return null);
+    const real = findFlowHoldingCont(items, site) orelse return null;
+    var hit: ?[]const u8 = null;
+    _ = rowArmPath(allocator, items, &real.body, null, site, name, &hit) catch return null;
+    return hit;
+}
+
+/// Arm names that bind a row (or give-back row-shape) record under a
+/// store op. `|`/`!` split the same word: `| row r` binds the row INDEX
+/// (usize — `take(pool[r])`), `! row e` binds the row RECORD (`e.hp`),
+/// so the row-word arms require `.effect`. `updated` is absent — it binds
+/// `{old, new}` of the watched column, not a row of the store.
+fn isRowArm(kind: ast.BranchKind, branch: []const u8) bool {
+    const t = std.mem.trim(u8, branch, " ");
+    if (kind == .effect) {
+        const effect_arms = [_][]const u8{ "row", "query", "each", "preorder", "inserted", "removed" };
+        for (effect_arms) |a| {
+            if (std.mem.eql(u8, t, a)) return true;
+        }
+        return false;
+    }
+    const terminal_arms = [_][]const u8{ "item", "full" };
+    for (terminal_arms) |a| {
+        if (std.mem.eql(u8, t, a)) return true;
+    }
+    return false;
+}
+
+/// A payload type text counts as a row record when it is empty (a
+/// multi-field column record), names `__KoruStoreRow_*`, or carries a
+/// phantom (`Player<std.store:taken!>` — the entity alias). A pointer or
+/// a plain scalar (`i64`, `usize`, `f64` — the inserted handle, a
+/// single-column `| item`) is NOT a record and must not map.
+fn isRowRecordType(ty: []const u8) bool {
+    if (ty.len == 0) return true;
+    if (ty[0] == '*') return false;
+    if (std.mem.startsWith(u8, ty, "__KoruStoreRow_")) return true;
+    if (std.mem.indexOfScalar(u8, ty, '<') != null) return true;
+    return false;
+}
+
+/// `_L<digits>_…` — the site tag store.new.kz mints on per-site names
+/// (`__store_qrow_<S>_L42_<tag>`): the store name ends before it.
+fn siteTagCut(s: []const u8) ?usize {
+    var i: usize = 0;
+    while (i + 2 < s.len) : (i += 1) {
+        if (s[i] == '_' and s[i + 1] == 'L' and std.ascii.isDigit(s[i + 2])) return i;
+    }
+    return null;
+}
+
+/// The store a row-arm's parent invocation belongs to — `__store_<op>_<S>`
+/// decoded past the op prefix and any `_L<n>_<tag>` site tag, or the
+/// surface spelling's first arg (`take(players, h)` → `players`).
+fn storeOfRowParent(inv: ?*const ast.Invocation) ?[]const u8 {
+    const i = inv orelse return null;
+    if (i.path.segments.len != 1) return null;
+    const seg = i.path.segments[0];
+    if (std.mem.startsWith(u8, seg, "__store_")) {
+        const rest = seg["__store_".len..];
+        const ops = [_][]const u8{
+            "qrow_",   "qbody_", "qsweep_", "take_",   "inserth_",
+            "insertf_", "insert_", "wapply_", "sapply_", "apply_",
+            "announce_", "stripe_", "sweep_", "watch_",  "rule_",
+        };
+        for (ops) |op| {
+            if (std.mem.startsWith(u8, rest, op)) {
+                var s = rest[op.len..];
+                if (siteTagCut(s)) |p| s = s[0..p];
+                return if (s.len > 0) s else null;
+            }
+        }
+        return null;
+    }
+    const surface = [_][]const u8{
+        "take",  "query",   "sweep",  "stripe", "apply",  "wapply",
+        "sapply", "insert",  "inserth", "insertf", "preorder", "wpreorder",
+        "rule",   "new",
+    };
+    for (surface) |op| {
+        if (std.mem.eql(u8, seg, op)) {
+            if (i.args.len == 0) return null;
+            const v = stripQuotes(std.mem.trim(u8, i.args[0].value, " "));
+            return if (v.len > 0) v else null;
+        }
+    }
+    return null;
+}
+
+/// Path descent mirroring takeItemPath: when an on-path arm cont binds
+/// `name` under a store-op parent with a record payload, record the store.
+fn rowArmPath(
+    allocator: std.mem.Allocator,
+    items: []const ast.Item,
+    cont: *const ast.Continuation,
+    parent_inv: ?*const ast.Invocation,
+    site: *const ast.Continuation,
+    name: []const u8,
+    hit: *?[]const u8,
+) anyerror!bool {
+    if (cont != site and !contHoldsTarget(cont, site)) return false;
+    if (hit.* == null) {
+        if (cont.binding) |b| {
+            if (std.mem.eql(u8, b, name) and isRowArm(cont.kind, cont.branch)) {
+                // Terminal arms are checked against their declared payload
+                // (a single-column `| item` binds the VALUE, insertf's
+                // `| row` the HANDLE); effect arms are record binds by
+                // construction — the decl's same-named terminal branch
+                // (`| row` = the index) must not veto them.
+                const record = if (cont.kind == .effect) true else blk: {
+                    const pty = branchPayloadType(allocator, items, parent_inv, std.mem.trim(u8, cont.branch, " ")) catch "";
+                    break :blk isRowRecordType(pty);
+                };
+                if (record) {
+                    if (storeOfRowParent(parent_inv)) |s| hit.* = s;
+                }
+            }
+        }
+    }
+    if (cont == site) return true;
+    var child_inv = parent_inv;
+    if (cont.node) |*node| {
+        switch (node.*) {
+            .invocation => |*inv| child_inv = inv,
+            .label_with_invocation => |*lwi| child_inv = &lwi.invocation,
+            else => {},
+        }
+    }
+    for (cont.continuations) |*c| {
+        if (try rowArmPath(allocator, items, c, child_inv, site, name, hit)) return true;
+    }
+    if (cont.node) |*n| {
+        var ctx: RowArmCtx = .{
+            .allocator = allocator,
+            .items = items,
+            .parent_inv = parent_inv,
+            .site = site,
+            .name = name,
+            .hit = hit,
+        };
+        if (anyNestedArmBody(n.*, &ctx, armBodyRowArmPath)) {
+            if (ctx.err) |e| return e;
+            return true;
+        }
+    }
+    return false;
+}
+
+const RowArmCtx = struct {
+    allocator: std.mem.Allocator,
+    items: []const ast.Item,
+    parent_inv: ?*const ast.Invocation,
+    site: *const ast.Continuation,
+    name: []const u8,
+    hit: *?[]const u8,
+    err: ?anyerror = null,
+};
+
+/// rowArmPath over one arm body — arm-body binds walk with the ENCLOSING
+/// parent inv (a conditional inside `| row e` is still under the row arm).
+fn armBodyRowArmPath(body: []const ast.Continuation, ctx: *RowArmCtx) bool {
+    for (body) |*c| {
+        const found = rowArmPath(ctx.allocator, ctx.items, c, ctx.parent_inv, ctx.site, ctx.name, ctx.hit) catch |e| {
+            ctx.err = e;
+            return true;
+        };
+        if (found) return true;
+    }
+    return false;
+}
+
+/// What a destructure field on a lifecycle interceptor arm binds.
+/// `! inserted { hp }`/`! removed { hp }` pun store columns by name —
+/// `hp` IS `S.hp` (user type text on these fields is refused, so the
+/// binding always arrives untyped). `! updated { old, new }` binds the
+/// written field's images — its type is the store's column type, which
+/// the decl enforces as uniform before this arm may bind at all.
+pub const LifecyclePun = union(enum) {
+    col_pun: []const u8,
+    updated_image: []const u8,
+};
+
+/// Is `name` bound, at this site, by a destructure field on a lifecycle
+/// arm of a store op? Mirrors rowBindStoreAtSite — the same site/holding
+/// flow machinery, matching `cont.destructure` instead of `cont.binding`.
+pub fn lifecyclePunAtSite(
+    allocator: std.mem.Allocator,
+    items: []const ast.Item,
+    flow: *const ast.Flow,
+    target: *const ast.Invocation,
+    name: []const u8,
+) ?LifecyclePun {
+    _ = allocator;
+    const site: *const ast.Continuation = flow.site_of orelse
+        (siteContOf(&flow.body, target) orelse return null);
+    const real = findFlowHoldingCont(items, site) orelse return null;
+    var hit: ?LifecyclePun = null;
+    _ = lifecyclePunPath(&real.body, null, site, name, &hit);
+    return hit;
+}
+
+fn lifecyclePunPath(
+    cont: *const ast.Continuation,
+    parent_inv: ?*const ast.Invocation,
+    site: *const ast.Continuation,
+    name: []const u8,
+    hit: *?LifecyclePun,
+) bool {
+    if (cont != site and !contHoldsTarget(cont, site)) return false;
+    if (hit.* == null and cont.kind == .effect) {
+        const b = std.mem.trim(u8, cont.branch, " ");
+        const is_updated = std.mem.eql(u8, b, "updated");
+        if (is_updated or std.mem.eql(u8, b, "inserted") or std.mem.eql(u8, b, "removed")) {
+            for (cont.destructure) |df| {
+                if (!std.mem.eql(u8, df.name, name)) continue;
+                if (df.sub.len > 0) break;
+                if (storeOfRowParent(parent_inv)) |sn| {
+                    hit.* = if (is_updated)
+                        LifecyclePun{ .updated_image = sn }
+                    else
+                        LifecyclePun{ .col_pun = sn };
+                }
+                break;
+            }
+        }
+    }
+    if (cont == site) return true;
+    var child_inv = parent_inv;
+    if (cont.node) |*node| {
+        switch (node.*) {
+            .invocation => |*inv| child_inv = inv,
+            .label_with_invocation => |*lwi| child_inv = &lwi.invocation,
+            else => {},
+        }
+    }
+    for (cont.continuations) |*c| {
+        if (lifecyclePunPath(c, child_inv, site, name, hit)) return true;
+    }
+    if (cont.node) |*n| {
+        var ctx: LifecyclePunCtx = .{
+            .parent_inv = parent_inv,
+            .site = site,
+            .name = name,
+            .hit = hit,
+        };
+        if (anyNestedArmBody(n.*, &ctx, armBodyLifecyclePunPath)) return true;
+    }
+    return false;
+}
+
+const LifecyclePunCtx = struct {
+    parent_inv: ?*const ast.Invocation,
+    site: *const ast.Continuation,
+    name: []const u8,
+    hit: *?LifecyclePun,
+};
+
+/// lifecyclePunPath over one nested arm body — binds walk with the
+/// ENCLOSING parent inv, same convention as armBodyRowArmPath.
+fn armBodyLifecyclePunPath(body: []const ast.Continuation, ctx: *LifecyclePunCtx) bool {
+    for (body) |*c| {
+        if (lifecyclePunPath(c, ctx.parent_inv, ctx.site, ctx.name, ctx.hit)) return true;
+    }
+    return false;
+}
+
 /// The `__store_*` decl scan — an event_decl named `name` anywhere in the
 /// item tree (module decls included).
 fn findEventDeclIn(items: []const ast.Item, name: []const u8) ?*const ast.EventDecl {

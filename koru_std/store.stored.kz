@@ -152,9 +152,9 @@
         // lowered envwrite invocation (prepared-witness channel).
         const env_checks = allocator.alloc(StoredWriteVerdict, env_fields.len) catch unreachable;
         for (env_fields, env_raw_values, 0..) |ef, rv, k| {
-            env_checks[k] = storedWriteCheck(allocator, program, env_store, ef, rv, write_scope);
+            env_checks[k] = storedWriteCheck(allocator, program, env_store, ef, rv, write_scope, flow);
             if (env_checks[k].narrows) {
-                const m = storedWriteNarrowing(allocator, program, env_store, ef, rv, write_scope).?;
+                const m = storedWriteNarrowing(allocator, program, env_store, ef, rv, write_scope, flow).?;
                 return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "{s}", .{m}) };
             }
         }
@@ -513,9 +513,9 @@
 
     // Same koru-owned narrowing refusal as the envelope path (690_160) —
     // and the verdict becomes the @witness mark on the lowered write call.
-    const write_check = storedWriteCheck(allocator, program, target_store, target_field, w.value, write_scope);
+    const write_check = storedWriteCheck(allocator, program, target_store, target_field, w.value, write_scope, flow);
     if (write_check.narrows) {
-        const m = storedWriteNarrowing(allocator, program, target_store, target_field, w.value, write_scope).?;
+        const m = storedWriteNarrowing(allocator, program, target_store, target_field, w.value, write_scope, flow).?;
         return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "{s}", .{m}) };
     }
 
