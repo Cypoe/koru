@@ -75,7 +75,12 @@ const SRewrite = struct {
             // field, a `bind:` name, or a `#`/`@`/`?` marker (690_361/362/363).
             const bare_end = if (expr_ctx[i] and at_boundary) bareBindEnd(text, i, bind, expr_ctx) else null;
             if (!row_is_identity and bare_end != null and (form == .input or form == .live)) {
-                const t = std.fmt.allocPrint(alloc, "__koru_store_{s}.__koru_handle_of({s})", .{ store, SCursor.liveIndex(alloc, cursor) }) catch unreachable;
+                // `store.method(...)` is the Zig/JS/CS member spelling; the C
+                // lane mints `__koru_handle_of_<S>` as a free function.
+                const t = if (storeHostTarget() == .c)
+                    std.fmt.allocPrint(alloc, "__koru_handle_of_{s}({s})", .{ store, SCursor.liveIndex(alloc, cursor) }) catch unreachable
+                else
+                    std.fmt.allocPrint(alloc, "__koru_store_{s}.__koru_handle_of({s})", .{ store, SCursor.liveIndex(alloc, cursor) }) catch unreachable;
                 out.appendSlice(alloc, t) catch unreachable;
                 i = bare_end.?;
                 continue;

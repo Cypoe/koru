@@ -145,9 +145,34 @@ plus `400_212` transducer) still hold.
 
 ### Prime sieve status
 
-`2105_prime_sieve --lang=c` now clears `for`/`if` and dies on the NEXT
-measured wall: `NoCProcBody` — `__grid_write_L32_1056` (`std/grid:stored`
-synthesizes its write procs with `.target = "zig"` unconditionally).
-The sieve needs the store/grid synthesis tranche: teach `grid.stored`,
-`store.new`/`store.cols`, `sweep`, and `grid.new` to mint `|c` variants
-of their synthesized procs and bodies.
+RESOLVED 2026-10-14: the store/grid synthesis tranche landed — the sieve
+compiles under `ccomp -O -fstruct-passing -Wl,-s` and its output is
+byte-identical to `expected.txt` (`78498`). K1 is proven end-to-end on
+a real program.
+
+### No-C store/grid census (measured 2026-10-14, HEAD a410df5e2+)
+
+Probe: 201 store/grid tests without `c` in LANGUAGES, each compiled
+`--lang=c`. 16 emitted C without a refusal; 185 refused (129 KORU161
+deliberate gates — rules/interceptors/watches/trees/owned — 41 KORU047
+fragment limits, 7 KORU120, 6 KORU002 env, 1 KORU121, 1 unknown).
+
+All 16 emitted artifacts were then compiled with CompCert
+(`-O -fstruct-passing -Wl,-s`) and run: **14 byte-identical to
+expected.txt, 2 exposed emitter gaps** — both now closed:
+
+- `690_363` — `store.qrewrite` minted the Zig member spelling
+  `__koru_store_<S>.__koru_handle_of(...)` for a swept-row take; C mints
+  the free fn `__koru_handle_of_<S>(...)`. One-site fix, now `zig cs c`
+  and green under the harness c-leg.
+- `230_005` — `*%`/`+%`/`-%` leaked verbatim (the js lane lowers them;
+  `lowerCInto` had no arm). Wrapping is defined at the operand's
+  DECLARED width and the C lane carries a uniform `long long` cell —
+  wrap-at-i64 would be a silent wrong answer, so `lowerCInto` now
+  refuses by name through `LowerDiag.unsupported_op` (KORU047). Pinned
+  via `C_REFUSES`.
+
+The 14 survivors gained `c` in LANGUAGES: 7 module/import/comptime-mirror
+tests, 2 parser tests, and 5 store tests including the three witness-mark
+tests (the `[witness]` lines emit identically through the C backend).
+Emitting C is not verification — ccomp + byte-diff is.

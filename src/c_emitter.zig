@@ -445,7 +445,11 @@ const Emitter = struct {
         var diag: codegen_utils.LowerDiag = .{};
         const lowered = codegen_utils.lowerKoruExpr(self.allocator, text, .c, .koru_expr, &diag) catch |err| {
             if (err == error.UnsupportedBuiltin) {
-                std.debug.print("error[KORU047]: C lane: unsupported builtin {s} in expression `{s}`\n", .{ diag.unknown_builtin, text });
+                if (diag.unsupported_op.len != 0) {
+                    std.debug.print("error[KORU047]: C lane: wrapping operator `{s}` in expression `{s}` — wrap width is the operand's declared int width, which the C lane's uniform i64 cell does not carry\n", .{ diag.unsupported_op, text });
+                } else {
+                    std.debug.print("error[KORU047]: C lane: unsupported builtin {s} in expression `{s}`\n", .{ diag.unknown_builtin, text });
+                }
                 return CEmitError.UnsupportedConstruct;
             }
             return CEmitError.OutOfMemory;

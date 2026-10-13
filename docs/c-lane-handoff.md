@@ -830,3 +830,40 @@ etc.), `e.str`-class non-numeric columns.
 
 Measured: corpus harvest 359 tests / 342 clean / 481 witness sites /
 180 tests with >=1 witness; injection caused 0 of the 17 non-clean.
+
+## Tranche: no-C census closes — 15 pinned positives, 1 pinned refusal (session, cont.)
+
+**The probe.** 201 store/grid tests without `c` in LANGUAGES, compiled
+`--lang=c`: 16 emitted, 185 refused (129 KORU161 gates, 41 KORU047, 7
+KORU120, 6 KORU002 env, 1 KORU121, 1 unknown). All 16 went through
+`ccomp -O -fstruct-passing -Wl,-s` + run + byte-diff: 14 MATCH, 2 emitter
+gaps.
+
+**Gap 1 — `690_363`: handle mint spelled for Zig.** `store.qrewrite`'s
+swept-row `store[r]` rewrite emitted `__koru_store_<S>.__koru_handle_of(d)`
+unconditionally; C mints `__koru_handle_of_<S>` as a free fn (the helper
+already existed and the insert path already used it — the rewrite was the
+only site still on the member spelling). Fixed by branching on
+`storeHostTarget()` at the one mint site. Test is `zig cs c` now.
+
+**Gap 2 — `230_005`: wrap ops leaked verbatim.** `lowerCInto` had no
+`*%`/`+%`/`-%` arm — the js lane lowers them (`Math.imul`, `| 0`) because
+its int model IS i32. C cannot copy that: wrapping is defined at the
+operand's DECLARED width (`i32 *%` wraps at 2^32) and the C lane's
+uniform `long long` cell has already lost the width — a wrap-at-i64
+lowering returns `6000000000` where `1705032704` was pinned: a silent
+wrong answer, strictly worse than the syntax error it replaces. So
+`LowerDiag` gained `unsupported_op` and `lowerCInto` refuses the three
+ops by name (KORU047). Pinned via `C_REFUSES`. The honest fix — carrying
+declared int widths into C cells — is a type-representation tranche, not
+a lowering patch.
+
+**The pins.** 15 tests gained `c` (the 14 survivors + `690_363`): module/
+import/comptime-mirror, parser, and store tests — including the three
+witness-mark tests, whose `[witness]` census lines emit identically
+through the C backend. In-WSL these run red only on the pre-existing
+`cs-compile`/`js-runtime` env gaps (no dotnet/node); the c-leg itself is
+green on all of them (`FAILURE` shows the env leg, not `c-*`).
+
+**Prime sieve stands.** Full K1 path re-verified this session: emitted C
+-> ccomp -> run -> `78498`, byte-identical.

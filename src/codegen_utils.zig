@@ -914,7 +914,12 @@ pub const LowerError = error{ UnsupportedBuiltin, OutOfMemory };
 /// Filled in when `lowerKoruExpr` returns `error.UnsupportedBuiltin`, so the
 /// caller can name the operation in its own diagnostic rather than reporting
 /// that something, somewhere, was not understood.
-pub const LowerDiag = struct { unknown_builtin: []const u8 = "" };
+pub const LowerDiag = struct {
+    unknown_builtin: []const u8 = "",
+    /// Set instead of `unknown_builtin` when what refused is an operator
+    /// (`*%` `+%` `-%`), not a builtin — the caller picks the wording.
+    unsupported_op: []const u8 = "",
+};
 
 /// Render Koru expression text for `target`. Caller owns the result.
 pub fn lowerKoruExpr(
@@ -3987,6 +3992,16 @@ fn lowerCInto(
                 i = after;
                 continue;
             }
+        }
+        // Zig WRAPPING operators `*%` `+%` `-%`. Wrapping is defined at the
+        // operand's DECLARED int width (i32 `*%` wraps at 2^32), and the C
+        // lane's uniform `long long` cell has already lost that width — the
+        // js lane can hardcode i32 because its int model IS i32, but a
+        // wrap-at-i64 lowering here would be a silent wrong answer, not a
+        // syntax error. Refuse by name rather than emit either.
+        if ((c == '*' or c == '+' or c == '-') and i + 1 < text.len and text[i + 1] == '%') {
+            if (diag) |d| d.unsupported_op = text[i .. i + 2];
+            return LowerError.UnsupportedBuiltin;
         }
         // `and`/`or`/`not` — word-boundary anchored, both modes (the js arm's
         // reasoning carries: these are Koru's logical vocabulary wherever a

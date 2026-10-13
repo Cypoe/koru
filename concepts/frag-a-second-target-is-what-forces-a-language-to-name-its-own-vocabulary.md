@@ -164,3 +164,35 @@ where JS was (expressions pass through fine). The number of targets is not
 the variable, and likeness-to-Zig is not the variable: the variable is which
 layer the *newest* host cannot pass through, and the surface is finished being
 named only when no host can find a layer nobody enumerated.
+
+## The fourth target (CompCert C, 2026-10-14): two more layers named — width-indexed operators and member-call spelling
+
+The no-C census (201 store/grid tests, `--lang=c`, then ccomp +
+byte-diff on the 16 emitters) found two leaks the first three targets
+had all silently absorbed:
+
+- **Width-indexed operator semantics.** `*%`/`+%`/`-%` passed verbatim
+  into C — a syntax error at the oracle, the same class the JS lane
+  fixed with `Math.imul` / `| 0`. But the C lane cannot copy the JS
+  answer: JS can hardcode i32 because its int model *is* i32, while the
+  C lane already erased declared int width (every cell is `long long`).
+  Wrapping is defined at the operand's DECLARED width, so wrap-at-i64
+  is not a lowering but a different program — `6000000000` where
+  `1705032704` was pinned. The layer C named: *operator semantics that
+  are indexed by a width the target's representation has discarded.*
+  The correct verdict was a named refusal (`LowerDiag.unsupported_op`,
+  KORU047), not a plausible shape. An emitter that can only produce the
+  wrong answer must refuse — the syntax error it replaces was the good
+  outcome.
+- **Member-call spelling.** `store.qrewrite` minted
+  `__koru_store_<S>.__koru_handle_of(d)` — valid on Zig, JS, and CS
+  because all three let a value carry callables. C's struct members are
+  data; the handle minter is a free function `__koru_handle_of_<S>(d)`.
+  The layer: *method-call syntax is a host capability*, and every
+  earlier host happened to have it.
+
+The refined claim survives: each new host names the layer where its own
+permissiveness runs out. C's layer is not expressivity — it is
+*representation*: a target whose cell erases type detail forces
+refusals that richer cells never reach. The surface is still not
+finished being named.
