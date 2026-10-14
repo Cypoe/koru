@@ -240,7 +240,73 @@ K1 is the executable shadow of the eventual simulation lemma.
 
 ---
 
-## 5. Sequencing
+## 5. Totality, holes, and refused surfaces
+
+What each layer currently *covers*, what it *refuses by name*, and what is
+still open — the honest inventory the "verified path" claim is scoped by.
+A hole not listed here that surfaces later is a defect of this section,
+not a loophole of the layers.
+
+### 5.1 Witness corpus (K3 channel)
+
+| Surface | Status | Boundary |
+|---|---|---|
+| `stored-write-numeric` | covered | per-line verdicts re-decided in Lean; `unproven`/`unresolved` are named verdicts, not skips |
+| `auto-discharge` | covered | the `all:` enumeration commits the solver's universe; candidates outside it are malformed — but the enumeration itself is solver-reported (an event the solver never saw is invisible; completeness needs the declaration corpus, not the mark) |
+| `custody-edge` | covered | per-edge vocabulary + corpus-level ledger replay per arrow (mint ⇒ exactly one settle; held may end contract-settled) |
+| `descriptor` / `descriptor-scope` | covered | decl↔emit claim parity re-derived in Lean; census `count=` must equal descriptor lines per scope |
+| `?` proto edges | **MALFORMED by design** | a `discharge` that saw no live binding record prints proto `?`; the ledger counts the edge but cannot re-check its proto — the checker losing a record is itself flagged, never normalized |
+| `-> expr` compound returns | covered by refusal | `issued` mints only when the expr names the obligation (identifier or *unique* mention) AND the flow's declared `-> T<state!>` return matches (type, state); ambiguity, no carrier, wrong carrier, and unmentioned live obligations all refuse KORU030 — the checker never guesses whether an obligation rides a compound expression |
+| witness format | strict | `|`/`;`/`=` separators assume type spellings never contain them; a spelling that does would fail loudly, not mis-parse |
+
+### 5.2 Phantom / obligation checker (`phantom_semantic_checker`, KORU030-family)
+
+| Surface | Status | Boundary |
+|---|---|---|
+| mint/discharge/issued/held | covered | the four ops are the complete lifecycle vocabulary the `.full` pass prints |
+| auto-discharge candidate set | solver-bounded | `sole`/`preferred` insertions are forced choices over the *enumerated* set; the enumeration is what the solver saw — see the `all:` row above |
+| call-shape invocations (`wrap(r)`) | different node kind | parses as `.invocation`, not `.expression` — outside the arm-exit compound audit by construction; its custody is the callee's contract edge, not a return-carrier question |
+
+### 5.3 C lane (K1)
+
+| Surface | Status | Boundary |
+|---|---|---|
+| declared-width arithmetic | pinned | wrapping ops use *declared* integer width, not storage width; 230_007 pins refusal where neither operand resolves to a declared integer width |
+| `usize` | pinned as `u64` | on Zig and C lanes `usize` lowers to u64; `usize -> i64` claims are *deferred*, not refused — named gap |
+| watches / interceptors / rules | **refused** | no C-lane lowering; refusal is named, not silent omission — census expansion is the tracked work item |
+| host lines, `!`-effect arms, pump/rings/worker.spawn | refused | §1 refusal table — sequential deterministic subset only |
+
+### 5.4 Alive2 leg (K2, landed shape)
+
+| Surface | Status | Boundary |
+|---|---|---|
+| intra-procedural opt instances | covered | `alive-tv --passes=` proves each a refinement of clang -O0 IR from `output_emitted.c` |
+| unmodeled libcalls | **scope:libcall** | `fputs`/`fflush`/`fprintf`/`abort`/`strlen` are outside alive2's modeled fragment — IO wrappers and panic paths are named, counted, never tallied as correct |
+| `sret` / aggregate returns | **scope:untranslatable** | untranslatable into Alive IR entirely — named, counted |
+| loops beyond unroll bound | **scope:unroll** | bounded by design (`--unroll=8` measured); deeper loops fail loudly, not pass silently |
+| timeouts on pure-IR functions | **FAIL** | genuinely undecided is a failure; `scope:libcall-timeout` applies only when *every* call in the region targets a declared-only external (causation proven: stubbing the three libcalls makes the same transform verify) |
+| koru-level transforms | **not covered** | clang's `.ll` can only see LLVM's transforms, never koru's — Use B needs the emitter to expose pre/post IR; tracked |
+| negative control | pinned | forged same-signature `mul`->`add` reports `incorrect input_wmul` |
+
+### 5.5 The boundary nobody verifies (named, not fixed)
+
+- **Source → emitter faithfulness has no independent oracle.** ccomp verifies
+  compilation *of* the emitted C; whether the emitted C is faithful to the
+  koru source rests on byte-diff + tests + refusal honesty. The zig
+  self-hosted backend (`backend`/`output` binaries) is likewise unverified
+  substrate. "100%" needs a verified emitter or a semantics-preservation
+  proof — the declared pass graph with `requires`/`preserves` invariants is
+  the staged instrument for it, and ISAR may give it teeth.
+- **Lean-side trust:** `WitnessCheck.lean` is checked by the Lean kernel; the
+  *rules* it encodes are the specification — soundness theorems (Role A)
+  cover the verdict definitions, not the koru pipeline that minted the marks.
+- **Witness marks are emitted under `std/witness:enforce` only** — a run
+  without enforcement produces no corpus and the oracle's `lines.isEmpty`
+  check fails rather than passes vacuously.
+
+---
+
+## 6. Sequencing
 
 - **K1** now on `ccomp`
 - **K3's Lean calculus** starts in parallel (gates nothing until first fragment
@@ -252,7 +318,7 @@ lands)
 
 ---
 
-## 6. Academic provenance
+## 7. Academic provenance
 
 ### 6.1 Where each idea comes from
 
