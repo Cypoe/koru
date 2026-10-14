@@ -5,7 +5,12 @@
 //   <instance!> - full control, can read/write/free
 //
 // The String struct carries its allocator, so it can be freed anywhere.
+//
+// Parts:
+// - `~part owning` (string.owning.kz): the ownership hand-offs —
+//   `snapshot` copies out, `detach` moves out.
 
+~part owning
 const std = @import("std");
 
 pub const String = struct {
@@ -92,24 +97,6 @@ pub const String = struct {
     s.allocator.free(s.data);
     s.allocator.destroy(s);
 }
-
-// ============================================
-// Snapshot - the escape path (610_007, ruled 2026-09-05)
-// ============================================
-//
-// `read` (`{ s } -> string` via `-> s.data`) retired here: a returned borrow
-// is unpoliceable — the owner can invalidate it by discharge OR mutation —
-// so borrows flow down, never up (KORU095 refuses the projection). Consumers
-// that used `read` to feed a call take the handle instead (borrow-for-the-
-// call, `{{ h:S }}`); genuine escapes copy out through this tor. The copy
-// carries `<view!>` so it cannot leak the way a bare allocating `string`
-// return would. One memcpy, at a boundary, priced as noise.
-~pub tor snapshot { s: *String<view|instance> }
-| ok *String<view!>
-| err string
-~snapshot = std/string:from-page(text: s.data)
-| ok s2 => ok s2
-| err e => err e
 
 ~pub tor len { s: *String<view|instance> } -> usize
 ~len -> s.data.len

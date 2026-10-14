@@ -1068,7 +1068,11 @@ pub fn crc32(src: []const u8) u32 {
     if (comptime @import("builtin").target.os.tag == .freestanding) {
         return .{ .error = "std/compress: allocating tor unsupported on freestanding — use gzipInto" };
     }
-    const allocator = std.heap.page_allocator;
+    // The compressed slice must come from the program's allocator: callers
+    // hand it to surfaces that free through koru_allocator() (Orisha's
+    // body_allocated post-send free among them), and a page_allocator
+    // buffer reaching libc free() aborts the process.
+    const allocator = koru_allocator();
     const out = allocator.alloc(u8, gzipFastBound(data.len)) catch {
         return .{ .error = "std/compress: out of memory" };
     };

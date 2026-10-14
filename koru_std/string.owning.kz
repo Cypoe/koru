@@ -1,0 +1,38 @@
+// Koru Standard Library: the `owning` part of string.kz.
+// Joined via `~part owning` in string.kz; merged into the module at load.
+
+// The two ownership hand-offs — lifted for the line wall. `snapshot`
+// copies out (the String keeps living); `detach` moves out (the String
+// ends and the slice's ownership transfers to the caller).
+
+// ============================================
+// Snapshot - the escape path (610_007, ruled 2026-09-05)
+// ============================================
+//
+// `read` (`{ s } -> string` via `-> s.data`) retired here: a returned borrow
+// is unpoliceable — the owner can invalidate it by discharge OR mutation —
+// so borrows flow down, never up (KORU095 refuses the projection). Consumers
+// that used `read` to feed a call take the handle instead (borrow-for-the-
+// call, `{{ h:S }}`); genuine escapes copy out through this tor. The copy
+// carries `<view!>` so it cannot leak the way a bare allocating `string`
+// return would. One memcpy, at a boundary, priced as noise.
+~pub tor snapshot { s: *String<view|instance> }
+| ok *String<view!>
+| err string
+~snapshot = std/string:from-page(text: s.data)
+| ok s2 => ok s2
+| err e => err e
+
+// The move-sibling of `snapshot`: consume the String and yield its bytes
+// as an owned `string` — no copy, no borrow. `snapshot` copies out and the
+// String keeps living; `detach` ends the String and hands the slice's
+// ownership to the caller, for custody hand-offs like a Response body
+// whose `body_allocated` frees it after send. It returns a bare `string`
+// on purpose: the contract is "an owned slice, now yours to dispose" —
+// tracked no further because the next holder owns it outright.
+~pub tor detach { s: *String<!view|!instance> } -> string
+~proc detach|zig {
+    const out = s.data;
+    s.allocator.destroy(s);
+    return out;
+}
