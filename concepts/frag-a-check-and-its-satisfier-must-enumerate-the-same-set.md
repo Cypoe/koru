@@ -74,3 +74,14 @@ on this host (measured: `__libc_start_main@GLIBC_2.34` in verneed, on a
 the artifact it meant to verify to be built differently — the path that
 supplies the checker also perturbed the satisfier. `KORU_LEAN` exists
 for exactly this; PATH mutation is the satisfier-side leak again.
+
+The K4 receipt regime runs the discipline on identity: a signed receipt
+is not an attestation unless the signer is in the pinned set
+(`tools/attest.pub`). The verify path checks three claims separately —
+signature valid (record untampered), signer trusted (the pinned
+attester's did:key), digests match (the artifacts are the ones the
+receipt names) — because each fails differently: a tampered verdict
+breaks the signature, a stranger's key breaks the pin, a moved tree
+breaks the digests. Collapsing them into "signature ok" would let a
+forged-but-well-formed receipt ride a stranger's honest signature — the
+same hole as a gate that only counted what it was shown.

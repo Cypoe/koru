@@ -73,9 +73,19 @@ Measured at `ccomp` `e94bfeeb9` (2026-10-14).
 
 ## K4 — attested receipts
 
-- **Pending entirely.** Nothing yet proves the battery itself executed
-  on CI rather than being skipped or partially run. This is the last
-  open layer.
+- **Rung 1 is self-attestation, not execution proof.** The signed
+  receipt records that the pinned battery ran on digested artifacts —
+  signed by the attester the repo pins in `tools/attest.pub`. It does
+  not prove the run was unmodified; the `proof` field is reserved for
+  the zk execution channel (RISC-V guest — no toolchain yet).
+- **The battery is one gate.** `attest.py`'s pinned list currently runs
+  `witness_gate.sh` only; the regression suite, ccomp oracle legs, and
+  alive2 legs are outside the attested battery — widening the pinned
+  list is the honest growth path, not a claim the suite is attested.
+- **The attester key lives on one host.** `~/.agents/keys/` on the
+  signing machine; a receipt from any other key verifies cryptographically
+  but fails the trusted-signer pin — which is the intended refusal, and
+  also means attestations cannot yet be issued from anywhere else.
 
 ## Cross-cutting
 

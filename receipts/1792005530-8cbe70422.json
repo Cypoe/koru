@@ -1,0 +1,41 @@
+{
+  "format": "koru-attest/1",
+  "tier": "attested",
+  "tree": "8cbe704226e7a9399d874efc0c981d37ba897520",
+  "tree_dirty": true,
+  "battery": [
+    {
+      "name": "witness-gate",
+      "argv": [
+        "bash",
+        "scripts/witness_gate.sh"
+      ],
+      "rc": 0,
+      "verdict": "PASS",
+      "last_line": "witness gate: PASS",
+      "elapsed_s": 10.5
+    }
+  ],
+  "digests": {
+    "koruc": "sha256:0c79918ac56656d1922198564a2f44dcfe668396170ced92c9a55bcaf4c4d5fc",
+    "ccomp": "sha256:5afafc28c4c001a0072c3cfbd7a0bc8b802d821afa73ba149c1c78302e29b84e",
+    "lean": "sha256:71815942a19c698f0e9b11bdfd93a619ff36d5a320dbbe07d67448bbdcf15fa5",
+    "corpora": {
+      "WitnessCheck.lean": "sha256:1e566d2ce25b882370f56063cc69697c636d62280498c0994b8d7079e13a683e",
+      "golden.txt": "sha256:353fdf22ecc6ac29c4a2428fcdeebbe7c06269896ce2e1f0d7041b277a5b40b9",
+      "forged.txt": "sha256:1c384e7b3ee46d3cf8dfddf89caad842d62bb80721810e0d4750e437bc85ea29",
+      "drift.txt": "sha256:f6e32842e46c0c556238f3d0cc52dcd57a7de977052f46381eb192c55922767b"
+    },
+    "gate_scripts": {
+      "witness_gate.sh": "sha256:2452c9aea63f24fc646a8f43c4f9bd49afa804cf719b85afecf4d47b4d2f8dc0"
+    }
+  },
+  "host": {
+    "uname": "Linux 6.18.33.2-microsoft-standard-WSL2 x86_64 GNU/Linux",
+    "ldd": "ldd (Ubuntu GLIBC 2.31-0ubuntu9) 2.31"
+  },
+  "ts": 1792005530,
+  "proof": null,
+  "signer": "did:key:z6MkfEvkG7MugC6PE9B6C93voz1GLY9kfpsW5BhnWKH9nvJc",
+  "signature": "4121337431ccb56844594baa799602fd638a52cb13b01567628a7cae08cdf86a0da744ed1552c7581e493112e5dec628e1e530160ab22e92e31bc0c63e7af50b"
+}
