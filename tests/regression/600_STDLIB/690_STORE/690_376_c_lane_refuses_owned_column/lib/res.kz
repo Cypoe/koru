@@ -1,0 +1,19 @@
+// Minimal owned-pointer resource — the owned-column substrate the C
+// lane refuses (shape cloned from 690_059's lib/res.kz).
+const std = @import("std");
+
+const Resource = struct { tag: i64 };
+
+~pub tor new { } -> *Resource<owned!>
+
+~proc new|zig {
+    const r = std.heap.page_allocator.create(Resource) catch unreachable;
+    r.* = .{ .tag = 42 };
+    return r;
+}
+
+~pub tor free { r: *Resource<!owned> }
+
+~proc free|zig {
+    std.heap.page_allocator.destroy(r);
+}

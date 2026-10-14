@@ -184,3 +184,26 @@ The 14 survivors gained `c` in LANGUAGES: 7 module/import/comptime-mirror
 tests, 2 parser tests, and 5 store tests including the three witness-mark
 tests (the `[witness]` lines emit identically through the C backend).
 Emitting C is not verification — ccomp + byte-diff is.
+
+### C-lane refusal pins (2026-10-14)
+
+The named-gate surface at `koru_std/store.new.kz` (the `host_is_c`
+cascade + the singleton write-subflow gate) is now pinned per class —
+the refusal is part of the contract, not just the census:
+
+| pin | gated surface | pinned text |
+|---|---|---|
+| 690_370 | store watch (singleton) | watches, interceptors and dischargers … |
+| 690_371 | `! inserted`/`! removed` arms | lifecycle interceptors and watches … |
+| 690_372 | `[tree]` | [tree] stores are outside … |
+| 690_373 | `char[N]` column | char[N] columns are outside … |
+| 690_374 | `std/indexes:store` | `std/indexes` columns are outside … |
+| 690_375 | `[entity]` | [entity] stores are outside … |
+| 690_376 | owned column | owned columns are outside … |
+| 690_377 | `ref()` home column | ref() home columns are outside … |
+| 690_336 | `std/store:rule` sweep (pre-existing) | rule/preorder sweeps … |
+
+Not yet pinned: drain stores (needs an ambiguous-discharger column
+type), refine facets, field defaults outside the expression fragment,
+and non-C-identifier field names — all refuse at the same gate, same
+named class, no silent path observed in the census.
