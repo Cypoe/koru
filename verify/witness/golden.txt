@@ -25,5 +25,5 @@
 [witness] site descriptor files main:nix discharge-refused cost=1;decl=in:h=*Handle<!nix>;emit=in:h=*Handle<!nix>
 [witness] site descriptor-scope files files events count=4
 
-[witness] site transform-app tap tap wp site=e471c4e610d684b1;rm=8b18a63b7956a96c,de23510294c3c951,41fa0cd74d3f14e1,5064baf9889758e6,e471c4e610d684b1,38b5000d546d100d;add=6c8aa49749b50b6c,949803eb38dc1a82,12f7fb610dc64f64,b13d06771e8d93f2,2fd527fdc9dc90b6
+[witness] site transform-app tap tap wp site=e471c4e610d684b1;rm=e60c389b970db6b0,de23510294c3c951,41fa0cd74d3f14e1,5064baf9889758e6,e471c4e610d684b1,38b5000d546d100d;add=2f04e6748aa364d0,949803eb38dc1a82,12f7fb610dc64f64,b13d06771e8d93f2,2fd527fdc9dc90b6
 [witness] site transform-app-census transform transform count=1

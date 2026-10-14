@@ -1,0 +1,9 @@
+// PINS: at a root pipeline (a flow nothing invokes), a required pass that
+// never runs is a dead edge — refused. Non-root chains are exempt: they may
+// sit inside a wider pipeline that provides the pass.
+~import std/io
+~[requires("setup")]pub tor work { } -> i32
+~proc work|zig { return 1; }
+~pub tor setup { } -> i32
+~proc setup|zig { return 0; }
+~main = work(): _ |> std/io:print("done")

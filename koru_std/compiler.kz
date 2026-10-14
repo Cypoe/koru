@@ -914,7 +914,7 @@ const Allocator = std.mem.Allocator;
 // Order among the three is load-bearing: the pyramid first, so the canonical
 // explicit-continuation shape exists; then the pun and thread, so every step's
 // args are in place; then the terminus, which needs the last step final.
-~pub tor desugar-chains { ctx: CompilerContext } -> CompilerContext
+~[requires("resolve-with-scopes")]pub tor desugar-chains { ctx: CompilerContext } -> CompilerContext
 
 ~proc desugar-chains|zig {
     const ast_transform = @import("ast_transform");
@@ -1587,6 +1587,7 @@ const emitFlowWithMocks = struct {
 // declaration must be rejected before any obligation-FLOW analysis reasons
 // about programs using that tor (otherwise auto-discharge halts first with
 // a spurious KORU030 leak and the declaration error stays dormant).
+// The ordering fact is declared on the consumer: pass-auto-discharge.
 ~pub tor check-phantom-signatures { ctx: CompilerContext }
 | ctx CompilerContext
 | failed { ctx: CompilerContext, message: string }
@@ -1605,7 +1606,9 @@ const emitFlowWithMocks = struct {
 
 // Auto-discharge insertion - inserts disposal calls before terminators
 // Runs BEFORE check-phantom-semantic so checker validates the inserted calls
-~pub tor pass-auto-discharge { ctx: CompilerContext }
+// KORU180 enforces the requires edges — a reorder that puts it ahead of the
+// signature/args checkers refuses at the frontend, not mid-run.
+~[requires("check-phantom-signatures","check-phantom-args")]pub tor pass-auto-discharge { ctx: CompilerContext }
 | ctx CompilerContext
 | failed { ctx: CompilerContext, message: string }
 
@@ -1613,13 +1616,13 @@ const emitFlowWithMocks = struct {
 // (docs/koru-verification-path.md §3.5: obligation-synthesis |> witness-check).
 // Prints the marks census for enforced programs; under [strict] it refuses
 // stored writes the numeric check left unproven or rounding.
-~pub tor pass-witness-check { ctx: CompilerContext }
+~[requires("pass-auto-discharge")]pub tor pass-witness-check { ctx: CompilerContext }
 | ctx CompilerContext
 | failed { ctx: CompilerContext, message: string }
 
 // Semantic phantom type checking - validates type-state compatibility using
 // the default Koru semantic checker (module-qualified phantom states)
-~pub tor check-phantom-semantic { ctx: CompilerContext }
+~[requires("pass-auto-discharge")]pub tor check-phantom-semantic { ctx: CompilerContext }
 | ctx CompilerContext
 | failed { ctx: CompilerContext, message: string }
 

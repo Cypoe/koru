@@ -388,6 +388,17 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Declared pass graph — [requires("a","b")] edges on tors, validated
+    // against the actual pipeline chains at frontend time (KORU180).
+    const pass_graph_module = b.createModule(.{
+        .root_source_file = b.path("src/pass_graph.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    pass_graph_module.addImport("ast", ast_module);
+    pass_graph_module.addImport("errors", errors_module);
+    pass_graph_module.addImport("annotation_parser", annotation_parser_module);
+
     // Add annotation_parser to flow_checker (defined earlier, but needs this dep)
     flow_checker_module.addImport("annotation_parser", annotation_parser_module);
     // parser (defined earlier) delimits annotation-block entries through it
@@ -550,6 +561,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("module_resolver", module_resolver_module);
     exe.root_module.addImport("file_types", file_types_module);
     exe.root_module.addImport("annotation_parser", annotation_parser_module);
+    exe.root_module.addImport("pass_graph", pass_graph_module);
     // emitter module removed - using visitor_emitter
     exe.root_module.addImport("ast", ast_module);
     exe.root_module.addImport("errors", errors_module);

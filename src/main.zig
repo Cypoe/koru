@@ -34,6 +34,7 @@ const lexer = @import("lexer");
 const struct_literal = @import("struct_literal");
 const emitter_helpers = @import("emitter_helpers");
 const site_hash = @import("site_hash");
+const pass_graph = @import("pass_graph");
 
 /// Native-only link steps (OpenSSL, etc.) must not run on wasm reactor builds.
 fn buildRequireSkippedOnWasm(req: []const u8) bool {
@@ -1752,6 +1753,13 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
         }
 
         const compiler_module = compiler_module_name.?; // Safe unwrap - we just checked
+
+        // Declared pass graph (KORU180): [requires("a","b")] on tors is the
+        // contract; the ~x = a |> b chains in this same parse are the
+        // observation. Checked here — while the pipeline is being baked into a
+        // backend — so a violated edge refuses the compiler's own construction
+        // at the frontend instead of misordering a run.
+        try pass_graph.validate(allocator, source_file.items);
 
         // ============================================================================
         // FRONTEND BOOTSTRAP COORDINATOR (Hardcoded Zig Fallback)

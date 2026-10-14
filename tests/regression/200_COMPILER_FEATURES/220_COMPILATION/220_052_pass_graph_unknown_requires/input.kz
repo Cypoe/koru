@@ -1,0 +1,6 @@
+// PINS: a [requires] arg that names no tor or pipeline segment is a dead
+// assertion — refused rather than guessed at.
+~import std/io
+~[requires("nosuchpass")]pub tor work { } -> i32
+~proc work|zig { return 1; }
+~main = work(): _ |> std/io:print("done")
