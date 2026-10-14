@@ -75,3 +75,61 @@ eyes wanted on the *deltas*, not the plan itself — K1–K4 and N1 stand.
 - **Absorb over wrap** — `phantom_semantic_checker` demotes to
   obligation-set producer and the new pass owns the verdict. If that
   is wrong for reasons we have not seen, now is the cheap moment.
+
+
+---
+
+# pass-graph rungs 1-3 landed (2026-10-14) — and a spelling for you
+
+Three more commits on `ccomp` since this handoff was written:
+`b2673bf54` (requires on tors, KORU180), `430c9cd8d` (transform
+requires/preserves, KORU181 blast radius), `e94bfeeb9` (committed arc
+corpus the Lean oracle re-decides). `96707aabd` registered the new
+vocabulary in the concordance matrix. The declared order is still
+authoritative everywhere — the graph validates, never reorders; the
+witness arcs commit what the validator checked; the oracle re-decides
+the same rules on the lines alone.
+
+## The collision: `[requires]` vs `std/compiler:requires`
+
+Two surfaces now own the same word:
+
+- **`std/compiler:requires`** — the pre-existing *directive tor*. The
+  frontend reads its body as backend build requirements (the build-dep
+  spelling). This was already in the tree.
+- **`[requires("a","b")]`** — the pass-graph *call-annotation* on tors
+  and transform decls, landed in rungs 1-2. Declares an ordering edge:
+  "this pass's requirements must run strictly earlier in every chain
+  that runs it" (pipeline) or "must sit in a strictly earlier stage"
+  (transforms). Same grammar slot as `depends_on`/`preserves`, not the
+  same slot as the directive tor.
+
+They never parse into the same position — a tor name vs an annotation
+argument — so the compiler is never confused. The collision is semantic,
+and it's real: `~[requires("x")]tor a` reads naturally as "tor a needs
+x to build", which is the *directive's* meaning, not the ordering edge's.
+
+**Executive decision taken to unblock: keep `[requires]`** — the English
+word is the right one for a prerequisite, the grammar slots are disjoint,
+and `std/compiler:requires` is a niche directive surface most users never
+spell. Recorded here for your final call; the rename is mechanical if you
+want it (annotation-parser lookup + compiler.kz/taps.kz seeds + tests +
+corpus lines).
+
+Options:
+
+- **Keep `requires`** — as shipped. Cost: the misreading above lives in
+  the vocabulary; docs carry the disambiguation.
+- **`after("x")` / `runs_after("x")`** — names the ordering semantics
+  directly, kills the collision. Cost: slightly weaker noun for
+  "prerequisite", reads backwards to dependency-graph convention.
+- **`requires_order("x")`** — keeps the word, disambiguates the
+  semantics. Cost: uglier, and the collision is only softened.
+- **Fold ordering into `std/compiler:requires`** — one word, one owner.
+  Cost: mixes build-dependency and pipeline-order semantics in one
+  directive — the two namespaces don't overlap (build deps name files/
+  steps, pass edges name tors), so a reader couldn't tell which a given
+  entry is without checking resolution. Rejected on those grounds.
+
+`preserves` has no collision. Lars's call on the rest — the rung-2
+commit message carries the same note.

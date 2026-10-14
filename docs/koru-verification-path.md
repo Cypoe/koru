@@ -357,6 +357,10 @@ not a loophole of the layers.
 - **Witness marks are emitted under `std/witness:enforce` only** — a run
   without enforcement produces no corpus and the oracle's `lines.isEmpty`
   check fails rather than passes vacuously.
+- **The full gap ledger** lives in `koru-verification-gaps.md` — the
+  per-layer list of what each oracle does *not* cover, kept honest as
+  layers land. The Lars-facing note on the `[requires]` spelling
+  collision is appended to `verify-path-handoff.md`.
 
 ---
 
