@@ -223,6 +223,16 @@
         symbol: []const u8,
         dispatch_name: []const u8,
         module_name: ?[]const u8,                   // Module this tor belongs to
+        /// The EventDecl this row claims to describe — the descriptor
+        /// witness's declared side. Null when the registered name resolved
+        /// to no decl: the descriptor-scope census then counts a row with
+        /// no matching descriptor line, and the corpus fails.
+        event_decl: ?*const ast_reg.EventDecl = null,
+        /// The discharge-claim refusal fired for this event (discharge
+        /// phantom declared, no implementation to honor it). The emitted
+        /// `dis:` set is empty by deliberate divergence — the descriptor
+        /// verdict names it `discharge-refused` instead of `registered`.
+        discharge_refused: bool = false,
     };
 
     const ScopeDef = struct {

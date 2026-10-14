@@ -99,6 +99,7 @@ const ast_reg = @import("ast");
         // (440_016 probe). Refuse to emit the discharge claim — the
         // obligation then strands at hang-up and close panics honestly,
         // naming the leak instead of papering over it.
+        var discharge_refused = false;
         if ((obligations.discharges.len > 0 or obligations.discharges_specs.len > 0) and
             !RegistryHelper.eventHasImpl(program, info.event_decl))
         {
@@ -107,6 +108,7 @@ const ast_reg = @import("ast");
                 ++ "its obligation strands at hang-up.\n", .{resolved.name});
             obligations.discharges = &.{};
             obligations.discharges_specs = &.{};
+            discharge_refused = true;
         }
 
         if (obligations.creates.len > 0 or obligations.discharges.len > 0) {
@@ -126,10 +128,130 @@ const ast_reg = @import("ast");
             .symbol = symbol,
             .dispatch_name = dispatch_name,
             .module_name = info.module_name,
+            .event_decl = info.event_decl,
+            .discharge_refused = discharge_refused,
         }) catch continue;
     }
 
     std.debug.print("[REGISTRY] Found {d} events\n", .{events_list.items.len});
+
+    // ── descriptor witness ──
+    // One `descriptor` site line per registered event: the declared
+    // contract, serialized straight off the EventDecl (an independent
+    // reader), next to the emitted scope_events row it produced. The
+    // oracle re-derives the obligation set from the declared spellings
+    // (`<!x>` on inputs → dis, `<x!>` on branch payloads/return → cr)
+    // and rules on agreement — a drift between declaration and the
+    // emitted descriptor diverges as MISMATCH; the discharge-claim
+    // refusal reads `discharge-refused` with an empty emitted `dis`.
+    // A `descriptor-scope` census closes the set: a resolved row with
+    // no decl emits no line, and the counts no longer agree.
+    if (@import("emitter_helpers").witness_enforced) {
+        for (events_list.items) |event| {
+            const ed = event.event_decl orelse continue;
+            var w = std.ArrayList(u8){ .items = &.{}, .capacity = 0 };
+            w.appendSlice(allocator, "cost=") catch continue;
+            w.appendSlice(allocator, std.fmt.allocPrint(allocator, "{d}", .{event.cost}) catch continue) catch continue;
+            w.appendSlice(allocator, ";decl=") catch continue;
+            var first = true;
+            for (ed.input.fields) |df| {
+                if (!first) w.appendSlice(allocator, "|") catch continue;
+                first = false;
+                w.appendSlice(allocator, "in:") catch continue;
+                w.appendSlice(allocator, df.name) catch continue;
+                w.appendSlice(allocator, "=") catch continue;
+                w.appendSlice(allocator, df.type) catch continue;
+                if (df.phantom) |ph| {
+                    w.appendSlice(allocator, "<") catch continue;
+                    w.appendSlice(allocator, ph) catch continue;
+                    w.appendSlice(allocator, ">") catch continue;
+                }
+            }
+            for (ed.branches) |dbr| {
+                if (!first) w.appendSlice(allocator, "|") catch continue;
+                first = false;
+                w.appendSlice(allocator, "br:") catch continue;
+                w.appendSlice(allocator, dbr.name) catch continue;
+                for (dbr.payload.fields) |pf| {
+                    w.appendSlice(allocator, "|") catch continue;
+                    w.appendSlice(allocator, "brf:") catch continue;
+                    w.appendSlice(allocator, dbr.name) catch continue;
+                    w.appendSlice(allocator, ":") catch continue;
+                    w.appendSlice(allocator, pf.name) catch continue;
+                    w.appendSlice(allocator, "=") catch continue;
+                    w.appendSlice(allocator, pf.type) catch continue;
+                    if (pf.phantom) |ph| {
+                        w.appendSlice(allocator, "<") catch continue;
+                        w.appendSlice(allocator, ph) catch continue;
+                        w.appendSlice(allocator, ">") catch continue;
+                    }
+                }
+            }
+            if (ed.return_type) |rt| {
+                if (!first) w.appendSlice(allocator, "|") catch continue;
+                first = false;
+                w.appendSlice(allocator, "ret:") catch continue;
+                w.appendSlice(allocator, rt) catch continue;
+                if (ed.return_phantom) |ph| {
+                    w.appendSlice(allocator, "<") catch continue;
+                    w.appendSlice(allocator, ph) catch continue;
+                    w.appendSlice(allocator, ">") catch continue;
+                }
+            }
+            w.appendSlice(allocator, ";emit=") catch continue;
+            first = true;
+            for (event.creates_specs) |sp| {
+                if (!first) w.appendSlice(allocator, "|") catch continue;
+                first = false;
+                w.appendSlice(allocator, "cr:") catch continue;
+                w.appendSlice(allocator, sp.obligation_module) catch continue;
+                w.appendSlice(allocator, ":") catch continue;
+                w.appendSlice(allocator, sp.obligation_name) catch continue;
+                w.appendSlice(allocator, "@") catch continue;
+                w.appendSlice(allocator, sp.field_name) catch continue;
+                if (sp.branch) |brn| {
+                    w.appendSlice(allocator, "#") catch continue;
+                    w.appendSlice(allocator, brn) catch continue;
+                }
+            }
+            for (event.discharges_specs) |sp| {
+                if (!first) w.appendSlice(allocator, "|") catch continue;
+                first = false;
+                w.appendSlice(allocator, "dis:") catch continue;
+                w.appendSlice(allocator, sp.obligation_module) catch continue;
+                w.appendSlice(allocator, ":") catch continue;
+                w.appendSlice(allocator, sp.obligation_name) catch continue;
+                w.appendSlice(allocator, "@") catch continue;
+                w.appendSlice(allocator, sp.arg_name) catch continue;
+            }
+            for (event.input_fields) |ef| {
+                if (!first) w.appendSlice(allocator, "|") catch continue;
+                first = false;
+                w.appendSlice(allocator, "in:") catch continue;
+                w.appendSlice(allocator, ef.name) catch continue;
+                w.appendSlice(allocator, "=") catch continue;
+                if (ef.is_optional) w.appendSlice(allocator, "?") catch continue;
+                w.appendSlice(allocator, ef.type_name) catch continue;
+                if (ef.phantom) |ph| {
+                    w.appendSlice(allocator, "<") catch continue;
+                    w.appendSlice(allocator, ph) catch continue;
+                    w.appendSlice(allocator, ">") catch continue;
+                }
+            }
+            for (event.branches) |eb| {
+                if (!first) w.appendSlice(allocator, "|") catch continue;
+                first = false;
+                w.appendSlice(allocator, "br:") catch continue;
+                w.appendSlice(allocator, eb.name) catch continue;
+            }
+            const verdict = if (event.discharge_refused) "discharge-refused" else "registered";
+            const home = event.module_name orelse "main";
+            std.debug.print("[witness] site descriptor {s} {s}:{s} {s} {s}\n",
+                .{ scope_name, home, event.name, verdict, w.items });
+        }
+        std.debug.print("[witness] site descriptor-scope {s} {s} events count={d}\n",
+            .{ scope_name, scope_name, events_list.items.len });
+    }
 
     // Generate dispatcher code (indented for main_module)
     var code = std.ArrayList(u8){ .items = &.{}, .capacity = 0 };

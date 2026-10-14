@@ -25,3 +25,13 @@
 [witness] site auto-discharge f opened!->std/fs:close sole:std/fs:close all:std/fs:close(x)
 [witness] site auto-discharge f opened!->std/fs:close sole:std/fs:close all:std/fs:close,std/fs:close
 [witness] site auto-discharge f opened!->std/fs:close preferred:std/fs:close!,std/fs:drop all:std/fs:close,std/fs:drop
+[witness] site descriptor files main:open registered cost=1;decl=in:path=string|ret:*Handle<opened!>;emit=cr:main:closed@__type_ref|in:path=string
+[witness] site descriptor files main:read registered cost=1;decl=in:h=*Handle<!opened>|br:data|brf:data:__type_ref=string|br:eof|brf:eof:__type_ref=*Handle<opened!>;emit=cr:main:opened@__type_ref#eof|dis:main:opened@path|in:h=*Handle<!opened>|br:data|br:eof
+[witness] site descriptor files main:nix registered cost=1;decl=in:h=*Handle<!nix>;emit=in:h=*Handle<!nix>
+[witness] site descriptor files main:nix discharge-refused cost=1;decl=in:h=*Handle<!nix>;emit=dis:main:nix@h|in:h=*Handle<!nix>
+[witness] site descriptor files main:open registered cost=1;decl=in:path=string;emit=cr:main:opened@__type_ref|in:path=string
+[witness] site descriptor files main:open registered decl=in:path=string|ret:*Handle<opened!>;emit=cr:main:opened@__type_ref|in:path=string
+[witness] site descriptor files main:open certified cost=1;decl=in:path=string|ret:*Handle<opened!>;emit=cr:main:opened@__type_ref|in:path=string
+[witness] site descriptor files main:open registered cost=1;decl=in:path=string|ret:*Handle<opened!>;emit=cr:main:opened@__type_ref|in:path=string|bogus:atom
+[witness] site descriptor-scope files files events count=banana
+[witness] site descriptor-scope files other events count=4

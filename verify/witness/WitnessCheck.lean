@@ -430,10 +430,192 @@ def custodyBalance (sites : List SiteLine) : List String :=
     | some st => !custodyClosed st
     | none => true
 
+/-! ## Kind `descriptor` — registry descriptor ↔ event-decl fidelity
+
+The `register|zig` transform (koru_std/runtime.kz) builds each emitted
+`scope_events` row from an `EventDecl` and prints, per event,
+
+    [witness] site descriptor <scope> <mod>:<event> <verdict> cost=<n>;decl=<atoms>;emit=<atoms>
+
+`decl` is the declared contract serialized straight off the `EventDecl`;
+`emit` is the row the transform actually generated. The obligation atoms:
+
+  - `dis:<mod>:<state>@<arg>`           — a declared consume input `<!state>`
+  - `cr:<mod>:<state>@<field>#<branch>` — a declared `<state!>` branch payload
+  - `cr:<mod>:<state>@__type_ref`       — a declared `<state!>` bare return
+
+plus shape atoms (`in:`/`br:`) mirrored verbatim on both sides. The
+checker re-derives the claim set from the `decl` spellings — the same
+token rule `parsePhantom` uses: a leading `!` marks a discharge, a
+trailing `!` a create, and `mod:name` splits the obligation's module
+from its name (falling back to the event's module) — then rules on
+agreement with the `emit` claims. `discharge-refused` licenses an empty
+emitted `dis` only when the declared side really carried discharges: a
+declaration-only event's unsatisfiable promise is named, not silently
+dropped. A `descriptor-scope` census line closes the set corpus-wide:
+one per scope, `count=` equal to its descriptor lines — a resolved row
+that produced no line unbalances the count. -/
+
+/-- The first `<…>` group of a type spelling — the raw phantom token. -/
+def phantomToken (t : String) : Option String :=
+  match t.splitOn "<" with
+  | _ :: tok :: _ =>
+    match tok.splitOn ">" with
+    | nm :: _ :: _ => if nm.isEmpty then none else some nm
+    | _ => none
+  | _ => none
+
+/-- Mirror of `parsePhantom` (koru_std/runtime.registry.kz): leading `!`
+discharges, trailing `!` creates, `mod:name` overrides the event module.
+Both marks may co-occur. Returns (discharge claim, create claim) as
+`mod:name` bodies. -/
+def claimOf (evMod tok : String) : Option String × Option String :=
+  let (dis, s1) := if tok.startsWith "!" then (true, (tok.drop 1).toString) else (false, tok)
+  let (cr, s2) := if s1.endsWith "!" then (true, String.ofList s1.toList.dropLast) else (false, s1)
+  if s2.isEmpty || (!dis && !cr) then (none, none)
+  else
+    let (m, n) := match s2.splitOn ":" with
+      | a :: b :: rest => (a, ":".intercalate (b :: rest))
+      | _ => (evMod, s2)
+    (if dis then some s!"{m}:{n}" else none, if cr then some s!"{m}:{n}" else none)
+
+structure DescSide where
+  ins : List String   -- `in:` atoms, verbatim
+  brs : List String   -- `br:` atoms, verbatim
+  crs : List String   -- `cr:` claim atoms
+  dis : List String   -- `dis:` claim atoms
+
+/-- Re-derive the obligation claims a `decl` atom list carries — the
+independent reading the emitted row must agree with. `none` on any atom
+outside the declared vocabulary. -/
+def declSide (evMod : String) : List String → DescSide → Option DescSide
+  | [], acc => some acc
+  | a :: rest, acc =>
+    if a.startsWith "brf:" then
+      match (a.drop 4).toString.splitOn "=" with
+      | [lhs, ty] =>
+        match lhs.splitOn ":" with
+        | [br, f] =>
+          let (d, c) := match phantomToken ty with
+            | some tok => claimOf evMod tok
+            | none => (none, none)
+          let acc := match c with
+            | some cl => { acc with crs := acc.crs ++ [s!"cr:{cl}@{f}#{br}"] }
+            | none => acc
+          let acc := match d with
+            | some cl => { acc with dis := acc.dis ++ [s!"dis:{cl}@{f}#{br}"] }
+            | none => acc
+          declSide evMod rest acc
+        | _ => none
+      | _ => none
+    else if a.startsWith "in:" then
+      match (a.drop 3).toString.splitOn "=" with
+      | [n, ty] =>
+        let acc := { acc with ins := acc.ins ++ [a] }
+        match phantomToken ty with
+        | none => declSide evMod rest acc
+        | some tok =>
+          let (d, c) := claimOf evMod tok
+          let acc := match d with
+            | some cl => { acc with dis := acc.dis ++ [s!"dis:{cl}@{n}"] }
+            | none => acc
+          let acc := match c with
+            | some cl => { acc with crs := acc.crs ++ [s!"cr:{cl}@{n}"] }
+            | none => acc
+          declSide evMod rest acc
+      | _ => none
+    else if a.startsWith "br:" then
+      declSide evMod rest { acc with brs := acc.brs ++ [a] }
+    else if a.startsWith "ret:" then
+      match phantomToken (a.drop 4).toString with
+      | none => declSide evMod rest acc
+      | some tok =>
+        let (d, c) := claimOf evMod tok
+        let acc := match c with
+          | some cl => { acc with crs := acc.crs ++ [s!"cr:{cl}@__type_ref"] }
+          | none => acc
+        let acc := match d with
+          | some cl => { acc with dis := acc.dis ++ [s!"dis:{cl}@__type_ref"] }
+          | none => acc
+        declSide evMod rest acc
+    else none
+
+/-- Partition an `emit` atom list; `none` on any atom outside the emitted
+vocabulary — a claim shape the checker cannot read is flagged, not
+skipped. -/
+def emitSide : List String → DescSide → Option DescSide
+  | [], acc => some acc
+  | a :: rest, acc =>
+    if a.startsWith "cr:" then emitSide rest { acc with crs := acc.crs ++ [a] }
+    else if a.startsWith "dis:" then emitSide rest { acc with dis := acc.dis ++ [a] }
+    else if a.startsWith "in:" then emitSide rest { acc with ins := acc.ins ++ [a] }
+    else if a.startsWith "br:" then emitSide rest { acc with brs := acc.brs ++ [a] }
+    else none
+
+def parseDescExtra (extra : String) : Option (List String × List String) :=
+  match extra.splitOn ";" with
+  | [cTok, dTok, eTok] =>
+    if !cTok.startsWith "cost=" || !dTok.startsWith "decl=" || !eTok.startsWith "emit=" then none
+    else match (cTok.drop 5).toString.toNat? with
+      | none => none
+      | some _ =>
+        some ((dTok.drop 5).toString.splitOn "|" |>.filter (· ≠ ""),
+              (eTok.drop 5).toString.splitOn "|" |>.filter (· ≠ ""))
+  | _ => none
+
+def setEq (a b : List String) : Bool := a.all (· ∈ b) && b.all (· ∈ a)
+
+def ruleDescriptor (s : SiteLine) : Ruling :=
+  let evMod := match s.arrow.splitOn ":" with
+    | m :: _ => m
+    | [] => ""
+  if evMod.isEmpty then .malformed else
+  match parseDescExtra s.extra with
+  | none => .malformed
+  | some (declAtoms, emitAtoms) =>
+    match declSide evMod declAtoms ⟨[], [], [], []⟩, emitSide emitAtoms ⟨[], [], [], []⟩ with
+    | some d, some e =>
+      let shape := setEq d.ins e.ins && setEq d.brs e.brs && setEq d.crs e.crs
+      if s.verdict == "registered" then
+        if shape && setEq d.dis e.dis then .match_
+        else .mismatch s!"{d.ins ++ d.brs ++ d.crs ++ d.dis} vs {e.ins ++ e.brs ++ e.crs ++ e.dis}"
+      else if s.verdict == "discharge-refused" then
+        if shape && e.dis.isEmpty && !d.dis.isEmpty then .match_
+        else .mismatch s!"refused {d.dis} vs {e.dis}"
+      else .malformed
+    | _, _ => .malformed
+
+def ruleDescriptorScope (s : SiteLine) : Ruling :=
+  if s.site != s.arrow || s.verdict != "events" then .malformed
+  else match s.extra.splitOn "=" with
+    | ["count", n] => match n.toNat? with
+      | some _ => .match_
+      | none => .malformed
+    | _ => .malformed
+
+/-- Corpus-level completeness: every scope carrying descriptor lines must
+carry exactly one `descriptor-scope` census whose `count=` equals the
+number of its descriptor lines — a resolved row that produced no line
+unbalances the count; a scope with no census line fails too. -/
+def descriptorScopeBalance (sites : List SiteLine) : List String :=
+  let descs := sites.filter (·.kind == "descriptor")
+  let cens := sites.filter (·.kind == "descriptor-scope")
+  let scopes := (descs.map (·.site) ++ cens.map (·.site)).eraseDups
+  scopes.filter fun sc =>
+    let n := (descs.filter (·.site == sc)).length
+    match cens.filter (·.site == sc) with
+    | [c] =>
+      (match c.extra.splitOn "=" with
+       | ["count", k] => k.toNat? != some n
+       | _ => true)
+    | _ => true
+
 def rule (s : SiteLine) : Ruling :=
   if s.kind == "stored-write-numeric" then ruleNumeric s
   else if s.kind == "auto-discharge" then ruleDischarge s
   else if s.kind == "custody-edge" then ruleCustody s
+  else if s.kind == "descriptor" then ruleDescriptor s
+  else if s.kind == "descriptor-scope" then ruleDescriptorScope s
   else .malformed
 
 def isSiteLine (line : String) : Bool :=
@@ -472,8 +654,16 @@ def main (args : List String) : IO UInt32 := do
   -- unclosed mint is a leaked obligation; an illegal edge is a ledger the
   -- checker itself could not have walked — both fail the batch either way.
   for a in custodyBalance sites.reverse do
-    bad := bad + 1
-    IO.println s!"BAD  UNBALANCED  {a}"
+    -- A corpus violation is rejection evidence: it fails a conformance
+    -- batch, and in forged mode it is one more reason the batch can't
+    -- pass — counting it as `bad` there would punish rejection itself.
+    if !forged then bad := bad + 1
+    IO.println s!"{if forged then "ok  " else "BAD "} UNBALANCED  {a}"
+  -- Corpus-level descriptor census: every scope's count must equal its
+  -- descriptor lines, and every descriptor scope must carry a census.
+  for sc in descriptorScopeBalance sites.reverse do
+    if !forged then bad := bad + 1
+    IO.println s!"{if forged then "ok  " else "BAD "} SCOPE-DRIFT  {sc}"
   let mode := if forged then "forged (all must reject)" else "conformance (all must match)"
   IO.println s!"{mode}: {lines.length} lines, {bad} bad"
   return (if bad == 0 then 0 else 1)

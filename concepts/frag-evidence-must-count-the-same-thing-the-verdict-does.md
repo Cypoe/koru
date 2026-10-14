@@ -71,3 +71,19 @@ Whether the other `confirm` rows have the same defect. POLICY greps `docs` for
 bare code mentions and EMITTED greps `src` and `koru_std` for `.CODE` and
 `error[CODE]`; neither was audited against the authoritative sets, and EMITTED is
 the one a wiring decision leans on hardest.
+
+## The same shape, made into a witness kind (2026-10-15)
+
+The `descriptor` witness turns this ruling into a channel: `register|zig`
+serializes each event's obligation contract TWICE — once straight off the
+`EventDecl` (`decl=`), once off the `scope_events` row it emitted (`emit=`)
+— and the Lean oracle re-derives the claims from `decl` and rules on set
+agreement with `emit`. The evidence (emitted row) must count the same
+claims the verdict (declared contract) does, and the two sides are read
+through different code so they cannot agree by construction. The
+`descriptor-scope` census is the same rule one level up: `count=` must
+equal the descriptor lines the scope actually printed — a resolved row
+that minted no line unbalances the set. `discharge-refused` is the honest
+edge: the emitted `dis` is empty BY DELIBERATE DIVERGENCE (declared
+consume, no impl), and the verdict names it rather than letting an empty
+claim set read as a clean empty contract.

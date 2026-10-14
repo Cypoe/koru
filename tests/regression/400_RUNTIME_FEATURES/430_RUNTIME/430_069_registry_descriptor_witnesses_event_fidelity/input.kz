@@ -1,0 +1,62 @@
+// PINS: the descriptor witness kind — under std/witness:enforce the
+// register transform prints one `[witness] site descriptor` line per
+// resolved scope event, serializing the declared contract straight off
+// the EventDecl (decl=) next to the scope_events row it emitted (emit=),
+// then a `descriptor-scope` census line. All four obligation shapes:
+//
+//   open  — bare `-> *Handle<opened!>` return:  cr:main:opened@__type_ref
+//   read  — <!opened> input discharge + `| eof *Handle<opened!>` branch
+//           payload create:                       dis:main:opened@h,
+//                                               cr:main:opened@__type_ref#eof
+//   close — discharge only
+//   nix   — declared <!nix> discharge on an tor with NO impl: the row
+//           refuses the claim, verdict discharge-refused, emitted dis
+//           empty while the declared side still carries it — named, not
+//           silently dropped.
+//
+// The Lean oracle (verify/witness/WitnessCheck.lean) re-derives every
+// claim from the decl spellings and rules on agreement; the census's
+// count must equal the descriptor lines or the corpus fails.
+
+~import std/io
+~import std/witness
+~import std/runtime
+
+const std = @import("std");
+const Handle = struct { n: i32 };
+
+~tor open { path: string } -> *Handle<opened!>
+~proc open|zig {
+    const h = std.heap.page_allocator.create(Handle) catch unreachable;
+    h.* = .{ .n = 0 };
+    return h;
+}
+
+~tor read { h: *Handle<!opened> }
+| data string
+| eof *Handle<opened!>
+~proc read|zig {
+    h.n += 1;
+    if (h.n < 2) return .{ .data = "line" };
+    return .{ .eof = h };
+}
+
+~tor close { h: *Handle<!opened> }
+~proc close|zig {
+    std.heap.page_allocator.destroy(h);
+}
+
+~tor nix { h: *Handle<!nix> }
+
+~[registry:scope(files)]std/runtime:register {
+    open(1)
+    read
+    close
+    nix
+}
+
+~std/witness:enforce { }
+
+~open(path: "x"): h |> read(h)
+| data s |> std/io:print.ln(s)
+| eof h2 |> close(h: h2)
