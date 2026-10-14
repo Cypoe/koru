@@ -622,13 +622,14 @@ top-level item digests:
     <transform> <site-flow>   wp   site=<d>;rm=<d,...>;add=<d,...>
     <transform> <site-flow>   gc   site=<d>;rm=<d>;add=
 
-The checkable contract is accounting honesty, not yet confinement bounds:
-a `wp` line must list its site item among the removed digests (the splice
-returned a program where the site item changed or vanished — an untouched
-site under a whole-program rewrite is a lie the digest can tell), and a
-`gc` line is by construction a singleton removal of the site itself.
-Blast-radius declarations are pass-graph surface; nothing here bounds
-which OTHER items a transform may touch. -/
+The checkable contract is accounting honesty plus, when the transform
+declares it, the blast-radius bound: `preserves` atoms are the declared
+invariant kinds (`!kind` = preserve-all-except; a bare/`!` mix is a
+malformed contract), `rmk`/`addk` carry the kinds positionally aligned
+with `rm`/`add`, and the site item itself is always licensed — it is the
+point of application, not collateral. Every other changed item must be
+a kind the transform did not preserve. `gc` lines keep the plain
+`site=;rm=;add=` shape — the singleton site removal needs no bound. -/
 
 def isHexDigest (d : String) : Bool :=
   d.length == 16 && d.all fun c => c ∈ "0123456789abcdef".toList
@@ -639,25 +640,74 @@ def digestList (raw : String) : Option (List String) :=
     let parts := raw.splitOn ","
     if parts.all isHexDigest then some parts else none
 
-def parseAppExtra (extra : String) : Option (String × List String × List String) :=
-  match extra.splitOn ";" with
-  | [sTok, rTok, aTok] =>
-    if !sTok.startsWith "site=" || !rTok.startsWith "rm=" || !aTok.startsWith "add=" then none
-    else match digestList (rTok.drop 3).toString, digestList (aTok.drop 4).toString with
-      | some rm, some add => some ((sTok.drop 5).toString, rm, add)
-      | _, _ => none
-  | _ => none
+/-- The Item union tag vocabulary — mirrored from src/ast.zig, the same
+closed list the frontend validates `preserves` atoms against. -/
+def itemKinds : List String :=
+  ["module_decl", "event_decl", "proc_decl", "flow", "event_tap",
+   "label_decl", "immediate_impl", "import_decl", "host_line",
+   "host_type_decl", "parse_error", "native_loop", "fused_event",
+   "inlined_event", "inline_code", "facet_decl"]
+
+def kindList (raw : String) : Option (List String) :=
+  if raw.isEmpty then some []
+  else
+    let parts := raw.splitOn ","
+    if parts.all (· ∈ itemKinds) then some parts else none
+
+/-- Preserves atoms: bare = "preserve exactly these", `!` = "preserve all
+except these". Mixed atoms are malformed; an atom naming no kind is too. -/
+def preservesAtoms (raw : String) : Option (List String) :=
+  if raw.isEmpty then some []
+  else
+    let parts := raw.splitOn ","
+    let bodies := parts.map fun a => if a.startsWith "!" then (a.drop 1).toString else a
+    let hasExcept := parts.any (·.startsWith "!")
+    let hasBare := parts.any fun a => !a.startsWith "!"
+    if hasExcept && hasBare then none
+    else if bodies.all (· ∈ itemKinds) then some parts else none
+
+/-- Is `kind` inside the declared invariant set? Mirrors the runner's
+`kindIsPreserved` — the oracle resolves `!` against its own vocabulary. -/
+def preservedKind (atoms : List String) (kind : String) : Bool :=
+  if atoms.any (·.startsWith "!")
+  then !(atoms.any fun a => (a.drop 1).toString == kind)
+  else atoms.contains kind
+
+def fieldOf (toks : List String) (pfx : String) : Option String :=
+  (toks.find? (·.startsWith pfx)).map fun t => (t.drop pfx.length).toString
+
+def parseAppExtra (extra : String) :
+    Option (String × List String × List String × List String × List String × List String) :=
+  let toks := extra.splitOn ";"
+  match fieldOf toks "site=", fieldOf toks "rm=", fieldOf toks "add=" with
+  | some siteTok, some rmTok, some addTok =>
+    match digestList rmTok, digestList addTok with
+    | some rm, some add =>
+      let pres := (fieldOf toks "preserves=").getD ""
+      let rmk := (fieldOf toks "rmk=").map kindList |>.getD (some [])
+      let addk := (fieldOf toks "addk=").map kindList |>.getD (some [])
+      match preservesAtoms pres, rmk, addk with
+      | some p, some rk, some ak => some (siteTok, p, rm, rk, add, ak)
+      | _, _, _ => none
+    | _, _ => none
+  | _, _, _ => none
 
 def ruleTransformApp (s : SiteLine) : Ruling :=
   if s.verdict != "wp" && s.verdict != "gc" then .malformed
   else match parseAppExtra s.extra with
   | none => .malformed
-  | some (siteD, rm, add) =>
+  | some (siteD, pres, rm, rmk, add, addk) =>
     if !isHexDigest siteD then .malformed
+    else if s.verdict == "wp" && !(rmk.length == rm.length && addk.length == add.length) then
+      .malformed
     else if s.verdict == "wp" && !rm.contains siteD then
       .mismatch s!"site {siteD} absent from rm {rm}"
     else if s.verdict == "gc" && !(rm == [siteD] && add.isEmpty) then
       .mismatch s!"gc {siteD} vs rm {rm} add {add}"
+    else if s.verdict == "wp" &&
+            (((rm.zip rmk).any fun (d, k) => d != siteD && preservedKind pres k) ||
+             (addk.any (preservedKind pres))) then
+      .mismatch s!"blast radius exceeds declared bound {pres}"
     else .match_
 
 def ruleTransformAppCensus (s : SiteLine) : Ruling :=

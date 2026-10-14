@@ -1,0 +1,3 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS error[KORU180]
+CONTAINS runs in the post stage

@@ -1,0 +1,14 @@
+// PINS: preserves() atoms name ast.Item kinds — an unknown atom is refused
+// at declaration time (closed vocabulary, so a typo cannot silently widen
+// the write-back bound).
+~import std/io
+
+~[keyword|comptime|transform|preserves("widget")]pub tor mk-consumer {
+    item: *const Item,
+    program: *const Program,
+    allocator: std.mem.Allocator
+} -> SiteResult
+
+~proc mk-consumer|zig { return .{}; }
+
+~std/io:print.ln("unreachable")

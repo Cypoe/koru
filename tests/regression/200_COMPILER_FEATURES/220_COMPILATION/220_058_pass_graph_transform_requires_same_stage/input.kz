@@ -1,0 +1,22 @@
+// PINS: two transforms in the same stage cannot order each other — the
+// fixed-point walk applies first-found sites across all entries, so same-
+// stage order is not a declarable contract. KORU180 refuses.
+~import std/io
+
+~[keyword|comptime|transform|pre]pub tor mk-producer {
+    item: *const Item,
+    program: *const Program,
+    allocator: std.mem.Allocator
+} -> SiteResult
+
+~proc mk-producer|zig { return .{}; }
+
+~[keyword|comptime|transform|pre|requires("mk-producer")]pub tor mk-consumer {
+    item: *const Item,
+    program: *const Program,
+    allocator: std.mem.Allocator
+} -> SiteResult
+
+~proc mk-consumer|zig { return .{}; }
+
+~std/io:print.ln("unreachable")

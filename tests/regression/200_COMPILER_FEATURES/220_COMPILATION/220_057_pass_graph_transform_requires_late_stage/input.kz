@@ -1,0 +1,22 @@
+// PINS: a main-stage transform requiring a post-stage transform refuses —
+// the required transform runs strictly LATER, so the edge is unsatisfiable.
+// KORU180 names both stages.
+~import std/io
+
+~[keyword|comptime|transform|requires("mk-producer")]pub tor mk-consumer {
+    item: *const Item,
+    program: *const Program,
+    allocator: std.mem.Allocator
+} -> SiteResult
+
+~proc mk-consumer|zig { return .{}; }
+
+~[keyword|comptime|transform|post]pub tor mk-producer {
+    item: *const Item,
+    program: *const Program,
+    allocator: std.mem.Allocator
+} -> SiteResult
+
+~proc mk-producer|zig { return .{}; }
+
+~std/io:print.ln("unreachable")

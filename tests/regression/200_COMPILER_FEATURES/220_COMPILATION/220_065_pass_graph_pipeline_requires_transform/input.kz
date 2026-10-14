@@ -1,0 +1,20 @@
+// PINS: the converse cross-surface edge — a pipeline tor requiring a
+// transform. A transform never runs as a chain step, so the chain cannot
+// satisfy the edge; in a non-root chain the "absent" tolerance would let it
+// stand unchecked. KORU180 refuses it by name.
+const std = @import("std");
+
+~import std/io
+
+~[keyword|comptime|transform]pub tor mk-transform {
+    item: *const Item,
+    program: *const Program,
+    allocator: std.mem.Allocator
+} -> SiteResult
+
+~proc mk-transform|zig { return .{}; }
+
+~[requires("mk-transform")]pub tor work { } -> i32
+~proc work|zig { return 1; }
+
+~work(): _ |> std/io:print.ln("unreachable")

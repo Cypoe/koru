@@ -100,3 +100,28 @@ and was chosen because the defining property of these rules is that they *cannot
 be proven — someone attests. Whether the emitted document should carry the prose
 verbatim or a reference the consumer resolves is unsettled, and it decides whether
 the document is self-contained or merely a manifest.
+
+## 2026-10-14 — the agent has to reach the decl it guards (pass graph, rung 2)
+
+The `requires`/`preserves` wall on `[transform]` decls landed with a discovery
+that is this belief at one remove: rung 1s
+
+## 2026-10-14 — the agent has to reach the decl it guards (pass graph, rung 2)
+
+The `requires`/`preserves` wall on `[transform]` decls landed with a discovery
+that is this belief at one remove: rung 1's seeded edges on `compiler.kz` were
+**dead assertions for a full rung** — `pass_graph.collect` iterated top-level
+items only, and every compiler pass decl lives inside a `module_decl`, so the
+graph validated an empty edge set. A checker that never reads the decls it
+guards is prose wearing a wall's clothes: it LOOKS enforced, and that is worse
+than the comment it replaced, because the comment at least admitted it was a
+claim. The fix was one line of recursion — the belief it confirms is that an
+annotation is not a contract until the thing that reads it is counted, and the
+count has to cover where decls actually live.
+
+The same rung added the second half the instrument was missing: `preserves`
+declares the *allowed* set (which top-level item kinds a whole-program
+write-back may not touch; `!kind` atoms mean "all except these", closed under
+vocabulary growth), KORU181 enforces it inside the backend run, and the Lean
+oracle re-decides compliance from the committed kind tags — the declared
+surface, the enforcement, and the independent check now name the same bound.

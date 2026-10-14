@@ -2933,6 +2933,17 @@ const reporter_inject_fmt =
     "@panic(\"{s} '{s}' declares reporter: *ErrorReporter but was invoked from a path that carries no compilation context\")))).reporter orelse " ++
     "@panic(\"{s} '{s}' declares reporter: *ErrorReporter but the compilation carries none\")),\n";
 
+/// Collect a call-annotation's arguments (`[x|requires("a","b")]`) as an
+/// owned slice — the annotation parse is the same one pass_graph sees.
+fn annotationCallArgs(allocator: std.mem.Allocator, annotations: []const []const u8, name: []const u8) ![]const []const u8 {
+    const call = try annotation_parser.getCall(allocator, annotations, name) orelse return &.{};
+    var c = call;
+    defer c.deinit(allocator);
+    var out: std.ArrayList([]const u8) = .empty;
+    for (c.args) |arg| try out.append(allocator, try allocator.dupe(u8, arg));
+    return out.toOwnedSlice(allocator);
+}
+
 /// TransformEvent stores both the underscore name (for stubs) and dotted name (for matching)
 /// Transforms are compiler passes: Program -> transformed{Program} | failed{error}
 /// Also used for derive handlers which generate new declarations from event declarations
@@ -2944,6 +2955,13 @@ const TransformEvent = struct {
     module_path: ?[]const u8, // e.g., "koru_std.control" for stdlib, null for main_module
     claims_descendants: bool = false, // Transform should run before walking lexical descendants
     stage: []const u8 = "main", // Ordered transform stage: "pre" | "main" | "post" ([transform|pre]/[transform|post])
+    /// Declared intra-transform ordering edges ([transform|requires("x")]).
+    /// The frontend validates stage-satisfiability (KORU180); the entry
+    /// carries them so witness/oracle surfaces can read the declaration.
+    requires_list: []const []const u8 = &.{},
+    /// Declared blast-radius bound — top-level item kinds that must stay
+    /// invariant across this transform's write-backs (KORU181 enforces).
+    preserves_list: []const []const u8 = &.{},
     has_source: bool, // Event accepts source: Source[T] parameter
     source_optional: bool = false, // The source param is `?Source` — blockless calls still fire the handler with null
     has_expression: bool, // Event accepts expr: Expression parameter
@@ -3467,6 +3485,23 @@ fn collectExplainers(allocator: std.mem.Allocator, source_file: *ast.Program) ![
 /// returns ast.SiteResult — the site-local write-back ABI) plus the dispatch
 /// table consumed by transform_pass_runner.
 /// Returns the number of transform events found
+/// Emit a zig `[]const []const u8` literal (`&.{ "a", "b" }`) for the
+/// declared contract lists carried on TransformEntry.
+fn emitStringListLit(code_emitter: anytype, items: []const []const u8) !void {
+    if (items.len == 0) {
+        try code_emitter.write("&.{}");
+        return;
+    }
+    try code_emitter.write("&.{ ");
+    for (items, 0..) |s, i| {
+        if (i > 0) try code_emitter.write(", ");
+        var esc_buf: [512]u8 = undefined;
+        const esc = std.fmt.bufPrint(&esc_buf, "\"{s}\"", .{s}) catch "&.{}";
+        try code_emitter.write(esc);
+    }
+    try code_emitter.write(" }");
+}
+
 fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.Allocator, source_file: *ast.Program) !usize {
     // Transforms are [comptime] procs — they execute inside the koruc Stage C
     // binary, which is always Zig. The variant dispatcher for a transform
@@ -3543,6 +3578,8 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
 
                 const claims_descendants = annotation_parser.hasPart(event_decl.annotations, "claims_descendants");
                 const stage_name: []const u8 = if (annotation_parser.hasPart(event_decl.annotations, "pre")) "pre" else if (annotation_parser.hasPart(event_decl.annotations, "post")) "post" else "main";
+                const requires_list = try annotationCallArgs(allocator, event_decl.annotations, "requires");
+                const preserves_list = try annotationCallArgs(allocator, event_decl.annotations, "preserves");
 
                 // Collect variant targets across the whole program (top-level event, so
                 // variants may live in any module that implements it).
@@ -3558,6 +3595,8 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                     .module_path = null, // Top-level events are in main_module
                     .claims_descendants = claims_descendants,
                     .stage = stage_name,
+                    .requires_list = requires_list,
+                    .preserves_list = preserves_list,
                     .has_source = scan.has_source_param,
                     .source_optional = scan.source_optional_param,
                     .has_expression = scan.has_expression_param,
@@ -3683,6 +3722,8 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
 
                         const claims_descendants = annotation_parser.hasPart(event_decl.annotations, "claims_descendants");
                         const stage_name: []const u8 = if (annotation_parser.hasPart(event_decl.annotations, "pre")) "pre" else if (annotation_parser.hasPart(event_decl.annotations, "post")) "post" else "main";
+                        const requires_list = try annotationCallArgs(allocator, event_decl.annotations, "requires");
+                        const preserves_list = try annotationCallArgs(allocator, event_decl.annotations, "preserves");
 
                         // Collect variant targets from the same module (variants live alongside the event).
                         const variant_targets_mod = try collectVariantTargetsForEventPath(allocator, module.items, event_decl.path.segments, comptime_default_lang);
@@ -3706,6 +3747,8 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                             .module_path = module_path,
                             .claims_descendants = claims_descendants,
                             .stage = stage_name,
+                            .requires_list = requires_list,
+                            .preserves_list = preserves_list,
                             .has_source = scan.has_source_param,
                             .source_optional = scan.source_optional_param,
                             .has_expression = scan.has_expression_param,
@@ -3751,6 +3794,10 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
             }
             for (event.variant_targets) |t| allocator.free(t);
             allocator.free(event.variant_targets);
+            for (event.requires_list) |t| allocator.free(t);
+            allocator.free(event.requires_list);
+            for (event.preserves_list) |t| allocator.free(t);
+            allocator.free(event.preserves_list);
         }
     }
 
@@ -4289,23 +4336,28 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
     for (transform_events.items) |event| {
         var stub_ident_buf: [256]u8 = undefined;
         const stub_ident = lowerKebabIdent(&stub_ident_buf, event.stub_name);
-        const entry_line = if (event.qualifier) |qualifier|
-            try std.fmt.bufPrint(&buf, "        .{{ .name = \"{s}\", .qualifier = \"{s}\", .claims_descendants = {s}, .stage = .{s}, .handler_fn = call_handler_{s} }},\n", .{
+        if (event.qualifier) |qualifier| {
+            const entry_line = try std.fmt.bufPrint(&buf, "        .{{ .name = \"{s}\", .qualifier = \"{s}\", .claims_descendants = {s}, .stage = .{s}, .requires = ", .{
                 event.match_name,
                 qualifier,
                 if (event.claims_descendants) "true" else "false",
                 event.stage,
-                stub_ident,
-            })
-        else
-            try std.fmt.bufPrint(&buf, "        .{{ .name = \"{s}\", .from_module = {s}, .claims_descendants = {s}, .stage = .{s}, .handler_fn = call_handler_{s} }},\n", .{
+            });
+            try code_emitter.write(entry_line);
+        } else {
+            const entry_line = try std.fmt.bufPrint(&buf, "        .{{ .name = \"{s}\", .from_module = {s}, .claims_descendants = {s}, .stage = .{s}, .requires = ", .{
                 event.match_name,
                 if (event.module_path != null) "true" else "false",
                 if (event.claims_descendants) "true" else "false",
                 event.stage,
-                stub_ident,
             });
-        try code_emitter.write(entry_line);
+            try code_emitter.write(entry_line);
+        }
+        try emitStringListLit(code_emitter, event.requires_list);
+        try code_emitter.write(", .preserves = ");
+        try emitStringListLit(code_emitter, event.preserves_list);
+        const tail_line = try std.fmt.bufPrint(&buf, ", .handler_fn = call_handler_{s} }},\n", .{stub_ident});
+        try code_emitter.write(tail_line);
     }
 
     try code_emitter.write("    };\n");

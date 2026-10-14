@@ -1,0 +1,48 @@
+// PINS: a whole-program write-back that honours its declared preserves bound
+// runs clean — strip-flows removes only flow items under
+// preserves("!flow","!module_decl") (negated atoms: preserve every item kind
+// EXCEPT these). Under std/witness:enforce the application commits an
+// enriched transform-app line carrying the bound and kind tags, which the
+// Lean oracle independently re-checks (WITNESS_CHECK).
+const std = @import("std");
+const ast = @import("ast");
+const ast_functional = @import("ast_functional");
+
+~import std/witness
+~std/witness:enforce { }
+
+~tor gone {} -> string
+~proc gone|zig { return "g"; }
+
+~gone()
+
+~[keyword|comptime|transform|preserves("!flow","!module_decl")]pub tor strip-flows {
+    invocation: *const Invocation,
+    item: *const std/compiler:Item,
+    program: *const Program,
+    allocator: std.mem.Allocator
+} -> SiteResult
+
+~proc strip-flows|zig {
+    var new_items = std.ArrayList(ast.Item).initCapacity(allocator, program.items.len) catch unreachable;
+    for (program.items) |*prog_item| {
+        if (prog_item == item) continue;
+        if (prog_item.* == .flow) {
+            const segs = prog_item.flow.inv().path.segments;
+            if (segs.len > 0 and std.mem.eql(u8, segs[segs.len-1], "gone")) continue;
+        }
+        new_items.append(allocator, ast_functional.cloneItem(allocator, prog_item) catch unreachable) catch unreachable;
+    }
+    const new_program = allocator.create(ast.Program) catch unreachable;
+    new_program.* = ast.Program{
+        .items = new_items.toOwnedSlice(allocator) catch unreachable,
+        .module_annotations = program.module_annotations,
+        .main_module_name = program.main_module_name,
+        .allocator = allocator,
+    };
+    return .{ .whole_program = new_program };
+}
+
+~import std/io
+~strip-flows()
+~std/io:print.ln("done")

@@ -759,6 +759,18 @@ pub const TransformEntry = struct {
     /// downstream structure before peer transforms rewrite it.
     claims_descendants: bool = false,
 
+    /// Declared intra-transform ordering edges ([transform|requires("x")]).
+    /// Frontend-validated (KORU180); carried here so witness/oracle surfaces
+    /// can read the contract that produced the order they observe.
+    requires: []const []const u8 = &.{},
+
+    /// Declared blast-radius bound ([transform|preserves("kind",...)]):
+    /// top-level items of the named kinds must be bit-identical across this
+    /// transform's write-backs. The SITE item is always licensed — it is the
+    /// point of application, not collateral. Violations refuse with KORU181.
+    /// Empty = the transform declares no bound (the honest default).
+    preserves: []const []const u8 = &.{},
+
     /// Handler function that takes (node, program, allocator, ctx) and returns a
     /// SiteResult — the site-local write-back ABI. The handler describes its
     /// change as a value (replace this site / append these items); the RUNNER
@@ -1282,31 +1294,41 @@ fn siteItemIndex(allocator: std.mem.Allocator, program: *const Program, sr: Site
     return null;
 }
 
-/// Commit the accounting for one whole-program write-back: site digest plus
-/// the multiset diff of top-level item digests (pre vs post). Anything the
-/// checker cannot account for is printed MALFORMED — a flag, never a guess.
-fn emitTransformAppLine(allocator: std.mem.Allocator, pre: *const Program, post: *const Program, sr: SiteRef, transform_name: []const u8, verdict: []const u8) void {
-    if (!transform_app_witness_enabled) return;
-    transform_app_witness_count += 1;
+/// One changed top-level item in a write-back's accounting — digest for
+/// identity, kind for the declared `preserves` bound, is_site for the
+/// license every transform holds over its own point of application.
+const DiffItem = struct {
+    digest: u64,
+    kind: []const u8,
+    is_site: bool,
+};
+
+/// The committed accounting for one whole-program write-back: the site's
+/// item index/digest and the pre/post multiset diff as tagged items.
+const AppAccounting = struct {
+    site_index: ?usize,
+    site_digest: ?u64,
+    rm: []DiffItem,
+    add: []DiffItem,
+    malformed: bool,
+};
+
+fn itemKindName(item: *const ast.Item) []const u8 {
+    return @tagName(item.*);
+}
+
+fn computeAppAccounting(allocator: std.mem.Allocator, pre: *const Program, post: *const Program, sr: SiteRef) ?AppAccounting {
     const site_idx = siteItemIndex(allocator, pre, sr);
     const site_digest = if (site_idx) |i| itemDigest(allocator, &pre.items[i], pre.main_module_name) else null;
-    var site_path_buf: [512]u8 = undefined;
-    const site_path: []const u8 = if (site_idx) |i| (if (pre.items[i] == .flow) joinPathInto(&site_path_buf, pre.items[i].flow.inv().path.segments) else "?") else "?";
 
-    const post_digests = allocator.alloc(?u64, post.items.len) catch {
-        std.debug.print("[witness] site transform-app {s} {s} MALFORMED oom\n", .{ transform_name, site_path });
-        return;
-    };
+    const post_digests = allocator.alloc(?u64, post.items.len) catch return null;
     for (post.items, 0..) |*it, i| post_digests[i] = itemDigest(allocator, it, post.main_module_name);
-    const used = allocator.alloc(bool, post.items.len) catch {
-        std.debug.print("[witness] site transform-app {s} {s} MALFORMED oom\n", .{ transform_name, site_path });
-        return;
-    };
+    const used = allocator.alloc(bool, post.items.len) catch return null;
     @memset(used, false);
 
     var malformed = site_digest == null;
-    var rm: std.ArrayList(u64) = .empty;
-    for (pre.items) |*it| {
+    var rm: std.ArrayList(DiffItem) = .empty;
+    for (pre.items, 0..) |*it, pi| {
         const d = itemDigest(allocator, it, pre.main_module_name) orelse {
             malformed = true;
             continue;
@@ -1320,34 +1342,149 @@ fn emitTransformAppLine(allocator: std.mem.Allocator, pre: *const Program, post:
                 break;
             }
         }
-        if (!matched) rm.append(allocator, d) catch {};
+        if (!matched) rm.append(allocator, .{ .digest = d, .kind = itemKindName(it), .is_site = site_idx != null and pi == site_idx.? }) catch {};
     }
-    var add: std.ArrayList(u64) = .empty;
+    var add: std.ArrayList(DiffItem) = .empty;
     for (post_digests, 0..) |pd, j| {
         if (used[j]) continue;
         if (pd) |d| {
-            add.append(allocator, d) catch {};
+            add.append(allocator, .{ .digest = d, .kind = itemKindName(&post.items[j]), .is_site = false }) catch {};
         } else {
             malformed = true;
         }
     }
+    return .{
+        .site_index = site_idx,
+        .site_digest = site_digest,
+        .rm = rm.toOwnedSlice(allocator) catch &.{},
+        .add = add.toOwnedSlice(allocator) catch &.{},
+        .malformed = malformed,
+    };
+}
+
+/// Is `kind` inside the transform's declared invariant set? Bare atoms mean
+/// "preserve exactly these"; `!`-atoms mean "preserve all EXCEPT these"
+/// (closed under vocabulary growth — the frontend refuses mixed modes, so
+/// the list is always uniformly one shape).
+fn kindIsPreserved(preserves: []const []const u8, kind: []const u8) bool {
+    var except_mode = false;
+    for (preserves) |a| {
+        if (a.len > 0 and a[0] == '!') except_mode = true;
+    }
+    for (preserves) |a| {
+        if (except_mode) {
+            if (a.len > 1 and a[0] == '!' and std.mem.eql(u8, a[1..], kind)) return false;
+        } else {
+            if (std.mem.eql(u8, a, kind)) return true;
+        }
+    }
+    return except_mode;
+}
+
+/// The declared blast-radius bound: anything a write-back removes or adds
+/// beyond the site item must be a kind the transform did NOT preserve.
+/// Refusal, not a flag — the bound is the contract.
+fn checkPreservesBound(acc: *const AppAccounting, transform: *const TransformEntry, sr: SiteRef) !void {
+    if (transform.preserves.len == 0) return;
+    for (acc.rm) |di| {
+        if (di.is_site) continue;
+        if (kindIsPreserved(transform.preserves, di.kind)) {
+            const loc = sr.holding.location;
+            std.debug.print(
+                "error[KORU181]: transform '{s}' removed a '{s}' item, but its declared `preserves` bound holds that kind invariant\n" ++
+                    "  --> {s}:{d}:{d}\n" ++
+                    "  declared bound: preserves({s}) — the site item is licensed, collateral is not\n" ++
+                    "  fix: narrow the write-back, or drop the kind from `preserves` if the touch is legitimate\n\n",
+                .{ transform.name, di.kind, loc.file, loc.line, loc.column, joinSliceInline(transform.preserves) },
+            );
+            return error.TransformBlastRadiusExceeded;
+        }
+    }
+    for (acc.add) |di| {
+        if (kindIsPreserved(transform.preserves, di.kind)) {
+            const loc = sr.holding.location;
+            std.debug.print(
+                "error[KORU181]: transform '{s}' added a '{s}' item, but its declared `preserves` bound holds that kind invariant\n" ++
+                    "  --> {s}:{d}:{d}\n" ++
+                    "  declared bound: preserves({s}) — additions outside the site count against the bound\n" ++
+                    "  fix: narrow the write-back, or drop the kind from `preserves` if the add is legitimate\n\n",
+                .{ transform.name, di.kind, loc.file, loc.line, loc.column, joinSliceInline(transform.preserves) },
+            );
+            return error.TransformBlastRadiusExceeded;
+        }
+    }
+}
+
+/// Appended top-level items on a site-local result are still write-backs
+/// outside the site — the same bound applies.
+fn checkPreservesAppended(transform: *const TransformEntry, appended: []const ast.Item) !void {
+    if (transform.preserves.len == 0) return;
+    for (appended) |*it| {
+        const kind = itemKindName(it);
+        if (kindIsPreserved(transform.preserves, kind)) {
+            std.debug.print(
+                "error[KORU181]: transform '{s}' appended a '{s}' item, but its declared `preserves` bound holds that kind invariant\n" ++
+                    "  declared bound: preserves({s})\n" ++
+                    "  fix: append a non-preserved kind, or drop the kind from `preserves`\n\n",
+                .{ transform.name, kind, joinSliceInline(transform.preserves) },
+            );
+            return error.TransformBlastRadiusExceeded;
+        }
+    }
+}
+
+var preserves_join_buf: [512]u8 = undefined;
+fn joinSliceInline(items: []const []const u8) []const u8 {
+    var fbs = std.io.fixedBufferStream(&preserves_join_buf);
+    const w = fbs.writer();
+    for (items, 0..) |s, i| {
+        if (i > 0) w.writeAll(",") catch break;
+        w.writeAll(s) catch break;
+    }
+    return fbs.getWritten();
+}
+
+/// Commit the accounting for one whole-program write-back: site digest plus
+/// the multiset diff of top-level item digests (pre vs post), tagged with
+/// item kinds and the transform's declared `preserves` bound so the oracle
+/// can rule on blast-radius containment, not just multiset honesty.
+fn emitTransformAppLine(allocator: std.mem.Allocator, pre: *const Program, transform_name: []const u8, verdict: []const u8, preserves: []const []const u8, acc: AppAccounting) void {
+    if (!transform_app_witness_enabled) return;
+    transform_app_witness_count += 1;
+    var site_path_buf: [512]u8 = undefined;
+    const site_path: []const u8 = if (acc.site_index) |i| (if (pre.items[i] == .flow) joinPathInto(&site_path_buf, pre.items[i].flow.inv().path.segments) else "?") else "?";
 
     var line: std.ArrayList(u8) = .empty;
     const w = line.writer(allocator);
-    if (malformed) {
+    if (acc.malformed) {
         w.print("[witness] site transform-app {s} {s} MALFORMED", .{ transform_name, site_path }) catch {};
     } else {
         w.print("[witness] site transform-app {s} {s} {s} site=", .{ transform_name, site_path, verdict }) catch {};
-        w.print("{x:0>16}", .{site_digest.?}) catch {};
-        w.print(";rm=", .{}) catch {};
-        for (rm.items, 0..) |d, i| {
+        w.print("{x:0>16}", .{acc.site_digest.?}) catch {};
+        w.print(";preserves=", .{}) catch {};
+        for (preserves, 0..) |k, i| {
             if (i > 0) w.print(",", .{}) catch {};
-            w.print("{x:0>16}", .{d}) catch {};
+            w.print("{s}", .{k}) catch {};
+        }
+        w.print(";rm=", .{}) catch {};
+        for (acc.rm, 0..) |di, i| {
+            if (i > 0) w.print(",", .{}) catch {};
+            w.print("{x:0>16}", .{di.digest}) catch {};
+        }
+        w.print(";rmk=", .{}) catch {};
+        for (acc.rm, 0..) |di, i| {
+            if (i > 0) w.print(",", .{}) catch {};
+            w.print("{s}", .{di.kind}) catch {};
         }
         w.print(";add=", .{}) catch {};
-        for (add.items, 0..) |d, i| {
+        for (acc.add, 0..) |di, i| {
             if (i > 0) w.print(",", .{}) catch {};
-            w.print("{x:0>16}", .{d}) catch {};
+            w.print("{x:0>16}", .{di.digest}) catch {};
+        }
+        w.print(";addk=", .{}) catch {};
+        for (acc.add, 0..) |di, i| {
+            if (i > 0) w.print(",", .{}) catch {};
+            w.print("{s}", .{di.kind}) catch {};
         }
     }
     std.debug.print("{s}\n", .{line.items});
@@ -1462,6 +1599,10 @@ fn applyTransform(
         return WalkResult{ .found = false, .program = program };
     }
 
+    // Declared blast-radius: appended items are write-backs outside the site
+    // even on the site-local path — the `preserves` bound applies.
+    try checkPreservesAppended(&transform, result.appended);
+
     // Place the change. The runner owns the splice — root site replaces its
     // flow Item, nested site replaces the holding continuation, appended items
     // go to the top level. This is the single write-back point.
@@ -1471,8 +1612,15 @@ fn applyTransform(
     // outside the site — commit the pre/post accounting before the progress
     // check below. Nested-position wp is excluded: its `post` is a rewrite of
     // the synthetic site VIEW, not the real program (and KORU124 errors it).
+    // The accounting also carries the declared `preserves` bound — a
+    // write-back exceeding it refuses (KORU181) instead of being recorded.
     if (result.whole_program != null and sr.wrapper != null) {
-        emitTransformAppLine(allocator, program, spliced, sr, transform.name, "wp");
+        const acc = computeAppAccounting(allocator, program, spliced, sr) orelse {
+            std.debug.print("[witness] site transform-app {s} ? MALFORMED oom\n", .{transform.name});
+            return error.TransformAccountingFailed;
+        };
+        try checkPreservesBound(&acc, &transform, sr);
+        emitTransformAppLine(allocator, program, transform.name, "wp", transform.preserves, acc);
     }
 
     // CIRCUIT BREAKER: Verify the transform made progress.

@@ -1914,11 +1914,13 @@ const emitFlowWithMocks = struct {
         var transform_ctx = ctx;
 
         const post_transform_ast = backend_output.run_pass("transform", ctx.ast, ctx.allocator, @ptrCast(&transform_ctx)) catch |err| {
-            if (err == error.TransformContinuationPositionUnsupported) {
-                // The runner already emitted a located error[KORU124] koru
-                // diagnostic. This proc returns a ctx (no clean error channel),
-                // so stop the pipeline cleanly rather than leaking the
-                // ICE-shaped @panic + host stack trace.
+            if (err == error.TransformContinuationPositionUnsupported or
+                err == error.TransformBlastRadiusExceeded or
+                err == error.TransformAccountingFailed) {
+                // The runner already emitted a located error[KORU124] /
+                // error[KORU181] koru diagnostic. This proc returns a ctx (no
+                // clean error channel), so stop the pipeline cleanly rather
+                // than leaking the ICE-shaped @panic + host stack trace.
                 std.process.exit(1);
             }
             // Transforms either complete or fail loudly. Continuing with the

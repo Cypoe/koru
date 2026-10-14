@@ -1,0 +1,43 @@
+// PINS: preserves() is a runtime-enforced bound on whole-program write-backs.
+// strip-decl declares preserves("event_decl") — the site item may change, but
+// collateral event_decl items are held invariant. Its write-back drops one,
+// so KORU181 refuses with the transform name, offending kind, site location,
+// and the declared bound. Backend-phase refusal (the bound is checked when
+// the transform runs inside the generated backend, not at frontend parse).
+const std = @import("std");
+const ast = @import("ast");
+const ast_functional = @import("ast_functional");
+
+~tor victim {} -> string
+~proc victim|zig { return "v"; }
+
+~[keyword|comptime|transform|preserves("event_decl")]pub tor strip-decl {
+    invocation: *const Invocation,
+    item: *const std/compiler:Item,
+    program: *const Program,
+    allocator: std.mem.Allocator
+} -> SiteResult
+
+~proc strip-decl|zig {
+    var new_items = std.ArrayList(ast.Item).initCapacity(allocator, program.items.len) catch unreachable;
+    for (program.items) |*prog_item| {
+        if (prog_item == item) continue;
+        if (prog_item.* == .event_decl) {
+            const segs = prog_item.event_decl.path.segments;
+            if (!std.mem.eql(u8, segs[segs.len-1], "strip-decl")) continue;
+        }
+        new_items.append(allocator, ast_functional.cloneItem(allocator, prog_item) catch unreachable) catch unreachable;
+    }
+    const new_program = allocator.create(ast.Program) catch unreachable;
+    new_program.* = ast.Program{
+        .items = new_items.toOwnedSlice(allocator) catch unreachable,
+        .module_annotations = program.module_annotations,
+        .main_module_name = program.main_module_name,
+        .allocator = allocator,
+    };
+    return .{ .whole_program = new_program };
+}
+
+~import std/io
+~strip-decl()
+~std/io:print.ln("unreachable")

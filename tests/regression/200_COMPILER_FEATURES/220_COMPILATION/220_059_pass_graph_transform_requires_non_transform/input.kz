@@ -1,0 +1,17 @@
+// PINS: transform requires-edges are intra-transform — naming an ordinary
+// tor (an event, not a [transform]) is refused. Pipeline ordering is already
+// expressed by the stage a transform runs in.
+~import std/io
+
+~[keyword|comptime|transform|requires("plain-tor")]pub tor mk-consumer {
+    item: *const Item,
+    program: *const Program,
+    allocator: std.mem.Allocator
+} -> SiteResult
+
+~proc mk-consumer|zig { return .{}; }
+
+~pub tor plain-tor { } -> i32
+~proc plain-tor|zig { return 0; }
+
+~std/io:print.ln("unreachable")

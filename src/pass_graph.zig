@@ -24,9 +24,19 @@
 //!     legitimately provide the required pass; refusing there would deny
 //!     the composition the mechanism exists to check.
 //!
-//! `requires` names pass *order* only. `preserves` (invariant obligations)
-//! and transform blast-radius bounds are declared surface for later rungs —
-//! they are parsed and stored but not yet enforced, and this module says so.
+//! `requires` on a pipeline tor names pass *order*. On a `[transform]` decl
+//! it is an INTRA-transform edge: the required transform must occupy a
+//! strictly earlier stage (pre < main < post). Same-stage ordering is
+//! fixed-point walk order — not a declarable contract — so a same-stage
+//! `requires` refuses rather than pretend.
+//!
+//! `preserves("kind",...)` on a `[transform]` decl is the blast-radius
+//! bound: top-level items of the named kinds must be bit-identical across
+//! the transform's write-backs (LLVM PreservedAnalyses semantics). The
+//! frontend validates the atoms against the Item union vocabulary; the
+//! runner enforces the bound on whole_program/appended write-backs
+//! (KORU181). `preserves` on a non-transform decl refuses — a bound with
+//! no write-back to constrain is a dead assertion.
 //!
 //! Naming: the call form follows `depends_on` (build steps, main.zig).
 //! `std/compiler:requires` the directive tor is a different grammar slot
@@ -38,6 +48,31 @@ const ast = @import("ast");
 const annotation_parser = @import("annotation_parser");
 const errors = @import("errors");
 
+/// Transform stages as an ordering — pre < main < post. A `requires` edge
+/// between transforms is satisfiable only when the producer sits strictly
+/// earlier; the intra-stage fixed point promises no order at all.
+const TransformStage = enum(u8) { pre = 0, main = 1, post = 2 };
+
+fn stageOf(annotations: []const []const u8) TransformStage {
+    if (annotation_parser.hasPart(annotations, "pre")) return .pre;
+    if (annotation_parser.hasPart(annotations, "post")) return .post;
+    return .main;
+}
+
+/// Top-level item kinds a `preserves` bound may name — the Item union tag
+/// vocabulary, closed: an atom that spells nothing refuses instead of
+/// silently bounding nothing. An atom prefixed `!` is an EXCEPTION: the
+/// bound then means "all kinds preserved except the named ones" — closed
+/// under vocabulary growth, where a bare enumeration silently widens when
+/// a new kind appears. Mixing bare and `!` atoms in one `preserves` is
+/// refused: which mode the bound means would be a guess.
+const item_kinds = [_][]const u8{
+    "module_decl",   "event_decl",    "proc_decl",      "flow",
+    "event_tap",     "label_decl",    "immediate_impl", "import_decl",
+    "host_line",     "host_type_decl", "parse_error",   "native_loop",
+    "fused_event",   "inlined_event", "inline_code",    "facet_decl",
+};
+
 const PassDecl = struct {
     /// Last segment of the decl path ("check-structure").
     name: []const u8,
@@ -46,6 +81,10 @@ const PassDecl = struct {
     qualified: []const u8,
     requires: []const []const u8,
     preserves: []const []const u8,
+    /// True on `[transform]` decls — their requires are intra-transform
+    /// stage edges, not pipeline positions.
+    is_transform: bool,
+    stage: TransformStage,
     location: errors.SourceLocation,
 };
 
@@ -77,8 +116,20 @@ fn declQualifier(decl: *const ast.EventDecl) []const u8 {
 
 /// Collect declared edges + impl flows. Returns false (via error) through
 /// the caller on violation — this function only gathers.
+/// A `[transform]` decl — a resolution target for intra-transform requires
+/// edges. Collected whether or not it declares edges of its own.
+const TransformDecl = struct {
+    name: []const u8,
+    qualified: []const u8,
+    stage: TransformStage,
+    location: errors.SourceLocation,
+};
+
 const Graph = struct {
     decls: std.ArrayList(PassDecl),
+    /// Every [transform] decl in the program — the transform namespace that
+    /// transform-level `requires` resolves against.
+    transforms: std.ArrayList(TransformDecl),
     /// impl flows by last-segment name — expansion targets.
     impl_flows: std.StringHashMapUnmanaged(std.ArrayList(*const ast.Flow)),
     /// Every flow item (impl or top-level), each a chain to check.
@@ -89,13 +140,38 @@ const Graph = struct {
 fn collect(allocator: std.mem.Allocator, items: []const ast.Item) !Graph {
     var g: Graph = .{
         .decls = .empty,
+        .transforms = .empty,
         .impl_flows = .{},
         .flows = .empty,
         .allocator = allocator,
     };
+    try collectItems(allocator, &g, items);
+    return g;
+}
+
+/// Decls and pipeline chains nest inside module_decl items — compiler.kz's
+/// coordinate/analysis chains live there, not at top level. A collector that
+/// skipped them would leave the seeded edges unchecked: a declared contract
+/// nobody reads is worse than none — it looks enforced while doing nothing.
+fn collectItems(allocator: std.mem.Allocator, g: *Graph, items: []const ast.Item) !void {
     for (items) |*item| {
         switch (item.*) {
+            .module_decl => |*md| try collectItems(allocator, g, md.items),
             .event_decl => |*decl| {
+                const is_transform = annotation_parser.hasPart(decl.annotations, "transform");
+                const name = lastSegment(decl.path);
+                const qual = if (declQualifier(decl).len > 0)
+                    try std.fmt.allocPrint(allocator, "{s}:{s}", .{ try normalizeQualifier(allocator, declQualifier(decl)), name })
+                else
+                    name;
+                if (is_transform) {
+                    try g.transforms.append(allocator, .{
+                        .name = name,
+                        .qualified = qual,
+                        .stage = stageOf(decl.annotations),
+                        .location = decl.location,
+                    });
+                }
                 var requires: std.ArrayList([]const u8) = .empty;
                 if (try annotation_parser.getCall(allocator, decl.annotations, "requires")) |call| {
                     var c = call;
@@ -109,16 +185,13 @@ fn collect(allocator: std.mem.Allocator, items: []const ast.Item) !Graph {
                     for (c.args) |arg| try preserves.append(allocator, try allocator.dupe(u8, arg));
                 }
                 if (requires.items.len == 0 and preserves.items.len == 0) continue;
-                const name = lastSegment(decl.path);
-                const qual = if (declQualifier(decl).len > 0)
-                    try std.fmt.allocPrint(allocator, "{s}:{s}", .{ try normalizeQualifier(allocator, declQualifier(decl)), name })
-                else
-                    name;
                 try g.decls.append(allocator, .{
                     .name = name,
                     .qualified = qual,
                     .requires = try requires.toOwnedSlice(allocator),
                     .preserves = try preserves.toOwnedSlice(allocator),
+                    .is_transform = is_transform,
+                    .stage = stageOf(decl.annotations),
                     .location = decl.location,
                 });
             },
@@ -134,7 +207,28 @@ fn collect(allocator: std.mem.Allocator, items: []const ast.Item) !Graph {
             else => {},
         }
     }
-    return g;
+}
+
+/// Every event_decl name, module-nested ones included — a `requires` that
+/// resolves against only the top level would refuse the stdlib's own edges.
+/// `nontransform_names` (optional) additionally collects just the names of
+/// decls that are NOT [transform]s — a transform decl is an event_decl, so
+/// the full name set alone cannot tell a pipeline entity from a transform.
+fn collectDeclNames(allocator: std.mem.Allocator, set: *std.StringHashMapUnmanaged(void), nontransform_names: ?*std.StringHashMapUnmanaged(void), items: []const ast.Item) !void {
+    for (items) |*item| {
+        switch (item.*) {
+            .module_decl => |*md| try collectDeclNames(allocator, set, nontransform_names, md.items),
+            .event_decl => |*decl| {
+                try set.put(allocator, lastSegment(decl.path), {});
+                if (nontransform_names) |nt| {
+                    if (!annotation_parser.hasPart(decl.annotations, "transform")) {
+                        try nt.put(allocator, lastSegment(decl.path), {});
+                    }
+                }
+            },
+            else => {},
+        }
+    }
 }
 
 /// Depth-first cycle check over the resolved edge digraph.
@@ -231,6 +325,42 @@ fn invokedNames(g: *const Graph) !std.StringHashMapUnmanaged(void) {
     return set;
 }
 
+/// Resolve a transform-level `requires` argument to a TransformDecl —
+/// bare last-segment or `module:name` qualified. A bare name hitting
+/// multiple transforms is refused as ambiguous rather than resolved by
+/// fiat (same discipline as every other edge in this module).
+fn resolveTransform(g: *const Graph, req: []const u8) ?*const TransformDecl {
+    var req_last = req;
+    var req_qual: []const u8 = "";
+    if (std.mem.indexOfScalar(u8, req, ':')) |ci| {
+        req_qual = req[0..ci];
+        req_last = req[ci + 1 ..];
+    }
+    var found: ?*const TransformDecl = null;
+    var count: usize = 0;
+    for (g.transforms.items) |*t| {
+        if (!std.mem.eql(u8, t.name, req_last)) continue;
+        if (req_qual.len > 0) {
+            var buf: [256]u8 = undefined;
+            if (req_qual.len > buf.len) continue;
+            @memcpy(buf[0..req_qual.len], req_qual);
+            for (buf[0..req_qual.len]) |*c| {
+                if (c.* == '/') c.* = '.';
+            }
+            const qual_norm = buf[0..req_qual.len];
+            const t_qual = if (std.mem.indexOfScalar(u8, t.qualified, ':')) |ci| t.qualified[0..ci] else "";
+            if (!std.mem.eql(u8, t_qual, qual_norm)) continue;
+        }
+        found = t;
+        count += 1;
+    }
+    if (count > 1 and req_qual.len == 0) {
+        std.debug.print("error[KORU180]: `requires` argument `{s}` names {d} different transforms — a bare name cannot pick between them\n  fix: qualify the edge (module:name) so the contract names exactly one transform\n", .{ req, count });
+        std.process.exit(1);
+    }
+    return found;
+}
+
 fn matchStep(g: *const Graph, step: Step, req: []const u8) bool {
     _ = g;
     var req_last = req;
@@ -260,14 +390,8 @@ pub fn validate(allocator: std.mem.Allocator, items: []const ast.Item) !void {
     // names resolve against the whole tor namespace, not just edge-holders.
     var decl_by_name: std.StringHashMapUnmanaged(usize) = .{};
     var all_names: std.StringHashMapUnmanaged(void) = .{};
-    for (items) |*item| {
-        switch (item.*) {
-            .event_decl => |*decl| {
-                try all_names.put(allocator, lastSegment(decl.path), {});
-            },
-            else => {},
-        }
-    }
+    var nontransform_names: std.StringHashMapUnmanaged(void) = .{};
+    try collectDeclNames(allocator, &all_names, &nontransform_names, items);
     for (g.decls.items, 0..) |*d, i| {
         try decl_by_name.put(allocator, d.name, i);
     }
@@ -276,8 +400,11 @@ pub fn validate(allocator: std.mem.Allocator, items: []const ast.Item) !void {
     var fit = g.impl_flows.iterator();
     while (fit.next()) |e| try flow_names.put(allocator, e.key_ptr.*, {});
 
-    // 1. Every required name must resolve to something real.
+    // 1. Every required name must resolve to something real. Transform
+    // decls resolve in their own namespace — step 2b carries the
+    // transform-shaped diagnostic for edges that name nothing there.
     for (g.decls.items) |*d| {
+        if (d.is_transform) continue;
         for (d.requires) |req| {
             const req_last = if (std.mem.indexOfScalar(u8, req, ':')) |ci| req[ci + 1 ..] else req;
             if (!all_names.contains(req_last) and !flow_names.contains(req_last)) {
@@ -289,6 +416,71 @@ pub fn validate(allocator: std.mem.Allocator, items: []const ast.Item) !void {
 
     // 2. Declared edges must be acyclic (linearizable) on their own.
     try checkDag(&g, decl_by_name);
+
+    // 2b. Transform surface: `requires` on a [transform] decl resolves inside
+    // the transform namespace and is satisfiable only across stages — the
+    // intra-stage fixed point orders by first-found walk, which no declared
+    // edge can bind. `preserves` atoms must name real Item kinds; on a
+    // non-transform decl it is refused as a bound constraining nothing.
+    for (g.decls.items) |*d| {
+        if (!d.is_transform) {
+            if (d.preserves.len > 0) {
+                std.debug.print("error[KORU180]: `{s}` declares `preserves`, but it is not a [transform] decl\n  {s}:{d}: preserves bounds a transform's write-back blast radius — on a pipeline pass there is no write-back for it to constrain\n  fix: drop the annotation, or move it to the transform decl it belongs to\n", .{ d.name, d.location.file, d.location.line });
+                std.process.exit(1);
+            }
+            // The converse edge is refused too: a pipeline tor requiring a
+            // transform orders against a surface that runs inside the
+            // transform stage — the chain can never satisfy it, and in a
+            // non-root chain the "absent" tolerance would let a dead edge
+            // stand. A name that is BOTH a pipeline entity and a transform
+            // resolves as pipeline — declarer-side ambiguity the decl owns.
+            for (d.requires) |req| {
+                const req_last = if (std.mem.indexOfScalar(u8, req, ':')) |ci| req[ci + 1 ..] else req;
+                if (resolveTransform(&g, req) != null and
+                    !nontransform_names.contains(req_last) and
+                    !flow_names.contains(req_last))
+                {
+                    std.debug.print("error[KORU180]: pass `{s}` requires `{s}`, but `{s}` is a transform, not a pipeline pass\n  {s}:{d}: pipeline requires are intra-pipeline edges — a transform never runs as a chain step; ordering against one is declared by the transform's stage, not by naming it here\n  fix: name the pass this one depends on, or drop the edge\n", .{ d.name, req, req_last, d.location.file, d.location.line });
+                    std.process.exit(1);
+                }
+            }
+            continue;
+        }
+        var saw_bare = false;
+        var saw_except = false;
+        for (d.preserves) |atom| {
+            const body = if (std.mem.startsWith(u8, atom, "!")) atom[1..] else atom;
+            if (atom.len > 0 and atom[0] == '!') saw_except = true else saw_bare = true;
+            var known = false;
+            for (item_kinds) |k| {
+                if (std.mem.eql(u8, body, k)) known = true;
+            }
+            if (!known or body.len == 0) {
+                std.debug.print("error[KORU180]: transform `{s}` preserves `{s}`, which names no top-level item kind\n  {s}:{d}: a bound spelled with an unknown atom constrains nothing — refusing rather than letting a typo stand as a contract\n  known kinds: module_decl event_decl proc_decl flow event_tap label_decl immediate_impl import_decl host_line host_type_decl parse_error native_loop fused_event inlined_event inline_code facet_decl\n  fix: fix the spelling, or widen the vocabulary deliberately\n", .{ d.name, atom, d.location.file, d.location.line });
+                std.process.exit(1);
+            }
+        }
+        if (saw_bare and saw_except) {
+            std.debug.print("error[KORU180]: transform `{s}` mixes bare and `!` atoms in `preserves` — the bound's mode is ambiguous\n  {s}:{d}: bare atoms mean \"preserve exactly these kinds\"; `!` atoms mean \"preserve all EXCEPT these\" — one declaration cannot mean both\n  fix: pick one mode — enumerate the preserved kinds, or list the exceptions as `!kind`\n", .{ d.name, d.location.file, d.location.line });
+            std.process.exit(1);
+        }
+        for (d.requires) |req| {
+            const target = resolveTransform(&g, req) orelse {
+                const req_last = if (std.mem.indexOfScalar(u8, req, ':')) |ci| req[ci + 1 ..] else req;
+                const exists = all_names.contains(req_last) or flow_names.contains(req_last);
+                if (exists) {
+                    std.debug.print("error[KORU180]: transform `{s}` requires `{s}`, but `{s}` is not a transform\n  {s}:{d}: transform requires are intra-transform edges — ordering against pipeline passes is declared by the transform's stage ([transform|pre]/[transform|post]), not by naming a pipeline step\n  fix: name the transform this one depends on, or drop the edge\n", .{ d.name, req, req_last, d.location.file, d.location.line });
+                } else {
+                    std.debug.print("error[KORU180]: transform `{s}` requires `{s}`, but no transform named `{s}` exists in this program\n  {s}:{d}: the edge names a transform identity, not an intention — the check refuses rather than guess which decl was meant\n  fix: fix the spelling, or declare the transform — a `requires` that names nothing is a dead assertion\n", .{ d.name, req, req_last, d.location.file, d.location.line });
+                }
+                std.process.exit(1);
+            };
+            if (@intFromEnum(target.stage) >= @intFromEnum(d.stage)) {
+                std.debug.print("error[KORU180]: transform `{s}` requires `{s}`, but `{s}` runs in the {s} stage — not before `{s}`'s {s} stage\n  {s}:{d}: within a stage the fixed point applies transforms in first-found walk order — same-stage ordering is not a declarable contract, and a later stage never ran earlier\n  fix: move the producer to an earlier stage, or drop the edge\n", .{ d.name, req, req, @tagName(target.stage), d.name, @tagName(d.stage), d.location.file, d.location.line });
+                std.process.exit(1);
+            }
+        }
+    }
 
     // 3. Order check against observed chains.
     const invoked = try invokedNames(&g);
@@ -307,6 +499,12 @@ pub fn validate(allocator: std.mem.Allocator, items: []const ast.Item) !void {
         const root = if (flow.impl_of) |io| !invoked.contains(lastSegment(io)) else true;
 
         for (g.decls.items) |*d| {
+            // Transform decls can appear as chain steps (`~tap()` — the
+            // fixed point still finds the site) — but their requires are
+            // intra-transform stage edges, checked in 2b; reading them as
+            // pipeline positions would refuse an edge the chain cannot
+            // express either way.
+            if (d.is_transform) continue;
             if (d.requires.len == 0) continue;
             for (steps.items, 0..) |s, i| {
                 if (!std.mem.eql(u8, s.name, d.name)) continue;

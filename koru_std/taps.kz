@@ -33,7 +33,12 @@ var metatype_global_counter: usize = 0;
 // 3. Wraps matching continuations with the tap's void call
 // 4. Removes the tap declaration (it compiled away)
 
-~[keyword|comptime|transform]pub tor tap {
+// The declared blast radius: tap removes its own declaration and rewrites
+// the flows it taps (which rewrites the module_decl items containing them).
+// Everything else — event decls, procs, imports, host lines — is invariant.
+// KORU181 refuses a write-back that exceeds this, and the transform-app
+// witness commits the bound so the oracle can check containment itself.
+~[keyword|comptime|transform|preserves("!flow","!module_decl")]pub tor tap {
     expr: Expression,
     invocation: *const Invocation,
     item: *const std/compiler:Item,

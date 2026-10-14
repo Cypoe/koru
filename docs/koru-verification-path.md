@@ -111,12 +111,28 @@ emit nothing. The comptime-only-site removal emits verdict `gc` — a
 singleton site removal. The Lean oracle rules on accounting honesty: a
 `wp` line must carry its site digest in `rm`; a `gc` line must be exactly
 the singleton `{site}`; the census count must equal the application lines
-(APP-DRIFT on mismatch). What it does NOT yet check is blast-radius —
-which other items a transform MAY touch is declared pass-graph surface,
-so transform congruence in the Alive2 sense stays open until the pass
-graph declares boundaries an oracle can measure against. Digests include
-source locations — the accounting is path-sensitive by construction;
-`310_140` pins the shape.
+(APP-DRIFT on mismatch).
+
+**Blast-radius bound landed (2026-10-14) — the pass-graph `preserves`
+surface.** `[transform|preserves(...)]` declares which top-level item
+kinds a transform's write-backs hold invariant — the *allowed* set the
+accounting was missing. Positive atoms list the preserved kinds;
+negated atoms (`preserves("!flow","!module_decl")`) mean "preserve every
+kind except these" — closed under future `ast.Item` growth, which is why
+`tap` declares the negated form (its measured write-back touches only
+`flow` and `module_decl` items). At each `whole_program` application the
+runner diffs touched kinds against the declaration: a removed or added
+collateral item of a preserved kind refuses with KORU181 (transform name,
+offending kind, site location, declared bound — the site item is always
+licensed; `appended`-path results stay site-local and carry no bound
+question). The committed line carries the bound and per-item kind tags
+(`preserves=`,`rmk=`,`addk=`), and the Lean oracle independently
+re-decides compliance from the kind vocabulary alone — a forged line
+that claims a bound while touching a held kind rejects (`forged.txt:45`).
+This is K2-Use-B congruence at the declared-surface level: the multiset
+the accounting commits is now bounded by contract, not merely observed.
+Digests include source locations — the accounting is path-sensitive by
+construction; `310_140` and `220_062`/`220_063` pin the shape.
 
 ---
 
