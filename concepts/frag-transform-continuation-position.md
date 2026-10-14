@@ -219,3 +219,19 @@ Cost, concretely: `koru-libs`' boids renderer drew a black window, because its
 frame arm was `std/grid:stored {..} |> draw.rect(..)` and the draw was the
 swallowed step. It needed no workaround in the end; the ordering rule that
 working around it produced was pure accident debt.
+
+---
+
+Extended 2026-10-14 (K2 Use B instrument): the whole-program escape this
+belief isolates is now the *instrumented* boundary. Under
+`std/witness:enforce` every `whole_program` write-back commits a
+`[witness] site transform-app` accounting line — site digest plus the
+top-level-item multiset diff — while site-local results emit nothing
+(confined by construction, exactly as this frag describes). The nested-wp
+carve-out in the emitter is this belief's own consequence: a continuation-
+position wp `post` is a rewrite of the synthetic site VIEW, not the real
+program, so the accounting excludes it rather than record a lie. What the
+lines commit is the *changed set*; what they cannot yet check is the
+*allowed* set — blast-radius bounds are declared pass-graph surface, the
+same place this belief's "flow-root-only by mechanism" constraint would
+be written down.

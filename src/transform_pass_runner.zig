@@ -20,6 +20,7 @@ const template_utils = @import("template_utils");
 const liquid = @import("liquid");
 const annotation_parser = @import("annotation_parser");
 const ast_functional = @import("ast_functional");
+const ast_json = @import("ast_json");
 const glob_pattern_matcher = @import("glob_pattern_matcher");
 
 // ============================================================================
@@ -881,6 +882,10 @@ pub fn walkAndTransformStages(
         }
     }
 
+    if (only_stage == null and transform_app_witness_enabled and transform_app_witness_count > 0) {
+        std.debug.print("[witness] site transform-app-census transform transform count={d}\n", .{transform_app_witness_count});
+    }
+
     return @constCast(current_program);
 }
 
@@ -1223,6 +1228,151 @@ fn getClaimCandidate(node: ASTNode, position: SitePosition) ?ClaimCandidate {
     };
 }
 
+// ============================================================================
+// K2 Use B — whole-program transform accounting (witness kind: transform-app)
+// ============================================================================
+//
+// Site-local results (replacement / replacement_node / appended) are confined
+// to their site by construction — the runner's splice is the single write-
+// back point. `whole_program` is the ONE escape where a handler can rewrite
+// items outside its site (koru_std/taps.kz is the only producer), and the
+// comptime-only-site removal is the one other top-level removal. When
+// `std/witness:enforce` flips `transform_app_witness_enabled` on, each such
+// application commits an accounting line — added/removed top-level items
+// keyed by canonical-AST digest — for an independent oracle to rule on.
+// Declared blast-radius bounds (which items a transform MAY touch) are
+// pass-graph surface; this instrument exposes the truth first.
+pub var transform_app_witness_enabled: bool = false;
+var transform_app_witness_count: usize = 0;
+
+/// Canonical digest of ONE top-level item — the per-item granularity the
+/// pre/post artifact diffs at. Null only when the serializer fails.
+fn itemDigest(allocator: std.mem.Allocator, item: *const ast.Item, main_module_name: []const u8) ?u64 {
+    const one = [_]ast.Item{item.*};
+    const view = ast.Program{
+        .items = &one,
+        .main_module_name = main_module_name,
+        .allocator = allocator,
+    };
+    const json = ast_json.serializeCanon(allocator, &view) catch return null;
+    return std.hash.Fnv1a_64.hash(json);
+}
+
+fn nodeHoldsContinuation(allocator: std.mem.Allocator, node: ASTNode, needle: *const ast.Continuation) bool {
+    if (node == .continuation and node.continuation == needle) return true;
+    const kids = node.children(allocator) catch return false;
+    for (kids) |kid| {
+        if (nodeHoldsContinuation(allocator, kid, needle)) return true;
+    }
+    return false;
+}
+
+/// Index of the top-level item carrying the site — the wrapper flow for root
+/// sites, the containing top-level item for nested ones.
+fn siteItemIndex(allocator: std.mem.Allocator, program: *const Program, sr: SiteRef) ?usize {
+    if (sr.wrapper) |w| {
+        for (program.items, 0..) |*it, i| {
+            if (it.* == .flow and &it.flow == w) return i;
+        }
+        return null;
+    }
+    for (program.items, 0..) |*it, i| {
+        if (nodeHoldsContinuation(allocator, .{ .item = @constCast(it) }, sr.holding)) return i;
+    }
+    return null;
+}
+
+/// Commit the accounting for one whole-program write-back: site digest plus
+/// the multiset diff of top-level item digests (pre vs post). Anything the
+/// checker cannot account for is printed MALFORMED — a flag, never a guess.
+fn emitTransformAppLine(allocator: std.mem.Allocator, pre: *const Program, post: *const Program, sr: SiteRef, transform_name: []const u8, verdict: []const u8) void {
+    if (!transform_app_witness_enabled) return;
+    transform_app_witness_count += 1;
+    const site_idx = siteItemIndex(allocator, pre, sr);
+    const site_digest = if (site_idx) |i| itemDigest(allocator, &pre.items[i], pre.main_module_name) else null;
+    var site_path_buf: [512]u8 = undefined;
+    const site_path: []const u8 = if (site_idx) |i| (if (pre.items[i] == .flow) joinPathInto(&site_path_buf, pre.items[i].flow.inv().path.segments) else "?") else "?";
+
+    const post_digests = allocator.alloc(?u64, post.items.len) catch {
+        std.debug.print("[witness] site transform-app {s} {s} MALFORMED oom\n", .{ transform_name, site_path });
+        return;
+    };
+    for (post.items, 0..) |*it, i| post_digests[i] = itemDigest(allocator, it, post.main_module_name);
+    const used = allocator.alloc(bool, post.items.len) catch {
+        std.debug.print("[witness] site transform-app {s} {s} MALFORMED oom\n", .{ transform_name, site_path });
+        return;
+    };
+    @memset(used, false);
+
+    var malformed = site_digest == null;
+    var rm: std.ArrayList(u64) = .empty;
+    for (pre.items) |*it| {
+        const d = itemDigest(allocator, it, pre.main_module_name) orelse {
+            malformed = true;
+            continue;
+        };
+        var matched = false;
+        for (post_digests, 0..) |pd, j| {
+            if (used[j]) continue;
+            if (pd != null and pd.? == d) {
+                used[j] = true;
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) rm.append(allocator, d) catch {};
+    }
+    var add: std.ArrayList(u64) = .empty;
+    for (post_digests, 0..) |pd, j| {
+        if (used[j]) continue;
+        if (pd) |d| {
+            add.append(allocator, d) catch {};
+        } else {
+            malformed = true;
+        }
+    }
+
+    var line: std.ArrayList(u8) = .empty;
+    const w = line.writer(allocator);
+    if (malformed) {
+        w.print("[witness] site transform-app {s} {s} MALFORMED", .{ transform_name, site_path }) catch {};
+    } else {
+        w.print("[witness] site transform-app {s} {s} {s} site=", .{ transform_name, site_path, verdict }) catch {};
+        w.print("{x:0>16}", .{site_digest.?}) catch {};
+        w.print(";rm=", .{}) catch {};
+        for (rm.items, 0..) |d, i| {
+            if (i > 0) w.print(",", .{}) catch {};
+            w.print("{x:0>16}", .{d}) catch {};
+        }
+        w.print(";add=", .{}) catch {};
+        for (add.items, 0..) |d, i| {
+            if (i > 0) w.print(",", .{}) catch {};
+            w.print("{x:0>16}", .{d}) catch {};
+        }
+    }
+    std.debug.print("{s}\n", .{line.items});
+}
+
+/// The comptime-only-site removal: the flow carrying the site is dropped
+/// wholesale — the accounting is the singleton {site} removal.
+fn emitTransformGcLine(allocator: std.mem.Allocator, program: *const Program, target_inv: *const Invocation, transform_name: []const u8) void {
+    if (!transform_app_witness_enabled) return;
+    transform_app_witness_count += 1;
+    for (program.items) |*it| {
+        if (it.* == .flow and it.flow.inv() == target_inv) {
+            var path_buf: [512]u8 = undefined;
+            const path = joinPathInto(&path_buf, it.flow.inv().path.segments);
+            if (itemDigest(allocator, it, program.main_module_name)) |d| {
+                std.debug.print("[witness] site transform-app {s} {s} gc site={x:0>16};rm={x:0>16};add=\n", .{ transform_name, path, d, d });
+            } else {
+                std.debug.print("[witness] site transform-app {s} {s} MALFORMED digest\n", .{ transform_name, path });
+            }
+            return;
+        }
+    }
+    std.debug.print("[witness] site transform-app {s} ? MALFORMED gc-site-not-found\n", .{transform_name});
+}
+
 fn applyTransform(
     node: ASTNode,
     position: SitePosition,
@@ -1303,6 +1453,7 @@ fn applyTransform(
                 return WalkResult{ .found = false, .program = program };
             };
             if (new_program) |np| {
+                emitTransformGcLine(allocator, program, node.invocation, transform.name);
                 return WalkResult{ .found = true, .program = np };
             }
         }
@@ -1315,6 +1466,14 @@ fn applyTransform(
     // flow Item, nested site replaces the holding continuation, appended items
     // go to the top level. This is the single write-back point.
     const spliced = try spliceSiteResult(allocator, program, sr, result);
+
+    // K2 Use B: a whole_program result is the one splice that can touch items
+    // outside the site — commit the pre/post accounting before the progress
+    // check below. Nested-position wp is excluded: its `post` is a rewrite of
+    // the synthetic site VIEW, not the real program (and KORU124 errors it).
+    if (result.whole_program != null and sr.wrapper != null) {
+        emitTransformAppLine(allocator, program, spliced, sr, transform.name, "wp");
+    }
 
     // CIRCUIT BREAKER: Verify the transform made progress.
     // Count matching invocations before and after - if the count didn't

@@ -610,12 +610,86 @@ def descriptorScopeBalance (sites : List SiteLine) : List String :=
        | _ => true)
     | _ => true
 
+/-! ## Kind `transform-app` — whole-program transform accounting (K2 Use B)
+
+`whole_program` is the one SiteResult splice where a handler may rewrite
+top-level items outside its site (koru_std/taps.kz); the comptime-only-site
+flow removal is the only other transform-driven top-level removal. The
+runner (src/transform_pass_runner.zig `emitTransformAppLine`) commits, per
+application, the site's canonical-AST digest and the multiset diff of
+top-level item digests:
+
+    <transform> <site-flow>   wp   site=<d>;rm=<d,...>;add=<d,...>
+    <transform> <site-flow>   gc   site=<d>;rm=<d>;add=
+
+The checkable contract is accounting honesty, not yet confinement bounds:
+a `wp` line must list its site item among the removed digests (the splice
+returned a program where the site item changed or vanished — an untouched
+site under a whole-program rewrite is a lie the digest can tell), and a
+`gc` line is by construction a singleton removal of the site itself.
+Blast-radius declarations are pass-graph surface; nothing here bounds
+which OTHER items a transform may touch. -/
+
+def isHexDigest (d : String) : Bool :=
+  d.length == 16 && d.all fun c => c ∈ "0123456789abcdef".toList
+
+def digestList (raw : String) : Option (List String) :=
+  if raw.isEmpty then some []
+  else
+    let parts := raw.splitOn ","
+    if parts.all isHexDigest then some parts else none
+
+def parseAppExtra (extra : String) : Option (String × List String × List String) :=
+  match extra.splitOn ";" with
+  | [sTok, rTok, aTok] =>
+    if !sTok.startsWith "site=" || !rTok.startsWith "rm=" || !aTok.startsWith "add=" then none
+    else match digestList (rTok.drop 3).toString, digestList (aTok.drop 4).toString with
+      | some rm, some add => some ((sTok.drop 5).toString, rm, add)
+      | _, _ => none
+  | _ => none
+
+def ruleTransformApp (s : SiteLine) : Ruling :=
+  if s.verdict != "wp" && s.verdict != "gc" then .malformed
+  else match parseAppExtra s.extra with
+  | none => .malformed
+  | some (siteD, rm, add) =>
+    if !isHexDigest siteD then .malformed
+    else if s.verdict == "wp" && !rm.contains siteD then
+      .mismatch s!"site {siteD} absent from rm {rm}"
+    else if s.verdict == "gc" && !(rm == [siteD] && add.isEmpty) then
+      .mismatch s!"gc {siteD} vs rm {rm} add {add}"
+    else .match_
+
+def ruleTransformAppCensus (s : SiteLine) : Ruling :=
+  if s.site != "transform" || s.arrow != "transform" then .malformed
+  else match s.verdict.splitOn "=" with
+    | ["count", n] => match n.toNat? with
+      | some _ => .match_
+      | none => .malformed
+    | _ => .malformed
+
+/-- Corpus-level completeness for transform-app: at most one census line,
+and when applications were emitted its count must equal them. A dropped
+or forged application line unbalances the count. -/
+def transformAppBalance (sites : List SiteLine) : Bool :=
+  let apps := sites.filter (·.kind == "transform-app")
+  let cens := sites.filter (·.kind == "transform-app-census")
+  match apps, cens with
+  | [], [] => true
+  | _, [c] =>
+    (match c.verdict.splitOn "=" with
+     | ["count", k] => k.toNat? == some apps.length
+     | _ => false)
+  | _, _ => false
+
 def rule (s : SiteLine) : Ruling :=
   if s.kind == "stored-write-numeric" then ruleNumeric s
   else if s.kind == "auto-discharge" then ruleDischarge s
   else if s.kind == "custody-edge" then ruleCustody s
   else if s.kind == "descriptor" then ruleDescriptor s
   else if s.kind == "descriptor-scope" then ruleDescriptorScope s
+  else if s.kind == "transform-app" then ruleTransformApp s
+  else if s.kind == "transform-app-census" then ruleTransformAppCensus s
   else .malformed
 
 def isSiteLine (line : String) : Bool :=
@@ -664,6 +738,11 @@ def main (args : List String) : IO UInt32 := do
   for sc in descriptorScopeBalance sites.reverse do
     if !forged then bad := bad + 1
     IO.println s!"{if forged then "ok  " else "BAD "} SCOPE-DRIFT  {sc}"
+  -- Corpus-level transform-app census: the count must equal the emitted
+  -- application lines — a dropped or invented application unbalances it.
+  if !transformAppBalance sites.reverse then
+    if !forged then bad := bad + 1
+    IO.println s!"{if forged then "ok  " else "BAD "} APP-DRIFT  transform-app census"
   let mode := if forged then "forged (all must reject)" else "conformance (all must match)"
   IO.println s!"{mode}: {lines.length} lines, {bad} bad"
   return (if bad == 0 then 0 else 1)

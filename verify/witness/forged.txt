@@ -35,3 +35,10 @@
 [witness] site descriptor files main:open registered cost=1;decl=in:path=string|ret:*Handle<opened!>;emit=cr:main:opened@__type_ref|in:path=string|bogus:atom
 [witness] site descriptor-scope files files events count=banana
 [witness] site descriptor-scope files other events count=4
+[witness] site transform-app tap tap wp site=aaaabbbbccccdddd;rm=1111aaaa2222bbbb,3333cccc4444dddd;add=5555eeee6666ffff
+[witness] site transform-app tap tap gc site=aaaabbbbccccdddd;rm=aaaabbbbccccdddd,deadbeefdeadbeef;add=
+[witness] site transform-app tap tap gc site=aaaabbbbccccdddd;rm=aaaabbbbccccdddd;add=deadbeefdeadbeef
+[witness] site transform-app tap tap wp site=xyz;rm=xyz;add=
+[witness] site transform-app tap tap bogus site=aaaabbbbccccdddd;rm=aaaabbbbccccdddd;add=
+[witness] site transform-app-census transform other count=1
+[witness] site transform-app-census transform transform count=banana

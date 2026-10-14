@@ -99,6 +99,25 @@ a same-signature `mul`→`add` IR forge reports `incorrect input_wmul`.
 Use B (koru-transform congruence) stays unlanded — it needs the emitter
 to expose pre/post IR, not a `.ll` from clang.
 
+**Use B instrument landed (2026-10-14) — accounting level, not congruence
+yet.** The exposure Use B was blocked on now exists: under
+`std/witness:enforce`, every `whole_program` transform write-back commits a
+`[witness] site transform-app` line — the site's canonical-AST digest plus
+the multiset diff of top-level item digests (`rm=`/`add=`), and a
+`transform-app-census` line per run. `whole_program` is the ONE splice
+where a handler can rewrite items outside its site (`koru_std/taps.kz` is
+the only producer); site-local results are confined by construction and
+emit nothing. The comptime-only-site removal emits verdict `gc` — a
+singleton site removal. The Lean oracle rules on accounting honesty: a
+`wp` line must carry its site digest in `rm`; a `gc` line must be exactly
+the singleton `{site}`; the census count must equal the application lines
+(APP-DRIFT on mismatch). What it does NOT yet check is blast-radius —
+which other items a transform MAY touch is declared pass-graph surface,
+so transform congruence in the Alive2 sense stays open until the pass
+graph declares boundaries an oracle can measure against. Digests include
+source locations — the accounting is path-sensitive by construction;
+`310_140` pins the shape.
+
 ---
 
 ## 3. K3 — Proof-carrying obligations

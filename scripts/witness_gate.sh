@@ -38,5 +38,11 @@ for corpus in "$@"; do
     "$LEAN" --run WitnessCheck.lean "$corpus" || fail=1
 done
 "$LEAN" --run WitnessCheck.lean --forged forged.txt | tail -1 || fail=1
+# Corpus-drift control: a well-formed-but-unbalanced census must FAIL a
+# conformance batch — rejection is the expected verdict, never a skip.
+if "$LEAN" --run WitnessCheck.lean drift.txt >/dev/null 2>&1; then
+    echo "FAIL: drift corpus accepted (census unbalanced but passed)"
+    fail=1
+fi
 if [ $fail -eq 0 ]; then echo "witness gate: PASS"; else echo "witness gate: FAIL"; fi
 exit $fail

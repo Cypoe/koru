@@ -613,6 +613,7 @@ const Allocator = std.mem.Allocator;
     transform_pass_runner_module.addImport("ast_functional", ast_functional_module);
     transform_pass_runner_module.addImport("liquid", liquid_module);
     transform_pass_runner_module.addImport("glob_pattern_matcher", glob_pattern_matcher_module);
+    transform_pass_runner_module.addImport("ast_json", ast_json_module);
 
     // Add all imports to the backend executable
     // Backend_output_emitted as its own compilation unit, linked via addObject.

@@ -722,6 +722,7 @@ pub fn build(b: *std.Build) void {
     transform_pass_runner_module.addImport("liquid", liquid_module);
     transform_pass_runner_module.addImport("log", log_module);
     transform_pass_runner_module.addImport("glob_pattern_matcher", glob_pattern_matcher_module);
+    transform_pass_runner_module.addImport("ast_json", ast_json_module);
     exe.root_module.addImport("transform_pass_runner", transform_pass_runner_module);
 
     // NOTE: compiler.zig (CompilerBootstrap) removed - abstract/impl handles coordinate overrides

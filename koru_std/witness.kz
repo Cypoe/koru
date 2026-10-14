@@ -204,6 +204,7 @@ const WCensus = struct {
     // which runs after this registration in the same process — prints one
     // `custody-edge` line per mint/discharge it walks.
     @import("phantom_semantic_checker").custody_edges_enabled = true;
+    @import("transform_pass_runner").transform_app_witness_enabled = true;
     return .{ .enforced = census.obligationSites() };
 }
 
