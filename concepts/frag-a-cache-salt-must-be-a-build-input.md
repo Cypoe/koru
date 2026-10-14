@@ -59,3 +59,19 @@ walk follows them and a test pins that it does.
   "an over-wide key serves no answers and says nothing". Both were the same
   mistake in different sites — the content-hash fix went to the key itself and
   left the salt behind for a month.
+
+---
+
+Extended 2026-10-14 (the third key had the same omission): the binary
+backend cache (`backendCacheKey`, the `~/.cache/koru-backend-cache` lookup
+the regression hot path lives on) carried NO ABI identity — a glibc-2.34
+mint replayed verbatim under a `KORU_BACKEND_TARGET=...2.31` build and the
+binary hard-failed at exec. The mint-manifest key
+(`backendHashComponents`) had carried the env+ABI salt since the earlier
+repair; the binary cache is a second key over the same artifact and the
+salt never reached it — the same pattern this frag already records for
+relative imports: a fix landed in the key that was *being looked at*, and
+the sibling key kept serving wrong answers silently. Two keys over one
+artifact is one belief: a salt that is not a build input poisons BOTH
+sides of the divide — under-salted serves stale, over-salted serves
+nothing.

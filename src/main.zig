@@ -380,6 +380,28 @@ fn backendCacheKey(allocator: std.mem.Allocator, koru_home: []const u8, output_d
         h.update(emitted_contents);
         count += 1;
     }
+    // ABI identity: backend binaries are dynamically linked, and a binary
+    // minted under one host glibc (or an explicit KORU_BACKEND_TARGET)
+    // hard-fails on another via versioned symbols — the key must refuse
+    // that replay instead of trusting it. Same block as backendHashComponents
+    // (the mint key); this cache predates it and stayed env-blind — measured
+    // 2026-10-14: a glibc-2.34 mint replayed under a 2.31-targeted build.
+    {
+        const builtin = @import("builtin");
+        const backend_target_env: ?[]const u8 = std.process.getEnvVarOwned(allocator, "KORU_BACKEND_TARGET") catch null;
+        defer if (backend_target_env) |t| allocator.free(t);
+        if (backend_target_env) |t| {
+            h.update("KORU_BACKEND_TARGET");
+            h.update(t);
+        } else {
+            h.update("native");
+            h.update(@tagName(builtin.target.abi));
+            if (builtin.target.os.versionRange().gnuLibCVersion()) |v| {
+                h.update(std.mem.asBytes(&v.major));
+                h.update(std.mem.asBytes(&v.minor));
+            }
+        }
+    }
     if (count == 0) return null;
     return std.fmt.allocPrint(allocator, "{x}", .{h.final()}) catch null;
 }
