@@ -45,6 +45,9 @@ Ruling values: `canon-alias` · `warranted neologism` · `unplaced`
 | `facet` | emitter internals | target-specific codegen arm | internal, not user surface | unplaced |
 | `?!name` (panic branch) | 830_* cluster | exception / `unreachable` | an obligation to *handle or declare*, not to discharge | warranted neologism (p) |
 | `marks` (`.marks`) | `ast.zig:1619` | compiler-internal metadata / attributes | never parsed from surface — grammar-bounded unauthorable channel | warranted neologism (p) |
+| `requires` (`[requires("a","b")]`) | `b2673bf54` pass graph | `depends_on` / build-requires edge | declarer-side ordering edge on tors (pipeline position) and on `[transform]` decls (stage order). Call-annotation grammar slot — distinct from `std/compiler:requires` the directive tor (build deps), same word two slots: Lars rules | canon-alias (p) |
+| `preserves` (`[preserves("kind",...)]`) | `430c9cd8d` pass graph rung 2 | LLVM `PreservedAnalyses` / analysis-preservation set | blast-radius bound: top-level `ast.Item` kinds a transform write-back holds invariant; `!kind` atoms invert ("all except"), KORU181 enforces | canon-alias (p) |
+| `!kind` atom | `430c9cd8d` pass graph rung 2 | set complement / negated atom | inside `preserves` only: "every item kind EXCEPT the named ones" — closed under future Item-union growth | warranted neologism (p) |
 
 ## 2. Obligation vocabulary
 
@@ -91,6 +94,11 @@ other → the composite is a warranted coinage.
 | `unauthorable` / `forgeable` | callsite draft N3 | not constructible in object language | enforced by grammar (`.marks`), not policy | warranted neologism (p) |
 | `candidate-set` | auto-discharge | feasible solution set / candidate enumeration | solver-reported list; completeness needs decl data (open) | canon-alias (p) |
 | `ledger` | 699_*/810_* test ledgers → custody arc | transaction/event log | the replayable record an oracle re-decides (`custodyBalance` is its checker) | canon-alias (p) |
+| `transform-app` | `459d2e9f2` K2 Use B | rewrite-application record / patch log | per whole_program write-back: site digest + multiset diff of top-level item digests | canon-alias (p) |
+| `wp` / `gc` | `459d2e9f2` K2 Use B | whole-program splice / dead-site collection | transform-app verdicts: `wp` = write-back committed, `gc` = comptime-only site removed (singleton) | canon-alias (p) |
+| `descriptor` / `descriptor-scope` | `e608264db` | declaration-surface record / scope census | per-event emitted claims (`dis:`/`cr:`/`in:`/`br:`) the oracle re-derives from `decl` and set-compares | canon-alias (p) |
+| `rm=`/`add=` (`rmk=`/`addk=`) | `459d2e9f2` / `430c9cd8d` | removal/addition multiset (k: kind tags) | digest sets of top-level items a write-back removed/added — the *actual* set the declared bound checks | canon-alias (p) |
+| `blast radius` | `430c9cd8d` pass graph rung 2 | blast radius (security/ops canon) | the set of items outside the site a write-back may touch; bounded by `preserves`, enforced KORU181 | canon-alias (p) |
 
 ## 4. Known drift risks — watch these
 
