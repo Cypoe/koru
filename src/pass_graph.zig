@@ -380,11 +380,35 @@ fn matchStep(g: *const Graph, step: Step, req: []const u8) bool {
     return std.mem.eql(u8, step.qualifier, buf[0..req_qual.len]);
 }
 
+/// What the validation observed — declared edges, transform stage rows,
+/// and the root-chain orders the order check actually walked. The backend
+/// bakes these into `pass-graph-*` witness lines under enforce so the
+/// oracle re-decides linearization from artifacts, not from "it compiled".
+pub const DeclaredEdge = struct {
+    consumer: []const u8,
+    req: []const u8,
+};
+pub const ObservedOrder = struct {
+    chain: []const u8,
+    steps: []const []const u8,
+};
+pub const StageRow = struct {
+    name: []const u8,
+    stage: []const u8, // "pre" | "main" | "post"
+};
+pub const Summary = struct {
+    edges: []const DeclaredEdge = &.{},
+    tedges: []const DeclaredEdge = &.{},
+    tstages: []const StageRow = &.{},
+    orders: []const ObservedOrder = &.{},
+};
+
 /// Entry point. Walks the parsed program; refuses via KORU180 on
-/// unresolvable edges, cycles, or order violations.
-pub fn validate(allocator: std.mem.Allocator, items: []const ast.Item) !void {
+/// unresolvable edges, cycles, or order violations. Returns what it
+/// checked — the witness payload the backend commits under enforce.
+pub fn validate(allocator: std.mem.Allocator, items: []const ast.Item) !Summary {
     var g = try collect(allocator, items);
-    if (g.decls.items.len == 0) return; // no declared edges — nothing to check
+    if (g.decls.items.len == 0 and g.transforms.items.len == 0) return .{}; // no declared edges — nothing to check
 
     // All decls (declared AND unannotated) indexed by last segment — required
     // names resolve against the whole tor namespace, not just edge-holders.
@@ -482,8 +506,10 @@ pub fn validate(allocator: std.mem.Allocator, items: []const ast.Item) !void {
         }
     }
 
-    // 3. Order check against observed chains.
+    // 3. Order check against observed chains — and commit the root chains'
+    // resolved steps as the observed orders the oracle re-decides against.
     const invoked = try invokedNames(&g);
+    var orders: std.ArrayList(ObservedOrder) = .empty;
 
     for (g.flows.items) |flow| {
         var steps: std.ArrayList(Step) = .empty;
@@ -497,6 +523,24 @@ pub fn validate(allocator: std.mem.Allocator, items: []const ast.Item) !void {
         // there. Non-roots (segments like `elaborate`) are embedded in a wider
         // chain that legitimately provides the name.
         const root = if (flow.impl_of) |io| !invoked.contains(lastSegment(io)) else true;
+        if (root) {
+            var step_names: std.ArrayList([]const u8) = .empty;
+            for (steps.items) |s| {
+                const spelling = if (s.qualifier.len > 0)
+                    try std.fmt.allocPrint(allocator, "{s}:{s}", .{ s.qualifier, s.name })
+                else
+                    s.name;
+                try step_names.append(allocator, spelling);
+            }
+            const chain_name = if (flow.impl_of) |io|
+                lastSegment(io)
+            else
+                lastSegment(flow.inv().path);
+            try orders.append(allocator, .{
+                .chain = if (chain_name.len > 0) chain_name else "?",
+                .steps = try step_names.toOwnedSlice(allocator),
+            });
+        }
 
         for (g.decls.items) |*d| {
             // Transform decls can appear as chain steps (`~tap()` — the
@@ -526,6 +570,32 @@ pub fn validate(allocator: std.mem.Allocator, items: []const ast.Item) !void {
             }
         }
     }
+
+    // 4. Commit what was checked: every declared edge (pipeline and
+    // transform surfaces kept distinct), every transform's stage row, and
+    // the root orders observed in step 3.
+    var edges: std.ArrayList(DeclaredEdge) = .empty;
+    var tedges: std.ArrayList(DeclaredEdge) = .empty;
+    for (g.decls.items) |*d| {
+        for (d.requires) |req| {
+            const edge: DeclaredEdge = .{ .consumer = d.name, .req = req };
+            if (d.is_transform) {
+                try tedges.append(allocator, edge);
+            } else {
+                try edges.append(allocator, edge);
+            }
+        }
+    }
+    var tstages: std.ArrayList(StageRow) = .empty;
+    for (g.transforms.items) |*t| {
+        try tstages.append(allocator, .{ .name = t.name, .stage = @tagName(t.stage) });
+    }
+    return .{
+        .edges = try edges.toOwnedSlice(allocator),
+        .tedges = try tedges.toOwnedSlice(allocator),
+        .tstages = try tstages.toOwnedSlice(allocator),
+        .orders = try orders.toOwnedSlice(allocator),
+    };
 }
 
 fn chainRepr(allocator: std.mem.Allocator, steps: []const Step) ![]const u8 {

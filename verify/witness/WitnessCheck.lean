@@ -732,6 +732,134 @@ def transformAppBalance (sites : List SiteLine) : Bool :=
      | _ => false)
   | _, _ => false
 
+/-! ## Kind `pass-graph-*` — the declared pass graph as committed artifacts
+
+The frontend validator (src/pass_graph.zig) checks declared ordering
+edges against the chains it observed; under enforce the backend commits
+what it checked — edges, observed root-chain orders, transform stage
+rows — so the oracle re-decides the same rules rather than trusting the
+check ran. Kinds:
+
+    pass-graph-edge    <consumer> requires <req>   — pipeline requires edge
+    pass-graph-order   <chain> runs <step,...>     — observed root order
+    pass-graph-tedge   <consumer> requires <req>   — intra-transform edge
+    pass-graph-tstage  <name> at <stage>           — transform stage row
+    pass-graph-census  graph counts edges=N orders=M,tedges=K,tstages=L
+
+The corpus rules mirror pass_graph.validate: wherever a consumer runs in
+a root order, every requirement must run strictly earlier (non-root
+chains are never emitted — the absent-tolerance is the frontend's, not
+the oracle's); a transform edge is satisfiable only when the producer's
+stage is strictly earlier (pre < main < post). -/
+
+def rulePassGraphEdge (s : SiteLine) : Ruling :=
+  if s.arrow != "requires" || s.verdict.isEmpty || s.verdict.contains ',' then .malformed
+  else .match_
+
+def rulePassGraphOrder (s : SiteLine) : Ruling :=
+  if s.arrow != "runs" || s.verdict.isEmpty then .malformed else .match_
+
+def rulePassGraphTstage (s : SiteLine) : Ruling :=
+  if s.arrow != "at" ||
+     !(s.verdict == "pre" || s.verdict == "main" || s.verdict == "post")
+  then .malformed else .match_
+
+def rulePassGraphCensus (s : SiteLine) : Ruling :=
+  if s.site != "graph" || s.arrow != "counts" then .malformed
+  else match s.verdict.splitOn "=" with
+    | ["edges", n] =>
+      match n.toNat? with
+      | none => .malformed
+      | some _ =>
+        let fields := s.extra.splitOn ","
+        if fields.length == 3 &&
+           fields.all (fun f => match f.splitOn "=" with
+             | [k, _] => k == "orders" || k == "tedges" || k == "tstages"
+             | _ => false)
+        then .match_ else .malformed
+    | _ => .malformed
+
+/-- A step or req spelling `qual:name` or bare `name` — the last segment
+is the identity; a qualifier refines it. Mirrors the frontend's
+matchStep spelling rules (`/` normalizes to `.`). -/
+def pgSplit (spelling : String) : String × String :=
+  match spelling.splitOn ":" with
+  | [q, n] => (q, n)
+  | _ => ("", (spelling.splitOn ":").getLastD "")
+
+def pgStepMatchesReq (req : String) (step : String) : Bool :=
+  let (rq, rl) := pgSplit req
+  let (sq, sl) := pgSplit step
+  rl == sl && (rq.isEmpty || rq == sq)
+
+/-- Last position where `req` matches a step — the frontend asks "did ANY
+position satisfy it", so the latest match is the checkable bound. -/
+def pgLastIdx (steps : List String) (req : String) : Option Nat :=
+  ((List.range steps.length).filter (fun i => steps[i]? == some req && true || steps[i]?.any (pgStepMatchesReq req))).getLast?
+
+/-- Positions where the consumer name runs — the frontend checks every
+step with the consumer's last segment. -/
+def pgConsumerIdxs (steps : List String) (consumer : String) : List Nat :=
+  (List.range steps.length).filter (fun i => match steps[i]? with | some s => (pgSplit s).2 == consumer | none => false)
+
+def pgFieldN (fields : List String) (i : Nat) : Option String :=
+  (fields[i]?).bind (fun f => (f.splitOn "=").getLast?)
+
+def pgStageOrd (stage : String) : Option Nat :=
+  if stage == "pre" then some 0 else if stage == "main" then some 1 else if stage == "post" then some 2 else none
+
+/-- Corpus-level linearization + stage check: every observed root order
+must satisfy every declared pipeline edge at every consumer position;
+every transform edge's producer stage must be strictly earlier than the
+consumer's (over every row that names it — a bare name hitting several
+transforms resolves ambiguously, so all rows must satisfy). The census
+must count the lines honestly. -/
+def passGraphCheck (sites : List SiteLine) : List String :=
+  let edges := sites.filter (·.kind == "pass-graph-edge")
+  let orders := sites.filter (·.kind == "pass-graph-order")
+  let tedges := sites.filter (·.kind == "pass-graph-tedge")
+  let tstages := sites.filter (·.kind == "pass-graph-tstage")
+  let cens := sites.filter (·.kind == "pass-graph-census")
+  let orderV := edges.foldl (init := ([] : List String)) fun acc e =>
+    orders.foldl (init := acc) fun acc2 o =>
+      let steps := o.verdict.splitOn ","
+      (pgConsumerIdxs steps e.site).foldl (init := acc2) fun acc3 i =>
+        match pgLastIdx steps e.verdict with
+        | some p =>
+          if p < i then acc3
+          else acc3 ++ [s!"order {o.site}: {e.site} requires {e.verdict} at pos {i} but {e.verdict} last runs at {p}"]
+        | none => acc3 ++ [s!"order {o.site}: {e.site} requires {e.verdict} but the root order never runs it"]
+  let stageV := tedges.foldl (init := ([] : List String)) fun acc e =>
+    let cs := tstages.filter (·.site == e.site)
+    let rs := tstages.filter (·.site == e.verdict)
+    if cs.isEmpty then acc ++ [s!"tedge consumer {e.site} has no stage row"]
+    else if rs.isEmpty then acc ++ [s!"tedge requirement {e.verdict} has no stage row"]
+    else
+      cs.foldl (init := acc) fun acc2 c =>
+        match pgStageOrd c.verdict with
+        | none => acc2 ++ [s!"tstage {c.site} carries unknown stage {c.verdict}"]
+        | some oc =>
+          rs.foldl (init := acc2) fun acc3 r =>
+            match pgStageOrd r.verdict with
+            | none => acc3 ++ [s!"tstage {r.site} carries unknown stage {r.verdict}"]
+            | some or_ =>
+              if or_ < oc then acc3
+              else acc3 ++ [s!"tedge {e.site} requires {e.verdict} but {e.verdict} stage {r.verdict} is not earlier than {e.site} stage {c.verdict}"]
+  let countsOk := match edges, orders, tedges, tstages, cens with
+    | [], [], [], [], [] => true
+    | _, _, _, _, [c] =>
+      (match c.verdict.splitOn "=" with
+       | ["edges", n] =>
+         let fields := c.extra.splitOn ","
+         n.toNat? == some edges.length && fields.length == 3 &&
+           pgFieldN fields 0 == some (toString orders.length) &&
+           pgFieldN fields 1 == some (toString tedges.length) &&
+           pgFieldN fields 2 == some (toString tstages.length)
+       | _ => false)
+    | _, _, _, _, _ => false
+  orderV ++ stageV ++ (if countsOk then [] else ["pass-graph census count drift"])
+
+
 def rule (s : SiteLine) : Ruling :=
   if s.kind == "stored-write-numeric" then ruleNumeric s
   else if s.kind == "auto-discharge" then ruleDischarge s
@@ -740,6 +868,11 @@ def rule (s : SiteLine) : Ruling :=
   else if s.kind == "descriptor-scope" then ruleDescriptorScope s
   else if s.kind == "transform-app" then ruleTransformApp s
   else if s.kind == "transform-app-census" then ruleTransformAppCensus s
+  else if s.kind == "pass-graph-edge" then rulePassGraphEdge s
+  else if s.kind == "pass-graph-order" then rulePassGraphOrder s
+  else if s.kind == "pass-graph-tedge" then rulePassGraphEdge s
+  else if s.kind == "pass-graph-tstage" then rulePassGraphTstage s
+  else if s.kind == "pass-graph-census" then rulePassGraphCensus s
   else .malformed
 
 def isSiteLine (line : String) : Bool :=
@@ -793,6 +926,12 @@ def main (args : List String) : IO UInt32 := do
   if !transformAppBalance sites.reverse then
     if !forged then bad := bad + 1
     IO.println s!"{if forged then "ok  " else "BAD "} APP-DRIFT  transform-app census"
+  -- Corpus-level pass-graph re-decision: declared edges must hold in
+  -- every observed root order, transform edges must point at a strictly
+  -- earlier stage, and the census must count the emitted lines honestly.
+  for v in passGraphCheck sites.reverse do
+    if !forged then bad := bad + 1
+    IO.println s!"{if forged then "ok  " else "BAD "} GRAPH-VIOLATION  {v}"
   let mode := if forged then "forged (all must reject)" else "conformance (all must match)"
   IO.println s!"{mode}: {lines.length} lines, {bad} bad"
   return (if bad == 0 then 0 else 1)

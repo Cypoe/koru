@@ -1,0 +1,9 @@
+// PINS: pass-graph witness arcs are enforce-gated — the same program
+// without std/witness:enforce commits no pass-graph-* lines at all
+// (post.sh greps the comptime channel). Witness output is a commitment
+// surface, not ambient pipeline noise; a backend that always prints the
+// graph would be committing declarations nobody asked it to attest.
+const std = @import("std");
+~tor hello {} -> string
+~proc hello|zig { std.debug.print("hi\n", .{}); return "hi"; }
+~hello()

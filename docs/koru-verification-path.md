@@ -134,6 +134,25 @@ the accounting commits is now bounded by contract, not merely observed.
 Digests include source locations — the accounting is path-sensitive by
 construction; `310_140` and `220_062`/`220_063` pin the shape.
 
+**Graph-arcs landed (2026-10-14) — the observed order is now itself a
+corpus.** `pass_graph.validate` still decides the declared-vs-observed
+check at frontend time (and still refuses on violation — the hand-written
+order remains authoritative); what changed is that under
+`std/witness:enforce` the backend commits what it checked:
+`pass-graph-edge` lines for every declared pipeline requirement,
+`pass-graph-order` lines for every root chain's flattened run order,
+`pass-graph-tedge`/`pass-graph-tstage` rows for the transform surface,
+and a `pass-graph-census` counting all four. The Lean oracle re-decides
+the rules on the committed corpus alone — wherever a consumer runs in a
+root order, every requirement must run strictly earlier; a transform
+edge's producer must sit in a strictly earlier stage (`pre < main <
+post`); the census must count the emitted lines honestly. A backend
+that printed a graph it did not check gets caught at the gate, not
+trusted at emission. `220_066` pins the live arcs with a `WITNESS_CHECK`
+leg; `220_067` pins the gate itself — no enforce, no arcs; forged and
+drift corpora carry malformed shapes, a reversed order, a same-stage
+transform edge, and count drift.
+
 ---
 
 ## 3. K3 — Proof-carrying obligations

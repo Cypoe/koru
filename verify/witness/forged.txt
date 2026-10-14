@@ -43,3 +43,14 @@
 [witness] site transform-app-census transform other count=1
 [witness] site transform-app-census transform transform count=banana
 [witness] site transform-app tap tap wp site=e471c4e610d684b1;preserves=event_decl;rm=e471c4e610d684b1,de23510294c3c951;rmk=flow,event_decl;add=f72f954df9fda90b;addk=flow
+[witness] site pass-graph-edge a runs b
+[witness] site pass-graph-edge a requires b,c
+[witness] site pass-graph-order main requires a
+[witness] site pass-graph-order main
+[witness] site pass-graph-tedge b requires a,c
+[witness] site pass-graph-tstage x at middle
+[witness] site pass-graph-tstage x pre main
+[witness] site pass-graph-census graph totals edges=1 orders=1,tedges=0,tstages=0
+[witness] site pass-graph-census graph counts edges=banana orders=1,tedges=0,tstages=0
+[witness] site pass-graph-census graph counts edges=1 orders=1,tedges=0
+[witness] site pass-graph-census foo counts edges=0 orders=0,tedges=0,tstages=0

@@ -46,3 +46,31 @@ Related: [[frag-a-check-that-cannot-match-reports-clean]] — a guard whose key
 cannot match reports success; this is its mirror, a guard whose *satisfier* is
 narrower than the guard, so it reports failure forever and blames the wrong
 thing.
+
+## Evolve — the corpus itself is the second enumeration (2026-10-14)
+
+The pass-graph witness arcs apply the fix, not just the diagnosis: the
+backend commits a census line counting its own arcs — edges, orders,
+transform edges, stage rows — and the Lean oracle re-counts the lines it
+received. Two enumerations of "what the graph is," one in the emitter,
+one in the oracle, and a dropped, duplicated, or invented arc unbalances
+the corpus by count rather than by argument. The divergence-reporting
+vocabulary is honest about it: GRAPH-VIOLATION names the count drift as
+a corpus property, not a verdict mismatch on a line.
+
+The same pattern was already running in transform-app-census and
+descriptor-scope; the pass-graph rung makes it the *default shape* for a
+check that wants an independent verdict: commit the inputs, commit the
+count, let the oracle re-decide the rule. A checker that cannot state
+its own enumeration cannot be checked this way — the census is the
+contract, not a convenience.
+
+A second, environmental instance surfaced in the same session: putting
+Lean's elan toolchain dir on PATH ahead of the system dirs shadows
+`cc`/`clang`/`ld.lld`, and `zig build`'s CRT discovery links the
+bundled glibc-2.34 Scrt1.o — producing backend binaries that cannot exec
+on this host (measured: `__libc_start_main@GLIBC_2.34` in verneed, on a
+2.31 image). The oracle invocation that asked for verification *caused*
+the artifact it meant to verify to be built differently — the path that
+supplies the checker also perturbed the satisfier. `KORU_LEAN` exists
+for exactly this; PATH mutation is the satisfier-side leak again.

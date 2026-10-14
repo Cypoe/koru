@@ -1,0 +1,12 @@
+// PINS: pass-graph witness arcs — under std/witness:enforce the backend
+// commits the declared edges, the observed root-chain orders, the transform
+// stage rows, and a census the Lean oracle re-counts (WITNESS_CHECK). The
+// emitted corpus is what pass_graph.validate checked; the oracle re-decides
+// declared-vs-observed independently, so a backend that printed a graph it
+// did not check gets caught at the gate, not trusted at emission.
+~import std/witness
+~std/witness:enforce { }
+const std = @import("std");
+~tor hello {} -> string
+~proc hello|zig { std.debug.print("hi\n", .{}); return "hi"; }
+~hello()

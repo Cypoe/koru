@@ -1754,12 +1754,10 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
 
         const compiler_module = compiler_module_name.?; // Safe unwrap - we just checked
 
-        // Declared pass graph (KORU180): [requires("a","b")] on tors is the
-        // contract; the ~x = a |> b chains in this same parse are the
-        // observation. Checked here — while the pipeline is being baked into a
-        // backend — so a violated edge refuses the compiler's own construction
-        // at the frontend instead of misordering a run.
-        try pass_graph.validate(allocator, source_file.items);
+        // Declared pass graph (KORU180) is validated earlier, inside
+        // generateComptimeBackendEmitted — the check must run before this
+        // backend emission and its summary feeds the pass-graph-* witness
+        // lines the emitted backend commits under enforce.
 
         // ============================================================================
         // FRONTEND BOOTSTRAP COORDINATOR (Hardcoded Zig Fallback)
@@ -2714,9 +2712,20 @@ fn generateComptimeBackendEmitted(allocator: std.mem.Allocator, source_file: *as
     // The visitor will automatically filter to only [comptime] modules via shouldFilter
     try visitor_emitter.emit(ast_to_emit);
 
+    // Declared pass graph (KORU180): [requires("a","b")] on tors and
+    // [transform|requires/preserves] on transform decls is the contract;
+    // the ~x = a |> b chains in this same parse are the observation.
+    // Checked here — while the pipeline is being baked into a backend —
+    // so a violated edge refuses the compiler's own construction at the
+    // frontend instead of misordering a run. The returned summary (edges,
+    // transform stage rows, observed root orders) is baked into the
+    // emitted backend and committed as pass-graph-* witness lines under
+    // std/witness:enforce — the oracle re-decides the same rules there.
+    const pg = try pass_graph.validate(allocator, source_file.items);
+
     // Generate transform handlers into backend_output_emitted.zig
     // These need to be in the same file as evaluate_comptime so it can call them
-    const transform_count = try generateTransformHandlersToEmitter(&code_emitter, allocator, source_file);
+    const transform_count = try generateTransformHandlersToEmitter(&code_emitter, allocator, source_file, &pg);
 
     // Extern wrappers — `pub export fn` shims that backend.zig calls via
     // `extern fn`. C-ABI flat extern struct because Zig 0.15 won't let extern fn
@@ -3502,7 +3511,7 @@ fn emitStringListLit(code_emitter: anytype, items: []const []const u8) !void {
     try code_emitter.write(" }");
 }
 
-fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.Allocator, source_file: *ast.Program) !usize {
+fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.Allocator, source_file: *ast.Program, pg: *const pass_graph.Summary) !usize {
     // Transforms are [comptime] procs — they execute inside the koruc Stage C
     // binary, which is always Zig. The variant dispatcher for a transform
     // therefore treats `|zig` as the default (emitted as plain `handler`) and
@@ -4364,6 +4373,51 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
     try code_emitter.write("    \n");
     try code_emitter.write("    // Use transform_pass_runner for proper recursive AST walking\n");
     try code_emitter.write("    const result = try transform_pass_runner.walkAndTransformStages(program, transforms, allocator, __only_stage, ctx);\n");
+    try code_emitter.write("    \n");
+    // pass-graph-* witness lines: the frontend validator observed these
+    // edges, stage rows, and root orders — the emitted backend commits them
+    // under enforce so the oracle re-decides the same checks, instead of
+    // trusting that validation ran.
+    try code_emitter.write("    if (transform_pass_runner.transform_app_witness_enabled) {\n");
+    {
+        var sbuf: [512]u8 = undefined;
+        try code_emitter.write("        const __pg_edges = [_]struct { c: []const u8, r: []const u8 }{ ");
+        for (pg.edges, 0..) |e, i| {
+            const frag = try std.fmt.bufPrint(&sbuf, "{s}.{{ .c = \"{s}\", .r = \"{s}\" }}", .{ if (i == 0) "" else ", ", e.consumer, e.req });
+            try code_emitter.write(frag);
+        }
+        try code_emitter.write(" };\n");
+        try code_emitter.write("        const __pg_tedges = [_]struct { c: []const u8, r: []const u8 }{ ");
+        for (pg.tedges, 0..) |e, i| {
+            const frag = try std.fmt.bufPrint(&sbuf, "{s}.{{ .c = \"{s}\", .r = \"{s}\" }}", .{ if (i == 0) "" else ", ", e.consumer, e.req });
+            try code_emitter.write(frag);
+        }
+        try code_emitter.write(" };\n");
+        try code_emitter.write("        const __pg_tstages = [_]struct { n: []const u8, s: []const u8 }{ ");
+        for (pg.tstages, 0..) |t, i| {
+            const frag = try std.fmt.bufPrint(&sbuf, "{s}.{{ .n = \"{s}\", .s = \"{s}\" }}", .{ if (i == 0) "" else ", ", t.name, t.stage });
+            try code_emitter.write(frag);
+        }
+        try code_emitter.write(" };\n");
+        try code_emitter.write("        const __pg_orders = [_]struct { c: []const u8, steps: []const []const u8 }{ ");
+        for (pg.orders, 0..) |o, i| {
+            const frag = try std.fmt.bufPrint(&sbuf, "{s}.{{ .c = \"{s}\", .steps = ", .{ if (i == 0) "" else ", ", o.chain });
+            try code_emitter.write(frag);
+            try emitStringListLit(code_emitter, o.steps);
+            try code_emitter.write(" }");
+        }
+        try code_emitter.write(" };\n");
+    }
+    try code_emitter.write("        for (__pg_edges) |e| __koru_std.debug.print(\"[witness] site pass-graph-edge {s} requires {s}\\n\", .{ e.c, e.r });\n");
+    try code_emitter.write("        for (__pg_orders) |o| { __koru_std.debug.print(\"[witness] site pass-graph-order {s} runs \", .{o.c}); for (o.steps, 0..) |st, i| __koru_std.debug.print(\"{s}{s}\", .{ if (i == 0) \"\" else \",\", st }); __koru_std.debug.print(\"\\n\", .{}); }\n");
+    try code_emitter.write("        for (__pg_tedges) |e| __koru_std.debug.print(\"[witness] site pass-graph-tedge {s} requires {s}\\n\", .{ e.c, e.r });\n");
+    try code_emitter.write("        for (__pg_tstages) |t| __koru_std.debug.print(\"[witness] site pass-graph-tstage {s} at {s}\\n\", .{ t.n, t.s });\n");
+    {
+        var cbuf: [256]u8 = undefined;
+        const census = std.fmt.bufPrint(&cbuf, "        __koru_std.debug.print(\"[witness] site pass-graph-census graph counts edges={d} orders={d},tedges={d},tstages={d}\\n\", .{{}});\n", .{ pg.edges.len, pg.orders.len, pg.tedges.len, pg.tstages.len }) catch "";
+        try code_emitter.write(census);
+    }
+    try code_emitter.write("    }\n");
     try code_emitter.write("    \n");
     try code_emitter.write("    // DUMP POINT 7: AST at run_pass() exit (after all transforms)\n");
     try code_emitter.write("    dumpAST(result, \"7-run-pass-end\", allocator);\n");
