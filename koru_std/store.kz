@@ -67,8 +67,7 @@ const std = @import("std");
 const ast_find = @import("ast");
 const codegen_utils_store = @import("codegen_utils");
 // Module-scope spellings the moved `~part` helpers use — named unlike the
-// member/local aliases (`ast`, `codegen_utils`, …) those structs and procs
-// carry, so no reference turns ambiguous or shadowed.
+// member/local aliases those structs and procs carry, so nothing shadows.
 const struct_literal_store = @import("struct_literal");
 const ast_functional_store = @import("ast_functional");
 
@@ -783,6 +782,7 @@ fn storeLowerText(
 ~part qrewrite
 ~part cursor
 ~part qcaps
+~part retqual
 ~part pverbs
 ~part sitetag
 ~part explain

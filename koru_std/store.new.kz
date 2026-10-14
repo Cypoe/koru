@@ -2254,11 +2254,11 @@
         const pcell_item = if (host_is_js or host_is_cs) ast.Item{ .inline_code = ast.InlineCode{
             .code = pcell_decl,
             .location = flow.location,
-            .module = allocator.dupe(u8, flow.module) catch unreachable,
+            .module = allocator.dupe(u8, home_ns) catch unreachable,
         } } else ast.Item{ .host_line = ast.HostLine{
             .content = pcell_decl,
             .location = flow.location,
-            .module = allocator.dupe(u8, flow.module) catch unreachable,
+            .module = allocator.dupe(u8, home_ns) catch unreachable,
         } };
         appended_items.append(allocator, pcell_item) catch unreachable;
         // ---- facet guards (std/refine) ----

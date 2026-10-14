@@ -1,0 +1,130 @@
+// Koru Standard Library: the `retqual` part of store.kz.
+// Joined via `~part retqual` in store.kz; merged into the module at load.
+
+// Return- and branch-type resolution for the query sweep's captures —
+// the sibling of Cap in qcaps.kz, lifted for the same line wall. These
+// helpers walk the program items and answer "what type does this tor's
+// return (or this branch's payload) yield?", phantoms re-qualified to
+// the DECLARING module's namespace so a captured binding arrives
+// tracked. Self-contained: every dependency arrives as a parameter.
+const RetQual = struct {
+    const ast = @import("ast");
+    // `phantom` carries the branch payload's obligation/state (`| list
+    // *List_i64<list!>` -> the `<list!>` marker). A bare-return bind has
+    // no branch payload to read one from, so the field defaults null.
+    const RetTy = struct { type: []const u8, module_path: ?[]const u8, phantom: ?[]const u8 = null };
+    fn namesMatch(a: []const u8, b: []const u8) bool {
+        if (a.len != b.len) return false;
+        for (a, b) |ca, cb| {
+            const na = if (ca == '/') '.' else ca;
+            const nb = if (cb == '/') '.' else cb;
+            if (na != nb) return false;
+        }
+        return true;
+    }
+    fn pathMatch(decl: ast.DottedPath, want: ast.DottedPath) bool {
+        if (decl.segments.len != want.segments.len) return false;
+        for (decl.segments, want.segments) |a, b| {
+            if (!std.mem.eql(u8, a, b)) return false;
+        }
+        return namesMatch(decl.module_qualifier orelse "", want.module_qualifier orelse "");
+    }
+    fn lookupReturnIn(its: []const ast.Item, path: ast.DottedPath) ?RetTy {
+        for (its) |pi| {
+            if (pi == .event_decl) {
+                const ed = &pi.event_decl;
+                if (!pathMatch(ed.path, path)) continue;
+                if (ed.return_type) |rt| {
+                    // A `[transform] -> SiteResult` bind holds the RUNTIME
+                    // result struct, not the comptime ABI. fmt:ln / print.ln
+                    // expand to `.{ .text = … }`; leaf-only lookup used to
+                    // return `read.ln`'s `string` instead (690_294).
+                    if (std.mem.eql(u8, rt, "SiteResult")) {
+                        return .{ .type = "struct { text: []const u8 }", .module_path = null };
+                    }
+                    // `-> *T<state!>` splits at the DECL: the phantom lives in
+                    // return_phantom, spelled in the declaring module's
+                    // vocabulary. Requalify it `mod:!state` — the prefixed
+                    // spelling the sweepbody input's demotion expects — so a
+                    // captured `obuf` keeps `std/string:instance` instead of
+                    // arriving untracked (the checker refused it: "no tracked
+                    // phantom state").
+                    const decl_ph: ?[]const u8 = if (ed.return_phantom) |rp| blk_rp: {
+                        const owed = rp.len > 1 and rp[rp.len - 1] == '!';
+                        const consumed = rp.len > 1 and rp[0] == '!';
+                        const base = if (owed) rp[0 .. rp.len - 1] else if (consumed) rp[1..] else rp;
+                        const mq = ed.path.module_qualifier orelse ed.module;
+                        if (mq.len == 0) break :blk_rp rp;
+                        break :blk_rp std.fmt.allocPrint(std.heap.page_allocator, "{s}:{s}{s}", .{ mq, if (owed) "!" else if (consumed) "" else "", base }) catch unreachable;
+                    } else null;
+                    // `koru/vaxis:Window` → type Window + module_path
+                    if (std.mem.indexOfScalar(u8, rt, ':')) |colon| {
+                        return .{ .type = rt[colon + 1 ..], .module_path = rt[0..colon], .phantom = decl_ph };
+                    }
+                    // A bare `*Type` return names a type in the DECLARING
+                    // module's scope — the same rule lookupBranch applies to
+                    // bare pointer payloads.
+                    if (std.mem.startsWith(u8, rt, "*")) {
+                        if (ed.path.module_qualifier) |mq| {
+                            if (mq.len > 0) return .{ .type = rt, .module_path = mq, .phantom = decl_ph };
+                        }
+                        if (ed.module.len > 0) return .{ .type = rt, .module_path = ed.module, .phantom = decl_ph };
+                    }
+                    return .{ .type = rt, .module_path = null, .phantom = decl_ph };
+                }
+            } else if (pi == .module_decl) {
+                if (lookupReturnIn(pi.module_decl.items, path)) |r| return r;
+            }
+        }
+        return null;
+    }
+    fn lookupReturn(items: []const ast.Item, path: ast.DottedPath) ?RetTy {
+        if (path.segments.len == 0) return null;
+        return lookupReturnIn(items, path);
+    }
+    // The payload type of one BRANCH — the arm-binding twin of lookupReturn.
+    // `! progress pr` binds the payload of `progress` on the tor the arm
+    // hangs off, exactly as `f(): n` binds that tor's return.
+    fn lookupBranchIn(its: []const ast.Item, name: []const u8, branch: []const u8) ?RetTy {
+        for (its) |pi| {
+            if (pi == .event_decl) {
+                const ed = &pi.event_decl;
+                if (ed.path.segments.len > 0 and std.mem.eql(u8, ed.path.segments[ed.path.segments.len - 1], name)) {
+                    for (ed.branches) |b| {
+                        if (!std.mem.eql(u8, b.name, branch)) continue;
+                        // Identity payload only (`| ok *Response<open!>` /
+                        // `! progress *Progress`): a multi-field payload is
+                        // a record the arm destructures, not a single value
+                        // a name stands for.
+                        if (b.payload.fields.len != 1) return null;
+                        const f = b.payload.fields[0];
+                        if (!std.mem.eql(u8, f.name, "__type_ref")) return null;
+                        if (f.module_path) |mp| return .{ .type = f.type, .module_path = mp, .phantom = f.phantom };
+                        if (std.mem.indexOfScalar(u8, f.type, ':')) |colon| {
+                            return .{ .type = f.type[colon + 1 ..], .module_path = f.type[0..colon], .phantom = f.phantom };
+                        }
+                        // A payload written bare (`! progress *Progress`)
+                        // names a type in the DECLARING module's scope, and
+                        // the capture lands in the consumer's. Pointer
+                        // payloads only: `! beat i64` is a primitive that no
+                        // module declares, and qualifying it invents
+                        // `koru_vaxis.i64`.
+                        if (std.mem.startsWith(u8, f.type, "*")) {
+                            if (ed.path.module_qualifier) |mq| {
+                                if (mq.len > 0) return .{ .type = f.type, .module_path = mq, .phantom = f.phantom };
+                            }
+                        }
+                        return .{ .type = f.type, .module_path = null, .phantom = f.phantom };
+                    }
+                }
+            } else if (pi == .module_decl) {
+                if (lookupBranchIn(pi.module_decl.items, name, branch)) |r| return r;
+            }
+        }
+        return null;
+    }
+    fn lookupBranch(items: []const ast.Item, path: ast.DottedPath, branch: []const u8) ?RetTy {
+        const leaf = if (path.segments.len > 0) path.segments[path.segments.len - 1] else return null;
+        return lookupBranchIn(items, leaf, branch);
+    }
+};

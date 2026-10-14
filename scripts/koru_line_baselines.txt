@@ -154,6 +154,9 @@ koru_std/optimizations/kernels.kz	62
 koru_std/optimizations/loops.kz	63
 koru_std/optimizer.k	31
 koru_std/package.kz	163
+koru_std/panic.kcs	8
+koru_std/panic.kjs	8
+koru_std/panic.kz	407
 koru_std/parser.kz	2060
 koru_std/profiler.kz	283
 koru_std/proto.fields.kz	58
@@ -234,7 +237,7 @@ koru_std/store.plan.kz	236
 koru_std/store.preorder.kz	103
 koru_std/store.prewrite.kz	445
 koru_std/store.pverbs.kz	713
-koru_std/store.qcaps.kz	370
+koru_std/store.qcaps.kz	289
 koru_std/store.qmiss.kz	46
 koru_std/store.qmisskind.kz	58
 koru_std/store.qnone.kz	129
@@ -243,6 +246,7 @@ koru_std/store.query.kz	854
 koru_std/store.refhome.kz	312
 koru_std/store.refhomeapi.kz	32
 koru_std/store.refs.kz	60
+koru_std/store.retqual.kz	130
 koru_std/store.rule.kz	141
 koru_std/store.sites.kz	169
 koru_std/store.sitetag.kz	27
@@ -256,7 +260,8 @@ koru_std/store.wait.kz	133
 koru_std/store.watch.kz	291
 koru_std/string-map.kz	126
 koru_std/string.kjs	147
-koru_std/string.kz	311
+koru_std/string.kz	300
+koru_std/string.owning.kz	38
 koru_std/supervisor.decl.kz	63
 koru_std/supervisor.explain.kz	490
 koru_std/supervisor.fold.kz	1086

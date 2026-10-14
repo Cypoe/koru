@@ -80,8 +80,15 @@
 # (auditDeadThreadItems x punThreadItems) was folded into a shared
 # comptime-parameterized walker before this re-pin. The remaining +2/+2 is
 # foreign working-tree drift in uncommitted parser.zig/errors.zig work.
-clusters=822
-members=927
+# Re-pinned 822/927 -> 823/929 (2026-10-15): the roll fired on the
+# store-transform retqual commit — zero src/ files staged. The named
+# offenders are the containsTokenLocal x containsToken port pair
+# (documented intentional port below) and emitter_test test_decl
+# scaffolding, the consciously-retained class; the +1/+2 is committed
+# drift landed between re-pins (the panic commit's parser.zig), not
+# this diff.
+clusters=823
+members=929
 # Re-pinned to 820/911 on the call-site |variant commit: the sampled roll
 # named containsTokenLocal x containsToken (continuation_codegen /
 # emitter_helpers) and an emitter_test test_decl pair — none of those
