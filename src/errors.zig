@@ -164,6 +164,7 @@ pub const ErrorCode = enum(u16) {
     KORU205, // std/refine refusal — malformed field line, non-int bound, or a meet that lands empty (671_*)
     KORU206, // A `#L` fold where every terminal arm re-dispatches `@L` can never exit — statically infinite (an external fuzzer watched `| done` re-fire 14.5M times; the corpus exit is `->` produce or a `|>` continuation)
     KORU207, // A `!` arm at an impl flow's head references the implementing tor's params — the arm lowers to a context-free `Handlers_*` fn that sees module scope only, so the reference dies in emitted Zig ('x' not accessible from inner function). Emitted by src/flow_checker.zig.
+    KORU208, // `mod/path:default(...)` spelled explicitly — the default door is invoked by the bare module path `mod/path(...)`; the `:default` segment is compiler-manufactured, never source. Emitted by src/import_pipeline.zig.
 };
 
 pub const SourceLocation = struct {
