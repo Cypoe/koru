@@ -1,14 +1,13 @@
 const std = @import("std");
 const File = struct { handle: i32 };
 
-~pub tor open { path: string }
-| opened *File<opened!>
+~pub tor open { path: string } -> *File<opened!>
 
 ~proc open|zig {
     std.debug.print("Opening file: {s}\n", .{path});
     const f = std.heap.page_allocator.create(File) catch unreachable;
     f.* = File{ .handle = 42 };
-    return .{ .opened = f };
+    return f;
 }
 
 ~pub tor close { file: *File<!opened> }

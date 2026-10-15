@@ -1,5 +1,15 @@
-OWED hole: an |err arm that leaves an opened connection unconsumed is refused.
+RULING PENDING (2026-10-15): the pin's premise moved. The compiler now
+auto-heals this shape — auto_discharge_inserter covers err-arm exits and
+synthesizes the declared discharger (emitted .err arm calls disconnect(conn: c);
+measured 2026-10-15, output shows "Disconnecting" on the err path). So the test
+compiles clean and would fail must-error-passed.
 
-Never green on the 2026-08-26..09-07 boards. Parked so the failed
-column means regression again. Driven by --todo-sweep; drop this
-marker when the pin is promotable.
+The open ruling: is Koru's answer to "err arm drops a live obligation" REFUSE
+(this pin: silent healing hides intent) or HEAL (inserter settles the debt —
+disconnect is the declared discharger for connected!, no policy choice being
+made)? Lars deferred 2026-10-15; park stays until ruled.
+
+If HEAL: convert MUST_ERROR -> MUST_RUN with expected.txt requiring
+"Disconnecting" (the ob-todo changeset carried this flip, evidence-backed).
+If REFUSE: the inserter's err-arm coverage is the bug — restrict it and this
+pin goes green as written.

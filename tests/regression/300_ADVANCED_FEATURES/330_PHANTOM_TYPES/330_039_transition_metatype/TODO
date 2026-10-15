@@ -1,1 +1,11 @@
-Feature: Transition metatype requires taps.eventToString and taps.branchToString which don't exist yet
+Feature: Transition metatype — fields are enums (EventEnum/BranchEnum) and the
+emitted taps namespace carries eventToString/branchToString, but no flow-level
+spelling can invoke them (KORU104 blocks calls in argument position; a bare
+`t.source` arg emits EventEnum into a []const u8 param, which fails zig build).
+
+Missing mechanism: a way to apply the emitted stringifiers — either the
+emitter auto-coerces metatype-enum args into string params, or a tor-visible
+path to the taps helpers.
+
+Re-spelled 2026-10-13: `~[comptime|runtime]* -> *` -> `~tap(* -> *)`; fails
+KORU104 at the real wall instead of KORU010 on dead grammar.

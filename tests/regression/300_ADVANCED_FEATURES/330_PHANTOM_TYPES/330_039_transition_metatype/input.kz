@@ -1,4 +1,10 @@
+// PIN: a Transition-metatype tap handler that stringifies its fields.
+// taps.eventToString/branchToString ARE emitted into the output's taps
+// namespace (src/emitter_helpers.zig), but flow syntax cannot reach them:
+// call-in-argument is KORU104-refused, and passing the enum fields bare
+// (`t.source`) emits zig that does not compile (EventEnum into []const u8).
 const std = @import("std");
+~import std/taps
 ~tor hello {}
 ~tor goodbye {}
 ~[comptime|runtime] tor logger { source: string, branch: string, destination: ?string }
@@ -15,7 +21,7 @@ const std = @import("std");
         std.debug.print("Transition: {s}.{s} -> terminal\n", .{source, branch});
     }
 }
-~[comptime|runtime]* -> *
+~tap(* -> *)
 | Transition t |> logger(source: taps.eventToString(t.source), branch: taps.branchToString(t.branch), destination: if (t.destination) |d| taps.eventToString(d) else null)
 
 ~hello() |> goodbye()
