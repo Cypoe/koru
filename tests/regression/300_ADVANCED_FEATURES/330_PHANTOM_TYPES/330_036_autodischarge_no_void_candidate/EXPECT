@@ -1,4 +1,4 @@
 MUST_ERROR
 # Should error because no void disposal candidate exists
 # Error occurs at backend-exec when auto-discharge finds no valid candidate
-CONTAINS Auto-discharge failed
+CONTAINS error[KORU030]: Resource '*Handle' obligation <open!> was not discharged. Call: close

@@ -1,1 +1,1 @@
-Phantom semantic validation failed
+error[KORU040]: Unknown module 'unknown' in phantom type annotation 'unknown:open' (event: check-file). Module not imported.

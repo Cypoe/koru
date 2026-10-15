@@ -2340,9 +2340,10 @@ const emitFlowWithMocks = struct {
 
         // Generic phantom-checker banner — identical to check-phantom-semantic's.
         // Both passes drive the SAME PhantomSemanticChecker library; the specific
-        // KORU0xx line above carries the real diagnostic. Keeping the banner
-        // uniform means a declaration-shape rejection reads the same whether it
-        // surfaces in the signature pass or the flow pass (330_034 asserts it).
+        // KORU0xx line above carries the real diagnostic (330_034 pins KORU040).
+        // The banner rides the .failed branch and reaches stderr only when no
+        // located diagnostic printed — diagnostics_were_printed gates the
+        // coordination echo (errors.zig).
         const err_msg = switch (err) {
             error.ValidationFailed => "Phantom semantic validation failed",
             else => "Phantom semantic validation error",
