@@ -2171,17 +2171,7 @@ const emitFlowWithMocks = struct {
     gate.check(mutable_ctx.ast) catch |err| {
         // Render through the reporter itself — it owns the code frame, the hint
         // and the source preview.
-        reporter.printErrors(@import("errors").FileSink.stderr()) catch {};
-        for (reporter.errors.items[err_base..]) |reporter_err| {
-            mutable_ctx.errors.append(mutable_ctx.allocator, .{
-                .message = mutable_ctx.allocator.dupe(u8, reporter_err.message) catch reporter_err.message,
-                .location = .{
-                    .file = mutable_ctx.allocator.dupe(u8, reporter_err.location.file) catch reporter_err.location.file,
-                    .line = @intCast(reporter_err.location.line),
-                    .column = @intCast(reporter_err.location.column),
-                },
-            }) catch {};
-        }
+        drainReporter(reporter, &mutable_ctx, err_base);
 
         const err_msg = switch (err) {
             error.ReleaseRejectsPrototype => "prototype module rejected in release build",
@@ -2259,17 +2249,7 @@ const emitFlowWithMocks = struct {
     checker.checkSourceFile(mutable_ctx.ast) catch |err| {
         // Render through the reporter itself — it owns the code frame, the hint
         // and the source preview.
-        reporter.printErrors(@import("errors").FileSink.stderr()) catch {};
-        for (reporter.errors.items[err_base..]) |reporter_err| {
-            mutable_ctx.errors.append(mutable_ctx.allocator, .{
-                .message = mutable_ctx.allocator.dupe(u8, reporter_err.message) catch reporter_err.message,
-                .location = .{
-                    .file = mutable_ctx.allocator.dupe(u8, reporter_err.location.file) catch reporter_err.location.file,
-                    .line = @intCast(reporter_err.location.line),
-                    .column = @intCast(reporter_err.location.column),
-                },
-            }) catch {};
-        }
+        drainReporter(reporter, &mutable_ctx, err_base);
 
         // Generate error message based on error type
         const err_msg = switch (err) {
@@ -2347,17 +2327,7 @@ const emitFlowWithMocks = struct {
     checker.checkSourceFile(mutable_ctx.ast) catch |err| {
         // Render through the reporter itself — it owns the code frame, the hint
         // and the source preview.
-        reporter.printErrors(@import("errors").FileSink.stderr()) catch {};
-        for (reporter.errors.items[err_base..]) |reporter_err| {
-            mutable_ctx.errors.append(mutable_ctx.allocator, .{
-                .message = mutable_ctx.allocator.dupe(u8, reporter_err.message) catch reporter_err.message,
-                .location = .{
-                    .file = mutable_ctx.allocator.dupe(u8, reporter_err.location.file) catch reporter_err.location.file,
-                    .line = @intCast(reporter_err.location.line),
-                    .column = @intCast(reporter_err.location.column),
-                },
-            }) catch {};
-        }
+        drainReporter(reporter, &mutable_ctx, err_base);
 
         // Generate error message based on error type
         const err_msg = switch (err) {
@@ -2418,17 +2388,7 @@ const emitFlowWithMocks = struct {
     checker.checkSignatures(mutable_ctx.ast) catch |err| {
         // Render through the reporter itself — it owns the code frame, the hint
         // and the source preview.
-        reporter.printErrors(@import("errors").FileSink.stderr()) catch {};
-        for (reporter.errors.items[err_base..]) |reporter_err| {
-            mutable_ctx.errors.append(mutable_ctx.allocator, .{
-                .message = mutable_ctx.allocator.dupe(u8, reporter_err.message) catch reporter_err.message,
-                .location = .{
-                    .file = mutable_ctx.allocator.dupe(u8, reporter_err.location.file) catch reporter_err.location.file,
-                    .line = @intCast(reporter_err.location.line),
-                    .column = @intCast(reporter_err.location.column),
-                },
-            }) catch {};
-        }
+        drainReporter(reporter, &mutable_ctx, err_base);
 
         // Generic phantom-checker banner — identical to check-phantom-semantic's.
         // Both passes drive the SAME PhantomSemanticChecker library; the specific
@@ -2501,18 +2461,7 @@ const emitFlowWithMocks = struct {
         // Render through the reporter itself — it owns the code frame, the hint
         // and the source preview. Hand-formatting here is what made this pass's
         // diagnostics render plainer than every other pass's.
-        reporter.printErrors(@import("errors").FileSink.stderr()) catch {};
-        for (reporter.errors.items[err_base..]) |reporter_err| {
-
-            mutable_ctx.errors.append(mutable_ctx.allocator, .{
-                .message = mutable_ctx.allocator.dupe(u8, reporter_err.message) catch reporter_err.message,
-                .location = .{
-                    .file = mutable_ctx.allocator.dupe(u8, reporter_err.location.file) catch reporter_err.location.file,
-                    .line = @intCast(reporter_err.location.line),
-                    .column = @intCast(reporter_err.location.column),
-                },
-            }) catch {};
-        }
+        drainReporter(reporter, &mutable_ctx, err_base);
 
         // Generic phantom-checker banner — identical to check-phantom-semantic's.
         // All three phantom passes drive the SAME PhantomSemanticChecker library;
@@ -2640,17 +2589,7 @@ const emitFlowWithMocks = struct {
         // runNormalizeOnly()) do NOT double up: printErrors carries a
         // printed-count watermark, so this call emits only diagnostics no
         // earlier render has shown.
-        reporter.printErrors(@import("errors").FileSink.stderr()) catch {};
-        for (reporter.errors.items[err_base..]) |reporter_err| {
-            mutable_ctx.errors.append(mutable_ctx.allocator, .{
-                .message = mutable_ctx.allocator.dupe(u8, reporter_err.message) catch reporter_err.message,
-                .location = .{
-                    .file = mutable_ctx.allocator.dupe(u8, reporter_err.location.file) catch reporter_err.location.file,
-                    .line = @intCast(reporter_err.location.line),
-                    .column = @intCast(reporter_err.location.column),
-                },
-            }) catch {};
-        }
+        drainReporter(reporter, &mutable_ctx, err_base);
 
         const err_msg = switch (err) {
             error.ValidationFailed => "Auto-discharge failed (multiple disposal options or no disposal event)",
@@ -2865,17 +2804,7 @@ fn witnessCheckCollectItems(
             }
         }
         if (refused) {
-            reporter.printErrors(@import("errors").FileSink.stderr()) catch {};
-            for (reporter.errors.items[err_base..]) |reporter_err| {
-                mutable_ctx.errors.append(mutable_ctx.allocator, .{
-                    .message = mutable_ctx.allocator.dupe(u8, reporter_err.message) catch reporter_err.message,
-                    .location = .{
-                        .file = mutable_ctx.allocator.dupe(u8, reporter_err.location.file) catch reporter_err.location.file,
-                        .line = @intCast(reporter_err.location.line),
-                        .column = @intCast(reporter_err.location.column),
-                    },
-                }) catch {};
-            }
+            drainReporter(reporter, &mutable_ctx, err_base);
             return .{ .failed = .{ .ctx = mutable_ctx, .message = "witness check: [strict] stored writes not proven lossless" } };
         }
     }
@@ -2936,17 +2865,7 @@ fn witnessCheckCollectItems(
     checker.check(mutable_ctx.ast, mutable_ctx.original_ast) catch |err| {
         // Render through the reporter itself — it owns the code frame, the hint
         // and the source preview.
-        reporter.printErrors(@import("errors").FileSink.stderr()) catch {};
-        for (reporter.errors.items[err_base..]) |reporter_err| {
-            mutable_ctx.errors.append(mutable_ctx.allocator, .{
-                .message = mutable_ctx.allocator.dupe(u8, reporter_err.message) catch reporter_err.message,
-                .location = .{
-                    .file = mutable_ctx.allocator.dupe(u8, reporter_err.location.file) catch reporter_err.location.file,
-                    .line = @intCast(reporter_err.location.line),
-                    .column = @intCast(reporter_err.location.column),
-                },
-            }) catch {};
-        }
+        drainReporter(reporter, &mutable_ctx, err_base);
 
         // Generate error message based on error type
         const err_msg = switch (err) {

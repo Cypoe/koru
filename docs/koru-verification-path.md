@@ -166,13 +166,15 @@ time (KORU180 refuses unknown predicates and `obliges` on non-transform
 decls); enforcement is unconditional — a violated obligation refuses
 with KORU182 whether or not witnesses are emitted. Under enforce each
 declared obligation commits one `transform-oblige` line per application
-carrying its own evidence (site digest, site kind, collateral kind
-multisets for `kind-stable`; the justified-item digest set for
-`matched-only`), the app line gains `;obliges=`, and the census commits
-both counts. The Lean oracle re-decides the predicates from the
-committed evidence alone — it does not trust the `ok` verdict — and the
-corpus check requires every declared obligation to pair with exactly one
-oblige line, so a dropped or extra line is a refusal. One honest
+— the claim plus verdict; `kind-stable` carries no fields because its
+whole evidence is already on the paired app line (`site`, `rmk`,
+`addk`), while `matched-only` commits `justified=`, the matched
+collateral digest set the app line does not carry. The app line gains
+`;obliges=` and the census commits both counts. The Lean oracle
+re-decides the predicates from the app's committed evidence alone — it
+does not trust the `ok` verdict — and the corpus check requires every
+declared obligation to pair with exactly one oblige line, so a dropped
+or extra line is a refusal. One honest
 consequence: obligations are enforced at canonical-digest granularity,
 so a transform that *clones* items it does not change registers them as
 touched — clone drift reads as a touch. The satisfied pin (`220_072`)

@@ -1629,10 +1629,15 @@ fn checkObligations(allocator: std.mem.Allocator, acc: *const AppAccounting, tra
 }
 
 /// Commit the decided obligations as witness lines — one per declared
-/// predicate, carrying the evidence the oracle re-decides. Lines only
-/// ever carry verdict `ok`: a violation refuses before this point, so
-/// an `ok` claim the evidence does not support is a forgery, and the
-/// oracle re-derives the verdict from the committed sets.
+/// predicate, carrying the claim plus any evidence not already on the
+/// app line. Lines only ever carry verdict `ok`: a violation refuses
+/// before this point, so an `ok` claim the evidence does not support is
+/// a forgery. `kind-stable` carries NO fields — its whole evidence is
+/// the sibling transform-app line's site/rmk/addk commits, and emitting
+/// it twice from the same accounting would not check anything new;
+/// `matched-only` commits `justified=` — the digest set of collateral
+/// removals containing a matching invocation — which the app line does
+/// not carry and the oracle cannot re-derive without the AST.
 fn emitObligeLines(allocator: std.mem.Allocator, pre: *const Program, transform: *const TransformEntry, acc: AppAccounting) void {
     if (!transform_app_witness_enabled) return;
     if (transform.obligations.len == 0) return;
@@ -1644,35 +1649,13 @@ fn emitObligeLines(allocator: std.mem.Allocator, pre: *const Program, transform:
         var line: std.ArrayList(u8) = .empty;
         const w = line.writer(allocator);
         w.print("[witness] site transform-oblige {s} {s} {s} ok", .{ transform.name, site_path, ob }) catch {};
-        if (acc.site_digest) |sd| {
-            w.print(";site={x:0>16}", .{sd}) catch {};
-        }
-        if (std.mem.eql(u8, ob, "kind-stable")) {
-            w.print(";rmk=", .{}) catch {};
-            var site_kind: []const u8 = "?";
-            for (acc.rm, 0..) |di, i| {
-                if (i > 0) w.print(",", .{}) catch {};
-                w.print("{s}", .{di.kind}) catch {};
-                if (di.is_site) site_kind = di.kind;
-            }
-            w.print(";siterk={s}", .{site_kind}) catch {};
-            w.print(";addk=", .{}) catch {};
-            for (acc.add, 0..) |di, i| {
-                if (i > 0) w.print(",", .{}) catch {};
-                w.print("{s}", .{di.kind}) catch {};
-            }
-        } else if (std.mem.eql(u8, ob, "matched-only")) {
+        if (std.mem.eql(u8, ob, "matched-only")) {
             w.print(";justified=", .{}) catch {};
             var first = true;
             for (acc.rm) |di| {
                 if (di.is_site or !di.matched) continue;
                 if (!first) w.print(",", .{}) catch {};
                 first = false;
-                w.print("{x:0>16}", .{di.digest}) catch {};
-            }
-            w.print(";nonmatching=", .{}) catch {};
-            for (acc.rm) |di| {
-                if (di.is_site or di.matched) continue;
                 w.print("{x:0>16}", .{di.digest}) catch {};
             }
         }

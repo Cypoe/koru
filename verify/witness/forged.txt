@@ -60,4 +60,7 @@
 [witness] site transform-oblige tap tap kind-stable fail;site=aaaabbbbccccdddd;rmk=flow;siterk=flow;addk=flow
 [witness] site transform-oblige tap tap kind-stable ok;rmk=flow;siterk=flow;addk=flow
 [witness] site transform-app tap tap wp site=aaaabbbbccccdddd;rm=aaaabbbbccccdddd;rmk=flow;add=;addk=;obliges=not-a-pred
+[witness] site transform-oblige tap tap matched-only ok
+[witness] site transform-oblige tap tap matched-only ok;justified=nothexdig
+[witness] site transform-oblige tap tap kind-stable ok;justified=aaaabbbbccccdddd
 [witness] site transform-app-census transform transform count=1

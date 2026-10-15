@@ -1,5 +1,8 @@
 [witness] site transform-app tap tap wp site=e471c4e610d684b1;preserves=!flow,!module_decl;rm=e471c4e610d684b1;rmk=flow;add=96670b2959368485;addk=module_decl;obliges=kind-stable
-[witness] site transform-app-census transform transform count=2 obliges=1
+[witness] site transform-oblige tap tap kind-stable ok
+[witness] site transform-app relabel relabel wp site=aaaa1111bbbb2222;preserves=;rm=cccc3333dddd4444,aaaa1111bbbb2222;rmk=flow,flow;add=eeee5555ffff6666;addk=flow;obliges=matched-only
+[witness] site transform-oblige relabel relabel matched-only ok;justified=dddd9999dddd9999
+[witness] site transform-app-census transform transform count=2 obliges=2
 [witness] site pass-graph-edge c requires r
 [witness] site pass-graph-order main runs c,r
 [witness] site pass-graph-tedge b requires a

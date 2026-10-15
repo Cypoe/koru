@@ -55,3 +55,22 @@ pub const CompilerContext = struct {
     /// Null only on a context built outside the pipeline head.
     reporter: ?*ErrorReporter,
 };
+
+/// Render the reporter's framed diagnostics to stderr, then move every
+/// error accumulated since `err_base` into the context's error list —
+/// the shared epilogue every check/pass gate runs on refusal. Nine
+/// gate bodies each carried this loop inline; one had already drifted
+/// (a stray blank line), which is how copies die. One drain, one owner.
+pub fn drainReporter(reporter: *ErrorReporter, ctx: *CompilerContext, err_base: usize) void {
+    reporter.printErrors(@import("errors").FileSink.stderr()) catch {};
+    for (reporter.errors.items[err_base..]) |reporter_err| {
+        ctx.errors.append(ctx.allocator, .{
+            .message = ctx.allocator.dupe(u8, reporter_err.message) catch reporter_err.message,
+            .location = .{
+                .file = ctx.allocator.dupe(u8, reporter_err.location.file) catch reporter_err.location.file,
+                .line = @intCast(reporter_err.location.line),
+                .column = @intCast(reporter_err.location.column),
+            },
+        }) catch {};
+    }
+}

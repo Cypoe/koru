@@ -756,17 +756,25 @@ violated obligation (KORU182) BEFORE emitting, so an honest corpus only
 ever carries `ok` verdicts — a line whose evidence does not support its
 `ok` is a forgery, re-derived here from the committed sets:
 
-    <transform> <site-flow> kind-stable  ok;site=<d>;rmk=<k,...>;siterk=<k>;addk=<k,...>
-    <transform> <site-flow> matched-only ok;site=<d>;justified=<d,...>;nonmatching=<d,...>
+    <transform> <site-flow> kind-stable  ok
+    <transform> <site-flow> matched-only ok;justified=<d,...>
 
-kind-stable re-decides: rmk minus ONE occurrence of siterk (the site is
-the licensed point of application) must equal addk as a multiset.
-matched-only re-decides: nonmatching must be empty — every removed
-non-site item contained an invocation the transform fires on. The
-corpus-level check additionally pairs each oblige line to its sibling
-transform-app: count must match the app's declared `obliges=` set,
-evidence fields must equal the app's own commits, and for matched-only
-justified ∪ {site} must cover the app's rm. -/
+kind-stable carries NO evidence of its own — every field it needs is
+already committed on the sibling transform-app line the corpus check
+pairs it to (site digest, rmk, addk); emitting them twice from the same
+accounting would duplicate surface without covering a new failure mode.
+matched-only commits `justified=` — the digest set of collateral
+removals that contained a matching invocation — which the app line does
+not carry and the oracle cannot re-derive without the AST.
+
+The per-line rule validates shape only; the corpus-level check does the
+re-decision against the paired app's commits: kind-stable requires the
+app's rmk minus ONE occurrence of the site item's kind (licensed point
+of application) to equal addk as a multiset; matched-only requires
+justified to equal exactly the app's rm minus the site — every removed
+non-site item contained an invocation the transform fires on, and a
+superset claim is a lie too. Every obligation the app declared must be
+followed by exactly one oblige line before any other line kind. -/
 
 /-- Multiset equality on lists of strings: remove each element of `a`
 from `b` one occurrence at a time; equal iff everything cancels. -/
@@ -780,28 +788,11 @@ def strMultisetEq (a b : List String) : Bool :=
 def ruleTransformOblige (s : SiteLine) : Ruling :=
   if !(s.verdict ∈ obligeNames) then .malformed
   else
-    let toks := s.extra.splitOn ";"
-    match toks with
-    | "ok" :: _ =>
-      if !(match fieldOf toks "site=" with
-            | some d => isHexDigest d
-            | none => false) then .malformed
-      else if s.verdict == "kind-stable" then
-        match (fieldOf toks "rmk=").bind kindList,
-              (fieldOf toks "siterk="),
-              (fieldOf toks "addk=").bind kindList with
-        | some rmk, some siterk, some addk =>
-          if !(siterk ∈ itemKinds) then .malformed
-          else if strMultisetEq (rmk.erase siterk) addk then .match_
-          else .mismatch s!"kind-stable: {rmk.erase siterk} != {addk}"
-        | _, _, _ => .malformed
-      else
-        match (fieldOf toks "justified=").bind digestList,
-              (fieldOf toks "nonmatching=").bind digestList with
-        | some _, some nm =>
-          if nm.isEmpty then .match_
-          else .mismatch s!"matched-only: nonmatching {nm} (honest runner refuses before emitting)"
-        | _, _ => .malformed
+    match s.extra.splitOn ";" with
+    | ["ok"] => if s.verdict == "kind-stable" then .match_ else .malformed
+    | ["ok", just] =>
+      if s.verdict == "matched-only" && just.startsWith "justified=" &&
+         (digestList (just.drop 10).toString).isSome then .match_ else .malformed
     | _ => .malformed
 
 /-- One pending wp application awaiting its oblige lines: the app's
@@ -816,11 +807,12 @@ structure PendingApp where
 
 /-- Corpus-level pairing: a `transform-oblige` line belongs to the
 transform-app immediately preceding it — same transform name, an
-obligation that app declared via `obliges=`, and evidence fields equal
-to the app's own commits (a forged oblige cannot carry evidence
-disconnected from the application it claims to justify). Every
-obligation the app declared must be followed by exactly one oblige
-line before any other line kind arrives. -/
+obligation that app declared via `obliges=`, and a verdict the app's
+own commits must support (the oblige commits the CLAIM; the oracle
+re-decides it against the application's evidence, so a forged `ok`
+fails the re-decision, not the parse). Every obligation the app
+declared must be followed by exactly one oblige line before any other
+line kind arrives. -/
 def transformObligeCheck (sites : List SiteLine) : List String :=
   let step := fun (pend : Option PendingApp) (bad : List String) (s : SiteLine) =>
     if s.kind == "transform-app" then
@@ -840,23 +832,21 @@ def transformObligeCheck (sites : List SiteLine) : List String :=
         if s.site != p.name then (some p, bad ++ [s!"oblige {s.site} does not name app {p.name}"])
         else if !(s.verdict ∈ p.owed) then (some p, bad ++ [s!"oblige {s.verdict} not declared (or already discharged) by app {p.name}"])
         else
-          -- Evidence fidelity: the oblige's commits must equal the app's.
-          let siteOk := fieldOf toks "site=" == some p.site
-          let evOk :=
-            if s.verdict == "kind-stable"
-            then fieldOf toks "rmk=" == some (String.intercalate "," p.rmk) &&
-                 fieldOf toks "addk=" == some (String.intercalate "," p.addk)
+          -- Re-decide the obligation against the app's own commits.
+          let holds :=
+            if s.verdict == "kind-stable" then
+              match (p.rm.zip p.rmk).find? (·.1 == p.site) with
+              | some (_, siteKind) => strMultisetEq (p.rmk.erase siteKind) p.addk
+              | none => false
             else
-              match (fieldOf toks "justified=").bind digestList,
-                    (fieldOf toks "nonmatching=").bind digestList with
-              | some j, some nm =>
+              match (fieldOf toks "justified=").bind digestList with
+              | some j =>
                 let collateral := p.rm.erase p.site
-                j.length + nm.length == collateral.length &&
-                j.all (· ∈ collateral) && nm.all (· ∈ collateral)
-              | _, _ => false
-          if siteOk && evOk
+                collateral.all (· ∈ j) && j.all (· ∈ collateral)
+              | none => false
+          if holds
           then (some { p with owed := p.owed.erase s.verdict }, bad)
-          else (some p, bad ++ [s!"oblige {s.verdict} evidence disagrees with app {p.name}'s commits"])
+          else (some p, bad ++ [s!"oblige {s.verdict} does not hold against app {p.name}'s commits"])
     else
       let bad' := match pend with
         | some p => if p.owed.isEmpty then bad else bad ++ [s!"app {p.name} owed {p.owed} — an unrelated line interrupted the oblige block"]
