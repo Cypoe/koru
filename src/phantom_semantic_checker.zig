@@ -2747,6 +2747,32 @@ pub const PhantomSemanticChecker = struct {
                                                 }
                                             }
                                         }
+                                    } else if (try ast_functional.recordFieldTexts(self.allocator, plain)) |produced| {
+                                        // `-> { h, n: 7 }` / `-> { e.h, e.n }`: the plain_value
+                                        // is itself a record literal — a resource named by a
+                                        // field VALUE escapes through the declared `<state!>`
+                                        // field it packs into, the escape-side mirror of
+                                        // verifyProduceFieldFeeders for this same shape.
+                                        defer self.allocator.free(produced);
+                                        if (implementing_event) |impl_ev| {
+                                            if (impl_ev.return_type) |rt| {
+                                                if (try ast_functional.recordFieldTexts(self.allocator, rt)) |declared| {
+                                                    defer self.allocator.free(declared);
+                                                    for (produced) |seg| {
+                                                        if (!std.mem.eql(u8, seg.value, resource)) continue;
+                                                        for (declared) |df| {
+                                                            if (!std.mem.eql(u8, df.name, seg.name)) continue;
+                                                            if (std.mem.indexOfScalar(u8, df.value, '<') != null and std.mem.indexOfScalar(u8, df.value, '!') != null) {
+                                                                documented_escape = true;
+                                                                log.debug("[CLEANUP]   '{s}' escapes through `-> record literal` field '{s}' with [!]\n", .{ resource, df.name });
+                                                            }
+                                                            break;
+                                                        }
+                                                        if (documented_escape) break;
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 } else {
                                     // Check each field in the constructor

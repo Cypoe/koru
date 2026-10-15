@@ -1,0 +1,30 @@
+// An `| err` arm inside a pure-Koru subflow impl produces a record whose
+// `<state!>` field is packed live — while a PEER obligation `h` (bound at the
+// flow head, untouched by the branch) is dropped on that arm. The produce
+// itself is verified and allowed to cross; the dropped peer is not forgiven.
+// With no `<!owned>` acceptor declared the debt is hard — no disposer can pay
+// it — so the arm's leaf refuses KORU030 naming 'h'. Pins that named-arm
+// produces inside an impl route through BOTH the produce-site field check and
+// the arm-leaf leak check (complements 335_006's whole-value err-leak with the
+// record-field produce surface).
+~import std/io
+const std = @import("std");
+const Handle = struct { n: i32 };
+
+~tor mint { id: usize } -> *Handle<owned!>
+~proc mint|zig { const h = std.heap.page_allocator.create(Handle) catch unreachable; h.* = .{ .n = 0 }; return h; }
+
+~tor branchy { id: usize }
+| ok *Handle<owned!>
+| err i64
+~proc branchy|zig {
+    if (id < 10) { const h = std.heap.page_allocator.create(Handle) catch unreachable; h.* = .{ .n = 1 }; return .{ .ok = h }; }
+    return .{ .err = @intCast(id) };
+}
+
+~tor pack { id: usize } -> { h: *Handle<owned!>, n: i64 }
+~pack = mint(id): h |> branchy(id)
+| ok h2 -> { h: h2, n: 7 }
+| err n |> mint(id: 99): h3 -> { h: h3, n }
+
+~pack(id: 20): s |> std/io:print.ln("n={{ s.n:d }}")

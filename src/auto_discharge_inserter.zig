@@ -2447,10 +2447,23 @@ pub const AutoDischargeInserter = struct {
             const join_after = nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx);
 
             if (cont.node) |node| {
-                if (node == .invocation) {
-                    const inv_event_name = try self.pathToString(node.invocation.path);
+                // A `#label step(...)` fold's arms bind the STEP event's branch
+                // payloads (`| live e`, `| done e`) — the label_with_invocation
+                // is the arm-parent just like a plain invocation is, so its
+                // inner invocation resolves `nested_event` the same way. Without
+                // this the fallback parent decl names no `live`/`done` branch,
+                // the payload seeding below skips `e.<field>` obligations, and
+                // a fold-arm `-> e` produce verifies `e.h` against an empty
+                // ledger while the phantom checker tracks it live.
+                const step_inv: ?*const ast.Invocation = switch (node) {
+                    .invocation => |*inv| inv,
+                    .label_with_invocation => |*lwi| if (lwi.is_declaration) &lwi.invocation else null,
+                    else => null,
+                };
+                if (step_inv) |inv| {
+                    const inv_event_name = try self.pathToString(inv.path);
                     defer self.allocator.free(inv_event_name);
-                    const inv_module = node.invocation.path.module_qualifier orelse module_name;
+                    const inv_module = inv.path.module_qualifier orelse module_name;
                     const inv_qualified = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ inv_module, inv_event_name });
                     defer self.allocator.free(inv_qualified);
 

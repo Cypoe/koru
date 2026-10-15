@@ -85,3 +85,25 @@ Three coordinated changes carry the obligation across:
 
 330_100 flipped MUST_ERROR → green; `dispose(res.h)` now pays the field
 exactly as a direct call does (330_138 is the literal-produce twin).
+
+## Two produce spellings slipped both walls (2026-10-15)
+
+The 2026-11-04 repair verified the produce edge for the spellings it knew:
+identifier paths and branch constructors on ordinary named arms. Probing
+the fresh surface found two more ways to spell the same escape:
+
+- **Label-fold produces.** `-> e` under `#L step(...)` was checked
+  against an empty ledger — the inserter's arm-parent walk never
+  resolved `label_with_invocation`, so `e.<field>` was never seeded.
+  Pin 330_141.
+- **Literal repack produces.** `-> { e.h, e.n }` was never decomposed
+  for escape credit on either arm kind — the checker's plain_value
+  branch didn't look inside record literals. Worse than a refusal bug:
+  the hole was silent. Good repacks (330_143/144) and a peer-leak
+  (330_142) all compiled unverified on main. The decompose is gated on
+  the declared field carrying `!`, so literal produce of phantom-less
+  fields stays free.
+
+Same lesson one level wider: a pass that enumerates the ways an
+obligation dies must enumerate arm SHAPES and produce SPELLINGS too —
+each new spelling is a new place for the escape to hide.

@@ -1,0 +1,3 @@
+disposed 0
+disposed 7
+n=7

@@ -1,0 +1,35 @@
+// A literal record produce on a NAMED branch arm: `| rec e -> { e.h, e.n }`
+// repacks the arm payload's fields, `| no n -> { h, n }` packs a flow-head
+// obligation and the arm's plain field. Each `<state!>` field's VALUE is the
+// obligation that crosses — `e.h` and `h` escape through the declared
+// `h: *Handle<owned!>` field and land on the caller as `s.h`. The bend: the
+// produce's plain_value is itself a record literal, so escape credit must
+// decompose it field-by-field — a path produce (`-> e`) credits `e.<field>`
+// by prefix, but a literal produce names each feeder by value. 330_138 pins
+// the same literal produce at flow-tail; this pins it on named arms.
+~import std/io
+const std = @import("std");
+const Handle = struct { n: i32 };
+
+~tor mint { id: usize } -> *Handle<owned!>
+~proc mint|zig { const h = std.heap.page_allocator.create(Handle) catch unreachable; h.* = .{ .n = 0 }; return h; }
+
+~tor dispose { h: *Handle<!owned> }
+~proc dispose|zig { std.debug.print("disposed {}\n", .{h.n}); std.heap.page_allocator.destroy(h); }
+
+~tor branchy { id: usize }
+| rec { h: *Handle<owned!>, n: i64 }
+| no i64
+~proc branchy|zig {
+    const h = std.heap.page_allocator.create(Handle) catch unreachable;
+    h.* = .{ .n = 7 };
+    if (id < 10) return .{ .rec = .{ .h = h, .n = 7 } };
+    return .{ .no = 1 };
+}
+
+~tor pack { id: usize } -> { h: *Handle<owned!>, n: i64 }
+~pack = mint(id): h |> branchy(id)
+| rec e |> dispose(h) -> { e.h, e.n }
+| no n -> { h, n }
+
+~pack(id: 5): s |> dispose(s.h) |> std/io:print.ln("n={{ s.n:d }}")

@@ -1,0 +1,33 @@
+// The literal-repack variant of 330_141: a `#label` fold's `done` arm produces
+// `-> { e.h, e.n }`, reconstituting the carried record field-by-field instead
+// of passing `e` whole. `e.h` is live on the arm (the fold step's `done`
+// payload re-issues it), so the literal produce verifies the `e.h` feeder and
+// hands it to the caller as `res.h`. Pins that the fold arm's payload-field
+// ledger key (`e.<field>`) is visible to BOTH the produce-site verification
+// and the literal-produce escape credit — the path produce `-> e` (330_141)
+// exercises the first, this shape exercises both.
+~import std/io
+const std = @import("std");
+const Handle = struct { n: i32 };
+
+~tor mint { id: usize } -> *Handle<owned!>
+~proc mint|zig { const h = std.heap.page_allocator.create(Handle) catch unreachable; h.* = .{ .n = 0 }; return h; }
+
+~tor dispose { h: *Handle<!owned> }
+~proc dispose|zig { std.debug.print("disposed {}\n", .{h.n}); std.heap.page_allocator.destroy(h); }
+
+~tor tick { h: *Handle<!owned>, n: i64 }
+| live { h: *Handle<owned!>, n: i64 }
+| done { h: *Handle<owned!>, n: i64 }
+~proc tick|zig {
+    h.n += 1;
+    if (h.n < 3) return .{ .live = .{ .h = h, .n = n + 1 } };
+    return .{ .done = .{ .h = h, .n = n + 1 } };
+}
+
+~tor spin { id: usize } -> { h: *Handle<owned!>, n: i64 }
+~spin = mint(id): h |> #L tick(h, n: 0)
+| live e |> @L(e.h, e.n)
+| done e -> { e.h, e.n }
+
+~spin(id: 1): res |> dispose(res.h) |> std/io:print.ln("n={{ res.n:d }}")
