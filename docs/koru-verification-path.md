@@ -153,6 +153,35 @@ leg; `220_067` pins the gate itself — no enforce, no arcs; forged and
 drift corpora carry malformed shapes, a reversed order, a same-stage
 transform edge, and count drift.
 
+**Obligations landed (2026-10-15) — a bound is not an obligation.**
+`preserves` says which item kinds a write-back may touch; it never
+obligated the transform to justify a touch it was permitted. The
+`[transform|obliges(...)]` surface closes that: a closed vocabulary of
+re-decidable claims about the write-back itself. `kind-stable` — the
+collateral rm/add kind multisets must agree (the site item stays
+licensed, as with `preserves`). `matched-only` — every removed non-site
+item must contain an invocation the transform fires on: no silent
+consumption of unrelated items. The vocabulary is closed at declaration
+time (KORU180 refuses unknown predicates and `obliges` on non-transform
+decls); enforcement is unconditional — a violated obligation refuses
+with KORU182 whether or not witnesses are emitted. Under enforce each
+declared obligation commits one `transform-oblige` line per application
+carrying its own evidence (site digest, site kind, collateral kind
+multisets for `kind-stable`; the justified-item digest set for
+`matched-only`), the app line gains `;obliges=`, and the census commits
+both counts. The Lean oracle re-decides the predicates from the
+committed evidence alone — it does not trust the `ok` verdict — and the
+corpus check requires every declared obligation to pair with exactly one
+oblige line, so a dropped or extra line is a refusal. One honest
+consequence: obligations are enforced at canonical-digest granularity,
+so a transform that *clones* items it does not change registers them as
+touched — clone drift reads as a touch. The satisfied pin (`220_072`)
+therefore passes untouched items through by value, which is the pattern
+the obligation exists to force: clone only what you change.
+Pins: `220_068`/`220_069` declaration refusals, `220_070`/`220_071`
+enforcement refusals, `220_072` the satisfied shape; `koru_std/taps.kz`
+declares `obliges("kind-stable")`.
+
 ---
 
 ## 3. K3 — Proof-carrying obligations

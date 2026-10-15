@@ -1,5 +1,5 @@
-[witness] site transform-app tap tap wp site=e471c4e610d684b1;preserves=!flow,!module_decl;rm=e471c4e610d684b1;rmk=flow;add=96670b2959368485;addk=module_decl
-[witness] site transform-app-census transform transform count=2
+[witness] site transform-app tap tap wp site=e471c4e610d684b1;preserves=!flow,!module_decl;rm=e471c4e610d684b1;rmk=flow;add=96670b2959368485;addk=module_decl;obliges=kind-stable
+[witness] site transform-app-census transform transform count=2 obliges=1
 [witness] site pass-graph-edge c requires r
 [witness] site pass-graph-order main runs c,r
 [witness] site pass-graph-tedge b requires a

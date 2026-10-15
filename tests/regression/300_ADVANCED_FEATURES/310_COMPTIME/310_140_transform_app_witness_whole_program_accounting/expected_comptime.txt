@@ -1,3 +1,4 @@
-[witness] site transform-app tap tap wp site=e471c4e610d684b1;preserves=!flow,!module_decl;rm=7c3981eab94001ed,de23510294c3c951,41fa0cd74d3f14e1,5064baf9889758e6,e471c4e610d684b1,38b5000d546d100d;rmk=module_decl,module_decl,module_decl,module_decl,flow,flow;add=96670b2959368485,949803eb38dc1a82,12f7fb610dc64f64,b13d06771e8d93f2,2fd527fdc9dc90b6;addk=module_decl,module_decl,module_decl,module_decl,flow
-[witness] site transform-app-census transform transform count=1
+[witness] site transform-app tap tap wp site=e471c4e610d684b1;preserves=!flow,!module_decl;rm=7c3981eab94001ed,de23510294c3c951,41fa0cd74d3f14e1,5064baf9889758e6,e471c4e610d684b1,38b5000d546d100d;rmk=module_decl,module_decl,module_decl,module_decl,flow,flow;add=96670b2959368485,949803eb38dc1a82,12f7fb610dc64f64,b13d06771e8d93f2,2fd527fdc9dc90b6;addk=module_decl,module_decl,module_decl,module_decl,flow;obliges=kind-stable
+[witness] site transform-oblige tap tap kind-stable ok;site=e471c4e610d684b1;rmk=module_decl,module_decl,module_decl,module_decl,flow,flow;siterk=flow;addk=module_decl,module_decl,module_decl,module_decl,flow
+[witness] site transform-app-census transform transform count=1 obliges=1
 [witness] custody-edge: mint=0 held=0 discharge=0 issued=0

@@ -162,8 +162,15 @@ The strongest evidence the layers are real is what they refused:
   exist. Nothing requires the transform to justify a permitted touch.
   This is the taxonomy the audit runs on: coverage gaps (arcs never
   printed), bound gaps (surfaces never bounded), and obligation gaps
-  (touches never justified). §6b's obligation-claims rung exists
-  precisely to close the third class.
+  (touches never justified). The `[transform|obliges(...)]` rung
+  (§6b) now closes the first two decidable instances —
+  `kind-stable` (collateral kind multisets agree) and `matched-only`
+  (every removed non-site item contains a matching invocation) —
+  enforced unconditionally at apply time (KORU182) and re-decided
+  by the Lean oracle from `transform-oblige` evidence. The open
+  remainder is the deep one: no declared obligation yet says the
+  rewrite preserves *meaning* — that is the semantic-obligation
+  surface §6a's Lean kernel exists to make expressible.
 - **K3 sees only printed arcs.** An unprinted obligation, an unemitted
   edge, a silent skip — invisible to the oracle. Corpus completeness
   rests on the compiler's wire between `validate()` and the printed
@@ -257,12 +264,19 @@ K3 already demonstrates the pattern: the compiler emits *claims*, an
 independent kernel re-decides them. Growing this into proof-carrying
 programs:
 
-- **Rung A — obligation witnesses.** Today's witnesses attest events
-  (a write happened, an edge was ordered). Next rung: the compiler
-  emits *obligations* it could not discharge — assertion conditions,
-  custody invariants at boundaries — as structured claims, and Lean
-  decides each. `auto-discharge` already names the discharged side;
-  the undischarged side is the proof-bearing surface.
+- **Rung A — obligation witnesses.** First leg landed: transforms
+  declare `[obliges("kind-stable","matched-only")]` — re-decidable
+  claims about their own write-back — enforced unconditionally
+  (KORU182) and committed as `transform-oblige` evidence the Lean
+  oracle re-decides. The pattern now proven: the compiler commits a
+  claim plus the evidence needed to falsify it, the oracle re-decides
+  from evidence alone and refuses a dropped or extra line. Next leg:
+  the compiler emits *obligations it could not discharge* — assertion
+  conditions, custody invariants at boundaries — as structured claims
+  Lean decides. `auto-discharge` already names the discharged side;
+  the undischarged side is the proof-bearing surface. Semantic
+  obligations ("this rewrite preserves evaluation") remain
+  inexpressible until §6a's kernel gives them a domain.
 - **Rung B — user-written proofs.** A `proof` block or attached
   certificate per obligation; the compiler forwards it, Lean checks
   it. This is PCC in the original sense — code ships with evidence a

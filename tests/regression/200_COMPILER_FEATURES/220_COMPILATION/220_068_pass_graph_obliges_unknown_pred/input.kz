@@ -1,0 +1,6 @@
+// PINS: an obliges() atom naming no known obligation predicate refuses at
+// declaration time (KORU180) — a claim the runner cannot decide is a claim
+// checked by nobody.
+~[keyword|comptime|transform|obliges("bogus-pred")]pub tor t {
+    invocation: *const Invocation
+} -> SiteResult

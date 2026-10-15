@@ -771,6 +771,21 @@ pub const TransformEntry = struct {
     /// Empty = the transform declares no bound (the honest default).
     preserves: []const []const u8 = &.{},
 
+    /// Declared obligation predicates ([transform|obliges("pred",...)]):
+    /// claims about the write-back's touches the runner must DECIDE — not
+    /// just bounds it must stay in. `preserves` says which kinds may not
+    /// be touched; obliges say what must be true of the touches made:
+    ///   "kind-stable"  — rm and add hold the same multiset of item kinds:
+    ///                    rewrite in place, no top-level fabrication or
+    ///                    deletion.
+    ///   "matched-only" — every removed non-site item contains an
+    ///                    invocation matching this transform's dispatch
+    ///                    predicate: consume only what called you.
+    /// Violations refuse with KORU182; satisfied obligations commit as
+    /// `transform-oblige` witness lines for the oracle to re-decide.
+    /// Empty = no obligations claimed (the honest default).
+    obligations: []const []const u8 = &.{},
+
     /// Handler function that takes (node, program, allocator, ctx) and returns a
     /// SiteResult — the site-local write-back ABI. The handler describes its
     /// change as a value (replace this site / append these items); the RUNNER
@@ -895,7 +910,7 @@ pub fn walkAndTransformStages(
     }
 
     if (only_stage == null and transform_app_witness_enabled and transform_app_witness_count > 0) {
-        std.debug.print("[witness] site transform-app-census transform transform count={d}\n", .{transform_app_witness_count});
+        std.debug.print("[witness] site transform-app-census transform transform count={d} obliges={d}\n", .{ transform_app_witness_count, transform_app_oblige_count });
     }
 
     return @constCast(current_program);
@@ -1256,6 +1271,9 @@ fn getClaimCandidate(node: ASTNode, position: SitePosition) ?ClaimCandidate {
 // pass-graph surface; this instrument exposes the truth first.
 pub var transform_app_witness_enabled: bool = false;
 var transform_app_witness_count: usize = 0;
+/// transform-oblige lines emitted — counted separately so the census can
+/// commit both counts and the oracle can check each against its own kind.
+var transform_app_oblige_count: usize = 0;
 
 /// Canonical digest of ONE top-level item — the per-item granularity the
 /// pre/post artifact diffs at. Null only when the serializer fails.
@@ -1296,11 +1314,14 @@ fn siteItemIndex(allocator: std.mem.Allocator, program: *const Program, sr: Site
 
 /// One changed top-level item in a write-back's accounting — digest for
 /// identity, kind for the declared `preserves` bound, is_site for the
-/// license every transform holds over its own point of application.
+/// license every transform holds over its own point of application,
+/// matched for the `matched-only` obligation (item contains an
+/// invocation the transform would fire on — it was "called" there).
 const DiffItem = struct {
     digest: u64,
     kind: []const u8,
     is_site: bool,
+    matched: bool = false,
 };
 
 /// The committed accounting for one whole-program write-back: the site's
@@ -1317,7 +1338,24 @@ fn itemKindName(item: *const ast.Item) []const u8 {
     return @tagName(item.*);
 }
 
-fn computeAppAccounting(allocator: std.mem.Allocator, pre: *const Program, post: *const Program, sr: SiteRef) ?AppAccounting {
+/// Does this top-level item carry an invocation the transform would fire
+/// on? Same predicate as the walk (invocationMatchesEntry via the count
+/// helpers) so the obligation and the dispatch can never drift — an item
+/// "called" the transform iff one of its invocations still matches.
+fn itemContainsMatch(allocator: std.mem.Allocator, it: *const ast.Item, transform: *const TransformEntry, program: *const Program) bool {
+    switch (it.*) {
+        .flow => |*flow| return countMatchingInFlow(allocator, flow, transform, program) > 0,
+        .module_decl => |*module| {
+            for (module.items) |*mod_item| {
+                if (mod_item.* == .flow and countMatchingInFlow(allocator, &mod_item.flow, transform, program) > 0) return true;
+            }
+            return false;
+        },
+        else => return false,
+    }
+}
+
+fn computeAppAccounting(allocator: std.mem.Allocator, pre: *const Program, post: *const Program, sr: SiteRef, transform: *const TransformEntry) ?AppAccounting {
     const site_idx = siteItemIndex(allocator, pre, sr);
     const site_digest = if (site_idx) |i| itemDigest(allocator, &pre.items[i], pre.main_module_name) else null;
 
@@ -1342,7 +1380,7 @@ fn computeAppAccounting(allocator: std.mem.Allocator, pre: *const Program, post:
                 break;
             }
         }
-        if (!matched) rm.append(allocator, .{ .digest = d, .kind = itemKindName(it), .is_site = site_idx != null and pi == site_idx.? }) catch {};
+        if (!matched) rm.append(allocator, .{ .digest = d, .kind = itemKindName(it), .is_site = site_idx != null and pi == site_idx.?, .matched = itemContainsMatch(allocator, it, transform, pre) }) catch {};
     }
     var add: std.ArrayList(DiffItem) = .empty;
     for (post_digests, 0..) |pd, j| {
@@ -1448,7 +1486,7 @@ fn joinSliceInline(items: []const []const u8) []const u8 {
 /// the multiset diff of top-level item digests (pre vs post), tagged with
 /// item kinds and the transform's declared `preserves` bound so the oracle
 /// can rule on blast-radius containment, not just multiset honesty.
-fn emitTransformAppLine(allocator: std.mem.Allocator, pre: *const Program, transform_name: []const u8, verdict: []const u8, preserves: []const []const u8, acc: AppAccounting) void {
+fn emitTransformAppLine(allocator: std.mem.Allocator, pre: *const Program, transform_name: []const u8, verdict: []const u8, preserves: []const []const u8, obligations: []const []const u8, acc: AppAccounting) void {
     if (!transform_app_witness_enabled) return;
     transform_app_witness_count += 1;
     var site_path_buf: [512]u8 = undefined;
@@ -1486,6 +1524,11 @@ fn emitTransformAppLine(allocator: std.mem.Allocator, pre: *const Program, trans
             if (i > 0) w.print(",", .{}) catch {};
             w.print("{s}", .{di.kind}) catch {};
         }
+        w.print(";obliges=", .{}) catch {};
+        for (obligations, 0..) |o, i| {
+            if (i > 0) w.print(",", .{}) catch {};
+            w.print("{s}", .{o}) catch {};
+        }
     }
     std.debug.print("{s}\n", .{line.items});
 }
@@ -1508,6 +1551,133 @@ fn emitTransformGcLine(allocator: std.mem.Allocator, program: *const Program, ta
         }
     }
     std.debug.print("[witness] site transform-app {s} ? MALFORMED gc-site-not-found\n", .{transform_name});
+}
+
+/// Does an obligation atom name a declared predicate? The frontend
+/// (pass_graph.validate) already refused unknown atoms — this is the
+/// runner-side mirror so a hand-built table cannot smuggle a claim the
+/// decider does not know.
+fn obligeIsDeclared(transform: *const TransformEntry, atom: []const u8) bool {
+    for (transform.obligations) |o| {
+        if (std.mem.eql(u8, o, atom)) return true;
+    }
+    return false;
+}
+
+fn kindMultisetEqual(a: []const DiffItem, b: []const DiffItem) bool {
+    if (a.len != b.len) return false;
+    var used: [512]bool = undefined;
+    if (b.len > used.len) return false;
+    @memset(used[0..b.len], false);
+    for (a) |di| {
+        var found = false;
+        for (b, 0..) |dj, j| {
+            if (!used[j] and std.mem.eql(u8, di.kind, dj.kind)) {
+                used[j] = true;
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return true;
+}
+
+/// The declared obligations — claims about the touches a write-back
+/// actually made. `preserves` bounds WHICH kinds may move; an oblige
+/// decides what must be TRUE of the moves. Refusal, not a flag —
+/// a claim that fails is a contract broken, KORU182.
+/// Returns the per-obligation verdict the witness line commits.
+fn checkObligations(allocator: std.mem.Allocator, acc: *const AppAccounting, transform: *const TransformEntry, sr: SiteRef) !void {
+    if (transform.obligations.len == 0) return;
+    if (obligeIsDeclared(transform, "kind-stable")) {
+        // The site item is licensed — it is the point of application, and a
+        // transform that consumes its own site (taps removes `~tap()`) is not
+        // deleting collateral. The bound compares collateral rm kinds to add.
+        var rm_collateral: std.ArrayList(DiffItem) = .empty;
+        for (acc.rm) |di| {
+            if (!di.is_site) rm_collateral.append(allocator, di) catch return error.TransformAccountingFailed;
+        }
+        if (!kindMultisetEqual(rm_collateral.items, acc.add)) {
+            const loc = sr.holding.location;
+            std.debug.print(
+                "error[KORU182]: transform '{s}' violated its declared `kind-stable` obligation — the write-back's collateral removals ({d} item(s)) and additions ({d}) carry differing kind multisets\n" ++
+                    "  --> {s}:{d}:{d}\n" ++
+                    "  declared obligation: obliges(\"kind-stable\") — a rewrite-in-place contract: no top-level item may be fabricated or deleted outright; the site item is licensed\n" ++
+                    "  fix: keep the write-back's rm/add kind multisets equal, or drop the obligation if fabrication/deletion is intended\n\n",
+                .{ transform.name, rm_collateral.items.len, acc.add.len, loc.file, loc.line, loc.column },
+            );
+            return error.TransformObligationViolated;
+        }
+    }
+    if (obligeIsDeclared(transform, "matched-only")) {
+        for (acc.rm) |di| {
+            if (di.is_site) continue;
+            if (!di.matched) {
+                const loc = sr.holding.location;
+                std.debug.print(
+                    "error[KORU182]: transform '{s}' violated its declared `matched-only` obligation — a '{s}' item (digest {x:0>16}) was removed without containing an invocation this transform fires on\n" ++
+                        "  --> {s}:{d}:{d}\n" ++
+                        "  declared obligation: obliges(\"matched-only\") — a transform consumes only items it was called on; the site item is licensed, collateral must match\n" ++
+                        "  fix: narrow the write-back to matched items, or drop the obligation if touching unmatched items is intended\n\n",
+                    .{ transform.name, di.kind, di.digest, loc.file, loc.line, loc.column },
+                );
+                return error.TransformObligationViolated;
+            }
+        }
+    }
+}
+
+/// Commit the decided obligations as witness lines — one per declared
+/// predicate, carrying the evidence the oracle re-decides. Lines only
+/// ever carry verdict `ok`: a violation refuses before this point, so
+/// an `ok` claim the evidence does not support is a forgery, and the
+/// oracle re-derives the verdict from the committed sets.
+fn emitObligeLines(allocator: std.mem.Allocator, pre: *const Program, transform: *const TransformEntry, acc: AppAccounting) void {
+    if (!transform_app_witness_enabled) return;
+    if (transform.obligations.len == 0) return;
+    if (acc.malformed) return; // the app line already commits MALFORMED — no honest verdict exists to emit
+    var site_path_buf: [512]u8 = undefined;
+    const site_path: []const u8 = if (acc.site_index) |i| (if (pre.items[i] == .flow) joinPathInto(&site_path_buf, pre.items[i].flow.inv().path.segments) else "?") else "?";
+    for (transform.obligations) |ob| {
+        transform_app_oblige_count += 1;
+        var line: std.ArrayList(u8) = .empty;
+        const w = line.writer(allocator);
+        w.print("[witness] site transform-oblige {s} {s} {s} ok", .{ transform.name, site_path, ob }) catch {};
+        if (acc.site_digest) |sd| {
+            w.print(";site={x:0>16}", .{sd}) catch {};
+        }
+        if (std.mem.eql(u8, ob, "kind-stable")) {
+            w.print(";rmk=", .{}) catch {};
+            var site_kind: []const u8 = "?";
+            for (acc.rm, 0..) |di, i| {
+                if (i > 0) w.print(",", .{}) catch {};
+                w.print("{s}", .{di.kind}) catch {};
+                if (di.is_site) site_kind = di.kind;
+            }
+            w.print(";siterk={s}", .{site_kind}) catch {};
+            w.print(";addk=", .{}) catch {};
+            for (acc.add, 0..) |di, i| {
+                if (i > 0) w.print(",", .{}) catch {};
+                w.print("{s}", .{di.kind}) catch {};
+            }
+        } else if (std.mem.eql(u8, ob, "matched-only")) {
+            w.print(";justified=", .{}) catch {};
+            var first = true;
+            for (acc.rm) |di| {
+                if (di.is_site or !di.matched) continue;
+                if (!first) w.print(",", .{}) catch {};
+                first = false;
+                w.print("{x:0>16}", .{di.digest}) catch {};
+            }
+            w.print(";nonmatching=", .{}) catch {};
+            for (acc.rm) |di| {
+                if (di.is_site or di.matched) continue;
+                w.print("{x:0>16}", .{di.digest}) catch {};
+            }
+        }
+        std.debug.print("{s}\n", .{line.items});
+    }
 }
 
 fn applyTransform(
@@ -1615,12 +1785,14 @@ fn applyTransform(
     // The accounting also carries the declared `preserves` bound — a
     // write-back exceeding it refuses (KORU181) instead of being recorded.
     if (result.whole_program != null and sr.wrapper != null) {
-        const acc = computeAppAccounting(allocator, program, spliced, sr) orelse {
+        const acc = computeAppAccounting(allocator, program, spliced, sr, &transform) orelse {
             std.debug.print("[witness] site transform-app {s} ? MALFORMED oom\n", .{transform.name});
             return error.TransformAccountingFailed;
         };
         try checkPreservesBound(&acc, &transform, sr);
-        emitTransformAppLine(allocator, program, transform.name, "wp", transform.preserves, acc);
+        try checkObligations(allocator, &acc, &transform, sr);
+        emitTransformAppLine(allocator, program, transform.name, "wp", transform.preserves, transform.obligations, acc);
+        emitObligeLines(allocator, program, &transform, acc);
     }
 
     // CIRCUIT BREAKER: Verify the transform made progress.

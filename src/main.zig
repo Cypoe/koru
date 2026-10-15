@@ -2971,6 +2971,10 @@ const TransformEvent = struct {
     /// Declared blast-radius bound — top-level item kinds that must stay
     /// invariant across this transform's write-backs (KORU181 enforces).
     preserves_list: []const []const u8 = &.{},
+    /// Declared obligation predicates — claims about the write-back's
+    /// touches the runner must decide and commit as transform-oblige
+    /// witness lines (KORU182 refuses a violated obligation).
+    obliges_list: []const []const u8 = &.{},
     has_source: bool, // Event accepts source: Source[T] parameter
     source_optional: bool = false, // The source param is `?Source` — blockless calls still fire the handler with null
     has_expression: bool, // Event accepts expr: Expression parameter
@@ -3589,6 +3593,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                 const stage_name: []const u8 = if (annotation_parser.hasPart(event_decl.annotations, "pre")) "pre" else if (annotation_parser.hasPart(event_decl.annotations, "post")) "post" else "main";
                 const requires_list = try annotationCallArgs(allocator, event_decl.annotations, "requires");
                 const preserves_list = try annotationCallArgs(allocator, event_decl.annotations, "preserves");
+                const obliges_list = try annotationCallArgs(allocator, event_decl.annotations, "obliges");
 
                 // Collect variant targets across the whole program (top-level event, so
                 // variants may live in any module that implements it).
@@ -3606,6 +3611,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                     .stage = stage_name,
                     .requires_list = requires_list,
                     .preserves_list = preserves_list,
+                    .obliges_list = obliges_list,
                     .has_source = scan.has_source_param,
                     .source_optional = scan.source_optional_param,
                     .has_expression = scan.has_expression_param,
@@ -3733,6 +3739,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                         const stage_name: []const u8 = if (annotation_parser.hasPart(event_decl.annotations, "pre")) "pre" else if (annotation_parser.hasPart(event_decl.annotations, "post")) "post" else "main";
                         const requires_list = try annotationCallArgs(allocator, event_decl.annotations, "requires");
                         const preserves_list = try annotationCallArgs(allocator, event_decl.annotations, "preserves");
+                        const obliges_list = try annotationCallArgs(allocator, event_decl.annotations, "obliges");
 
                         // Collect variant targets from the same module (variants live alongside the event).
                         const variant_targets_mod = try collectVariantTargetsForEventPath(allocator, module.items, event_decl.path.segments, comptime_default_lang);
@@ -3758,6 +3765,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                             .stage = stage_name,
                             .requires_list = requires_list,
                             .preserves_list = preserves_list,
+                            .obliges_list = obliges_list,
                             .has_source = scan.has_source_param,
                             .source_optional = scan.source_optional_param,
                             .has_expression = scan.has_expression_param,
@@ -3807,6 +3815,8 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
             allocator.free(event.requires_list);
             for (event.preserves_list) |t| allocator.free(t);
             allocator.free(event.preserves_list);
+            for (event.obliges_list) |t| allocator.free(t);
+            allocator.free(event.obliges_list);
         }
     }
 
@@ -4365,6 +4375,8 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
         try emitStringListLit(code_emitter, event.requires_list);
         try code_emitter.write(", .preserves = ");
         try emitStringListLit(code_emitter, event.preserves_list);
+        try code_emitter.write(", .obligations = ");
+        try emitStringListLit(code_emitter, event.obliges_list);
         const tail_line = try std.fmt.bufPrint(&buf, ", .handler_fn = call_handler_{s} }},\n", .{stub_ident});
         try code_emitter.write(tail_line);
     }

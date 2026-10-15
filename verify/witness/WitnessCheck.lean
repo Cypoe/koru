@@ -676,8 +676,20 @@ def preservedKind (atoms : List String) (kind : String) : Bool :=
 def fieldOf (toks : List String) (pfx : String) : Option String :=
   (toks.find? (·.startsWith pfx)).map fun t => (t.drop pfx.length).toString
 
+/-- The obligation predicate vocabulary — mirrored from
+`src/pass_graph.zig oblige_names`. A `transform-oblige` line's verdict
+position names which predicate the evidence decides. -/
+def obligeNames : List String := ["kind-stable", "matched-only"]
+
+/-- Oblige atoms: comma-separated names, each in the vocabulary. -/
+def obligeAtoms (raw : String) : Option (List String) :=
+  if raw.isEmpty then some []
+  else
+    let parts := raw.splitOn ","
+    if parts.all (· ∈ obligeNames) then some parts else none
+
 def parseAppExtra (extra : String) :
-    Option (String × List String × List String × List String × List String × List String) :=
+    Option (String × List String × List String × List String × List String × List String × List String) :=
   let toks := extra.splitOn ";"
   match fieldOf toks "site=", fieldOf toks "rm=", fieldOf toks "add=" with
   | some siteTok, some rmTok, some addTok =>
@@ -686,9 +698,10 @@ def parseAppExtra (extra : String) :
       let pres := (fieldOf toks "preserves=").getD ""
       let rmk := (fieldOf toks "rmk=").map kindList |>.getD (some [])
       let addk := (fieldOf toks "addk=").map kindList |>.getD (some [])
-      match preservesAtoms pres, rmk, addk with
-      | some p, some rk, some ak => some (siteTok, p, rm, rk, add, ak)
-      | _, _, _ => none
+      let obs := (fieldOf toks "obliges=").getD ""
+      match preservesAtoms pres, rmk, addk, obligeAtoms obs with
+      | some p, some rk, some ak, some ob => some (siteTok, p, rm, rk, add, ak, ob)
+      | _, _, _, _ => none
     | _, _ => none
   | _, _, _ => none
 
@@ -696,7 +709,7 @@ def ruleTransformApp (s : SiteLine) : Ruling :=
   if s.verdict != "wp" && s.verdict != "gc" then .malformed
   else match parseAppExtra s.extra with
   | none => .malformed
-  | some (siteD, pres, rm, rmk, add, addk) =>
+  | some (siteD, pres, rm, rmk, add, addk, _) =>
     if !isHexDigest siteD then .malformed
     else if s.verdict == "wp" && !(rmk.length == rm.length && addk.length == add.length) then
       .malformed
@@ -712,25 +725,147 @@ def ruleTransformApp (s : SiteLine) : Ruling :=
 
 def ruleTransformAppCensus (s : SiteLine) : Ruling :=
   if s.site != "transform" || s.arrow != "transform" then .malformed
-  else match s.verdict.splitOn "=" with
-    | ["count", n] => match n.toNat? with
+  else match s.verdict.splitOn "=", (fieldOf (s.extra.splitOn ";") "obliges=").bind (·.toNat?) with
+    | ["count", n], some _ => match n.toNat? with
       | some _ => .match_
       | none => .malformed
-    | _ => .malformed
+    | _, _ => .malformed
 
 /-- Corpus-level completeness for transform-app: at most one census line,
-and when applications were emitted its count must equal them. A dropped
-or forged application line unbalances the count. -/
+and when applications were emitted its count must equal them — the same
+for the oblige lines it also counts. A dropped or forged line of either
+kind unbalances its count. -/
 def transformAppBalance (sites : List SiteLine) : Bool :=
   let apps := sites.filter (·.kind == "transform-app")
+  let obl := sites.filter (·.kind == "transform-oblige")
   let cens := sites.filter (·.kind == "transform-app-census")
-  match apps, cens with
-  | [], [] => true
-  | _, [c] =>
-    (match c.verdict.splitOn "=" with
-     | ["count", k] => k.toNat? == some apps.length
-     | _ => false)
-  | _, _ => false
+  match apps, obl, cens with
+  | [], [], [] => true
+  | _, _, [c] =>
+    (match c.verdict.splitOn "=", (fieldOf (c.extra.splitOn ";") "obliges=").bind (·.toNat?) with
+     | ["count", k], some m => k.toNat? == some apps.length && m == obl.length
+     | _, _ => false)
+  | _, _, _ => false
+
+/-! ## Kind `transform-oblige` — declared obligations, decided
+
+`obliges("pred",...)` on a `[transform]` decl claims predicates about the
+write-back's touches — `preserves` bounds which kinds may move; an
+oblige decides what must be TRUE of the moves. The runner refuses a
+violated obligation (KORU182) BEFORE emitting, so an honest corpus only
+ever carries `ok` verdicts — a line whose evidence does not support its
+`ok` is a forgery, re-derived here from the committed sets:
+
+    <transform> <site-flow> kind-stable  ok;site=<d>;rmk=<k,...>;siterk=<k>;addk=<k,...>
+    <transform> <site-flow> matched-only ok;site=<d>;justified=<d,...>;nonmatching=<d,...>
+
+kind-stable re-decides: rmk minus ONE occurrence of siterk (the site is
+the licensed point of application) must equal addk as a multiset.
+matched-only re-decides: nonmatching must be empty — every removed
+non-site item contained an invocation the transform fires on. The
+corpus-level check additionally pairs each oblige line to its sibling
+transform-app: count must match the app's declared `obliges=` set,
+evidence fields must equal the app's own commits, and for matched-only
+justified ∪ {site} must cover the app's rm. -/
+
+/-- Multiset equality on lists of strings: remove each element of `a`
+from `b` one occurrence at a time; equal iff everything cancels. -/
+def strMultisetEq (a b : List String) : Bool :=
+  a.length == b.length &&
+  (a.foldl (init := (b, true)) fun (rest, ok) x =>
+    if !ok then (rest, false)
+    else if x ∈ rest then (rest.erase x, true)
+    else (rest, false)).snd
+
+def ruleTransformOblige (s : SiteLine) : Ruling :=
+  if !(s.verdict ∈ obligeNames) then .malformed
+  else
+    let toks := s.extra.splitOn ";"
+    match toks with
+    | "ok" :: _ =>
+      if !(match fieldOf toks "site=" with
+            | some d => isHexDigest d
+            | none => false) then .malformed
+      else if s.verdict == "kind-stable" then
+        match (fieldOf toks "rmk=").bind kindList,
+              (fieldOf toks "siterk="),
+              (fieldOf toks "addk=").bind kindList with
+        | some rmk, some siterk, some addk =>
+          if !(siterk ∈ itemKinds) then .malformed
+          else if strMultisetEq (rmk.erase siterk) addk then .match_
+          else .mismatch s!"kind-stable: {rmk.erase siterk} != {addk}"
+        | _, _, _ => .malformed
+      else
+        match (fieldOf toks "justified=").bind digestList,
+              (fieldOf toks "nonmatching=").bind digestList with
+        | some _, some nm =>
+          if nm.isEmpty then .match_
+          else .mismatch s!"matched-only: nonmatching {nm} (honest runner refuses before emitting)"
+        | _, _ => .malformed
+    | _ => .malformed
+
+/-- One pending wp application awaiting its oblige lines: the app's
+committed fields plus which declared obligations are still owed. -/
+structure PendingApp where
+  name : String
+  site : String
+  rm : List String
+  rmk : List String
+  addk : List String
+  owed : List String
+
+/-- Corpus-level pairing: a `transform-oblige` line belongs to the
+transform-app immediately preceding it — same transform name, an
+obligation that app declared via `obliges=`, and evidence fields equal
+to the app's own commits (a forged oblige cannot carry evidence
+disconnected from the application it claims to justify). Every
+obligation the app declared must be followed by exactly one oblige
+line before any other line kind arrives. -/
+def transformObligeCheck (sites : List SiteLine) : List String :=
+  let step := fun (pend : Option PendingApp) (bad : List String) (s : SiteLine) =>
+    if s.kind == "transform-app" then
+      let bad' := match pend with
+        | some p => if p.owed.isEmpty then bad else bad ++ [s!"app {p.name} owed {p.owed} but {p.owed.length} oblige line(s) never arrived"]
+        | none => bad
+      if s.verdict != "wp" then (none, bad')
+      else match parseAppExtra s.extra with
+        | some (siteD, _, rm, rmk, _, addk, obs) =>
+          (some ⟨s.site, siteD, rm, rmk, addk, obs⟩, bad')
+        | none => (none, bad')  -- malformed app ruled on per-line
+    else if s.kind == "transform-oblige" then
+      match pend with
+      | none => (none, bad ++ ["transform-oblige with no preceding transform-app"])
+      | some p =>
+        let toks := s.extra.splitOn ";"
+        if s.site != p.name then (some p, bad ++ [s!"oblige {s.site} does not name app {p.name}"])
+        else if !(s.verdict ∈ p.owed) then (some p, bad ++ [s!"oblige {s.verdict} not declared (or already discharged) by app {p.name}"])
+        else
+          -- Evidence fidelity: the oblige's commits must equal the app's.
+          let siteOk := fieldOf toks "site=" == some p.site
+          let evOk :=
+            if s.verdict == "kind-stable"
+            then fieldOf toks "rmk=" == some (String.intercalate "," p.rmk) &&
+                 fieldOf toks "addk=" == some (String.intercalate "," p.addk)
+            else
+              match (fieldOf toks "justified=").bind digestList,
+                    (fieldOf toks "nonmatching=").bind digestList with
+              | some j, some nm =>
+                let collateral := p.rm.erase p.site
+                j.length + nm.length == collateral.length &&
+                j.all (· ∈ collateral) && nm.all (· ∈ collateral)
+              | _, _ => false
+          if siteOk && evOk
+          then (some { p with owed := p.owed.erase s.verdict }, bad)
+          else (some p, bad ++ [s!"oblige {s.verdict} evidence disagrees with app {p.name}'s commits"])
+    else
+      let bad' := match pend with
+        | some p => if p.owed.isEmpty then bad else bad ++ [s!"app {p.name} owed {p.owed} — an unrelated line interrupted the oblige block"]
+        | none => bad
+      (none, bad')
+  let (pend, bad) := sites.foldl (fun acc s => step acc.1 acc.2 s) ((none : Option PendingApp), ([] : List String))
+  match pend with
+  | some p => if p.owed.isEmpty then bad else bad ++ [s!"app {p.name} owed {p.owed} at corpus end"]
+  | none => bad
 
 /-! ## Kind `pass-graph-*` — the declared pass graph as committed artifacts
 
@@ -867,6 +1002,7 @@ def rule (s : SiteLine) : Ruling :=
   else if s.kind == "descriptor" then ruleDescriptor s
   else if s.kind == "descriptor-scope" then ruleDescriptorScope s
   else if s.kind == "transform-app" then ruleTransformApp s
+  else if s.kind == "transform-oblige" then ruleTransformOblige s
   else if s.kind == "transform-app-census" then ruleTransformAppCensus s
   else if s.kind == "pass-graph-edge" then rulePassGraphEdge s
   else if s.kind == "pass-graph-order" then rulePassGraphOrder s
@@ -926,6 +1062,12 @@ def main (args : List String) : IO UInt32 := do
   if !transformAppBalance sites.reverse then
     if !forged then bad := bad + 1
     IO.println s!"{if forged then "ok  " else "BAD "} APP-DRIFT  transform-app census"
+  -- Corpus-level obligation pairing: each wp application's declared
+  -- obliges must be discharged by exactly the oblige lines following it,
+  -- carrying evidence equal to the app's own commits.
+  for v in transformObligeCheck sites.reverse do
+    if !forged then bad := bad + 1
+    IO.println s!"{if forged then "ok  " else "BAD "} OBLIGE-VIOLATION  {v}"
   -- Corpus-level pass-graph re-decision: declared edges must hold in
   -- every observed root order, transform edges must point at a strictly
   -- earlier stage, and the census must count the emitted lines honestly.

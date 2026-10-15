@@ -99,6 +99,10 @@ other → the composite is a warranted coinage.
 | `descriptor` / `descriptor-scope` | `e608264db` | declaration-surface record / scope census | per-event emitted claims (`dis:`/`cr:`/`in:`/`br:`) the oracle re-derives from `decl` and set-compares | canon-alias (p) |
 | `rm=`/`add=` (`rmk=`/`addk=`) | `459d2e9f2` / `430c9cd8d` | removal/addition multiset (k: kind tags) | digest sets of top-level items a write-back removed/added — the *actual* set the declared bound checks | canon-alias (p) |
 | `blast radius` | `430c9cd8d` pass graph rung 2 | blast radius (security/ops canon) | the set of items outside the site a write-back may touch; bounded by `preserves`, enforced KORU181 | canon-alias (p) |
+| `obliges` (`[obliges("pred",...)]`) | obligation rung | proof obligation / decidable contract | closed vocabulary of claims a transform's write-back must satisfy; KORU180 refuses unknown preds + non-transform decls, KORU182 refuses violations unconditionally | canon-alias (p) |
+| `kind-stable` | obligation rung | sort-preserving rewrite / type-stable patch | collateral rm/add top-level kind multisets must agree (site licensed): no top-level fabrication or silent deletion | warranted neologism (p) |
+| `matched-only` | obligation rung | justified-touch / callsite-only consumption | every removed non-site item must contain an invocation the transform fires on: no silent consumption of unrelated items | warranted neologism (p) |
+| `transform-oblige` | obligation rung | obligation-evidence record | one witness line per declared obligation per application, carrying the evidence the oracle needs to re-decide (site digest, kind multisets / justified set) — verdict never trusted | canon-alias (p) |
 
 ## 4. Known drift risks — watch these
 

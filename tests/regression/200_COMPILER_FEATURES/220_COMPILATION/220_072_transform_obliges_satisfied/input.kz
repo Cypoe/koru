@@ -1,0 +1,57 @@
+// PINS: a whole-program write-back honouring both declared obligations
+// runs clean. relabel declares obliges("kind-stable","matched-only"):
+// it removes the second ~relabel() invocation flow — a collateral item
+// containing a matching invocation, so matched-only holds — and adds one
+// rewritten flow, so the collateral rm/add kind multisets stay equal
+// (kind-stable). The site item is licensed. Items the transform does
+// not change pass through BY VALUE — cloning an untouched item can shift
+// its canonical digest (observed on module_decl), which the accounting
+// would honestly report as a touch and matched-only would refuse.
+const std = @import("std");
+const ast = @import("ast");
+const ast_functional = @import("ast_functional");
+
+~[keyword|comptime|transform|obliges("kind-stable","matched-only")]pub tor relabel {
+    invocation: *const Invocation,
+    item: *const std/compiler:Item,
+    program: *const Program,
+    allocator: std.mem.Allocator
+} -> SiteResult
+
+~proc relabel|zig {
+    var new_items = std.ArrayList(ast.Item).initCapacity(allocator, program.items.len) catch unreachable;
+    for (program.items) |*prog_item| {
+        if (prog_item == item) continue;
+        if (prog_item.* == .flow) {
+            const segs = prog_item.flow.inv().path.segments;
+            if (segs.len > 0 and std.mem.eql(u8, segs[segs.len-1], "relabel")) {
+                // Collateral ~relabel() invocation flow — rewrite it so it
+                // no longer matches the transform.
+                var f = (ast_functional.cloneItem(allocator, prog_item) catch unreachable).flow;
+                const inv = @constCast(f.inv());
+                const new_segs = allocator.alloc([]const u8, inv.path.segments.len) catch unreachable;
+                for (inv.path.segments, 0..) |s, i| {
+                    new_segs[i] = if (i == inv.path.segments.len - 1) "relabelled" else s;
+                }
+                inv.path.segments = new_segs;
+                new_items.append(allocator, .{ .flow = f }) catch unreachable;
+                continue;
+            }
+        }
+        new_items.append(allocator, prog_item.*) catch unreachable;
+    }
+    const new_program = allocator.create(ast.Program) catch unreachable;
+    new_program.* = ast.Program{
+        .items = new_items.toOwnedSlice(allocator) catch unreachable,
+        .module_annotations = program.module_annotations,
+        .main_module_name = program.main_module_name,
+        .allocator = allocator,
+    };
+    return .{ .whole_program = new_program };
+}
+
+~pub tor relabelled { } -> i32
+~proc relabelled|zig { return 0; }
+
+~relabel()
+~relabel()

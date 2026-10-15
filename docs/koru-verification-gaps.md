@@ -36,6 +36,19 @@ Measured at `ccomp` `e94bfeeb9` (2026-10-14).
 - **`preserves` bounds kinds, not content.** A transform may rewrite
   every item of a kind it declared preserved; the bound only refuses
   *collateral adds/removes* of held kinds.
+- **`obliges` closes the first two decidable obligation claims, not
+  semantics.** `kind-stable` and `matched-only` are shape-level:
+  a transform may rewrite its matched items into anything and no
+  obligation yet says the rewrite preserves meaning. The vocabulary
+  is closed — extending it is a declaration surface, not an escape
+  hatch; the semantic claim needs the §6a Lean kernel to have a
+  domain at all.
+- **Obligation granularity is the canonical digest.** An item a
+  transform *clones but does not change* still registers as touched
+  if the clone drifts the digest (observed on `module_decl`) — the
+  obligation correctly refuses. Honest write-backs pass untouched
+  items through by value; clone-drift fidelity in `ast_functional`
+  is a real latent issue the obligation made visible, not a loophole.
 - **Canonical digest equivalence is pinned, not proved.** The zig
   emitter and the Lean oracle agree on digests because the corpora
   match — a shared digest drift would pass both.

@@ -54,3 +54,10 @@
 [witness] site pass-graph-census graph counts edges=banana orders=1,tedges=0,tstages=0
 [witness] site pass-graph-census graph counts edges=1 orders=1,tedges=0
 [witness] site pass-graph-census foo counts edges=0 orders=0,tedges=0,tstages=0
+[witness] site transform-oblige tap tap kind-stable ok;site=aaaabbbbccccdddd;rmk=flow;siterk=flow;addk=module_decl
+[witness] site transform-oblige tap tap matched-only ok;site=aaaabbbbccccdddd;justified=1111aaaa2222bbbb;nonmatching=deadbeefdeadbeef
+[witness] site transform-oblige tap tap unknown-pred ok;site=aaaabbbbccccdddd
+[witness] site transform-oblige tap tap kind-stable fail;site=aaaabbbbccccdddd;rmk=flow;siterk=flow;addk=flow
+[witness] site transform-oblige tap tap kind-stable ok;rmk=flow;siterk=flow;addk=flow
+[witness] site transform-app tap tap wp site=aaaabbbbccccdddd;rm=aaaabbbbccccdddd;rmk=flow;add=;addk=;obliges=not-a-pred
+[witness] site transform-app-census transform transform count=1

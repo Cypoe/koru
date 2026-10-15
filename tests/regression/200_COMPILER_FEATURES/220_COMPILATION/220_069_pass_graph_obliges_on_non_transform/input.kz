@@ -1,0 +1,6 @@
+// PINS: obliges() on a non-transform decl refuses (KORU180) — obligations
+// govern a transform's write-back; a pipeline tor has no write-back for
+// them to constrain.
+~[obliges("kind-stable")]pub tor consumer { } -> i32
+~proc consumer|zig { return 0; }
+~main = consumer(): _

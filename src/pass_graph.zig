@@ -73,6 +73,25 @@ const item_kinds = [_][]const u8{
     "fused_event",   "inlined_event", "inline_code",    "facet_decl",
 };
 
+/// Obligation predicates a `[transform]` decl may claim (`obliges(...)`) —
+/// mechanically decided by the runner on every whole_program write-back,
+/// each committed as a `transform-oblige` witness line the Lean oracle
+/// re-decides. `preserves` says which kinds a transform may NOT touch;
+/// an oblige says what must be TRUE of the touches it does make — the
+/// third gap class (touches never justified) closed as a contract:
+///   kind-stable  — rm and add hold the same multiset of item kinds:
+///                  the write-back rewrites in place; it may not
+///                  fabricate or delete a top-level item outright.
+///   matched-only — every removed non-site item contains an invocation
+///                  matching this transform's own dispatch predicate:
+///                  the transform consumes only items it was called on.
+/// An atom naming no known predicate refuses — a declared obligation
+/// the runner cannot decide is a claim checked by nobody.
+const oblige_names = [_][]const u8{
+    "kind-stable",
+    "matched-only",
+};
+
 const PassDecl = struct {
     /// Last segment of the decl path ("check-structure").
     name: []const u8,
@@ -81,6 +100,9 @@ const PassDecl = struct {
     qualified: []const u8,
     requires: []const []const u8,
     preserves: []const []const u8,
+    /// Declared obligation predicates — claims about the write-back's
+    /// touches the runner must decide, not just bounds it must stay in.
+    obliges: []const []const u8,
     /// True on `[transform]` decls — their requires are intra-transform
     /// stage edges, not pipeline positions.
     is_transform: bool,
@@ -184,12 +206,19 @@ fn collectItems(allocator: std.mem.Allocator, g: *Graph, items: []const ast.Item
                     defer c.deinit(allocator);
                     for (c.args) |arg| try preserves.append(allocator, try allocator.dupe(u8, arg));
                 }
-                if (requires.items.len == 0 and preserves.items.len == 0) continue;
+                var obliges: std.ArrayList([]const u8) = .empty;
+                if (try annotation_parser.getCall(allocator, decl.annotations, "obliges")) |call| {
+                    var c = call;
+                    defer c.deinit(allocator);
+                    for (c.args) |arg| try obliges.append(allocator, try allocator.dupe(u8, arg));
+                }
+                if (requires.items.len == 0 and preserves.items.len == 0 and obliges.items.len == 0) continue;
                 try g.decls.append(allocator, .{
                     .name = name,
                     .qualified = qual,
                     .requires = try requires.toOwnedSlice(allocator),
                     .preserves = try preserves.toOwnedSlice(allocator),
+                    .obliges = try obliges.toOwnedSlice(allocator),
                     .is_transform = is_transform,
                     .stage = stageOf(decl.annotations),
                     .location = decl.location,
@@ -452,6 +481,10 @@ pub fn validate(allocator: std.mem.Allocator, items: []const ast.Item) !Summary 
                 std.debug.print("error[KORU180]: `{s}` declares `preserves`, but it is not a [transform] decl\n  {s}:{d}: preserves bounds a transform's write-back blast radius — on a pipeline pass there is no write-back for it to constrain\n  fix: drop the annotation, or move it to the transform decl it belongs to\n", .{ d.name, d.location.file, d.location.line });
                 std.process.exit(1);
             }
+            if (d.obliges.len > 0) {
+                std.debug.print("error[KORU180]: `{s}` declares `obliges`, but it is not a [transform] decl\n  {s}:{d}: obliges are claims about a transform's write-back — on a pipeline pass there is no write-back for them to constrain\n  fix: drop the annotation, or move it to the transform decl it belongs to\n", .{ d.name, d.location.file, d.location.line });
+                std.process.exit(1);
+            }
             // The converse edge is refused too: a pipeline tor requiring a
             // transform orders against a surface that runs inside the
             // transform stage — the chain can never satisfy it, and in a
@@ -487,6 +520,16 @@ pub fn validate(allocator: std.mem.Allocator, items: []const ast.Item) !Summary 
         if (saw_bare and saw_except) {
             std.debug.print("error[KORU180]: transform `{s}` mixes bare and `!` atoms in `preserves` — the bound's mode is ambiguous\n  {s}:{d}: bare atoms mean \"preserve exactly these kinds\"; `!` atoms mean \"preserve all EXCEPT these\" — one declaration cannot mean both\n  fix: pick one mode — enumerate the preserved kinds, or list the exceptions as `!kind`\n", .{ d.name, d.location.file, d.location.line });
             std.process.exit(1);
+        }
+        for (d.obliges) |atom| {
+            var known = false;
+            for (oblige_names) |o| {
+                if (std.mem.eql(u8, atom, o)) known = true;
+            }
+            if (!known) {
+                std.debug.print("error[KORU180]: transform `{s}` obliges `{s}`, which names no known obligation predicate\n  {s}:{d}: an obligation the runner cannot decide is a claim checked by nobody — refusing rather than letting the word stand as a contract\n  known obligations: kind-stable matched-only\n  fix: fix the spelling, or widen the vocabulary deliberately\n", .{ d.name, atom, d.location.file, d.location.line });
+                std.process.exit(1);
+            }
         }
         for (d.requires) |req| {
             const target = resolveTransform(&g, req) orelse {
