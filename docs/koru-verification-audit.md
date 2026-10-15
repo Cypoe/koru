@@ -157,8 +157,13 @@ The strongest evidence the layers are real is what they refused:
   `rm`/`add` with a forbidden kind, so KORU181 fires. What remains
   unchecked is correctness *within* permitted kinds — a transform may
   rewrite the kinds it owns and nothing decides the rewrite was
-  semantically right. That is obligation-claim territory (§6b), not a
-  bound hole.
+  semantically right. Call this an **obligation gap**, not a bound
+  hole: the bound is satisfied — it is the obligation that does not
+  exist. Nothing requires the transform to justify a permitted touch.
+  This is the taxonomy the audit runs on: coverage gaps (arcs never
+  printed), bound gaps (surfaces never bounded), and obligation gaps
+  (touches never justified). §6b's obligation-claims rung exists
+  precisely to close the third class.
 - **K3 sees only printed arcs.** An unprinted obligation, an unemitted
   edge, a silent skip — invisible to the oracle. Corpus completeness
   rests on the compiler's wire between `validate()` and the printed
@@ -186,7 +191,14 @@ The strongest evidence the layers are real is what they refused:
 
 ## 5. Where the gaps live structurally
 
-Reading the ledger as architecture, the gaps cluster on three seams:
+Two axes audit the ledger, and they are orthogonal — a gap needs both
+coordinates to be closed. **Kind of gap:** coverage (an arc the
+emitter never prints — invisible to every oracle), bound (a surface
+nothing constrains — the transform may touch it freely), obligation
+(a permitted touch nothing requires to be justified). **Seam:**
+the three below. A check that closes coverage on one seam can still
+leave the obligation gap open on the same seam — rung-3's pass-graph
+lines have complete coverage and zero obligation content.
 
 1. **The emitter-trust seam** — everything Lean checks arrives through
    the compiler's own print statements. Closing it needs either (a) a
