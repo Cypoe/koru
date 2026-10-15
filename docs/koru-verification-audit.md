@@ -143,13 +143,22 @@ The strongest evidence the layers are real is what they refused:
 
 ## 4. What it did not do — honest failures
 
-- **Nothing here is end-to-end verified.** Each layer independently
-  checks a property; no layer proves the compiler correct. The chain
-  elaborated-graph → IR → C has two verified *points* (CompCert below
-  C, Lean above witnesses) with unverified spans between them.
-- **K2-B is accounting, not congruence.** `preserves` bounds item
-  *kinds*, never content — a transform could corrupt everything it
-  declares preserved and KORU181 stays silent.
+- **Nothing here is end-to-end verified — but nothing is vacuous
+  either.** Each layer's check is a real proof of a real proposition:
+  a Lean re-decision is kernel-checked, a ccomp leg is a verified
+  compilation. What is unverified is the *composition* — no link
+  proves graph→C→asm preserves semantics as a chain. The seam is
+  open; the propositions on either side of it are not. Vacuity would
+  enter through coverage, which is exactly what the forged corpus,
+  census, and collect-recursion machinery exists to guard.
+- **K2-B is accounting, not congruence — with a sharper residual than
+  first stated.** Digest sets make *mutation of a preserved kind*
+  caught, not merely bounded: a changed preserved item must appear in
+  `rm`/`add` with a forbidden kind, so KORU181 fires. What remains
+  unchecked is correctness *within* permitted kinds — a transform may
+  rewrite the kinds it owns and nothing decides the rewrite was
+  semantically right. That is obligation-claim territory (§6b), not a
+  bound hole.
 - **K3 sees only printed arcs.** An unprinted obligation, an unemitted
   edge, a silent skip — invisible to the oracle. Corpus completeness
   rests on the compiler's wire between `validate()` and the printed
@@ -159,9 +168,13 @@ The strongest evidence the layers are real is what they refused:
 - **The pass graph is opt-in and order-only.** Undeclared orderings
   are unchecked; requires/preserves say nothing about data flow,
   termination, or semantics.
-- **K4 rung 1 is self-attestation.** The signature records the key
-  holder's claim that the battery ran; it does not prove the run was
-  unmodified. `proof: null` is reserved, not satisfied.
+- **K4 rung 1 is self-attestation — now shrinkable to provenance.**
+  `verify --re-run` re-executes the battery and compares verdicts, so
+  the verifier re-decides rather than trusting recorded outcomes; the
+  receipt degrades gracefully to "the pinned attester claims these
+  inputs were tested" for readers who do not re-run. `proof: null`
+  remains reserved for the zk leg that removes attester honesty from
+  the trust base entirely.
 - **The battery is one gate.** `witness_gate.sh` only — the regression
   suite, ccomp legs, and alive2 legs are outside the attested set.
 - **The attester key lives on one host** — attestations cannot yet be
@@ -194,15 +207,27 @@ Reading the ledger as architecture, the gaps cluster on three seams:
 
 The CompCert shape is the honest template: a mechanized semantics for
 the source, a mechanized semantics for the target, and a proof that
-translation preserves it. For Koru that decomposes as:
+translation preserves it. This is the next rung — *scoped, not total*:
+do not mechanize Koru's semantics, mechanize a kernel subset of the
+flow graph (values, arithmetic, calls, branches — the shape a small
+fixture family exercises). Weeks-scale, not years; and it anchors the
+existing propositions to meaning rather than digests.
 
-- **Rung A — mechanize the flow-graph semantics in Lean.** The
+- **Rung A — mechanize a kernel flow-graph semantics in Lean.** The
   elaborated graph is already the agreed semantics boundary (both
-  emitters consume it). A Lean model of graph evaluation is the single
-  most valuable artifact: it turns "the same elaborated flow graph"
-  from a convention into a checkable object. The existing
-  WitnessCheck kernel is the seed — it already parses the corpus; a
+  emitters consume it). A Lean evaluator for the kernel fragment turns
+  "the same elaborated flow graph" from a convention into a checkable
+  object. WitnessCheck is the seed — it already parses the corpus; the
   semantics formalization extends it to *evaluate*.
+- **Rung A.5 — per-instance refinement, subset-declared.** With the
+  evaluator, a Lean checker takes graph + emitted C for a kernel
+  program and verifies refinement *for that program* (the CompCert
+  lesson: verified checkers beat verified generators — small, and they
+  refuse loudly). For the covered subset the chain graph→C→asm then
+  becomes genuinely end-to-end: Lean-checked refinement above,
+  CompCert below. A `verified-subset` tier falsifies "nothing is
+  end-to-end verified" for a declared region instead of waiting for
+  the whole pipeline.
 - **Rung B — prove emitter correspondence per-instance or once.**
   Two strategies, both honest: keep translation validation (ccomp +
   byte-diff per program — scales, never proves a universal); or prove

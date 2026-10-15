@@ -12,6 +12,12 @@ zkVM execution channel: null until the battery runs in a guest.
              the digests it claims (input-match is only meaningful on
              the tree the receipt names; signature + trusted signer are
              meaningful on any tree)
+    verify <receipt> --re-run — additionally re-execute the recorded
+             battery and compare verdicts. The receipt then attests only
+             "the pinned attester claims these inputs were tested";
+             the verifier independently confirms the outcomes. This is
+             the regime's own doctrine applied at the top: re-decide,
+             don't trust — self-attestation shrinks to provenance.
 
 Key: KORU_ATTEST_KEY env or ~/.agents/keys/koru-attest.ed25519 (hex seed).
 Trusted attester: tools/attest.pub (did:key) — anyone can sign; the repo
@@ -160,7 +166,7 @@ def emit() -> int:
           "| dirty:", dirty)
     return 0 if ok else 1
 
-def verify(path: str) -> int:
+def verify(path: str, re_run: bool = False) -> int:
     from nacl.signing import VerifyKey
     from nacl.exceptions import BadSignatureError
     r = json.loads(Path(path).read_text())
@@ -199,6 +205,20 @@ def verify(path: str) -> int:
               f" (rc={g['rc']})")
         if g["verdict"] != "PASS":
             ok = False
+    if re_run:
+        live = {g["name"]: g for g in run_battery()}
+        for g in r.get("battery", []):
+            cur = live.get(g["name"])
+            if cur is None:
+                print(f"re-run {g['name']}: gate not in battery")
+                ok = False
+            elif cur["verdict"] == g["verdict"]:
+                print(f"re-run {g['name']}: verdict confirmed"
+                      f" ({cur['verdict']})")
+            else:
+                print(f"re-run {g['name']}: recorded {g['verdict']}"
+                      f" != live {cur['verdict']}")
+                ok = False
     print("tree:", r["tree"], "| dirty:", r["tree_dirty"],
           "| verdict:", "ATTESTED" if ok else "REJECTED")
     return 0 if ok else 1
@@ -207,6 +227,6 @@ if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "emit":
         sys.exit(emit())
     if len(sys.argv) >= 3 and sys.argv[1] == "verify":
-        sys.exit(verify(sys.argv[2]))
+        sys.exit(verify(sys.argv[2], "--re-run" in sys.argv[3:]))
     print(__doc__)
     sys.exit(2)

@@ -73,11 +73,18 @@ Measured at `ccomp` `e94bfeeb9` (2026-10-14).
 
 ## K4 — attested receipts
 
-- **Rung 1 is self-attestation, not execution proof.** The signed
-  receipt records that the pinned battery ran on digested artifacts —
-  signed by the attester the repo pins in `tools/attest.pub`. It does
-  not prove the run was unmodified; the `proof` field is reserved for
-  the zk execution channel (RISC-V guest — no toolchain yet).
+- **Rung 1 is self-attestation, not execution proof — but it is
+  re-decidable.** The signed receipt records that the pinned battery
+  ran on digested artifacts, signed by the attester the repo pins in
+  `tools/attest.pub`. `verify --re-run` re-executes the recorded
+  battery and compares verdicts, so the verifier confirms outcomes
+  rather than trusting them; the signature then attests only
+  provenance ("the pinned attester claims these inputs were tested").
+  Without `--re-run` the verifier trusts the recorded verdicts — the
+  residual is self-attestation for non-re-running readers. The
+  `proof` field is reserved for the zk execution channel, which
+  removes the attester's honesty from the trust base entirely
+  (RISC-V guest — no toolchain yet).
 - **The battery is one gate.** `attest.py`'s pinned list currently runs
   `witness_gate.sh` only; the regression suite, ccomp oracle legs, and
   alive2 legs are outside the attested battery — widening the pinned
