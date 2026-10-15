@@ -326,18 +326,22 @@ K1 is the executable shadow of the eventual simulation lemma.
 **Rung 1 landed (2026-10-14) — the receipt regime, not the guest.** No
 Rust/zk toolchain and no CI infrastructure exist in the tree, so the
 first rung is the receipt itself rather than its proof channel:
-`scripts/attest.py emit` runs the pinned battery (`witness_gate.sh`),
-and writes a signed `koru-attest/1` receipt into `receipts/` carrying
-the tree hash, `tree_dirty` honestly, koruc/ccomp/lean digests, corpus
-and gate-script digests, per-gate verdicts, host ABI (`uname`, `ldd`),
+`scripts/attest.py emit` runs the pinned battery (`witness_gate.sh`,
+`semantics_gate.sh`), and writes a signed `koru-attest/1` receipt into
+`receipts/` carrying the tree hash, `tree_dirty` honestly,
+koruc/ccomp/lean digests, corpus, semantics-kernel and gate-script
+digests, per-gate verdicts, host ABI (`uname`, `ldd`),
 and `proof: null`. Signing is Ed25519; the signer is a `did:key` and
 the repo pins *which* did counts in `tools/attest.pub` — a valid
 signature from an unpinned key is not an attestation, it is a signature.
 `attest.py verify` checks all three claims separately: signature valid
 (the record is untampered), signer trusted (the pinned attester signed
 it), digests match (the artifacts the receipt names are the ones
-present). A tampered verdict invalidates the signature, not the digest
-check — the failure names which claim broke.
+present). `verify --re-run` re-executes the recorded battery and
+compares verdicts instead of trusting them — re-decide, don't trust,
+applied at the top layer too; without it, recorded verdicts are
+self-attestation. A tampered verdict invalidates the signature, not
+the digest check — the failure names which claim broke.
 **What this rung does NOT attest:** the signature is self-attestation
 by the key holder — it records that the battery ran, signed by the
 pinned attester, on the artifacts digested. It does not prove the run

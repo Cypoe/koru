@@ -232,12 +232,33 @@ flow graph (values, arithmetic, calls, branches — the shape a small
 fixture family exercises). Weeks-scale, not years; and it anchors the
 existing propositions to meaning rather than digests.
 
-- **Rung A — mechanize a kernel flow-graph semantics in Lean.** The
-  elaborated graph is already the agreed semantics boundary (both
-  emitters consume it). A Lean evaluator for the kernel fragment turns
-  "the same elaborated flow graph" from a convention into a checkable
-  object. WitnessCheck is the seed — it already parses the corpus; the
-  semantics formalization extends it to *evaluate*.
+- **Rung A — mechanize a kernel flow-graph semantics in Lean.**
+  *Landed:* `verify/semantics/FlowKernel.lean` is a standalone kernel
+  semantics — values (int/bool/unit), expressions (literals, args,
+  ambient vars, binops, `ife`, `ret` branch delivery), `invoke`/`halt`
+  nodes, and first-match continuation dispatch with `when` clauses.
+  `evalNode` is fuel-bounded (decrement on invoke only); the design
+  choices are the honest ones — tor bodies evaluate under the parameter
+  env alone, a `when` that fails to evaluate is a program error not a
+  silent skip, and `none` never means "close enough". Nine fixture
+  evaluations are compile-checked by `native_decide` (arithmetic chains,
+  branch selection, when-skip, no-match, type error, div-zero, fuel
+  exhaustion, ret-through-halt); two metatheorems are kernel-proved:
+  `firstCont_fires_first` (dispatch really is first-match) and
+  `evalNode_mono` (more fuel never flips a decided result — the theorem
+  that makes fuel a resource bound rather than a semantics change).
+  It is checked by `scripts/semantics_gate.sh`, which the attested
+  battery now runs and whose digest the receipt pins — so "the flow
+  semantics proofs held" is an attested verdict, not a convention.
+  The elaborated graph is already the agreed semantics boundary (both
+  emitters consume it); this turns "the same elaborated flow graph"
+  from a convention into a checkable object. **Open:** the kernel is a
+  *model*, not yet a corpus surface — nothing emits `graph-eval` claims
+  for it to re-decide, and it shares no code with koruc, so divergence
+  is possible in both directions (that is the point of a single
+  mechanized definition; the corpus-facing leg is what exercises it).
+  Effects, stores, labels, taps, transforms, modules, and recursion are
+  deliberately out of scope.
 - **Rung A.5 — per-instance refinement, subset-declared.** With the
   evaluator, a Lean checker takes graph + emitted C for a kernel
   program and verifies refinement *for that program* (the CompCert

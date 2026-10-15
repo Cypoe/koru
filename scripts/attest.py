@@ -86,6 +86,8 @@ def git(*args) -> str:
 BATTERY = [
     {"name": "witness-gate",
      "argv": ["bash", "scripts/witness_gate.sh"]},
+    {"name": "semantics-gate",
+     "argv": ["bash", "scripts/semantics_gate.sh"]},
 ]
 
 def run_battery() -> list:
@@ -126,9 +128,13 @@ def digests() -> dict:
             for f in ("WitnessCheck.lean", "golden.txt",
                       "forged.txt", "drift.txt")
         },
+        "semantics": {
+            f: sha256_file(ROOT / "verify/semantics" / f)
+            for f in ("FlowKernel.lean",)
+        },
         "gate_scripts": {
             s: sha256_file(ROOT / "scripts" / s)
-            for s in ("witness_gate.sh",)
+            for s in ("witness_gate.sh", "semantics_gate.sh")
         },
     }
 
@@ -193,7 +199,7 @@ def verify(path: str, re_run: bool = False) -> int:
         if want != got:
             ok = False
         print(f"digest {sect}: {mark}")
-    for group in ("corpora", "gate_scripts"):
+    for group in ("corpora", "semantics", "gate_scripts"):
         for f, want in r["digests"].get(group, {}).items():
             got = here[group].get(f)
             mark = "match" if want == got else "DRIFT"

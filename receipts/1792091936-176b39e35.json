@@ -1,0 +1,56 @@
+{
+  "format": "koru-attest/1",
+  "tier": "attested",
+  "tree": "176b39e3599831aca00f447bf9b6948f5fe8d3f6",
+  "tree_dirty": true,
+  "battery": [
+    {
+      "name": "witness-gate",
+      "argv": [
+        "bash",
+        "scripts/witness_gate.sh"
+      ],
+      "rc": 0,
+      "verdict": "PASS",
+      "last_line": "witness gate: PASS",
+      "elapsed_s": 8.5
+    },
+    {
+      "name": "semantics-gate",
+      "argv": [
+        "bash",
+        "scripts/semantics_gate.sh"
+      ],
+      "rc": 0,
+      "verdict": "PASS",
+      "last_line": "semantics gate: PASS",
+      "elapsed_s": 0.9
+    }
+  ],
+  "digests": {
+    "koruc": "sha256:66369d0382447a1685b77b344746fbf3a389a1e9b5722ec7daa2c670d97f3864",
+    "ccomp": "sha256:5afafc28c4c001a0072c3cfbd7a0bc8b802d821afa73ba149c1c78302e29b84e",
+    "lean": "sha256:71815942a19c698f0e9b11bdfd93a619ff36d5a320dbbe07d67448bbdcf15fa5",
+    "corpora": {
+      "WitnessCheck.lean": "sha256:f7b30d09d0c5f6846dfe10c4400539a95044229e64f0bd02f2bb7aaa318edc7b",
+      "golden.txt": "sha256:ef98304a27add47678dc86f62f09ad468cfc02e64869e7688f0ecf089e5ba7a8",
+      "forged.txt": "sha256:6f2125987b2fc7eeae48936bf1d6d2676562523183717e471d80a3d9bcf2bbfa",
+      "drift.txt": "sha256:34ce4195a781ada4dbba19c95fb142449369cba8aea687ab6971031932951988"
+    },
+    "semantics": {
+      "FlowKernel.lean": "sha256:7cb0d5f9148031220db65b008442ba696793badc8129054eba3c5d7131d11fb5"
+    },
+    "gate_scripts": {
+      "witness_gate.sh": "sha256:2452c9aea63f24fc646a8f43c4f9bd49afa804cf719b85afecf4d47b4d2f8dc0",
+      "semantics_gate.sh": "sha256:485b199f30aadc9ca1ca80677cb32a560f130badb37c47208a8c98d66cf4513c"
+    }
+  },
+  "host": {
+    "uname": "Linux 6.18.33.2-microsoft-standard-WSL2 x86_64 GNU/Linux",
+    "ldd": "ldd (Ubuntu GLIBC 2.31-0ubuntu9) 2.31"
+  },
+  "ts": 1792091936,
+  "proof": null,
+  "signer": "did:key:z6MkfEvkG7MugC6PE9B6C93voz1GLY9kfpsW5BhnWKH9nvJc",
+  "signature": "08587475e61f0ea7779bad27613fb5c7c7826c0aea775d6a530ef9f5e5a9b554417835f03ccfcda2c9db586c752e2dd9fa88a429bcbdc2928c194951c9f7360d"
+}

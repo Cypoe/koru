@@ -84,6 +84,21 @@ Measured at `ccomp` `e94bfeeb9` (2026-10-14).
 - The witness channel is `enforce`-gated by design: non-enforce runs
   produce no corpus, and the battery attests committed runs only.
 
+## K3-adjacent — flow semantics kernel (`verify/semantics/`)
+
+- **`FlowKernel.lean` is a model, not yet a consumer surface.** Its
+  evaluator, fixtures, and metatheorems are kernel-checked, but nothing
+  emits claims for it to re-decide — the corpus-facing leg
+  (`graph-eval` witness lines on kernel-subset programs) is open, so
+  the kernel currently verifies itself rather than any run.
+- **No shared code with koruc.** Independence is the point — divergence
+  between the kernel and the compiler is a bug in one of them — but
+  until a surface consumes it, silent divergence on kernel-subset
+  programs is possible in both directions and nothing would notice.
+- **Kernel scope is declared small:** no effects, stores, labels, taps,
+  transforms, modules, name resolution, or recursion. Programs outside
+  the subset have no mechanized meaning.
+
 ## K4 — attested receipts
 
 - **Rung 1 is self-attestation, not execution proof — but it is
@@ -98,10 +113,11 @@ Measured at `ccomp` `e94bfeeb9` (2026-10-14).
   `proof` field is reserved for the zk execution channel, which
   removes the attester's honesty from the trust base entirely
   (RISC-V guest — no toolchain yet).
-- **The battery is one gate.** `attest.py`'s pinned list currently runs
-  `witness_gate.sh` only; the regression suite, ccomp oracle legs, and
-  alive2 legs are outside the attested battery — widening the pinned
-  list is the honest growth path, not a claim the suite is attested.
+- **The battery is two gates.** `attest.py`'s pinned list runs
+  `witness_gate.sh` and `semantics_gate.sh`; the regression suite,
+  ccomp oracle legs, and alive2 legs are outside the attested battery —
+  widening the pinned list is the honest growth path, not a claim the
+  suite is attested.
 - **The attester key lives on one host.** `~/.agents/keys/` on the
   signing machine; a receipt from any other key verifies cryptographically
   but fails the trusted-signer pin — which is the intended refusal, and

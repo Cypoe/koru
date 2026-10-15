@@ -1,0 +1,56 @@
+---
+type: belief
+id: frag-verdicts-want-redeciders-definitions-want-singletons
+provenance: building verify/semantics/FlowKernel.lean next to verify/witness/WitnessCheck.lean — two Lean artifacts that look symmetric and are not; the asymmetry is the point
+ts: 2026-10-17
+---
+
+# Verdicts want re-deciders; definitions want singletons (belief)
+
+The verification branch carries two Lean surfaces that look like the same
+move and are opposites:
+
+- `WitnessCheck.lean` is a **re-decider**: the compiler prints witness
+  claims, the oracle independently derives the verdict again. Two
+  implementations, and their possible disagreement is the mechanism — a
+  forged or drifted claim fails because the second decider does not
+  follow the first.
+- `FlowKernel.lean` is a **singleton**: the mechanized flow-graph
+  evaluator does not re-decide anything. It IS the semantics. There is
+  deliberately no second evaluator to cross-check it against, because a
+  semantics that exists twice is not checked — it is two candidates and
+  a coincidence.
+
+**The durable claim: independence is the doctrine for claims, not for
+definitions.** Re-deciding a *verdict* buys you a wall — disagreement is
+a refusal surface. Re-deciding a *definition* buys you nothing — two
+evaluators that agree today are two places the semantics can drift
+tomorrow, and when they disagree you have learned there is a bug
+somewhere but not which artifact is wrong, because neither is the
+referent. The referent for a definition has to be singular: one
+evaluator, kernel-checked, against which every implementation (koruc's
+runtime, the C emitter's compiled output) is a *claim* to be verified —
+and claims get re-deciders.
+
+This is why the fuel-bounded evaluator in FlowKernel ships with
+`evalNode_mono` rather than a second engine: more-fuel-never-flips is
+what makes the bound a resource limit instead of a second semantics.
+If fuel could change a decided answer, the fuelled evaluator and the
+unfuelled "true" semantics would be the two-candidates problem all over
+again, with the disagreement hidden inside one file.
+
+## Where this could be wrong
+
+- A singleton semantics is only as good as its fit to the implementation
+  it claims to define. Nothing yet exercises FlowKernel against real
+  emitted programs — the corpus-facing leg is open, and until it lands
+  the kernel could be a clean model of the wrong language. The belief
+  predicts this is fine: divergence is a bug with a referent, not a
+  third semantics. If in practice the kernel drifts silently because no
+  surface consumes it, the missing piece is the claim-emitter, not more
+  formalization.
+- There is a defensible middle: two mechanized semantics with a proved
+  equivalence (a definitional and a denotational reading, as in textbook
+  PL formalizations). That is one semantics stated twice and *proved*
+  equal — the proof is what makes it safe. The claim is against two
+  unproved-equal definitions, not two presentations.
