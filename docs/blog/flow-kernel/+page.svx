@@ -1,0 +1,55 @@
+---
+title: "Flow Kernel: koru's Walker Semantics in Lean"
+subject: "Flow Kernel"
+date: 2026-10-16
+excerpt: "verify/semantics/FlowKernel.lean mechanizes the comptime walker's evaluation semantics; FlowCheck.lean re-decides whole-program [flow-eval] claims against it — the trusted surface is thunk leaves."
+readTime: 6 min read
+tags: [verification, koru, lean, semantics]
+ai_authored: mostly
+draft: true
+---
+
+
+The witness channel re-decides what a pass *claimed*. The deeper question — what does a koru flow *mean* — needs the same treatment: a semantics small enough to check by hand and machine, written once, that real program runs can be re-decided against. `verify/semantics/FlowKernel.lean` is that semantics.
+
+It is a model of `src/comptime_eval.zig`'s walker — the actual operational semantics comptime evaluation already runs — not an invented idealization:
+
+- **Values:** int, float, bool, string, array, cell — the full `Value` union minus `fragment` (which refuses).
+- **Expressions:** the walker's complete surface — literals, identifiers, binary/unary ops, conditionals, field access, array indexing, builtin calls. `/` and `%` are truncating (`@divTrunc`/`@rem` parity, sign follows dividend); `@mod` is the floored flavor; `++` is string concat and `+` on strings refuses; `and`/`or`/conditionals short-circuit; `@as` evaluates only its value argument — the type name is never evaluated.
+- **Dispatch is three cases, not one:** tagged results match arms by branch name; bare `->T` results make *every* named arm a candidate and guards select; void results refuse at every arm site.
+- **Control flow:** `#label` + `@jump(args)` loops re-enter the enclosing labeled flow's head; calls bind named args in a fresh callee environment; payload binds *before* guard evaluation.
+- **Thunks are asserted oracle leaves** — a native thunk is foreign code the kernel cannot see, so `(name, args) → result` assertions are the entire trusted surface. Everything Koru-expressible is evaluated, not trusted.
+
+Fuel bounds evaluation; `run_mono` is a proved theorem — once evaluation decides, more fuel never flips the result — which is what makes fuel a resource bound rather than a second semantics hiding in the same file. ~45 `native_decide` fixture theorems pin the distinguishing surface: void-dispatch refusal, guard order, payload-before-guard, nested-invoke continuations, env isolation, unasserted-thunk refusal, `@as` laziness, the truncated/floored division pair.
+
+## Faithfulness was audited, not asserted
+
+The kernel was written by reading `comptime_eval.zig` clause-by-clause — and the audit caught seven real divergences, every one of them model-side: the walker was right and the model moved. The instructive ones:
+
+- **Void + arms.** `dispatchArms` refuses `payload == null` before scanning arms; the first model let a void result dispatch through guard-less arms. The model's own doc comment already documented the correct rule — the code just didn't implement it.
+- **`@as` laziness.** `evalBuiltin` evaluates only `args[1]`; the type name is "ignored, not evaluated." An eager-args model refuses `@as(i32, 5)` on an unbound type name; the walker returns `5`.
+- **Truncating division.** Lean's `Int` division is floored — `-7/2 = -4` — while the walker's `/` is C-style truncation (`-3`). The model now computes truncation explicitly.
+- **`and`/`or`.** `false and <error>` returns `false` in the walker; an eager model refuses.
+- **Catchalls in tagged dispatch.** Tagged dispatch compares branch names only — a `&#124;*` arm carries the literal name `*`. The extra flag-skip the first model added diverged exactly on the `*` tag.
+
+This is the reason a model needs to be a consumer surface, not a monument: a semantics that exists twice is two candidates and a coincidence. The audit made them agree by moving the model; the corpus leg below is what keeps them agreeing as the compiler evolves.
+
+## FlowCheck: the whole-program claim consumer
+
+`verify/semantics/FlowCheck.lean` closes the loop on the consumer side. A `[flow-eval]` line is a complete, self-contained claim — s-expressions, because arm/subflow/continuation structure is nested:
+
+```
+[flow-eval] ((entry main) (fuel 16) (result (bare (int 20)))
+  (graph (def add (bare (bin add (var a) (var b)))) ...)
+  (oracle (leaf read (() (int 41)))))
+```
+
+The checker decodes graph + entry call + fuel + asserted result + asserted thunk leaves and re-decides end to end: `eval graph oracle fuel entry args == expected`. `refuse` claims succeed only when the kernel actually decides `none` — a refusal asserted for a program that computes fails, and a result asserted for a program that refuses fails. Malformed wire data refuses rather than guesses; duplicate claims are accounting drift and fail the batch.
+
+The gate (`scripts/semantics_gate.sh`) runs the same discipline as the witness gate: golden corpus 11/11 must match, forged 9/9 must reject, the drift corpus must fail on its duplicate. The gate is in the attested battery — the receipts in `receipts/` pin `FlowKernel.lean`'s digest alongside the gate outcomes, so "the semantics proofs held" is an attested verdict, not a convention.
+
+## The boundary that remains
+
+Two honest edges. First, **koruc does not emit `[flow-eval]` claims yet** — today's corpora are hand-authored validation fixtures exercising the checker; the kernel verifies itself plus whatever it is fed, not yet real runs. The emission leg is the serializer: the comptime walker prints the graph it evaluated, per kernel-subset program, and the claims it produces become real evidence. Second, **i64 overflow** — the kernel uses unbounded `Int`; the walker runs on machine integers, so overflow behavior is a declared divergence at the boundary, not an oversight.
+
+After emission lands, rung A.5 is the per-instance check the pyramid is missing: graph → emitted-C refinement, proved per program rather than asserted for the emitter.

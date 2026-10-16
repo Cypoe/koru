@@ -1,0 +1,49 @@
+---
+title: "ccomp: CompCert as koru's Semantics Oracle"
+subject: "ccomp"
+date: 2026-10-16
+excerpt: "koru emits CompCert-dialect C through the same elaborated flow graph the Zig backend consumes — a verified compiler, a byte-diff, and a named refusal table are the oracle that the translation preserved meaning."
+readTime: 6 min read
+tags: [verification, koru, compcert, alive2]
+ai_authored: mostly
+draft: true
+---
+
+<script>
+  import RegressionTestLink from '$lib/components/RegressionTestLink.svelte';
+</script>
+
+Two different claims get called "verified" and they are not the same claim. A *program* is verified when its obligations check out — that's the witness channel's job. A *semantics* is verified when the translation preserved meaning — which is a claim about the compiler, not the program. `ccomp` is the second story.
+
+koru compiles to C through `src/c_emitter.zig`, and the emit is not a second language. The C pass translates the same elaborated flow graph the Zig emitter consumes — there is no second semantics to drift, only translation arms that could. That distinction is the whole design: the Zig backend stays the product path; the C path exists so that *another* compiler — one whose correctness is a machine-checked theorem, not a test suite — gets an independent vote on what the program means.
+
+## The oracle is three things, not one
+
+**Byte-diff equivalence (G-CC-1).** Both backends compile the same program; the two binaries run; stdout bytes and return codes must be identical. If the C emitter and the Zig emitter disagree about what `count()` returns, the gate names the divergence — this is where translation-arm drift surfaces, because both arms interpret one graph.
+
+**CompCert (G-CC-2, G-CC-4).** The emitted C is written in CompCert's dialect — ISO C99 minus VLA, minus `setjmp`/`longjmp`, minus `long double`, with CompCert C's defined evaluation order. `ccomp` compiles it, and its correctness theorem rides along for free: whatever ccomp produces faithfully implements the C it was given. A missing oracle fails loudly and names the resolved path — `KORU_CC_ORACLE` — never a skip; and the pinned toolchain plus flags must produce a byte-identical binary across runs.
+
+**The refusal table (G-CC-3).** What the C lane cannot say, it refuses — by name. Host lines, `!`-effect arms, `pump`/`rings`/`worker.spawn`, watches, interceptors, rules, tree/char[N]/index/entity/owned/ref stores: each class refuses with a named diagnostic pinned by its own test. Silent acceptance is a red battery — an emitter that quietly drops a construct it can't lower is worse than one that refuses, because the refusal is checkable and the drop is invisible.
+
+<RegressionTestLink
+  tests={[
+    { name: "400_212 C transducer equivalence", directory: "400_212_c_transducer_equiv", categorySlug: "400_RUNTIME_FEATURES", description: "A finite byte transducer over std/io — both backends, identical stdout bytes and rc." },
+    { name: "400_211 counted-for equivalence", directory: "400_211_c_for_counted_equiv", categorySlug: "400_RUNTIME_FEATURES", description: "Counted loops emit through both lanes to identical output." },
+    { name: "230_007 unresolvable width refuses", directory: "230_007_wrap_op_unresolvable_operand_c_refuses", categorySlug: "200_COMPILER_FEATURES/230_CODEGEN", description: "Wrapping arithmetic uses declared integer width; where neither operand resolves, the C lane refuses." },
+    { name: "690_370 store watch refused", directory: "690_370_c_lane_refuses_store_watch", categorySlug: "600_STDLIB/690_STORE", description: "A named refusal class — watches have no C lowering." }
+  ]}
+/>
+
+## What the C claims about arithmetic
+
+The C emitter carries declared integer widths into its cells — `*%`, `+%`, `-%` lower through the declared width, not the storage width, so a `u8` that wraps wraps the way the program said. Where neither operand resolves to a declared integer width, the emit refuses (230_007 above — refusal again, not a guess). `usize` pins as `u64` on both lanes; a `usize -> i64` claim is *deferred* — a named gap in the ledger, not a silent promise.
+
+## Alive2: the second opinion on the same artifact
+
+`ccomp` validates CompCert's own pipeline — its proof is about its passes. `scripts/alive2_gate.sh` asks a different question of the same emitted C: clang `-O0` lowers `output_emitted.c` to reference IR, and `alive-tv --passes=` proves each intra-procedural optimization instance is a refinement of it. The claim that lands is complementary: the emitted C holds no undefined behavior a mainstream optimizer can diverge on. Twelve tests carry the `ALIVE2_CHECK` marker under `KORU_ALIVE2=1`.
+
+The verdict discipline is strict — `incorrect`, timeout, and undecided all fail — and the scope exclusions are named and counted rather than absorbed: `scope:libcall` for unmodeled externals (`fputs`, `fflush`, `fprintf`, `abort`, `strlen`), `scope:untranslatable` for `sret` aggregate returns, `scope:unroll` for loops past the unroll bound. The parser's exclusion counts are cross-checked against alive-tv's own summary, so a gate that silently excluded everything it couldn't check would itself fail. The negative control is measured: a forged same-signature `mul`→`add` IR reports `incorrect input_wmul`.
+
+## The hole the oracles don't cover
+
+Name it plainly, because the verification doc does: **source → emitter faithfulness has no independent oracle.** `ccomp` verifies compilation *of* the emitted C; whether the emitted C is faithful to the koru source rests on byte-diff + tests + refusal honesty — and byte-diff is a test, not a proof. The mechanized flow kernel (`verify/semantics/FlowKernel.lean`) is the staged instrument for closing that: once koruc emits graph-evaluation claims the kernel re-decides, source→graph faithfulness gets its own independent vote. Until then the gap is listed, not papered.

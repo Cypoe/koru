@@ -1,0 +1,79 @@
+---
+title: "Witnesses: koruc Commits What It Checked"
+subject: "Witnesses"
+date: 2026-10-16
+excerpt: "Under std/witness:enforce, koruc prints the claims it checked as [witness] site lines — and a Lean checker re-decides every line rather than trusting the verdict it carries."
+readTime: 6 min read
+tags: [verification, koru, proof-carrying code]
+ai_authored: mostly
+draft: true
+---
+
+<script>
+  import RegressionTestLink from '$lib/components/RegressionTestLink.svelte';
+</script>
+
+A compiler that says "checked" is a claim. A compiler that prints *what* it checked, in a form a second program can re-decide, is an oracle. `std/witness:enforce` turns koruc into the second kind:
+
+```koru
+import std/witness
+
+std/witness:enforce { }
+```
+
+The declaration opts a program into the witness channel. During compilation, the passes that own verdicts commit `[witness] site …` lines — one line per claim, each carrying its site, its evidence fields, and the verdict the pass reached. The marks are `.marks` — pass-produced and unauthorable; there is no spelling a program could use to write one itself, and removing one is a refusal.
+
+The surface landed as a small scaffold — `koru_std/witness.kz` (~140 lines): the `enforce` declaration, which counts obligation sites through its `&#124; enforced` arm, and `koruc <program> witness`, a command that folds a program's obligation families into a census. Everything after that grew inside the channel the scaffold opened: the channel stopped being a measurement and became the corpus the verification battery re-decides.
+
+## The vocabulary
+
+Each line kind names what the backend committed about one site:
+
+| Line kind | What it commits |
+|---|---|
+| `stored-write-numeric` | the numeric verdict on a lowered stored write — `lossless` or `rounds`, computed per site |
+| `auto-discharge` | an inserted disposal, plus `all:` — the solver's full enumerated candidate set, so a candidate the solver never saw is *malformed*, not merely missing |
+| `custody-edge` | one obligation lifecycle edge — `mint`, `held`, `discharge`, `issued` — replayed against the per-arrow ledger |
+| `descriptor` / `descriptor-scope` | a declared contract matched to its emitted registry row; census count must equal the line count |
+| `transform-app` / `transform-app-census` | a `whole_program` write-back: site digest plus the `rm=`/`add=` multiset of touched top-level items |
+| `pass-graph-edge` / `-order` / `-tedge` / `-tstage` / `-census` | the declared pipeline's edges and the flattened run order the backend observed |
+| `transform-oblige` | a declared `obliges` predicate plus verdict — the claim, not just the outcome |
+
+<RegressionTestLink
+  tests={[
+    { name: "690_364 witness marks on lowered stored writes", directory: "690_364_witness_marks_ride_lowered_stored_writes", categorySlug: "600_STDLIB/690_STORE", description: "The prepared-witness channel: marks minted by the transform, enumerated by enforce, printed under KORU_WITNESS=1." },
+    { name: "330_138 auto-discharge sole/preferred", directory: "330_138_auto_discharge_witness_marks_sole_and_preferred", categorySlug: "300_ADVANCED_FEATURES/330_PHANTOM_TYPES", description: "Inserted disposals commit marks; the all: field pins the candidate universe." },
+    { name: "330_139 custody-edge mint/held/issued", directory: "330_139_custody_edge_witnesses_mint_held_issued", categorySlug: "300_ADVANCED_FEATURES/330_PHANTOM_TYPES", description: "The four lifecycle ops as committed edges." },
+    { name: "310_140 whole-program transform accounting", directory: "310_140_transform_app_witness_whole_program_accounting", categorySlug: "300_ADVANCED_FEATURES/310_COMPTIME", description: "The one splice where a handler may rewrite items outside its site commits its rm/add multiset." },
+    { name: "220_066 pass-graph witness arcs", directory: "220_066_pass_graph_witness_lines", categorySlug: "200_COMPILER_FEATURES/220_COMPILATION", description: "Declared requirements and observed order, committed under enforce." },
+    { name: "430_069 registry descriptor fidelity", directory: "430_069_registry_descriptor_witnesses_event_fidelity", categorySlug: "400_RUNTIME_FEATURES/430_RUNTIME", description: "Descriptor lines pair declared contracts with emitted rows." }
+  ]}
+/>
+
+## The verdict on the line is not trusted
+
+Emitting a claim is not checking it. `verify/witness/WitnessCheck.lean` is the second decider: it parses the committed corpus and re-derives every verdict from the evidence fields alone — a `wp` line must carry its site digest in `rm`, a `gc` line must be exactly the singleton `{site}`, a `matched-only` obligation must justify every collateral removal with a fired invocation, the census must equal the count of lines it claims to count. A line whose fields disagree with its verdict rejects, even though the compiler printed it.
+
+The gate (`scripts/witness_gate.sh`) runs three corpora: golden (47 lines, every verdict must re-match), forged (66 lines, every one must reject — a checker that accepts a forged witness is a red battery, not a caveat), and drift (duplicate and count-drifted lines must fail the batch as accounting violations, not pass silently). No `WITNESS_CHECK` marker, no enforce, no corpus — and an empty corpus *fails* the gate rather than passing vacuously. A missing Lean toolchain is a `FAIL` naming the path, never a skip.
+
+<RegressionTestLink
+  test={{ name: "220_067 the witness gate itself", directory: "220_067_pass_graph_witness_gated", categorySlug: "200_COMPILER_FEATURES/220_COMPILATION", description: "No enforce, no arcs — the gate fails rather than trusting an absent corpus." }}
+/>
+
+## Obligations: a bound is not a duty
+
+`[transform&#124;preserves(...)]` bounds which item kinds a write-back may touch — the blast radius. `[transform&#124;obliges(...)]` closes the other direction: a permitted touch still has to be *justified*. The vocabulary is deliberately closed and re-decidable — `kind-stable` (the collateral rm/add kind multisets must agree) and `matched-only` (every removed non-site item must contain an invocation the transform fires on). Declarations are validated at declaration time (KORU180 refuses unknown predicates and `obliges` on non-transforms); enforcement is unconditional (KORU182 refuses a violated obligation whether or not witnesses are emitted). Under enforce, each obligation commits a `transform-oblige` line the Lean checker re-decides — it does not trust the `ok` verdict.
+
+One honest consequence: obligations are enforced at canonical-digest granularity, so a transform that *clones* items it does not change registers them as touched — clone drift reads as a touch. The satisfied pin passes untouched items through by value, which is the pattern the obligation exists to force: clone only what you change.
+
+<RegressionTestLink
+  tests={[
+    { name: "220_070 kind-stable violated", directory: "220_070_transform_obliges_kind_stable_violated", categorySlug: "200_COMPILER_FEATURES/220_COMPILATION", description: "Enforcement refuses a write-back whose collateral kinds disagree." },
+    { name: "220_071 matched-only violated", directory: "220_071_transform_obliges_matched_only_violated", categorySlug: "200_COMPILER_FEATURES/220_COMPILATION", description: "A silent consumption of an unrelated item refuses." },
+    { name: "220_072 the satisfied shape", directory: "220_072_transform_obliges_satisfied", categorySlug: "200_COMPILER_FEATURES/220_COMPILATION", description: "Untouched items passed by value — clone only what you change." }
+  ]}
+/>
+
+## Why this shape
+
+Proof-carrying code's viability rested on the certifying compiler: Touchstone generated the proofs automatically because nobody would hand-write them. The same accounting applies here — the producer (the auto-discharge solver, the transform runner) is untrusted; the witness is data; the checker's verdict is the only one that counts. Solver ≠ checker, and disagreement refuses naming both. What the witness channel adds to the 1997 shape: the corpus is *also* the conformance oracle. The Lean checker doesn't just verify claims — it detects when the Zig implementation drifts from the calculus it's supposed to implement, which is why forged and drift corpora are standing gates and not aspirational tests.

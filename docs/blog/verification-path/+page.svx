@@ -1,0 +1,60 @@
+---
+title: "Verification Path: Four Layers, Checked"
+subject: "Verification Path"
+date: 2026-10-16
+excerpt: "docs/koru-verification-path.md planned four independent oracles — CompCert, Alive2, a Lean-checked obligation layer, attested execution. This is the accounting of what landed, what landed in a different shape, and what is still open."
+readTime: 7 min read
+tags: [verification, koru, compcert, lean]
+ai_authored: mostly
+draft: true
+---
+
+<script>
+  import RegressionTestLink from '$lib/components/RegressionTestLink.svelte';
+</script>
+
+`docs/koru-verification-path.md` was written as a design note for co-review: four layers, each certifying a different thing, none substituting for another. A proof about semantics does not attest execution; an attestation of execution does not prove semantics. This is the review the doc asked for — layer by layer, against the tree.
+
+## K1 — CompCert oracle: landed
+
+`src/c_emitter.zig` emits CompCert-dialect C from the same elaborated flow graph the Zig emitter consumes; `scripts/cc_gates.sh` implements the four canonical cells — byte-diff equivalence, missing-oracle `FAIL`, named refusal table, determinism pin. The refusal classes are pinned per construct family (host lines, `!`-effect arms, `pump`/`rings`, watches/interceptors/rules, tree/entity stores), and the arithmetic honesty holds at declared width. Equivalence tests `400_211`–`400_215` exercise the transducer, loops, conditionals, and file-scope consts across both lanes.
+
+## K2 — Alive2 congruence: landed, different shape
+
+The sketch proposed a `-fllvm` leg. No such leg exists; what shipped (`scripts/alive2_gate.sh`) validates *emitted-C optimization congruence* instead: clang `-O0` produces reference IR from `output_emitted.c`, `alive-tv` proves each intra-procedural optimization instance a refinement — so the artifact carries no UB a mainstream optimizer can diverge on. Verdict discipline is strict, scope exclusions are named and counted (`libcall`, `untranslatable`, `unroll`), and the negative control measures a forged `mul`→`add` as `incorrect`. The doc records the landed shape inline rather than pretending the sketch shipped.
+
+What stayed open: the doc's "Use B" — koru-transform congruence — needs the emitter to expose pre/post IR, which clang's `.ll` never sees. What *did* land in Use B's direction is accounting-level: `whole_program` transform write-backs commit `transform-app` witness lines, `preserves` bounds their blast radius, and `obliges` obligates the touches the bound permits. Congruence at the declared-surface level, not the IR level — honest about which it is.
+
+## K3 — Proof-carrying obligations: landed, and wider than planned
+
+The N1–N5 non-negotiables all shipped as infrastructure rather than principles:
+
+- **N1, solver ≠ checker** — realized as named comptime passes: `pass-auto-discharge` mints `.marks` (untrusted producer), `pass-witness-check` owns the verdicts. Under `std/witness:enforce` the claims print as `[witness] site` lines.
+- **N2, the checker is small and machine-trusted** — `verify/witness/WitnessCheck.lean` re-decides every committed line; `scripts/witness_gate.sh` runs golden/forged/drift corpora, and a missing Lean toolchain fails rather than skips.
+- **N3, witnesses are data** — `.marks` are pass-produced, unauthorable; removal is a refusal.
+- **N4, forged gates standing** — 66 forged lines must all reject; the drift corpus must fail on accounting violations.
+- **N5, no LLM in the trust chain** — synthesis is algorithmic (the fragment is decidable); refusal is the honest output.
+
+Beyond the plan: `transform-oblige` claims (KORU180/181/182 vocabulary — `kind-stable`, `matched-only`), pass-graph arcs as committed corpus, and the custody-edge ledger replay — the doc's §3 fragment became a channel carrying nine line kinds.
+
+## K4 — Attested execution: rung 1 landed
+
+No zkVM, no guest — rung 1 is the receipt regime itself. `scripts/attest.py emit` runs the pinned battery (witness gate + semantics gate) and writes a signed `koru-attest/1` receipt into `receipts/`: tree hash, `tree_dirty` honestly, koruc/ccomp/lean digests, corpus and gate-script digests, per-gate verdicts, host ABI, `proof: null`. Ed25519 signature by a `did:key`; the repo pins *which* did counts in `tools/attest.pub`. `attest.py verify` checks signature, signer trust, and digest match separately; `--re-run` re-executes the battery instead of trusting the recorded verdicts — re-decide, don't trust, applied at the top layer too. What it does not attest is named in the receipt's own docs: the signature records that the battery ran under the pinned attester; the zk execution channel the `proof` field reserves is still future work.
+
+## What piled on past the doc
+
+Three things the plan did not predict:
+
+1. **The semantics kernel** (`verify/semantics/FlowKernel.lean` + `FlowCheck.lean`) — the audit's §6a growth path landed: a mechanized model of the comptime walker, faithful by clause-by-clause audit, plus a consumer that re-decides whole-program `[flow-eval]` claims with thunk leaves as the only trusted surface. This is the instrument aimed at the doc's own named hole — source → emitter faithfulness has no independent oracle.
+2. **The declared pass graph** — `[requires]`/`[preserves]`/`[obliges]` turned pipeline order and transform blast radius into committed, re-decidable evidence rather than convention.
+3. **The gap ledger** (`docs/koru-verification-gaps.md`) — every layer's boundary lives in one honest file, revised as layers land.
+
+## Still open, by name
+
+- **koruc does not emit `[flow-eval]` claims** — the kernel consumes hand-authored corpora; the emission leg is the serializer that turns real walks into evidence.
+- **Per-instance graph→C refinement (rung A.5)** — the remaining check between the graph and the artifact.
+- **Source→emitter faithfulness** — rests on byte-diff + tests + refusal honesty until the kernel's emission leg lands.
+- **The zk execution channel** — `proof: null` in every receipt until the guest toolchain exists.
+- **i64 overflow in the kernel** — unbounded `Int` vs machine integers, declared.
+
+The discipline that held across all of it is the one the doc's foot-down summary named: refusal named, never silent; missing oracle = `FAIL`; forged gates standing; the verdict on a line is re-decided, not trusted. Every layer below is only as strong as the layer above it that it leans on — the ledger now says which layers exist.
