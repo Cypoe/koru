@@ -1,0 +1,7 @@
+# FlowCheck drift corpus — well-formed claims that must FAIL the
+# conformance batch: a byte-identical claim appearing twice inflates
+# the claimed count without adding coverage.
+
+[flow-eval] ((entry cat) (fuel 16) (result (bare (str "ab"))) (graph (def cat (bare (bin concat (lit (str "a")) (lit (str "b")))))) (oracle))
+[flow-eval] ((entry pick) (fuel 16) (result (bare (int 1))) (graph (def pick (bare (cond (lit (bool true)) (lit (int 1)) (bin div (lit (int 1)) (lit (int 0))))))) (oracle))
+[flow-eval] ((entry cat) (fuel 16) (result (bare (str "ab"))) (graph (def cat (bare (bin concat (lit (str "a")) (lit (str "b")))))) (oracle))

@@ -1,0 +1,535 @@
+import FlowKernel
+
+/-
+FlowCheck — the corpus-facing consumer of the flow kernel.
+
+This is the second rung of the audit's §6a path: FlowKernel is the
+mechanized semantics; FlowCheck is the surface that consumes emitted
+`[flow-eval]` claims and re-decides them against it. The whole-program
+claim (Option A): graph + entry call + asserted result + asserted
+thunk leaves, checked end to end. Nothing is trusted except the
+native-thunk leaves, which are foreign code the kernel cannot see —
+everything Koru-expressible is re-evaluated.
+
+Run (Role B):  lean --run FlowCheck.lean <corpus>            — every claim must MATCH
+               lean --run FlowCheck.lean --forged <corpus>   — every claim must be REJECTED
+A corpus is emitter output (or a fixture standing in for it); only
+`[flow-eval] <sexpr>` lines are read. A corpus with zero claim lines
+FAILs: an empty batch is not a passed batch.
+
+## Wire format — one claim per line, s-expression payload
+
+    [flow-eval] ( (entry NAME (ARGV*)) (fuel N) (result R)
+                  (graph DECL*) (oracle LEAF*) )
+
+    ARGV := (name VAL)                          named, evaluated arg
+    VAL  := (int I) | (float N D)               N/D rational, D ≠ 0
+          | (bool true|false) | (str "S")       no escapes — quotes end atoms
+          | (arr VAL*) | (cell (name VAL)*)
+    R    := refuse                              expected refusal (see fuel note)
+          | (void) | (bare VAL) | (tag NAME) | (tag NAME VAL)
+    DECL := (def NAME thunk)                    native — oracle leaf territory
+          | (def NAME (bare EXPR))
+          | (def NAME (subflow ((label L))? (head NAME ARGE*) ARM*))
+    ARGE := (name EXPR)
+    ARM  := (arm FIELD*)
+    FIELD := (tag NAME) | catchall              catchall ⇒ branch "*" + flag
+           | (bind NAME) | (when EXPR)
+           | (node NODE) | (conts ARM*)
+    NODE := terminal | (jump NAME ARGE*) | (invoke NAME ARGE*)
+          | (produce EXPR) | (ctor NAME EXPR)
+    EXPR := (lit VAL) | (var NAME)
+          | (bin OP EXPR EXPR)    OP ∈ add sub mul div mod eq ne lt le
+                                    gt ge and or concat
+          | (un OP EXPR)          OP ∈ not neg
+          | (cond C T E) | (field EXPR NAME) | (index EXPR EXPR)
+          | (builtin NAME EXPR*)
+    LEAF := (leaf NAME (ARGV*) R)               R must not be `refuse`
+
+Every decoder is a total `Sx → Option T`: malformed structure is a
+rejection, never an approximation. Duplicated claim fields refuse.
+
+## Honesty notes
+
+  * Success claims are fuel-independent once decided (`run_mono`), so
+    checking at the claimed fuel is sound. A `refuse` claim is
+    budget-relative by construction — "did not decide within fuel N" —
+    so emitters must fuel refusal claims generously; the convention is
+    pinned in the corpus files, not enforced by the checker yet.
+  * Oracle leaves are the declared trust boundary: `(leaf ...)` rows
+    assert what a native thunk returned. The kernel re-decides all
+    control flow and expression evaluation around them, never the leaf.
+  * Corpus-level rule: a byte-identical claim appearing twice is a
+    drift violation — duplicated lines inflate a claimed count without
+    adding coverage.
+-/
+
+namespace Koru.FlowCheck
+
+open Koru.FlowKernel
+
+/-! ## S-expression surface: tokenize → parse -/
+
+inductive Sx where
+  | atom : String → Sx
+  | list : List Sx → Sx
+deriving BEq, Repr
+
+def isSxSpace (c : Char) : Bool :=
+  c == ' ' || c == '\t' || c == '\n' || c == '\r'
+
+/-- Collect a quoted atom's body — fueled by remaining length, one char
+per step. Unterminated quote refuses. -/
+def tkQuote : Nat → List Char → Option (List Char × List Char)
+  | 0, _ => none
+  | _, [] => none
+  | _ + 1, '"' :: rest => some ([], rest)
+  | fuel + 1, c :: rest => (tkQuote fuel rest).map fun (w, r) => (c :: w, r)
+
+/-- Collect a bare atom — stops (without consuming) at a delimiter. -/
+def tkAtom : Nat → List Char → List Char × List Char
+  | 0, cs => ([], cs)
+  | _, [] => ([], [])
+  | fuel + 1, c :: rest =>
+      if isSxSpace c || c == '(' || c == ')' || c == '"'
+      then ([], c :: rest)
+      else match tkAtom fuel rest with
+           | (w, r) => (c :: w, r)
+
+/-- Tokenize: `(`, `)`, quoted atoms kept WITH quotes (no escapes —
+an unterminated quote refuses), bare atoms. Fuel is the remaining
+length; every step consumes at least one char. The `[]` arm must come
+first — an input that consumes its budget exactly is still a success. -/
+def tkGo : Nat → List Char → Option (List String)
+  | _, [] => some []
+  | 0, _ => none
+  | fuel + 1, c :: rest =>
+      if isSxSpace c then tkGo fuel rest
+      else if c == '(' then (tkGo fuel rest).map ("(" :: ·)
+      else if c == ')' then (tkGo fuel rest).map (")" :: ·)
+      else if c == '"' then
+        match tkQuote rest.length rest with
+        | some (w, rest') =>
+            (tkGo fuel rest').map (String.ofList ('"' :: w ++ ['"']) :: ·)
+        | none => none
+      else
+        match tkAtom (c :: rest).length (c :: rest) with
+        | (w, rest') => (tkGo fuel rest').map (String.ofList w :: ·)
+
+def tokenize (cs : List Char) : Option (List String) := tkGo (cs.length + 1) cs
+
+mutual
+/-- One s-expression plus leftover tokens, fueled by a step budget —
+every `(` and every list element costs one unit, so `2 * toks + 2` is
+always sufficient. Fuel is a bound, not a semantics. -/
+def parseSx : Nat → List String → Option (Sx × List String)
+  | 0, _ => none
+  | _, ")" :: _ => none
+  | fuel + 1, "(" :: rest =>
+      (parseList fuel rest).map fun (xs, r) => (.list xs, r)
+  | _, a :: rest => some (.atom a, rest)
+  | _, [] => none
+def parseList : Nat → List String → Option (List Sx × List String)
+  | _, ")" :: rest => some ([], rest)
+  | _, [] => none
+  | 0, _ => none
+  | fuel + 1, toks =>
+      match parseSx fuel toks with
+      | some (x, rest) => (parseList fuel rest).map fun (xs, r) => (x :: xs, r)
+      | none => none
+end
+
+/-- A full line must be exactly one s-expression — trailing tokens
+refuse. -/
+def parseTop (line : String) : Option Sx :=
+  match tokenize line.toList with
+  | some toks =>
+      match parseSx (2 * toks.length + 2) toks with
+      | some (x, []) => some x
+      | _ => none
+  | none => none
+
+/-! ## Decoders — `Sx → Option T`, explicit refusal everywhere -/
+
+def sxInt (s : String) : Option Int :=
+  if s.startsWith "-"
+  then (s.drop 1).toNat?.map fun n => -(Int.ofNat n)
+  else s.toNat?.map Int.ofNat
+
+def sxBinOp : String → Option BinOp
+  | "add" => some .add     | "sub" => some .sub | "mul" => some .mul
+  | "div" => some .div     | "mod" => some .mod
+  | "eq" => some .eq       | "ne" => some .ne
+  | "lt" => some .lt       | "le" => some .le
+  | "gt" => some .gt       | "ge" => some .ge
+  | "and" => some .and     | "or" => some .or  | "concat" => some .concat
+  | _ => none
+
+def sxUnOp : String → Option UnOp
+  | "not" => some .not | "neg" => some .neg
+  | _ => none
+
+/-- Bare atom, unquoted — names. -/
+def sxName : Sx → Option String
+  | .atom s => if s.startsWith "\"" then none else some s
+  | _ => none
+
+/-- Quoted atom, quotes stripped — strings. -/
+def sxStr (s : String) : Option String :=
+  if s.startsWith "\"" && s.endsWith "\"" && s.length ≥ 2
+  then some (String.ofList ((s.toList.drop 1).dropLast))
+  else none
+
+mutual
+def sxVal : Sx → Option Val
+  | .list [.atom "int", .atom i] => (sxInt i).map .int
+  | .list [.atom "float", .atom n, .atom d] =>
+      match sxInt n, sxInt d with
+      | some n', some d' =>
+          if d' == 0 then none else some (.float (Float.ofInt n' / Float.ofInt d'))
+      | _, _ => none
+  | .list [.atom "bool", .atom "true"] => some (.bool true)
+  | .list [.atom "bool", .atom "false"] => some (.bool false)
+  | .list [.atom "str", .atom s] => (sxStr s).map .str
+  | .list (.atom "arr" :: xs) => (sxValList xs).map .arr
+  | .list (.atom "cell" :: fs) => (sxNamedValList fs).map .cell
+  | _ => none
+
+def sxValList : List Sx → Option (List Val)
+  | [] => some []
+  | x :: rest =>
+      match sxVal x, sxValList rest with
+      | some v, some vs => some (v :: vs)
+      | _, _ => none
+
+def sxNamedVal : Sx → Option (String × Val)
+  | .list [.atom n, v] => match sxVal v with
+      | some v' => some (n, v')
+      | none => none
+  | _ => none
+
+def sxNamedValList : List Sx → Option (List (String × Val))
+  | [] => some []
+  | x :: rest =>
+      match sxNamedVal x, sxNamedValList rest with
+      | some p, some ps => some (p :: ps)
+      | _, _ => none
+
+def sxExpr : Sx → Option Expr
+  | .list [.atom "lit", v] => (sxVal v).map .lit
+  | .list [.atom "var", .atom n] => some (.var n)
+  | .list [.atom "bin", .atom op, a, b] =>
+      match sxBinOp op, sxExpr a, sxExpr b with
+      | some op', some a', some b' => some (.bin op' a' b')
+      | _, _, _ => none
+  | .list [.atom "un", .atom op, a] =>
+      match sxUnOp op, sxExpr a with
+      | some op', some a' => some (.un op' a')
+      | _, _ => none
+  | .list [.atom "cond", c, t, e] =>
+      match sxExpr c, sxExpr t, sxExpr e with
+      | some c', some t', some e' => some (.cond c' t' e')
+      | _, _, _ => none
+  | .list [.atom "field", o, .atom n] => (sxExpr o).map (.field · n)
+  | .list [.atom "index", o, i] =>
+      match sxExpr o, sxExpr i with
+      | some o', some i' => some (.index o' i')
+      | _, _ => none
+  | .list (.atom "builtin" :: .atom n :: args) =>
+      (sxExprList args).map (.builtin n)
+  | _ => none
+
+def sxExprList : List Sx → Option (List Expr)
+  | [] => some []
+  | x :: rest =>
+      match sxExpr x, sxExprList rest with
+      | some e, some es => some (e :: es)
+      | _, _ => none
+
+def sxNamedExpr : Sx → Option (String × Expr)
+  | .list [.atom n, e] => (sxExpr e).map (n, ·)
+  | _ => none
+
+def sxNamedExprList : List Sx → Option (List (String × Expr))
+  | [] => some []
+  | x :: rest =>
+      match sxNamedExpr x, sxNamedExprList rest with
+      | some p, some ps => some (p :: ps)
+      | _, _ => none
+
+def sxArmNode : Sx → Option ArmNode
+  | .atom "terminal" => some .terminal
+  | .list (.atom "jump" :: .atom n :: args) =>
+      (sxNamedExprList args).map (.jump n)
+  | .list (.atom "invoke" :: .atom n :: args) =>
+      (sxNamedExprList args).map (.invoke n)
+  | .list [.atom "produce", e] => (sxExpr e).map .produce
+  | .list [.atom "ctor", .atom n, e] => (sxExpr e).map (.retCtor n)
+  | _ => none
+
+/-- Arm fields fold — order-free, every field may appear at most once.
+`catchall` sets branch `*` AND the flag, matching the walker's stored
+shape (catchall arms carry `branch = "*"` and tagged dispatch compares
+names only). -/
+def sxArmFields : List Sx → Arm → Option Arm
+  | [], a => some a
+  | .list [.atom "tag", .atom n] :: rest, a =>
+      if a.branch != "" then none
+      else sxArmFields rest { a with branch := n }
+  | .atom "catchall" :: rest, a =>
+      if a.catchall || a.branch != "" then none
+      else sxArmFields rest { a with branch := "*", catchall := true }
+  | .list [.atom "bind", .atom n] :: rest, a =>
+      if a.bind.isSome then none
+      else sxArmFields rest { a with bind := some n }
+  | .list [.atom "when", e] :: rest, a =>
+      if a.cond.isSome then none
+      else match sxExpr e with
+           | some e' => sxArmFields rest { a with cond := some e' }
+           | none => none
+  | .list [.atom "node", n] :: rest, a =>
+      if a.node.isSome then none
+      else match sxArmNode n with
+           | some n' => sxArmFields rest { a with node := some n' }
+           | none => none
+  | .list (.atom "conts" :: cs) :: rest, a =>
+      if !a.conts.isEmpty then none
+      else match sxArmList cs with
+           | some cs' => sxArmFields rest { a with conts := cs' }
+           | none => none
+  | _ :: _, _ => none
+
+def sxArm : Sx → Option Arm
+  | .list (.atom "arm" :: fields) => sxArmFields fields {}
+  | _ => none
+
+def sxArmList : List Sx → Option (List Arm)
+  | [] => some []
+  | x :: rest =>
+      match sxArm x, sxArmList rest with
+      | some a, some as => some (a :: as)
+      | _, _ => none
+
+/-- `(label L)? (head NAME ARGE*) ARM*` — the subflow body after the
+`subflow` tag. -/
+def sxFlowBody : List Sx → Option Flow
+  | .list [.atom "label", .atom l] :: .list (.atom "head" :: .atom h :: args) :: arms =>
+      match sxNamedExprList args, sxArmList arms with
+      | some args', some arms' =>
+          some { preLabel := some l, head := (h, args'), arms := arms' }
+      | _, _ => none
+  | .list (.atom "head" :: .atom h :: args) :: arms =>
+      match sxNamedExprList args, sxArmList arms with
+      | some args', some arms' =>
+          some { head := (h, args'), arms := arms' }
+      | _, _ => none
+  | _ => none
+
+def sxDecl : Sx → Option (String × Callable)
+  | .list [.atom "def", .atom n, .atom "thunk"] => some (n, .thunk)
+  | .list [.atom "def", .atom n, .list (.atom "bare" :: [e])] =>
+      (sxExpr e).map fun e' => (n, .bare e')
+  | .list [.atom "def", .atom n, .list (.atom "subflow" :: body)] =>
+      (sxFlowBody body).map fun f => (n, .subflow f)
+  | _ => none
+
+def sxDeclList : List Sx → Option (List (String × Callable))
+  | [] => some []
+  | x :: rest =>
+      match sxDecl x, sxDeclList rest with
+      | some d, some ds => some (d :: ds)
+      | _, _ => none
+
+/-- A thunk-result form (void/bare/tag) — `refuse` is NOT a leaf value;
+a thunk that fails is a refusal at its call site, not an assertable
+leaf. -/
+def sxThunkResult : Sx → Option Result
+  | .list [.atom "void"] => some {}
+  | .list [.atom "bare", v] => (sxVal v).map fun v' => { payload := some v' }
+  | .list [.atom "tag", .atom n] => some { branch := some n }
+  | .list [.atom "tag", .atom n, v] =>
+      (sxVal v).map fun v' => { branch := some n, payload := some v' }
+  | _ => none
+
+def sxLeaf : Sx → Option ((String × List (String × Val)) × Result)
+  | .list [.atom "leaf", .atom n, .list args, r] =>
+      match sxNamedValList args, sxThunkResult r with
+      | some args', some r' => some ((n, args'), r')
+      | _, _ => none
+  | _ => none
+
+def sxLeafList : List Sx → Option (List ((String × List (String × Val)) × Result))
+  | [] => some []
+  | x :: rest =>
+      match sxLeaf x, sxLeafList rest with
+      | some l, some ls => some (l :: ls)
+      | _, _ => none
+
+/-- The claim's expected field: `refuse` → `none` (eval must not
+decide), otherwise a `Result`. -/
+def sxExpected : Sx → Option (Option Result)
+  | .atom "refuse" => some none
+  | r => (sxThunkResult r).map some
+
+end
+
+/-! ## The claim and its re-decision -/
+
+structure Claim where
+  graph : Graph
+  oracle : Oracle
+  entry : String
+  args : List (String × Val)
+  fuel : Nat
+  expected : Option Result
+deriving Repr
+
+/-- Claim fields fold — tagged forms, each required exactly once. -/
+private structure ClaimAcc where
+  entry : Option (String × List (String × Val)) := none
+  fuel : Option Nat := none
+  expected : Option (Option Result) := none
+  graph : Option Graph := none
+  oracle : Option Oracle := none
+
+private def claimFields : List Sx → ClaimAcc → Option ClaimAcc
+  | [], acc => some acc
+  | .list (.atom "entry" :: .atom n :: args) :: rest, acc =>
+      if acc.entry.isSome then none
+      else match sxNamedValList args with
+           | some a => claimFields rest { acc with entry := some (n, a) }
+           | none => none
+  | .list [.atom "fuel", .atom f] :: rest, acc =>
+      if acc.fuel.isSome then none
+      else match f.toNat? with
+           | some n => claimFields rest { acc with fuel := some n }
+           | none => none
+  | .list [.atom "result", r] :: rest, acc =>
+      if acc.expected.isSome then none
+      else match sxExpected r with
+           | some r' => claimFields rest { acc with expected := some r' }
+           | none => none
+  | .list (.atom "graph" :: ds) :: rest, acc =>
+      if acc.graph.isSome then none
+      else match sxDeclList ds with
+           | some g => claimFields rest { acc with graph := some g }
+           | none => none
+  | .list (.atom "oracle" :: ls) :: rest, acc =>
+      if acc.oracle.isSome then none
+      else match sxLeafList ls with
+           | some o => claimFields rest { acc with oracle := some o }
+           | none => none
+  | _ :: _, _ => none
+
+def sxClaim : Sx → Option Claim
+  | .list fields =>
+      match claimFields fields {} with
+      | some { entry := some (n, a), fuel := some f, expected := some e,
+               graph := some g, oracle := some o } =>
+          some { graph := g, oracle := o, entry := n, args := a, fuel := f, expected := e }
+      | _ => none
+  | _ => none
+
+/-- The whole check — `eval` re-decides the graph and every modeled
+expression; only thunk leaves read the asserted oracle. `==` compares
+the kernel's verdict against the asserted one — both directions
+covered: a claimed result must be reproduced exactly, a `refuse` claim
+must actually not decide. -/
+def decideClaim (c : Claim) : Bool :=
+  eval c.graph c.oracle c.fuel c.entry c.args == c.expected
+
+/-- Line-level entry: strip the `[flow-eval] ` prefix, parse, decode,
+re-decide. -/
+def checkLine (line : String) : Option Bool :=
+  (parseTop line).bind sxClaim |>.map decideClaim
+
+/-! ## Corpus driver -/
+
+def isClaimLine (line : String) : Bool :=
+  line.startsWith "[flow-eval] "
+
+/-- Byte-identical claims appearing twice inflate a claimed count
+without adding coverage — a drift violation. Reported once each. -/
+def dupLines : List String → List String → List String
+  | [], _ => []
+  | x :: rest, seen =>
+      if x ∉ seen && x ∈ rest then x :: dupLines rest (x :: seen)
+      else dupLines rest (x :: seen)
+
+def parseArgs : List String → Option (Bool × String)
+  | ["--forged", p] => some (true, p)
+  | [p] => some (false, p)
+  | _ => none
+
+def main (args : List String) : IO UInt32 := do
+  let some (forged, path) := parseArgs args
+    | do IO.eprintln "usage: FlowCheck [--forged] <corpus>"; return 2
+  let raw := (← IO.FS.lines path).toList.filter isClaimLine
+  if raw.isEmpty then
+    IO.println s!"FAIL: no [flow-eval] lines in {path}"
+    return 1
+  let lines := raw.map fun l => (l.drop "[flow-eval] ".length).toString
+  let mut bad := 0
+  for (line, sexpr) in raw.zip lines do
+    let verdict := checkLine sexpr
+    let accepted := verdict == some true
+    let label := match verdict with
+      | some true => "MATCH"
+      | some false => "MISMATCH (re-decided differently)"
+      | none => "MALFORMED"
+    let ok := if forged then !accepted else accepted
+    if !ok then bad := bad + 1
+    IO.println s!"{if ok then "ok  " else "BAD "} {label}  {line}"
+  for d in dupLines lines [] do
+    if !forged then bad := bad + 1
+    IO.println s!"{if forged then "ok  " else "BAD "} DUPLICATE  {d}"
+  let mode := if forged then "forged (all must reject)" else "conformance (all must match)"
+  IO.println s!"{mode}: {raw.length} lines, {bad} bad"
+  return (if bad == 0 then 0 else 1)
+
+end Koru.FlowCheck
+
+/-! ## End-to-end fixtures — text → parse → decode → re-decide, all
+checked by the Lean kernel itself. These pin the wire format against
+the kernel fixtures: the same programs the FlowKernel fixtures
+evaluate must decode to identical verdicts as wire text. -/
+
+namespace Koru.FlowCheck
+open Koru.FlowKernel
+
+/-- The gArith fixture as wire text — a nested-invocation chain whose
+asserted result must re-decide exactly. -/
+theorem wire_arith : checkLine "((entry main) (fuel 16) (result (bare (int 20))) (graph (def add (bare (bin add (var a) (var b)))) (def mul (bare (bin mul (var x) (var y)))) (def main (subflow (head add (a (lit (int 2))) (b (lit (int 3)))) (arm (tag go) (bind s) (node (invoke mul (x (var s)) (y (lit (int 4))))) (conts (arm (tag done) (bind t) (node (produce (var t))))))))) (oracle))" == some true := by native_decide
+
+/-- A thunk-oracle claim — asserted leaf, kernel-decided dispatch. -/
+theorem wire_thunk : checkLine "((entry main) (fuel 16) (result (bare (int 5))) (graph (def tick thunk) (def main (subflow (head tick (n (lit (int 5)))) (arm (tag go) (bind i) (node (produce (var i))))))) (oracle (leaf tick ((n (int 5))) (tag go (int 5)))))" == some true := by
+  native_decide
+
+/-- A `refuse` claim must hold only when eval genuinely does not
+decide — unasserted thunk, generous fuel. -/
+theorem wire_refuse : checkLine "((entry main) (fuel 64) (result refuse) (graph (def tick thunk) (def main (subflow (head tick (n (lit (int 5)))) (arm (tag go) (bind i) (node (produce (var i))))))) (oracle))" == some true := by native_decide
+
+/-- The same claim with `refuse` on a program that DOES decide must
+reject — not merely fail to match. -/
+theorem wire_refuse_false : checkLine "((entry main) (fuel 64) (result refuse) (graph (def mk (bare (lit (int 0)))) (def main (subflow (head mk) (arm (tag x) (node terminal))))) (oracle))" == some false := by native_decide
+
+/-- The labeled loop as wire text. -/
+theorem wire_loop : checkLine "((entry count (n (int 5))) (fuel 64) (result (bare (int 0))) (graph (def dec (bare (bin sub (var n) (lit (int 1))))) (def count (subflow (label loop) (head dec (n (var n))) (arm (tag go) (bind i) (when (bin lt (lit (int 0)) (var i))) (node (jump loop (n (bin sub (var i) (lit (int 1))))))) (arm (tag go) (bind i) (node (produce (var i))))))) (oracle))" == some true := by native_decide
+
+/-- `@as`'s lazy type argument survives the round trip — the claim
+evaluates despite `i32` being an unbound name. -/
+theorem wire_as_lazy : checkLine "((entry calc) (fuel 16) (result (bare (int -3))) (graph (def calc (bare (builtin as (var i32) (builtin divTrunc (lit (int -7)) (lit (int 2))))))) (oracle))" == some true := by native_decide
+
+/-- Malformed inputs refuse at the decode layer, never silently. -/
+theorem wire_malformed_paren :
+    parseTop "((entry main) (fuel 8)" == none := by native_decide
+
+theorem wire_malformed_op : checkLine "((entry f) (fuel 8) (result (bare (int 1))) (graph (def f (bare (bin pow (lit (int 1)) (lit (int 1)))))) (oracle))" == none := by native_decide
+
+/-- A duplicated field refuses — `(fuel 1) (fuel 2)` is not a claim. -/
+theorem wire_dup_field : checkLine "((entry f) (fuel 8) (fuel 9) (result (bare (int 1))) (graph (def f (bare (lit (int 1))))) (oracle))" == none := by
+  native_decide
+
+end Koru.FlowCheck
+
+def main (args : List String) : IO UInt32 := Koru.FlowCheck.main args

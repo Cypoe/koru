@@ -42,13 +42,18 @@ again, with the disagreement hidden inside one file.
 ## Where this could be wrong
 
 - A singleton semantics is only as good as its fit to the implementation
-  it claims to define. Nothing yet exercises FlowKernel against real
-  emitted programs — the corpus-facing leg is open, and until it lands
-  the kernel could be a clean model of the wrong language. The belief
-  predicts this is fine: divergence is a bug with a referent, not a
-  third semantics. If in practice the kernel drifts silently because no
-  surface consumes it, the missing piece is the claim-emitter, not more
-  formalization.
+  it claims to define — **measured, not merely predicted.** A
+  clause-by-clause audit of FlowKernel against `comptime_eval.zig` found
+  seven real divergences, all model-side (void-dispatch refusal,
+  catchall tagged-dispatch, `and`/`or` short-circuit, truncating `/` `%`,
+  floored `@mod`, `++` vs `+`, lazy `@as`): the kernel WAS a clean model
+  of a slightly-wrong language, and every fix moved the model toward the
+  implementation — divergence was a bug with a referent, exactly as
+  predicted. `FlowCheck.lean` now re-decides `[flow-eval]` whole-program
+  claims end to end, so the singleton is exerciseable — but koruc does
+  not emit claims yet, so silent divergence is only *detectable*, not yet
+  *detected* on real runs. The remaining missing piece is the
+  claim-emitter, not more formalization — also as predicted.
 - There is a defensible middle: two mechanized semantics with a proved
   equivalence (a definitional and a denotational reading, as in textbook
   PL formalizations). That is one semantics stated twice and *proved*

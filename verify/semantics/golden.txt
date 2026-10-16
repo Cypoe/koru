@@ -1,0 +1,38 @@
+# FlowCheck golden corpus — every [flow-eval] claim must re-decide to
+# its asserted result. Claims are one-line s-expressions; other lines
+# are ignored. Fuel on `refuse` claims is set generously by convention.
+
+# 1. Bare-return impls chained through untagged dispatch (the gArith
+#    fixture as wire text): add(2,3) -> s, mul(s,4) -> t, produce t = 20.
+[flow-eval] ((entry main) (fuel 16) (result (bare (int 20))) (graph (def add (bare (bin add (var a) (var b)))) (def mul (bare (bin mul (var x) (var y)))) (def main (subflow (head add (a (lit (int 2))) (b (lit (int 3)))) (arm (tag go) (bind s) (node (invoke mul (x (var s)) (y (lit (int 4))))) (conts (arm (tag done) (bind t) (node (produce (var t))))))))) (oracle))
+
+# 2. Tagged dispatch: classify(-5) routes through the sign guard into
+#    => neg 0; the caller's pos arm never fires even though listed first.
+[flow-eval] ((entry main) (fuel 32) (result (bare (int 7))) (graph (def sign (bare (bin lt (var x) (lit (int 0))))) (def classify (subflow (head sign (x (var x))) (arm (tag ok) (bind p) (when (var p)) (node (ctor neg (lit (int 0))))) (arm (tag ok) (bind p) (node (ctor pos (var x)))))) (def main (subflow (head classify (x (lit (int -5)))) (arm (tag pos) (node (produce (lit (int 999))))) (arm (tag neg) (node (produce (lit (int 7)))))))) (oracle))
+
+# 3. Labeled loop + guard-skip: count(5) jumps #loop while i > 0, then
+#    the unguarded `go i` arm produces 0.
+[flow-eval] ((entry count (n (int 5))) (fuel 64) (result (bare (int 0))) (graph (def dec (bare (bin sub (var n) (lit (int 1))))) (def count (subflow (label loop) (head dec (n (var n))) (arm (tag go) (bind i) (when (bin lt (lit (int 0)) (var i))) (node (jump loop (n (bin sub (var i) (lit (int 1))))))) (arm (tag go) (bind i) (node (produce (var i))))))) (oracle))
+
+# 4. Thunk oracle leaf — the kernel re-decides the dispatch around the
+#    asserted (tick 5) => go 5, never the leaf itself.
+[flow-eval] ((entry main) (fuel 16) (result (bare (int 5))) (graph (def tick thunk) (def main (subflow (head tick (n (lit (int 5)))) (arm (tag go) (bind i) (node (produce (var i))))))) (oracle (leaf tick ((n (int 5))) (tag go (int 5)))))
+
+# 5. Unasserted thunk call refuses — the kernel does not invent leaves.
+[flow-eval] ((entry main) (fuel 64) (result refuse) (graph (def tick thunk) (def main (subflow (head tick (n (lit (int 5)))) (arm (tag go) (bind i) (node (produce (var i))))))) (oracle))
+
+# 6. Void result cannot dispatch arms — inner chain ends terminal, the
+#    caller's arm set makes the whole call refuse.
+[flow-eval] ((entry main) (fuel 64) (result refuse) (graph (def mk (bare (lit (int 0)))) (def inner (subflow (head mk) (arm (tag x) (node terminal)))) (def main (subflow (head inner) (arm (tag y) (node (produce (lit (int 9)))))))) (oracle))
+
+# 7. Expression surface: @as's lazy type arg, truncating div, string
+#    concat, conditional — one bare impl exercising each.
+[flow-eval] ((entry calc) (fuel 16) (result (bare (int -3))) (graph (def calc (bare (builtin as (var i32) (builtin divTrunc (lit (int -7)) (lit (int 2))))))) (oracle))
+[flow-eval] ((entry cat) (fuel 16) (result (bare (str "ab"))) (graph (def cat (bare (bin concat (lit (str "a")) (lit (str "b")))))) (oracle))
+[flow-eval] ((entry pick) (fuel 16) (result (bare (int 1))) (graph (def pick (bare (cond (lit (bool true)) (lit (int 1)) (bin div (lit (int 1)) (lit (int 0))))))) (oracle))
+
+# 8. Terminal flow surfaces a void result — asserted as (void).
+[flow-eval] ((entry inner) (fuel 16) (result (void)) (graph (def mk (bare (lit (int 0)))) (def inner (subflow (head mk) (arm (tag x) (node terminal))))) (oracle))
+
+# 9. Cell/array values from a thunk leaf get field-read and indexed.
+[flow-eval] ((entry main) (fuel 16) (result (bare (int 20))) (graph (def feed thunk) (def main (subflow (head feed) (arm (tag ok) (bind c) (node (produce (index (field (var c) items) (lit (int 1))))))))) (oracle (leaf feed () (tag ok (cell (items (arr (int 10) (int 20))))))))

@@ -1,0 +1,21 @@
+# FlowCheck forged corpus — every line must be REJECTED: malformed
+# s-expressions, decode refusals, and honest-shape/false-claim lines
+# (the asserted result does not match the re-decided one).
+
+# Malformed: unbalanced parens, trailing tokens, missing claim field.
+[flow-eval] ((entry main) (fuel 16) (result (bare (int 20))) (graph
+[flow-eval] ((entry main)) extra)
+[flow-eval] ((entry main) (fuel 16) (result (bare (int 20))) (graph) (oracle))
+
+# Decode refusals: unknown operator, bad val shape, quoted name in a
+# bare-name position is fine — but an int literal that isn't a number,
+# a float with a zero denominator, a `refuse` leaf — all refuse.
+[flow-eval] ((entry f) (fuel 8) (result (bare (int 1))) (graph (def f (bare (bin pow (lit (int 1)) (lit (int 1)))))) (oracle))
+[flow-eval] ((entry f) (fuel 8) (result (bare (int 1))) (graph (def f (bare (lit (int abc))))) (oracle))
+[flow-eval] ((entry f) (fuel 8) (result (bare (float 3 2))) (graph (def f (bare (lit (float 3 0))))) (oracle))
+[flow-eval] ((entry f) (fuel 8) (result (bare (int 1))) (graph (def t thunk) (def f (subflow (head t)))) (oracle (leaf t () refuse)))
+
+# Honest shape, false claim: the graph evaluates 20, not 21 — and a
+# `refuse` claim on a program that decides must reject too.
+[flow-eval] ((entry main) (fuel 16) (result (bare (int 21))) (graph (def add (bare (bin add (var a) (var b)))) (def mul (bare (bin mul (var x) (var y)))) (def main (subflow ((head add (a (lit (int 2))) (b (lit (int 3)))) (arm (tag go) (bind s) (node (invoke mul (x (var s)) (y (lit (int 4))))) (conts (arm (tag done) (bind t) (node (produce (var t)))))))))) (oracle))
+[flow-eval] ((entry main) (fuel 64) (result refuse) (graph (def main (subflow (head mk) (arm (tag x) (node terminal)))) (def mk (bare (lit (int 0))))) (oracle))

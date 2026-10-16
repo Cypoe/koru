@@ -86,18 +86,25 @@ Measured at `ccomp` `e94bfeeb9` (2026-10-14).
 
 ## K3-adjacent — flow semantics kernel (`verify/semantics/`)
 
-- **`FlowKernel.lean` is a model, not yet a consumer surface.** Its
-  evaluator, fixtures, and metatheorems are kernel-checked, but nothing
-  emits claims for it to re-decide — the corpus-facing leg
-  (`graph-eval` witness lines on kernel-subset programs) is open, so
-  the kernel currently verifies itself rather than any run.
+- **`FlowCheck.lean` consumes `[flow-eval]` claims — but nothing emits
+  them yet.** The whole-program checker (graph + entry call + fuel +
+  asserted result + asserted thunk leaves, re-decided end to end) is
+  gated on hand-authored corpora (golden/forged/drift). The open leg is
+  koruc-side serialization: emit a claim per kernel-subset walk on real
+  corpus runs so the kernel re-decides actual executions.
 - **No shared code with koruc.** Independence is the point — divergence
   between the kernel and the compiler is a bug in one of them — but
-  until a surface consumes it, silent divergence on kernel-subset
+  until koruc emits real claims, silent divergence on kernel-subset
   programs is possible in both directions and nothing would notice.
-- **Kernel scope is declared small:** no effects, stores, labels, taps,
-  transforms, modules, name resolution, or recursion. Programs outside
-  the subset have no mechanized meaning.
+- **Kernel scope covers the walker's comptime expression surface:**
+  int/float/bool/str/array/cell values, full binary/unary ops (with
+  truncating `/`,`%` and floored `@mod` distinguished), lazy
+  `and`/`or`/conditionals/`@as`, field access, array indexing, tagged/
+  bare/void dispatch, `#label`+`@jump` loops, named args, thunk oracle
+  leaves. Refused: effects, stores, `|*`, taps, transforms, modules,
+  name resolution, recursion, function calls, fragments, destructured
+  arms, `Source` args, non-enclosing labels, and i64 overflow (the
+  kernel uses unbounded `Int`).
 
 ## K4 — attested receipts
 

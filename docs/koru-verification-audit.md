@@ -233,32 +233,38 @@ fixture family exercises). Weeks-scale, not years; and it anchors the
 existing propositions to meaning rather than digests.
 
 - **Rung A — mechanize a kernel flow-graph semantics in Lean.**
-  *Landed:* `verify/semantics/FlowKernel.lean` is a standalone kernel
-  semantics — values (int/bool/unit), expressions (literals, args,
-  ambient vars, binops, `ife`, `ret` branch delivery), `invoke`/`halt`
-  nodes, and first-match continuation dispatch with `when` clauses.
-  `evalNode` is fuel-bounded (decrement on invoke only); the design
-  choices are the honest ones — tor bodies evaluate under the parameter
-  env alone, a `when` that fails to evaluate is a program error not a
-  silent skip, and `none` never means "close enough". Nine fixture
-  evaluations are compile-checked by `native_decide` (arithmetic chains,
-  branch selection, when-skip, no-match, type error, div-zero, fuel
-  exhaustion, ret-through-halt); two metatheorems are kernel-proved:
-  `firstCont_fires_first` (dispatch really is first-match) and
-  `evalNode_mono` (more fuel never flips a decided result — the theorem
-  that makes fuel a resource bound rather than a semantics change).
-  It is checked by `scripts/semantics_gate.sh`, which the attested
-  battery now runs and whose digest the receipt pins — so "the flow
-  semantics proofs held" is an attested verdict, not a convention.
-  The elaborated graph is already the agreed semantics boundary (both
-  emitters consume it); this turns "the same elaborated flow graph"
-  from a convention into a checkable object. **Open:** the kernel is a
-  *model*, not yet a corpus surface — nothing emits `graph-eval` claims
-  for it to re-decide, and it shares no code with koruc, so divergence
-  is possible in both directions (that is the point of a single
-  mechanized definition; the corpus-facing leg is what exercises it).
-  Effects, stores, labels, taps, transforms, modules, and recursion are
-  deliberately out of scope.
+  *Landed:* `verify/semantics/FlowKernel.lean` is a mechanized model of
+  `comptime_eval.zig`'s walker — values (int/float/bool/str/array/
+  cell), the full binary/unary operator set (truncating `/`,`%`,
+  floored `@mod`, `++` concat, short-circuit `and`/`or`), lazy
+  conditionals and builtins (`@as` evaluates only its value argument —
+  the type name is never evaluated), field access, bounds-checked array
+  indexing, tagged/bare/void dispatch (void results refuse at every arm
+  site; catchalls participate in bare dispatch only), `#label`+`@jump`
+  loops, named args, and thunk oracle leaves. `run` is fuel-bounded;
+  `run_mono` proves more fuel never flips a decided result. ~45
+  `native_decide` fixture theorems pin the distinguishing surface —
+  including void-dispatch refusal, guard order, payload-before-guard,
+  nested invoke continuations, env isolation, and unasserted-thunk
+  refusal. Faithfulness was established by clause-by-clause audit
+  against `comptime_eval.zig`, which caught and fixed seven model-side
+  divergences (the walker was right every time; the model is now the
+  side that had to move). *Corpus surface landed:*
+  `verify/semantics/FlowCheck.lean` consumes `[flow-eval]` s-expression
+  claims — whole-program graph + entry call + fuel + asserted result +
+  asserted thunk oracle leaves — and re-decides each through `eval`;
+  `refuse` claims succeed only when the kernel actually decides
+  `none`. Golden/forged/drift corpora are gated by
+  `scripts/semantics_gate.sh`, which the attested battery runs and
+  whose digest the receipt pins. **Open:** nothing *emits* claims yet —
+  koruc-side serialization of kernel-subset walks on real corpus runs
+  is the remaining leg, and until it lands silent divergence between
+  kernel and compiler is possible in both directions (that is the
+  point of a single mechanized definition; emission is what exercises
+  it). Effects, stores, `|*`, taps, transforms, modules, name
+  resolution, recursion, function calls, fragments, destructured arms,
+  `Source` args, non-enclosing labels, and i64 overflow (the kernel
+  uses unbounded `Int`) are declared refusals.
 - **Rung A.5 — per-instance refinement, subset-declared.** With the
   evaluator, a Lean checker takes graph + emitted C for a kernel
   program and verifies refinement *for that program* (the CompCert
