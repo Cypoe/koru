@@ -121,6 +121,19 @@ Measured at `ccomp` `e94bfeeb9` (2026-10-14).
   (same call walked twice) trip the duplicate rule — the checker cannot
   distinguish "same fact committed twice" from emitter double-counting,
   so `FLOW_EVAL_CHECK` tests must not repeat a walk verbatim.
+- **The decoder's fidelity is unproved.** `checkLine_{sound,complete,
+  reject,none}` pin the executable to `WireOk` — "the line decodes to a
+  claim the kernel reproduces" — but nothing proves `sxDecl`/`sxArm`/
+  `sxVal` decode what the emitter *meant*. A decoder bug misreads both
+  sides of the comparison consistently: the forged corpus catches gross
+  shape errors, never semantic misreads (an arm's guard dropped on the
+  floor would still "re-decide" the misdecoded graph). This is the
+  encode/decode-preservation lemma the `FlowDialect` rung owns.
+  Adjacent: `WireOk` inherits `==`'s IEEE corner — `+0.0 == -0.0` —
+  because `Float` has no lawful `DecidableEq`; wire floats decode from
+  rationals so `NaN` is inexpressible, but a kernel-computed `-0.0` can
+  be claimed as `+0.0` and match. Bit-exactness, if ever wanted, is a
+  wire-level decision, not a patch.
 - **No shared code with koruc.** Independence is the point — divergence
   between the kernel and the compiler is a bug in one of them. With the
   emit leg landed that divergence is now *detectable* per run, but only

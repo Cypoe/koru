@@ -67,7 +67,17 @@ again, with the disagreement hidden inside one file.
   is isomorphic to the checker's cost model, the walk reports its own
   depth, and every undercount fails loud (fuel exhaustion is `none`,
   never a wrong yes). What remains unproved is the isomorphism itself —
-  corpus-pinned, not theorem-pinned.
+  corpus-pinned, not theorem-pinned. The checker itself now carries its
+  spec: `WireOk` is the wire relation, and `checkLine_{sound,complete,
+  reject,none}` prove the executable answers MATCH only inside it —
+  the ISAR `step?`/`IStep` shape. Two honest discoveries from that rung:
+  `Float` has no lawful decidable equality (IEEE `+0.0 == -0.0`), so the
+  relation's verdict-equality *is* the checker's `==` — attempting
+  `decide (· = ·)` was the two-candidates trap in miniature, proposing a
+  stricter equality the corpus never agreed to; and the unproved residue
+  is decoder fidelity — `WireOk` talks about the *decoded* claim, and a
+  misdecoding `sxArm` would verify the wrong claim consistently. That
+  lemma belongs to `FlowDialect`'s encode/decode preservation.
 - There is a defensible middle: two mechanized semantics with a proved
   equivalence (a definitional and a denotational reading, as in textbook
   PL formalizations). That is one semantics stated twice and *proved*

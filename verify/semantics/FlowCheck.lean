@@ -443,6 +443,67 @@ re-decide. -/
 def checkLine (line : String) : Option Bool :=
   (parseTop line).bind sxClaim |>.map decideClaim
 
+/-- The wire relation a `[flow-eval]` line asserts: the line decodes to
+a claim whose committed outcome the kernel's verdict is equal to —
+`==`-equal, the checker's own notion, which is IEEE on floats (the
+only unlawful corner: `+0.0 == -0.0` while `+0.0 ≠ -0.0`; wire floats
+decode from rationals so `NaN` cannot appear, but the kernel can
+produce `-0.0` — a claim that needed bit-exact `-0.0` is inexpressible,
+the wire's verdict is IEEE-equal). `checkLine` is the executable half;
+`WireOk` is the spec — the ISAR `step?`/`IStep` pairing: a Bool
+function is a checker only once it is proved to land inside the
+relation it claims to decide. -/
+inductive WireOk (line : String) : Prop where
+  | mk (c : Claim) :
+      (parseTop line).bind sxClaim = some c →
+      (eval c.graph c.oracle c.fuel c.entry c.args == c.expected) = true →
+      WireOk line
+
+/-- Soundness: `checkLine` answers MATCH only for lines in the wire
+relation — it cannot pass a claim the kernel does not reproduce, and
+cannot pass a line that fails to decode. `native_decide` fixtures pin
+instances; this pins the whole grammar. -/
+theorem checkLine_sound (line : String) :
+    checkLine line = some true → WireOk line := by
+  intro h
+  unfold checkLine at h
+  cases hp : (parseTop line).bind sxClaim with
+  | none => simp [hp] at h
+  | some c =>
+      rw [hp] at h
+      simp only [Option.map_some, Option.some.injEq] at h
+      exact ⟨c, hp, h⟩
+
+/-- Completeness: every line in the wire relation checks MATCH — the
+relation and the executable check agree exactly, not only where the
+checker happens to succeed. -/
+theorem checkLine_complete (line : String) :
+    WireOk line → checkLine line = some true := by
+  rintro ⟨c, hp, he⟩
+  unfold checkLine
+  rw [hp]
+  simp only [Option.map_some, Option.some.injEq]
+  exact he
+
+/-- REJECT is a decision, not a decode failure: `some false` answers
+only on lines that parse to a claim whose outcome the kernel does not
+reproduce. A malformed line can never be claimed as a refusal. -/
+theorem checkLine_reject (line : String) (c : Claim) :
+    checkLine line = some false →
+    (parseTop line).bind sxClaim = some c →
+    (eval c.graph c.oracle c.fuel c.entry c.args == c.expected) = false := by
+  intro h hp
+  unfold checkLine at h
+  rw [hp, Option.map_some] at h
+  exact Option.some.inj h
+
+/-- The silence case: `none` iff the line never decoded to a claim —
+exactly the "unparseable input says nothing" boundary. -/
+theorem checkLine_none (line : String) :
+    checkLine line = none ↔ (parseTop line).bind sxClaim = none := by
+  unfold checkLine
+  cases (parseTop line).bind sxClaim <;> simp
+
 /-! ## Corpus driver -/
 
 def isClaimLine (line : String) : Bool :=
