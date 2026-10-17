@@ -1,0 +1,3 @@
+# std — the stdlib board. Every 6xx cluster (fmt, string, io, store, rings,
+# compress, ...). ~640 tests, ~35 min at --parallel 8.
+6*_*

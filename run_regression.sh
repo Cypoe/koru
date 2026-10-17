@@ -616,10 +616,45 @@ SMOKE_MODE=false
 
 # Filter REQUESTS, for the partial-match guard below. One row per thing the
 # caller asked for: a numeric shortcut is ONE request even when it expands to
-# two patterns (its patterns joined by tab), while each curated smoke pattern
+# two patterns (its patterns joined by tab), while each curated profile pattern
 # is its own request (each was chosen to match something). A request whose
 # every pattern matches nothing is a question that was never asked.
 FILTER_REQUESTS=()
+
+# Profiles are data, not switch cases: tests/regression/profiles/<name>.txt
+# holds one glob per line (blank lines and #-comments skipped). Every line
+# becomes its own FILTER_REQUEST, so a profile line that rots — matches no
+# test dir — refuses upfront instead of silently shrinking the board.
+load_profile() {
+    local name="$1" file="tests/regression/profiles/$1.txt" line
+    case "$name" in
+        *[!a-zA-Z0-9_-]*)
+            echo -e "${RED}❌ Error: invalid profile name '$name'${NC}"
+            exit 1 ;;
+    esac
+    if [ ! -f "$file" ]; then
+        echo -e "${RED}❌ Error: no profile '$name' ($file not found)${NC}"
+        echo "Available profiles:"
+        for f in tests/regression/profiles/*.txt; do
+            [ -f "$f" ] && echo "  $(basename "$f" .txt)"
+        done
+        exit 1
+    fi
+    local added=0
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%%#*}"
+        line="$(echo "$line" | tr -d '[:space:]')"
+        [ -z "$line" ] && continue
+        TEST_FILTERS+=("$line")
+        FILTER_REQUESTS+=("$line")
+        added=$((added + 1))
+    done < "$file"
+    if [ "$added" -eq 0 ]; then
+        echo -e "${RED}❌ Error: profile '$name' has no patterns${NC}"
+        exit 1
+    fi
+    PROFILE_NAME="$name"
+}
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -715,14 +750,17 @@ while [[ $# -gt 0 ]]; do
             ;;
         smoke)
             SMOKE_MODE=true
-            TEST_FILTERS+=(
-                "205_*" "302_*" "401_*" "501_*"
-                "701_*" "831_*" "916_*"
-            )
-            for _p in "205_*" "302_*" "401_*" "501_*" "701_*" "831_*" "916_*"; do
-                FILTER_REQUESTS+=("$_p")
-            done
+            load_profile smoke
             shift
+            ;;
+        --profile)
+            if [[ -n "$2" ]]; then
+                load_profile "$2"
+                shift 2
+            else
+                echo -e "${RED}❌ Error: --profile requires an argument${NC}"
+                exit 1
+            fi
             ;;
         --filter)
             if [[ -n "$2" ]]; then
@@ -889,6 +927,9 @@ trap 'rm -rf "$KORU_RUN_LOCK"; [ "$OWNS_MACHINE_LOCK" = true ] && rm -rf "$KORU_
 # Display what we're running
 if [ "$SMOKE_MODE" = true ]; then
     echo "🔥 SMOKE TEST MODE - Running curated test suite"
+    echo ""
+elif [ -n "${PROFILE_NAME:-}" ]; then
+    echo -e "${CYAN}Running profile:${NC} $PROFILE_NAME (tests/regression/profiles/$PROFILE_NAME.txt)"
     echo ""
 elif [ ${#TEST_FILTERS[@]} -gt 0 ]; then
     # Join patterns with space for display

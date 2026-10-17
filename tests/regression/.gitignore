@@ -55,6 +55,9 @@
 !**/banner.txt
 !**/hello.txt
 
+# Keep suite profiles — named test selections, one glob per line
+!profiles/*.txt
+
 # Nested .gitignore files are deliberate (nbody/, local fixture rules)
 !**/.gitignore
 
