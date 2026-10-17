@@ -53,3 +53,17 @@ vocabulary channels gain a third: *events*.
   world (two sessions mounting concurrently) has no interleave discipline
   — appends are line-level and the file is append-only, which is the
   honest floor, not a lock.
+
+**The record gained an independent reader.** `verify/holds/HoldsCheck.lean`
+re-decides the whole vocabulary line-by-line against a session-span ledger
+— `lean --run` over `holds.log` — with the ledger proved to agree with an
+independent right-to-left reference scan at every accepted prefix
+(`step_inv`, `replay_all`), and `clean_sound` certifying that a clean file
+leaves nothing held anywhere and that every release was backed by a live
+mint at its position. Two rulings the checker surfaced: `unreleased-at-close`
+records the violation *and* applies the close — the close did happen, so
+the record reflects it — and `use` remains outside the vocabulary: borrow
+specs never reach the pool callback, so exercising a held handle is
+enforced (`assertHandlesHeld` at dispatch) but unwritten. That is the last
+unwitnessed edge class; extending the vocabulary is the R2 question, for
+Lars's eyes.
