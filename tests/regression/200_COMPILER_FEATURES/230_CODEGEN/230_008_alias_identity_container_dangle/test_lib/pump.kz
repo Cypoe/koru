@@ -1,0 +1,21 @@
+// Cross-module arm-firer that names its OWN payload type through a qualified
+// alias — the way koru-libs packages self-qualify (`koru/metal:KeyData`,
+// `koru/vaxis:Window`). `b` and `a` are two aliases for THIS directory; the
+// decl spells `b/pump:Payload` while the consumer imports `a/pump`. The
+// emitted container is named for the consumer's alias, so the optional-arm
+// noop that writes `koru_b.koru_pump.Payload` must still resolve — the
+// module's identity cannot depend on the spelling used to reach it.
+
+pub const Payload = struct { code: u32 };
+
+~pub tor pump { n: i64 }
+! bump i64 -> i64
+! ?tick b/pump:Payload
+| done
+
+~proc pump|zig {
+    var acc: i64 = 0;
+    var i: i64 = 0;
+    while (i < n) : (i += 1) acc += bump(i);
+    return .{ .done = .{} };
+}

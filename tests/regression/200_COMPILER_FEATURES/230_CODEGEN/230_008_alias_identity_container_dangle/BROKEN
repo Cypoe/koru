@@ -1,0 +1,7 @@
+Module container identity is keyed on the consumer's import-alias spelling,
+not the resolved module: `a/pump` emits `koru_a.koru_pump` while the decl's
+own `b/pump:Payload` (same file, other alias) is written `koru_b.koru_pump
+.Payload` in the ?-optional-arm noop and Handlers signatures — a dangling
+`use of undeclared identifier 'koru_b'`. Surfaced by koru-libs/metal drift.k
+(`libs/metal` vs `koru/metal:KeyData`). Canonicalize emitted container names
+on module identity; fix in the emitter, not the test.
