@@ -1,0 +1,33 @@
+// PINS: A.5 per-instance graph->C refinement — the [flow-eval] claim
+// carries the flow's unspliced residue arms, so the Lean kernel renders
+// the expected stdout itself (result dispatched into arms, print.ln
+// format holes filled) and compares it against the __koru_stdout_write*
+// sequence actually emitted into output_emitted.c. The emitter's
+// observable output is thereby checked against an independent
+// derivation, not trusted. Same program shape as 310_141; the
+// C_REFINE_CHECK marker needs the c lane (LANGUAGES: zig c) so
+// compile_c.err and output_emitted.c both exist, and KORU_WITNESS=1
+// for the Lean oracle.
+~import std/witness
+~import std/io
+
+~std/witness:enforce { }
+
+~[comptime] tor pick { n: i64 }
+| small i64
+| big i64
+~proc pick|zig {
+    if (n < 10) return .{ .small = n };
+    return .{ .big = n };
+}
+
+~[comptime] tor route { n: i64 }
+| small i64
+| big i64
+~route = pick(n)
+| small v => small v
+| big v => big v
+
+~route(n: 4)
+| small v |> std/io:print.ln("small {{ v:d }}")
+| big v |> std/io:print.ln("big {{ v:d }}")

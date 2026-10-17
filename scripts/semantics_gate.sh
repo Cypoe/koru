@@ -30,6 +30,14 @@ if [ ! -x "$LEAN" ]; then
     exit 1
 fi
 fail=0
+# --cref <cfile>: the A.5 leg — each corpus ALSO refines the emitted C's
+# stdout writes against the kernel-rendered residue observable. The
+# C file applies to every corpus argument (in practice: one per call).
+cref=""
+if [ "${1:-}" = "--cref" ]; then
+    cref="$2"; shift 2
+    [ -f "$cref" ] || { echo "FAIL: cref C file missing: $cref"; exit 1; }
+fi
 cd "$DIR" || exit 1
 # Role A — every .lean checks clean. FlowKernel.olean is built first so
 # `import FlowKernel` resolves through LEAN_PATH.
@@ -74,7 +82,11 @@ for corpus in "$@"; do
         fail=1
         continue
     fi
-    LEAN_PATH="$DIR" "$LEAN" --run FlowCheck.lean "$corpus" || fail=1
+    if [ -n "$cref" ]; then
+        LEAN_PATH="$DIR" "$LEAN" --run FlowCheck.lean --cref "$cref" "$corpus" || fail=1
+    else
+        LEAN_PATH="$DIR" "$LEAN" --run FlowCheck.lean "$corpus" || fail=1
+    fi
 done
 rm -f FlowKernel.olean FlowCheck.olean FlowCheck.c
 if [ $fail -eq 0 ]; then echo "semantics gate: PASS"; else echo "semantics gate: FAIL"; fi

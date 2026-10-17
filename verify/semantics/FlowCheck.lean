@@ -382,15 +382,22 @@ structure Claim where
   args : List (String × Val)
   fuel : Nat
   expected : Option Result
+  /-- The unspliced residue arms the result dispatches into — the
+  observable half of the claim (A.5): the checker re-dispatches and
+  re-renders the output itself rather than trusting the emitter's
+  splice. Absent = the step has no residue. -/
+  residue : List Arm := []
 deriving Repr
 
-/-- Claim fields fold — tagged forms, each required exactly once. -/
+/-- Claim fields fold — tagged forms, each required exactly once
+(`residue` optional, defaults to none). -/
 private structure ClaimAcc where
   entry : Option (String × List (String × Val)) := none
   fuel : Option Nat := none
   expected : Option (Option Result) := none
   graph : Option Graph := none
   oracle : Option Oracle := none
+  residue : Option (List Arm) := none
 
 private def claimFields : List Sx → ClaimAcc → Option ClaimAcc
   | [], acc => some acc
@@ -419,14 +426,20 @@ private def claimFields : List Sx → ClaimAcc → Option ClaimAcc
       else match sxLeafList ls with
            | some o => claimFields rest { acc with oracle := some o }
            | none => none
+  | .list (.atom "residue" :: arms) :: rest, acc =>
+      if acc.residue.isSome then none
+      else match sxArmList arms with
+           | some a => claimFields rest { acc with residue := some a }
+           | none => none
   | _ :: _, _ => none
 
 def sxClaim : Sx → Option Claim
   | .list fields =>
       match claimFields fields {} with
       | some { entry := some (n, a), fuel := some f, expected := some e,
-               graph := some g, oracle := some o } =>
-          some { graph := g, oracle := o, entry := n, args := a, fuel := f, expected := e }
+               graph := some g, oracle := some o, residue := r } =>
+          some { graph := g, oracle := o, entry := n, args := a,
+                 fuel := f, expected := e, residue := r.getD [] }
       | _ => none
   | _ => none
 
@@ -504,6 +517,131 @@ theorem checkLine_none (line : String) :
   unfold checkLine
   cases (parseTop line).bind sxClaim <;> simp
 
+/-! ## A.5 — graph→C observable refinement
+
+`checkLine` verifies the SEMANTIC half: the emitted graph re-decides
+to the claimed verdict. A.5 verifies the OBSERVABLE half: the emitted
+C's stdout writes equal what the KERNEL derives from
+`(result, residue)` — `renderObservable` is the kernel's own
+splice+render, so "refinement" never compares the emitter's output
+against the emitter's own claim.
+
+Subset — anything else is `none` (loud refusal, never a guess):
+`main` is a flat sequence of `koru_flow_N();` calls ending in
+`return …`; each `static void koru_flow_N(void) {…}` body is a flat
+statement list of `__koru_stdout_write("…")` /
+`__koru_stdout_write_i64(⟨int⟩)`; claim count must equal the call
+count and they zip in order. A `;` inside a C string literal breaks
+the statement split — the fragments fail to parse, which is the
+intended refusal, not a silent wrong answer. -/
+
+/-- Decode a C string-literal body — the emitter's escape set
+(`\n \t \r \\ \" \'`); `\xNN`/octal/NUL refuse. -/
+def cUnescape : List Char → Option String
+  | [] => some ""
+  | '\\' :: 'n' :: r => (cUnescape r).map ("\n" ++ ·)
+  | '\\' :: 't' :: r => (cUnescape r).map ("\t" ++ ·)
+  | '\\' :: 'r' :: r => (cUnescape r).map ("\r" ++ ·)
+  | '\\' :: '\\' :: r => (cUnescape r).map ("\\" ++ ·)
+  | '\\' :: '"' :: r => (cUnescape r).map ("\"" ++ ·)
+  | '\\' :: '\'' :: r => (cUnescape r).map ("'" ++ ·)
+  | '\\' :: _ => none
+  | '"' :: _ => none
+  | c :: r => (cUnescape r).map (String.ofList [c] ++ ·)
+
+/-- Strip redundant parentheses — the emitter wraps printed values for
+precedence (`write_i64((4))`); fuel-bounded like the rest of the
+checker. -/
+def stripParensF : Nat → String → String
+  | 0, s => s
+  | n+1, s =>
+      let t := s.trimAscii.copy
+      if t.startsWith "(" && t.endsWith ")" then
+        stripParensF n ((t.drop 1 |>.dropEnd 1).copy)
+      else t
+
+/-- One emitted C statement's stdout contribution. -/
+def cStmtText (stmt : String) : Option String :=
+  let s := stmt.trimAscii.copy
+  if s.isEmpty then some ""
+  else if s.startsWith "__koru_stdout_write_i64" then
+    let arg := (s.drop "__koru_stdout_write_i64".length).copy
+    if arg.startsWith "(" && arg.endsWith ")" then
+      match (stripParensF arg.length arg).toInt? with
+      | some i => some (toString i)
+      | none => none
+    else none
+  else if s.startsWith "__koru_stdout_write_f64" then none
+  else if s.startsWith "__koru_stdout_write" then
+    let arg := s.drop "__koru_stdout_write".length
+    if arg.startsWith "(\"" && arg.endsWith "\")" then
+      cUnescape ((arg.drop 2 |>.dropEnd 2).copy.toList)
+    else none
+  else none
+
+/-- The stdout a `koru_flow_*` body commits: every statement must be a
+recognized write; anything else refuses. -/
+def cBodyWrites (body : String) : Option String :=
+  ((body.splitOn ";").mapM cStmtText).map (String.join ·)
+
+/-- `main`'s ordered `koru_flow_N()` calls — the execution order the
+claims must zip against. Subset is a flat statement list; `return …`
+terminates. -/
+def cMainCalls (src : String) : Option (List String) :=
+  match src.splitOn "int main" with
+  | [_, rest] =>
+      match rest.splitOn "{" with
+      | _ :: bodyAndAfter :: _ =>
+          match bodyAndAfter.splitOn "}" with
+          | body :: _ =>
+              ((body.splitOn ";").mapM fun (st : String) =>
+                let s := st.trimAscii.copy
+                if s.isEmpty then some none
+                else if s.startsWith "return" then some none
+                else if s.startsWith "koru_flow_" && s.endsWith "()" then
+                  some (some (s.dropEnd 2).copy)
+                else none).map (·.filterMap id)
+          | [] => none
+      | _ => none
+  | _ => none
+
+/-- One `static void NAME(void) { … }` body — flat-body subset: nested
+braces truncate the slice, whose statements then refuse to parse. -/
+def cFnBody (src : String) (name : String) : Option String :=
+  match src.splitOn ("static void " ++ name ++ "(void)") with
+  | [_, rest] =>
+      match rest.splitOn "{" with
+      | _ :: bodyAndAfter :: _ =>
+          match bodyAndAfter.splitOn "}" with
+          | body :: _ => some body
+          | [] => none
+      | _ => none
+  | _ => none
+
+/-- The A.5 verdict over one claim stream: zip claims against `main`'s
+ordered flow calls; per pair, the kernel-rendered observable must equal
+the C body's writes. `none` = outside the subset (count mismatch,
+`refuse` claim, unrenderable residue, unparseable C); `some false` =
+a decided mismatch — the emitter's writes and the kernel's render
+disagree. -/
+def checkCRefine : List Claim → List String → String → Option Bool
+  | [], [], _ => some true
+  | c :: cs, fn :: fns, src =>
+      match c.expected with
+      | none => none
+      | some r =>
+          match renderObservable c.residue r,
+                (cFnBody src fn).bind cBodyWrites with
+          | some want, some got =>
+              if want == got then checkCRefine cs fns src else some false
+          | _, _ => none
+  | _, _, _ => none
+
+def cRefineAll (claims : List Claim) (src : String) : Option Bool :=
+  match cMainCalls src with
+  | none => none
+  | some fns => checkCRefine claims fns src
+
 /-! ## Corpus driver -/
 
 def isClaimLine (line : String) : Bool :=
@@ -517,14 +655,15 @@ def dupLines : List String → List String → List String
       if x ∉ seen && x ∈ rest then x :: dupLines rest (x :: seen)
       else dupLines rest (x :: seen)
 
-def parseArgs : List String → Option (Bool × String)
-  | ["--forged", p] => some (true, p)
-  | [p] => some (false, p)
+def parseArgs : List String → Option (Bool × Option String × String)
+  | ["--forged", p] => some (true, none, p)
+  | ["--cref", c, p] => some (false, some c, p)
+  | [p] => some (false, none, p)
   | _ => none
 
 def main (args : List String) : IO UInt32 := do
-  let some (forged, path) := parseArgs args
-    | do IO.eprintln "usage: FlowCheck [--forged] <corpus>"; return 2
+  let some (forged, cpath, path) := parseArgs args
+    | do IO.eprintln "usage: FlowCheck [--forged | --cref <emitted.c>] <corpus>"; return 2
   let raw := (← IO.FS.lines path).toList.filter isClaimLine
   if raw.isEmpty then
     IO.println s!"FAIL: no [flow-eval] lines in {path}"
@@ -544,6 +683,22 @@ def main (args : List String) : IO UInt32 := do
   for d in dupLines lines [] do
     if !forged then bad := bad + 1
     IO.println s!"{if forged then "ok  " else "BAD "} DUPLICATE  {d}"
+  if let some cp := cpath then
+    let csrc ← IO.FS.readFile cp
+    match (lines.map fun s => (parseTop s).bind sxClaim).mapM id with
+    | none =>
+        bad := bad + 1
+        IO.println "BAD  cref: SKIP — a claim line did not decode"
+    | some claims =>
+        match cRefineAll claims csrc with
+        | some true =>
+            IO.println "cref: refined — kernel-rendered stdout == emitted C writes"
+        | some false =>
+            bad := bad + 1
+            IO.println "BAD  cref: MISMATCH — C writes ≠ kernel render"
+        | none =>
+            bad := bad + 1
+            IO.println "BAD  cref: outside-subset — claim's residue or the C body is outside the rendered subset"
   let mode := if forged then "forged (all must reject)" else "conformance (all must match)"
   IO.println s!"{mode}: {raw.length} lines, {bad} bad"
   return (if bad == 0 then 0 else 1)

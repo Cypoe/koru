@@ -1061,4 +1061,172 @@ theorem run_mono (g : Graph) (o : Oracle) :
         | produce e => exact h
         | retCtor b e => exact h
 
+/-! ## Residue rendering — the observable half of a claim
+
+`eval` decides WHAT a call produced; the residue decides what the
+PROGRAM does with the result. For A.5 per-instance graph→C refinement
+the kernel must render the observable itself — deriving expected stdout
+from `(result, residue)` rather than trusting the emitter's splice —
+otherwise "refinement" compares the emitter's own output against its
+own claim.
+
+Subset (everything else is `none` — a loud refusal, never a guess):
+the matched arm's node is a `std.io:print`/`std.io:print.ln` invoke
+whose single argument evaluates to a literal format string with
+`{{ name }}` / `{{ name:spec }}` holes, spec `d`, `s`, or absent, the
+hole naming a bound variable. Nested `conts` on the arm (a `|>` chain
+PAST the print) are a later rung. `eprint` writes stderr — outside the
+stdout observable — and refuses here rather than silently rendering
+nothing. -/
+
+/-- Dispatch a decided result into residue arms — `spliceResidue`'s
+rule exactly: tagged results name-match (`*`/`""` never equal a real
+tag); bare results make every arm a candidate but catchall/unnamed
+arms refuse outright; a binding arm on a payload-less result refuses;
+a false guard keeps scanning; first match wins. -/
+def dispatchResidue : List Arm → Result → Option (Arm × Env)
+  | [], _ => none
+  | a :: rest, r =>
+      match r.branch with
+      | some b =>
+          if a.branch != b then dispatchResidue rest r
+          else match bindArmEnv a [] r with
+               | none => none
+               | some env =>
+                   match evalGuard env a with
+                   | some true => some (a, env)
+                   | some false => dispatchResidue rest r
+                   | none => none
+      | none =>
+          if r.payload.isNone then none
+          else if a.catchall || a.branch == "" then none
+          else match bindArmEnv a [] r with
+               | none => none
+               | some env =>
+                   match evalGuard env a with
+                   | some true => some (a, env)
+                   | some false => dispatchResidue rest r
+                   | none => none
+
+/-- Render a value where a format spec didn't pick a representation —
+`%g`-style float printing has no lawful rendering here, so floats
+refuse rather than approximate. -/
+def renderVal : Val → Option String
+  | .int i => some (toString i)
+  | .str s => some s
+  | .bool b => some (if b then "true" else "false")
+  | _ => none
+
+/-- `{{ name }}`/`{{ name:spec }}` — the hole is a bound identifier
+(dot-paths allowed for cell fields); literal-expr holes are a later
+rung. -/
+def isHoleName (s : String) : Bool :=
+  s.length > 0 && s.all (fun c => c.isAlphanum || c == '_' || c == '.')
+
+def renderHole (env : Env) (hole : String) : Option String :=
+  match (hole.trimAscii.copy.splitOn ":").map (fun s => s.trimAscii.copy) with
+  | [n] =>
+      if isHoleName n then (env.lookup n).bind renderVal else none
+  | [n, spec] =>
+      if !isHoleName n then none
+      else match env.lookup n with
+        | some (.int i) =>
+            if spec == "d" || spec == "s" || spec == ""
+            then some (toString i) else none
+        | some v =>
+            if spec == "s" || spec == "" then renderVal v else none
+        | none => none
+  | _ => none
+
+/-- Chars up to the first `}}` — the hole's interior. -/
+def takeHole : List Char → Option (List Char × List Char)
+  | '}' :: '}' :: rest => some ([], rest)
+  | c :: rest => (takeHole rest).map fun (h, r) => (c :: h, r)
+  | [] => none
+
+/-- The print family's format render: literal text interleaved with
+`{{ hole }}` interpolation. Any other brace shape refuses. Fuel-bounded
+like `run` — one unit per char visited; the input length suffices. -/
+def renderFmtF (env : Env) : Nat → List Char → Option String
+  | 0, _ => none
+  | _+1, [] => some ""
+  | f+1, '{' :: '{' :: rest =>
+      match takeHole rest with
+      | none => none
+      | some (hole, rest') =>
+          match renderHole env (String.ofList hole) with
+          | none => none
+          | some s => (renderFmtF env f rest').map (s ++ ·)
+  | _+1, '{' :: _ => none
+  | f+1, c :: rest => (renderFmtF env f rest).map (String.ofList [c] ++ ·)
+
+def renderFmt (env : Env) (fmt : List Char) : Option String :=
+  renderFmtF env (fmt.length + 1) fmt
+
+/-- One residue arm's stdout — the print invoke is the only rendered
+node kind in the subset. -/
+def renderArmNode (a : Arm) (env : Env) : Option String :=
+  if !a.conts.isEmpty then none
+  else match a.node with
+    | some (.invoke name args) =>
+        let suffix := if name == "std.io:print.ln" then "\n" else ""
+        if !(name == "std.io:print.ln" || name == "std.io:print") then none
+        else match args with
+          | [(_, e)] =>
+              match evalE env e with
+              | some (.str fmt) => (renderFmt env fmt.toList).map (· ++ suffix)
+              | some v => (renderVal v).map (· ++ suffix)
+              | none => none
+          | _ => none
+    | _ => none
+
+/-- The observable a decided claim commits: no residue → no output; a
+lone unnamed arm is the `|>` chain — `spliceResidue` binds the entry's
+return-binding into it, which the serializer writes into the arm's
+`bind` slot; otherwise dispatch like the fold does. `none` = outside
+the rendered subset. -/
+def renderObservable (residue : List Arm) (r : Result) : Option String :=
+  match residue with
+  | [] => some ""
+  | [a] =>
+      if a.branch == "" && !a.catchall then
+        match a.bind with
+        | some b =>
+            match r.payload with
+            | some v => renderArmNode a [(b, v)]
+            | none => none
+        | none => renderArmNode a []
+      else
+        match dispatchResidue [a] r with
+        | some (sel, env) => renderArmNode sel env
+        | none => none
+  | arms =>
+      match dispatchResidue arms r with
+      | some (sel, env) => renderArmNode sel env
+      | none => none
+
+/-- Render fixtures — pinned at compile time. -/
+theorem render_tagged_dispatch :
+    renderObservable
+      [ { branch := "small", bind := some "v",
+          node := some (.invoke "std.io:print.ln" [("expr", .lit (.str "small {{ v:d }}"))]) },
+        { branch := "big", bind := some "v",
+          node := some (.invoke "std.io:print.ln" [("expr", .lit (.str "big {{ v:d }}"))]) } ]
+      { branch := some "small", payload := some (.int 4) }
+      == some "small 4\n" := by native_decide
+
+theorem render_chain_residue :
+    renderObservable
+      [ { bind := some "v",
+          node := some (.invoke "std.io:print.ln" [("expr", .lit (.str "got {{ v }}"))]) } ]
+      { branch := none, payload := some (.int 7) }
+      == some "got 7\n" := by native_decide
+
+theorem render_refuses_foreign_node :
+    renderObservable
+      [ { branch := "small", bind := some "v",
+          node := some (.invoke "std.io:eprint.ln" [("expr", .lit (.str "e {{ v }}"))]) } ]
+      { branch := some "small", payload := some (.int 4) }
+      == none := by native_decide
+
 end Koru.FlowKernel

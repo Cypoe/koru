@@ -720,6 +720,52 @@ regression_check_flow_eval_oracle() {
     echo -e "${GREEN}  ✓ flow-eval oracle: all claims re-decided (Lean)${NC}"
 }
 
+# C-refine oracle leg — opt-in via a `C_REFINE_CHECK` marker AND
+# KORU_WITNESS=1 (same Lean toolchain gate), and only meaningful on a
+# test that already ran the C lane (`c` in LANGUAGES). This is the A.5
+# check: every `[flow-eval]` claim in compile_c.err is re-decided AND
+# its residue rendered by the kernel into expected stdout, which must
+# equal the __koru_stdout_write* sequence in output_emitted.c — the
+# graph→C seam checked per-instance rather than trusted. Claims are
+# paired with koru_flow_N() calls in `main` order; a marked test whose
+# claims/C fall outside the declared subset FAILS, it does not skip.
+regression_check_c_refine_oracle() {
+    local test_dir="$1"
+    local TEST_NAME
+    TEST_NAME=$(basename "$test_dir")
+
+    [ -f "$test_dir/C_REFINE_CHECK" ] || return 0
+    [ -f "$test_dir/SUCCESS" ] && [ ! -f "$test_dir/FAILURE" ] || return 0
+
+    if [ "${KORU_WITNESS:-0}" != "1" ]; then
+        echo -e "${BLUE}  (c-refine oracle not run — set KORU_WITNESS=1)${NC}"
+        return 0
+    fi
+
+    _c_refine_oracle_fail() {
+        rm -f "$test_dir/SUCCESS"
+        echo "$1" > "$test_dir/FAILURE"
+        FAILED_TESTS="$FAILED_TESTS $TEST_NAME($1)"
+        [ "${PASSED_TESTS:-0}" -gt 0 ] && PASSED_TESTS=$((PASSED_TESTS - 1))
+        echo -e "${RED}  ✗ c-refine oracle: $2${NC}"
+    }
+
+    if [ ! -s "$test_dir/output_emitted.c" ] || [ ! -f "$test_dir/compile_c.err" ]; then
+        _c_refine_oracle_fail "c-refine-check" "no output_emitted.c/compile_c.err — marker needs the c lane (add 'c' to LANGUAGES)"
+        return 0
+    fi
+    # The gate cds into verify/semantics before reading its args — both
+    # paths must be absolute to survive that cd.
+    local cref_corpus="$(cd "$test_dir" && pwd)/compile_c.err"
+    local cref_c="$(cd "$test_dir" && pwd)/output_emitted.c"
+    if ! "$SCRIPT_DIR/scripts/semantics_gate.sh" --cref "$cref_c" "$cref_corpus" >"$test_dir/c_refine_check.out" 2>&1; then
+        _c_refine_oracle_fail "c-refine-check" "gate failed (see c_refine_check.out)"
+        tail -15 "$test_dir/c_refine_check.out" | sed 's/^/    /'
+        return 0
+    fi
+    echo -e "${GREEN}  ✓ c-refine oracle: kernel-rendered stdout == emitted C writes (Lean)${NC}"
+}
+
 # Alive2 congruence leg — opt-in via an `ALIVE2_CHECK` marker AND
 # KORU_ALIVE2=1. The gate (scripts/alive2_gate.sh) clang -O0's the emitted
 # output_emitted.c to reference IR and proves every intra-procedural
@@ -2325,6 +2371,9 @@ EOF
     # The flow-eval oracle leg — opt-in via FLOW_EVAL_CHECK + KORU_WITNESS=1;
     # the semantics kernel re-decides the [flow-eval] claims in backend.err.
     regression_check_flow_eval_oracle "$test_dir"
+    # The c-refine oracle leg — opt-in via C_REFINE_CHECK + KORU_WITNESS=1 +
+    # the c lane having run; A.5 per-instance graph→C refinement.
+    regression_check_c_refine_oracle "$test_dir"
     # The Alive2 congruence leg — opt-in via ALIVE2_CHECK + KORU_ALIVE2=1;
     # optimization instances on the emitted C must all refine the O0 IR.
     regression_check_alive2_oracle "$test_dir"
@@ -2337,7 +2386,7 @@ EOF
     if [ -f "$test_dir/SUCCESS" ] && [ ! -f "$test_dir/FAILURE" ]; then
         rm -rf "$test_dir/zig-out" "$test_dir/output_emitted.js" "$test_dir/actual.js.txt" "$test_dir/compile_js.err" "$test_dir/temp_build.zig" \
                "$test_dir/output_emitted.c" "$test_dir/actual.c.txt" "$test_dir/compile_c.err" "$test_dir/ccomp.err" "$test_dir/a_c_equiv" \
-               "$test_dir/witness_check.out" 2>/dev/null
+               "$test_dir/witness_check.out" "$test_dir/c_refine_check.out" 2>/dev/null
     fi
 
     return 0

@@ -147,6 +147,22 @@ Measured at `ccomp` `e94bfeeb9` (2026-10-14).
   name resolution, recursion, function calls, fragments, destructured
   arms, `Source` args, non-enclosing labels, and i64 overflow (the
   kernel uses unbounded `Int`).
+- **A.5 landed: claims carry `(residue ARM*)`, and `C_REFINE_CHECK`
+  closes the graph→C seam per instance.** Every claim now commits the
+  flow's unspliced residue arms (absent = `[]`, old corpora still
+  decode); `renderObservable` in the kernel re-dispatches the result
+  into those arms — `spliceResidue`'s own rule — and renders the
+  `std.io:print[.ln]` node into expected stdout. FlowCheck's `--cref`
+  mode then reads `output_emitted.c` (main's ordered `koru_flow_N`
+  calls, per-fn `__koru_stdout_write[_i64]` statement lists, C escapes
+  decoded) and requires equality. A forged C file MISMATCHes; an
+  outside-subset residue or C shape FAILs the marked test rather than
+  silently passing. `310_142` pins it: verdict re-decision and
+  observable refinement on the same compile. The declared subset
+  refuses: non-print residue nodes, `eprint` (stderr isn't the
+  checked channel), floats (`%g` rendering isn't lawful here),
+  nested arm continuations, literal-expr format holes, and C bodies
+  that aren't flat write sequences.
 
 ## K4 — attested receipts
 

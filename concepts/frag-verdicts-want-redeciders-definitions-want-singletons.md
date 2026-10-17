@@ -78,6 +78,20 @@ again, with the disagreement hidden inside one file.
   is decoder fidelity — `WireOk` talks about the *decoded* claim, and a
   misdecoding `sxArm` would verify the wrong claim consistently. That
   lemma belongs to `FlowDialect`'s encode/decode preservation.
+  The re-decider shape then grew past the verdict: A.5 put the flow's
+  residue arms on the wire, so the kernel re-decides the *observable*
+  too — `renderObservable` re-dispatches the result into the residue
+  (`spliceResidue`'s own rule, not a second reading) and renders the
+  print nodes, and `--cref` compares that derivation against the
+  emitted C's actual `__koru_stdout_write*` sequence. The graph→C seam
+  is thereby checked per instance — the emitter's runtime observable
+  is verified against an independent derivation of it, which is the
+  translation-validation half of the channel. `310_142` pins the pair:
+  verdict MATCH and `cref: refined` on one compile. What A.5 does NOT
+  yet do: refuse the *absence* of residue coverage — a claim with
+  `(residue)` arms the renderer can't read just fails the marked test,
+  but nothing checks that every emitted flow function got a claim
+  (the zip is count-strict per corpus, which is the current guard).
 - There is a defensible middle: two mechanized semantics with a proved
   equivalence (a definitional and a denotational reading, as in textbook
   PL formalizations). That is one semantics stated twice and *proved*

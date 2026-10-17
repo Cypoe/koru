@@ -695,9 +695,23 @@ pub const Evaluator = struct {
     /// absent claim is never ambiguous. Serialization failure is the
     /// honest refusal: the kernel's subset is deliberately smaller than
     /// the AST, and a walk outside it reports rather than guesses.
-    pub fn emitClaim(self: *Evaluator, entry_name: []const u8, args: []const ArgValue, expected: ClaimExpected) void {
+    /// `retbind` is the entry invocation's `return_binding` — for the
+    /// `|>`-chain residue the chain binds the produced value under that
+    /// name, which lives on the invocation, not the arm. The claim writes
+    /// it into the chain arm's `bind` slot so the kernel binds the same
+    /// env when it re-dispatches.
+    pub fn emitClaim(self: *Evaluator, entry_name: []const u8, args: []const ArgValue, expected: ClaimExpected, residue: []const ast.Continuation, retbind: ?[]const u8) void {
+        var eff: [1]ast.Continuation = undefined;
+        var eff_residue = residue;
+        if (retbind) |rb| {
+            if (residue.len == 1 and residue[0].branch.len == 0 and !residue[0].is_catchall and residue[0].binding == null) {
+                eff[0] = residue[0];
+                eff[0].binding = rb;
+                eff_residue = eff[0..1];
+            }
+        }
         var ser = ClaimSer{ .allocator = self.allocator };
-        const line = ser.claimLine(entry_name, args, expected, self.claim_defs.items, self.claim_leaves.items, self.claim_ops) catch |err| {
+        const line = ser.claimLine(entry_name, args, expected, self.claim_defs.items, self.claim_leaves.items, self.claim_ops, eff_residue) catch |err| {
             switch (err) {
                 error.Unserializable => self.emitSkip(entry_name, ser.dead_reason),
                 error.OutOfMemory => self.emitSkip(entry_name, "out-of-memory"),
@@ -979,14 +993,14 @@ pub const Folder = struct {
         const args = self.evaluator.evalArgs(&env, inv.args) catch |err| {
             // The walk refused inside its own arg eval — the claim is
             // still re-decidable (the kernel will refuse the same call).
-            if (claim) self.evaluator.emitClaim(entry_name, &.{}, .{ .refuse = refuseClass(err) });
+            if (claim) self.evaluator.emitClaim(entry_name, &.{}, .{ .refuse = refuseClass(err) }, flow.body.continuations, inv.return_binding);
             return err;
         };
         const result = self.evaluator.walkFlow(program.items, sub, args) catch |err| {
-            if (claim) self.evaluator.emitClaim(entry_name, args, .{ .refuse = refuseClass(err) });
+            if (claim) self.evaluator.emitClaim(entry_name, args, .{ .refuse = refuseClass(err) }, flow.body.continuations, inv.return_binding);
             return err;
         };
-        if (claim) self.evaluator.emitClaim(entry_name, args, .{ .result = result });
+        if (claim) self.evaluator.emitClaim(entry_name, args, .{ .result = result }, flow.body.continuations, inv.return_binding);
         return self.spliceResidue(flow, result);
     }
 
@@ -1009,7 +1023,7 @@ pub const Folder = struct {
         var arg_count: usize = 0;
         for (inv.args) |arg| {
             const arg_value = self.evalText(&env, arg.value) catch |err| {
-                if (claim) self.evaluator.emitClaim(entry_name, arg_vals[0..arg_count], .{ .refuse = refuseClass(err) });
+                if (claim) self.evaluator.emitClaim(entry_name, arg_vals[0..arg_count], .{ .refuse = refuseClass(err) }, flow.body.continuations, inv.return_binding);
                 return err;
             };
             try env.bind(arg.name, arg_value);
@@ -1020,10 +1034,10 @@ pub const Folder = struct {
         const plain = impl.value.plain_value orelse
             return self.evaluator.fail(error.UnsupportedConstruct, "comptime fold: impl of `{s}` has no bare-return expression", .{lastSegment(&impl.event_path)});
         const value = self.evalText(&env, plain) catch |err| {
-            if (claim) self.evaluator.emitClaim(entry_name, arg_vals[0..arg_count], .{ .refuse = refuseClass(err) });
+            if (claim) self.evaluator.emitClaim(entry_name, arg_vals[0..arg_count], .{ .refuse = refuseClass(err) }, flow.body.continuations, inv.return_binding);
             return err;
         };
-        if (claim) self.evaluator.emitClaim(entry_name, arg_vals[0..arg_count], .{ .result = .{ .payload = value } });
+        if (claim) self.evaluator.emitClaim(entry_name, arg_vals[0..arg_count], .{ .result = .{ .payload = value } }, flow.body.continuations, inv.return_binding);
         return self.spliceResidue(flow, .{ .branch = null, .payload = value });
     }
 
@@ -1051,11 +1065,11 @@ pub const Folder = struct {
         }
         var env = Env.init(self.allocator);
         const args = self.evaluator.evalArgs(&env, inv.args) catch |err| {
-            if (claim) self.evaluator.emitClaim(entry_name, &.{}, .{ .refuse = refuseClass(err) });
+            if (claim) self.evaluator.emitClaim(entry_name, &.{}, .{ .refuse = refuseClass(err) }, flow.body.continuations, inv.return_binding);
             return err;
         };
         const result = thunk.call(self.allocator, args) catch |err| {
-            if (claim) self.evaluator.emitClaim(entry_name, args, .{ .refuse = refuseClass(err) });
+            if (claim) self.evaluator.emitClaim(entry_name, args, .{ .refuse = refuseClass(err) }, flow.body.continuations, inv.return_binding);
             return err;
         };
         if (claim) {
@@ -1064,7 +1078,7 @@ pub const Folder = struct {
                 .args = args,
                 .result = result,
             }) catch return error.OutOfMemory;
-            self.evaluator.emitClaim(entry_name, args, .{ .result = result });
+            self.evaluator.emitClaim(entry_name, args, .{ .result = result }, flow.body.continuations, inv.return_binding);
         }
         return result;
     }
@@ -1920,6 +1934,7 @@ const ClaimSer = struct {
         defs: []const ClaimDef,
         leaves: []const ClaimLeaf,
         fuel: usize,
+        residue: []const ast.Continuation,
     ) Error![]const u8 {
         try self.outStr("((entry ");
         try self.outAtom(entry);
@@ -1960,6 +1975,15 @@ const ClaimSer = struct {
             try self.outStr(") ");
             try self.thunkResult(l.result);
             try self.outStr(")");
+        }
+        // The residue arms the result will dispatch into — UNSPLICED, so
+        // the kernel re-dispatches and re-renders the observable itself
+        // rather than trusting the emitter's splice (A.5's checkable
+        // surface: graph→C refinement is decidable against this).
+        try self.outStr(") (residue");
+        for (residue) |*r| {
+            try self.outStr(" ");
+            try self.arm(r);
         }
         try self.outStr("))");
         return self.buf.toOwnedSlice(self.allocator) catch error.OutOfMemory;
