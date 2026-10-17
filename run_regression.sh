@@ -74,6 +74,23 @@ board_float() {
         -H 'Content-Type: application/json' -d "$1" >/dev/null 2>&1 || true
 }
 
+# Print the ten slowest tests from the run's timing TSV. Runs for filtered
+# runs too (which write no snapshot), so a single slow test is visible without
+# a full board. Cached rows are ~0ms and sort last naturally.
+report_slowest_tests() {
+    local file="${KORU_TIMING_FILE:-}"
+    [ -s "$file" ] || return 0
+    local n tab
+    n=$(wc -l < "$file" | tr -d ' ')
+    tab=$(printf '\t')
+    echo ""
+    echo "SLOWEST TESTS (${n} timed):"
+    sort -t "$tab" -k4,4nr "$file" | head -10 | while IFS="$tab" read -r path start end dur status cached; do
+        [ -n "$path" ] || continue
+        printf '  %7sms  %-9s %s\n' "$dur" "$status" "$path"
+    done
+}
+
 # Float the board delta: diff the just-written test markers against the
 # PREVIOUS latest.json — must run before save-snapshot overwrites it. --diff
 # existed as an opt-in flag, which meant a regression only surfaced when
@@ -227,9 +244,12 @@ PRIORITY_LIST=""
 # Use --ignore-leaks to disable strict leak checking
 CHECK_LEAKS=true
 
-# Unit test execution flag (default: ON)
-# Use --skip-units to skip unit tests
+# Unit test execution flag (default: ON for a full board).
+# A filtered run asks about a handful of tests, not the whole compiler, so it
+# skips the 400+ unit suite unless --run-units is passed explicitly.
+# --skip-units always wins; --run-units forces them back on.
 RUN_UNIT_TESTS=true
+UNIT_TESTS_EXPLICIT=false
 
 # Compiler rebuild flag (default: ON)
 # Use --no-rebuild to skip rebuilding the compiler (for rapid iteration)
@@ -258,6 +278,16 @@ ALLOW_CONCURRENT=${ALLOW_CONCURRENT:-false}
 # outcomes — used to validate the cache logic itself.
 CACHE_MODE=off
 VERIFY_CACHE=false
+
+# Cross-target equivalence (JS / C#) is OPT-IN (default: OFF). Zig is the
+# board's primary target; a test's LANGUAGES marker records what it CAN run,
+# not that every board must pay for a second compile + dotnet build. The
+# checks still gate on LANGUAGES, so --cross-targets only enables the tests
+# that opted in. KORU_CROSS_TARGETS=on does the same for standalone runs.
+CROSS_TARGETS=off
+case "${KORU_CROSS_TARGETS:-off}" in
+    1|true|on|yes) CROSS_TARGETS=on ;;
+esac
 
 # Priority list flag (default: OFF)
 # Use --priority to list all priority items
@@ -329,7 +359,10 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo -e "${CYAN}OPTIONS:${NC}"
     echo "  --ignore-leaks                         Run without memory leak checks"
     echo "  --no-rebuild                           Skip compiler rebuild (for rapid iteration)"
-    echo "  --skip-units                           Skip unit tests (they run by default)"
+    echo "  --skip-units                           Skip unit tests (default: run on a full board, skipped on a filtered run)"
+    echo "  --run-units                            Run unit tests even on a filtered run"
+    echo "  --cross-targets                        Run JS/C# equivalence checks for tests whose LANGUAGES opt in (default: off)"
+    echo "  --no-cross-targets                     Skip JS/C# equivalence checks (default)"
     echo "  --verbose                              Show full stderr output on failures (not truncated)"
     echo "  --priority                             List all tests marked as PRIORITY"
     echo "  --clean                                Clean all Zig caches before running (fresh build)"
@@ -346,6 +379,7 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "  After each full run, a snapshot is saved to test-results/ with:"
     echo "    - Timestamp and git commit hash"
     echo "    - Complete test status (pass/fail/skip/todo/broken)"
+    echo "    - Per-test wall time (durationMs) and the slowest-test report"
     echo "    - Automatically tracked for regression detection"
     echo ""
     echo -e "${CYAN}HISTORY TRACKER:${NC}"
@@ -653,14 +687,25 @@ while [[ $# -gt 0 ]]; do
             exec "$SCRIPT_DIR/scripts/todo_sweep.sh" "${@:2}"
             ;;
         --run-units)
-            # Backwards compatibility - unit tests now run by default
+            # Unit tests are the default for a full board; this is the escape
+            # hatch for a filtered run (and keeps old invocations meaningful).
             RUN_UNIT_TESTS=true
+            UNIT_TESTS_EXPLICIT=true
             shift
             ;;
         --skip-units)
             RUN_UNIT_TESTS=false
+            UNIT_TESTS_EXPLICIT=true
             echo "⏭️  Unit tests DISABLED"
             echo ""
+            shift
+            ;;
+        --cross-targets)
+            CROSS_TARGETS=on
+            shift
+            ;;
+        --no-cross-targets)
+            CROSS_TARGETS=off
             shift
             ;;
         --verbose|-v)
@@ -772,6 +817,18 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# A filtered run is an iteration tool; the unit suite is a board-level check.
+# Apply the default AFTER parsing, so an explicit --run-units or --skip-units
+# always wins. Smoke is a filter too: it is a 7-pattern subset, not a board.
+if [ "$UNIT_TESTS_EXPLICIT" != true ] && \
+   { [ ${#TEST_FILTERS[@]} -gt 0 ] || [ "$SMOKE_MODE" = true ]; }; then
+    RUN_UNIT_TESTS=false
+fi
+
+# Workers and the serial path both read this from the environment; the
+# --cross-targets gate lives in regression_lib.sh so standalone runs share it.
+export KORU_CROSS_TARGETS="$CROSS_TARGETS"
 
 # A filter that matches SOME tests must not silently drop the rest. The zero-
 # total case is refused at the end of the run (f1a74bd1); this is the same rule
@@ -1043,6 +1100,21 @@ if [ "$CHECK_LEAKS" = true ]; then
 else
     echo "⚠️  Memory leak checking DISABLED - leaks will NOT fail tests"
 fi
+
+# ── Per-test timing ────────────────────────────────────────────────────────
+# One TSV row per test, appended by the workers (run_single_test.sh) or by the
+# serial loop. A full board embeds it in the snapshot; every run prints the
+# slowest ten, so a filtered run can answer "what cost 40s?" too.
+KORU_TIMING_FILE="${TMPDIR:-/tmp}/koru-timings.$$.tsv"
+: > "$KORU_TIMING_FILE"
+export KORU_TIMING_FILE
+
+if [ "$CROSS_TARGETS" = "on" ]; then
+    echo "🎯 Cross-target checks ENABLED (JS/C#; LANGUAGES still decides which tests)"
+else
+    echo "🎯 Cross-target checks DISABLED (Zig-only board; --cross-targets enables JS/C#)"
+fi
+echo "⏱  Per-test timings: $KORU_TIMING_FILE"
 echo ""
 
 # ════════════════════════════════════════
@@ -1078,6 +1150,9 @@ if [ "$RUN_UNIT_TESTS" = true ]; then
     echo "    REGRESSION TESTS"
     echo "════════════════════════════════════════"
     echo ""
+else
+    echo "⏭️  Unit tests skipped (filtered run; --run-units to include them)"
+    echo ""
 fi
 
 board_float "{\"_type\":\"koru.regression.start\",\"head\":\"$KORU_BOARD_HEAD\",\"scope\":\"$KORU_RUN_SCOPE\",\"jobs\":$PARALLEL_JOBS}"
@@ -1101,6 +1176,12 @@ if [ "$PARALLEL_JOBS" -gt 1 ]; then
         rm -f "$LIST_FILE" "$FILTERED_LIST"
         rm -rf "$KORU_RUN_LOCK"
         [ "$OWNS_MACHINE_LOCK" = true ] && rm -rf "$KORU_MACHINE_LOCK"
+        # This trap REPLACES the one set after the compiler snapshot, so it
+        # must also remove the snapshot. It did not: every --parallel run
+        # leaked one zig-out-run-<pid>/ (9.2MB), which is how 1,398 of them
+        # and 12GB accumulated. SIGKILL still cannot be caught; a startup
+        # sweep is the only cover for that case.
+        [ -n "${KORUC_SNAPSHOT_DIR:-}" ] && rm -rf "$KORUC_SNAPSHOT_DIR"
         return 0
     }
     trap cleanup_parallel_files EXIT
@@ -1168,6 +1249,7 @@ PY
     # different worktrees — truncate and interleave each other's output.
     PARALLEL_OUTPUT=$(mktemp /tmp/koru-parallel-output.XXXXXX)
     env REGRESSION_QUIET=true CHECK_LEAKS="$CHECK_LEAKS" VERBOSE="$VERBOSE" ZIG_GLOBAL_CACHE="$ZIG_GLOBAL_CACHE" \
+        KORU_CROSS_TARGETS="$CROSS_TARGETS" KORU_TIMING_FILE="$KORU_TIMING_FILE" \
         xargs -0 -P "$PARALLEL_JOBS" -I{} ./run_single_test.sh {} < "$FILTERED_LIST" 2>&1 | \
         tee "$PARALLEL_OUTPUT"
 
@@ -1260,6 +1342,8 @@ PY
     echo "$SUMMARY_LINE"
     echo "════════════════════════════════════════"
 
+    report_slowest_tests
+
     if [ "$RUN_UNIT_TESTS" = true ]; then
         if [ "$UNIT_TESTS_PASSED" = true ]; then
             echo -e "${GREEN}✅ Unit tests: PASSED${NC}"
@@ -1282,7 +1366,8 @@ PY
                 --passed="$PASSED_TESTS" \
                 --total="$TOTAL_TESTS" \
                 --flags="$CMD_FLAGS" \
-                --commit="$GIT_COMMIT" 2>&1 | while read line; do
+                --commit="$GIT_COMMIT" \
+                --timings="$KORU_TIMING_FILE" 2>&1 | while read line; do
                 echo "  $line"
             done
 
@@ -1403,7 +1488,9 @@ while IFS= read -r -d '' test_dir; do
             # regression_run_one_test increments counters internally; do not double-count.
             rm -f "$test_dir/SUCCESS" "$test_dir/FAILURE"
             cache_invalidate "$test_dir"
+            TIMING_T0=$(koru_now_ms)
             regression_run_one_test "$test_dir" >/dev/null 2>&1
+            record_timing_line "$test_dir" "$TIMING_T0" "$(koru_now_ms)" 0
             uncached_outcome="unknown"
             [ -f "$test_dir/SUCCESS" ] && [ ! -f "$test_dir/FAILURE" ] && uncached_outcome="pass"
             [ -f "$test_dir/FAILURE" ] && uncached_outcome="fail"
@@ -1425,6 +1512,8 @@ while IFS= read -r -d '' test_dir; do
                 FAILED_TESTS=$((FAILED_TESTS + 1))
             fi
             CACHED_TESTS=$((${CACHED_TESTS:-0} + 1))
+            TIMING_NOW=$(koru_now_ms)
+            record_timing_line "$test_dir" "$TIMING_NOW" "$TIMING_NOW" 1
         fi
         continue
     fi
@@ -1435,7 +1524,9 @@ while IFS= read -r -d '' test_dir; do
     # the default for full runs) reads disk markers instead, so it carries the
     # watchdog. Serial is single-test/small-range, where a hang is visible and
     # Ctrl-C-able (not an orphan), and the inner binary timeout still applies.
+    TIMING_T0=$(koru_now_ms)
     regression_run_one_test "$test_dir"
+    record_timing_line "$test_dir" "$TIMING_T0" "$(koru_now_ms)" 0
 
     # Update cache after test ran. Cache_write writes on either outcome and
     # refuses if neither SUCCESS nor FAILURE exists (test didn't complete).
@@ -1521,6 +1612,8 @@ fi
 echo "$STATUS_LINE"
 echo "════════════════════════════════════════"
 
+report_slowest_tests
+
 # Report unit test status
 if [ "$RUN_UNIT_TESTS" = true ]; then
     if [ "$UNIT_TESTS_PASSED" = true ]; then
@@ -1567,7 +1660,8 @@ if [ ${#TEST_FILTERS[@]} -eq 0 ] && [ "$SMOKE_MODE" = false ]; then
             --passed="$PASSED_TESTS" \
             --total="$TOTAL_TESTS" \
             --flags="$CMD_FLAGS" \
-            --commit="$GIT_COMMIT" 2>&1 | while read line; do
+            --commit="$GIT_COMMIT" \
+            --timings="$KORU_TIMING_FILE" 2>&1 | while read line; do
             echo "  $line"
         done
 
