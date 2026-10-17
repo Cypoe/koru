@@ -3,7 +3,7 @@
 // KORU180 names both stages.
 ~import std/io
 
-~[keyword|comptime|transform|requires("mk-producer")]pub tor mk-consumer {
+~[keyword|comptime|transform|contract:requires("mk-producer")]pub tor mk-consumer {
     item: *const Item,
     program: *const Program,
     allocator: std.mem.Allocator

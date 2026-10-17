@@ -62,7 +62,7 @@ drift oracle.
   under `std/witness:enforce`. This is *digest honesty*: the corpus
   proves the transform touched exactly what it touched, not that the
   rewrite was semantically right.
-- **`preserves` bounds**: transforms declare which `ast.Item` kinds
+- **`contract:preserves` bounds**: transforms declare which `ast.Item` kinds
   they may not touch; `!kind` atoms ("all except these") keep the
   bound closed under vocabulary growth. KORU181 enforces inside the
   backend run — unconditionally, not gated on `enforce` — and the
@@ -84,11 +84,11 @@ linearization. The corpus regime has three honest controls:
 
 ### The declared pass graph (rungs 1–4)
 
-- `[requires("a","b")]` on tors — declarer-side ordering edges (the
-  `depends_on` grammar slot), checked at pipeline-bake time. KORU180
+- `[contract:requires("a","b")]` on tors — declarer-side ordering edges
+  (the `depends_on` grammar slot), checked at pipeline-bake time. KORU180
   refuses four shapes: order violation, unknown name, cycle, and
   required-never-runs-at-root.
-- `[requires]`/`[preserves]` on `[transform]` decls — intra-transform
+- `[contract:requires]`/`[contract:preserves]` on `[transform]` decls — intra-transform
   ordering satisfiable only across stages (`pre` < `main` < `post`),
   since the fixed point's first-found walk order is no declarable
   contract.
@@ -98,10 +98,11 @@ linearization. The corpus regime has three honest controls:
 - Rung 3 commits the arcs: `pass-graph-{edge,order,tedge,tstage,census}`
   witness lines baked into the generated backend; Lean re-decides the
   linearization, stage ordering, and census completeness independently.
-- Rung 4 is process: the `[requires]` vs `std/compiler:requires`
-  spelling collision is recorded for Lars (options table in the
-  handoff; shipped `requires` as executive decision, rename is
-  mechanical), and the gaps ledger exists.
+- Rung 4 is process: the `requires` vs `std/compiler:requires`
+  spelling collision is resolved — Lars ruled the `contract:`
+  namespace (2026-10-17), so the family spells
+  `contract:requires`/`contract:preserves`/`contract:obliges`,
+  and the gaps ledger exists.
 
 ### K4 — attested receipts (rung 1)
 
@@ -126,7 +127,7 @@ The strongest evidence the layers are real is what they refused:
   wearing a wall's clothes. Verified by injecting a bogus nested edge:
   it refused after the fix.
 - **Cross-surface misread** — a transform invoked at a root flow had
-  its intra-transform `requires` re-checked as a pipeline edge → false
+  its intra-transform `contract:requires` re-checked as a pipeline edge → false
   "root pipeline never runs" refusal. Fixed; the converse (pipeline
   tor requiring a transform) refuses by name.
 - **`catch break` witness truncation** — arc emission could silently
@@ -292,7 +293,7 @@ independent kernel re-decides them. Growing this into proof-carrying
 programs:
 
 - **Rung A — obligation witnesses.** First leg landed: transforms
-  declare `[obliges("kind-stable","matched-only")]` — re-decidable
+  declare `[contract:obliges("kind-stable","matched-only")]` — re-decidable
   claims about their own write-back — enforced unconditionally
   (KORU182) and committed as `transform-oblige` evidence the Lean
   oracle re-decides. The pattern now proven: the compiler commits a

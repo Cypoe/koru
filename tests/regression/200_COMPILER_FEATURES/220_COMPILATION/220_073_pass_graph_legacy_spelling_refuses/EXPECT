@@ -1,0 +1,4 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS error[KORU180]
+CONTAINS no longer names a contract
+CONTAINS contract:requires

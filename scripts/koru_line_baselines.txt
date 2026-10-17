@@ -55,10 +55,11 @@ koru_std/compiler.control.kz	31
 koru_std/compiler.directives.kz	15
 koru_std/compiler.dump.kz	24
 koru_std/compiler.flags.kz	6
-koru_std/compiler.kz	2749
+koru_std/compiler.kz	2717
 koru_std/compiler.paths.kz	33
 koru_std/compiler.stages.kz	61
 koru_std/compiler.with.kz	313
+koru_std/compiler.witness.kz	226
 koru_std/constructor.kz	305
 koru_std/control.capture.kz	352
 koru_std/control.kz	138
@@ -265,7 +266,8 @@ koru_std/supervisor.policy.kz	149
 koru_std/switch.emit.kz	74
 koru_std/switch.kz	145
 koru_std/table.kz	62
-koru_std/taps.kz	1442
+koru_std/taps.kz	55
+koru_std/taps.transform.kz	1409
 koru_std/template.k	71
 koru_std/testing.assert.kz	92
 koru_std/testing.compare.kz	131

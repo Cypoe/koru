@@ -759,21 +759,21 @@ pub const TransformEntry = struct {
     /// downstream structure before peer transforms rewrite it.
     claims_descendants: bool = false,
 
-    /// Declared intra-transform ordering edges ([transform|requires("x")]).
+    /// Declared intra-transform ordering edges ([transform|contract:requires("x")]).
     /// Frontend-validated (KORU180); carried here so witness/oracle surfaces
     /// can read the contract that produced the order they observe.
     requires: []const []const u8 = &.{},
 
-    /// Declared blast-radius bound ([transform|preserves("kind",...)]):
+    /// Declared blast-radius bound ([transform|contract:preserves("kind",...)]):
     /// top-level items of the named kinds must be bit-identical across this
     /// transform's write-backs. The SITE item is always licensed — it is the
     /// point of application, not collateral. Violations refuse with KORU181.
     /// Empty = the transform declares no bound (the honest default).
     preserves: []const []const u8 = &.{},
 
-    /// Declared obligation predicates ([transform|obliges("pred",...)]):
+    /// Declared obligation predicates ([transform|contract:obliges("pred",...)]):
     /// claims about the write-back's touches the runner must DECIDE — not
-    /// just bounds it must stay in. `preserves` says which kinds may not
+    /// just bounds it must stay in. `contract:preserves` says which kinds may not
     /// be touched; obliges say what must be true of the touches made:
     ///   "kind-stable"  — rm and add hold the same multiset of item kinds:
     ///                    rewrite in place, no top-level fabrication or
@@ -1313,7 +1313,7 @@ fn siteItemIndex(allocator: std.mem.Allocator, program: *const Program, sr: Site
 }
 
 /// One changed top-level item in a write-back's accounting — digest for
-/// identity, kind for the declared `preserves` bound, is_site for the
+/// identity, kind for the declared `contract:preserves` bound, is_site for the
 /// license every transform holds over its own point of application,
 /// matched for the `matched-only` obligation (item contains an
 /// invocation the transform would fire on — it was "called" there).
@@ -1429,10 +1429,10 @@ fn checkPreservesBound(acc: *const AppAccounting, transform: *const TransformEnt
         if (kindIsPreserved(transform.preserves, di.kind)) {
             const loc = sr.holding.location;
             std.debug.print(
-                "error[KORU181]: transform '{s}' removed a '{s}' item, but its declared `preserves` bound holds that kind invariant\n" ++
+                "error[KORU181]: transform '{s}' removed a '{s}' item, but its declared `contract:preserves` bound holds that kind invariant\n" ++
                     "  --> {s}:{d}:{d}\n" ++
-                    "  declared bound: preserves({s}) — the site item is licensed, collateral is not\n" ++
-                    "  fix: narrow the write-back, or drop the kind from `preserves` if the touch is legitimate\n\n",
+                    "  declared bound: contract:preserves({s}) — the site item is licensed, collateral is not\n" ++
+                    "  fix: narrow the write-back, or drop the kind from `contract:preserves` if the touch is legitimate\n\n",
                 .{ transform.name, di.kind, loc.file, loc.line, loc.column, joinSliceInline(transform.preserves) },
             );
             return error.TransformBlastRadiusExceeded;
@@ -1442,10 +1442,10 @@ fn checkPreservesBound(acc: *const AppAccounting, transform: *const TransformEnt
         if (kindIsPreserved(transform.preserves, di.kind)) {
             const loc = sr.holding.location;
             std.debug.print(
-                "error[KORU181]: transform '{s}' added a '{s}' item, but its declared `preserves` bound holds that kind invariant\n" ++
+                "error[KORU181]: transform '{s}' added a '{s}' item, but its declared `contract:preserves` bound holds that kind invariant\n" ++
                     "  --> {s}:{d}:{d}\n" ++
-                    "  declared bound: preserves({s}) — additions outside the site count against the bound\n" ++
-                    "  fix: narrow the write-back, or drop the kind from `preserves` if the add is legitimate\n\n",
+                    "  declared bound: contract:preserves({s}) — additions outside the site count against the bound\n" ++
+                    "  fix: narrow the write-back, or drop the kind from `contract:preserves` if the add is legitimate\n\n",
                 .{ transform.name, di.kind, loc.file, loc.line, loc.column, joinSliceInline(transform.preserves) },
             );
             return error.TransformBlastRadiusExceeded;
@@ -1461,9 +1461,9 @@ fn checkPreservesAppended(transform: *const TransformEntry, appended: []const as
         const kind = itemKindName(it);
         if (kindIsPreserved(transform.preserves, kind)) {
             std.debug.print(
-                "error[KORU181]: transform '{s}' appended a '{s}' item, but its declared `preserves` bound holds that kind invariant\n" ++
-                    "  declared bound: preserves({s})\n" ++
-                    "  fix: append a non-preserved kind, or drop the kind from `preserves`\n\n",
+                "error[KORU181]: transform '{s}' appended a '{s}' item, but its declared `contract:preserves` bound holds that kind invariant\n" ++
+                    "  declared bound: contract:preserves({s})\n" ++
+                    "  fix: append a non-preserved kind, or drop the kind from `contract:preserves`\n\n",
                 .{ transform.name, kind, joinSliceInline(transform.preserves) },
             );
             return error.TransformBlastRadiusExceeded;
@@ -1484,7 +1484,7 @@ fn joinSliceInline(items: []const []const u8) []const u8 {
 
 /// Commit the accounting for one whole-program write-back: site digest plus
 /// the multiset diff of top-level item digests (pre vs post), tagged with
-/// item kinds and the transform's declared `preserves` bound so the oracle
+/// item kinds and the transform's declared `contract:preserves` bound so the oracle
 /// can rule on blast-radius containment, not just multiset honesty.
 fn emitTransformAppLine(allocator: std.mem.Allocator, pre: *const Program, transform_name: []const u8, verdict: []const u8, preserves: []const []const u8, obligations: []const []const u8, acc: AppAccounting) void {
     if (!transform_app_witness_enabled) return;
@@ -1584,7 +1584,7 @@ fn kindMultisetEqual(a: []const DiffItem, b: []const DiffItem) bool {
 }
 
 /// The declared obligations — claims about the touches a write-back
-/// actually made. `preserves` bounds WHICH kinds may move; an oblige
+/// actually made. `contract:preserves` bounds WHICH kinds may move; an oblige
 /// decides what must be TRUE of the moves. Refusal, not a flag —
 /// a claim that fails is a contract broken, KORU182.
 /// Returns the per-obligation verdict the witness line commits.
@@ -1603,7 +1603,7 @@ fn checkObligations(allocator: std.mem.Allocator, acc: *const AppAccounting, tra
             std.debug.print(
                 "error[KORU182]: transform '{s}' violated its declared `kind-stable` obligation — the write-back's collateral removals ({d} item(s)) and additions ({d}) carry differing kind multisets\n" ++
                     "  --> {s}:{d}:{d}\n" ++
-                    "  declared obligation: obliges(\"kind-stable\") — a rewrite-in-place contract: no top-level item may be fabricated or deleted outright; the site item is licensed\n" ++
+                    "  declared obligation: contract:obliges(\"kind-stable\") — a rewrite-in-place contract: no top-level item may be fabricated or deleted outright; the site item is licensed\n" ++
                     "  fix: keep the write-back's rm/add kind multisets equal, or drop the obligation if fabrication/deletion is intended\n\n",
                 .{ transform.name, rm_collateral.items.len, acc.add.len, loc.file, loc.line, loc.column },
             );
@@ -1618,7 +1618,7 @@ fn checkObligations(allocator: std.mem.Allocator, acc: *const AppAccounting, tra
                 std.debug.print(
                     "error[KORU182]: transform '{s}' violated its declared `matched-only` obligation — a '{s}' item (digest {x:0>16}) was removed without containing an invocation this transform fires on\n" ++
                         "  --> {s}:{d}:{d}\n" ++
-                        "  declared obligation: obliges(\"matched-only\") — a transform consumes only items it was called on; the site item is licensed, collateral must match\n" ++
+                        "  declared obligation: contract:obliges(\"matched-only\") — a transform consumes only items it was called on; the site item is licensed, collateral must match\n" ++
                         "  fix: narrow the write-back to matched items, or drop the obligation if touching unmatched items is intended\n\n",
                     .{ transform.name, di.kind, di.digest, loc.file, loc.line, loc.column },
                 );
@@ -1753,7 +1753,7 @@ fn applyTransform(
     }
 
     // Declared blast-radius: appended items are write-backs outside the site
-    // even on the site-local path — the `preserves` bound applies.
+    // even on the site-local path — the `contract:preserves` bound applies.
     try checkPreservesAppended(&transform, result.appended);
 
     // Place the change. The runner owns the splice — root site replaces its
@@ -1765,7 +1765,7 @@ fn applyTransform(
     // outside the site — commit the pre/post accounting before the progress
     // check below. Nested-position wp is excluded: its `post` is a rewrite of
     // the synthetic site VIEW, not the real program (and KORU124 errors it).
-    // The accounting also carries the declared `preserves` bound — a
+    // The accounting also carries the declared `contract:preserves` bound — a
     // write-back exceeding it refuses (KORU181) instead of being recorded.
     if (result.whole_program != null and sr.wrapper != null) {
         const acc = computeAppAccounting(allocator, program, spliced, sr, &transform) orelse {

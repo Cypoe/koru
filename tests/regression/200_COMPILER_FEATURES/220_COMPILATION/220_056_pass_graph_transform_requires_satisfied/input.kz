@@ -1,4 +1,4 @@
-// PINS: [requires("mk-producer")] on a main-stage transform is satisfied when
+// PINS: [contract:requires("mk-producer")] on a main-stage transform is satisfied when
 // the required transform runs at the earlier pre stage — stage order is the
 // contract for transform dependencies.
 const std = @import("std");
@@ -13,7 +13,7 @@ const std = @import("std");
 
 ~proc mk-producer|zig { return .{}; }
 
-~[keyword|comptime|transform|requires("mk-producer")]pub tor mk-consumer {
+~[keyword|comptime|transform|contract:requires("mk-producer")]pub tor mk-consumer {
     item: *const Item,
     program: *const Program,
     allocator: std.mem.Allocator

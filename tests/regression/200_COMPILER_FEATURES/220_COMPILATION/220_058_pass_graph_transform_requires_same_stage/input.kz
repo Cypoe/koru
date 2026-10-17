@@ -11,7 +11,7 @@
 
 ~proc mk-producer|zig { return .{}; }
 
-~[keyword|comptime|transform|pre|requires("mk-producer")]pub tor mk-consumer {
+~[keyword|comptime|transform|pre|contract:requires("mk-producer")]pub tor mk-consumer {
     item: *const Item,
     program: *const Program,
     allocator: std.mem.Allocator

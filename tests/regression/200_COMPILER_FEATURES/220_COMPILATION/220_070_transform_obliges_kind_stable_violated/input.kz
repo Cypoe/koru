@@ -1,5 +1,5 @@
 // PINS: kind-stable is a runtime-enforced obligation on whole-program
-// write-backs. strip-decl declares obliges("kind-stable") — the site item
+// write-backs. strip-decl declares contract:obliges("kind-stable") — the site item
 // is licensed, but its write-back drops a collateral event_decl outright
 // (rm kinds != add kinds), so KORU182 refuses with the transform name,
 // the counts, and the declared obligation. Backend-phase refusal: the
@@ -12,7 +12,7 @@ const ast_functional = @import("ast_functional");
 ~tor victim {} -> string
 ~proc victim|zig { return "v"; }
 
-~[keyword|comptime|transform|obliges("kind-stable")]pub tor strip-decl {
+~[keyword|comptime|transform|contract:obliges("kind-stable")]pub tor strip-decl {
     invocation: *const Invocation,
     item: *const std/compiler:Item,
     program: *const Program,

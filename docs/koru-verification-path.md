@@ -113,11 +113,11 @@ singleton site removal. The Lean oracle rules on accounting honesty: a
 the singleton `{site}`; the census count must equal the application lines
 (APP-DRIFT on mismatch).
 
-**Blast-radius bound landed (2026-10-14) — the pass-graph `preserves`
-surface.** `[transform|preserves(...)]` declares which top-level item
+**Blast-radius bound landed (2026-10-14) — the pass-graph `contract:preserves`
+surface.** `[transform|contract:preserves(...)]` declares which top-level item
 kinds a transform's write-backs hold invariant — the *allowed* set the
 accounting was missing. Positive atoms list the preserved kinds;
-negated atoms (`preserves("!flow","!module_decl")`) mean "preserve every
+negated atoms (`contract:contract:preserves("!flow","!module_decl")`) mean "preserve every
 kind except these" — closed under future `ast.Item` growth, which is why
 `tap` declares the negated form (its measured write-back touches only
 `flow` and `module_decl` items). At each `whole_program` application the
@@ -154,15 +154,15 @@ drift corpora carry malformed shapes, a reversed order, a same-stage
 transform edge, and count drift.
 
 **Obligations landed (2026-10-15) — a bound is not an obligation.**
-`preserves` says which item kinds a write-back may touch; it never
+`contract:preserves` says which item kinds a write-back may touch; it never
 obligated the transform to justify a touch it was permitted. The
-`[transform|obliges(...)]` surface closes that: a closed vocabulary of
+`[transform|contract:obliges(...)]` surface closes that: a closed vocabulary of
 re-decidable claims about the write-back itself. `kind-stable` — the
 collateral rm/add kind multisets must agree (the site item stays
-licensed, as with `preserves`). `matched-only` — every removed non-site
+licensed, as with `contract:preserves`). `matched-only` — every removed non-site
 item must contain an invocation the transform fires on: no silent
 consumption of unrelated items. The vocabulary is closed at declaration
-time (KORU180 refuses unknown predicates and `obliges` on non-transform
+time (KORU180 refuses unknown predicates and `contract:obliges` on non-transform
 decls); enforcement is unconditional — a violated obligation refuses
 with KORU182 whether or not witnesses are emitted. Under enforce each
 declared obligation commits one `transform-oblige` line per application
@@ -182,7 +182,7 @@ therefore passes untouched items through by value, which is the pattern
 the obligation exists to force: clone only what you change.
 Pins: `220_068`/`220_069` declaration refusals, `220_070`/`220_071`
 enforcement refusals, `220_072` the satisfied shape; `koru_std/taps.kz`
-declares `obliges("kind-stable")`.
+declares `contract:contract:obliges("kind-stable")`.
 
 ---
 
@@ -405,7 +405,7 @@ not a loophole of the layers.
   koru source rests on byte-diff + tests + refusal honesty. The zig
   self-hosted backend (`backend`/`output` binaries) is likewise unverified
   substrate. "100%" needs a verified emitter or a semantics-preservation
-  proof — the declared pass graph with `requires`/`preserves` invariants is
+  proof — the declared pass graph with `requires`/`contract:preserves` invariants is
   the staged instrument for it, and ISAR may give it teeth.
 - **Lean-side trust:** `WitnessCheck.lean` is checked by the Lean kernel; the
   *rules* it encodes are the specification — soundness theorems (Role A)
@@ -415,8 +415,9 @@ not a loophole of the layers.
   check fails rather than passes vacuously.
 - **The full gap ledger** lives in `koru-verification-gaps.md` — the
   per-layer list of what each oracle does *not* cover, kept honest as
-  layers land. The Lars-facing note on the `[requires]` spelling
-  collision is appended to `verify-path-handoff.md`.
+  layers land. The `[requires]` spelling collision was ruled on by Lars
+  (2026-10-17): the family spells `contract:requires`/`contract:preserves`/
+  `contract:obliges`; resolution recorded in `verify-path-handoff.md`.
 
 ---
 

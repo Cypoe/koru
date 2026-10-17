@@ -14,7 +14,7 @@ const std = @import("std");
 
 ~proc mk-transform|zig { return .{}; }
 
-~[requires("mk-transform")]pub tor work { } -> i32
+~[contract:requires("mk-transform")]pub tor work { } -> i32
 ~proc work|zig { return 1; }
 
 ~work(): _ |> std/io:print.ln("unreachable")

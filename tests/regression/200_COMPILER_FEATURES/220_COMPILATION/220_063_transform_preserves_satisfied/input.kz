@@ -1,6 +1,6 @@
 // PINS: a whole-program write-back that honours its declared preserves bound
 // runs clean — strip-flows removes only flow items under
-// preserves("!flow","!module_decl") (negated atoms: preserve every item kind
+// contract:preserves("!flow","!module_decl") (negated atoms: preserve every item kind
 // EXCEPT these). Under std/witness:enforce the application commits an
 // enriched transform-app line carrying the bound and kind tags, which the
 // Lean oracle independently re-checks (WITNESS_CHECK).
@@ -16,7 +16,7 @@ const ast_functional = @import("ast_functional");
 
 ~gone()
 
-~[keyword|comptime|transform|preserves("!flow","!module_decl")]pub tor strip-flows {
+~[keyword|comptime|transform|contract:preserves("!flow","!module_decl")]pub tor strip-flows {
     invocation: *const Invocation,
     item: *const std/compiler:Item,
     program: *const Program,

@@ -623,7 +623,7 @@ top-level item digests:
     <transform> <site-flow>   gc   site=<d>;rm=<d>;add=
 
 The checkable contract is accounting honesty plus, when the transform
-declares it, the blast-radius bound: `preserves` atoms are the declared
+declares it, the blast-radius bound: `contract:preserves` atoms are the declared
 invariant kinds (`!kind` = preserve-all-except; a bare/`!` mix is a
 malformed contract), `rmk`/`addk` carry the kinds positionally aligned
 with `rm`/`add`, and the site item itself is always licensed — it is the
@@ -641,7 +641,7 @@ def digestList (raw : String) : Option (List String) :=
     if parts.all isHexDigest then some parts else none
 
 /-- The Item union tag vocabulary — mirrored from src/ast.zig, the same
-closed list the frontend validates `preserves` atoms against. -/
+closed list the frontend validates `contract:preserves` atoms against. -/
 def itemKinds : List String :=
   ["module_decl", "event_decl", "proc_decl", "flow", "event_tap",
    "label_decl", "immediate_impl", "import_decl", "host_line",
@@ -749,8 +749,8 @@ def transformAppBalance (sites : List SiteLine) : Bool :=
 
 /-! ## Kind `transform-oblige` — declared obligations, decided
 
-`obliges("pred",...)` on a `[transform]` decl claims predicates about the
-write-back's touches — `preserves` bounds which kinds may move; an
+`contract:obliges("pred",...)` on a `[transform]` decl claims predicates about the
+write-back's touches — `contract:preserves` bounds which kinds may move; an
 oblige decides what must be TRUE of the moves. The runner refuses a
 violated obligation (KORU182) BEFORE emitting, so an honest corpus only
 ever carries `ok` verdicts — a line whose evidence does not support its

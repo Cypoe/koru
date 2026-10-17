@@ -1,8 +1,8 @@
-// PINS: preserves() bounds a whole-program transform write-back — on an
+// PINS: contract:preserves() bounds a whole-program transform write-back — on an
 // ordinary tor it is meaningless and refused at declaration time.
 ~import std/io
 
-~[requires("plain-tor")|preserves("flow")]pub tor work { } -> i32
+~[contract:requires("plain-tor")|contract:preserves("flow")]pub tor work { } -> i32
 ~proc work|zig { return 1; }
 ~pub tor plain-tor { } -> i32
 ~proc plain-tor|zig { return 0; }

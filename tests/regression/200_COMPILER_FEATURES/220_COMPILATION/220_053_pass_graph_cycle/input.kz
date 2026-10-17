@@ -1,8 +1,8 @@
 // PINS: requires edges form a DAG — a cycle admits no linearization, so the
 // declarations themselves are refused even before any chain is consulted.
 ~import std/io
-~[requires("b")]pub tor a { } -> i32
+~[contract:requires("b")]pub tor a { } -> i32
 ~proc a|zig { return 1; }
-~[requires("a")]pub tor b { } -> i32
+~[contract:requires("a")]pub tor b { } -> i32
 ~proc b|zig { return 0; }
 ~main = a(): _ |> b(): _ |> std/io:print("done")

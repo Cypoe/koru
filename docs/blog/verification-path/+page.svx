@@ -23,7 +23,7 @@ draft: true
 
 The sketch proposed a `-fllvm` leg. No such leg exists; what shipped (`scripts/alive2_gate.sh`) validates *emitted-C optimization congruence* instead: clang `-O0` produces reference IR from `output_emitted.c`, `alive-tv` proves each intra-procedural optimization instance a refinement — so the artifact carries no UB a mainstream optimizer can diverge on. Verdict discipline is strict, scope exclusions are named and counted (`libcall`, `untranslatable`, `unroll`), and the negative control measures a forged `mul`→`add` as `incorrect`. The doc records the landed shape inline rather than pretending the sketch shipped.
 
-What stayed open: the doc's "Use B" — koru-transform congruence — needs the emitter to expose pre/post IR, which clang's `.ll` never sees. What *did* land in Use B's direction is accounting-level: `whole_program` transform write-backs commit `transform-app` witness lines, `preserves` bounds their blast radius, and `obliges` obligates the touches the bound permits. Congruence at the declared-surface level, not the IR level — honest about which it is.
+What stayed open: the doc's "Use B" — koru-transform congruence — needs the emitter to expose pre/post IR, which clang's `.ll` never sees. What *did* land in Use B's direction is accounting-level: `whole_program` transform write-backs commit `transform-app` witness lines, `contract:preserves` bounds their blast radius, and `contract:obliges` obligates the touches the bound permits. Congruence at the declared-surface level, not the IR level — honest about which it is.
 
 ## K3 — Proof-carrying obligations: landed, and wider than planned
 
@@ -46,7 +46,7 @@ No zkVM, no guest — rung 1 is the receipt regime itself. `scripts/attest.py em
 Three things the plan did not predict:
 
 1. **The semantics kernel** (`verify/semantics/FlowKernel.lean` + `FlowCheck.lean`) — the audit's §6a growth path landed: a mechanized model of the comptime walker, faithful by clause-by-clause audit, plus a consumer that re-decides whole-program `[flow-eval]` claims with thunk leaves as the only trusted surface. This is the instrument aimed at the doc's own named hole — source → emitter faithfulness has no independent oracle.
-2. **The declared pass graph** — `[requires]`/`[preserves]`/`[obliges]` turned pipeline order and transform blast radius into committed, re-decidable evidence rather than convention.
+2. **The declared pass graph** — `[contract:requires]`/`[contract:preserves]`/`[contract:obliges]` turned pipeline order and transform blast radius into committed, re-decidable evidence rather than convention.
 3. **The gap ledger** (`docs/koru-verification-gaps.md`) — every layer's boundary lives in one honest file, revised as layers land.
 
 ## Still open, by name

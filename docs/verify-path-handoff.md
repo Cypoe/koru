@@ -133,3 +133,19 @@ Options:
 
 `preserves` has no collision. Lars's call on the rest — the rung-2
 commit message carries the same note.
+
+**Resolved 2026-10-17 (Lars): `contract:` namespace.** None of the
+options above — the family spells `contract:requires`,
+`contract:preserves`, `contract:obliges`. The namespace does the
+disambiguating work a rename alone couldn't: it also clears the deeper
+`depends_on` collision Lars surfaced (build steps and store rules use
+`depends_on` for topo-sort-me edges; the pass graph validates authored
+order and refuses — opposite contract, so sharing the word would have
+misled worse than `requires` did). The namespaced spelling reads as a
+member of the existing claim-stamp idiom (`[measured]`/`[proven]`/
+`[aspirational]` vertical blocks) — annotations are namespaced names
+already (`[registry:scope(...)]`), so no grammar work was needed.
+Vertical-block form for the compiler.kz seeds and `tap`, one contract
+claim per dash; witness wire tokens (`pass-graph-edge … requires …`,
+`preserves=`, `obliges=`) deliberately unchanged — the attested corpora
+and `WitnessCheck.lean` stay byte-valid.

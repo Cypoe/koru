@@ -1,5 +1,5 @@
-// PINS: preserves() is a runtime-enforced bound on whole-program write-backs.
-// strip-decl declares preserves("event_decl") — the site item may change, but
+// PINS: contract:preserves() is a runtime-enforced bound on whole-program write-backs.
+// strip-decl declares contract:preserves("event_decl") — the site item may change, but
 // collateral event_decl items are held invariant. Its write-back drops one,
 // so KORU181 refuses with the transform name, offending kind, site location,
 // and the declared bound. Backend-phase refusal (the bound is checked when
@@ -11,7 +11,7 @@ const ast_functional = @import("ast_functional");
 ~tor victim {} -> string
 ~proc victim|zig { return "v"; }
 
-~[keyword|comptime|transform|preserves("event_decl")]pub tor strip-decl {
+~[keyword|comptime|transform|contract:preserves("event_decl")]pub tor strip-decl {
     invocation: *const Invocation,
     item: *const std/compiler:Item,
     program: *const Program,

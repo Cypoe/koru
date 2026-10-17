@@ -33,10 +33,10 @@ Measured at `ccomp` `e94bfeeb9` (2026-10-14).
 - **Digest honesty, not semantic congruence.** The `rm=`/`add=` lines
   prove the write-back touched the declared item multiset — not that
   the rewrite preserves meaning.
-- **`preserves` bounds kinds, not content.** A transform may rewrite
+- **`contract:preserves` bounds kinds, not content.** A transform may rewrite
   every item of a kind it declared preserved; the bound only refuses
   *collateral adds/removes* of held kinds.
-- **`obliges` closes the first two decidable obligation claims, not
+- **`contract:obliges` closes the first two decidable obligation claims, not
   semantics.** `kind-stable` and `matched-only` are shape-level:
   a transform may rewrite its matched items into anything and no
   obligation yet says the rewrite preserves meaning. The vocabulary

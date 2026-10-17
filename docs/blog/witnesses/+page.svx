@@ -37,7 +37,7 @@ Each line kind names what the backend committed about one site:
 | `descriptor` / `descriptor-scope` | a declared contract matched to its emitted registry row; census count must equal the line count |
 | `transform-app` / `transform-app-census` | a `whole_program` write-back: site digest plus the `rm=`/`add=` multiset of touched top-level items |
 | `pass-graph-edge` / `-order` / `-tedge` / `-tstage` / `-census` | the declared pipeline's edges and the flattened run order the backend observed |
-| `transform-oblige` | a declared `obliges` predicate plus verdict — the claim, not just the outcome |
+| `transform-oblige` | a declared `contract:obliges` predicate plus verdict — the claim, not just the outcome |
 
 <RegressionTestLink
   tests={[
@@ -62,7 +62,7 @@ The gate (`scripts/witness_gate.sh`) runs three corpora: golden (47 lines, every
 
 ## Obligations: a bound is not a duty
 
-`[transform&#124;preserves(...)]` bounds which item kinds a write-back may touch — the blast radius. `[transform&#124;obliges(...)]` closes the other direction: a permitted touch still has to be *justified*. The vocabulary is deliberately closed and re-decidable — `kind-stable` (the collateral rm/add kind multisets must agree) and `matched-only` (every removed non-site item must contain an invocation the transform fires on). Declarations are validated at declaration time (KORU180 refuses unknown predicates and `obliges` on non-transforms); enforcement is unconditional (KORU182 refuses a violated obligation whether or not witnesses are emitted). Under enforce, each obligation commits a `transform-oblige` line the Lean checker re-decides — it does not trust the `ok` verdict.
+`[transform&#124;contract:preserves(...)]` bounds which item kinds a write-back may touch — the blast radius. `[transform&#124;contract:obliges(...)]` closes the other direction: a permitted touch still has to be *justified*. The vocabulary is deliberately closed and re-decidable — `kind-stable` (the collateral rm/add kind multisets must agree) and `matched-only` (every removed non-site item must contain an invocation the transform fires on). Declarations are validated at declaration time (KORU180 refuses unknown predicates and `contract:obliges` on non-transforms); enforcement is unconditional (KORU182 refuses a violated obligation whether or not witnesses are emitted). Under enforce, each obligation commits a `transform-oblige` line the Lean checker re-decides — it does not trust the `ok` verdict.
 
 One honest consequence: obligations are enforced at canonical-digest granularity, so a transform that *clones* items it does not change registers them as touched — clone drift reads as a touch. The satisfied pin passes untouched items through by value, which is the pattern the obligation exists to force: clone only what you change.
 

@@ -2712,8 +2712,8 @@ fn generateComptimeBackendEmitted(allocator: std.mem.Allocator, source_file: *as
     // The visitor will automatically filter to only [comptime] modules via shouldFilter
     try visitor_emitter.emit(ast_to_emit);
 
-    // Declared pass graph (KORU180): [requires("a","b")] on tors and
-    // [transform|requires/preserves] on transform decls is the contract;
+    // Declared pass graph (KORU180): [contract:requires("a","b")] on tors and
+    // [transform|contract:requires/contract:preserves] on transform decls is the contract;
     // the ~x = a |> b chains in this same parse are the observation.
     // Checked here — while the pipeline is being baked into a backend —
     // so a violated edge refuses the compiler's own construction at the
@@ -2942,7 +2942,7 @@ const reporter_inject_fmt =
     "@panic(\"{s} '{s}' declares reporter: *ErrorReporter but was invoked from a path that carries no compilation context\")))).reporter orelse " ++
     "@panic(\"{s} '{s}' declares reporter: *ErrorReporter but the compilation carries none\")),\n";
 
-/// Collect a call-annotation's arguments (`[x|requires("a","b")]`) as an
+/// Collect a call-annotation's arguments (`[x|contract:requires("a","b")]`) as an
 /// owned slice — the annotation parse is the same one pass_graph sees.
 fn annotationCallArgs(allocator: std.mem.Allocator, annotations: []const []const u8, name: []const u8) ![]const []const u8 {
     const call = try annotation_parser.getCall(allocator, annotations, name) orelse return &.{};
@@ -2964,7 +2964,7 @@ const TransformEvent = struct {
     module_path: ?[]const u8, // e.g., "koru_std.control" for stdlib, null for main_module
     claims_descendants: bool = false, // Transform should run before walking lexical descendants
     stage: []const u8 = "main", // Ordered transform stage: "pre" | "main" | "post" ([transform|pre]/[transform|post])
-    /// Declared intra-transform ordering edges ([transform|requires("x")]).
+    /// Declared intra-transform ordering edges ([transform|contract:requires("x")]).
     /// The frontend validates stage-satisfiability (KORU180); the entry
     /// carries them so witness/oracle surfaces can read the declaration.
     requires_list: []const []const u8 = &.{},
@@ -3591,9 +3591,9 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
 
                 const claims_descendants = annotation_parser.hasPart(event_decl.annotations, "claims_descendants");
                 const stage_name: []const u8 = if (annotation_parser.hasPart(event_decl.annotations, "pre")) "pre" else if (annotation_parser.hasPart(event_decl.annotations, "post")) "post" else "main";
-                const requires_list = try annotationCallArgs(allocator, event_decl.annotations, "requires");
-                const preserves_list = try annotationCallArgs(allocator, event_decl.annotations, "preserves");
-                const obliges_list = try annotationCallArgs(allocator, event_decl.annotations, "obliges");
+                const requires_list = try annotationCallArgs(allocator, event_decl.annotations, "contract:requires");
+                const preserves_list = try annotationCallArgs(allocator, event_decl.annotations, "contract:preserves");
+                const obliges_list = try annotationCallArgs(allocator, event_decl.annotations, "contract:obliges");
 
                 // Collect variant targets across the whole program (top-level event, so
                 // variants may live in any module that implements it).
@@ -3737,9 +3737,9 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
 
                         const claims_descendants = annotation_parser.hasPart(event_decl.annotations, "claims_descendants");
                         const stage_name: []const u8 = if (annotation_parser.hasPart(event_decl.annotations, "pre")) "pre" else if (annotation_parser.hasPart(event_decl.annotations, "post")) "post" else "main";
-                        const requires_list = try annotationCallArgs(allocator, event_decl.annotations, "requires");
-                        const preserves_list = try annotationCallArgs(allocator, event_decl.annotations, "preserves");
-                        const obliges_list = try annotationCallArgs(allocator, event_decl.annotations, "obliges");
+                        const requires_list = try annotationCallArgs(allocator, event_decl.annotations, "contract:requires");
+                        const preserves_list = try annotationCallArgs(allocator, event_decl.annotations, "contract:preserves");
+                        const obliges_list = try annotationCallArgs(allocator, event_decl.annotations, "contract:obliges");
 
                         // Collect variant targets from the same module (variants live alongside the event).
                         const variant_targets_mod = try collectVariantTargetsForEventPath(allocator, module.items, event_decl.path.segments, comptime_default_lang);

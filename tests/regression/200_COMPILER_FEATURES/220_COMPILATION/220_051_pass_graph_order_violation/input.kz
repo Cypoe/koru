@@ -1,9 +1,9 @@
-// PINS: [requires("a","b")] on a tor declares an ordering edge the chains must
+// PINS: [contract:requires("a","b")] on a tor declares an ordering edge the chains must
 // satisfy — `work` declares it needs `setup` first, but the chain runs setup
 // later. KORU180 refuses: the annotation is the contract, the chain is the
 // observation, disagreement is a refusal rather than a silent reorder.
 ~import std/io
-~[requires("setup")]pub tor work { } -> i32
+~[contract:requires("setup")]pub tor work { } -> i32
 ~proc work|zig { return 1; }
 ~pub tor setup { } -> i32
 ~proc setup|zig { return 0; }

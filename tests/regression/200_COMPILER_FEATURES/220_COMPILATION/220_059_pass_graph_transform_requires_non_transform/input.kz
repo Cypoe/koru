@@ -3,7 +3,7 @@
 // expressed by the stage a transform runs in.
 ~import std/io
 
-~[keyword|comptime|transform|requires("plain-tor")]pub tor mk-consumer {
+~[keyword|comptime|transform|contract:requires("plain-tor")]pub tor mk-consumer {
     item: *const Item,
     program: *const Program,
     allocator: std.mem.Allocator

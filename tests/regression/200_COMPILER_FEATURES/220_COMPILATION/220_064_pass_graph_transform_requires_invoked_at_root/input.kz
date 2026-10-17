@@ -1,4 +1,4 @@
-// PINS: a [transform] decl carrying requires() that is itself invoked at a
+// PINS: a [transform] decl carrying contract:requires() that is itself invoked at a
 // root flow — the transform edge is intra-transform (stage ordering), not a
 // pipeline position. Before the fix, step 3 re-read it as a pipeline edge
 // and refused "root pipeline never runs mk-producer" — a false refusal of a
@@ -15,7 +15,7 @@ const std = @import("std");
 
 ~proc mk-producer|zig { return .{}; }
 
-~[keyword|comptime|transform|requires("mk-producer")]pub tor mk-consumer {
+~[keyword|comptime|transform|contract:requires("mk-producer")]pub tor mk-consumer {
     item: *const Item,
     program: *const Program,
     allocator: std.mem.Allocator

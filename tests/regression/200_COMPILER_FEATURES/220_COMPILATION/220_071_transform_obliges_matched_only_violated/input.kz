@@ -1,5 +1,5 @@
 // PINS: matched-only is a runtime-enforced obligation on whole-program
-// write-backs. strip-decl declares obliges("matched-only") — a transform
+// write-backs. strip-decl declares contract:obliges("matched-only") — a transform
 // consumes only items it was called on. Its write-back drops a collateral
 // event_decl — an item kind that can never contain a matching invocation —
 // so KORU182 refuses with the transform name, the item kind+digest, and
@@ -11,7 +11,7 @@ const ast_functional = @import("ast_functional");
 ~tor victim {} -> string
 ~proc victim|zig { return "v"; }
 
-~[keyword|comptime|transform|obliges("matched-only")]pub tor strip-decl {
+~[keyword|comptime|transform|contract:obliges("matched-only")]pub tor strip-decl {
     invocation: *const Invocation,
     item: *const std/compiler:Item,
     program: *const Program,

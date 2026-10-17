@@ -1,5 +1,5 @@
 // PINS: a whole-program write-back honouring both declared obligations
-// runs clean. relabel declares obliges("kind-stable","matched-only"):
+// runs clean. relabel declares contract:obliges("kind-stable","matched-only"):
 // it removes the second ~relabel() invocation flow — a collateral item
 // containing a matching invocation, so matched-only holds — and adds one
 // rewritten flow, so the collateral rm/add kind multisets stay equal
@@ -11,7 +11,7 @@ const std = @import("std");
 const ast = @import("ast");
 const ast_functional = @import("ast_functional");
 
-~[keyword|comptime|transform|obliges("kind-stable","matched-only")]pub tor relabel {
+~[keyword|comptime|transform|contract:obliges("kind-stable","matched-only")]pub tor relabel {
     invocation: *const Invocation,
     item: *const std/compiler:Item,
     program: *const Program,
