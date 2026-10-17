@@ -2396,8 +2396,12 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\                // what was asked for: a wasm host is handed the bytes, and
             \\                // neither WebAssembly.compile nor the test harness cares what
             \\                // the file on disk is called.
+            \\                // Windows targets likewise produce `output.exe`, and
+            \\                // copyFile does no suffix search — the same silent
+            \\                // FileNotFound the wasm comment above names.
             \\                const is_wasm = if (build_target) |t| __koru_std.mem.indexOf(u8, t, "wasm") != null else false;
-            \\                const zig_artifact = if (is_wasm) "zig-out/bin/output.wasm" else "zig-out/bin/output";
+            \\                const wants_exe = if (build_target) |t| __koru_std.mem.indexOf(u8, t, "windows") != null else @import("builtin").os.tag == .windows;
+            \\                const zig_artifact = if (is_wasm) "zig-out/bin/output.wasm" else if (wants_exe) "zig-out/bin/output.exe" else "zig-out/bin/output";
             \\                __koru_std.fs.cwd().copyFile(zig_artifact, __koru_std.fs.cwd(), output_exe, .{}) catch |copy_err| {
             \\                    const msg2 = try __koru_std.fmt.bufPrint(&buf2, "✗ Failed to copy output: {}\n", .{copy_err});
             \\                    try __koru_std.fs.File.stderr().writeAll(msg2);

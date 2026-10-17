@@ -809,6 +809,61 @@ regression_check_alive2_oracle() {
     echo -e "${GREEN}  ✓ alive2 oracle: optimization instances verified${NC}"
 }
 
+# Holds-log oracle leg — opt-in via a `HOLDS_CHECK` marker AND
+# KORU_WITNESS=1 (same Lean toolchain gate as the witness oracle). The
+# custody checker (verify/holds/HoldsCheck.lean) re-decides every event
+# a world-mounted bridge wrote to holds.log — session spans, the
+# mint→release pairing, died-holding — in code independent of the pool
+# that wrote it. Opt-in for the same reason as WITNESS_CHECK: the oracle
+# needs Lean, so a marker without KORU_WITNESS is a noted skip, never a
+# verdict. A marked test that left no holds.log FAILs — the pin is the
+# record's presence, not just its verdict.
+regression_check_holds_oracle() {
+    local test_dir="$1"
+    local TEST_NAME
+    TEST_NAME=$(basename "$test_dir")
+
+    [ -f "$test_dir/HOLDS_CHECK" ] || return 0
+    [ -f "$test_dir/SUCCESS" ] && [ ! -f "$test_dir/FAILURE" ] || return 0
+
+    if [ "${KORU_WITNESS:-0}" != "1" ]; then
+        echo -e "${BLUE}  (holds oracle not run — set KORU_WITNESS=1)${NC}"
+        return 0
+    fi
+
+    _holds_oracle_fail() {
+        rm -f "$test_dir/SUCCESS"
+        echo "$1" > "$test_dir/FAILURE"
+        FAILED_TESTS="$FAILED_TESTS $TEST_NAME($1)"
+        [ "${PASSED_TESTS:-0}" -gt 0 ] && PASSED_TESTS=$((PASSED_TESTS - 1))
+        echo -e "${RED}  ✗ holds oracle: $2${NC}"
+    }
+
+    # The world dir is per-test; the record lands wherever the test mounts
+    # it — or at the test root if a post.sh that cleaned the world
+    # preserved it there.
+    local holds_logs
+    holds_logs=$(find "$test_dir" -name holds.log -type f 2>/dev/null)
+    if [ -z "$holds_logs" ]; then
+        _holds_oracle_fail "holds-check" "no holds.log under test dir — a HOLDS_CHECK-marked test must mount a world (or have post.sh preserve the log)"
+        return 0
+    fi
+    # The gate cds into verify/holds before reading its corpus args —
+    # the paths must be absolute to survive that cd. `pwd -W` (MSYS)
+    # native-paths them for a Windows lean; on Linux it fails and the
+    # POSIX fallback rides.
+    local corpus_args=()
+    while IFS= read -r p; do
+        corpus_args+=("$(cd "$(dirname "$p")" && { pwd -W 2>/dev/null || pwd; })/$(basename "$p")")
+    done <<< "$holds_logs"
+    if ! "$SCRIPT_DIR/scripts/holds_gate.sh" "${corpus_args[@]}" >"$test_dir/holds_check.out" 2>&1; then
+        _holds_oracle_fail "holds-check" "gate failed (see holds_check.out)"
+        tail -15 "$test_dir/holds_check.out" | sed 's/^/    /'
+        return 0
+    fi
+    echo -e "${GREEN}  ✓ holds oracle: custody ledger clean (Lean)${NC}"
+}
+
 regression_run_one_test() {
     local test_dir="$1"
     local TEST_NAME
@@ -2377,6 +2432,10 @@ EOF
     # The Alive2 congruence leg — opt-in via ALIVE2_CHECK + KORU_ALIVE2=1;
     # optimization instances on the emitted C must all refine the O0 IR.
     regression_check_alive2_oracle "$test_dir"
+    # The holds-log oracle leg — opt-in via HOLDS_CHECK + KORU_WITNESS=1;
+    # the custody checker re-decides every event a world-mounted bridge
+    # wrote to holds.log.
+    regression_check_holds_oracle "$test_dir"
 
     # Residual hygiene on a passed test: the JS-equivalence deposit (a JS-target
     # backend in zig-out/, output_emitted.js, js-run artifacts) must not linger —
@@ -2386,7 +2445,8 @@ EOF
     if [ -f "$test_dir/SUCCESS" ] && [ ! -f "$test_dir/FAILURE" ]; then
         rm -rf "$test_dir/zig-out" "$test_dir/output_emitted.js" "$test_dir/actual.js.txt" "$test_dir/compile_js.err" "$test_dir/temp_build.zig" \
                "$test_dir/output_emitted.c" "$test_dir/actual.c.txt" "$test_dir/compile_c.err" "$test_dir/ccomp.err" "$test_dir/a_c_equiv" \
-               "$test_dir/witness_check.out" "$test_dir/c_refine_check.out" 2>/dev/null
+               "$test_dir/witness_check.out" "$test_dir/c_refine_check.out" \
+               "$test_dir/holds.log" "$test_dir/holds_check.out" 2>/dev/null
     fi
 
     return 0

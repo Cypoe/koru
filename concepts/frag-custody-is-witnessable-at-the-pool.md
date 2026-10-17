@@ -67,3 +67,17 @@ specs never reach the pool callback, so exercising a held handle is
 enforced (`assertHandlesHeld` at dispatch) but unwritten. That is the last
 unwitnessed edge class; extending the vocabulary is the R2 question, for
 Lars's eyes.
+
+**The reader now runs inside the suite.** A test mounts a world, opts in
+with a `HOLDS_CHECK` marker plus `KORU_WITNESS=1`, and after the post
+hook preserves the log the harness calls `scripts/holds_gate.sh` —
+`lean --run HoldsCheck.lean <corpus>` over every `holds.log` found under
+the test dir. A marked test that produces no corpus fails; a verdict the
+checker refuses fails; the skip note stays a skip. First consumer:
+`440_043_two_sessions_one_world`, whose post.sh lifts the log out of the
+world before deleting it — the record outlives the world it wrote to,
+which is the claim the frag made. Landing it surfaced a sibling gap
+unrelated to custody: the emitted driver's `zig-out/bin/output` copy had
+no `.exe` arm, so the whole `build_output.zig` backend-exec lane could
+never complete on a Windows host — the world model widened by one
+platform-named artifact.

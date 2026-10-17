@@ -50,6 +50,7 @@
 !**/ALIVE2_CHECK
 !**/FLOW_EVAL_CHECK
 !**/C_REFINE_CHECK
+!**/HOLDS_CHECK
 !**/ARGS
 !**/STDIN
 !**/input.txt
