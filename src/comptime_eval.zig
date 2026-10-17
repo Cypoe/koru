@@ -185,9 +185,13 @@ pub const Evaluator = struct {
     /// everything EXCEPT these; native bodies are outside its visibility
     /// (the declared trusted leaf of the whole channel).
     claim_leaves: std.ArrayListUnmanaged(ClaimLeaf) = .{},
-    /// Kernel-step accounting → the emitted fuel bound. A measured count
-    /// with headroom, not a certificate — that rung is ISAR's
-    /// sufficient_fuel_correct shape and has not landed here yet.
+    /// Fuel certificate: the count of kernel `run` calls along this walk's
+    /// derivation spine — one increment at each site that maps to a kernel
+    /// step (.invoke/.flow/.loop/dispatch/armTry/dispatch-rest/.armWalk).
+    /// The kernel decrements fuel once per nested run call, so the emitted
+    /// value is the exact spine depth the re-decision needs: not a padded
+    /// bound, not ISAR's statically-computed sufficient_fuel_correct, but
+    /// the walk reporting its own proof-tree depth.
     claim_ops: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) Evaluator {
@@ -451,10 +455,9 @@ pub const Evaluator = struct {
     /// named wall otherwise.
     pub fn invokePath(self: *Evaluator, items: []const ast.Item, path: *const ast.DottedPath, args: []const ArgValue) EvalError!ThunkResult {
         const name = lastSegment(path);
-        // Kernel-step accounting toward the emitted fuel bound —
-        // unconditional (cheap); only read under claim_enabled.
-        // Covers the kernel's .invoke + .flow + .loop-entry shape.
-        self.claim_ops += 4;
+        // Kernel-step certificate — unconditional (cheap); only read under
+        // claim_enabled. One per `run` call: this is the kernel's `.invoke`.
+        self.claim_ops += 1;
 
         if (self.findThunk(name)) |thunk| {
             const result = try thunk.call(self.allocator, args);
@@ -494,6 +497,7 @@ pub const Evaluator = struct {
     /// callers need the branch to dispatch residue arms the way the runtime
     /// would.
     pub fn walkFlow(self: *Evaluator, items: []const ast.Item, flow: *const ast.Flow, args: []const ArgValue) EvalError!ThunkResult {
+        self.claim_ops += 1; // kernel: the `.flow` step
         var env = Env.init(self.allocator);
         for (args) |a| try env.bind(a.name, a.value);
         return self.walkLabeledBody(items, &flow.body, flow.pre_label, &env);
@@ -529,7 +533,7 @@ pub const Evaluator = struct {
             if (iterations > WALK_ITERATION_WALL)
                 return self.fail(error.UnsupportedConstruct, "comptime walk: labeled loop `#{s}` exceeded {d} iterations — non-terminating comptime loop?", .{ pre_label orelse "<unlabeled>", WALK_ITERATION_WALL });
 
-            self.claim_ops += 2; // kernel: the .loop step per iteration
+            self.claim_ops += 1; // kernel: the `.loop` step per iteration
             const result = try self.invokePath(items, &inv.path, head_args);
 
             if (body.continuations.len == 0) return result;
@@ -555,7 +559,7 @@ pub const Evaluator = struct {
     /// see it; a guarded arm matches only when its guard is true. First match
     /// wins — the runtime's arm semantics, interpreted.
     fn dispatchArms(self: *Evaluator, items: []const ast.Item, arms: []const ast.Continuation, result: ThunkResult, env: *Env) EvalError!Outcome {
-        self.claim_ops += 2; // kernel: the dispatch call itself
+        self.claim_ops += 1; // kernel: the `.dispatchTag`/`.dispatchBare` call
         const branch = result.branch orelse {
             // Bare-return convention: a `-> T` result carries no tag, so arm
             // names are decorative — every arm is a candidate and the
@@ -566,18 +570,25 @@ pub const Evaluator = struct {
             if (result.payload == null)
                 return self.fail(error.UnsupportedConstruct, "comptime walk: a void call cannot dispatch branch arms", .{});
             for (arms) |*arm| {
-                self.claim_ops += 3; // kernel: dispatch-scan step + armTry
+                // Kernel order: the catchall/unnamed check sits INSIDE the
+                // dispatchBare call — refusal there costs nothing, so it is
+                // checked before the arm's `.armTry` step is counted.
                 if (arm.is_catchall or arm.branch.len == 0)
                     return self.fail(error.UnsupportedConstruct, "comptime walk: a `-> T` result cannot dispatch a catchall or unnamed arm", .{});
+                self.claim_ops += 1; // kernel: `.armTry` for this arm
                 if (try self.matchArm(items, arm, result.payload, env)) |outcome| return outcome;
+                self.claim_ops += 1; // kernel: `.skip` → `.dispatchBare rest`
             }
             return self.fail(error.UnsupportedConstruct, "comptime walk: `-> T` result matched no arm — every when-guard false", .{});
         };
 
         for (arms) |*arm| {
-            self.claim_ops += 3; // kernel: dispatch-scan step + armTry
+            // Kernel: name-mismatch costs the `.dispatchTag rest` recursion
+            // step; a match costs the `.armTry` call — either way one step.
+            self.claim_ops += 1;
             if (!std.mem.eql(u8, arm.branch, branch)) continue;
             if (try self.matchArm(items, arm, result.payload, env)) |outcome| return outcome;
+            self.claim_ops += 1; // kernel: `.skip` → `.dispatchTag rest`
         }
         return self.fail(error.UnsupportedConstruct, "comptime walk: branch `{s}` matched no arm — name unhandled or every guard false", .{branch});
     }
@@ -613,7 +624,9 @@ pub const Evaluator = struct {
     /// dispatchable result and the arm has nested arms — recurse. Jumps
     /// bubble up to the enclosing labeled loop.
     fn walkArm(self: *Evaluator, items: []const ast.Item, arm: *const ast.Continuation, env: *Env) EvalError!Outcome {
-        self.claim_ops += 2; // kernel: .armWalk + the node step
+        // kernel: the `.armWalk` call; node steps are free inside it except
+        // nested invokes, which count themselves through invokePath.
+        self.claim_ops += 1;
         const node = arm.node orelse return .none;
         switch (node) {
             .terminal => return .none,
@@ -655,11 +668,13 @@ pub const Evaluator = struct {
     // stderr channel and enforce discipline as [witness] lines.
     // ------------------------------------------------------------
 
-    /// Per-claim reset — one claim is one top-level consumable step.
+    /// Per-claim reset — one claim is one top-level consumable step. The
+    /// count starts at 1: every claim's entry decodes to
+    /// `run (.invoke entry args)`, the spine's first kernel call.
     pub fn claimBegin(self: *Evaluator) void {
         self.claim_defs.clearRetainingCapacity();
         self.claim_leaves.clearRetainingCapacity();
-        self.claim_ops = 0;
+        self.claim_ops = 1;
     }
 
     /// The wire name for a call site — delegates to the file-scope
@@ -682,7 +697,7 @@ pub const Evaluator = struct {
     /// the AST, and a walk outside it reports rather than guesses.
     pub fn emitClaim(self: *Evaluator, entry_name: []const u8, args: []const ArgValue, expected: ClaimExpected) void {
         var ser = ClaimSer{ .allocator = self.allocator };
-        const line = ser.claimLine(entry_name, args, expected, self.claim_defs.items, self.claim_leaves.items, self.claim_ops * 8 + 512) catch |err| {
+        const line = ser.claimLine(entry_name, args, expected, self.claim_defs.items, self.claim_leaves.items, self.claim_ops) catch |err| {
             switch (err) {
                 error.Unserializable => self.emitSkip(entry_name, ser.dead_reason),
                 error.OutOfMemory => self.emitSkip(entry_name, "out-of-memory"),

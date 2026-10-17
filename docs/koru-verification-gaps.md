@@ -106,11 +106,17 @@ Measured at `ccomp` `e94bfeeb9` (2026-10-14).
   the line; a corpus of only skips fails as "no claim lines", which is
   the correct loud shape, while a *mix* of claims and skips has no
   accounting that every walk produced one or the other.
-- **Fuel is a bound, not a certificate.** Emitted fuel is the walk's
-  own step accounting scaled with headroom; an underestimate produces a
-  loud MISMATCH on honest output (never a silent pass), an overestimate
-  is harmless to re-decision. ISAR's `sufficient_fuel_correct` is the
-  proven shape this upgrades toward.
+- **Fuel is an exact certificate, but the accounting itself is
+  unproved.** Emitted fuel is the count of kernel `run` calls along the
+  walk's derivation spine — one Zig increment per mapped kernel step
+  (`.invoke`/`.flow`/`.loop`/dispatch/armTry/dispatch-rest/`.armWalk`),
+  no padding. Re-decision empirically confirms sufficiency per claim:
+  an undercount exhausts kernel fuel into a loud MISMATCH on honest
+  output, never a silent pass. What is not proved is the mapping itself
+  — the Zig increment sites match the kernel's cost model only because
+  the corpus pins them (measured: `route`=7, a six-iteration guarded
+  loop=35). ISAR's `sufficient_fuel_correct` proves the bound inside
+  the logic; ours is measured exact but trusted.
 - **Identical walks are corpus-level drift.** Two byte-identical claims
   (same call walked twice) trip the duplicate rule — the checker cannot
   distinguish "same fact committed twice" from emitter double-counting,

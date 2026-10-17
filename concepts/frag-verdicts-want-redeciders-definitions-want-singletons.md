@@ -52,12 +52,22 @@ again, with the disagreement hidden inside one file.
   predicted. `FlowCheck.lean` re-decides `[flow-eval]` whole-program
   claims end to end, and the emit leg has now landed:
   `comptime_eval.zig` serializes one claim per interpreter-consumed
-  walk under `std/witness:enforce` (graph + entry args + fuel bound +
-  result-or-refuse + thunk oracle leaves), with `[flow-eval-skip]`
+  walk under `std/witness:enforce` (graph + entry args + fuel
+  certificate + result-or-refuse + thunk oracle leaves), with
+  `[flow-eval-skip]`
   markers for walks outside the kernel subset so silence is never
   ambiguous. Real claims re-decide MATCH; a hand-forged edit to a real
   claim's result MISMATCHes — the disagreement surface works on live
-  output, not only on fixtures. `310_141` pins the round trip.
+  output, not only on fixtures. `310_141` pins the round trip. The fuel
+  field is a certificate in the strong sense: the walker counts one
+  increment per kernel `run` call along the derivation spine, so the
+  emitted number IS the measured proof depth — not a padded bound. The
+  move that made this cheap: you don't need ISAR's static
+  `sufficient_fuel_correct` to stop guessing — when the instrumentation
+  is isomorphic to the checker's cost model, the walk reports its own
+  depth, and every undercount fails loud (fuel exhaustion is `none`,
+  never a wrong yes). What remains unproved is the isomorphism itself —
+  corpus-pinned, not theorem-pinned.
 - There is a defensible middle: two mechanized semantics with a proved
   equivalence (a definitional and a denotational reading, as in textbook
   PL formalizations). That is one semantics stated twice and *proved*
