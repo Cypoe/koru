@@ -35,10 +35,10 @@ nop = nop-impl()
 
 // The flow under test: its `history` PARAMETER shadows the store named
 // `history`, so the punned argument below must not become a store read.
-tor transit { goal: string, history: string } -> string
+tor transit { goal: string<*@scoped>, history: string<*@scoped> } -> string
 transit = reframe(goal, history)
 
-tor reframe { goal: string, history: string } -> string
+tor reframe { goal: string<*@scoped>, history: string<*@scoped> } -> string
 proc reframe|zig {
     return @import("std").fmt.allocPrint(@import("std").heap.page_allocator, "{s}|{s}", .{ history, goal }) catch @panic("OOM");
 }

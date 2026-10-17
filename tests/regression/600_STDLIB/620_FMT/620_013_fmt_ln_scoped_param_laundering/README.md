@@ -1,36 +1,41 @@
-# 620_013 — fmt:ln scoped param laundering (aspirational)
+# 620_013 — fmt:ln scoped param laundering
 
 `scratch@scoped` on `fmt:ln`'s product refuses direct produce (`-> l`,
-`-> l.text`, record literals, `=>` payloads — 620_011). What it does not yet
-refuse is the same escape through a parameter:
+`-> l.text`, record literals, `=>` payloads — 620_011). Before declared
+class conferral, the same escape survived through a parameter:
 
 ```koru
 identity = std/io:print.ln(data) -> data
 ```
 
-`identity(data: l.text)` compiles today because the arg wall resolves the
-projection by suffix (a binding ending in `.text`) and misses that `l` — the
-carrier — is the tracked, classed binding. Inside `identity`, `data` binds
-unqualified `string`, so `-> data` produces the borrow back to the caller,
-who now holds an unqualified alias that can leave the frame.
+`identity(data: l.text)` compiled because the arg wall resolved the
+projection by suffix (a binding ending in `.text`) and missed that `l` —
+the carrier — is the tracked, classed binding. Inside `identity`, `data`
+bound unqualified `string`, so `-> data` produced the borrow back to the
+caller holding an unqualified alias.
 
-## What closes this
+## What closed it
 
-Two mechanics plus a ruling, named in the commit thread for c37503911:
+Declared class conferral, two mechanics and a ruling:
 
-1. **Prefix resolution at the arg wall** — `l.text` must resolve its carrier
-   `l`'s phantom the way the produce-edge check already does (descends-from a
-   classed binding), not only suffix-match for renamed field bindings.
-2. **Class conferral through parameter binding** — the arg's classes land on
-   the callee's param binding regardless of the declared annotation. A class
-   is a property of the value, not of the contract.
-3. **The ruling** — what the acceptance wall does with a class-only phantom:
-   strict (unqualified params refuse; consumers re-declare `string<*>`) vs
-   conferral (class-only values pass — the wall exists for debts — and bind
-   with the class). The pinned diagnostic text below assumes conferral;
-   under strict the refusal fires at the call wall instead and says
-   "accepts only unqualified".
+1. **Prefix resolution at the arg wall** — `l.text` resolves its carrier
+   `l`'s phantom (descends-from a classed binding, the same walk the
+   produce-edge check does), so a scoped argument is *seen* as scoped.
+2. **The arg wall enforces declared class acceptance** — `string` and
+   `string<*>` refuse a scoped argument with a teaching hint; only a param
+   that declares `string<*@scoped>` (any identity + the `scoped` class)
+   accepts it.
+3. **Conferral is declared, not inferred** — bodies are checked once per
+   decl, so the param's declared phantom lands on the callee binding:
+   `data: string<*@scoped>` binds `data` scoped inside, and `-> data` from
+   such a param is refused at the callee's own produce edge unless the
+   declared output itself carries `scoped` (`-> string<*@scoped>` is a
+   class-preserving reissue — the caller's binding stays scoped).
 
-`expected_error.txt` pins the conferral shape: `'data' is @scoped`. If the
-strict ruling wins, the pin's text changes — the program still refuses
-somewhere, which is all this test exists to decide.
+The strict ruling (unqualified params accept, callee re-binds unqualified)
+was rejected: it would re-create the launder this test pins. Refusing at
+the wall means a tor that wants to tunnel a borrow through must say so on
+the declaration — the contract, not the call site, carries the class.
+
+`expected_error.txt` pins the wall diagnostic: the param `declares no
+scoped acceptance`.

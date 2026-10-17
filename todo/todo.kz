@@ -79,14 +79,6 @@
     "tags": ["unbuilt"]
 }
 
-~std/todo:owed {
-    "name": "fmt-ln-scoped-param-laundering",
-    "site": "src/phantom_semantic_checker.zig:3953",
-    "owed": "A scratch@scoped borrow crosses param walls unqualified — `identity(data: l.text)` binds `data` as plain `string` inside the callee, and `-> data` produces an unqualified alias of the scratch buffer back to the caller. One identity tor defeats the class. The arg wall resolves projections by suffix (a binding ending in `.text`) and never asks whether the carrier `l` is classed; and classes do not confer through parameter binding at all.",
-    "witness": "620_013_fmt_ln_scoped_param_laundering",
-    "tags": ["phantom-classes", "scoped", "fmt"]
-}
-
 // ============================================================
 // DOUBTED — no amount of building closes these; someone must rule
 // ============================================================

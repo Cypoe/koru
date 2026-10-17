@@ -1846,7 +1846,14 @@ pub const AutoDischargeInserter = struct {
                     if (bodyReferencesBinding(flow, field.name)) continue;
                     const canonical = try self.canonicalizePhantom(phantom_str, impl_info.decl.module, fieldTypeModule(field));
                     defer self.allocator.free(canonical);
-                    const held = try std.fmt.allocPrint(self.allocator, "{s}!", .{canonical});
+                    // The held debt spells `module:name!@class…` — `!` rides
+                    // the name atom ahead of the join; a class can't owe.
+                    const held = blk: {
+                        if (std.mem.indexOfScalar(u8, canonical, '@')) |at| {
+                            break :blk try std.fmt.allocPrint(self.allocator, "{s}!{s}", .{ canonical[0..at], canonical[at..] });
+                        }
+                        break :blk try std.fmt.allocPrint(self.allocator, "{s}!", .{canonical});
+                    };
                     defer self.allocator.free(held);
                     try context.addBinding(field.name, held, field.name, field.type, self.nextAcqSeq());
                     if (context.cleanup_obligations.getPtr(field.name)) |info| info.not_auto_dischargeable = true;
@@ -3216,12 +3223,17 @@ pub const AutoDischargeInserter = struct {
                 if (disposals.len == 0) {
                     // No auto-dischargeable events - check if there are multi-branch events that accept this state
                     if (!try self.reportUndischargedCandidates(info, site_loc, display_name, display_state)) {
-                        // Strip trailing `!` from the state literal for the consumer-form suggestion:
-                        // the obligation is on `<unsanitized!>`; the discharger accepts `<!unsanitized>`.
+                        // Strip the `!` off the NAME for the consumer-form
+                        // suggestion: the obligation is on `<unsanitized!>` /
+                        // `<unsanitized!@scoped>`; the discharger accepts
+                        // `<!unsanitized>` / `<!unsanitized@scoped>`.
                         const state_without_bang = if (std.mem.endsWith(u8, display_state, "!"))
                             display_state[0 .. display_state.len - 1]
+                        else if (std.mem.indexOf(u8, display_state, "!@")) |bang_at|
+                            try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ display_state[0..bang_at], display_state[bang_at + 1 ..] })
                         else
                             display_state;
+                        defer if (!std.mem.endsWith(u8, display_state, "!") and !std.mem.eql(u8, state_without_bang, display_state)) self.allocator.free(state_without_bang);
                         try self.reporter.addError(
                             .KORU030,
                             site_loc.line,
@@ -4327,11 +4339,11 @@ pub const AutoDischargeInserter = struct {
                 try canon.appendSlice(self.allocator, mod);
                 try canon.append(self.allocator, ':');
                 try canon.appendSlice(self.allocator, concrete.name);
+                try canon.appendSlice(self.allocator, cleanup_suffix);
                 for (concrete.classes) |cls| {
                     try canon.append(self.allocator, '@');
                     try canon.appendSlice(self.allocator, cls);
                 }
-                try canon.appendSlice(self.allocator, cleanup_suffix);
                 return canon.toOwnedSlice(self.allocator);
             },
             .variable => {

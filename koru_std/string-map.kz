@@ -66,7 +66,7 @@ pub const Map_string_i64 = struct {
 
 // Insert or overwrite key → value. Dupes the key on first insert; an overwrite
 // reuses the already-stored key (no re-dupe, no leak). Void, chains with `|>`.
-~pub tor set { m: *Map_string_i64<map>, k: string, v: i64 }
+~pub tor set { m: *Map_string_i64<map>, k: string<*@scoped>, v: i64 }
 
 ~proc set|zig {
     const gop = m.map.getOrPut(m.allocator, k) catch {
@@ -85,7 +85,7 @@ pub const Map_string_i64 = struct {
 // ============================================
 
 // Lookup by key. `value` on hit, `missing` when absent.
-~pub tor get { m: *Map_string_i64<map>, k: string }
+~pub tor get { m: *Map_string_i64<map>, k: string<*@scoped> }
 | value i64
 | missing
 
@@ -97,7 +97,7 @@ pub const Map_string_i64 = struct {
 }
 
 // Membership test.
-~pub tor contains { m: *Map_string_i64<map>, k: string }
+~pub tor contains { m: *Map_string_i64<map>, k: string<*@scoped> }
 | yes
 | no
 

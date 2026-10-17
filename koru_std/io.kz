@@ -99,7 +99,7 @@ var readln_buf: [8192]u8 = undefined;
 // }
 
 // Print error to stderr
-~pub tor eprintln { message: string }
+~pub tor eprintln { message: string<*@scoped> }
 
 ~proc eprintln|zig {
     const stderr = std.fs.File.stderr().writer();
@@ -110,14 +110,14 @@ var readln_buf: [8192]u8 = undefined;
 }
 
 // Success message with green color (if terminal supports it)
-~pub tor success { message: string }
+~pub tor success { message: string<*@scoped> }
 
 ~proc success|zig {
     std.debug.print("✅ {s}\n", .{message});
 }
 
 // Warning message
-~pub tor warn { message: string }
+~pub tor warn { message: string<*@scoped> }
 
 ~proc warn|zig {
     std.debug.print("⚠️  {s}\n", .{message});
@@ -270,7 +270,7 @@ var readln_buf: [8192]u8 = undefined;
 } -> SiteResult
 
 ~[norun]pub tor print.impl {
-    expr: string<*>,
+    expr: string<*@scoped>,
 }
 
 // eprint / eprint.ln — the stderr siblings of print / print.ln. Same engine

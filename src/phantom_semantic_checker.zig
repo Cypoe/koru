@@ -765,6 +765,51 @@ pub const PhantomSemanticChecker = struct {
         };
     }
 
+    /// Does this value carry the `scoped` class — on its own binding or on any
+    /// carrier prefix? Classes describe lifetime, and a projection's lifetime
+    /// is its carrier's: `l.text` rides `l`'s frame exactly as `l` does.
+    /// Identities do NOT descend this way (`b.text` is not `b`'s identity), so
+    /// this walk is deliberately class-only.
+    fn argHasScopedClass(
+        self: *PhantomSemanticChecker,
+        context: *BindingContext,
+        arg_value: []const u8,
+    ) !bool {
+        const name = std.mem.trim(u8, arg_value, " \t");
+        if (name.len == 0) return false;
+        for (name) |c| {
+            if (!isIdentChar(c) and c != '.') return false;
+        }
+        var prefix_end: usize = 0;
+        while (prefix_end < name.len) {
+            var seg = prefix_end;
+            while (seg < name.len and name[seg] != '.') seg += 1;
+            if (try self.bindingHasScopedClass(context, name[0..seg])) return true;
+            prefix_end = seg + 1;
+        }
+        return false;
+    }
+
+    /// The classes a param position declares — `string<*@scoped>` accepts
+    /// classed args (any identity + scoped), `string<*>`/`string` do not.
+    /// `scoped` is the only confinement class today; `static` carries no rule
+    /// and deliberately does not participate.
+    fn expectedHasScopedClass(self: *PhantomSemanticChecker, expected_phantom: ?[]const u8) bool {
+        const ep = expected_phantom orelse return false;
+        var parsed = phantom_parser.PhantomState.parse(self.allocator, ep) catch return false;
+        defer parsed.deinit(self.allocator);
+        return switch (parsed) {
+            .concrete => |c| c.hasClass("scoped"),
+            .state_union => |u| blk: {
+                for (u.members) |m| {
+                    if (m.hasClass("scoped")) break :blk true;
+                }
+                break :blk false;
+            },
+            else => false,
+        };
+    }
+
     /// A produced value may not carry the `scoped` class — output position is
     /// where a frame-bound borrow escapes into a scope that outlives its
     /// frame. Covers every produce shape a branch_constructor spells: bare
@@ -777,8 +822,19 @@ pub const PhantomSemanticChecker = struct {
         bc: *const ast.BranchConstructor,
         context: *BindingContext,
         location: errors.SourceLocation,
+        implementing_event: ?*const ast.EventDecl,
     ) !bool {
         var reported = false;
+        // A bare `-> expr` into a declared `*@scoped` output is a
+        // class-preserving reissue, not an escape: the caller binds the value
+        // still-scoped. Record-literal and `=>` field produce keep refusing —
+        // caller-side record-field class conferral is not enforced yet, so
+        // legalizing a declared `*@scoped` field would launder the class
+        // through a hole that does not confer it back.
+        const output_accepts_scoped = if (implementing_event) |impl_ev|
+            self.expectedHasScopedClass(impl_ev.return_phantom)
+        else
+            false;
         if (bc.plain_value) |pv| {
             const expr = std.mem.trim(u8, pv, " \t");
             if (try ast_functional.recordFieldTexts(self.allocator, expr)) |fields| {
@@ -786,7 +842,7 @@ pub const PhantomSemanticChecker = struct {
                 for (fields) |f| {
                     if (try self.refuseIfScopedProduced(f.value, context, location)) reported = true;
                 }
-            } else {
+            } else if (!output_accepts_scoped) {
                 if (try self.refuseIfScopedProduced(expr, context, location)) reported = true;
             }
         }
@@ -1143,20 +1199,21 @@ pub const PhantomSemanticChecker = struct {
                     break :blk bare_module;
                 };
 
-                // Build canonical form: module:state, module:state@class…,
-                // module:state! — classes are sorted in parse, so the join is
-                // already canonical.
+                // Build canonical form: module:state, module:state!@class…,
+                // module:state! — `!` rides the name atom ahead of the join;
+                // classes are sorted in parse, so the join is already
+                // canonical.
                 const cleanup_suffix = if (concrete.requires_cleanup) "!" else "";
                 var canon: std.ArrayListUnmanaged(u8) = .{};
                 errdefer canon.deinit(self.allocator);
                 try canon.appendSlice(self.allocator, canonical_module);
                 try canon.append(self.allocator, ':');
                 try canon.appendSlice(self.allocator, concrete.name);
+                try canon.appendSlice(self.allocator, cleanup_suffix);
                 for (concrete.classes) |cls| {
                     try canon.append(self.allocator, '@');
                     try canon.appendSlice(self.allocator, cls);
                 }
-                try canon.appendSlice(self.allocator, cleanup_suffix);
                 return canon.toOwnedSlice(self.allocator);
             },
             .variable => {
@@ -1803,7 +1860,15 @@ pub const PhantomSemanticChecker = struct {
                     const canonical_base_type = try self.canonicalizeBaseType(field.type, field.module_path, impl_module orelse impl_ev.module);
                     defer self.allocator.free(canonical_base_type);
                     if (concrete.consumes_obligation) {
-                        const held = try std.fmt.allocPrint(self.allocator, "{s}!", .{canonical_phantom});
+                        // The held debt spells `module:name!@class…` — `!`
+                        // rides the name atom ahead of the join; a class
+                        // can't owe a debt.
+                        const held = blk: {
+                            if (std.mem.indexOfScalar(u8, canonical_phantom, '@')) |at| {
+                                break :blk try std.fmt.allocPrint(self.allocator, "{s}!{s}", .{ canonical_phantom[0..at], canonical_phantom[at..] });
+                            }
+                            break :blk try std.fmt.allocPrint(self.allocator, "{s}!", .{canonical_phantom});
+                        };
                         defer self.allocator.free(held);
                         try root_context.setWithType(field.name, held, canonical_base_type);
                         // The marker exists so CONSUME SITES can tell "I was
@@ -2236,10 +2301,15 @@ pub const PhantomSemanticChecker = struct {
         }
 
         if (disposal_events.items.len == 0) {
+            // The consume spelling takes `!` off the NAME — `scratch!` →
+            // `<!scratch>`, `scratch!@scoped` → `<!scratch@scoped>`.
             const state_without_bang = if (std.mem.endsWith(u8, display_state, "!"))
                 display_state[0 .. display_state.len - 1]
+            else if (std.mem.indexOf(u8, display_state, "!@")) |bang_at|
+                try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ display_state[0..bang_at], display_state[bang_at + 1 ..] })
             else
                 display_state;
+            defer if (!std.mem.endsWith(u8, display_state, "!") and !std.mem.eql(u8, state_without_bang, display_state)) self.allocator.free(state_without_bang);
             try self.reporter.addError(
                 .KORU030,
                 location.line,
@@ -2457,7 +2527,7 @@ pub const PhantomSemanticChecker = struct {
                 if (exit_node == .branch_constructor) {
                     const exit_bc = &exit_node.branch_constructor;
                     if (self.check_mode == .full) {
-                        if (try self.refuseScopedProduce(exit_bc, &void_context, location)) {
+                        if (try self.refuseScopedProduce(exit_bc, &void_context, location, implementing_event)) {
                             return false;
                         }
                     }
@@ -2774,9 +2844,10 @@ pub const PhantomSemanticChecker = struct {
             if (cont.node) |node| {
                 if (node == .branch_constructor) {
                     const bc = &node.branch_constructor;
-                    // A `@scoped` value may never occupy output position —
-                    // bare `->`, `=>` payload fields, record-literal produce.
-                    if (try self.refuseScopedProduce(bc, &context, location)) {
+                    // A `@scoped` value may occupy output position only where
+                    // the declared output itself carries `scoped` — bare
+                    // `->`, `=>` payload fields, record-literal produce.
+                    if (try self.refuseScopedProduce(bc, &context, location, implementing_event)) {
                         has_errors = true;
                     }
                     if (bc.is_bare_return) {
@@ -3936,9 +4007,33 @@ pub const PhantomSemanticChecker = struct {
         }
 
         // `<*>` — the any-qualification wildcard — takes the no-requirement
-        // path: marked or unmarked args accepted, nothing consumed.
-        const any_qualification = if (expected_phantom) |ep| std.mem.eql(u8, ep, "*") else false;
+        // path: marked or unmarked args accepted, nothing consumed. Classes
+        // ride a separate axis from identity: `*` accepts any STATE, while
+        // `*@scoped` additionally declares it may receive frame-bound values.
+        const any_qualification = if (expected_phantom) |ep| blk: {
+            const name_end = std.mem.indexOfScalar(u8, ep, '@') orelse ep.len;
+            break :blk std.mem.eql(u8, ep[0..name_end], "*");
+        } else false;
         if (expected_phantom == null or any_qualification) {
+            // Class confinement: a `scoped` value may enter only a param that
+            // declares the class. `l.text` into `string`/`<*>` laundered the
+            // borrow — the callee bound it unqualified and could produce it
+            // back out (620_013). `<*@scoped>` is the sink contract: any
+            // identity, frame-bound included — and it binds scoped inside, so
+            // the callee's own produce edges refuse the same escape.
+            if (!self.expectedHasScopedClass(expected_phantom) and
+                (try self.argHasScopedClass(context, arg.value) or
+                    (arg.phantom_type != null and self.expectedHasScopedClass(arg.phantom_type))))
+            {
+                try self.reporter.addError(
+                    .KORU030,
+                    location.line,
+                    location.column,
+                    "argument '{s}' is @scoped — it dies with its frame and parameter '{s}' declares no scoped acceptance. Declare it 'string<*@scoped>' (the borrow stays confined inside the callee), or copy it out first (std/string:from-page + take / fmt.blk)",
+                    .{ arg.value, arg.name },
+                );
+                return false;
+            }
             if (!any_qualification and expected_base_type_raw != null) {
                 // A qualifier is part of the type: an unqualified param names
                 // the PLAIN type — `string` is not `string<state>`. A
@@ -4018,6 +4113,23 @@ pub const PhantomSemanticChecker = struct {
             // marked only where a `<!state>` param consumes), so the
             // re-validation exemption the consuming path needs does not apply.
             return !try self.reportStaleReads(arg, context, location);
+        }
+
+        // Class confinement applies on the qualified path too: `scratch@scoped`
+        // into `string<scratch>` laundered the confinement class off the value —
+        // the param must declare it (`string<scratch@scoped>` / `<*@scoped>`).
+        if (!self.expectedHasScopedClass(expected_phantom) and
+            (try self.argHasScopedClass(context, arg.value) or
+                (arg.phantom_type != null and self.expectedHasScopedClass(arg.phantom_type))))
+        {
+            try self.reporter.addError(
+                .KORU030,
+                location.line,
+                location.column,
+                "argument '{s}' is @scoped — it dies with its frame and parameter '{s}' declares no scoped acceptance. Declare it with '@scoped' (the borrow stays confined inside the callee), or copy it out first (std/string:from-page + take / fmt.blk)",
+                .{ arg.value, arg.name },
+            );
+            return false;
         }
 
         // A null literal into an optional-typed param is absence, not a state

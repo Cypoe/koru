@@ -33,7 +33,7 @@ pub const String = struct {
 // ============================================
 
 // Create with explicit allocator
-~pub tor new { allocator: std.mem.Allocator, text: string }
+~pub tor new { allocator: std.mem.Allocator, text: string<*@scoped> }
 | ok *String<view!>
 | err string
 
@@ -52,7 +52,7 @@ pub const String = struct {
 }
 
 // Create with page allocator (simple, for demos)
-~pub tor from-page { text: string<*> }
+~pub tor from-page { text: string<*@scoped> }
 | ok *String<view!>
 | err string
 
@@ -229,7 +229,7 @@ pub const String = struct {
 // Write operations - require instance
 // ============================================
 
-~pub tor append { s: *String<instance>, text: string<*> }
+~pub tor append { s: *String<instance>, text: string<*@scoped> }
 | ok
 | err string
 
