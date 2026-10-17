@@ -678,6 +678,48 @@ regression_check_witness_oracle() {
     echo -e "${GREEN}  ✓ witness oracle: all site verdicts match (Lean)${NC}"
 }
 
+# Flow-eval oracle leg — opt-in via a `FLOW_EVAL_CHECK` marker AND
+# KORU_WITNESS=1 (same Lean toolchain gate as the witness oracle). The
+# semantics kernel checker (verify/semantics/FlowCheck.lean) re-decides
+# every `[flow-eval]` claim the fold-comptime walker printed into
+# backend.err — entry args, graph, fuel, result-or-refuse, thunk oracle
+# leaves — and every claim must MATCH. Opt-in for the same reason as
+# WITNESS_CHECK: the oracle needs Lean, so a marker without KORU_WITNESS
+# is a noted skip, never a verdict. A marked test whose run printed no
+# `[flow-eval]` lines FAILS inside the gate — the pin is the claim's
+# presence, not just its verdict.
+regression_check_flow_eval_oracle() {
+    local test_dir="$1"
+    local TEST_NAME
+    TEST_NAME=$(basename "$test_dir")
+
+    [ -f "$test_dir/FLOW_EVAL_CHECK" ] || return 0
+    [ -f "$test_dir/SUCCESS" ] && [ ! -f "$test_dir/FAILURE" ] || return 0
+
+    if [ "${KORU_WITNESS:-0}" != "1" ]; then
+        echo -e "${BLUE}  (flow-eval oracle not run — set KORU_WITNESS=1)${NC}"
+        return 0
+    fi
+
+    _flow_eval_oracle_fail() {
+        rm -f "$test_dir/SUCCESS"
+        echo "$1" > "$test_dir/FAILURE"
+        FAILED_TESTS="$FAILED_TESTS $TEST_NAME($1)"
+        [ "${PASSED_TESTS:-0}" -gt 0 ] && PASSED_TESTS=$((PASSED_TESTS - 1))
+        echo -e "${RED}  ✗ flow-eval oracle: $2${NC}"
+    }
+
+    # The gate cds into verify/semantics before reading its corpus args —
+    # the backend.err path must be absolute to survive that cd.
+    local eval_corpus="$(cd "$test_dir" && pwd)/backend.err"
+    if ! "$SCRIPT_DIR/scripts/semantics_gate.sh" "$eval_corpus" >"$test_dir/flow_eval_check.out" 2>&1; then
+        _flow_eval_oracle_fail "flow-eval-check" "gate failed (see flow_eval_check.out)"
+        tail -15 "$test_dir/flow_eval_check.out" | sed 's/^/    /'
+        return 0
+    fi
+    echo -e "${GREEN}  ✓ flow-eval oracle: all claims re-decided (Lean)${NC}"
+}
+
 # Alive2 congruence leg — opt-in via an `ALIVE2_CHECK` marker AND
 # KORU_ALIVE2=1. The gate (scripts/alive2_gate.sh) clang -O0's the emitted
 # output_emitted.c to reference IR and proves every intra-procedural
@@ -2280,6 +2322,9 @@ EOF
     # The witness oracle leg — opt-in via WITNESS_CHECK + KORU_WITNESS=1; the
     # Lean checker re-decides the [witness] site verdicts in backend.err.
     regression_check_witness_oracle "$test_dir"
+    # The flow-eval oracle leg — opt-in via FLOW_EVAL_CHECK + KORU_WITNESS=1;
+    # the semantics kernel re-decides the [flow-eval] claims in backend.err.
+    regression_check_flow_eval_oracle "$test_dir"
     # The Alive2 congruence leg — opt-in via ALIVE2_CHECK + KORU_ALIVE2=1;
     # optimization instances on the emitted C must all refine the O0 IR.
     regression_check_alive2_oracle "$test_dir"

@@ -257,15 +257,22 @@ existing propositions to meaning rather than digests.
   `refuse` claims succeed only when the kernel actually decides
   `none`. Golden/forged/drift corpora are gated by
   `scripts/semantics_gate.sh`, which the attested battery runs and
-  whose digest the receipt pins. **Open:** nothing *emits* claims yet —
-  koruc-side serialization of kernel-subset walks on real corpus runs
-  is the remaining leg, and until it lands silent divergence between
-  kernel and compiler is possible in both directions (that is the
-  point of a single mechanized definition; emission is what exercises
-  it). Effects, stores, `|*`, taps, transforms, modules, name
-  resolution, recursion, function calls, fragments, destructured arms,
-  `Source` args, non-enclosing labels, and i64 overflow (the kernel
-  uses unbounded `Int`) are declared refusals.
+  whose digest the receipt pins. *Emit leg landed:* under
+  `std/witness:enforce` the `fold-comptime` walker commits one
+  `[flow-eval]` claim per interpreter-consumed flow — graph, entry
+  args, fuel bound, result or bare `refuse`, and per-call thunk oracle
+  leaves — serialized by `ClaimSer` in `comptime_eval.zig` onto the
+  witness channel's stderr discipline. Unserializable walks emit a
+  `[flow-eval-skip]` marker naming the reason, so silence is never
+  ambiguous. `FLOW_EVAL_CHECK` + `KORU_WITNESS=1` route a test's
+  `backend.err` through the gate (`310_141` is the pinning test); a
+  forged claim against a real emitted graph MISMATCHes under
+  re-decision. Kernel↔compiler divergence on kernel-subset walks is
+  now detectable per run rather than silent — the point of the single
+  mechanized definition. Effects, stores, `|*`, taps, transforms,
+  modules, name resolution, recursion, function calls, fragments,
+  destructured arms, `Source` args, non-enclosing labels, and i64
+  overflow (the kernel uses unbounded `Int`) are declared refusals.
 - **Rung A.5 — per-instance refinement, subset-declared.** With the
   evaluator, a Lean checker takes graph + emitted C for a kernel
   program and verifies refinement *for that program* (the CompCert

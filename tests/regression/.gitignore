@@ -48,6 +48,7 @@
 !**/C_REFUSES
 !**/WITNESS_CHECK
 !**/ALIVE2_CHECK
+!**/FLOW_EVAL_CHECK
 !**/ARGS
 !**/STDIN
 !**/input.txt

@@ -1,0 +1,35 @@
+// PINS: the [flow-eval] claim channel — under std/witness:enforce the
+// fold-comptime walker commits, per interpreter-consumed flow, the graph it
+// walked, the entry call's evaluated args, a fuel bound, its result (or
+// refuse), and each native thunk call as an oracle leaf. verify/semantics/
+// FlowCheck.lean re-decides every claim in backend.err end to end — the
+// kernel walks the same graph and must reach the same verdict. A walk whose
+// values can't serialize prints a [flow-eval-skip] marker instead, so the
+// absence of a claim is never ambiguous.
+//
+// The program shape is 310_132: a [comptime] subflow impl whose head invokes
+// a thunked |zig proc — one oracle leaf — with the walked branch re-produced
+// and dispatched into the residue's print.
+~import std/witness
+~import std/io
+
+~std/witness:enforce { }
+
+~[comptime] tor pick { n: i64 }
+| small i64
+| big i64
+~proc pick|zig {
+    if (n < 10) return .{ .small = n };
+    return .{ .big = n };
+}
+
+~[comptime] tor route { n: i64 }
+| small i64
+| big i64
+~route = pick(n)
+| small v => small v
+| big v => big v
+
+~route(n: 4)
+| small v |> std/io:print.ln("small {{ v:d }}")
+| big v |> std/io:print.ln("big {{ v:d }}")

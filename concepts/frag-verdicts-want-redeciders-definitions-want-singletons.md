@@ -49,11 +49,15 @@ again, with the disagreement hidden inside one file.
   floored `@mod`, `++` vs `+`, lazy `@as`): the kernel WAS a clean model
   of a slightly-wrong language, and every fix moved the model toward the
   implementation — divergence was a bug with a referent, exactly as
-  predicted. `FlowCheck.lean` now re-decides `[flow-eval]` whole-program
-  claims end to end, so the singleton is exerciseable — but koruc does
-  not emit claims yet, so silent divergence is only *detectable*, not yet
-  *detected* on real runs. The remaining missing piece is the
-  claim-emitter, not more formalization — also as predicted.
+  predicted. `FlowCheck.lean` re-decides `[flow-eval]` whole-program
+  claims end to end, and the emit leg has now landed:
+  `comptime_eval.zig` serializes one claim per interpreter-consumed
+  walk under `std/witness:enforce` (graph + entry args + fuel bound +
+  result-or-refuse + thunk oracle leaves), with `[flow-eval-skip]`
+  markers for walks outside the kernel subset so silence is never
+  ambiguous. Real claims re-decide MATCH; a hand-forged edit to a real
+  claim's result MISMATCHes — the disagreement surface works on live
+  output, not only on fixtures. `310_141` pins the round trip.
 - There is a defensible middle: two mechanized semantics with a proved
   equivalence (a definitional and a denotational reading, as in textbook
   PL formalizations). That is one semantics stated twice and *proved*

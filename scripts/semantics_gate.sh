@@ -15,7 +15,12 @@
 #         claim, forged must REJECT every line, drift must FAIL the
 #         batch (duplicate claims are dishonest accounting).
 #
-# Usage: scripts/semantics_gate.sh
+# Usage: scripts/semantics_gate.sh [corpus ...]
+#   extra args: real claim corpora — any file with `[flow-eval] ` lines
+#   (a regression test's backend.err). Filtered per line, so non-claim
+#   lines ride along harmlessly. A corpus with zero claim lines FAILs —
+#   a FLOW_EVAL_CHECK-marked test that emitted nothing is a broken leg,
+#   not a vacuous pass.
 set -u -o pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LEAN="${KORU_LEAN:-/home/cypoe/.elan/toolchains/leanprover--lean4---v4.31.0/bin/lean}"
@@ -60,6 +65,17 @@ if LEAN_PATH="$DIR" "$LEAN" --run FlowCheck.lean drift.txt >/dev/null 2>&1; then
     echo "FAIL: drift corpus accepted (duplicate claims but passed)"
     fail=1
 fi
+# Real corpora — `[flow-eval]` lines emitted by actual compiles (test
+# backend.err files). Every claim must re-decide MATCH; the corpus
+# argument paths are absolute, so the cd is already done.
+for corpus in "$@"; do
+    if [ ! -f "$corpus" ]; then
+        echo "FAIL: corpus missing: $corpus"
+        fail=1
+        continue
+    fi
+    LEAN_PATH="$DIR" "$LEAN" --run FlowCheck.lean "$corpus" || fail=1
+done
 rm -f FlowKernel.olean FlowCheck.olean FlowCheck.c
 if [ $fail -eq 0 ]; then echo "semantics gate: PASS"; else echo "semantics gate: FAIL"; fi
 exit $fail

@@ -171,6 +171,25 @@ pub const Evaluator = struct {
     /// pipeline wires it in; resolution falls through to subflow/bare-return.
     thunks: []const Thunk = &.{},
 
+    /// [flow-eval] claim channel state — Folder.fold flips claim_enabled
+    /// when the program declares `~std/witness:enforce`. AST presence is
+    /// the gate, not the decl's executed side-effect: that lands in
+    /// evaluate-comptime's comptime_main run, AFTER this fold, so the
+    /// executed flag would arrive too late for the walks it must cover.
+    claim_enabled: bool = false,
+    /// The claim's graph — callables this walk resolved, keyed by
+    /// call-site path text (dedup on name; the same subflow under two
+    /// spellings is two keys, both correct).
+    claim_defs: std.ArrayListUnmanaged(ClaimDef) = .{},
+    /// The claim's oracle — asserted thunk leaves. The kernel re-decides
+    /// everything EXCEPT these; native bodies are outside its visibility
+    /// (the declared trusted leaf of the whole channel).
+    claim_leaves: std.ArrayListUnmanaged(ClaimLeaf) = .{},
+    /// Kernel-step accounting → the emitted fuel bound. A measured count
+    /// with headroom, not a certificate — that rung is ISAR's
+    /// sufficient_fuel_correct shape and has not landed here yet.
+    claim_ops: usize = 0,
+
     pub fn init(allocator: std.mem.Allocator) Evaluator {
         return .{ .allocator = allocator };
     }
@@ -432,16 +451,32 @@ pub const Evaluator = struct {
     /// named wall otherwise.
     pub fn invokePath(self: *Evaluator, items: []const ast.Item, path: *const ast.DottedPath, args: []const ArgValue) EvalError!ThunkResult {
         const name = lastSegment(path);
+        // Kernel-step accounting toward the emitted fuel bound —
+        // unconditional (cheap); only read under claim_enabled.
+        // Covers the kernel's .invoke + .flow + .loop-entry shape.
+        self.claim_ops += 4;
 
         if (self.findThunk(name)) |thunk| {
-            return thunk.call(self.allocator, args);
+            const result = try thunk.call(self.allocator, args);
+            if (self.claim_enabled) {
+                const wname = try self.claimName(path);
+                try self.recordDef(wname, .thunk);
+                try self.claim_leaves.append(self.allocator, .{
+                    .name = wname,
+                    .args = args,
+                    .result = result,
+                });
+            }
+            return result;
         }
 
         if (findSubflowImpl(items, path)) |sub| {
+            if (self.claim_enabled) try self.recordDef(try self.claimName(path), .{ .subflow = sub });
             return self.walkFlow(items, sub, args);
         }
 
         if (findBareReturnImpl(items, path)) |impl| {
+            if (self.claim_enabled) try self.recordDef(try self.claimName(path), .{ .bare = impl });
             var env = Env.init(self.allocator);
             for (args) |a| try env.bind(a.name, a.value);
             const plain = impl.value.plain_value orelse
@@ -494,6 +529,7 @@ pub const Evaluator = struct {
             if (iterations > WALK_ITERATION_WALL)
                 return self.fail(error.UnsupportedConstruct, "comptime walk: labeled loop `#{s}` exceeded {d} iterations — non-terminating comptime loop?", .{ pre_label orelse "<unlabeled>", WALK_ITERATION_WALL });
 
+            self.claim_ops += 2; // kernel: the .loop step per iteration
             const result = try self.invokePath(items, &inv.path, head_args);
 
             if (body.continuations.len == 0) return result;
@@ -519,6 +555,7 @@ pub const Evaluator = struct {
     /// see it; a guarded arm matches only when its guard is true. First match
     /// wins — the runtime's arm semantics, interpreted.
     fn dispatchArms(self: *Evaluator, items: []const ast.Item, arms: []const ast.Continuation, result: ThunkResult, env: *Env) EvalError!Outcome {
+        self.claim_ops += 2; // kernel: the dispatch call itself
         const branch = result.branch orelse {
             // Bare-return convention: a `-> T` result carries no tag, so arm
             // names are decorative — every arm is a candidate and the
@@ -529,6 +566,7 @@ pub const Evaluator = struct {
             if (result.payload == null)
                 return self.fail(error.UnsupportedConstruct, "comptime walk: a void call cannot dispatch branch arms", .{});
             for (arms) |*arm| {
+                self.claim_ops += 3; // kernel: dispatch-scan step + armTry
                 if (arm.is_catchall or arm.branch.len == 0)
                     return self.fail(error.UnsupportedConstruct, "comptime walk: a `-> T` result cannot dispatch a catchall or unnamed arm", .{});
                 if (try self.matchArm(items, arm, result.payload, env)) |outcome| return outcome;
@@ -537,6 +575,7 @@ pub const Evaluator = struct {
         };
 
         for (arms) |*arm| {
+            self.claim_ops += 3; // kernel: dispatch-scan step + armTry
             if (!std.mem.eql(u8, arm.branch, branch)) continue;
             if (try self.matchArm(items, arm, result.payload, env)) |outcome| return outcome;
         }
@@ -574,6 +613,7 @@ pub const Evaluator = struct {
     /// dispatchable result and the arm has nested arms — recurse. Jumps
     /// bubble up to the enclosing labeled loop.
     fn walkArm(self: *Evaluator, items: []const ast.Item, arm: *const ast.Continuation, env: *Env) EvalError!Outcome {
+        self.claim_ops += 2; // kernel: .armWalk + the node step
         const node = arm.node orelse return .none;
         switch (node) {
             .terminal => return .none,
@@ -605,6 +645,60 @@ pub const Evaluator = struct {
             },
             else => return self.fail(error.UnsupportedConstruct, "comptime walk: arm node `{s}` is a later rung", .{@tagName(node)}),
         }
+    }
+
+    // ------------------------------------------------------------
+    // [flow-eval] claims — what the walk computed, emitted for the
+    // FlowCheck kernel (verify/semantics/) to re-decide. The Folder
+    // drivers bracket one claim per consumable step:
+    // claimBegin → drive the step → emitClaim. Claims ride the same
+    // stderr channel and enforce discipline as [witness] lines.
+    // ------------------------------------------------------------
+
+    /// Per-claim reset — one claim is one top-level consumable step.
+    pub fn claimBegin(self: *Evaluator) void {
+        self.claim_defs.clearRetainingCapacity();
+        self.claim_leaves.clearRetainingCapacity();
+        self.claim_ops = 0;
+    }
+
+    /// The wire name for a call site — delegates to the file-scope
+    /// claimPathText, the single path→wire spelling.
+    pub fn claimName(self: *Evaluator, path: *const ast.DottedPath) error{OutOfMemory}![]const u8 {
+        return claimPathText(self.allocator, path);
+    }
+
+    fn recordDef(self: *Evaluator, name: []const u8, callable: ClaimCallable) error{OutOfMemory}!void {
+        for (self.claim_defs.items) |d| {
+            if (std.mem.eql(u8, d.name, name)) return;
+        }
+        try self.claim_defs.append(self.allocator, .{ .name = name, .callable = callable });
+    }
+
+    /// Emit one [flow-eval] claim for the step just completed — or a
+    /// [flow-eval-skip] line naming why none could be emitted, so an
+    /// absent claim is never ambiguous. Serialization failure is the
+    /// honest refusal: the kernel's subset is deliberately smaller than
+    /// the AST, and a walk outside it reports rather than guesses.
+    pub fn emitClaim(self: *Evaluator, entry_name: []const u8, args: []const ArgValue, expected: ClaimExpected) void {
+        var ser = ClaimSer{ .allocator = self.allocator };
+        const line = ser.claimLine(entry_name, args, expected, self.claim_defs.items, self.claim_leaves.items, self.claim_ops * 8 + 512) catch |err| {
+            switch (err) {
+                error.Unserializable => self.emitSkip(entry_name, ser.dead_reason),
+                error.OutOfMemory => self.emitSkip(entry_name, "out-of-memory"),
+            }
+            return;
+        };
+        std.debug.print("[flow-eval] {s}\n", .{line});
+    }
+
+    /// A walk happened and nothing checkable could be emitted — the
+    /// marker names why.
+    pub fn emitSkip(self: *Evaluator, entry_name: []const u8, reason: []const u8) void {
+        _ = self;
+        const en = if (sxAtomOk(entry_name)) entry_name else "?";
+        const rn = if (sxAtomOk(reason)) reason else "unserializable";
+        std.debug.print("[flow-eval-skip] {s} {s}\n", .{ en, rn });
     }
 };
 
@@ -653,6 +747,73 @@ pub const Thunk = struct {
 /// this many times is almost certainly non-terminating at compile time; the
 /// walker stops LOUDLY instead of hanging the build.
 pub const WALK_ITERATION_WALL: usize = 1_000_000;
+
+// ============================================================
+// [flow-eval] claims — the std/witness:enforce semantics channel
+// ============================================================
+//
+// Every consumable fold step commits WHAT IT COMPUTED as a one-line
+// s-expression claim (`verify/semantics/FlowCheck.lean` is the
+// re-decider): the graph the walker consumed, the entry call's
+// evaluated args, a fuel bound, the result or refusal, and every thunk
+// call as an asserted oracle leaf. The claim is evidence, never trust —
+// the kernel re-runs the whole graph and compares.
+//
+//   [flow-eval] ((entry NAME (arg VAL)*) (fuel N) (result R)
+//                (graph (def ...)*) (oracle (leaf ...)*))
+//   [flow-eval-skip] NAME REASON — a walk happened; serialization
+//                 refused for the named reason. Absent claims are
+//                 never ambiguous.
+
+/// One callable the walk resolved — a claim graph entry.
+const ClaimCallable = union(enum) {
+    thunk,
+    subflow: *const ast.Flow,
+    bare: *const ast.ImmediateImpl,
+};
+
+const ClaimDef = struct { name: []const u8, callable: ClaimCallable };
+
+/// One thunk invocation — name, evaluated args, result — asserted
+/// wholesale. The kernel re-decides the control flow around it, never
+/// the native body: that is the channel's declared trusted leaf.
+const ClaimLeaf = struct { name: []const u8, args: []const ArgValue, result: ThunkResult };
+
+/// What the walk claims happened.
+const ClaimExpected = union(enum) {
+    result: ThunkResult,
+    /// The walker's EvalError class — kept at the boundary even though
+    /// the wire verdict is bare `refuse`: the kernel's `none` collapses
+    /// classes, so today the class is diagnostic-only (a named gap —
+    /// docs/koru-verification-gaps.md — until the wire grows a
+    /// `(refuse-class …)` field FlowCheck can compare).
+    refuse: []const u8,
+};
+
+/// Kebab-case refusal classes for the wire.
+fn refuseClass(err: EvalError) []const u8 {
+    return switch (err) {
+        error.UnknownIdentifier => "unknown-identifier",
+        error.UnknownField => "unknown-field",
+        error.UnsupportedBuiltin => "unsupported-builtin",
+        error.UnsupportedConstruct => "unsupported-construct",
+        error.TypeMismatch => "type-mismatch",
+        error.DivisionByZero => "division-by-zero",
+        error.IndexOutOfBounds => "index-out-of-bounds",
+        error.InvalidLiteral => "invalid-literal",
+        error.OutOfMemory => "out-of-memory",
+    };
+}
+
+/// Atom-safety for bare wire names — the claim tokenizer delimits on
+/// whitespace, parens and quotes only; anything else is atom text.
+fn sxAtomOk(s: []const u8) bool {
+    if (s.len == 0) return false;
+    for (s) |c| {
+        if (c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '(' or c == ')' or c == '"') return false;
+    }
+    return true;
+}
 
 /// Find a named subflow implementation (`name = #loop tick(...) | ...`,
 /// carried as a Flow with `impl_of` set) — the walker's second resolution
@@ -721,6 +882,10 @@ pub const Folder = struct {
     /// so the loop terminates. A flow that ends with no residue was fully
     /// comptime and is dropped — it happened at compile time.
     pub fn fold(self: *Folder, program: *const ast.Program) EvalError!*const ast.Program {
+        // The [flow-eval] channel's gate is the enforce DECL's AST
+        // presence — its executed side-effect (witness_enforced) lands
+        // in evaluate-comptime, after this pass.
+        self.evaluator.claim_enabled = programEnforcesWitness(program.items);
         var found = false;
         for (program.items) |item| {
             // Impl flows are definitions, not call sites — the walker enters
@@ -788,9 +953,25 @@ pub const Folder = struct {
     /// happen right here, during compilation; the residue emits at runtime.
     fn walkFlowResidue(self: *Folder, program: *const ast.Program, flow: *const ast.Flow, sub: *const ast.Flow) EvalError!?ast.Flow {
         const inv = &flow.body.node.?.invocation;
+        const claim = self.evaluator.claim_enabled;
+        var entry_name: []const u8 = "";
+        if (claim) {
+            self.evaluator.claimBegin();
+            entry_name = self.evaluator.claimName(&inv.path) catch return error.OutOfMemory;
+            try self.evaluator.recordDef(entry_name, .{ .subflow = sub });
+        }
         var env = Env.init(self.allocator);
-        const args = try self.evaluator.evalArgs(&env, inv.args);
-        const result = try self.evaluator.walkFlow(program.items, sub, args);
+        const args = self.evaluator.evalArgs(&env, inv.args) catch |err| {
+            // The walk refused inside its own arg eval — the claim is
+            // still re-decidable (the kernel will refuse the same call).
+            if (claim) self.evaluator.emitClaim(entry_name, &.{}, .{ .refuse = refuseClass(err) });
+            return err;
+        };
+        const result = self.evaluator.walkFlow(program.items, sub, args) catch |err| {
+            if (claim) self.evaluator.emitClaim(entry_name, args, .{ .refuse = refuseClass(err) });
+            return err;
+        };
+        if (claim) self.evaluator.emitClaim(entry_name, args, .{ .result = result });
         return self.spliceResidue(flow, result);
     }
 
@@ -799,17 +980,35 @@ pub const Folder = struct {
     /// result is tagless: `.branch = null`, the payload is the value.
     fn foldFlow(self: *Folder, flow: *const ast.Flow, impl: *const ast.ImmediateImpl) EvalError!?ast.Flow {
         const inv = &flow.body.node.?.invocation;
+        const claim = self.evaluator.claim_enabled;
+        var entry_name: []const u8 = "";
+        if (claim) {
+            self.evaluator.claimBegin();
+            entry_name = self.evaluator.claimName(&inv.path) catch return error.OutOfMemory;
+            try self.evaluator.recordDef(entry_name, .{ .bare = impl });
+        }
 
         // Bind event args: each arg value is itself a comptime expression.
         var env = Env.init(self.allocator);
+        const arg_vals = self.allocator.alloc(ArgValue, inv.args.len) catch return error.OutOfMemory;
+        var arg_count: usize = 0;
         for (inv.args) |arg| {
-            const arg_value = try self.evalText(&env, arg.value);
+            const arg_value = self.evalText(&env, arg.value) catch |err| {
+                if (claim) self.evaluator.emitClaim(entry_name, arg_vals[0..arg_count], .{ .refuse = refuseClass(err) });
+                return err;
+            };
             try env.bind(arg.name, arg_value);
+            arg_vals[arg_count] = .{ .name = arg.name, .value = arg_value };
+            arg_count += 1;
         }
 
         const plain = impl.value.plain_value orelse
             return self.evaluator.fail(error.UnsupportedConstruct, "comptime fold: impl of `{s}` has no bare-return expression", .{lastSegment(&impl.event_path)});
-        const value = try self.evalText(&env, plain);
+        const value = self.evalText(&env, plain) catch |err| {
+            if (claim) self.evaluator.emitClaim(entry_name, arg_vals[0..arg_count], .{ .refuse = refuseClass(err) });
+            return err;
+        };
+        if (claim) self.evaluator.emitClaim(entry_name, arg_vals[0..arg_count], .{ .result = .{ .payload = value } });
         return self.spliceResidue(flow, .{ .branch = null, .payload = value });
     }
 
@@ -828,9 +1027,31 @@ pub const Folder = struct {
         if (hasAnnotationPart(decl.annotations, "transform")) return null;
         const thunk = self.evaluator.findThunk(lastSegment(&inv.path)) orelse
             return self.evaluator.fail(error.UnsupportedConstruct, "comptime fold: residue head `{s}` is [comptime] but not comptime-executable — no bare-return impl, no subflow impl, no thunkable proc — the call would emit nothing", .{lastSegment(&inv.path)});
+        const claim = self.evaluator.claim_enabled;
+        var entry_name: []const u8 = "";
+        if (claim) {
+            self.evaluator.claimBegin();
+            entry_name = self.evaluator.claimName(&inv.path) catch return error.OutOfMemory;
+            try self.evaluator.recordDef(entry_name, .thunk);
+        }
         var env = Env.init(self.allocator);
-        const args = try self.evaluator.evalArgs(&env, inv.args);
-        return try thunk.call(self.allocator, args);
+        const args = self.evaluator.evalArgs(&env, inv.args) catch |err| {
+            if (claim) self.evaluator.emitClaim(entry_name, &.{}, .{ .refuse = refuseClass(err) });
+            return err;
+        };
+        const result = thunk.call(self.allocator, args) catch |err| {
+            if (claim) self.evaluator.emitClaim(entry_name, args, .{ .refuse = refuseClass(err) });
+            return err;
+        };
+        if (claim) {
+            self.evaluator.claim_leaves.append(self.allocator, .{
+                .name = entry_name,
+                .args = args,
+                .result = result,
+            }) catch return error.OutOfMemory;
+            self.evaluator.emitClaim(entry_name, args, .{ .result = result });
+        }
+        return result;
     }
 
     /// Splice a comptime-produced result into a flow's residue continuations.
@@ -1223,6 +1444,530 @@ pub fn findBareReturnImpl(items: []const ast.Item, path: *const ast.DottedPath) 
 
 fn lastSegment(path: *const ast.DottedPath) []const u8 {
     return if (path.segments.len > 0) path.segments[path.segments.len - 1] else "<empty>";
+}
+
+/// The [flow-eval] channel's gate: does the program carry a
+/// `~std/witness:enforce { }` declaration? Static AST presence, not the
+/// decl's executed side-effect — enforce runs in evaluate-comptime's
+/// comptime_main, AFTER fold-comptime, so the executed flag
+/// (emitter_helpers.witness_enforced) lands too late for the walks it
+/// must cover. Mirrors the WCensus shape in koru_std/witness.kz.
+fn programEnforcesWitness(items: []const ast.Item) bool {
+    for (items) |*item| {
+        switch (item.*) {
+            .flow => |*fl| {
+                const node = fl.body.node orelse continue;
+                if (node != .invocation) continue;
+                const inv = &node.invocation;
+                const mq = inv.path.module_qualifier orelse continue;
+                if (std.mem.indexOf(u8, mq, "witness") != null and
+                    inv.path.segments.len > 0 and
+                    std.mem.eql(u8, inv.path.segments[0], "enforce"))
+                    return true;
+            },
+            .module_decl => |*m| {
+                if (programEnforcesWitness(m.items)) return true;
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+/// The wire name for a call site: the full dotted path text as the
+/// invocation spells it. `mod:event` and `a.b` both survive the claim
+/// tokenizer (only whitespace, parens and quotes delimit atoms). Keyed
+/// by call-site text deliberately: the claim's graph IS the resolution
+/// table, so the def key must be the spelling the invoke carried.
+fn claimPathText(allocator: std.mem.Allocator, path: *const ast.DottedPath) error{OutOfMemory}![]const u8 {
+    var buf = std.ArrayList(u8).initCapacity(allocator, 24) catch return error.OutOfMemory;
+    const w = buf.writer(allocator);
+    if (path.module_qualifier) |mq| w.print("{s}:", .{mq}) catch return error.OutOfMemory;
+    for (path.segments, 0..) |seg, i| {
+        if (i > 0) w.writeAll(".") catch return error.OutOfMemory;
+        w.writeAll(seg) catch return error.OutOfMemory;
+    }
+    return buf.toOwnedSlice(allocator) catch error.OutOfMemory;
+}
+
+// ============================================================
+// The claim serializer — AST → FlowCheck wire s-expressions
+// ============================================================
+//
+// Everything the kernel re-decides is serialized STRUCTURE, never
+// surface text: arg/guard/produce payloads parse through the same
+// ExpressionParser the evaluator's evalText drives, so the claim
+// carries the tree the walker consumed. Anything outside the kernel's
+// subset — function calls, fragments, later-rung node kinds — refuses
+// the whole claim via error.Unserializable; the caller then emits a
+// [flow-eval-skip] marker naming the reason, never silence.
+const ClaimSer = struct {
+    allocator: std.mem.Allocator,
+    buf: std.ArrayList(u8) = .empty,
+    dead_reason: []const u8 = "unserializable",
+
+    const Error = error{ Unserializable, OutOfMemory };
+
+    fn dead(self: *ClaimSer, reason: []const u8) Error {
+        self.dead_reason = reason;
+        return error.Unserializable;
+    }
+
+    fn deadf(self: *ClaimSer, comptime fmt: []const u8, args: anytype) Error {
+        self.dead_reason = std.fmt.allocPrint(self.allocator, fmt, args) catch "unserializable";
+        return error.Unserializable;
+    }
+
+    fn out(self: *ClaimSer, comptime fmt: []const u8, args: anytype) Error!void {
+        const w = self.buf.writer(self.allocator);
+        w.print(fmt, args) catch return error.OutOfMemory;
+    }
+
+    fn outStr(self: *ClaimSer, s: []const u8) Error!void {
+        const w = self.buf.writer(self.allocator);
+        w.writeAll(s) catch return error.OutOfMemory;
+    }
+
+    fn outAtom(self: *ClaimSer, s: []const u8) Error!void {
+        if (!sxAtomOk(s)) return self.dead("name-not-atom");
+        try self.outStr(s);
+    }
+
+    // ---- values ----
+
+    fn val(self: *ClaimSer, v: Value) Error!void {
+        switch (v) {
+            .int => |i| try self.out("(int {d})", .{i}),
+            .float => |f| try self.floatVal(f),
+            .boolean => |b| try self.out("(bool {s})", .{if (b) "true" else "false"}),
+            .string => |s| try self.stringVal(s),
+            .array => |items| {
+                try self.outStr("(arr");
+                for (items) |it| {
+                    try self.outStr(" ");
+                    try self.val(it);
+                }
+                try self.outStr(")");
+            },
+            .cell => |c| {
+                try self.outStr("(cell");
+                var it = c.fields.iterator();
+                while (it.next()) |entry| {
+                    try self.outStr(" (");
+                    try self.outAtom(entry.key_ptr.*);
+                    try self.outStr(" ");
+                    try self.val(entry.value_ptr.*);
+                    try self.outStr(")");
+                }
+                try self.outStr(")");
+            },
+            .fragment => return self.dead("fragment-value"),
+        }
+    }
+
+    /// Quoted atoms carry NO escapes in the claim tokenizer — a `"`
+    /// or newline inside a string cannot be represented. Refusal,
+    /// never a mangled write.
+    fn stringVal(self: *ClaimSer, s: []const u8) Error!void {
+        for (s) |c| {
+            if (c == '"' or c == '\n' or c == '\r') return self.dead("string-not-quotable");
+        }
+        try self.out("(str \"{s}\")", .{s});
+    }
+
+    /// f64 → `(float n d)`, the EXACT binary value as a rational: the
+    /// frexp mantissa (≤2^53, exact under the kernel's Float.ofInt)
+    /// over a power of two (exact while 2^k ≤ 2^1023). The kernel's
+    /// `ofInt n / ofInt d` then correctly-rounds back to f itself.
+    /// Denominators past 2^1023 refuse — named, never approximated.
+    fn floatVal(self: *ClaimSer, f: f64) Error!void {
+        if (!std.math.isFinite(f)) return self.dead("float-nonfinite");
+        if (f == 0) return self.outStr("(float 0 1)");
+        const fr = std.math.frexp(f);
+        const neg = fr.significand < 0;
+        const mant: u128 = @intFromFloat(@abs(fr.significand) * 4503599627370496.0); // 2^53, exact
+        const e2 = fr.exponent - 53;
+        if (e2 >= 0) {
+            var n = std.math.big.int.Managed.initSet(self.allocator, mant) catch return error.OutOfMemory;
+            n.shiftLeft(&n, @intCast(e2)) catch return error.OutOfMemory;
+            const ns = n.toString(self.allocator, 10, .lower) catch return error.OutOfMemory;
+            try self.out("(float {s}{s} 1)", .{ if (neg) "-" else "", ns });
+        } else {
+            const k: usize = @intCast(-@as(i64, e2));
+            if (k > 1023) return self.dead("float-denominator-range");
+            var d = std.math.big.int.Managed.initSet(self.allocator, 1) catch return error.OutOfMemory;
+            d.shiftLeft(&d, k) catch return error.OutOfMemory;
+            const ds = d.toString(self.allocator, 10, .lower) catch return error.OutOfMemory;
+            try self.out("(float {s}{d} {s})", .{ if (neg) "-" else "", mant, ds });
+        }
+    }
+
+    // ---- expressions — parsed from the same text evalText consumes ----
+
+    fn exprText(self: *ClaimSer, text: []const u8) Error!void {
+        var parser = expression_parser.ExpressionParser.init(self.allocator, text);
+        const e = parser.parseAll() catch return self.dead("expr-parse");
+        try self.expr(e);
+    }
+
+    fn expr(self: *ClaimSer, e: *const ast.Expression) Error!void {
+        try self.exprNode(&e.node);
+    }
+
+    /// `Literal.number` is text: integer forms emit `(int N)`; decimals
+    /// decompose mantissa/denominator, each bounded ≤ 2^53 so the
+    /// kernel's ofInt is exact and its IEEE division lands on the same
+    /// f64 parseFloat chose.
+    fn litNumber(self: *ClaimSer, text: []const u8) Error!void {
+        var clean_buf: [96]u8 = undefined;
+        var clean = text;
+        if (std.mem.indexOfScalar(u8, text, '_') != null) {
+            if (text.len > clean_buf.len) return self.dead("literal-length");
+            var n: usize = 0;
+            for (text) |c| {
+                if (c == '_') continue;
+                clean_buf[n] = c;
+                n += 1;
+            }
+            clean = clean_buf[0..n];
+        }
+        if (std.fmt.parseInt(i64, clean, 0)) |i| {
+            return self.out("(int {d})", .{i});
+        } else |_| {}
+        try self.litFloatText(clean);
+    }
+
+    fn litFloatText(self: *ClaimSer, text: []const u8) Error!void {
+        var mant_part = text;
+        var exp10: i64 = 0;
+        if (std.mem.indexOfAny(u8, text, "eE")) |eidx| {
+            mant_part = text[0..eidx];
+            exp10 = std.fmt.parseInt(i64, text[eidx + 1 ..], 10) catch return self.dead("literal-float");
+        }
+        var i: usize = 0;
+        var neg = false;
+        if (i < mant_part.len and (mant_part[i] == '-' or mant_part[i] == '+')) {
+            neg = mant_part[i] == '-';
+            i += 1;
+        }
+        var mantissa: u128 = 0;
+        var frac_len: usize = 0;
+        var digits = false;
+        var dot = false;
+        while (i < mant_part.len) : (i += 1) {
+            const c = mant_part[i];
+            if (c == '.') {
+                if (dot) return self.dead("literal-float");
+                dot = true;
+                continue;
+            }
+            if (!std.ascii.isDigit(c)) return self.dead("literal-float");
+            digits = true;
+            mantissa = mantissa * 10 + (c - '0');
+            if (dot) frac_len += 1;
+            if (mantissa > (1 << 53)) return self.dead("literal-float-range");
+        }
+        if (!digits) return self.dead("literal-float");
+        var denom: u128 = 1;
+        for (0..frac_len) |_| denom *= 10;
+        if (exp10 >= 0) {
+            for (0..@intCast(exp10)) |_| {
+                mantissa *= 10;
+                if (mantissa > (1 << 53)) return self.dead("literal-float-range");
+            }
+        } else {
+            for (0..@intCast(-exp10)) |_| {
+                denom *= 10;
+                if (denom > (1 << 53)) return self.dead("literal-float-range");
+            }
+        }
+        try self.out("(float {s}{d} {d})", .{ if (neg) "-" else "", mantissa, denom });
+    }
+
+    fn exprNode(self: *ClaimSer, en: *const ast.ExprNode) Error!void {
+        switch (en.*) {
+            .literal => |lit| {
+                try self.outStr("(lit ");
+                switch (lit) {
+                    .number => |t| try self.litNumber(t),
+                    .string => |t| {
+                        const bare = if (t.len >= 2 and t[0] == '"' and t[t.len - 1] == '"') t[1 .. t.len - 1] else t;
+                        try self.stringVal(bare);
+                    },
+                    .boolean => |b| try self.out("(bool {s})", .{if (b) "true" else "false"}),
+                }
+                try self.outStr(")");
+            },
+            .identifier => |name| {
+                try self.outStr("(var ");
+                try self.outAtom(name);
+                try self.outStr(")");
+            },
+            .binary => |b| {
+                try self.out("(bin {s} ", .{binOpWire(b.op)});
+                try self.expr(b.left);
+                try self.outStr(" ");
+                try self.expr(b.right);
+                try self.outStr(")");
+            },
+            .unary => |u| {
+                try self.out("(un {s} ", .{if (u.op == .not) "not" else "neg"});
+                try self.expr(u.operand);
+                try self.outStr(")");
+            },
+            .field_access => |fa| {
+                try self.outStr("(field ");
+                try self.expr(fa.object);
+                try self.outStr(" ");
+                try self.outAtom(fa.field);
+                try self.outStr(")");
+            },
+            .grouped => |inner| try self.expr(inner),
+            .builtin_call => |bc| {
+                try self.outStr("(builtin ");
+                try self.outAtom(bc.name);
+                for (bc.args) |a| {
+                    try self.outStr(" ");
+                    try self.expr(a);
+                }
+                try self.outStr(")");
+            },
+            .array_index => |ai| {
+                try self.outStr("(index ");
+                try self.expr(ai.object);
+                try self.outStr(" ");
+                try self.expr(ai.index);
+                try self.outStr(")");
+            },
+            .conditional => |c| {
+                try self.outStr("(cond ");
+                try self.expr(c.condition);
+                try self.outStr(" ");
+                try self.expr(c.then_expr);
+                try self.outStr(" ");
+                try self.expr(c.else_expr);
+                try self.outStr(")");
+            },
+            .function_call => return self.dead("function-call-expr"),
+        }
+    }
+
+    // ---- flows: invocation args, arms, node kinds, defs ----
+
+    /// Invocation/jump arg lists — evalArgs consumes `arg.value` text
+    /// (parsed_expression is a cache for other consumers), so the claim
+    /// re-parses the same text the walk evaluated.
+    fn callArgs(self: *ClaimSer, args: []const ast.Arg) Error!void {
+        for (args) |arg| {
+            if (arg.source_value != null) return self.dead("source-arg");
+            try self.outStr(" (");
+            try self.outAtom(arg.name);
+            try self.outStr(" ");
+            try self.exprText(arg.value);
+            try self.outStr(")");
+        }
+    }
+
+    fn arm(self: *ClaimSer, c: *const ast.Continuation) Error!void {
+        if (c.destructure.len > 0) return self.dead("destructure-arm");
+        try self.outStr("(arm");
+        if (c.is_catchall) {
+            try self.outStr(" catchall");
+        } else if (c.branch.len > 0) {
+            try self.outStr(" (tag ");
+            try self.outAtom(c.branch);
+            try self.outStr(")");
+        }
+        if (c.binding) |b| {
+            try self.outStr(" (bind ");
+            try self.outAtom(b);
+            try self.outStr(")");
+        }
+        // The walker prefers condition_expr when present — the claim
+        // carries whichever form the walk evaluated.
+        if (c.condition_expr) |ce| {
+            try self.outStr(" (when ");
+            try self.expr(ce);
+            try self.outStr(")");
+        } else if (c.condition) |t| {
+            try self.outStr(" (when ");
+            try self.exprText(t);
+            try self.outStr(")");
+        }
+        if (c.node) |*n| {
+            try self.outStr(" (node ");
+            try self.node(n);
+            try self.outStr(")");
+        }
+        if (c.continuations.len > 0) {
+            try self.outStr(" (conts");
+            for (c.continuations) |*sub| {
+                try self.outStr(" ");
+                try self.arm(sub);
+            }
+            try self.outStr(")");
+        }
+        try self.outStr(")");
+    }
+
+    fn node(self: *ClaimSer, n: *const ast.Node) Error!void {
+        switch (n.*) {
+            .terminal => try self.outStr("terminal"),
+            .label_jump => |lj| {
+                try self.outStr("(jump ");
+                try self.outAtom(lj.label);
+                try self.callArgs(lj.args);
+                try self.outStr(")");
+            },
+            .invocation => |*inv| {
+                try self.outStr("(invoke ");
+                try self.outAtom(claimPathText(self.allocator, &inv.path) catch return error.OutOfMemory);
+                try self.callArgs(inv.args);
+                try self.outStr(")");
+            },
+            .branch_constructor => |*bc| {
+                const pv = bc.plain_value orelse return self.dead("named-fields-ctor");
+                try self.outStr("(ctor ");
+                try self.outAtom(bc.branch_name);
+                try self.outStr(" ");
+                try self.exprText(pv);
+                try self.outStr(")");
+            },
+            .expression => |text| {
+                try self.outStr("(produce ");
+                try self.exprText(text);
+                try self.outStr(")");
+            },
+            else => return self.deadf("{s}-node", .{@tagName(n.*)}),
+        }
+    }
+
+    fn def(self: *ClaimSer, name: []const u8, callable: ClaimCallable) Error!void {
+        try self.outStr("(def ");
+        try self.outAtom(name);
+        switch (callable) {
+            .thunk => try self.outStr(" thunk)"),
+            .bare => |impl| {
+                const pv = impl.value.plain_value orelse return self.dead("bare-impl-no-expr");
+                try self.outStr(" (bare ");
+                try self.exprText(pv);
+                try self.outStr("))");
+            },
+            .subflow => |fl| {
+                try self.outStr(" (subflow");
+                if (fl.pre_label) |l| {
+                    try self.outStr(" (label ");
+                    try self.outAtom(l);
+                    try self.outStr(")");
+                }
+                const head = fl.body.node orelse return self.dead("head-missing");
+                if (head != .invocation) return self.dead("head-not-invocation");
+                try self.outStr(" (head ");
+                try self.outAtom(claimPathText(self.allocator, &head.invocation.path) catch return error.OutOfMemory);
+                try self.callArgs(head.invocation.args);
+                try self.outStr(")");
+                for (fl.body.continuations) |*a| {
+                    try self.outStr(" ");
+                    try self.arm(a);
+                }
+                try self.outStr("))");
+            },
+        }
+    }
+
+    // ---- results and the claim line ----
+
+    /// Result shape: `(tag NAME VAL?)` | `(bare VAL)` | `(void)`.
+    fn thunkResult(self: *ClaimSer, r: ThunkResult) Error!void {
+        if (r.branch) |b| {
+            try self.outStr("(tag ");
+            try self.outAtom(b);
+            if (r.payload) |v| {
+                try self.outStr(" ");
+                try self.val(v);
+            }
+            try self.outStr(")");
+        } else if (r.payload) |v| {
+            try self.outStr("(bare ");
+            try self.val(v);
+            try self.outStr(")");
+        } else {
+            try self.outStr("(void)");
+        }
+    }
+
+    /// `((entry NAME (a VAL)*) (fuel N) (result R) (graph DEF*) (oracle LEAF*))`
+    fn claimLine(
+        self: *ClaimSer,
+        entry: []const u8,
+        args: []const ArgValue,
+        expected: ClaimExpected,
+        defs: []const ClaimDef,
+        leaves: []const ClaimLeaf,
+        fuel: usize,
+    ) Error![]const u8 {
+        try self.outStr("((entry ");
+        try self.outAtom(entry);
+        for (args) |a| {
+            try self.outStr(" (");
+            try self.outAtom(a.name);
+            try self.outStr(" ");
+            try self.val(a.value);
+            try self.outStr(")");
+        }
+        try self.out(") (fuel {d}) (result ", .{fuel});
+        switch (expected) {
+            .result => |r| try self.thunkResult(r),
+            // The wire's refusal verdict is bare `refuse` — the kernel
+            // collapses refusal classes into `none`, so the class is a
+            // diagnostic, not checkable surface. It still reaches stderr
+            // through the walk's own diagnostic when the error propagates.
+            .refuse => |_| try self.outStr("refuse"),
+        }
+        try self.outStr(") (graph");
+        for (defs) |d| {
+            try self.outStr(" ");
+            try self.def(d.name, d.callable);
+        }
+        try self.outStr(") (oracle");
+        for (leaves) |l| {
+            try self.outStr(" (leaf ");
+            try self.outAtom(l.name);
+            try self.outStr(" (");
+            for (l.args, 0..) |a, i| {
+                if (i > 0) try self.outStr(" ");
+                try self.outStr("(");
+                try self.outAtom(a.name);
+                try self.outStr(" ");
+                try self.val(a.value);
+                try self.outStr(")");
+            }
+            try self.outStr(") ");
+            try self.thunkResult(l.result);
+            try self.outStr(")");
+        }
+        try self.outStr("))");
+        return self.buf.toOwnedSlice(self.allocator) catch error.OutOfMemory;
+    }
+};
+
+fn binOpWire(op: ast.BinaryOperator) []const u8 {
+    return switch (op) {
+        .add => "add",
+        .subtract => "sub",
+        .multiply => "mul",
+        .divide => "div",
+        .modulo => "mod",
+        .equal => "eq",
+        .not_equal => "ne",
+        .less => "lt",
+        .less_equal => "le",
+        .greater => "gt",
+        .greater_equal => "ge",
+        .and_op => "and",
+        .or_op => "or",
+        .string_concat => "concat",
+    };
 }
 
 // ============================================================================

@@ -86,16 +86,39 @@ Measured at `ccomp` `e94bfeeb9` (2026-10-14).
 
 ## K3-adjacent — flow semantics kernel (`verify/semantics/`)
 
-- **`FlowCheck.lean` consumes `[flow-eval]` claims — but nothing emits
-  them yet.** The whole-program checker (graph + entry call + fuel +
-  asserted result + asserted thunk leaves, re-decided end to end) is
-  gated on hand-authored corpora (golden/forged/drift). The open leg is
-  koruc-side serialization: emit a claim per kernel-subset walk on real
-  corpus runs so the kernel re-decides actual executions.
+- **`FlowCheck.lean` now consumes real claims.** `comptime_eval.zig`
+  emits one `[flow-eval]` line per interpreter-consumed comptime flow
+  under `std/witness:enforce` — entry call with evaluated args, graph
+  (subflow/bare/thunk defs), a fuel bound, the result or bare `refuse`,
+  and every native thunk call as an asserted oracle leaf. The
+  `FLOW_EVAL_CHECK` marker + `KORU_WITNESS=1` route a test's
+  `backend.err` through `semantics_gate.sh`; `310_141` is the pinning
+  test. Forged variants of real claims MISMATCH under re-decision.
+- **Refusal classes are diagnostic-only.** The wire verdict is bare
+  `refuse`; the kernel's `none` collapses the walker's named classes
+  (unbound var, div-zero, uncallable head, …), so a claim verifies
+  *that* a walk refused, never *why*. Divergence on refusal reason is
+  undetected until the wire grows a `(refuse-class …)` field the
+  checker can compare.
+- **`[flow-eval-skip]` markers are not consumed.** A walk whose values
+  can't serialize (unquotable string, fragment, later-rung node) prints
+  a named skip marker — presence is auditable, but FlowCheck ignores
+  the line; a corpus of only skips fails as "no claim lines", which is
+  the correct loud shape, while a *mix* of claims and skips has no
+  accounting that every walk produced one or the other.
+- **Fuel is a bound, not a certificate.** Emitted fuel is the walk's
+  own step accounting scaled with headroom; an underestimate produces a
+  loud MISMATCH on honest output (never a silent pass), an overestimate
+  is harmless to re-decision. ISAR's `sufficient_fuel_correct` is the
+  proven shape this upgrades toward.
+- **Identical walks are corpus-level drift.** Two byte-identical claims
+  (same call walked twice) trip the duplicate rule — the checker cannot
+  distinguish "same fact committed twice" from emitter double-counting,
+  so `FLOW_EVAL_CHECK` tests must not repeat a walk verbatim.
 - **No shared code with koruc.** Independence is the point — divergence
-  between the kernel and the compiler is a bug in one of them — but
-  until koruc emits real claims, silent divergence on kernel-subset
-  programs is possible in both directions and nothing would notice.
+  between the kernel and the compiler is a bug in one of them. With the
+  emit leg landed that divergence is now *detectable* per run, but only
+  on programs the marked tests actually exercise: coverage, not proof.
 - **Kernel scope covers the walker's comptime expression surface:**
   int/float/bool/str/array/cell values, full binary/unary ops (with
   truncating `/`,`%` and floored `@mod` distinguished), lazy
