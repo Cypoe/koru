@@ -1,0 +1,9 @@
+{
+  "name": "arm-body-result-shadow",
+  "version": "0.1.0",
+  "paths": {
+    "std": "../../../../../koru_std",
+    "app": "{{ ENTRY }}",
+    "lib": "{{ ENTRY }}/test_lib"
+  }
+}

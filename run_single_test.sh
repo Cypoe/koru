@@ -63,6 +63,28 @@ if [ "${REGRESSION_QUIET:-false}" != "true" ] && [ -z "${KORU_SUITE_LOCK_BYPASS:
     fi
 fi
 
+# ── Per-test timing ─────────────────────────────────────────────────────────
+# The suite exports KORU_TIMING_FILE and gets one TSV row per worker; a
+# standalone run has no file, so the row is printed instead. Both cleanups
+# share one EXIT trap: a second `trap ... EXIT` would replace the snapshot
+# remover set above, and the 12GB of leaked zig-out-run-* dirs came from
+# cleanup that was never reached. Set after the lock check so a refused run
+# does not record a row.
+TIMING_START_MS=$(koru_now_ms)
+TIMING_CACHED=0
+finish_test_timing() {
+    local rc=$?
+    local end_ms
+    end_ms=$(koru_now_ms)
+    record_timing_line "$test_dir" "$TIMING_START_MS" "$end_ms" "$TIMING_CACHED"
+    if [ "${REGRESSION_QUIET:-false}" != "true" ]; then
+        printf '⏱  %dms  %s\n' "$((end_ms - TIMING_START_MS))" "${TEST_NAME:-$(basename "$test_dir")}"
+    fi
+    [ -n "${KORUC_SNAPSHOT_DIR:-}" ] && rm -rf "$KORUC_SNAPSHOT_DIR"
+    return "$rc"
+}
+trap finish_test_timing EXIT
+
 # Backend-binary cache: default ON for standalone invocations too (when the suite
 # drives us it exports MODE/DIR itself, including MODE=off under
 # --no-backend-cache, and this block is skipped). A test's key is the content of
@@ -155,9 +177,11 @@ if [ "$CACHE_HIT" = true ]; then
     fi
 
     if [ "$cached_outcome" = "pass" ]; then
+        TIMING_CACHED=1
         echo -e "${GREEN}💾 CACHED${NC} ${GREEN}✓${NC} ${DIM}$TEST_NAME${NC}"
         exit 0
     else
+        TIMING_CACHED=1
         reason=$(head -1 "$test_dir/FAILURE" 2>/dev/null || echo "cached-fail")
         echo -e "${RED}💾 CACHED${NC} ${RED}✗${NC} ${DIM}$TEST_NAME${NC} ${DIM}($reason)${NC}"
         exit 1

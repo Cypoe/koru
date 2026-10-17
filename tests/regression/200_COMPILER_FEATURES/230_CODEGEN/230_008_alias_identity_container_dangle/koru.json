@@ -1,0 +1,10 @@
+{
+  "name": "alias-identity-container-dangle",
+  "version": "0.1.0",
+  "paths": {
+    "std": "../../../../../koru_std",
+    "app": "{{ ENTRY }}",
+    "a": "{{ ENTRY }}/test_lib",
+    "b": "{{ ENTRY }}/test_lib"
+  }
+}

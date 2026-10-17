@@ -93,3 +93,24 @@ whose key cannot match the thing it is meant to catch, reporting success.
 And [[frag-synthesized-phantoms-are-derived-names]] — the adjacent claim that
 constant synthesized phantoms are safe because fully qualified; qualification
 was never the whole obligation — the qualifier has a canonical spelling too.
+
+## The fourth shape: the emitted container name
+
+2026-10-17, pinned 230_008: the module's Zig container is named after the
+*import-path spelling* the consumer used — `libs/metal` emits `koru_libs.
+koru_metal`, `koru/metal` emits `koru_koru.koru_metal`. Same resolved file,
+two emitted identities. The decl side then writes its own qualified payload
+type through the alias it happened to spell (`koru/metal:KeyData`, the
+package's canonical self-name via the builtin `koru` alias), and the
+`?`-optional-arm noop — and the Handlers method signatures — reference a
+container that only exists when the consumer's spelling matches. A consumer
+importing under a different alias gets `use of undeclared identifier
+'koru_b'` from generated code.
+
+Every earlier shape was two writers disagreeing on a key; this one is subtler:
+the name minted *is* consistent, but it encodes the reference path, not the
+referent. The rule already on the books covers it — synthesized names must be
+minted in canonical form — and the emitted container name is a synthesized
+name: its canonical form should derive from the resolved module, so every
+spelling that reaches it writes the same identity. Surfaced by
+koru-libs/metal/tests/drift.k, the second wall in that file.

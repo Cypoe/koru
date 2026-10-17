@@ -32,6 +32,7 @@ const passed = parseInt(getArg('passed') || '0');
 const total = parseInt(getArg('total') || '0');
 const flags = getArg('flags') || '';
 const commit = getArg('commit') || 'unknown';
+const timingsPath = getArg('timings');
 
 async function fileExists(path) {
 	try {
@@ -242,6 +243,35 @@ async function loadUnitTests() {
 	}
 }
 
+/**
+ * Read the run's timing TSV (one row per executed test):
+ *   <path under tests/regression>\t<start-ms>\t<end-ms>\t<duration-ms>\t<status>\t<cached>
+ * The file is written by the workers and the serial loop; a missing file is
+ * not an error (older runs, or a board where every test was skipped).
+ */
+async function loadTimings(path) {
+	const map = new Map();
+	try {
+		const content = await readFile(path, 'utf-8');
+		for (const line of content.split('\n')) {
+			if (!line) continue;
+			const [rel, start, end, duration, status, cached] = line.split('\t');
+			const durationMs = Number(duration);
+			if (!rel || !Number.isFinite(durationMs)) continue;
+			map.set(rel.replace(/^tests\/regression\//, ''), {
+				startMs: Number(start),
+				endMs: Number(end),
+				durationMs,
+				status,
+				cached: cached === '1'
+			});
+		}
+	} catch {
+		return null;
+	}
+	return map;
+}
+
 async function saveSnapshot() {
 	try {
 		// Ensure results directory exists
@@ -269,6 +299,23 @@ async function saveSnapshot() {
 		// Scan all tests recursively (matching bash script behavior)
 		const allTests = await findAllTestDirs(REGRESSION_PATH);
 		allTests.sort((a, b) => a.directory.localeCompare(b.directory));
+
+		// Attach this run's per-test wall time. Keyed by the path under
+		// tests/regression so a duplicate `directory` basename in two
+		// categories (the 210_166 collision) cannot merge the wrong rows.
+		const timings = timingsPath ? await loadTimings(timingsPath) : null;
+		if (timings) {
+			for (const test of allTests) {
+				const t = timings.get(`${test.categorySlug}/${test.directory}`);
+				if (!t || !Number.isFinite(t.durationMs)) continue;
+				test.durationMs = t.durationMs;
+				if (Number.isFinite(t.startMs)) {
+					test.startedAt = new Date(t.startMs).toISOString();
+				}
+				test.cached = t.cached;
+			}
+		}
+		const timedTests = allTests.filter(t => typeof t.durationMs === 'number');
 
 		// Group tests by category for structured output
 		const categoryMap = new Map();
@@ -328,6 +375,7 @@ async function saveSnapshot() {
 				broken: brokenTests,
 				benchmark: benchmarkTests,
 				untested: untestedTests,
+				timed: timedTests.length,
 				awaitingRuling,
 				rulingSettled,
 				passRate: inScopeTests > 0 ? ((passedTests / inScopeTests) * 100).toFixed(1) : '0.0'
@@ -369,6 +417,14 @@ async function saveSnapshot() {
 			console.log(
 				`  Unit tests: ${us.passed}/${us.total} passed${skipPart}, ${us.compileErrors} compile errors`
 			);
+		}
+		if (timedTests.length > 0) {
+			const slowest = [...timedTests]
+				.sort((a, b) => b.durationMs - a.durationMs)
+				.slice(0, 5)
+				.map(t => `${t.directory} ${t.durationMs}ms`)
+				.join(', ');
+			console.log(`  Timing: ${timedTests.length} tests measured; slowest: ${slowest}`);
 		}
 		if (loc) {
 			const parts = Object.entries(loc)

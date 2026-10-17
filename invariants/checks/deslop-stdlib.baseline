@@ -18,8 +18,16 @@
 # re-qualify) joins the import_decl preamble cluster and the
 # interpreter.run/runcached event_decl twins persist from the
 # ~part split; same decl-shell protocol category as 73/118+.
-clusters=96
-members=156
+# 98/160: measured 2026-10-17 at HEAD eba57455c during the
+# arm-body-shadow pin commit (zero .kz staged — a test dir and a
+# concept file). +2 clusters/+4 members is committed foreign drift:
+# runtime.registry/store.kz import_decl pair, bridge.steps/store.
+# retqual/store.wait preamble triple, and the bridge.custody/
+# interpreter.guards/pump.wait/store.bulkjoin import_decl quad —
+# part-file decl shells from the custody-witness and bulkjoin
+# landings, same decl-shell protocol category as every prior re-pin.
+clusters=98
+members=160
 skipped=2
 spellings=45
 # 70/111: store.keyed.kz joined io.blk-style import preamble clone w/ interpreter.select.kz (3 shared compiler-module imports, boilerplate)

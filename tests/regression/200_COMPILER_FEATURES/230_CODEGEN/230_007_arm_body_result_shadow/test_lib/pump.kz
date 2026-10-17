@@ -1,0 +1,16 @@
+// Cross-module arm-firer: `pump` declares a resume-valued `! tick` arm and
+// its |zig proc consumes the resume. Because the arm is a real call the
+// proc makes (value in, value out), callers get the Handlers_N struct path
+// — the arm bodies become methods nested inside the caller's flow fn,
+// which is where the result_N shadow collides.
+
+~pub tor pump { n: i64 }
+! tick i64 -> i64
+| done
+
+~proc pump|zig {
+    var acc: i64 = 0;
+    var i: i64 = 0;
+    while (i < n) : (i += 1) acc += tick(i);
+    return .{ .done = .{} };
+}
