@@ -405,8 +405,17 @@ not a loophole of the layers.
   koru source rests on byte-diff + tests + refusal honesty. The zig
   self-hosted backend (`backend`/`output` binaries) is likewise unverified
   substrate. "100%" needs a verified emitter or a semantics-preservation
-  proof — the declared pass graph with `requires`/`contract:preserves` invariants is
-  the staged instrument for it, and ISAR may give it teeth.
+  proof — the declared pass graph with `contract:requires`/`contract:preserves`
+  invariants is the staged instrument for it, and ISAR may give it teeth —
+  concretely: isar-proofs proves its `InvariantLayer` quotient *terminal* in
+  a category of dialects (`Dialect` = encode/decode/eval + preservation),
+  which is the N²→N collapse for emitter congruence. Without a kernel
+  object, lanes pair off (Zig↔C, Zig↔LLVM, …) and per-instance checks pay
+  per artifact forever; a `FlowDialect` instance (koru flow carrier +
+  preservation proof, prototyped in isar-proofs, ported back if it checks
+  out) derives cross-lane congruence through the quotient once per view
+  instead. Per-instance refinement keeps buying coverage while that proof
+  debt accrues; the factorization retires the debt class.
 - **Lean-side trust:** `WitnessCheck.lean` is checked by the Lean kernel; the
   *rules* it encodes are the specification — soundness theorems (Role A)
   cover the verdict definitions, not the koru pipeline that minted the marks.
