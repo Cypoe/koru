@@ -1,17 +1,10 @@
-// TEST: fmt:ln scoped borrow — param-wall laundering (ASPIRATIONAL, TODO).
+// TEST: fmt:ln scoped borrow — param-wall laundering is refused.
 //
-// `.text` carries scratch@scoped, but projections cross param walls
-// unqualified: `identity(data: l.text)` arrives inside `identity` as plain
-// `string`, and `-> data` produces an unqualified alias of the scratch borrow
-// back to the caller. One indirection defeats the class.
-//
-// Desired: the class follows the value. With class conferral across
-// parameter binding, `data` binds `scratch@scoped` inside `identity` and
-// `-> data` refuses KORU030 at the produce edge — same refusal 620_011
-// pins for `-> l.text` directly.
-//
-// Compiles and runs today; MUST_ERROR once conferral lands.
-// Residual declared in todo/todo.kz ("fmt-ln-scoped-param-laundering").
+// `.text` carries scratch@scoped. `identity`'s param `data: string`
+// declares no scoped acceptance, so the argument `l.text` refuses at the
+// call wall (KORU030) before the callee ever binds it — the class follows
+// the value through the projection (the carrier `l` is the classed
+// binding), and only a param spelled `string<*@scoped>` could take it.
 import std/fmt
 import std/io
 
