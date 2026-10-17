@@ -1,6 +1,0 @@
-Emitter hygiene gap: a result-emitting step (e.g. std/store:stored) inside a
-cross-module effect arm lowers to a Handlers_N method nested in the flow fn and
-re-emits `const result_0`, shadowing the head call's bound result — Zig refuses
-the emission ("local constant 'result_0' shadows local constant from outer
-scope"). Surfaced by koru-libs/metal/tests/drift.k; fix belongs in
-emitContinuationBody / the arm-body result counter, not the test.

@@ -8155,6 +8155,19 @@ pub fn emitHandlersStruct(
                 }
                 try emitter.write(";\n");
             } else {
+                // Arm bodies land as `fn`s inside this Handlers_N container —
+                // itself nested in the enclosing flow fn's body — and Zig's
+                // no-shadow rule reaches across that boundary: a fresh
+                // `result_0` here collides with the head call's `result_0`
+                // (230_007, drift.k's `stored` in a `frames` arm). NEST the
+                // namespace under the enclosing prefix like the `c`/`e` tags
+                // above instead of seeding the counter — emitContinuationBody
+                // reads `counter == 0`/`counter-1` as sentinels, so a nonzero
+                // seed would name a stale enclosing-scope variable.
+                const saved_prefix = ctx.result_prefix;
+                var prefix_buf: [128]u8 = undefined;
+                ctx.result_prefix = std.fmt.bufPrint(&prefix_buf, "{s}{s}_", .{ saved_prefix, handlers_name }) catch saved_prefix;
+                defer ctx.result_prefix = saved_prefix;
                 var result_counter: usize = 0;
                 try emitContinuationBody(emitter, ctx, cont, &result_counter);
 
