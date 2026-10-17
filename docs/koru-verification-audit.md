@@ -163,7 +163,7 @@ The strongest evidence the layers are real is what they refused:
   exist. Nothing requires the transform to justify a permitted touch.
   This is the taxonomy the audit runs on: coverage gaps (arcs never
   printed), bound gaps (surfaces never bounded), and obligation gaps
-  (touches never justified). The `[transform|obliges(...)]` rung
+  (touches never justified). The `[transform|contract:obliges(...)]` rung
   (§6b) now closes the first two decidable instances —
   `kind-stable` (collateral kind multisets agree) and `matched-only`
   (every removed non-site item contains a matching invocation) —

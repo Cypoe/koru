@@ -117,7 +117,7 @@ the singleton `{site}`; the census count must equal the application lines
 surface.** `[transform|contract:preserves(...)]` declares which top-level item
 kinds a transform's write-backs hold invariant — the *allowed* set the
 accounting was missing. Positive atoms list the preserved kinds;
-negated atoms (`contract:contract:preserves("!flow","!module_decl")`) mean "preserve every
+negated atoms (`contract:preserves("!flow","!module_decl")`) mean "preserve every
 kind except these" — closed under future `ast.Item` growth, which is why
 `tap` declares the negated form (its measured write-back touches only
 `flow` and `module_decl` items). At each `whole_program` application the
@@ -182,7 +182,7 @@ therefore passes untouched items through by value, which is the pattern
 the obligation exists to force: clone only what you change.
 Pins: `220_068`/`220_069` declaration refusals, `220_070`/`220_071`
 enforcement refusals, `220_072` the satisfied shape; `koru_std/taps.kz`
-declares `contract:contract:obliges("kind-stable")`.
+declares `contract:obliges("kind-stable")`.
 
 ---
 
