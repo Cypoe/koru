@@ -448,6 +448,7 @@ pub fn build(b: *std.Build) void {
     });
     canonicalize_names_module.addImport("ast", ast_module);
     canonicalize_names_module.addImport("log", log_module);
+    canonicalize_names_module.addImport("module_resolver", module_resolver_module);
 
     // Host-type scope checker - refuse bare cross-module host-type references
     // (220_031, ruled 2026-09-06): bare is module-local; cross-module is `*mod:Type`.

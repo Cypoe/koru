@@ -8569,7 +8569,7 @@ pub fn main() !void {
     // Canonicalize all DottedPaths - set module_qualifier on everything
     // This enables reliable name resolution for all downstream passes
     const canonicalize_names = @import("canonicalize_names");
-    try canonicalize_names.canonicalize(&source_file, parse_allocator);
+    try canonicalize_names.canonicalize(&source_file, parse_allocator, &resolver);
 
     // Host-type scope: a bare host (Zig) type is legal only inside the module
     // that declares it; across a module boundary the signature spells it fully

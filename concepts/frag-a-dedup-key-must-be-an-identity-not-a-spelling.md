@@ -1,8 +1,8 @@
 ---
 type: belief
 id: frag-a-dedup-key-must-be-an-identity-not-a-spelling
-provenance: `~import mylib` resolved to `<dir>`; the `mylib/index` import the compiler synthesizes for `~import mylib/helper` resolved to `<dir>/index.kz`. Dedup keyed on the resolved path, so one module was imported twice and every declaration in its index emitted twice. Found 2026-08-08 wiring orisha's pump seam; fixed and pinned as 110_030. Evolved 2026-09-29: the same fault, second shape — the phantom-discharge JOIN between a synthesized `std/store:taken!` literal and a parser-canonicalized `std.store:taken!`. Evolved 2026-10-07: third shape — the dir-submodule's canonical path was the first-seen `readdir` dirent while the file-import path minted it by extension priority; orisha's `pump` emitted twice on overlayfs, once on virtiofs, pinned as 140_030.
-ts: 2026-10-07
+provenance: `~import mylib` resolved to `<dir>`; the `mylib/index` import the compiler synthesizes for `~import mylib/helper` resolved to `<dir>/index.kz`. Dedup keyed on the resolved path, so one module was imported twice and every declaration in its index emitted twice. Found 2026-08-08 wiring orisha's pump seam; fixed and pinned as 110_030. Evolved 2026-09-29: the same fault, second shape — the phantom-discharge JOIN between a synthesized `std/store:taken!` literal and a parser-canonicalized `std.store:taken!`. Evolved 2026-10-07: third shape — the dir-submodule's canonical path was the first-seen `readdir` dirent while the file-import path minted it by extension priority; orisha's `pump` emitted twice on overlayfs, once on virtiofs, pinned as 140_030. Evolved 2026-10-18: fourth shape resolved — 230_008 green; the canonical name turned out to be the materialized spelling, not a path-derived one, because emitted names are a contract host code writes against.
+ts: 2026-10-18
 ---
 
 # A comparison key must be an identity, not whichever spelling arrived
@@ -109,8 +109,32 @@ importing under a different alias gets `use of undeclared identifier
 
 Every earlier shape was two writers disagreeing on a key; this one is subtler:
 the name minted *is* consistent, but it encodes the reference path, not the
-referent. The rule already on the books covers it — synthesized names must be
-minted in canonical form — and the emitted container name is a synthesized
-name: its canonical form should derive from the resolved module, so every
-spelling that reaches it writes the same identity. Surfaced by
-koru-libs/metal/tests/drift.k, the second wall in that file.
+referent. Surfaced by koru-libs/metal/tests/drift.k, the second wall in that
+file.
+
+### How it resolved — the canonical form is the *materialized* spelling
+
+The prediction above — "the container's canonical form should derive from
+the resolved module" — was half right and wrong in the interesting half. A
+path-derived container name *would* give every spelling one identity — but
+the emitted name is not internal. Host Zig written by the user names these
+containers directly (`koru_std.koru_runtime` in 440_004/010/011); renaming
+containers to a canonical form would break every program that writes the
+emitted name it can see. The emitted name is a **contract, not a key**.
+
+So identity got restored on the reference side instead. The dedup winner's
+`logical_name` — the first-processed import spelling — is already the de
+facto canonical name everywhere the compiler agrees (host type homes, event
+lookup, emitted container). The fix makes it formally canonical: the
+canonicalize pass resolves every stored spelling (`Field.module_path`,
+`DottedPath.module_qualifier`, `mod:` qualifiers embedded in type/phantom/
+resume strings) back through the resolver to its canonical file, maps that
+file to the one logical_name it materialized as, and rewrites the reference.
+Dedup kept its identity key; references now share it.
+
+The refinement to the standing rule: **synthesized names must be minted in
+canonical form — but when a name is already minted and user-visible, the
+canonical form is whichever spelling actually materialized, and it is the
+*references* that must be canonicalized to it.** Canonical form is not
+always the form you would have chosen; sometimes it is the form the first
+writer chose, and the obligation moves to everyone else.
