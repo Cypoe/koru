@@ -44,11 +44,27 @@ to copy is a decision that must be written down where the copy happens.
 dropping them, and `condition_expr` is nulled deliberately. That is the standard;
 silent omission is not.
 
-**Open questions.** (1) `cloneInvocation` still drops `variant`,
-`return_binding`, `return_destructure`, `annotations`, `inline_body` and
-`preamble_code`. Nothing in the corpus provokes them yet, and changing six
-behaviours in a shared helper on speculation is its own risk — but each is the
-same defect waiting for a shape. (2) The general form is worth a wall rather
-than vigilance: a clone helper could be made structurally exhaustive so a field
-added to the struct fails to compile until the clone decides about it. Zig can
-express that; nobody has written it.
+**Open questions — revised.** (1) `cloneInvocation` is now exhaustive
+(`variant`, `return_binding`, `return_destructure`, `annotations`, `marks`,
+`inline_body`, `preamble_code`, `source_module`, tap flags all copy); the
+warning it carried is discharged. (2) The wall now exists in a weaker but
+measured form — `ast_functional_test` pins
+`serializeCanon(cloneItem(x)) == serializeCanon(x)` per field class, so any
+*serialized* field a clone drops is a test failure, not a latent bug. That
+covers the canonical surface; what it still cannot see is a field the
+serializer also skips — the structural-exhaustiveness wall (a field added to
+the struct fails to compile until the clone decides) remains unwritten.
+
+**Second instance, different detector.** The digest run found the class again
+without any semantic misresolution: `transform_pass_runner.itemDigest`
+fingerprints items through `serializeCanon`, so a dropped *serialized* field
+shows up as an accounting lie rather than a wrong program — the same defect,
+caught at the fingerprint instead of downstream. Eight field classes were
+silently resetting to defaults: `ProcDecl.inline_flows`/`is_public`,
+`ImmediateImpl.is_impl`, `EventTap.annotations` (allocated *empty*, not
+null — the drop had a shape, just no content), `Arg.had_explicit_label`,
+`Flow.super_shape`/`site_of`, `FacetField.alts`/`alt_default`, and
+`inserted_by_tap`/`from_opaque_tap` on the `conditional_block` and
+`metatype_binding` node payloads. Pointer-copied fields are a different
+case: same pointer, same serialization, no digest drift — the aliasing
+hazard is real but belongs to the ownership story, not this one.

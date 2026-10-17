@@ -99,7 +99,10 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         \\  // on purpose: `dynamic` boxed every value-type operand — measured
         \\  // ~1s/10M elements on 012_threat_scanner — while T specializes to
         \\  // the operand's own ToString() with no box.
-        \\  public static string __koru_str<T>(T v) => v is bool b ? (b ? "true" : "false") : v?.ToString();
+        \\  // IFormattable takes InvariantCulture: a `double` under de-DE
+        \\  // ToStrings `3,14` where the zig host prints `3.14` — Koru's
+        \\  // print semantics are locale-free.
+        \\  public static string __koru_str<T>(T v) => v is bool b ? (b ? "true" : "false") : v is global::System.IFormattable f ? f.ToString(null, global::System.Globalization.CultureInfo.InvariantCulture) : v?.ToString();
         \\
     );
 

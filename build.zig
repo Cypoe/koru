@@ -1368,6 +1368,7 @@ pub fn build(b: *std.Build) void {
     });
     ast_functional_tests.root_module.addImport("ast", ast_module);
     ast_functional_tests.root_module.addImport("ast_functional", ast_functional_module);
+    ast_functional_tests.root_module.addImport("ast_json", ast_json_module);
     const run_ast_functional_tests = b.addRunArtifact(ast_functional_tests);
     const ast_functional_test_step = b.step("test-ast-functional", "Run ast_functional tests");
     ast_functional_test_step.dependOn(&run_ast_functional_tests.step);

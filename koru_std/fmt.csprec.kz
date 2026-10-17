@@ -17,6 +17,10 @@
 // `{{ s:s }}` is still zero-alloc. Precision keeps its InvariantCulture
 // ToString inside the hole — the `:.N` tail renders `expr.ToString("F"+N,
 // InvariantCulture)` so a French locale doesn't answer "3,14" for "3.14".
+// The whole `$"…"` sits inside `string.Create(InvariantCulture, …)`: the
+// handler formats bare numeric holes against its provider, which defaults
+// to CurrentCulture — same `3,14` trap as `:.N`, closed without losing the
+// pooled-buffer shape.
 // A dotted path (`req.text`) is a cs member read verbatim, and a segment
 // that collides with a C# keyword is legal after a dot — nothing to escape.
 fn csHole(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, placeholder: []const u8) void {
@@ -101,7 +105,7 @@ fn csHole(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, placeholder: []
     if (content.len == 0) {
         buf.appendSlice(allocator, "\"\"") catch unreachable;
     } else {
-        buf.appendSlice(allocator, "$\"") catch unreachable;
+        buf.appendSlice(allocator, "string.Create(global::System.Globalization.CultureInfo.InvariantCulture, $\"") catch unreachable;
     }
     var i: usize = 0;
     while (i < content.len) {
@@ -143,7 +147,7 @@ fn csHole(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, placeholder: []
             i += 1;
         }
     }
-    if (content.len > 0) buf.append(allocator, '"') catch unreachable;
+    if (content.len > 0) buf.appendSlice(allocator, "\")") catch unreachable;
 
     // The two binding shapes are `blk|zig`'s: a call-site `: f` bind yields
     // the string itself; a `| formatted f` arm binds the tagged record and
@@ -257,7 +261,7 @@ fn csHole(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, placeholder: []
     if (content.len == 0) {
         buf.appendSlice(allocator, "\"\"") catch unreachable;
     } else {
-        buf.appendSlice(allocator, "$\"") catch unreachable;
+        buf.appendSlice(allocator, "string.Create(global::System.Globalization.CultureInfo.InvariantCulture, $\"") catch unreachable;
     }
     var i: usize = 0;
     while (i < content.len) {
@@ -302,7 +306,7 @@ fn csHole(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, placeholder: []
             i += 1;
         }
     }
-    if (content.len > 0) buf.append(allocator, '"') catch unreachable;
+    if (content.len > 0) buf.appendSlice(allocator, "\")") catch unreachable;
 
     // The two binding shapes are |js's: `: l |> …` declares `l` in the spliced
     // text; `| line l -> …` declares it here AND hands off with a marker.

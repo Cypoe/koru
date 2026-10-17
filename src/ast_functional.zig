@@ -679,8 +679,7 @@ fn cloneContinuationSlice(
 }
 
 /// The shared clone tail for flows: every field deep-cloned except `body`,
-/// which the caller supplies (already-cloned). `super_shape` is dropped on
-/// all clone paths — see the TODO below.
+/// which the caller supplies (already-cloned).
 fn cloneFlowWithBody(
     allocator: std.mem.Allocator,
     flow: *const ast.Flow,
@@ -689,7 +688,7 @@ fn cloneFlowWithBody(
     return .{
         .body = new_body,
         .pre_label = if (flow.pre_label) |l| try allocator.dupe(u8, l) else null,
-        .super_shape = null, // TODO: clone super_shape if needed
+        .super_shape = if (flow.super_shape) |*ss| try cloneSuperShape(allocator, ss) else null,
         .inline_body = if (flow.inline_body) |body| try allocator.dupe(u8, body) else null,
         .preamble_code = if (flow.preamble_code) |preamble| try allocator.dupe(u8, preamble) else null,
         .is_pure = flow.is_pure,
@@ -700,6 +699,10 @@ fn cloneFlowWithBody(
         .impl_of = if (flow.impl_of) |io| try cloneDottedPath(allocator, &io) else null,
         .impl_variant = if (flow.impl_variant) |v| try allocator.dupe(u8, v) else null,
         .is_impl = flow.is_impl,
+        // Borrowed back-pointer to the real holding continuation (synthetic
+        // site views only — null on real flows). deinit doesn't free it; the
+        // clone is the same view of the same site, so the pointer copies.
+        .site_of = flow.site_of,
     };
 }
 
@@ -1190,6 +1193,12 @@ pub fn cloneItem(allocator: std.mem.Allocator, item: *const ast.Item) CloneError
         .facet_decl => |fd| {
             var fields = try allocator.alloc(ast.FacetField, fd.fields.len);
             for (fd.fields, 0..) |field, i| {
+                var alts: ?[]const i64 = null;
+                if (field.alts) |a| {
+                    const copy = try allocator.alloc(i64, a.len);
+                    @memcpy(copy, a);
+                    alts = copy;
+                }
                 fields[i] = .{
                     .name = try allocator.dupe(u8, field.name),
                     .type = try allocator.dupe(u8, field.type),
@@ -1197,6 +1206,8 @@ pub fn cloneItem(allocator: std.mem.Allocator, item: *const ast.Item) CloneError
                     .hi = field.hi,
                     .eq = field.eq,
                     .clamp = field.clamp,
+                    .alts = alts,
+                    .alt_default = field.alt_default,
                 };
             }
             return .{ .facet_decl = ast.FacetDecl{
@@ -1289,13 +1300,21 @@ fn cloneProcDecl(allocator: std.mem.Allocator, proc: *const ast.ProcDecl) !ast.P
         annotations[i] = try allocator.dupe(u8, ann);
     }
 
+    var inline_flows = try allocator.alloc(ast.Flow, proc.inline_flows.len);
+    errdefer allocator.free(inline_flows);
+    for (proc.inline_flows, 0..) |*f, i| {
+        inline_flows[i] = try cloneFlow(allocator, f);
+    }
+
     return .{
         .path = try cloneDottedPath(allocator, &proc.path),
         .body = try cloneSource(allocator, &proc.body),
+        .inline_flows = inline_flows,
         .annotations = annotations,
         .prose = try allocator.dupe(u8, proc.prose),
         .target = if (proc.target) |t| try allocator.dupe(u8, t) else null,
         .is_impl = proc.is_impl,
+        .is_public = proc.is_public,
         .is_pure = proc.is_pure,
         .is_transitively_pure = proc.is_transitively_pure,
         .location = proc.location,
@@ -1332,6 +1351,7 @@ fn cloneImmediateImpl(allocator: std.mem.Allocator, ii: *const ast.ImmediateImpl
         .annotations = try cloneStringSlice(allocator, ii.annotations),
         .location = ii.location,
         .module = try allocator.dupe(u8, ii.module),
+        .is_impl = ii.is_impl,
     };
 }
 
@@ -1359,7 +1379,7 @@ fn cloneEventTap(allocator: std.mem.Allocator, tap: *const ast.EventTap) !ast.Ev
         .destination = destination,
         .continuations = continuations,
         .is_input_tap = tap.is_input_tap,
-        .annotations = try allocator.alloc([]const u8, 0), // TODO: clone annotations if needed
+        .annotations = try cloneStringSlice(allocator, tap.annotations),
         .location = tap.location,
         .module = try allocator.dupe(u8, tap.module),
     };
@@ -1390,6 +1410,26 @@ fn cloneShape(allocator: std.mem.Allocator, shape: *const ast.Shape) !ast.Shape 
     // Preserve `is_wildcard` (bare `*` payload) across clones — otherwise a
     // pipeline transform silently resets it and codegen loses the `anytype` handler.
     return .{ .fields = fields, .is_wildcard = shape.is_wildcard };
+}
+
+fn cloneSuperShape(allocator: std.mem.Allocator, ss: *const ast.SuperShape) !ast.SuperShape {
+    var branches = try allocator.alloc(ast.SuperShape.BranchVariant, ss.branches.len);
+    errdefer allocator.free(branches);
+
+    for (ss.branches, 0..) |*bv, i| {
+        var sources = try allocator.alloc(ast.DottedPath, bv.sources.len);
+        errdefer allocator.free(sources);
+        for (bv.sources, 0..) |*src, j| {
+            sources[j] = try cloneDottedPath(allocator, src);
+        }
+        branches[i] = .{
+            .name = try allocator.dupe(u8, bv.name),
+            .payload = try cloneShape(allocator, &bv.payload),
+            .sources = sources,
+        };
+    }
+
+    return .{ .branches = branches };
 }
 
 fn cloneField(allocator: std.mem.Allocator, field: *const ast.Field) !ast.Field {
@@ -1542,6 +1582,7 @@ fn cloneArg(allocator: std.mem.Allocator, arg: *const ast.Arg) CloneError!ast.Ar
         .expression_value = arg.expression_value,
         .parsed_expression = arg.parsed_expression,
         .phantom_type = if (arg.phantom_type) |pt| try allocator.dupe(u8, pt) else null,
+        .had_explicit_label = arg.had_explicit_label,
     };
 }
 
@@ -1603,6 +1644,8 @@ fn cloneStep(allocator: std.mem.Allocator, step: *const ast.Step) CloneError!ast
                     .condition = if (cb.condition) |c| try allocator.dupe(u8, c) else null,
                     .condition_expr = cb.condition_expr, // Expression cloning is complex, for now just copy pointer
                     .nodes = cloned_nodes,
+                    .inserted_by_tap = cb.inserted_by_tap,
+                    .from_opaque_tap = cb.from_opaque_tap,
                 },
             };
         },
@@ -1614,6 +1657,8 @@ fn cloneStep(allocator: std.mem.Allocator, step: *const ast.Step) CloneError!ast
                 .source_event = try allocator.dupe(u8, mb.source_event),
                 .dest_event = if (mb.dest_event) |dest| try allocator.dupe(u8, dest) else null,
                 .branch = try allocator.dupe(u8, mb.branch),
+                .inserted_by_tap = mb.inserted_by_tap,
+                .from_opaque_tap = mb.from_opaque_tap,
             } };
         },
         .inline_code => |code| {
