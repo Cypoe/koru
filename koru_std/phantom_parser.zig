@@ -80,9 +80,11 @@ pub const PhantomState = union(enum) {
                 return error.InvalidPhantomState;
             }
 
+            const nc = try splitNameClasses(allocator, state_name);
             return .{ .concrete = .{
                 .module_path = try allocator.dupe(u8, module_path),
-                .name = try allocator.dupe(u8, state_name),
+                .name = nc.name,
+                .classes = nc.classes,
                 .requires_cleanup = requires_cleanup,
                 .consumes_obligation = consumes,
             }};
@@ -108,9 +110,11 @@ pub const PhantomState = union(enum) {
             return error.InvalidPhantomState;
         }
 
+        const nc = try splitNameClasses(allocator, state_name);
         return .{ .concrete = .{
             .module_path = null,
-            .name = try allocator.dupe(u8, state_name),
+            .name = nc.name,
+            .classes = nc.classes,
             .requires_cleanup = requires_cleanup,
             .consumes_obligation = consumes_obligation,
         }};
@@ -125,16 +129,87 @@ pub const PhantomState = union(enum) {
     }
 };
 
+/// Closed class vocabulary for `<name@class>` — names are module-coined and
+/// open, classes are compiler-owned rules. `@` joins them unordered:
+/// `a@b` and `b@a` parse identically (parts are classified, not positional),
+/// so the join is a set — `allocated@scoped` is `scoped@allocated`.
+///   scoped — may not occupy output position: the debt dies with the
+///            producing frame; reissue through `->`, a branch payload, or a
+///            store column refuses. Settles only inside its own scope.
+///   static — immortal lifetime; documents intent, carries no extra rule.
+/// A `@` join needs exactly ONE name part and at least one class part —
+/// `a@b` with no known class is a typo'd class or a misused `|`.
+pub const KNOWN_CLASSES = [_][]const u8{ "scoped", "static" };
+
+pub fn isKnownClass(part: []const u8) bool {
+    for (KNOWN_CLASSES) |class| {
+        if (std.mem.eql(u8, part, class)) return true;
+    }
+    return false;
+}
+
+/// Split a bare state name on `@`: exactly one part is the identity (kept in
+/// `name`), the rest must be known classes (kept, sorted, in `classes`).
+/// No `@` → the whole string is the name, no classes.
+const NameClasses = struct {
+    name: []const u8,
+    classes: [][]const u8,
+};
+
+fn splitNameClasses(allocator: std.mem.Allocator, raw: []const u8) !NameClasses {
+    if (std.mem.indexOfScalar(u8, raw, '@') == null) {
+        return .{ .name = try allocator.dupe(u8, raw), .classes = &.{} };
+    }
+    var name_parts: std.ArrayListUnmanaged([]const u8) = .{};
+    defer name_parts.deinit(allocator);
+    var classes: std.ArrayListUnmanaged([]const u8) = .{};
+    errdefer {
+        for (classes.items) |c| allocator.free(c);
+        classes.deinit(allocator);
+    }
+    var iter = std.mem.tokenizeScalar(u8, raw, '@');
+    while (iter.next()) |part| {
+        if (isKnownClass(part)) {
+            try classes.append(allocator, try allocator.dupe(u8, part));
+        } else {
+            try name_parts.append(allocator, part);
+        }
+    }
+    if (classes.items.len == 0 or name_parts.items.len != 1) {
+        return error.InvalidPhantomState;
+    }
+    // Canonical order: classes sort ascending so `a@b` and `b@a` are one state.
+    std.mem.sort([]const u8, classes.items, {}, struct {
+        fn lt(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.order(u8, a, b) == .lt;
+        }
+    }.lt);
+    return .{
+        .name = try allocator.dupe(u8, name_parts.items[0]),
+        .classes = try classes.toOwnedSlice(allocator),
+    };
+}
+
 /// Concrete phantom state (e.g., "open", "mipmap:open", "fs:closed", "opened!", "!opened")
 pub const ConcreteState = struct {
     module_path: ?[]const u8,  // null for local, "mipmap" for module-qualified
-    name: []const u8,           // "open", "closed", "owned", etc.
+    name: []const u8,           // identity part of "open", "scratch@scoped" -> "scratch"
+    classes: [][]const u8 = &.{},  // `@`-joined classes, sorted; owned
     requires_cleanup: bool = false,  // true if state name ended with ! (e.g., "opened!")
     consumes_obligation: bool = false,  // true if state name starts with ! (e.g., "!opened")
 
     pub fn deinit(self: *ConcreteState, allocator: std.mem.Allocator) void {
         if (self.module_path) |path| allocator.free(path);
         allocator.free(self.name);
+        for (self.classes) |c| allocator.free(c);
+        if (self.classes.len > 0) allocator.free(self.classes);
+    }
+
+    pub fn hasClass(self: ConcreteState, class: []const u8) bool {
+        for (self.classes) |c| {
+            if (std.mem.eql(u8, c, class)) return true;
+        }
+        return false;
     }
 };
 
@@ -278,9 +353,11 @@ fn parseUnionMember(allocator: std.mem.Allocator, str: []const u8) !ConcreteStat
         if (consumes and requires_cleanup) return error.InvalidPhantomState;
         if (consumes and std.mem.eql(u8, state_name, "*")) return error.InvalidPhantomState;
 
+        const nc = try splitNameClasses(allocator, state_name);
         return .{
             .module_path = try allocator.dupe(u8, module_path),
-            .name = try allocator.dupe(u8, state_name),
+            .name = nc.name,
+            .classes = nc.classes,
             .requires_cleanup = requires_cleanup,
             .consumes_obligation = consumes,
         };
@@ -296,9 +373,11 @@ fn parseUnionMember(allocator: std.mem.Allocator, str: []const u8) !ConcreteStat
     if (consumes_obligation and requires_cleanup) return error.InvalidPhantomState;
     if (consumes_obligation and std.mem.eql(u8, state_name, "*")) return error.InvalidPhantomState;
 
+    const nc = try splitNameClasses(allocator, state_name);
     return .{
         .module_path = null,
-        .name = try allocator.dupe(u8, state_name),
+        .name = nc.name,
+        .classes = nc.classes,
         .requires_cleanup = requires_cleanup,
         .consumes_obligation = consumes_obligation,
     };
@@ -896,4 +975,98 @@ test "isStateUnion helper" {
     try std.testing.expect(!isStateUnion("fs:open")); // Module-qualified
     try std.testing.expect(!isStateUnion("M'open|closing")); // State variable with constraints
     try std.testing.expect(!isStateUnion("M'_")); // State variable wildcard
+}
+
+// ============================================================================
+// Class-join (`@`) tests — `name@class`: exactly one identity part, the rest
+// known classes, order-insensitive.
+// ============================================================================
+
+test "parse class join - name@class with cleanup" {
+    const allocator = std.testing.allocator;
+
+    const state = try PhantomState.parse(allocator, "scratch@scoped!");
+    defer {
+        var s = state;
+        s.deinit(allocator);
+    }
+
+    try std.testing.expectEqual(@as(std.meta.Tag(PhantomState), .concrete), @as(std.meta.Tag(PhantomState), state));
+    const concrete = state.concrete;
+    try std.testing.expectEqualStrings("scratch", concrete.name);
+    try std.testing.expect(concrete.requires_cleanup);
+    try std.testing.expectEqual(@as(usize, 1), concrete.classes.len);
+    try std.testing.expectEqualStrings("scoped", concrete.classes[0]);
+    try std.testing.expect(concrete.hasClass("scoped"));
+    try std.testing.expect(!concrete.hasClass("static"));
+}
+
+test "parse class join - order is irrelevant" {
+    const allocator = std.testing.allocator;
+
+    // `allocated@scoped` and `scoped@allocated` classify identically:
+    // name is the non-class part, classes sort canonically.
+    var a = try PhantomState.parse(allocator, "allocated@scoped!");
+    defer a.deinit(allocator);
+    var b = try PhantomState.parse(allocator, "scoped@allocated!");
+    defer b.deinit(allocator);
+
+    try std.testing.expectEqualStrings("allocated", a.concrete.name);
+    try std.testing.expectEqualStrings("allocated", b.concrete.name);
+    try std.testing.expect(a.concrete.hasClass("scoped"));
+    try std.testing.expect(b.concrete.hasClass("scoped"));
+}
+
+test "parse class join - consume marker survives" {
+    const allocator = std.testing.allocator;
+
+    const state = try PhantomState.parse(allocator, "!scratch@scoped");
+    defer {
+        var s = state;
+        s.deinit(allocator);
+    }
+
+    try std.testing.expectEqualStrings("scratch", state.concrete.name);
+    try std.testing.expect(state.concrete.consumes_obligation);
+    try std.testing.expect(state.concrete.hasClass("scoped"));
+}
+
+test "parse class join - module-qualified" {
+    const allocator = std.testing.allocator;
+
+    const state = try PhantomState.parse(allocator, "std/fmt:scratch@scoped!");
+    defer {
+        var s = state;
+        s.deinit(allocator);
+    }
+
+    try std.testing.expectEqualStrings("std/fmt", state.concrete.module_path.?);
+    try std.testing.expectEqualStrings("scratch", state.concrete.name);
+    try std.testing.expect(state.concrete.hasClass("scoped"));
+}
+
+test "parse class join - unknown class refused" {
+    const allocator = std.testing.allocator;
+
+    // `a@bogus`: neither part is a known class — a typo'd class is not a
+    // silently-new state.
+    try std.testing.expectError(error.InvalidPhantomState, PhantomState.parse(allocator, "a@bogus"));
+}
+
+test "parse class join - two names refused" {
+    const allocator = std.testing.allocator;
+
+    // `a@b@scoped`: two non-class parts — `@` joins one identity, not two.
+    try std.testing.expectError(error.InvalidPhantomState, PhantomState.parse(allocator, "a@b@scoped"));
+}
+
+test "areCompatible - classed value fits base-named surface" {
+    const allocator = std.testing.allocator;
+
+    // Compatibility matches on the name part: `allocated@scoped` satisfies a
+    // declared `allocated` (in-direction), and `scratch` fits `scratch@scoped`.
+    try std.testing.expect(try areCompatible(allocator, "allocated", "allocated@scoped"));
+    try std.testing.expect(try areCompatible(allocator, "scratch@scoped", "scratch"));
+    // ...but identities still discriminate across names.
+    try std.testing.expect(!try areCompatible(allocator, "view", "scratch@scoped"));
 }

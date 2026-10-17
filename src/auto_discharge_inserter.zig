@@ -4322,7 +4322,17 @@ pub const AutoDischargeInserter = struct {
             .concrete => |concrete| {
                 const mod = concrete.module_path orelse (base_type_module orelse module);
                 const cleanup_suffix = if (concrete.requires_cleanup) "!" else "";
-                return try std.fmt.allocPrint(self.allocator, "{s}:{s}{s}", .{ mod, concrete.name, cleanup_suffix });
+                var canon: std.ArrayListUnmanaged(u8) = .{};
+                errdefer canon.deinit(self.allocator);
+                try canon.appendSlice(self.allocator, mod);
+                try canon.append(self.allocator, ':');
+                try canon.appendSlice(self.allocator, concrete.name);
+                for (concrete.classes) |cls| {
+                    try canon.append(self.allocator, '@');
+                    try canon.appendSlice(self.allocator, cls);
+                }
+                try canon.appendSlice(self.allocator, cleanup_suffix);
+                return canon.toOwnedSlice(self.allocator);
             },
             .variable => {
                 return try self.allocator.dupe(u8, phantom_str);

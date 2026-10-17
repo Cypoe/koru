@@ -356,9 +356,9 @@ pub const FormattedText = struct {
 //   : l |> ... use l.text ...
 //
 // Zero allocation: `.text` BORROWS the site's threadlocal 4KiB scratch —
-// valid only until THIS call site runs again; consume in place or copy via
-// std/string:from-page + take / fmt.blk. UNENFORCED today — the intended
-// scratch@scoped label and the full contract live in 620_011/README.md.
+// valid only until THIS call site runs again. `l` carries scratch@scoped:
+// read `.text` freely in frame, never produce it out (`-> l.text` refuses).
+// Escape = copy (std/string:from-page + take) or own (fmt.blk). 620_011.
 // The {{ var:spec }} placeholders are resolved at compile time into
 // std.fmt.bufPrint calls that run at runtime in the caller's scope.
 
@@ -371,7 +371,7 @@ pub const FormattedText = struct {
 
 ~[norun]pub tor ln.impl {
     expr: string,
-} -> string
+} -> string<scratch@scoped>
 
 ~proc ln|zig {
     const ast = @import("ast");

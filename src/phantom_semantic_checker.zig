@@ -746,6 +746,119 @@ pub const PhantomSemanticChecker = struct {
         };
     }
 
+    /// Whether a tracked binding's phantom carries the `scoped` class
+    /// (`<name@class>` — see koru_std/phantom_parser.zig). A scoped debt may
+    /// not occupy output position: `->` returns, branch payloads, and store
+    /// columns all refuse it. The class lives on the VALUE's phantom, so the
+    /// produce edge checks the resource, not the declared output.
+    fn bindingHasScopedClass(
+        self: *PhantomSemanticChecker,
+        context: *BindingContext,
+        name: []const u8,
+    ) !bool {
+        const phantom = context.get(name) orelse return false;
+        var parsed = phantom_parser.PhantomState.parse(self.allocator, phantom) catch return false;
+        defer parsed.deinit(self.allocator);
+        return switch (parsed) {
+            .concrete => |c| c.hasClass("scoped"),
+            else => false,
+        };
+    }
+
+    /// A produced value may not carry the `scoped` class — output position is
+    /// where a frame-bound borrow escapes into a scope that outlives its
+    /// frame. Covers every produce shape a branch_constructor spells: bare
+    /// `-> expr`, `-> { f: expr }` record-literal produce, `=> { f: expr }`
+    /// payload fields. The produced expr's own binding AND every tracked
+    /// `expr.<field>` beneath it are checked — `-> r` rides `r.text` out
+    /// just as surely as `-> r.text` does.
+    fn refuseScopedProduce(
+        self: *PhantomSemanticChecker,
+        bc: *const ast.BranchConstructor,
+        context: *BindingContext,
+        location: errors.SourceLocation,
+    ) !bool {
+        var reported = false;
+        if (bc.plain_value) |pv| {
+            const expr = std.mem.trim(u8, pv, " \t");
+            if (try ast_functional.recordFieldTexts(self.allocator, expr)) |fields| {
+                defer self.allocator.free(fields);
+                for (fields) |f| {
+                    if (try self.refuseIfScopedProduced(f.value, context, location)) reported = true;
+                }
+            } else {
+                if (try self.refuseIfScopedProduced(expr, context, location)) reported = true;
+            }
+        }
+        for (bc.fields) |f| {
+            if (f.expression_str) |expr| {
+                if (try self.refuseIfScopedProduced(expr, context, location)) reported = true;
+            }
+        }
+        return reported;
+    }
+
+    /// Refuse one produced expression if its binding — or any tracked
+    /// `expr.<field>` beneath it — carries the `scoped` class. Only
+    /// identifier/path expressions can name bindings; anything else
+    /// (literals, compound exprs) simply does not resolve.
+    fn refuseIfScopedProduced(
+        self: *PhantomSemanticChecker,
+        expr: []const u8,
+        context: *BindingContext,
+        location: errors.SourceLocation,
+    ) !bool {
+        var reported = false;
+        const name = std.mem.trim(u8, expr, " \t");
+        if (name.len == 0) return false;
+        for (name) |c| {
+            if (!isIdentChar(c) and c != '.') return false;
+        }
+        // The full path and every prefix of it: a scoped RECORD's fields ride
+        // its class — `-> l.text` escapes `l`'s scoped value under a field
+        // name just as `-> l` does under the whole name.
+        var prefix_end: usize = 0;
+        while (prefix_end < name.len) {
+            var seg = prefix_end;
+            while (seg < name.len and name[seg] != '.') seg += 1;
+            const prefix = name[0..seg];
+            if (try self.bindingHasScopedClass(context, prefix)) {
+                try self.reportScopedProduce(name, location);
+                reported = true;
+                break;
+            }
+            prefix_end = seg + 1;
+        }
+        // `-> r` carries every tracked `r.<field>` with it — a scoped field
+        // on the produced record escapes under the record's clean name.
+        var it = context.bindings.keyIterator();
+        while (it.next()) |key| {
+            const binding = key.*;
+            if (binding.len <= name.len + 1) continue;
+            if (!std.mem.startsWith(u8, binding, name)) continue;
+            if (binding[name.len] != '.') continue;
+            if (try self.bindingHasScopedClass(context, binding)) {
+                try self.reportScopedProduce(binding, location);
+                reported = true;
+            }
+        }
+        return reported;
+    }
+
+    fn reportScopedProduce(
+        self: *PhantomSemanticChecker,
+        name: []const u8,
+        location: errors.SourceLocation,
+    ) !void {
+        try self.reporter.addError(
+            .KORU030,
+            location.line,
+            location.column,
+            "'{s}' is @scoped — it dies with this frame and may not be produced out. Consume it in place, or copy it out first (std/string:from-page + take / fmt.blk)",
+            .{name},
+        );
+    }
+
     fn validatePhantom(self: *PhantomSemanticChecker, phantom_str: []const u8, event_name: []const u8, location: errors.SourceLocation, is_input: bool) !bool {
         // `event_decl.location` is stored in USER coordinates
         // (parser.getUserDeclStartLocation — `--ast-json` reads it raw, pinned
@@ -1030,9 +1143,21 @@ pub const PhantomSemanticChecker = struct {
                     break :blk bare_module;
                 };
 
-                // Build canonical form: module:state or module:state!
+                // Build canonical form: module:state, module:state@class…,
+                // module:state! — classes are sorted in parse, so the join is
+                // already canonical.
                 const cleanup_suffix = if (concrete.requires_cleanup) "!" else "";
-                return try std.fmt.allocPrint(self.allocator, "{s}:{s}{s}", .{ canonical_module, concrete.name, cleanup_suffix });
+                var canon: std.ArrayListUnmanaged(u8) = .{};
+                errdefer canon.deinit(self.allocator);
+                try canon.appendSlice(self.allocator, canonical_module);
+                try canon.append(self.allocator, ':');
+                try canon.appendSlice(self.allocator, concrete.name);
+                for (concrete.classes) |cls| {
+                    try canon.append(self.allocator, '@');
+                    try canon.appendSlice(self.allocator, cls);
+                }
+                try canon.appendSlice(self.allocator, cleanup_suffix);
+                return canon.toOwnedSlice(self.allocator);
             },
             .variable => {
                 // State variables don't get canonicalized - they're constraints
@@ -1065,10 +1190,14 @@ pub const PhantomSemanticChecker = struct {
                         break :blk bare_module;
                     };
 
-                    // Append module:state
+                    // Append module:state@class…
                     try result.appendSlice(self.allocator, canonical_module);
                     try result.append(self.allocator, ':');
                     try result.appendSlice(self.allocator, member.name);
+                    for (member.classes) |cls| {
+                        try result.append(self.allocator, '@');
+                        try result.appendSlice(self.allocator, cls);
+                    }
                 }
 
                 return result.toOwnedSlice(self.allocator);
@@ -1903,7 +2032,12 @@ pub const PhantomSemanticChecker = struct {
             }
             const gt = close orelse continue;
             const phantom_content = std.mem.trim(u8, f_value[lt + 1 .. gt], " \t");
-            if (!std.mem.endsWith(u8, phantom_content, "!")) continue;
+            // `<state>` fields without `!` carry no cleanup debt, but a
+            // CLASSED phantom (`name@scoped`) still needs tracking — the
+            // class rules (no produce, etc.) are enforced off the binding's
+            // phantom text, not the obligation set.
+            if (!std.mem.endsWith(u8, phantom_content, "!") and
+                std.mem.indexOfScalar(u8, phantom_content, '@') == null) continue;
             const base_type = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{
                 std.mem.trim(u8, f_value[0..lt], " \t"),
                 f_value[gt + 1 ..],
@@ -2322,6 +2456,11 @@ pub const PhantomSemanticChecker = struct {
                 // frontier 1: `dispose(h) -> { h }` must refuse at the pack).
                 if (exit_node == .branch_constructor) {
                     const exit_bc = &exit_node.branch_constructor;
+                    if (self.check_mode == .full) {
+                        if (try self.refuseScopedProduce(exit_bc, &void_context, location)) {
+                            return false;
+                        }
+                    }
                     if (exit_bc.is_bare_return) {
                         if (implementing_event) |impl_ev| {
                             if (impl_ev.return_type) |rt| {
@@ -2635,6 +2774,11 @@ pub const PhantomSemanticChecker = struct {
             if (cont.node) |node| {
                 if (node == .branch_constructor) {
                     const bc = &node.branch_constructor;
+                    // A `@scoped` value may never occupy output position —
+                    // bare `->`, `=>` payload fields, record-literal produce.
+                    if (try self.refuseScopedProduce(bc, &context, location)) {
+                        has_errors = true;
+                    }
                     if (bc.is_bare_return) {
                         if (implementing_event) |impl_ev| {
                             if (impl_ev.return_type) |rt| {
@@ -2688,6 +2832,12 @@ pub const PhantomSemanticChecker = struct {
 
                 var lost_count: usize = 0;
                 var first_lost: ?[]const u8 = null;
+                var scoped_reported = std.StringHashMap(void).init(self.allocator);
+                defer {
+                    var it = scoped_reported.keyIterator();
+                    while (it.next()) |key| self.allocator.free(key.*);
+                    scoped_reported.deinit();
+                }
 
                 for (uncleaned) |resource| {
                     // Outer-scope obligations are the outer scope's responsibility -
@@ -2702,6 +2852,27 @@ pub const PhantomSemanticChecker = struct {
                     if (context.isJoinLive(resource)) {
                         continue;
                     }
+                    // `<name@scoped>` debts have NO legal end at a terminator:
+                    // the class means the value may not occupy output
+                    // position, so any scoped obligation still live here —
+                    // produced out or left to die — is the violation itself.
+                    if (try self.bindingHasScopedClass(&context, resource)) {
+                        const display_name = if (std.mem.indexOf(u8, resource, ".")) |dot_idx|
+                            resource[dot_idx + 1 ..]
+                        else
+                            resource;
+                        try self.reporter.addError(
+                            .KORU030,
+                            location.line,
+                            location.column,
+                            "obligation '{s}' is @scoped — it dies with this frame and may not be produced out. Consume it in place, or copy it out first (std/string:from-page + take / fmt.blk)",
+                            .{display_name},
+                        );
+                        has_errors = true;
+                        try scoped_reported.put(try self.allocator.dupe(u8, resource), {});
+                        continue;
+                    }
+
                     // For hard terminals (_), all uncleaned resources are errors
                     var documented_escape = false;
 
@@ -2889,6 +3060,9 @@ pub const PhantomSemanticChecker = struct {
                     const fields_for_error = return_branch_fields orelse (if (branch_payload) |bp| bp.fields else null);
 
                     for (uncleaned) |resource| {
+                        // A refused @scoped produce was reported already.
+                        if (scoped_reported.contains(resource)) continue;
+
                         // Skip if it escapes through signature
                         var escapes = false;
 

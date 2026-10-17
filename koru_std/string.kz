@@ -52,7 +52,7 @@ pub const String = struct {
 }
 
 // Create with page allocator (simple, for demos)
-~pub tor from-page { text: string }
+~pub tor from-page { text: string<*> }
 | ok *String<view!>
 | err string
 
