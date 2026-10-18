@@ -485,3 +485,55 @@ forward progress independent of this design.
 ## Ignore-for-now pile (Lars's call, 2026-06-15)
 JS/cross-target (`140_014/015`, `630_001`), taps (`310_013`, `504`), interpreter
 (`410_010`, `430_020/035/042`). `430_005` held pending the interpreter-boundary call.
+
+## C-line decisions (Lars's call, surfaced 2026-10-18)
+
+Surfaced during the ccomp/witness-ledger line (SWE-2, on `fork/ccomp`). Each is
+grounded in a landed mechanism so the question survives context.
+
+### C1 — `BorrowsSpec`: should borrows be a manifest-visible spec surface?
+`borrow`/`use` are now first-class ledger ops: comptime emits a `borrow`
+custody-edge when an obligation-carrying arg enters a bare `<state>` param
+(`330_146`), and runtime records `use` at `assertHandlesHeld` admission
+(`440_043`). Neither is *declared* anywhere — a tor's signature says `<state>`
+but no manifest row says "this tor borrows." If the spec surface should show
+borrows the way it shows issue/consume, that is a channel addition; the ledger
+already produces the edges it would pin.
+
+### C2 — `699_029`: the pin contradicts the poison law it documents
+The pin's own `| ok` arm reads `v.id` after `v` was consumed — the input
+program violates the post-consume rule the test exists to pin. The pin is
+self-contradictory: it needs either a re-spelled input or a ruling that the
+read is legal in that position.
+
+### C3 — `699_020`: supervision boundary on std verbs
+Supervising a std verb directly refuses (the `320_113` boundary); composing a
+wrapper works. Two sub-questions: (a) should std verbs be supervisable
+directly, or is the wrapper the intended surface? (b) the broadcast/select
+spellings — no spelling ruled yet.
+
+### C4 — `origin/ccomp` sync state
+`fork/ccomp` carries the merge line plus custody/harness work past it;
+`korulang/koru`'s `ccomp` branch is frozen at `a1218e1f2` and `main` at
+`3d81f837f`. Lars's worktree commit `90d0de48d` (nested-result/mail-merge) is
+not on `origin/main` yet — the merge line takes `origin/main` whenever it
+lands. No action needed from the ccomp side; noting so both sides read the
+same picture.
+
+## Landed on the ccomp line (informational, no ruling needed)
+- **`held -> borrow -> issued` relay** — a tor `h: *Handle<!owned>` returning
+  `*Handle<owned!>` may produce its own consumed param; the checker now audits
+  chain-terminal bare-return produces (`x: _ -> h`) with the same escape audit
+  as arm-leaf produces, and a held binding named-but-not-carried refuses
+  KORU030 (`330_146` relay, `330_151` refusal twin). Lean ledger row
+  `heldSt + issued -> clean` lands with it.
+- **Held obligations are seeded outside `cleanup_obligations`** — the produce
+  audit iterates a held-bindings pass over live `bindings` (excluding
+  disposed/outer-scope/join-live), because held seeding deliberately clears
+  the cleanup marker.
+- **`KORU_PROFILE` env override** — `koru_std/profiler.kz` still defaults to
+  `/tmp/koru_profile.json`; the harness exports a Windows path on MSYS so
+  `420_003`'s post.sh sees the trace. No spelling change, POSIX default kept.
+- **Windows CRLF harness fixes** — flag/marker readers (`COMPILER_FLAGS`,
+  `ARGS`, `JS/CS/C_REFUSES`, EXPECT marker classification, `expected.json`
+  compare) now strip ``; ~70 latent pin files affected.
