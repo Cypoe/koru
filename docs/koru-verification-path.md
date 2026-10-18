@@ -89,8 +89,10 @@ related but distinct claim from Use A — it establishes that the emitted
 C holds no UB a mainstream optimizer can diverge on, which is exactly
 the K1-complementary property: ccomp validates its own pipeline, alive2
 validates arbitrary-pipeline safety of the artifact itself.
-`ALIVE2_CHECK` marker + `KORU_ALIVE2=1` opt a regression test in (needs
-clang + alive-tv on PATH); 12 tests marked. Verdict discipline is strict
+An `ALIVE2_CHECK` marker puts a regression test under the leg (needs
+clang + alive-tv on PATH); 12 tests marked. The marker is the contract:
+a marked test on a host without the oracles fails `alive2-oracle` naming
+the resolved path — the G-CC-2 doctrine applied to K2, never a skip. Verdict discipline is strict
 — incorrect/timeout/undecided fail — with named, counted scope
 exclusions for alive2's structural limits (unmodeled libcalls,
 sret/untranslatable signatures, unroll-bound loops); the parser's counts

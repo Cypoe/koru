@@ -537,3 +537,22 @@ same picture.
 - **Windows CRLF harness fixes** — flag/marker readers (`COMPILER_FLAGS`,
   `ARGS`, `JS/CS/C_REFUSES`, EXPECT marker classification, `expected.json`
   compare) now strip ``; ~70 latent pin files affected.
+
+### C5 — two oracle postures: do the Lean legs join marker=contract?
+
+The battery now carries two postures for "a marker is present" (membrane:
+`frag-the-battery-has-two-oracle-postures-and-only-one-is-a-contract`):
+
+- **Posture A (marker = contract):** `LANGUAGES=c` and now `ALIVE2_CHECK` —
+  a missing oracle is FAIL naming the resolved path. K2 moved here when it
+  left opt-in (no more `KORU_ALIVE2`).
+- **Posture B (marker + env = contract):** `WITNESS_CHECK` /
+  `FLOW_EVAL_CHECK` / `C_REFINE_CHECK` / `HOLDS_CHECK` additionally need
+  `KORU_WITNESS=1`; without it the leg is a documented noted-skip
+  ("machines without Lean").
+
+The open call: do the Lean legs move to posture A — so a suite run on an
+unprovisioned host goes red `witness-oracle` the way a ccomp-less host
+goes red `c-oracle` today — or does "not armed" become a named verdict
+distinct from green? The current state prints a blue parenthetical and
+reports PASS, which reads as a verdict the oracle never produced.

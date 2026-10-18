@@ -772,16 +772,16 @@ regression_check_c_refine_oracle() {
     echo -e "${GREEN}  ✓ c-refine oracle: kernel-rendered stdout == emitted C writes (Lean)${NC}"
 }
 
-# Alive2 congruence leg — opt-in via an `ALIVE2_CHECK` marker AND
-# KORU_ALIVE2=1. The gate (scripts/alive2_gate.sh) clang -O0's the emitted
-# output_emitted.c to reference IR and proves every intra-procedural
-# optimization instance is a refinement — a different axis than ccomp:
-# K1 says the verified compiler was faithful; K2 says the emitted C holds
-# no UB a mainstream optimizer can diverge on. Opt-in because it needs
-# clang + alive-tv: a marker without KORU_ALIVE2 is a noted skip, never a
-# verdict. With KORU_ALIVE2=1 a marked test that produced no emitted C is
-# a FAIL — the pin is only meaningful when the artifact exists (don't
-# mark C_REFUSES tests).
+# Alive2 congruence leg — the marker IS the contract (G-CC-2's twin for K2).
+# The gate (scripts/alive2_gate.sh) clang -O0's the emitted output_emitted.c
+# to reference IR and proves every intra-procedural optimization instance is
+# a refinement — a different axis than ccomp: K1 says the verified compiler
+# was faithful; K2 says the emitted C holds no UB a mainstream optimizer can
+# diverge on. A marker on a host without clang/alive-tv is a missing-oracle
+# FAIL naming the resolved path — never a skip; the same doctrine the c leg
+# applies to ccomp. A marked test that produced no emitted C is a FAIL — the
+# pin is only meaningful when the artifact exists (don't mark C_REFUSES
+# tests).
 regression_check_alive2_oracle() {
     local test_dir="$1"
     local TEST_NAME
@@ -790,11 +790,6 @@ regression_check_alive2_oracle() {
     [ -f "$test_dir/ALIVE2_CHECK" ] || return 0
     [ -f "$test_dir/SUCCESS" ] && [ ! -f "$test_dir/FAILURE" ] || return 0
 
-    if [ "${KORU_ALIVE2:-0}" != "1" ]; then
-        echo -e "${BLUE}  (alive2 oracle not run — set KORU_ALIVE2=1)${NC}"
-        return 0
-    fi
-
     _alive2_oracle_fail() {
         rm -f "$test_dir/SUCCESS"
         echo "$1" > "$test_dir/FAILURE"
@@ -802,6 +797,26 @@ regression_check_alive2_oracle() {
         [ "${PASSED_TESTS:-0}" -gt 0 ] && PASSED_TESTS=$((PASSED_TESTS - 1))
         echo -e "${RED}  ✗ alive2 oracle: $2${NC}"
     }
+
+    local alive_bin="${KORU_ALIVE_TV:-alive-tv}"
+    local clang_bin="${KORU_CLANG:-clang}"
+    if ! command -v "$alive_bin" >/dev/null 2>&1; then
+        _alive2_oracle_fail "alive2-oracle" "missing oracle: alive-tv not found at '$alive_bin' (set KORU_ALIVE_TV)"
+        return 0
+    fi
+    if ! command -v "$clang_bin" >/dev/null 2>&1; then
+        _alive2_oracle_fail "alive2-oracle" "missing oracle: clang not found at '$clang_bin' (set KORU_CLANG)"
+        return 0
+    fi
+
+    # G-LL-2 discrimination check — the gate proves it can disagree before
+    # this test's `correct` counts mean anything. Cheap (two tiny pairs),
+    # but a gate that cannot reject a forged pair is a red battery.
+    if ! "$SCRIPT_DIR/scripts/alive2_gate.sh" --selfcheck >"$test_dir/alive2_selfcheck.out" 2>&1; then
+        _alive2_oracle_fail "alive2-selfcheck" "gate selfcheck failed (see alive2_selfcheck.out)"
+        tail -10 "$test_dir/alive2_selfcheck.out" | sed 's/^/    /'
+        return 0
+    fi
 
     if [ ! -s "$test_dir/output_emitted.c" ]; then
         _alive2_oracle_fail "alive2-check" "no output_emitted.c — c leg did not emit (env-skipped or refusal)"
@@ -1194,6 +1209,7 @@ regression_run_one_test() {
           "$test_dir/backend.out" \
           "$test_dir/witness_check.out" \
           "$test_dir/alive2_check.out" \
+          "$test_dir/alive2_selfcheck.out" \
           "$test_dir/post.log" \
           "$test_dir/ast.err" \
           "$test_dir/actual.json" \
@@ -2442,7 +2458,7 @@ EOF
     # The c-refine oracle leg — opt-in via C_REFINE_CHECK + KORU_WITNESS=1 +
     # the c lane having run; A.5 per-instance graph→C refinement.
     regression_check_c_refine_oracle "$test_dir"
-    # The Alive2 congruence leg — opt-in via ALIVE2_CHECK + KORU_ALIVE2=1;
+    # The Alive2 congruence leg — ALIVE2_CHECK marker is the contract;
     # optimization instances on the emitted C must all refine the O0 IR.
     regression_check_alive2_oracle "$test_dir"
     # The holds-log oracle leg — opt-in via HOLDS_CHECK + KORU_WITNESS=1;

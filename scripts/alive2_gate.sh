@@ -50,7 +50,40 @@ if ! command -v "$CLANG" >/dev/null; then
     echo "FAIL: clang not found (set KORU_CLANG)"
     exit 1
 fi
-[ $# -ge 1 ] || { echo "usage: alive2_gate.sh <emitted.c> [...]"; exit 1; }
+
+# --selfcheck: G-LL-2 — the gate must prove it can disagree before any
+# `correct` count above it means anything. Forged src/tgt pair (mul->add)
+# must report `incorrect`; the honest pair (commuted operands) must report
+# `correct` — a gate that fails the honest side has a control too strict
+# to trust its `incorrect` verdicts either.
+if [ "${1:-}" = "--selfcheck" ]; then
+    FIXTURE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/verify/alive2"
+    sc_fail=0
+    sc_out=$("$ALIVE" --disable-undef-input --disable-poison-input --smt-to="$SMT_TO" \
+        --src-unroll="$UNROLL" --tgt-unroll="$UNROLL" \
+        "$FIXTURE_DIR/control_src.ll" "$FIXTURE_DIR/control_tgt_forged.ll" 2>&1)
+    if echo "$sc_out" | grep -q "1 incorrect"; then
+        echo "selfcheck forged: PASS — alive-tv rejected mul->add (incorrect input_wmul)"
+    else
+        echo "selfcheck forged: FAIL — alive-tv did not reject the forged pair:"
+        echo "$sc_out" | tail -8 | sed 's/^/    /'
+        sc_fail=1
+    fi
+    sc_out=$("$ALIVE" --disable-undef-input --disable-poison-input --smt-to="$SMT_TO" \
+        --src-unroll="$UNROLL" --tgt-unroll="$UNROLL" \
+        "$FIXTURE_DIR/control_src.ll" "$FIXTURE_DIR/control_tgt_honest.ll" 2>&1)
+    if echo "$sc_out" | grep -q "1 correct"; then
+        echo "selfcheck honest: PASS — alive-tv verified commuted mul (correct input_wmul)"
+    else
+        echo "selfcheck honest: FAIL — alive-tv could not prove the honest pair:"
+        echo "$sc_out" | tail -8 | sed 's/^/    /'
+        sc_fail=1
+    fi
+    [ "$sc_fail" -eq 0 ] && { echo "alive2 selfcheck: PASS"; exit 0; }
+    echo "alive2 selfcheck: FAIL"; exit 1
+fi
+
+[ $# -ge 1 ] || { echo "usage: alive2_gate.sh <emitted.c> [...] | --selfcheck"; exit 1; }
 
 fail=0
 work=$(mktemp -d)
