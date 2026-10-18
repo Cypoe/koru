@@ -1,0 +1,62 @@
+// Koru Standard Library: the `qcols` part of store — joined via
+// `~part qcols` in store.kz; members land in koru_store.
+//
+// The `! query`/`! first` column set for a non-view store.
+//
+// The insert event's input shape is the INSERT surface: user columns plus
+// the trailing synthetic `__site_line`. A [tree] store's synthesized
+// `parent` is absent from it by ruling (TT1 — inserts never name `parent`),
+// but TT0 keeps the column QUERYABLE (`query … entity.parent` so traversal
+// can follow it), so the row binding's column list is the insert surface
+// plus `parent` when the store is a tree. (`kind` needs no such patch: a
+// kinded store's inserts name it, so it is already on the surface.)
+
+const QCols = struct {
+    names: []const []const u8,
+    types: []const []const u8,
+    mods: []const ?[]const u8,
+    phantoms: []const ?[]const u8,
+};
+
+/// The write-cascade event exists only for a [tree] store — the presence
+/// check is the post-coordination tree test.
+fn isTreeStoreQ(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8) bool {
+    const writec_name = std.fmt.allocPrint(alloc, "__store_writec_{s}", .{store}) catch unreachable;
+    for (flatItems(alloc, prog.items)) |pi| {
+        if (pi.* != .event_decl) continue;
+        const ed = &pi.event_decl;
+        if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], writec_name)) return true;
+    }
+    return false;
+}
+
+fn queryStoreCols(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8) ?QCols {
+    const insert_ev_name = std.fmt.allocPrint(alloc, "__store_insert_{s}", .{store}) catch unreachable;
+    for (flatItems(alloc, prog.items)) |pi| {
+        if (pi.* != .event_decl) continue;
+        const ed = &pi.event_decl;
+        if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], insert_ev_name)) {
+            const flds = ed.input.fields;
+            const is_tree = isTreeStoreQ(alloc, prog, store);
+            const n = (if (flds.len > 0) flds.len - 1 else 0) + @intFromBool(is_tree);
+            const nm = alloc.alloc([]const u8, n) catch unreachable;
+            const ty = alloc.alloc([]const u8, n) catch unreachable;
+            const mp = alloc.alloc(?[]const u8, n) catch unreachable;
+            const ph = alloc.alloc(?[]const u8, n) catch unreachable;
+            for (flds[0 .. n - @intFromBool(is_tree)], 0..) |f2, i| {
+                nm[i] = f2.name;
+                ty[i] = f2.type;
+                mp[i] = f2.module_path;
+                ph[i] = f2.phantom;
+            }
+            if (is_tree) {
+                nm[n - 1] = alloc.dupe(u8, "parent") catch unreachable;
+                ty[n - 1] = alloc.dupe(u8, "i64") catch unreachable;
+                mp[n - 1] = null;
+                ph[n - 1] = null;
+            }
+            return .{ .names = nm, .types = ty, .mods = mp, .phantoms = ph };
+        }
+    }
+    return null;
+}

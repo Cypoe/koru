@@ -111,29 +111,13 @@
         col_mods = view_col_mods.toOwnedSlice(allocator) catch unreachable;
         col_phantoms = view_col_phantoms.toOwnedSlice(allocator) catch unreachable;
     } else {
-        const insert_ev_name = std.fmt.allocPrint(allocator, "__store_insert_{s}", .{store_name}) catch unreachable;
-        for (flatItems(allocator, program.items)) |pi| {
-            if (pi.* != .event_decl) continue;
-            const ed = &pi.event_decl;
-            if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], insert_ev_name)) {
-                const flds = ed.input.fields;
-                const n = if (flds.len > 0) flds.len - 1 else 0;
-                const nm = allocator.alloc([]const u8, n) catch unreachable;
-                const ty = allocator.alloc([]const u8, n) catch unreachable;
-                const mp = allocator.alloc(?[]const u8, n) catch unreachable;
-                const ph = allocator.alloc(?[]const u8, n) catch unreachable;
-                for (flds[0..n], 0..) |f2, i| {
-                    nm[i] = f2.name;
-                    ty[i] = f2.type;
-                    mp[i] = f2.module_path;
-                    ph[i] = f2.phantom;
-                }
-                col_names = nm;
-                col_types = ty;
-                col_mods = mp;
-                col_phantoms = ph;
-                break;
-            }
+        // The insert surface plus a [tree] store's synthesized `parent` —
+        // invisible to inserts (TT1), queryable on the row (TT0).
+        if (queryStoreCols(allocator, program, store_name)) |qc| {
+            col_names = qc.names;
+            col_types = qc.types;
+            col_mods = qc.mods;
+            col_phantoms = qc.phantoms;
         }
         if (col_names.len == 0) {
             // The store's own decl already refused → qmiss returns null and we

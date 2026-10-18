@@ -725,4 +725,5 @@ fn storeRefsText(alloc: std.mem.Allocator, text: []const u8, name: []const u8, p
 ~part qtail
 ~part qguard
 ~part qsites
+~part qcols
 ~part lowertext

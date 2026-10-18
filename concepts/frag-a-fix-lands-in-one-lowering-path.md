@@ -823,3 +823,50 @@ the two halves of one handshake disagreeing about what counts as a site.
 
 Pinned at 695_006: `preorder` inside a `for ! each` arm walks the tree in
 DFS order twice — `n 1234` then `n 12341234` end to end.
+
+## The column list was derived from the wrong SURFACE, and the codebase knew the difference
+
+`store.cols.kz` carries the lesson in its own header: `storeFieldOrder`
+answers "every SoA column" and `storeInsertOrder` answers "the insert
+surface" — and they differ by exactly the `[tree]`-synthesized `parent`.
+A comment there records that merging them once broke all five tree tests.
+`store.query.kz` read the INSERT event's fields for `col_names` anyway —
+the surface that excludes `parent` by ruling — so `s.parent` refused as an
+unknown field on a `! query` row while `tree[h].parent` indexed cleanly.
+
+That is this belief's scope tell wearing a new costume: the derivation was
+not wrong *code*, it was the wrong *question* — it asked the insert surface
+for the column set instead of asking the column set. The fix routes the
+non-view path through `queryStoreCols` (store.qcols.kz), which appends
+`parent` when the store is a tree. Pinned at 695_007: `when s.parent == -1`
+selects the root, `tree[s.parent].v` follows the edge.
+
+- **Name the surface the derivation answers.** "columns" is ambiguous —
+  insert surface, projection surface, SoA layout are three different sets
+  with overlapping names. A helper named for the surface it reads is the
+  only honest spelling; `cols.kz` already has the vocabulary.
+- **The same miss can recur in the next file over.** The correction existed
+  (the merge that broke the tests was reverted); the KNOWLEDGE existed
+  (the header comment). What did not exist was the derivation actually
+  consulting the answer — knowledge that lives in a comment one file away
+  from the call site guards nothing.
+
+## And a KIND test on the shadow check let one spelling through
+
+Same file family, same sitting: the rule-5 shadow check — "a nested arm that
+rebinds the row name stops the outer rewrite" — guarded on `node_is_sweep`
+plus a `c.binding` read. A destructure arm `! query { [row]s }` has no
+`binding`; its names live in `c.destructure`. So the one shadow spelling the
+check could not see is exactly the one the request-block dialect introduced —
+`[row]s` rebinds `s` identically to `! query s`, and the guard's kind test
+let it pass straight through to the outer row's projection.
+
+- **Read the guard against the rule, not the spelling.** "A nested arm
+  rebinds the name" quantifies over *bindings*, full stop — `binding`,
+  every destructure field, every arm kind. The check quantified over the
+  spelling the author happened to write, which is the discriminant tell
+  again: same function, same block, one arm walled and the sibling arm
+  fallen through.
+- Pinned at 690_374: an inner `! query { [row]s }` on the same store
+  shadows the outer `s`; its `when` reads the inner row, and the outer
+  row's own fields keep rewriting beside it.
