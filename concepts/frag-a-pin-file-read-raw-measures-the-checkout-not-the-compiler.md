@@ -30,6 +30,13 @@ Measured reach, all from one byte:
   byte-identical under normalization.
 - `ARGS`, `JS/CS/C_REFUSES` — same class, same one byte.
 
+The same class exists *inside* the pattern dialect, one escape over: the
+error-pin sweep wrote `error\[KORU\d+\]` — PCRE — and
+`check_expected_patterns` read it with `grep -E`, which treats `\d` as a
+literal 'd'. Thirty-six pin files; every one asserting a pattern that could
+never match the line it was written for. `210_014` measured red for the wrong
+reason until the reader normalized `\d` to `[0-9]` at the same boundary.
+
 ## The belief
 
 **Every read of a pin file is part of the measured program; normalize at the

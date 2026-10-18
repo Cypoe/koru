@@ -103,15 +103,123 @@
             }
         },
         {
-            "type": "parse_error",
-            "code": "PARSE003",
-            "message": "tor declaration missing input shape",
+            "type": "event_decl",
+            "name": "sample",
+            "path": ["sample"],
+            "module": "input",
+            "input": {
+                "fields": [
+
+                ]
+            },
+            "branches": [
+                {
+                    "name": "one",
+                    "kind": "effect",
+                    "resume": "string",
+                    "resume_phantom": null,
+                    "is_optional": false,
+                    "is_panic": false,
+                    "payload": {
+                        "fields": [
+                            {
+                                "name": "__type_ref",
+                                "type": "string",
+                                "is_source": false,
+                                "is_file": false,
+                                "is_embed_file": false,
+                                "is_expression": false,
+                                "is_invocation_meta": false,
+                                "phantom": null
+                            }
+                        ]
+                    }
+                },
+                {
+                    "name": "two",
+                    "kind": "effect",
+                    "resume": "usize",
+                    "resume_phantom": null,
+                    "is_optional": false,
+                    "is_panic": false,
+                    "payload": {
+                        "fields": [
+                            {
+                                "name": "__type_ref",
+                                "type": "string",
+                                "is_source": false,
+                                "is_file": false,
+                                "is_embed_file": false,
+                                "is_expression": false,
+                                "is_invocation_meta": false,
+                                "phantom": null
+                            }
+                        ]
+                    }
+                },
+                {
+                    "name": "three",
+                    "kind": "effect",
+                    "resume": "string",
+                    "resume_phantom": null,
+                    "is_optional": false,
+                    "is_panic": false,
+                    "payload": {
+                        "fields": [
+                            {
+                                "name": "__type_ref",
+                                "type": "string",
+                                "is_source": false,
+                                "is_file": false,
+                                "is_embed_file": false,
+                                "is_expression": false,
+                                "is_invocation_meta": false,
+                                "phantom": null
+                            }
+                        ]
+                    }
+                },
+                {
+                    "name": "four",
+                    "kind": "effect",
+                    "resume": "i32",
+                    "resume_phantom": null,
+                    "is_optional": false,
+                    "is_panic": false,
+                    "payload": {
+                        "fields": [
+                            {
+                                "name": "__type_ref",
+                                "type": "string",
+                                "is_source": false,
+                                "is_file": false,
+                                "is_embed_file": false,
+                                "is_expression": false,
+                                "is_invocation_meta": false,
+                                "phantom": null
+                            }
+                        ]
+                    }
+                },
+                {
+                    "name": "done",
+                    "kind": "terminal",
+                    "resume": null,
+                    "resume_phantom": null,
+                    "is_optional": false,
+                    "is_panic": false,
+                    "payload": {
+                        "fields": [
+
+                        ]
+                    }
+                }
+            ],
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_080_body_position_expressions/input.kz",
-                "line": 11,
-                "col": 1
-            },
-            "raw_text": "~pub tor sample\n! one string -> string\n! two string -> usize\n! three string -> string\n! four string -> i32\n| done\n\n"
+                "line": 12,
+                "col": 0
+            }
         },
         {
             "type": "flow",

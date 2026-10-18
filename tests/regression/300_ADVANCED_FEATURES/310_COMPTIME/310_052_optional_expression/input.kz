@@ -22,7 +22,7 @@ const std = @import("std");
     // expr is ?[]const u8 — null when called without (), non-null otherwise
     const text: []const u8 = if (expr != null) "yes" else "no";
     const code = std.fmt.allocPrint(allocator,
-        \\_ = @import("std").posix.write(1, "{s}\n") catch {{}};
+        \\@import("std").fs.File.stdout().writeAll("{s}\n") catch {{}};
         , .{text}) catch unreachable;
 
     _ = invocation;

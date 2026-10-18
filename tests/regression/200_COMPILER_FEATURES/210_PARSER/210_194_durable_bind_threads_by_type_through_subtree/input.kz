@@ -39,7 +39,7 @@ const std = @import("std");
 
 ~pub tor show { n: i64 }
 ~proc show|zig {
-    (struct { fn p(v: i64) void { var b:[64]u8=undefined; const s=@import("std").fmt.bufPrint(&b,"n={d}\n",.{v}) catch b[0..0]; @import("std").mem.doNotOptimizeAway(@import("std").posix.write(1,s) catch @as(usize,0)); } }).p(n);
+    (struct { fn p(v: i64) void { var b:[64]u8=undefined; const s=@import("std").fmt.bufPrint(&b,"n={d}\n",.{v}) catch b[0..0]; @import("std").fs.File.stdout().writeAll(s) catch {}; } }).p(n);
 }
 
 ~mk(): v |> gate(x: v)
