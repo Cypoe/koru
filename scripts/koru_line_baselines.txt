@@ -229,10 +229,11 @@ koru_std/store.index.kz	175
 koru_std/store.indexwalk.kz	222
 koru_std/store.insert.kz	418
 koru_std/store.iprov.kz	427
-koru_std/store.ixrefs.kz	103
+koru_std/store.ixrefs.kz	92
+koru_std/store.lowertext.kz	59
 koru_std/store.keyed.kz	43
 koru_std/store.kinds.kz	704
-koru_std/store.kz	812
+koru_std/store.kz	785
 koru_std/store.leaf.kz	207
 koru_std/store.new.kz	6226
 koru_std/store.plan.kz	236

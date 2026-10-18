@@ -1,0 +1,59 @@
+// Koru Standard Library: the `lowertext` part of store.kz.
+// Joined via `~part lowertext` in store.kz; merged into the module at load.
+//
+// The shared text-lowering surface: `storeLowerText` composes the cell and
+// indexed passes for one text slot, and `storeNameIn`/`isPrecededByIs` are
+// the small predicates the rewrites share — a name-list membership test and
+// the `is`/`not is` lookahead that keeps a bare identity-store read out of
+// `x is name` comparisons.
+
+fn storeNameIn(xs: []const []const u8, n: []const u8) bool {
+    for (xs) |x| if (std.mem.eql(u8, x, n)) return true;
+    return false;
+}
+
+fn isPrecededByIs(text: []const u8, idx: usize) bool {
+    var p = idx;
+    while (p > 0 and (text[p - 1] == ' ' or text[p - 1] == '\t')) p -= 1;
+    if (p >= 3 and std.mem.eql(u8, text[p - 3 .. p], "not")) {
+        const not_pos = p - 3;
+        if (not_pos == 0 or !storeIdentChar(text[not_pos - 1])) {
+            p = not_pos;
+            while (p > 0 and (text[p - 1] == ' ' or text[p - 1] == '\t')) p -= 1;
+        }
+    }
+    if (p >= 2 and std.mem.eql(u8, text[p - 2 .. p], "is")) {
+        const is_pos = p - 2;
+        if (is_pos == 0 or !storeIdentChar(text[is_pos - 1])) return true;
+    }
+    return false;
+}
+
+/// A text slot, FULLY lowered: cell paths first, then indexed reads — the order
+/// `stored`'s value pass uses, so a cross-store index inside an indexed read is a cell path already.
+/// `bound` are names an enclosing binding shadows (a row binding makes
+/// `<store>.<field>` mean THE ROW); BOTH passes skip them — the indexed
+/// pass takes a filtered scope.
+/// The one function a walk calls per text slot. Every position an expression
+/// may stand in — guard, arg, captured expression, frozen template body,
+/// inline_code node, produce arm, branch payload — is the same lowering, and
+/// the store's reach gaps have all been a position that called some of it.
+fn storeLowerText(
+    alloc: std.mem.Allocator,
+    prog: *const ast_find.Program,
+    text: []const u8,
+    scope: StoreScope,
+    idents: []const []const u8,
+    bound: []const []const u8,
+) []const u8 {
+    var live_n = std.ArrayList([]const u8).initCapacity(alloc, scope.names.len) catch unreachable;
+    var live_p = std.ArrayList([]const u8).initCapacity(alloc, scope.names.len) catch unreachable;
+    var t = text;
+    for (scope.names, scope.prefixes) |nm, px| {
+        if (storeNameIn(bound, nm)) continue;
+        live_n.append(alloc, nm) catch unreachable;
+        live_p.append(alloc, px) catch unreachable;
+        t = storeRefsText(alloc, t, nm, px, storeNameIn(idents, nm));
+    }
+    return storeIndexedRefsIn(alloc, prog, t, .{ .names = live_n.items, .prefixes = live_p.items });
+}

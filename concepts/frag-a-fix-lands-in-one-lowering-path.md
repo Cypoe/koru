@@ -713,3 +713,48 @@ What this instance adds:
 Pinned at 690_371: `for(0..world.dd)` prints three times; the member-dot
 refusals (row-binding shadow, cross-store index, all covered positions)
 verified green on the 10-pin slice.
+
+## Fifth instance — the emitted form the parser cannot read back (2026-10-18)
+
+An indexed char-column read `rows[h].dir` lowered through `storeIndexedRefs`
+to `(&__koru_store_rows.dir)[__koru_store_rows.__koru_resolve(h)]` — a `[N]u8`
+array. Downstream, `rewriteZigExpr` is supposed to wrap `x == "lit"` in the
+`std.mem.eql` block; `ZigExprParser.parseUnary` accepts `!` and `-` but not
+`&`, so `(&arr)[resolve] == "lit"` is NoParse and the whole condition ships
+to the backend raw — `cannot compare strings with ==`. Meanwhile
+`store.prewrite.kz`'s `entityRefs` had already settled the correct shape for
+the same read in `stored` value position: `sliceTo(&(&col)[idx], 0)` — the
+slice, the same form the qrow projection binds. Two paths, one read, two
+emissions — and the wrong one was wrong twice: unparseable to the rewriter,
+uncomparable to the backend.
+
+The second half of the instance is the file's older tell verbatim: insert's
+seed fields lower through a LOCAL `storeRefsAll` inside `store.insert.kz` —
+a partial copy of `StoredScan`'s composition that never included the indexed
+pass — so `insert(out) { dir: rows[h].dir }` reached Zig as literal
+`rows[...]` source text, an undeclared identifier. The comment beside it even
+claimed "the same rewrite the stored RHS gets." It was the same name, one
+pass short.
+
+What this instance adds:
+
+- **The copy was a SUBSET of a named composition.** Earlier tells found
+  duplicated logic that drifted; this one was a deliberately re-built
+  `storeRefsAll` that silently selected fewer passes than the shared
+  `lowerStoreExprs` already offered. A private re-implementation inside a
+  transform is a lowering boundary nobody diffs.
+- **Emit-parse agreement is a contract, not a coincidence.** The text
+  rewriters and `ZigExprParser` are one pipeline in two halves: anything a
+  rewriter emits, the parser must read. `(&col)[idx]` was the first emitted
+  shape that broke it — an emission optimized for "looks like Zig" over
+  "readable by our own pass."
+- **The fix stayed in the emitter, not the parser.** Teaching `parseUnary`
+  about `&` would have made the array parse — and still produced
+  `mem.eql(u8, [N]u8, "lit")`, a type error one level deeper. The char
+  column's canonical read form is the slice; emitting it at the source
+  (ixrefs, matching prewrite and the qrow projection) fixed the compare,
+  the `stored` coercion, and the insert seed in one move.
+
+Pinned at 690_372: `rows[world.ph].dir == "ltr"` wraps eql at a `| row`
+continuation and inside a `! query` arm, a `stored` write takes the read as
+a value, and an `insert` seed stores it — `hits 1211` end to end.

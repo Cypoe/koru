@@ -729,34 +729,6 @@ fn storeRefsText(alloc: std.mem.Allocator, text: []const u8, name: []const u8, p
     }
     return out.toOwnedSlice(alloc) catch unreachable;
 }
-/// A text slot, FULLY lowered: cell paths first, then indexed reads — the order
-/// `stored`'s value pass uses, so a cross-store index inside an indexed read is a cell path already.
-/// `bound` are names an enclosing binding shadows (a row binding makes
-/// `<store>.<field>` mean THE ROW); BOTH passes skip them — the indexed
-/// pass takes a filtered scope.
-/// The one function a walk calls per text slot. Every position an expression
-/// may stand in — guard, arg, captured expression, frozen template body,
-/// inline_code node, produce arm, branch payload — is the same lowering, and
-/// the store's reach gaps have all been a position that called some of it.
-fn storeLowerText(
-    alloc: std.mem.Allocator,
-    prog: *const ast_find.Program,
-    text: []const u8,
-    scope: StoreScope,
-    idents: []const []const u8,
-    bound: []const []const u8,
-) []const u8 {
-    var live_n = std.ArrayList([]const u8).initCapacity(alloc, scope.names.len) catch unreachable;
-    var live_p = std.ArrayList([]const u8).initCapacity(alloc, scope.names.len) catch unreachable;
-    var t = text;
-    for (scope.names, scope.prefixes) |nm, px| {
-        if (storeNameIn(bound, nm)) continue;
-        live_n.append(alloc, nm) catch unreachable;
-        live_p.append(alloc, px) catch unreachable;
-        t = storeRefsText(alloc, t, nm, px, storeNameIn(idents, nm));
-    }
-    return storeIndexedRefsIn(alloc, prog, t, .{ .names = live_n.items, .prefixes = live_p.items });
-}
 ~part new
 ~part emitnames
 ~part hstruct
@@ -810,3 +782,4 @@ fn storeLowerText(
 ~part srefscan
 ~part iprov
 ~part qtail
+~part lowertext

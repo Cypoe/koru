@@ -51,6 +51,16 @@ fn storeIndexedRefs(alloc: std.mem.Allocator, prog: *const ast_find.Program, tex
                     // index position in the emitted text.
                     const piece = if (storeHostTarget() == .cs)
                         std.fmt.allocPrint(alloc, "{s}__koru_store_{s}.__koru_read_{s}({s})", .{ prefix, store, codegen_utils_store.HostShape.csFolded(alloc, fname), inner }) catch unreachable
+                    else if (charCap(alloc, prog, store, fname) != null)
+                        // A char column reads as the string slice up to the
+                        // first NUL — the same shape the qrow projection
+                        // binds and entityRefs (prewrite) emits. The bare
+                        // `(&col)[idx]` form is a `[N]u8` array, which the
+                        // expression rewrites cannot read (`&` inside parens
+                        // is NoParse in ZigExprParser) and `==` on which Zig
+                        // refuses outright — the slice form is what lets a
+                        // downstream parseEq wrap `spec[h].dir == "ttb"`.
+                        std.fmt.allocPrint(alloc, "@import(\"std\").mem.sliceTo(&(&{s}__koru_store_{s}.{s})[{s}__koru_store_{s}.__koru_resolve({s})], 0)", .{ prefix, store, fname, prefix, store, inner }) catch unreachable
                     else
                         std.fmt.allocPrint(alloc, "(&{s}__koru_store_{s}.{s})[{s}__koru_store_{s}.__koru_resolve({s})]", .{ prefix, store, fname, prefix, store, inner }) catch unreachable;
                     out.appendSlice(alloc, piece) catch unreachable;
@@ -79,25 +89,4 @@ fn storeScopeBare(alloc: std.mem.Allocator, prog: *const ast_find.Program) Store
     const px = alloc.alloc([]const u8, names.len) catch unreachable;
     for (px) |*p| p.* = "";
     return .{ .names = names, .prefixes = px };
-}
-fn storeNameIn(xs: []const []const u8, n: []const u8) bool {
-    for (xs) |x| if (std.mem.eql(u8, x, n)) return true;
-    return false;
-}
-
-fn isPrecededByIs(text: []const u8, idx: usize) bool {
-    var p = idx;
-    while (p > 0 and (text[p - 1] == ' ' or text[p - 1] == '\t')) p -= 1;
-    if (p >= 3 and std.mem.eql(u8, text[p - 3 .. p], "not")) {
-        const not_pos = p - 3;
-        if (not_pos == 0 or !storeIdentChar(text[not_pos - 1])) {
-            p = not_pos;
-            while (p > 0 and (text[p - 1] == ' ' or text[p - 1] == '\t')) p -= 1;
-        }
-    }
-    if (p >= 2 and std.mem.eql(u8, text[p - 2 .. p], "is")) {
-        const is_pos = p - 2;
-        if (is_pos == 0 or !storeIdentChar(text[is_pos - 1])) return true;
-    }
-    return false;
 }
