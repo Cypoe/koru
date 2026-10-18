@@ -140,3 +140,4 @@
 2026-10-15T04:24:46.498Z	a232e663d	fixed	440_046_colon_prose_absorbs_continuation_lines
 2026-10-15T04:24:46.498Z	a232e663d	fixed	681_001_catch_answers_unhandled
 2026-10-15T04:24:46.498Z	a232e663d	fixed	681_006_forward_verdict_escalates
+2026-10-18T13:10:20.246Z	cb07e7d53	regressed	690_066_store_query_nested_in_loop
