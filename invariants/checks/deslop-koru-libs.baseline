@@ -13,7 +13,15 @@
 # the diff adds no surface. Spellings drift 605→619 is foreign — in-flight
 # session work in the consumer tree (yyjson edits, flat/) that the census
 # counts because it reads the working tree. Clusters/members unchanged.
-clusters=634
-members=331
+# Re-pinned 2026-10-18: sampled roll fired on the libs/ui commit. Own
+# contribution is the spec.k ↔ spec_snap.k twin (+359-leaf cluster —
+# the autonomous-capture variant shares the spec seed cascade, same
+# structural twin class as folder.k/folder_snap.k already counted).
+# The rest is foreign drift landed between rolls — games/ponkatris
+# level/test pairs and unikraft blk boot-test repetitions dominate the
+# top offenders; spellings 619→661 include libs/ui's new tors plus
+# foreign surface.
+clusters=827
+members=373
 skipped=21
-spellings=619
+spellings=661
