@@ -873,8 +873,10 @@ fn parseNode(allocator: std.mem.Allocator, content: []const u8) ParseError!ast.N
         if (std.mem.indexOf(u8, trimmed, " ")) |space_idx| {
             const name_part = trimmed[0..space_idx];
             const value_part = lexer.trim(trimmed[space_idx + 1 ..]);
-            if (name_part.len > 0 and value_part.len > 0 and
-                (std.ascii.isAlphabetic(name_part[0]) or name_part[0] == '_'))
+            // The name must be a plain branch name — a colon here is the
+            // retired `verb: prose` shape ("say: hello"), which otherwise
+            // parsed as branch `say:` + value and silently never dispatched.
+            if (value_part.len > 0 and isPlainBranchName(name_part))
             {
                 return .{ .branch_constructor = .{
                     .branch_name = try allocator.dupe(u8, name_part),

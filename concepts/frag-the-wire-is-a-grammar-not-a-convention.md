@@ -318,11 +318,13 @@ same day) covers the bound-value composition the colon form existed to
 spare. `Expression` fields keep bare-text admission (`calc(expr: 2 + 3)`);
 that survival is unruled — same comptime-only family, pending Lars.
 440_046 re-pinned as `colon_form_is_refused`; 440_047 renamed
-`bare_name_is_a_reference`. The one surviving trap is positional and
-older than the spelling it stranded: `|> say: x` in chain-step position
-still parses as invocation-plus-bind and drops the prose silently —
-program parser, not item scanner; kopium bridge-mirror
-2026-10-18-colon-in-chain carries it. The deletion shrank the wire:
+`bare_name_is_a_reference`. The chain-step half closed the same day:
+`|> say: x` was parsing as a branch constructor *named* `say:` in
+`flow_parser`'s plain-value path — a loose first-char check admitted the
+colon into the name — so the step became a label and never dispatched.
+The guard now requires `isPlainBranchName`; the step dies as a named
+`MalformedNode` parse-error, pinned by 440_048. The deletion shrank the
+wire:
 wirescan 266→202, turn 92→71, turnscan 70→47 — the grammar is smaller
 *and* stricter, which is what the 09-16 derivation lesson always aimed
 at.
