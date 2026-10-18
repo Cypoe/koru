@@ -1,0 +1,25 @@
+// PINS: a required `!` arm referenced as a VALUE inside a `~proc|zig`
+// body keeps the invocation on the handler-call path — `const tick =
+// __H.tick` is a real fn value, so the body can store it for later fire.
+// The inline splice lowers only `tick(` direct calls; a bare `tick`
+// reaches Zig as an undeclared identifier. This is the required-arm
+// analogue of 400_168's optional `if (ready) |f| f()` — metal's
+// `frames` registers its `! frame` arm on `frame_cb` for the
+// live-resize redraw, exactly this shape.
+~import std/io
+
+var cb: ?*const fn(i64) void = null;
+
+~pub tor pump {}
+! tick i64
+| done i64
+
+~proc pump|zig {
+    cb = tick;
+    if (cb) |f| f(7);
+    return .{ .done = 99 };
+}
+
+~pump()
+! tick t |> std/io:print.ln("tick {{ t:d }}")
+| done r |> std/io:print.ln("done {{ r:d }}")

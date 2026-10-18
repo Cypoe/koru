@@ -6575,15 +6575,18 @@ fn inlineEffectfulEligibility(ctx: *EmissionContext, inv: *const ast.Invocation,
         if (containsToken(proc.body.text, "fn")) return null;
         if (has_terminal_branch and !containsToken(proc.body.text, "return")) return null;
 
-        // Inline splicing lowers an optional effect arm only in DIRECT-CALL form
+        // Inline splicing lowers an effect arm only in DIRECT-CALL form
         // (`ready(...)` → splice, or evaluate-and-discard when unhandled). A body
-        // that references an optional arm as a VALUE — `if (ready) |f| f()`, the
-        // nullable-fn-ptr contract the handler-call path provides via
-        // `emitOptionalArmNullableAlias` — has no such local in the spliced
-        // frame, so the reference leaks a raw Zig `undeclared identifier`. Those
-        // bodies keep the handler-call path, which emits the alias prelude.
+        // that references an arm as a VALUE — `if (ready) |f| f()`, or a
+        // required arm stored for later fire (`frame_cb = frame` — metal's
+        // `frames` registers the `! frame` handler for the live-resize redraw
+        // path) — has no such local in the spliced frame, so the reference
+        // leaks a raw Zig `undeclared identifier`. Those bodies keep the
+        // handler-call path, which emits the alias prelude
+        // (`emitOptionalArmNullableAlias` for `! ?`; `const NAME = __H.NAME`
+        // for required arms — a real fn value either way).
         // (400_168; the koru-libs vaxis `run` wrapper, guarded-only consumer.)
-        if (procRefsOptionalArmAsValue(proc.body.text, event_decl)) return null;
+        if (procRefsAnyArmAsValue(proc.body.text, event_decl)) return null;
 
         return .{ .event_decl = event_decl, .proc = proc, .flow = null };
     }
@@ -6612,10 +6615,9 @@ fn inlineEffectfulEligibility(ctx: *EmissionContext, inv: *const ast.Invocation,
 /// calls, so a value reference has no local in the spliced frame and leaks a
 /// raw `undeclared identifier`. Names are matched in their emitted (Zig-
 /// sanitized: `-` → `_`) form, since that is how the body spells them. (400_168)
-fn procRefsOptionalArmAsValue(body: []const u8, event_decl: *const ast.EventDecl) bool {
+fn procRefsAnyArmAsValue(body: []const u8, event_decl: *const ast.EventDecl) bool {
     for (event_decl.branches) |b| {
         if (b.kind != .effect) continue;
-        if (!b.is_optional) continue;
         if (std.mem.eql(u8, b.name, "*")) continue;
         var name_buf: [128]u8 = undefined;
         if (b.name.len > name_buf.len) continue;
