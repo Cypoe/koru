@@ -1050,6 +1050,19 @@ pub const VisitorEmitter = struct {
         try emitter.emitMainModuleStart(self.code_emitter, self.emit_mode == .comptime_only, needs_flat_lane_stack);
         self.code_emitter.indent_level = 1; // Set indent for main_module contents
 
+        // Deferred module-level decls: effect-arm Handlers structs whose
+        // bodies capture enclosing-scope bindings emit as generic `Caps`
+        // factories at module level (CodeEmitter.deferred) — their member
+        // fns must live outside any flow fn or their capture aliases
+        // shadow the enclosing fn's locals (the Zig no-shadow rule is the
+        // whole wall this channel exists to route around).
+        var module_decls = try emitter.CodeEmitter.initGrowable(self.allocator, 16 * 1024);
+        defer self.allocator.free(module_decls.buffer);
+        module_decls.indent_level = 1; // main_module body indent
+        const saved_deferred = self.code_emitter.deferred;
+        self.code_emitter.deferred = &module_decls;
+        defer self.code_emitter.deferred = saved_deferred;
+
         // Phase 1: Emit all declarations inside main_module (events, procs, flows, etc.)
         for (source_file.items) |*item| {
             try self.visitItem(item, source_file.module_annotations, source_file.items);
@@ -1090,6 +1103,13 @@ pub const VisitorEmitter = struct {
             .module_annotations = source_file.module_annotations,
         };
         try emitter.emitAllTaps(self.code_emitter, &ctx, source_file.items, &tap_counter);
+
+        // Flush deferred module-level decls (captured-binding Handlers
+        // factories) inside main_module, before the struct closes.
+        if (module_decls.pos > 0) {
+            try self.code_emitter.write(module_decls.buffer[0..module_decls.pos]);
+            try self.code_emitter.write("\n");
+        }
 
         // Close main_module struct
         self.code_emitter.indent_level = 0; // Reset indent before closing main_module
