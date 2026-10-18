@@ -100,8 +100,16 @@
 # items, and emitter_test/visitor_emitter_test test_decl +
 # simple_var_decl scaffolding. Growth landed between re-pins — the store
 # transform and emitter sessions' committed drift — not in this diff.
-clusters=830
-members=933
+# Re-pinned 830/933 -> 831/935 (2026-10-18): the roll fired on the
+# 690_370 regression-pin commit — zero src/ files staged. The named
+# offenders are the documented classes (containsTokenLocal x
+# containsToken port pair, emitter_test/visitor_emitter_test test_decl +
+# simple_var_decl scaffolding, package_requires/compiler_requires
+# fixtures). The +1/+2 is committed drift landed between re-pins — the
+# desugar and emitter-capture commits (abf67e120, ec769041b, c5b6d45bf)
+# — not this diff.
+clusters=831
+members=935
 # Re-pinned to 820/911 on the call-site |variant commit: the sampled roll
 # named containsTokenLocal x containsToken (continuation_codegen /
 # emitter_helpers) and an emitter_test test_decl pair — none of those
