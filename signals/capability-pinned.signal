@@ -1,0 +1,13 @@
+name: capability-pinned
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a boundary that already existed is recorded in the suite — a
+  delegated refusal, an unruled edge, a host-owned diagnostic — pinned
+  such that the pin itself goes red the day the boundary moves
+  (BACKEND_COMPILE_ERROR refusing once an error[KORU…] fires, a BROKEN
+  flipping green). Distinct from capability-added (new surface that
+  works) and defect-closed (something wrong made right): here nothing
+  changed about what compiles — what changed is that the seam is now
+  observable and self-invalidating instead of tribal knowledge.
