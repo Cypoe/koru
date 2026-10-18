@@ -3,7 +3,6 @@
 // - Parses Koru source at runtime using the same parser as the compiler
 // - Walks the AST and executes tors via registered dispatchers
 // - Tracks bindings in an environment; validates flows before execution
-//
 // Usage:
 //   import std/interpreter
 //   import std/runtime
@@ -572,3 +571,4 @@ pub fn findHostTilde(source: []const u8) ?HostTilde {
 ~part flowsrc
 ~part deftable
 ~part defined
+~part wireexpr

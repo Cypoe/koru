@@ -199,7 +199,7 @@ const ast_reg = @import("ast");
         code.appendSlice(allocator, I ++ "                }\n") catch unreachable;
         code.appendSlice(allocator, I ++ "            },\n") catch unreachable;
         code.appendSlice(allocator, I ++ "            else => {\n") catch unreachable;
-        code.appendSlice(allocator, I ++ "                @field(__koru_input, __koru_field.name) = if (__koru_F == __koru_dispatcher_ast.Source) .{ .text = __koru_raw, .scope = .{ .bindings = &.{} } } else __koru_dispatcher_std.mem.zeroes(__koru_F);\n") catch unreachable;
+        code.appendSlice(allocator, I ++ "                @field(__koru_input, __koru_field.name) = __koru_dispatcher_std.mem.zeroes(__koru_F);\n") catch unreachable;
         code.appendSlice(allocator, I ++ "            },\n") catch unreachable;
         code.appendSlice(allocator, I ++ "        }\n") catch unreachable;
         code.appendSlice(allocator, I ++ "    }\n") catch unreachable;
@@ -1274,7 +1274,7 @@ fn lookupEventBranches(scope_name: []const u8, event_name: []const u8) []const B
 ~part specs
 ~part wireval
 ~part wirescan
-~part wirecap
+~part wiretail
 ~part wirelex
 ~part obtainvia
 ~part affordances

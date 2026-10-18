@@ -1,0 +1,8 @@
+say:miss gone
+t1-inline result
+say:ok file-text
+t2-multiline result
+t3-mixed parse-error a `|` on the call's own line commits the program to that line — a later `|` arm has nothing to hang on. For several branches give each `|` its own indented line under the bare call: `call(...)\n    | ok r |> ...\n    | error e |> ...`
+say:inner miss
+t4-interior result
+t5-partial unhandled ok

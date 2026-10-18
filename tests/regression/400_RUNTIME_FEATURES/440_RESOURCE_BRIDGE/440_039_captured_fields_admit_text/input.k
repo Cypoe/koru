@@ -1,22 +1,21 @@
-// Pins: the wire gate is type-directed — a value position's declared field
-// type decides what it admits.
+// Pins: a bare wire value is a Koru expression, judged by the language's
+// own expression parser — not by a field's declared type.
 //
-// `expr: Expression` takes balanced expression text bare (`calc(expr: 2 +
-// 3)`); an ordinary `string` field takes a quoted literal — `render(src:
-// "hello world")`, `note(text: "thinking out loud")` — and refuses bare
-// prose, `say(text: hello world)` being a parse-error: a bare word reads
-// as a bound name. Captured text normalizes to canonical quoted wire
-// before the interpreter parser sees it, so the proc receives identical
-// text either spelling (440_038 pins the marshal beneath).
+// `calc(expr: 2 + 3)` evaluates a bare expression to i64 5; `string`
+// fields take quoted literals — `render(src: "hello world")`,
+// `note(text: "thinking out loud")` — and refuse bare prose,
+// `say(text: hello world)` being a parse-error: bare text is not a Koru
+// expression.
 
 import std/io
 import std/bridge
 import std/runtime
 
-tor calc { expr: Expression }
+tor calc { expr: i64 }
 proc calc|zig {
     _ = @import("std").posix.write(1, "calc:") catch {};
-    _ = @import("std").posix.write(1, expr) catch {};
+    const buf = @import("std").fmt.allocPrint(@import("std").heap.page_allocator, "{d}", .{expr}) catch unreachable;
+    _ = @import("std").posix.write(1, buf) catch {};
     _ = @import("std").posix.write(1, "\n") catch {};
 }
 

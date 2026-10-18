@@ -49,7 +49,7 @@ fn checkInvocationArgs(
                     }
                 }
                 for (inv.args) |arg| {
-                    if (unboundRefName(arg.value, bound)) |name| {
+                    if (unboundRefName(arg.value, bound, allocator)) |name| {
                         return .{
                             .message = std.fmt.allocPrint(allocator, "unbound '{s}' on '{s}' — bind it with an arm (`| <branch> {s} |>`) or quote it for a literal", .{ name, event_name, name }) catch "unbound identifier",
                             .binding_name = name,

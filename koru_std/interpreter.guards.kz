@@ -21,9 +21,9 @@ fn armGuardPasses(
     allocator: std.mem.Allocator,
 ) !bool {
     const cond_text = cont.condition orelse return true;
-    var scoped_values = try bindings.values.clone();
-    defer scoped_values.deinit();
-    var scoped = ExprBindings{ .values = scoped_values, .allocator = allocator };
+    // Populate and deinit the same `values` — a second wrapper frees stale.
+    var scoped = ExprBindings{ .values = try bindings.values.clone(), .allocator = allocator };
+    defer scoped.values.deinit();
     if (cont.binding) |name| {
         const bv = Value.fromDispatch(branch, fields);
         try populateArmExprBindings(&scoped, name, bv, branch, allocator);

@@ -224,8 +224,8 @@ fn exprCompareGte(left: ExprValue, right: ExprValue) ExprEvalError!ExprValue {
 
 const ExprArithOp = enum { add, sub, mul, div, mod };
 
-// Evaluate a simple expression against the environment
-// Handles: literals ("hello"), bindings (r), field access (r.message)
+// Evaluate an arg value: quoted string, bound name, lone field path,
+// whole expression — then verbatim.
 fn evaluateExpr(expr_str: []const u8, ctx: *InterpreterContext) ![]const u8 {
     const env = ctx.env;
     const allocator = ctx.allocator;
@@ -236,23 +236,22 @@ fn evaluateExpr(expr_str: []const u8, ctx: *InterpreterContext) ![]const u8 {
         return try interpolateWireString(try unescapeStringLiteral(trimmed[1..trimmed.len - 1], allocator), ctx);
     }
 
-    // Check for field access (binding.field) — only when the base is an
-    // identifier; a leading digit or '-' makes `3.5`/`-0.25` a float literal,
-    // not a reference (the same judgment argref's unboundRefName makes).
-    if (std.mem.indexOf(u8, trimmed, ".")) |dot_pos| {
-        const binding_name = trimmed[0..dot_pos];
-        const field_name = trimmed[dot_pos + 1..];
-        if (!isWireIdent(binding_name)) return try allocator.dupe(u8, trimmed);
+    // Lone field path (`r3.user_id`) only — `3.5` is a float literal and
+    // `r3.x + 1` is an expression; both fall to the evaluator below.
+    const dot_pos = std.mem.indexOf(u8, trimmed, ".");
+    const lone_field_path = dot_pos != null and isWireIdent(trimmed[0..dot_pos.?]) and isWireIdent(trimmed[dot_pos.? + 1 ..]);
+    if (lone_field_path) {
+        const binding_name = trimmed[0..dot_pos.?];
+        const field_name = trimmed[dot_pos.? + 1..];
 
         if (env.get(binding_name)) |bound_value| {
-            // Look up field in bound value
             for (bound_value.fields) |fv| {
                 if (std.mem.eql(u8, fv.name, field_name)) {
                     return try fieldValueToString(fv.value, allocator);
                 }
             }
-            // Field not found — refuse loudly. A placeholder string passed
-            // off as data is the dishonest version of this error.
+            // Field not found — refuse loudly; a placeholder shipped as
+            // data is the dishonest version of this error.
             ctx.error_detail = std.fmt.allocPrint(allocator,
                 "'{s}.{s}' — the bound value '{s}' carries no field '{s}'",
                 .{ binding_name, field_name, binding_name, field_name }) catch null;
@@ -264,15 +263,15 @@ fn evaluateExpr(expr_str: []const u8, ctx: *InterpreterContext) ![]const u8 {
         return error.UnboundName;
     }
 
-    // Simple binding reference
     if (env.get(trimmed)) |bound_value| {
-        // Return the branch name or first field value
         if (bound_value.fields.len > 0) {
             return try fieldValueToString(bound_value.fields[0].value, allocator);
         }
         return bound_value.branch;
     }
 
-    // Return as-is (number, boolean, etc.)
+    // A whole Koru expression (`n * 2`, `r3.total > 50`) is judged by the
+    // evaluator (wireexpr); non-expression text keeps the verbatim fallback.
+    if (try evalWireExprArg(trimmed, ctx)) |v| return v;
     return try allocator.dupe(u8, trimmed);
 }

@@ -7,9 +7,9 @@
 const WIRE_GRAMMAR_TEXT =
     \\Your reply IS wire — open it with an invocation, never narration: verb(field: value, field: value) with `|` arms chaining what each call issues.
     \\- An arm binds what a call issued to a name for the next call: `| ok u |>` for an ordinary result, `| chosen c |>` for a named branch — the arm word is the branch name the verb's line in the vocabulary declares; an outcome marked `?` in that line may go unarmed, every other named outcome must be armed or the turn stops with `unhandled-branch`.
+    \\- Arms have two shapes, one per call: predicted branches ride the call's own line — `call(a: 1) | ok r |> next(r: r)` — or each branch gets its own indented line under the bare call — `call(a: 1)\n    | ok r |> ...\n    | error e |> ...` (deeper indent arms a mid-chain step). A `|` on the call's line commits it: no `|` line may follow.
     \\- The verb is a bare name from your vocabulary — letters, digits, '-', '_' — immediately followed by '('.
-    \\- A value is a double-quoted string (escape \" and \\ inside) or a bare literal: a number, true/false, or a name a `|` arm already bound.
-    \\- A field typed `Expression` takes its text bare inside the parens — `calc(expr: 2 + 3)` — and quote it when the text carries a comma, a `)`, or a newline: `calc(expr: "max(a, b) + 1")`.
+    \\- A value is a double-quoted string (escape \" and \\ inside) or a bare Koru expression — a number, true/false, a bound name a `|` arm gave (`r9`), a field path (`r3.user_id`), or an operation (`n * 2`, `r3.total > 50`).
     \\- A field typed `name<x>` takes only a bound name the session minted `<x!>` — an `rN` from an earlier verb or an arm binding, never literal text.
     \\- A bound name keeps its fields: `r3.user_id` reads that field out of the value r3 bound — the whole result stays readable in the session, not just its name.
     \\- Inside a quoted string, `{{ name }}` or `{{ name.field }}` splices the bound value into the text — `say(text: "booked {{ b.reservation_id }}, charged {{ b.total }}")` — so a chain's result lands in prose within the same reply. A name nobody bound refuses with a dispatch-error; braces that do not open a bound name print literally.

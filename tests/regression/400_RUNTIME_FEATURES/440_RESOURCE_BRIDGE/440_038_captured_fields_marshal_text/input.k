@@ -1,9 +1,8 @@
-// Pins: a scope tor declaring an Expression field marshals wire text
-// through the interpreter dispatcher — `expr: Expression` arrives as a
-// string carrying the captured expression text; a `string` field arrives
-// as the evaluated literal. Quoted wire is the canonical form: the gate
-// admits it and the marshal routes it by declared field type, not by
-// value shape.
+// Pins: a bare wire value is a Koru expression — `calc(expr: 2 + 3)`
+// evaluates to i64 5 through the dispatcher; a `string` field arrives as
+// the quoted literal's text. The gate admits expression text whole and
+// the evaluator judges it — there is no capture channel: declared field
+// type, not value shape, is the contract.
 //
 // These are runtime fields — [comptime], [norun], and Program remain the
 // only timing controls (400_202/400_203 pin the emitted-backend twin).
@@ -11,10 +10,11 @@ import std/io
 import std/bridge
 import std/runtime
 
-tor calc { expr: Expression }
+tor calc { expr: i64 }
 proc calc|zig {
     _ = @import("std").posix.write(1, "calc:") catch {};
-    _ = @import("std").posix.write(1, expr) catch {};
+    const buf = @import("std").fmt.allocPrint(@import("std").heap.page_allocator, "{d}", .{expr}) catch unreachable;
+    _ = @import("std").posix.write(1, buf) catch {};
     _ = @import("std").posix.write(1, "\n") catch {};
 }
 
@@ -31,7 +31,7 @@ std/runtime:register(scope: "api") {
 }
 
 tor gated { br: *std/bridge:Bridge<session> }
-gated = std/bridge:run(br, source: "calc(expr: \"2 + 3\")\nrender(src: \"hello world\")")
+gated = std/bridge:run(br, source: "calc(expr: 2 + 3)\nrender(src: \"hello world\")")
 | partial p |> std/io:print.ln("{{ p.report:s }}")
 | result r |> std/io:print.ln("FAIL result — a two-item turn reports per step")
 | unhandled-branch ub |> std/io:print.ln("FAIL unhandled {{ ub.branch:s }}")

@@ -1,0 +1,59 @@
+// Koru Standard Library: the `wireexpr` part of interpreter.kz — the
+// whole-expression fallback for arg values. Joined via `~part wireexpr`
+// in interpreter.kz; merged into the interpreter module at load.
+//
+// evaluateExpr resolves quoted strings, bound names, and lone field paths
+// first; what remains is judged here as one Koru expression — `2 + 3`,
+// `n * 2`, `r3.total > 50` — evaluated against expr_bindings, the same
+// scope `when` guards see. Text that is not an expression at all returns
+// null so the caller keeps its verbatim fallback (non-wire callers feed
+// evaluateExpr raw shapes the wire never admits); text that parses as an
+// expression but cannot evaluate — a name nothing bound — refuses loudly.
+
+pub fn evalWireExprArg(trimmed: []const u8, ctx: *InterpreterContext) !?[]const u8 {
+    var ep = koru_parser.ExpressionParser.init(ctx.allocator, trimmed);
+    defer ep.deinit();
+    const parsed = ep.parseAll() catch return null;
+    const v = evaluateExpression(parsed, ctx.expr_bindings) catch {
+        ctx.error_detail = std.fmt.allocPrint(ctx.allocator, "'{s}' is an expression but does not evaluate — every name in it must be bound by an earlier arm", .{trimmed}) catch null;
+        return error.UnboundName;
+    };
+    return switch (v) {
+        .int_val => |n| try std.fmt.allocPrint(ctx.allocator, "{d}", .{n}),
+        .float_val => |f| try std.fmt.allocPrint(ctx.allocator, "{d}", .{f}),
+        .bool_val => |b| try ctx.allocator.dupe(u8, if (b) "true" else "false"),
+        .string_val => |sv| try ctx.allocator.dupe(u8, sv),
+        .null_val => try ctx.allocator.dupe(u8, "null"),
+    };
+}
+
+/// The first unbound reference inside expression arg text, or null.
+/// `unboundRefName` judges lone bare names; this judges idents inside
+/// expressions (`n * 2`, `r3.total > limit`) so the validation walk can
+/// name the missing binding before dispatch. Text that is not a whole
+/// expression (`|> result`, prose) is outside this question — an ident
+/// directly after `.` is a field name, not a reference.
+pub fn wireExprRefName(text: []const u8, bound: *const std.StringHashMap(void), allocator: std.mem.Allocator) ?[]const u8 {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var parser = koru_parser.ExpressionParser.init(arena.allocator(), text);
+    _ = parser.parseAll() catch return null;
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        const c = text[i];
+        if (!std.ascii.isAlphabetic(c) and c != '_') continue;
+        const start = i;
+        while (i + 1 < text.len) {
+            const n2 = text[i + 1];
+            const joins = std.ascii.isAlphanumeric(n2) or n2 == '_' or
+                (n2 == '-' and i + 2 < text.len and (std.ascii.isAlphanumeric(text[i + 2]) or text[i + 2] == '_'));
+            if (!joins) break;
+            i += 1;
+        }
+        if (start > 0 and text[start - 1] == '.') continue;
+        const word = text[start .. i + 1];
+        if (std.mem.eql(u8, word, "true") or std.mem.eql(u8, word, "false") or std.mem.eql(u8, word, "null")) continue;
+        if (!bound.contains(word)) return word;
+    }
+    return null;
+}

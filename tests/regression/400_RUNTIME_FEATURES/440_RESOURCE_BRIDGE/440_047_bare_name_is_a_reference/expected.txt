@@ -5,6 +5,9 @@ sink:payload-7
 RESULT bound=r3
 calc:7
 RESULT bound=r4
+calc:8
+RESULT bound=r5
+REFUSED unbound 'ghost' on 'calc' — bind it with an arm (`| <branch> ghost |>`) or quote it for a literal
 REFUSED unbound 'ghost' on 'sink' — bind it with an arm (`| <branch> ghost |>`) or quote it for a literal
 sink:hello world
-RESULT bound=r5
+RESULT bound=r6

@@ -328,3 +328,21 @@ wire:
 wirescan 266→202, turn 92→71, turnscan 70→47 — the grammar is smaller
 *and* stricter, which is what the 09-16 derivation lesson always aimed
 at.
+
+2026-10-18 (later) — Lars ruled the pending half: `Expression` is off the
+wire too. The last capture channel is deleted — a bare value position is
+a *real Koru expression*, parsed by the language's own
+`ExpressionParser` and evaluated against the session/arm bindings
+(`n * 2`, `r3.total > 50`, `q - 1`); what parses but cannot evaluate
+refuses, and validation names the first unbound ident inside expression
+text. Type-directed admission itself is gone — field *names* are still
+judged against the scope, but no declared type changes what a value may
+spell. `Source`/`Expression` keep their real jobs (comptime capture in
+the language — `register`'s own `source: Source` param) and no wire
+meaning; the wire never synthesized a true `Source` — an empty-scope
+capture struct was a string wearing a type. The arm grammar also fixed
+its commitment rule the same day: a `|` on the call's own line commits
+the program to single-line predict-and-chain — every inline `| label`
+arms the head and unhandled branches return the meta-response — while
+indented `|`-lines arm by indentation, including interior steps; an
+indented arm after an inline-`|` line refuses loudly (440_049).

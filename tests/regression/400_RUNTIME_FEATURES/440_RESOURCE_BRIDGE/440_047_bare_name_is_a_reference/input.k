@@ -1,11 +1,11 @@
-// Pins: a captured field obeys the same bound-name law as every other
-// field — a lone bare token is a reference, not literal text.
+// Pins: a bare wire value obeys the bound-name law on every field — a
+// lone bare token is a reference, not literal text.
 //
-// `expr: Expression` captures expression text bare; `src: string` takes a
-// quoted literal. But a bare token on either is a bound-name reference —
 // `sink(src: r1.flights)` resolves the bound field's text (JSON bytes
-// intact), an unbound name refuses at validation naming the arm that
-// would bind it, and bare prose never parses as a value.
+// intact), `calc(expr: r1.count)` resolves a bound scalar into an i64,
+// an unbound name refuses at validation naming the arm that would bind
+// it, and bare prose never parses as a value — it is not a Koru
+// expression.
 
 import std/io
 import std/bridge
@@ -25,10 +25,11 @@ proc sink|zig {
     _ = @import("std").posix.write(1, "\n") catch {};
 }
 
-tor calc { expr: Expression }
+tor calc { expr: i64 }
 proc calc|zig {
     _ = @import("std").posix.write(1, "calc:") catch {};
-    _ = @import("std").posix.write(1, expr) catch {};
+    const buf = @import("std").fmt.allocPrint(@import("std").heap.page_allocator, "{d}", .{expr}) catch unreachable;
+    _ = @import("std").posix.write(1, buf) catch {};
     _ = @import("std").posix.write(1, "\n") catch {};
 }
 
@@ -58,5 +59,7 @@ turn = std/bridge:run(br, source: src)
 |> turn(br, src: "sink(src: r1.flights)")
 |> turn(br, src: "sink(src: r1.text)")
 |> turn(br, src: "calc(expr: r1.count)")
+|> turn(br, src: "calc(expr: r1.count + 1)")
+|> turn(br, src: "calc(expr: ghost - 1)")
 |> turn(br, src: "sink(src: ghost.field)")
 |> turn(br, src: "sink(src: \"hello world\")")
