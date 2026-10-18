@@ -999,6 +999,8 @@ fn tryDesugarChain(
     defer steps.deinit(allocator);
     var chokes = try std.ArrayList(ast.Continuation).initCapacity(allocator, 4);
     defer chokes.deinit(allocator);
+    var stage_local = try std.ArrayList(bool).initCapacity(allocator, 4);
+    defer stage_local.deinit(allocator);
 
     try stage_infos.append(allocator, head_info);
 
@@ -1011,9 +1013,14 @@ fn tryDesugarChain(
                 unnamed = child;
             } else {
                 // Choke handler. Desugar its own subtree first (it may host a
-                // nested chain), then record it for replication.
+                // nested chain), then record it for replication. An arm under
+                // a stage that declares NO branches is that stage's own
+                // continuation — a transform verb's arm (insert's `| row`)
+                // owned by the stage's lowering, not a chain claim — so the
+                // dead-claim check below must not judge it.
                 try desugarSitePointfree(allocator, table, child, null, counter, reporter, false);
                 try chokes.append(allocator, child.*);
+                try stage_local.append(allocator, stage_infos.items[stage_infos.items.len - 1].branches.len == 0);
             }
         }
         const step = unnamed orelse break;
@@ -1079,9 +1086,13 @@ fn tryDesugarChain(
     // check therefore lives at the CHAIN, which is the scope a choke claims
     // over: every claim must land on at least one stage.
     var dead_claim = false;
-    for (chokes.items) |choke| {
+    for (chokes.items, 0..) |choke, i| {
         if (claims_owned) break; // an ancestor already judged this choke set
         if (choke.kind != .terminal or choke.is_catchall or choke.branch.len == 0) continue;
+        // An arm under a branchless stage is that stage's own continuation —
+        // the stage's transform lowering owns it (insert's `| row`), so a
+        // name no chain stage declares is not a dead claim.
+        if (stage_local.items[i]) continue;
         var lands = false;
         for (stage_infos.items) |info| {
             if (branchNamed(info, choke.branch) != null) {

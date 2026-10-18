@@ -55,6 +55,18 @@ dead-claim wall lives at the **chain** — a claim must land on at least one
 stage, refused at the choke, naming the word that was got wrong. Chain for
 exactness, stage for replication; neither scope substitutes for the other.
 
+One carve-out, learned from a real refusal: **an arm under a stage that
+declares NO branches is not a claim at all.** Transform verbs — `insert`'s
+`| row`, a stage whose EventInfo carries zero branch names — own their
+continuation arms directly; their lowering consumes them. An `|> if` step
+inside an arm body heads a desugar attempt whose stage set is a suffix of
+the chain the arm was written for, and it swept `| row` into the choke set
+and dead-claimed it (KORU021, koru-libs `spec.k`). The wall now judges only
+arms whose parent stage has a branch vocabulary — under a branchless stage
+the name belongs to the stage, not the chain. A claim that still lands is
+collected and replicated as before; the carve-out only stops the wall from
+refusing what it was never asked to read. Pin: 690_369.
+
 Corollary worth keeping: **uniform-branch ladders are the degenerate case, not
 the representative one.** `analysis` in `compiler.kz` is `| failed` six times,
 so the ladder that proved the feature was the one shape that could not expose
