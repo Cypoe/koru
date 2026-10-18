@@ -154,6 +154,7 @@ pub fn hostDispatch(
     const is_vocab = std.mem.eql(u8, name, "vocabulary");
     const is_bind = std.mem.eql(u8, name, "bind");
     const is_note = std.mem.eql(u8, name, "note");
+    const is_custody = std.mem.eql(u8, name, "custody");
     if (is_bind) return hostBind(view, inv, out);
     if (is_note) return hostNote(view, inv, out);
     if (inv.args.len != 0) {
@@ -162,6 +163,7 @@ pub fn hostDispatch(
             catch "'vocabulary'/'grammar' take no fields";
         return error.DispatchFailed;
     }
+    if (is_custody) return hostCustody(view, out);
     const text = (if (is_vocab)
         renderVocabulary(view.allocator, view.scope_name, view.defined, true, view.session_env)
     else

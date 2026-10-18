@@ -29,6 +29,7 @@ const host_verbs = [_]HostVerbSpec{
     .{ .name = "note", .fields = &.{
         .{ .name = "text", .type_name = "Source" },
     }, .doc = " — speaks to the observer, not the user: reasoning, plans, and \"why I'm stuck\" go here" },
+    .{ .name = "custody", .fields = &.{}, .doc = " — reads the world's custody record: every session's span, what it still holds" },
 };
 
 fn hostInputLookup(verb: []const u8) ?[]const Runtime.InputFieldSpec {

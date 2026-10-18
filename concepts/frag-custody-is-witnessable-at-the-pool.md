@@ -81,3 +81,19 @@ unrelated to custody: the emitted driver's `zig-out/bin/output` copy had
 no `.exe` arm, so the whole `build_output.zig` backend-exec lane could
 never complete on a Windows host — the world model widened by one
 platform-named artifact.
+
+**The runtime reads its own record.** `custody()` joins the introspection
+wire verbs — same grant gate as `vocabulary()`/`grammar()` — and replays
+`<world>/holds.log` through a ledger model mirroring `HoldsCheck.lean`'s:
+per-session spans, mint ⇒ exactly-one-release-per-span, the same verdict
+names (`died-holding`, `unreleased-at-close`, `release-of-unminted`, …).
+A session can now ask mid-flight what it holds, and a successor session
+asks what the world settled before it acts — the read the frag called
+for, landed in-band. The plumbing chose the honest hop: `HostView`
+carries the pool's existing `custody_ctx` (installed at world mount) —
+one field, no world-path threading through every runtime API layer.
+Two readers, one record, one verdict vocabulary; divergence between the
+runtime render and `lean --run` on the same corpus is itself a finding.
+Surfaced while landing: the rendered-expected fixtures revealed that
+`vocabulary()` renders JSON-escaped `\n` while `grammar()` renders real
+newlines — same table, two encodings, both pinned.

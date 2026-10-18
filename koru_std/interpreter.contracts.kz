@@ -25,6 +25,12 @@ pub const HostView = struct {
     // value (the bridge's `bind`) writes here; values in it are owned by
     // the session allocator, not the run arena. null = no session.
     session_env: ?*Environment = null,
+    // The opaque context the pool's custody witness was armed with —
+    // null when no `on_custody` callback is installed (a worldless
+    // bridge, a bare interpreter run). The armer owns the type: the
+    // bridge passes itself and its host verbs cast back to *Bridge to
+    // reach the world. Opaque because contracts cannot name bridge.
+    custody_ctx: ?*anyopaque = null,
 };
 // Dispatch-detail channel: a generated dispatcher lives in the user module
 // and cannot reach InterpreterContext, so a typed-arg failure it detects

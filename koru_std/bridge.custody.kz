@@ -63,3 +63,363 @@ pub fn armCustodyLog(br: *Bridge) void {
     br.pool.on_custody = custodyNote;
     custodyMark(br, "session-open");
 }
+
+// ============================================================================
+// CUSTODY READER - the in-band verdict over holds.log
+// ============================================================================
+//
+// The writer above is the synchronous witness; `custody()` is the reader
+// the frag promised — a successor session re-decides <world>/holds.log
+// against the same session-span ledger verify/holds/HoldsCheck.lean runs
+// as the external oracle. Two readers, one verdict vocabulary: BAD lines
+// and the malformed verdict carry the checker's spellings, so the
+// runtime's answer and the oracle's answer compare at a glance.
+//
+// One deliberate divergence: the CALLING session's own span is open at
+// read time — that is live state, not a violation (a post-mortem oracle
+// judges a finished file; this read happens mid-span). Everything else —
+// foreign open spans, unreleased-at-close, pair violations, grammar —
+// follows the checker's rulings verbatim. A second divergence is order:
+// step and grammar violations interleave in file order here, where the
+// checker groups grammar first — the record's own order is the honest
+// one for a reader.
+
+const HoldsEvKind = enum { session_open, session_closed, mint, release };
+
+const HoldsEv = struct {
+    kind: HoldsEvKind,
+    session: []const u8,
+    handle: []const u8 = "",
+    line: usize,
+};
+
+const HoldsSpan = struct {
+    session: []const u8,
+    open_: bool,
+    live: std.ArrayList([]const u8) = .{ .items = &.{}, .capacity = 0 },
+    dead: std.ArrayList([]const u8) = .{ .items = &.{}, .capacity = 0 },
+    mints: u32 = 0,
+    releases: u32 = 0,
+};
+
+/// `tok` must spell `key=<v>` with a non-empty `v` — same rule as the
+/// checker's fieldVal.
+fn holdsFieldVal(tok: []const u8, key: []const u8) ?[]const u8 {
+    if (tok.len <= key.len) return null;
+    if (!std.mem.startsWith(u8, tok, key)) return null;
+    if (tok[key.len] != '=') return null;
+    const v = tok[key.len + 1 ..];
+    return if (v.len == 0) null else v;
+}
+
+fn holdsTsOk(tok: []const u8) bool {
+    const v = holdsFieldVal(tok, "t") orelse return false;
+    if (v.len == 0) return false;
+    for (v) |c| {
+        if (c < '0' or c > '9') return false;
+    }
+    return true;
+}
+
+/// One line → one event, or null (a grammar violation — the checker
+/// reports it and the line is not an event).
+fn holdsParseLine(line: []const u8, lineno: usize) ?HoldsEv {
+    // tolerate a CR tail only: the writer emits LF, a checked-out or
+    // copied corpus may arrive CRLF — line-format noise, not content
+    var l = line;
+    if (l.len > 0 and l[l.len - 1] == '\r') l = l[0 .. l.len - 1];
+    if (l.len == 0) return null;
+    var it = std.mem.splitScalar(u8, l, '\t');
+    const k = it.next() orelse return null;
+    if (std.mem.eql(u8, k, "session-open") or std.mem.eql(u8, k, "session-closed")) {
+        const t = it.next() orelse return null;
+        const s = it.next() orelse return null;
+        if (it.next() != null) return null;
+        if (!holdsTsOk(t)) return null;
+        const sess = holdsFieldVal(s, "session") orelse return null;
+        return .{
+            .kind = if (k.len == 12) .session_open else .session_closed,
+            .session = sess,
+            .line = lineno,
+        };
+    }
+    if (std.mem.eql(u8, k, "release")) {
+        const t = it.next() orelse return null;
+        const s = it.next() orelse return null;
+        const h = it.next() orelse return null;
+        const b = it.next() orelse return null;
+        if (it.next() != null) return null;
+        if (!holdsTsOk(t)) return null;
+        const sess = holdsFieldVal(s, "session") orelse return null;
+        const handle = holdsFieldVal(h, "handle") orelse return null;
+        _ = holdsFieldVal(b, "by") orelse return null;
+        return .{ .kind = .release, .session = sess, .handle = handle, .line = lineno };
+    }
+    if (std.mem.eql(u8, k, "mint")) {
+        const t = it.next() orelse return null;
+        const s = it.next() orelse return null;
+        const h = it.next() orelse return null;
+        const v = it.next() orelse return null;
+        const ty = it.next() orelse return null;
+        // subject= heads the tail — its value may carry =/spaces/tabs, so
+        // everything after this token is accepted verbatim
+        const subj = it.next() orelse return null;
+        if (!holdsTsOk(t)) return null;
+        const sess = holdsFieldVal(s, "session") orelse return null;
+        const handle = holdsFieldVal(h, "handle") orelse return null;
+        _ = holdsFieldVal(v, "verb") orelse return null;
+        _ = holdsFieldVal(ty, "type") orelse return null;
+        if (!std.mem.startsWith(u8, subj, "subject=")) return null;
+        return .{ .kind = .mint, .session = sess, .handle = handle, .line = lineno };
+    }
+    return null;
+}
+
+fn holdsFindSpan(spans: []const HoldsSpan, session: []const u8) ?usize {
+    for (spans, 0..) |sp, i| {
+        if (std.mem.eql(u8, sp.session, session)) return i;
+    }
+    return null;
+}
+
+fn holdsViol(out: *std.ArrayList([]const u8), allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) void {
+    const s = std.fmt.allocPrint(allocator, fmt, args) catch return;
+    out.append(allocator, s) catch return;
+}
+
+/// `[h1, h2]` — the checker's List.toString shape, so BAD lines carry the
+/// same spelling in both readers.
+fn holdsJoinLive(allocator: std.mem.Allocator, live: []const []const u8) []const u8 {
+    var buf = std.ArrayList(u8){ .items = &.{}, .capacity = 0 };
+    buf.append(allocator, '[') catch return "[]";
+    for (live, 0..) |h, i| {
+        if (i > 0) buf.appendSlice(allocator, ", ") catch return buf.items;
+        buf.appendSlice(allocator, h) catch return buf.items;
+    }
+    buf.append(allocator, ']') catch return buf.items;
+    return buf.items;
+}
+
+/// sp :: spans.filter (·.session != sp.session) — the touched span lands
+/// at the head; the span list stays most-recently-touched-first, matching
+/// the checker's putSpan and its violation order.
+fn holdsPutSpan(spans: *std.ArrayList(HoldsSpan), allocator: std.mem.Allocator, sp: HoldsSpan) void {
+    var kept = std.ArrayList(HoldsSpan){ .items = &.{}, .capacity = 0 };
+    for (spans.items) |old| {
+        if (!std.mem.eql(u8, old.session, sp.session)) kept.append(allocator, old) catch unreachable;
+    }
+    spans.clearRetainingCapacity();
+    spans.append(allocator, sp) catch unreachable;
+    spans.appendSlice(allocator, kept.items) catch unreachable;
+}
+
+/// First occurrence out (the checker's List.erase).
+fn holdsErase(list: *std.ArrayList([]const u8), h: []const u8) void {
+    for (list.items, 0..) |x, i| {
+        if (std.mem.eql(u8, x, h)) {
+            _ = list.orderedRemove(i);
+            return;
+        }
+    }
+}
+
+/// Every occurrence out (the checker's live.filter).
+fn holdsDropLive(list: *std.ArrayList([]const u8), h: []const u8) void {
+    var i: usize = 0;
+    while (i < list.items.len) {
+        if (std.mem.eql(u8, list.items[i], h)) {
+            _ = list.orderedRemove(i);
+        } else i += 1;
+    }
+}
+
+fn holdsIn(list: []const []const u8, h: []const u8) bool {
+    for (list) |x| {
+        if (std.mem.eql(u8, x, h)) return true;
+    }
+    return false;
+}
+
+/// One event applied to the ledger — the checker's `step` ported
+/// verdict-for-verdict. A violation leaves the state untouched except
+/// unreleased-at-close, which flags AND applies the close: the close did
+/// happen, so the record must reflect it.
+fn holdsStep(spans: *std.ArrayList(HoldsSpan), allocator: std.mem.Allocator, e: *const HoldsEv, violations: *std.ArrayList([]const u8)) void {
+    const idx = holdsFindSpan(spans.items, e.session);
+    switch (e.kind) {
+        .session_open => {
+            if (idx) |i| {
+                if (spans.items[i].open_) {
+                    holdsViol(violations, allocator, "reopen: session '{s}' opened while open (line {d})", .{ e.session, e.line });
+                    return;
+                }
+            }
+            holdsPutSpan(spans, allocator, .{ .session = e.session, .open_ = true });
+        },
+        .session_closed => {
+            const i = idx orelse {
+                holdsViol(violations, allocator, "close-of-unopened: '{s}' (line {d})", .{ e.session, e.line });
+                return;
+            };
+            if (!spans.items[i].open_) {
+                holdsViol(violations, allocator, "close-of-unopened: '{s}' span already closed (line {d})", .{ e.session, e.line });
+                return;
+            }
+            var nsp = spans.items[i];
+            nsp.open_ = false;
+            if (nsp.live.items.len != 0) {
+                holdsViol(violations, allocator, "unreleased-at-close: '{s}' closed holding {s} (line {d})", .{ e.session, holdsJoinLive(allocator, nsp.live.items), e.line });
+            }
+            holdsPutSpan(spans, allocator, nsp);
+        },
+        .mint => {
+            const i = idx orelse {
+                holdsViol(violations, allocator, "mint-outside-session: '{s}' in '{s}' (line {d})", .{ e.handle, e.session, e.line });
+                return;
+            };
+            if (!spans.items[i].open_) {
+                holdsViol(violations, allocator, "mint-outside-session: '{s}' in '{s}' (line {d})", .{ e.handle, e.session, e.line });
+                return;
+            }
+            if (holdsIn(spans.items[i].live.items, e.handle)) {
+                holdsViol(violations, allocator, "double-mint: '{s}' in '{s}' (line {d})", .{ e.handle, e.session, e.line });
+                return;
+            }
+            var nsp = spans.items[i];
+            nsp.live.insert(allocator, 0, e.handle) catch return;
+            holdsErase(&nsp.dead, e.handle);
+            nsp.mints += 1;
+            holdsPutSpan(spans, allocator, nsp);
+        },
+        .release => {
+            const i = idx orelse {
+                holdsViol(violations, allocator, "release-outside-session: '{s}' in '{s}' (line {d})", .{ e.handle, e.session, e.line });
+                return;
+            };
+            if (!spans.items[i].open_) {
+                holdsViol(violations, allocator, "release-outside-session: '{s}' in '{s}' (line {d})", .{ e.handle, e.session, e.line });
+                return;
+            }
+            if (holdsIn(spans.items[i].live.items, e.handle)) {
+                var nsp = spans.items[i];
+                holdsDropLive(&nsp.live, e.handle);
+                holdsErase(&nsp.dead, e.handle);
+                nsp.dead.insert(allocator, 0, e.handle) catch return;
+                nsp.releases += 1;
+                holdsPutSpan(spans, allocator, nsp);
+                return;
+            }
+            if (holdsIn(spans.items[i].dead.items, e.handle)) {
+                holdsViol(violations, allocator, "double-release: '{s}' in '{s}' (line {d})", .{ e.handle, e.session, e.line });
+            } else {
+                holdsViol(violations, allocator, "release-of-unminted: '{s}' in '{s}' (line {d})", .{ e.handle, e.session, e.line });
+            }
+        },
+    }
+}
+
+/// The session's own read of the record — `custody()` for host callers
+/// and the wire verb. One line per span (least-recently-touched first,
+/// the chronological read), then BAD lines in the checker's spellings,
+/// then the verdict.
+fn renderCustody(allocator: std.mem.Allocator, world: ?[]const u8, current: []const u8) []const u8 {
+    var out = std.ArrayList(u8){ .items = &.{}, .capacity = 0 };
+    const w = world orelse {
+        return "no custody record — this session mounts no world";
+    };
+    var path_buf: [512]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "{s}/holds.log", .{w}) catch
+        return "no custody record — world path too long";
+    const body = std.fs.cwd().readFileAlloc(allocator, path, 1 << 20) catch {
+        out.appendSlice(allocator, "no custody record — this world has no holds.log") catch unreachable;
+        return out.toOwnedSlice(allocator) catch unreachable;
+    };
+    if (body.len == 0) {
+        out.appendSlice(allocator, "empty custody record — holds.log has no events") catch unreachable;
+        return out.toOwnedSlice(allocator) catch unreachable;
+    }
+
+    var spans = std.ArrayList(HoldsSpan){ .items = &.{}, .capacity = 0 };
+    var violations = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
+
+    // A single trailing newline terminates the file, not a line — every
+    // interior empty segment IS a (grammar-violating) line.
+    var b = body;
+    if (b.len > 0 and b[b.len - 1] == '\n') b = b[0 .. b.len - 1];
+
+    var lineno: usize = 0;
+    var line_it = std.mem.splitScalar(u8, b, '\n');
+    while (line_it.next()) |line| {
+        lineno += 1;
+        if (holdsParseLine(line, lineno)) |ev| {
+            holdsStep(&spans, allocator, &ev, &violations);
+        } else {
+            holdsViol(&violations, allocator, "grammar: line {d} is not a custody event", .{lineno});
+        }
+    }
+
+    // Per-span lines, oldest-touch first — the chronological read a
+    // successor wants. Foreign open spans become the checker's
+    // unclosed-session/died-holding; the calling session's own open span
+    // is live state and never a violation.
+    var vi = spans.items.len;
+    while (vi > 0) {
+        vi -= 1;
+        const sp = spans.items[vi];
+        if (out.items.len > 0) out.append(allocator, '\n') catch unreachable;
+        if (sp.open_ and std.mem.eql(u8, sp.session, current)) {
+            const holding = if (sp.live.items.len == 0) "nothing" else holdsJoinLive(allocator, sp.live.items);
+            out.appendSlice(allocator, std.fmt.allocPrint(allocator, "{s}: open — current session, holding {s}", .{ sp.session, holding }) catch continue) catch unreachable;
+        } else if (sp.open_) {
+            const holding = if (sp.live.items.len == 0) "nothing" else holdsJoinLive(allocator, sp.live.items);
+            out.appendSlice(allocator, std.fmt.allocPrint(allocator, "{s}: open — holding {s} — UNSETTLED", .{ sp.session, holding }) catch continue) catch unreachable;
+            if (sp.live.items.len == 0) {
+                holdsViol(&violations, allocator, "unclosed-session: '{s}'", .{sp.session});
+            } else {
+                holdsViol(&violations, allocator, "died-holding: '{s}' holding {s}", .{ sp.session, holding });
+            }
+        } else {
+            out.appendSlice(allocator, std.fmt.allocPrint(allocator, "{s}: closed — {d} minted, {d} released", .{ sp.session, sp.mints, sp.releases }) catch continue) catch unreachable;
+        }
+    }
+
+    for (violations.items) |v| {
+        if (out.items.len > 0) out.append(allocator, '\n') catch unreachable;
+        out.appendSlice(allocator, "BAD ") catch unreachable;
+        out.appendSlice(allocator, v) catch unreachable;
+    }
+    if (out.items.len > 0) out.append(allocator, '\n') catch unreachable;
+    if (violations.items.len == 0) {
+        out.appendSlice(allocator, std.fmt.allocPrint(allocator, "clean: {d} events, ledger settled — '{s}' live", .{ lineno, current }) catch "clean") catch unreachable;
+    } else {
+        out.appendSlice(allocator, std.fmt.allocPrint(allocator, "malformed: {d} violation(s)", .{violations.items.len}) catch "malformed") catch unreachable;
+    }
+    return out.toOwnedSlice(allocator) catch unreachable;
+}
+
+// `custody()` — the introspection verb arm. Reaches br through the pool's
+// custody context: the same channel custodyNote writes through, read
+// back. A worldless (or custody-less) run gets a teaching refusal, not a
+// forged empty record.
+fn hostCustody(view: *const Interp.HostView, out: *Interp.DispatchResult) anyerror!void {
+    const br: *Bridge = if (view.custody_ctx) |c| @ptrCast(@alignCast(c)) else {
+        view.error_detail.* = "'custody' reads the world record — this session mounts no world";
+        return error.DispatchFailed;
+    };
+    const text = renderCustody(view.allocator, br.world, br.session_id);
+    const S = struct { threadlocal var field_buf: [1]Interp.NamedField = undefined; };
+    S.field_buf[0] = .{ .name = "__type_ref", .value = .{ .string_val = text } };
+    out.* = .{ .branch = "", .fields = S.field_buf[0..1] };
+}
+
+// ============================================================================
+// CUSTODY tor — the same verdict for host callers
+// ============================================================================
+
+~pub tor custody { br: *Bridge<session> } -> string
+
+~proc custody|zig {
+    var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena_state.allocator();
+    return renderCustody(allocator, br.world, br.session_id);
+}

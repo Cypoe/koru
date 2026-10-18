@@ -833,6 +833,11 @@ fn executeFlow(
                                 .allocator = ctx.allocator,
                                 .error_detail = &ctx.error_detail,
                                 .session_env = ctx.session_env,
+                                // The pool carries the opaque session
+                                // context the custody witness was armed
+                                // with — the bridge's host verbs (the
+                                // custody() reader) cast it back.
+                                .custody_ctx = if (ctx.handle_pool) |p| p.custody_ctx else null,
                             };
                             try hd(event_name, &evaluated_inv, &view, &dispatch_result);
                         } else return derr;
