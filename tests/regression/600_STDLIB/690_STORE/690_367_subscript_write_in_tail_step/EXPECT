@@ -1,0 +1,2 @@
+CONTAINS error[SHAPE002]
+CONTAINS duplicate unguarded handler for branch 'row'

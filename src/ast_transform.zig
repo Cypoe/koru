@@ -721,47 +721,62 @@ fn reattachArmsToLastStep(
     // The chain's level is its steps' indentation. Steps that disagree are not
     // one flat chain and this rule does not govern them.
     var level: ?usize = null;
-    var last_step: ?usize = null;
-    for (kids, 0..) |*k, i| {
+    for (kids) |*k| {
         if (!isUnnamedStep(k)) continue;
         if (level) |l| {
             if (k.indent != l) return false;
         } else level = k.indent;
-        last_step = i;
     }
     const lvl = level orelse return false;
-    const tail = last_step orelse return false;
 
+    // An arm attaches to the last step BEFORE it at the chain's level — the
+    // step it visibly follows. "Last step at its level" is read in source
+    // order: an arm written before every step keeps its flat-parse home on
+    // the head. Moving it forward would invert the layout — `| row b`
+    // followed by a same-level `|>` landed the row arm UNDER the step, and
+    // the step's tor took the blame (`has no branch 'row'`, 690_367).
+    const targets = try allocator.alloc(?usize, kids.len);
+    defer allocator.free(targets);
+    var last_step: ?usize = null;
     var moving: usize = 0;
     for (kids, 0..) |*k, i| {
-        if (i == tail or isUnnamedStep(k)) continue;
-        if (k.branch.len > 0 and k.indent == lvl) moving += 1;
+        targets[i] = null;
+        if (isUnnamedStep(k)) {
+            last_step = i;
+            continue;
+        }
+        if (k.branch.len > 0 and k.indent == lvl and last_step != null) {
+            targets[i] = last_step;
+            moving += 1;
+        }
     }
     if (moving == 0) return false;
 
-    const isMoving = struct {
-        fn f(k: *const ast.Continuation, i: usize, tail_i: usize, l: usize) bool {
-            return i != tail_i and k.branch.len > 0 and !isUnnamedStep(k) and k.indent == l;
-        }
-    }.f;
-
-    const tail_kid = &@constCast(kids)[tail];
-
-    // The tail's own children first, so the arms land AFTER anything it already
-    // carried, then publish onto the tail BEFORE `kept` copies it — `kept`
-    // holds values, so a copy taken first would keep the stale child list.
-    var arms = try std.ArrayList(ast.Continuation).initCapacity(allocator, tail_kid.continuations.len + moving);
-    defer arms.deinit(allocator);
-    try arms.appendSlice(allocator, tail_kid.continuations);
-    for (kids, 0..) |*k, i| {
-        if (isMoving(k, i, tail, lvl)) try arms.append(allocator, k.*);
-    }
-    tail_kid.continuations = try arms.toOwnedSlice(allocator);
-
+    // Publish each step's resolved arms AFTER the children it already
+    // carried, then republish the site without the moved arms. `kept` holds
+    // values, so the arms must merge into each step's list while the kids
+    // array is still the source of truth.
     var kept = try std.ArrayList(ast.Continuation).initCapacity(allocator, kids.len - moving);
-    defer kept.deinit(allocator);
+    errdefer kept.deinit(allocator);
     for (kids, 0..) |*k, i| {
-        if (!isMoving(k, i, tail, lvl)) try kept.append(allocator, k.*);
+        if (targets[i] != null) continue;
+        const dest = try kept.addOne(allocator);
+        dest.* = k.*;
+        var extra: usize = 0;
+        for (targets) |t| {
+            if (t == i) extra += 1;
+        }
+        if (extra == 0) continue;
+        const merged = try allocator.alloc(ast.Continuation, dest.continuations.len + extra);
+        @memcpy(merged[0..dest.continuations.len], dest.continuations);
+        var at = dest.continuations.len;
+        for (kids, 0..) |*a, j| {
+            if (targets[j] == i) {
+                merged[at] = a.*;
+                at += 1;
+            }
+        }
+        dest.continuations = merged;
     }
     site.continuations = try kept.toOwnedSlice(allocator);
     return true;
