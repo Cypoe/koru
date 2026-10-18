@@ -52,6 +52,12 @@ Environment:
 The gate binary (a.out, from gate.k) is built on first run and whenever
 gate.k or a linked module (koru/odds) is newer than it — the stale-binary
 discipline applied to the gate itself.
+
+A staged file whose own diff section exceeds JUDGE_STATE_MAX_BYTES
+(vendored upstream sources, generated artifacts) is elided from the
+judged state — its `diff --git` header survives as a stub naming the
+elision and size — rather than UNJUDGED-blocking every row on an input
+one file made unholdable.
 """
 
 import hashlib
@@ -75,6 +81,32 @@ GATE_SRC = os.path.join(HERE, "gate.k")
 # judgment failure; it is an input the judge cannot hold, and the
 # honest answer is UNJUDGED with the cause named.
 JUDGE_STATE_MAX_BYTES = 96_000
+
+
+def elide_oversized_files(diff):
+    """A file whose staged section alone exceeds the judge's window can
+    never be held by the judge — vendored upstream sources, generated
+    artifacts, bulk data. Eliding the whole commit on one such file
+    (UNJUDGED blocks every row) confuses an input limit with a verdict,
+    and hides the rest of the commit from every judge. Instead the
+    file's section is replaced by a stub that keeps its `diff --git`
+    header — the judge still sees the file was touched, names the
+    elision and its size, and can flag an elision it actually cares
+    about. Returns (filtered diff, [(path, bytes)])"""
+    sections = re.split(r"(?=^diff --git )", diff, flags=re.M)
+    out = []
+    elided = []
+    for s in sections:
+        if s.startswith("diff --git ") and len(s.encode()) > JUDGE_STATE_MAX_BYTES:
+            header = s.splitlines()[0]
+            path = header.split(" b/")[-1]
+            elided.append((path, len(s.encode())))
+            out.append(f"{header}\n[gate: file content elided from "
+                       f"judgment — {len(s.encode())}B exceeds "
+                       f"{JUDGE_STATE_MAX_BYTES}B per-file window]\n")
+        else:
+            out.append(s)
+    return "".join(out), elided
 
 
 def koruc_invariants():
@@ -271,6 +303,10 @@ def main():
 
     provision_key()
     diff = git_staged_diff(repo)
+    diff, elided = elide_oversized_files(diff)
+    for path, size in elided:
+        print(f"gate note  elided {path} ({size}B) — exceeds the judge's "
+              "per-file window; header only in judged state")
     have_diff = bool(diff.strip())
     binary_ready = False
 

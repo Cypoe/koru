@@ -81,8 +81,14 @@
 # that missed) plus +6 clusters / +4 members of uncommitted parser.zig
 # work-in-progress in the tree. This commit touches only koru_std/,
 # tests/, invariants/, and scripts/ — zero src/ files.
-clusters=1878
-members=2418
+# Re-pinned in "invariants/gate: elide per-file oversized diff sections
+# from judged state": the roll fired on +19 clusters / +11 members of
+# foreign src/ drift accumulated between rolls — this commit touches
+# only invariants/gate.py; zero src/ files. The residual named is the
+# same documented emitter_test/visitor_emitter_test field-literal idiom
+# plus the standing errdefer clusters in parser.zig/shape_analyzer.zig.
+clusters=1897
+members=2429
 # Re-pinned to 1878/2418 on the tightening-017 cherry-pick: the roll named
 # parser.zig similar-arm blocks (1277, 2962, 3479, 3804, 6727 +5) plus
 # shape_analyzer/emitter_test scaffolding — the documented consciously-
