@@ -5,12 +5,20 @@ backup = read(path: src) | ok t |> write(path: dst, text: t)
   world< defined backup
   agent> backup(src: "hello.txt", dst: "again.txt")
   world< {"branch":"","value":"wrote"}
+  agent> open(path: "hello.txt")
+  world< {"branch":"","value":"conn_1"}
+  agent> poke(conn: "conn_1")
+  world< {"branch":"","value":"poked"}
   agent> custody()
-  world< {"branch":"","value":"a: open — current session, holding nothing\nclean: 1 events, ledger settled — 'a' live"}
+  world< {"branch":"","value":"a: open — current session, holding [conn_1]\nclean: 3 events, ledger settled — 'a' live"}
+  agent> shut(conn: "conn_1")
+  world< {"branch":"","value":"closed"}
   agent> vocabulary()
-  world< {"branch":"","value":"read(path: string)\nwrite(path: string, text: string)\nvocabulary()\ngrammar()\nbind(name: string, value: Source)\nnote(text: Source) — speaks to the observer, not the user: reasoning, plans, and \"why I'm stuck\" go here\ncustody() — reads the world's custody record: every session's span, what it still holds\nbackup(src: string, dst: string)"}
+  world< {"branch":"","value":"read(path: string)\nwrite(path: string, text: string)\nopen(path: string) -> <opened!>\npoke(conn: string<opened>)\nshut(conn: string<!opened>)\nvocabulary()\ngrammar()\nbind(name: string, value: Source)\nnote(text: Source) — speaks to the observer, not the user: reasoning, plans, and \"why I'm stuck\" go here\ncustody() — reads the world's custody record: every session's span, what it still holds\nbackup(src: string, dst: string)"}
+  agent> poke(conn: "conn_1")
+  world< dispatch: 'conn' wants a live <opened> — 'conn_1' names nothing the session holds. Mint one through a verb whose signature ends '-> <opened!>'
   agent> custody()
-  world< {"branch":"","value":"a: closed — 0 minted, 0 released\nb: open — current session, holding nothing\nclean: 3 events, ledger settled — 'b' live"}
+  world< {"branch":"","value":"a: closed — 1 minted, 1 released\nb: open — current session, holding nothing\nclean: 6 events, ledger settled — 'b' live"}
   agent> backup(src: "hello.txt", dst: "b-copy.txt")
   world< {"branch":"","value":"wrote"}
   agent> format-disk()

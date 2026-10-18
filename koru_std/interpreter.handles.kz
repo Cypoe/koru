@@ -114,6 +114,12 @@ fn assertHandlesHeld(
                     .{ field.name, state, arg.value, h.obligation_name, state }) catch null;
                 return error.HandleNotHeld;
             }
+            // The claim is proven — witness the exercise so the record
+            // carries the third leg of obligation safety (no leak, no
+            // double-discharge, no use-after-release): a `use` line on a
+            // dead handle in the log can then only mean this gate
+            // regressed, which is what the checker re-decides.
+            pool.noteUse(h, event_name);
             break;
         }
     }

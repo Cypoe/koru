@@ -97,3 +97,18 @@ runtime render and `lean --run` on the same corpus is itself a finding.
 Surfaced while landing: the rendered-expected fixtures revealed that
 `vocabulary()` renders JSON-escaped `\n` while `grammar()` renders real
 newlines — same table, two encodings, both pinned.
+
+**The last unwitnessed edge class is written.** `use` joins the record —
+a borrow admitted by `assertHandlesHeld` appends
+`use\tt=..\tsession=..\thandle=..\tverb=<exercising tor>` through the
+same pool callback. No `BorrowsSpec` table was needed: the borrow pass
+already derives the claim from the tor's declared input phantoms via
+`input_fn`, so the event fires where the hold is proven — a `use` line
+on a dead handle can then only mean the gate regressed, which is what
+the checker's `use-of-released`/`use-of-unminted`/`use-outside-session`
+codes name. Refused borrows write nothing: the record shows what WAS
+exercised, and the wire already carries what was refused. `HoldsCheck.lean`
+gained the kind, the rule, and `clean_sound` now certifies every release
+*and* every use was backed by a live mint at its position; `custody()`
+replays the same arms in-band. The N1 boundary holds: the write happens
+at admission, the verdict is re-decided elsewhere.

@@ -43,7 +43,7 @@ pub const Handle = struct {
 };
 
 /// What the custody record saw happen to a handle.
-pub const CustodyKind = enum { mint, release };
+pub const CustodyKind = enum { mint, use, release };
 
 pub const HandlePool = struct {
     handles: std.ArrayList(Handle),
@@ -88,6 +88,14 @@ pub const HandlePool = struct {
         const cb = self.on_custody orelse return;
         const ctx = self.custody_ctx orelse return;
         cb(ctx, kind, h, subject);
+    }
+
+    /// A borrow claim admitted — the exercising verb is the subject.
+    /// Called only where the hold was PROVEN live (`assertHandlesHeld`),
+    /// so the record distinguishes granted exercises from refused ones:
+    /// a `use` line on a dead handle means enforcement regressed.
+    pub fn noteUse(self: *HandlePool, h: *const Handle, verb: []const u8) void {
+        self.noteCustody(.use, h, verb);
     }
 
     /// Register a new handle and return its pool ID

@@ -9,6 +9,7 @@
 //
 //   session-open / session-closed   the span a session's holds live in
 //   mint      verb + subject + the handle it bound
+//   use       a borrow exercising a live handle — moves no custody
 //   release   the discharge that retired it
 //
 // A mint inside a closed session's span with no release was released at
@@ -36,6 +37,9 @@ fn custodyNote(ctx: *anyopaque, kind: Interp.CustodyKind, h: *const Interp.Handl
     const line = switch (kind) {
         .mint => std.fmt.bufPrint(&buf, "mint\tt={d}\tsession={s}\thandle={s}\tverb={s}\ttype={s}\tsubject={s}", .{
             std.time.milliTimestamp(), br.session_id, h.handle_id, h.created_by_event, h.resource_type, subject,
+        }),
+        .use => std.fmt.bufPrint(&buf, "use\tt={d}\tsession={s}\thandle={s}\tverb={s}", .{
+            std.time.milliTimestamp(), br.session_id, h.handle_id, subject,
         }),
         .release => std.fmt.bufPrint(&buf, "release\tt={d}\tsession={s}\thandle={s}\tby={s}", .{
             std.time.milliTimestamp(), br.session_id, h.handle_id, h.discharge_event,
@@ -84,7 +88,7 @@ pub fn armCustodyLog(br: *Bridge) void {
 // checker groups grammar first — the record's own order is the honest
 // one for a reader.
 
-const HoldsEvKind = enum { session_open, session_closed, mint, release };
+const HoldsEvKind = enum { session_open, session_closed, mint, use, release };
 
 const HoldsEv = struct {
     kind: HoldsEvKind,
@@ -142,6 +146,18 @@ fn holdsParseLine(line: []const u8, lineno: usize) ?HoldsEv {
             .session = sess,
             .line = lineno,
         };
+    }
+    if (std.mem.eql(u8, k, "use")) {
+        const t = it.next() orelse return null;
+        const s = it.next() orelse return null;
+        const h = it.next() orelse return null;
+        const v = it.next() orelse return null;
+        if (it.next() != null) return null;
+        if (!holdsTsOk(t)) return null;
+        const sess = holdsFieldVal(s, "session") orelse return null;
+        const handle = holdsFieldVal(h, "handle") orelse return null;
+        _ = holdsFieldVal(v, "verb") orelse return null;
+        return .{ .kind = .use, .session = sess, .handle = handle, .line = lineno };
     }
     if (std.mem.eql(u8, k, "release")) {
         const t = it.next() orelse return null;
@@ -290,6 +306,26 @@ fn holdsStep(spans: *std.ArrayList(HoldsSpan), allocator: std.mem.Allocator, e: 
             holdsErase(&nsp.dead, e.handle);
             nsp.mints += 1;
             holdsPutSpan(spans, allocator, nsp);
+        },
+        .use => {
+            const i = idx orelse {
+                holdsViol(violations, allocator, "use-outside-session: '{s}' in '{s}' (line {d})", .{ e.handle, e.session, e.line });
+                return;
+            };
+            if (!spans.items[i].open_) {
+                holdsViol(violations, allocator, "use-outside-session: '{s}' in '{s}' (line {d})", .{ e.handle, e.session, e.line });
+                return;
+            }
+            if (holdsIn(spans.items[i].live.items, e.handle)) {
+                // a borrow exercises; it does not mint, move, or settle —
+                // the ledger is untouched and the span order unchanged
+                return;
+            }
+            if (holdsIn(spans.items[i].dead.items, e.handle)) {
+                holdsViol(violations, allocator, "use-of-released: '{s}' in '{s}' (line {d})", .{ e.handle, e.session, e.line });
+            } else {
+                holdsViol(violations, allocator, "use-of-unminted: '{s}' in '{s}' (line {d})", .{ e.handle, e.session, e.line });
+            }
         },
         .release => {
             const i = idx orelse {

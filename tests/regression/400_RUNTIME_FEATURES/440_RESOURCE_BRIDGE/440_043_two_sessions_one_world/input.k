@@ -1,5 +1,8 @@
 // An agent, two sessions, one world: session A does a file-copy by hand,
 // invents `backup`, and session B's vocabulary already contains it.
+// The world also holds the custody record — A mints a handle, borrows
+// it (`use`), discharges it; B's `custody()` reads A's settled span,
+// and B's borrow of the released handle is refused, leaving no event.
 import std/io
 import std/bridge
 import std/runtime
@@ -21,9 +24,28 @@ proc write|zig {
     return "wrote";
 }
 
+tor open { path: string } -> string<opened!>
+proc open|zig {
+    _ = path;
+    return "conn_1";
+}
+tor poke { conn: string<opened> } -> string
+proc poke|zig {
+    _ = conn;
+    return "poked";
+}
+tor shut { conn: string<!opened> } -> string
+proc shut|zig {
+    _ = conn;
+    return "closed";
+}
+
 std/runtime:register(scope: "sandbox") {
     read(1)
     write(1)
+    open(1)
+    poke(1)
+    shut(1)
 }
 
 tor turn { br: *std/bridge:Bridge<session>, source: string }
@@ -45,10 +67,14 @@ turn = std/io:print.ln("  agent> {{ source:s }}")
 |> turn(br: a, source: "read(path: \"hello.txt\") | ok t |> write(path: \"backup.txt\", text: t)")
 |> turn(br: a, source: "tor backup { src: string, dst: string }\nbackup = read(path: src) | ok t |> write(path: dst, text: t)")
 |> turn(br: a, source: "backup(src: \"hello.txt\", dst: \"again.txt\")")
+|> turn(br: a, source: "open(path: \"hello.txt\")")
+|> turn(br: a, source: "poke(conn: \"conn_1\")")
 |> turn(br: a, source: "custody()")
+|> turn(br: a, source: "shut(conn: \"conn_1\")")
 |> std/bridge:close(br: a)
 |> std/bridge:create(id: "b", scope: "sandbox", introspection: true, world: "tests/regression/400_RUNTIME_FEATURES/440_RESOURCE_BRIDGE/440_043_two_sessions_one_world/world"): b
 |> turn(br: b, source: "vocabulary()")
+|> turn(br: b, source: "poke(conn: \"conn_1\")")
 |> turn(br: b, source: "custody()")
 |> turn(br: b, source: "backup(src: \"hello.txt\", dst: \"b-copy.txt\")")
 |> turn(br: b, source: "format-disk()")

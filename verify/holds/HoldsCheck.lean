@@ -17,6 +17,7 @@ Vocabulary — one event per line, tab-separated, fields in this order:
     session-open    t=<ms>  session=<id>
     session-closed  t=<ms>  session=<id>
     mint    t=<ms>  session=<id>  handle=<h>  verb=<creating-tor>  type=<T>  subject=<args>
+    use     t=<ms>  session=<id>  handle=<h>  verb=<exercising-tor>
     release t=<ms>  session=<id>  handle=<h>  by=<discharge-tor>
 
 Ledger rules, per session span:
@@ -25,6 +26,11 @@ Ledger rules, per session span:
                       process restart reusing an id is a new span)
     mint              span open; handle not already live (double-mint is
                       refused — `findByHandleId` could never name both)
+    use               span open; handle live — a borrow only exercises,
+                      it does not move custody (the writer emits it where
+                      `assertHandlesHeld` admits the claim, so a `use`
+                      line on a dead handle means enforcement regressed,
+                      not that a borrow slipped through)
     release           span open; handle live (never-minted and
                       already-released are different named failures)
     session-closed    span open and EMPTY — `close` runs `dischargeAll`
@@ -35,11 +41,10 @@ Ledger rules, per session span:
                       are both `malformed`, distinct codes: a faithful
                       record of an unsettled hold is still unsettled
 
-Any other kind — including a `use` edge over declared borrow args, which
-the runtime does not emit yet — is out of vocabulary and refused. A
-dropped mint+release PAIR is the known channel limit: balance cannot see
-what was never written, exactly as the compile-time ledger cannot see an
-edge the checker never walked.
+Any other kind is out of vocabulary and refused. A dropped mint+release
+PAIR is the known channel limit: balance cannot see what was never
+written, exactly as the compile-time ledger cannot see an edge the
+checker never walked.
 
 Role A: `heldSpec` is an independent reference scan — the most recent
 event touching `(s,h)` decides held-ness, span boundaries erase — and the
@@ -47,7 +52,8 @@ simulation theorem shows the ledger's `live` sets agree with it at every
 accepted prefix. `heldSpec_true` extracts the pairing: held means a mint
 with no intervening settle. `clean_sound` is the deliverable statement:
 an empty violation list certifies that nothing remains held anywhere and
-every release was backed by a live mint at its position.
+every release — and every use — was backed by a live mint at its
+position.
 
 Run (Role B):  lean --run HoldsCheck.lean <holds.log>   — verdict must be clean
 -/
@@ -57,10 +63,10 @@ namespace Koru.HoldsCheck
 /-! ## Events -/
 
 inductive EvKind where
-  | sessionOpen | sessionClosed | mint | release
+  | sessionOpen | sessionClosed | mint | use | release
 deriving DecidableEq, Repr
 
-/-- One parsed custody event. `handle` is set only on `mint`/`release`. -/
+/-- One parsed custody event. `handle` is set only on `mint`/`use`/`release`. -/
 structure Ev where
   kind : EvKind
   session : String
@@ -103,6 +109,10 @@ def parseLine (lineno : Nat) (line : String) : Option Ev :=
     match fieldTs tTok, fieldVal sTok "session" with
     | some _, some s => some ⟨.sessionClosed, s, "", lineno⟩
     | _, _ => none
+  | "use" :: [tTok, sTok, hTok, vTok] =>
+    match fieldTs tTok, fieldVal sTok "session", fieldVal hTok "handle", fieldVal vTok "verb" with
+    | some _, some s, some h, some _ => some ⟨.use, s, h, lineno⟩
+    | _, _, _, _ => none
   | "release" :: [tTok, sTok, hTok, bTok] =>
     match fieldTs tTok, fieldVal sTok "session", fieldVal hTok "handle", fieldVal bTok "by" with
     | some _, some s, some h, some _ => some ⟨.release, s, h, lineno⟩
@@ -180,6 +190,21 @@ def step (spans : List Span) (e : Ev) : Option String × List Span :=
         (some s!"double-mint: '{e.handle}' in '{e.session}' (line {e.line})", spans)
       else (none, putSpan spans ⟨sp.session, sp.open_, e.handle :: sp.live,
                                  sp.dead.erase e.handle⟩)
+  | .use =>
+    match findSpan spans e.session with
+    | none =>
+      (some s!"use-outside-session: '{e.handle}' in '{e.session}' (line {e.line})", spans)
+    | some sp =>
+      if !sp.open_ then
+        (some s!"use-outside-session: '{e.handle}' in '{e.session}' (line {e.line})", spans)
+      else if e.handle ∈ sp.live then
+        -- a borrow exercises; it does not mint, move, or settle — the
+        -- ledger is untouched and the span's touched-order is unchanged
+        (none, spans)
+      else if e.handle ∈ sp.dead then
+        (some s!"use-of-released: '{e.handle}' in '{e.session}' (line {e.line})", spans)
+      else
+        (some s!"use-of-unminted: '{e.handle}' in '{e.session}' (line {e.line})", spans)
   | .release =>
     match findSpan spans e.session with
     | none =>
@@ -437,6 +462,14 @@ theorem touches_handle (e : Ev) (s h : String) (hs : e.session = s)
   | inl hk => rw [hk]; simp [hs, hh]
   | inr hk => rw [hk]; simp [hs, hh]
 
+/-- A `use` writes no custody: it is neither a span boundary nor a
+    mint/release touch, so `touchesOrResets` is false whatever `(s,h)` —
+    held-ness survives an exercise unchanged, by definition. -/
+theorem touches_use (e : Ev) (s h : String) (hk : e.kind = .use) :
+    touchesOrResets e s h = false := by
+  unfold touchesOrResets
+  rw [hk]; simp
+
 theorem not_touches_handle (e : Ev) (s h : String) (hs : e.session = s)
     (hh : e.handle ≠ h) (hk : e.kind = .mint ∨ e.kind = .release) :
     touchesOrResets e s h = false := by
@@ -576,6 +609,27 @@ theorem step_inv (e : Ev) (spans spans' : List Span)
             · have hne : sess ≠ s := fun hh => hss (beq_iff_eq.mpr (hsp.trans hh).symm)
               rw [if_neg hss, touches_of_session_ne _ s h hne]
               exact hinv s h
+    | use =>
+      simp only [step] at hs
+      split at hs
+      · rename_i hfs; simp at hs  -- no span: refused
+      · rename_i sp hfs
+        split at hs
+        · rename_i hop; simp at hs  -- closed span: refused
+        · rename_i hop
+          split at hs
+          · rename_i hmem
+            -- accepted: the state is returned unchanged — custody did
+            -- not move, so the invariant carries over verbatim
+            rw [Prod.mk.injEq] at hs
+            obtain ⟨_, hsub⟩ := hs
+            subst hsub
+            have ht : ¬(touchesOrResets ⟨.use, sess, hdl, ln⟩ s h = true) := by
+              rw [touches_use _ _ _ rfl]; simp
+            rw [if_neg ht]
+            exact hinv s h
+          · -- dead → use-of-released, else use-of-unminted — refused
+            split at hs <;> · rename_i hmem hdead; simp at hs
     | release =>
       simp only [step] at hs
       split at hs
@@ -656,16 +710,45 @@ theorem step_release_holds (spans : List Span) (e : Ev) (spans' : List Span)
         simp [hmem]
       · split at hs <;> · rename_i hmem hdead; simp at hs
 
+/-- An accepted `use` step says the handle was live in its span —
+    the ledger side of "every exercise was backed by a hold". -/
+theorem step_use_holds (spans : List Span) (e : Ev) (spans' : List Span)
+    (hs : step spans e = (none, spans')) (hk : e.kind = .use) :
+    liveHolds spans e.session e.handle = true := by
+  simp only [step] at hs
+  rw [hk] at hs
+  dsimp only at hs
+  split at hs
+  · rename_i hfs; simp at hs
+  · rename_i sp hfs
+    split at hs
+    · rename_i hop; simp at hs
+    · rename_i hop
+      split at hs
+      · rename_i hmem
+        unfold liveHolds
+        rw [hfs]
+        show (sp.open_ && sp.live.contains e.handle) = true
+        have hop' : sp.open_ = true := by
+          cases ho : sp.open_ with
+          | true => rfl
+          | false => simp [ho] at hop
+        rw [hop', List.contains_eq_mem]
+        simp [hmem]
+      · split at hs <;> · rename_i hmem hdead; simp at hs
+
 /-! ## Lifting to a run -/
 
 /-- Strict replay preserves the invariant and makes every accepted
-    release a held one. `pre` carries the already-consumed prefix so the
-    induction generalizes over position. -/
+    release — and every accepted exercise — a held one. `pre` carries
+    the already-consumed prefix so the induction generalizes over
+    position. -/
 theorem replay_all : ∀ (evs : List Ev) (st st' : List Span) (pre : List Ev),
     replay evs st = .ok st' →
     (∀ s h, liveHolds st s h = heldSpec pre s h) →
     (∀ s h, liveHolds st' s h = heldSpec (pre ++ evs) s h) ∧
-    (∀ past e' future, evs = past ++ e' :: future → e'.kind = .release →
+    (∀ past e' future, evs = past ++ e' :: future →
+       e'.kind = .release ∨ e'.kind = .use →
        heldSpec (pre ++ past) e'.session e'.handle = true) := by
   intro evs
   induction evs with
@@ -697,8 +780,10 @@ theorem replay_all : ∀ (evs : List Ev) (st st' : List Span) (pre : List Ev),
         | nil =>
           simp at hsplit
           obtain ⟨rfl, rfl⟩ := hsplit
-          have hheld : liveHolds st e.session e.handle = true :=
-            step_release_holds st e st1 hstep hk
+          have hheld : liveHolds st e.session e.handle = true := by
+            cases hk with
+            | inl hr => exact step_release_holds st e st1 hstep hr
+            | inr hu => exact step_use_holds st e st1 hstep hu
           rw [hinv e.session e.handle] at hheld
           simpa using hheld
         | cons p past' =>
@@ -708,11 +793,12 @@ theorem replay_all : ∀ (evs : List Ev) (st st' : List Span) (pre : List Ev),
           rwa [List.append_assoc, List.singleton_append] at this
 
 /-- A clean run from the empty ledger: `liveHolds` tracks `heldSpec`
-    throughout, and every release had a live hold behind it. -/
+    throughout, and every release or exercise had a live hold behind it. -/
 theorem replay_nil_sound (evs : List Ev) (st' : List Span)
     (hok : replay evs [] = .ok st') :
     (∀ s h, liveHolds st' s h = heldSpec evs s h) ∧
-    (∀ past e' future, evs = past ++ e' :: future → e'.kind = .release →
+    (∀ past e' future, evs = past ++ e' :: future →
+       e'.kind = .release ∨ e'.kind = .use →
        heldSpec past e'.session e'.handle = true) := by
   have hinv0 : ∀ s h, liveHolds [] s h = heldSpec [] s h := fun s h => rfl
   obtain ⟨hend, hrel⟩ := replay_all evs [] st' [] hok hinv0
@@ -851,14 +937,16 @@ theorem spanCheck_nil (spans : List Span) (h : spanCheck spans = []) :
     rfl
 
 /-- The headline theorem: `checkLog` empty certifies a lawful ledger —
-    nothing held anywhere at end of file, and every release was backed by
-    a live mint at its position (via `replay_nil_sound`), which
-    `heldSpec_true` upgrades to an earlier mint of the same
-    `(session, handle)` with no settling event between them. -/
+    nothing held anywhere at end of file, and every release and every
+    use was backed by a live mint at its position (via
+    `replay_nil_sound`), which `heldSpec_true` upgrades to an earlier
+    mint of the same `(session, handle)` with no settling event between
+    them. -/
 theorem clean_sound (lines : List String) (hc : checkLog lines = [])
     (evs : List Ev) (hpar : parseLines 1 lines = ([], evs)) :
     (∀ s h, heldSpec evs s h = false) ∧
-    (∀ past e future, evs = past ++ e :: future → e.kind = .release →
+    (∀ past e future, evs = past ++ e :: future →
+       e.kind = .release ∨ e.kind = .use →
        heldSpec past e.session e.handle = true) := by
   simp only [checkLog] at hc
   rw [hpar] at hc
@@ -954,6 +1042,47 @@ theorem forged_unreleased_at_close :
       "session-closed\tt=3\tsession=a"] =
       ["unreleased-at-close: 'a' closed holding [h1] (line 3)"] := by
   native_decide
+
+/-- A borrow exercises without settling: two `use` lines between mint and
+    release leave the ledger clean. -/
+theorem golden_use :
+    checkLog [
+      "session-open\tt=1\tsession=a",
+      "mint\tt=2\tsession=a\thandle=conn_1\tverb=open\ttype=Conn\tsubject=path=\"f\"",
+      "use\tt=3\tsession=a\thandle=conn_1\tverb=poke",
+      "use\tt=4\tsession=a\thandle=conn_1\tverb=poke",
+      "release\tt=5\tsession=a\thandle=conn_1\tby=close",
+      "session-closed\tt=6\tsession=a"] = [] := by native_decide
+
+/-- A use-after-release is the third leg of obligation safety: the
+    `dead` set names it `use-of-released`, not `use-of-unminted`. -/
+theorem forged_use_of_released :
+    checkLog [
+      "session-open\tt=1\tsession=a",
+      "mint\tt=2\tsession=a\thandle=h1\tverb=open\ttype=string\tsubject=x=1",
+      "release\tt=3\tsession=a\thandle=h1\tby=close",
+      "use\tt=4\tsession=a\thandle=h1\tverb=poke",
+      "session-closed\tt=5\tsession=a"] =
+      ["use-of-released: 'h1' in 'a' (line 4)"] := by native_decide
+
+/-- A use naming a handle that was never minted in that session. -/
+theorem forged_use_of_unminted :
+    checkLog [
+      "session-open\tt=1\tsession=a",
+      "use\tt=2\tsession=a\thandle=h9\tverb=poke",
+      "session-closed\tt=3\tsession=a"] =
+      ["use-of-unminted: 'h9' in 'a' (line 2)"] := by native_decide
+
+/-- A use inside no span at all — and one after the span closed — is
+    `use-outside-session`, the same family mint/release name. -/
+theorem forged_use_outside_session :
+    checkLog [
+      "use\tt=1\tsession=a\thandle=h1\tverb=poke",
+      "session-open\tt=2\tsession=a",
+      "session-closed\tt=3\tsession=a",
+      "use\tt=4\tsession=a\thandle=h1\tverb=poke"] =
+      ["use-outside-session: 'h1' in 'a' (line 1)",
+       "use-outside-session: 'h1' in 'a' (line 4)"] := by native_decide
 
 /-- Process died holding: open span, live handle, no close. -/
 theorem forged_died_holding :
