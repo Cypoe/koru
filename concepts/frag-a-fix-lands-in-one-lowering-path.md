@@ -673,3 +673,43 @@ What this adds that the earlier instances did not have:
   only at fold-arm depth 0", which neither path currently states — one side
   over-suppresses nothing (correct by accident), the other under-scopes the
   label (the pin).
+
+## Fourth instance — the shared predicate was the divergent copy (2026-10-18)
+
+Every text rewriter that maps `<store>.<field>` onto the cell path asks the
+same question before rewriting a name: is the character before it a dot?
+`x.world` must not become `x.__koru_store_world` — the member path is not
+the store. That question was inlined at seven sites (store.kz, srefscan,
+insert, ixrefs, gate, qrewrite, new's identRefs) as the literal expression
+`(i == 0 or text[i - 1] != '.')` — and every copy misread `0..world.dd`
+the same way: `..` is the range operator, `world` is a fresh operand, and
+a dot immediately before the name is not always a member dot.
+
+The misread was discovered through its symptom — `for(0..world.dd)` emits
+`world` undeclared while `if (world.dd > 0)` lowers fine — and presented
+as a missing walk position, the pattern this whole file documents ("every
+gap this walk has ever had was an arm that was not here"). It was not a
+missing arm. It was the guard itself, identically wrong in every copy.
+
+What this instance adds:
+
+- **The copies were a predicate, not a lowering.** The file's earlier
+  tells count divergent *behaviors* — cost, emission, semantics. This one
+  is smaller: a five-token boundary test pasted seven times, and the paste
+  carried the misread to every site that pasted it. The bug did not drift
+  BETWEEN copies — it was born in all of them at once, because "not
+  preceded by a dot" reads like it means "not a member" and doesn't.
+- **The fix IS the file's own prescription.** `precededByMemberDot` in
+  ast.zig, next to `identBoundaryBefore` — one predicate, every call site
+  changed to call it. Odd dot counts are member dots; exactly-two is the
+  range operand (`x...name` = `x .. .name` re-arms the refusal — a
+  leading-dot literal). A rule subtle enough to get wrong seven times is
+  subtle enough to write once.
+- **`identBoundaryBefore`'s comment predicted it.** "every text rewriter
+  in the compiler needs it and there are a dozen private helpers to get
+  it wrong in a dozen ways" — written about the boundary half, while the
+  member-dot half sat beside it in exactly the shape it described.
+
+Pinned at 690_371: `for(0..world.dd)` prints three times; the member-dot
+refusals (row-binding shadow, cross-store index, all covered positions)
+verified green on the 10-pin slice.

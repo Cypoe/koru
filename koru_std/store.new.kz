@@ -5270,7 +5270,7 @@
             var out = std.ArrayList(u8).initCapacity(alloc, text.len + 32) catch unreachable;
             var i: usize = 0;
             while (i < text.len) {
-                const prev_ok = ast.identBoundaryBefore(text, i) and (i == 0 or text[i - 1] != '.');
+                const prev_ok = ast.identBoundaryBefore(text, i) and !ast.precededByMemberDot(text, i);
                 const next_i = i + name.len;
                 const next_ok = next_i >= text.len or !isIdent(text[next_i]);
                 if (prev_ok and next_ok and next_i <= text.len and std.mem.startsWith(u8, text[i..], name)) {

@@ -706,7 +706,7 @@ fn storeRefsText(alloc: std.mem.Allocator, text: []const u8, name: []const u8, p
     var i: usize = 0;
     while (i < text.len) {
         const at_boundary = ast_find.identBoundaryBefore(text, i);
-        const starts = at_boundary and (i == 0 or text[i - 1] != '.') and std.mem.startsWith(u8, text[i..], name);
+        const starts = at_boundary and !ast_find.precededByMemberDot(text, i) and std.mem.startsWith(u8, text[i..], name);
         const after = i + name.len;
         if (expr_ctx[i] and starts and after < text.len and text[after] == '.') {
             out.appendSlice(alloc, prefix) catch unreachable;
