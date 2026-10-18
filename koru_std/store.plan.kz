@@ -220,7 +220,7 @@ const SPlan = struct {
             return std.fmt.allocPrint(alloc, "refused: {s}", .{m}) catch unreachable;
         }
         const guard_z: ?[]const u8 = if (sc.condition) |c|
-            SRewrite.refs(alloc, guard_is orelse c, row_bind, s.name, col_names, srf_prefix, srow_name, .input, used_cols, &unknown_field, is_view)
+            SRewrite.refs(alloc, guard_is orelse c, row_bind, s.name, col_names, program, srf_prefix, srow_name, .input, used_cols, &unknown_field, is_view)
         else
             null;
         if (unknown_field) |uf| {

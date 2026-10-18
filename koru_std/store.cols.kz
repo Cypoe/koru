@@ -260,7 +260,7 @@ fn fireRow(
 ) bool {
     for (proj_names, proj_cols) |pn, ci| {
         const esc_cn = codegen_utils_store.escapeZigIdentifier(alloc, col_names[ci]) catch col_names[ci];
-        const read = cellRead(alloc, host_target, prog, cellq, store_name, col_names[ci], esc_cn);
+        const read = cellRead(alloc, host_target, prog, cellq, store_name, col_names[ci], esc_cn, "__koru_si");
         loop.appendSlice(alloc, codegen_utils_store.HostShape.constBind(alloc, host_target, pn, read)) catch unreachable;
     }
     if (scan_guard) |cond| {

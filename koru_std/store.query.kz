@@ -283,9 +283,9 @@
     // collectRefs must see the guard's ambient binds (capture + use-check).
     if (sc.condition != null and body_clone.condition != null and std.mem.eql(u8, sc.condition.?, body_clone.condition.?)) {
         const gused = blk: { const g = allocator.alloc(bool, col_names.len) catch unreachable; @memset(g, false); break :blk g; };
-        @constCast(&body_clone).condition = SRewrite.refs(allocator, body_clone.condition.?, row_bind, store_name, col_names, srf_prefix, srow_name, .input, gused, &unknown_field, is_view);
+        @constCast(&body_clone).condition = SRewrite.refs(allocator, body_clone.condition.?, row_bind, store_name, col_names, program, srf_prefix, srow_name, .input, gused, &unknown_field, is_view);
     }
-    SRewrite.walkCont(allocator, &body_clone, row_bind, store_name, col_names, srf_prefix, srow_name, used_cols, &unknown_field, is_view);
+    SRewrite.walkCont(allocator, &body_clone, row_bind, store_name, col_names, program, srf_prefix, srow_name, used_cols, &unknown_field, is_view);
     const body_cols = allocator.dupe(bool, used_cols) catch unreachable;
 
     // Read AFTER the walk: a replaced `inline_body` is a slice a pre-walk copy never sees (690_312).
@@ -301,7 +301,7 @@
     const guard_is = if (sc.condition) |c| rewriteIsGuard(allocator, program, "query", store_name, row_bind, c, &is_refusal) else null;
     if (is_refusal) |m| return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "{s}", .{m}) };
     const guard_z: ?[]const u8 = if (sc.condition) |c|
-        SRewrite.refs(allocator, guard_is orelse c, row_bind, store_name, col_names, srf_prefix, srow_name, .input, used_cols, &unknown_field, is_view)
+        SRewrite.refs(allocator, guard_is orelse c, row_bind, store_name, col_names, program, srf_prefix, srow_name, .input, used_cols, &unknown_field, is_view)
     else
         null;
 
@@ -658,7 +658,7 @@
                     }
                     if (found_col) {
                         const esc_cn = codegen_utils_store.escapeZigIdentifier(allocator, cn) catch cn;
-                        const read = cellRead(allocator, host_target, program, mem_cellq, mem_name, cn, esc_cn);
+                        const read = cellRead(allocator, host_target, program, mem_cellq, mem_name, cn, esc_cn, "__koru_si");
                         loop.appendSlice(allocator, HS.constBind(allocator, host_target, pn, read)) catch unreachable;
                     } else {
                         const def_val = zeroFillForType(col_types[ci]) orelse "0";
