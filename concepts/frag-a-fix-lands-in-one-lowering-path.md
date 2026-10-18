@@ -897,3 +897,35 @@ installation verb beside it.
   the boundary it broke (a MUST_ERROR two directories over) live in the same
   scan's blast radius. A "focused slice" sized to the feature under test is
   sized to miss exactly this failure class.
+
+## And the capture oracle read the AST the transform had already eaten (2026-10-18)
+
+The `Handlers_*` capture set — the names a lifted member fn aliases from its
+enclosing scope — was computed by walking the arm's continuation tree. But a
+store site inside the arm gets its body consumed by the site transform and
+replaced with an `is_transformed_subtree` graft; the ambient names that graft
+references live only in the GENERATED call args (`.{ .w = w, .h = h }`) the
+sweepbody invocation emits. `spec_sel.k`'s `| win w` binding was spelled
+nowhere else — `h` survived via a surface-level `layout(cl: h)`, `w` did
+not — so the Caps factory minted `T_h` and the emitted member fn died on
+`use of undeclared identifier w`. Same family, same tell: the pass computing
+a boundary's inputs asked a representation that had already lost them.
+
+- **When the oracle and the boundary disagree about WHAT is the subject,
+  the boundary wins.** The capture set is not "names the authored AST
+  references" — it is "names the emitted code references that are live at
+  the call site." collectEmittedCaptures now emits each arm block into a
+  throwaway buffer (deferred decls routed to a scratch emitter, dropped)
+  and scans the text; the AST keeps only the half it still owns — names
+  bound INSIDE the arm, so a rebind `const w = …` in the arm itself keeps
+  `w` out of its own prelude.
+- **A fix to the oracle moves the whole interface.** The scan pass must
+  see the same scope shape the real pass sees — same shared-param push,
+  same eligibility filter — or it collects captures under a different
+  contract and the two passes mint different sets (400_209's `r` tripling
+  was a `seen` key dangling into a freed scan buffer, not a logic error —
+  the arena was fine, the hash key was not).
+- Pinned at 230_010: `| done w` referenced only inside a `std/store:query`
+  arm body still reaches the member-fn handler; three `! tick` arms force
+  the lowered path; un-falsified by a stash revert (backend-exec red on
+  the old collector, green on the new).

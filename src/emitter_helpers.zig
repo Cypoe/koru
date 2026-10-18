@@ -8097,10 +8097,45 @@ fn isCaptureEligible(ctx: *EmissionContext, name: []const u8, event_decl: *const
     return false;
 }
 
-fn collectHandlerCaptures(
+/// The shared payload parameter spelling for a multi-cont branch group:
+/// the common binding when every cont agrees (and isn't `_`), else a
+/// stable internal name conts alias to. `branch.name` itself is never
+/// picked — it would shadow the synthesized `fn <branch>` member.
+fn pickSharedParam(group: []const *const ast.Continuation, branch: *const ast.Branch) []const u8 {
+    const first_binding = if (group[0].binding) |b| b else branch.name;
+    var all_same = !std.mem.eql(u8, first_binding, "_");
+    if (all_same) {
+        for (group[1..]) |cont| {
+            const b = if (cont.binding) |bb| bb else branch.name;
+            if (!std.mem.eql(u8, b, first_binding)) {
+                all_same = false;
+                break;
+            }
+        }
+    }
+    const candidate = if (all_same) first_binding else "__koru_h_arg";
+    return if (std.mem.eql(u8, candidate, branch.name)) "__koru_h_arg" else candidate;
+}
+
+/// The capture set is what an arm EMITS that names a binding live at the
+/// call site — computed by emitting each cont's block into a throwaway
+/// buffer and scanning the resulting text. An AST walk cannot see these
+/// refs: transform grafts (`is_transformed_subtree`) consume the user
+/// bodies into generated units, and only the emitted call args still
+/// spell the ambient names (`__store_sweepbody_*(.{ .w = w, .h = h, … })`
+/// inside a `frames` arm — invisible to collectArmScope; spec_sel caught
+/// `h` through a surface-level `layout(cl: h)` but dropped `w` entirely).
+///
+/// Deferred decls route to a scratch emitter and are dropped — the real
+/// emission below re-runs emitArmContBlock with the final captures, so
+/// every decl lands through `emitter.deferred` exactly once.
+fn collectEmittedCaptures(
     ctx: *EmissionContext,
-    effect_conts: []const ast.Continuation,
+    emitter: *CodeEmitter,
+    groups: *std.StringArrayHashMap(std.ArrayList(*const ast.Continuation)),
+    group_order: []const []const u8,
     event_decl: *const ast.EventDecl,
+    handlers_name: []const u8,
 ) !HandlerCaptures {
     var caps: HandlerCaptures = .{
         .per_cont = std.AutoHashMap(*const ast.Continuation, []const []const u8).init(ctx.allocator),
@@ -8108,30 +8143,272 @@ fn collectHandlerCaptures(
     errdefer caps.deinit(ctx.allocator);
     var seen = std.StringHashMap(void).init(ctx.allocator);
     defer seen.deinit();
-    for (effect_conts) |*cont| {
-        if (cont.is_catchall or cont.is_transformed_subtree) continue;
-        var scope = ArmScope.init(ctx.allocator);
-        defer scope.deinit();
-        try collectArmScope(cont, &scope, ctx.allocator);
-        var list: std.ArrayList([]const u8) = .empty;
-        var it = scope.refs.keyIterator();
-        while (it.next()) |name| {
-            const n = name.*;
-            if (scope.binds.contains(n)) continue;
-            if (!isCaptureEligible(ctx, n, event_decl)) continue;
-            try list.append(ctx.allocator, n);
-            if (!seen.contains(n)) {
-                try seen.put(n, {});
-                try caps.names.append(ctx.allocator, n);
+    var scan_deferred = try CodeEmitter.initGrowable(ctx.allocator, 16 * 1024);
+    defer ctx.allocator.free(scan_deferred.buffer);
+
+    for (group_order) |branch_name| {
+        const group = groups.get(branch_name).?;
+        const branch: *const ast.Branch = for (event_decl.branches) |*b| {
+            if (std.mem.eql(u8, b.name, branch_name)) break b;
+        } else continue;
+
+        // Mirror the real pass exactly — same param spelling, same scope
+        // push — so a nested Handlers site inside a body scans under the
+        // eligibility it will see when emitted for real.
+        const shared_param_name = pickSharedParam(group.items, branch);
+        const is_void_payload = branch.payload.fields.len == 0 and !branch.payload.is_wildcard;
+        const prev_scope_len = ctx.zig_scope_bindings.items.len;
+        defer while (ctx.zig_scope_bindings.items.len > prev_scope_len) {
+            const popped = ctx.zig_scope_bindings.pop() orelse break;
+            ctx.allocator.free(popped);
+        };
+        if (!is_void_payload) {
+            try ctx.zig_scope_bindings.append(ctx.allocator, try ctx.allocator.dupe(u8, shared_param_name));
+        }
+
+        var any_guarded = false;
+        for (group.items) |gc| {
+            if (gc.condition != null) {
+                any_guarded = true;
+                break;
             }
         }
-        if (list.items.len > 0) {
-            try caps.per_cont.put(cont, try list.toOwnedSlice(ctx.allocator));
-        } else {
-            list.deinit(ctx.allocator);
+        const multicast = !any_guarded and branch.resume_type == null and branch.resume_arms == null;
+
+        for (group.items) |cont| {
+            const guarded = cont.condition != null;
+            var body_buf = try CodeEmitter.initGrowable(ctx.allocator, 8 * 1024);
+            defer ctx.allocator.free(body_buf.buffer);
+            if (emitter.deferred != null) body_buf.deferred = &scan_deferred;
+            try emitArmContBlock(&body_buf, ctx, cont, branch, shared_param_name, handlers_name);
+
+            var refs = std.StringHashMap(void).init(ctx.allocator);
+            defer refs.deinit();
+            try scanArmRefs(body_buf.buffer[0..body_buf.pos], &refs);
+
+            // The cont's own bound names come from the AST: an arm that
+            // rebinds an outer name emits `const w = …` itself, and a
+            // `const w = __koru_cap_w` prelude would collide with it.
+            var scope = ArmScope.init(ctx.allocator);
+            defer scope.deinit();
+            try collectArmScope(cont, &scope, ctx.allocator);
+
+            var list: std.ArrayList([]const u8) = .empty;
+            var it = refs.keyIterator();
+            while (it.next()) |name| {
+                const n = name.*;
+                if (scope.binds.contains(n)) continue;
+                if (std.mem.eql(u8, n, shared_param_name)) continue;
+                if (!isCaptureEligible(ctx, n, event_decl)) continue;
+                // `n` slices into body_buf — dupe before the buffer frees.
+                const owned = try ctx.allocator.dupe(u8, n);
+                try list.append(ctx.allocator, owned);
+                if (!seen.contains(n)) {
+                    try seen.put(owned, {});
+                    try caps.names.append(ctx.allocator, owned);
+                }
+            }
+            if (list.items.len > 0) {
+                try caps.per_cont.put(cont, try list.toOwnedSlice(ctx.allocator));
+            } else {
+                list.deinit(ctx.allocator);
+            }
+            if (!guarded and !multicast) break;
         }
     }
     return caps;
+}
+
+/// Everything inside one cont's `{ }` block after the capture prelude:
+/// payload aliases, the `if (guard)` wrapper, the resume dispatch, and
+/// the arm body itself. Emitted twice per cont — once into a throwaway
+/// buffer by collectEmittedCaptures (the text is the capture oracle:
+/// transform grafts reference ambient names the AST no longer spells),
+/// once into the real output — so one definition keeps the scan and the
+/// shipped code identical by construction.
+fn emitArmContBlock(
+    out: *CodeEmitter,
+    ctx: *EmissionContext,
+    cont: *const ast.Continuation,
+    branch: *const ast.Branch,
+    shared_param_name: []const u8,
+    handlers_name: []const u8,
+) anyerror!void {
+    const guarded = cont.condition != null;
+
+    // Alias the cont's binding to the shared param ONLY when the
+    // user wrote an actual binding name (not `_`, not omitted).
+    // Omitting the binding means "no name to reference"; aliasing
+    // to `branch.name` would shadow the synthesized fn declaration.
+    const has_named_binding = if (cont.binding) |b|
+        !std.mem.eql(u8, b, "_") and !std.mem.eql(u8, b, shared_param_name)
+    else
+        false;
+    const cont_binding: []const u8 = if (cont.binding) |b| b else branch.name;
+    if (cont.destructure.len > 0) {
+        // Shape-destructure: per-field consts off the shared param.
+        try out.writeIndent();
+        try emitDestructureConsts(out, cont.destructure, shared_param_name);
+        try out.write("\n");
+    } else if (has_named_binding) {
+        try out.writeIndent();
+        try out.write("const ");
+        try writeBranchName(out, cont_binding);
+        try out.write(" = ");
+        try writeBranchName(out, shared_param_name);
+        try out.write(";\n");
+        try out.writeIndent();
+        try out.write("_ = &");
+        try writeBranchName(out, cont_binding);
+        try out.write(";\n");
+    }
+
+    if (guarded) {
+        try out.writeIndent();
+        try out.write("if (");
+        try out.write(lowerExprZig(out, ctx, cont.condition.?));
+        try out.write(") {\n");
+        out.indent();
+    }
+
+    // Body emission: prefer the bare-expression resume-value form
+    // when the branch declares a resume type and the body is a
+    // single expression (see `project_effect_resume_value_syntax`).
+    var resume_expr_owned: ?[]const u8 = null;
+    defer if (resume_expr_owned) |s| ctx.allocator.free(s);
+
+    const resume_expr: ?[]const u8 = blk: {
+        // Multi-arm resume sum: `=> halved n / 2` constructs the chosen
+        // arm as a variant of the synthesized resume union; a payload-less
+        // arm (`=> timeout`) is its bare tag.
+        if (branch.resume_arms != null) {
+            if (cont.continuations.len != 0) break :blk null;
+            const node = cont.node orelse break :blk null;
+            if (node != .branch_constructor) break :blk null;
+            const bc = node.branch_constructor;
+            var arm_buf: [128]u8 = undefined;
+            const lowered_arm = lowerIdent(&arm_buf, bc.branch_name);
+            if (bc.fields.len != 0) {
+                // Record arm: `=> result { halved: X, quadrupled: Y }`
+                // constructs the variant's struct payload.
+                var built = try std.ArrayList(u8).initCapacity(ctx.allocator, 64);
+                errdefer built.deinit(ctx.allocator);
+                const w = built.writer(ctx.allocator);
+                try w.print(".{{ .{s} = .{{", .{lowered_arm});
+                for (bc.fields, 0..) |field, fi| {
+                    if (fi > 0) try w.writeAll(",");
+                    var fld_buf: [128]u8 = undefined;
+                    try w.print(" .{s} = ({s})", .{
+                        lowerIdent(&fld_buf, field.name),
+                        lowerExprZig(out, ctx, field.expression_str orelse field.type),
+                    });
+                }
+                try w.writeAll(" } }");
+                resume_expr_owned = try built.toOwnedSlice(ctx.allocator);
+            } else if (bc.plain_value) |pv| {
+                resume_expr_owned = try std.fmt.allocPrint(
+                    ctx.allocator,
+                    ".{{ .{s} = ({s}) }}",
+                    .{ lowered_arm, lowerExprZig(out, ctx, pv) },
+                );
+            } else {
+                resume_expr_owned = try std.fmt.allocPrint(
+                    ctx.allocator,
+                    ".{s}",
+                    .{lowered_arm},
+                );
+            }
+            break :blk resume_expr_owned.?;
+        }
+        if (branch.resume_type == null) break :blk null;
+        if (cont.continuations.len != 0) break :blk null;
+        const node = cont.node orelse break :blk null;
+        switch (node) {
+            .expression => |code| break :blk lowerExprZig(out, ctx, code),
+            .branch_constructor => |bc| {
+                if (bc.fields.len != 0) break :blk null;
+                if (bc.plain_value) |pv| {
+                    // A record resume value (`! ask -> { a: 10, b: 20 }`)
+                    // is a Koru struct literal; lower it to Zig
+                    // `.{ .a = 10, .b = 20 }`. A scalar value (`-> 50`)
+                    // passes through with its (empty, for bare-return)
+                    // branch_name prefix.
+                    const trimmed_pv = std.mem.trim(u8, pv, " \t");
+                    if (isKoruStructLiteral(trimmed_pv)) {
+                        var scratch = try CodeEmitter.initGrowable(ctx.allocator, 128);
+                        defer ctx.allocator.free(scratch.buffer);
+                        try emitStructLiteral(&scratch, ctx, trimmed_pv);
+                        resume_expr_owned = try ctx.allocator.dupe(u8, scratch.buffer[0..scratch.pos]);
+                    } else {
+                        resume_expr_owned = try std.fmt.allocPrint(
+                            ctx.allocator,
+                            "{s} {s}",
+                            .{ bc.branch_name, lowerExprZig(out, ctx, pv) },
+                        );
+                    }
+                    break :blk resume_expr_owned.?;
+                }
+                break :blk bc.branch_name;
+            },
+            else => break :blk null,
+        }
+    };
+
+    // `->` produce-is-the-call sugar: the resume value is an event
+    // call (`! step p -> mix(x: p)`). Emit the invocation bound to a
+    // temp, then return it as the resume value.
+    const resume_inv: ?*const ast.Invocation = blk: {
+        if (branch.resume_type == null) break :blk null;
+        if (cont.continuations.len != 0) break :blk null;
+        if (cont.node == null) break :blk null;
+        if (cont.node.? != .invocation) break :blk null;
+        break :blk &cont.node.?.invocation;
+    };
+
+    if (resume_inv) |inv| {
+        try emitInvocation(out, ctx, inv, "__koru_resume");
+        try out.writeIndent();
+        try out.write("return __koru_resume;\n");
+    } else if (resume_expr) |expr| {
+        try out.writeIndent();
+        try out.write("return ");
+        if (!try writeRepackedRecordProduce(out, expr, branch.resume_type)) {
+            try out.write(expr);
+        }
+        try out.write(";\n");
+    } else {
+        // Arm bodies land as `fn`s inside this Handlers_N container —
+        // itself nested in the enclosing flow fn's body — and Zig's
+        // no-shadow rule reaches across that boundary: a fresh
+        // `result_0` here collides with the head call's `result_0`
+        // (230_007, drift.k's `stored` in a `frames` arm). NEST the
+        // namespace under the enclosing prefix like the `c`/`e` tags
+        // above instead of seeding the counter — emitContinuationBody
+        // reads `counter == 0`/`counter-1` as sentinels, so a nonzero
+        // seed would name a stale enclosing-scope variable.
+        const saved_prefix = ctx.result_prefix;
+        var prefix_buf: [128]u8 = undefined;
+        ctx.result_prefix = std.fmt.bufPrint(&prefix_buf, "{s}{s}_", .{ saved_prefix, handlers_name }) catch saved_prefix;
+        defer ctx.result_prefix = saved_prefix;
+        var result_counter: usize = 0;
+        try emitContinuationBody(out, ctx, cont, &result_counter);
+
+        // For guarded void-return conts, emit an explicit `return;`
+        // so subsequent guards in the chain don't fire after a match.
+        // (Resume-typed conts already returned via the `return EXPR`
+        // path above.)
+        if (guarded and branch.resume_type == null) {
+            try out.writeIndent();
+            try out.write("return;\n");
+        }
+    }
+
+    if (guarded) {
+        // Close the `if (cond) {` block.
+        out.dedent();
+        try out.writeIndent();
+        try out.write("}\n");
+    }
 }
 
 pub fn emitHandlersStruct(
@@ -8186,14 +8463,16 @@ pub fn emitHandlersStruct(
         try gop.value_ptr.append(ctx.allocator, cont);
     }
 
-    // Captured bindings: names an arm subtree references but does not
-    // itself bind, intersected with bindings live at this call site. When
-    // any exist, the member fns must emit at MODULE level (an in-function
-    // `const h = ...` prelude collides with the flow fn's own `h` under
-    // Zig's no-shadow rule), so the struct becomes the return type of a
-    // generic `__HandlersCaps_*` factory routed to `emitter.deferred`;
-    // the call site below instantiates it and assigns each container var.
-    var captures = try collectHandlerCaptures(ctx, effect_conts, event_decl);
+    // Captured bindings: names an arm's emitted code references but does
+    // not itself bind, intersected with bindings live at this call site —
+    // collected by emit-scanning, since transform grafts leave no AST to
+    // walk. When any exist, the member fns must emit at MODULE level (an
+    // in-function `const h = ...` prelude collides with the flow fn's own
+    // `h` under Zig's no-shadow rule), so the struct becomes the return
+    // type of a generic `__HandlersCaps_*` factory routed to
+    // `emitter.deferred`; the call site below instantiates it and assigns
+    // each container var.
+    var captures = try collectEmittedCaptures(ctx, emitter, &groups, group_order.items, event_decl, handlers_name);
     defer captures.deinit(ctx.allocator);
     const use_caps = captures.names.items.len > 0 and emitter.deferred != null;
     var fac_buf: CodeEmitter = undefined;
@@ -8260,36 +8539,11 @@ pub fn emitHandlersStruct(
 
         // Pick a parameter name. If all conts in the group share a binding
         // (common case) and that binding isn't `_`, use it directly so the
-        // body code can reference it unchanged. Otherwise fall back to the
-        // branch name as a stable shared parameter, and conts whose binding
-        // differs will alias it.
-        const shared_param_name: []const u8 = blk: {
-            const first = group.items[0];
-            const first_binding = if (first.binding) |b| b else branch.name;
-
-            // Check if all conts share the same binding (and it's not `_`).
-            var all_same = !std.mem.eql(u8, first_binding, "_");
-            if (all_same) {
-                for (group.items[1..]) |cont| {
-                    const b = if (cont.binding) |bb| bb else branch.name;
-                    if (!std.mem.eql(u8, b, first_binding)) {
-                        all_same = false;
-                        break;
-                    }
-                }
-            }
-
-            // When bindings differ (or any cont uses `_`), or when the
-            // shared binding equals the branch name (which would shadow the
-            // synthesized `fn <branch_name>` declaration in Zig), fall back
-            // to a stable internal name. Conts whose binding differs from
-            // this will alias it inside the body.
-            const candidate = if (all_same) first_binding else "__koru_h_arg";
-            break :blk if (std.mem.eql(u8, candidate, branch.name))
-                "__koru_h_arg"
-            else
-                candidate;
-        };
+        // body code can reference it unchanged. Otherwise fall back to a
+        // stable internal name, and conts whose binding differs alias it.
+        // The scan pass above computed captures under the SAME spelling —
+        // both passes must agree or the prelude binds a different name.
+        const shared_param_name = pickSharedParam(group.items, branch);
 
         // Void-payload effects (zero-field branch) emit a no-arg handler so the
         // producer-side `name()` call matches. A `void` param would require the
@@ -8425,179 +8679,7 @@ pub fn emitHandlersStruct(
                 }
             }
 
-            // Alias the cont's binding to the shared param ONLY when the
-            // user wrote an actual binding name (not `_`, not omitted).
-            // Omitting the binding means "no name to reference"; aliasing
-            // to `branch.name` would shadow the synthesized fn declaration.
-            const has_named_binding = if (cont.binding) |b|
-                !std.mem.eql(u8, b, "_") and !std.mem.eql(u8, b, shared_param_name)
-            else
-                false;
-            const cont_binding: []const u8 = if (cont.binding) |b| b else branch.name;
-            if (cont.destructure.len > 0) {
-                // Shape-destructure: per-field consts off the shared param.
-                try out.writeIndent();
-                try emitDestructureConsts(out, cont.destructure, shared_param_name);
-                try out.write("\n");
-            } else if (has_named_binding) {
-                try out.writeIndent();
-                try out.write("const ");
-                try writeBranchName(out, cont_binding);
-                try out.write(" = ");
-                try writeBranchName(out, shared_param_name);
-                try out.write(";\n");
-                try out.writeIndent();
-                try out.write("_ = &");
-                try writeBranchName(out, cont_binding);
-                try out.write(";\n");
-            }
-
-            if (guarded) {
-                try out.writeIndent();
-                try out.write("if (");
-                try out.write(lowerExprZig(out, ctx, cont.condition.?));
-                try out.write(") {\n");
-                out.indent();
-            }
-
-            // Body emission: prefer the bare-expression resume-value form
-            // when the branch declares a resume type and the body is a
-            // single expression (see `project_effect_resume_value_syntax`).
-            var resume_expr_owned: ?[]const u8 = null;
-            defer if (resume_expr_owned) |s| ctx.allocator.free(s);
-
-            const resume_expr: ?[]const u8 = blk: {
-                // Multi-arm resume sum: `=> halved n / 2` constructs the chosen
-                // arm as a variant of the synthesized resume union; a payload-less
-                // arm (`=> timeout`) is its bare tag.
-                if (branch.resume_arms != null) {
-                    if (cont.continuations.len != 0) break :blk null;
-                    const node = cont.node orelse break :blk null;
-                    if (node != .branch_constructor) break :blk null;
-                    const bc = node.branch_constructor;
-                    var arm_buf: [128]u8 = undefined;
-                    const lowered_arm = lowerIdent(&arm_buf, bc.branch_name);
-                    if (bc.fields.len != 0) {
-                        // Record arm: `=> result { halved: X, quadrupled: Y }`
-                        // constructs the variant's struct payload.
-                        var built = try std.ArrayList(u8).initCapacity(ctx.allocator, 64);
-                        errdefer built.deinit(ctx.allocator);
-                        const w = built.writer(ctx.allocator);
-                        try w.print(".{{ .{s} = .{{", .{lowered_arm});
-                        for (bc.fields, 0..) |field, fi| {
-                            if (fi > 0) try w.writeAll(",");
-                            var fld_buf: [128]u8 = undefined;
-                            try w.print(" .{s} = ({s})", .{
-                                lowerIdent(&fld_buf, field.name),
-                                lowerExprZig(out, ctx, field.expression_str orelse field.type),
-                            });
-                        }
-                        try w.writeAll(" } }");
-                        resume_expr_owned = try built.toOwnedSlice(ctx.allocator);
-                    } else if (bc.plain_value) |pv| {
-                        resume_expr_owned = try std.fmt.allocPrint(
-                            ctx.allocator,
-                            ".{{ .{s} = ({s}) }}",
-                            .{ lowered_arm, lowerExprZig(out, ctx, pv) },
-                        );
-                    } else {
-                        resume_expr_owned = try std.fmt.allocPrint(
-                            ctx.allocator,
-                            ".{s}",
-                            .{lowered_arm},
-                        );
-                    }
-                    break :blk resume_expr_owned.?;
-                }
-                if (branch.resume_type == null) break :blk null;
-                if (cont.continuations.len != 0) break :blk null;
-                const node = cont.node orelse break :blk null;
-                switch (node) {
-                    .expression => |code| break :blk lowerExprZig(out, ctx, code),
-                    .branch_constructor => |bc| {
-                        if (bc.fields.len != 0) break :blk null;
-                        if (bc.plain_value) |pv| {
-                            // A record resume value (`! ask -> { a: 10, b: 20 }`)
-                            // is a Koru struct literal; lower it to Zig
-                            // `.{ .a = 10, .b = 20 }`. A scalar value (`-> 50`)
-                            // passes through with its (empty, for bare-return)
-                            // branch_name prefix.
-                            const trimmed_pv = std.mem.trim(u8, pv, " \t");
-                            if (isKoruStructLiteral(trimmed_pv)) {
-                                var scratch = try CodeEmitter.initGrowable(ctx.allocator, 128);
-                                defer ctx.allocator.free(scratch.buffer);
-                                try emitStructLiteral(&scratch, ctx, trimmed_pv);
-                                resume_expr_owned = try ctx.allocator.dupe(u8, scratch.buffer[0..scratch.pos]);
-                            } else {
-                                resume_expr_owned = try std.fmt.allocPrint(
-                                    ctx.allocator,
-                                    "{s} {s}",
-                                    .{ bc.branch_name, lowerExprZig(out, ctx, pv) },
-                                );
-                            }
-                            break :blk resume_expr_owned.?;
-                        }
-                        break :blk bc.branch_name;
-                    },
-                    else => break :blk null,
-                }
-            };
-
-            // `->` produce-is-the-call sugar: the resume value is an event
-            // call (`! step p -> mix(x: p)`). Emit the invocation bound to a
-            // temp, then return it as the resume value.
-            const resume_inv: ?*const ast.Invocation = blk: {
-                if (branch.resume_type == null) break :blk null;
-                if (cont.continuations.len != 0) break :blk null;
-                if (cont.node == null) break :blk null;
-                if (cont.node.? != .invocation) break :blk null;
-                break :blk &cont.node.?.invocation;
-            };
-
-            if (resume_inv) |inv| {
-                try emitInvocation(out, ctx, inv, "__koru_resume");
-                try out.writeIndent();
-                try out.write("return __koru_resume;\n");
-            } else if (resume_expr) |expr| {
-                try out.writeIndent();
-                try out.write("return ");
-                if (!try writeRepackedRecordProduce(out, expr, branch.resume_type)) {
-                    try out.write(expr);
-                }
-                try out.write(";\n");
-            } else {
-                // Arm bodies land as `fn`s inside this Handlers_N container —
-                // itself nested in the enclosing flow fn's body — and Zig's
-                // no-shadow rule reaches across that boundary: a fresh
-                // `result_0` here collides with the head call's `result_0`
-                // (230_007, drift.k's `stored` in a `frames` arm). NEST the
-                // namespace under the enclosing prefix like the `c`/`e` tags
-                // above instead of seeding the counter — emitContinuationBody
-                // reads `counter == 0`/`counter-1` as sentinels, so a nonzero
-                // seed would name a stale enclosing-scope variable.
-                const saved_prefix = ctx.result_prefix;
-                var prefix_buf: [128]u8 = undefined;
-                ctx.result_prefix = std.fmt.bufPrint(&prefix_buf, "{s}{s}_", .{ saved_prefix, handlers_name }) catch saved_prefix;
-                defer ctx.result_prefix = saved_prefix;
-                var result_counter: usize = 0;
-                try emitContinuationBody(out, ctx, cont, &result_counter);
-
-                // For guarded void-return conts, emit an explicit `return;`
-                // so subsequent guards in the chain don't fire after a match.
-                // (Resume-typed conts already returned via the `return EXPR`
-                // path above.)
-                if (guarded and branch.resume_type == null) {
-                    try out.writeIndent();
-                    try out.write("return;\n");
-                }
-            }
-
-            if (guarded) {
-                // Close the `if (cond) {` block.
-                out.dedent();
-                try out.writeIndent();
-                try out.write("}\n");
-            }
+            try emitArmContBlock(out, ctx, cont, branch, shared_param_name, handlers_name);
 
             // Close the per-cont scope block.
             out.dedent();
