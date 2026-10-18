@@ -1,0 +1,1 @@
+std/store: 'res[world.focus]' does not address a row — the index is a scalar-store column read, not a handle this store issued (handles come from `| row`, row cursors, or a handle-carrying column of the same store)
