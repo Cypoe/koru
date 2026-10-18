@@ -414,6 +414,7 @@ def custodyStep : CustodySt → String → Option CustodySt
   | .minted,   "discharge" => some .clean
   | .minted,   "issued"    => some .clean
   | .heldSt,   "discharge" => some .clean
+  | .heldSt,   "issued"    => some .clean
   | _,         _           => none
 
 /-- An arrow's ledger closes iff every mint settled. A live `held` may end
@@ -443,6 +444,12 @@ example : custodyClosed .minted = false := rfl
 -- golden spines close: mint → exercise → settle, held → exercise → settle
 example : custodyRun ["mint", "borrow", "discharge"] CustodySt.clean = some .clean := rfl
 example : custodyRun ["held", "borrow", "discharge"] CustodySt.clean = some .clean := rfl
+-- relay: a held obligation exits live through a declared `!` return —
+-- custody transfers onward, it does not discharge here
+example : custodyRun ["held", "issued"] CustodySt.clean = some .clean := rfl
+example : custodyRun ["held", "borrow", "issued"] CustodySt.clean = some .clean := rfl
+-- but a bare clean ledger still cannot issue what it never held
+example : custodyRun ["issued"] CustodySt.clean = none := rfl
 -- a borrow edge carrying a bare `<state>` proto is malformed — the edge
 -- names the caller's obligation, so it carries `!` like every other op
 example : ruleCustody ⟨"custody-edge", "h", "h<-*Handle<input:owned>", "borrow", ""⟩ = .malformed := by native_decide

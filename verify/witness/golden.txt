@@ -51,3 +51,4 @@
 [witness] site custody-edge h0 h0<-input:*Handle<input:owned!> discharge
 [witness] site custody-edge hh hh<-input:*Handle<input:held!> held
 [witness] site custody-edge hh hh<-input:*Handle<input:held!> borrow
+[witness] site custody-edge hh hh<-input:*Handle<input:held!> issued

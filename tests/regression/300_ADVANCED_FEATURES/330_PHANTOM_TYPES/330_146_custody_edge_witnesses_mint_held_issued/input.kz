@@ -15,6 +15,10 @@
 //   h (peek) — borrow: enters peek live through its declared borrow param
 //       `<owned>` (no `!`) — custody stays with the caller, the claim is
 //       witnessed so the ledger can tell borrowed from never-touched
+//   h (fwd) — held → borrow → issued: the relay — an obligation consumed
+//       through `<!owned>` is exercised (touch borrows it) then exits live
+//       through the declared `<owned!>` return; custody transfers onward,
+//       it does not discharge inside fwd
 //
 // The .args_only pre-pass (check-phantom-args) walks the same bindings but
 // must NOT print — emit_edges is set only when check_mode == .full, or the
@@ -40,6 +44,14 @@ const Handle = struct { n: i32 };
     std.debug.print("peek n={}\n", .{h.n});
 }
 
+~tor touch { h: *Handle<owned> } -> i32
+~proc touch|zig {
+    return h.n;
+}
+
+~tor fwd { h: *Handle<!owned> } -> *Handle<owned!>
+~fwd = touch(h): _ -> h
+
 ~tor done { h: *Handle<!owned> }
 ~proc done|zig {
     std.debug.print("n={}\n", .{h.n});
@@ -60,4 +72,4 @@ const Handle = struct { n: i32 };
 
 ~std/witness:enforce { }
 
-~make(): h0 |> peek(h: h0) |> spin(h: h0): hf |> done(h: hf)
+~make(): h0 |> peek(h: h0) |> fwd(h: h0): hf2 |> spin(h: hf2): hf |> done(h: hf)

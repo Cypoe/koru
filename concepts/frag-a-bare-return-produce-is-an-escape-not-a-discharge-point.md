@@ -1,8 +1,8 @@
 ---
 type: belief
 id: frag-a-bare-return-produce-is-an-escape-not-a-discharge-point
-provenance: surfaced 2026-08-23 fixing 330_076/330_085 — auto_discharge_inserter read a subflow impl's bare-return produce as an "implicit terminator", appended the caller's disposer after its own `return r`, and emitted unreachable code naming an undeclared result. Evolved 2026-11-04: the escape now carries record-FIELD obligations across the produce boundary — the produce edge verifies the feed, the caller is seeded `res.<field>` debts.
-ts: 2026-11-04
+provenance: surfaced 2026-08-23 fixing 330_076/330_085 — auto_discharge_inserter read a subflow impl's bare-return produce as an "implicit terminator", appended the caller's disposer after its own `return r`, and emitted unreachable code naming an undeclared result. Evolved 2026-11-04: the escape now carries record-FIELD obligations across the produce boundary — the produce edge verifies the feed, the caller is seeded `res.<field>` debts. Evolved 2026-11-05: the chain-terminal produce (`x: _ -> h`) exits through validateNestedContinuations, not the leaf audit — and held bindings live outside `cleanup_obligations`, so even an audit that runs cannot see a held escape without a second pass over `bindings`.
+ts: 2026-11-05
 ---
 
 # A bare-return produce is an escape, not a discharge point (belief)
@@ -107,3 +107,32 @@ the fresh surface found two more ways to spell the same escape:
 Same lesson one level wider: a pass that enumerates the ways an
 obligation dies must enumerate arm SHAPES and produce SPELLINGS too —
 each new spelling is a new place for the escape to hide.
+
+## Two ledgers, and the audit only read one (2026-11-05)
+
+The produce spellings above all concerned MINTED obligations — the set
+`cleanup_obligations` tracks. Held obligations are seeded into `bindings`
+with their `<state!>` marker and then deliberately cleared from
+`cleanup_obligations` (the contract settles them invisibly, so the leak
+audit must not chase them). Correct for exit-balance — and a blind spot
+for escape: an audit that reads `cleanup_obligations` cannot tell "held
+binding produced through a declared `!` return" (`issued`, custody
+transfers) from "held binding produced through a bare return" (the debt
+evaporates — same wall as a minted evaporation).
+
+The chain-terminal `x: _ -> h` produce compounded it: that node exits
+through `validateNestedContinuations`'s void path, which ran
+`verifyProduceFieldFeeders` (does the pack feed the declared `!` fields?)
+but never the escape audit, so even a MINTED `-> h` settled invisibly —
+no `issued` edge, no refusal. The fix is one audit,
+`auditProduceEscape`, shared by the `.expression` leaf and the
+`.branch_constructor` chain exit, over two obligation sets: the tracked
+set for minted, plus a `bindings` scan for held — named by the produce,
+not disposed, carried → `issued`, not carried → KORU030, unnamed →
+contract-open as before. 330_146's `fwd` relay pins held → borrow →
+issued; 330_151 pins the bare-return refusal.
+
+The standing asymmetry to keep straight: held obligations may end a flow
+open (the host impl's contract settles them), so held joins the audit
+only when the produce NAMES it — escape is opt-in per produce, never
+ambient.

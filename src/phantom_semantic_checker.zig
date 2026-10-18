@@ -2168,6 +2168,206 @@ pub const PhantomSemanticChecker = struct {
         }
     }
 
+    /// `-> expr` produce escape audit — every live obligation in `context`
+    /// must exit live through the flow's declared `-> T<state!>` return.
+    /// `expr_text` is the produced expression's source text. Three carrier
+    /// shapes: the produced identifier itself (`-> r`), a record root whose
+    /// `e.<field>` keys escape through the declared record's `<state!>`
+    /// fields (`-> e`), and a literal pack whose field feeders hand live
+    /// obligations to declared `!` fields (`-> { h, n: 7 }`). A carried
+    /// obligation commits `issued`; anything else still live evaporates at
+    /// the leaf — KORU030, the same wall the terminators enforce. Shared by
+    /// `.expression` arm-leaf produces (`| stop r -> r`) and chain-terminal
+    /// `.branch_constructor` bare returns (`x: _ -> h`): the chain exit
+    /// used to settle produced obligations invisibly — no `issued` edge,
+    /// no leak wall.
+    /// Does the flow's declared `->` return carry `resource`'s obligation?
+    /// Scalar returns match (type, state) on `return_phantom`; record
+    /// returns carry the debt on the `<state!>` field the resource keys
+    /// into — a rooted escape `e.<field>`, a whole-record produce `-> e`,
+    /// or a literal pack `-> { h, n: 7 }` feeding the field by name.
+    fn produceCarriesObligation(
+        self: *PhantomSemanticChecker,
+        implementing_event: ?*const ast.EventDecl,
+        info: BindingContext.BindingInfo,
+        expr_text: []const u8,
+        resource: []const u8,
+        rooted_in_expr: bool,
+    ) !bool {
+        const impl_ev = implementing_event orelse return false;
+        const rt = impl_ev.return_type orelse return false;
+        if (rooted_in_expr) {
+            if (try ast_functional.recordFieldTexts(self.allocator, rt)) |declared| {
+                defer self.allocator.free(declared);
+                const fname = resource[expr_text.len + 1 ..];
+                for (declared) |df| {
+                    if (!std.mem.eql(u8, df.name, fname)) continue;
+                    if (std.mem.indexOfScalar(u8, df.value, '<') != null and std.mem.indexOfScalar(u8, df.value, '!') != null) {
+                        return true;
+                    }
+                    break;
+                }
+            }
+            return false;
+        }
+        if (impl_ev.return_phantom) |rph| {
+            if ((try self.phantomRequiresCleanup(rph)) and
+                std.mem.eql(u8, phantomStateTail(rph), phantomStateTail(info.phantom_state)) and
+                std.mem.eql(u8, lastIdentToken(rt), lastIdentToken(info.base_type)))
+            {
+                return true;
+            }
+        }
+        // Literal pack `-> { h, n: 7 }`: the resource feeds a declared `!`
+        // field by name — the record-literal twin of the `e.<field>` rooted
+        // case above.
+        if (try ast_functional.recordFieldTexts(self.allocator, expr_text)) |pack| {
+            defer self.allocator.free(pack);
+            if (try ast_functional.recordFieldTexts(self.allocator, rt)) |declared| {
+                defer self.allocator.free(declared);
+                for (pack) |seg| {
+                    if (!std.mem.eql(u8, seg.value, resource)) continue;
+                    for (declared) |df| {
+                        if (!std.mem.eql(u8, df.name, seg.name)) continue;
+                        if (std.mem.indexOfScalar(u8, df.value, '<') != null and std.mem.indexOfScalar(u8, df.value, '!') != null) {
+                            return true;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /// Chain produces (`x: _ -> h`, `-> { h }` — `.branch_constructor`
+    /// bare returns) exit the flow through `validateNestedContinuations`,
+    /// not the leaf audit — the same live-obligation-into-`<state!>` rule
+    /// applies. One obligation in the produced position: the declared
+    /// `!` carrier settles it (`issued` when custody edges are on — the
+    /// same edge the expression-produce path emits); anything live but
+    /// un-carried is the KORU030 evaporation wall. Held bindings live
+    /// outside `cleanup_obligations` — a produce that names one is an
+    /// escape attempt too (carried → `issued`; named but un-carried →
+    /// refuse; untouched stays contract-open).
+    fn auditProduceEscape(
+        self: *PhantomSemanticChecker,
+        context: *BindingContext,
+        expr_text: []const u8,
+        implementing_event: ?*const ast.EventDecl,
+        location: errors.SourceLocation,
+    ) !bool {
+        // Two passes: first count how many live obligations the expression
+        // text mentions — a declared `!` return carries one obligation
+        // channel, so an `issued` edge is honest only for a unique mention
+        // whose (type, state) matches the declared return.
+        var mentioned_count: usize = 0;
+        var count_it = context.cleanup_obligations.keyIterator();
+        while (count_it.next()) |k| {
+            const resource = k.*;
+            if (context.isOuterScope(resource) or context.isJoinLive(resource)) continue;
+            if (std.mem.eql(u8, resource, expr_text)) continue;
+            if (exprMentionsResource(expr_text, resource)) mentioned_count += 1;
+        }
+        var expr_leak = false;
+        var exit_it = context.cleanup_obligations.keyIterator();
+        while (exit_it.next()) |k| {
+            const resource = k.*;
+            if (context.isOuterScope(resource)) continue;
+            if (context.isJoinLive(resource)) continue;
+            const is_ident = std.mem.eql(u8, resource, expr_text);
+            const rooted_in_expr = !is_ident and
+                std.mem.startsWith(u8, resource, expr_text) and
+                resource.len > expr_text.len and
+                resource[expr_text.len] == '.';
+            const named_in_expr = is_ident or rooted_in_expr or
+                (mentioned_count == 1 and exprMentionsResource(expr_text, resource));
+            var carried = false;
+            var no_record = false;
+            if (named_in_expr) {
+                if (context.getInfo(resource)) |info| {
+                    // Honest `issued` requires the flow's declared
+                    // `-> T<state!>` return to carry exactly this
+                    // obligation's (type, state).
+                    carried = try self.produceCarriesObligation(implementing_event, info, expr_text, resource, rooted_in_expr);
+                } else {
+                    // No binding record — the checker's bookkeeping
+                    // lost this one; the `?`-proto edge is how the
+                    // ledger learns the record is missing.
+                    no_record = true;
+                }
+            }
+            if (carried or no_record) {
+                if (context.emit_edges) {
+                    if (context.getInfo(resource)) |info| {
+                        emitCustodyEdge("issued", resource, info.phantom_state, info.base_type);
+                    } else {
+                        emitCustodyEdge("issued", resource, "?", "?");
+                    }
+                }
+                continue;
+            }
+            // The obligation isn't carried out — it dies unreferenced
+            // at the produce leaf. Full pass only: pre-insertion the
+            // auto-discharger hasn't placed its disposals yet.
+            if (self.check_mode != .args_only) {
+                const binding_info = context.getInfo(resource);
+                const phantom_state = if (binding_info) |bi| bi.phantom_state else "?";
+                const base_type = if (binding_info) |bi| bi.base_type else "";
+                const display_name = if (std.mem.indexOf(u8, resource, ".")) |dot_idx|
+                    resource[dot_idx + 1 ..]
+                else if (std.mem.startsWith(u8, resource, "_auto_") and base_type.len > 0)
+                    base_type
+                else
+                    resource;
+                try self.reportUndischargedObligation(display_name, phantom_state, base_type, location);
+                expr_leak = true;
+            }
+        }
+
+        // Held bindings live outside `cleanup_obligations` — their contract
+        // settles them invisibly, so an untouched held stays contract-open.
+        // But a produce that NAMES a held binding is an escape attempt:
+        // carried → `issued` (the held→issued ledger row); named through an
+        // undeclared return → the obligation evaporates, same KORU030 wall.
+        // Only the exact ident or a rooted `e.<field>` path counts — a held
+        // binding merely mentioned inside a produced expression is a borrow
+        // into that expression's result, not an escape.
+        var held_it = context.bindings.iterator();
+        while (held_it.next()) |entry| {
+            const resource = entry.key_ptr.*;
+            const info = entry.value_ptr.*;
+            if (context.cleanup_obligations.contains(resource)) continue;
+            if (!std.mem.endsWith(u8, info.phantom_state, "!")) continue;
+            if (context.isOuterScope(resource) or context.isJoinLive(resource)) continue;
+            if (context.isDisposed(resource)) continue;
+            const is_ident = std.mem.eql(u8, resource, expr_text);
+            const rooted_in_expr = !is_ident and
+                std.mem.startsWith(u8, resource, expr_text) and
+                resource.len > expr_text.len and
+                resource[expr_text.len] == '.';
+            if (!is_ident and !rooted_in_expr) continue;
+            const carried = try self.produceCarriesObligation(implementing_event, info, expr_text, resource, rooted_in_expr);
+            if (carried) {
+                if (context.emit_edges) {
+                    emitCustodyEdge("issued", resource, info.phantom_state, info.base_type);
+                }
+                continue;
+            }
+            if (self.check_mode != .args_only) {
+                const display_name = if (std.mem.indexOf(u8, resource, ".")) |dot_idx|
+                    resource[dot_idx + 1 ..]
+                else if (std.mem.startsWith(u8, resource, "_auto_") and info.base_type.len > 0)
+                    info.base_type
+                else
+                    resource;
+                try self.reportUndischargedObligation(display_name, info.phantom_state, info.base_type, location);
+                expr_leak = true;
+            }
+        }
+        return !expr_leak;
+    }
+
     /// Report every undischarged obligation still held at a HARD terminal
     /// (`|> _`). The named-branch terminator path performs this inline with
     /// escape analysis for branch constructors; a hard terminal permits no
@@ -2460,6 +2660,16 @@ pub const PhantomSemanticChecker = struct {
                         if (implementing_event) |impl_ev| {
                             if (impl_ev.return_type) |rt| {
                                 if (self.check_mode == .full) try self.verifyProduceFieldFeeders(exit_bc, rt, &void_context, location);
+                            }
+                        }
+                        // The produce is also the flow's obligation exit:
+                        // run the same escape audit the `.expression`
+                        // arm-leaf path performs — a scalar `-> h` exits
+                        // here and used to settle h invisibly (no `issued`
+                        // edge, no leak wall).
+                        if (exit_bc.plain_value) |plain| {
+                            if (!try self.auditProduceEscape(&void_context, plain, implementing_event, location)) {
+                                return false;
                             }
                         }
                     }
@@ -3136,105 +3346,7 @@ pub const PhantomSemanticChecker = struct {
         // the terminators enforce.
         if (cont.node) |step| {
             if (step == .expression and cont.continuations.len == 0) {
-                // Two passes: first count how many live obligations the
-                // expression text mentions — a declared `!` return carries
-                // one obligation channel, so an `issued` edge is honest
-                // only for a unique mention whose (type, state) matches the
-                // declared return.
-                var mentioned_count: usize = 0;
-                var count_it = context.cleanup_obligations.keyIterator();
-                while (count_it.next()) |k| {
-                    const resource = k.*;
-                    if (context.isOuterScope(resource) or context.isJoinLive(resource)) continue;
-                    if (std.mem.eql(u8, resource, step.expression)) continue;
-                    if (exprMentionsResource(step.expression, resource)) mentioned_count += 1;
-                }
-                var expr_leak = false;
-                var exit_it = context.cleanup_obligations.keyIterator();
-                while (exit_it.next()) |k| {
-                    const resource = k.*;
-                    if (context.isOuterScope(resource)) continue;
-                    if (context.isJoinLive(resource)) continue;
-                    const is_ident = std.mem.eql(u8, resource, step.expression);
-                    // `-> e` where `e` is a record: `e.<field>` keys escape
-                    // through the declared return's `<state!>` fields — the
-                    // same pass-through the branch-constructor audit grants
-                    // `r.<field>` above.
-                    const rooted_in_expr = !is_ident and
-                        std.mem.startsWith(u8, resource, step.expression) and
-                        resource.len > step.expression.len and
-                        resource[step.expression.len] == '.';
-                    const named_in_expr = is_ident or rooted_in_expr or
-                        (mentioned_count == 1 and exprMentionsResource(step.expression, resource));
-                    var carried = false;
-                    var no_record = false;
-                    if (named_in_expr) {
-                        if (context.getInfo(resource)) |info| {
-                            // Honest `issued` requires the flow's declared
-                            // `-> T<state!>` return to carry exactly this
-                            // obligation's (type, state) — scalar returns
-                            // match (type, state) on return_phantom; a
-                            // record return carries the debt on the
-                            // `<state!>` field this resource keys into.
-                            if (implementing_event) |impl_ev| {
-                                if (impl_ev.return_type) |rt| {
-                                    if (rooted_in_expr) {
-                                        if (try ast_functional.recordFieldTexts(self.allocator, rt)) |declared| {
-                                            defer self.allocator.free(declared);
-                                            const fname = resource[step.expression.len + 1 ..];
-                                            for (declared) |df| {
-                                                if (!std.mem.eql(u8, df.name, fname)) continue;
-                                                if (std.mem.indexOfScalar(u8, df.value, '<') != null and std.mem.indexOfScalar(u8, df.value, '!') != null) {
-                                                    carried = true;
-                                                }
-                                                break;
-                                            }
-                                        }
-                                    } else if (impl_ev.return_phantom) |rph| {
-                                        if ((try self.phantomRequiresCleanup(rph)) and
-                                            std.mem.eql(u8, phantomStateTail(rph), phantomStateTail(info.phantom_state)) and
-                                            std.mem.eql(u8, lastIdentToken(rt), lastIdentToken(info.base_type)))
-                                        {
-                                            carried = true;
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            // No binding record — the checker's bookkeeping
-                            // lost this one; the `?`-proto edge is how the
-                            // ledger learns the record is missing.
-                            no_record = true;
-                        }
-                    }
-                    if (carried or no_record) {
-                        if (context.emit_edges) {
-                            if (context.getInfo(resource)) |info| {
-                                emitCustodyEdge("issued", resource, info.phantom_state, info.base_type);
-                            } else {
-                                emitCustodyEdge("issued", resource, "?", "?");
-                            }
-                        }
-                        continue;
-                    }
-                    // The obligation isn't carried out — it dies unreferenced
-                    // at the arm leaf. Full pass only: pre-insertion the
-                    // auto-discharger hasn't placed its disposals yet.
-                    if (self.check_mode != .args_only) {
-                        const binding_info = context.getInfo(resource);
-                        const phantom_state = if (binding_info) |bi| bi.phantom_state else "?";
-                        const base_type = if (binding_info) |bi| bi.base_type else "";
-                        const display_name = if (std.mem.indexOf(u8, resource, ".")) |dot_idx|
-                            resource[dot_idx + 1 ..]
-                        else if (std.mem.startsWith(u8, resource, "_auto_") and base_type.len > 0)
-                            base_type
-                        else
-                            resource;
-                        try self.reportUndischargedObligation(display_name, phantom_state, base_type, location);
-                        expr_leak = true;
-                    }
-                }
-                if (expr_leak) return false;
+                if (!try self.auditProduceEscape(&context, step.expression, implementing_event, location)) return false;
             }
         }
 

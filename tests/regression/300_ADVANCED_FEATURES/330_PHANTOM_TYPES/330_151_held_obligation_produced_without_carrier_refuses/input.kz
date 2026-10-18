@@ -1,0 +1,27 @@
+// PINS: the held → issued relay's refusal twin — a held obligation NAMED
+// in a chain produce whose declared return carries no `!` slot evaporates,
+// so the produce exit hits the same KORU030 wall the minted path enforces.
+// `~fwd { h: *Handle<!owned> } -> *Handle` produces h through a bare
+// return: custody can neither discharge here (h stays live on the caller's
+// ledger) nor transfer (the return declares no obligation channel). The
+// carried twin is 330_146's fwd relay, which emits `issued` instead.
+
+const std = @import("std");
+const Handle = struct { n: i32 };
+
+~tor touch { h: *Handle<owned> } -> i32
+~proc touch|zig {
+    return h.n;
+}
+
+~tor fwd { h: *Handle<!owned> } -> *Handle
+~fwd = touch(h): _ -> h
+
+~tor make {} -> *Handle<owned!>
+~proc make|zig {
+    const h = std.heap.page_allocator.create(Handle) catch unreachable;
+    h.* = .{ .n = 0 };
+    return h;
+}
+
+~make(): h0 |> fwd(h: h0): _
