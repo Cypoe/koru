@@ -18,7 +18,8 @@ proc echo-num|zig {
     const std = @import("std");
     var buf: [64]u8 = undefined;
     const s = std.fmt.bufPrint(&buf, "n={d}\n", .{n}) catch unreachable;
-    _ = std.posix.write(1, s) catch {};
+    const stdout = @import("std").fs.File.stdout();
+    stdout.writeAll(s) catch {};
 }
 
 std/runtime:register(scope: "api") {

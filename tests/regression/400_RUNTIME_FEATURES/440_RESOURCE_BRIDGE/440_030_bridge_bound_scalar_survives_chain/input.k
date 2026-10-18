@@ -16,8 +16,9 @@ proc produce|zig {
 
 tor echo { text: string }
 proc echo|zig {
-    _ = @import("std").posix.write(1, text) catch {};
-    _ = @import("std").posix.write(1, "\n") catch {};
+    const stdout = @import("std").fs.File.stdout();
+    stdout.writeAll(text) catch {};
+    stdout.writeAll("\n") catch {};
 }
 
 std/runtime:register(scope: "api") {

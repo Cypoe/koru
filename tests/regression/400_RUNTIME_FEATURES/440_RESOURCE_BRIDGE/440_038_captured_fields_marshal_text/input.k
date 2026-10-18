@@ -13,16 +13,18 @@ import std/runtime
 
 tor calc { expr: Expression }
 proc calc|zig {
-    _ = @import("std").posix.write(1, "calc:") catch {};
-    _ = @import("std").posix.write(1, expr) catch {};
-    _ = @import("std").posix.write(1, "\n") catch {};
+    const stdout = @import("std").fs.File.stdout();
+    stdout.writeAll("calc:") catch {};
+    stdout.writeAll(expr) catch {};
+    stdout.writeAll("\n") catch {};
 }
 
 tor render { src: Source }
 proc render|zig {
-    _ = @import("std").posix.write(1, "render:") catch {};
-    _ = @import("std").posix.write(1, src.text) catch {};
-    _ = @import("std").posix.write(1, "\n") catch {};
+    const stdout = @import("std").fs.File.stdout();
+    stdout.writeAll("render:") catch {};
+    stdout.writeAll(src.text) catch {};
+    stdout.writeAll("\n") catch {};
 }
 
 std/runtime:register(scope: "api") {
