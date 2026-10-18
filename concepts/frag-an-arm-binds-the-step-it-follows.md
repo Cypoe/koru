@@ -44,9 +44,9 @@ nesting is gone, so that discipline now rides on authors and obligations.
 
 Landed: KORU108 (400_213, 400_214) refuses a join or sibling-arm reference
 to an arm binding — but only in CORE call arguments. Names inside library
-syntax (`{{ }}` interpolation in 400_212, `stored {}` bodies in 690_367,
-label params inside a labeled step's own arms in 400_217) still fall to the
-host's undeclared-identifier error; extending the refusal there is ruled
+syntax (`{{ }}` interpolation in 400_212, `stored {}` bodies in 690_367)
+still fall to the host's undeclared-identifier error, as do names bound
+nowhere at all; extending the refusal there is ruled
 out of the core checker's reach — it must not know the library. (320_152 is
 a different defect entirely: a VALID program the emitter mis-captures, not
 an out-of-scope reference — an earlier draft of this paragraph folded it
