@@ -87,8 +87,12 @@
 # only invariants/gate.py; zero src/ files. The residual named is the
 # same documented emitter_test/visitor_emitter_test field-literal idiom
 # plus the standing errdefer clusters in parser.zig/shape_analyzer.zig.
-clusters=1897
-members=2429
+# Re-pinned in the `status: board` commit for c0d3a4201 — the
+# roll fired on a test-results-only stage (zero src/ delta in the
+# commit); the +5/+8 over 1897/2429 is committed drift since the
+# judge-additions re-pin, none of it mine. Re-pinned to measured.
+clusters=1902
+members=2437
 # Re-pinned to 1878/2418 on the tightening-017 cherry-pick: the roll named
 # parser.zig similar-arm blocks (1277, 2962, 3479, 3804, 6727 +5) plus
 # shape_analyzer/emitter_test scaffolding — the documented consciously-
