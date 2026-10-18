@@ -28,3 +28,11 @@ parallelism. `./scripts/bettermaker_profiler_oracle.sh` no longer forces
 
 Still open: per-test profile output path in `koru_std/profiler.kz` (env var) —
 would remove the global entirely; snapshot is sufficient for regression honesty.
+
+**Landed 2026-10-18, for a reason the race never predicted.** On Windows a native
+binary resolves `/tmp` to the *drive root* (`W:	mp\`), so the trace was written
+somewhere `post.sh` never looks — `420_003` ran its whole program and produced a
+perfect trace in the wrong place. `koru_std/profiler.kz` now honors
+`KORU_PROFILE` (default `/tmp/koru_profile.json` unchanged); the harness exports
+`cygpath -w /tmp/…` on MSYS. The env var that was "nice to have for parallelism"
+turned out to be the only honest spelling of the path on a second platform.

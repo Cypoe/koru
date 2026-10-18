@@ -294,7 +294,7 @@ regression_check_js_equivalence() {
     [ -f "$test_dir/EXPECT_TRAP" ] && return 0
 
     local flags=""
-    [ -f "$test_dir/COMPILER_FLAGS" ] && flags=$(tr '\n' ' ' < "$test_dir/COMPILER_FLAGS")
+    [ -f "$test_dir/COMPILER_FLAGS" ] && flags=$(tr -d '\r' < "$test_dir/COMPILER_FLAGS" | tr '\n' ' ')
 
     # Durable per-target record. The collapse into SUCCESS/FAILURE below is for
     # suite accounting; TARGETS.json is the granular truth the website reads to
@@ -344,7 +344,7 @@ regression_check_js_equivalence() {
         # is the JS-side twin of the negative-branch `expected_error.txt`.
         if [ -f "$test_dir/JS_REFUSES" ]; then
             local want
-            want=$(cat "$test_dir/JS_REFUSES")
+            want=$(tr -d '\r' < "$test_dir/JS_REFUSES")
             if grep -qF "$want" "$test_dir/compile_js.err"; then
                 _write_targets "refused" "$want"
                 echo -e "${GREEN}  ✓ JS refused cleanly (JS_REFUSES pinned)${NC}"
@@ -370,7 +370,7 @@ regression_check_js_equivalence() {
     local -a RUN_ARGS=()
     if [ -f "$test_dir/ARGS" ]; then
         while IFS= read -r _arg || [ -n "$_arg" ]; do
-            RUN_ARGS+=("$_arg")
+            RUN_ARGS+=("${_arg%$'\r'}")
         done < "$test_dir/ARGS"
     fi
     timeout "${REGRESSION_TEST_TIMEOUT:-30}" node "$js_out" "${RUN_ARGS[@]}" >"$js_actual" 2>&1
@@ -413,7 +413,7 @@ regression_check_cs_equivalence() {
     [ -f "$test_dir/EXPECT_TRAP" ] && return 0
 
     local flags=""
-    [ -f "$test_dir/COMPILER_FLAGS" ] && flags=$(tr '\n' ' ' < "$test_dir/COMPILER_FLAGS")
+    [ -f "$test_dir/COMPILER_FLAGS" ] && flags=$(tr -d '\r' < "$test_dir/COMPILER_FLAGS" | tr '\n' ' ')
 
     # Upsert one row into TARGETS.json: read the existing array (the js check
     # may have already written zig+js this run), drop any prior cs/zig rows,
@@ -452,7 +452,7 @@ regression_check_cs_equivalence() {
             >"$test_dir/compile_cs.err" 2>&1; then
         if [ -f "$test_dir/CS_REFUSES" ]; then
             local want
-            want=$(cat "$test_dir/CS_REFUSES")
+            want=$(tr -d '\r' < "$test_dir/CS_REFUSES")
             if grep -qF "$want" "$test_dir/compile_cs.err"; then
                 _write_cs_target "refused" "$want"
                 echo -e "${GREEN}  ✓ CS refused cleanly (CS_REFUSES pinned)${NC}"
@@ -473,7 +473,7 @@ regression_check_cs_equivalence() {
     local -a RUN_ARGS=()
     if [ -f "$test_dir/ARGS" ]; then
         while IFS= read -r _arg || [ -n "$_arg" ]; do
-            RUN_ARGS+=("$_arg")
+            RUN_ARGS+=("${_arg%$'\r'}")
         done < "$test_dir/ARGS"
     fi
     timeout "${REGRESSION_TEST_TIMEOUT:-30}" "$cs_app" "${RUN_ARGS[@]}" >"$cs_actual" 2>&1
@@ -524,7 +524,7 @@ regression_check_c_equivalence() {
     [ -f "$test_dir/EXPECT_TRAP" ] && return 0
 
     local flags=""
-    [ -f "$test_dir/COMPILER_FLAGS" ] && flags=$(tr '\n' ' ' < "$test_dir/COMPILER_FLAGS")
+    [ -f "$test_dir/COMPILER_FLAGS" ] && flags=$(tr -d '\r' < "$test_dir/COMPILER_FLAGS" | tr '\n' ' ')
     local ccomp_bin="${KORU_CC_ORACLE:-ccomp}"
 
     # Upsert the c row into TARGETS.json (same merge discipline as the cs row:
@@ -569,7 +569,7 @@ regression_check_c_equivalence() {
     if [ ! -s "$c_src" ]; then
         if [ -f "$test_dir/C_REFUSES" ]; then
             local want
-            want=$(cat "$test_dir/C_REFUSES")
+            want=$(tr -d '\r' < "$test_dir/C_REFUSES")
             if grep -qF "$want" "$test_dir/compile_c.err"; then
                 _write_c_target "refused" "$want"
                 echo -e "${GREEN}  ✓ C refused cleanly (C_REFUSES pinned)${NC}"
@@ -616,7 +616,7 @@ regression_check_c_equivalence() {
     local -a RUN_ARGS=()
     if [ -f "$test_dir/ARGS" ]; then
         while IFS= read -r _arg || [ -n "$_arg" ]; do
-            RUN_ARGS+=("$_arg")
+            RUN_ARGS+=("${_arg%$'\r'}")
         done < "$test_dir/ARGS"
     fi
     if [ -f "$test_dir/STDIN" ]; then
@@ -1209,7 +1209,7 @@ regression_run_one_test() {
     # Check for COMPILER_FLAGS file to pass additional flags
     COMPILER_FLAGS=""
     if [ -f "$test_dir/COMPILER_FLAGS" ]; then
-        COMPILER_FLAGS=$(cat "$test_dir/COMPILER_FLAGS" | tr '\n' ' ')
+        COMPILER_FLAGS=$(cat "$test_dir/COMPILER_FLAGS" | tr -d '\r' | tr '\n' ' ')
     fi
 
     # PARSER_TEST: AST validation tests - check BEFORE attempting full compilation
@@ -1241,7 +1241,7 @@ regression_run_one_test() {
 
         # TODO: Use proper JSON comparison (for now, use diff)
         # In future: parse both JSONs and do structural comparison
-        if diff -q "$test_dir/expected.json" "$test_dir/actual.json" > /dev/null 2>&1; then
+        if diff -q <(tr -d '\r' < "$test_dir/expected.json") "$test_dir/actual.json" > /dev/null 2>&1; then
             echo -e "${GREEN}✅ PASS (AST validated)${NC}"
             mark_test_passed "$test_dir"
             PASSED_TESTS=$((PASSED_TESTS + 1))
@@ -1250,7 +1250,7 @@ regression_run_one_test() {
             echo "  Expected: $test_dir/expected.json"
             echo "  Actual:   $test_dir/actual.json"
             # Show first difference
-            diff "$test_dir/expected.json" "$test_dir/actual.json" | head -10
+            diff <(tr -d '\r' < "$test_dir/expected.json") "$test_dir/actual.json" | head -10
             echo "ast-mismatch" > "$test_dir/FAILURE"
             FAILED_TESTS="$FAILED_TESTS $TEST_NAME(ast-mismatch)"
         fi
@@ -1280,7 +1280,7 @@ regression_run_one_test() {
 
         # Check for EXPECT file with FRONTEND_COMPILE_ERROR
         if [ -f "$test_dir/EXPECT" ]; then
-            if grep -q "^FRONTEND_COMPILE_ERROR$" "$test_dir/EXPECT"; then
+            if tr -d '\r' < "$test_dir/EXPECT" | grep -q '^FRONTEND_COMPILE_ERROR$'; then
                 FRONTEND_ERROR_EXPECTED=true
                 # If this is a PARSER_TEST, we still need to validate AST
                 # Otherwise, check expected.txt for exact error output match
@@ -1493,7 +1493,7 @@ regression_run_one_test() {
     # CRITICAL: Check if frontend SUCCESS was unexpected
     # If EXPECT says FRONTEND_COMPILE_ERROR but compile succeeded, this is a BUG
     if [ "$COMPILE_KZ_SUCCESS" = true ] && [ -f "$test_dir/EXPECT" ]; then
-        if grep -q "^FRONTEND_COMPILE_ERROR$" "$test_dir/EXPECT"; then
+        if tr -d '\r' < "$test_dir/EXPECT" | grep -q '^FRONTEND_COMPILE_ERROR$'; then
             echo -e "${RED}❌ Expected frontend compile error but compilation SUCCEEDED${NC}"
             echo "  This test expects the compiler to reject the code, but it was accepted."
             echo "  This usually means a compiler feature is not implemented or has a bug."
@@ -1887,7 +1887,7 @@ EOF
                 # Koru diagnostic (error[KORU####]) fired, it MUST be pinned — leave
                 # BACKEND_ERROR_EXPECTED=false so it falls through to the no-error-pin guard.
                 if [ "$BACKEND_ERROR_EXPECTED" = false ] && [ -f "$test_dir/EXPECT" ]; then
-                    if grep -q "^BACKEND_COMPILE_ERROR$" "$test_dir/EXPECT" && ! grep -q 'error\[KORU' "$test_dir/backend.err"; then
+                    if tr -d '\r' < "$test_dir/EXPECT" | grep -q '^BACKEND_COMPILE_ERROR$' && ! grep -q 'error\[KORU' "$test_dir/backend.err"; then
                         if [ "$CHECK_LEAKS" = true ] && [ "$HAS_MEMORY_LEAK" = true ]; then
                             echo -e "${RED}❌ Expected backend compile error but memory leak detected ($LEAK_PHASE)${NC}"
                             echo "leak-$LEAK_PHASE" > "$test_dir/FAILURE"
@@ -1909,7 +1909,7 @@ EOF
                 # error and no matched pin. A test that DECLARED it expects a backend error
                 # — via MUST_ERROR, or a bare BACKEND_COMPILE_ERROR marker that did NOT pass
                 # because a Koru diagnostic fired — must pin WHICH error.
-                if [ "$BACKEND_ERROR_EXPECTED" = false ] && { [ -f "$test_dir/MUST_ERROR" ] || { [ -f "$test_dir/EXPECT" ] && grep -q "^BACKEND_COMPILE_ERROR$" "$test_dir/EXPECT"; }; }; then
+                if [ "$BACKEND_ERROR_EXPECTED" = false ] && { [ -f "$test_dir/MUST_ERROR" ] || { [ -f "$test_dir/EXPECT" ] && tr -d '\r' < "$test_dir/EXPECT" | grep -q '^BACKEND_COMPILE_ERROR$'; }; }; then
                     echo -e "${RED}❌ Backend error has no pin${NC}"
                     echo "  Backend failed, but nothing pins WHICH error to expect."
                     echo "  A bare BACKEND_COMPILE_ERROR marker only covers raw host/Zig"
@@ -2020,15 +2020,22 @@ EOF
         local -a RUN_ARGS=()
         if [ -f "$test_dir/ARGS" ]; then
             while IFS= read -r _arg || [ -n "$_arg" ]; do
-                RUN_ARGS+=("$_arg")
+                RUN_ARGS+=("${_arg%$'\r'}")
             done < "$test_dir/ARGS"
         fi
         # Optional STDIN file: piped to the binary (else /dev/null) — the
         # interactive/pipe vertical, parallel to ARGS.
+        # Windows: native binaries resolve "/tmp" to the drive root, so the
+        # profiler pins land at <drive>:\tmp\ — point KORU_PROFILE at the
+        # MSYS /tmp as a real NT path so post.sh sees the trace. No-op on Linux.
+        local -a PROFILE_ENV=()
+        if command -v cygpath >/dev/null 2>&1; then
+            PROFILE_ENV=(KORU_PROFILE="$(cygpath -w /tmp/koru_profile.json)")
+        fi
         if [ -f "$test_dir/STDIN" ]; then
-            timeout "$TEST_TIMEOUT" "$test_dir/output" "${RUN_ARGS[@]}" < "$test_dir/STDIN" > "$test_dir/actual.txt" 2>&1
+            env "${PROFILE_ENV[@]}" timeout "$TEST_TIMEOUT" "$test_dir/output" "${RUN_ARGS[@]}" < "$test_dir/STDIN" > "$test_dir/actual.txt" 2>&1
         else
-            timeout "$TEST_TIMEOUT" "$test_dir/output" "${RUN_ARGS[@]}" < /dev/null > "$test_dir/actual.txt" 2>&1
+            env "${PROFILE_ENV[@]}" timeout "$TEST_TIMEOUT" "$test_dir/output" "${RUN_ARGS[@]}" < /dev/null > "$test_dir/actual.txt" 2>&1
         fi
         RUN_EXIT=$?
 
