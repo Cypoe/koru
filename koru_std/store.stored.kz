@@ -216,6 +216,8 @@
                     else
                         std.fmt.allocPrint(allocator, "(&__koru_store_{s}.{s})[__koru_store_{s}.__koru_resolve({s})]", .{ env_store, ref_field, env_store, base }) catch unreachable;
                 } else {
+                    // `res[world.focus]` in an envelope head is the same provably-not-a-handle read (690_365).
+                    if (IndexProvenance.refusal(allocator, reporter, program, flow, re, env_store)) |r| return .{ .transformed = r };
                     env_row = H.storeRefsAll(allocator, program, re);
                 }
             } else {
@@ -462,7 +464,6 @@
             return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: store '{s}' is a DRAIN store (ambiguous discharger) - a stored write must evict the old value through the canonical discharger, which its owned column does not have; declare exactly one void discharger for the column type (690_062 pins the write; 690_057/058 pin the drain)", .{target_store}) };
         }
     }
-
     const order = H.fieldOrder(allocator, program, target_store) orelse {
         // The store's OWN declaration was already refused; that diagnostic is the
         // true one and this lookup can only ever fail. Staying silent here is what
@@ -491,10 +492,7 @@
             const ref_field = std.mem.trim(u8, re[dp + 1 ..], " ");
             var ref_ok = false;
             for (order) |fname| {
-                if (std.mem.eql(u8, fname, ref_field)) {
-                    ref_ok = true;
-                    break;
-                }
+                if (std.mem.eql(u8, fname, ref_field)) ref_ok = true;
             }
             if (ref_ok and !@import("emitter_helpers").takeItemBoundAtSite(program.items, flow, invocation, base)) {
                 // Pointer-named base (`&`) — see colRead: a by-value base
@@ -507,6 +505,8 @@
                 else
                     std.fmt.allocPrint(allocator, "(&__koru_store_{s}.{s})[__koru_store_{s}.__koru_resolve({s})]", .{ target_store, ref_field, target_store, base }) catch unreachable;
             } else {
+                // Dotted index outside this store's handle columns → cell read; `base` naming a store is decidable HERE, not in the panic (690_365).
+                if (IndexProvenance.refusal(allocator, reporter, program, flow, re, target_store)) |r| return .{ .transformed = r };
                 row_expr = H.storeRefsAll(allocator, program, re);
             }
         } else {

@@ -544,7 +544,6 @@ fn storeNewHomeIn(its: []const ast_find.Item, want: []const u8, enclosing: ?[]co
     }
     return null;
 }
-
 fn isStoreNewFor(f: *const ast_find.Flow, want: []const u8) bool {
     const inv = f.inv();
     if (inv.path.segments.len != 1 or !std.mem.eql(u8, inv.path.segments[0], "new")) return false;
@@ -644,7 +643,6 @@ fn storeAllNames(alloc: std.mem.Allocator, prog: *const ast_find.Program) []cons
     }
     return names.toOwnedSlice(alloc) catch unreachable;
 }
-
 fn storeViewMembers(alloc: std.mem.Allocator, prog: *const ast_find.Program, view_name: []const u8) ?[]const []const u8 {
     for (flatItems(alloc, prog.items)) |pi| {
         if (pi.* == .inline_code) {
@@ -810,3 +808,4 @@ fn storeLowerText(
 ~part ixrefs
 ~part prewrite
 ~part srefscan
+~part iprov

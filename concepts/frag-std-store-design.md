@@ -1105,3 +1105,38 @@ price is therefore a speed problem, not a correctness debt — the
 challenge is the substrate any join fix must keep green. Field watches
 announce `stored` writes only; insert seeds do not announce (46 brand-
 writes observed = the reshoe count, not the 496 inserts).
+
+### A subscript index's provenance is decidable when it names a declared store's cell (2026-10-16, pin 690_365)
+
+`store[expr]` used to defer every index to the runtime: the emitted
+`__koru_resolve(<expr>)` carries a brand test that panics on whatever it
+finds, and a scalar `0` carries brand 0 — deliberately not a store brand —
+so `res[world.focus]` compiled clean and died at run time. The ruling that
+closed it: integer-typed is not handle-typed, but handle-ness is mostly not
+visible at compile time either — a bound name, a call result, a closure
+capture can all carry a handle. Refusing on type alone would over-refuse.
+
+What IS decidable: an index spelled `base.field` where `base` names a
+declared store lowers to a read of the cell itself — `storeRefsAll` rewrites
+it to `__koru_store_<base>.<field>` unconditionally — so its provenance can
+be decided at the seam rather than inside the panic. Three verdicts
+(`indexProvenance`, store.srefscan.kz): a PLURAL `base` makes `base.field`
+the whole column — an array, never a handle, refused. A capacity-1 `base`
+puts the cell on its write history: if every write the scan can see is
+provably scalar the cell never holds a handle and the subscript is refused;
+one write that could carry a handle — a `| row` binding, another cell read,
+any name the scan cannot classify — keeps it legal, which is exactly the
+sanctioned handle-carrying column of 690_075. Everything else is OPAQUE and
+the brand check stands as before: a bound name shadowing the store, a base
+that is no store, a member that is no column, a seed or write the scan
+cannot read. The scan is conservative in the allowing direction only — a
+missed scalar keeps an index legal, never the reverse.
+
+The documented handle sources stay legal by never landing here: `| row`
+bindings and cursors are site-bound names (opaque), and a handle-carrying
+column of the TARGET store is claimed by the field-of-store self-FK arm
+before the scan runs (690_048). One residual structure note: the seam had
+to be installed at all three `store[…]` lowering paths — `stored`'s row
+head, `stored`'s envelope head, and `take` — because the rule lands per
+path, not per construct (the `frag-a-fix-lands-in-one-lowering-path`
+recurrence, again on store internals).

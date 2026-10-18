@@ -75,12 +75,15 @@
     }
     const store_name = std.mem.trim(u8, target_text[0..lb], " ");
     if (KeyedAddressing.in(allocator, reporter, flow, "std/store:take", target_text)) |r| return .{ .transformed = .{ .replacement = r } };
-    // Cross-store cell index (`todos[ui.sel]`) must lower like stored (690_075).
-    const row_expr = H.storeRefsAll(allocator, program, std.mem.trim(u8, target_text[lb + 1 .. target_text.len - 1], " "));
+    // Cross-store cell index (`todos[ui.sel]`) must lower like stored (690_075) —
+    // and the same provenance refusal applies first (690_365): a provably-scalar
+    // store column read can never name a row.
+    const row_text = std.mem.trim(u8, target_text[lb + 1 .. target_text.len - 1], " ");
+    if (IndexProvenance.refusal(allocator, reporter, program, flow, row_text, store_name)) |r| return .{ .transformed = r };
+    const row_expr = H.storeRefsAll(allocator, program, row_text);
     if (store_name.len == 0 or row_expr.len == 0) {
         return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:take: malformed addressing head '{s}' - take(store[handle])", .{target_text}) };
     }
-
     // The generated units live in the STORE's home namespace, which is the
     // import-derived `app.lib` — not this flow's file-derived `lib`. They
     // coincide in the entry file and diverge inside a library (115_018).
@@ -90,10 +93,7 @@
     for (flatItems(allocator, program.items)) |pi| {
         if (pi.* != .event_decl) continue;
         const ed = &pi.event_decl;
-        if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], take_name)) {
-            unit_exists = true;
-            break;
-        }
+        if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], take_name)) unit_exists = true;
     }
     if (!unit_exists) {
         return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:take({s}[...]): unknown or not-yet-created container store '{s}'", .{ store_name, store_name }) };
