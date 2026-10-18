@@ -15,8 +15,7 @@
 // continuation's own location — and it is that view's
 // `__store_qsweep_<s>_L<line>` the site transform then looks up. This part
 // mints the same view on the coordinator side so the qrow/qbody/qsweep
-// units exist for the site transform to find: one scan shape for top-level
-// flows and nested sites.
+// units exist for it to find.
 
 /// Every item in the program, flattened through `.module_decl`, in tree order,
 /// as POINTERS into the program's own arrays.
@@ -28,16 +27,13 @@
 /// diagnostic pointing at the author: "unknown store — no std/store:new(c)
 /// found", with the `new` sitting four lines above the `watch`.
 ///
-/// The caveat `findSynthDecl` carries still applies and is the reason this
-/// returns items rather than flows: flattening is safe for a predicate that
-/// names something only the store machinery mints (a `__store_*` symbol, a
-/// `std/store:<verb>` invocation) and UNSAFE for a general `.flow` scan, which
-/// would start matching ordinary flows inside `std.compiler` and friends. Every
-/// caller here is predicate-guarded; a new one must be too.
+/// Returns items not flows for the `findSynthDecl` reason: safe for a
+/// predicate naming what only the store machinery mints (`__store_*`,
+/// `std/store:<verb>`), UNSAFE for a general `.flow` scan. Every caller is
+/// predicate-guarded; a new one must be too.
 ///
-/// Pointers, not copies, so a site may take `&pi.flow` and keep it, and so the
-/// two mutating walks can `@constCast` a real program node rather than a
-/// temporary.
+/// Pointers, not copies — a site may keep `&pi.flow` and the mutating walks
+/// can `@constCast` a real program node rather than a temporary.
 ///
 /// The result is MEMOIZED per items-epoch. Flattening is O(program); the store
 /// machinery calls it per field, per leaf, per interceptor arm — thousands of
@@ -77,13 +73,17 @@ fn collectFlat(alloc: std.mem.Allocator, items: []const ast_find.Item, out: *std
     }
 }
 
-
 fn isQSiteInv(store_name: []const u8, inv: *const ast_find.Invocation) bool {
     const mq = inv.path.module_qualifier orelse return false;
     if (!std.mem.eql(u8, mq, "std.store")) return false;
     if (inv.path.segments.len != 1) return false;
+    // preorder only — never `rule`: a nested rule is a standing-rule
+    // installation, top-level-only BY CONSTRUCTION (frag-store-verb-
+    // placement). Invisibility HERE is the refusal — the site transform
+    // finds the store declared but no sweep unit and teaches "top-level-
+    // only" (690_066). preorder is momentary and nests (695_006).
     const seg = inv.path.segments[0];
-    if (!std.mem.eql(u8, seg, "rule") and !std.mem.eql(u8, seg, "preorder")) return false;
+    if (!std.mem.eql(u8, seg, "preorder")) return false;
     const stripQuotes = @import("emitter_helpers").stripQuotes;
     for (inv.args) |a| {
         if (std.mem.eql(u8, a.name, "expr")) return std.mem.eql(u8, stripQuotes(a.value), store_name);
@@ -91,8 +91,8 @@ fn isQSiteInv(store_name: []const u8, inv: *const ast_find.Invocation) bool {
     return false;
 }
 
-/// Every `std/store:rule(store)`/`preorder(store)` site nested inside an arm
-/// body anywhere in `flat_items`, minted as the synthetic flow the
+/// Every `std/store:preorder(store)` site nested inside an arm body anywhere
+/// in `flat_items`, minted as the synthetic flow the
 /// coordinator's qsites scan consumes: `.body` the holding continuation (its
 /// `.continuations` are the site's arms), `.annotations` the invocation's
 /// (a rule's [name]/[depends_on] ride the invocation, not an enclosing flow),
@@ -126,8 +126,8 @@ fn nestedQSites(
 }
 
 /// The rule/preorder site list the coordinator scans: every top-level
-/// `.flow` in the program plus a synthetic flow per nested site — one list,
-/// one scan shape.
+/// `.flow` in the program plus a synthetic flow per nested preorder site —
+/// one list, one scan shape.
 fn qSiteFlows(
     alloc: std.mem.Allocator,
     items: []const ast_find.Item,

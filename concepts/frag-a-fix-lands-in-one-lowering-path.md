@@ -870,3 +870,30 @@ let it pass straight through to the outer row's projection.
 - Pinned at 690_374: an inner `! query { [row]s }` on the same store
   shadows the outer `s`; its `when` reads the inner row, and the outer
   row's own fields keep rewriting beside it.
+
+## And the reach fix ran past the boundary the UNREACHED half was holding (2026-10-18)
+
+The spatial reach fix — mint coordinator units for `preorder` sites nested
+inside arm bodies — quantified over `rule` too, and `rule` nested in a body
+is not a missed site, it is the REFUSAL. `std/store:rule` is a standing-rule
+installation, top-level-only by construction (frag-store-verb-placement), and
+the enforcement IS the coordinator's blindness: the site transform finds the
+store declared but no minted sweep unit and teaches "top-level-only". Mint
+the unit and the refusal never fires — 690_066 passed-compile on the board.
+
+Same family, inverted direction: the previous instances asked "why did the
+fix not reach this position"; this one asked, too late, "what was the
+unreached position HOLDING". Discovery reach and refusal semantics are one
+surface — a scan widened for the momentary verb silently legalized the
+installation verb beside it.
+
+- **Before widening a scan, enumerate what invisibility enforces.** The
+  predicate `isQSiteInv` matched two verbs because they share a unit shape;
+  they do not share a placement ruling. The corrected predicate names
+  `preorder` only, and the comment now says the invisibility is load-bearing
+  so the next widening has to argue against it, not stumble over it.
+- **The board caught what the focused slice missed.** 690_066 was never in
+  the iteration set — the pins for the fix (695_006, green) and the pin for
+  the boundary it broke (a MUST_ERROR two directories over) live in the same
+  scan's blast radius. A "focused slice" sized to the feature under test is
+  sized to miss exactly this failure class.
