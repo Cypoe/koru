@@ -1,9 +1,9 @@
 --- granted session
-  vocab -> {"branch":"","value":"echo(text: string)\nvocabulary()\ngrammar()\nbind(name: string, value: Source)\nnote(text: Source) — speaks to the observer, not the user: reasoning, plans, and \"why I'm stuck\" go here"}
-  chained -> {"branch":"","value":"echo(text: string)\nvocabulary()\ngrammar()\nbind(name: string, value: Source)\nnote(text: Source) — speaks to the observer, not the user: reasoning, plans, and \"why I'm stuck\" go here\nr1"}
+  vocab -> {"branch":"","value":"echo(text: string)\nvocabulary()\ngrammar()\nbind(name: string, value: string)\nnote(text: string) — speaks to the observer, not the user: reasoning, plans, and \"why I'm stuck\" go here"}
+  chained -> {"branch":"","value":"echo(text: string)\nvocabulary()\ngrammar()\nbind(name: string, value: string)\nnote(text: string) — speaks to the observer, not the user: reasoning, plans, and \"why I'm stuck\" go here\nr1"}
   args dispatch-error: 'vocabulary' takes no fields — call it bare: vocabulary()
   defined shout
-  vocab+def -> {"branch":"","value":"echo(text: string)\nvocabulary()\ngrammar()\nbind(name: string, value: Source)\nnote(text: Source) — speaks to the observer, not the user: reasoning, plans, and \"why I'm stuck\" go here\nshout(text: string)\nr1\nr3\nr2"}
+  vocab+def -> {"branch":"","value":"echo(text: string)\nvocabulary()\ngrammar()\nbind(name: string, value: string)\nnote(text: string) — speaks to the observer, not the user: reasoning, plans, and \"why I'm stuck\" go here\nshout(text: string)\nr1\nr3\nr2"}
 --- ungranted session
   denied: event-denied vocabulary
 --- done

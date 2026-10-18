@@ -4,11 +4,10 @@
 //
 // wireValidate (wireval part) is the scope-blind shape check. wireScan is the
 // same grammar PLUS the declared field type: a field typed `Expression`
-// admits balanced expression text, a field typed `Source` admits raw text —
-// the colon form `verb: <rest>` fills a verb's lone Source field. Admitted
-// typed text is normalized to canonical quoted wire, so eval, marshal, and
-// the prompt see one representation: the type is the contract, the quoting
-// is an implementation detail of the same bytes.
+// admits balanced expression text bare. Admitted typed text is normalized
+// to canonical quoted wire, so eval,
+// marshal, and the prompt see one representation: the type is the contract,
+// the quoting is an implementation detail of the same bytes.
 
 const WireScan = union(enum) {
     ok: []const u8, // normalized wire — typed positions re-quoted
@@ -44,15 +43,10 @@ fn wireFieldType(specs: ?[]const InputFieldSpec, field: []const u8) ?[]const u8 
     return null;
 }
 
-// Captured-text fields name their type `Expression`/`Source` (module-qualified spellings included).
+// Captured-text fields name their type `Expression` (module-qualified spellings included).
 fn wireIsCapturedType(t: []const u8) bool {
     const base = if (std.mem.lastIndexOfScalar(u8, t, '.')) |d| t[d + 1 ..] else t;
-    return std.mem.eql(u8, base, "Expression") or std.mem.eql(u8, base, "Source");
-}
-
-fn wireIsSourceType(t: []const u8) bool {
-    const base = if (std.mem.lastIndexOfScalar(u8, t, '.')) |d| t[d + 1 ..] else t;
-    return std.mem.eql(u8, base, "Source");
+    return std.mem.eql(u8, base, "Expression");
 }
 
 // The captured-text family — wireEmitQuoted, wireIsBareRef, wireScanCaptured —
@@ -71,22 +65,6 @@ fn wireScan(allocator: std.mem.Allocator, s: []const u8, input_fn: ?InputLookupF
     const specs = wireFieldSpecs(verb, input_fn, host_input_fn);
     while (i < s.len and (s[i] == ' ' or s[i] == '\t')) i += 1;
 
-    // Colon form: `verb: <rest>` fills the verb's lone Source field — the
-    // spelling a model reaches for when the argument IS prose.
-    if (i < s.len and s[i] == ':') {
-        if (specs) |ss| {
-            if (ss.len == 1 and wireIsSourceType(ss[0].type_name)) {
-                out.appendSlice(allocator, verb) catch unreachable;
-                out.append(allocator, '(') catch unreachable;
-                out.appendSlice(allocator, ss[0].name) catch unreachable;
-                out.appendSlice(allocator, ": ") catch unreachable;
-                wireEmitQuoted(&out, allocator, std.mem.trim(u8, s[i + 1 ..], " \t\r\n"));
-                out.append(allocator, ')') catch unreachable;
-                return .{ .ok = out.items };
-            }
-        }
-        return .{ .reject = wireRejectResidue("not an invocation: after the verb '{s}' comes '(' — calls are `verb(field: ...)` and `vocabulary()` lists every verb", .{verb}, i) };
-    }
     if (i >= s.len or s[i] != '(') return .{ .reject = wireRejectResidue("not an invocation: after the verb '{s}' comes '(' — calls are `verb(field: ...)` and `vocabulary()` lists every verb", .{verb}, i) };
     out.appendSlice(allocator, s[0 .. i + 1]) catch unreachable;
     i += 1;

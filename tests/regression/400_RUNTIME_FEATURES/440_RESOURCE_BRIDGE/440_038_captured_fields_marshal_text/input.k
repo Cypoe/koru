@@ -1,9 +1,9 @@
-// Pins: a scope tor declaring captured fields marshals wire text through
-// the interpreter dispatcher — `expr: Expression` arrives as a string
-// carrying the captured expression text, `src: Source` arrives as a
-// Source struct whose .text is the raw wire text. Quoted wire is the
-// canonical form: the gate admits it today and the marshal routes it by
-// declared field type, not by value shape.
+// Pins: a scope tor declaring an Expression field marshals wire text
+// through the interpreter dispatcher — `expr: Expression` arrives as a
+// string carrying the captured expression text; a `string` field arrives
+// as the evaluated literal. Quoted wire is the canonical form: the gate
+// admits it and the marshal routes it by declared field type, not by
+// value shape.
 //
 // These are runtime fields — [comptime], [norun], and Program remain the
 // only timing controls (400_202/400_203 pin the emitted-backend twin).
@@ -18,10 +18,10 @@ proc calc|zig {
     _ = @import("std").posix.write(1, "\n") catch {};
 }
 
-tor render { src: Source }
+tor render { src: string }
 proc render|zig {
     _ = @import("std").posix.write(1, "render:") catch {};
-    _ = @import("std").posix.write(1, src.text) catch {};
+    _ = @import("std").posix.write(1, src) catch {};
     _ = @import("std").posix.write(1, "\n") catch {};
 }
 

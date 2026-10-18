@@ -1,17 +1,13 @@
 // Pins: the wire gate is type-directed — a value position's declared field
 // type decides what it admits.
 //
-// `expr: Expression` takes balanced expression text (`calc(expr: 2 + 3)`);
-// `src: Source` takes raw text (`render(src: hello world)`); the colon
-// form `verb: <rest>` fills a verb's lone Source field (`render: prose`,
-// `note: prose`). The host verb `note` declares `text` Source, so
-// `note(text: unquoted prose)` is wire. All of it normalizes to canonical
-// quoted wire before the interpreter parser sees it — the proc receives
-// identical text either spelling.
-//
-// An ordinary `string` field still refuses bare prose — `say(text: hello
-// world)` is a parse-error, the control that keeps captured-text types a
-// declaration, not a convention (440_038 pins the marshal beneath).
+// `expr: Expression` takes balanced expression text bare (`calc(expr: 2 +
+// 3)`); an ordinary `string` field takes a quoted literal — `render(src:
+// "hello world")`, `note(text: "thinking out loud")` — and refuses bare
+// prose, `say(text: hello world)` being a parse-error: a bare word reads
+// as a bound name. Captured text normalizes to canonical quoted wire
+// before the interpreter parser sees it, so the proc receives identical
+// text either spelling (440_038 pins the marshal beneath).
 
 import std/io
 import std/bridge
@@ -24,10 +20,10 @@ proc calc|zig {
     _ = @import("std").posix.write(1, "\n") catch {};
 }
 
-tor render { src: Source }
+tor render { src: string }
 proc render|zig {
     _ = @import("std").posix.write(1, "render:") catch {};
-    _ = @import("std").posix.write(1, src.text) catch {};
+    _ = @import("std").posix.write(1, src) catch {};
     _ = @import("std").posix.write(1, "\n") catch {};
 }
 
@@ -58,5 +54,5 @@ gated = std/bridge:run(br, source)
 | scope-not-found s2 |> std/io:print.ln("FAIL noscope {{ s2:s }}")
 
 [with]std/bridge:create(id: "cap", scope: "api", introspection: true): br
-|> gated(br, source: "calc(expr: 2 + 3)\nrender(src: hello world)\nrender: raw prose here\nnote(text: thinking out loud)\nnote: colon form too")
+|> gated(br, source: "calc(expr: 2 + 3)\nrender(src: \"hello world\")\nnote(text: \"thinking out loud\")")
 |> gated(br, source: "say(text: hello world)")

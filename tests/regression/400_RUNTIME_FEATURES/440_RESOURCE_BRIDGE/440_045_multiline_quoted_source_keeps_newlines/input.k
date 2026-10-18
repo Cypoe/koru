@@ -9,10 +9,10 @@ import std/io
 import std/bridge
 import std/runtime
 
-tor render { src: Source }
+tor render { src: string }
 proc render|zig {
     _ = @import("std").posix.write(1, "render:") catch {};
-    _ = @import("std").posix.write(1, src.text) catch {};
+    _ = @import("std").posix.write(1, src) catch {};
     _ = @import("std").posix.write(1, "\n") catch {};
 }
 

@@ -52,14 +52,14 @@ fn runSteps(br: *Bridge, source: []const u8, items: []const TurnItem) StepRun {
                 const rn = bindResidue(br, item);
                 if (rn.len > 0) {
                     const head = item[0..@min(std.mem.indexOfScalar(u8, item, '\n') orelse item.len, 48)];
-                    writer.print("step {d}/{d} residue bound: {s} — '{s}' is not wire; nothing reached the user, but the observer kept it. `say:` reaches the user, `note:` thinks, `verb(field: ...)` calls — `vocabulary()` lists every verb\n", .{ step, total, rn, head }) catch {};
+                    writer.print("step {d}/{d} residue bound: {s} — '{s}' is not wire; nothing reached the user, but the observer kept it. `say(text: ...)` reaches the user, `note(text: ...)` thinks, `verb(field: ...)` calls — `vocabulary()` lists every verb\n", .{ step, total, rn, head }) catch {};
                     continue;
                 }
             }
             if (isNoteAttempt(br, item)) {
                 const rn = bindResidue(br, item);
                 if (rn.len > 0) {
-                    writer.print("step {d}/{d} residue bound: {s} — your note did not parse as wire, but the observer kept it. Well-formed: note(text: \"...\") or note: <prose>; to reach the user, re-emit the text under `say:`\n", .{ step, total, rn }) catch {};
+                    writer.print("step {d}/{d} residue bound: {s} — your note did not parse as wire, but the observer kept it. Well-formed: note(text: \"...\"); to reach the user, say(text: \"...\")\n", .{ step, total, rn }) catch {};
                     continue;
                 }
             }

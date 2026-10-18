@@ -303,3 +303,26 @@ capture, because neither lexes bare. The 10-07 advice survives it:
 re-emitting prose under `say:` is still the taught redelivery — but the
 "unfulfillable" spelling now resolves, and the env is the judge instead
 of the scanner. Pinned by 440_047.
+
+2026-10-18 — the second spelling is deleted; there is one form:
+`verb(field: value)`. Lars's ruling: the colon form was a concession to
+an era's fear (quote-balance in prose), and a second spelling is itself
+the defect — either the wire calls `tor`s or it cannot. The 10-07
+block-segmenter, the item-head `verb:` admission in wirescan, the
+`in_colon` state, and every teaching string are gone; a colon-headed
+line binds as residue and the refusal names the paren form. The same
+ruling purged `Source` from wire scope: it was always the comptime
+source-fragment type (`ast.zig`), never a prose type — `say`/`note`/`bind`
+carry `string`, and `{{ }}` interpolation (interpreter.interp, landed the
+same day) covers the bound-value composition the colon form existed to
+spare. `Expression` fields keep bare-text admission (`calc(expr: 2 + 3)`);
+that survival is unruled — same comptime-only family, pending Lars.
+440_046 re-pinned as `colon_form_is_refused`; 440_047 renamed
+`bare_name_is_a_reference`. The one surviving trap is positional and
+older than the spelling it stranded: `|> say: x` in chain-step position
+still parses as invocation-plus-bind and drops the prose silently —
+program parser, not item scanner; kopium bridge-mirror
+2026-10-18-colon-in-chain carries it. The deletion shrank the wire:
+wirescan 266→202, turn 92→71, turnscan 70→47 — the grammar is smaller
+*and* stricter, which is what the 09-16 derivation lesson always aimed
+at.

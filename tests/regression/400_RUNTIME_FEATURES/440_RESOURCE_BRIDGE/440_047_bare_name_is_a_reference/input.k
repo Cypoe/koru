@@ -1,16 +1,11 @@
 // Pins: a captured field obeys the same bound-name law as every other
 // field — a lone bare token is a reference, not literal text.
 //
-// `src: Source` and `expr: Expression` capture raw wire text: prose and
-// bracketed data normalize to quoted literals. But a single bare token was
-// captured too, sealing the one spelling a bound name uses —
-// `sink(src: r1.flights)` delivered the nine bytes "r1.flights" to the proc
-// while `echo(text: r1.text)` on a string field resolved the same name
-// (440_033). The scanner's own refusal text already teaches "a bare word
-// reads as a bound name"; this pin makes captured fields keep it — a bound
-// `rN`/`rN.field` resolves to the bound field's text (JSON bytes intact),
-// an unbound name refuses at validation naming the arm that would bind it,
-// and real prose still captures.
+// `expr: Expression` captures expression text bare; `src: string` takes a
+// quoted literal. But a bare token on either is a bound-name reference —
+// `sink(src: r1.flights)` resolves the bound field's text (JSON bytes
+// intact), an unbound name refuses at validation naming the arm that
+// would bind it, and bare prose never parses as a value.
 
 import std/io
 import std/bridge
@@ -23,10 +18,10 @@ proc produce|zig {
     return std.fmt.bufPrint(&S.buf, "{{\"flights\": [{{\"flight_number\": \"H1001\", \"date\": \"2024-05-01\"}}], \"text\": \"payload-7\", \"count\": 7}}", .{}) catch unreachable;
 }
 
-tor sink { src: Source }
+tor sink { src: string }
 proc sink|zig {
     _ = @import("std").posix.write(1, "sink:") catch {};
-    _ = @import("std").posix.write(1, src.text) catch {};
+    _ = @import("std").posix.write(1, src) catch {};
     _ = @import("std").posix.write(1, "\n") catch {};
 }
 
@@ -50,7 +45,7 @@ turn = std/bridge:run(br, source: src)
 | unhandled-branch ub |> std/io:print.ln("FAIL unhandled {{ ub.branch:s }}")
 | event-denied ev |> std/io:print.ln("FAIL denied {{ ev:s }}")
 | residue _ |> std/io:print.ln("FAIL: residue outcome")
-| parse-error p |> std/io:print.ln("FAIL parse {{ p.message:s }}")
+| parse-error p |> std/io:print.ln("REFUSED parse {{ p.message:s }}")
 | validation-error v |> std/io:print.ln("REFUSED {{ v:s }}")
 | shape-error sh |> std/io:print.ln("FAIL shape {{ sh.message:s }}")
 | dispatch-error e |> std/io:print.ln("FAIL dispatch {{ e.message:s }}")
@@ -64,5 +59,4 @@ turn = std/bridge:run(br, source: src)
 |> turn(br, src: "sink(src: r1.text)")
 |> turn(br, src: "calc(expr: r1.count)")
 |> turn(br, src: "sink(src: ghost.field)")
-|> turn(br, src: "sink(src: hello world)")
-|> turn(br, src: "sink: a colon line stays prose")
+|> turn(br, src: "sink(src: \"hello world\")")

@@ -1,0 +1,7 @@
+shout:hi
+step 1/3 residue bound: r1 — 'render: line1' is not wire; nothing reached the user, but the observer kept it. `say(text: ...)` reaches the user, `note(text: ...)` thinks, `verb(field: ...)` calls — `vocabulary()` lists every verb
+step 2/3 residue bound: r2 — 'line2' is not wire; nothing reached the user, but the observer kept it. `say(text: ...)` reaches the user, `note(text: ...)` thinks, `verb(field: ...)` calls — `vocabulary()` lists every verb
+step 3/3 result: {"branch":""} bound: r3
+
+residue, as it should be
+residue, as it should be

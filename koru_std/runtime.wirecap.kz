@@ -1,5 +1,5 @@
 // Koru Standard Library: the `wirecap` part of runtime — captured-text
-// scanning for `Expression`/`Source` wire fields: balanced-text extraction,
+// scanning for `Expression` wire fields: balanced-text extraction,
 // canonical quoting, and the bare-reference judgment. Joined via
 // `~part wirecap` in runtime.kz; merged into the runtime module at load.
 

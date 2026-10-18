@@ -1,17 +1,17 @@
-// Pins: a `verb: <prose>` colon item is a block — following lines that are
-// not invocation heads fold into the prose instead of splitting into
-// residue items. The block ends at the next `name(`, `name:`, `|`, or
-// `tor ` line; blank lines inside it are preserved. Before this, every
-// continuation line after a colon head opened its own item and bound as
-// residue — a multi-line `say:` delivered only its first line to the user.
+// Pins: `verb: <prose>` is not wire — a call has one spelling and it
+// carries parens: verb(field: value). A colon-headed line refuses as
+// residue, every following prose line binds as its own residue item, and
+// invocations in the same reply still run. There is no colon form to
+// maintain — quoting is the quoting; a second spelling was a segmenter
+// special-case that silently swallowed the same construct in chain steps.
 import std/io
 import std/bridge
 import std/runtime
 
-tor render { src: Source }
+tor render { src: string }
 proc render|zig {
     _ = @import("std").posix.write(1, "render:") catch {};
-    _ = @import("std").posix.write(1, src.text) catch {};
+    _ = @import("std").posix.write(1, src) catch {};
     _ = @import("std").posix.write(1, "\n") catch {};
 }
 
@@ -33,7 +33,7 @@ gated = std/bridge:run(br, source)
 | partial p |> std/io:print.ln("{{ p.report:s }}")
 | unhandled-branch ub |> std/io:print.ln("FAIL unhandled {{ ub.branch:s }}")
 | event-denied ev |> std/io:print.ln("FAIL denied {{ ev:s }}")
-| residue _ |> std/io:print.ln("FAIL: residue outcome")
+| residue _ |> std/io:print.ln("residue, as it should be")
 | parse-error p |> std/io:print.ln("FAIL parse {{ p.message:s }}")
 | validation-error v |> std/io:print.ln("FAIL invalid {{ v:s }}")
 | shape-error sh |> std/io:print.ln("FAIL shape {{ sh.message:s }}")
@@ -42,10 +42,10 @@ gated = std/bridge:run(br, source)
 | exhausted _ |> std/io:print.ln("FAIL exhausted")
 | scope-not-found s2 |> std/io:print.ln("FAIL noscope {{ s2:s }}")
 
-// Colon block: two prose lines (one blank line between) fold into src.
+// `render:` and its prose continuations all bind residue; shout dispatches.
 [with]std/bridge:create(id: "cap", scope: "api"): br
 |> gated(br, source: "render: line1\n\nline2\nshout(word: \"hi\")")
-// A `|`-arm line ends the block and stands alone — a lone arm is not wire.
+// A `|`-arm line is not wire either — a lone arm binds residue.
 |> gated(br, source: "render: a\n| ok u |>")
-// A `word:` line ends the block — invocation-shaped, even if unknown.
+// An invocation-shaped `Note:` line is refused the same as the rest.
 |> gated(br, source: "render: b\nNote: ends it")
