@@ -21,7 +21,15 @@
 # level/test pairs and unikraft blk boot-test repetitions dominate the
 # top offenders; spellings 619→661 include libs/ui's new tors plus
 # foreign surface.
-clusters=827
-members=373
+# Re-pinned 2026-10-18: sampled roll fired on the tree-twin commit. Own
+# contribution is the [tree]-backing experiment — spec_tree.k ↔ spec_snap.k
+# and bench_scale_tree.k ↔ bench_scale.k are deliberate dialect twins kept
+# side by side to compare the two store shapes (byte-identical render is
+# the check), same structural twin class as the *_snap pairs already
+# counted; the bench_* family (phases/scan/bracket/scale) are measurement
+# harnesses sharing the spec seed cascade by design. The remainder is
+# foreign drift — ponkatris level pairs and the asteroids main twin.
+clusters=1009
+members=413
 skipped=21
-spellings=661
+spellings=663
