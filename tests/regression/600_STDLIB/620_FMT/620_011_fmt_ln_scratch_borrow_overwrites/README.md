@@ -20,12 +20,14 @@ contract is enforced by the compiler:
 ## Enforcement (landed)
 
 `fmt:ln`'s bound product (`l` in `fmt:ln(...): l`) carries
-`string<scratch@scoped>`. The grammar: `@` joins a name (open vocabulary,
-module-coined identity) and classes (closed vocabulary, compiler-enforced
-rules), commutatively — `scratch@scoped` ≡ `scoped@scratch`. Identity
-matching strips classes, so `scratch` acceptors and plain `l.text` reads
-keep working; the class rule fires only at boundaries. Names are payload;
-`!` and `@class` are grammar.
+`string<scratch@scoped>`. The grammar is positional: the name holds the
+first position, classes join after it (`name!@class@class`); the name
+atom is where `!` binds — `alloc!@scoped` issues a confined obligation.
+Class vocabulary is open — the compiler enforces `scoped` and carries
+any other class inertly for modules to honor. Identity matching strips
+classes, so `scratch` acceptors and plain `l.text` reads keep working;
+the class rule fires only at boundaries. Names are payload; `!` and
+`@class` are grammar.
 
 `scoped` means "may not occupy output position": `-> l`, `-> l.text`,
 `-> { f: l }`, and `=>` payload fields all refuse KORU030 at the produce
@@ -40,8 +42,11 @@ The legal shapes, both pinned green:
 
 ## Known residual
 
-The class rides the binding, not its projections at parameter position:
-`f(l.text)` sees `.text` as unqualified, so a callee receiving `.text`
-through a param could re-produce it — class preservation across param
-bindings is not yet implemented. The produce-edge check closes the
-direct escape; the param path is the named next hole.
+Scoped values cross parameter walls only by declared contract:
+`f(l.text)` into a plain `string`/`string<*>` param refuses at the
+argument wall (620_013); a param declared `string<*@scoped>` accepts and
+binds the value as scoped inside the callee (620_014), and only an
+output declared `-> string<*@scoped>` may reissue it (620_015). What
+remains open: record-literal produce with a scoped field refuses even
+when the declared output field carries the class — field-level conferral
+is not yet implemented, so the conservative refusal stands.
