@@ -5,7 +5,7 @@ provenance: Windows verification pass, ccomp branch, 2026-10-12 —
   koruc --lang=cs on the Windows host failed three times before the
   first .NET byte ran: unescaped path literal, posix.getenv, open
   csproj handle
-ts: 2026-10-12
+ts: 2026-11-05
 tags: [koru, portability, windows, toolchain, emitters]
 ---
 
@@ -33,8 +33,17 @@ three independent leaks, each a silent-on-Linux default:
    Windows refuses with MSB4025. The defer had to move above the
    `Child.run`, not merely exist in scope.
 
+4. `Child.run`'s `.cwd_dir` handle (2026-11-05, `expression_codegen_
+   compile_test`): on Windows the handle reaches the child as a `\\?\`
+   device path, and the spawned zig's file-hash then cannot open the
+   relative source name — `file_hash FileNotFound`, two unit reds that
+   looked like a cache bug. POSIX resolves the handle to a plain path;
+   the failure only exists where the hand-off format differs. Fix:
+   `realpathAlloc` the dir and pass `.cwd` as a string.
+
 The rule: when the toolchain touches the host — files it writes then
 hands to a child process, environment reads, paths it bakes into
-generated literals — POSIX-tolerance is not evidence of correctness,
-it is the hiding place. A Windows run is the cheapest portability
-instrument the repo has; run it before claiming a lane works.
+generated literals, the cwd a child inherits — POSIX-tolerance is not
+evidence of correctness, it is the hiding place. A Windows run is the
+cheapest portability instrument the repo has; run it before claiming a
+lane works.

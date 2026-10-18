@@ -54,11 +54,15 @@ test "generated logical operators compile in Zig" {
         defer test_file.close();
         try test_file.writeAll(test_program);
         
-        // Compile and run the test
+        // Compile and run the test — cwd as a realpath string: a cwd_dir
+        // handle reaches the child as a \\?\ device path on Windows and the
+        // spawned zig's file-hash then can't open the relative source name.
+        const tmp_abs = try tmp_dir.dir.realpathAlloc(allocator, ".");
+        defer allocator.free(tmp_abs);
         const result = try std.process.Child.run(.{
             .allocator = allocator,
             .argv = &[_][]const u8{ "zig", "test", "test_and.zig" },
-            .cwd_dir = tmp_dir.dir,
+            .cwd = tmp_abs,
         });
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
@@ -115,10 +119,12 @@ test "generated logical operators compile in Zig" {
         defer test_file.close();
         try test_file.writeAll(test_program);
         
+        const tmp_abs = try tmp_dir.dir.realpathAlloc(allocator, ".");
+        defer allocator.free(tmp_abs);
         const result = try std.process.Child.run(.{
             .allocator = allocator,
             .argv = &[_][]const u8{ "zig", "test", "test_or.zig" },
-            .cwd_dir = tmp_dir.dir,
+            .cwd = tmp_abs,
         });
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
@@ -236,10 +242,12 @@ test "complex expression with all operators compiles" {
     defer test_file.close();
     try test_file.writeAll(test_program);
     
+    const tmp_abs = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_abs);
     const result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{ "zig", "test", "test_complex.zig" },
-        .cwd_dir = tmp_dir.dir,
+        .cwd = tmp_abs,
     });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
