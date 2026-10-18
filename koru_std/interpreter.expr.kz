@@ -231,9 +231,9 @@ fn evaluateExpr(expr_str: []const u8, ctx: *InterpreterContext) ![]const u8 {
     const allocator = ctx.allocator;
     const trimmed = std.mem.trim(u8, expr_str, " \t");
 
-    // String literal - return without quotes, honoring escapes
+    // String literal: unescape, then splice `{{ name }}` / `{{ name.field }}` (interp part)
     if (trimmed.len >= 2 and trimmed[0] == '"' and trimmed[trimmed.len - 1] == '"') {
-        return try unescapeStringLiteral(trimmed[1..trimmed.len - 1], allocator);
+        return try interpolateWireString(try unescapeStringLiteral(trimmed[1..trimmed.len - 1], allocator), ctx);
     }
 
     // Check for field access (binding.field) — only when the base is an

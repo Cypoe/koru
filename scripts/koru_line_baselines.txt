@@ -105,8 +105,9 @@ koru_std/interpreter.deftable.kz	174
 koru_std/interpreter.expr.kz	278
 koru_std/interpreter.flowsrc.kz	85
 koru_std/interpreter.guards.kz	63
+koru_std/interpreter.interp.kz	83
 koru_std/interpreter.handles.kz	279
-koru_std/interpreter.kz	575
+koru_std/interpreter.kz	574
 koru_std/interpreter.literal.kz	40
 koru_std/interpreter.names.kz	18
 koru_std/interpreter.parse.kz	52

@@ -1,7 +1,5 @@
 // Koru Interpreter Standard Library
-// Enables runtime evaluation of Koru source code
-//
-// DESIGN:
+// Enables runtime evaluation of Koru source code — DESIGN:
 // - Parses Koru source at runtime using the same parser as the compiler
 // - Walks the AST and executes tors via registered dispatchers
 // - Tracks bindings in an environment; validates flows before execution
@@ -559,6 +557,7 @@ pub fn findHostTilde(source: []const u8) ?HostTilde {
 ~part define
 ~part expr
 ~part guards
+~part interp
 ~part names
 ~part parse
 ~part pool

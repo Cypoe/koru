@@ -1,0 +1,83 @@
+// Koru Standard Library: the `interp` part of interpreter — `{{ name }}` /
+// `{{ name.field }}` splicing inside wire string literals, resolved against
+// the session's bindings. Joined via `~part interp` in interpreter.kz;
+// merged into the interpreter module at load.
+
+// `{{ name }}` / `{{ name.field }}` inside a wire string splices a bound
+// value into the text — the composition channel that lets one reply carry a
+// call's result into prose ("booked {{ b.reservation_id }}") instead of
+// spending a second turn to quote it. A reference that resolves
+// substitutes; a name nobody bound refuses loudly (an empty placeholder
+// shipped as data is the dishonest version of that error). `{{` that does
+// not open a dotted identifier stays literal, so prose may carry braces.
+fn interpolateWireString(inner: []const u8, ctx: *InterpreterContext) ![]const u8 {
+    const allocator = ctx.allocator;
+    if (std.mem.indexOf(u8, inner, "{{") == null) return try allocator.dupe(u8, inner);
+    var out = try std.ArrayList(u8).initCapacity(allocator, inner.len);
+    var i: usize = 0;
+    while (i < inner.len) {
+        if (i + 1 < inner.len and inner[i] == '{' and inner[i + 1] == '{') {
+            var j = i + 2;
+            while (j < inner.len and inner[j] == ' ') j += 1;
+            const ref_start = j;
+            while (j < inner.len and
+                (std.ascii.isAlphanumeric(inner[j]) or inner[j] == '_' or inner[j] == '-' or inner[j] == '.')) j += 1;
+            const ref_txt = inner[ref_start..j];
+            // fmt's `{{ x:s }}` habit is welcome — the tail sigil names a
+            // rendering this channel does not have, so it is accepted and
+            // ignored; everything lands as text either way.
+            if (j < inner.len and inner[j] == ':') {
+                var k = j + 1;
+                while (k < inner.len and std.ascii.isAlphabetic(inner[k])) k += 1;
+                if (k > j + 1) j = k;
+            }
+            while (j < inner.len and inner[j] == ' ') j += 1;
+            if (ref_txt.len > 0 and isWireIdent(ref_txt[0..std.mem.indexOfScalar(u8, ref_txt, '.') orelse ref_txt.len]) and
+                j + 1 < inner.len and inner[j] == '}' and inner[j + 1] == '}')
+            {
+                try out.appendSlice(allocator, try interpolateRef(ref_txt, ctx));
+                i = j + 2;
+                continue;
+            }
+        }
+        try out.append(allocator, inner[i]);
+        i += 1;
+    }
+    return out.items;
+}
+
+// One `{{ ref }}` — `name` or `name.field`, first-dot split like the bare
+// field-access path in expr.
+fn interpolateRef(ref_txt: []const u8, ctx: *InterpreterContext) ![]const u8 {
+    const allocator = ctx.allocator;
+    const env = ctx.env;
+    if (std.mem.indexOfScalar(u8, ref_txt, '.')) |dot| {
+        const binding_name = ref_txt[0..dot];
+        const field_name = ref_txt[dot + 1 ..];
+        if (env.get(binding_name)) |bound_value| {
+            for (bound_value.fields) |fv| {
+                if (std.mem.eql(u8, fv.name, field_name)) {
+                    return try fieldValueToString(fv.value, allocator);
+                }
+            }
+            ctx.error_detail = std.fmt.allocPrint(allocator,
+                "'{{ {s}.{s} }}' — the bound value '{s}' carries no field '{s}'",
+                .{ binding_name, field_name, binding_name, field_name }) catch null;
+            return error.FieldNotOnBoundValue;
+        }
+        ctx.error_detail = std.fmt.allocPrint(allocator,
+            "'{{ {s} }}' names '{s}', which is not bound — no earlier arm issued it; bind the value with `| ok name |>` first",
+            .{ ref_txt, binding_name }) catch null;
+        return error.UnboundName;
+    }
+    if (env.get(ref_txt)) |bound_value| {
+        if (bound_value.fields.len > 0) {
+            return try fieldValueToString(bound_value.fields[0].value, allocator);
+        }
+        return bound_value.branch;
+    }
+    ctx.error_detail = std.fmt.allocPrint(allocator,
+        "'{{ {s} }}' is not bound — no earlier arm issued that name; bind the value with `| ok name |>` first",
+        .{ref_txt}) catch null;
+    return error.UnboundName;
+}
