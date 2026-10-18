@@ -45,3 +45,9 @@
 [witness] site pass-graph-tstage renumber at main
 [witness] site pass-graph-tstage tap at main
 [witness] site pass-graph-census graph counts edges=5 orders=3,tedges=1,tstages=3
+[witness] site custody-edge h0 h0<-input:*Handle<input:owned!> mint
+[witness] site custody-edge h0 h0<-input:*Handle<input:owned!> borrow
+[witness] site custody-edge h0 h0<-input:*Handle<input:owned!> borrow
+[witness] site custody-edge h0 h0<-input:*Handle<input:owned!> discharge
+[witness] site custody-edge hh hh<-input:*Handle<input:held!> held
+[witness] site custody-edge hh hh<-input:*Handle<input:held!> borrow

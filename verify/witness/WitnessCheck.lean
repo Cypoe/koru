@@ -231,7 +231,7 @@ def parseSiteLine (line : String) : Option SiteLine :=
 
 inductive Ruling where
   | match_ | mismatch (want : String) | malformed
-deriving Repr
+deriving Repr, DecidableEq
 
 /-! ## Kind `auto-discharge` — the unattended-discharge policy
 
@@ -357,6 +357,12 @@ proto (`base_type<phantom_state>`). The ops:
   - `held`      — an obligation arrived through a declared consume input
                   (`<!state>`): the debt is real but settled by the event's
                   contract, so it never enters the leak audit.
+  - `borrow`    — an owned obligation was exercised through a declared
+                  borrow input (`<state>`, no `!`) at a call site
+                  (`validateArgument`): custody stays with the caller —
+                  an exercise edge, the static twin of the runtime's
+                  `use` event. The edge names the arg binding and carries
+                  the binding's own `<...!>` proto like every other op.
   - `discharge` — a consume call or field-suffix settled the obligation
                   (BindingContext.markDisposed).
   - `issued`    — the obligation exited live through a declared `[!]`
@@ -369,6 +375,9 @@ edge list per arrow and requires
 
     mint      ⇒ exactly one settle (discharge or issued) before re-bind/end
     held      ⇒ at most one discharge (settlement may be contract-invisible)
+    borrow    ⇒ an outstanding mint or held must precede it — custody is
+                unchanged (exercise ≠ transfer); without it the ledger
+                could not tell "borrowed live" from "never touched"
     discharge/issued ⇒ an outstanding mint or held must precede them
 
 — the witness-level twin of the checker's own leak walls. -/
@@ -383,9 +392,9 @@ def ruleCustody (s : SiteLine) : Ruling :=
   | some (nm, proto) =>
     let name := String.ofList nm
     if name.isEmpty || s.site != name then .malformed
-    else if !protoHasBang (String.ofList proto) then .malformed
     else match s.verdict with
-      | "mint" | "held" | "discharge" | "issued" => .match_
+      | "mint" | "held" | "borrow" | "discharge" | "issued" =>
+        if !protoHasBang (String.ofList proto) then .malformed else .match_
       | _ => .malformed
 
 /-- Ledger state for one arrow's edge sequence. -/
@@ -395,14 +404,17 @@ inductive CustodySt where
   | heldSt   -- a held obligation may discharge or end contract-settled
 deriving DecidableEq, Repr
 
-/-- One transition; `none` = the edge is illegal here. -/
+/-- One transition; `none` = the edge is illegal here. `borrow` needs an
+outstanding hold and moves nothing — exercise, not transfer. -/
 def custodyStep : CustodySt → String → Option CustodySt
-  | .clean,   "mint"      => some .minted
-  | .clean,   "held"      => some .heldSt
-  | .minted,  "discharge" => some .clean
-  | .minted,  "issued"    => some .clean
-  | .heldSt,  "discharge" => some .clean
-  | _,        _           => none
+  | .clean,    "mint"      => some .minted
+  | .clean,    "held"      => some .heldSt
+  | .minted,   "borrow"    => some .minted
+  | .heldSt,   "borrow"    => some .heldSt
+  | .minted,   "discharge" => some .clean
+  | .minted,   "issued"    => some .clean
+  | .heldSt,   "discharge" => some .clean
+  | _,         _           => none
 
 /-- An arrow's ledger closes iff every mint settled. A live `held` may end
 open — a host impl's contract settles it invisibly. -/
@@ -416,6 +428,25 @@ def custodyRun : List String → CustodySt → Option CustodySt
   | op :: rest, st => match custodyStep st op with
     | some st' => custodyRun rest st'
     | none => none
+
+/-! #### Borrow-edge pins — the op's fixture classes, decided at compile time -/
+
+-- a borrow on an outstanding mint is legal and moves nothing
+example : custodyStep .minted "borrow" = some .minted := rfl
+-- a borrow on an outstanding held is legal and moves nothing
+example : custodyStep .heldSt "borrow" = some .heldSt := rfl
+-- a forged borrow with no outstanding obligation is refused
+example : custodyStep .clean "borrow" = none := rfl
+-- repeated borrows do not discharge: the ledger still owes a settle
+example : custodyRun ["mint", "borrow", "borrow"] CustodySt.clean = some .minted := rfl
+example : custodyClosed .minted = false := rfl
+-- golden spines close: mint → exercise → settle, held → exercise → settle
+example : custodyRun ["mint", "borrow", "discharge"] CustodySt.clean = some .clean := rfl
+example : custodyRun ["held", "borrow", "discharge"] CustodySt.clean = some .clean := rfl
+-- a borrow edge carrying a bare `<state>` proto is malformed — the edge
+-- names the caller's obligation, so it carries `!` like every other op
+example : ruleCustody ⟨"custody-edge", "h", "h<-*Handle<input:owned>", "borrow", ""⟩ = .malformed := by native_decide
+example : ruleCustody ⟨"custody-edge", "h", "h<-*Handle<input:owned!>", "borrow", ""⟩ = .match_ := by native_decide
 
 /-- Corpus-level balance: group custody-edge lines by arrow, replay each
 group's ops in file order, every ledger must close. Returns the failing

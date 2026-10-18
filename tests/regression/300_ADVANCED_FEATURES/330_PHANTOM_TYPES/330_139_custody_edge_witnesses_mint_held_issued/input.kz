@@ -12,6 +12,9 @@
 //       the branch-constructor escape audit never sees)
 //   h0 — mint:   the caller's bare-return bind; discharged into spin
 //   hf — mint:   receives spin's issued output; discharged by done
+//   h (peek) — borrow: enters peek live through its declared borrow param
+//       `<owned>` (no `!`) — custody stays with the caller, the claim is
+//       witnessed so the ledger can tell borrowed from never-touched
 //
 // The .args_only pre-pass (check-phantom-args) walks the same bindings but
 // must NOT print — emit_edges is set only when check_mode == .full, or the
@@ -30,6 +33,11 @@ const Handle = struct { n: i32 };
     h.n += 1;
     if (h.n < 3) return .{ .again = h };
     return .{ .stop = h };
+}
+
+~tor peek { h: *Handle<owned> }
+~proc peek|zig {
+    std.debug.print("peek n={}\n", .{h.n});
 }
 
 ~tor done { h: *Handle<!owned> }
@@ -52,4 +60,4 @@ const Handle = struct { n: i32 };
 
 ~std/witness:enforce { }
 
-~make(): h0 |> spin(h: h0): hf |> done(h: hf)
+~make(): h0 |> peek(h: h0) |> spin(h: h0): hf |> done(h: hf)

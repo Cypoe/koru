@@ -188,3 +188,21 @@ obligation live-but-unmentioned — is the same KORU030 evaporation the
 terminators already refuse. The surprise is that "identifier-match only"
 was never a modesty the ledger needed: the declared carrier was already
 visible; what was missing was asking.
+
+Evolution (2026-10-18, `borrow` — the fifth edge): the vocabulary carried a
+blind spot symmetric to the one the runtime record closed with `use` — a
+bare `<state>` input accepted the obligation, exercised it, and left the
+ledger silent, so "borrowed live" was indistinguishable from "never
+touched". The edge lives at the CALL site, not the callee's seed: the arg
+binding already owes (`<...!>` proto like every other op), and `borrow`
+leaves its ledger state untouched — an exercise record, not a transfer.
+Two placements were weighed and the seeding site lost: a flow-impl's own
+`<state>` param owes nothing in ITS scope, so minting an edge there would
+make the corpus refuse legal code; only obligation-carrying args edge,
+which also keeps a re-passed borrow honest by construction. Ledger rule:
+`borrow` is legal only from an outstanding `minted`/`heldSt` and returns
+the same state; a bare-proto `borrow` line is MALFORMED the way a bare
+proto is on every other op. Pins: `330_139` (peek exercises `h0` between
+mint and discharge — `mint=4 held=1 borrow=1 discharge=4 issued=1`),
+golden/forged corpus lines, and compile-time `example` pins in
+WitnessCheck for all five fixture classes.

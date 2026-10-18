@@ -64,3 +64,4 @@
 [witness] site transform-oblige tap tap matched-only ok;justified=nothexdig
 [witness] site transform-oblige tap tap kind-stable ok;justified=aaaabbbbccccdddd
 [witness] site transform-app-census transform transform count=1
+[witness] site custody-edge h h<-input:*Handle<input:owned> borrow

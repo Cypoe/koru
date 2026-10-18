@@ -37,6 +37,7 @@ pub var custody_edges_enabled: bool = false;
 /// run and print once at its end.
 var custody_mints: usize = 0;
 var custody_helds: usize = 0;
+var custody_borrows: usize = 0;
 var custody_discharges: usize = 0;
 var custody_issueds: usize = 0;
 
@@ -111,7 +112,7 @@ fn phantomStateTail(state: []const u8) []const u8 {
 
 fn emitCustodyEdge(op: []const u8, name: []const u8, phantom_state: []const u8, base_type: []const u8) void {
     if (!custody_edges_enabled) return;
-    if (std.mem.eql(u8, op, "mint")) custody_mints += 1 else if (std.mem.eql(u8, op, "held")) custody_helds += 1 else if (std.mem.eql(u8, op, "discharge")) custody_discharges += 1 else if (std.mem.eql(u8, op, "issued")) custody_issueds += 1;
+    if (std.mem.eql(u8, op, "mint")) custody_mints += 1 else if (std.mem.eql(u8, op, "held")) custody_helds += 1 else if (std.mem.eql(u8, op, "borrow")) custody_borrows += 1 else if (std.mem.eql(u8, op, "discharge")) custody_discharges += 1 else if (std.mem.eql(u8, op, "issued")) custody_issueds += 1;
     std.debug.print("[witness] site custody-edge {s} {s}<-{s}<{s}> {s}\n", .{ name, name, base_type, phantom_state, op });
 }
 
@@ -453,7 +454,7 @@ pub const PhantomSemanticChecker = struct {
         // edge lines emit during THIS walk, which runs after the marks
         // consumer in the pipeline. One line per enforced compile.
         if (custody_edges_enabled) {
-            std.debug.print("[witness] custody-edge: mint={d} held={d} discharge={d} issued={d}\n", .{ custody_mints, custody_helds, custody_discharges, custody_issueds });
+            std.debug.print("[witness] custody-edge: mint={d} held={d} borrow={d} discharge={d} issued={d}\n", .{ custody_mints, custody_helds, custody_borrows, custody_discharges, custody_issueds });
         }
         log.debug("[PHANTOM] All validation passed!\n", .{});
     }
@@ -1858,6 +1859,11 @@ pub const PhantomSemanticChecker = struct {
                         // stood). The silent-drop wall is the inserter's.
                         root_context.clearCleanupObligation(field.name);
                     } else {
+                        // A bare `<state>` input borrows: the binding owes
+                        // nothing in this scope, so the ledger records NO
+                        // edge for it here. The custody event lives at the
+                        // CALL site — `validateArgument` emits `borrow` for
+                        // the caller's exercised (still-owned) binding.
                         try root_context.setWithType(field.name, canonical_phantom, canonical_base_type);
                     }
                 }
@@ -4281,6 +4287,21 @@ pub const PhantomSemanticChecker = struct {
                     context.clearCleanupObligation(arg.value);
                     // Mark the binding as disposed (poisoned - cannot be used anymore)
                     try context.markDisposed(arg.value, site_key);
+                } else if (!concrete.requires_cleanup) {
+                    // A bare `<state>` parameter is a BORROW: custody stays
+                    // with the caller, but the exercise is a custody event on
+                    // the caller's obligation — witness it so the ledger can
+                    // tell "borrowed live" from "never touched", the same
+                    // blindness the runtime record closed with `use`.
+                    // The edge names the ARG binding (the obligation being
+                    // lent), not the param; it carries the binding's own
+                    // `<...!>` proto like every other op. Only obligation-
+                    // carrying args edge — a seeded borrow param re-passed
+                    // onward owes nothing and stays edge-less, the same way
+                    // its arrival seed emitted nothing.
+                    if (context.emit_edges and std.mem.endsWith(u8, binding_info.phantom_state, "!")) {
+                        emitCustodyEdge("borrow", arg.value, binding_info.phantom_state, binding_info.base_type);
+                    }
                 }
             },
             .variable => {},

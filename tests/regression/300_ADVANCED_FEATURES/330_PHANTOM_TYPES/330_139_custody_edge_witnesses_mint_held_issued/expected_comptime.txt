@@ -5,7 +5,8 @@
 [witness] site custody-edge r r<-input:*Handle<input:owned!> mint
 [witness] site custody-edge r r<-input:*Handle<input:owned!> issued
 [witness] site custody-edge h0 h0<-input:*Handle<input:owned!> mint
+[witness] site custody-edge h0 h0<-input:*Handle<input:owned!> borrow
 [witness] site custody-edge h0 h0<-input:*Handle<input:owned!> discharge
 [witness] site custody-edge hf hf<-input:*Handle<input:owned!> mint
 [witness] site custody-edge hf hf<-input:*Handle<input:owned!> discharge
-[witness] custody-edge: mint=4 held=1 discharge=4 issued=1
+[witness] custody-edge: mint=4 held=1 borrow=1 discharge=4 issued=1

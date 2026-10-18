@@ -9412,6 +9412,11 @@ pub fn main() !void {
         // This ensures all module dependencies are properly linked
         const output_dir_for_build = std.fs.path.dirname(output) orelse ".";
 
+        // The built backend's artifact name: copyFile does no suffix search,
+        // so `backend` vs `backend.exe` must be spelled by the host target —
+        // the same gap the emitted driver's output[.exe] arm already fixed.
+        const backend_artifact_name = if (@import("builtin").os.tag == .windows) "backend.exe" else "backend";
+
         // `mint check` — the audit verb. Recomputes the closure over the live
         // tree and diffs it against the manifest. Runs AFTER emission (the
         // emitted hash is a component) but never reaches a zig build.
@@ -9447,7 +9452,7 @@ pub fn main() !void {
                 const bin_dir = std.fs.path.join(allocator, &[_][]const u8{ output_dir_for_build, "zig-out", "bin" }) catch null;
                 if (bin_dir) |bd_| {
                     defer allocator.free(bd_);
-                    const backend_dest = std.fs.path.join(allocator, &[_][]const u8{ bd_, "backend" }) catch null;
+                    const backend_dest = std.fs.path.join(allocator, &[_][]const u8{ bd_, backend_artifact_name }) catch null;
                     if (backend_dest) |bdest_| {
                         defer allocator.free(bdest_);
                         if (std.fs.cwd().access(bp_, .{})) |_| {
@@ -9517,7 +9522,7 @@ pub fn main() !void {
                 const bkey2_path = std.fs.path.join(allocator, &[_][]const u8{ cache_dir_path, bkey2 }) catch null;
                 if (bkey2_path) |bp2_| {
                     defer allocator.free(bp2_);
-                    const built_backend = std.fs.path.join(allocator, &[_][]const u8{ output_dir_for_build, "zig-out", "bin", "backend" }) catch null;
+                    const built_backend = std.fs.path.join(allocator, &[_][]const u8{ output_dir_for_build, "zig-out", "bin", backend_artifact_name }) catch null;
                     if (built_backend) |bb_| {
                         defer allocator.free(bb_);
                         std.fs.cwd().copyFile(bb_, std.fs.cwd(), bp2_, .{}) catch {};
@@ -9532,15 +9537,15 @@ pub fn main() !void {
         // with its manifest and stop: a mint records the compiler, it does
         // not compile the program.
         if (mint_create) |mname| {
-            const built_backend = try std.fs.path.join(allocator, &[_][]const u8{ output_dir_for_build, "zig-out", "bin", "backend" });
+            const built_backend = try std.fs.path.join(allocator, &[_][]const u8{ output_dir_for_build, "zig-out", "bin", backend_artifact_name });
             defer allocator.free(built_backend);
             try storeMint(allocator, koru_lib_path, &resolver, mname, built_backend, comptime_backend_code, input);
             return;
         }
 
-        // Backend is at zig-out/bin/backend (from zig build) — or at the mint
-        // store path when compiler:use pinned one.
-        const backend_exe = "zig-out/bin/backend";
+        // Backend is at zig-out/bin/backend[.exe] (from zig build) — or at the
+        // mint store path when compiler:use pinned one.
+        const backend_exe = "zig-out/bin/" ++ backend_artifact_name;
 
         // Now run the backend, which generates output_emitted.zig and compiles it
         // If a comptime command was detected, pass it to the backend
