@@ -159,6 +159,13 @@
     // first matching visit. `| none` pairs with it as the absent case (the
     // established spelling: 320_090, 220_012); a `! query` sweep visits every
     // row and has no absent case to name.
+    // Unclaimed named arms evaporate silently — the replacement is built
+    // from the claimed arm's body, not the site's own continuation list, so
+    // a `| done` written anyway never runs and no diagnostic says so
+    // (690_364). This site claims exactly `! query`/`! first`/`| none`.
+    if (SPlan.unclaimedArm(flow.body.continuations, &.{ "query", "first", "none" })) |uname| {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): unclaimed arm `| {s}` — this site claims `! query`/`! first` and `| none` only; a `{s}` arm never runs, the transform replaces the site without it (to run code after the sweep, name it as a tor and continue the caller's `|>` chain past the call)", .{ store_name, uname, uname }) };
+    }
     const sc_query = SPlan.findArm(flow.body.continuations, "query");
     const sc_first = SPlan.findArm(flow.body.continuations, "first");
     const none_arm = SPlan.findArm(flow.body.continuations, "none");

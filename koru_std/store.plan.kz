@@ -45,6 +45,27 @@ const SPlan = struct {
         return found;
     }
 
+    /// The complement of findArm: the first named arm on a site that the
+    /// caller's claimed set does NOT cover — the arm a transform would
+    /// silently drop when it replaces the site (690_364: `| done` on a
+    /// query site never ran, and no diagnostic said so). Void-branch
+    /// continuations are skipped the same way findArm skips them —
+    /// profiler taps splice those, they are not user arms (the convention
+    /// is store.new.kz's own `bname.len == 0` rule). Returns the trimmed
+    /// branch name, or null when every named arm is claimed.
+    fn unclaimedArm(conts: []const ast_find.Continuation, claimed: []const []const u8) ?[]const u8 {
+        for (conts) |*c| {
+            const bname = std.mem.trim(u8, c.branch, " ");
+            if (bname.len == 0) continue;
+            var claimed_hit = false;
+            for (claimed) |name| {
+                if (std.mem.eql(u8, bname, name)) { claimed_hit = true; break; }
+            }
+            if (!claimed_hit) return bname;
+        }
+        return null;
+    }
+
     /// The continuation-nested half of the site fold: store doors inside a
     /// flow's continuations (`| row a |> std/store:insert(...)`, a query
     /// under a `|>` pipeline) count exactly as head sites do — except `new`,

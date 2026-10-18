@@ -39,6 +39,15 @@
         return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:rule requires a store name: query(name)", .{}) };
     }
 
+    // Same wall as the query site (SPlan.unclaimedArm, 690_364): the site
+    // claims exactly `! row` — the coordinator transplants only that arm into
+    // the sweep unit and this replacement carries NO continuations, so any
+    // other named arm never runs. Refuse by name rather than let it
+    // evaporate silently.
+    if (SPlan.unclaimedArm(flow.body.continuations, &.{"row"})) |uname| {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:rule({s}): unclaimed arm `| {s}` — this site claims `! row` only; a `{s}` arm never runs, the transform replaces the site without it", .{ store_name, uname, uname }) };
+    }
+
     // The generated units live in the STORE's home namespace, which is the
     // import-derived `app.lib` — not this flow's file-derived `lib`. They
     // coincide in the entry file and diverge inside a library (115_018).
@@ -94,10 +103,12 @@
             return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:rule({s}) is top-level-only: it cannot be nested inside a handler or loop body. `query` is a standing-rule installation (comptime-fused into the store's write paths), so a nested body has nothing to install into. The store IS declared - move the query to module (top-level) scope. Momentary verbs (insert/take) DO run in nested bodies.", .{store_name}) };
         }
 
-        // The store's OWN declaration was already refused; that diagnostic is the
-        // true one and this lookup can only ever fail. Staying silent here is what
-        // keeps one mistake to one error.
+        // The store's OWN declaration — or this site itself (unclaimed-arm
+        // audit) — was already refused; that diagnostic is the true one and
+        // this lookup can only ever fail. Staying silent here is what keeps
+        // one mistake to one error.
         if (ast.declarationRefused(allocator, program, flow.module, "std/store:new({s}):", .{store_name})) return .{ .transformed = .{} };
+        if (ast.declarationRefused(allocator, program, flow.module, "std/store:rule({s}):", .{store_name})) return .{ .transformed = .{} };
         return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:rule({s}): unknown store - no std/store:new({s}) found (or the store is a capacity-1 value - queries need a container, declare `capacity: N` at create)", .{ store_name, store_name }) };
     }
 
