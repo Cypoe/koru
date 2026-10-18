@@ -53,6 +53,7 @@ const std = @import("std");
 // exact structure, cell = growing `[]const E` instead of a scalar.
 ~[transform]proc default|zig {
     const ast = @import("ast");
+    const ast_functional = @import("ast_functional");
 
     if (item.* != .flow) @panic("constructor default transform: containing item is not a flow - walker dispatch contract broken");
     const flow = &item.flow;
@@ -65,6 +66,15 @@ const std = @import("std");
         return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU166, flow.location, flow.module, "std/constructor requires a name: std/constructor(nums)", .{}) } };
     }
     const cell_name = invocation.args[0].value;
+
+    // The declared contract (`! construct *` / `| ?constructed *`) is DOCS for
+    // transform sites — the shape checker runs AFTER transforms, so nothing
+    // downstream ever sees the arms this site drops. The replacement carries
+    // only `constructed`; every other named arm would parse, then never run
+    // and never diagnose (same wall as 690_364's query site). Refuse by name.
+    if (ast_functional.unclaimedContinuation(flow.body.continuations, &.{ "construct", "constructed" })) |uname| {
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU166, flow.location, flow.module, "std/constructor({s}): unclaimed arm `| {s}` — this site claims `! construct` and `| constructed` only; a `{s}` arm never runs, the transform replaces the site without it", .{ cell_name, uname, uname }) } };
+    }
 
     // --- Find `! construct` (the traversal) and `| constructed <r>` (after-read). ---
     var construct_cont: ?*const ast.Continuation = null;
@@ -197,11 +207,20 @@ const std = @import("std");
 // by data instead of a seed's typeInfo.
 ~[transform]proc struct|zig {
     const ast = @import("ast");
+    const ast_functional = @import("ast_functional");
 
     if (item.* != .flow) @panic("constructor struct transform: containing item is not a flow - walker dispatch contract broken");
     const flow = &item.flow;
 
     const type_name = if (invocation.args.len > 0) invocation.args[0].value else "AnonStruct";
+
+    // Same wall as the value terminal: the replacement is an inline_code type
+    // declaration carrying NO continuations — every arm, even a declared-legal
+    // `| constructed`, evaporates. Claimed set is `! construct` only (the struct
+    // tor declares no after-read), so any named arm refuses by name.
+    if (ast_functional.unclaimedContinuation(flow.body.continuations, &.{"construct"})) |uname| {
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU166, flow.location, flow.module, "std/constructor:struct({s}): unclaimed arm `| {s}` — this site claims `! construct` only; a `{s}` arm never runs, the transform replaces the site without it", .{ type_name, uname, uname }) } };
+    }
 
     // --- Find `! construct` and read the range, loop var, and the `field(name:, type:)`
     //     spec from its nested `! each`. ---

@@ -4,7 +4,7 @@
 // the arm parses as an ordinary branch continuation, the coordinator
 // replaces the site with the emitted sweep, and the arm evaporates:
 // the continuation NEVER runs and no diagnostic says so. The audit in
-// SPlan.unclaimedArm refuses it by name before resolution.
+// ast_functional.unclaimedContinuation refuses it by name before resolution.
 
 import std/io
 import std/store

@@ -2348,6 +2348,32 @@ pub fn findContinuationByBranchInSlice(
     return null;
 }
 
+/// The complement of a claimed-arms lookup: the first NAMED arm outside the
+/// caller's claimed set — the arm a transform would silently drop when its
+/// replacement is built from the claimed arms only (690_364: `| done` on a
+/// query site never ran, and no diagnostic said so). Anonymous `|>` chain
+/// continuations (`branch.len == 0`) are skipped — profiler taps splice
+/// those onto sites; they are not user arms. Returns the trimmed branch
+/// name, or null when every named arm is claimed.
+pub fn unclaimedContinuation(
+    continuations: []const ast.Continuation,
+    claimed: []const []const u8,
+) ?[]const u8 {
+    for (continuations) |*cont| {
+        const bname = std.mem.trim(u8, cont.branch, " ");
+        if (bname.len == 0) continue;
+        var hit = false;
+        for (claimed) |name| {
+            if (std.mem.eql(u8, bname, name)) {
+                hit = true;
+                break;
+            }
+        }
+        if (!hit) return bname;
+    }
+    return null;
+}
+
 /// Find the continuation whose node is the target invocation.
 /// Recurses into nested continuations.
 pub fn findContinuationContainingInvocation(

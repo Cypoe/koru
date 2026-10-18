@@ -22,6 +22,7 @@
 
 ~[transform]proc rule|zig {
     const ast = @import("ast");
+    const ast_functional = @import("ast_functional");
 
     if (item.* != .flow) @panic("store:rule transform: containing item is not a flow - walker dispatch contract broken");
     const flow = &item.flow;
@@ -39,12 +40,12 @@
         return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:rule requires a store name: query(name)", .{}) };
     }
 
-    // Same wall as the query site (SPlan.unclaimedArm, 690_364): the site
+    // Same wall as the query site (unclaimedContinuation, 690_364): the site
     // claims exactly `! row` — the coordinator transplants only that arm into
     // the sweep unit and this replacement carries NO continuations, so any
     // other named arm never runs. Refuse by name rather than let it
     // evaporate silently.
-    if (SPlan.unclaimedArm(flow.body.continuations, &.{"row"})) |uname| {
+    if (ast_functional.unclaimedContinuation(flow.body.continuations, &.{"row"})) |uname| {
         return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:rule({s}): unclaimed arm `| {s}` — this site claims `! row` only; a `{s}` arm never runs, the transform replaces the site without it", .{ store_name, uname, uname }) };
     }
 

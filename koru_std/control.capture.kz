@@ -28,8 +28,10 @@
 // - Decomposes fold while preserving purity guarantees
 // The tor declares the USER surface (second [transform]proc migrant after
 // std/regex:match): a source block, the `! as` cell effect, the optional
-// `| captured` after-read. The shape checker enforces this contract with zero
-// capture-specific code. The machine interface (invocation/item/program/
+// `| captured` after-read. The shape checker does NOT enforce this contract —
+// transforms run before it and the transform's replacement is what the checker
+// sees — so the transform below audits the claimed set itself
+// (unclaimedContinuation). The machine interface (invocation/item/program/
 // allocator → transformed SiteResult) is the proc-return convention.
 ~[keyword|comptime|transform]pub tor capture { source: Source, reporter: *std/compiler:ErrorReporter }
 ! as *
@@ -37,6 +39,7 @@
 
 ~[transform]proc capture|zig {
     const ast = @import("ast");
+    const ast_functional = @import("ast_functional");
     const struct_literal = @import("struct_literal");
 
     // The walker hands transforms the containing item of the matched
@@ -76,6 +79,15 @@
     }
     if (as_cont == null) {
         return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU164, flow.location, flow.module, "~capture requires a `! as <cell>` effect branch", .{}) } };
+    }
+
+    // The declared contract (`! as *` / `| ?captured *`) is DOCS for transform
+    // sites — the shape checker runs AFTER transforms, so nothing downstream
+    // ever sees the arms this site drops. The replacement is built from `as`
+    // and `captured` alone; every other named arm would parse, then never run
+    // and never diagnose (same wall as 690_364's query site). Refuse by name.
+    if (ast_functional.unclaimedContinuation(flow.body.continuations, &.{ "as", "captured" })) |uname| {
+        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU164, flow.location, flow.module, "~capture: unclaimed arm `| {s}` — this site claims `! as` and `| captured` only; a `{s}` arm never runs, the transform replaces the site without it", .{ uname, uname }) } };
     }
 
     // `! as _` discards the cell NAME, but the cell IS the accumulator the
