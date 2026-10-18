@@ -1,0 +1,143 @@
+// Koru Standard Library: the `qsites` part of store — joined via
+// `~part qsites` in store.kz; members land in koru_store.
+//
+// The scans that find a store's sites.
+//
+// `flatItems`/`collectFlat` are the program-items flatten every store scan
+// builds on (memoized per items-epoch — see the contract below); they see
+// top-level items and module trees, never continuation trees.
+//
+// `nestedQSites` is the continuation-tree half: a `std/store:preorder(s)`
+// spelled inside an arm body is a CONTINUATION whose node is the invocation
+// — never a top-level `.flow` item, so the flat scan cannot see it. The
+// transform runner hands that nested site to its transform inside a
+// synthetic flow view (transform_pass_runner.siteView) keyed on the holding
+// continuation's own location — and it is that view's
+// `__store_qsweep_<s>_L<line>` the site transform then looks up. This part
+// mints the same view on the coordinator side so the qrow/qbody/qsweep
+// units exist for the site transform to find: one scan shape for top-level
+// flows and nested sites.
+
+/// Every item in the program, flattened through `.module_decl`, in tree order,
+/// as POINTERS into the program's own arrays.
+///
+/// `program.items` is one level deep: an imported module arrives as a single
+/// `.module_decl` carrying its own items. Every scan in this file that reads
+/// `program.items` directly is therefore blind to a store declared, watched,
+/// queried or written inside a library — and the failure is not a miss, it is a
+/// diagnostic pointing at the author: "unknown store — no std/store:new(c)
+/// found", with the `new` sitting four lines above the `watch`.
+///
+/// The caveat `findSynthDecl` carries still applies and is the reason this
+/// returns items rather than flows: flattening is safe for a predicate that
+/// names something only the store machinery mints (a `__store_*` symbol, a
+/// `std/store:<verb>` invocation) and UNSAFE for a general `.flow` scan, which
+/// would start matching ordinary flows inside `std.compiler` and friends. Every
+/// caller here is predicate-guarded; a new one must be too.
+///
+/// Pointers, not copies, so a site may take `&pi.flow` and keep it, and so the
+/// two mutating walks can `@constCast` a real program node rather than a
+/// temporary.
+///
+/// The result is MEMOIZED per items-epoch. Flattening is O(program); the store
+/// machinery calls it per field, per leaf, per interceptor arm — thousands of
+/// times per compile — and every result lands on the compile arena, which frees
+/// nothing until exit. That product is what SIGKILLed monolithic programs
+/// (≈9.7 GB live for the 003_ecs benchmark). The memo keeps ONE flatten per
+/// items-epoch. The key is the items SLICE HEADER (buffer pointer + length):
+/// every structural write-back — appendItems, boxed replacements, site splices —
+/// allocates a fresh top-level array, so minted declarations are never hidden
+/// behind a stale list, and a write path that mutated the header in place would
+/// serve stale structure (none exists; this is the memo's contract). Content
+/// mutations (rewrites that @constCast nodes in place) are visible through the
+/// cached pointers and need no invalidation. Returned slices are never freed or
+/// mutated, only abandoned, so a nested call that evicts the cache cannot
+/// invalidate an outer caller's iteration.
+var flat_memo_buf_ptr: usize = 0;
+var flat_memo_buf_len: usize = std.math.maxInt(usize);
+var flat_memo_out: []const *const ast_find.Item = &.{};
+var flat_memo_lock: std.Thread.Mutex = .{};
+
+fn flatItems(alloc: std.mem.Allocator, items: []const ast_find.Item) []const *const ast_find.Item {
+    flat_memo_lock.lock();
+    defer flat_memo_lock.unlock();
+    if (flat_memo_buf_ptr == @intFromPtr(items.ptr) and flat_memo_buf_len == items.len) return flat_memo_out;
+    var out = std.ArrayList(*const ast_find.Item){};
+    collectFlat(alloc, items, &out);
+    flat_memo_buf_ptr = @intFromPtr(items.ptr);
+    flat_memo_buf_len = items.len;
+    flat_memo_out = out.items;
+    return out.items;
+}
+
+fn collectFlat(alloc: std.mem.Allocator, items: []const ast_find.Item, out: *std.ArrayList(*const ast_find.Item)) void {
+    for (items) |*it| {
+        out.append(alloc, it) catch return;
+        if (it.* == .module_decl) collectFlat(alloc, it.module_decl.items, out);
+    }
+}
+
+
+fn isQSiteInv(store_name: []const u8, inv: *const ast_find.Invocation) bool {
+    const mq = inv.path.module_qualifier orelse return false;
+    if (!std.mem.eql(u8, mq, "std.store")) return false;
+    if (inv.path.segments.len != 1) return false;
+    const seg = inv.path.segments[0];
+    if (!std.mem.eql(u8, seg, "rule") and !std.mem.eql(u8, seg, "preorder")) return false;
+    const stripQuotes = @import("emitter_helpers").stripQuotes;
+    for (inv.args) |a| {
+        if (std.mem.eql(u8, a.name, "expr")) return std.mem.eql(u8, stripQuotes(a.value), store_name);
+    }
+    return false;
+}
+
+/// Every `std/store:rule(store)`/`preorder(store)` site nested inside an arm
+/// body anywhere in `flat_items`, minted as the synthetic flow the
+/// coordinator's qsites scan consumes: `.body` the holding continuation (its
+/// `.continuations` are the site's arms), `.annotations` the invocation's
+/// (a rule's [name]/[depends_on] ride the invocation, not an enclosing flow),
+/// `.location` the site's own source position, `.module` the containing
+/// flow's module, `.site_of` the holding continuation — exactly the fields
+/// transform_pass_runner.siteView fills for the site transform.
+fn nestedQSites(
+    alloc: std.mem.Allocator,
+    flat_items: []const *const ast_find.Item,
+    store_name: []const u8,
+) []*const ast_find.Flow {
+    var out = std.ArrayList(*const ast_find.Flow).initCapacity(alloc, 2) catch unreachable;
+    const fns = @import("ast_functional");
+    for (flat_items) |pi| {
+        if (pi.* != .flow) continue;
+        var hits = std.ArrayList(*const ast_find.Continuation){};
+        fns.collectInvSites(alloc, &pi.flow.body, store_name, isQSiteInv, &hits) catch unreachable;
+        for (hits.items) |c| {
+            const f = alloc.create(ast_find.Flow) catch unreachable;
+            f.* = ast_find.Flow{
+                .body = c.*,
+                .annotations = c.node.?.invocation.annotations,
+                .location = c.location,
+                .module = alloc.dupe(u8, pi.flow.module) catch unreachable,
+                .site_of = c,
+            };
+            out.append(alloc, f) catch unreachable;
+        }
+    }
+    return out.items;
+}
+
+/// The rule/preorder site list the coordinator scans: every top-level
+/// `.flow` in the program plus a synthetic flow per nested site — one list,
+/// one scan shape.
+fn qSiteFlows(
+    alloc: std.mem.Allocator,
+    items: []const ast_find.Item,
+    store_name: []const u8,
+) []*const ast_find.Flow {
+    const flat = flatItems(alloc, items);
+    var out = std.ArrayList(*const ast_find.Flow).initCapacity(alloc, 8) catch unreachable;
+    for (flat) |pi| {
+        if (pi.* == .flow) out.append(alloc, &pi.flow) catch unreachable;
+    }
+    for (nestedQSites(alloc, flat, store_name)) |sf| out.append(alloc, sf) catch unreachable;
+    return out.items;
+}

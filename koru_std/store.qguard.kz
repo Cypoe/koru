@@ -1,0 +1,22 @@
+// Koru Standard Library: the `qguard` part of store.kz.
+// Joined via `~part qguard` in store.kz; merged into the module at load.
+
+const QGuard = struct {
+    /// `[id]`/`[ordinal]` request binds mint their per-row values at the
+    /// handler call site (the sweep's captures); a `when` guard that names
+    /// one reads it in the sweep loop BEFORE that call, where only the dense
+    /// cursor `__koru_si` exists — substitute the same expression the capture
+    /// computes (the branded handle for `[id]`, the i64-cast cursor for
+    /// `[ordinal]`), so `when … rows[sh].v == k` lowers instead of emitting
+    /// the bare request name undeclared.
+    fn reqBinds(allocator: std.mem.Allocator, prog: *const ast_find.Program, home_ns: []const u8, store_name: []const u8, req_id: ?[]const u8, req_ordinal: ?[]const u8, g: []const u8) []const u8 {
+        var t = g;
+        if (req_id) |idn| {
+            t = codegen_utils_store.replaceIdentifier(allocator, t, idn, std.fmt.allocPrint(allocator, "{s}__koru_store_{s}.__koru_handle_of(__koru_si)", .{ storeCellQualifier(allocator, home_ns, prog.main_module_name), store_name }) catch unreachable) catch t;
+        }
+        if (req_ordinal) |on| {
+            t = codegen_utils_store.replaceIdentifier(allocator, t, on, "@as(i64, @intCast(__koru_si))") catch t;
+        }
+        return t;
+    }
+};

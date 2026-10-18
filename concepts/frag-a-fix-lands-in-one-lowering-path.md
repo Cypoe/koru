@@ -758,3 +758,68 @@ What this instance adds:
 Pinned at 690_372: `rows[world.ph].dir == "ltr"` wraps eql at a `| row`
 continuation and inside a `! query` arm, a `stored` write takes the read as
 a value, and an `insert` seed stores it — `hits 1211` end to end.
+
+## The reach gap can be TEMPORAL: the name does not exist yet when the guard runs
+
+The same class once more, and this instance has no second lowering and no
+second scanner to count — the boundary is a *moment*. A `! query { [id]h }`
+request bind is minted at the generated sweep's handler call:
+`{ .h = __koru_handle_of(__koru_si) }`. The arm's `when` guard runs in the
+sweep loop *before* that call, so `when rows[h].v == 20` emitted a reference
+to a binding that had not been created yet — `use of undeclared identifier`
+at backend compile, the position naming nothing about the real gap.
+
+The reach question this belief asks — "what does this check quantify over" —
+here has a *time* axis: the name's availability is bounded by when the
+capture is minted, not just by where it is written. `when` is a real consumer
+position sitting between the row and the call, and every request binding
+needed its capture expression inlined into the guard text to live there
+(`store.qguard.kz` substitutes `__koru_handle_of(__koru_si)` for `[id]` and
+the cursor cast for `[ordinal]` — the same expressions the handler args mint,
+computed at the guard's own moment).
+
+- **A binding's true scope includes WHEN.** "The arm sees `[id]h`" was true
+  of the arm's body and false of its guard, and the two reads of "the arm"
+  were never distinguished until a program put the name in the earlier
+  position. Enumerate the moments a name is needed, not just the places.
+- **The substitute, not the pipe.** The fix could not thread another handler
+  input (the guard runs before there is a call to thread it through) — the
+  only sound move was recomputing the capture's value at the guard's
+  position. Where a name must be visible before the mechanism that mints it,
+  the minted expression itself travels to the earlier site.
+
+Pinned at 690_373: `[id]` and `[ordinal]` names read inside `when` on
+`! query` and `! first`, including a nested indexed read of the guard's own
+store — `n 1030` end to end.
+
+## And the reach gap is SPATIAL the same way: the scan quantifies over items, never continuations
+
+Found the same afternoon, in the sibling direction. The coordinator's site
+scan — the pass that mints each `rule`/`preorder` site's qrow/qbody/qsweep
+units — iterates `flatItems(program.items)`: top-level `.flow` items and
+module trees. A `std/store:preorder(t)` inside a `for ! each` arm is not an
+item; it is a continuation node. The site's transform fired on it fine —
+`siteView` already hands a nested site a synthetic flow keyed on the holding
+continuation's location — and then refused `unknown store`, because the
+coordinator had never minted the unit the view names.
+
+Same defect family, different axis: the earlier instances are a feature
+present in one lowering and absent in its sibling; this one is a *site*
+present to the transform dispatcher and absent to the registration scan —
+the two halves of one handshake disagreeing about what counts as a site.
+`store.qsites.kz` now mints the identical flow view on the coordinator side
+(`ast_functional.collectInvSites` walks continuation trees, skipping
+`is_transformed_subtree` grafts), so both halves quantify over the same set.
+
+- **A handshake has two scanners, and both are the unit of work.** The
+  dispatcher could see nested sites for as long as `siteView` has existed;
+  the registration scan could not, and the gap held because the corpus had
+  never nested a preorder — every authored `preorder`/`rule` sits at top
+  level by habit, so the two scanners were never compared on a program that
+  distinguishes them.
+- **The view contract is the fix shape.** Where a consumer and a producer
+  must name the same thing, mint the SAME synthetic — here siteView's flow
+  on both sides — rather than a parallel structure that can drift again.
+
+Pinned at 695_006: `preorder` inside a `for ! each` arm walks the tree in
+DFS order twice — `n 1234` then `n 12341234` end to end.

@@ -301,7 +301,7 @@
     const guard_is = if (sc.condition) |c| rewriteIsGuard(allocator, program, "query", store_name, row_bind, c, &is_refusal) else null;
     if (is_refusal) |m| return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "{s}", .{m}) };
     const guard_z: ?[]const u8 = if (sc.condition) |c|
-        SRewrite.refs(allocator, guard_is orelse c, row_bind, store_name, col_names, program, srf_prefix, srow_name, .input, used_cols, &unknown_field, is_view)
+        QGuard.reqBinds(allocator, program, home_ns, store_name, req_id, req_ordinal, SRewrite.refs(allocator, guard_is orelse c, row_bind, store_name, col_names, program, srf_prefix, srow_name, .input, used_cols, &unknown_field, is_view))
     else
         null;
 

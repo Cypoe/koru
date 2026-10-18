@@ -242,10 +242,12 @@ koru_std/store.prewrite.kz	445
 koru_std/store.pverbs.kz	713
 koru_std/store.qbinds.kz	275
 koru_std/store.qcaps.kz	173
+koru_std/store.qguard.kz	22
 koru_std/store.qmiss.kz	46
 koru_std/store.qmisskind.kz	58
 koru_std/store.qnone.kz	113
 koru_std/store.qrewrite.kz	224
+koru_std/store.qsites.kz	143
 koru_std/store.qtail.kz	129
 koru_std/store.query.kz	851
 koru_std/store.refhome.kz	312

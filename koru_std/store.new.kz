@@ -1520,9 +1520,9 @@
         };
         const program_items = flatItems(allocator, program.items);
         var qsites = std.ArrayList(QuerySite).initCapacity(allocator, 4) catch unreachable;
-        for (flatItems(allocator, program.items)) |pi| {
-            if (pi.* != .flow) continue;
-            const qf = &pi.flow;
+        // Nested sites are continuation nodes, not `.flow` items — qSiteFlows
+        // mints each as the flow view siteView hands its transform (qsites).
+        for (qSiteFlows(allocator, program.items, store_name)) |qf| {
             const q_verb: []const u8 = if (H.isStoreInv(qf, "rule", store_name))
                 "rule"
             else if (H.isStoreInv(qf, "preorder", store_name))
