@@ -1,0 +1,7 @@
+name: board
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: regression board result string (e.g. "2166/2181") declared on status: commits; categorizes pass/fail spread vs the standing-failures ledger
+route: surface
