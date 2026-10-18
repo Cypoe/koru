@@ -91,8 +91,8 @@
 # roll fired on a test-results-only stage (zero src/ delta in the
 # commit); the +5/+8 over 1897/2429 is committed drift since the
 # judge-additions re-pin, none of it mine. Re-pinned to measured.
-clusters=1902
-members=2437
+clusters=1906
+members=2442
 # Re-pinned to 1878/2418 on the tightening-017 cherry-pick: the roll named
 # parser.zig similar-arm blocks (1277, 2962, 3479, 3804, 6727 +5) plus
 # shape_analyzer/emitter_test scaffolding — the documented consciously-
@@ -170,3 +170,9 @@ members=2437
 # drift accumulated over the 41 commits since ed76eb0b1 (the cs merge
 # window, per-target twin residual as documented above). Clusters fell
 # 1831 -> 1828. Census re-measured post-fold: 1828/2346.
+# Re-pinned in "pin: 220_046 — a name bound nowhere still reaches the
+# host": the roll fired on +4 clusters / +5 members of foreign committed
+# drift (parser.zig errdefer clones; KORU108-era flow_checker growth
+# landed under rolls that missed). This commit carries zero src/ delta —
+# a regression pin and a concept evolve only. Census re-measured:
+# 1906/2442.
