@@ -23,7 +23,8 @@
 #   not a vacuous pass.
 set -u -o pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-LEAN="${KORU_LEAN:-/home/cypoe/.elan/toolchains/leanprover--lean4---v4.31.0/bin/lean}"
+. "$ROOT/scripts/lean_resolve.sh"
+resolve_lean
 DIR="$ROOT/verify/semantics"
 if [ ! -x "$LEAN" ]; then
     echo "FAIL: lean not found at $LEAN (set KORU_LEAN)"

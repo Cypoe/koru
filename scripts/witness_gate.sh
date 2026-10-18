@@ -10,7 +10,8 @@
 #   default corpus: 690_364's backend.err (run the regression test first).
 set -u -o pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-LEAN="${KORU_LEAN:-/home/cypoe/.elan/toolchains/leanprover--lean4---v4.31.0/bin/lean}"
+. "$ROOT/scripts/lean_resolve.sh"
+resolve_lean
 DIR="$ROOT/verify/witness"
 if [ ! -x "$LEAN" ]; then
     echo "FAIL: lean not found at $LEAN (set KORU_LEAN)"

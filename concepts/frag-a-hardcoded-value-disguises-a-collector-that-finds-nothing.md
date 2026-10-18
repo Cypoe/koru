@@ -50,6 +50,24 @@ test also passed for a reason unrelated to what it claimed to guard. The common
 shape across all three: **ask what observation would differ if this were broken.**
 If the answer is "none", it is not tested, however green it is.
 
+## The mirror image: loud, but misattributed
+
+The same shape fired with the harm inverted. The witness/semantics/holds
+gates resolved `lean` through a default of
+`/home/cypoe/.elan/toolchains/.../bin/lean` — one developer's absolute path
+standing in for a discovery step that never ran. On that machine the value
+was correct. Everywhere else the gate failed closed with `lean not found`,
+and the failure presented at the wrong layer: during a merge verify it
+read as five witness-leg reds — semantic failures in the corpus — not as
+"the oracle isn't installed on this box." There the seeded value made a
+broken scan invisible; here a valid-on-one-machine path made a working
+gate unreadable. Both are a hardcoded answer where a lookup belongs; the
+invisibility is only the more dangerous half of the family. The fix is the
+same shape too — `scripts/lean_resolve.sh` now does the discovery the
+default skipped: pinned path, installed elan toolchains (the checker's
+version first, newest after), then `PATH`, with `KORU_LEAN` as the
+explicit override rather than the only lifeline.
+
 ## Open
 
 The seeded `zig` entry is kept, now deduped against `koru_std/compiler.kz`'s real
