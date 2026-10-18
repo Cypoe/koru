@@ -3156,7 +3156,15 @@ pub const PhantomSemanticChecker = struct {
                     if (context.isOuterScope(resource)) continue;
                     if (context.isJoinLive(resource)) continue;
                     const is_ident = std.mem.eql(u8, resource, step.expression);
-                    const named_in_expr = is_ident or
+                    // `-> e` where `e` is a record: `e.<field>` keys escape
+                    // through the declared return's `<state!>` fields — the
+                    // same pass-through the branch-constructor audit grants
+                    // `r.<field>` above.
+                    const rooted_in_expr = !is_ident and
+                        std.mem.startsWith(u8, resource, step.expression) and
+                        resource.len > step.expression.len and
+                        resource[step.expression.len] == '.';
+                    const named_in_expr = is_ident or rooted_in_expr or
                         (mentioned_count == 1 and exprMentionsResource(step.expression, resource));
                     var carried = false;
                     var no_record = false;
@@ -3164,10 +3172,25 @@ pub const PhantomSemanticChecker = struct {
                         if (context.getInfo(resource)) |info| {
                             // Honest `issued` requires the flow's declared
                             // `-> T<state!>` return to carry exactly this
-                            // obligation's (type, state).
+                            // obligation's (type, state) — scalar returns
+                            // match (type, state) on return_phantom; a
+                            // record return carries the debt on the
+                            // `<state!>` field this resource keys into.
                             if (implementing_event) |impl_ev| {
-                                if (impl_ev.return_phantom) |rph| {
-                                    if (impl_ev.return_type) |rt| {
+                                if (impl_ev.return_type) |rt| {
+                                    if (rooted_in_expr) {
+                                        if (try ast_functional.recordFieldTexts(self.allocator, rt)) |declared| {
+                                            defer self.allocator.free(declared);
+                                            const fname = resource[step.expression.len + 1 ..];
+                                            for (declared) |df| {
+                                                if (!std.mem.eql(u8, df.name, fname)) continue;
+                                                if (std.mem.indexOfScalar(u8, df.value, '<') != null and std.mem.indexOfScalar(u8, df.value, '!') != null) {
+                                                    carried = true;
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    } else if (impl_ev.return_phantom) |rph| {
                                         if ((try self.phantomRequiresCleanup(rph)) and
                                             std.mem.eql(u8, phantomStateTail(rph), phantomStateTail(info.phantom_state)) and
                                             std.mem.eql(u8, lastIdentToken(rt), lastIdentToken(info.base_type)))

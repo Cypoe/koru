@@ -775,7 +775,7 @@ wraps `selectDisposal` at all three selection sites and mints
 `@witness("auto-discharge","<binding>","<state>-><disposer>","<rule>:<cands>")`
 onto the inserted disposal invocation's `.marks`; rule is `sole` or
 `preferred`, cands carry `!` for `[!]`. Fields containing a space, `"` (or
-`,` in a candidate) mint nothing rather than a malformed mark. 330_138 pins a
+`,` in a candidate) mint nothing rather than a malformed mark. 330_145 pins a
 preferred and a sole pick.
 
 **[strict].** Mirrors the module-word convention (compiler.kz ~2541): under
@@ -790,8 +790,8 @@ write-refusal class — a W3 code decision for Lars.
 **K3.** The Lean file gained the `auto-discharge` kind: `pick` re-runs the
 policy over the recorded candidates, `pick_sound` proves a pick is a
 candidate and forced (only candidate, or only `[!]`). Golden +3, forged +7.
-Real corpora: 330_138 2/2 MATCH, 690_365 1/1, 690_364 4/4, 690_366 2/2.
-330_138 and 690_366 carry WITNESS_CHECK. Stated limit: the checker cannot see
+Real corpora: 330_145 2/2 MATCH, 690_365 1/1, 690_364 4/4, 690_366 2/2.
+330_145 and 690_366 carry WITNESS_CHECK. Stated limit: the checker cannot see
 whether the recorded candidate list is complete.
 
 ## Tranche: numeric check reaches the honest floor (commits 47500f627..a410df5e2)
@@ -908,10 +908,10 @@ reversible part; the semantics calls are flagged.
   gained `ruleCustody` (per-line well-formedness) + `custodyBalance`
   (per-arrow ledger replay: mint => exactly one settle, held => at
   most one discharge, settle => outstanding mint/held). Pin:
-  `330_139_custody_edge_witnesses_mint_held_issued` (10 edges, all
-  four ops, K3 gate green); 330_138's auto-discharges corroborate
+  `330_146_custody_edge_witnesses_mint_held_issued` (10 edges, all
+  four ops, K3 gate green); 330_145's auto-discharges corroborate
   cross-kind (auto-discharge pick vs custody mint/discharge on the
-  same `_auto_N` bindings). `-> expr` leaf semantics (330_141/142/143):
+  same `_auto_N` bindings). `-> expr` leaf semantics (330_148/149/150):
   a live obligation settles as `issued` when the expression names it
   AND the flow's declared `-> T<state!>` return matches its
   (type, state) — identifier or unique compound mention alike;

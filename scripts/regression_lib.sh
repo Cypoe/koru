@@ -124,6 +124,7 @@ check_expected_comptime() {
     local pos=1
     local want found
     while IFS= read -r want || [ -n "$want" ]; do
+        want="${want%$'\r'}"
         found=$(tail -n +"$pos" "$combined" | grep -n -x -F -m1 -- "$want" | cut -d: -f1)
         if [ -z "$found" ]; then
             echo "  Comptime line not found (in order, exact): $want"
@@ -148,6 +149,7 @@ check_expected_patterns() {
     local line_num=0
     local pattern
     while IFS= read -r pattern || [ -n "$pattern" ]; do
+        pattern="${pattern%$'\r'}"
         line_num=$((line_num + 1))
         [ -z "$pattern" ] && continue
         case "$pattern" in
@@ -194,6 +196,7 @@ check_expect_assertions() {
     local seen_first_non_comment=false
     local line substr
     while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
         [ -z "$line" ] && continue
         case "$line" in \#*) continue ;; esac
         # First non-comment line: skip if it's a known category marker

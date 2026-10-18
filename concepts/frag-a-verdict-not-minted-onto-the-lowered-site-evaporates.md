@@ -202,7 +202,18 @@ make the corpus refuse legal code; only obligation-carrying args edge,
 which also keeps a re-passed borrow honest by construction. Ledger rule:
 `borrow` is legal only from an outstanding `minted`/`heldSt` and returns
 the same state; a bare-proto `borrow` line is MALFORMED the way a bare
-proto is on every other op. Pins: `330_139` (peek exercises `h0` between
+proto is on every other op. Pins: `330_146` (peek exercises `h0` between
 mint and discharge — `mint=4 held=1 borrow=1 discharge=4 issued=1`),
 golden/forged corpus lines, and compile-time `example` pins in
 WitnessCheck for all five fixture classes.
+
+Evolution (2026-10-18, merge fallout): the leaf audit's "mentioned in the
+expression" predicate only saw the produced identifier itself — `-> e`
+where `e` is a record left `e.h` flagged as an unmentioned live
+obligation at the leaf (upstream's 330_141 fold-arm produce broke on the
+merged tree). The leaf now grants the same pass-through the
+branch-constructor audit grants `r.<field>`: a resource keyed
+`<expr>.<field>` is carried iff the declared return's matching field
+carries `!`. Same lesson the upstream frags keep teaching from the other
+side — enumerate the *spellings* a produce can take, or each new one is
+a new place for the escape to hide.
