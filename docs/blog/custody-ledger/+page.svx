@@ -1,0 +1,71 @@
+---
+title: "Custody: Borrow and Use Join the Lifecycle Ledger"
+subject: "Custody"
+date: 2026-10-18
+excerpt: "An obligation that gets exercised without changing hands used to be invisible to both ledgers. Borrow joins the comptime edge vocabulary and use joins the runtime record — two independent readers, one vocabulary."
+readTime: 5 min read
+tags: [verification, koru, phantoms]
+ai_authored: mostly
+draft: true
+---
+
+<script>
+  import RegressionTestLink from '$lib/components/RegressionTestLink.svelte';
+</script>
+
+Koru tracks obligations on two ledgers. The comptime ledger commits `[witness] site custody-edge` lines while the flow graph is checked; the runtime record appends events to a world-mounted `holds.log` the bridge can read back. Both replay the same lifecycle — `mint`, `held`, `discharge`, `issued` — and both had the same hole: an obligation that gets *exercised* without changing hands left no trace. "Borrowed live" read exactly like "never touched."
+
+The vocabulary now has five ops, and the fifth is exercise:
+
+```koru
+tor open { path: string } -> string<opened!>
+tor poke { conn: string<opened> } -> string
+tor shut { conn: string<!opened> } -> string
+```
+
+`open` returns `<opened!>` — a minted debt. `shut` takes `<!opened>` — it consumes. `poke` takes bare `<opened>` — a borrow: it needs the handle alive but leaves custody with the caller. The signature was always the spec; the ledgers just never read it.
+
+## Borrow: the comptime edge
+
+Passing a live obligation into a bare `<state>` parameter commits a `borrow` edge at the call site — named on the *arg* binding, because what the edge describes is the caller's obligation being lent, not the callee's parameter:
+
+```koru
+tor peek { h: *Handle<owned> }
+```
+
+The ledger rule is the one the signature already implied: `borrow` is legal only against an outstanding `minted` or `held` obligation, and it leaves the state untouched — an exercise record, not a transfer. The witness corpus pins the shape directly:
+
+```text
+[witness] site custody-edge h0 h0<-input:*Handle<input:owned!> mint
+[witness] site custody-edge h0 h0<-input:*Handle<input:owned!> borrow
+[witness] site custody-edge h0 h0<-input:*Handle<input:owned!> discharge
+```
+
+One placement rule keeps the channel honest: only obligation-carrying args edge. A flow-impl's own borrow parameter owes nothing in its scope, so a re-passed borrow stays silent — the ledger can't be inflated by forwarding a handle through helper after helper.
+
+<RegressionTestLink
+  test={{ name: "330_146 custody edges, all five ops", directory: "330_146_custody_edge_witnesses_mint_held_issued", categorySlug: "300_ADVANCED_FEATURES/330_PHANTOM_TYPES", description: "peek exercises h0 between mint and discharge: mint=4 held=1 borrow=1 discharge=4 issued=1." }}
+/>
+
+## Use: the runtime twin
+
+The world-mounted record needed the same fix from the other side. A `use` event fires where the borrow is *admitted* — the dispatch point that already proved the handle live — so a `use` line on a dead handle can only mean the gate regressed. A refused borrow writes nothing: the wire already carries the refusal, the record carries granted exercises.
+
+```text
+world< {"branch":"","value":"a: closed — 1 minted, 1 released\nb: open — current session, holding nothing\nclean: 6 events, ledger settled — 'b' live"}
+```
+
+Session `a` mints `conn_1`, pokes it, shuts it. Session `b` reads the settled span and tries its own `poke` on the released handle — refused at dispatch, and the record stays clean: six events, no phantom seventh.
+
+<RegressionTestLink
+  tests={[
+    { name: "440_043 two sessions, one world", directory: "440_043_two_sessions_one_world", categorySlug: "400_RUNTIME_FEATURES/440_RESOURCE_BRIDGE", description: "Session B reads A's settled span; its borrow of the released handle is refused and writes nothing." },
+    { name: "440_035 borrow requires a live handle", directory: "440_035_borrow_requires_live_handle", categorySlug: "400_RUNTIME_FEATURES/440_RESOURCE_BRIDGE", description: "The dispatch-side gate the use event reports on." }
+  ]}
+/>
+
+## Two readers, one vocabulary
+
+Neither ledger is self-checked. `WitnessCheck.lean` re-decides the comptime corpus — including `borrow` only from an outstanding `minted`/`held` state, and a bare-proto borrow line as malformed like every other op. `HoldsCheck.lean` replays the runtime record — `use` on a released or unminted handle names the violation (`use-of-released`, `use-of-unminted`, `use-outside-session`), and its settlement theorem now covers exercise: every release *and* every use must be backed by a live mint. Divergence between the runtime render and the Lean re-decision on the same corpus is itself a finding.
+
+Two limits worth naming. The ledger records granted exercises — a borrow refused upstream of admission is only on the wire, not the record. And `held` + `issued` isn't a legal transition today: an obligation arriving through `<!state>` can discharge or stay contract-open, but can't yet flow out through a declared `!` return — nothing in the corpus hits it, and the Lean ledger will refuse it first if a program ever tries.

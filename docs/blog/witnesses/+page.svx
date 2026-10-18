@@ -33,7 +33,7 @@ Each line kind names what the backend committed about one site:
 |---|---|
 | `stored-write-numeric` | the numeric verdict on a lowered stored write — `lossless` or `rounds`, computed per site |
 | `auto-discharge` | an inserted disposal, plus `all:` — the solver's full enumerated candidate set, so a candidate the solver never saw is *malformed*, not merely missing |
-| `custody-edge` | one obligation lifecycle edge — `mint`, `held`, `discharge`, `issued` — replayed against the per-arrow ledger |
+| `custody-edge` | one obligation lifecycle edge — `mint`, `held`, `borrow`, `discharge`, `issued` — replayed against the per-arrow ledger |
 | `descriptor` / `descriptor-scope` | a declared contract matched to its emitted registry row; census count must equal the line count |
 | `transform-app` / `transform-app-census` | a `whole_program` write-back: site digest plus the `rm=`/`add=` multiset of touched top-level items |
 | `pass-graph-edge` / `-order` / `-tedge` / `-tstage` / `-census` | the declared pipeline's edges and the flattened run order the backend observed |
@@ -43,7 +43,7 @@ Each line kind names what the backend committed about one site:
   tests={[
     { name: "690_364 witness marks on lowered stored writes", directory: "690_364_witness_marks_ride_lowered_stored_writes", categorySlug: "600_STDLIB/690_STORE", description: "The prepared-witness channel: marks minted by the transform, enumerated by enforce, printed under KORU_WITNESS=1." },
     { name: "330_145 auto-discharge sole/preferred", directory: "330_145_auto_discharge_witness_marks_sole_and_preferred", categorySlug: "300_ADVANCED_FEATURES/330_PHANTOM_TYPES", description: "Inserted disposals commit marks; the all: field pins the candidate universe." },
-    { name: "330_146 custody-edge mint/held/issued", directory: "330_146_custody_edge_witnesses_mint_held_issued", categorySlug: "300_ADVANCED_FEATURES/330_PHANTOM_TYPES", description: "The four lifecycle ops as committed edges." },
+    { name: "330_146 custody-edge lifecycle", directory: "330_146_custody_edge_witnesses_mint_held_issued", categorySlug: "300_ADVANCED_FEATURES/330_PHANTOM_TYPES", description: "All five lifecycle ops as committed edges — borrow included." },
     { name: "310_140 whole-program transform accounting", directory: "310_140_transform_app_witness_whole_program_accounting", categorySlug: "300_ADVANCED_FEATURES/310_COMPTIME", description: "The one splice where a handler may rewrite items outside its site commits its rm/add multiset." },
     { name: "220_066 pass-graph witness arcs", directory: "220_066_pass_graph_witness_lines", categorySlug: "200_COMPILER_FEATURES/220_COMPILATION", description: "Declared requirements and observed order, committed under enforce." },
     { name: "430_069 registry descriptor fidelity", directory: "430_069_registry_descriptor_witnesses_event_fidelity", categorySlug: "400_RUNTIME_FEATURES/430_RUNTIME", description: "Descriptor lines pair declared contracts with emitted rows." }
