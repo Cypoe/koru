@@ -1,16 +1,16 @@
 // 690_370 — an `! each` loop binding reaches a nested store query's `when`
 // guard.
 //
-// The outer query's `when` sees `i` (it lowers inline in the loop body);
-// the INNER query lowers to a separate sweeprun handler fn whose Input
-// packs only row fields — the enclosing binding is not threaded as a
-// capture. The expected behavior once the gap closes: `i` binds in the
-// nested guard, `p.d == i` matches the seeded row when i == 1, and the
-// program prints one `hit`.
+// Pins the capture threading for wildcard-payload arm binds: `each`'s
+// payload is `*`, which lookupBranch cannot type, so collectBindsOnPath
+// derives the element type from the `for` expr — `a..b` iterates usize,
+// an `&[_]T{…}` literal iterates T, and a bare `for(name)` resolves off
+// the named bind's own `[]T`/`[N]T` in a second pass. An iterable whose
+// element cannot be named stays "?" and refuses with teaching if a body
+// captures it (the `| none` twin refuses the same way in store.qnone).
 //
-// Surfaced by clay/tests/spec.k's measure pass, which wanted
-// `for (0..8) ! each i |> query … when s.d == (7 - i)` — routed to
-// explicit depth-bounded sweeps pending this.
+// The captured `i` rides every hop — sweeprun Input, sweepbody Input —
+// so `p.d == i` evaluates inside the inner sweep's handler frame.
 import std/io
 import std/store
 

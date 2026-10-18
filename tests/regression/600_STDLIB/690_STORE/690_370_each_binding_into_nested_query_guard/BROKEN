@@ -1,9 +1,0 @@
-`! each` loop bindings do not cross a nested store sweep boundary: the
-inner `|> query` lowers to a separate sweeprun handler whose Input packs
-only row fields, so the enclosing `i` is undeclared in the emitted Zig
-(backend error). Depending on shape the same gap also surfaces as
-KORU100 (`binding 'i' has nowhere to go — the continuation target
-'__store_sweeprun_…' takes no input`).
-
-Found via clay/tests/spec.k's measure pass (2026-10-18); the spike uses
-explicit depth-bounded sweeps until this closes.

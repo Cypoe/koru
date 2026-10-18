@@ -774,6 +774,7 @@ fn storeLowerText(
 ~part qrewrite
 ~part cursor
 ~part qcaps
+~part qbinds
 ~part retqual
 ~part pverbs
 ~part sitetag

@@ -36,8 +36,14 @@
 # store.new.kz) and compression/part-file moves. Named offenders are the
 # sanctioned catch-append idiom and trellis/fmt/io twin var-decls.
 # Re-pinned to measured; fold targets unchanged.
-clusters=1135
-members=970
+# 1082/972: the roll fired on the `! each` sweep-capture split —
+# collectBindsOnPath and the each-typing helpers re-site at
+# store.qbinds.kz under ~part qbinds (named in no cluster), and
+# the `| none` capture pick folds into a shared Binds.pickCaptures.
+# The +2 members are residual drift between sampled rolls — no
+# staged file is named by the census.
+clusters=1082
+members=972
 # 1039/915: the roll fired on the |? coverage commit ("coverage: |? no
 # longer suppresses panic arms, and refuses where no union exists") —
 # that commit touches src/ checkers, in-repo tests, and a concept frag;
