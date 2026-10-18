@@ -126,7 +126,9 @@ fn resolveModuleSpellingUncached(ctx: *Context, spelling: []const u8) ?[]const u
     }
 
     var resolved = resolver.resolveBoth(slash_spelling, ctx.base_file) catch return null;
-    defer resolved.deinit(ctx.allocator);
+    // resolveBoth allocates on the resolver's allocator, not ours — free with
+    // the allocator that minted the paths or the free silently misses.
+    defer resolved.deinit(resolver.allocator);
 
     if (resolved.file_path) |fp| {
         if (map.get(fp)) |ln| return ln;
