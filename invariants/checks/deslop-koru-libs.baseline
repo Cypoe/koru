@@ -29,7 +29,13 @@
 # counted; the bench_* family (phases/scan/bracket/scale) are measurement
 # harnesses sharing the spec seed cascade by design. The remainder is
 # foreign drift — ponkatris level pairs and the asteroids main twin.
-clusters=1009
-members=413
+# Re-pinned 2026-10-18: sampled roll fired on the live-twin commit. Own
+# contribution is spec_sel.k ↔ spec_sel_live.k — the scripted/live pair
+# kept side by side (one pins pixel snaps, one is the manual surface),
+# same structural twin class as the *_snap pairs. spec_sel ↔ spec_tree
+# join at #2 the same way the dialect twins did. Remaining growth is
+# foreign drift — ponkatris level pairs still dominate the tail.
+clusters=1133
+members=426
 skipped=21
 spellings=663
