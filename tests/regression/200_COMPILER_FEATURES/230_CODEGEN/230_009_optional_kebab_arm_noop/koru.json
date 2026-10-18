@@ -1,0 +1,9 @@
+{
+  "name": "optional-kebab-arm-noop",
+  "version": "0.1.0",
+  "paths": {
+    "std": "../../../../../koru_std",
+    "app": "{{ ENTRY }}",
+    "lib": "{{ ENTRY }}/test_lib"
+  }
+}

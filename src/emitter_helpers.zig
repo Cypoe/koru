@@ -7750,7 +7750,7 @@ pub fn emitOptionalArmNullableAlias(emitter: *CodeEmitter, branch: *const ast.Br
         try emitter.write(") ");
         try writeEffectResumeType(emitter, branch);
         try emitter.write(" = if (@hasDecl(__H, \"");
-        try emitter.write(branch.name);
+        try writeMangledSeg(emitter, branch.name);
         try emitter.write("\")) &__H.");
         try writeBranchName(emitter, branch.name);
         try emitter.write(" else null;\n");
@@ -7759,7 +7759,7 @@ pub fn emitOptionalArmNullableAlias(emitter: *CodeEmitter, branch: *const ast.Br
         try emitter.write("const ");
         try writeBranchName(emitter, branch.name);
         try emitter.write(" = if (@hasDecl(__H, \"");
-        try emitter.write(branch.name);
+        try writeMangledSeg(emitter, branch.name);
         try emitter.write("\")) __H.");
         try writeBranchName(emitter, branch.name);
         try emitter.write(" else struct { fn __koru_noop(");
@@ -8274,7 +8274,12 @@ fn presenceConditionRewrite(
             // `if (opt)` is NOT a bool in Zig (it needs a capture), so the
             // condition becomes a real comptime bool → Zig analyzes only the
             // taken branch. (Nullable-ptr alias serves the proc side.)
-            return try std.fmt.allocPrint(allocator, "@hasDecl(__H, \"{s}\")", .{b.name});
+            const mname = try allocator.dupe(u8, b.name);
+            defer allocator.free(mname);
+            for (mname) |*c| {
+                if (c.* == '-') c.* = '_';
+            }
+            return try std.fmt.allocPrint(allocator, "@hasDecl(__H, \"{s}\")", .{mname});
         }
         return try std.fmt.allocPrint(
             allocator,
@@ -8472,7 +8477,7 @@ fn emitInvocation(
                 // truth, 400_154). The 210_076 no-op contract lives HERE — a
                 // comptime guard that folds the call away when absent.
                 try emitter.write("if (@hasDecl(__H, \"");
-                try emitter.write(arm.name);
+                try writeMangledSeg(emitter, arm.name);
                 try emitter.write("\")) ");
             }
             try writeArmFireCallExpr(emitter, ctx, invocation, arm);
