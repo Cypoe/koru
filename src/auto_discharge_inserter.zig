@@ -5077,8 +5077,20 @@ pub const AutoDischargeInserter = struct {
         // their arms is the JOIN continuation — "after the conditional" — not
         // an arm waiting for a branch name. Only real event calls resolve.
         if (annotation_parser.isKeyword(decl.annotations)) return null;
+        // The same join rule holds for every tor: an unnamed `|>` written at
+        // a step's own level AFTER that step's `|` arms rejoins after the
+        // dispatch, it is not an anonymous arm. Only an anonymous step ahead
+        // of the first named arm — `call |> next` — is "continue on the
+        // success branch" and resolves below.
+        var first_arm: usize = conts.len;
+        for (conts, 0..) |*c, idx| {
+            if (c.is_catchall or c.branch.len != 0) {
+                first_arm = idx;
+                break;
+            }
+        }
         var has_anon = false;
-        for (conts) |*c| {
+        for (conts[0..first_arm]) |*c| {
             if (!c.is_catchall and c.branch.len == 0) {
                 has_anon = true;
                 break;
@@ -5108,7 +5120,7 @@ pub const AutoDischargeInserter = struct {
         errdefer self.allocator.free(out);
         for (conts, 0..) |*c, i| {
             out[i] = c.*;
-            if (!c.is_catchall and c.branch.len == 0) {
+            if (i < first_arm and !c.is_catchall and c.branch.len == 0) {
                 out[i].branch = try self.allocator.dupe(u8, success);
             }
         }

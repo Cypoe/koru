@@ -10579,6 +10579,11 @@ fn emitContinuationList(
     for (continuation_branch_groups) |group| {
         // Skip residual (it has branch = "*" and will be handled separately)
         if (std.mem.eql(u8, group.branch_name, "*")) continue;
+        // Anonymous continuations are the step's JOIN — they ride no union tag
+        // and emit once after the switch, same as the inline path's
+        // emitAnonymousContinuations (400_193/400_205 for keyword tors; the
+        // rule is general).
+        if (group.branch_name.len == 0) continue;
 
         if (group.continuations.len == 1) {
             // Single continuation - emit as normal
@@ -10751,6 +10756,13 @@ fn emitContinuationList(
     emitter.dedent();
     try emitter.writeIndent();
     try emitter.write("}\n");
+
+    // The join tail: anonymous continuations run once after the dispatch,
+    // in source order, after whichever arm fired.
+    for (continuations) |*cont| {
+        if (cont.is_catchall or cont.branch.len != 0) continue;
+        try emitContinuationBody(emitter, ctx, cont, result_counter);
+    }
 }
 
 /// Emit a single continuation case (.branch => |binding| { ... })

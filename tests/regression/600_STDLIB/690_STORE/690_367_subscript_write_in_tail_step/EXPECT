@@ -1,2 +1,1 @@
-CONTAINS error[SHAPE002]
-CONTAINS duplicate unguarded handler for branch 'row'
+BACKEND_COMPILE_ERROR

@@ -7331,6 +7331,36 @@ pub const Parser = struct {
             self.current += 1; // Move past current line before parsing
             const cont = try self.parseContinuationWithNested(indent, location);
 
+            // An unnamed `|>` step at this level, written after the previous
+            // sibling step's `|`/`!` arms, is that step's JOIN — it nests
+            // under the armed step (an anonymous sibling of the arms), the
+            // same shape attachToDeepestChainTail produces inside arm bodies.
+            // Without this the step and the join land as two anonymous
+            // siblings and SHAPE002 fires for every tor, keyword or not.
+            if (isChainStep(&cont) and continuations.items.len > 0 and
+                isChainStep(&continuations.items[continuations.items.len - 1]))
+            {
+                var tail = &continuations.items[continuations.items.len - 1];
+                while (tail.continuations.len > 0 and isChainStep(&tail.continuations[0])) {
+                    tail = @constCast(&tail.continuations[0]);
+                }
+                var tail_has_arms = false;
+                for (tail.continuations) |*tc| {
+                    if (tc.is_catchall or tc.branch.len != 0) {
+                        tail_has_arms = true;
+                        break;
+                    }
+                }
+                if (tail_has_arms) {
+                    const kids = try self.allocator.alloc(ast.Continuation, tail.continuations.len + 1);
+                    @memcpy(kids[0..tail.continuations.len], tail.continuations);
+                    kids[tail.continuations.len] = cont;
+                    if (tail.continuations.len > 0) self.allocator.free(tail.continuations);
+                    tail.continuations = kids;
+                    continue;
+                }
+            }
+
             // Ordering rule check. Residual (`!*` / `|*`) handlers are exempt
             // — they're symmetric ends for both sides.
             //

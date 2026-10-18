@@ -1,19 +1,14 @@
-// 690_367 — a `|>` written at the SAME indent as a `| row` arm is the
-// site's second row-produce handler, not a continuation of the arm.
-// Refused SHAPE002: two unguarded `row` handlers at one level.
+// 690_367 — a `|>` at the same indent as a `| row` arm is insert's JOIN
+// (400_210's rule: an unnamed `|>` after a step's arms rejoins after the
+// dispatch, for every tor). Arm bindings are arm-local — `b` is invisible
+// at the join, so `s[b]` cannot resolve there. Attachment stays positional:
+// `| row b` dispatches on insert, the step before it.
 //
-// The pin locks two things. The reattachment rule (reattachArmsToLastStep)
-// is positional: an arm attaches to the last step BEFORE it at its own
-// level, so `| row b` keeps its flat-parse home on insert — before the fix
-// the desugar moved the arm UNDER the later `|>` step, and the step's tor
-// took the blame (`'__store_write_s' has no branch 'row'`, a
-// KORU021 naming the wrong party; a plain `|> std/io:print.ln` produced
-// the identical misfire against print.impl).
+// No koruc-level unbound-reference check exists yet (the same hole 320_152
+// lives in): today the refusal is the host's `use of undeclared identifier
+// 'b'` from the emitted Zig.
 //
-// And the semantics: an unnamed `|>` on inserth IS the `row` handler —
-// the single-branch produce arrives unnamed — so `| row b` + `|>` is two
-// claims on one produce. `s[b]` could never see `b` there anyway. The
-// per-row write this wanted already has a spelling — the arm body:
+// The per-row write this wanted already has a spelling — the arm body:
 //
 //     | row b |> std/store:stored { w.h: a }
 //         |> std/store:stored { s[b].p: a }

@@ -26,12 +26,25 @@ bind the current chain tail): together they say an arm attaches to the tail
 it visibly follows — deeper means that step's subtree, same level means the
 last step it comes after.
 
-What the correct tree then exposes: an unnamed `|>` on a branched tor is
-the produce continuation, not a through. On inserth it IS the `row`
-handler — `| row b` + `|>` is two claims on one produce (SHAPE002) — and on
-a multi-branch tor it is ambiguous (KORU022 names the rule). There is no
-"aligned with the arm means inside the arm": per-row work lives in the arm
-body, one indent deeper.
+What the correct tree then exposes, ruled 2026-10-18: an unnamed `|>` at a
+step's own level, after that step's arms, is the step's JOIN — for every
+tor, not only keyword ones (frag-the-unnamed-sibling-after-named-arms-is-a-join
+now holds universally). The earlier reading — on a branched tor that `|>` is
+the produce continuation, so `| row b` + `|>` is two claims on one produce
+and a multi-branch tor is ambiguous — meant a failable verb mid-chain forced
+either nesting the whole remainder one level deeper or turning failure into
+a panic (koru-libs clay/tests/FLOW_BINDINGS.md §2). Only an unnamed `|>`
+before any arm still means "continue on the sole success branch."
+
+"Aligned with the arm" still never means "inside the arm": arm bindings are
+arm-local and invisible at the join, so per-row work lives in the arm body,
+one indent deeper. The accepted cost: the join makes "handle the failure arm
+and carry on" the cheapest spelling — the no-fallbacks pressure that forced
+nesting is gone, so that discipline now rides on authors and obligations.
+
+Open: nothing in koruc refuses a join that references an arm binding — the
+host's undeclared-identifier error does (690_367, 400_212, and 320_152's
+older shape). An unbound-reference check is owed.
 
 Open: choke collection in tryDesugarChain is order-free by design — a
 choke's reach is the whole lexical block — so an arm claiming a chain it
