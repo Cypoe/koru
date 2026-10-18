@@ -55,61 +55,10 @@ fn wireIsSourceType(t: []const u8) bool {
     return std.mem.eql(u8, base, "Source");
 }
 
-// Emit a captured-text value as canonical quoted wire: ", \, and the
-// whitespace escapes unescapeStringLiteral reads (\n \t \r) round-trip.
-fn wireEmitQuoted(out: *std.ArrayList(u8), allocator: std.mem.Allocator, text: []const u8) void {
-    out.append(allocator, '"') catch unreachable;
-    for (text) |c| {
-        switch (c) {
-            '"' => out.appendSlice(allocator, "\\\"") catch unreachable,
-            '\\' => out.appendSlice(allocator, "\\\\") catch unreachable,
-            '\n' => out.appendSlice(allocator, "\\n") catch unreachable,
-            '\t' => out.appendSlice(allocator, "\\t") catch unreachable,
-            '\r' => out.appendSlice(allocator, "\\r") catch unreachable,
-            else => out.append(allocator, c) catch unreachable,
-        }
-    }
-    out.append(allocator, '"') catch unreachable;
-}
-
-// Scan a captured-text value: balanced to a depth-0 ',' or ')' — strings and
-// bracket pairs inside the text are data, not delimiters.
-fn wireScanCaptured(s: []const u8, i: *usize) []const u8 {
-    const start = i.*;
-    var depth: i32 = 0;
-    var quote: ?u8 = null;
-    while (i.* < s.len) {
-        const c = s[i.*];
-        if (quote) |q| {
-            if (c == '\\' and i.* + 1 < s.len) {
-                i.* += 2;
-                continue;
-            }
-            if (c == q) quote = null;
-            i.* += 1;
-            continue;
-        }
-        // Only '"' quotes — captured text is prose/code, and an apostrophe
-        // in it ("it's stuck") is a character, not a delimiter.
-        if (c == '"') {
-            quote = c;
-        } else if (c == '(' or c == '{' or c == '[') {
-            depth += 1;
-        } else if (c == ']' or c == '}') {
-            if (depth > 0) depth -= 1;
-        } else if (c == ')') {
-            if (depth == 0) break;
-            depth -= 1;
-        } else if (c == ',' and depth == 0) {
-            break;
-        }
-        i.* += 1;
-    }
-    return s[start..i.*];
-}
-
+// The captured-text family — wireEmitQuoted, wireIsBareRef, wireScanCaptured —
+// lives in the `wirecap` part (runtime.wirecap.kz).
 fn wireScan(allocator: std.mem.Allocator, s: []const u8, input_fn: ?InputLookupFn, host_input_fn: ?InputLookupFn) WireScan {
-    if (s.len == 0) return .{ .reject = wireReject("the wire carries exactly one invocation per turn — the reply was empty", .{}, 0) };
+    if (s.len == 0) return .{ .reject = wireReject("the reply carried no invocation — a reply is one or more invocations, one per line", .{}, 0) };
 
     // The normalized text must outlive this call — caller arena or the same
     // never-freed page tolerance the wire layer already carries.
@@ -136,9 +85,9 @@ fn wireScan(allocator: std.mem.Allocator, s: []const u8, input_fn: ?InputLookupF
                 return .{ .ok = out.items };
             }
         }
-        return .{ .reject = wireRejectResidue("not an invocation: after the verb '{s}' comes '(' — prose is not wire", .{verb}, i) };
+        return .{ .reject = wireRejectResidue("not an invocation: after the verb '{s}' comes '(' — calls are `verb(field: ...)` and `vocabulary()` lists every verb", .{verb}, i) };
     }
-    if (i >= s.len or s[i] != '(') return .{ .reject = wireRejectResidue("not an invocation: after the verb '{s}' comes '(' — prose is not wire", .{verb}, i) };
+    if (i >= s.len or s[i] != '(') return .{ .reject = wireRejectResidue("not an invocation: after the verb '{s}' comes '(' — calls are `verb(field: ...)` and `vocabulary()` lists every verb", .{verb}, i) };
     out.appendSlice(allocator, s[0 .. i + 1]) catch unreachable;
     i += 1;
 
@@ -185,7 +134,16 @@ fn wireScan(allocator: std.mem.Allocator, s: []const u8, input_fn: ?InputLookupF
         } else if (field_type != null and wireIsCapturedType(field_type.?)) {
             const raw = std.mem.trim(u8, wireScanCaptured(s, &i), " \t");
             if (raw.len == 0) return .{ .reject = wireReject("the field '{s}' expects captured text — an expression or raw source text", .{field}, i) };
-            wireEmitQuoted(&out, allocator, raw);
+            // A lone bare token is a bound-name reference — the same
+            // judgment a bare value on any other field gets (`r9.flights`
+            // resolves, an unbound name refuses at validation). Quoting it
+            // here would seal the only spelling a bound name has; prose
+            // and bracketed text still capture, because neither lexes bare.
+            if (wireIsBareRef(raw)) {
+                out.appendSlice(allocator, raw) catch unreachable;
+            } else {
+                wireEmitQuoted(&out, allocator, raw);
+            }
         } else {
             // Bare literal — number, true/false, or a bound name: the same token the
             // interpreter's own parser accepts here, judged by it, not re-parsed.
@@ -220,8 +178,8 @@ fn wireScan(allocator: std.mem.Allocator, s: []const u8, input_fn: ?InputLookupF
         out.appendSlice(allocator, s[i..]) catch unreachable;
         return .{ .ok = out.items };
     }
-    if (s[i] == '\r' or s[i] == '\n') return .{ .reject = wireReject("one flow per turn: a second invocation is a second turn", .{}, i) };
-    return .{ .reject = wireReject("one flow per turn: nothing follows the closing ')' except arms", .{}, i) };
+    if (s[i] == '\r' or s[i] == '\n') return .{ .reject = wireReject("one invocation per line: a second invocation goes on its own line", .{}, i) };
+    return .{ .reject = wireReject("one invocation per line: nothing follows the closing ')' except arms", .{}, i) };
 }
 
 // parse.wire's proc — the tor is declared in the `parsewire` part. The scan

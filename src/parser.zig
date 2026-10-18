@@ -9055,13 +9055,43 @@ pub const Parser = struct {
         }
 
         // Line-start `|>` continuation (KORU010 territory) — not a branch body.
+
+        // A trailing top-level `-> produce` on the last `|>` step of a branch
+        // arm's chain (`|> f(x): v -> expr`) is the bare-return produce arm —
+        // the same chain-tail grammar parseBranchContinuationBase strips for
+        // `| done |> … -> expr` and parseInlineContinuation strips for flow-level
+        // chains (020_030). `->` is not a `|>` delimiter, so it rides on the
+        // final segment; without this strip the invocation parser's arg scan
+        // silently swallows it (return_binding kept, produce dropped, false
+        // KORU100 on the binding).
+        var produce_tail: ?[]const u8 = null;
+        {
+            const fc_nc = stripTrailingLineComment(full_content);
+            if (indexOfTopLevelArrow(fc_nc)) |aidx| {
+                const pt = lexer.trim(fc_nc[aidx + 2 ..]);
+                if (pt.len > 0) {
+                    produce_tail = pt;
+                    full_content = lexer.trim(fc_nc[0..aidx]);
+                }
+            }
+        }
+
         const steps = try self.parsePipelineSteps(full_content, false, location);
         const step: ?ast.Step = if (steps.len > 0) steps[0] else null;
 
+        // The stripped produce becomes the innermost continuation of the chain:
+        // a bare-return branch_constructor (the same node the subflow-head
+        // `head(): v -> expr` produce uses).
+        const produce_conts: []const ast.Continuation = if (produce_tail) |pt| blk: {
+            const conts = try self.allocator.alloc(ast.Continuation, 1);
+            conts[0] = try self.bareReturnContinuation(pt, indent, self.chainLinkLocation(location, link_lines, if (steps.len > 0) steps.len - 1 else 0), &.{});
+            break :blk conts;
+        } else &[_]ast.Continuation{};
+
         // FIX: Chain additional steps as nested continuations (same as parseBranchContinuationBase)
         if (steps.len > 1) {
-            // Build chain from back to front
-            const current_nested: []const ast.Continuation = try self.chainTrailingSteps(steps, &[_]ast.Continuation{}, indent, location, link_lines);
+            // Build chain from back to front — produce rides the last step.
+            const current_nested: []const ast.Continuation = try self.chainTrailingSteps(steps, produce_conts, indent, location, link_lines);
 
             return ast.Continuation{
                 .branch = try self.allocator.dupe(u8, ""), // Empty branch for pipeline continuation
@@ -9082,7 +9112,7 @@ pub const Parser = struct {
             .condition_expr = null,
             .node = step,
             .indent = indent,
-            .continuations = &[_]ast.Continuation{}, // Will be filled by caller
+            .continuations = produce_conts, // Will be filled by caller when empty
             .location = self.chainLinkLocation(location, link_lines, 0),
         };
     }

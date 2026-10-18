@@ -179,3 +179,60 @@ which no negative test ever sees — the corpus that caught it was a consumer
 (kopium's live agent) doing the ordinary thing. Pins that exercise the
 produce side into qualified slots, not only qualified params refusing wrong
 args, are the coverage this class needs.
+
+## The candidacy field is the author-written one — the produce is NEAREST (2026-10-13)
+
+"Exactly one candidate binds" was being enforced over a field the subtree fill
+had already raided. `punContinuationBinding` ran the scope fill FIRST and the
+thread election SECOND, so `other(): o |> produce() |> consume(b: "B")` emitted
+`.a = o` — the produce computed and discarded — and
+`other(): o |> produce() |> consume()` compiled `.a = o, .b = o` where 210_180
+promises KORU093. The refusal was a property of empty scopes, not of the
+language.
+
+The reservation doctrine already existed one mechanism over: `own_payload_type`
+keeps the fill off slots the arm's own payload is about to take, because a fill
+winning by pass order rather than nearness is 690_090's defect shape verbatim.
+The `|>` produce thread was the same shape unguarded — `thread != null`
+explicitly disabled the guard that exists to serve it. The fix extends the same
+reservation symmetrically: every open slot the incoming thread can fill
+(`typeCanFill`, the election's own predicate) is skipped by the fill and left
+to the election — zero is KORU092, one binds, several is KORU093 naming them.
+Pins: 210_320 (the produce is nearest — `a=made`, never `a=other`) and 210_321
+(the refusal survives a compatible binding in scope).
+
+What changed in consequence, and it is the semantic content of the ruling: an
+auto-filled argument no longer narrows the election. `f(x: T, y: T)` with a
+`T` bind in scope now refuses where it used to split `x` to scope and `y` to
+the thread — the author writes `x: o` to say which slot the scope value takes.
+Written arguments narrow; filled arguments do not. The produce is the nearest
+binding of its type in every `|>` step, because "the value that just arrived"
+is what `|>` means.
+
+## A produce nobody can reach is a refusal, not a discard (2026-10-13)
+
+The reservation fixed WHO takes the slot; it said nothing about a produce
+that arrives where nothing can take it at all. `produce() |> consume(a: "A",
+b: "B")` — every slot written — compiled, emitted `const result_1 =
+produce()`, and dropped the value where nothing could ever read it. The
+checker's own comment ruled it legal: "Complete is never an error." A call
+with no unfilled parameters never even looked at the thread — the conveyor
+lost its cargo and stayed silent.
+
+An in-election refusal could not carry it: `210_172`'s running-value chain
+(`seed(): n |> bump(n) |> bump(n)`) mints its `__thread_pun` holders in the
+pun-advance pass, AFTER the election — an election-time refusal condemned a
+produce that was about to be named. So the check is a post-pass AUDIT
+(`auditDeadThreads`, KORU092: "the {T} produced by '{tor}' has nowhere to
+land — every parameter downstream that could take it is already written").
+A produce survives unnamed only where it honestly can: at the chain's end,
+bound and written (`produce(): s |> consume(a: s)` is landing, not discarding
+— 210_323), destructured, or deliberately dropped with `: _`. Union payloads
+are eaten by their arms, not offered to the election.
+
+The audit's verdict is stage-relative like the threading it audits: a child
+whose callee this stage cannot resolve (a `[with]`-scoped bare name before
+resolve-with-scopes) was never offered the thread, so "nowhere to land"
+defers to the elaborate segment, where `auditDeadThreadsInProgram` runs after
+the names resolve and the verdict is final (641_015 keeps passing; a
+`[with]`-scoped dead produce refuses).

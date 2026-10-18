@@ -44,5 +44,20 @@ preserves an abstraction by restoring the platform it assumed has not ported
 anything.** It has re-created the host and run there. Compare what the artifact
 IS, not whether it runs.
 
+**And "freestanding" is itself a union.** Measured 2026-10-15: the emitted
+`__koru_backing` sent every `os.tag == .freestanding` program to `__koru_bare`
+— the extern `posix_memalign`/`free` road this frag celebrates on Unikraft,
+where the image really does carry `T malloc`/`T free`. On wasm32-freestanding
+those symbols are *imports the host must supply*, and Vercel's wasm runtime
+supplies exactly one (`env.time`) — every invocation died at instantiate,
+`LinkError: Import #1 module="env" function="free"`, until `__koru_backing`
+split freestanding on `cpu.arch.isWasm()`: wasm gets `page_allocator`, which
+Zig resolves to `WasmAllocator` (`memory.grow`, self-contained, no imports);
+the extern road stays for the boards that own their symbols. The externs had
+been dead-stripped for months — `ce2b015ff` making compress/string buffers
+answer to `koru_allocator()` is what made `free` reachable and surfaced the
+hole. A fallback measured on one freestanding host is not measured on
+freestanding.
+
 Related: [[frag-a-diagnostics-hint-is-a-claim-not-a-tested-path]] — both are
 about trusting a stated surface over an exercised one.

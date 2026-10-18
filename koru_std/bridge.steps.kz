@@ -29,9 +29,8 @@ fn runSteps(br: *Bridge, source: []const u8, items: []const TurnItem) StepRun {
     // rejected wire reply and the caller's strike bound needs to see it.
     var wire_failures: u32 = 0;
     const total: u32 = @intCast(items.len);
-    // A turn whose EVERY item bound residue is not `partial` — nothing ran —
-    // it is the single `residue` outcome. Reached only when the all-prose
-    // fast path's bind failed; normally all-prose returns above.
+    // A turn whose EVERY item bound residue is the single `residue` outcome,
+    // not `partial` — reached only when the all-prose fast path's bind failed.
     var all_residue = true;
     for (items, 0..) |it, idx| {
         const step: u32 = @intCast(idx + 1);
@@ -52,7 +51,8 @@ fn runSteps(br: *Bridge, source: []const u8, items: []const TurnItem) StepRun {
             if (e.not_invocation) {
                 const rn = bindResidue(br, item);
                 if (rn.len > 0) {
-                    writer.print("step {d}/{d} residue bound: {s} — your reply was not wire; nothing reached the user, but the observer kept it. Prose meant for the user wants `say:` up front (no quoting needed), `note:` for thinking out loud — re-emit that text in that shape\n", .{ step, total, rn }) catch {};
+                    const head = item[0..@min(std.mem.indexOfScalar(u8, item, '\n') orelse item.len, 48)];
+                    writer.print("step {d}/{d} residue bound: {s} — '{s}' is not wire; nothing reached the user, but the observer kept it. `say:` reaches the user, `note:` thinks, `verb(field: ...)` calls — `vocabulary()` lists every verb\n", .{ step, total, rn, head }) catch {};
                     continue;
                 }
             }

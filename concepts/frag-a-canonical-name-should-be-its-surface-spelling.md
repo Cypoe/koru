@@ -42,6 +42,14 @@ old spelling, refused" and becomes an ordinary name character, so
 `std.io:print.ln` reads as a reference to a module literally named `std.io`
 (resolve-or-not-found, possibly a did-you-mean lint), not a parse error.
 
+First enforcement landed 2026-10-15 on the door axis: `mod/path:default`
+is a canonical spelling the surface can no longer produce — KORU208
+refuses it in the import pipeline's door-rewrite walk and teaches the bare
+`mod/path(...)` form. A module's default door now has exactly one legal
+spelling; the `:default` segment is compiler-manufactured state, not
+source. The same shape the June ruling took on `/` vs `.` — one meaning,
+one spelling.
+
 ## Open questions
 
 - The migration's blast radius is every site that constructs or compares

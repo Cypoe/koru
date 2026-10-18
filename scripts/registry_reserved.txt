@@ -91,6 +91,14 @@ KORU171
 # Zig — the emit-scan reads .zig only. Same situation as KORU140 above.
 KORU178
 
+# Emitted by koru_std/panic.kz's `catch` transform — a .kz graft pass, so the
+# zig-only emit-scan cannot see it. Same situation as KORU178 above.
+KORU179
+
+# Emitted by koru_std/compiler.witness.kz's witness-check arm — a .kz pass, so
+# the zig-only emit-scan cannot see it. Same situation as KORU178/179 above.
+KORU209
+
 # `unknownConstruct` was the only emitter and nothing called it — the DEAD check
 # could not see that until 2026-09-17, when the emit-scan stopped crediting a
 # `.KORUxxx` tag in src/errors.zig whose enclosing helper has no call site. The

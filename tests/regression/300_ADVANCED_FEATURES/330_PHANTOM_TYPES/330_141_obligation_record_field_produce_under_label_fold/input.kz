@@ -1,0 +1,35 @@
+// A packed record whose field carries `<state!>` crosses a `#label` fold's
+// back-edge and is produced whole from the fold's `done` arm (`-> e`). The
+// fold step's consuming params retire the seed's obligation and re-issue it on
+// the branch payloads (`| live e` / `| done e`), so `e.h` is live at the
+// produce — the same key the caller's `res.h` debt is seeded on. The bend this
+// pins: the arm's payload field is keyed `e.<field>` on the inserter ledger
+// too, not just on the phantom checker's — a `-> e` expression produce on a
+// fold arm verifies the field the same way `| rec e -> e` does on a named
+// branch arm. Complements 330_074 (whole scalar through a back-edge) and
+// 330_138 (literal record produce).
+~import std/io
+const std = @import("std");
+const Handle = struct { n: i32 };
+
+~tor mint { id: usize } -> *Handle<owned!>
+~proc mint|zig { const h = std.heap.page_allocator.create(Handle) catch unreachable; h.* = .{ .n = 0 }; return h; }
+
+~tor dispose { h: *Handle<!owned> }
+~proc dispose|zig { std.debug.print("disposed {}\n", .{h.n}); std.heap.page_allocator.destroy(h); }
+
+~tor tick { h: *Handle<!owned>, n: i64 }
+| live { h: *Handle<owned!>, n: i64 }
+| done { h: *Handle<owned!>, n: i64 }
+~proc tick|zig {
+    h.n += 1;
+    if (h.n < 3) return .{ .live = .{ .h = h, .n = n + 1 } };
+    return .{ .done = .{ .h = h, .n = n + 1 } };
+}
+
+~tor spin { id: usize } -> { h: *Handle<owned!>, n: i64 }
+~spin = mint(id): h |> #L tick(h, n: 0)
+| live e |> @L(e.h, e.n)
+| done e -> e
+
+~spin(id: 1): res |> dispose(res.h) |> std/io:print.ln("n={{ res.n:d }}")

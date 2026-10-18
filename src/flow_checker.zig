@@ -196,6 +196,17 @@ pub const FlowChecker = struct {
             try self.checkMutableBorrows(&flow.body, &borrow_scope);
         }
 
+        // KORU207: a `!` arm on an impl flow's HEAD call lowers into a
+        // synthesized `Handlers_*` struct — a context-free fn that sees
+        // module scope only. The implemented tor's params are locals of
+        // the enclosing handler fn and cannot cross; a reference dies in
+        // emitted Zig ('x' not accessible from inner function) with no
+        // Koru diagnostic. Mid-chain `!` arms inline into the frame and
+        // DO see them — only the head partition loses scope.
+        if (self.mode == .frontend and !is_transformed) {
+            try self.checkHeadArmScope(flow);
+        }
+
         // KORU021 (source half): an unknown arm name is a misspelling wherever
         // it is spelled — but the `.all` pass only sees what transforms left
         // standing. A consuming transform (capture dissolving `| captured`
@@ -1597,6 +1608,267 @@ pub const FlowChecker = struct {
         if (std.mem.startsWith(u8, t, "*")) return !std.mem.startsWith(u8, t, "*const");
         if (std.mem.startsWith(u8, t, "[*")) return !(std.mem.startsWith(u8, t, "[*]const") or std.mem.startsWith(u8, t, "[*] const"));
         return false;
+    }
+
+    /// KORU207 — the context-free arm wall. An impl flow's head `!`
+    /// continuations partition into a synthesized `Handlers_*` struct
+    /// (visitor_emitter phase 3b): fns inside a struct cannot see the
+    /// enclosing handler's locals, so the implemented tor's params are
+    /// dead names inside the arm — today they die as `'x' not accessible
+    /// from inner function' in emitted Zig. Names bound INSIDE the arm
+    /// subtree stay legal (they emit in the arm fn's own frame, nested
+    /// `!` arms included); a param referenced unbound is refused.
+    fn checkHeadArmScope(self: *FlowChecker, flow: *const ast.Flow) !void {
+        const impl_path = flow.impl_of orelse return;
+        // Label folds take emitFlow, not the partition — `!` arms there
+        // keep the enclosing frame.
+        if (flow.pre_label != null) return;
+        const impl_decl = self.findEventDecl(&impl_path) orelse return;
+        const invoked = self.findEventDecl(&flow.inv().path) orelse return;
+        // `[template]` procs (for/if/capture) lower by substitution into
+        // the consumer frame — the arm keeps the enclosing scope; only
+        // tor and |zig|/|js| proc invocations partition at the head.
+        // (`for` resolves to a decl for its `! each` interface, so
+        // the decl's own annotations do not carry "template".)
+        if (self.invocationResolvesToTemplateProc(&flow.inv().path)) return;
+        // The declaration-side spelling of the same claim: `capture`/`for`/
+        // the transform tors carry [transform] — their `!` arms are consumed
+        // by the transform, not partitioned into Handlers_*.
+        if (annotation_parser.hasPart(invoked.annotations, "transform")) return;
+        var head_effectful = false;
+        for (invoked.branches) |b| {
+            if (b.kind == .effect) head_effectful = true;
+        }
+        if (!head_effectful) return;
+        for (flow.body.continuations) |*cont| {
+            if (cont.kind != .effect) continue;
+            // Transform-grafted arms (`for`/`split` accumulators ride
+            // is_transformed_subtree) are consumed before the partition —
+            // they never reach a Handlers_* fn, so their params cross fine.
+            if (cont.is_transformed_subtree) continue;
+            var scope = ArmScope.init(self.allocator);
+            defer scope.deinit();
+            try collectArmScope(cont, &scope, self.allocator);
+            for (impl_decl.input.fields) |f| {
+                if (f.name.len == 0 or f.name[0] == '_') continue;
+                if (scope.binds.contains(f.name) or !scope.refs.contains(f.name)) continue;
+                try self.reporter.addErrorAtLocationWithHint(
+                    .KORU207,
+                    cont.location,
+                    "`! {s}` at the head of '{s}'s implementation references '{s}' — a head-position `!` arm lowers to a context-free fn that sees module scope only, so the implementing tor's params do not cross",
+                    .{ cont.branch, impl_decl.path.segments[impl_decl.path.segments.len - 1], f.name },
+                    "stage '{s}' in a store and read it inside the arm, or move the call off the head — a mid-chain `!` arm inlines and keeps the enclosing scope",
+                    .{f.name},
+                );
+            }
+        }
+    }
+
+    /// The two name sets an arm-scope walk collects: names bound inside
+    /// the subtree (legal — they emit in the arm fn's own frame) and
+    /// names referenced (a param among them is the KORU207 hit).
+    const ArmScope = struct {
+        binds: std.StringHashMap(void),
+        refs: std.StringHashMap(void),
+
+        fn init(allocator: std.mem.Allocator) ArmScope {
+            return .{
+                .binds = std.StringHashMap(void).init(allocator),
+                .refs = std.StringHashMap(void).init(allocator),
+            };
+        }
+
+        fn deinit(self: *ArmScope) void {
+            self.binds.deinit();
+            self.refs.deinit();
+        }
+    };
+
+    fn collectArmScope(cont: *const ast.Continuation, scope: *ArmScope, allocator: std.mem.Allocator) anyerror!void {
+        if (cont.is_transformed_subtree) return;
+        if (cont.binding) |b| try scope.binds.put(b, {});
+        for (cont.destructure) |f| try collectArmDestructureBinds(f, scope, allocator);
+        if (cont.condition) |c| try scanArmRefs(c, &scope.refs);
+        if (cont.condition_expr) |e| try collectExprRefs(e, &scope.refs, allocator);
+        if (cont.node) |*n| try collectArmNodeScope(n, scope, allocator);
+        for (cont.continuations) |*child| try collectArmScope(child, scope, allocator);
+    }
+
+    fn collectArmDestructureBinds(f: ast.DestructureField, scope: *ArmScope, allocator: std.mem.Allocator) anyerror!void {
+        if (f.sub.len > 0) {
+            for (f.sub) |sub| try collectArmDestructureBinds(sub, scope, allocator);
+            return;
+        }
+        try scope.binds.put(f.name, {});
+    }
+
+    fn collectArmNamedBranch(nb: *const ast.NamedBranch, scope: *ArmScope, allocator: std.mem.Allocator) anyerror!void {
+        if (nb.binding) |b| try scope.binds.put(b, {});
+        for (nb.body) |*cont| try collectArmScope(cont, scope, allocator);
+    }
+
+    fn collectArmNodeScope(n: *const ast.Node, scope: *ArmScope, allocator: std.mem.Allocator) anyerror!void {
+        switch (n.*) {
+            .invocation => |*inv| {
+                for (inv.args) |*arg| try scanArmRefs(arg.value, &scope.refs);
+                if (inv.return_binding) |rb| try scope.binds.put(rb, {});
+                for (inv.return_destructure) |f| try collectArmDestructureBinds(f, scope, allocator);
+            },
+            .label_with_invocation => |*lwi| {
+                for (lwi.invocation.args) |*arg| try scanArmRefs(arg.value, &scope.refs);
+            },
+            .label_jump => |*lj| {
+                for (lj.args) |*arg| try scanArmRefs(arg.value, &scope.refs);
+            },
+            .branch_constructor => |*bc| {
+                if (bc.plain_value) |pv| try scanArmRefs(pv, &scope.refs);
+                for (bc.fields) |f| try collectArmFieldRefs(f, scope, allocator);
+            },
+            .conditional_block => |*cb| {
+                if (cb.condition) |c| try scanArmRefs(c, &scope.refs);
+                if (cb.condition_expr) |e| try collectExprRefs(e, &scope.refs, allocator);
+                for (cb.nodes) |*nn| try collectArmNodeScope(nn, scope, allocator);
+            },
+            .conditional => |*cd| {
+                try scanArmRefs(cd.condition, &scope.refs);
+                if (cd.condition_expr) |e| try collectExprRefs(e, &scope.refs, allocator);
+                for (cd.branches) |*nb| try collectArmNamedBranch(nb, scope, allocator);
+            },
+            .foreach => |*fe| {
+                try scanArmRefs(fe.iterable, &scope.refs);
+                for (fe.branches) |*nb| try collectArmNamedBranch(nb, scope, allocator);
+            },
+            .switch_result => |*sr| {
+                try scanArmRefs(sr.expression, &scope.refs);
+                for (sr.branches) |*nb| try collectArmNamedBranch(nb, scope, allocator);
+            },
+            .assignment => |*asgn| {
+                try scope.binds.put(asgn.target, {});
+                for (asgn.fields) |f| try collectArmFieldRefs(f, scope, allocator);
+            },
+            .metatype_binding => |*mb| try scope.binds.put(mb.binding, {}),
+            .expression => |code| try scanArmRefs(code, &scope.refs),
+            else => {},
+        }
+    }
+
+    fn collectArmFieldRefs(f: ast.Field, scope: *ArmScope, allocator: std.mem.Allocator) anyerror!void {
+        if (f.expression_str) |s| try scanArmRefs(s, &scope.refs);
+        if (f.expression) |e| try collectExprRefs(e, &scope.refs, allocator);
+        if (f.default) |d| try scanArmRefs(d, &scope.refs);
+    }
+
+    /// Expression-tree walk: `.identifier` leaves are references. A
+    /// field_access's `field` is a name, not an Expression, so `v.tag`
+    /// counts only `v`.
+    fn collectExprRefs(e: *const ast.Expression, refs: *std.StringHashMap(void), allocator: std.mem.Allocator) anyerror!void {
+        switch (e.node) {
+            .identifier => |id| try refs.put(id, {}),
+            .binary => |*b| {
+                try collectExprRefs(b.left, refs, allocator);
+                try collectExprRefs(b.right, refs, allocator);
+            },
+            .unary => |*u| try collectExprRefs(u.operand, refs, allocator),
+            .field_access => |*fa| try collectExprRefs(fa.object, refs, allocator),
+            .grouped => |g| try collectExprRefs(g, refs, allocator),
+            .builtin_call => |*bc| for (bc.args) |a| try collectExprRefs(a, refs, allocator),
+            .array_index => |*ai| {
+                try collectExprRefs(ai.object, refs, allocator);
+                try collectExprRefs(ai.index, refs, allocator);
+            },
+            .conditional => |*c| {
+                try collectExprRefs(c.condition, refs, allocator);
+                try collectExprRefs(c.then_expr, refs, allocator);
+                try collectExprRefs(c.else_expr, refs, allocator);
+            },
+            .function_call => |*fc| for (fc.args) |a| try collectExprRefs(a, refs, allocator),
+            .literal => {},
+        }
+    }
+
+    /// Raw-text identifier scan for the places the AST keeps unparsed
+    /// text (arg values, when-strings, `->` produce tails). Skips string
+    /// literals except `{{ }}` interpolation holes, field names after
+    /// `.`, label keys before `:`, and `@`/`~`-prefixed builtin names.
+    fn scanArmRefs(text: []const u8, refs: *std.StringHashMap(void)) anyerror!void {
+        var i: usize = 0;
+        var in_string = false;
+        var in_hole = false;
+        while (i < text.len) {
+            const ch = text[i];
+            if (in_string) {
+                if (ch == '\\') {
+                    i += 2;
+                    continue;
+                }
+                if (ch == '{') {
+                    if (i + 1 < text.len and text[i + 1] == '{') {
+                        in_hole = true;
+                        in_string = false;
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    continue;
+                }
+                if (ch == '"') in_string = false;
+                i += 1;
+                continue;
+            }
+            if (in_hole) {
+                if (ch == '}') {
+                    if (i + 1 < text.len and text[i + 1] == '}') {
+                        in_hole = false;
+                        in_string = true;
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    continue;
+                }
+                // `:` inside a hole ends the expression part — the rest
+                // is a format spec, not a reference.
+                if (ch == ':') {
+                    while (i < text.len and !(text[i] == '}' and i + 1 < text.len and text[i + 1] == '}')) i += 1;
+                    continue;
+                }
+            } else if (ch == '"') {
+                in_string = true;
+                i += 1;
+                continue;
+            } else if (ch == '\'') {
+                // Char/symbol literal — skip to the closing quote.
+                i += 1;
+                while (i < text.len and text[i] != '\'') {
+                    if (text[i] == '\\') i += 1;
+                    i += 1;
+                }
+                i += 1;
+                continue;
+            }
+            if (!isArmIdentStart(ch)) {
+                i += 1;
+                continue;
+            }
+            const start = i;
+            while (i < text.len and ast.isKebabIdentChar(text[i])) i += 1;
+            const tok = text[start..i];
+            // `@`/`~`-prefixed builtin names are not user bindings.
+            if (start > 0 and (text[start - 1] == '@' or text[start - 1] == '~')) continue;
+            // Field position — `v.tag` references `v`, not `tag`. `..`
+            // is a range, not field access: the dot is preceded by a dot.
+            if (start > 0 and text[start - 1] == '.' and (start < 2 or text[start - 2] != '.')) continue;
+            // Outside a hole an ident immediately followed by `:` is a
+            // key/label (`{ name: value }`), not a reference.
+            if (!in_hole and i < text.len and text[i] == ':') continue;
+            // `{{ flag:name }}` is an interpolation directive, not a read.
+            if (in_hole and std.mem.eql(u8, tok, "flag")) continue;
+            try refs.put(tok, {});
+        }
+    }
+
+    fn isArmIdentStart(ch: u8) bool {
+        return (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or ch == '_';
     }
 
     fn isBindingUsed(self: *FlowChecker, cont: *const ast.Continuation, binding: []const u8) bool {

@@ -278,3 +278,28 @@ invocation-head lines by construction). The report's advice is
 re-emission, not name-passing: "re-emit your text in that shape." A
 teaching message whose own instruction cannot be obeyed is worse than
 silence — it manufactures a second failure out of the first.
+
+2026-10-12 — the grammar text leaked a shape that is not the wire's.
+`name<!x>` (the consume-annotation) sat in WIRE_GRAMMAR_TEXT as if it were
+spelling the model could meet or write; it is a declaration-layer type —
+the schema may carry it, the wire language cannot. The model only ever
+emits `rN`; teaching "spends it" priced phantom internals into 8.5k of
+front-loaded prompt that already buries the domain policy. The line now
+describes the field, not the consumption marker — the marker stays where
+the type system enforces it.
+
+2026-10-13 — the 10-07 (ter) carve-out is superseded: a lone bare token
+in a captured field is a REFERENCE after all. That entry ruled "Source
+and Expression never look anything up — that is what 'captured' means"
+to fix an unfulfillable residue report — and the carve-out then sealed
+the only spelling a bound name has: `flights: r9.flights` scanned to the
+literal `"r9.flights"`, dispatched as data, and the marshal spliced it
+into invalid JSON (kopium task-18 crash). The identifier law this frag
+already states — "a bare identifier in arg position is a reference,
+never a literal" — now holds in captured fields too: a single bare token
+(`r9`, `r9.flights`) emits unquoted and gets the same bound/unbound
+judgment every other field gets; prose and bracketed payloads still
+capture, because neither lexes bare. The 10-07 advice survives it:
+re-emitting prose under `say:` is still the taught redelivery — but the
+"unfulfillable" spelling now resolves, and the env is the judge instead
+of the scanner. Pinned by 440_047.

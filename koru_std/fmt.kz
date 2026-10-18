@@ -355,7 +355,10 @@ pub const FormattedText = struct {
 //   std/fmt:ln("Hello {{ name:s }}! Count: {{ count:d }}")
 //   : l |> ... use l.text ...
 //
-// Zero allocation: uses a thread-local buffer (safe across workers).
+// Zero allocation: `.text` BORROWS the site's threadlocal 4KiB scratch —
+// valid only until THIS call site runs again; consume in place or copy via
+// std/string:from-page + take / fmt.blk. UNENFORCED today — the intended
+// scratch@scoped label and the full contract live in 620_011/README.md.
 // The {{ var:spec }} placeholders are resolved at compile time into
 // std.fmt.bufPrint calls that run at runtime in the caller's scope.
 

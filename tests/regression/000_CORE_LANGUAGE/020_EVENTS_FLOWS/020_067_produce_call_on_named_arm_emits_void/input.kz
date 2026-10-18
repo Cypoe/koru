@@ -1,0 +1,28 @@
+// A `->` produce expression on a named branch arm whose whole value is a call
+// (`| yes _ -> pack(id)`): the produce verifier forwards the callee's declared
+// return contract, but the emitter drops the call's result — the arm emits
+// `return void` where the produced record belongs (`expected type '...Output',
+// found 'void'`). The shape should emit the call and produce its return value
+// to the caller, obligation keys included (`res.h` owed `dispose` here).
+~import std/io
+const std = @import("std");
+const Handle = struct { n: i32 };
+
+~tor mint { id: usize } -> *Handle<owned!>
+~proc mint|zig { const h = std.heap.page_allocator.create(Handle) catch unreachable; h.* = .{ .n = @intCast(id) }; return h; }
+
+~tor dispose { h: *Handle<!owned> }
+~proc dispose|zig { std.heap.page_allocator.destroy(h); }
+
+~tor pack { id: usize } -> { h: *Handle<owned!>, n: i64 }
+~pack = mint(id): h -> { h, n: 7 }
+
+~tor gate { n: i64 } | yes i64 | no i64
+~proc gate|zig { if (n > 0) return .{ .yes = n }; return .{ .no = n }; }
+
+~tor spin { id: usize } -> { h: *Handle<owned!>, n: i64 }
+~spin = gate(n: 1)
+| yes _ -> pack(id)
+| no _ -> pack(id)
+
+~spin(id: 1): res |> dispose(res.h) |> std/io:print.ln("n={{ res.n:d }}")

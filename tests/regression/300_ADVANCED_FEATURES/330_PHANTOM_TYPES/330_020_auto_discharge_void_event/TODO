@@ -1,1 +1,7 @@
-TODO: Auto-dispose doesn't trigger before void event invocations
+TODO: Auto-discharge lands at scope exit, not before the following void
+event — run prints "Done!" before "Closing file". expected.txt pins the
+eager ordering (close before the void call); that insertion point does not
+exist in the inserter today.
+
+Re-spelled to current grammar 2026-10-13 (bare return, `: _` bind, MUST_RUN
+added so the ordering delta fails as output-mismatch, not config-error).

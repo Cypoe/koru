@@ -122,18 +122,26 @@ Pinned by `510_118` (`CONTAINS error[KORU030]`,
 
 ## Open
 
-- Whether (2) should exist at all once (1) is good. Its content is a summary of a
-  six-way error value and its wording contradicts the specific diagnostic in at
-  least this case. Options: drop it when the reporter has already spoken, or split
-  `error.ValidationFailed` so each inserter path carries its own sentence. The
-  second is more work and is the one that would make the summary true.
-- Whether (4)'s location-stripped re-print should be dropped or should instead be
-  the *only* rendering, with (1) suppressed. One of the two is redundant; which
-  one survives depends on whether the trailing block is meant as a summary for
-  multi-error runs.
+- ~~Whether (2) should exist at all once (1) is good.~~ **Resolved
+  2026-10-10** with the cheap discriminator this file proposed: the backend's
+  `emit()` now reads `errors.diagnostics_were_printed` (a module-global set by
+  `printErrors`) and prints the `❌` line + trace hint only when no diagnostic
+  was rendered. The error value keeps both meanings; the *print* is what got
+  gated. koruc's stderr mirror (`main.zig`, the backend-drain loop) filters
+  the same two lines as a compat shim for minted/cached backends built before
+  the flag existed. 510_127 pins it: `CONTAINS error[KORU040]` +
+  `NOT_CONTAINS Compiler coordination error` against raw backend stderr.
+- ~~Whether (4)'s location-stripped re-print should be dropped~~ — partially:
+  `emitDiagnosticsSummary` now returns early when the captured stderr held no
+  non-diagnostic noise lines (indented diagnostic continuations don't count
+  as noise). A clean refusal renders once. With real noise interleaved the
+  digest still prints.
 - `430_001` pins that a user coordinator's message reaches the user through this
   same print. Any change to (2) has to keep that path — a user-authored
-  coordination error is a real message, not plumbing.
+  coordination error is a real message, not plumbing. (Held: 430_012/013/014
+  stayed green through the 2026-10-10 change because overrides carry no
+  reporter diagnostic, so `diagnostics_were_printed` is false and the echo
+  still prints.)
 
 ## Rejecting and *succeeding* also share the exit path (2026-10-12)
 
@@ -150,4 +158,3 @@ moved to where the verdict actually lives: absence of the emitted artifact,
 matched against the pinned refusal text in the diagnostics stream. Any
 consumer keying on koruc's exit code alone will misread a clean refusal as a
 clean compile.
-

@@ -1,0 +1,3 @@
+CONTAINS error[KORU030]
+CONTAINS drops cleanup obligation
+CONTAINS @loop

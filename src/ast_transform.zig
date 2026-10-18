@@ -1575,7 +1575,10 @@ fn bindThreadIntoStep(
     }
 
     // Nothing is unfilled: the call the author wrote is already complete, so
-    // the thread simply is not taken here. Complete is never an error.
+    // the thread is not taken HERE. Whether the produce still lands — bound by
+    // name, pun-advanced by the running-value pass — or dies unnamed is
+    // decidable only after every thread pass has run: auditDeadThreads does
+    // exactly that, and refuses the produce nobody can reach (210_322).
     if (open_names.items.len == 0) return;
 
     const step = eventLeafName(info);
@@ -2114,6 +2117,20 @@ fn punContinuationBinding(
                         if (claimed) continue;
                     }
 
+                    // A `|>` produce is the NEAREST binding of its type — the
+                    // value that just arrived — so every open slot it can fill
+                    // is reserved for the election in step 1b, the same way
+                    // own_payload_type reserves the arm's payload above. Let
+                    // the fill run first on these slots and the nearer value
+                    // loses purely by pass order (same defect shape as
+                    // 690_090): a stale bind takes the slot, the produce is
+                    // computed and discarded, and KORU093's election dissolves
+                    // into a silent fill whenever a compatible binding is in
+                    // scope. The arm guard never reached this thread.
+                    if (thread) |th| {
+                        if (typeCanFill(th.type, f_type)) continue;
+                    }
+
                     // TEACHING GUARD (KORU038), kept alive across the selector
                     // change. A `std/fmt:ln(...): text` bind is a RESULT STRUCT,
                     // so it can never type-match a `string` slot — the fill below
@@ -2320,7 +2337,12 @@ pub fn desugarChainPunThreading(
     try runDesugar(allocator, program, reporter, punThreadItems);
 }
 
-fn punThreadItems(
+/// One traversal for both callers: `pun = true` mints the running-value
+/// holders first (desugarChainPunThreading); `pun = false` audits only
+/// (the elaborate segment's post-resolution pass). Either way the dead
+/// produce check sees the bindings that stage's thread passes left.
+fn chainThreadItems(
+    comptime pun: bool,
     allocator: std.mem.Allocator,
     table: *SymbolTable,
     items: []const ast.Item,
@@ -2329,16 +2351,126 @@ fn punThreadItems(
 ) std.mem.Allocator.Error!void {
     for (@constCast(items)) |*item| {
         switch (item.*) {
-            .flow => |*flow| try threadFlowChain(allocator, table, flow, counter),
+            .flow => |*flow| {
+                if (pun) try threadFlowChain(allocator, table, flow, counter);
+                try auditDeadThreads(allocator, table, &flow.body, reporter);
+            },
             .proc_decl => |*proc| {
                 for (@constCast(proc.inline_flows)) |*flow| {
-                    try threadFlowChain(allocator, table, flow, counter);
+                    if (pun) try threadFlowChain(allocator, table, flow, counter);
+                    try auditDeadThreads(allocator, table, &flow.body, reporter);
                 }
             },
-            .module_decl => |*module| try punThreadItems(allocator, table, module.items, counter, reporter),
+            .module_decl => |*module| try chainThreadItems(pun, allocator, table, module.items, counter, reporter),
             else => {},
         }
     }
+}
+
+fn punThreadItems(
+    allocator: std.mem.Allocator,
+    table: *SymbolTable,
+    items: []const ast.Item,
+    counter: *usize,
+    reporter: *errors_mod.ErrorReporter,
+) std.mem.Allocator.Error!void {
+    try chainThreadItems(true, allocator, table, items, counter, reporter);
+}
+
+/// Entry point: audit only — no minting. The bootstrap segment runs this
+/// inside desugarChainPunThreading and defers any chain whose step names it
+/// cannot resolve (a `[with]` scope re-qualifies them one segment later);
+/// the elaborate segment calls this directly after resolve-with-scopes has
+/// run, where every callee is visible and the deferred verdict is final.
+pub fn auditDeadThreadsInProgram(
+    allocator: std.mem.Allocator,
+    program: *ast.Program,
+    reporter: *errors_mod.ErrorReporter,
+) !void {
+    try runDesugar(allocator, program, reporter, auditDeadThreadItems);
+}
+
+fn auditDeadThreadItems(
+    allocator: std.mem.Allocator,
+    table: *SymbolTable,
+    items: []const ast.Item,
+    counter: *usize,
+    reporter: *errors_mod.ErrorReporter,
+) std.mem.Allocator.Error!void {
+    try chainThreadItems(false, allocator, table, items, counter, reporter);
+}
+
+/// The dead-produce audit (210_322). Runs after BOTH thread passes — the
+/// by-type election (which mints `__thread{N}` when a step takes the value)
+/// and the running-value pun advance above (which mints `__thread_pun{N}`) —
+/// so a produce that still has no binding here is one nothing could reach:
+/// it was computed, handed `|>`-ward, taken by nobody, and cannot ever be
+/// named. The conveyor lost its cargo in silence — the same defect family as
+/// a scope-fill stealing the thread's slot — so it refuses in KORU092 like
+/// any other no-destination.
+///
+/// A produce survives unnamed only where it legitimately can:
+///   - at the chain's END — the last step is a call for its effect, no `|>`
+///     follows, nothing was promised a value;
+///   - author-handled — bound (`: s`), destructured, or deliberately
+///     discarded (`: _`), all of which give it a name;
+///   - UNION-consumed — a `T | err` produce is eaten by its arms, not offered
+///     to the scalar election (union branches, not `return_type`).
+/// A guarded or bound child (`| cond =>`, `| ok v`) is not an unnamed step —
+/// the thread is only ever offered to unnamed ones — so the audit fires only
+/// where the offer existed and the value still died.
+fn auditDeadThreads(
+    allocator: std.mem.Allocator,
+    table: *SymbolTable,
+    cont: *const ast.Continuation,
+    reporter: *errors_mod.ErrorReporter,
+) std.mem.Allocator.Error!void {
+    if (cont.node) |n| {
+        if (n == .invocation) {
+            const inv = &n.invocation;
+            var offered = false;
+            var decidable = true;
+            for (cont.continuations) |*child| {
+                if (!isUnnamedStep(child)) continue;
+                offered = true;
+                // A callee this stage cannot resolve — a `[with]`-scoped bare
+                // name before resolve-with-scopes re-qualifies it — was never
+                // offered the thread, so "nowhere to land" is not decidable
+                // yet. The elaborate segment's audit sees it resolved.
+                if (table.getEventInfo(child.node.?.invocation.path) == null) {
+                    decidable = false;
+                }
+            }
+            if (offered and decidable and produceDiedUnnamed(table, inv)) {
+                const info = table.getEventInfo(inv.path).?;
+                try reporter.addErrorAtLocationWithHint(
+                    .KORU092,
+                    cont.location,
+                    "the {s} produced by '{s}' has nowhere to land — every parameter downstream that could take it is already written",
+                    .{ info.return_type.?, eventLeafName(info) },
+                    "leave the slot that should take it unfilled so the thread elects it, or drop the value at its source with `: _`. An unnamed produce cannot be referenced; `|>` forwards it or refuses.",
+                    .{},
+                );
+            }
+        }
+    }
+    for (@constCast(cont.continuations)) |*child| {
+        try auditDeadThreads(allocator, table, child, reporter);
+    }
+}
+
+/// True when this invocation produces a real threadable value nobody kept:
+/// declared `-> T`, no return binding of any kind (name, `_`, minted holder,
+/// pun-advance holder), no destructure, and not a union the arms consume.
+fn produceDiedUnnamed(table: *SymbolTable, inv: *const ast.Invocation) bool {
+    if (inv.return_binding != null) return false;
+    if (inv.return_destructure.len > 0) return false;
+    const info = table.getEventInfo(inv.path) orelse return false;
+    if (info.input_is_compiler_supplied) return false;
+    if (info.branches.len > 0) return false;
+    const rt = info.return_type orelse return false;
+    if (isTransformResultReturn(rt)) return false;
+    return true;
 }
 
 /// Whether a chain step's invocation produces a runtime value that can continue

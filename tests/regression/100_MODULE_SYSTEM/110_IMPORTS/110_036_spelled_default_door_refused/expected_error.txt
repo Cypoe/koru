@@ -1,0 +1,1 @@
+'lib/door:default(...)' spells the default door explicitly — invoke the module path itself: 'lib/door(...)'

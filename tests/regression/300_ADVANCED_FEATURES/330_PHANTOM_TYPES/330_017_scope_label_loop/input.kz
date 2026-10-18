@@ -1,12 +1,21 @@
+// PIN: an obligation created inside a label-fold body and dropped at the
+// @loop back-edge is refused — scope tracking traces @loop jumps back to
+// #loop, sees the opened file goes nowhere on that edge, and raises KORU030
+// ("discharge it before jumping"). Complements 330_075, which pins the
+// same rule for a carried obligation dropped via an empty @loop().
 ~import app/fs
 const std = @import("std");
-~tor iterate { count: i32 } -> i32
+~tor iterate { count: i32 }
+| more i32
+| fin i32
 ~proc iterate|zig {
     if (count < 3) {
-        return count + 1;
-    } else {
+        return .{ .more = count + 1 };
     }
+    return .{ .fin = count };
 }
-~#loop iterate(count: 0): n |> app/fs:open(path: "test.txt")
-    | opened f |> @loop(n.count)  // Auto-close f before @loop
-|> _
+~tor spin {} -> i32
+~spin = #loop iterate(count: 0)
+    | more n |> app/fs:open(path: "test.txt"): f |> @loop(count: n)
+    | fin r -> r
+~spin()

@@ -6,13 +6,14 @@ SCENARIO: Database transaction pattern
   commit()  → Connection[connected!]        (consumes in_transaction, CREATES connected!)
   close()   → void                          (consumes connected)
 
-CURRENT LIMITATION:
-  [!] annotation only allowed on void events (no branches)
-  commit has | committed branch, so can't be marked [!]
+CURRENT LIMITATION (measured 2026-10-13):
+  [!] is refused on any tor with output — commit's `-> *Connection<connected!>`
+  hits error[KORU083] "[!] annotation requires a void tor" (also green-pinned
+  by 330_037 / 330_132). The cascade scenario cannot even be declared today.
 
 REQUIRED CHANGES:
-  1. Allow [!] on single-branch events (not just void)
-  2. When discharging single-branch event, track new obligations from output
+  1. Allow [!] on single-output events (not just void)
+  2. When discharging a producing event, track new obligations from output
   3. Run auto-discharge iteratively until no obligations remain
 
 USER BENEFIT:
@@ -22,3 +23,6 @@ USER BENEFIT:
             do_work(tx: _.tx) | done _ |> _
 
   Compiler auto-inserts: commit(tx) then close(conn)
+
+Re-spelled to current grammar 2026-10-13 (bare returns); fails at the real
+wall (KORU083) instead of PARSE003 on dead single-branch-union spelling.

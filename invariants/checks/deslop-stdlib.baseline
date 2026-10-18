@@ -12,8 +12,14 @@
 # foreign koru_std drift (invariants.kz/package.kz/parser.kz/
 # rules.kz twins from the concurrent cs lane); this commit
 # stages only a signal definition — zero .kz files.
+# 96/156: measured 2026-10-15 at HEAD 7afa38593 during the
+# obligation-merge commit (zero .kz staged). +2 members is committed
+# foreign landing drift — store.retqual.kz (74494812b phantom
+# re-qualify) joins the import_decl preamble cluster and the
+# interpreter.run/runcached event_decl twins persist from the
+# ~part split; same decl-shell protocol category as 73/118+.
 clusters=96
-members=154
+members=156
 skipped=2
 spellings=45
 # 70/111: store.keyed.kz joined io.blk-style import preamble clone w/ interpreter.select.kz (3 shared compiler-module imports, boilerplate)

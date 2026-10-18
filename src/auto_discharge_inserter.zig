@@ -206,6 +206,11 @@ pub const AutoDischargeInserter = struct {
     /// carried obligation reads as live after the jump and a spurious (double-
     /// free) disposal gets inserted under the back edge (330_076).
     label_seed_map: std.StringHashMap(*const ast.Invocation),
+    /// Bare-return produce nodes already field-verified this run. A produce
+    /// leaf is reachable through more than one context in the same `.full`
+    /// walk (the escape credit retires the obligation on the first pass), so
+    /// the second visit sees an emptied context and must not re-verify.
+    verified_produces: std.AutoHashMap(*const ast.BranchConstructor, void),
     synthetic_binding_counter: u32,
     /// Monotonic acquisition sequence for LIFO auto-discharge unwind order.
     /// Stamped onto each new obligation; preserved across BindingContext.clone
@@ -678,16 +683,16 @@ pub const AutoDischargeInserter = struct {
     fn bindingEscapesViaBranchConstructor(bc: *const ast.BranchConstructor, binding_name: []const u8) bool {
         // Identity branch constructors use plain_value instead of fields
         if (bc.plain_value) |plain| {
-            if (std.mem.eql(u8, plain, binding_name)) {
+            const t = std.mem.trim(u8, plain, " \t");
+            // `-> r` carries the record's `r.<field>` obligation keys — the
+            // expression text is shorter than the key, so match the key
+            // against the text in reverse.
+            if (std.mem.startsWith(u8, binding_name, t) and binding_name.len > t.len and binding_name[t.len] == '.') {
                 return true;
             }
-            // Also match binding.field pattern on plain value
-            if (std.mem.startsWith(u8, plain, binding_name)) {
-                if (plain.len > binding_name.len and plain[binding_name.len] == '.') {
-                    return true;
-                }
-            }
-            return false;
+            // Record-literal produce text (`{ h, n: 7 }`) and plain paths
+            // (`r`, `s.h`) both reduce to a word-bounded mention of the key.
+            return expressionReferences(t, binding_name);
         }
         for (bc.fields) |field| {
             // Check if field expression_str references the binding
@@ -957,6 +962,7 @@ pub const AutoDischargeInserter = struct {
             .reporter = reporter,
             .event_map = std.StringHashMap(EventInfo).init(allocator),
             .label_seed_map = std.StringHashMap(*const ast.Invocation).init(allocator),
+            .verified_produces = std.AutoHashMap(*const ast.BranchConstructor, void).init(allocator),
             .synthetic_binding_counter = 0,
             .acq_seq_counter = 0,
             .warn_mode = warn_mode,
@@ -1024,6 +1030,7 @@ pub const AutoDischargeInserter = struct {
         }
         self.event_map.deinit();
         self.label_seed_map.deinit();
+        self.verified_produces.deinit();
     }
 
     /// Main entry point - run the auto-discharge pass on a program
@@ -2251,6 +2258,8 @@ pub const AutoDischargeInserter = struct {
                 // IMPORTANT: For branch_constructor, check if obligations ESCAPE via the return fields
                 // If an obligation is returned (e.g., got_file { file: f.file }), it should NOT be disposed
                 if (node == .branch_constructor) {
+                    const br_loc = if (cont.location.line != 0) cont.location else flow.location;
+                    try self.handleBareReturnProduce(&node.branch_constructor, flow, module_name, &context, br_loc);
                     removeEscapingObligations(&context, &node.branch_constructor);
                 }
 
@@ -2473,10 +2482,23 @@ pub const AutoDischargeInserter = struct {
             const join_after = nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx);
 
             if (cont.node) |node| {
-                if (node == .invocation) {
-                    const inv_event_name = try self.pathToString(node.invocation.path);
+                // A `#label step(...)` fold's arms bind the STEP event's branch
+                // payloads (`| live e`, `| done e`) — the label_with_invocation
+                // is the arm-parent just like a plain invocation is, so its
+                // inner invocation resolves `nested_event` the same way. Without
+                // this the fallback parent decl names no `live`/`done` branch,
+                // the payload seeding below skips `e.<field>` obligations, and
+                // a fold-arm `-> e` produce verifies `e.h` against an empty
+                // ledger while the phantom checker tracks it live.
+                const step_inv: ?*const ast.Invocation = switch (node) {
+                    .invocation => |*inv| inv,
+                    .label_with_invocation => |*lwi| if (lwi.is_declaration) &lwi.invocation else null,
+                    else => null,
+                };
+                if (step_inv) |inv| {
+                    const inv_event_name = try self.pathToString(inv.path);
                     defer self.allocator.free(inv_event_name);
-                    const inv_module = node.invocation.path.module_qualifier orelse module_name;
+                    const inv_module = inv.path.module_qualifier orelse module_name;
                     const inv_qualified = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ inv_module, inv_event_name });
                     defer self.allocator.free(inv_qualified);
 
@@ -2537,13 +2559,37 @@ pub const AutoDischargeInserter = struct {
                 else => false,
             } else false;
 
+            // A bare-return PRODUCE (`-> expr` under a subflow impl) is an
+            // ESCAPE, not a discard-terminus: the produced value crosses to
+            // the CALLER carrying its obligation (linear transfer — the
+            // caller's consuming site or the caller's own discharge settles
+            // it). The caller is seeded `result.<field>` debts on the strength
+            // of the declared return type alone, so a produce whose record
+            // declares `<state!>` fields must actually hand a LIVE obligation
+            // into each — verify BEFORE any credit. Runs outside the
+            // hasObligations gate: a field fed by a dead or phantom-less value
+            // is a refusal at the pack, not a charge the caller cannot pay.
+            if (!has_explicit_terminator) {
+                if (cont.node) |pnode| {
+                    if (pnode == .expression and flow.impl_of != null) {
+                        const impl_decl = blk: {
+                            const impl_path = flow.impl_of.?;
+                            const impl_name = try self.pathToString(impl_path);
+                            defer self.allocator.free(impl_name);
+                            const iq = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ flow.module, impl_name });
+                            defer self.allocator.free(iq);
+                            break :blk self.event_map.get(iq);
+                        };
+                        if (impl_decl != null and impl_decl.?.decl.return_type != null) {
+                            try self.verifyProducedFieldObligations(pnode.expression, impl_decl.?.decl.return_type.?, module_name, &context, site_loc);
+                        }
+                    }
+                }
+            }
+
             if (!has_explicit_terminator and context.hasObligations() and !context.in_sequential_prefix) {
-                // A bare-return PRODUCE (`-> expr` under a subflow impl whose
-                // event declares `-> T`) is an ESCAPE, not a discard-terminus:
-                // the produced value crosses to the CALLER carrying its
-                // obligation (linear transfer — the caller's consuming site or
-                // the caller's own discharge settles it). The branch-constructor
-                // twin of this credit lives in the explicit-terminator path
+                // The produce-escape credit: the branch-constructor twin of
+                // this credit lives in the explicit-terminator path
                 // (bindingEscapesViaBranchConstructor); without the expression
                 // twin, every transfer-through-bare-return impl got a disposal
                 // appended AFTER its `return r;` — unreachable code naming an
@@ -2754,6 +2800,8 @@ pub const AutoDischargeInserter = struct {
                 // IMPORTANT: For branch_constructor, check if obligations ESCAPE via the return fields
                 // If an obligation is returned (e.g., got_file { file: f.file }), it should NOT be disposed
                 if (node == .branch_constructor) {
+                    const br_loc = if (cont.location.line != 0) cont.location else flow.location;
+                    try self.handleBareReturnProduce(&node.branch_constructor, flow, module_name, context, br_loc);
                     removeEscapingObligations(context, &node.branch_constructor);
                 }
 
@@ -4547,6 +4595,219 @@ pub const AutoDischargeInserter = struct {
             // to the "was not discharged" wall rather than an auto-insert the
             // phantom checker can't validate.
             if (context.cleanup_obligations.getPtr(key)) |oblig| oblig.not_auto_dischargeable = true;
+        }
+    }
+
+    /// A bare-return produce (`-> expr` under a subflow impl, parsed as a
+    /// `.branch_constructor` with `is_bare_return`) is an ESCAPE, not a
+    /// discard-terminus: the produced value crosses to the CALLER carrying its
+    /// obligation (linear transfer). Verify the produced record actually hands
+    /// live obligations into every declared `<state!>` field — the caller is
+    /// seeded `result.<field>` debts on the declared type alone — then let the
+    /// escape credit retire what crosses. For the `-> r` pass-through the
+    /// produced keys are `r.<field>`, longer than the expression text, so the
+    /// mention-match in bindingEscapesViaBranchConstructor cannot reach them;
+    /// the verifier clears them itself after checking liveness.
+    fn handleBareReturnProduce(
+        self: *AutoDischargeInserter,
+        bc: *const ast.BranchConstructor,
+        flow: *const ast.Flow,
+        module_name: []const u8,
+        context: *BindingContext,
+        site_loc: errors.SourceLocation,
+    ) !void {
+        if (!bc.is_bare_return or flow.impl_of == null) return;
+        // A produce leaf can be reached through more than one context in the
+        // same walk — the first visit's escape credit retires the obligations
+        // it verified, so a second visit sees them gone and must not re-verify.
+        if (self.verified_produces.contains(bc)) return;
+        try self.verified_produces.put(bc, {});
+        const impl_decl = blk: {
+            const impl_path = flow.impl_of.?;
+            const impl_name = try self.pathToString(impl_path);
+            defer self.allocator.free(impl_name);
+            const iq = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ flow.module, impl_name });
+            defer self.allocator.free(iq);
+            break :blk self.event_map.get(iq);
+        };
+        const decl = impl_decl orelse return;
+        const rt = decl.decl.return_type orelse return;
+        const produce_text: []const u8 = if (bc.plain_value) |plain|
+            plain
+        else blk: {
+            // Record-literal produce: the constructor's fields ARE the record's
+            // `name: expr` segments — synthesize the `{ ... }` text shape the
+            // verifier splits on.
+            var buf = std.ArrayList(u8).empty;
+            try buf.append(self.allocator, '{');
+            var first = true;
+            for (bc.fields) |f| {
+                if (!first) try buf.appendSlice(self.allocator, ", ");
+                first = false;
+                try buf.appendSlice(self.allocator, f.name);
+                try buf.appendSlice(self.allocator, ": ");
+                try buf.appendSlice(self.allocator, f.expression_str orelse f.name);
+            }
+            try buf.append(self.allocator, '}');
+            break :blk buf.items;
+        };
+        defer if (bc.plain_value == null) self.allocator.free(produce_text);
+        try self.verifyProducedFieldObligations(produce_text, rt, module_name, context, site_loc);
+    }
+
+    /// The produce-edge twin of the call-site field seeding: a bare-return
+    /// produce (`-> expr`) under a subflow impl whose tor declares record
+    /// `<state!>` fields must feed each one a LIVE obligation of that state.
+    /// The caller is seeded `result.<field>` debts on the strength of the
+    /// declared type alone — an unverified produce lets a dead or phantom-less
+    /// value cross the boundary as a debt the checker can neither see filled
+    /// at the pack nor let the caller pay (charged-but-unpayable; deadbolt
+    /// frontier 1's record-field gap).
+    ///
+    /// Verified shapes — the only two a produce can carry a record in:
+    /// - a record literal (`{ h, f: expr }`): each declared `<state!>` field's
+    ///   value must name a live obligation key in `context` holding that
+    ///   canonical state;
+    /// - a binding path (`-> r`): the record's `r.<field>` keys must be live
+    ///   and in that state, and are retired here — they cross to the caller,
+    ///   and the mention-credit's word-match cannot reach a key longer than
+    ///   the expression.
+    /// An invocation produce (`-> f(...)`) forwards the inner call's own
+    /// declared return — that call's boundary guarantees the fields the same
+    /// way — and any other shape cannot produce a record, which is the shape
+    /// checker's verdict, not this one's.
+    fn verifyProducedFieldObligations(
+        self: *AutoDischargeInserter,
+        expr: []const u8,
+        return_type: []const u8,
+        module_name: []const u8,
+        context: *BindingContext,
+        site_loc: errors.SourceLocation,
+    ) !void {
+        const declared = (try ast_functional.recordFieldTexts(self.allocator, return_type)) orelse return;
+        defer self.allocator.free(declared);
+        const t = std.mem.trim(u8, expr, " \t");
+        if (t.len == 0) return;
+        const produced: ?[]ast_functional.RecordFieldText = try ast_functional.recordFieldTexts(self.allocator, t);
+        defer if (produced) |p| self.allocator.free(p);
+        // `-> f(...)` forwards the inner call's declared return — verified at
+        // that call's own boundary, identically.
+        if (produced == null and std.mem.indexOfScalar(u8, t, '(') != null) return;
+
+        for (declared) |df| {
+            // Only a cleanup-carrying field (`<state!>`) is a debt to verify;
+            // borrow (`<state>`) and plain fields are the shape checker's.
+            const lt = std.mem.indexOfScalar(u8, df.value, '<') orelse continue;
+            var ph_depth: usize = 0;
+            var close: ?usize = null;
+            for (df.value[lt..], lt..) |pc, pj| {
+                if (pc == '<') ph_depth += 1 else if (pc == '>') {
+                    ph_depth -= 1;
+                    if (ph_depth == 0) {
+                        close = pj;
+                        break;
+                    }
+                }
+            }
+            const gt = close orelse continue;
+            const phantom_content = std.mem.trim(u8, df.value[lt + 1 .. gt], " \t");
+            if (!std.mem.endsWith(u8, phantom_content, "!")) continue;
+            const base_type = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{
+                std.mem.trim(u8, df.value[0..lt], " \t"),
+                df.value[gt + 1 ..],
+            });
+            defer self.allocator.free(base_type);
+            const canonical = try self.canonicalizePhantom(phantom_content, module_name, typeModuleOf(base_type));
+            defer self.allocator.free(canonical);
+
+            // The key the debt sits under inside the body: the literal field's
+            // value spelling, or `<expr>.<field>` for a path produce.
+            var owned_key: ?[]u8 = null;
+            defer if (owned_key) |k| self.allocator.free(k);
+            const key = if (produced) |pf| blk: {
+                var v: ?[]const u8 = null;
+                for (pf) |seg| {
+                    if (std.mem.eql(u8, seg.name, df.name)) {
+                        v = seg.value;
+                        break;
+                    }
+                }
+                // A missing literal field is the shape checker's find, not
+                // this one's.
+                break :blk v orelse continue;
+            } else blk: {
+                owned_key = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ t, df.name });
+                break :blk owned_key.?;
+            };
+            // An invocation in the field value forwards that call's own
+            // declared return — its boundary guarantees the state.
+            if (std.mem.indexOfScalar(u8, key, '(') != null) continue;
+            const info = context.cleanup_obligations.get(key) orelse {
+                try self.reporter.addError(
+                    .KORU030,
+                    site_loc.line,
+                    site_loc.column,
+                    "Produced record field '{s}' is declared <{s}> but '{s}' holds no live obligation to hand the caller — it was never acquired or has already been discharged.",
+                    .{ df.name, canonical, key },
+                );
+                return error.ValidationFailed;
+            };
+            if (!std.mem.eql(u8, info.phantom_state, canonical)) {
+                try self.reporter.addError(
+                    .KORU030,
+                    site_loc.line,
+                    site_loc.column,
+                    "Produced record field '{s}' is declared <{s}> but '{s}' holds <{s}> — an obligation crosses a call boundary only in its declared state.",
+                    .{ df.name, canonical, key, info.phantom_state },
+                );
+                return error.ValidationFailed;
+            }
+            // Verified: the debt crossed under `result.<field>` — the caller
+            // owes it now; keeping it here mints an auto-dispose for a binding
+            // the caller owns (an emitted use-after-free, p1).
+            context.clearObligation(key);
+        }
+
+        // The mirror direction on a literal produce: a live obligation packed
+        // into a field NOT declared `<state!>` escapes with its debt silently
+        // dropped — a phantom-stripped hand-off the mention-credit cannot see.
+        if (produced) |pf| {
+            var obl_iter = context.obligations();
+            while (obl_iter.next()) |entry| {
+                const key = entry.key_ptr.*;
+                for (pf) |seg| {
+                    if (!std.mem.eql(u8, seg.value, key)) continue;
+                    var declared_owned = false;
+                    for (declared) |df| {
+                        if (!std.mem.eql(u8, df.name, seg.name)) continue;
+                        const lt = std.mem.indexOfScalar(u8, df.value, '<') orelse break;
+                        var ph_depth: usize = 0;
+                        var close: ?usize = null;
+                        for (df.value[lt..], lt..) |pc, pj| {
+                            if (pc == '<') ph_depth += 1 else if (pc == '>') {
+                                ph_depth -= 1;
+                                if (ph_depth == 0) {
+                                    close = pj;
+                                    break;
+                                }
+                            }
+                        }
+                        const gt = close orelse break;
+                        if (std.mem.endsWith(u8, std.mem.trim(u8, df.value[lt + 1 .. gt], " \t"), "!")) declared_owned = true;
+                        break;
+                    }
+                    if (!declared_owned) {
+                        try self.reporter.addError(
+                            .KORU030,
+                            site_loc.line,
+                            site_loc.column,
+                            "Produced record field '{s}' is fed '{s}', a live <{s}> obligation, but the field does not declare one — the debt would cross the call boundary stripped and unpayable.",
+                            .{ seg.name, key, entry.value_ptr.phantom_state },
+                        );
+                        return error.ValidationFailed;
+                    }
+                }
+            }
         }
     }
 

@@ -956,8 +956,8 @@ pub fn mergeEntryCompanions(
         .type_registry = primary.type_registry,
     };
 }
-fn rewriteDefaultEventCalls(allocator: std.mem.Allocator, items: []const ast.Item) void {
-    rewriteDefaultEventScope(allocator, items, items);
+fn rewriteDefaultEventCalls(allocator: std.mem.Allocator, items: []const ast.Item, violations: *usize) void {
+    rewriteDefaultEventScope(allocator, items, items, violations);
 }
 
 /// Rewrite bare `std/M(args)` module calls to `std.M:default(args)` in one
@@ -965,22 +965,22 @@ fn rewriteDefaultEventCalls(allocator: std.mem.Allocator, items: []const ast.Ite
 /// entry's imports never leak into a library. Imported modules arrive wrapped
 /// as `module_decl` with their import_decls inside, so descent re-scopes at
 /// every boundary.
-fn rewriteDefaultEventScope(allocator: std.mem.Allocator, scope_items: []const ast.Item, items: []const ast.Item) void {
+fn rewriteDefaultEventScope(allocator: std.mem.Allocator, scope_items: []const ast.Item, items: []const ast.Item, violations: *usize) void {
     for (items) |*item_const| {
         if (item_const.* == .module_decl) {
             const mod = @constCast(&item_const.module_decl);
-            rewriteDefaultEventScope(allocator, mod.items, mod.items);
+            rewriteDefaultEventScope(allocator, mod.items, mod.items, violations);
             continue;
         }
         if (item_const.* != .flow) continue;
         const item = @constCast(item_const);
         if (item.flow.body.node) |*n| {
-            rewriteDefaultEventNode(allocator, scope_items, n);
+            rewriteDefaultEventNode(allocator, scope_items, n, violations);
         }
         // The bare-module call can sit at any depth — `| db d |> libs/M { }`
         // in a continuation is the same default-door convention as a flow-root
         // `~libs/M { }` (sqlite3's `default` source-block door lives there).
-        rewriteDefaultEventContinuations(allocator, scope_items, item.flow.body.continuations);
+        rewriteDefaultEventContinuations(allocator, scope_items, item.flow.body.continuations, violations);
     }
 }
 
@@ -1004,28 +1004,56 @@ fn rewriteDefaultEventInvocationPath(allocator: std.mem.Allocator, scope_items: 
     path.segments = new_segs;
 }
 
-fn rewriteDefaultEventNode(allocator: std.mem.Allocator, scope_items: []const ast.Item, node: *ast.Node) void {
+/// Refuse a spelled `module:default(...)` call — the door is invoked by the
+/// bare module path `mod/path(args)`, never by naming `default`. Runs before
+/// the rewrite below because the rewrite manufactures `module:default` from
+/// the bare form: a node checked after rewriting is indistinguishable from a
+/// spelled one. Walk order guarantees each invocation is inspected exactly
+/// once before any rewrite touches it — the imported-module pass only descends
+/// `module_decl` scopes, which the parser never produces in a source file, so
+/// no rewrite output is ever re-walked.
+fn refuseSpelledDefaultDoor(inv: *const ast.Invocation, violations: *usize) void {
+    const qualifier = inv.path.module_qualifier orelse return;
+    if (inv.path.segments.len != 1 or !std.mem.eql(u8, inv.path.segments[0], "default")) return;
+    violations.* += 1;
+    var buf: [512]u8 = undefined;
+    const door = if (qualifier.len <= buf.len) blk: {
+        _ = std.mem.replace(u8, qualifier, ".", "/", &buf);
+        break :blk buf[0..qualifier.len];
+    } else qualifier;
+    log.err("error[KORU208]: '{s}:default(...)' spells the default door explicitly — invoke the module path itself: '{s}(...)'\n", .{
+        door, door,
+    });
+}
+
+fn rewriteDefaultEventNode(allocator: std.mem.Allocator, scope_items: []const ast.Item, node: *ast.Node, violations: *usize) void {
     switch (node.*) {
-        .invocation => |*inv| rewriteDefaultEventInvocationPath(allocator, scope_items, &inv.path),
-        .label_with_invocation => |*lwi| rewriteDefaultEventInvocationPath(allocator, scope_items, &lwi.invocation.path),
+        .invocation => |*inv| {
+            refuseSpelledDefaultDoor(inv, violations);
+            rewriteDefaultEventInvocationPath(allocator, scope_items, &inv.path);
+        },
+        .label_with_invocation => |*lwi| {
+            refuseSpelledDefaultDoor(&lwi.invocation, violations);
+            rewriteDefaultEventInvocationPath(allocator, scope_items, &lwi.invocation.path);
+        },
         .conditional_block => |*cb| {
             for (cb.nodes) |*n_const| {
-                rewriteDefaultEventNode(allocator, scope_items, @constCast(n_const));
+                rewriteDefaultEventNode(allocator, scope_items, @constCast(n_const), violations);
             }
         },
         .conditional => |n| {
             for (n.branches) |*branch| {
-                rewriteDefaultEventContinuations(allocator, scope_items, branch.body);
+                rewriteDefaultEventContinuations(allocator, scope_items, branch.body, violations);
             }
         },
         .foreach => |n| {
             for (n.branches) |*branch| {
-                rewriteDefaultEventContinuations(allocator, scope_items, branch.body);
+                rewriteDefaultEventContinuations(allocator, scope_items, branch.body, violations);
             }
         },
         .switch_result => |n| {
             for (n.branches) |*branch| {
-                rewriteDefaultEventContinuations(allocator, scope_items, branch.body);
+                rewriteDefaultEventContinuations(allocator, scope_items, branch.body, violations);
             }
         },
         // terminal, label_apply, label_jump, branch_constructor, assignment —
@@ -1034,13 +1062,13 @@ fn rewriteDefaultEventNode(allocator: std.mem.Allocator, scope_items: []const as
     }
 }
 
-fn rewriteDefaultEventContinuations(allocator: std.mem.Allocator, scope_items: []const ast.Item, continuations: []const ast.Continuation) void {
+fn rewriteDefaultEventContinuations(allocator: std.mem.Allocator, scope_items: []const ast.Item, continuations: []const ast.Continuation, violations: *usize) void {
     for (continuations) |*cont_const| {
         const cont = @constCast(cont_const);
         if (cont.node) |*node| {
-            rewriteDefaultEventNode(allocator, scope_items, node);
+            rewriteDefaultEventNode(allocator, scope_items, node, violations);
         }
-        rewriteDefaultEventContinuations(allocator, scope_items, cont.continuations);
+        rewriteDefaultEventContinuations(allocator, scope_items, cont.continuations, violations);
     }
 }
 
@@ -1048,11 +1076,11 @@ fn rewriteDefaultEventContinuations(allocator: std.mem.Allocator, scope_items: [
 /// entry-only pass above runs before imported items join the tree; this pass
 /// covers each `module_decl` subscope. Entry flows are already rewritten
 /// (the mq guard makes a second pass a no-op), so only subscopes are walked.
-fn rewriteImportedDefaultEventCalls(allocator: std.mem.Allocator, items: []const ast.Item) void {
+fn rewriteImportedDefaultEventCalls(allocator: std.mem.Allocator, items: []const ast.Item, violations: *usize) void {
     for (items) |*item_const| {
         if (item_const.* != .module_decl) continue;
         const mod = @constCast(&item_const.module_decl);
-        rewriteDefaultEventScope(allocator, mod.items, mod.items);
+        rewriteDefaultEventScope(allocator, mod.items, mod.items, violations);
     }
 }
 
@@ -1269,7 +1297,10 @@ pub fn combineImports(
     var combined_items = try std.ArrayList(ast.Item).initCapacity(parse_allocator, source_file.items.len);
     defer combined_items.deinit(parse_allocator);
 
-    rewriteDefaultEventCalls(parse_allocator, source_file.items);
+    // Spelled `:default` door calls are refused across both passes; the
+    // diagnostics teach the bare `mod/path(...)` form before the error lands.
+    var spelled_door_violations: usize = 0;
+    rewriteDefaultEventCalls(parse_allocator, source_file.items, &spelled_door_violations);
 
     var emitted_files = std.StringHashMap(void).init(gpa);
     defer {
@@ -1292,7 +1323,8 @@ pub fn combineImports(
     source_file.items = try combined_items.toOwnedSlice(parse_allocator);
     // Default-door calls inside imported modules rewrite against their own
     // imports — the pre-merge pass only ever saw the entry file.
-    rewriteImportedDefaultEventCalls(parse_allocator, source_file.items);
+    rewriteImportedDefaultEventCalls(parse_allocator, source_file.items, &spelled_door_violations);
+    if (spelled_door_violations > 0) return error.ExplicitDefaultDoorCall;
 
     var path_list = try std.ArrayList([]const u8).initCapacity(gpa, imported_paths_map.count());
     var path_iter = imported_paths_map.keyIterator();

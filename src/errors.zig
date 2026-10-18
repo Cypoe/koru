@@ -153,7 +153,7 @@ pub const ErrorCode = enum(u16) {
     KORU176, // A std/declarations:const call site is malformed — the `const { … }` field list refused by the shared field-list rules (a nameless entry, `name:` with no value, a fused line that dropped its comma, a name bound twice). One code for the class; the message names the fault. Emitted by src/template_processor.zig at template render — const is a [template] proc, so its refusal surfaces through the render path rather than a transform's ast.refusal.
     KORU177, // A call-site `|variant` names no declared proc target — the emitter would write a handler__<variant> call that resolves to nothing and surface it as a Zig backend 'no member' error. Emitted by src/flow_checker.zig (370_015).
     KORU178, // A std/json:parse call site is malformed — missing input, a branch outside ok/malformed, an empty or untypeable schema, an unsupported field type, or a destructure annotation a parse does not implement. One code for the class; the message names the fault. Emitted by koru_std/json.parse.kz — reserved in scripts/registry_reserved.txt.
-    KORU179, // A witness-check refusal — pass-witness-check (koru_std/compiler.kz) rejected a program whose prepared witnesses do not meet the contract it declared: under [strict] + std/witness:enforce, a stored write whose stored-write-numeric witness is rounds or deferred. One code for the witness-check family; the message names the site, the kind and the verdict.
+    KORU179, // A std/panic:catch declaration is malformed — a missing site pattern, a non-`!` arm, no `!` arms, a pattern that grafts nothing, two catches claiming one site+branch, or an absorb arm grafted into a producing flow that ends without a verdict. One code for the class; the message names the fault. Emitted by koru_std/panic.kz — reserved in scripts/registry_reserved.txt.
 
     // Module structure errors
     KORU200, // Ambiguous module structure (both foo.kz and foo/ exist)
@@ -163,6 +163,9 @@ pub const ErrorCode = enum(u16) {
     KORU204, // part declared inside a part file — parts are flat; promote to a directory module when a part outgrows its file (140_028)
     KORU205, // std/refine refusal — malformed field line, non-int bound, or a meet that lands empty (671_*)
     KORU206, // A `#L` fold where every terminal arm re-dispatches `@L` can never exit — statically infinite (an external fuzzer watched `| done` re-fire 14.5M times; the corpus exit is `->` produce or a `|>` continuation)
+    KORU207, // A `!` arm at an impl flow's head references the implementing tor's params — the arm lowers to a context-free `Handlers_*` fn that sees module scope only, so the reference dies in emitted Zig ('x' not accessible from inner function). Emitted by src/flow_checker.zig.
+    KORU208, // `mod/path:default(...)` spelled explicitly — the default door is invoked by the bare module path `mod/path(...)`; the `:default` segment is compiler-manufactured, never source. Emitted by src/import_pipeline.zig.
+    KORU209, // A witness-check refusal — pass-witness-check (koru_std/compiler.witness.kz) rejected a program whose prepared witnesses do not meet the contract it declared: under [strict] + std/witness:enforce, a stored write whose stored-write-numeric witness is rounds or deferred. One code for the witness-check family; the message names the site, the kind and the verdict. (Numbered 209, not 179 — the merge gave 179 to std/panic:catch, which claimed it upstream first.)
 };
 
 pub const SourceLocation = struct {
@@ -206,6 +209,15 @@ pub const ParseError = struct {
         }
     }
 };
+
+/// Process-global "the reporter rendered at least one diagnostic" flag. The
+/// generated backend's `emit()` reads this before printing the
+/// `❌ Compiler coordination error:` line: a failure whose pass already
+/// delivered located diagnostics gets its quiet `exit(1)`, and the echo is
+/// reserved for failures that never spoke (user coordinator overrides,
+/// diagnostic-free internal errors). One compilation per backend process, so
+/// a plain global is the whole mechanism.
+pub var diagnostics_were_printed = false;
 
 pub const ErrorReporter = struct {
     allocator: std.mem.Allocator,
@@ -510,6 +522,7 @@ pub const ErrorReporter = struct {
 
             try writer.writeAll("\n");
         }
+        if (self.errors.items.len > 0) diagnostics_were_printed = true;
         self.printed_count = self.errors.items.len;
     }
 

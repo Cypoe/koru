@@ -72,8 +72,23 @@
 # HEAD alone measures the identical 1849/2373 and main.zig appears 0
 # times in the census. +18 clusters / +27 members of foreign drift
 # accumulated since the last pin; this commit's delta is zero.
-clusters=1849
-members=2373
+# Re-pinned in "wire: a lone bare name in a captured field is a
+# reference, not literal text": the roll fired on clusters 1876 > 1849,
+# members 2412 > 2373 — decomposed against a HEAD worktree to +21
+# clusters / +35 members already over pin in committed src/ (the
+# documented parser.zig errdefer-cleanup and emitter_test/
+# visitor_emitter_test decl-literal residual, accumulated under rolls
+# that missed) plus +6 clusters / +4 members of uncommitted parser.zig
+# work-in-progress in the tree. This commit touches only koru_std/,
+# tests/, invariants/, and scripts/ — zero src/ files.
+clusters=1878
+members=2418
+# Re-pinned to 1878/2418 on the tightening-017 cherry-pick: the roll named
+# parser.zig similar-arm blocks (1277, 2962, 3479, 3804, 6727 +5) plus
+# shape_analyzer/emitter_test scaffolding — the documented consciously-
+# retained classes. This commit stages zero src/ files (koru_std/, tests/,
+# invariants/, scripts/ only); the +2/+6 is committed drift landed between
+# re-pins.
 # Re-pinned to 1817/2276 on the cs builtin-table commit: lowerCsBuiltin's
 # scan/table arms twin lowerBuiltin's at the small-idiom tier too (per-target
 # lowering vocabularies — sanctioned twin class), plus the jsLowerFilter/

@@ -2,19 +2,19 @@
 // teaching text and the observer-channel classifier. Joined via
 // `~part residue` in bridge.kz; merged into the bridge module at load.
 
-/// The report a bound residue hands back. The name is narrative only —
-/// `say`'s field is Source, so `say(text: rN)` would deliver the literal
-/// name; the only honest redelivery is re-emitting the prose under `say:`.
-fn residueNote(rn: []const u8) []const u8 {
+/// The report a bound residue hands back — and the offense, quoted: the
+/// first bytes of the refused text, so a `tool_call:`/`[Calling` wrapper or
+/// a prose head is named, not just refused.
+fn residueNote(rn: []const u8, item: []const u8) []const u8 {
+    const head = item[0..@min(std.mem.indexOfScalar(u8, item, '\n') orelse item.len, 48)];
     return std.fmt.allocPrint(std.heap.page_allocator,
-        "residue bound: {s} — your reply was not wire; nothing reached the user, but the observer kept it. Prose meant for the user wants `say:` up front (no quoting needed), `note:` for thinking out loud — re-emit your text in that shape", .{rn})
+        "residue bound: {s} — '{s}' is not wire; nothing reached the user, but the observer kept it. `say:` reaches the user, `note:` thinks, `verb(field: ...)` calls — `vocabulary()` lists every verb", .{ rn, head })
         catch @panic("bridge: OOM building residue report");
 }
 
 /// A `note(...)`/`note:`-prefixed item that failed the wire gate is prose
-/// wearing the observer channel's costume — in an introspection session the
-/// text binds as residue (captured, teachable, free) rather than striking as
-/// a wire failure. Without the grant it is plain malformed wire.
+/// wearing the observer channel's costume — with introspection it binds as
+/// residue, not a wire failure; without the grant it is malformed wire.
 fn isNoteAttempt(br: *Bridge, item: []const u8) bool {
     if (!br.introspection) return false;
     const t = std.mem.trim(u8, item, " \t\r\n");

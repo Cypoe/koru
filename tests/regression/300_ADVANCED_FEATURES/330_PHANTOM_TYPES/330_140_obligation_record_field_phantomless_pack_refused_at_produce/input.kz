@@ -1,0 +1,18 @@
+// A subflow produce cannot pack a phantom-LESS value into a `<state!>`-
+// declared record field — `h` was never acquired as an obligation, so there
+// is nothing live to hand the caller. The declared record return is a
+// checked contract at the produce edge, not a claim the caller's seeded
+// `s.<field>` debts can silently launder (800_010 deadbolt frontier 1: the
+// call-site seeding that believes the declared type only stays sound while
+// the pack verifies the feeder).
+~import std/io
+const std = @import("std");
+const Handle = struct { n: i32 };
+
+~tor mint-raw { id: usize } -> *Handle
+~proc mint-raw|zig { const h = std.heap.page_allocator.create(Handle) catch unreachable; h.* = .{ .n = 5 }; return h; }
+
+~tor pack { id: usize } -> { h: *Handle<owned!>, n: i64 }
+~pack = mint-raw(id): h -> { h, n: 7 }
+
+~pack(id: 1): s |> std/io:print.ln("n={{ s.n:d }}")

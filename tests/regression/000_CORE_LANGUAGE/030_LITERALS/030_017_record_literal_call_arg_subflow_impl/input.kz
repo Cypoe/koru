@@ -1,0 +1,19 @@
+// A record literal in argument position inside a pure-Koru subflow impl:
+// `sum(env: { a: x, b: 2 })`. The same spelling emits correctly at flow head
+// (labeled identifier and literal fields lower to `.{ .a = x, .b = 2 }`), but
+// inside a subflow impl the argument literal is emitted verbatim —
+// `.{ .env = { a: x, b: 2 } }` — and Zig rejects the bare `{ ... }` field
+// value. The subflow body should lower call-arg record literals exactly like
+// the flow-head path does.
+~import std/io
+const std = @import("std");
+~tor sum { env: { a: i64, b: i64 } } -> i64
+~proc sum|zig { return env.a + env.b; }
+
+~tor one {} -> i64
+~proc one|zig { return 1; }
+
+~tor two {} -> i64
+~two = one(): x |> sum(env: { a: x, b: 2 }): r -> r
+
+~two(): s |> std/io:print.ln("{{ s:d }}")

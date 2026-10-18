@@ -1,0 +1,8 @@
+name: knowledge
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `observation` — declare that name. A property noticed
+  and confirmed is an observation, not a new kind. (orphan drained
+  2026-10-12, minted by commit "first five 820 proofs" via register-on-miss)

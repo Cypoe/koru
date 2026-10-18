@@ -25,7 +25,6 @@ const ast = @import("ast");
     allocator: std.mem.Allocator
 } -> SiteResult
 
-// ============================================================================
 // REGISTRY COMMON moved to runtime.registry.kz (~part registry) — shared
 // comptime machinery for register's emission, the scope-manifest builder,
 // and the [explainer].
@@ -1397,6 +1396,7 @@ fn lookupEventBranches(scope_name: []const u8, event_name: []const u8) []const B
 ~part specs
 ~part wireval
 ~part wirescan
+~part wirecap
 ~part wirelex
 ~part obtainvia
 ~part affordances

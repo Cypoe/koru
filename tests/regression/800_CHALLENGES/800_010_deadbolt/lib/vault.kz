@@ -1,0 +1,99 @@
+// CHALLENGE 800_010 — "deadbolt": the host side of the vault desk.
+//
+// Every tor here is a LEAF: mint, borrow-inspect, one mutating
+// primitive (shift), one counter (witness), and the dischargers.
+// No lifecycle rule lives in this file — the whole protocol
+// (seize order, pair depth, LIFO release) is pure Koru in
+// lib/order.k. A proc body the compiler cannot see never touches
+// a phantom; it only allocates, mutates, and frees.
+
+const std = @import("std");
+
+const Vault = struct { id: i64, bal: i64 };
+const Guard = struct { depth: i64 };
+const Attest = struct { count: i64 };
+
+~pub tor mint-vault { id: i64, bal: i64 } -> *Vault<free!>
+~proc mint-vault|zig {
+    const v = std.heap.page_allocator.create(Vault) catch unreachable;
+    v.* = .{ .id = id, .bal = bal };
+    return v;
+}
+
+~pub tor mint-guard {} -> *Guard<none!>
+~proc mint-guard|zig {
+    const g = std.heap.page_allocator.create(Guard) catch unreachable;
+    g.* = .{ .depth = 0 };
+    return g;
+}
+
+~pub tor mint-attest {} -> *Attest<open!>
+~proc mint-attest|zig {
+    const a = std.heap.page_allocator.create(Attest) catch unreachable;
+    a.* = .{ .count = 0 };
+    return a;
+}
+
+// Peek the id while the vault is still <free> — the ordering rule
+// reads the id BEFORE it is allowed to seize anything.
+~pub tor id-of { v: *Vault<free> } -> i64
+~proc id-of|zig {
+    return v.id;
+}
+
+// Peek the balance of a HELD vault — the desk can only count a
+// vault's money while the desk holds it.
+~pub tor bal-of { v: *Vault<held> } -> i64
+~proc bal-of|zig {
+    return v.bal;
+}
+
+// The closing read — a <free> vault can still be counted, just not
+// moved from.
+~pub tor peek-bal { v: *Vault<free> } -> i64
+~proc peek-bal|zig {
+    return v.bal;
+}
+
+// The one mutating primitive. Both vaults must be HELD — a borrow
+// on <held>, no consume. Resolves | moved amt when the source can
+// cover, | short when it cannot. Cleanup after either arm is the
+// caller's problem — and the caller's type.
+~pub tor shift { src: *Vault<held>, dst: *Vault<held>, amt: i64 }
+| moved i64
+| short
+
+~proc shift|zig {
+    if (src.bal >= amt) {
+        src.bal -= amt;
+        dst.bal += amt;
+        return .{ .moved = amt };
+    }
+    return .{ .short = .{} };
+}
+
+// The notary borrow — ticks once per transfer, never consumes.
+~pub tor witness { a: *Attest<open> }
+~proc witness|zig {
+    a.count += 1;
+}
+
+// The dischargers — the ONLY ways these resources may leave the
+// world. A vault leaves <free>, a guard leaves <none>, an attest
+// leaves <open>. Anything else is a refusal, not a convention.
+~pub tor retire-vault { v: *Vault<!free> }
+~proc retire-vault|zig {
+    std.heap.page_allocator.destroy(v);
+}
+
+~pub tor retire-guard { g: *Guard<!none> }
+~proc retire-guard|zig {
+    std.heap.page_allocator.destroy(g);
+}
+
+~pub tor seal-attest { a: *Attest<!open> } -> i64
+~proc seal-attest|zig {
+    const n = a.count;
+    std.heap.page_allocator.destroy(a);
+    return n;
+}

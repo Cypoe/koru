@@ -21,4 +21,4 @@ const std = @import("std");
 
 ~tap(hello -> *): v |> tap-action()
 
-~hello() |> std/io:print.ln("profiled tap run complete")
+~hello(): _ |> std/io:print.ln("profiled tap run complete")

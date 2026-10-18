@@ -1,0 +1,27 @@
+desk open: vault 2 bal 300, vault 1 bal 80
+round 0: move 17 vault 2 -> vault 1
+  seize 1 then 2
+  moved 17
+round 1: move 70 vault 1 -> vault 2
+  seize 1 then 2
+  moved 70
+round 2: move 3 vault 2 -> vault 1
+  seize 1 then 2
+  moved 3
+round 3: move 56 vault 1 -> vault 2
+  seize 1 then 2
+  move 56 SHORT — insufficient
+round 4: move 109 vault 2 -> vault 1
+  seize 1 then 2
+  moved 109
+round 5: move 42 vault 1 -> vault 2
+  seize 1 then 2
+  moved 42
+round 6: move 95 vault 2 -> vault 1
+  seize 1 then 2
+  moved 95
+round 7: move 28 vault 1 -> vault 2
+  seize 1 then 2
+  moved 28
+desk closed: vault 2 bal 216, vault 1 bal 164
+moved 7, short 1, attested 8
