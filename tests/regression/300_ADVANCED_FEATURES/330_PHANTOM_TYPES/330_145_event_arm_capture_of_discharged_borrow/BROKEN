@@ -1,1 +1,0 @@
-KORU030: ambient binding discharged by the event-loop tor is refused inside its own `!` arm — but the same capture compiles in spec_sel_live.k when a w-derived binding is also captured into the arm. Non-compositional verdict; pin holds both readings (see input.k header + koru-libs/clay/tests/FLOW_BINDINGS.md §3).

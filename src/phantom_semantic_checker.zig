@@ -1944,7 +1944,7 @@ pub const PhantomSemanticChecker = struct {
         // and module_name (where event is defined, for phantom qualification).
         // Pass root_context so the flow-head bare-return bind propagates.
         for (flow.body.continuations, 0..) |*cont_ptr, cont_idx| {
-            const cont_valid = try self.validateContinuation(cont_ptr, event_info.decl, module_name, current_module, event_map, flow.location, &root_context, implementing_event, cont_ptr.branch.len != 0 and joinFollows(flow.body.continuations, cont_idx));
+            const cont_valid = try self.validateContinuation(cont_ptr, event_info.decl, module_name, current_module, event_map, flow.location, &root_context, implementing_event, cont_ptr.branch.len != 0 and joinFollows(flow.body.continuations, cont_idx), flow.inv());
             if (!cont_valid) {
                 has_errors = true;
                 // Continue checking for more errors
@@ -2358,8 +2358,16 @@ pub const PhantomSemanticChecker = struct {
         context: ?*const BindingContext,
         implementing_event: ?*const ast.EventDecl,
     ) anyerror!bool {
+        // The arms nested under `cont` fire from cont's own step — when that
+        // step is an invocation it is the firing call a `!`-arm custody
+        // revive (validateContinuation's .effect block) may consider.
+        const nested_firing: ?*const ast.Invocation = if (cont.node) |*step| switch (step.*) {
+            .invocation => |*inv| inv,
+            .label_with_invocation => |*lwi| &lwi.invocation,
+            else => null,
+        } else null;
         for (cont.continuations, 0..) |*nested, nested_idx| {
-            const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
+            const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx), nested_firing);
             if (!nested_valid) {
                 return false;
             }
@@ -2378,21 +2386,58 @@ pub const PhantomSemanticChecker = struct {
         parent_context: ?*const BindingContext, // Optional parent context to inherit from
         implementing_event: ?*const ast.EventDecl, // Event this flow implements (for branch_constructor escape)
         is_join_arm: bool, // This continuation is a named arm followed by a join — obligations inherited at entry are live-through
+        firing_inv: ?*const ast.Invocation, // The invocation whose call fired this arm — null when unknown
     ) anyerror!bool {
         var has_errors = false;
-
-        // Transform-grafted subtrees are synthesized, not user-authored — and a
-        // fused/flattened loop body cannot be linearity-judged (one straight-line
-        // pass re-uses iteration bindings, reading as false use-after-discharge).
-        // Same short-circuit flow_checker and shape_checker apply; mistakes
-        // inside the graft are caught downstream by the Zig backend.
-        if (cont.is_transformed_subtree) return true;
 
         // The arm owns the error: every diagnostic raised for this continuation —
         // branch, step, argument, or exit-balance — names ITS line, not the flow
         // head the caller threaded down (fa026be34's convention: the arm's own
         // location, falling back to the caller's when the parser left line 0).
         const location = if (cont.location.line != 0) cont.location else caller_location;
+
+        // Transform-grafted subtrees are synthesized, not user-authored — and a
+        // fused/flattened loop body cannot be linearity-judged (one straight-line
+        // pass re-uses iteration bindings, reading as false use-after-discharge).
+        // Same short-circuit flow_checker and shape_checker apply; mistakes
+        // inside the graft are caught downstream by the Zig backend.
+        //
+        // But the mark lives on the synthesized NODE, and a transform that
+        // bottoms its chain out in the flow's authored continuations
+        // (std/store:stored's envwrite chain) leaves user code as a CHILD of
+        // a marked node — pruning here deadened every check on the tail: a
+        // `stored` write in a `!` arm hid `window.size(win: w)` from the
+        // discharge ledger entirely (330_145). Skip the synthesized node,
+        // still walk its children — each carries its own mark. Children
+        // dispatch against the synthesized node's invoked tor, exactly as
+        // the named-branch walk does below; an unresolvable one keeps the
+        // old blanket-skip rather than guessing.
+        if (cont.is_transformed_subtree) {
+            var graft_event: ?struct { decl: *const ast.EventDecl, module: ?[]const u8 } = null;
+            const graft_inv: ?*const ast.Invocation = if (cont.node) |*step| switch (step.*) {
+                .invocation => |*inv| inv,
+                .label_with_invocation => |*lwi| &lwi.invocation,
+                else => null,
+            } else null;
+            if (graft_inv) |inv| {
+                const graft_name = try self.pathToString(inv.path);
+                defer self.allocator.free(graft_name);
+                const graft_module = inv.path.module_qualifier orelse flow_module;
+                const graft_qualified = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graft_module, graft_name });
+                defer self.allocator.free(graft_qualified);
+                if (event_map.get(graft_qualified)) |ei| {
+                    graft_event = .{ .decl = ei.decl, .module = graft_module };
+                }
+            }
+            if (graft_event) |ge| {
+                for (cont.continuations, 0..) |*nested, nested_idx| {
+                    const nested_valid = try self.validateContinuation(nested, ge.decl, ge.module, flow_module, event_map, location, parent_context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx), graft_inv);
+                    if (!nested_valid) has_errors = true;
+                }
+            }
+            return !has_errors;
+        }
+
         log.debug("[PHANTOM-FLOW]   Continuation branch: '{s}'\n", .{cont.branch});
 
         // Debug: print event path and branches
@@ -2715,6 +2760,77 @@ pub const PhantomSemanticChecker = struct {
         // obligations live past the arm's leaf — they settle at the join.
         // (Checker-side twin of the inserter's join_watermark.)
         if (is_join_arm) try context.markInheritedJoinLive();
+
+        // A `!` arm runs INSIDE the callee's loop body. A binding the firing
+        // call consumed through `<!state>` params is the loop's live value
+        // for the arm's duration — `frames(win: w)` takes `<!opened|!active>`
+        // and during `! frame` the window really is opened|active, which is
+        // why borrows like `window.size` declare exactly those states. The
+        // disposed mark the call left is right for code AFTER the call and
+        // wrong inside its own `!` arms: revive the binding here as live
+        // with the consumed states minus the `!` — the obligations moved to
+        // the loop's custody and `| done`-style arms re-issue them when it
+        // returns. Without this, an ambient use inside a `!` arm was
+        // refused outright (or silently passed under a transform graft —
+        // the marked-node descent above is what used to hide it): 330_145.
+        if (cont.kind == .effect) {
+            // Custody is identified by the firing call's own argument nodes:
+            // the disposal site's `/<arg-ptr>` suffix is the arg's value-string
+            // pointer, so only a discharge THIS invocation performed revives —
+            // a binding a prior call discharged stays dead inside the arm.
+            if (firing_inv) |finv| {
+                for (finv.args, 0..) |arg, arg_idx| {
+                    const site = context.disposalSite(arg.value) orelse continue;
+                    const site_suffix = try std.fmt.allocPrint(self.allocator, "/{x}", .{@intFromPtr(arg.value.ptr)});
+                    defer self.allocator.free(site_suffix);
+                    if (!std.mem.endsWith(u8, site, site_suffix)) continue;
+
+                    // Only `<!state>`-consuming params hand custody to the loop;
+                    // a borrow or produce param discharges nothing inside it.
+                    // Positional args resolve to their field by position.
+                    var live_phantom: ?[]const u8 = null;
+                    for (event_decl.input.fields, 0..) |field, field_idx| {
+                        const matches = if (arg.name.len != 0)
+                            std.mem.eql(u8, field.name, arg.name)
+                        else
+                            field_idx == arg_idx;
+                        if (!matches) continue;
+                        const param_phantom = field.phantom orelse break;
+                        if (std.mem.indexOfScalar(u8, param_phantom, '!') == null) break;
+                        const live_text = try self.allocator.alloc(u8, param_phantom.len);
+                        defer self.allocator.free(live_text);
+                        var li: usize = 0;
+                        for (param_phantom) |pc| {
+                            if (pc != '!') {
+                                live_text[li] = pc;
+                                li += 1;
+                            }
+                        }
+                        const module_for_canon = event_module orelse event_decl.module;
+                        live_phantom = try self.canonicalizePhantomStateWithBase(
+                            live_text[0..li],
+                            module_for_canon,
+                            try self.baseTypeModule(field.module_path),
+                        );
+                        break;
+                    }
+
+                    if (live_phantom) |lp| {
+                        defer self.allocator.free(lp);
+                        // setWithType removes the old entry — and frees the old
+                        // base_type — before it dupes; a slice of that old entry
+                        // passed straight in aliases freed memory.
+                        const live_base = try self.allocator.dupe(u8, context.getBaseType(arg.value) orelse "");
+                        defer self.allocator.free(live_base);
+                        try context.setWithType(arg.value, lp, live_base);
+                        if (context.disposed_bindings.fetchRemove(arg.value)) |kv| {
+                            self.allocator.free(kv.key);
+                            self.allocator.free(kv.value);
+                        }
+                    }
+                }
+            }
+        }
 
         // Add binding with phantom states from branch payload
         // If there's no explicit binding, synthesize "_" to track the obligation
@@ -3274,7 +3390,7 @@ pub const PhantomSemanticChecker = struct {
                 // Validate nested continuations against the invoked event (not parent event)
                 // Pass the current context down so disposed bindings propagate
                 for (cont.continuations, 0..) |*nested, nested_idx| {
-                    const nested_valid = try self.validateContinuation(nested, nested_event_info.decl, module_name, flow_module, event_map, location, &context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
+                    const nested_valid = try self.validateContinuation(nested, nested_event_info.decl, module_name, flow_module, event_map, location, &context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx), inv);
                     if (!nested_valid) {
                         has_errors = true;
                         // Continue checking for more errors
@@ -3306,7 +3422,7 @@ pub const PhantomSemanticChecker = struct {
                     // No invocations in pipeline - nested continuations still belong to parent event
                     log.debug("[PHANTOM-FLOW]   No invocations in pipeline, nested continuations belong to parent event\n", .{});
                     for (cont.continuations, 0..) |*nested, nested_idx| {
-                        const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, &context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
+                        const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, &context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx), firing_inv);
                         if (!nested_valid) {
                             has_errors = true;
                             // Continue checking for more errors
@@ -3369,7 +3485,7 @@ pub const PhantomSemanticChecker = struct {
                         if (event_map.get(qualified_name)) |event_info| {
                             // Validate nested continuations against this event
                             for (cont.continuations, 0..) |*nested, nested_idx| {
-                                const nested_valid = try self.validateContinuation(nested, event_info.decl, resolved_module, flow_module orelse "unknown", event_map, location, &context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
+                                const nested_valid = try self.validateContinuation(nested, event_info.decl, resolved_module, flow_module orelse "unknown", event_map, location, &context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx), inv);
                                 if (!nested_valid) {
                                     has_errors = true;
                                 }
@@ -3661,8 +3777,10 @@ pub const PhantomSemanticChecker = struct {
             // continuation's binding to the context with the correct phantom state.
             var nested_event_decl: ?*const ast.EventDecl = null;
             var nested_event_module: ?[]const u8 = null;
-            if (cont.node) |step_for_nested| switch (step_for_nested) {
-                .invocation => |inv_for_nested| {
+            var nested_firing_inv: ?*const ast.Invocation = null;
+            if (cont.node) |*step_for_nested| switch (step_for_nested.*) {
+                .invocation => |*inv_for_nested| {
+                    nested_firing_inv = inv_for_nested;
                     const ev_name = try self.pathToString(inv_for_nested.path);
                     defer self.allocator.free(ev_name);
                     nested_event_module = inv_for_nested.path.module_qualifier orelse current_module;
@@ -3701,6 +3819,7 @@ pub const PhantomSemanticChecker = struct {
                         &branch_context,
                         null,
                         nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx),
+                        nested_firing_inv,
                     );
                     if (!valid) has_errors = true;
                     continue;
