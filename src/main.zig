@@ -2397,8 +2397,9 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\    // KORU_BACKEND_TARGET fills the gap for hosts whose glibc
             \\    // predates zig's native baseline — a program's declared
             \\    // target always wins.
-            \\    const build_target = emitter_helpers.getBuildConfig("target") orelse
-            \\        (__koru_std.process.getEnvVarOwned(allocator, "KORU_BACKEND_TARGET") catch null);
+            \\    const env_target = __koru_std.process.getEnvVarOwned(allocator, "KORU_BACKEND_TARGET") catch null;
+            \\    defer if (env_target) |t| allocator.free(t);
+            \\    const build_target = emitter_helpers.getBuildConfig("target") orelse env_target;
             \\
             \\    // --zig-lib-dir overlay: koru's optimized-but-byte-identical
             \\    // std/json/Stringify.zig for every @import("std") the emitted
