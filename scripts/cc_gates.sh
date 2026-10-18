@@ -18,6 +18,19 @@
 #
 # Oracle resolution: ${KORU_CC_ORACLE:-ccomp} — an absolute path or a PATH
 # lookup. The pinned toolchain (versions + sha256) lives in tools/tools.json.
+#
+# Provisioned lane (verified green 2026-10-18, branch ccomp @ e1b4f1b0d):
+#   WSL Ubuntu 20.04 (glibc 2.31) + nix profile: ccomp 3.18, dotnet-sdk 8.0.425,
+#   nodejs 24, zig at ~/bin/zig.
+#     DOTNET_ROOT=$HOME/.nix-profile/share/dotnet \
+#     KORU_BACKEND_TARGET=x86_64-linux-musl \
+#     bash scripts/cc_gates.sh
+#   Why the env: emitted backends default to the host glibc, which 2.34-linked
+#   binaries cannot run on — the musl target makes them static. dotnet's apphost
+#   resolves its runtime via DOTNET_ROOT; the nix profile path is the stable
+#   symlink over the store hash. Without either, tests fail cs-compile /
+#   backend-exec for environment reasons and the `c` leg is never reached —
+#   the harness short-circuits on the first leg's FAILURE.
 
 set -o pipefail
 
