@@ -196,6 +196,36 @@ pub const FlowChecker = struct {
             try self.checkMutableBorrows(&flow.body, &borrow_scope);
         }
 
+        // KORU108: a reference to a name the flow binds SOMEWHERE, on a path
+        // that does not bind it — an arm binding read at the join after the
+        // arms, or a sibling arm's binding read from a disjoint branch. Core
+        // call arguments only: `source`/expression args (`stored {…}` bodies,
+        // `{{ }}` interpolation, transform expression params) are library
+        // syntax this pass must not open, and a [transform] invocation's own
+        // args are likewise data (the transform consumes the text, the call's
+        // continuations are still real steps — the exemption is PER-
+        // INVOCATION, not per-flow, or a print.ln-headed chain would carry
+        // its armed steps past the check: 400_213). Bound set and path scope
+        // come from ONE enumeration of name-introducing sites — a kind the
+        // enumeration misses can neither enter the set nor flag.
+        if (self.mode == .frontend and !is_transformed) {
+            var bound = std.StringHashMap(BindSite).init(self.allocator);
+            defer bound.deinit();
+            try self.collectFlowBinds(&flow.body, &bound);
+            var ref_scope: std.ArrayList([]const u8) = .empty;
+            defer ref_scope.deinit(self.allocator);
+            // Impl flows see their event's input fields everywhere — `n` in
+            // `load = if(n < 0) | then …` is a param, never an arm's binding.
+            if (flow.impl_of) |*iop| {
+                if (self.findEventDecl(iop)) |decl| {
+                    for (decl.input.fields) |f| {
+                        if (f.name.len > 0 and f.name[0] != '_') try ref_scope.append(self.allocator, f.name);
+                    }
+                }
+            }
+            try self.checkUnboundReferences(&flow.body, &ref_scope, &bound);
+        }
+
         // KORU207 used to live here: a `!` arm on an impl flow's head
         // lowered into a context-free `Handlers_*` fn that could not see
         // the enclosing handler's locals, so a param reference had to be
@@ -1599,6 +1629,232 @@ pub const FlowChecker = struct {
             if (std.mem.eql(u8, b.name, name)) return b;
         }
         return null;
+    }
+
+    // =========================================================================
+    // KORU108 — a name the flow binds, referenced off its path.
+    //
+    // Arm bindings are arm-local and `: name` binds scope downstream only, so
+    // a name can be bound SOMEWHERE in the flow and still be invisible where
+    // it is spelled — the join after the arms (400_213), a sibling arm's body
+    // (400_214), any disjoint branch. Before this check the reference sailed
+    // through to emitted Zig and died on `use of undeclared identifier` — a
+    // host sentence for a language fact.
+    //
+    // The walk uses checkShadowing's scope discipline verbatim: a bind is
+    // live on the path from its site downward, and siblings restore the depth
+    // between them — which is exactly what makes an arm binding invisible at
+    // the join (the anonymous continuation the parser now nests beside the
+    // arms). Only CORE argument text is scanned: args carrying captured
+    // `source_value`/`expression_value` are library syntax (`stored {…}`
+    // bodies, transform expression params), and string literals are skipped
+    // whole, so `{{ }}` interpolation text is never read. Bound set and path
+    // scope come from ONE site enumeration (collectArmSites/collectNodeSites)
+    // so a bind kind it misses can neither enter the set nor flag — the arm
+    // destructure `{ [row]s }` was the first divergence (400_215).
+    // =========================================================================
+
+    /// One name-introducing site, rendered for the diagnostic as
+    /// `{glyph} {branch} {name}` (`| img t`, `! item x`, `| Profile p`) or
+    /// `: {name}` for a call-site bind (glyph ':').
+    const BindSite = struct { glyph: u8, branch: []const u8, name: []const u8 };
+
+    /// THE name-introducing fields on a continuation — arm-position binds,
+    /// live when the continuation's own node runs: `| img t` binds `t`, and
+    /// the arm-level destructure `! query { [row]s, [ordinal]o }` binds each
+    /// leaf. Single enumeration shared by the bound-set collection and the
+    /// path-scope walk so the two can never diverge on what counts as a bind.
+    fn collectArmSites(self: *FlowChecker, cont: *const ast.Continuation, out: *std.ArrayList(BindSite)) anyerror!void {
+        const glyph: u8 = if (cont.kind == .terminal) '|' else '!';
+        if (cont.binding) |b| {
+            if (b.len > 0 and b[0] != '_') try out.append(self.allocator, .{ .glyph = glyph, .branch = cont.branch, .name = b });
+        }
+        for (cont.destructure) |f| {
+            try self.appendDestructureSites(out, f, glyph, cont.branch);
+        }
+    }
+
+    /// Node-position binds, live downstream of the node: `: name` and
+    /// `: {destructure}` on invocation-shaped nodes, `binding` on a
+    /// metatype_binding node. Tap/template-produced sites are gated out the
+    /// same way KORU106's walk gates them.
+    fn collectNodeSites(self: *FlowChecker, node: ast.Node, out: *std.ArrayList(BindSite)) anyerror!void {
+        switch (node) {
+            .invocation => |*inv| try self.collectCallSites(inv, out),
+            .label_with_invocation => |*lwi| try self.collectCallSites(&lwi.invocation, out),
+            .metatype_binding => |*mb| {
+                if (!mb.inserted_by_tap and !mb.from_opaque_tap and
+                    mb.binding.len > 0 and mb.binding[0] != '_')
+                {
+                    try out.append(self.allocator, .{ .glyph = '|', .branch = mb.metatype, .name = mb.binding });
+                }
+            },
+            else => {},
+        }
+    }
+
+    fn collectCallSites(self: *FlowChecker, inv: *const ast.Invocation, out: *std.ArrayList(BindSite)) anyerror!void {
+        if (inv.inserted_by_tap or inv.from_opaque_tap or
+            self.invocationResolvesToTemplateProc(&inv.path)) return;
+        if (inv.return_binding) |rb| {
+            if (rb.len > 0 and rb[0] != '_') try out.append(self.allocator, .{ .glyph = ':', .branch = "", .name = rb });
+        }
+        for (inv.return_destructure) |f| {
+            try self.appendDestructureSites(out, f, ':', "");
+        }
+    }
+
+    fn appendDestructureSites(self: *FlowChecker, out: *std.ArrayList(BindSite), f: ast.DestructureField, glyph: u8, branch: []const u8) anyerror!void {
+        if (f.sub.len > 0) {
+            for (f.sub) |sub| try self.appendDestructureSites(out, sub, glyph, branch);
+            return;
+        }
+        if (f.name.len > 0 and f.name[0] != '_') try out.append(self.allocator, .{ .glyph = glyph, .branch = branch, .name = f.name });
+    }
+
+    /// Every bind site anywhere in the flow, first spelling wins — the set a
+    /// reference must be in before scope is even consulted.
+    fn collectFlowBinds(self: *FlowChecker, cont: *const ast.Continuation, bound: *std.StringHashMap(BindSite)) anyerror!void {
+        if (cont.is_transformed_subtree) return;
+
+        var sites: std.ArrayList(BindSite) = .empty;
+        defer sites.deinit(self.allocator);
+        try self.collectArmSites(cont, &sites);
+        for (sites.items) |site| {
+            if (!bound.contains(site.name)) try bound.put(site.name, site);
+        }
+
+        if (cont.node) |node| {
+            sites.clearRetainingCapacity();
+            try self.collectNodeSites(node, &sites);
+            for (sites.items) |site| {
+                if (!bound.contains(site.name)) try bound.put(site.name, site);
+            }
+        }
+
+        for (cont.continuations) |*child| {
+            try self.collectFlowBinds(child, bound);
+        }
+    }
+
+    /// Path-scoped walk over `inv.args` values. Arm binds are live when the
+    /// continuation's own node runs (pushed before the arg scan); node binds
+    /// scope downstream only (pushed after it) — the same ordering
+    /// checkMutableBorrows documents.
+    fn checkUnboundReferences(self: *FlowChecker, cont: *const ast.Continuation, scope: *std.ArrayList([]const u8), bound: *const std.StringHashMap(BindSite)) anyerror!void {
+        if (cont.is_transformed_subtree) return;
+
+        const depth = scope.items.len;
+        defer scope.shrinkRetainingCapacity(depth);
+
+        var sites: std.ArrayList(BindSite) = .empty;
+        defer sites.deinit(self.allocator);
+        try self.collectArmSites(cont, &sites);
+        for (sites.items) |site| try scope.append(self.allocator, site.name);
+
+        if (cont.node) |node| {
+            switch (node) {
+                .invocation => |*inv| try self.checkUnboundReferenceArgs(inv, inv.args, cont.location, scope.items, bound),
+                .label_with_invocation => |*lwi| try self.checkUnboundReferenceArgs(&lwi.invocation, lwi.invocation.args, cont.location, scope.items, bound),
+                .label_jump => |*lj| try self.checkUnboundReferenceArgs(null, lj.args, cont.location, scope.items, bound),
+                else => {},
+            }
+            sites.clearRetainingCapacity();
+            try self.collectNodeSites(node, &sites);
+            for (sites.items) |site| try scope.append(self.allocator, site.name);
+        }
+
+        for (cont.continuations) |*child| {
+            try self.checkUnboundReferences(child, scope, bound);
+        }
+    }
+
+    /// Identifiers in a plain arg's expression text: string literals are
+    /// skipped whole, `.`-led member names and `@`-led builtins are not
+    /// references, and `args` carrying captured source/expression bodies are
+    /// library syntax this pass does not open. A [transform] invocation's own
+    /// args are data the rewrite consumes, not references; synthesized
+    /// invocations (taps, template-proc splices) carry temporaries, not
+    /// author text. `inv` is null for label-jump args, which carry no such
+    /// marks. First offender per invocation only.
+    fn checkUnboundReferenceArgs(self: *FlowChecker, inv: ?*const ast.Invocation, args: []const ast.Arg, location: errors.SourceLocation, scope: []const []const u8, bound: *const std.StringHashMap(BindSite)) anyerror!void {
+        if (inv) |i| {
+            if (i.inserted_by_tap or i.from_opaque_tap or
+                self.invocationResolvesToTemplateProc(&i.path) or
+                self.invocationIsTransform(&i.path)) return;
+        }
+        for (args) |arg| {
+            if (arg.source_value != null or arg.expression_value != null) continue;
+            const v = arg.value;
+            var in_string = false;
+            var quote: u8 = 0;
+            var i: usize = 0;
+            while (i < v.len) {
+                const ch = v[i];
+                if (in_string) {
+                    if (ch == '\\') {
+                        i += 1;
+                    } else if (ch == quote) {
+                        in_string = false;
+                    }
+                    i += 1;
+                    continue;
+                }
+                if (ch == '"' or ch == '\'') {
+                    in_string = true;
+                    quote = ch;
+                    i += 1;
+                    continue;
+                }
+                const is_start = (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or ch == '_';
+                if (!is_start) {
+                    i += 1;
+                    continue;
+                }
+                var end = i + 1;
+                while (end < v.len and ast.isKebabIdentChar(v[end])) end += 1;
+                const name = v[i..end];
+                const is_ref = name[0] != '_' and !(i > 0 and v[i - 1] == '@') and !ast.precededByMemberDot(v, i);
+                if (is_ref) {
+                    if (bound.get(name)) |site| {
+                        var in_scope = false;
+                        for (scope) |s| {
+                            if (std.mem.eql(u8, s, name)) {
+                                in_scope = true;
+                                break;
+                            }
+                        }
+                        if (!in_scope) {
+                            const bindtext = if (site.glyph == ':')
+                                try std.fmt.allocPrint(self.allocator, ": {s}", .{site.name})
+                            else
+                                try std.fmt.allocPrint(self.allocator, "{c} {s} {s}", .{ site.glyph, site.branch, site.name });
+                            defer self.allocator.free(bindtext);
+                            try self.reporter.addErrorWithHint(
+                                .KORU108,
+                                location.line,
+                                location.column,
+                                "'{s}' is not in scope here — it is bound by '{s}', and an arm's bindings end with that arm",
+                                .{ name, bindtext },
+                                "move this step into the arm body",
+                                .{},
+                            );
+                            return;
+                        }
+                    }
+                }
+                i = end;
+            }
+        }
+    }
+
+    /// True when the invocation's event is declared `[transform]` — its arg
+    /// text is the rewrite's input data, not a reference for the scope walk.
+    fn invocationIsTransform(self: *FlowChecker, path: *const ast.DottedPath) bool {
+        if (self.findEventDecl(path)) |event_decl| {
+            return annotation_parser.hasPart(event_decl.annotations, "transform");
+        }
+        return false;
     }
 
     fn isMutablePointerType(ty: []const u8) bool {

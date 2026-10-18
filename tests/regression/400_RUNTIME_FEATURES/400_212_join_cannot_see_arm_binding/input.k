@@ -1,8 +1,9 @@
 // PINS: an unnamed `|>` at a step's own level after that step's arms is the
 // join (400_210), and arm bindings are arm-local — `t` bound by `| img t`
-// is invisible at the join. No koruc-level unbound-reference check exists
-// yet (same hole as 320_152): today the refusal is the host's
-// `use of undeclared identifier 't'` from the emitted Zig.
+// is invisible at the join. `t` sits inside std/io's `{{ }}` interpolation,
+// which the core flow checker does not read (KORU108 covers core call
+// arguments only), so today the refusal is the host's `use of undeclared
+// identifier 't'`.
 import std/io
 
 pub tor load { n: i64 }

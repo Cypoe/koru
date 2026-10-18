@@ -4,9 +4,10 @@
 // at the join, so `s[b]` cannot resolve there. Attachment stays positional:
 // `| row b` dispatches on insert, the step before it.
 //
-// No koruc-level unbound-reference check exists yet (the same hole 320_152
-// lives in): today the refusal is the host's `use of undeclared identifier
-// 'b'` from the emitted Zig.
+// `s[b]` sits inside std/store's write body, which the core flow checker
+// does not read (KORU108 covers core call arguments only), so today the
+// refusal is the host's `use of undeclared identifier 'b'` from the
+// emitted Zig.
 //
 // The per-row write this wanted already has a spelling — the arm body:
 //
