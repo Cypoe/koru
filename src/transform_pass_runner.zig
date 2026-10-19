@@ -722,14 +722,17 @@ fn flowStillMatchesTransform(allocator: std.mem.Allocator, inv: *const Invocatio
 
 /// Transform handler entry in the dispatch table
 /// Ordered transform stages. `walkAndTransform` runs the fixed-point once per
-/// stage in THIS declared order (pre → main → post), so a `.pre` transform is
-/// guaranteed to reach fixed point before any `.main`/`.post` transform runs —
-/// the producer-before-consumer ordering that source order alone cannot
-/// promise (a type-EMITTING transform must complete before a transform that
-/// CONSUMES the type). Set via `[transform|pre]` / `[transform|post]`;
-/// untagged transforms are `.main`, so an all-`.main` program is byte-identical
-/// to the legacy single-set fixed point.
-pub const Stage = enum { pre, main, post };
+/// stage in THIS declared order (pre → pre_late → main → post), so a `.pre`
+/// transform is guaranteed to reach fixed point before any `.main`/`.post`
+/// transform runs — the producer-before-consumer ordering that source order
+/// alone cannot promise (a type-EMITTING transform must complete before a
+/// transform that CONSUMES the type). `.pre_late` sits between: it consumes
+/// decls `.pre` producers synthesized (component-generated tors, store cells)
+/// yet still completes before `.main` `claims_descendants` transforms lift
+/// raw subtrees. Set via `[transform|pre]` / `[transform|pre_late]` /
+/// `[transform|post]`; untagged transforms are `.main`, so an all-`.main`
+/// program is byte-identical to the legacy single-set fixed point.
+pub const Stage = enum { pre, pre_late, main, post };
 
 pub const TransformEntry = struct {
     /// Which ordered stage this transform runs in (see `Stage`).
@@ -845,7 +848,7 @@ pub fn walkAndTransformStages(
     // producer-before-consumer guarantee source order cannot give. WITHIN a
     // stage this is exactly the legacy single-set fixed point, so an
     // all-`.main` program (every untagged transform) behaves identically.
-    for ([_]Stage{ .pre, .main, .post }) |stage| {
+    for ([_]Stage{ .pre, .pre_late, .main, .post }) |stage| {
         if (only_stage) |os| {
             if (stage != os) continue;
         }

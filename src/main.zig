@@ -3543,7 +3543,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                 const has_compile_error = transform_flags.has_compile_error;
 
                 const claims_descendants = annotation_parser.hasPart(event_decl.annotations, "claims_descendants");
-                const stage_name: []const u8 = if (annotation_parser.hasPart(event_decl.annotations, "pre")) "pre" else if (annotation_parser.hasPart(event_decl.annotations, "post")) "post" else "main";
+                const stage_name: []const u8 = if (annotation_parser.hasPart(event_decl.annotations, "pre_late")) "pre_late" else if (annotation_parser.hasPart(event_decl.annotations, "pre")) "pre" else if (annotation_parser.hasPart(event_decl.annotations, "post")) "post" else "main";
 
                 // Collect variant targets across the whole program (top-level event, so
                 // variants may live in any module that implements it).
@@ -3683,7 +3683,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                         }
 
                         const claims_descendants = annotation_parser.hasPart(event_decl.annotations, "claims_descendants");
-                        const stage_name: []const u8 = if (annotation_parser.hasPart(event_decl.annotations, "pre")) "pre" else if (annotation_parser.hasPart(event_decl.annotations, "post")) "post" else "main";
+                        const stage_name: []const u8 = if (annotation_parser.hasPart(event_decl.annotations, "pre_late")) "pre_late" else if (annotation_parser.hasPart(event_decl.annotations, "pre")) "pre" else if (annotation_parser.hasPart(event_decl.annotations, "post")) "post" else "main";
 
                         // Collect variant targets from the same module (variants live alongside the event).
                         const variant_targets_mod = try collectVariantTargetsForEventPath(allocator, module.items, event_decl.path.segments, comptime_default_lang);
@@ -4274,6 +4274,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
     try code_emitter.write("    // that stage; anything else (e.g. \"transform\") runs all stages in order.\n");
     try code_emitter.write("    const __only_stage: ?@import(\"transform_pass_runner\").Stage =\n");
     try code_emitter.write("        if (transform_std.mem.eql(u8, annotation, \"pre\")) .pre\n");
+    try code_emitter.write("        else if (transform_std.mem.eql(u8, annotation, \"pre_late\")) .pre_late\n");
     try code_emitter.write("        else if (transform_std.mem.eql(u8, annotation, \"main\")) .main\n");
     try code_emitter.write("        else if (transform_std.mem.eql(u8, annotation, \"post\")) .post\n");
     try code_emitter.write("        else null;\n");

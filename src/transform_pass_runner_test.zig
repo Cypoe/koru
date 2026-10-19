@@ -145,6 +145,84 @@ test "transform runner prefers nested transform before outer owner candidate" {
     _ = transformed;
 }
 
+fn observingTransform(node: ast.ASTNode, program: *const ast.Program, allocator: std.mem.Allocator, ctx: ?*anyopaque) !ast.SiteResult {
+    _ = program;
+    _ = allocator;
+    _ = ctx;
+    if (node == .invocation) recordObservation(node.invocation.path.segments[0]);
+    return .{}; // no-op: observe only
+}
+
+fn makeProgramWithChain(allocator: std.mem.Allocator) !*ast.Program {
+    const gamma_inv = try makeInvocation(allocator, "gamma", false);
+    const beta_inv = try makeInvocation(allocator, "beta", false);
+    const alpha_inv = try makeInvocation(allocator, "alpha", false);
+
+    const gamma_cont = try allocator.alloc(ast.Continuation, 1);
+    gamma_cont[0] = ast.Continuation{
+        .branch = try allocator.dupe(u8, ""),
+        .binding = null,
+        .condition = null,
+        .node = ast.Node{ .invocation = gamma_inv },
+        .indent = 0,
+        .continuations = try allocator.alloc(ast.Continuation, 0),
+    };
+    const beta_cont = try allocator.alloc(ast.Continuation, 1);
+    beta_cont[0] = ast.Continuation{
+        .branch = try allocator.dupe(u8, ""),
+        .binding = null,
+        .condition = null,
+        .node = ast.Node{ .invocation = beta_inv },
+        .indent = 0,
+        .continuations = gamma_cont,
+    };
+
+    const items = try allocator.alloc(ast.Item, 1);
+    items[0] = ast.Item{
+        .flow = ast.Flow{
+            .body = ast.rootSite(alpha_inv, beta_cont, .{ .file = "generated", .line = 0, .column = 0 }),
+            .annotations = try allocator.alloc([]const u8, 0),
+            .module = try allocator.dupe(u8, "test"),
+        },
+    };
+
+    const program = try allocator.create(ast.Program);
+    program.* = ast.Program{
+        .items = items,
+        .module_annotations = try allocator.alloc([]const u8, 0),
+        .main_module_name = try allocator.dupe(u8, "test"),
+        .allocator = allocator,
+    };
+    return program;
+}
+
+test "pre_late stage lands between pre and main" {
+    resetObservations();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const original = try makeProgramWithChain(allocator);
+
+    // Tree order is alpha → beta → gamma; stage tags INVERT it entirely:
+    // gamma (.pre) first, beta (.pre_late) second, alpha (.main) last. The
+    // ordering is causal — a consumer transform sees producer output before
+    // .main claimers lift the subtree.
+    const transforms = [_]transform_pass_runner.TransformEntry{
+        .{ .name = "alpha", .stage = .main, .handler_fn = observingTransform },
+        .{ .name = "beta", .stage = .pre_late, .handler_fn = observingTransform },
+        .{ .name = "gamma", .stage = .pre, .handler_fn = observingTransform },
+    };
+
+    const transformed = try transform_pass_runner.walkAndTransform(original, &transforms, allocator, null);
+
+    try testing.expectEqual(@as(usize, 3), observed_count);
+    try testing.expectEqualStrings("gamma", observed_order[0]);
+    try testing.expectEqualStrings("beta", observed_order[1]);
+    try testing.expectEqualStrings("alpha", observed_order[2]);
+    _ = transformed;
+}
+
 test "claimed transform checks self before descendants and sees raw child invocation" {
     resetObservations();
 

@@ -38,7 +38,7 @@
 
 const std = @import("std");
 
-~[keyword|comptime|transform|pre]pub tor default {
+~[keyword|comptime|transform|pre_late]pub tor default {
     expr: Expression,
     invocation: *const Invocation,
     item: *const Item,

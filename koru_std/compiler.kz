@@ -13,6 +13,7 @@
 ~part dump
 ~part directives
 ~part stages
+~part prelate
 // Compiler system dependencies
 ~std/deps:requires.system {
     "name": "zig",

@@ -28,34 +28,13 @@
     return updated_ctx;
 }
 
-// Pre-stage transforms: run the transform runner's `.pre` stage BEFORE the
-// template pass. A transform that GRAFTS templated code — e.g. std/constructor
-// dissolving into a comptime list plus a `for` over the var it just defined —
-// must dissolve FIRST, so the template pass then processes the graft as ordinary
-// code. Only `.pre`-tagged transforms fire here; `.main`/`.post` still run at
-// Phase 2.4 (evaluate-comptime). `.pre` transforms carry @pass_ran, so that later
-// all-stages run re-visits them as no-ops. This is the named-stage design: the
-// pipeline sprinkles transform stages where they belong, deliberately.
-~pub tor run-pre-transforms { ctx: CompilerContext } -> CompilerContext
-
-~proc run-pre-transforms|zig {
-    const backend_output = @import("backend_output_emitted.zig");
-    var updated_ctx = ctx;
-    if (@hasDecl(backend_output, "run_pass")) {
-        const pre_ast = backend_output.run_pass("pre", ctx.ast, ctx.allocator, @ptrCast(&updated_ctx)) catch |err| {
-            if (err == error.TransformContinuationPositionUnsupported) {
-                // The runner already emitted a located error[KORU124] koru
-                // diagnostic. evaluate/run-pre have no clean error channel
-                // (they return a ctx), so stop the pipeline cleanly rather than
-                // leaking the ICE-shaped @panic + host stack trace.
-                std.process.exit(1);
-            }
-            log.err("FATAL: pre-stage transform pass failed ({s}). The pipeline cannot continue with a partially-transformed AST.\n", .{@errorName(err)});
-            @panic("pre-stage transform pass failed — see error above");
-        };
-        updated_ctx.ast = pre_ast;
-    }
-    updated_ctx.passes_completed += 1;
-    updated_ctx.current_pass = "run_pre_transforms";
-    return updated_ctx;
-}
+// Pre-stage transforms live in the `prelate` part (compiler.prelate.kz):
+// run-pre-transforms fires `.pre` then `.pre_late` BEFORE the template
+// pass. A transform that GRAFTS templated code — e.g. std/constructor
+// dissolving into a comptime list plus a `for` over the var it just
+// defined — must dissolve FIRST, so the template pass then processes the
+// graft as ordinary code. `.main`/`.post` still run at Phase 2.4
+// (evaluate-comptime). `.pre*` transforms carry @pass_ran, so that later
+// all-stages run re-visits them as no-ops. This is the named-stage
+// design: the pipeline sprinkles transform stages where they belong,
+// deliberately.
