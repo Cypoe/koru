@@ -7,16 +7,31 @@
 // convention as `std/store(game)` / `std/pump(main)`. A `ctx(X)` step is a
 // compile-time scope: the transform walks its continuation subtree and, for
 // every invocation, fills params the call left unfilled from the nearest
-// enclosing scope providing a field of the same name — the author spelling
-// `call()` while the emitted call reads `call(a: inner.a, b: outer.b)`.
-// Scope = downstream continuation subtree, so a linear `ctx(A) |> ctx(B) |>
-// call()` chain shadows A with B for the call; arms, conditionals, and nested
-// chains all inherit. The ctx step itself is spliced out — zero runtime
-// cost: injection is argument-filling at compile time, nothing resolves at
-// run.
+// enclosing scope providing a field of the same name AND a type that fits
+// the param — the author spelling `call()` while the emitted call reads
+// `call(a: inner.a, b: outer.b)`. Scope = downstream continuation subtree,
+// so a linear `ctx(A) |> ctx(B) |> call()` chain shadows A with B for the
+// call; arms, conditionals, and nested chains all inherit. The ctx step
+// itself is spliced out — zero runtime cost: injection is argument-filling
+// at compile time, nothing resolves at run.
 //
-//   precedence: explicit arg > innermost ctx > outward ctx > declared
-//   default > ordinary missing-param refusal (automatic — nothing new)
+//   precedence: explicit arg > innermost compatible ctx > outward ctx >
+//   declared default > ordinary missing-param refusal (automatic — nothing
+//   new)
+//
+// Matching is name + exact canonical type: a same-named column whose type
+// cannot serve the param does NOT shadow — it falls through to outer
+// scopes, so `ctx(inner) |> ctx(outer)` with `inner.a:f64`/`outer.a:i64`
+// feeds `a: i64` params from outer and `a: f64` params from inner. A param
+// no compatible scope provides stays unfilled and refuses through the
+// ordinary missing-input path.
+//
+// TODO(projection): scope spelling is planned to take a capture-shaped map —
+// `std/ctx { fs: theme[r].fs, sel: docs[cur] }` — presenting names bound to
+// arbitrary backing exprs (ScopeBinding's {name, type, value_ref} shape).
+// Types resolve off store-field paths; arbitrary exprs need inference or an
+// explicit type in the map. Clone keys + free-var lifting follow the same
+// rules as subscripted scopes.
 //
 // TRANSITIVITY — the scope crosses the subflow boundary. When a call under
 // a scope targets a koru-bodied tor whose body (transitively) consumes a
@@ -30,9 +45,9 @@
 //
 // The scope value is a source expression naming a store — `world`,
 // `themes[h]`, `cfg`. Which fields a scope provides is read off the schema
-// of the store it names (the `std/store:new` seed block); a scope that
-// names no store provides nothing. Calls whose decl has no input shape in
-// this program pass through untouched.
+// of the store it names (the `std/store:new` seed block — name AND column
+// type); a scope that names no store provides nothing. Calls whose decl has
+// no input shape in this program pass through untouched.
 //
 // Promoted from the libs/ctx experiment (koru-libs commit 60b20a3).
 
@@ -102,9 +117,83 @@ const std = @import("std");
             return .{ .store = v[0..end], .expr = v, .sub = null };
         }
 
-        // Column names of a store — the injectable surface of a scope that
+        // A column of the injectable surface: presented name + canonical
+        // type. Matching is name AND type — a same-named column whose type
+        // cannot serve the callee's param is skipped, so an outer scope's
+        // compatible field answers through a mistyped inner shadow.
+        const Col = struct { name: []const u8, type: []const u8 };
+
+        // Canonical column type from a seed field's rhs: `9[i64]` peels to
+        // `i64` (struct_literal.peelBaseType's rule, mirrored — transform
+        // code cannot import it), otherwise the rhs IS the type spelling.
+        // `<...>` phantom state is stripped, matching Field.type's canonical
+        // form ("phantom states/tags stripped"). A rhs that is a bare
+        // literal (`0`, `"x"`, `true`) carries no readable type — returns ""
+        // and matches by name alone, preserving name-only behavior for
+        // seeds whose type is inferred downstream.
+        fn canonColType(self: *const @This(), rhs0: []const u8) []const u8 {
+            var rhs = std.mem.trim(u8, rhs0, " \t");
+            if (rhs.len >= 3 and rhs[rhs.len - 1] == ']') {
+                if (std.mem.lastIndexOfScalar(u8, rhs, '[')) |lb| {
+                    const inner = rhs[lb + 1 .. rhs.len - 1];
+                    const base_types = [_][]const u8{
+                        "i8",  "i16", "i32",   "i64",   "u8",   "u16", "u32",
+                        "u64", "usize", "isize", "f16",  "f32",  "f64", "bool",
+                    };
+                    for (base_types) |t| {
+                        if (std.mem.eql(u8, inner, t)) {
+                            rhs = inner;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (rhs.len == 0) return "";
+            const c0 = rhs[0];
+            if ((c0 >= '0' and c0 <= '9') or c0 == '-' or c0 == '+' or c0 == '"' or c0 == '\'') return "";
+            if (std.mem.eql(u8, rhs, "true") or std.mem.eql(u8, rhs, "false")) return "";
+            if (std.mem.indexOfScalar(u8, rhs, '<')) |lt| rhs = std.mem.trim(u8, rhs[0..lt], " \t");
+            return self.a.dupe(u8, rhs) catch unreachable;
+        }
+
+        // Exact canonical-string match: column type vs the callee's declared
+        // field type. A module-qualified column `*app/lib/pend:Pending` also
+        // accepts `module_path:type` reconstruction — f.type for `*Pending`
+        // carries its qualifier in f.module_path. An unreadable column type
+        // (bare-literal seed, "") is a wildcard: name-only, as before.
+        fn typeFits(self: *const @This(), colty: []const u8, f: *const ast.Field) bool {
+            if (colty.len == 0) return true;
+            if (std.mem.eql(u8, colty, f.type)) return true;
+            const mp = f.module_path orelse return false;
+            var ty = f.type;
+            var ptr = false;
+            if (ty.len > 0 and ty[0] == '*') {
+                ptr = true;
+                ty = ty[1..];
+            }
+            const qualified = std.fmt.allocPrint(self.a, "{s}{s}:{s}", .{ if (ptr) "*" else "", mp, ty }) catch unreachable;
+            if (std.mem.eql(u8, colty, qualified)) return true;
+            // Separators differ between the two spellings — module_path is
+            // dotted (`test_lib.user`), seeds are slashed (`app/lib/pend`).
+            const alt = self.a.dupe(u8, qualified) catch unreachable;
+            for (alt) |*ch| {
+                if (ch.* == '/') ch.* = '.' else if (ch.* == '.') ch.* = '/';
+            }
+            return std.mem.eql(u8, colty, alt);
+        }
+
+        // First column of `cols` that can serve decl field `f` — same name
+        // AND a fitting type — or null.
+        fn matchingCol(self: *const @This(), cols: []const Col, f: *const ast.Field) ?[]const u8 {
+            for (cols) |c| {
+                if (std.mem.eql(u8, c.name, f.name) and self.typeFits(c.type, f)) return c.name;
+            }
+            return null;
+        }
+
+        // Columns of a store — the injectable surface of a scope that
         // names it. Read off the `std/store:new` seed block.
-        fn scopeFields(self: *const @This(), store: []const u8) []const []const u8 {
+        fn scopeFields(self: *const @This(), store: []const u8) []const Col {
             for (self.prog.items) |*pi| {
                 if (pi.* != .flow) continue;
                 const inv = pi.flow.inv();
@@ -123,18 +212,22 @@ const std = @import("std");
                     }
                 }
                 if (!named or seed == null) continue;
-                var cols = std.ArrayList([]const u8).initCapacity(self.a, 8) catch unreachable;
+                var cols = std.ArrayList(Col).initCapacity(self.a, 8) catch unreachable;
                 var tok = std.mem.tokenizeAny(u8, seed.?, ",\n\r\t");
                 while (tok.next()) |raw| {
                     const f = std.mem.trim(u8, raw, " \t");
                     if (f.len == 0) continue;
                     const cp = std.mem.indexOfScalar(u8, f, ':') orelse continue;
                     const nm = std.mem.trim(u8, f[0..cp], " \t");
-                    if (nm.len > 0) cols.append(self.a, self.a.dupe(u8, nm) catch unreachable) catch unreachable;
+                    if (nm.len == 0) continue;
+                    cols.append(self.a, .{
+                        .name = self.a.dupe(u8, nm) catch unreachable,
+                        .type = self.canonColType(f[cp + 1 ..]),
+                    }) catch unreachable;
                 }
                 return cols.toOwnedSlice(self.a) catch unreachable;
             }
-            return &[_][]const u8{};
+            return &[_]Col{};
         }
 
         // Find the event_decl whose path matches an invocation — the input
@@ -205,11 +298,9 @@ const std = @import("std");
                 inner: while (si > 0) {
                     si -= 1;
                     const cols = self.scopeFields(stack[si].store);
-                    for (cols) |cn| {
-                        if (std.mem.eql(u8, cn, f.name)) {
-                            n += 1;
-                            break :inner;
-                        }
+                    if (self.matchingCol(cols, &f) != null) {
+                        n += 1;
+                        break :inner;
                     }
                 }
             }
@@ -217,7 +308,8 @@ const std = @import("std");
         }
 
         // Inject `scope.field` args for every declared field the call left
-        // unfilled, innermost scope first (stack top wins — shadowing).
+        // unfilled — innermost scope with a name+type-fitting column wins;
+        // a mistyped same-named column falls through to outer scopes.
         fn inject(self: *const @This(), inv: ast.Invocation, stack: []const Scope) ast.Invocation {
             if (stack.len == 0) return inv;
             const od = self.declOf(&inv) orelse return inv;
@@ -233,21 +325,18 @@ const std = @import("std");
                 while (si > 0 and !found) {
                     si -= 1;
                     const cols = self.scopeFields(stack[si].store);
-                    for (cols) |cn| {
-                        if (std.mem.eql(u8, cn, f.name)) {
-                            const value = std.fmt.allocPrint(self.a, "{s}.{s}", .{ stack[si].expr, f.name }) catch unreachable;
-                            adds.append(self.a, .{
-                                .name = self.a.dupe(u8, f.name) catch unreachable,
-                                .value = value,
-                                // Forced punning: `a: outer.a` is PARSE005-
-                                // redundant — `outer.a` already puns to `a`.
-                                // `theme[r].fs` can't pun (brackets) and keeps
-                                // its label.
-                                .had_explicit_label = !punsTo(value, f.name),
-                            }) catch unreachable;
-                            found = true;
-                            break;
-                        }
+                    if (self.matchingCol(cols, &f) != null) {
+                        const value = std.fmt.allocPrint(self.a, "{s}.{s}", .{ stack[si].expr, f.name }) catch unreachable;
+                        adds.append(self.a, .{
+                            .name = self.a.dupe(u8, f.name) catch unreachable,
+                            .value = value,
+                            // Forced punning: `a: outer.a` is PARSE005-
+                            // redundant — `outer.a` already puns to `a`.
+                            // `theme[r].fs` can't pun (brackets) and keeps
+                            // its label.
+                            .had_explicit_label = !punsTo(value, f.name),
+                        }) catch unreachable;
+                        found = true;
                     }
                 }
             }
