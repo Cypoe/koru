@@ -24,9 +24,8 @@ cited test does not refresh the comment.
 
 Three first-sentence states: **blocker** (compiled, refused), **not a blocker**
 (compiled or a passing test *is* the join), **unmeasured** (not compiled this
-session — stop narrating). Inventing a grid-slot / “conditional store” workaround
-because a comment said a store query cannot take a frame borrow is the consumer
-reroute this file already bans — and it is worse when you never even compiled.
+session — pause further claims until measured). Avoid inventing a grid-slot / “conditional store” workaround
+because a comment said a store query cannot take a frame borrow; verify by compiling first.
 
 - **`koru-by-example.md`** — curated tour of real tests, verbatim source.
 - **`tests/regression/`** — the full suite.

@@ -5,10 +5,11 @@
 # SAME token-normalized fingerprint (tools/deslop.zig) over it. First
 # measured baseline: the layer holds ~15x the clone mass the decl census
 # ever saw (1061 clusters vs 70). Keys are ceilings; see the sibling
-# baselines. Six files' host text does not parse standalone
-# (eval/table/types/control/declarations/io — dormant proc bodies carry
-# Zig that never reached a compiler, e.g. `.{ .error = ... }`); they are
-# named on stderr and escape the count until they parse.
+# baselines. Several files' host text does not parse standalone
+# (compress/eval/table/types/control/bridge.bind/declarations/io —
+# dormant proc bodies carry Zig that never reached a compiler, e.g.
+# `.{ .error = ... }`); they are named on stderr and escape the count
+# until they parse.
 # Tightened 2026-10-14 same-day: the refusal-envelope fold (122 sites,
 # `.replacement = ast.refusal(...)` longhand -> ast.refuse) collapsed the
 # board's largest cross-file idiom. Net -19 clusters/-43 members vs the
@@ -42,8 +43,13 @@
 # the `| none` capture pick folds into a shared Binds.pickCaptures.
 # The +2 members are residual drift between sampled rolls — no
 # staged file is named by the census.
-clusters=1082
-members=972
+# 1083/970: the roll fired on a docs-only commit (strays landing) —
+# +1 cluster/-2 members is drift across the ~49 commits above
+# c0d3a4201, the wire-expression rework among them (interpreter.run.kz
+# names cluster members; wiretail/wireexpr are not named). The
+# unparseable roster above now includes compress and bridge.bind.
+clusters=1083
+members=970
 # 1039/915: the roll fired on the |? coverage commit ("coverage: |? no
 # longer suppresses panic arms, and refuses where no union exists") —
 # that commit touches src/ checkers, in-repo tests, and a concept frag;

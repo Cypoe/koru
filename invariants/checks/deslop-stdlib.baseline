@@ -26,8 +26,14 @@
 # interpreter.guards/pump.wait/store.bulkjoin import_decl quad —
 # part-file decl shells from the custody-witness and bulkjoin
 # landings, same decl-shell protocol category as every prior re-pin.
+# 98/161: the roll fired on a strays-landing commit (zero .kz staged).
+# +1 member is committed drift since 62d353f69 — the wire-expression
+# rework (e78c0a082) among it: interpreter.guards is named by the
+# census (clone-fix growth) and run.kz's session-env seed block twins
+# runcached's by protocol (fold candidate: one shared seed proc —
+# deferred, belongs to the deslop campaign not this commit).
 clusters=98
-members=160
+members=161
 skipped=2
 spellings=45
 # 70/111: store.keyed.kz joined io.blk-style import preamble clone w/ interpreter.select.kz (3 shared compiler-module imports, boilerplate)
