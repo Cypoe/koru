@@ -98,8 +98,15 @@
 # blocks, and the documented emitter_test/visitor_emitter_test residual.
 # This commit touches koru_std/ctx.kz and 696_CTX tests — zero src/
 # files. Census re-measured: 1911/2444.
-clusters=1911
-members=2444
+# Re-pinned 2026-10-19: roll fired on the pre_late stage commit. Own
+# contribution is makeProgramWithChain in transform_pass_runner_test —
+# a deliberate test-fixture twin of makeProgramWithNestedInvocation,
+# same class as the emitter_test residual. The remaining share is foreign
+# working-tree drift in parser.zig (uncommitted edits from a sibling
+# session — the census reads the working tree, so it counts). Census
+# re-measured: 1919/2451.
+clusters=1919
+members=2451
 # Re-pinned to 1878/2418 on the tightening-017 cherry-pick: the roll named
 # parser.zig similar-arm blocks (1277, 2962, 3479, 3804, 6727 +5) plus
 # shape_analyzer/emitter_test scaffolding — the documented consciously-

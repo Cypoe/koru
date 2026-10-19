@@ -65,7 +65,14 @@
 # commit exists to add. Clusters/members improved 1539→1535/489→487.
 # Named top offenders are foreign: ponkatris cross↔pacman level twin
 # and spec_sel↔spec_tree (the deliberate selection-adaptive twin).
-clusters=1535
-members=487
+# Re-pinned 2026-10-19: roll fired on the ctx decl-order probe commit.
+# Own contribution is the probe_ctx_order ↔ probe_ctx_order2 twin pair —
+# the probe and its no-ctx control kept side by side, same twin class as
+# the scripted/live pairs above — plus probe_ctx_store_order joining the
+# probe_ctx_* family. +3 spellings ride the component-probe vocabulary
+# (theme/accent/card props). Named top offenders are foreign, unchanged:
+# spec_click↔spec_sel_live, the bench/spec six-pack, ponkatris levels.
+clusters=1543
+members=491
 skipped=21
-spellings=696
+spellings=699
