@@ -91,8 +91,15 @@
 # roll fired on a test-results-only stage (zero src/ delta in the
 # commit); the +5/+8 over 1897/2429 is committed drift since the
 # judge-additions re-pin, none of it mine. Re-pinned to measured.
-clusters=1906
-members=2442
+# Re-pinned in "std/ctx: transitive scope via keyed clone
+# specialization": the roll fired on +5 clusters / +2 members of foreign
+# committed drift — the named offenders are parser.zig errdefer clones
+# (join commit 092264fb), the package_requires/compiler_requires twin
+# blocks, and the documented emitter_test/visitor_emitter_test residual.
+# This commit touches koru_std/ctx.kz and 696_CTX tests — zero src/
+# files. Census re-measured: 1911/2444.
+clusters=1911
+members=2444
 # Re-pinned to 1878/2418 on the tightening-017 cherry-pick: the roll named
 # parser.zig similar-arm blocks (1277, 2962, 3479, 3804, 6727 +5) plus
 # shape_analyzer/emitter_test scaffolding — the documented consciously-
