@@ -1,0 +1,296 @@
+// Koru Standard Library: the `neworder` part of store.new.kz — the preorder
+// sweep body (plain and `order:`-sifted variants) for all three hosts, plus
+// `order:` clause validation.
+// Joined via `~part neworder` in store.kz; merged into the module at load.
+
+const PSweep = struct {
+    const ast = @import("ast");
+    const H = struct {
+        const stripQuotes = @import("emitter_helpers").stripQuotes;
+    };
+
+    const Clause = struct { order: ?[]const u8, refusal: ?ast.SiteResult };
+
+    // `order: "col"` — per-site sibling ordering. Preorder-only: a rule/query
+    // sweep has no levels to order. The column must exist and be numeric;
+    // the sift reads it as `col[kid] > col[next]`. Returns the column name,
+    // or a refusal to hand straight back to the coordinator.
+    fn clause(
+        alloc: std.mem.Allocator,
+        reporter: anytype,
+        flow: *const ast.Flow,
+        store_name: []const u8,
+        q_verb: []const u8,
+        q_is_preorder: bool,
+        field_names: []const []const u8,
+        field_types: []const []const u8,
+    ) Clause {
+        var order: ?[]const u8 = null;
+        for (flow.inv().args) |a| {
+            if (std.mem.eql(u8, a.name, "order")) order = H.stripQuotes(a.value);
+        }
+        const ocol = order orelse return .{ .order = null, .refusal = null };
+        if (!q_is_preorder) {
+            return .{ .order = null, .refusal = .{ .replacement = ast.refusal(alloc, reporter, .KORU161, flow.location, flow.module, "std/store:{s}({s}): `order:` is a preorder clause - a {s} sweep has no levels to order (declare the store [tree] and walk std/store:preorder)", .{ q_verb, store_name, q_verb }) } };
+        }
+        var found = false;
+        for (field_names, 0..) |ofn, ofi| {
+            if (std.mem.eql(u8, ofn, ocol)) {
+                found = true;
+                if (!std.mem.eql(u8, field_types[ofi], "i64") and !std.mem.eql(u8, field_types[ofi], "f64")) {
+                    return .{ .order = null, .refusal = .{ .replacement = ast.refusal(alloc, reporter, .KORU161, flow.location, flow.module, "std/store:preorder({s}): `order:` column '{s}' is '{s}' - sibling ordering needs a numeric column (i64, f64)", .{ store_name, ocol, field_types[ofi] }) } };
+                }
+            }
+        }
+        if (!found) {
+            return .{ .order = null, .refusal = .{ .replacement = ast.refusal(alloc, reporter, .KORU161, flow.location, flow.module, "std/store:preorder({s}): `order:` names unknown column '{s}' - '{s}' has no such field (the ordering column is declared in the store's seed block)", .{ store_name, ocol, store_name }) } };
+        }
+        return .{ .order = ocol, .refusal = null };
+    }
+
+    // The preorder sweep body. Null `order` emits the plain walk: explicit
+    // stack, roots and children pushed dense-descending so insertion order
+    // pops first. A named order column emits the sift variant: each level's
+    // matches insert-sort ascending by it (stable; ties keep insertion
+    // order), pushed reversed so the smallest pops first.
+    fn sweepBody(
+        alloc: std.mem.Allocator,
+        host: codegen_utils_store.HostTarget,
+        store_name: []const u8,
+        emit_ns: []const u8,
+        qrow_name: []const u8,
+        cap: usize,
+        order: ?[]const u8,
+    ) []const u8 {
+        const ocol = order orelse return plainBody(alloc, host, store_name, emit_ns, qrow_name, cap);
+        return switch (host) {
+            .js => std.fmt.allocPrint(alloc,
+                \\const __koru_stack = new Array({d}).fill(0);
+                \\let __koru_sp = 0;
+                \\const __koru_kids = new Array({d}).fill(0);
+                \\let __koru_nk = 0;
+                \\for (let __koru_i = 0; __koru_i < __koru_store_{s}.len; __koru_i++) {{
+                \\  if (__koru_store_{s}.parent[__koru_i] === -1) {{
+                \\    let __koru_p = __koru_nk;
+                \\    for (let __koru_b = 0; __koru_b < __koru_nk; __koru_b++) {{
+                \\      const __koru_jj = __koru_nk - 1 - __koru_b;
+                \\      if (__koru_store_{s}.{s}[__koru_kids[__koru_jj]] <= __koru_store_{s}.{s}[__koru_i]) break;
+                \\      __koru_kids[__koru_jj + 1] = __koru_kids[__koru_jj];
+                \\      __koru_p = __koru_jj;
+                \\    }}
+                \\    __koru_kids[__koru_p] = __koru_i;
+                \\    __koru_nk += 1;
+                \\  }}
+                \\}}
+                \\for (let __koru_ki = 0; __koru_ki < __koru_nk; __koru_ki++) {{
+                \\  __koru_stack[__koru_sp] = __koru_kids[__koru_nk - 1 - __koru_ki];
+                \\  __koru_sp += 1;
+                \\}}
+                \\while (__koru_sp > 0) {{
+                \\  __koru_sp -= 1;
+                \\  const __koru_cur = __koru_stack[__koru_sp];
+                \\  {s}{s}_event.handler({{ row: __koru_cur }});
+                \\  __koru_nk = 0;
+                \\  for (let __koru_j = 0; __koru_j < __koru_store_{s}.len; __koru_j++) {{
+                \\    if (__koru_store_{s}.parent[__koru_j] === __koru_store_{s}.__koru_handle_of(__koru_cur)) {{
+                \\      let __koru_p = __koru_nk;
+                \\      for (let __koru_b = 0; __koru_b < __koru_nk; __koru_b++) {{
+                \\        const __koru_jj = __koru_nk - 1 - __koru_b;
+                \\        if (__koru_store_{s}.{s}[__koru_kids[__koru_jj]] <= __koru_store_{s}.{s}[__koru_j]) break;
+                \\        __koru_kids[__koru_jj + 1] = __koru_kids[__koru_jj];
+                \\        __koru_p = __koru_jj;
+                \\      }}
+                \\      __koru_kids[__koru_p] = __koru_j;
+                \\      __koru_nk += 1;
+                \\    }}
+                \\  }}
+                \\  for (let __koru_kj = 0; __koru_kj < __koru_nk; __koru_kj++) {{
+                \\    __koru_stack[__koru_sp] = __koru_kids[__koru_nk - 1 - __koru_kj];
+                \\    __koru_sp += 1;
+                \\  }}
+                \\}}
+                \\return;
+            , .{ cap, cap, store_name, store_name, store_name, ocol, store_name, ocol, emit_ns, qrow_name, store_name, store_name, store_name, store_name, ocol, store_name, ocol }) catch unreachable,
+            .cs => std.fmt.allocPrint(alloc,
+                \\long[] __koru_stack = new long[{d}];
+                \\long __koru_sp = 0;
+                \\long[] __koru_kids = new long[{d}];
+                \\long __koru_nk = 0;
+                \\for (long __koru_i = 0; __koru_i < __koru_store_{s}.len; __koru_i++) {{
+                \\  if (__koru_store_{s}.parent[__koru_i] == -1) {{
+                \\    long __koru_p = __koru_nk;
+                \\    for (long __koru_b = 0; __koru_b < __koru_nk; __koru_b++) {{
+                \\      long __koru_jj = __koru_nk - 1 - __koru_b;
+                \\      if (__koru_store_{s}.{s}[__koru_kids[__koru_jj]] <= __koru_store_{s}.{s}[__koru_i]) break;
+                \\      __koru_kids[__koru_jj + 1] = __koru_kids[__koru_jj];
+                \\      __koru_p = __koru_jj;
+                \\    }}
+                \\    __koru_kids[__koru_p] = __koru_i;
+                \\    __koru_nk += 1;
+                \\  }}
+                \\}}
+                \\for (long __koru_ki = 0; __koru_ki < __koru_nk; __koru_ki++) {{
+                \\  __koru_stack[__koru_sp] = __koru_kids[__koru_nk - 1 - __koru_ki];
+                \\  __koru_sp += 1;
+                \\}}
+                \\while (__koru_sp > 0) {{
+                \\  __koru_sp -= 1;
+                \\  long __koru_cur = __koru_stack[__koru_sp];
+                \\  {s}{s}_event.handler(new {s}{s}_event.Input {{ row = __koru_cur }});
+                \\  __koru_nk = 0;
+                \\  for (long __koru_j = 0; __koru_j < __koru_store_{s}.len; __koru_j++) {{
+                \\    if (__koru_store_{s}.parent[__koru_j] == __koru_store_{s}.__koru_handle_of(__koru_cur)) {{
+                \\      long __koru_p = __koru_nk;
+                \\      for (long __koru_b = 0; __koru_b < __koru_nk; __koru_b++) {{
+                \\        long __koru_jj = __koru_nk - 1 - __koru_b;
+                \\        if (__koru_store_{s}.{s}[__koru_kids[__koru_jj]] <= __koru_store_{s}.{s}[__koru_j]) break;
+                \\        __koru_kids[__koru_jj + 1] = __koru_kids[__koru_jj];
+                \\        __koru_p = __koru_jj;
+                \\      }}
+                \\      __koru_kids[__koru_p] = __koru_j;
+                \\      __koru_nk += 1;
+                \\    }}
+                \\  }}
+                \\  for (long __koru_kj = 0; __koru_kj < __koru_nk; __koru_kj++) {{
+                \\    __koru_stack[__koru_sp] = __koru_kids[__koru_nk - 1 - __koru_kj];
+                \\    __koru_sp += 1;
+                \\  }}
+                \\}}
+            , .{ cap, cap, store_name, store_name, store_name, ocol, store_name, ocol, emit_ns, qrow_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name, ocol, store_name, ocol }) catch unreachable,
+            else => std.fmt.allocPrint(alloc,
+                \\var __koru_stack: [{d}]usize = undefined;
+                \\var __koru_sp: usize = 0;
+                \\var __koru_kids: [{d}]usize = undefined;
+                \\var __koru_nk: usize = 0;
+                \\for (0..__koru_store_{s}.len) |__koru_i| {{
+                \\    if (__koru_store_{s}.parent[__koru_i] == -1) {{
+                \\        var __koru_p = __koru_nk;
+                \\        for (0..__koru_nk) |__koru_b| {{
+                \\            const __koru_jj = __koru_nk - 1 - __koru_b;
+                \\            if (__koru_store_{s}.{s}[__koru_kids[__koru_jj]] <= __koru_store_{s}.{s}[__koru_i]) break;
+                \\            __koru_kids[__koru_jj + 1] = __koru_kids[__koru_jj];
+                \\            __koru_p = __koru_jj;
+                \\        }}
+                \\        __koru_kids[__koru_p] = __koru_i;
+                \\        __koru_nk += 1;
+                \\    }}
+                \\}}
+                \\for (0..__koru_nk) |__koru_ki| {{
+                \\    __koru_stack[__koru_sp] = __koru_kids[__koru_nk - 1 - __koru_ki];
+                \\    __koru_sp += 1;
+                \\}}
+                \\while (__koru_sp > 0) {{
+                \\    __koru_sp -= 1;
+                \\    const __koru_cur = __koru_stack[__koru_sp];
+                \\    {s}{s}_event.handler(.{{ .row = __koru_cur }});
+                \\    __koru_nk = 0;
+                \\    for (0..__koru_store_{s}.len) |__koru_j| {{
+                \\        if (__koru_store_{s}.parent[__koru_j] == __koru_store_{s}.__koru_handle_of(__koru_cur)) {{
+                \\            var __koru_p = __koru_nk;
+                \\            for (0..__koru_nk) |__koru_b| {{
+                \\                const __koru_jj = __koru_nk - 1 - __koru_b;
+                \\                if (__koru_store_{s}.{s}[__koru_kids[__koru_jj]] <= __koru_store_{s}.{s}[__koru_j]) break;
+                \\                __koru_kids[__koru_jj + 1] = __koru_kids[__koru_jj];
+                \\                __koru_p = __koru_jj;
+                \\            }}
+                \\            __koru_kids[__koru_p] = __koru_j;
+                \\            __koru_nk += 1;
+                \\        }}
+                \\    }}
+                \\    for (0..__koru_nk) |__koru_kj| {{
+                \\        __koru_stack[__koru_sp] = __koru_kids[__koru_nk - 1 - __koru_kj];
+                \\        __koru_sp += 1;
+                \\    }}
+                \\}}
+                \\return;
+            , .{ cap, cap, store_name, store_name, store_name, ocol, store_name, ocol, emit_ns, qrow_name, store_name, store_name, store_name, store_name, ocol, store_name, ocol }) catch unreachable,
+        };
+    }
+
+    // The plain walk — insertion order everywhere. Explicit stack, pushed in
+    // reverse so the lowest index pops first; every row is pushed at most
+    // once (as a root, or by its unique parent), so CAP bounds the stack.
+    // The naive O(n^2) child scan is the correctness rung.
+    fn plainBody(
+        alloc: std.mem.Allocator,
+        host: codegen_utils_store.HostTarget,
+        store_name: []const u8,
+        emit_ns: []const u8,
+        qrow_name: []const u8,
+        cap: usize,
+    ) []const u8 {
+        return switch (host) {
+            .js => std.fmt.allocPrint(alloc,
+                \\const __koru_stack = new Array({d}).fill(0);
+                \\let __koru_sp = 0;
+                \\for (let __koru_ri = 0; __koru_ri < __koru_store_{s}.len; __koru_ri++) {{
+                \\  const __koru_i = __koru_store_{s}.len - 1 - __koru_ri;
+                \\  if (__koru_store_{s}.parent[__koru_i] === -1) {{
+                \\    __koru_stack[__koru_sp] = __koru_i;
+                \\    __koru_sp += 1;
+                \\  }}
+                \\}}
+                \\while (__koru_sp > 0) {{
+                \\  __koru_sp -= 1;
+                \\  const __koru_cur = __koru_stack[__koru_sp];
+                \\  {s}{s}_event.handler({{ row: __koru_cur }});
+                \\  for (let __koru_rj = 0; __koru_rj < __koru_store_{s}.len; __koru_rj++) {{
+                \\    const __koru_j = __koru_store_{s}.len - 1 - __koru_rj;
+                \\    if (__koru_store_{s}.parent[__koru_j] === __koru_store_{s}.__koru_handle_of(__koru_cur)) {{
+                \\      __koru_stack[__koru_sp] = __koru_j;
+                \\      __koru_sp += 1;
+                \\    }}
+                \\  }}
+                \\}}
+                \\return;
+            , .{ cap, store_name, store_name, store_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable,
+            .cs => std.fmt.allocPrint(alloc,
+                \\long[] __koru_stack = new long[{d}];
+                \\long __koru_sp = 0;
+                \\for (long __koru_ri = 0; __koru_ri < __koru_store_{s}.len; __koru_ri++) {{
+                \\  long __koru_i = __koru_store_{s}.len - 1 - __koru_ri;
+                \\  if (__koru_store_{s}.parent[__koru_i] == -1) {{
+                \\    __koru_stack[__koru_sp] = __koru_i;
+                \\    __koru_sp += 1;
+                \\  }}
+                \\}}
+                \\while (__koru_sp > 0) {{
+                \\  __koru_sp -= 1;
+                \\  long __koru_cur = __koru_stack[__koru_sp];
+                \\  {s}{s}_event.handler(new {s}{s}_event.Input {{ row = __koru_cur }});
+                \\  for (long __koru_rj = 0; __koru_rj < __koru_store_{s}.len; __koru_rj++) {{
+                \\    long __koru_j = __koru_store_{s}.len - 1 - __koru_rj;
+                \\    if (__koru_store_{s}.parent[__koru_j] == __koru_store_{s}.__koru_handle_of(__koru_cur)) {{
+                \\      __koru_stack[__koru_sp] = __koru_j;
+                \\      __koru_sp += 1;
+                \\    }}
+                \\  }}
+                \\}}
+            , .{ cap, store_name, store_name, store_name, emit_ns, qrow_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable,
+            else => std.fmt.allocPrint(alloc,
+                \\var __koru_stack: [{d}]usize = undefined;
+                \\var __koru_sp: usize = 0;
+                \\for (0..__koru_store_{s}.len) |__koru_ri| {{
+                \\    const __koru_i = __koru_store_{s}.len - 1 - __koru_ri;
+                \\    if (__koru_store_{s}.parent[__koru_i] == -1) {{
+                \\        __koru_stack[__koru_sp] = __koru_i;
+                \\        __koru_sp += 1;
+                \\    }}
+                \\}}
+                \\while (__koru_sp > 0) {{
+                \\    __koru_sp -= 1;
+                \\    const __koru_cur = __koru_stack[__koru_sp];
+                \\    {s}{s}_event.handler(.{{ .row = __koru_cur }});
+                \\    for (0..__koru_store_{s}.len) |__koru_rj| {{
+                \\        const __koru_j = __koru_store_{s}.len - 1 - __koru_rj;
+                \\        if (__koru_store_{s}.parent[__koru_j] == __koru_store_{s}.__koru_handle_of(__koru_cur)) {{
+                \\            __koru_stack[__koru_sp] = __koru_j;
+                \\            __koru_sp += 1;
+                \\        }}
+                \\    }}
+                \\}}
+                \\return;
+            , .{ cap, store_name, store_name, store_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable,
+        };
+    }
+};

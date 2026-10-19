@@ -1517,6 +1517,9 @@
             /// handle is exactly as meaningful here as on a sweep while
             /// `[ordinal]` is meaningless and refused by name.
             req_id: ?[]const u8 = null,
+            /// `order: "col"` — a preorder site's sift column (the `neworder`
+            /// part validates + emits it). Null = insertion-order walk.
+            order: ?[]const u8 = null,
         };
         const program_items = flatItems(allocator, program.items);
         var qsites = std.ArrayList(QuerySite).initCapacity(allocator, 4) catch unreachable;
@@ -1538,6 +1541,11 @@
             if (q_is_preorder and !is_tree) {
                 return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, qf.location, qf.module, "std/store:preorder({s}): preorder needs a [tree] store - '{s}' has no synthesized parent column (declare it as [tree]std/store:new({s}) {{ ... }})", .{ store_name, store_name, store_name }) } };
             }
+            // `order: "col"` — per-site sibling ordering (the `neworder` part
+            // validates the clause and emits the ordered sweep).
+            const ocl = PSweep.clause(allocator, reporter, qf, store_name, q_verb, q_is_preorder, field_names, field_types);
+            if (ocl.refusal) |r| return .{ .transformed = r };
+            const q_order = ocl.order;
             const qc = TapPeel.findArm(qf.body.continuations, q_arm) orelse {
                 return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, qf.location, qf.module, "std/store:{s}({s}): exactly one `! {s} {{ ... }}` branch per site this rung", .{ q_verb, store_name, q_arm }) } };
             };
@@ -1653,6 +1661,7 @@
                 .may_remove = q_may_remove,
                 .drain = q_drain,
                 .req_id = if (q_req_id) |idn| allocator.dupe(u8, std.mem.trim(u8, idn, " ")) catch unreachable else null,
+                .order = if (q_order) |o| allocator.dupe(u8, o) catch unreachable else null,
             }) catch unreachable;
         }
         // The proc-local lists reduce to two bools here; the decision itself
@@ -3977,37 +3986,9 @@
             // normally, so non-mutating queries are byte-identical (690_031).
             //
             // A PREORDER site sweeps the forest in DFS pre-order instead
-            // (695_STORE_TREE TT5): roots (parent == -1) in ascending
-            // insertion order, each node emitted before its children,
-            // children in ascending insertion order. Explicit stack, pushed
-            // in reverse so the lowest index pops first; every row is pushed
-            // at most once (as a root, or by its unique parent), so CAP
-            // bounds the stack. The naive O(n^2) child scan is the
-            // correctness rung.
-            const sweep_body = if (host_is_js) (if (qs.is_preorder) std.fmt.allocPrint(allocator,
-                \\const __koru_stack = new Array({d}).fill(0);
-                \\let __koru_sp = 0;
-                \\for (let __koru_ri = 0; __koru_ri < __koru_store_{s}.len; __koru_ri++) {{
-                \\  const __koru_i = __koru_store_{s}.len - 1 - __koru_ri;
-                \\  if (__koru_store_{s}.parent[__koru_i] === -1) {{
-                \\    __koru_stack[__koru_sp] = __koru_i;
-                \\    __koru_sp += 1;
-                \\  }}
-                \\}}
-                \\while (__koru_sp > 0) {{
-                \\  __koru_sp -= 1;
-                \\  const __koru_cur = __koru_stack[__koru_sp];
-                \\  {s}{s}_event.handler({{ row: __koru_cur }});
-                \\  for (let __koru_rj = 0; __koru_rj < __koru_store_{s}.len; __koru_rj++) {{
-                \\    const __koru_j = __koru_store_{s}.len - 1 - __koru_rj;
-                \\    if (__koru_store_{s}.parent[__koru_j] === __koru_store_{s}.__koru_handle_of(__koru_cur)) {{
-                \\      __koru_stack[__koru_sp] = __koru_j;
-                \\      __koru_sp += 1;
-                \\    }}
-                \\  }}
-                \\}}
-                \\return;
-            , .{ CAP, store_name, store_name, store_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable else if (qs.drain) drainScanSweepBody(allocator, host_target, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
+            // (695_STORE_TREE TT5) — the stack walk, plain and `order:`-
+            // sifted, is the `neworder` part's emission (PSweep.sweepBody).
+            const sweep_body = if (host_is_js) (if (qs.is_preorder) PSweep.sweepBody(allocator, host_target, store_name, emit_ns, qrow_name, CAP, qs.order) else if (qs.drain) drainScanSweepBody(allocator, host_target, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
                 \\let __koru_i = 0;
                 \\while (__koru_i < __koru_store_{s}.len) {{
                 \\  const __koru_len_before = __koru_store_{s}.len;
@@ -4020,29 +4001,7 @@
                 \\  {s}{s}_event.handler({{ row: __koru_i }});
                 \\}}
                 \\return;
-            , .{ store_name, emit_ns, qrow_name }) catch unreachable) else if (host_is_cs) (if (qs.is_preorder) std.fmt.allocPrint(allocator,
-                \\long[] __koru_stack = new long[{d}];
-                \\long __koru_sp = 0;
-                \\for (long __koru_ri = 0; __koru_ri < __koru_store_{s}.len; __koru_ri++) {{
-                \\  long __koru_i = __koru_store_{s}.len - 1 - __koru_ri;
-                \\  if (__koru_store_{s}.parent[__koru_i] == -1) {{
-                \\    __koru_stack[__koru_sp] = __koru_i;
-                \\    __koru_sp += 1;
-                \\  }}
-                \\}}
-                \\while (__koru_sp > 0) {{
-                \\  __koru_sp -= 1;
-                \\  long __koru_cur = __koru_stack[__koru_sp];
-                \\  {s}{s}_event.handler(new {s}{s}_event.Input {{ row = __koru_cur }});
-                \\  for (long __koru_rj = 0; __koru_rj < __koru_store_{s}.len; __koru_rj++) {{
-                \\    long __koru_j = __koru_store_{s}.len - 1 - __koru_rj;
-                \\    if (__koru_store_{s}.parent[__koru_j] == __koru_store_{s}.__koru_handle_of(__koru_cur)) {{
-                \\      __koru_stack[__koru_sp] = __koru_j;
-                \\      __koru_sp += 1;
-                \\    }}
-                \\  }}
-                \\}}
-            , .{ CAP, store_name, store_name, store_name, emit_ns, qrow_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable else if (qs.drain) drainScanSweepBody(allocator, host_target, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
+            , .{ store_name, emit_ns, qrow_name }) catch unreachable) else if (host_is_cs) (if (qs.is_preorder) PSweep.sweepBody(allocator, host_target, store_name, emit_ns, qrow_name, CAP, qs.order) else if (qs.drain) drainScanSweepBody(allocator, host_target, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
                 \\long __koru_i = 0;
                 \\while (__koru_i < __koru_store_{s}.len) {{
                 \\  long __koru_len_before = __koru_store_{s}.len;
@@ -4057,30 +4016,7 @@
                 \\for (long __koru_i = 0; __koru_i < __koru_store_{s}.len; __koru_i++) {{
                 \\  {s}{s}_event.handler(new {s}{s}_event.Input {{ row = __koru_i }});
                 \\}}
-            , .{ store_name, emit_ns, qrow_name, emit_ns, qrow_name }) catch unreachable) else if (qs.is_preorder) std.fmt.allocPrint(allocator,
-                \\var __koru_stack: [{d}]usize = undefined;
-                \\var __koru_sp: usize = 0;
-                \\for (0..__koru_store_{s}.len) |__koru_ri| {{
-                \\    const __koru_i = __koru_store_{s}.len - 1 - __koru_ri;
-                \\    if (__koru_store_{s}.parent[__koru_i] == -1) {{
-                \\        __koru_stack[__koru_sp] = __koru_i;
-                \\        __koru_sp += 1;
-                \\    }}
-                \\}}
-                \\while (__koru_sp > 0) {{
-                \\    __koru_sp -= 1;
-                \\    const __koru_cur = __koru_stack[__koru_sp];
-                \\    {s}{s}_event.handler(.{{ .row = __koru_cur }});
-                \\    for (0..__koru_store_{s}.len) |__koru_rj| {{
-                \\        const __koru_j = __koru_store_{s}.len - 1 - __koru_rj;
-                \\        if (__koru_store_{s}.parent[__koru_j] == __koru_store_{s}.__koru_handle_of(__koru_cur)) {{
-                \\            __koru_stack[__koru_sp] = __koru_j;
-                \\            __koru_sp += 1;
-                \\        }}
-                \\    }}
-                \\}}
-                \\return;
-            , .{ CAP, store_name, store_name, store_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable else if (qs.drain) drainScanSweepBody(allocator, host_target, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
+            , .{ store_name, emit_ns, qrow_name, emit_ns, qrow_name }) catch unreachable) else if (qs.is_preorder) PSweep.sweepBody(allocator, host_target, store_name, emit_ns, qrow_name, CAP, qs.order) else if (qs.drain) drainScanSweepBody(allocator, host_target, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
                 \\var __koru_i: usize = 0;
                 \\while (__koru_i < __koru_store_{s}.len) {{
                 \\    const __koru_len_before = __koru_store_{s}.len;

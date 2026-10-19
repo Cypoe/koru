@@ -671,6 +671,7 @@ fn storeRefsText(alloc: std.mem.Allocator, text: []const u8, name: []const u8, p
     return out.toOwnedSlice(alloc) catch unreachable;
 }
 ~part new
+~part neworder
 ~part emitnames
 ~part hstruct
 ~part view

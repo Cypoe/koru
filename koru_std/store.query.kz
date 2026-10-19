@@ -55,6 +55,12 @@
     if (store_name.len == 0) {
         return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query requires a store name: query(name)", .{}) };
     }
+    // `order:` is a preorder clause — a flat sweep has no levels to order.
+    for (invocation.args) |arg| {
+        if (std.mem.eql(u8, arg.name, "order")) {
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:query({s}): `order:` is a preorder clause - a query sweep has no levels to order (declare the store [tree] and walk std/store:preorder)", .{store_name}) };
+        }
+    }
 
     // The generated units live in the STORE's home namespace, which is the
     // import-derived `app.lib` — not this flow's file-derived `lib`. They
