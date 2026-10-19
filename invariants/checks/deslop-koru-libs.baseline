@@ -53,7 +53,13 @@
 # intentional API surface already ruled — input.up/move/drag/scroll,
 # el.clip, window.snap, text.descent. Remaining growth is foreign
 # drift — ponkatris level pairs and the asteroids main twin.
+# Re-pinned 2026-10-19: roll fired on a membrane evolve commit (zero
+# code). The +6 members sit in today's gallery_comp growth — the
+# args:get arm pair and the named-preset driver gates twin the
+# scripted/live driver family already named above. +2 spellings ride
+# the same args:get/preset surface (the call sites are unique to
+# gallery_comp). Clusters at pin.
 clusters=1539
-members=483
+members=489
 skipped=21
-spellings=690
+spellings=692
