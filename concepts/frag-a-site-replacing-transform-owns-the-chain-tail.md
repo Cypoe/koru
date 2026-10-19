@@ -17,11 +17,12 @@ A replacement that returns an empty continuation silently discards the rest
 of the author's program — the worst possible failure shape, because it
 compiles clean and simply never runs.
 
-`preorder` does exactly this today (695_008, red): its `rootSite` carries no
-continuations, so a `preorder` mid-chain eats everything after its arm. The
-contract the fix should honor is the query one — the same site shape, the
-same splice. `rule` shares the empty-continuation replacement; whether its
-sites can legally carry a tail is the same question.
+`preorder` violated this until 695_008 landed the fix: its `rootSite`
+carried an empty continuation and ate the tail; it now splits the site's
+continuations — named `preorder` arm claimed, branchless tail re-rooted —
+the same splice `query` makes. `rule` still carries the empty-continuation
+replacement; whether its sites can legally carry a tail is the same
+question, now open on `rule`.
 
 ## Family
 
@@ -33,4 +34,4 @@ transform that never looked at the sequel at all.
 
 ## Pin
 
-Regression 695_008 `preorder_drops_chain_tail`.
+Regression 695_008 `preorder_keeps_chain_tail`.

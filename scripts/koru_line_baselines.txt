@@ -240,6 +240,7 @@ koru_std/store.lowertext.kz	59
 koru_std/store.new.kz	6226
 koru_std/store.plan.kz	236
 koru_std/store.preorder.kz	103
+koru_std/store.preordertail.kz	54
 koru_std/store.prewrite.kz	445
 koru_std/store.pverbs.kz	713
 koru_std/store.qbinds.kz	275

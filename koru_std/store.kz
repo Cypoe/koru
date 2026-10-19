@@ -681,6 +681,7 @@ fn storeRefsText(alloc: std.mem.Allocator, text: []const u8, name: []const u8, p
 ~part rule
 ~part query
 ~part preorder
+~part preordertail
 ~part take
 ~part clear
 ~part stripe
