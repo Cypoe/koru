@@ -59,7 +59,13 @@
 # scripted/live driver family already named above. +2 spellings ride
 # the same args:get/preset surface (the call sites are unique to
 # gallery_comp). Clusters at pin.
-clusters=1539
-members=489
+# Re-pinned 2026-10-19: roll fired on the ctx-package extraction.
+# Own contribution is spellings 692→696 — the new libs/ctx package
+# surface (`default` tor + `ctxprobe` probe tor), the vocabulary the
+# commit exists to add. Clusters/members improved 1539→1535/489→487.
+# Named top offenders are foreign: ponkatris cross↔pacman level twin
+# and spec_sel↔spec_tree (the deliberate selection-adaptive twin).
+clusters=1535
+members=487
 skipped=21
-spellings=692
+spellings=696
