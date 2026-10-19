@@ -43,7 +43,17 @@
 # as winnow's tors above). Remaining growth is foreign drift —
 # repro_else_orphan ↔ spec_sel_live joined at #2, ponkatris level pairs
 # and the clay bench/spec twin family still dominate.
-clusters=1184
-members=427
+# Re-pinned 2026-10-19: sampled roll fired on the component-twin commit.
+# Own contribution is gallery.k ↔ gallery_live.k ↔ gallery_comp.k —
+# the scripted/live/component twins kept side by side (one pins the
+# deterministic event-replay snap, one is the manual surface, one is
+# the spec-store expansion prototype), same structural twin class as
+# the spec_sel pair above. The spec_click ↔ spec_sel_live pair at #1
+# rides the same scripted/live contract. Spellings 674→690: new
+# intentional API surface already ruled — input.up/move/drag/scroll,
+# el.clip, window.snap, text.descent. Remaining growth is foreign
+# drift — ponkatris level pairs and the asteroids main twin.
+clusters=1539
+members=483
 skipped=21
-spellings=674
+spellings=690
