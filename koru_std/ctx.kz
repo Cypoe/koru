@@ -235,10 +235,15 @@ const std = @import("std");
                     const cols = self.scopeFields(stack[si].store);
                     for (cols) |cn| {
                         if (std.mem.eql(u8, cn, f.name)) {
+                            const value = std.fmt.allocPrint(self.a, "{s}.{s}", .{ stack[si].expr, f.name }) catch unreachable;
                             adds.append(self.a, .{
                                 .name = self.a.dupe(u8, f.name) catch unreachable,
-                                .value = std.fmt.allocPrint(self.a, "{s}.{s}", .{ stack[si].expr, f.name }) catch unreachable,
-                                .had_explicit_label = true,
+                                .value = value,
+                                // Forced punning: `a: outer.a` is PARSE005-
+                                // redundant — `outer.a` already puns to `a`.
+                                // `theme[r].fs` can't pun (brackets) and keeps
+                                // its label.
+                                .had_explicit_label = !punsTo(value, f.name),
                             }) catch unreachable;
                             found = true;
                             break;
@@ -253,6 +258,29 @@ const std = @import("std");
             for (adds.items, 0..) |add, i| nargs[inv.args.len + i] = add;
             ninv.args = nargs;
             return ninv;
+        }
+
+        // Mirrors lexer.punnableName (not importable from transform code —
+        // the backend gets `ast`/`errors` modules only): a value puns to
+        // `name` when it is a pure dotted-identifier path whose last
+        // segment equals the name. Brackets, operators, parens, quotes,
+        // `..`, leading/trailing dots, and leading digits all disqualify.
+        fn punsTo(value: []const u8, name: []const u8) bool {
+            if (value.len == 0) return false;
+            for (value) |c| {
+                switch (c) {
+                    'a'...'z', 'A'...'Z', '0'...'9', '_', '.' => {},
+                    else => return false,
+                }
+            }
+            if (std.mem.indexOf(u8, value, "..") != null) return false;
+            if (value[0] == '.' or value[value.len - 1] == '.') return false;
+            if (value[0] >= '0' and value[0] <= '9') return false;
+            const seg = if (std.mem.lastIndexOfScalar(u8, value, '.')) |d|
+                value[d + 1 ..]
+            else
+                value;
+            return std.mem.eql(u8, seg, name);
         }
 
         fn isCtxCont(ct: *const ast.Continuation) bool {

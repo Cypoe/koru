@@ -36,7 +36,7 @@ Two settled semantics worth repeating because they cost nothing at run
 time: scope fields come from `std/store:new` schemas — a scope value that
 names no store provides nothing and never guesses host-type fields; and
 the emitted clone body contains ordinary injected args
-(`ctxprobe(a: inner.a, ...)`) — there is no runtime resolver.
+(`ctxprobe(inner.a, ...)`) — there is no runtime resolver.
 
 The koru-libs ancestor fragment `frag-ctx-is-a-scope-stack-resolved-once`
 documented the call-site-only rung; this belief extends it across the
