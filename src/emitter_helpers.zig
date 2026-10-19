@@ -2362,7 +2362,11 @@ pub fn emitSubflowContinuations(
     // lookups on this path (400_198).
     program_items: []const ast.Item,
 ) !void {
-    try emitSubflowContinuationsWithDepth(emitter, continuations, start_idx, indent, all_items, program_items, 0, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, null, self_loop_canonical, head_binding, null);
+    const refs_alloc = emitter.allocator orelse std.heap.page_allocator;
+    var subtree_refs: SubtreeRefSets = .empty;
+    defer freeSubtreeRefSets(refs_alloc, &subtree_refs);
+    try buildSubtreeRefSets(refs_alloc, continuations, &subtree_refs);
+    try emitSubflowContinuationsWithDepth(emitter, continuations, start_idx, indent, all_items, program_items, 0, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, null, self_loop_canonical, head_binding, null, &subtree_refs);
 }
 
 /// Same as emitSubflowContinuations, but names the ROOT result const the
@@ -2390,7 +2394,11 @@ pub fn emitSubflowContinuationsRooted(
 ) !void {
     // The root result name doubles as the head binding for scope collection
     // — both name the same caller-emitted const.
-    try emitSubflowContinuationsWithDepth(emitter, continuations, start_idx, indent, all_items, program_items, 0, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, root_result_name, self_loop_canonical, null, null);
+    const refs_alloc = emitter.allocator orelse std.heap.page_allocator;
+    var subtree_refs: SubtreeRefSets = .empty;
+    defer freeSubtreeRefSets(refs_alloc, &subtree_refs);
+    try buildSubtreeRefSets(refs_alloc, continuations, &subtree_refs);
+    try emitSubflowContinuationsWithDepth(emitter, continuations, start_idx, indent, all_items, program_items, 0, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, root_result_name, self_loop_canonical, null, null, &subtree_refs);
 }
 
 /// Helper to check if any continuation in a list has a label
@@ -2540,19 +2548,141 @@ fn stepReferencesBinding(step: ast.Node, binding_name: []const u8) bool {
     return false;
 }
 
-/// Helper to check if a binding variable is used in nested continuations
-/// This is CRITICAL for deeply nested subflows where outer bindings must stay in scope
-fn bindingIsUsedInContinuations(binding_name: []const u8, continuations: []const ast.Continuation) bool {
-    for (continuations) |cont| {
-        // Check the step
+/// For every continuation node, the set of names referenced anywhere in its
+/// subtree. This used to be answered by rescanning the whole subtree per
+/// (binding, continuation-group) pair — and emitSubflowContinuationsWithDepth
+/// asks it once per group at every nesting level, so each nested arm's
+/// values were re-tokenized once per ancestor group. On a preorder arm over
+/// a deep spec tree that compounds to minutes. Building the sets bottom-up
+/// once per emitSubflowContinuations entry makes every needs_binding check a
+/// lookup: O(subtree) once, not O(groups x subtree).
+const SubtreeRefSets = std.AutoHashMapUnmanaged(*const ast.Continuation, *std.StringHashMap(void));
+
+/// Enumerate whole identifiers in `value` outside string literals (the
+/// containsIdentifier gate), filter each through valueReferencesBinding so
+/// the accepted set is byte-identical to per-name probing, and union the
+/// survivors into `set`.
+fn collectValueNameRefs(
+    allocator: std.mem.Allocator,
+    value: []const u8,
+    set: *std.StringHashMap(void),
+) !void {
+    var seen: std.StringHashMap(void) = .init(allocator);
+    defer seen.deinit();
+    var idx: usize = 0;
+    while (idx < value.len) {
+        // Skip string literal contents, same as containsIdentifier.
+        if (value[idx] == '"') {
+            idx += 1;
+            while (idx < value.len) {
+                if (value[idx] == '\\') {
+                    idx += 2;
+                } else if (value[idx] == '"') {
+                    idx += 1;
+                    break;
+                } else {
+                    idx += 1;
+                }
+            }
+            continue;
+        }
+        if (isIdentifierChar(value[idx]) and (idx == 0 or !isIdentifierChar(value[idx - 1]))) {
+            const start = idx;
+            while (idx < value.len and isIdentifierChar(value[idx])) idx += 1;
+            const tok = value[start..idx];
+            if (!seen.contains(tok)) {
+                try seen.put(tok, {});
+                if (valueReferencesBinding(value, tok)) {
+                    try set.put(tok, {});
+                }
+            }
+        } else {
+            idx += 1;
+        }
+    }
+}
+
+/// The set-collecting twin of stepReferencesBinding: same node kinds, same
+/// value fields.
+fn collectStepNameRefs(
+    allocator: std.mem.Allocator,
+    step: ast.Node,
+    set: *std.StringHashMap(void),
+) !void {
+    switch (step) {
+        .invocation => |inv| {
+            for (inv.args) |arg| {
+                try collectValueNameRefs(allocator, arg.value, set);
+            }
+            if (inv.inline_body) |ib| {
+                try collectValueNameRefs(allocator, ib, set);
+            }
+        },
+        .label_with_invocation => |lwi| {
+            for (lwi.invocation.args) |arg| {
+                try collectValueNameRefs(allocator, arg.value, set);
+            }
+        },
+        .branch_constructor => |bc| {
+            if (bc.plain_value) |pv| {
+                try collectValueNameRefs(allocator, pv, set);
+            }
+            for (bc.fields) |field| {
+                try collectValueNameRefs(allocator, if (field.expression_str) |expr| expr else field.type, set);
+            }
+        },
+        .assignment => |asgn| {
+            for (asgn.fields) |field| {
+                if (field.expression_str) |expr| {
+                    try collectValueNameRefs(allocator, expr, set);
+                }
+            }
+        },
+        else => {},
+    }
+}
+
+/// Post-order pass: set(cont) = step's own refs + union of children's sets.
+/// Every descendant of `conts` ends up mapped, so queries inside nested
+/// emitSubflowContinuationsWithDepth recursion stay O(#siblings).
+fn buildSubtreeRefSets(
+    allocator: std.mem.Allocator,
+    conts: []const ast.Continuation,
+    map: *SubtreeRefSets,
+) !void {
+    for (conts) |*cont| {
+        if (map.contains(cont)) continue;
+        try buildSubtreeRefSets(allocator, cont.continuations, map);
+        const set = try allocator.create(std.StringHashMap(void));
+        set.* = std.StringHashMap(void).init(allocator);
         if (cont.node) |step| {
-            if (stepReferencesBinding(step, binding_name)) {
-                return true;
+            try collectStepNameRefs(allocator, step, set);
+        }
+        for (cont.continuations) |*child| {
+            if (map.get(child)) |child_set| {
+                var kit = child_set.keyIterator();
+                while (kit.next()) |k| try set.put(k.*, {});
             }
         }
-        // Recursively check nested continuations
-        if (bindingIsUsedInContinuations(binding_name, cont.continuations)) {
-            return true;
+        try map.put(allocator, cont, set);
+    }
+}
+
+fn freeSubtreeRefSets(allocator: std.mem.Allocator, map: *SubtreeRefSets) void {
+    var vit = map.valueIterator();
+    while (vit.next()) |set_ptr| {
+        set_ptr.*.deinit();
+        allocator.destroy(set_ptr.*);
+    }
+    map.deinit(allocator);
+}
+
+/// bindingIsUsedInContinuations against the precomputed sets — same answer,
+/// no rescan.
+fn subtreeReferencesName(ref_sets: *const SubtreeRefSets, conts: []const ast.Continuation, name: []const u8) bool {
+    for (conts) |*cont| {
+        if (ref_sets.get(cont)) |set| {
+            if (set.contains(name)) return true;
         }
     }
     return false;
@@ -3061,6 +3191,10 @@ fn emitSubflowContinuationsWithDepth(
     // path keeps no EmissionContext, so the in-scope set escapeBoundNames
     // needs is collected from the AST instead of read off ctx.
     ancestor_bindings: ?*const std.ArrayList([]const u8),
+    // Per-node referenced-name sets covering this chain's whole subtree —
+    // built once at the emitSubflowContinuations entry, so needs_binding
+    // checks are lookups instead of subtree rescans.
+    subtree_refs: *const SubtreeRefSets,
 ) !void {
     if (start_idx >= continuations.len) return;
 
@@ -3388,6 +3522,7 @@ fn emitSubflowContinuationsWithDepth(
                 self_loop_canonical,
                 null,
                 &local_bindings,
+                subtree_refs,
             );
         }
         return;
@@ -3543,7 +3678,7 @@ fn emitSubflowContinuationsWithDepth(
                 }
                 // Also check nested continuations for binding usage
                 if (!needs_binding) {
-                    needs_binding = bindingIsUsedInContinuations(binding_name, cont.continuations);
+                    needs_binding = subtreeReferencesName(subtree_refs, cont.continuations, binding_name);
                 }
 
                 // Check if branch has payload fields - empty payloads shouldn't be captured
@@ -3595,7 +3730,7 @@ fn emitSubflowContinuationsWithDepth(
                     }
                     // Also check nested continuations
                     if (!needs_binding) {
-                        needs_binding = bindingIsUsedInContinuations(binding_name, cont.continuations);
+                        needs_binding = subtreeReferencesName(subtree_refs, cont.continuations, binding_name);
                     }
                     if (needs_binding) break;
                 }
@@ -3767,7 +3902,7 @@ fn emitSubflowContinuationsWithDepth(
             // Example: | created s |> ... nested ... |> assemble(sun: s.sun, ...)
             //          The binding 's' is used deep in nested continuations!
             if (!needs_binding and cont.continuations.len > 0) {
-                needs_binding = bindingIsUsedInContinuations(actual_binding, cont.continuations);
+                needs_binding = subtreeReferencesName(subtree_refs, cont.continuations, actual_binding);
             }
 
             // Check if branch has payload fields - empty payloads shouldn't be captured
@@ -4073,7 +4208,7 @@ fn emitSubflowContinuationsWithDepth(
                             if (cont.continuations.len > 0) {
                                 var deeper_indent_buf: [128]u8 = undefined;
                                 const deeper_indent = indentDeeper(&deeper_indent_buf, indent, "            ");
-                                try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, program_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical, null, &local_bindings);
+                                try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, program_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical, null, &local_bindings, subtree_refs);
                             }
 
                             try emitter.write(indent);
@@ -4121,7 +4256,7 @@ fn emitSubflowContinuationsWithDepth(
                 if (cont.continuations.len > 0 and !is_metatype_binding) {
                     var deeper_indent_buf: [128]u8 = undefined;
                     const deeper_indent = indentDeeper(&deeper_indent_buf, indent, "        ");
-                    try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, program_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical, null, &local_bindings);
+                    try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, program_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical, null, &local_bindings, subtree_refs);
                 }
                 } // if (!self_reentry_emitted)
 
@@ -4166,7 +4301,7 @@ fn emitSubflowContinuationsWithDepth(
                     needs_binding = stepReferencesBinding(step, actual_binding);
                 }
                 if (!needs_binding and cont.continuations.len > 0) {
-                    needs_binding = bindingIsUsedInContinuations(actual_binding, cont.continuations);
+                    needs_binding = subtreeReferencesName(subtree_refs, cont.continuations, actual_binding);
                 }
                 if (needs_binding) break;
             }

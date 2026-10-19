@@ -48,8 +48,15 @@
 # c0d3a4201, the wire-expression rework among them (interpreter.run.kz
 # names cluster members; wiretail/wireexpr are not named). The
 # unparseable roster above now includes compress and bridge.bind.
-clusters=1083
-members=970
+# 1089/982: the roll fired on the emitter subtree-ref-sets commit —
+# which touches only src/emitter_helpers.zig, zero koru_std files.
+# Clean HEAD (git archive) measures 1083/974: clusters exactly at pin,
+# +4 members of committed drift under rolls that missed. The residual
+# +6/+8 is the concurrent session's uncommitted interpreter/bridge/
+# runtime edits in the shared checkout — same uncommitted-work clause
+# as the 1135/970 pin above; re-settles when that work commits.
+clusters=1089
+members=982
 # 1039/915: the roll fired on the |? coverage commit ("coverage: |? no
 # longer suppresses panic arms, and refuses where no union exists") —
 # that commit touches src/ checkers, in-repo tests, and a concept frag;
