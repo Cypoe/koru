@@ -418,6 +418,26 @@ const std = @import("std");
         // continuations push their scope and SPLICE OUT (their children
         // take their slot); every other invocation gets inject() and
         // recursed — plus clone dispatch for consuming callees.
+        // Splicing a ctx step removes its node — the edge that fed it
+        // (`| row r`, `! fail`, a `when` clause) must land on each
+        // promoted kid or the binding evaporates upstream of its uses.
+        fn inheritEdge(kid: *ast.Continuation, from: *const ast.Continuation) void {
+            if (from.branch.len == 0 and from.binding == null and
+                from.destructure.len == 0 and from.condition == null and
+                from.kind == .terminal and !from.is_catchall) return;
+            if (kid.branch.len == 0) kid.branch = from.branch;
+            if (kid.binding == null) kid.binding = from.binding;
+            if (kid.binding_annotations.len == 0) kid.binding_annotations = from.binding_annotations;
+            if (kid.binding_marks.len == 0) kid.binding_marks = from.binding_marks;
+            if (kid.destructure.len == 0) kid.destructure = from.destructure;
+            if (kid.kind == .terminal) kid.kind = from.kind;
+            if (!kid.is_catchall) kid.is_catchall = from.is_catchall;
+            if (kid.catchall_metatype == null) kid.catchall_metatype = from.catchall_metatype;
+            if (kid.condition == null) kid.condition = from.condition;
+            if (kid.condition_expr == null) kid.condition_expr = from.condition_expr;
+            kid.binding_type = from.binding_type;
+        }
+
         fn rewriteConts(self: *const @This(), conts: []const ast.Continuation, stack: []const Scope) []const ast.Continuation {
             var out = std.ArrayList(ast.Continuation).initCapacity(self.a, conts.len) catch unreachable;
             for (conts) |*ct| {
@@ -425,7 +445,9 @@ const std = @import("std");
                     const nstack = self.a.alloc(Scope, stack.len + 1) catch unreachable;
                     for (stack, 0..) |s, i| nstack[i] = s;
                     nstack[stack.len] = self.scopeOf(ct);
-                    out.appendSlice(self.a, self.rewriteConts(ct.continuations, nstack)) catch unreachable;
+                    const pkids: []ast.Continuation = @constCast(self.rewriteConts(ct.continuations, nstack));
+                    for (pkids) |*k| inheritEdge(k, ct);
+                    out.appendSlice(self.a, pkids) catch unreachable;
                     self.changed.* = true;
                     continue;
                 }
@@ -450,7 +472,11 @@ const std = @import("std");
                 nstack[stack.len] = self.scopeOf(&body);
                 const kids = self.rewriteConts(body.continuations, nstack);
                 self.changed.* = true;
-                if (kids.len > 0) return kids[0];
+                if (kids.len > 0) {
+                    const k0: *ast.Continuation = @constCast(&kids[0]);
+                    inheritEdge(k0, &body);
+                    return k0.*;
+                }
                 var nb = body;
                 nb.continuations = &[_]ast.Continuation{};
                 return nb;

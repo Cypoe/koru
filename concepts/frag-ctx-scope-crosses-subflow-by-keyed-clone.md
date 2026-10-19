@@ -41,3 +41,22 @@ the emitted clone body contains ordinary injected args
 The koru-libs ancestor fragment `frag-ctx-is-a-scope-stack-resolved-once`
 documented the call-site-only rung; this belief extends it across the
 subflow boundary without changing the site-injection contract.
+
+EXTENDED 2026-10-19 (component collision): exercising `ctx` against
+`libs/ui:component`-generated tors surfaced the edge the splice drops. A
+`std/ctx` step is a comptime no-op — its continuation node is removed and
+its kids promoted — but the edge INTO it can carry real payload: a
+`| row r` binder, a `!` effect kind, a `when` clause. Splice without
+inheritance emits the scope's `theme[r]` reads with `r` never bound
+(696_009 pins `insert | row r |> ctx(outer[r]) |> ctxprobe()`). The fix
+copies the edge fields onto each promoted kid — the binding moves, it is
+not replayed.
+
+The same probe settled how ctx meets generated components: a
+`component`-synthesized tor declares its props as ordinary inputs, so
+`ctx(theme[r]) |> card()` injects `fs: theme[r].fs` AT THE CALL SITE —
+the boundary crossing is the declared-input kind, and the generated impl
+never clones because the transform emits complete calls (`consumes()`
+finds nothing to fill). XAML-style ambient styling through components is
+therefore prop injection, not clone specialization — the clone rung stays
+for hand-written tors whose bodies leave calls unfilled.
