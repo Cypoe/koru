@@ -108,8 +108,13 @@
 # fixtures). The +1/+2 is committed drift landed between re-pins — the
 # desugar and emitter-capture commits (abf67e120, ec769041b, c5b6d45bf)
 # — not this diff.
-clusters=831
-members=935
+# Re-pinned to 836/939 on a tests-only ctx commit: the roll named a
+# continuation_codegen:291-320 ↔ emitter_helpers:6806-6835 fn_decl twin
+# and emitter_test test_decl twins — all foreign drift from the recent
+# emitter refactor commits (needs_binding ref-sets, handler captures
+# from emitted text). Own contribution to src/ is zero files.
+clusters=836
+members=939
 # Re-pinned to 820/911 on the call-site |variant commit: the sampled roll
 # named containsTokenLocal x containsToken (continuation_codegen /
 # emitter_helpers) and an emitter_test test_decl pair — none of those
