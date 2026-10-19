@@ -7,7 +7,6 @@
 // - std/runtime:get-scope(name: "...") looks up a scope at runtime
 
 ~[comptime|runtime]
-
 ~import std/compiler_types
 ~import std/interpreter
 
@@ -1273,6 +1272,7 @@ fn lookupEventBranches(scope_name: []const u8, event_name: []const u8) []const B
 ~part outcome
 ~part specs
 ~part wireval
+~part grammartext
 ~part wirescan
 ~part wiretail
 ~part wirelex

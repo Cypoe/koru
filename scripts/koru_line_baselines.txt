@@ -209,6 +209,7 @@ koru_std/runtime.wirescan.kz	161
 koru_std/runtime.wiretail.kz	118
 koru_std/runtime.wiretext.kz	38
 koru_std/runtime.wireval.kz	31
+koru_std/runtime.grammartext.kz	48
 koru_std/set.kz	96
 koru_std/simple.kz	7
 koru_std/store.bulk.kz	197
