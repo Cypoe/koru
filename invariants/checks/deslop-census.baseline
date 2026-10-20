@@ -120,7 +120,7 @@
 # emitter_helpers:6806-6835 fn_decl twin (the intentional
 # containsTokenLocal port pair) and emitter_test test_decl scaffolding.
 # Growth landed between re-pins — committed src/ drift from the
-# cells/fleets and board commits — not in this diff.
+# cells/nodes and board commits — not in this diff.
 clusters=842
 members=945
 # Re-pinned to 820/911 on the call-site |variant commit: the sampled roll

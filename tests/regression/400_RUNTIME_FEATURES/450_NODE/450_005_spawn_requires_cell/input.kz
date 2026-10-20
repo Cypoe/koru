@@ -1,8 +1,8 @@
-// Test: `std/fleet:spawn(f, id:)` without `cell:` is refused — a fleet member
+// Test: `std/node:spawn(f, id:)` without `cell:` is refused — a node member
 // IS a cell; the shape binding is not optional.
 
 ~import std/io
-~import std/fleet
+~import std/node
 ~import std/proto
 ~import std/runtime
 
@@ -13,10 +13,10 @@
 ~std/runtime:register(scope: "cell") {
 }
 
-~std/fleet:new(node, scope: "cell", world: "", capacity: 8)
+~std/node:new(node, scope: "cell", world: "", capacity: 8)
 
-~std/fleet(node)
-| fleet f |> std/fleet:spawn(f, id: "room-9")
+~std/node(node)
+| node f |> std/node:spawn(f, id: "room-9")
   | spawned b |> std/io:print.ln("spawned")
   | resident |> std/io:print.ln("resident")
   | refused |> std/io:print.ln("refused")

@@ -1,8 +1,11 @@
 ---
 type: belief
 id: frag-a-cell-commit-is-an-arm-extent
-provenance: std/cell + std/fleet construction, 2026-10-20 — materializer
-  landed at the capture seam; fleet activation probes the durable floor
+provenance: std/cell + std/node construction, 2026-10-20 — materializer
+  landed at the capture seam; node activation probes the durable floor
+  (written as std/fleet; renamed to std/node the same day — `fleet` is
+  reserved for the cross-machine layer: nodes sharing one `world` with
+  ownership CAS, epoch fencing, peer routing — which does not exist yet)
 ts: 2026-10-20
 ---
 
@@ -26,7 +29,7 @@ store later — owns exactly one call site. If the seam ever becomes two
 call sites, the semantics changed; watching the seam count is watching
 the invariant.
 
-The fleet-side corollary, discovered the same week: **residency is a
+The node-side corollary, discovered the same week: **residency is a
 cache; the directory is the truth.** `| not-found` means "never existed
 anywhere", not "not in memory" — a member lookup miss probes
 `<world_root>/<id>/state.kv`, reads the `#shape` header, and rebuilds the

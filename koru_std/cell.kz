@@ -9,7 +9,7 @@
 //   |> std/cell:hibernate(c)
 //
 // `open` is the standalone custodian path — the caller takes the `cell!`
-// obligation into the arm and is answerable for `hibernate`. `std/fleet` is
+// obligation into the arm and is answerable for `hibernate`. `std/node` is
 // the shared custodian: `spawn` mints the same session and keeps it in the
 // residency index instead. Cell-ness is shape + scope + world; custody is
 // whoever holds the obligation, and the cell code cannot tell the difference.
@@ -213,7 +213,7 @@ fn cellLoad(c: *Cell) void {
 | ?refused
 
 // The cell lifecycle as host calls — `cell-open`'s guts and `hibernate`'s
-// teardown, shared with `std/fleet` (spawn/evict/drain are the same acts
+// teardown, shared with `std/node` (spawn/evict/drain are the same acts
 // under a different custodian). Both custodians route through these so the
 // bridge/world/state bookkeeping has one home.
 pub fn cellCreate(shape: []const u8, shape_def: []const u8, id: []const u8, scope: []const u8, world: []const u8) ?*Cell {
@@ -342,7 +342,7 @@ pub fn cellDestroy(c: *Cell) void {
 
 // ============================================================================
 // HIBERNATE — the standalone custodian's discharge: hang the session up and
-// release the cell. For fleet-resident cells this is `std/fleet:evict`'s job —
+// release the cell. For node-resident cells this is `std/node:evict`'s job —
 // hibernating a cell is always the custodian's call, never the borrower's.
 // ============================================================================
 

@@ -1,4 +1,4 @@
-# 013_cell_fleet
+# 013_cell_node
 
 The Orleans counter-grain workload, on koru cells. Orleans' persistence
 microbench measures, per grain call: method dispatch + `WriteStateAsync`
@@ -20,8 +20,8 @@ real materializer (SQLite, object store) will own. The one here is flat-file:
 
 | arm | what it isolates |
 |---|---|
-| `resident` | worldless fleet — dispatch + capture, no materializer |
-| `durable` | world-mounted fleet — same turns, every commit is a file write |
+| `resident` | worldless node — dispatch + capture, no materializer |
+| `durable` | world-mounted node — same turns, every commit is a file write |
 | `activation` | evict + member-lookup cycles — hibernate, then re-materialize from `state.kv` (Orleans DeactivateOnIdle + wake-on-call) |
 | `baseline.zig` | identical semantics, no interpreter — the speed of light for the I/O shape |
 
@@ -34,7 +34,7 @@ interpreter + custody + materializer stack's real price.
 ## Correctness gate
 
 Each grain must show `hits == TURNS` at the end — read back through the
-fleet. A stage that silently never ran shows up as a wrong checksum, not a
+node. A stage that silently never ran shows up as a wrong checksum, not a
 suspiciously fast number.
 
 ## Run
@@ -47,5 +47,5 @@ suspiciously fast number.
 
 - No epoch fencing — single-process custody; celld's conditional ownership
   writes exist to fence STALE writers, which this model can't express yet.
-- No peer routing — `std/fleet` is one registry per process.
+- No peer routing — `std/node` is one registry per process.
 - `capacity` evicts an ARBITRARY resident on activation overflow, not LRU.

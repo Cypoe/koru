@@ -1,4 +1,4 @@
-// 013_cell_fleet — the Orleans counter-grain workload on koru cells.
+// 013_cell_node — the Orleans counter-grain workload on koru cells.
 //
 // The shape Orleans' persistence microbench measures: per turn, a grain
 // method call + a durable state write (WriteStateAsync). Ours per turn:
@@ -7,8 +7,8 @@
 //                         (WriteStateAsync's moment — one state.kv write)
 //
 // Three arms:
-//   resident   — worldless fleet: dispatch + capture, no materializer
-//   durable    — world-mounted fleet: same turns, every commit is a file write
+//   resident   — worldless node: dispatch + capture, no materializer
+//   durable    — world-mounted node: same turns, every commit is a file write
 //   activation — evict + member-lookup cycles: hibernate, then re-materialize
 //                from state.kv on next touch (Orleans DeactivateOnIdle + wake)
 //
@@ -16,7 +16,7 @@
 // silently never ran.
 
 ~import std/io
-~import std/fleet
+~import std/node
 ~import std/cell
 ~import std/proto
 ~import std/runtime
@@ -35,24 +35,24 @@
 
 const TURNS: usize = 60;
 
-~std/fleet:new(rf, scope: "cell", world: "", capacity: 8)
-~std/fleet:new(df, scope: "cell", world: "/tmp/koru-bench-cells", capacity: 8)
+~std/node:new(rf, scope: "cell", world: "", capacity: 8)
+~std/node:new(df, scope: "cell", world: "/tmp/koru-bench-cells", capacity: 8)
 
-~std/fleet(rf)
-| fleet f |> std/fleet:spawn(f, id: "grain", cell: counter)
+~std/node(rf)
+| node f |> std/node:spawn(f, id: "grain", cell: counter)
   | spawned b |> std/io:print.ln("rf grain spawned")
   | resident |> std/io:print.ln("rf grain resident")
   | refused |> std/io:print.ln("rf grain refused")
 
-~std/fleet(df)
-| fleet f |> std/fleet:spawn(f, id: "grain", cell: counter)
+~std/node(df)
+| node f |> std/node:spawn(f, id: "grain", cell: counter)
   | spawned b |> std/io:print.ln("df grain spawned")
   | resident |> std/io:print.ln("df grain resident")
   | refused |> std/io:print.ln("df grain refused")
 
 // ─── arm A: resident turns ─── dispatch + capture, memory only ───
 ~std/time:now(): t0
-  |> std/fleet(rf.grain)
+  |> std/node(rf.grain)
     | cell c |> for(0..TURNS)
       ! each _ |> std/cell:run(c, source: "touch(k: 1)")
         | result _ |> std/cell:capture(c, shape: counter)
@@ -64,7 +64,7 @@ const TURNS: usize = 60;
 
 // ─── arm B: durable turns ─── same turns, commits are file writes ───
 ~std/time:now(): t1
-  |> std/fleet(df.grain)
+  |> std/node(df.grain)
     | cell c |> for(0..TURNS)
       ! each _ |> std/cell:run(c, source: "touch(k: 1)")
         | result _ |> std/cell:capture(c, shape: counter)
@@ -76,32 +76,32 @@ const TURNS: usize = 60;
 
 // ─── arm C: activation ─── evict (hibernate) + lookup (re-materialize) ───
 ~std/time:now(): t2
-  |> std/fleet(df)
-    | fleet f |> for(0..TURNS)
-      ! each _ |> std/fleet:evict(f, id: "grain")
-        | evicted |> std/fleet(df.grain)
+  |> std/node(df)
+    | node f |> for(0..TURNS)
+      ! each _ |> std/node:evict(f, id: "grain")
+        | evicted |> std/node(df.grain)
           | cell c |> std/cell:fields(c): _
           | not-found |> std/io:print.ln("activation failed")
         | absent |> std/io:print.ln("evict absent")
   |> std/time:elapsed(start: t2): rc
   |> std/io:print.ln("activation: {{ rc.ms:f }}ms for {{ TURNS:d }} cycles")
 
-// ─── checksum: the oracle reads both floors through the fleet ───
-~std/fleet(df.grain)
+// ─── checksum: the oracle reads both floors through the node ───
+~std/node(df.grain)
 | cell c |> std/cell:get(c, field: "hits")
   | value v |> std/io:print.ln("df hits={{ v.int:d }}")
   | unset u |> std/io:print.ln("df hits unset")
   | unknown-field e |> std/io:print.ln("no field")
 | not-found |> std/io:print.ln("df grain gone")
 
-~std/fleet(rf.grain)
+~std/node(rf.grain)
 | cell c |> std/cell:get(c, field: "hits")
   | value v |> std/io:print.ln("rf hits={{ v.int:d }}")
   | unset u |> std/io:print.ln("rf hits unset")
   | unknown-field e |> std/io:print.ln("no field")
 | not-found |> std/io:print.ln("rf grain gone")
 
-~std/fleet(rf)
-| fleet f |> std/fleet:drain(f): n1 |> std/io:print.ln("rf drained {{ n1:d }}")
-~std/fleet(df)
-| fleet f |> std/fleet:drain(f): n2 |> std/io:print.ln("df drained {{ n2:d }}")
+~std/node(rf)
+| node f |> std/node:drain(f): n1 |> std/io:print.ln("rf drained {{ n1:d }}")
+~std/node(df)
+| node f |> std/node:drain(f): n2 |> std/io:print.ln("df drained {{ n2:d }}")

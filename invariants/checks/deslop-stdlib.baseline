@@ -38,8 +38,8 @@
 # tree's 113/189 (the restore folded the per-step gate-refusal block
 # into one helper in the new bridge.note.kz part). The named offenders
 # are committed drift landed under rolls that missed: channel.kz/
-# fleet.kz/pump.kz event_decl + import_decl part-file scaffolding from
-# the cells/fleets landing, same documented class as the scope-
+# node.kz/pump.kz event_decl + import_decl part-file scaffolding from
+# the cells/nodes landing, same documented class as the scope-
 # vocabulary twins the 92/145 entry records.
 clusters=113
 members=189

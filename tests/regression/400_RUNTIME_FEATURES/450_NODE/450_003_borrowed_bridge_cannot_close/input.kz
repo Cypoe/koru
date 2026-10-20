@@ -1,0 +1,14 @@
+// Test: the node's member borrow hands out `*Cell<cell>` — read-only
+// custody. `std/cell:hibernate` wants `<!cell>` (consume the obligation),
+// which only the node's index holds, so hibernate on a borrowed cell is a
+// compile-time phantom mismatch, not a runtime footgun.
+
+~import std/io
+~import std/node
+~import std/cell
+
+~std/node:new(node, scope: "cell", world: "", capacity: 8)
+
+~std/node(node.room-42)
+| cell b |> std/cell:hibernate(c: b)
+| not-found |> std/io:print.ln("missing")

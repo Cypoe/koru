@@ -1,34 +1,40 @@
-// Koru Standard Library: fleet — a named, custody-owning index of cells.
+// Koru Standard Library: node — a named, custody-owning index of cells.
 //
-//   std/fleet:new(node, scope: "cell", world: "cells", capacity: 256)
+//   std/node:new(main, scope: "cell", world: "cells", capacity: 256)
 //
-//   std/fleet(node)                         // borrow the fleet
-//   | fleet f |> std/fleet:spawn(f, id: "room-42", cell: room_state)
+//   std/node(main)                         // borrow the node
+//   | node f |> std/node:spawn(f, id: "room-42", cell: room_state)
 //     | spawned b |> ...
 //     | resident |> ...
 //     | refused |> ...
 //
-//   std/fleet(node.room-42)                 // borrow a member, static name
+//   std/node(main.room-42)                 // borrow a member, static name
 //   | cell c |> std/cell:run(c, src)
 //   | not-found |> ...
 //
-//   std/fleet(node[id])                     // borrow a member, runtime key
+//   std/node(main[id])                     // borrow a member, runtime key
 //   | cell c |> ...
 //   | not-found |> ...
 //
-// A fleet is residency + custody: it owns every `*Cell<cell!>` it mints
+// A node is residency + custody: it owns every `*Cell<cell!>` it mints
 // (`spawn` wraps `std/cell`'s cell-create, `evict` its destroy), so the
 // cell obligation never leaves the index — a member cannot be dropped,
-// only evicted through the discharge path. `| fleet f |` and `| cell c |`
+// only evicted through the discharge path. `| node f |` and `| cell c |`
 // are BORROWS: enough to run, define, and inspect; never enough to mint or
 // hang up. That is the whole shape of the surface — one transform reading the
 // target's form, ordinary borrow-gated tors for everything else.
 //
 // `new` mints the NAME, not the contents — membership is runtime data, the
 // way a store's name is comptime while its rows are not. The registry maps
-// the declared name to a `*Fleet`; `default`'s rewrite bakes the name into a
-// `fleet-self`/`member-named` call, so a lookup with no `std/fleet:new` is a
+// the declared name to a `*Node`; `default`'s rewrite bakes the name into a
+// `node-self`/`member-named` call, so a lookup with no `std/node:new` is a
 // comptime refusal, not a runtime miss.
+//
+// Naming, celld-aligned: a NODE is one process's residency index — residency,
+// custody, and a durable floor under `world`. `fleet` is RESERVED for the
+// cross-machine layer: the nodes that share one `world`, with ownership CAS,
+// epoch fencing, and peer routing. That layer does not exist yet; nothing in
+// this file claims it.
 
 ~import std/bridge
 ~import std/cell
@@ -39,12 +45,12 @@ const ast_functional = @import("ast_functional");
 const Cl = @import("root").koru_std.koru_cell;
 
 // ============================================================================
-// FLEET — the resident-cell index. One per `std/fleet:new` name; members are
+// NODE — the resident-cell index. One per `std/node:new` name; members are
 // `*Cell` keyed by cell id. The map is the custody: `spawn` puts, `evict`
 // removes + discharges, `member`/`member-named` hand out borrows only.
 // ============================================================================
 
-pub const Fleet = struct {
+pub const Node = struct {
     name: []const u8,
     scope: []const u8,
     world_root: []const u8,
@@ -53,36 +59,36 @@ pub const Fleet = struct {
     allocator: std.mem.Allocator,
 };
 
-var fleet_registry: ?std.StringHashMap(*Fleet) = null;
+var node_registry: ?std.StringHashMap(*Node) = null;
 
-fn registry() *std.StringHashMap(*Fleet) {
-    if (fleet_registry == null) {
-        fleet_registry = std.StringHashMap(*Fleet).init(koru_allocator());
+fn registry() *std.StringHashMap(*Node) {
+    if (node_registry == null) {
+        node_registry = std.StringHashMap(*Node).init(koru_allocator());
     }
-    return &fleet_registry.?;
+    return &node_registry.?;
 }
 
-// Name-addressed lookup shared by `fleet-self`, `member-named`, and the
+// Name-addressed lookup shared by `node-self`, `member-named`, and the
 // `new`-emitted init. `new` is checked at comptime, so a missing name here is
 // a source-order violation, not user error — panic with the teaching.
-fn fleetByName(name: []const u8) *Fleet {
+fn nodeByName(name: []const u8) *Node {
     return registry().get(name) orelse
-        std.debug.panic("std/fleet: '{s}' has no fleet — `std/fleet:new({s}, ...)` must precede its lookups in source order", .{ name, name });
+        std.debug.panic("std/node: '{s}' has no node — `std/node:new({s}, ...)` must precede its lookups in source order", .{ name, name });
 }
 
-fn fleetMember(f: *Fleet, id: []const u8) ?*Cl.Cell {
+fn nodeMember(f: *Node, id: []const u8) ?*Cl.Cell {
     if (f.members.get(id)) |c| return c;
-    return fleetActivate(f, id);
+    return nodeActivate(f, id);
 }
 
 // Dormant-but-durable re-activation, Orleans-style: a member miss probes
 // `<world_root>/<id>/state.kv`; the file's `#shape`/`#shape_def` header is
 // enough to rebuild the cell with its state restored, so `| not-found` means
-// "never existed anywhere", not "not in memory". At capacity the fleet evicts
+// "never existed anywhere", not "not in memory". At capacity the node evicts
 // an arbitrary resident to make room — residency is a cache; the directory
-// is the truth. A worldless fleet has no durable floor and keeps the old
+// is the truth. A worldless node has no durable floor and keeps the old
 // miss semantics.
-fn fleetActivate(f: *Fleet, id: []const u8) ?*Cl.Cell {
+fn nodeActivate(f: *Node, id: []const u8) ?*Cl.Cell {
     if (f.world_root.len == 0) return null;
     var pb: [1024]u8 = undefined;
     const path = std.fmt.bufPrint(&pb, "{s}/{s}/state.kv", .{ f.world_root, id }) catch return null;
@@ -120,17 +126,17 @@ fn fleetActivate(f: *Fleet, id: []const u8) ?*Cl.Cell {
 }
 
 // ============================================================================
-// FLEET-INIT — what `std/fleet:new` rewrites to. Void: the declaration is a
+// NODE-INIT — what `std/node:new` rewrites to. Void: the declaration is a
 // statement, not a turn.
 // ============================================================================
 
-~pub tor fleet-init { name: string, scope: string, world: string, capacity: usize }
+~pub tor node-init { name: string, scope: string, world: string, capacity: usize }
 
-~proc fleet-init|zig {
+~proc node-init|zig {
     const a = koru_allocator();
     const reg = registry();
     if (reg.get(name) != null) return;
-    const f = a.create(Fleet) catch unreachable;
+    const f = a.create(Node) catch unreachable;
     f.* = .{
         .name = a.dupe(u8, name) catch unreachable,
         .scope = a.dupe(u8, scope) catch unreachable,
@@ -143,50 +149,50 @@ fn fleetActivate(f: *Fleet, id: []const u8) ?*Cl.Cell {
 }
 
 // ============================================================================
-// FLEET-SELF — `std/fleet(node)`: borrow the fleet itself.
+// NODE-SELF — `std/node(node)`: borrow the node itself.
 // ============================================================================
 
-~pub tor fleet-self { fleet: string }
-| fleet *Fleet<fleet>
+~pub tor node-self { node: string }
+| node *Node<node>
 | ?not-found
 
-~proc fleet-self|zig {
-    const f = registry().get(fleet) orelse return .{ .not_found = .{} };
-    return .{ .fleet = f };
+~proc node-self|zig {
+    const f = registry().get(node) orelse return .{ .not_found = .{} };
+    return .{ .node = f };
 }
 
 // ============================================================================
-// MEMBER / MEMBER-NAMED — `std/fleet(node.ID)`: borrow the member cell.
-// `member` is the borrow-typed verb (inside a `| fleet f |` arm);
+// MEMBER / MEMBER-NAMED — `std/node(node.ID)`: borrow the member cell.
+// `member` is the borrow-typed verb (inside a `| node f |` arm);
 // `member-named` is the name-addressed surface `default` emits.
 // ============================================================================
 
-~pub tor member { f: *Fleet<fleet>, id: string }
+~pub tor member { f: *Node<node>, id: string }
 | cell *std/cell:Cell<cell>
 | not-found
 
 ~proc member|zig {
-    if (fleetMember(f, id)) |b| return .{ .cell = b };
+    if (nodeMember(f, id)) |b| return .{ .cell = b };
     return .{ .not_found = .{} };
 }
 
-~pub tor member-named { fleet: string, id: string }
+~pub tor member-named { node: string, id: string }
 | cell *std/cell:Cell<cell>
 | not-found
 
 ~proc member-named|zig {
-    if (fleetMember(fleetByName(fleet), id)) |b| return .{ .cell = b };
+    if (nodeMember(nodeByName(node), id)) |b| return .{ .cell = b };
     return .{ .not_found = .{} };
 }
 
 // ============================================================================
-// CELL-SPAWN — activate a cell under fleet custody. The user-facing verb is
+// CELL-SPAWN — activate a cell under node custody. The user-facing verb is
 // `spawn(f, id:, cell: <proto>)`, whose [pre] transform resolves the proto and
 // rewrites here with `shape`/`shape_def` baked. `| spawned` yields the borrow
 // so the caller can dispatch into it immediately.
 // ============================================================================
 
-~pub tor cell-spawn { f: *Fleet<fleet>, id: string, shape: string, shape_def: string }
+~pub tor cell-spawn { f: *Node<node>, id: string, shape: string, shape_def: string }
 | spawned *std/cell:Cell<cell>
 | resident
 | refused
@@ -226,7 +232,7 @@ fn fleetActivate(f: *Fleet, id: []const u8) ?*Cl.Cell {
 // that is the point of routing teardown through here.
 // ============================================================================
 
-~pub tor evict { f: *Fleet<fleet>, id: string }
+~pub tor evict { f: *Node<node>, id: string }
 | evicted
 | absent
 
@@ -245,7 +251,7 @@ fn fleetActivate(f: *Fleet, id: []const u8) ?*Cl.Cell {
 // the cell stops existing anywhere. `| absent` only when nothing was there.
 // ============================================================================
 
-~pub tor retire { f: *Fleet<fleet>, id: string }
+~pub tor retire { f: *Node<node>, id: string }
 | retired
 | absent
 
@@ -272,20 +278,20 @@ fn fleetActivate(f: *Fleet, id: []const u8) ?*Cl.Cell {
 // COUNT — resident cells.
 // ============================================================================
 
-~pub tor count { f: *Fleet<fleet> } -> u32
+~pub tor count { f: *Node<node> } -> u32
 
 ~proc count|zig {
     return @intCast(f.members.count());
 }
 
 // ============================================================================
-// DRAIN — shutdown: close every resident cell, retire the fleet's registry
-// entry, and release everything the index allocated. A daemon runs fleets
+// DRAIN — shutdown: close every resident cell, retire the node's registry
+// entry, and release everything the index allocated. A daemon runs nodes
 // forever; a program that created one must drain it before exit — the leak
 // check counts every byte the registry still holds.
 // ============================================================================
 
-~pub tor drain { f: *Fleet<fleet> } -> u32
+~pub tor drain { f: *Node<node> } -> u32
 
 ~proc drain|zig {
     var n: u32 = 0;
@@ -305,7 +311,7 @@ fn fleetActivate(f: *Fleet, id: []const u8) ?*Cl.Cell {
     a.destroy(f);
     if (reg.count() == 0) {
         reg.deinit();
-        fleet_registry = null;
+        node_registry = null;
     }
     return n;
 }
@@ -331,7 +337,7 @@ const FH = struct {
         }
         return true;
     }
-    // Recursive scan: every flow item whose invocation is `std/fleet:new`
+    // Recursive scan: every flow item whose invocation is `std/node:new`
     // with `expr` == name. Runs in [pre] — decl sites are still raw.
     fn findDecl(items: []const ast.Item, name: []const u8) bool {
         for (items) |*it| {
@@ -339,7 +345,7 @@ const FH = struct {
                 .flow => |*f| {
                     const inv = f.inv();
                     if (inv.path.module_qualifier) |mq| {
-                        if (std.mem.eql(u8, mq, "std.fleet") and inv.path.segments.len == 1 and std.mem.eql(u8, inv.path.segments[0], "new")) {
+                        if (std.mem.eql(u8, mq, "std.node") and inv.path.segments.len == 1 and std.mem.eql(u8, inv.path.segments[0], "new")) {
                             for (inv.args) |a| {
                                 if (std.mem.eql(u8, a.name, "expr") and std.mem.eql(u8, stripQuotes(a.value), name)) return true;
                             }
@@ -387,7 +393,7 @@ const FH = struct {
         W.retain(prog.items, "create", alloc);
         W.retain(prog.items, "close", alloc);
         // `run` too — `std/cell:run` reaches `Br.run_event.handler` from host
-        // code, and a fleet program can run cells without ever spelling
+        // code, and a node program can run cells without ever spelling
         // `std/cell:open`.
         W.retain(prog.items, "run", alloc);
     }
@@ -408,8 +414,8 @@ const FH = struct {
 };
 
 // ============================================================================
-// FLEET.NEW — `std/fleet:new(name, scope: "cell", world: "cells", capacity: N)`
-// mints the name at comptime and rewrites to a `fleet-init` call so the
+// NODE.NEW — `std/node:new(name, scope: "cell", world: "cells", capacity: N)`
+// mints the name at comptime and rewrites to a `node-init` call so the
 // registry is populated at the point the declaration sat in source.
 // ============================================================================
 
@@ -423,21 +429,21 @@ const FH = struct {
 } -> SiteResult
 
 ~[transform]proc new|zig {
-    if (item.* != .flow) @panic("fleet:new transform: containing item is not a flow - walker dispatch contract broken");
+    if (item.* != .flow) @panic("node:new transform: containing item is not a flow - walker dispatch contract broken");
     const flow = &item.flow;
 
     if (invocation != flow.inv()) {
-        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet:new: a fleet declaration is a top-level item", .{}) };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node:new: a node declaration is a top-level item", .{}) };
     }
 
-    var fleet_name: []const u8 = "";
+    var node_name: []const u8 = "";
     var scope_text: ?[]const u8 = null;
     var world_text: []const u8 = "";
     var cap_text: []const u8 = "256";
     for (invocation.args) |a| {
         const an = std.mem.trim(u8, a.name, " \t");
         if (std.mem.eql(u8, an, "expr")) {
-            fleet_name = FH.stripQuotes(a.value);
+            node_name = FH.stripQuotes(a.value);
             continue;
         }
         if (std.mem.eql(u8, an, "scope")) {
@@ -454,46 +460,46 @@ const FH = struct {
         }
         // A bare positional that leads is the name; anything else is a stray.
         if (a.expression_value == null and std.mem.eql(u8, an, FH.trim(a.value))) {
-            if (fleet_name.len == 0) {
-                fleet_name = FH.stripQuotes(an);
+            if (node_name.len == 0) {
+                node_name = FH.stripQuotes(an);
                 continue;
             }
-            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet:new({s}): '{s}' is a bare positional — scope, world, and capacity are named", .{ fleet_name, an }) };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node:new({s}): '{s}' is a bare positional — scope, world, and capacity are named", .{ node_name, an }) };
         }
-        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet:new: unknown argument '{s}' — the head is `std/fleet:new(name, scope: \"cell\", world: \"cells\", capacity: N)`", .{an}) };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node:new: unknown argument '{s}' — the head is `std/node:new(name, scope: \"cell\", world: \"cells\", capacity: N)`", .{an}) };
     }
-    if (fleet_name.len == 0) {
-        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet:new needs the fleet name — `std/fleet:new(node, scope: \"cell\")`", .{}) };
+    if (node_name.len == 0) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node:new needs the node name — `std/node:new(node, scope: \"cell\")`", .{}) };
     }
-    if (!FH.identOk(fleet_name)) {
-        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet:new: the fleet name '{s}' is not usable — it must be an identifier (a-z, A-Z, 0-9, '_', '-'; no leading digit)", .{fleet_name}) };
+    if (!FH.identOk(node_name)) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node:new: the node name '{s}' is not usable — it must be an identifier (a-z, A-Z, 0-9, '_', '-'; no leading digit)", .{node_name}) };
     }
     const scope = scope_text orelse {
-        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet:new({s}): a fleet names its vocabulary — `scope: \"cell\"`, the register block its cells dispatch against", .{fleet_name}) };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node:new({s}): a node names its vocabulary — `scope: \"cell\"`, the register block its cells dispatch against", .{node_name}) };
     };
     _ = std.fmt.parseInt(usize, cap_text, 10) catch {
-        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet:new({s}): capacity '{s}' is not a comptime integer — the index is sized at the declaration", .{ fleet_name, cap_text }) };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node:new({s}): capacity '{s}' is not a comptime integer — the index is sized at the declaration", .{ node_name, cap_text }) };
     };
 
     if (FH.anyArm(flow)) |arm| {
-        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet:new({s}): `{s}` doesn't parse on a declaration — members attach through `std/fleet({s}.ID)` and verbs take the `| fleet f |` borrow", .{ fleet_name, arm, fleet_name }) };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node:new({s}): `{s}` doesn't parse on a declaration — members attach through `std/node({s}.ID)` and verbs take the `| node f |` borrow", .{ node_name, arm, node_name }) };
     }
 
-    // The fleet's procs reach create/close through host code only — retain
+    // The node's procs reach create/close through host code only — retain
     // them or dead-strip strips them.
     FH.retainBridgeEvents(program, allocator);
 
     // Rewrite to the init call — `name`/`scope`/`world` as string literals,
     // capacity as the raw integer text.
     const segs = allocator.alloc([]const u8, 1) catch unreachable;
-    segs[0] = allocator.dupe(u8, "fleet-init") catch unreachable;
+    segs[0] = allocator.dupe(u8, "node-init") catch unreachable;
     const init_args = allocator.alloc(ast.Arg, 4) catch unreachable;
-    init_args[0] = ast.Arg{ .name = allocator.dupe(u8, "name") catch unreachable, .value = std.fmt.allocPrint(allocator, "\"{s}\"", .{fleet_name}) catch unreachable };
+    init_args[0] = ast.Arg{ .name = allocator.dupe(u8, "name") catch unreachable, .value = std.fmt.allocPrint(allocator, "\"{s}\"", .{node_name}) catch unreachable };
     init_args[1] = ast.Arg{ .name = allocator.dupe(u8, "scope") catch unreachable, .value = std.fmt.allocPrint(allocator, "\"{s}\"", .{scope}) catch unreachable };
     init_args[2] = ast.Arg{ .name = allocator.dupe(u8, "world") catch unreachable, .value = std.fmt.allocPrint(allocator, "\"{s}\"", .{world_text}) catch unreachable };
     init_args[3] = ast.Arg{ .name = allocator.dupe(u8, "capacity") catch unreachable, .value = allocator.dupe(u8, cap_text) catch unreachable };
     const init_inv = ast.Invocation{
-        .path = ast.DottedPath{ .module_qualifier = allocator.dupe(u8, "std.fleet") catch unreachable, .segments = segs },
+        .path = ast.DottedPath{ .module_qualifier = allocator.dupe(u8, "std.node") catch unreachable, .segments = segs },
         .args = init_args,
     };
     return .{ .transformed = .{ .replacement = ast.Item{ .flow = ast.Flow{
@@ -511,11 +517,11 @@ const FH = struct {
 }
 
 // ============================================================================
-// FLEET.SPAWN — `std/fleet:spawn(f, id: "room-42", cell: room_state)`: bind the
+// NODE.SPAWN — `std/node:spawn(f, id: "room-42", cell: room_state)`: bind the
 // shape at spawn. The `cell:` name resolves against the program's `std/proto`
 // decls at transform time ([pre], like cell:open — decl sites still legible),
 // its field block bakes into the `shape_def` manifest, and the call rewrites
-// to `cell-spawn`. A spawn without `cell:` refuses — a fleet member IS a cell.
+// to `cell-spawn`. A spawn without `cell:` refuses — a node member IS a cell.
 // ============================================================================
 
 ~[keyword|comptime|transform|pre]pub tor spawn {
@@ -532,7 +538,7 @@ const FH = struct {
 | refused
 
 ~[transform]proc spawn|zig {
-    if (item.* != .flow) @panic("fleet:spawn transform: containing item is not a flow - walker dispatch contract broken");
+    if (item.* != .flow) @panic("node:spawn transform: containing item is not a flow - walker dispatch contract broken");
     const flow = &item.flow;
 
     var f_text: ?[]const u8 = null;
@@ -552,27 +558,27 @@ const FH = struct {
             id_text = a.value;
             continue;
         }
-        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet:spawn: unknown argument '{s}' — the head is `std/fleet:spawn(f, id: \"room-42\", cell: room_state)`", .{an}) };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node:spawn: unknown argument '{s}' — the head is `std/node:spawn(f, id: \"room-42\", cell: room_state)`", .{an}) };
     }
     if (f_text == null) {
-        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet:spawn needs the fleet borrow — `| fleet f |> std/fleet:spawn(f, id: \"...\", cell: <shape>)`", .{}) };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node:spawn needs the node borrow — `| node f |> std/node:spawn(f, id: \"...\", cell: <shape>)`", .{}) };
     }
     if (id_text == null) {
-        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet:spawn: cells are named — pass `id: \"room-42\"`", .{}) };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node:spawn: cells are named — pass `id: \"room-42\"`", .{}) };
     }
     if (shape.len == 0) {
-        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet:spawn: a fleet member is a cell — name the shape, `cell: room_state` (a declared std/proto)", .{}) };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node:spawn: a node member is a cell — name the shape, `cell: room_state` (a declared std/proto)", .{}) };
     }
     // CH lives in this same emitted module (koru_std.koru_cell) — a direct
     // ref, not `Cl`/`@import("root")`: transform procs are analyzed under the
     // backend exe too, where `root` is backend.zig and has no `koru_std`.
     const proto_source = koru_std.koru_cell.CH.findProtoSource(program.items, shape) orelse {
         if (ast.declarationRefused(allocator, program, flow.module, "std/proto({s})", .{shape})) return .{ .transformed = .{} };
-        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet:spawn: unknown shape '{s}' — no `std/proto({s}) {{ ... }}` declared", .{ shape, shape }) };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node:spawn: unknown shape '{s}' — no `std/proto({s}) {{ ... }}` declared", .{ shape, shape }) };
     };
     const manifest = koru_std.koru_cell.CH.shapeManifest(allocator, proto_source);
 
-    // The spawn sits mid-chain inside a `| fleet f` arm — rewrite the site's
+    // The spawn sits mid-chain inside a `| node f` arm — rewrite the site's
     // invocation in place; the spawned/resident/refused arms pass through.
     const site = koru_std.koru_cell.CH.findSite(&flow.body, invocation) orelse
         return .{ .transformed = .{} };
@@ -585,7 +591,7 @@ const FH = struct {
     args[2] = ast.Arg{ .name = allocator.dupe(u8, "shape") catch unreachable, .value = std.fmt.allocPrint(allocator, "\"{s}\"", .{shape}) catch unreachable };
     args[3] = ast.Arg{ .name = allocator.dupe(u8, "shape_def") catch unreachable, .value = std.fmt.allocPrint(allocator, "\"{s}\"", .{manifest}) catch unreachable };
     const call_inv = ast.Invocation{
-        .path = ast.DottedPath{ .module_qualifier = allocator.dupe(u8, "std.fleet") catch unreachable, .segments = segs },
+        .path = ast.DottedPath{ .module_qualifier = allocator.dupe(u8, "std.node") catch unreachable, .segments = segs },
         .args = args,
     };
     const conts = allocator.alloc(ast.Continuation, site.continuations.len) catch unreachable;
@@ -599,10 +605,10 @@ const FH = struct {
 }
 
 // ============================================================================
-// FLEET.DEFAULT — `std/fleet(<target>)`: the borrow join. [pre] so the rewrite
+// NODE.DEFAULT — `std/node(<target>)`: the borrow join. [pre] so the rewrite
 // lands before `new` transforms away — the scan reads raw declaration sites.
 //
-//   node        → fleet-self(node)          needs `| fleet f |`
+//   node        → node-self(node)          needs `| node f |`
 //   node.ID     → member-named(node, "ID")  needs `| cell c |` (+ `| not-found`)
 //   node[expr]  → member-named(node, expr)  needs `| cell c |` (+ `| not-found`)
 // ============================================================================
@@ -617,61 +623,61 @@ const FH = struct {
 } -> SiteResult
 
 ~[transform]proc default|zig {
-    if (item.* != .flow) @panic("fleet:default transform: containing item is not a flow - walker dispatch contract broken");
+    if (item.* != .flow) @panic("node:default transform: containing item is not a flow - walker dispatch contract broken");
     const flow = &item.flow;
 
     if (invocation != flow.inv()) {
-        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet: the bare borrow is a top-level item — member lookups inside a chain go through `std/fleet:member(f, id)` on a `| fleet f |` borrow", .{}) };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node: the bare borrow is a top-level item — member lookups inside a chain go through `std/node:member(f, id)` on a `| node f |` borrow", .{}) };
     }
     if (invocation.args.len == 0) {
-        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet: the borrow needs a target — `std/fleet(node)` for the fleet, `std/fleet(node.ID)` for a member", .{}) };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node: the borrow needs a target — `std/node(node)` for the node, `std/node(node.ID)` for a member", .{}) };
     }
     const target = FH.trim(invocation.args[0].value);
     if (invocation.args.len > 1) {
-        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet({s}): the borrow takes only the target", .{target}) };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node({s}): the borrow takes only the target", .{target}) };
     }
     if (target.len == 0) {
-        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet: the borrow needs a target — `std/fleet(node)` for the fleet, `std/fleet(node.ID)` for a member", .{}) };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node: the borrow needs a target — `std/node(node)` for the node, `std/node(node.ID)` for a member", .{}) };
     }
 
     // Target form: `name[key]` subscript (runtime id), `name.member` (static
-    // id), or bare `name` (the fleet itself).
-    var fleet_name: []const u8 = target;
+    // id), or bare `name` (the node itself).
+    var node_name: []const u8 = target;
     var member_text: ?[]const u8 = null;
     var member_is_expr = false;
     if (std.mem.indexOfScalar(u8, target, '[')) |ob| {
-        fleet_name = FH.trim(target[0..ob]);
+        node_name = FH.trim(target[0..ob]);
         const close = std.mem.lastIndexOfScalar(u8, target, ']') orelse
-            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet({s}): unbalanced `[` — the member subscript is `std/fleet(node[id])`", .{target}) };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node({s}): unbalanced `[` — the member subscript is `std/node(node[id])`", .{target}) };
         member_text = FH.trim(target[ob + 1 .. close]);
         member_is_expr = true;
     } else if (std.mem.indexOfScalar(u8, target, '.')) |dot| {
-        fleet_name = FH.trim(target[0..dot]);
+        node_name = FH.trim(target[0..dot]);
         member_text = FH.trim(target[dot + 1 ..]);
     }
 
-    if (!FH.identOk(fleet_name)) {
-        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet({s}): '{s}' is not a usable fleet name", .{ target, fleet_name }) };
+    if (!FH.identOk(node_name)) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node({s}): '{s}' is not a usable node name", .{ target, node_name }) };
     }
-    if (!FH.findDecl(program.items, fleet_name)) {
-        if (ast.declarationRefused(allocator, program, flow.module, "std/fleet:new({s}):", .{fleet_name})) return .{ .transformed = .{} };
-        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet({s}): unknown fleet — no std/fleet:new({s}, ...) declared", .{ target, fleet_name }) };
+    if (!FH.findDecl(program.items, node_name)) {
+        if (ast.declarationRefused(allocator, program, flow.module, "std/node:new({s}):", .{node_name})) return .{ .transformed = .{} };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node({s}): unknown node — no std/node:new({s}, ...) declared", .{ target, node_name }) };
     }
 
     // The arm the call shape needs must be there — name the missing one.
     if (member_text == null) {
-        if (!FH.hasArm(flow, "fleet")) {
-            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet({s}): the fleet borrow arrives on `| fleet f |` — `std/fleet({s}) | fleet f |> ...`", .{ target, target }) };
+        if (!FH.hasArm(flow, "node")) {
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node({s}): the node borrow arrives on `| node f |` — `std/node({s}) | node f |> ...`", .{ target, target }) };
         }
     } else {
         if (member_text.?.len == 0) {
-            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet({s}): the member name is empty — `std/fleet({s}.ID)` or `std/fleet({s}[key])`", .{ target, fleet_name, fleet_name }) };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node({s}): the member name is empty — `std/node({s}.ID)` or `std/node({s}[key])`", .{ target, node_name, node_name }) };
         }
         if (!FH.hasArm(flow, "cell")) {
-            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet({s}): the member borrow arrives on `| cell c |` — `std/fleet({s}) | cell c |> ... | not-found |> ...`", .{ target, target }) };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node({s}): the member borrow arrives on `| cell c |` — `std/node({s}) | cell c |> ... | not-found |> ...`", .{ target, target }) };
         }
         if (!FH.hasArm(flow, "not-found")) {
-            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/fleet({s}): a member lookup can miss — `| not-found |>` is required; dormant is a decision, not silence", .{target}) };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node({s}): a member lookup can miss — `| not-found |>` is required; dormant is a decision, not silence", .{target}) };
         }
     }
 
@@ -681,14 +687,14 @@ const FH = struct {
     const args = allocator.alloc(ast.Arg, 2) catch unreachable;
     if (member_text) |m| {
         segs[0] = allocator.dupe(u8, "member-named") catch unreachable;
-        args[0] = ast.Arg{ .name = allocator.dupe(u8, "fleet") catch unreachable, .value = std.fmt.allocPrint(allocator, "\"{s}\"", .{fleet_name}) catch unreachable };
+        args[0] = ast.Arg{ .name = allocator.dupe(u8, "node") catch unreachable, .value = std.fmt.allocPrint(allocator, "\"{s}\"", .{node_name}) catch unreachable };
         args[1] = ast.Arg{ .name = allocator.dupe(u8, "id") catch unreachable, .value = if (member_is_expr) allocator.dupe(u8, m) catch unreachable else std.fmt.allocPrint(allocator, "\"{s}\"", .{m}) catch unreachable };
     } else {
-        segs[0] = allocator.dupe(u8, "fleet-self") catch unreachable;
-        args[0] = ast.Arg{ .name = allocator.dupe(u8, "fleet") catch unreachable, .value = std.fmt.allocPrint(allocator, "\"{s}\"", .{fleet_name}) catch unreachable };
+        segs[0] = allocator.dupe(u8, "node-self") catch unreachable;
+        args[0] = ast.Arg{ .name = allocator.dupe(u8, "node") catch unreachable, .value = std.fmt.allocPrint(allocator, "\"{s}\"", .{node_name}) catch unreachable };
     }
     const call_inv = ast.Invocation{
-        .path = ast.DottedPath{ .module_qualifier = allocator.dupe(u8, "std.fleet") catch unreachable, .segments = segs },
+        .path = ast.DottedPath{ .module_qualifier = allocator.dupe(u8, "std.node") catch unreachable, .segments = segs },
         .args = args[0..(if (member_text == null) 1 else 2)],
     };
     const conts = allocator.alloc(ast.Continuation, flow.body.continuations.len) catch unreachable;

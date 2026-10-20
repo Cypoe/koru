@@ -1,10 +1,10 @@
 #!/usr/bin/env sh
-# 013_cell_fleet — Orleans counter-grain workload: per turn = method call
+# 013_cell_node — Orleans counter-grain workload: per turn = method call
 # (interpreter dispatch) + durable state write (capture commit → state.kv).
 #
 # Arms:
-#   koru resident   — worldless fleet: turns with no materializer
-#   koru durable    — world-mounted fleet: every commit writes state.kv
+#   koru resident   — worldless node: turns with no materializer
+#   koru durable    — world-mounted node: every commit writes state.kv
 #   koru activation — evict + member-lookup cycles (hibernate → re-materialize)
 #   zig baseline    — same semantics, no interpreter: the speed of light
 #

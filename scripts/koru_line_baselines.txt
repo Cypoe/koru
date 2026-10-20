@@ -85,7 +85,7 @@ koru_std/eval.kz	454
 koru_std/explain.kz	181
 koru_std/explain.wit.kz	34
 koru_std/field.kz	743
-koru_std/fleet.kz	710
+koru_std/node.kz	716
 koru_std/fmt.csprec.kz	371
 koru_std/fmt.jsprec.kz	39
 koru_std/fmt.kz	572
