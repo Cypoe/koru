@@ -246,5 +246,5 @@ fn ownerWrite(world: []const u8, id: []const u8, node: []const u8, epoch: u32) !
     std.fs.cwd().deleteTree(p) catch {};
     return .cleared;
 }
-
 ~part acquire
+~part fence

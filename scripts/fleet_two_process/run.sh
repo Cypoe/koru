@@ -16,7 +16,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-KORUC="${KORUC:-../../zig-out/bin/koruc}"
+KORUC="$(cd "$(dirname "${KORUC:-../../zig-out/bin/koruc}")" && pwd)/$(basename "${KORUC:-../../zig-out/bin/koruc}")"
 SCRATCH="${SCRATCH:-/tmp/koru-fleet-2proc}"
 mkdir -p "$SCRATCH/world"
 rm -rf "$SCRATCH/world"
