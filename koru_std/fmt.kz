@@ -11,6 +11,7 @@
 ~[comptime|runtime]
 ~part jsprec
 ~part csprec
+~part lnzig
 
 const std = @import("std");
 
@@ -355,9 +356,12 @@ pub const FormattedText = struct {
 //   std/fmt:ln("Hello {{ name:s }}! Count: {{ count:d }}")
 //   : l |> ... use l.text ...
 //
-// Zero allocation: `.text` BORROWS the site's threadlocal 4KiB scratch —
+// Zero allocation: `.text` BORROWS the site's threadlocal scratch —
 // valid only until THIS call site runs again. `l` carries scratch@scoped:
 // read `.text` freely in frame, never produce it out (`-> l.text` refuses).
+// The scratch is per-call-site: `[size(16k)]` on the call sizes THIS
+// site's buffer (digits + optional k/m; absent: 4096). A bad size is a
+// compile error; overflow panics naming the site's size.
 // Escape = copy (std/string:from-page + take) or own (fmt.blk). 620_011.
 // The {{ var:spec }} placeholders are resolved at compile time into
 // std.fmt.bufPrint calls that run at runtime in the caller's scope.
@@ -373,254 +377,6 @@ pub const FormattedText = struct {
     expr: string,
 } -> string<scratch@scoped>
 
-~proc ln|zig {
-    const ast = @import("ast");
-
-    // Helper: Check if identifier is a Zig keyword
-    const isZigKeyword = struct {
-        fn check(word: []const u8) bool {
-            const keywords = [_][]const u8{
-                "error", "type", "async", "await", "suspend", "resume",
-                "try", "catch", "if", "else", "switch", "while",
-                "for", "break", "continue", "return", "defer", "errdefer",
-                "test", "pub", "export", "extern", "packed", "inline",
-                "noinline", "comptime", "nosuspend", "volatile", "allowzero",
-                "align", "linksection", "callconv", "noalias",
-                "struct", "enum", "union", "opaque", "fn", "const",
-                "var", "anyframe", "anytype", "anyerror", "unreachable",
-                "undef", "null", "true", "false", "and", "or",
-                "orelse", "threadlocal",
-            };
-            for (keywords) |kw| {
-                if (std.mem.eql(u8, word, kw)) return true;
-            }
-            // Zig primitive names — a local may not shadow them, so they
-            // escape exactly like keywords (230_018).
-            const primitives = [_][]const u8{
-                "bool",         "void",     "noreturn", "anyopaque",
-                "usize",        "isize",    "f16",      "f32",
-                "f64",          "f80",      "f128",     "undefined",
-                "comptime_int", "comptime_float",       "c_char",
-                "c_short",      "c_ushort", "c_int",    "c_uint",
-                "c_long",       "c_ulong",  "c_longlong",
-                "c_ulonglong",  "c_longdouble",
-            };
-            for (primitives) |p| {
-                if (std.mem.eql(u8, word, p)) return true;
-            }
-            // u<digits> / i<digits> — the arbitrary-width integer family.
-            if (word.len >= 2 and (word[0] == 'u' or word[0] == 'i')) {
-                var all_digits = true;
-                for (word[1..]) |c| {
-                    if (c < '0' or c > '9') all_digits = false;
-                }
-                if (all_digits) return true;
-            }
-            return false;
-        }
-    }.check;
-
-    // Helper: Append path with escaped keywords (e.g., err.error -> err.@"error")
-    const appendEscapedPath = struct {
-        fn append(buf: *std.ArrayList(u8), alloc: std.mem.Allocator, path: []const u8) void {
-            var start: usize = 0;
-            var pos: usize = 0;
-            var is_first = true;
-
-            while (pos <= path.len) {
-                if (pos == path.len or path[pos] == '.') {
-                    const segment = path[start..pos];
-                    if (!is_first) {
-                        buf.append(alloc, '.') catch unreachable;
-                        if (isZigKeyword(segment)) {
-                            buf.appendSlice(alloc, "@\"") catch unreachable;
-                            buf.appendSlice(alloc, segment) catch unreachable;
-                            buf.append(alloc, '"') catch unreachable;
-                        } else {
-                            buf.appendSlice(alloc, segment) catch unreachable;
-                        }
-                    } else if (isZigKeyword(segment)) {
-                        // A bare binding may legally collide with a Zig
-                        // keyword or primitive (`: u1` — 230_018); the first
-                        // segment escapes like any other.
-                        buf.appendSlice(alloc, "@\"") catch unreachable;
-                        buf.appendSlice(alloc, segment) catch unreachable;
-                        buf.append(alloc, '"') catch unreachable;
-                    } else {
-                        buf.appendSlice(alloc, segment) catch unreachable;
-                    }
-                    is_first = false;
-                    start = pos + 1;
-                }
-                pos += 1;
-            }
-        }
-    }.append;
-
-    // Get the flow from the item
-    const flow = if (item.* == .flow)
-        &item.flow
-    else
-        return .{};
-
-    // Extract the expression string from the first invocation arg
-    const expr = if (invocation.args.len > 0) invocation.args[0].value else "";
-
-    // Parse the expression string for {{ ... }} placeholders
-    var format_buf = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
-    var args_buf = std.ArrayList(u8).initCapacity(allocator, 64) catch unreachable;
-    var i: usize = 0;
-    var first_arg = true;
-
-    // Strip quotes
-    const start_pos: usize = if (expr.len > 0 and expr[0] == '"') 1 else 0;
-    const end_pos: usize = if (expr.len > 0 and expr[expr.len - 1] == '"') expr.len - 1 else expr.len;
-    const content = expr[start_pos..end_pos];
-
-    while (i < content.len) {
-        if (i + 1 < content.len and content[i] == '{' and content[i + 1] == '{') {
-            const placeholder_start = i + 2;
-            var ws_start = placeholder_start;
-            while (ws_start < content.len and (content[ws_start] == ' ' or content[ws_start] == '\t')) : (ws_start += 1) {}
-
-            var j = ws_start;
-            while (j + 1 < content.len and !(content[j] == '}' and content[j + 1] == '}')) : (j += 1) {}
-
-            if (j + 1 < content.len) {
-                var ws_end = j;
-                while (ws_end > ws_start and (content[ws_end - 1] == ' ' or content[ws_end - 1] == '\t')) : (ws_end -= 1) {}
-
-                const placeholder = content[ws_start..ws_end];
-                var var_name: []const u8 = placeholder;
-                var format_spec: []const u8 = "any";
-
-                if (std.mem.indexOf(u8, placeholder, ":")) |colon_pos| {
-                    var_name = placeholder[0..colon_pos];
-                    format_spec = placeholder[colon_pos + 1..];
-                }
-
-                // :S is the handle form (610_007). :f collapses to `{}`.
-                const zig_fmt_spec_ln = if (std.mem.eql(u8, format_spec, "f")) "" else if (std.mem.eql(u8, format_spec, "S")) "s" else format_spec;
-                format_buf.append(allocator, '{') catch unreachable;
-                format_buf.appendSlice(allocator, zig_fmt_spec_ln) catch unreachable;
-                format_buf.append(allocator, '}') catch unreachable;
-
-                if (!first_arg) {
-                    args_buf.appendSlice(allocator, ", ") catch unreachable;
-                }
-                appendEscapedPath(&args_buf, allocator, var_name);
-                if (std.mem.eql(u8, format_spec, "S")) args_buf.appendSlice(allocator, ".data") catch unreachable;
-                first_arg = false;
-                i = j + 2;
-            } else {
-                format_buf.append(allocator, content[i]) catch unreachable;
-                i += 1;
-            }
-        } else {
-            switch (content[i]) {
-                '{' => format_buf.appendSlice(allocator, "{{") catch unreachable,
-                '}' => format_buf.appendSlice(allocator, "}}") catch unreachable,
-                '"' => format_buf.appendSlice(allocator, "\\\"") catch unreachable,
-                '\\' => {
-                    // Koru escape: pass \X pair through verbatim to Zig
-                    format_buf.append(allocator, '\\') catch unreachable;
-                    if (i + 1 < content.len) {
-                        i += 1;
-                        format_buf.append(allocator, content[i]) catch unreachable;
-                    }
-                },
-                '\n' => format_buf.appendSlice(allocator, "\\n") catch unreachable,
-                '\r' => format_buf.appendSlice(allocator, "\\r") catch unreachable,
-                '\t' => format_buf.appendSlice(allocator, "\\t") catch unreachable,
-                else => format_buf.append(allocator, content[i]) catch unreachable,
-            }
-            i += 1;
-        }
-    }
-
-    // Generate inline code that formats into a thread-local buffer and breaks
-    // out with the line value. Uses __KORU_INLINE__ as label placeholder — the
-    // emitter replaces it with a unique label when wrapping in a labeled block.
-    //
-    // Result SHAPE follows the consumption form: the `: l` bare-return BIND
-    // needs the payload `struct { text }` directly, so `l.text` resolves
-    // (620_002); a `| line l` BRANCH (refused on bare returns — a legacy
-    // router-inline spelling) needs the `__LnResult` tagged union to switch on.
-    // Self-contained — no external module path references needed.
-    const inline_code = if (invocation.return_binding != null)
-        std.fmt.allocPrint(
-            allocator,
-            \\{{
-            \\    const __S = struct {{ threadlocal var __buf: [4096]u8 = undefined; }};
-            \\    const __text = @import("std").fmt.bufPrint(&__S.__buf, "{s}", .{{{s}}}) catch @panic("std/fmt:ln output exceeds the 4096-byte scratch buffer — use fmt.blk (allocates, no cap) for long lines");
-            \\    break :__KORU_INLINE__ .{{ .text = __text }};
-            \\}}
-            ,
-            .{ format_buf.items, args_buf.items }
-        ) catch unreachable
-    else
-        std.fmt.allocPrint(
-            allocator,
-            \\{{
-            \\    const __S = struct {{ threadlocal var __buf: [4096]u8 = undefined; }};
-            \\    const __text = @import("std").fmt.bufPrint(&__S.__buf, "{s}", .{{{s}}}) catch @panic("std/fmt:ln output exceeds the 4096-byte scratch buffer — use fmt.blk (allocates, no cap) for long lines");
-            \\    const __LnResult = union(enum) {{ line: struct {{ text: []const u8 }} }};
-            \\    break :__KORU_INLINE__ @as(__LnResult, .{{ .line = .{{ .text = __text }} }});
-            \\}}
-            ,
-            .{ format_buf.items, args_buf.items }
-        ) catch unreachable;
-
-    // Already transformed — don't re-run
-    if (invocation.inline_body != null) {
-        return .{};
-    }
-
-    // Build the replacement invocation: reroute to ln.impl, carry inline_body.
-    // This is the same regardless of where the invocation lives (top-level or pipeline).
-    const impl_segments = allocator.alloc([]const u8, 1) catch unreachable;
-    impl_segments[0] = allocator.dupe(u8, "ln.impl") catch unreachable;
-    const impl_path = ast.DottedPath{
-        .module_qualifier = invocation.path.module_qualifier,
-        .segments = impl_segments,
-    };
-
-    const new_marks = allocator.alloc([]const u8, invocation.marks.len + 1) catch unreachable;
-    for (invocation.marks, 0..) |m, idx| new_marks[idx] = m;
-    new_marks[invocation.marks.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
-
-    const new_invocation = ast.Invocation{
-        .path = impl_path,
-        .args = invocation.args,
-        .annotations = invocation.annotations,
-        .marks = new_marks,
-        .inserted_by_tap = invocation.inserted_by_tap,
-        .from_opaque_tap = invocation.from_opaque_tap,
-        .inline_body = allocator.dupe(u8, inline_code) catch unreachable,
-        // Preserve the site's `: l` bind so the emitter binds the inline result
-        // (const l = …) for the following void continuations to reference (620_002).
-        .return_binding = invocation.return_binding,
-    };
-
-    // Position-agnostic: the runner lifts nested sites into a synthetic
-    // top-level flow, so `invocation` IS the flow's own invocation at every depth.
-    // One write-back path; the runner grafts nested results back.
-    const transformed_flow = ast.Flow{
-        .body = ast.rootSite(new_invocation, flow.body.continuations, flow.location),
-        .annotations = flow.annotations,
-        .pre_label = flow.pre_label,
-        .super_shape = flow.super_shape,
-        .inline_body = inline_code,
-        .is_pure = flow.is_pure,
-        .is_transitively_pure = flow.is_transitively_pure,
-        .location = flow.location,
-        .module = flow.module,
-        .impl_of = flow.impl_of,
-    };
-
-    const new_item = ast.Item{ .flow = transformed_flow };
-    return .{ .replacement = new_item };
-}
 
 // ============================================================================
 // LN|JS - JavaScript-target rendering of the SAME transform

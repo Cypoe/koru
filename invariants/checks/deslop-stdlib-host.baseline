@@ -55,8 +55,14 @@
 # +6/+8 is the concurrent session's uncommitted interpreter/bridge/
 # runtime edits in the shared checkout — same uncommitted-work clause
 # as the 1135/970 pin above; re-settles when that work commits.
-clusters=1089
-members=982
+# 1096/991: the roll fired on the fmt:ln [size(N)] commit — ln|zig
+# moved to fmt.lnzig.kz (~part lnzig) under the 816-line pin; the moved
+# host text's long-standing twins (clusters #3/#6: fmt.blk|zig and
+# io.blk.kz shared shapes) now fingerprint cross-file instead of
+# same-file. The +7/+9 is the file-boundary relabel; the new size-parse
+# code is under the token floor. Re-pinned to measured.
+clusters=1096
+members=991
 # 1039/915: the roll fired on the |? coverage commit ("coverage: |? no
 # longer suppresses panic arms, and refuses where no union exists") —
 # that commit touches src/ checkers, in-repo tests, and a concept frag;

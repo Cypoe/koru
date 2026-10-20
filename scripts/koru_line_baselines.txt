@@ -87,7 +87,8 @@ koru_std/field.kz	743
 koru_std/fleet.kz	710
 koru_std/fmt.csprec.kz	371
 koru_std/fmt.jsprec.kz	39
-koru_std/fmt.kz	816
+koru_std/fmt.kz	572
+koru_std/fmt.lnzig.kz	288
 koru_std/foreign.kz	125
 koru_std/fs.kjs	76
 koru_std/fs.kz	113
