@@ -1956,12 +1956,23 @@ fn trimRightBlank(text: []const u8, start: usize, end: usize) usize {
     return e;
 }
 
-/// `indent` + `extra` written into `buf` — nested continuation emission hands
-/// each level a longer whitespace run without allocating.
-fn indentDeeper(buf: *[128]u8, indent: []const u8, extra: []const u8) []const u8 {
+/// `indent` + `extra` — nested continuation emission hands each level a
+/// longer whitespace run. Growable emitters allocate the run (nested
+/// continuation depth has no natural ceiling — a synthesized seed chain
+/// is one level per element); fixed-buffer emitters keep the stack path
+/// and fail loudly rather than overrunning.
+fn indentDeeper(emitter: *CodeEmitter, buf: *[128]u8, indent: []const u8, extra: []const u8) ![]const u8 {
+    const total = indent.len + extra.len;
+    if (emitter.allocator) |a| {
+        const out = try a.alloc(u8, total);
+        @memcpy(out[0..indent.len], indent);
+        @memcpy(out[indent.len..], extra);
+        return out;
+    }
+    if (total > buf.len) return error.IndentOverflow;
     @memcpy(buf[0..indent.len], indent);
-    @memcpy(buf[indent.len .. indent.len + extra.len], extra);
-    return buf[0 .. indent.len + extra.len];
+    @memcpy(buf[indent.len..], extra);
+    return buf[0..total];
 }
 
 /// Extract element type from a slice type string
@@ -4207,7 +4218,7 @@ fn emitSubflowContinuationsWithDepth(
                             // Emit continuations inside the scope block
                             if (cont.continuations.len > 0) {
                                 var deeper_indent_buf: [128]u8 = undefined;
-                                const deeper_indent = indentDeeper(&deeper_indent_buf, indent, "            ");
+                                const deeper_indent = try indentDeeper(emitter, &deeper_indent_buf, indent, "            ");
                                 try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, program_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical, null, &local_bindings, subtree_refs);
                             }
 
@@ -4255,7 +4266,7 @@ fn emitSubflowContinuationsWithDepth(
                 const is_metatype_binding = if (cont.node) |step| step == .metatype_binding else false;
                 if (cont.continuations.len > 0 and !is_metatype_binding) {
                     var deeper_indent_buf: [128]u8 = undefined;
-                    const deeper_indent = indentDeeper(&deeper_indent_buf, indent, "        ");
+                    const deeper_indent = try indentDeeper(emitter, &deeper_indent_buf, indent, "        ");
                     try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, program_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical, null, &local_bindings, subtree_refs);
                 }
                 } // if (!self_reentry_emitted)
