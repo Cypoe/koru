@@ -78,7 +78,12 @@
 # scripted/live pairs — plus the seed() arg vocabulary (which/bn/gn).
 # Named top offenders are foreign, unchanged: spec_click↔spec_sel_live,
 # the bench/spec six-pack, ponkatris levels.
-clusters=1559
-members=509
+clusters=1533
+members=511
 skipped=20
 spellings=715
+# Re-pinned 2026-10-20: roll fired on the signal-vocab commit after the
+# bench_boxes pair landed. Own contribution: bench_boxes.k +
+# bench_boxes_gate.k — nanoui hillclimb ports, same spec dialect shape
+# as the bench/spec six-pack, members 509→511 on existing clusters.
+# Clusters fell 1559→1533 (census re-run, foreign drift resolved).
