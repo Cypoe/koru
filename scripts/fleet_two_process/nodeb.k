@@ -29,7 +29,7 @@ std/node(nodeb.room-42)
 | held-by o |> std/io:print.ln("lookup refused: held by {{ o:s }}")
 | not-found |> std/io:print.ln("not found")
 
-std/fleet:seize(world: "/tmp/koru-fleet-2proc/world", id: "room-42", node: "nodeb")
+std/fleet:seize(world: "/tmp/koru-fleet-2proc/world", id: "room-42", node: "nodeb", ttl-ms: 0)
   | seized e |> std/io:print.ln("nodeb seized at epoch {{ e:d }}")
   | free |> std/io:print.ln("already free")
   | contended |> std/io:print.ln("contended")

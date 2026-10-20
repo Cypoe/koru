@@ -41,8 +41,14 @@
 # node.kz/pump.kz event_decl + import_decl part-file scaffolding from
 # the cells/nodes landing, same documented class as the scope-
 # vocabulary twins the 92/145 entry records.
-clusters=113
-members=189
+# Re-pinned 113/189 -> 118/198 (2026-10-20): the roll fired on the
+# fleet-lease commit. Own delta is fleet.lease.kz's seize/renew decl
+# shells — the documented part-file clone category. The named clusters
+# are committed drift under rolls that missed: proto.kz's 12-member
+# event_decl self-cluster, the channel/io/node/pump event_decl cluster,
+# interpreter/store import_decl twins — none in this diff.
+clusters=118
+members=198
 skipped=2
 spellings=45
 # 70/111: store.keyed.kz joined io.blk-style import preamble clone w/ interpreter.select.kz (3 shared compiler-module imports, boilerplate)

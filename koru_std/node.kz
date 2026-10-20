@@ -177,7 +177,7 @@ fn nodeByName(name: []const u8) *Node {
         } else |_| {}
         if (!dormant and f.members.count() >= f.capacity) return .refused;
         var fnb: [256]u8 = undefined;
-        switch (Fl.fleetAcquire(f.world_root, id, f.name, &fnb)) {
+        switch (Fl.fleetAcquire(f.world_root, id, f.name, 0, &fnb)) {
             .foreign => |o| return .{ .held_by = std.heap.page_allocator.dupe(u8, o) catch
                 return .refused },
             .failed => return .refused,

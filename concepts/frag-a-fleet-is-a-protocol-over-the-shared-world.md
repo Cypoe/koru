@@ -40,9 +40,19 @@ floor — deterministic, no clocks, no sockets. Six tors, all leaves:
   there is no way to send it a turn — `std/net` is a refusal surface.
   Routing waits on a wire, or on a mailbox-dir simulation that has not
   been written.
-- **No leases.** `seize` is operator-decided takeover; nothing expires on
-  a clock. A TTL field in the record plus a monotonic `std/time` read is
-  the obvious next chip, and it is a chip, not a design problem.
+- **Leases are spelled, heartbeats are not.** `claim`, `seize`, and
+  `renew` take `ttl-ms` and write `until=<unix-ms>` on the record — a
+  wall-clock deadline every process reads the same way (`std/time`'s
+  `now` is process-relative monotonic, the wrong clock for a shared
+  floor). An expired record is claimable: `fleetClaimExpired` runs the
+  same serialized bump+commit `seize` does, so expiry is takeover by
+  clock instead of by operator. `guard`/`owner`/`renew` all treat a
+  lapsed lease as no lease. What is NOT here (evolved 2026-10-20): no
+  background renewal — the caller's cadence is the heartbeat, and
+  `std/node` still acquires un-leased (`ttl 0`) because node-level
+  renewal machinery does not exist yet; a dead node's cells stay
+  held-forever until that lands. celld renews at ttl/3 from inside the
+  runtime; that is the delta.
 - **Cross-process proven, claim and seize both raced.** The protocol
   survives a real process boundary (`scripts/fleet_two_process/run.sh`):
   process A claims, writes, and exits — the record outlives it; a fresh

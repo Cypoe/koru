@@ -9,7 +9,7 @@ std/fleet:reset(world: "tests/regression/400_RUNTIME_FEATURES/470_FLEET/470_005_
   | cleared |> std/io:print.ln("slate cleared")
   | failed e |> std/io:print.ln("reset failed {{ e:s }}")
 
-std/fleet:claim(world: "tests/regression/400_RUNTIME_FEATURES/470_FLEET/470_005_guard_owner_then_free/world", id: "room-42", node: "node-a")
+std/fleet:claim(world: "tests/regression/400_RUNTIME_FEATURES/470_FLEET/470_005_guard_owner_then_free/world", id: "room-42", node: "node-a", ttl-ms: 0)
   | claimed e |> std/io:print.ln("node-a claimed epoch={{ e:d }}")
   | held-by o |> std/io:print.ln("a refused: held by {{ o:s }}")
   | failed e |> std/io:print.ln("claim failed {{ e:s }}")

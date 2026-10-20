@@ -1,24 +1,24 @@
-// Koru Standard Library: the `acquire` part of fleet — the shared helpers
+// Koru Standard Library: the `acquire` part of fleet — the claim path
 // `std/node` and `std/cell` call from host code. Joined via `~part acquire`.
-// The single claim path: caller ends up holding the id, learns the foreign
-// owner (`nb`), or fails on I/O.
+// Caller ends up holding the id, learns the foreign owner (`nb`), or fails.
 pub const Acquire = union(enum) {
     held: u32,
     foreign: []const u8,
     failed,
 };
 
-pub fn fleetAcquire(world: []const u8, id: []const u8, node: []const u8, nb: []u8) Acquire {
+pub fn fleetAcquire(world: []const u8, id: []const u8, node: []const u8, ttl_ms: u64, nb: []u8) Acquire {
     ensureDirs(world) catch return .failed;
     var pb: [1024]u8 = undefined;
     const p = ownerPath(&pb, world, id) orelse return .failed;
     if (ownerRead(world, id, nb)) |rec| {
+        if (!leaseLive(rec.until)) return fleetClaimExpired(world, id, node, ttl_ms, nb);
         if (std.mem.eql(u8, rec.node, node)) return .{ .held = rec.epoch };
         return .{ .foreign = rec.node };
     }
     const epoch = epochRead(world, id) + 1;
     var cb: [1024]u8 = undefined;
-    const body = std.fmt.bufPrint(&cb, "node={s}\nepoch={d}\n", .{ node, epoch }) catch
+    const body = std.fmt.bufPrint(&cb, "node={s}\nepoch={d}\nuntil={d}\n", .{ node, epoch, leaseUntil(ttl_ms) }) catch
         return .failed;
     const f = std.fs.cwd().createFile(p, .{ .exclusive = true }) catch |err| {
         if (err == error.PathAlreadyExists) {

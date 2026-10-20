@@ -46,7 +46,7 @@ std/node(nodea.room-42)
 | held-by o |> std/io:print.ln("lookup refused: held by {{ o:s }}")
 | not-found |> std/io:print.ln("lost")
 
-std/fleet:seize(world: "tests/regression/400_RUNTIME_FEATURES/470_FLEET/470_011_stale_capture_write_fences/world", id: "room-42", node: "nodeb")
+std/fleet:seize(world: "tests/regression/400_RUNTIME_FEATURES/470_FLEET/470_011_stale_capture_write_fences/world", id: "room-42", node: "nodeb", ttl-ms: 0)
   | seized e |> std/io:print.ln("nodeb seized at epoch {{ e:d }}")
   | free |> std/io:print.ln("seize: room-42 already free")
   | contended |> std/io:print.ln("seize contended")

@@ -33,7 +33,7 @@ fn nodeActivate(f: *Node, id: []const u8) MemberResult {
     std.fs.cwd().access(path, .{}) catch return .absent;
     var fnb: [256]u8 = undefined;
     var epoch: u32 = 0;
-    switch (Fl.fleetAcquire(f.world_root, id, f.name, &fnb)) {
+    switch (Fl.fleetAcquire(f.world_root, id, f.name, 0, &fnb)) {
         .foreign => |o| return .{ .foreign = std.heap.page_allocator.dupe(u8, o) catch return .absent },
         .failed => return .absent,
         .held => |e| epoch = e,
