@@ -92,6 +92,18 @@ again, with the disagreement hidden inside one file.
   `(residue)` arms the renderer can't read just fails the marked test,
   but nothing checks that every emitted flow function got a claim
   (the zip is count-strict per corpus, which is the current guard).
+- The doctrine now spans **command-produced** verdicts. Commands are
+  solvers: koru-os's `realize` commits admission/declaration verdicts
+  through `emitter_helpers.commitCommandMark` — a validated sink, not a
+  text writer — and the backend flushes `<stem>.marks` after dispatch,
+  before honoring `command_exit_code`. The asymmetry is preserved on
+  purpose: `Invocation.marks` stays pass-produced internal state, while
+  the command channel mints a *named artifact* whose line format lives
+  in the channel, never in command code. `WitnessCheck.lean` then
+  re-decides the artifact as just another corpus — `admission`/`declaration`
+  joined the relation vocabulary, and the corpus-level law (one verdict
+  per (site, arm) per run) is checker-enforced. A command's verdict is a
+  claim, so it gets a re-decider — same wall, wider door.
 - There is a defensible middle: two mechanized semantics with a proved
   equivalence (a definitional and a denotational reading, as in textbook
   PL formalizations). That is one semantics stated twice and *proved*

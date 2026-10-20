@@ -1,0 +1,42 @@
+// Pins the command marks channel: a [comptime|command] handler commits
+// verdict lines through emitter_helpers.commitCommandMark, and the backend
+// flushes them to <entry-stem>.marks after dispatch — before honoring
+// command_exit_code. A malformed commit (empty field, quote, newline) must
+// return false: a mark that never committed never claims.
+//
+// Run: koruc input.kz markcmd  → input.marks with two @witness lines,
+//      stderr prints "refused-commits=3 exit-requested".
+
+~import std/compiler
+
+~std/compiler:command.declare {
+    "name": "markcmd",
+    "description": "Commit witness marks through the command channel"
+}
+
+~[comptime|command]pub tor markcmd {
+    program: *const Program,
+    allocator: __koru_std.mem.Allocator,
+    argv: []string,
+}
+
+const std = @import("std");
+
+~proc markcmd|zig {
+    const emitter_helpers = @import("emitter_helpers");
+    var refused: u32 = 0;
+    if (!emitter_helpers.commitCommandMark(allocator, "admission", "demo.iface", "koru-native<-none", "refused", "reason=missing-row")) refused += 1;
+    if (!emitter_helpers.commitCommandMark(allocator, "declaration", "demo.mod", "decl<-parsed", "refused", "lacks-iface-or-binds")) refused += 1;
+    if (!emitter_helpers.commitCommandMark(allocator, "admission", "demo.iface", "koru-native<-none", "refused", "")) refused += 1;
+    if (!emitter_helpers.commitCommandMark(allocator, "admission", "demo.iface", "koru-native<-none", "refused", "bad\"quote")) refused += 1;
+    if (!emitter_helpers.commitCommandMark(allocator, "admission", "demo.iface", "koru-native<-none", "refused", "bad\nnewline")) refused += 1;
+    std.debug.print("refused-commits={d} exit-requested\n", .{refused});
+    emitter_helpers.command_exit_code = 7;
+}
+
+~tor main {}
+
+~proc main|zig {
+}
+
+~main()
