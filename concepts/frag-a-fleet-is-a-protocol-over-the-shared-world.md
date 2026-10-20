@@ -92,13 +92,13 @@ floor — deterministic, no clocks, no sockets. Six tors, all leaves:
 - **The verbs are priced, and the price is the floor (evolved
   2026-10-20).** `tests/benchmarks/014_fleet_protocol` loops each verb
   60× against a zig baseline replaying the identical syscall sequences.
-  Mins over 5 runs on a load-13 box — indicative, not claim-grade:
-  owner ~14µs, claim+release ~330µs, renew ~240µs, seize ~420µs per op.
-  The baseline lands within the same noise band — neither direction of
-  the delta is claimed; what is measurable is that the runtime stack's
-  overhead sits below the I/O noise floor on this box. The protocol is
-  syscall-bound: custody's cost is the filesystem, not the dispatch.
-  The numbers want a calm-machine re-run before they are cited anywhere.
+  Mins over 5 runs on a calm box (load ~4, 2026-10-20): owner ~10µs,
+  claim+release ~194µs, renew ~164µs, seize ~270µs per op — vs baseline
+  ~6µs / ~206µs / ~158µs / ~261µs. The write verbs land within ~4% of
+  the raw-syscall floor and the read probe shows ~3.7µs of stack
+  (dispatch + parse): the protocol is syscall-bound — custody's cost
+  is the filesystem, not the runtime. A first run under load-13 read
+  ~2× these numbers, which is the noise band these figures sit above.
 - **Ownership is enforced at the identity boundary and the write
   fence now gates the write path.** `std/node` consults the record on
   every identity-changing path (evolved 2026-10-20): `spawn` and member
