@@ -57,9 +57,13 @@ floor — deterministic, no clocks, no sockets. Six tors, all leaves:
   caches `until` so a live lease costs zero floor reads on lookup.
   A dead process stops renewing and its cells become claimable — the
   failure detector is the clock, exactly celld's ttl/3 cadence without
-  a thread. 470_013 pins the lifecycle: live lease blocks, activity
-  extends past the original deadline, quiet lapse hands off with state
-  intact, and the stale resident answers held-by on its next hit.
+  a thread. 470_013 pins the lifecycle in-process; the cross-process
+  receipt (`scripts/fleet_lease_two_process/run.sh`, evolved
+  2026-10-20) proves it at the real boundary: process A leases and
+  exits, a probe at ~400ms is refused `held-by`, and a later process
+  B's bare member lookup takes the lapsed lease through the serialized
+  takeover — no seize call, no operator — landing at epoch 2 with A's
+  durable state intact.
 - **Cross-process proven, claim and seize both raced.** The protocol
   survives a real process boundary (`scripts/fleet_two_process/run.sh`):
   process A claims, writes, and exits — the record outlives it; a fresh
