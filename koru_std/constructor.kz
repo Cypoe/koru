@@ -196,7 +196,7 @@ const std = @import("std");
         .module = flow.module,
     };
 
-    return .{ .transformed = .{ .replacement = ast.Item{ .flow = transformed_flow } } };
+    return .{ .transformed = .{ .replacement = ast.Item{ .flow = transformed_flow }, .consumed_arms = &.{ "construct", "constructed" } } };
 }
 
 // STRUCT TERMINAL transform. Reads the field specs collected over the `! construct`
@@ -321,5 +321,5 @@ const std = @import("std");
     const decl = p.toOwnedSlice(allocator) catch unreachable;
 
     // The flow dissolves entirely into the top-level type declaration.
-    return .{ .transformed = .{ .replacement = ast.Item{ .inline_code = ast.InlineCode{ .code = decl, .location = flow.location, .module = flow.module } } } };
+    return .{ .transformed = .{ .replacement = ast.Item{ .inline_code = ast.InlineCode{ .code = decl, .location = flow.location, .module = flow.module } }, .consumed_arms = &.{"construct"} } };
 }

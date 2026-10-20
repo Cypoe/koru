@@ -128,7 +128,7 @@
         .is_transitively_pure = false,
         .location = flow.location,
         .module = allocator.dupe(u8, flow.module) catch unreachable,
-    } } } };
+    } }, .consumed_arms = &.{"row"} } };
 }
 
 // ============================================================================

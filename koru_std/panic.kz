@@ -402,6 +402,10 @@ const std = @import("std");
         return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU179, flow.location, flow.module, "std/panic:catch({s}) answered nothing - no unhandled ?! site matched; the pattern is stale or the problem is already solved", .{raw}) } };
     }
 
-    // answered: the decl dissolves
-    return .{ .transformed = .{ .replacement = ast.Item{ .inline_code = ast.InlineCode{ .code = "", .location = flow.location, .module = flow.module } } } };
+    // answered: the decl dissolves. The `!` arms persist — grafted in place
+    // into other sites' continuation lists by the walker — so they leave the
+    // site's own write-back but are consumed, not dropped.
+    const consumed = allocator.alloc([]const u8, arms.items.len) catch @panic("oom");
+    for (arms.items, 0..) |a, i| consumed[i] = a.branch;
+    return .{ .transformed = .{ .replacement = ast.Item{ .inline_code = ast.InlineCode{ .code = "", .location = flow.location, .module = flow.module } }, .consumed_arms = consumed } };
 }

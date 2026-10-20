@@ -303,6 +303,8 @@
     } }) catch unreachable;
 
     const call = ast.Invocation{ .path = mk.path(allocator, home_ns, sweep_name), .args = &[_]ast.Arg{} };
+    // The `! sweep` arm was compiled into the appended sweep unit — it leaves
+    // the site's own write-back.
     return .{ .transformed = .{
         .replacement = ast.Item{ .flow = ast.Flow{
             .body = ast.rootSite(call, &[_]ast.Continuation{}, flow.location),
@@ -313,5 +315,6 @@
             .module = allocator.dupe(u8, flow.module) catch unreachable,
         } },
         .appended = appended.toOwnedSlice(allocator) catch unreachable,
+        .consumed_arms = &.{"sweep"},
     } };
 }

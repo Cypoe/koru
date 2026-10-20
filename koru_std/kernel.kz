@@ -515,6 +515,7 @@ const codegen_utils_kernel = @import("codegen_utils");
                     .code = compile_error_code,
                     .location = flow.location,
                     .module = allocator.dupe(u8, flow.module) catch unreachable,
+                    .is_refusal = true,
                 },
             };
 
@@ -546,6 +547,7 @@ const codegen_utils_kernel = @import("codegen_utils");
                 .code = computed_error,
                 .location = flow.location,
                 .module = allocator.dupe(u8, flow.module) catch unreachable,
+                .is_refusal = true,
             },
         };
 
@@ -1960,7 +1962,9 @@ const codegen_utils_kernel = @import("codegen_utils");
         ai += 1;
         appended[ai] = local_init_proc;
         ai += 1;
-        return .{ .replacement = new_item, .appended = appended };
+        // The `| kernel` / `| computed` / `| reduce` arms are fused into the
+        // generated init machinery — none ride the site's own write-back.
+        return .{ .replacement = new_item, .appended = appended, .consumed_arms = &.{ "kernel", "computed", "reduce" } };
     }
 }
 
@@ -2585,6 +2589,7 @@ const codegen_utils_kernel = @import("codegen_utils");
     
     // Check for | step |> and flatten it to void-chain
     var new_conts: []const ast.Continuation = &[_]ast.Continuation{};
+    var consumed_step = false;
     if (step_cont) |cont| {
         for (cont.continuations) |*nested| {
             if (std.mem.eql(u8, nested.branch, "step")) {
@@ -2599,13 +2604,16 @@ const codegen_utils_kernel = @import("codegen_utils");
                     .continuations = nested.continuations,
                 };
                 new_conts = void_cont;
+                consumed_step = true;
                 break;
             }
         }
     }
-    
+
     const empty_node = ast.Node{ .inline_code = "" };
-    return .{ .replacement_node = .{ .node = empty_node, .children = new_conts } };
+    // The `| step` arm's NAME is consumed by the flatten — its body survives
+    // as the void-chain, the arm word does not.
+    return .{ .replacement_node = .{ .node = empty_node, .children = new_conts }, .consumed_arms = if (consumed_step) &.{"step"} else &.{} };
 }
 // ============================================================================
 // FUTURE: kernel.reduce, kernel.cross

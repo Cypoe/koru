@@ -103,6 +103,7 @@ fn kernelInitFieldListRefusal(
             .code = compile_error_code,
             .location = flow.location,
             .module = alloc.dupe(u8, flow.module) catch unreachable,
+            .is_refusal = true,
         },
     };
 }

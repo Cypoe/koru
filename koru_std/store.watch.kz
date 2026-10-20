@@ -256,12 +256,22 @@
         }
     }
     if (spliced) {
+        // The watch's `!` arms were transplanted into the store's write
+        // subflow by the coordinator — they leave this site's write-back.
+        const consumed_arms = allocator.alloc([]const u8, flow.body.continuations.len) catch unreachable;
+        var consumed_n: usize = 0;
+        for (flow.body.continuations) |*c| {
+            const cb = std.mem.trim(u8, c.branch, " ");
+            if (cb.len == 0) continue;
+            consumed_arms[consumed_n] = cb;
+            consumed_n += 1;
+        }
         const consumed = std.fmt.allocPrint(allocator, "// std/store: watch({s}) spliced into the write-subflow", .{store_name}) catch unreachable;
         return .{ .transformed = .{ .replacement = ast.Item{ .host_line = ast.HostLine{
             .content = consumed,
             .location = flow.location,
             .module = allocator.dupe(u8, flow.module) catch unreachable,
-        } } } };
+        } }, .consumed_arms = consumed_arms[0..consumed_n] } };
     }
 
     // Not spliced: is there an untransformed create later in the program?

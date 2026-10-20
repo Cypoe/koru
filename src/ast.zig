@@ -342,6 +342,16 @@ pub const SiteResult = struct {
     /// verbatim. Reserve this for transforms that are irreducibly global; the
     /// site-local fields above are the default and the right tool for the rest.
     whole_program: ?*const Program = null,
+    /// Named arms on the input site this write-back CONSUMES — i.e. arms that
+    /// are neither carried into the replacement nor required to be (the
+    /// claimed-vocabulary half of arm accounting; 690_364's `| done` class).
+    /// The runner reconciles: every named input arm must appear in the
+    /// result's own continuations or in this set, else it refuses — a
+    /// transform that drops an arm it never declared fails the write-back.
+    /// Dynamic vocabularies (channel kinds, watch field names) compute the
+    /// set; static ones list it. Empty = the transform consumes nothing and
+    /// every input arm must be carried (the strict default).
+    consumed_arms: []const []const u8 = &.{},
 };
 
 /// ExplainReport — what a library's `[explainer]` returns to the `explain`
@@ -847,7 +857,7 @@ pub fn refusal(
     rep.addErrorAtLocation(code, loc, fmt, args) catch {};
     const inner = std.fmt.allocPrint(alloc, fmt, args) catch unreachable;
     const msg = std.fmt.allocPrint(alloc, "comptime {{ @compileError(\"{s}\"); }}", .{inner}) catch unreachable;
-    return Item{ .inline_code = InlineCode{ .code = msg, .location = loc, .module = module } };
+    return Item{ .inline_code = InlineCode{ .code = msg, .location = loc, .module = module, .is_refusal = true } };
 }
 
 /// `refusal` with the teaching half attached. A transform that refuses AND has
@@ -870,7 +880,7 @@ pub fn refusalWithHint(
     rep.addErrorAtLocationWithHint(code, loc, fmt, args, hint_fmt, hint_args) catch {};
     const inner = std.fmt.allocPrint(alloc, fmt, args) catch unreachable;
     const msg = std.fmt.allocPrint(alloc, "comptime {{ @compileError(\"{s}\"); }}", .{inner}) catch unreachable;
-    return Item{ .inline_code = InlineCode{ .code = msg, .location = loc, .module = module } };
+    return Item{ .inline_code = InlineCode{ .code = msg, .location = loc, .module = module, .is_refusal = true } };
 }
 
 /// The refusal envelope's payload: report the diagnostic and produce the
@@ -2223,6 +2233,13 @@ pub const InlineCode = struct {
     // FOUNDATIONAL: Every item knows where it came from
     location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },
     module: []const u8,
+
+    /// This item IS a transform refusal — `refusal`/`refusalWithHint` set it.
+    /// Refusal-ness used to live only in the `@compileError` text (which is
+    /// why `declarationRefused` sniffs strings); the flag makes the verdict
+    /// machine-readable so consumers (the arm-accounting check, stay-silent
+    /// suppression) can read the item's kind instead of its content.
+    is_refusal: bool = false,
 
     pub fn deinit(self: *InlineCode, allocator: std.mem.Allocator) void {
         allocator.free(self.code);

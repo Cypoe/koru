@@ -501,12 +501,22 @@ fn siteName(invocation: *const ast.Invocation) []const u8 {
         }
     }
 
+    // The `| drained` arm (if present) is compiled into the pump machinery —
+    // it leaves this site's write-back.
+    const consumed_arms = allocator.alloc([]const u8, flow.body.continuations.len) catch unreachable;
+    var consumed_n: usize = 0;
+    for (flow.body.continuations) |*c| {
+        const cb = std.mem.trim(u8, c.branch, " ");
+        if (cb.len == 0) continue;
+        consumed_arms[consumed_n] = cb;
+        consumed_n += 1;
+    }
     const pconsumed = std.fmt.allocPrint(allocator, "// std/pump: pump '{s}' created", .{pump_name}) catch unreachable;
     return .{ .transformed = .{ .replacement = ast.Item{ .host_line = ast.HostLine{
         .content = pconsumed,
         .location = flow.location,
         .module = allocator.dupe(u8, flow.module) catch unreachable,
-    } }, .appended = appended_items.toOwnedSlice(allocator) catch unreachable } };
+    } }, .appended = appended_items.toOwnedSlice(allocator) catch unreachable, .consumed_arms = consumed_arms[0..consumed_n] } };
 }
 
 // ----------------------------------------------------------------------------
@@ -624,10 +634,20 @@ fn siteName(invocation: *const ast.Invocation) []const u8 {
         PWait.emitWait(allocator, &appended_items, program, flow, pump_name, join_idx, wa, wbind, wait_interest);
     }
 
+    // The `! step`/`! live`/`! wait` arms are compiled into the participant's
+    // appended machinery — they leave this site's write-back.
+    const consumed_arms = allocator.alloc([]const u8, flow.body.continuations.len) catch unreachable;
+    var consumed_n: usize = 0;
+    for (flow.body.continuations) |*c| {
+        const cb = std.mem.trim(u8, c.branch, " ");
+        if (cb.len == 0) continue;
+        consumed_arms[consumed_n] = cb;
+        consumed_n += 1;
+    }
     const pconsumed = std.fmt.allocPrint(allocator, "// std/pump: '{s}' joins pump '{s}' (participant {d})", .{ pump_name, pump_name, join_idx }) catch unreachable;
     return .{ .transformed = .{ .replacement = ast.Item{ .host_line = ast.HostLine{
         .content = pconsumed,
         .location = flow.location,
         .module = allocator.dupe(u8, flow.module) catch unreachable,
-    } }, .appended = appended_items.toOwnedSlice(allocator) catch unreachable } };
+    } }, .appended = appended_items.toOwnedSlice(allocator) catch unreachable, .consumed_arms = consumed_arms[0..consumed_n] } };
 }

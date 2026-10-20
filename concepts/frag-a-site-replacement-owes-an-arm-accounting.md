@@ -54,6 +54,39 @@ deferred shape: the census says per-site audits suffice *today*, but only
 because the surface was measured once; nothing structurally prevents the
 next transform from reintroducing the hole.
 
+**Update 2026-10-19 — the deferred shape landed.** The runner now audits
+every transform write-back at the single splice point
+(`auditArmAccounting` in transform_pass_runner.zig): the named
+continuations on the input site must appear in the result's own
+continuations (walked recursively, including `appended` items and
+node-internal branch bodies) or in a new `SiteResult.consumed_arms`
+field, else KORU183 refuses naming the transform, the arm, and the fix.
+Consumption is a fact about the write-back, so it is declared on the
+*return value* — not a static `~tor` annotation, which could never name
+channel's join kinds or watch's field names because those are computed
+from the decl's args at run time.
+
+Three result kinds are exempt by construction, not by text-sniffing:
+`is_refusal` items (a refusal IS the site's verdict — the arms die with
+the site, they do not evaporate; the flag is set inside `ast.refusal` /
+`refusalWithHint` and must also be set on hand-rolled verdict items),
+appended-only results (the site is untouched), and `whole_program` (the
+documented escape hatch, same license as the blast-radius bound). The
+splice semantics *are* the accounting: `children: null` and
+`retarget_producer` keep the site's continuations and count as carried;
+a root-site `inline_code` node dissolves the flow and counts as a drop.
+
+The first sweep it ran enumerated what per-site audits had missed:
+`field` consumed `| field` as well as `| err`, `grid.sweep` consumed its
+`! sweep` arm, `kernel:step`'s flatten consumed the `| step` arm-name,
+`init` fused `| computed`/`| reduce` alongside `| kernel`, plural-store
+`new` consumed lifecycle arms on a second return path, and three
+test-local transforms hand-rolled verdicts without the flag. The
+per-site audits stay — they fire first with the better diagnostic (they
+name the claimed set and teach the fix); KORU183 is the floor under
+transforms that did not audit, and it is what makes the bug class
+unable to re-enter silently.
+
 Two structural corollaries:
 
 - **Unnamed `|>` continuations are not arms.** `branch.len == 0` skips —

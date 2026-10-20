@@ -809,6 +809,7 @@
                     .module = allocator.dupe(u8, flow.module) catch unreachable,
                 } },
                 .appended = appended.toOwnedSlice(allocator) catch unreachable,
+                .consumed_arms = &.{ "query", "first", "none" },
             } };
         }
     }
@@ -819,6 +820,7 @@
         return .{ .transformed = .{
             .replacement = ast.Item{ .inline_code = ast.InlineCode{ .code = loop.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .module = allocator.dupe(u8, flow.module) catch unreachable } },
             .appended = appended.toOwnedSlice(allocator) catch unreachable,
+            .consumed_arms = &.{ "query", "first", "none" },
         } };
     }
 
@@ -863,6 +865,7 @@
             .module = allocator.dupe(u8, flow.module) catch unreachable,
         } },
         .appended = appended.toOwnedSlice(allocator) catch unreachable,
+        .consumed_arms = &.{ "query", "first", "none" },
     } };
 }
 

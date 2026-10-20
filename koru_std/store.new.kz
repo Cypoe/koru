@@ -5550,6 +5550,14 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
             }
 
             const cconsumed = std.fmt.allocPrint(allocator, "// std/store: plural store '{s}' created (C lane: SoA cell + insert/insertf/inserth + take + stored-write + apply; rules/views/envwrite are the named-refusal surface){s}", .{ store_name, StoreRefHome.marker(allocator, cell_fields) }) catch unreachable;
+            const c_consumed = allocator.alloc([]const u8, flow.body.continuations.len) catch unreachable;
+            var c_cn: usize = 0;
+            for (flow.body.continuations) |*ac| {
+                const cbn = std.mem.trim(u8, ac.branch, " ");
+                if (cbn.len == 0) continue;
+                c_consumed[c_cn] = cbn;
+                c_cn += 1;
+            }
             return .{ .transformed = .{
                 .replacement = ast.Item{ .inline_code = ast.InlineCode{
                     .code = cconsumed,
@@ -5557,10 +5565,19 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
                     .module = allocator.dupe(u8, flow.module) catch unreachable,
                 } },
                 .appended = c_appended.toOwnedSlice(allocator) catch unreachable,
+                .consumed_arms = c_consumed[0..c_cn],
             } };
         }
 
         const pconsumed = std.fmt.allocPrint(allocator, "// std/store: plural store '{s}' created (SoA cell + insert/query/write/take/stripe units){s}", .{ store_name, StoreRefHome.marker(allocator, cell_fields) }) catch unreachable;
+        const p_consumed = allocator.alloc([]const u8, flow.body.continuations.len) catch unreachable;
+        var p_cn: usize = 0;
+        for (flow.body.continuations) |*ac| {
+            const cbn = std.mem.trim(u8, ac.branch, " ");
+            if (cbn.len == 0) continue;
+            p_consumed[p_cn] = cbn;
+            p_cn += 1;
+        }
         return .{ .transformed = .{
             .replacement = ast.Item{ .inline_code = ast.InlineCode{
                 .code = pconsumed,
@@ -5568,6 +5585,7 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
                 .module = allocator.dupe(u8, flow.module) catch unreachable,
             } },
             .appended = appended_items.toOwnedSlice(allocator) catch unreachable,
+            .consumed_arms = p_consumed[0..p_cn],
         } };
     }
     // ------------------------------------------------------------------
@@ -6930,7 +6948,17 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
             .location = flow.location,
             .module = allocator.dupe(u8, flow.module) catch unreachable,
         } };
-        return .{ .transformed = .{ .replacement = replacement, .appended = c_appended } };
+        // Every named arm on the `new` site was collected above and compiled
+        // into the appended machinery — none ride the site's own write-back.
+        const c_consumed = allocator.alloc([]const u8, flow.body.continuations.len) catch unreachable;
+        var c_cn: usize = 0;
+        for (flow.body.continuations) |*ac| {
+            const cbn = std.mem.trim(u8, ac.branch, " ");
+            if (cbn.len == 0) continue;
+            c_consumed[c_cn] = cbn;
+            c_cn += 1;
+        }
+        return .{ .transformed = .{ .replacement = replacement, .appended = c_appended, .consumed_arms = c_consumed[0..c_cn] } };
     }
 
     const appended = allocator.alloc(ast.Item, 5 + stripe_items.items.len + fg_each_items.items.len) catch unreachable;
@@ -6965,5 +6993,16 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
     for (stripe_items.items, 0..) |si, sii| appended[5 + sii] = si;
     for (fg_each_items.items, 0..) |fi, fii| appended[5 + stripe_items.items.len + fii] = fi;
 
-    return .{ .transformed = .{ .replacement = replacement, .appended = appended } };
+    // Every named arm on the `new` site — watches, interceptors, dischargers,
+    // lifecycle branches — was collected above and compiled into the appended
+    // machinery; none of them ride the site's own write-back.
+    const consumed_arms = allocator.alloc([]const u8, flow.body.continuations.len) catch unreachable;
+    var consumed_n: usize = 0;
+    for (flow.body.continuations) |*ac| {
+        const cbn = std.mem.trim(u8, ac.branch, " ");
+        if (cbn.len == 0) continue;
+        consumed_arms[consumed_n] = cbn;
+        consumed_n += 1;
+    }
+    return .{ .transformed = .{ .replacement = replacement, .appended = appended, .consumed_arms = consumed_arms[0..consumed_n] } };
 }

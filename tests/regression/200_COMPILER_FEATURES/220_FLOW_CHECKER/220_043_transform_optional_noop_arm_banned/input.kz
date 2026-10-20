@@ -18,7 +18,10 @@
     const ast = @import("ast");
     const allocator = @import("std").heap.page_allocator;
     const flow = if (item.* == .flow) &item.flow else return .{};
-    return .{ .replacement = ast.Item{ .inline_code = .{ .code = "// run ran", .location = flow.location, .module = allocator.dupe(u8, flow.module) catch return .{} } } };
+    // `run` forwards `!` arms onto the generated `step` call — the arm is
+    // consumed here so the checker's optional-noop ruling is what this test
+    // exercises, not the arm-accounting floor.
+    return .{ .replacement = ast.Item{ .inline_code = .{ .code = "// run ran", .location = flow.location, .module = allocator.dupe(u8, flow.module) catch return .{} } }, .consumed_arms = &.{"tick"} };
 }
 
 ~run()

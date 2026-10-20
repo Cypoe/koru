@@ -1482,6 +1482,115 @@ fn joinSliceInline(items: []const []const u8) []const u8 {
     return fbs.getWritten();
 }
 
+// ============================================================================
+// ARM ACCOUNTING — a named continuation on a transform site is an obligation:
+// it must ride into the write-back or be declared consumed (690_364's `| done`
+// class, generalized to every transform). A transform that builds its
+// replacement from selected arms claims a vocabulary; a named arm outside it
+// parses, then evaporates — never runs, no diagnostic. The per-site audits
+// (ast_functional.unclaimedContinuation) catch it where the author remembered;
+// THIS check is the floor: every named input arm must appear in the result's
+// own continuations (recursively — legitimate transplants land deeper, or in
+// appended items) or in `result.consumed_arms`, else the write-back refuses.
+//
+// Two results are exempt by kind, not by sniffing:
+//   .is_refusal items — a refusal IS the site's verdict; the arms die with the
+//      site, they do not evaporate (typed on the item, set by ast.refusal).
+//   whole_program — the documented escape hatch (tap); the site-local fields
+//      do not apply, the same license the blast-radius bound gives it.
+// ============================================================================
+
+fn collectNodeArms(node: *const ast.Node, set: *std.StringHashMap(void)) error{OutOfMemory}!void {
+    // Arms transplanted INTO a node's own branch bodies (kernel's pairwise
+    // moves `sub_continuations` into a foreach `step` branch) still count as
+    // carried — same name-matching approximation as the slice walk.
+    const branches: []const ast.NamedBranch = switch (node.*) {
+        .foreach => |*fe| fe.branches,
+        .conditional => |*cond| cond.branches,
+        .switch_result => |*sw| sw.branches,
+        else => return,
+    };
+    for (branches) |*b| try collectContArms(b.body, set);
+}
+
+fn collectContArms(conts: []const ast.Continuation, set: *std.StringHashMap(void)) error{OutOfMemory}!void {
+    for (conts) |*c| {
+        const bname = std.mem.trim(u8, c.branch, " ");
+        if (bname.len != 0) try set.put(bname, {});
+        if (c.node) |*n| try collectNodeArms(n, set);
+        try collectContArms(c.continuations, set);
+    }
+}
+
+fn collectItemArms(item: *const ast.Item, set: *std.StringHashMap(void)) error{OutOfMemory}!void {
+    switch (item.*) {
+        .flow => |*f| try collectContArms(&.{f.body}, set),
+        .module_decl => |*m| for (m.items) |*it| try collectItemArms(it, set),
+        else => {},
+    }
+}
+
+fn auditArmAccounting(
+    allocator: std.mem.Allocator,
+    sr: SiteRef,
+    transform_name: []const u8,
+    result: ast.SiteResult,
+) !void {
+    if (result.whole_program != null) return;
+    if (result.replacement == null and result.replacement_node == null) {
+        // Appended-only: the splice leaves the site untouched — the arms
+        // cannot drop, by definition.
+        return;
+    }
+    if (result.replacement) |*repl| {
+        if (repl.* == .inline_code and repl.inline_code.is_refusal) return;
+    }
+
+    var accounted = std.StringHashMap(void).init(allocator);
+    defer accounted.deinit();
+    if (result.replacement) |*repl| try collectItemArms(repl, &accounted);
+    if (result.replacement_node) |nr| {
+        // The splice semantics are the accounting:
+        //  - root site + inline_code node → the whole flow dissolves into an
+        //    Item.inline_code; the site's continuations AND any provided
+        //    children are all dropped — nothing is carried.
+        //  - `children: null` keeps the site's existing continuations
+        //    (node-only replace), so the input arms are carried verbatim.
+        //  - `retarget_producer` rewrites a node elsewhere in the program and
+        //    leaves the site's continuations untouched — also carried.
+        //  - non-null children at a live site is a fresh vocabulary.
+        if (nr.node != .inline_code or sr.wrapper == null) {
+            if (nr.children != null and !nr.retarget_producer) {
+                try collectContArms(nr.children.?, &accounted);
+            } else {
+                try collectContArms(sr.holding.continuations, &accounted);
+            }
+            // The new node itself may hold transplanted arms inside its own
+            // branch bodies (pairwise moves the site's sub_continuations into
+            // a foreach `step` branch).
+            try collectNodeArms(&nr.node, &accounted);
+        }
+    }
+    for (result.appended) |*it| try collectItemArms(it, &accounted);
+    for (result.consumed_arms) |name| try accounted.put(name, {});
+
+    for (sr.holding.continuations) |*c| {
+        const bname = std.mem.trim(u8, c.branch, " ");
+        if (bname.len == 0) continue;
+        if (!accounted.contains(bname)) {
+            const loc = c.location;
+            std.debug.print(
+                "error[KORU183]: transform '{s}' dropped unclaimed arm '| {s}' — named arms on a transform site are obligations: carry the arm into the write-back or list it in `consumed_arms`\n" ++
+                    "  --> {s}:{d}:{d}\n" ++
+                    "  declared consumed: {s}\n" ++
+                    "  fix: carry the arm into the replacement/appended items, add it to `consumed_arms` if the transform consumes it, or refuse the arm yourself for a better diagnostic\n\n",
+                .{ transform_name, bname, loc.file, loc.line, loc.column, if (result.consumed_arms.len == 0) "none" else joinSliceInline(result.consumed_arms) },
+            );
+            return error.TransformAccountingFailed;
+        }
+    }
+}
+
 /// Commit the accounting for one whole-program write-back: site digest plus
 /// the multiset diff of top-level item digests (pre vs post), tagged with
 /// item kinds and the transform's declared `contract:preserves` bound so the oracle
@@ -1756,6 +1865,9 @@ fn applyTransform(
     // even on the site-local path — the `contract:preserves` bound applies.
     try checkPreservesAppended(&transform, result.appended);
 
+    // Arm accounting: every named input arm is carried or declared consumed.
+    try auditArmAccounting(allocator, sr, transform.name, result);
+
     // Place the change. The runner owns the splice — root site replaces its
     // flow Item, nested site replaces the holding continuation, appended items
     // go to the top level. This is the single write-back point.
@@ -1901,7 +2013,11 @@ fn applyExpandAtSite(
     };
     const maybe_item = try applyExpandTemplate(node, position, program, inv_path, allocator);
     const repl = maybe_item orelse return WalkResult{ .found = false, .program = program };
-    const spliced = try spliceSiteResult(allocator, program, sr, .{ .replacement = repl });
+    const result: ast.SiteResult = .{ .replacement = repl };
+    // Expand carries the site body verbatim today — the arm check runs anyway:
+    // a template that ever stops carrying arms is the same evaporation.
+    try auditArmAccounting(allocator, sr, inv_path, result);
+    const spliced = try spliceSiteResult(allocator, program, sr, result);
     return WalkResult{ .found = true, .program = spliced };
 }
 

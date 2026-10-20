@@ -1,0 +1,18 @@
+// The runner-level arm accounting floor (KORU183). A transform that replaces
+// its site with machinery built from nothing claims an empty vocabulary —
+// named arms would evaporate (never run, no diagnostic). The per-site audits
+// catch it where the author remembered `unclaimedContinuation`; this pin
+// proves the floor catches it where they did not: the replacement must carry
+// every named arm, declare it in `consumed_arms`, or refuse.
+
+~[comptime|transform]pub tor run { item: *const std/compiler:Item, program: *const std/compiler:Program } -> SiteResult
+
+~proc run|zig {
+    const ast = @import("ast");
+    const allocator = @import("std").heap.page_allocator;
+    const flow = if (item.* == .flow) &item.flow else return .{};
+    return .{ .replacement = ast.Item{ .inline_code = .{ .code = "// run ran", .location = flow.location, .module = allocator.dupe(u8, flow.module) catch return .{} } } };
+}
+
+~run()
+| done |> _

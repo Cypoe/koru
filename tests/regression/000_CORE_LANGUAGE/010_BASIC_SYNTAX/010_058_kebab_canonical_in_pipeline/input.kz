@@ -47,6 +47,7 @@ const std = @import("std");
         .code = code,
         .location = flow.location,
         .module = allocator.dupe(u8, flow.module) catch unreachable,
+        .is_refusal = true,
     } };
 
     return .{ .replacement = replacement };

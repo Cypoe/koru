@@ -361,5 +361,5 @@
     transformed_flow.preamble_code = preamble;
 
     const new_item = ast.Item{ .flow = transformed_flow };
-    return .{ .transformed = .{ .replacement = new_item } };
+    return .{ .transformed = .{ .replacement = new_item, .consumed_arms = &.{ "as", "captured" } } };
 }

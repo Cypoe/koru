@@ -252,7 +252,9 @@ var __field_noop_alloc = std.mem.Allocator{
         stack_flow.body = ast.rootSite(inv2_bound, kept.toOwnedSlice(allocator) catch unreachable, flow.location);
         stack_flow.preamble_code = preamble;
         stack_flow.inline_body = null;
-        return .{ .replacement = ast.Item{ .flow = stack_flow } };
+        // The stack path can't OOM — the `| err` arm is consumed, deliberately
+        // (comment above); naming it keeps the drop machine-checked.
+        return .{ .replacement = ast.Item{ .flow = stack_flow }, .consumed_arms = &.{ "err", "field" } };
     }
 
     // HEAP path — route to the concrete heap constructor, preserving | field / | err.
