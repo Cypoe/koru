@@ -43,14 +43,20 @@ floor — deterministic, no clocks, no sockets. Six tors, all leaves:
 - **No leases.** `seize` is operator-decided takeover; nothing expires on
   a clock. A TTL field in the record plus a monotonic `std/time` read is
   the obvious next chip, and it is a chip, not a design problem.
-- **Race windows exist.** The epoch counter is advisory under true
-  multi-process concurrency — two racing claims can compute the same
-  candidate epoch, and only the createNew serialization makes that
-  harmless. The node-id half of the guard check is what carries
-  correctness in those windows; the epoch half carries it across
-  release/reclaim. celld gets exact CAS from the object store; the
-  filesystem gives atomic create and atomic rename but no
-  compare-and-swap, so the honest limit is stated, not hidden.
+- **Cross-process proven, races unmeasured.** The protocol survives a
+  real process boundary (evolved 2026-10-20,
+  `scripts/fleet_two_process/run.sh`): process A claims, writes, and
+  exits — the record outlives it; a fresh process B is refused
+  `held-by nodea`, seizes at epoch 2, reads A's durable state, and
+  writes under its own epoch. What remains unmeasured is true
+  CONCURRENT racing — two processes claiming/seizing at once — where
+  the epoch counter is advisory (both racers can compute the same
+  candidate) and only the createNew serialization makes that harmless.
+  The node-id half of the guard check carries correctness in those
+  windows; the epoch half carries it across release/reclaim. celld
+  gets exact CAS from the object store; the filesystem gives atomic
+  create and atomic rename but no compare-and-swap, so the honest
+  limit is stated, not hidden.
 - **Ownership is enforced at the identity boundary and the write
   fence now gates the write path.** `std/node` consults the record on
   every identity-changing path (evolved 2026-10-20): `spawn` and member
