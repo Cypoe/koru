@@ -45,3 +45,15 @@ Related: [[frag-a-check-that-cannot-match-reports-clean]] and
 [[frag-a-check-and-its-satisfier-must-enumerate-the-same-set]] — a family of
 failures whose common shape is *the machine said something true and no one was
 listening at the place it spoke*.
+
+Evolved 2026-10-20: the run surfaces got the fix this belief implies.
+`std/cell:run` declared eleven outcomes and callers wrote ten ritual
+arms — exactly the audited-but-unread shape. The re-tier keeps the
+guarantee (a caller cannot decline to answer failure) while deleting the
+noise: `| result` and `| error` are required, `error` carrying the
+lossless union of every failure class with `kind` naming the variant;
+the turn-completed findings (`defined`, `unhandled-branch`, `residue`,
+`partial`) became armable optionals, and `error-decode` routes `kind`
+back to per-class arms for callers that distinguish. One arm that means
+something beats nine that mean nothing — and `e.kind` read is the report
+the ritual arms never were. Pinned in 460_009.

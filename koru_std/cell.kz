@@ -274,45 +274,6 @@ pub fn cellDestroy(c: *Cell) void {
 }
 
 // ============================================================================
-// RUN — dispatch a source turn into the cell's session. A straight
-// pass-through of `std/bridge:run` against the inner bridge — same budget
-// behavior, same branch set.
-// ============================================================================
-
-~pub tor run { c: *Cell<cell>, source: string<*> }
-| result { value: @import("root").koru_std.koru_interpreter.Value, used: u64, handles: u32, bound: string, trace: string }
-| defined string
-| unhandled-branch { branch: string, payload: string, handles: string }
-| exhausted { used: u64, last_event: string, handles: u32 }
-| parse-error { message: string, line: u32, column: u32 }
-| residue { report: string, observer: bool, bound: string, text: string }
-| validation-error string
-| shape-error { branch: string, field: ?string, message: string }
-| event-denied string
-| dispatch-error { event_name: string, message: string, trace: string }
-| ?partial { ran: u32, total: u32, used: u64, handles: u32, report: string, wire_failures: u32 }
-| scope-not-found string
-
-~proc run|zig {
-    const r = Br.run_event.handler(.{ .br = c.br, .source = source });
-    // Same union shape, different nominal structs — copy field by field.
-    return switch (r) {
-        .result => |v| .{ .result = .{ .value = v.value, .used = v.used, .handles = v.handles, .bound = v.bound, .trace = v.trace } },
-        .defined => |v| .{ .defined = v },
-        .unhandled_branch => |v| .{ .unhandled_branch = .{ .branch = v.branch, .payload = v.payload, .handles = v.handles } },
-        .exhausted => |v| .{ .exhausted = .{ .used = v.used, .last_event = v.last_event, .handles = v.handles } },
-        .parse_error => |v| .{ .parse_error = .{ .message = v.message, .line = v.line, .column = v.column } },
-        .residue => |v| .{ .residue = .{ .report = v.report, .observer = v.observer, .bound = v.bound, .text = v.text } },
-        .validation_error => |v| .{ .validation_error = v },
-        .shape_error => |v| .{ .shape_error = .{ .branch = v.branch, .field = v.field, .message = v.message } },
-        .event_denied => |v| .{ .event_denied = v },
-        .dispatch_error => |v| .{ .dispatch_error = .{ .event_name = v.event_name, .message = v.message, .trace = v.trace } },
-        .partial => |v| .{ .partial = .{ .ran = v.ran, .total = v.total, .used = v.used, .handles = v.handles, .report = v.report, .wire_failures = v.wire_failures } },
-        .scope_not_found => |v| .{ .scope_not_found = v },
-    };
-}
-
-// ============================================================================
 // STATE — the shape's fields as a checked surface. `get`/`set` validate the
 // field name against the baked manifest (`unknown-field` names the shape, not
 // a shrug), and `set` coerces the value through the declared field type
@@ -924,3 +885,5 @@ pub const CH = struct {
         .module = allocator.dupe(u8, flow.module) catch unreachable,
     } } } };
 }
+
+~part run

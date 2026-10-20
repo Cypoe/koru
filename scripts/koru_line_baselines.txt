@@ -44,7 +44,8 @@ koru_std/build_image.kz	357
 koru_std/build.kz	586
 koru_std/ccp_aspirational.kz	108
 koru_std/ccp.kz	109
-koru_std/cell.kz	926
+koru_std/cell.kz	889
+koru_std/cell.run.kz	119
 koru_std/channel.custody.kz	210
 koru_std/channel.home.kz	54
 koru_std/channel.kz	1447
