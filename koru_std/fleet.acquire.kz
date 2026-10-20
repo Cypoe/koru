@@ -13,7 +13,10 @@ pub fn fleetAcquire(world: []const u8, id: []const u8, node: []const u8, ttl_ms:
     const p = ownerPath(&pb, world, id) orelse return .failed;
     if (ownerRead(world, id, nb)) |rec| {
         if (!leaseLive(rec.until)) return fleetClaimExpired(world, id, node, ttl_ms, nb);
-        if (std.mem.eql(u8, rec.node, node)) return .{ .held = rec.epoch };
+        if (std.mem.eql(u8, rec.node, node)) {
+            _ = fleetRenewDue(world, id, node, ttl_ms, rec.until);
+            return .{ .held = rec.epoch };
+        }
         return .{ .foreign = rec.node };
     }
     const epoch = epochRead(world, id) + 1;
@@ -21,20 +24,17 @@ pub fn fleetAcquire(world: []const u8, id: []const u8, node: []const u8, ttl_ms:
     const body = std.fmt.bufPrint(&cb, "node={s}\nepoch={d}\nuntil={d}\n", .{ node, epoch, leaseUntil(ttl_ms) }) catch
         return .failed;
     const f = std.fs.cwd().createFile(p, .{ .exclusive = true }) catch |err| {
-        if (err == error.PathAlreadyExists) {
-            // createNew publishes the path before writeAll lands the bytes — a
-            // loser racing that gap reads a zero-byte record. Re-read with a
-            // bound: the payload settles in microseconds; 20ms means real I/O
-            // failure, not the window.
-            var tries: u32 = 0;
-            while (tries < 200) : (tries += 1) {
-                if (ownerRead(world, id, nb)) |rec| {
-                    if (std.mem.eql(u8, rec.node, node)) return .{ .held = rec.epoch };
-                    return .{ .foreign = rec.node };
-                }
-                std.Thread.sleep(100 * std.time.ns_per_us);
+        if (err != error.PathAlreadyExists) return .failed;
+        // createNew publishes the path before writeAll lands the bytes — a
+        // loser racing that gap reads a zero-byte record. Re-read with a
+        // bound: 20ms past it means real I/O failure, not the window.
+        var tries: u32 = 0;
+        while (tries < 200) : (tries += 1) {
+            if (ownerRead(world, id, nb)) |rec| {
+                if (std.mem.eql(u8, rec.node, node)) return .{ .held = rec.epoch };
+                return .{ .foreign = rec.node };
             }
-            return .failed;
+            std.Thread.sleep(100 * std.time.ns_per_us);
         }
         return .failed;
     };
@@ -46,5 +46,4 @@ pub fn fleetAcquire(world: []const u8, id: []const u8, node: []const u8, ttl_ms:
     _ = epochBump(world, id);
     return .{ .held = epoch };
 }
-
 

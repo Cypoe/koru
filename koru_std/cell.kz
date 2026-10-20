@@ -597,7 +597,6 @@ pub fn cellDestroy(c: *Cell) void {
     for (trailing.items) |tc| {
         inner.append(allocator, $mod.ast_functional.cloneContinuation(allocator, tc) catch unreachable) catch unreachable;
     }
-
     const wrapper = allocator.alloc($mod.ast.Continuation, 1) catch unreachable;
     wrapper[0] = .{
         .branch = "",
@@ -828,8 +827,8 @@ pub const CH = struct {
 
     // Host code calls bridge create/close/run — retain them against dead-strip.
     CH.retainBridgeEvents(program, allocator);
-    // cellFlush calls fleet's guard from host code — same retention need
-    // (the splice lives in the fleet part).
+    // cellFlush calls fleet's guard and renewal from host code — same
+    // retention need (the splice lives in the retain part).
     retainFleetEvents(program, allocator);
 
     const segs = allocator.alloc([]const u8, 1) catch unreachable;
@@ -864,3 +863,4 @@ pub const CH = struct {
 
 ~part run
 ~part fleet
+~part retain

@@ -3,19 +3,22 @@
 // `~part fleet` in cell.kz; merged into the cell module at load.
 
 // The node's ownership stamp: when a node claims an id on the shared
-// floor it marks the cell with (world, id, node, granted-epoch) — the
-// four things `cellFlush` needs to present to the fence. Zero/empty is
-// "unstamped": standalone `cell:open` cells and worldless nodes carry no
-// claim and write unfenced.
+// floor it marks the cell with (world, id, node, granted-epoch, lease
+// TTL + cached deadline) — what `cellFlush` presents to the fence and
+// the due-check the resident-hit renewal reads without touching the
+// floor. Zero/empty is "unstamped": standalone `cell:open` cells and
+// worldless nodes carry no claim and write unfenced.
 pub const FleetStamp = struct {
     world: []const u8 = "",
     id: []const u8 = "",
     node: []const u8 = "",
     epoch: u32 = 0,
+    lease_ms: u64 = 0,
+    until: i64 = 0,
 };
 
-pub fn cellStampFleet(c: *Cell, world: []const u8, id: []const u8, node: []const u8, epoch: u32) void {
-    c.fleet = .{ .world = world, .id = id, .node = node, .epoch = epoch };
+pub fn cellStampFleet(c: *Cell, world: []const u8, id: []const u8, node: []const u8, epoch: u32, lease_ms: u64, until: i64) void {
+    c.fleet = .{ .world = world, .id = id, .node = node, .epoch = epoch, .lease_ms = lease_ms, .until = until };
 }
 
 fn statePath(c: *Cell, buf: []u8) ?[]u8 {
@@ -30,6 +33,9 @@ pub fn cellFlush(c: *Cell) void {
     // here, the way celld voids zombie writes; the fence is at the write,
     // not at dispatch. `std/fleet:guard` is where a program can check.
     if (c.fleet.node.len > 0 and !Fl.fleetGuard(c.fleet.world, c.fleet.id, c.fleet.node, c.fleet.epoch)) return;
+    // The write is liveness — renew the lease if its last third is near.
+    if (c.fleet.lease_ms > 0) c.fleet.until =
+        Fl.fleetRenewDue(c.fleet.world, c.fleet.id, c.fleet.node, c.fleet.lease_ms, c.fleet.until);
     var path_buf: [1024]u8 = undefined;
     const path = statePath(c, &path_buf) orelse return;
     const a = c.allocator;
@@ -57,41 +63,7 @@ pub fn cellFlush(c: *Cell) void {
     std.fs.cwd().writeFile(.{ .sub_path = path, .data = buf.items }) catch return;
 }
 
-// `cellFlush` calls `Fl.fleetGuard` from HOST code — nothing in a
-// cell-only program spells `std/fleet:*`, so dead-strip would retire
-// the tors and `koru_fleet` would never emit. Same splice as bridge:
-// the transform in cell.kz calls this for every `cell:open`.
-fn retainFleetEvents(prog: *const ast.Program, alloc: std.mem.Allocator) void {
-    const W = struct {
-        fn retain(its: []const ast.Item, want: []const u8, al: std.mem.Allocator) void {
-            for (its) |*pi| {
-                switch (pi.*) {
-                    .module_decl => |*md| {
-                        if (std.mem.eql(u8, md.logical_name, "std.fleet")) {
-                            for (md.items) |*mi| {
-                                if (mi.* != .event_decl) continue;
-                                const ed = &mi.event_decl;
-                                if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], want)) {
-                                    for (ed.annotations) |a| if (std.mem.eql(u8, a, "retain")) return;
-                                    const grown = al.alloc([]const u8, ed.annotations.len + 1) catch unreachable;
-                                    @memcpy(grown[0..ed.annotations.len], ed.annotations);
-                                    grown[ed.annotations.len] = al.dupe(u8, "retain") catch unreachable;
-                                    @constCast(ed).annotations = grown;
-                                }
-                            }
-                            return;
-                        }
-                        retain(md.items, want, al);
-                    },
-                    else => {},
-                }
-            }
-        }
-    };
-    W.retain(prog.items, "claim", alloc);
-    W.retain(prog.items, "owner", alloc);
-    W.retain(prog.items, "seize", alloc);
-    W.retain(prog.items, "release", alloc);
-    W.retain(prog.items, "guard", alloc);
-    W.retain(prog.items, "reset", alloc);
-}
+// `cellFlush` calls `Fl.fleetGuard`/`Fl.fleetRenewDue` from HOST code —
+// nothing in a cell-only program spells `std/fleet:*`, so dead-strip
+// would retire the tors and `koru_fleet` would never emit. The `open`
+// transform in cell.kz calls `Fl.fleetRetainEvents` for every open.

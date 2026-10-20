@@ -40,19 +40,26 @@ floor — deterministic, no clocks, no sockets. Six tors, all leaves:
   there is no way to send it a turn — `std/net` is a refusal surface.
   Routing waits on a wire, or on a mailbox-dir simulation that has not
   been written.
-- **Leases are spelled, heartbeats are not.** `claim`, `seize`, and
-  `renew` take `ttl-ms` and write `until=<unix-ms>` on the record — a
-  wall-clock deadline every process reads the same way (`std/time`'s
-  `now` is process-relative monotonic, the wrong clock for a shared
-  floor). An expired record is claimable: `fleetClaimExpired` runs the
-  same serialized bump+commit `seize` does, so expiry is takeover by
-  clock instead of by operator. `guard`/`owner`/`renew` all treat a
-  lapsed lease as no lease. What is NOT here (evolved 2026-10-20): no
-  background renewal — the caller's cadence is the heartbeat, and
-  `std/node` still acquires un-leased (`ttl 0`) because node-level
-  renewal machinery does not exist yet; a dead node's cells stay
-  held-forever until that lands. celld renews at ttl/3 from inside the
-  runtime; that is the delta.
+- **Leases are spelled, and the node renews on activity — there is no
+  heartbeat thread by design.** `claim`, `seize`, and `renew` take
+  `ttl-ms` and write `until=<unix-ms>` on the record — a wall-clock
+  deadline every process reads the same way (`std/time`'s `now` is
+  process-relative monotonic, the wrong clock for a shared floor). An
+  expired record is claimable: `fleetClaimExpired` runs the same
+  serialized bump+commit `seize` does, so expiry is takeover by clock
+  instead of by operator. `guard`/`owner`/`renew` all treat a lapsed
+  lease as no lease. Node-side (evolved 2026-10-20):
+  `std/node:new(..., lease-ms: T)` makes every claim carry a deadline;
+  residency itself is the heartbeat — a member hit inside the
+  deadline's last third re-acquires (renewing if still ours, evicting
+  and answering `| held-by` if a takeover landed while the cell sat
+  quiet), and `cellFlush` renews before its durable write. The stamp
+  caches `until` so a live lease costs zero floor reads on lookup.
+  A dead process stops renewing and its cells become claimable — the
+  failure detector is the clock, exactly celld's ttl/3 cadence without
+  a thread. 470_013 pins the lifecycle: live lease blocks, activity
+  extends past the original deadline, quiet lapse hands off with state
+  intact, and the stale resident answers held-by on its next hit.
 - **Cross-process proven, claim and seize both raced.** The protocol
   survives a real process boundary (`scripts/fleet_two_process/run.sh`):
   process A claims, writes, and exits — the record outlives it; a fresh
@@ -91,9 +98,9 @@ floor — deterministic, no clocks, no sockets. Six tors, all leaves:
   owner's write dies at the flush, celld's void-the-zombie semantic.
   470_011 pins it: seize at epoch 2, the stale capture runs (compute
   is not fenced — the write is) and the new owner reads pre-seize
-  state. Still open: no lease TTL, no routing, and a stamped cell's
-  fenced write is silent — `std/fleet:guard` is where a program can
-  check, an arm on the write is not.
+  state. Still open: no routing, and a stamped cell's fenced write is
+  silent — `std/fleet:guard` is where a program can check, an arm on
+  the write is not.
 
 ## What would correct this belief
 

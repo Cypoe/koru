@@ -77,35 +77,3 @@ pub fn fleetClaimExpired(
         else => return .{ .failed = "takeover failed" },
     }
 }
-
-// ============================================================================
-// RENEW — the owner refreshes its own deadline (celld renews at ttl/3; the
-// cadence is the caller's — there is no heartbeat yet). Under the lock so a
-// renew can never overwrite a committed takeover with its stale epoch. A
-// lapsed own lease answers `free`: the way back is `claim`.
-// ============================================================================
-
-~pub tor renew { world: string, id: string, node: string, ttl-ms: u64 }
-| renewed
-| held-by string
-| free
-| failed string
-
-~proc renew|zig {
-    ensureDirs(world) catch return .{ .failed = "cannot create .fleet dirs" };
-    var lb: [1024]u8 = undefined;
-    const lock = std.fmt.bufPrint(&lb, "{s}/.fleet/locks/{s}", .{ world, id }) catch
-        return .{ .failed = "path too long" };
-    std.fs.cwd().makeDir(lock) catch
-        return .{ .failed = "renew lock contended" };
-    defer std.fs.cwd().deleteDir(lock) catch {};
-    var nb: [256]u8 = undefined;
-    const rec = ownerRead(world, id, &nb) orelse return .free;
-    if (!std.mem.eql(u8, rec.node, node)) return .{ .held_by =
-        std.heap.page_allocator.dupe(u8, rec.node) catch
-        return .{ .failed = "out of memory" } };
-    if (!leaseLive(rec.until)) return .free;
-    ownerWrite(world, id, node, rec.epoch, leaseUntil(ttl_ms)) catch
-        return .{ .failed = "renew write failed" };
-    return .renewed;
-}

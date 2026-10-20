@@ -11,7 +11,31 @@ const MemberResult = union(enum) {
 };
 
 fn nodeMember(f: *Node, id: []const u8) MemberResult {
-    if (f.members.get(id)) |c| return .{ .cell = c };
+    if (f.members.get(id)) |c| {
+        // A leased resident re-proves ownership inside its deadline's last
+        // third: the cached `until` gates it, so a live cell never touches
+        // the floor on lookup. Renewal keeps it held; a lease that lapsed
+        // while it sat quiet answers the takeover it now is.
+        if (c.fleet.lease_ms > 0 and
+            c.fleet.until - std.time.milliTimestamp() < @as(i64, @intCast(c.fleet.lease_ms / 3))) {
+            var fnb: [256]u8 = undefined;
+            switch (Fl.fleetAcquire(f.world_root, id, f.name, f.lease_ms, &fnb)) {
+                .held => |e| {
+                    c.fleet.epoch = e;
+                    c.fleet.until = Fl.fleetUntil(f.world_root, id, f.name, &fnb);
+                },
+                .foreign => |o| {
+                    const kv = f.members.fetchRemove(id).?;
+                    f.allocator.free(kv.key);
+                    Cl.cellDestroy(c);
+                    return .{ .foreign = std.heap.page_allocator.dupe(u8, o) catch
+                        return .absent };
+                },
+                .failed => {},
+            }
+        }
+        return .{ .cell = c };
+    }
     return nodeActivate(f, id);
 }
 
@@ -33,10 +57,14 @@ fn nodeActivate(f: *Node, id: []const u8) MemberResult {
     std.fs.cwd().access(path, .{}) catch return .absent;
     var fnb: [256]u8 = undefined;
     var epoch: u32 = 0;
-    switch (Fl.fleetAcquire(f.world_root, id, f.name, 0, &fnb)) {
+    var until: i64 = 0;
+    switch (Fl.fleetAcquire(f.world_root, id, f.name, f.lease_ms, &fnb)) {
         .foreign => |o| return .{ .foreign = std.heap.page_allocator.dupe(u8, o) catch return .absent },
         .failed => return .absent,
-        .held => |e| epoch = e,
+        .held => |e| {
+            epoch = e;
+            until = Fl.fleetUntil(f.world_root, id, f.name, &fnb);
+        },
     }
     const a = f.allocator;
     const src = std.fs.cwd().readFileAlloc(a, path, 1024 * 1024) catch return .absent;
@@ -59,8 +87,10 @@ fn nodeActivate(f: *Node, id: []const u8) MemberResult {
         }
     }
     const c = Cl.cellCreate(shape.?, shape_def.?, id, f.scope, f.world_root) orelse return .absent;
-    // The granted epoch rides with the cell — the write fence presents it.
-    Cl.cellStampFleet(c, f.world_root, id, f.name, epoch);
+    // The granted epoch rides with the cell — the write fence presents it;
+    // the lease deadline rides too so resident hits can renew without
+    // touching the floor.
+    Cl.cellStampFleet(c, f.world_root, id, f.name, epoch, f.lease_ms, until);
     const key = a.dupe(u8, id) catch {
         Cl.cellDestroy(c);
         return .absent;
@@ -112,40 +142,3 @@ fn nodeActivate(f: *Node, id: []const u8) MemberResult {
     return if (found) .{ .retired = .{} } else .{ .absent = .{} };
 }
 
-// The fleet helpers are called from HOST code — nothing in the program
-// spells `std/fleet:claim`, so dead-strip retires the tors and
-// `koru_fleet` would never emit. Retain all six: they share the helpers.
-fn retainFleetEvents(prog: *const ast.Program, alloc: std.mem.Allocator) void {
-    const W = struct {
-        fn retain(its: []const ast.Item, want: []const u8, al: std.mem.Allocator) void {
-            for (its) |*pi| {
-                switch (pi.*) {
-                    .module_decl => |*md| {
-                        if (std.mem.eql(u8, md.logical_name, "std.fleet")) {
-                            for (md.items) |*mi| {
-                                if (mi.* != .event_decl) continue;
-                                const ed = &mi.event_decl;
-                                if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], want)) {
-                                    for (ed.annotations) |a| if (std.mem.eql(u8, a, "retain")) return;
-                                    const grown = al.alloc([]const u8, ed.annotations.len + 1) catch unreachable;
-                                    @memcpy(grown[0..ed.annotations.len], ed.annotations);
-                                    grown[ed.annotations.len] = al.dupe(u8, "retain") catch unreachable;
-                                    @constCast(ed).annotations = grown;
-                                }
-                            }
-                            return;
-                        }
-                        retain(md.items, want, al);
-                    },
-                    else => {},
-                }
-            }
-        }
-    };
-    W.retain(prog.items, "claim", alloc);
-    W.retain(prog.items, "owner", alloc);
-    W.retain(prog.items, "seize", alloc);
-    W.retain(prog.items, "release", alloc);
-    W.retain(prog.items, "guard", alloc);
-    W.retain(prog.items, "reset", alloc);
-}
