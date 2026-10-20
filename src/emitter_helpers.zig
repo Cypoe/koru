@@ -6606,6 +6606,31 @@ fn lowerIdent(buf: []u8, name: []const u8) []const u8 {
     return buf[0..name.len];
 }
 
+/// The items list that directly contains `decl` — a module_decl's items when
+/// the event is module-nested, else `items` itself. Module-nested decls carry
+/// unqualified paths (`["drain"]` inside both `std.node` and `std.fleet`), so
+/// a bare-segment scan across all items first-matches by ITEM ORDER, not by
+/// the module the resolved event actually lives in — `std/node:drain`'s proc
+/// spliced into a `std/fleet:drain` call once a `std/node:drain` call pulled
+/// it into the retained set (470_015). Scoping to the decl's own module
+/// restores the qualifier its path never carried.
+fn itemsOfDecl(items: []const ast.Item, decl: *const ast.EventDecl) []const ast.Item {
+    for (items) |*item| {
+        switch (item.*) {
+            .module_decl => |*m| {
+                for (m.items) |*mi| {
+                    if (mi.* == .event_decl and &mi.event_decl == decl) return m.items;
+                }
+            },
+            .event_decl => |*ed| {
+                if (ed == decl) return items;
+            },
+            else => {},
+        }
+    }
+    return items;
+}
+
 fn findDefaultZigProc(items: []const ast.Item, path: *const ast.DottedPath) ?*const ast.ProcDecl {
     for (items) |*item| {
         switch (item.*) {
@@ -6743,7 +6768,12 @@ fn inlineEffectfulEligibility(ctx: *EmissionContext, inv: *const ast.Invocation,
     // right or wrong, is preserved rather than traded for a missing symbol.
     if (registeredVariantProcExists(items, event_decl, &inv.path)) return null;
 
-    if (findDefaultZigProc(items, &event_decl.path)) |proc| {
+    // The impl lives beside its event — module-nested decls carry unqualified
+    // paths, so the scan must be scoped to the event's own module_decl or a
+    // same-named proc from ANY module wins by item order (470_015).
+    const event_items = itemsOfDecl(items, event_decl);
+
+    if (findDefaultZigProc(event_items, &event_decl.path)) |proc| {
         // A nested fn makes token rewriting unsound; a terminal-bearing event
         // whose proc never `return`s relies on the legacy glue's synthesized
         // tail. Both keep the call path.
@@ -6777,7 +6807,7 @@ fn inlineEffectfulEligibility(ctx: *EmissionContext, inv: *const ast.Invocation,
     // same way, and unhandled optional fires no-op at the impl-fire site.
     // Pins: 833 (fold × optional arm), 400_145/154 (omitted optional).
 
-    const found = findImplByPath(items, &event_decl.path) orelse return null;
+    const found = findImplByPath(event_items, &event_decl.path) orelse return null;
     switch (found) {
         .flow => |flow| return .{ .event_decl = event_decl, .proc = null, .flow = flow },
         else => return null,
@@ -15226,11 +15256,14 @@ fn emitEventDeclForModule(
     try code_emitter.write("_ = &__koru_event_input;\n");
 
     // Find and emit implementation (ImmediateImpl, Flow with impl_of, or proc_decl)
-    // Use findImplByPath which correctly handles module_qualifier differences
+    // Scope to the event's own module_decl — module-nested decls carry
+    // unqualified paths, so an all_items scan first-matches a same-named impl
+    // from any module by item order (470_015).
     var found_impl = false;
+    const event_items = itemsOfDecl(all_items, event);
 
     // First check for impl items (immediate mock or flow body)
-    if (findImplByPath(all_items, &event.path)) |found| {
+    if (findImplByPath(event_items, &event.path)) |found| {
         switch (found) {
             .immediate_impl => |ii| {
                 const bc = &ii.value;
@@ -15292,7 +15325,7 @@ fn emitEventDeclForModule(
 
     // Then check for proc_decl (Zig inline implementation)
     if (!found_impl) {
-        if (findProcDeclByPath(all_items, &event.path)) |proc| {
+        if (findProcDeclByPath(event_items, &event.path)) |proc| {
             if (proc.body.text.len > 0) {
                 const body = try rewriteModToBare(ctx.allocator, proc.body.text);
                 defer ctx.allocator.free(body);
