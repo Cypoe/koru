@@ -1,0 +1,29 @@
+// Koru Standard Library: the `scopedispatch` part of bridge — the wire's
+// last mile: normalize, then run through the scope. Joined via
+// `~part scopedispatch` in bridge.kz; merged into the bridge module at
+// load.
+
+/// One wire item dispatched through the session: the runtime run with the
+/// bridge's pool, defined-flows table, and — when the model has introspection —
+/// the host verbs, plus the session binder so every link gets its `rN`.
+/// Typed positions were admitted by the gate; here they normalize to
+/// canonical quoted wire so eval sees one representation.
+fn dispatchThroughScope(br: *Bridge, src: []const u8, turn_env: ?*Interp.Environment) Runtime.run_event.Output {
+    // Page-backed like the rest of the wire layer — the normalized text
+    // must outlive the whole dispatch, and the arena dies at prepare().
+    const wire = Runtime.wireNormalize(std.heap.page_allocator, src, scopeInputFn(br), hostInputLookup);
+    return Runtime.run_event.handler(.{
+        .source = wire,
+        .scope = br.scope,
+        .handle_pool = &br.pool,
+        .auto_discharge = false,
+        .defined = br.defined,
+        .lenient = true,
+        .host_dispatch = if (br.introspection) @as(?Interp.HostDispatchFn, hostDispatch) else null,
+        .session_env = br.session_env,
+        .session_bind_fn = @as(?Interp.SessionBindFn, sessionBindAdapter),
+        .session_bind_env = br.session_env,
+        .session_bind_counter = &br.bound_count,
+        .turn_env = turn_env,
+    });
+}

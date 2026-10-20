@@ -1,0 +1,76 @@
+// Koru Standard Library: the `flowchecks` part of interpreter — the
+// pre-execution judgment: field membership, bound references, shadowing,
+// unreachable arms — one traversal before the flow runs. Joined via
+// `~part flowchecks` in interpreter.kz; merged into the module at load.
+//
+// FIELD MEMBERSHIP — a named field the verb's signature does not declare
+// is refused, never ignored at dispatch. The declared vocabulary comes
+// from the scope's own `get_event_input` table — the check is derived
+// from the same registry data the prompt and dispatcher are emitted
+// from, so it cannot drift from what dispatch enforces. `input_fn`
+// answers null for a name outside the scope: vocabulary membership is a
+// different question (event-denied at dispatch), and an empty list is a
+// real answer — a zero-field verb refuses any named field. A
+// session-defined flow's params are its own surface and are not judged
+// against the scope manifest; calls nested in its arms still are.
+//
+// BOUND REFERENCES — a bare identifier in arg position is a reference,
+// never a literal. Unbound, it must not degrade to its own text
+// (`append(handle: h)` dispatching `handle="h"` fails `HandleNotHeld`,
+// which blames the handle instead of the missing binding). Bindings are
+// per item along an arm path: `| ok h |>` scopes `h` to that arm's
+// subtree and to every later item of the turn — a sibling arm still sees
+// it unbound.
+
+pub const ValidationError = struct {
+    message: []const u8,
+    binding_name: []const u8,
+};
+
+pub fn checkFlowArgs(
+    flow: *const ast.Flow,
+    input_fn: ?InputLookupFn,
+    branches_fn: ?BranchesLookupFn,
+    defined: ?*DefinedFlows,
+    allocator: std.mem.Allocator,
+    session_env: ?*Environment,
+    turn_env: ?*Environment,
+) ?ValidationError {
+    var bound = std.StringHashMap(void).init(allocator);
+    defer bound.deinit();
+    // Session bindings are bound for this flow's whole text — a name an
+    // earlier turn bound is as real as an arm binding on this one. The
+    // turn env adds this turn's earlier items: `| ok b |>` on item 1 makes
+    // `b` a bound reference on item 3.
+    if (session_env) |se| {
+        var it = se.bindings.iterator();
+        while (it.next()) |e| bound.put(e.key_ptr.*, {}) catch {};
+    }
+    if (turn_env) |te| {
+        var it = te.bindings.iterator();
+        while (it.next()) |e| bound.put(e.key_ptr.*, {}) catch {};
+    }
+    return checkInvocationArgs(&flow.body, input_fn, branches_fn, defined, &bound, allocator);
+}
+
+/// Validates a flow AST before execution.
+/// Checks for shadowing (duplicate bindings), unreachable arms (a second
+/// unguarded handler for a branch first-match selection already answers),
+/// field membership (a named field the verb's signature does not declare),
+/// and bound references (a bare identifier no arm on this path binds).
+/// Returns null if valid, or ValidationError if invalid.
+pub fn validateFlow(
+    flow: *const ast.Flow,
+    allocator: std.mem.Allocator,
+    input_fn: ?InputLookupFn,
+    branches_fn: ?BranchesLookupFn,
+    defined: ?*DefinedFlows,
+    session_env: ?*Environment,
+    turn_env: ?*Environment,
+) ?ValidationError {
+    var seen_bindings = std.StringHashMap(void).init(allocator);
+    defer seen_bindings.deinit();
+    if (validateFlowRecursive(flow, &seen_bindings)) |e| return e;
+    if (checkShadowedArms(flow.body.continuations, allocator)) |e| return e;
+    return checkFlowArgs(flow, input_fn, branches_fn, defined, allocator, session_env, turn_env);
+}

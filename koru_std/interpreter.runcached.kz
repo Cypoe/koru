@@ -20,12 +20,14 @@
     scope_name: string = "default",  // Scope name for handle isolation
     auto_discharge: bool = true,  // Auto-discharge undischarged handles at end
     defined: ?*DefinedFlows = null, input_fn: ?InputLookupFn = null,  // REPL define; tor -> declared input fields
+    branches_fn: ?BranchesLookupFn = null,  // tor -> declared outcomes; arm-word check rides it
     lenient: bool = false,  // 430_056: under-handling hands back `unhandled-branch`
     host_dispatch: ?HostDispatchFn = null,
     session_env: ?*Environment = null,
     session_bind_fn: ?SessionBindFn = null,
     session_bind_env: ?*Environment = null,
-    session_bind_counter: ?*u64 = null
+    session_bind_counter: ?*u64 = null,
+    turn_env: ?*Environment = null           // arm bindings for the rest of this turn
 }
 | result { value: Value, used: u64, handles: u32, bound: string, trace: string }
 | unhandled-branch { branch: string, payload: string, handles: string }
@@ -53,21 +55,18 @@
         } },
     };
 
-    if (validateFlow(cached_flow, allocator, input_fn, defined, session_env)) |validation_err| {
+    if (validateFlow(cached_flow, allocator, input_fn, branches_fn, defined, session_env, turn_env)) |validation_err| {
         return .{ .validation_error = std.heap.page_allocator.dupe(u8, validation_err.message) catch "validation error" };
     }
 
     const env = &InterpreterThreadState.env;
     const expr_bindings = &InterpreterThreadState.expr_bindings;
 
-    // Seed the session's durable bindings into this run's env — the wire's
-    // `r3.user_id` on turn 9 names a value a turn 4 call bound. Session
-    // values were copied into session memory at bind time, so a shallow
-    // transplant is safe: the arena reset cannot reach them.
-    if (session_env) |se| {
-        var sit = se.bindings.iterator();
-        while (sit.next()) |e| env.bind(e.key_ptr.*, e.value_ptr.*) catch {};
-    }
+    // Session's durable bindings, then this turn's earlier arm bindings —
+    // the wire's `r3.user_id` on turn 9 names a value a turn 4 call bound;
+    // same scope as `run`. Session values were copied into session memory
+    // at bind time, so the shallow transplant survives the arena reset.
+    seedSessionTurnEnvs(env, session_env, turn_env);
 
     var budget_state = BudgetState.init(budget);
 
@@ -97,6 +96,7 @@
         .session_bind_fn = session_bind_fn,
         .session_bind_env = session_bind_env,
         .session_bind_counter = session_bind_counter,
+        .turn_env = turn_env,
         .unhandled_outcome = null,
     };
 

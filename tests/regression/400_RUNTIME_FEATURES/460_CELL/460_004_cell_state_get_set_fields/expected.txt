@@ -1,0 +1,13 @@
+shape: visits:u32;name:string;awake:bool
+visits unset
+visits set
+visits = 41
+unknown: vists (shape: room_state)
+visits wanted u32
+name set
+name reset
+name = assistant-02
+awake set
+awake = true
+cell said: r1
+assistant hibernated

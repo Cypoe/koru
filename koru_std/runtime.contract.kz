@@ -2,17 +2,21 @@
 // line's full render for the wire prompt. Joined via `~part contract` in
 // runtime.kz; merged into the runtime module at load.
 //
-// Three helpers compose one vocabulary line: the call surface
-// (`name(arg: type<phantom>)`), what the verb mints (`-> <obligation!>`),
-// and the outcome contract (`| branch payload` — the arm vocabulary the
-// wire grammar tells the model to name). Every piece renders from the
-// same spec tables dispatch enforces, so the prompt cannot describe a
-// call the law would refuse — or hide an outcome the law would fire.
+// The vocabulary line IS the declaration — `pub tor name { field: type }`,
+// then `-> type<obligation!>` for a bare return or `| branch payload` for
+// declared outcomes. One surface: the text that defines the verb is the
+// text that teaches it, so the prompt cannot describe a call the law
+// would refuse — or hide an outcome the law would fire.
 
-/// The call surface: `name(field: type, field: type<phantom>)`.
+/// The declaration head: `pub tor name { field: type, field: type<phantom> }`.
 fn wireSignatureLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, event_name: []const u8, input: []const InputFieldSpec) void {
+    out.appendSlice(allocator, "pub tor ") catch unreachable;
     out.appendSlice(allocator, event_name) catch unreachable;
-    out.append(allocator, '(') catch unreachable;
+    if (input.len == 0) {
+        out.appendSlice(allocator, " {}") catch unreachable;
+        return;
+    }
+    out.appendSlice(allocator, " { ") catch unreachable;
     for (input, 0..) |field, i| {
         if (i > 0) out.appendSlice(allocator, ", ") catch unreachable;
         out.appendSlice(allocator, field.name) catch unreachable;
@@ -24,30 +28,22 @@ fn wireSignatureLine(out: *std.ArrayList(u8), allocator: std.mem.Allocator, even
             out.append(allocator, '>') catch unreachable;
         }
     }
-    out.append(allocator, ')') catch unreachable;
+    out.appendSlice(allocator, " }") catch unreachable;
 }
 
-/// What the verb mints — ` -> <obligation!>` per create edge, the produce
-/// side a `<state>` arg elsewhere consumes.
-fn wireMintSuffix(out: *std.ArrayList(u8), allocator: std.mem.Allocator, creates: []const CreateSpec) void {
-    for (creates) |spec| {
+/// The declaration's outcome clause, spelled as the source spells it:
+/// a bare return (`| ok` with a positional `__type_ref` payload) renders
+/// ` -> T<obligation!>` — mints already ride the type text — and a
+/// declared outcome list renders ` | name T | name { f: t }`, `?` marking
+/// the one optional branch. A void decl gets no clause.
+fn wireDeclOutcome(out: *std.ArrayList(u8), allocator: std.mem.Allocator, branches: []const BranchSpec) void {
+    if (branches.len == 1 and std.mem.eql(u8, branches[0].name, "ok") and
+        branches[0].fields.len == 1 and std.mem.eql(u8, branches[0].fields[0].name, "__type_ref"))
+    {
         out.appendSlice(allocator, " -> ") catch unreachable;
-        if (spec.branch) |b| {
-            out.appendSlice(allocator, b) catch unreachable;
-            out.append(allocator, ' ') catch unreachable;
-        }
-        out.append(allocator, '<') catch unreachable;
-        out.appendSlice(allocator, spec.obligation_name) catch unreachable;
-        out.appendSlice(allocator, "!>") catch unreachable;
+        out.appendSlice(allocator, branches[0].fields[0].type_name) catch unreachable;
+        return;
     }
-}
-
-/// The outcome contract — ` | ok string | missing string | ?hint string` —
-/// the branch names an arm must spell. A `__type_ref` field is a
-/// positional payload (render the type alone); named fields render as the
-/// record the arm binds. `?` marks an optional outcome: the only branch
-/// a turn may omit.
-fn wireBranchSuffix(out: *std.ArrayList(u8), allocator: std.mem.Allocator, branches: []const BranchSpec) void {
     for (branches) |branch| {
         out.appendSlice(allocator, " | ") catch unreachable;
         if (branch.is_optional) out.append(allocator, '?') catch unreachable;

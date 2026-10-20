@@ -25,9 +25,9 @@ const host_verbs = [_]HostVerbSpec{
         .{ .name = "name", .type_name = "string" },
         .{ .name = "value", .type_name = "string" },
     } },
-    .{ .name = "note", .fields = &.{
-        .{ .name = "text", .type_name = "string" },
-    }, .doc = " — speaks to the observer, not the user: reasoning, plans, and \"why I'm stuck\" go here" },
+    .{ .name = "abandon", .fields = &.{
+        .{ .name = "reason", .type_name = "string" },
+    }, .doc = " — ends the session with your reason: what you tried, what blocked you" },
 };
 
 fn hostInputLookup(verb: []const u8) ?[]const Runtime.InputFieldSpec {
@@ -80,26 +80,5 @@ fn wireGate(br: *Bridge, source: []const u8) ?GateRejection {
     };
 }
 
-/// One wire item dispatched through the session: the runtime run with the
-/// bridge's pool, defined-flows table, and — when the model has introspection —
-/// the host verbs, plus the session binder so every link gets its `rN`.
-/// Typed positions were admitted by the gate; here they normalize to
-/// canonical quoted wire so eval sees one representation.
-fn dispatchThroughScope(br: *Bridge, src: []const u8) Runtime.run_event.Output {
-    // Page-backed like the rest of the wire layer — the normalized text
-    // must outlive the whole dispatch, and the arena dies at prepare().
-    const wire = Runtime.wireNormalize(std.heap.page_allocator, src, scopeInputFn(br), hostInputLookup);
-    return Runtime.run_event.handler(.{
-        .source = wire,
-        .scope = br.scope,
-        .handle_pool = &br.pool,
-        .auto_discharge = false,
-        .defined = br.defined,
-        .lenient = true,
-        .host_dispatch = if (br.introspection) @as(?Interp.HostDispatchFn, hostDispatch) else null,
-        .session_env = br.session_env,
-        .session_bind_fn = @as(?Interp.SessionBindFn, sessionBindAdapter),
-        .session_bind_env = br.session_env,
-        .session_bind_counter = &br.bound_count,
-    });
-}
+// dispatchThroughScope moved to the `scopedispatch` part — the wire's
+// last mile: normalize, then run through the scope.

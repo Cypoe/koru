@@ -1,0 +1,5 @@
+seeded visits=0
+c1 captured: visits=1 name=assistant-01 awake=true
+map sees visits = 1
+c2 captured: visits=11 name=assistant-01 awake=true
+room-7 hibernated

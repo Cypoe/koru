@@ -1,0 +1,13 @@
+// Test: `std/cell:open(nosuch, ...)` — the shape name must resolve to a
+// declared std/proto at comptime. An unknown shape is a refusal, not a
+// runtime miss.
+
+~import std/io
+~import std/cell
+~import std/runtime
+
+~std/runtime:register(scope: "cell") {
+}
+
+~std/cell:open(nosuch, id: "assistant")
+| cell c |> std/cell:hibernate(c)

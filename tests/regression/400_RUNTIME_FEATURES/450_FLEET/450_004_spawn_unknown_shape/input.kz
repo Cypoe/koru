@@ -1,0 +1,23 @@
+// Test: `std/fleet:spawn(f, id:, cell: nosuch)` — the shape name must resolve
+// to a declared std/proto at comptime. An unknown shape is a refusal, not a
+// runtime miss — same contract as `std/cell:open`.
+
+~import std/io
+~import std/fleet
+~import std/proto
+~import std/runtime
+
+~std/proto(room_state) {
+    visits: u32
+}
+
+~std/runtime:register(scope: "cell") {
+}
+
+~std/fleet:new(node, scope: "cell", world: "", capacity: 8)
+
+~std/fleet(node)
+| fleet f |> std/fleet:spawn(f, id: "room-9", cell: nosuch)
+  | spawned b |> std/io:print.ln("spawned")
+  | resident |> std/io:print.ln("resident")
+  | refused |> std/io:print.ln("refused")

@@ -1,0 +1,10 @@
+// Test: `std/fleet(node.ID)` without `| not-found` is refused — a member
+// lookup can miss, and dormant must be a stated decision, not a skipped arm.
+
+~import std/io
+~import std/fleet
+
+~std/fleet:new(node, scope: "cell", world: "", capacity: 8)
+
+~std/fleet(node.room-42)
+| cell b |> std/io:print.ln("found")

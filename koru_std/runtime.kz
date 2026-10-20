@@ -7,6 +7,7 @@
 // - std/runtime:get-scope(name: "...") looks up a scope at runtime
 
 ~[comptime|runtime]
+
 ~import std/compiler_types
 ~import std/interpreter
 
@@ -121,6 +122,7 @@ const ast_reg = @import("ast");
             .discharges_specs = obligations.discharges_specs,
             .branches = branches,
             .input_fields = input_fields,
+            .doc = info.event_decl.prose,
             .symbol = symbol,
             .dispatch_name = dispatch_name,
             .module_name = info.module_name,
@@ -194,7 +196,10 @@ const ast_reg = @import("ast");
         code.appendSlice(allocator, I ++ "                if (__koru_ptr_info.size == .slice and __koru_ptr_info.child == u8) {\n") catch unreachable;
         code.appendSlice(allocator, I ++ "                    @field(__koru_input, __koru_field.name) = __koru_raw;\n") catch unreachable;
         code.appendSlice(allocator, I ++ "                } else {\n") catch unreachable;
-        code.appendSlice(allocator, I ++ "                    @field(__koru_input, __koru_field.name) = __koru_dispatcher_std.mem.zeroes(__koru_F);\n") catch unreachable;
+        code.appendSlice(allocator, I ++ "                    @field(__koru_input, __koru_field.name) = koru_std.koru_interpreter.resolveDispatchResource(__koru_F, __koru_raw) orelse {\n") catch unreachable;
+        code.appendSlice(allocator, I ++ "                        koru_std.koru_interpreter.setDispatchDetail(__koru_dispatcher_std.fmt.allocPrint(__koru_dispatcher_std.heap.page_allocator, \"field '{s}' names a resource token this pool does not hold — got '{s}'\", .{ __koru_field.name, __koru_raw }) catch @panic(\"dispatch: OOM\"));\n") catch unreachable;
+        code.appendSlice(allocator, I ++ "                        return error.InvalidArgument;\n") catch unreachable;
+        code.appendSlice(allocator, I ++ "                    };\n") catch unreachable;
         code.appendSlice(allocator, I ++ "                }\n") catch unreachable;
         code.appendSlice(allocator, I ++ "            },\n") catch unreachable;
         code.appendSlice(allocator, I ++ "            else => {\n") catch unreachable;
@@ -267,6 +272,9 @@ const ast_reg = @import("ast");
             code.appendSlice(allocator, I ++ "            if (__koru_ptr_info.size == .slice and __koru_ptr_info.child == u8) {\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                __koru_SR.buf[0] = .{ .name = \"__type_ref\", .value = __koru_FieldValue{ .string_val = __koru_own(__koru_v) } };\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                __koru_n = 1;\n") catch unreachable;
+            code.appendSlice(allocator, I ++ "            } else {\n") catch unreachable;
+            code.appendSlice(allocator, I ++ "                __koru_SR.buf[0] = .{ .name = \"__type_ref\", .value = __koru_FieldValue{ .string_val = koru_std.koru_interpreter.registerDispatchResource(@typeName(__koru_ptr_info.child), __koru_v) } };\n") catch unreachable;
+            code.appendSlice(allocator, I ++ "                __koru_n = 1;\n") catch unreachable;
             code.appendSlice(allocator, I ++ "            }\n") catch unreachable;
             code.appendSlice(allocator, I ++ "        }\n") catch unreachable;
             code.appendSlice(allocator, I ++ "        __koru_out.* = .{ .branch = \"\", .fields = __koru_SR.buf[0..__koru_n] };\n") catch unreachable;
@@ -292,7 +300,7 @@ const ast_reg = @import("ast");
             code.appendSlice(allocator, I ++ "                if (__koru_ptr_info.size == .slice and __koru_ptr_info.child == u8) {\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                    __koru_S.buf[0] = .{ .name = \"__type_ref\", .value = __koru_FieldValue{ .string_val = __koru_own(__koru_p) } };\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                } else {\n") catch unreachable;
-            code.appendSlice(allocator, I ++ "                    break :blk @as(usize, 0);\n") catch unreachable;
+            code.appendSlice(allocator, I ++ "                    __koru_S.buf[0] = .{ .name = \"__type_ref\", .value = __koru_FieldValue{ .string_val = koru_std.koru_interpreter.registerDispatchResource(@typeName(__koru_ptr_info.child), __koru_p) } };\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                }\n") catch unreachable;
             code.appendSlice(allocator, I ++ "            } else {\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                break :blk @as(usize, 0);\n") catch unreachable;
@@ -319,6 +327,9 @@ const ast_reg = @import("ast");
             code.appendSlice(allocator, I ++ "                .pointer => |__koru_ptr_info| {\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                    if (__koru_ptr_info.size == .slice and __koru_ptr_info.child == u8) {\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                        __koru_S.buf[__koru_count] = .{ .name = __koru_field.name, .value = __koru_FieldValue{ .string_val = __koru_own(@field(__koru_p, __koru_field.name)) } };\n") catch unreachable;
+            code.appendSlice(allocator, I ++ "                        __koru_count += 1;\n") catch unreachable;
+            code.appendSlice(allocator, I ++ "                    } else if (__koru_ptr_info.size == .one) {\n") catch unreachable;
+            code.appendSlice(allocator, I ++ "                        __koru_S.buf[__koru_count] = .{ .name = __koru_field.name, .value = __koru_FieldValue{ .string_val = koru_std.koru_interpreter.registerDispatchResource(@typeName(__koru_ptr_info.child), @field(__koru_p, __koru_field.name)) } };\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                        __koru_count += 1;\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                    }\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                },\n") catch unreachable;
@@ -444,6 +455,22 @@ const ast_reg = @import("ast");
             code.appendSlice(allocator, " }") catch unreachable;
         }
         code.appendSlice(allocator, "}") catch unreachable;
+
+        // Declaration prose — the vertical annotation block's rationale,
+        // escaped into a Zig string literal so the vocabulary line can say
+        // what the verb IS, not just what it takes.
+        if (event.doc.len > 0) {
+            code.appendSlice(allocator, ", .doc = \"") catch unreachable;
+            for (event.doc) |ch| {
+                switch (ch) {
+                    '"' => code.appendSlice(allocator, "\\\"") catch unreachable,
+                    '\\' => code.appendSlice(allocator, "\\\\") catch unreachable,
+                    '\n' => code.appendSlice(allocator, "\\n") catch unreachable,
+                    else => code.append(allocator, ch) catch unreachable,
+                }
+            }
+            code.appendSlice(allocator, "\"") catch unreachable;
+        }
 
         code.appendSlice(allocator, ", .dispatcher = ") catch unreachable;
         code.appendSlice(allocator, event.dispatch_name) catch unreachable;
@@ -576,6 +603,19 @@ const ast_reg = @import("ast");
     code.appendSlice(allocator, "_event_names;\n") catch unreachable;
     code.appendSlice(allocator, I ++ "}\n\n") catch unreachable;
 
+    // Generate doc lookup — the tor's declaration prose (vertical
+    // annotation block text), empty when the decl carried none.
+    code.appendSlice(allocator, I ++ "pub fn get_event_doc_") catch unreachable;
+    code.appendSlice(allocator, scope_ident) catch unreachable;
+    code.appendSlice(allocator, "(__koru_event_name: []const u8) []const u8 {\n") catch unreachable;
+    code.appendSlice(allocator, I ++ "    inline for (scope_events_") catch unreachable;
+    code.appendSlice(allocator, scope_ident) catch unreachable;
+    code.appendSlice(allocator, ") |__koru_ev| {\n") catch unreachable;
+    code.appendSlice(allocator, I ++ "        if (__koru_dispatcher_std.mem.eql(u8, __koru_event_name, __koru_ev.name)) return __koru_ev.doc;\n") catch unreachable;
+    code.appendSlice(allocator, I ++ "    }\n") catch unreachable;
+    code.appendSlice(allocator, I ++ "    return \"\";\n") catch unreachable;
+    code.appendSlice(allocator, I ++ "}\n\n") catch unreachable;
+
     // Generate input-field lookup - an tor's argument vocabulary (null = not this scope's verb).
     code.appendSlice(allocator, I ++ "pub fn get_event_input_") catch unreachable;
     code.appendSlice(allocator, scope_ident) catch unreachable;
@@ -696,7 +736,20 @@ const ast_reg = @import("ast");
             code.appendSlice(allocator, if (branch_spec.is_optional) "true" else "false") catch unreachable;
             code.appendSlice(allocator, " }") catch unreachable;
         }
-        code.appendSlice(allocator, "} },\n") catch unreachable;
+        code.appendSlice(allocator, "}") catch unreachable;
+        if (event.doc.len > 0) {
+            code.appendSlice(allocator, ", .doc = \"") catch unreachable;
+            for (event.doc) |ch| {
+                switch (ch) {
+                    '"' => code.appendSlice(allocator, "\\\"") catch unreachable,
+                    '\\' => code.appendSlice(allocator, "\\\\") catch unreachable,
+                    '\n' => code.appendSlice(allocator, "\\n") catch unreachable,
+                    else => code.append(allocator, ch) catch unreachable,
+                }
+            }
+            code.appendSlice(allocator, "\"") catch unreachable;
+        }
+        code.appendSlice(allocator, " },\n") catch unreachable;
     }
     code.appendSlice(allocator, I ++ "},\n") catch unreachable;
     code.appendSlice(allocator, I ++ "    .includes = &[_][]const u8{") catch unreachable;
@@ -706,7 +759,19 @@ const ast_reg = @import("ast");
         code.appendSlice(allocator, inc) catch unreachable;
         code.appendSlice(allocator, "\"") catch unreachable;
     }
-    code.appendSlice(allocator, "}\n") catch unreachable;
+    code.appendSlice(allocator, "},\n") catch unreachable;
+    if (scope_manifest.doc.len > 0) {
+        code.appendSlice(allocator, I ++ "    .doc = \"") catch unreachable;
+        for (scope_manifest.doc) |ch| {
+            switch (ch) {
+                '"' => code.appendSlice(allocator, "\\\"") catch unreachable,
+                '\\' => code.appendSlice(allocator, "\\\\") catch unreachable,
+                '\n' => code.appendSlice(allocator, "\\n") catch unreachable,
+                else => code.append(allocator, ch) catch unreachable,
+            }
+        }
+        code.appendSlice(allocator, "\",\n") catch unreachable;
+    }
     code.appendSlice(allocator, I ++ "};\n\n") catch unreachable;
 
     code.appendSlice(allocator, I ++ "pub fn dispatch_") catch unreachable;
@@ -805,6 +870,8 @@ pub const ScopeRuntime = struct {
     // Vocabulary enumeration: tor names + per-event input/arg fields
     events_fn: ?EventsLookupFn,
     input_fn: ?InputLookupFn,
+    // Declaration prose per verb — what the tor IS, beside its signature
+    doc_fn: ?DocLookupFn,
     // The scope's manifest record — minted at scope creation (register) from
     // the same EventEntry data the dispatch tables are emitted from. null
     // never occurs for a descriptor register built: the two are emitted side
@@ -874,6 +941,9 @@ pub const ManifestEvent = struct {
     creates: []const ManifestCreate = &.{},
     discharges: []const ManifestDischarge = &.{},
     branches: []const ManifestBranch = &.{},
+    /// Declaration prose — the vertical annotation block's text, what the
+    /// verb IS. Empty when the decl carried no prose.
+    doc: []const u8 = "",
 };
 
 /// The served contract for one scope: the register block as data.
@@ -885,6 +955,12 @@ pub const ScopeManifest = struct {
     /// Direct `scope(other)` includes named in THIS register block, in
     /// declaration order. Transitive closures stay implicit.
     includes: []const []const u8 = &.{},
+    /// The scope's own contract — the annotation-block prose of a module-
+    /// level `contract` tor declaration. It is documentation, not an event:
+    /// never registered, never callable, and the grammar render serves it
+    /// from here so the text ships with the prompt rather than costing a
+    /// model turn to fetch.
+    doc: []const u8 = "",
 };
 
 fn mangleScopeName(comptime name: []const u8) []const u8 {
@@ -973,6 +1049,7 @@ fn buildScopeTable() []const ScopeRuntime {
             const branches_name = std.fmt.comptimePrint("get_event_branches_{s}", .{scope_ident});
             const events_name = std.fmt.comptimePrint("get_events_{s}", .{scope_ident});
             const input_name = std.fmt.comptimePrint("get_event_input_{s}", .{scope_ident});
+            const doc_name = std.fmt.comptimePrint("get_event_doc_{s}", .{scope_ident});
             const manifest_name = std.fmt.comptimePrint("{s}_manifest", .{scope_ident});
 
             table[i] = .{
@@ -987,6 +1064,7 @@ fn buildScopeTable() []const ScopeRuntime {
                 .branches_fn = if (@hasDecl(NS, branches_name)) &@field(NS, branches_name) else null,
                 .events_fn = if (@hasDecl(NS, events_name)) &@field(NS, events_name) else null,
                 .input_fn = if (@hasDecl(NS, input_name)) &@field(NS, input_name) else null,
+                .doc_fn = if (@hasDecl(NS, doc_name)) &@field(NS, doc_name) else null,
                 .manifest = if (@hasDecl(NS, manifest_name)) &@field(NS, manifest_name) else null,
             };
             i += 1;
@@ -996,161 +1074,9 @@ fn buildScopeTable() []const ScopeRuntime {
     return table[0..];
 }
 
-~[retain]pub tor get-scope { name: string }
-| scope {
-    dispatcher: DispatchFn,
-    cost_fn: ?CostFn,
-    creates_obligations_fn: ?ObligationsArrayFn,
-    discharges_obligations_fn: ?ObligationsArrayFn,
-    discharge_event_fn: ?DischargeEventFn,
-    creates_spec_fn: ?CreatesSpecFn,
-    discharges_spec_fn: ?DischargesSpecFn,
-    events_fn: ?EventsLookupFn,
-    input_fn: ?InputLookupFn
-}
-| not-found
-
-// Look up scope dispatcher by name — generated beside the register as dispatch_<scope>
-~proc get-scope|zig {
-    inline for (comptime buildScopeTable()) |scope_info| {
-        if (std.mem.eql(u8, name, scope_info.name)) {
-            return .{ .scope = .{
-                .dispatcher = scope_info.dispatcher,
-                .cost_fn = scope_info.cost_fn,
-                .creates_obligations_fn = scope_info.creates_obligations_fn,
-                .discharges_obligations_fn = scope_info.discharges_obligations_fn,
-                .discharge_event_fn = scope_info.discharge_event_fn,
-                .creates_spec_fn = scope_info.creates_spec_fn,
-                .discharges_spec_fn = scope_info.discharges_spec_fn,
-                .events_fn = scope_info.events_fn,
-                .input_fn = scope_info.input_fn,
-            } };
-        }
-    }
-    return .{ .not_found = .{} };
-}
-
-// ============================================================================
-// SCOPE-VOCABULARY - Render a scope's vocabulary for an external reader
-//
-// The whole point of the enumeration surface: a model driving this interpreter
-// must be told, accurately, what it may call — and that description must come
-// from the register declaration, not a hand-typed script that can drift. This
-// renders exactly the surface the register block enforces, as one line per
-// tor with its named arguments and possession phantoms:
-//
-//   open(path: string)
-//   append(handle: string<!open>, text: string)
-//   close(handle: string<!open>)
-//   say(text: string)
-//
-// No JSON schema, no second source of truth: the prompt and the enforcement
-// are the same bytes.
-
-// @retain: scope_vocabulary_event is referenced from generated Zig code in user
-// pipelines (std/bridge:vocabulary compiles to scope_vocabulary_event.handler).
-~[retain]pub tor scope-vocabulary { name: string }
-| ok string
-| not-found
-
-~proc scope-vocabulary|zig {
-    // A local arena over page_allocator — the same substrate the interpreter's
-    // own arena and its message dupes use. ArrayList growth here allocates
-    // fresh chunks (arena realloc resolves to alloc+copy, which works in this
-    // binary; direct realloc-based growth OOMs). The arena is intentionally
-    // never freed: the returned string must outlive this call, and a few pages
-    // per vocabulary render are tolerated exactly like parse-error messages.
-    var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const allocator = arena_state.allocator();
-    var out = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
-
-    inline for (comptime buildScopeTable()) |scope_info| {
-        if (std.mem.eql(u8, name, scope_info.name)) {
-            const events = scope_info.events_fn.?();
-            for (events) |event_name| {
-                if (out.items.len > 0) out.append(allocator, '\n') catch unreachable;
-                const input = if (scope_info.input_fn) |f| f(event_name) orelse &.{} else &.{};
-                wireSignatureLine(&out, allocator, event_name, input);
-                // What the verb mints — the produce edge a `<state>` arg
-                // elsewhere consumes, from the spec table the pool enforces.
-                if (scope_info.creates_spec_fn) |cs| wireMintSuffix(&out, allocator, cs(event_name));
-                // The outcome contract — the branch names an arm must spell.
-                if (scope_info.branches_fn) |bf| wireBranchSuffix(&out, allocator, bf(event_name));
-            }
-            return .{ .ok = out.toOwnedSlice(allocator) catch unreachable };
-        }
-    }
-    return .{ .not_found = .{} };
-}
-
-// ============================================================================
-// SCOPE-MANIFEST - Serve a scope's vocabulary as a data contract (JSON)
-//
-// The manifest record is minted at scope creation (register) from the same
-// EventEntry data the dispatch tables are emitted from; this tor serializes
-// it to JSON so a running program can serve it as a contract endpoint
-// (Orisha) or hand it to a tool. The emitted JSON has no hand-authored bytes:
-// every field derives from the scope declaration, so the served contract and
-// the enforcement cannot drift. Defined flows (session growth) are NOT part
-// of this record — it is the compiled base, minted before any session exists.
-
-// @retain: scope_manifest_event is referenced from generated Zig code in user
-// pipelines (Orisha serves it as the .json endpoint; explain consumes it).
-~[retain]pub tor scope-manifest { name: string }
-| ok string
-| not-found
-
-~proc scope-manifest|zig {
-    inline for (comptime buildScopeTable()) |scope_info| {
-        if (std.mem.eql(u8, name, scope_info.name)) {
-            const m = scope_info.manifest orelse {
-                std.debug.print("[RUNTIME] scope '{s}' has no manifest record\n", .{name});
-                return .{ .not_found = .{} };
-            };
-            var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-            const allocator = arena_state.allocator();
-            const json = scopeManifestToJson(allocator, m) catch return .{ .not_found = .{} };
-            return .{ .ok = json };
-        }
-    }
-    return .{ .not_found = .{} };
-}
-
-// ============================================================================
-// SCOPE-GRAMMAR - the wire grammar, rendered from the register block
-//
-// The third render from the scope table, and the one that closes the R2
-// loop: scope-vocabulary tells a model WHAT it may call, scope-manifest
-// serves it as data, and scope-grammar teaches HOW a call is written — the
-// wire's shape rules (the constant half, WIRE_GRAMMAR_TEXT, kept beside the
-// parser that enforces it) above this scope's own verb lines (rendered by
-// scope-vocabulary, so the signatures cannot drift from enforcement either).
-// A prompt built from this render and a turn judged by parse.wire are the
-// same declaration read twice: the lesson and the law.
-
-// @retain: scope_grammar_event is referenced from generated Zig code in user
-// pipelines (kopium's agent prompt is built from it).
-~[retain]pub tor scope-grammar { name: string }
-| ok string
-| not-found
-
-~proc scope-grammar|zig {
-    inline for (comptime buildScopeTable()) |scope_info| {
-        if (std.mem.eql(u8, name, scope_info.name)) {
-            var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-            const allocator = arena_state.allocator();
-            var out = std.ArrayList(u8).initCapacity(allocator, 512) catch unreachable;
-            out.appendSlice(allocator, wireGrammarRules(allocator, scope_info.manifest)) catch unreachable;
-            out.appendSlice(allocator, "\n\nYour vocabulary:\n") catch unreachable;
-            switch (scope_vocabulary_event.handler(.{ .name = name })) {
-                .ok => |v| out.appendSlice(allocator, v) catch unreachable,
-                .not_found => unreachable, // the inline-for already matched this scope
-            }
-            return .{ .ok = out.toOwnedSlice(allocator) catch unreachable };
-        }
-    }
-    return .{ .not_found = .{} };
-}
+// The scope introspection tors — get-scope, scope-vocabulary,
+// scope-manifest, scope-grammar (and the scope-affordances tor decl) —
+// moved to the `scopeverbs` part.
 
 // ============================================================================
 // EXPLAIN-RUNTIME - the `[explainer]` for the scope registry
@@ -1282,3 +1208,8 @@ fn lookupEventBranches(scope_name: []const u8, event_name: []const u8) []const B
 ~part wiretext
 ~part contract
 ~part registry
+~part scopeverbs
+~part jsonemit
+~part runcimpl
+~part lookups
+~part branchex

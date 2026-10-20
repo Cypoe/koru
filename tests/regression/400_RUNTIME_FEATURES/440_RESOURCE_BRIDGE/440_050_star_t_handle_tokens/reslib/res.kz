@@ -1,0 +1,27 @@
+// A `*T` resource module for the token-dispatch pin: the wire never sees
+// a pointer — mint() produces a *Res that packs as "h:Res:N", use()
+// resolves the token back to the live struct, release() discharges it.
+
+pub const Res = struct { v: u32 };
+
+~pub tor mint {} -> *Res<opened!>
+
+~proc mint|zig {
+    const r = @import("std").heap.page_allocator.create(Res) catch unreachable;
+    r.* = .{ .v = 42 };
+    return r;
+}
+
+~pub tor grab { r: *Res<opened> }
+
+~proc grab|zig {
+    var buf: [32]u8 = undefined;
+    const s = @import("std").fmt.bufPrint(&buf, "used v={d}\n", .{r.v}) catch unreachable;
+    _ = @import("std").posix.write(1, s) catch {};
+}
+
+~pub tor release { r: *Res<!opened> }
+
+~proc release|zig {
+    @import("std").heap.page_allocator.destroy(r);
+}

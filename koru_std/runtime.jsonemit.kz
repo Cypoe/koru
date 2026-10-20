@@ -1,0 +1,32 @@
+// Koru Standard Library: the `jsonemit` part of runtime — the JSON
+// append primitives the manifest serializer composes. Joined via
+// `~part jsonemit` in runtime.kz; merged into the runtime module at load.
+
+fn jsonAppendString(out: *std.ArrayList(u8), alloc: std.mem.Allocator, s: []const u8) void {
+    // Identifiers, module paths and obligation names cannot carry quotes or
+    // control bytes in Koru; the escape keeps caller-supplied scope names
+    // honest anyway (the only string in the manifest not shaped by the
+    // language).
+    out.append(alloc, '"') catch return;
+    for (s) |c| {
+        switch (c) {
+            '"' => out.appendSlice(alloc, "\\\"") catch return,
+            '\\' => out.appendSlice(alloc, "\\\\") catch return,
+            // All control bytes escape as \u — including \t/\n/\r, which the
+            // (valid, but longer) named forms would overlap in switch terms.
+            0...0x1f => |cc| {
+                var buf: [7]u8 = undefined;
+                const code = std.fmt.bufPrint(&buf, "\\u{x:0>4}", .{cc}) catch continue;
+                out.appendSlice(alloc, code) catch return;
+            },
+            else => out.append(alloc, c) catch return,
+        }
+    }
+    out.append(alloc, '"') catch return;
+}
+
+fn jsonAppendNumber(out: *std.ArrayList(u8), alloc: std.mem.Allocator, n: anytype) void {
+    var buf: [32]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "{d}", .{n}) catch return;
+    out.appendSlice(alloc, s) catch return;
+}

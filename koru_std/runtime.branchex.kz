@@ -1,0 +1,81 @@
+// Koru Standard Library: the `branchex` part of runtime — the outcome
+// spec types and their extraction from EventDecls. Joined via
+// `~part branchex` in runtime.kz; merged into the runtime module at load.
+
+    // Local branch specs for codegen (mirrors runtime BranchSpec/BranchField)
+    const LocalBranchField = struct {
+        name: []const u8,
+        type_name: []const u8,
+        is_optional: bool,
+    };
+
+    const LocalBranchSpec = struct {
+        name: []const u8,
+        fields: []const LocalBranchField,
+        is_optional: bool,
+    };
+
+    // Helper: Extract branch specs from EventDecl for shape validation.
+    // A `-> T` bare return IS an outcome — the arm vocabulary says `ok` —
+    // so mint the spec for it: `ok` carrying the declared type as a
+    // positional `__type_ref` payload (the same field the dispatcher
+    // reports a bare return on). Without it the outcome list was empty and
+    // a value-returning tor rendered identically to a void one.
+    const extractBranches = struct {
+        fn extract(alloc: std.mem.Allocator, ed: *const ast_reg.EventDecl) []const LocalBranchSpec {
+            var branch_specs = std.ArrayList(LocalBranchSpec){ .items = &.{}, .capacity = 0 };
+
+            if (ed.branches.len == 0) {
+                if (ed.return_type) |rt| {
+                    const fields = alloc.alloc(LocalBranchField, 1) catch return &.{};
+                    // The declared type text INCLUDES a return phantom:
+                    // `-> string<open!>` renders back exactly as declared.
+                    const ty = if (ed.return_phantom) |p|
+                        std.fmt.allocPrint(alloc, "{s}<{s}>", .{ rt, p }) catch rt
+                    else
+                        alloc.dupe(u8, rt) catch rt;
+                    fields[0] = .{
+                        .name = "__type_ref",
+                        .type_name = ty,
+                        .is_optional = false,
+                    };
+                    branch_specs.append(alloc, .{
+                        .name = "ok",
+                        .fields = fields,
+                        .is_optional = false,
+                    }) catch {};
+                }
+                return branch_specs.toOwnedSlice(alloc) catch &.{};
+            }
+
+            for (ed.branches) |branch| {
+                var field_specs = std.ArrayList(LocalBranchField){ .items = &.{}, .capacity = 0 };
+
+                for (branch.payload.fields) |field| {
+                    // Check if field type starts with ? (optional)
+                    const is_optional = field.type.len > 0 and field.type[0] == '?';
+                    const base = if (is_optional) field.type[1..] else field.type;
+                    // The payload field's phantom is part of the declared
+                    // type text: `| chosen string<chosen!>` renders verbatim.
+                    const type_name = if (field.phantom) |p|
+                        std.fmt.allocPrint(alloc, "{s}<{s}>", .{ base, p }) catch base
+                    else
+                        alloc.dupe(u8, base) catch base;
+
+                    field_specs.append(alloc, .{
+                        .name = alloc.dupe(u8, field.name) catch field.name,
+                        .type_name = type_name,
+                        .is_optional = is_optional,
+                    }) catch continue;
+                }
+
+                branch_specs.append(alloc, .{
+                    .name = alloc.dupe(u8, branch.name) catch branch.name,
+                    .fields = field_specs.toOwnedSlice(alloc) catch &.{},
+                    .is_optional = branch.is_optional,
+                }) catch continue;
+            }
+
+            return branch_specs.toOwnedSlice(alloc) catch &.{};
+        }
+    }.extract;

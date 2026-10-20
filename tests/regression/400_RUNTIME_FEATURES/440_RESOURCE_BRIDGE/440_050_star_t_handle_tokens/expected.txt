@@ -1,0 +1,9 @@
+used v=42
+used v=42
+step 1/6 result: {"branch":"","value":"h:Res:1"} bound: r1
+step 2/6 result: {"branch":""} bound: r2
+step 3/6 result: {"branch":""} bound: r3
+step 4/6 dispatch-error grab: 'r' wants a live <opened> — 'h:bogus:9' names nothing the session holds. Mint one through a verb whose signature ends '-> <opened!>'
+step 5/6 result: {"branch":""} bound: r4
+step 6/6 dispatch-error grab: 'r' wants a live <opened> — 'h:Res:1' names nothing the session holds. Mint one through a verb whose signature ends '-> <opened!>'
+

@@ -17,13 +17,7 @@
 
 ~import std/interpreter
 ~import std/runtime
-const std = @import("std");
-
-// Re-export interpreter types
-pub const HandlePool = @import("root").koru_std.koru_interpreter.HandlePool;
-pub const Handle = @import("root").koru_std.koru_interpreter.Handle;
-pub const DefinedFlows = @import("root").koru_std.koru_interpreter.DefinedFlows;
-pub const Environment = @import("root").koru_std.koru_interpreter.Environment;
+// `const std` and the interpreter-type re-exports moved to the `types` part.
 
 // Bridge: persistent session state
 pub const Bridge = struct {
@@ -71,8 +65,10 @@ pub const Bridge = struct {
         const session_env = allocator.create(Environment) catch @panic("std/bridge:create: OOM minting session env");
         session_env.* = Environment.init(session_arena.allocator());
         const world_owned: ?[]const u8 = if (world.len > 0) allocator.dupe(u8, world) catch world else null;
+        var pool = HandlePool.init(allocator);
+        pool.bridge_id = session_id;
         return .{
-            .pool = HandlePool.init(allocator),
+            .pool = pool,
             .allocator = allocator,
             .session_id = allocator.dupe(u8, session_id) catch session_id,
             .scope = allocator.dupe(u8, scope) catch scope,
@@ -198,3 +194,7 @@ pub const Bridge = struct {
 ~part items
 ~part define
 ~part deflines
+~part types
+~part grammar
+~part scopedispatch
+~part runsteps

@@ -1,0 +1,72 @@
+// Koru Standard Library: the `resdispatch` part of interpreter — the
+// thread-local channels a generated dispatcher speaks through. Joined via
+// `~part resdispatch` in interpreter.kz; merged into the interpreter
+// module at load.
+//
+// A generated dispatcher lives in the user module and cannot reach
+// InterpreterContext or the HandlePool — these slots are the channel:
+// dispatch-detail carries the typed-arg failure it detects, dispatch-pool
+// carries the pool that `*T` handle args resolve against and `*T` returns
+// mint into.
+
+// Dispatch-detail channel: a typed-arg failure the dispatcher detects
+// (e.g. an i64 field handed 'abc') reports through this slot instead of
+// degrading to a silent default. Cleared at the top of every run; read when
+// a dispatch actually throws, folded into error_detail.
+threadlocal var __dispatch_detail: ?[]const u8 = null;
+
+pub fn setDispatchDetail(msg: []const u8) void {
+    __dispatch_detail = msg;
+}
+pub fn takeDispatchDetail() ?[]const u8 {
+    const d = __dispatch_detail;
+    __dispatch_detail = null;
+    return d;
+}
+pub fn clearDispatchDetail() void {
+    __dispatch_detail = null;
+}
+
+// Dispatch-pool channel: a generated dispatcher also cannot reach the
+// HandlePool, but resolving a `*T` handle arg and minting a `*T` return's
+// token are both pool acts. Installed around each dispatcher call by the
+// run; a dispatch without a pool resolves nothing and refuses to mint.
+threadlocal var __dispatch_pool: ?*HandlePool = null;
+threadlocal var __dispatch_scope: []const u8 = "";
+
+pub fn setDispatchPool(pool: *HandlePool, scope_name: []const u8) void {
+    __dispatch_pool = pool;
+    __dispatch_scope = scope_name;
+}
+pub fn clearDispatchPool() void {
+    __dispatch_pool = null;
+    __dispatch_scope = "";
+}
+
+/// Pack-time half: a `*T` value cannot cross the wire, so the dispatcher
+/// mints its token and hands the pool the typed value under it. The token
+/// rides the result as an ordinary string field; the obligation scan picks
+/// it up as the handle_id — the handle and the resource it names are born
+/// of the same string. Panics rather than mint into nothing: a `*T` return
+/// with no pool installed is a runtime defect, not a degradable case.
+pub fn registerDispatchResource(type_name: []const u8, resource: *anyopaque) []const u8 {
+    const pool = __dispatch_pool orelse @panic("dispatch: *T return with no handle pool installed");
+    // @typeName arrives fully qualified through the emitted module's own
+    // namespace — the token wants the resource's name, not its address.
+    const bare = if (std.mem.lastIndexOfScalar(u8, type_name, '.')) |dot| type_name[dot + 1 ..] else type_name;
+    const token = pool.mintResourceToken(bare);
+    pool.registerResource(token, resource);
+    return token;
+}
+
+/// Arg-time half: a `*T` field on the input resolves the token to the
+/// resource the pool holds under it. Map membership IS liveness — discharge
+/// drops the entry, so a spent token returns null and the caller refuses
+/// loudly; zero-filling the pointer is not a resolution. Borrows (`*T`
+/// returns carrying no obligation) hold no handle record — the resource
+/// table alone is their authority.
+pub fn resolveDispatchResource(comptime T: type, token: []const u8) ?T {
+    const pool = __dispatch_pool orelse return null;
+    const raw = pool.resolveResource(token) orelse return null;
+    return @ptrCast(@alignCast(raw));
+}

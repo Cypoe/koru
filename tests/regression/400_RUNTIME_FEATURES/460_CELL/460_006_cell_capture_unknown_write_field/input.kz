@@ -1,0 +1,22 @@
+// Test: `captured { vists: ... }` — write heads are checked against the proto
+// block at transform time. A typo refuses naming the field AND the shape it
+// was checked against — the same check the stringly surface can only do at
+// runtime (`unknown-field`), except here the compiler holds the manifest.
+
+~import std/io
+~import std/cell
+~import std/proto
+~import std/runtime
+
+~std/proto(room_state) {
+    visits: u32
+}
+
+~std/runtime:register(scope: "cell") {
+}
+
+~std/cell:open(room_state, id: "room-7")
+| cell c |> std/cell:capture(c, shape: room_state)
+    ! as s |> std/cell:captured { vists: s.visits + 1 }
+    | captured f |> std/io:print.ln("{{ f.visits:d }}")
+  |> std/cell:hibernate(c)

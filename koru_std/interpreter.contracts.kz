@@ -26,24 +26,8 @@ pub const HostView = struct {
     // the session allocator, not the run arena. null = no session.
     session_env: ?*Environment = null,
 };
-// Dispatch-detail channel: a generated dispatcher lives in the user module
-// and cannot reach InterpreterContext, so a typed-arg failure it detects
-// (e.g. an i64 field handed 'abc') reports through this slot instead of
-// degrading to a silent default. Cleared at the top of every run; read when
-// a dispatch actually throws, folded into error_detail.
-threadlocal var __dispatch_detail: ?[]const u8 = null;
-
-pub fn setDispatchDetail(msg: []const u8) void {
-    __dispatch_detail = msg;
-}
-pub fn takeDispatchDetail() ?[]const u8 {
-    const d = __dispatch_detail;
-    __dispatch_detail = null;
-    return d;
-}
-pub fn clearDispatchDetail() void {
-    __dispatch_detail = null;
-}
+// Dispatch-detail/dispatch-pool channels moved to the `resdispatch` part —
+// the threadlocals a generated dispatcher reports and resolves through.
 
 // Host-provided verbs, consulted only when the scope's dispatcher returns
 // EventDenied: session-level capabilities (the bridge's `vocabulary`,
@@ -89,3 +73,10 @@ pub const DischargesSpecFn = *const fn([]const u8) []const DischargeSpec;  // to
 // is foreign.
 pub const InputFieldSpec = @import("root").koru_std.koru_runtime.InputFieldSpec;
 pub const InputLookupFn = *const fn([]const u8) ?[]const InputFieldSpec;
+
+// Outcome lookup — an tor's declared branch vocabulary; what an arm word
+// must spell. Empty means the single anonymous outcome, spelled `ok` on
+// the wire. The scope's table answers empty for a non-member name too,
+// so arm-word checks ride under the input_fn membership answer.
+pub const BranchSpec = @import("root").koru_std.koru_runtime.BranchSpec;
+pub const BranchesLookupFn = @import("root").koru_std.koru_runtime.BranchesLookupFn;

@@ -1,0 +1,19 @@
+// Test: `std/cell:capture` without `! as` — the live record is the capture's
+// whole point; a capture that never binds it is a refusal at transform time.
+
+~import std/io
+~import std/cell
+~import std/proto
+~import std/runtime
+
+~std/proto(room_state) {
+    visits: u32
+}
+
+~std/runtime:register(scope: "cell") {
+}
+
+~std/cell:open(room_state, id: "room-7")
+| cell c |> std/cell:capture(c, shape: room_state)
+    | captured f |> std/io:print.ln("{{ f.visits:d }}")
+  |> std/cell:hibernate(c)

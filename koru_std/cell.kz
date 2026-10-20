@@ -1,0 +1,926 @@
+// Koru Standard Library: cell — a shape-bound session.
+//
+//   std/proto(room_state) { visits: u32 }
+//
+//   std/cell:open(room_state, id: "assistant", scope: "cell", world: "cells")
+//   | cell c |> std/cell:run(c, source: "...")
+//     | result r |> ...
+//     ...
+//   |> std/cell:hibernate(c)
+//
+// `open` is the standalone custodian path — the caller takes the `cell!`
+// obligation into the arm and is answerable for `hibernate`. `std/fleet` is
+// the shared custodian: `spawn` mints the same session and keeps it in the
+// residency index instead. Cell-ness is shape + scope + world; custody is
+// whoever holds the obligation, and the cell code cannot tell the difference.
+//
+// The shape is a comptime name: `open`'s transform resolves `room_state`
+// against the program's `std/proto(...)` declarations — an unknown shape is a
+// refusal, not a runtime miss. Materializers (a `[SQLite]`-style field backend)
+// consume the declared shape later; nothing here bakes a storage model in.
+
+~import std/bridge
+
+const std = @import("std");
+const ast = @import("ast");
+const ast_functional = @import("ast_functional");
+const Br = @import("root").koru_std.koru_bridge;
+
+// ============================================================================
+// CELL — the session's own record: the bridge it runs on, the shape it was
+// opened under, and that shape's field manifest (baked at transform time from
+// the proto block). `state` is the in-memory field store — the sketch's
+// honest seam: nothing here persists across `hibernate` yet. The SQLite
+// materializer plugs in where `state` lives.
+// ============================================================================
+
+pub const CellField = struct {
+    name: []const u8,
+    ftype: []const u8,
+};
+
+pub const CellValue = union(enum) {
+    int: i64,
+    float: f64,
+    text: []const u8,
+    flag: bool,
+};
+
+pub const Cell = struct {
+    br: *Br.Bridge,
+    shape: []const u8,
+    manifest: []u8, // the baked "name:type;..." block — field slices live in it
+    fields: []CellField,
+    state: std.StringHashMap(CellValue),
+    allocator: std.mem.Allocator,
+};
+
+fn cellField(c: *Cell, name: []const u8) ?*const CellField {
+    for (c.fields) |*f| {
+        if (std.mem.eql(u8, f.name, name)) return f;
+    }
+    return null;
+}
+
+fn isIntType(t: []const u8) bool {
+    const ts = [_][]const u8{ "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "usize", "isize" };
+    for (ts) |k| {
+        if (std.mem.eql(u8, t, k)) return true;
+    }
+    return false;
+}
+
+fn isFloatType(t: []const u8) bool {
+    return std.mem.eql(u8, t, "f16") or std.mem.eql(u8, t, "f32") or std.mem.eql(u8, t, "f64");
+}
+
+fn freeValue(v: *CellValue, a: std.mem.Allocator) void {
+    if (v.* == .text) a.free(v.text);
+}
+
+// ============================================================================
+// CAPTURE BACKING — the scalar reads/writes a capture's generated record
+// seeds from and flushes to. Called from transform-emitted inline_code as
+// `koru_std.koru_cell.stateIntOr(c, "field")` — these are plain fns, not tors.
+// ============================================================================
+
+pub fn stateIntOr(c: *Cell, name: []const u8) i64 {
+    const v = c.state.get(name) orelse return 0;
+    return switch (v) { .int => |i| i, else => 0 };
+}
+pub fn stateFloatOr(c: *Cell, name: []const u8) f64 {
+    const v = c.state.get(name) orelse return 0.0;
+    return switch (v) { .float => |x| x, else => 0.0 };
+}
+pub fn stateTextOr(c: *Cell, name: []const u8) []const u8 {
+    const v = c.state.get(name) orelse return "";
+    return switch (v) { .text => |t| t, else => "" };
+}
+pub fn stateFlagOr(c: *Cell, name: []const u8) bool {
+    const v = c.state.get(name) orelse return false;
+    return switch (v) { .flag => |f| f, else => false };
+}
+fn statePut(c: *Cell, name: []const u8, v: CellValue) void {
+    if (c.state.getPtr(name)) |old| freeValue(old, c.allocator);
+    c.state.put(name, v) catch unreachable;
+}
+pub fn stateSetInt(c: *Cell, name: []const u8, v: i64) void {
+    statePut(c, name, .{ .int = v });
+}
+pub fn stateSetFloat(c: *Cell, name: []const u8, v: f64) void {
+    statePut(c, name, .{ .float = v });
+}
+pub fn stateSetText(c: *Cell, name: []const u8, v: []const u8) void {
+    // A capture's flush writes every declared field back, and fields the body
+    // left untouched still alias the map's own stored slice — freeing it here
+    // would leave the `| captured` after-read holding a dead pointer.
+    if (c.state.getPtr(name)) |old| {
+        if (old.* == .text and old.text.ptr == v.ptr and old.text.len == v.len) return;
+    }
+    statePut(c, name, .{ .text = c.allocator.dupe(u8, v) catch unreachable });
+}
+pub fn stateSetFlag(c: *Cell, name: []const u8, v: bool) void {
+    statePut(c, name, .{ .flag = v });
+}
+
+// ============================================================================
+// MATERIALIZER — flat-file durability riding the bridge's world mount. The
+// cell's world dir (`<world_root>/<id>/`, already created by `create`) carries
+// `state.kv`: a `#shape`/`#shape_def` header — enough for a custodian to
+// re-activate the cell without being told its shape — plus `name=value` lines
+// typed by the manifest. Flush points: the capture commit seam, every `set`
+// write-through, and destroy (hibernate loses nothing). A worldless cell
+// skips all of it and stays memory-only.
+// ============================================================================
+
+fn statePath(c: *Cell, buf: []u8) ?[]u8 {
+    const w = c.br.world orelse return null;
+    return std.fmt.bufPrint(buf, "{s}/state.kv", .{w}) catch null;
+}
+
+pub fn cellFlush(c: *Cell) void {
+    var path_buf: [1024]u8 = undefined;
+    const path = statePath(c, &path_buf) orelse return;
+    const a = c.allocator;
+    var buf = std.ArrayList(u8).initCapacity(a, 256) catch return;
+    defer buf.deinit(a);
+    const w = buf.writer(a);
+    w.print("#shape={s}\n#shape_def={s}\n", .{ c.shape, c.manifest }) catch return;
+    for (c.fields) |f| {
+        const v = c.state.get(f.name) orelse continue;
+        switch (v) {
+            .int => |i| w.print("{s}={d}\n", .{ f.name, i }) catch return,
+            .float => |x| w.print("{s}={d}\n", .{ f.name, x }) catch return,
+            .flag => |b| w.print("{s}={s}\n", .{ f.name, if (b) "true" else "false" }) catch return,
+            .text => |t| {
+                w.print("{s}=", .{f.name}) catch return;
+                for (t) |ch| {
+                    if (ch == '\\') w.writeAll("\\\\") catch return
+                    else if (ch == '\n') w.writeAll("\\n") catch return
+                    else w.writeByte(ch) catch return;
+                }
+                w.writeByte('\n') catch return;
+            },
+        }
+    }
+    std.fs.cwd().writeFile(.{ .sub_path = path, .data = buf.items }) catch return;
+}
+
+fn cellLoad(c: *Cell) void {
+    var path_buf: [1024]u8 = undefined;
+    const path = statePath(c, &path_buf) orelse return;
+    const a = c.allocator;
+    const src = std.fs.cwd().readFileAlloc(a, path, 8 * 1024 * 1024) catch return;
+    defer a.free(src);
+    var lines = std.mem.splitScalar(u8, src, '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0 or line[0] == '#') continue;
+        const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        const name = line[0..eq];
+        const raw = line[eq + 1 ..];
+        const f = cellField(c, name) orelse continue;
+        if (isIntType(f.ftype)) {
+            const i = std.fmt.parseInt(i64, raw, 10) catch continue;
+            c.state.put(f.name, .{ .int = i }) catch unreachable;
+        } else if (isFloatType(f.ftype)) {
+            const x = std.fmt.parseFloat(f64, raw) catch continue;
+            c.state.put(f.name, .{ .float = x }) catch unreachable;
+        } else if (std.mem.eql(u8, f.ftype, "bool")) {
+            c.state.put(f.name, .{ .flag = std.mem.eql(u8, raw, "true") }) catch unreachable;
+        } else if (std.mem.eql(u8, f.ftype, "string")) {
+            // decode \\ and \n escapes
+            var out = std.ArrayList(u8).initCapacity(a, raw.len) catch unreachable;
+            var i: usize = 0;
+            while (i < raw.len) : (i += 1) {
+                if (raw[i] == '\\' and i + 1 < raw.len) {
+                    i += 1;
+                    out.append(a, if (raw[i] == 'n') '\n' else raw[i]) catch unreachable;
+                } else out.append(a, raw[i]) catch unreachable;
+            }
+            c.state.put(f.name, .{ .text = out.toOwnedSlice(a) catch unreachable }) catch unreachable;
+        }
+    }
+}
+
+// ============================================================================
+// CELL-OPEN — what `std/cell:open` rewrites to. Minting `*Cell<cell!>` through
+// the `| cell` arm transfers the obligation into the caller's custody; only
+// `hibernate` settles it.
+// ============================================================================
+
+~pub tor cell-open { shape: string, shape_def: string, id: string, scope: string, world: string }
+| cell *Cell<cell!>
+| ?refused
+
+// The cell lifecycle as host calls — `cell-open`'s guts and `hibernate`'s
+// teardown, shared with `std/fleet` (spawn/evict/drain are the same acts
+// under a different custodian). Both custodians route through these so the
+// bridge/world/state bookkeeping has one home.
+pub fn cellCreate(shape: []const u8, shape_def: []const u8, id: []const u8, scope: []const u8, world: []const u8) ?*Cell {
+    const a = koru_allocator();
+    const w = if (world.len > 0)
+        std.fmt.allocPrint(a, "{s}/{s}", .{ world, id }) catch return null
+    else
+        a.dupe(u8, "") catch unreachable;
+    const br = Br.create_event.handler(.{ .id = id, .scope = scope, .world = w });
+    // Bridge.init dupes `world` (its deinit frees the dupe); on the dupe's
+    // catch-fallback it keeps OUR slice. Free ours only when it stored its own.
+    if (br.world) |bw| {
+        if (bw.ptr != w.ptr) a.free(w);
+    } else a.free(w);
+    const c = a.create(Cell) catch {
+        Br.close_event.handler(.{ .br = br });
+        return null;
+    };
+    // shape_def arrives as "name:type;name:type" — the transform already ran
+    // the real field grammar upstream; this is a dumb splitter. One dupe owns
+    // the block; field name/ftype slices point into it.
+    const manifest = a.dupe(u8, shape_def) catch unreachable;
+    var fields = std.ArrayList(CellField).initCapacity(a, 8) catch unreachable;
+    var parts = std.mem.splitScalar(u8, manifest, ';');
+    while (parts.next()) |part| {
+        const colon = std.mem.indexOfScalar(u8, part, ':') orelse continue;
+        fields.append(a, .{ .name = part[0..colon], .ftype = part[colon + 1 ..] }) catch unreachable;
+    }
+    c.* = .{
+        .br = br,
+        .shape = a.dupe(u8, shape) catch unreachable,
+        .manifest = manifest,
+        .fields = fields.toOwnedSlice(a) catch unreachable,
+        .state = std.StringHashMap(CellValue).init(a),
+        .allocator = a,
+    };
+    cellLoad(c);
+    return c;
+}
+
+pub fn cellDestroy(c: *Cell) void {
+    const a = c.allocator;
+    cellFlush(c);
+    Br.close_event.handler(.{ .br = c.br });
+    var it = c.state.iterator();
+    while (it.next()) |e| freeValue(e.value_ptr, a);
+    c.state.deinit();
+    a.free(c.fields);
+    a.free(c.manifest);
+    a.free(c.shape);
+    a.destroy(c);
+}
+
+~proc cell-open|zig {
+    const c = cellCreate(shape, shape_def, id, scope, world) orelse
+        return .{ .refused = .{} };
+    return .{ .cell = c };
+}
+
+// ============================================================================
+// RUN — dispatch a source turn into the cell's session. A straight
+// pass-through of `std/bridge:run` against the inner bridge — same budget
+// behavior, same branch set.
+// ============================================================================
+
+~pub tor run { c: *Cell<cell>, source: string<*> }
+| result { value: @import("root").koru_std.koru_interpreter.Value, used: u64, handles: u32, bound: string, trace: string }
+| defined string
+| unhandled-branch { branch: string, payload: string, handles: string }
+| exhausted { used: u64, last_event: string, handles: u32 }
+| parse-error { message: string, line: u32, column: u32 }
+| residue { report: string, observer: bool, bound: string, text: string }
+| validation-error string
+| shape-error { branch: string, field: ?string, message: string }
+| event-denied string
+| dispatch-error { event_name: string, message: string, trace: string }
+| ?partial { ran: u32, total: u32, used: u64, handles: u32, report: string, wire_failures: u32 }
+| scope-not-found string
+
+~proc run|zig {
+    const r = Br.run_event.handler(.{ .br = c.br, .source = source });
+    // Same union shape, different nominal structs — copy field by field.
+    return switch (r) {
+        .result => |v| .{ .result = .{ .value = v.value, .used = v.used, .handles = v.handles, .bound = v.bound, .trace = v.trace } },
+        .defined => |v| .{ .defined = v },
+        .unhandled_branch => |v| .{ .unhandled_branch = .{ .branch = v.branch, .payload = v.payload, .handles = v.handles } },
+        .exhausted => |v| .{ .exhausted = .{ .used = v.used, .last_event = v.last_event, .handles = v.handles } },
+        .parse_error => |v| .{ .parse_error = .{ .message = v.message, .line = v.line, .column = v.column } },
+        .residue => |v| .{ .residue = .{ .report = v.report, .observer = v.observer, .bound = v.bound, .text = v.text } },
+        .validation_error => |v| .{ .validation_error = v },
+        .shape_error => |v| .{ .shape_error = .{ .branch = v.branch, .field = v.field, .message = v.message } },
+        .event_denied => |v| .{ .event_denied = v },
+        .dispatch_error => |v| .{ .dispatch_error = .{ .event_name = v.event_name, .message = v.message, .trace = v.trace } },
+        .partial => |v| .{ .partial = .{ .ran = v.ran, .total = v.total, .used = v.used, .handles = v.handles, .report = v.report, .wire_failures = v.wire_failures } },
+        .scope_not_found => |v| .{ .scope_not_found = v },
+    };
+}
+
+// ============================================================================
+// STATE — the shape's fields as a checked surface. `get`/`set` validate the
+// field name against the baked manifest (`unknown-field` names the shape, not
+// a shrug), and `set` coerces the value through the declared field type
+// (`type-mismatch` names what the field wanted). This is the sketch — state
+// is in-memory; hibernate loses it until a materializer lands.
+// ============================================================================
+
+~pub tor get { c: *Cell<cell>, field: string }
+| value { kind: string, int: i64, float: f64, text: string, flag: bool }
+| unknown-field { field: string, shape: string }
+| unset string
+
+~proc get|zig {
+    const f = cellField(c, field) orelse
+        return .{ .unknown_field = .{ .field = field, .shape = c.shape } };
+    const v = c.state.get(f.name) orelse
+        return .{ .unset = field };
+    return .{ .value = switch (v) {
+        .int => |i| .{ .kind = f.ftype, .int = i, .float = 0.0, .text = "", .flag = false },
+        .float => |x| .{ .kind = f.ftype, .int = 0, .float = x, .text = "", .flag = false },
+        .text => |t| .{ .kind = f.ftype, .int = 0, .float = 0.0, .text = t, .flag = false },
+        .flag => |b| .{ .kind = f.ftype, .int = 0, .float = 0.0, .text = "", .flag = b },
+    } };
+}
+
+~pub tor set { c: *Cell<cell>, field: string, value: string }
+| set
+| unknown-field { field: string, shape: string }
+| type-mismatch { field: string, expected: string }
+
+~proc set|zig {
+    const f = cellField(c, field) orelse
+        return .{ .unknown_field = .{ .field = field, .shape = c.shape } };
+    const a = c.allocator;
+    const t = f.ftype;
+    const v: CellValue = if (isIntType(t)) blk: {
+        const i = std.fmt.parseInt(i64, value, 10) catch
+            return .{ .type_mismatch = .{ .field = field, .expected = t } };
+        break :blk .{ .int = i };
+    } else if (isFloatType(t)) blk: {
+        const x = std.fmt.parseFloat(f64, value) catch
+            return .{ .type_mismatch = .{ .field = field, .expected = t } };
+        break :blk .{ .float = x };
+    } else if (std.mem.eql(u8, t, "bool")) blk: {
+        if (std.mem.eql(u8, value, "true")) break :blk .{ .flag = true };
+        if (std.mem.eql(u8, value, "false")) break :blk .{ .flag = false };
+        return .{ .type_mismatch = .{ .field = field, .expected = t } };
+    } else if (std.mem.eql(u8, t, "string")) blk: {
+        break :blk .{ .text = a.dupe(u8, value) catch unreachable };
+    } else {
+        // Compound/qualified/terminal types aren't reducible here — the
+        // materializer layer owns them.
+        return .{ .type_mismatch = .{ .field = field, .expected = t } };
+    };
+    if (c.state.getPtr(f.name)) |old| freeValue(old, a);
+    c.state.put(f.name, v) catch unreachable;
+    cellFlush(c);
+    return .set;
+}
+
+~pub tor fields { c: *Cell<cell> } -> string
+
+~proc fields|zig {
+    return c.manifest;
+}
+
+// ============================================================================
+// HIBERNATE — the standalone custodian's discharge: hang the session up and
+// release the cell. For fleet-resident cells this is `std/fleet:evict`'s job —
+// hibernating a cell is always the custodian's call, never the borrower's.
+// ============================================================================
+
+~pub tor hibernate { c: *Cell<!cell> }
+
+~proc hibernate|zig {
+    cellDestroy(c);
+}
+
+// ============================================================================
+// CAPTURE — the state transaction. `std/cell:capture(c, shape: room_state)`
+// dissolves the same way control.kz's `capture` does: `! as s` binds a live
+// proto-typed record seeded from the cell's state map, `std/cell:captured { f: expr }`
+// blocks become field-wise assignments, and `| captured final` is the
+// after-read — reading the record AFTER the flush that lands the transaction.
+// The `! as` arm's end IS the commit boundary: every declared field writes
+// back to `c.state` there, whether or not an after-read exists.
+//
+//   std/cell:capture(c, shape: room_state)
+//   ! as s |> std/cell:captured { visits: s.visits + 1 }
+//   | captured final |> std/io:print.ln("{{ final.visits:d }}")
+//
+// Storage-agnostic by construction: the record is a local var; the flush is
+// the ONLY point that knows a store exists. A [SQLite] materializer swaps
+// these generated stateSet* calls for its own write path and the surface
+// does not change.
+// ============================================================================
+
+~[keyword|comptime|transform|pre]pub tor capture {
+    expr: Expression,
+    shape: Expression,
+    invocation: *const Invocation,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
+    reporter: *std/compiler:ErrorReporter,
+    allocator: std.mem.Allocator
+}
+! as *
+| ?captured *
+
+~[transform]proc capture|zig {
+    const struct_literal = @import("struct_literal");
+    if (item.* != .flow) @panic("cell:capture transform: containing item is not a flow - walker dispatch contract broken");
+    const flow = &item.flow;
+
+    var c_text: ?[]const u8 = null;
+    var shape: []const u8 = "";
+    for (invocation.args) |a| {
+        const an = $mod.CH.trim(a.name);
+        if (std.mem.eql(u8, an, "expr")) {
+            c_text = a.value;
+            continue;
+        }
+        if (std.mem.eql(u8, an, "shape")) {
+            shape = $mod.CH.stripQuotes(a.value);
+            continue;
+        }
+        return .{ .transformed = $mod.ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/cell:capture: unknown argument '{s}' — the head is `std/cell:capture(c, shape: room_state)`", .{an}) };
+    }
+    if (c_text == null) {
+        return .{ .transformed = $mod.ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/cell:capture needs the cell — `std/cell:capture(c, shape: room_state)`", .{}) };
+    }
+    if (shape.len == 0) {
+        return .{ .transformed = $mod.ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/cell:capture needs the shape the record types against — `std/cell:capture(c, shape: room_state)`", .{}) };
+    }
+    const proto_source = $mod.CH.findProtoSource(program.items, shape) orelse {
+        if ($mod.ast.declarationRefused(allocator, program, flow.module, "std/proto({s})", .{shape})) return .{ .transformed = .{} };
+        return .{ .transformed = $mod.ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/cell:capture({s}): unknown shape — no `std/proto({s}) {{ ... }}` declared", .{ shape, shape }) };
+    };
+    const fields = $mod.CH.protoFields(allocator, proto_source);
+
+    // The site's children carry the arm vocabulary: `! as` (required),
+    // `| captured` (optional after-read), `''` chain continuation. A stray
+    // arm is a typo — refuse rather than drop it.
+    const site = $mod.CH.findSite(&flow.body, invocation) orelse
+        return .{ .transformed = .{} };
+    var as_cont: ?*const $mod.ast.Continuation = null;
+    var captured_cont: ?*const $mod.ast.Continuation = null;
+    var cell_name: []const u8 = "s";
+    var result_name: []const u8 = "final";
+    var trailing = std.ArrayList(*const $mod.ast.Continuation).initCapacity(allocator, 2) catch unreachable;
+    for (site.continuations) |*cont| {
+        if (std.mem.eql(u8, cont.branch, "as")) {
+            as_cont = cont;
+            if (cont.binding) |b| cell_name = b;
+        } else if (std.mem.eql(u8, cont.branch, "captured")) {
+            captured_cont = cont;
+            if (cont.binding) |b| result_name = b;
+        } else if (cont.branch.len == 0) {
+            trailing.append(allocator, cont) catch unreachable;
+        } else {
+            return .{ .transformed = $mod.ast.refuse(allocator, reporter, .KORU161, cont.location, flow.module, "std/cell:capture: `| {s}` is not part of the capture — the vocabulary is `! as` (the live record) and `| captured` (the after-read)", .{cont.branch}) };
+        }
+    }
+    if (as_cont == null) {
+        return .{ .transformed = $mod.ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/cell:capture({s}) requires a `! as <record>` effect branch — `! as s |> ...`", .{shape}) };
+    }
+    if (std.mem.eql(u8, cell_name, "_")) {
+        cell_name = std.fmt.allocPrint(allocator, "__koru_cellcap_{d}", .{flow.location.line}) catch unreachable;
+    }
+
+    // The record takes scalar materials only — a `ref(X)` or qualified field
+    // is a materializer's row type, not a snapshot value. Refuse the whole
+    // capture rather than silently mis-type one field.
+    for (fields) |f| {
+        if ($mod.CH.fieldClass(f.ftype) == .other) {
+            return .{ .transformed = $mod.ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/cell:capture({s}): field '{s}' is '{s}' — the capture record takes scalar materials (int/float/bool/string); ref() and qualified fields wait on the materializer", .{ shape, f.name, f.ftype }) };
+        }
+    }
+
+    // Rewrite `std/cell:captured { f: expr }` blocks anywhere inside the as-
+    // body into field-wise assignments on the record — and check the write
+    // heads against the manifest: `vists:` refuses naming the field and the
+    // shape. The write verb must be qualified: a bare `captured` inside the
+    // arm is std/control's ambient word, not this cell's — refuse loudly.
+    const Cap = struct {
+        fields: []const $mod.CH.ShapeField,
+        shape: []const u8,
+        err: ?struct { msg: []const u8, loc: @TypeOf(flow.location) } = null,
+        fn inManifest(self: *const @This(), want: []const u8) bool {
+            for (self.fields) |f| {
+                if (std.mem.eql(u8, f.name, want)) return true;
+            }
+            return false;
+        }
+        fn rewrite(
+            self: *@This(),
+            alloc: std.mem.Allocator,
+            cont: *const $mod.ast.Continuation,
+            target: []const u8,
+        ) *const $mod.ast.Continuation {
+            var new_node: ?$mod.ast.Node = cont.node;
+            if (cont.node) |step| {
+                if (step == .invocation) {
+                    const segs = step.invocation.path.segments;
+                    const is_captured = segs.len > 0 and std.mem.eql(u8, segs[segs.len - 1], "captured");
+                    const mq = step.invocation.path.module_qualifier orelse "";
+                    if (is_captured and !std.mem.eql(u8, mq, "std.cell")) {
+                        self.err = .{ .msg = std.fmt.allocPrint(alloc, "captured: a bare `captured` write-block is std/control's ambient word — the cell's write verb is `std/cell:captured`", .{}) catch "captured: unqualified write-block", .loc = cont.location };
+                        const out_err0 = alloc.create($mod.ast.Continuation) catch unreachable;
+                        out_err0.* = cont.*;
+                        return out_err0;
+                    }
+                    if (is_captured) {
+                        const raw = if (step.invocation.args.len > 0) step.invocation.args[0].value else "";
+                        const payload = std.fmt.allocPrint(alloc, "{{{s}}}", .{raw}) catch unreachable;
+                        const parsed = struct_literal.parseFields(alloc, payload) catch |err| {
+                            self.err = .{ .msg = std.fmt.allocPrint(alloc, "captured: {s}", .{struct_literal.describeErrorIn(alloc, err, payload)}) catch "captured: struct literal error", .loc = cont.location };
+                            const out_err = alloc.create($mod.ast.Continuation) catch unreachable;
+                            out_err.* = cont.*;
+                            return out_err;
+                        };
+                        const asgn_fields = alloc.alloc($mod.ast.Field, parsed.len) catch unreachable;
+                        for (parsed, 0..) |pf, i| {
+                            if (!self.inManifest(pf.name)) {
+                                self.err = .{ .msg = std.fmt.allocPrint(alloc, "captured: no field '{s}' on shape '{s}' — write heads come from the proto block", .{ pf.name, self.shape }) catch "captured: unknown field", .loc = cont.location };
+                                const out_err2 = alloc.create($mod.ast.Continuation) catch unreachable;
+                                out_err2.* = cont.*;
+                                return out_err2;
+                            }
+                            asgn_fields[i] = .{
+                                .name = alloc.dupe(u8, pf.name) catch unreachable,
+                                .type = "",
+                                .expression_str = alloc.dupe(u8, pf.value) catch unreachable,
+                            };
+                        }
+                        new_node = .{ .assignment = .{
+                            .target = target,
+                            .fields = asgn_fields,
+                        } };
+                    }
+                }
+            }
+            const new_conts = alloc.alloc($mod.ast.Continuation, cont.continuations.len) catch unreachable;
+            for (cont.continuations, 0..) |*nc, i| {
+                new_conts[i] = self.rewrite(alloc, nc, target).*;
+            }
+            const out = alloc.create($mod.ast.Continuation) catch unreachable;
+            out.* = cont.*;
+            out.node = new_node;
+            out.continuations = new_conts;
+            return out;
+        }
+    };
+    var cap = Cap{ .fields = fields, .shape = shape };
+    const rewritten_as = cap.rewrite(allocator, as_cont.?, cell_name);
+    if (cap.err) |e| {
+        return .{ .transformed = $mod.ast.refuse(allocator, reporter, .KORU161, e.loc, flow.module, "{s}", .{e.msg}) };
+    }
+
+    // The seed: `var s: struct { ...proto fields... } = .{ .f = readOr(...) }`.
+    // Reads come from the cell's state map — unset fields take the type's
+    // zero (the stringly `get` keeps the unset/default distinction; the
+    // record presents the materialized view).
+    var seed = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
+    const sw = seed.writer(allocator);
+    sw.print("var {s}: struct {{ ", .{cell_name}) catch unreachable;
+    for (fields, 0..) |f, i| {
+        if (i > 0) sw.writeAll(", ") catch unreachable;
+        sw.print("{s}: {s}", .{ f.name, $mod.CH.fieldZigType(f.ftype) }) catch unreachable;
+    }
+    sw.writeAll(" } = .{ ") catch unreachable;
+    for (fields, 0..) |f, i| {
+        if (i > 0) sw.writeAll(", ") catch unreachable;
+        switch ($mod.CH.fieldClass(f.ftype)) {
+            .int => sw.print(".{s} = @intCast(koru_std.koru_cell.stateIntOr({s}, \"{s}\"))", .{ f.name, c_text.?, f.name }) catch unreachable,
+            .float => sw.print(".{s} = @floatCast(koru_std.koru_cell.stateFloatOr({s}, \"{s}\"))", .{ f.name, c_text.?, f.name }) catch unreachable,
+            .flag => sw.print(".{s} = koru_std.koru_cell.stateFlagOr({s}, \"{s}\")", .{ f.name, c_text.?, f.name }) catch unreachable,
+            .text => sw.print(".{s} = koru_std.koru_cell.stateTextOr({s}, \"{s}\")", .{ f.name, c_text.?, f.name }) catch unreachable,
+            .other => unreachable,
+        }
+    }
+    sw.print(" }};\n_ = &{s};", .{cell_name}) catch unreachable;
+
+    // The flush: the `! as` arm's end IS the commit — every declared field
+    // writes back. Runs whether or not a `| captured` after-read exists.
+    var flush = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
+    const fw = flush.writer(allocator);
+    for (fields) |f| {
+        switch ($mod.CH.fieldClass(f.ftype)) {
+            .int => fw.print("koru_std.koru_cell.stateSetInt({s}, \"{s}\", @intCast({s}.{s}));\n", .{ c_text.?, f.name, cell_name, f.name }) catch unreachable,
+            .float => fw.print("koru_std.koru_cell.stateSetFloat({s}, \"{s}\", @floatCast({s}.{s}));\n", .{ c_text.?, f.name, cell_name, f.name }) catch unreachable,
+            .flag => fw.print("koru_std.koru_cell.stateSetFlag({s}, \"{s}\", {s}.{s});\n", .{ c_text.?, f.name, cell_name, f.name }) catch unreachable,
+            .text => fw.print("koru_std.koru_cell.stateSetText({s}, \"{s}\", {s}.{s});\n", .{ c_text.?, f.name, cell_name, f.name }) catch unreachable,
+            .other => unreachable,
+        }
+    }
+    // The commit IS the durable write — one flush per transaction, not one
+    // per field.
+    fw.print("koru_std.koru_cell.cellFlush({s});\n", .{c_text.?}) catch unreachable;
+
+    // The expansion is ONE `''` chain — capture's own emission idiom — but
+    // several `''` siblings trip SHAPE002 ("multiple unnamed '|>' steps")
+    // anywhere the duplicate-handler walk reaches. The wrapper carries
+    // is_transformed_subtree: the checker stops at the wrapper, so the
+    // sequence inside is exempt — the same exemption control.capture's
+    // grafted void-chains ride on.
+    var inner = std.ArrayList($mod.ast.Continuation).initCapacity(allocator, 4) catch unreachable;
+    for (rewritten_as.continuations) |*rc| {
+        inner.append(allocator, rc.*) catch unreachable;
+    }
+    inner.append(allocator, .{
+        .branch = "",
+        .binding = null,
+        .condition = null,
+        .node = .{ .inline_code = flush.toOwnedSlice(allocator) catch unreachable },
+        .indent = 0,
+        .continuations = &.{},
+        .is_transformed_subtree = true,
+        .location = flow.location,
+    }) catch unreachable;
+    if (captured_cont) |cc| {
+        const bind_code = if (std.mem.startsWith(u8, result_name, "_"))
+            allocator.dupe(u8, "") catch unreachable
+        else
+            std.fmt.allocPrint(allocator, "const {s} = {s};", .{ result_name, cell_name }) catch unreachable;
+        const body_inner = allocator.alloc($mod.ast.Continuation, 1) catch unreachable;
+        body_inner[0] = .{
+            .branch = "",
+            .binding = null,
+            .condition = null,
+            .node = cc.node,
+            .indent = 0,
+            .continuations = cc.continuations,
+            .is_transformed_subtree = true,
+            .location = cc.location,
+        };
+        inner.append(allocator, .{
+            .branch = "",
+            .binding = null,
+            .condition = null,
+            .node = .{ .inline_code = bind_code },
+            .indent = 0,
+            .continuations = body_inner,
+            .is_transformed_subtree = true,
+            .location = cc.location,
+        }) catch unreachable;
+    }
+    for (trailing.items) |tc| {
+        inner.append(allocator, $mod.ast_functional.cloneContinuation(allocator, tc) catch unreachable) catch unreachable;
+    }
+
+    const wrapper = allocator.alloc($mod.ast.Continuation, 1) catch unreachable;
+    wrapper[0] = .{
+        .branch = "",
+        .binding = null,
+        .condition = null,
+        .node = rewritten_as.node,
+        .indent = 0,
+        .continuations = inner.toOwnedSlice(allocator) catch unreachable,
+        .is_transformed_subtree = true,
+        .location = as_cont.?.location,
+    };
+
+    return .{ .transformed = .{ .replacement_node = .{
+        .node = .{ .inline_code = seed.toOwnedSlice(allocator) catch unreachable },
+        .children = wrapper,
+    } } };
+}
+
+// ============================================================================
+// Helpers for the transform (local — the CH pattern in channel.kz).
+// ============================================================================
+
+pub const CH = struct {
+    fn trim(s: []const u8) []const u8 {
+        return std.mem.trim(u8, s, " \t\n\r");
+    }
+    fn stripQuotes(s: []const u8) []const u8 {
+        const t = trim(s);
+        if (t.len >= 2 and t[0] == '"' and t[t.len - 1] == '"') return t[1 .. t.len - 1];
+        return t;
+    }
+    // Recursive scan: the `std/proto(<name>)` decl's `source` text — the raw
+    // `name: type` block — or null when nothing declares it. The bare-module
+    // call is rewritten to `:default` at import time; in [pre] the decl sites
+    // are still raw.
+    pub fn findProtoSource(items: []const ast.Item, name: []const u8) ?[]const u8 {
+        for (items) |*it| {
+            switch (it.*) {
+                .flow => |*f| {
+                    const inv = f.inv();
+                    if (inv.path.module_qualifier) |mq| {
+                        const is_proto = std.mem.eql(u8, mq, "std.proto") and
+                            (inv.path.segments.len == 0 or
+                                (inv.path.segments.len == 1 and std.mem.eql(u8, inv.path.segments[0], "default")));
+                        if (is_proto) {
+                            var matches = false;
+                            var source: []const u8 = "";
+                            for (inv.args) |a| {
+                                const an = trim(a.name);
+                                if (std.mem.eql(u8, an, "expr") and std.mem.eql(u8, stripQuotes(a.value), name)) matches = true;
+                                if (std.mem.eql(u8, an, "source")) source = a.value;
+                            }
+                            if (matches) return stripQuotes(source);
+                        }
+                    }
+                },
+                .module_decl => |*m| if (findProtoSource(m.items, name)) |s| return s,
+                else => {},
+            }
+        }
+        return null;
+    }
+    const ShapeField = struct { name: []const u8, ftype: []const u8 };
+    // The proto block as field entries. The real field grammar ran when
+    // proto's own transform accepted the decl — this only splits lines.
+    fn protoFields(alloc: std.mem.Allocator, source_text: []const u8) []ShapeField {
+        var out = std.ArrayList(ShapeField).initCapacity(alloc, 8) catch unreachable;
+        var lines = std.mem.splitScalar(u8, source_text, '\n');
+        while (lines.next()) |raw| {
+            var line = trim(raw);
+            if (line.len == 0) continue;
+            if (std.mem.startsWith(u8, line, "//")) continue;
+            const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+            const fname = trim(line[0..colon]);
+            var ftype = trim(line[colon + 1 ..]);
+            if (ftype.len > 0 and ftype[ftype.len - 1] == ',') ftype = trim(ftype[0 .. ftype.len - 1]);
+            if (fname.len == 0 or ftype.len == 0) continue;
+            out.append(alloc, .{ .name = alloc.dupe(u8, fname) catch unreachable, .ftype = alloc.dupe(u8, ftype) catch unreachable }) catch unreachable;
+        }
+        return out.toOwnedSlice(alloc) catch unreachable;
+    }
+    // Bake the proto block into a "name:type;name:type" manifest.
+    pub fn shapeManifest(alloc: std.mem.Allocator, source_text: []const u8) []const u8 {
+        var buf = std.ArrayList(u8).initCapacity(alloc, 64) catch unreachable;
+        for (protoFields(alloc, source_text), 0..) |f, i| {
+            if (i > 0) buf.append(alloc, ';') catch unreachable;
+            buf.appendSlice(alloc, f.name) catch unreachable;
+            buf.append(alloc, ':') catch unreachable;
+            buf.appendSlice(alloc, f.ftype) catch unreachable;
+        }
+        return buf.toOwnedSlice(alloc) catch unreachable;
+    }
+    const FieldClass = enum { int, float, flag, text, other };
+    fn fieldClass(t: []const u8) FieldClass {
+        const ints = [_][]const u8{ "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "usize", "isize" };
+        for (ints) |k| {
+            if (std.mem.eql(u8, t, k)) return .int;
+        }
+        if (std.mem.eql(u8, t, "f16") or std.mem.eql(u8, t, "f32") or std.mem.eql(u8, t, "f64")) return .float;
+        if (std.mem.eql(u8, t, "bool")) return .flag;
+        if (std.mem.eql(u8, t, "string")) return .text;
+        return .other;
+    }
+    // The record field's Zig spelling — scalars carry their proto type
+    // verbatim; `string` lowers the way tor params do.
+    fn fieldZigType(t: []const u8) []const u8 {
+        if (std.mem.eql(u8, t, "string")) return "[]const u8";
+        return t;
+    }
+    // The continuation that owns the matched invocation — the site's arms are
+    // its children.
+    pub fn findSite(cont: *const ast.Continuation, target: *const ast.Invocation) ?*const ast.Continuation {
+        if (cont.node) |*n| {
+            if (n.* == .invocation and &n.invocation == target) return cont;
+        }
+        for (cont.continuations) |*c| {
+            if (findSite(c, target)) |found| return found;
+        }
+        return null;
+    }
+    // `cell-open`/`hibernate` call bridge's create/close from HOST code —
+    // nothing in the program invokes them, so dead-strip would retire the
+    // tors and the emitted `koru_bridge` module would land without its
+    // handlers. Splice `retain` onto those two event_decls; idempotent.
+    fn retainBridgeEvents(prog: *const ast.Program, alloc: std.mem.Allocator) void {
+        const W = struct {
+            fn retain(its: []const ast.Item, want: []const u8, al: std.mem.Allocator) void {
+                for (its) |*pi| {
+                    switch (pi.*) {
+                        .module_decl => |*md| {
+                            if (std.mem.eql(u8, md.logical_name, "std.bridge")) {
+                                for (md.items) |*mi| {
+                                    if (mi.* != .event_decl) continue;
+                                    const ed = &mi.event_decl;
+                                    if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], want)) {
+                                        for (ed.annotations) |a| if (std.mem.eql(u8, a, "retain")) return;
+                                        const grown = al.alloc([]const u8, ed.annotations.len + 1) catch unreachable;
+                                        @memcpy(grown[0..ed.annotations.len], ed.annotations);
+                                        grown[ed.annotations.len] = al.dupe(u8, "retain") catch unreachable;
+                                        @constCast(ed).annotations = grown;
+                                    }
+                                }
+                                return;
+                            }
+                            retain(md.items, want, al);
+                        },
+                        else => {},
+                    }
+                }
+            }
+        };
+        W.retain(prog.items, "create", alloc);
+        W.retain(prog.items, "close", alloc);
+        W.retain(prog.items, "run", alloc);
+    }
+    fn hasArm(flow: *const ast.Flow, branch: []const u8) bool {
+        for (flow.body.continuations) |*c| {
+            if (c.kind == .terminal and std.mem.eql(u8, trim(c.branch), branch)) return true;
+        }
+        return false;
+    }
+};
+
+// ============================================================================
+// CELL.OPEN — `std/cell:open(room_state, id: "assistant")`: resolve the shape
+// name against the program's protos and rewrite to `cell-open`. [pre] so the
+// proto decl sites are still legible when we scan.
+// ============================================================================
+
+~[keyword|comptime|transform|pre]pub tor open {
+    expr: Expression,
+    invocation: *const Invocation,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
+    reporter: *std/compiler:ErrorReporter,
+    allocator: std.mem.Allocator
+} -> SiteResult
+
+~[transform]proc open|zig {
+    if (item.* != .flow) @panic("cell:open transform: containing item is not a flow - walker dispatch contract broken");
+    const flow = &item.flow;
+
+    if (invocation != flow.inv()) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/cell:open is a top-level item — the cell's obligation starts its own chain", .{}) };
+    }
+
+    var shape: []const u8 = "";
+    var id_text: ?[]const u8 = null;
+    var scope_text: []const u8 = "\"cell\"";
+    var world_text: []const u8 = "\"\"";
+    for (invocation.args) |a| {
+        const an = CH.trim(a.name);
+        if (std.mem.eql(u8, an, "expr")) {
+            shape = CH.stripQuotes(a.value);
+            continue;
+        }
+        if (std.mem.eql(u8, an, "id")) {
+            id_text = a.value;
+            continue;
+        }
+        if (std.mem.eql(u8, an, "scope")) {
+            scope_text = a.value;
+            continue;
+        }
+        if (std.mem.eql(u8, an, "world")) {
+            world_text = a.value;
+            continue;
+        }
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/cell:open: unknown argument '{s}' — the head is `std/cell:open(shape, id: \"...\", scope: \"cell\", world: \"cells\")`", .{an}) };
+    }
+    if (shape.len == 0) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/cell:open needs the shape — `std/cell:open(room_state, id: \"...\")`, where room_state is a declared std/proto", .{}) };
+    }
+    if (id_text == null) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/cell:open({s}): cells are named — pass `id: \"assistant\"`", .{shape}) };
+    }
+    const proto_source = CH.findProtoSource(program.items, shape) orelse {
+        if (ast.declarationRefused(allocator, program, flow.module, "std/proto({s})", .{shape})) return .{ .transformed = .{} };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/cell:open({s}): unknown shape — no `std/proto({s}) {{ ... }}` declared", .{ shape, shape }) };
+    };
+    const manifest = CH.shapeManifest(allocator, proto_source);
+
+    // The `| cell` arm IS the custody handoff — name the missing arm, don't
+    // let a silent open mint an obligation nobody holds.
+    if (!CH.hasArm(flow, "cell")) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/cell:open({s}): the cell arrives on `| cell c |` — `std/cell:open({s}, ...) | cell c |> ...`", .{ shape, shape }) };
+    }
+
+    // Host code calls bridge create/close/run — retain them against dead-strip.
+    CH.retainBridgeEvents(program, allocator);
+
+    const segs = allocator.alloc([]const u8, 1) catch unreachable;
+    segs[0] = allocator.dupe(u8, "cell-open") catch unreachable;
+    const args = allocator.alloc(ast.Arg, 5) catch unreachable;
+    args[0] = ast.Arg{ .name = allocator.dupe(u8, "shape") catch unreachable, .value = std.fmt.allocPrint(allocator, "\"{s}\"", .{shape}) catch unreachable };
+    args[1] = ast.Arg{ .name = allocator.dupe(u8, "shape_def") catch unreachable, .value = std.fmt.allocPrint(allocator, "\"{s}\"", .{manifest}) catch unreachable };
+    args[2] = ast.Arg{ .name = allocator.dupe(u8, "id") catch unreachable, .value = allocator.dupe(u8, id_text.?) catch unreachable };
+    args[3] = ast.Arg{ .name = allocator.dupe(u8, "scope") catch unreachable, .value = allocator.dupe(u8, scope_text) catch unreachable };
+    args[4] = ast.Arg{ .name = allocator.dupe(u8, "world") catch unreachable, .value = allocator.dupe(u8, world_text) catch unreachable };
+    const call_inv = ast.Invocation{
+        .path = ast.DottedPath{ .module_qualifier = allocator.dupe(u8, "std.cell") catch unreachable, .segments = segs },
+        .args = args,
+    };
+    const conts = allocator.alloc(ast.Continuation, flow.body.continuations.len) catch unreachable;
+    for (flow.body.continuations, 0..) |*c, i| {
+        conts[i] = ast_functional.cloneContinuation(allocator, c) catch unreachable;
+    }
+    return .{ .transformed = .{ .replacement = ast.Item{ .flow = ast.Flow{
+        .body = ast.rootSite(call_inv, conts, flow.location),
+        .pre_label = null,
+        .impl_of = flow.impl_of,
+        .super_shape = null,
+        .inline_body = null,
+        .preamble_code = invocation.preamble_code,
+        .is_pure = false,
+        .is_transitively_pure = false,
+        .location = flow.location,
+        .module = allocator.dupe(u8, flow.module) catch unreachable,
+    } } } };
+}

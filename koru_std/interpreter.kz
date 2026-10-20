@@ -375,41 +375,9 @@ pub const BudgetState = struct {
 };
 
 // ============================================================================
-// ENVIRONMENT - Tracks bindings during interpretation
+// ENVIRONMENT moved to the `env` part — the binding table and the
+// session/turn seeding helper.
 // ============================================================================
-
-pub const Environment = struct {
-    bindings: std.StringHashMap(Value),
-    allocator: std.mem.Allocator,
-
-    pub fn init(allocator: std.mem.Allocator) Environment {
-        return .{
-            .bindings = std.StringHashMap(Value).init(allocator),
-            .allocator = allocator,
-        };
-    }
-
-    pub fn deinit(self: *Environment) void {
-        self.bindings.deinit();
-    }
-
-    /// Clear bindings but keep capacity to avoid reallocating in hot paths.
-    pub fn clear(self: *Environment) void {
-        self.bindings.clearRetainingCapacity();
-    }
-
-    pub fn bind(self: *Environment, name: []const u8, value: Value) !void {
-        try self.bindings.put(name, value);
-    }
-
-    pub fn get(self: *Environment, name: []const u8) ?Value {
-        return self.bindings.get(name);
-    }
-
-    pub fn remove(self: *Environment, name: []const u8) void {
-        _ = self.bindings.remove(name);
-    }
-};
 
 // ============================================================================
 // DISPATCH RESULT - What dispatchers return to the interpreter
@@ -462,6 +430,11 @@ pub const InterpreterContext = struct {
     // value across turns. null = no session behind this run; every binding
     // dies with it.
     session_env: ?*Environment = null,
+    // Turn-scoped bindings — the layer between the per-run env and the
+    // session. An arm binding (`| ok b |>`) scopes to the rest of the
+    // turn's program: every later item seeds it, so `b` resolves several
+    // items deep, not only in the next call. null = arms stay item-local.
+    turn_env: ?*Environment = null,
     // Set when the fragment ended because a branch had no handler (430_056):
     // the outcome that fired, handed back for the host to act on.
     unhandled_outcome: ?Value = null,
@@ -572,3 +545,10 @@ pub fn findHostTilde(source: []const u8) ?HostTilde {
 ~part deftable
 ~part defined
 ~part wireexpr
+~part resdispatch
+~part custody
+~part invargs
+~part flowchecks
+~part defflow
+~part eval
+~part env
