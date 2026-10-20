@@ -1,8 +1,8 @@
 // Pins: a bare identifier in arg position is a REFERENCE, and an
 // unbound one is refused by name — never the identifier's own text
-// smuggled to the verb. Bindings live per item along an arm path:
-// `| ok h |>` puts `h` in scope inside that arm's subtree only — not
-// in a second item, not in a sibling arm.
+// smuggled to the verb. Bindings live along the turn's path: `| ok h |>`
+// puts `h` in the turn env, so a later item in the same reply names it —
+// but not a sibling arm's subtree, and not the next `run` call.
 //
 // Two surfaces, one law. Bare literals are legal wire everywhere
 // (430_066 — `count: 42` is a value, not a refusal), so an unbound
@@ -58,9 +58,9 @@ turn1 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found t |> echo(text
 | partial p |> std/io:print.ln("FAIL t1 partial {{ p.report:s }}")
 | scope-not-found s2 |> std/io:print.ln("FAIL t1 noscope {{ s2:s }}")
 
-// Turn 2: item 1 binds `h`; item 2 names it. Bindings do not cross
-// items — and the wire parser refuses the bare value outright, so the
-// step dies as parse-error inside a `partial` outcome, item 1 intact.
+// Turn 2: item 1's arm binds `h`; item 2 names it — bindings cross
+// items inside a turn through the turn env, so `echo(text: h)`
+// resolves `hit` for real and both steps report `bound: rN`.
 tor turn2 { br: *std/bridge:Bridge<session> }
 turn2 = std/bridge:run(br, source: "probe(path: \"hit\")\n| found h |> echo(text: \"one\")\necho(text: h)")
 | result r |> std/io:print.ln("FAIL t2 result")
