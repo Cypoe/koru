@@ -113,6 +113,30 @@ floor — deterministic, no clocks, no sockets. Six tors, all leaves:
   (dispatch + parse): the protocol is syscall-bound — custody's cost
   is the filesystem, not the runtime. A first run under load-13 read
   ~2× these numbers, which is the noise band these figures sit above.
+- **The first real celld comparator exists (evolved 2026-10-21).**
+  celld 0.6.2 runs locally via the distroless docker image
+  (`celld dev --host 0.0.0.0` + a mounted linux-arm64 esbuild —
+  `dev` bundles with esbuild and the image ships none). Its own
+  `examples/counter` IS the counter-grain workload: get → n++ → put
+  per request. Sequential durable turns: ~4.6ms p50, ~208 rps; at 8
+  connections ~789 rps (it pipelines a single cell ~3.8×). An echo
+  path that never touches the DO costs ~172µs — wire+V8+docker floor
+  — so ~96% of the turn is inside celld's DO/SQLite machinery, not
+  transport. Koru's matching arm (`durable`, 013) sits at ~121µs.
+  The named asymmetries: celld's ack is fsync-grade SQLite while
+  `state.kv` is buffered `writeAll`+close — a new `durable+sync` arm
+  (`std/fs:sync`, fs.sync.kz) spells that level and costs ~139µs/turn,
+  and the baseline shows fsync ≈ ~7µs on this Mac's APFS, so celld's
+  4.6ms is mostly its own machinery + virtio-fs, not the sync. Its
+  durability oracle verified — n survives a container kill; ours
+  proves process-death only. Also observed: sequential turns are
+  exactly-once (101/101), but c8 runs each produced ~1 duplicate
+  turn per connection — at-least-once visible on the request path,
+  attribution between docker-proxy resets and celld's front retry
+  unresolved. The honest comparison statement: same logical counter
+  transition, different wire and durability levels, and both floors
+  named — 121µs buffered / 139µs synced (in-process, no wire) vs
+  ~4.6ms acknowledged (HTTP + V8 + SQLite + docker VM).
 - **Ownership is enforced at the identity boundary and the write
   fence now gates the write path.** `std/node` consults the record on
   every identity-changing path (evolved 2026-10-20): `spawn` and member

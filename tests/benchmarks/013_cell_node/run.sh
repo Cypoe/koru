@@ -5,6 +5,7 @@
 # Arms:
 #   koru resident   — worldless node: turns with no materializer
 #   koru durable    — world-mounted node: every commit writes state.kv
+#   koru durable+sync — same commits, fsync'd per turn (celld's ack level)
 #   koru activation — evict + member-lookup cycles (hibernate → re-materialize)
 #   zig baseline    — same semantics, no interpreter: the speed of light
 #
@@ -33,14 +34,16 @@ echo "== compile task.kz"
 
 echo "== run koru arms"
 out="$(cd "$work" && ./task_bin)"
-printf '%s\n' "$out" | grep -E 'resident:|durable:|activation:|hits=|drained'
+printf '%s\n' "$out" | grep -E 'resident:|durable|activation:|hits=|drained'
 
 echo "== correctness gate"
 df_hits="$(printf '%s\n' "$out" | sed -n 's/^df hits=\([0-9]*\).*/\1/p')"
 rf_hits="$(printf '%s\n' "$out" | sed -n 's/^rf hits=\([0-9]*\).*/\1/p')"
+ds_hits="$(printf '%s\n' "$out" | sed -n 's/^ds hits=\([0-9]*\).*/\1/p')"
 [ "$df_hits" = "$TURNS" ] || { echo "df hits=$df_hits, want $TURNS"; exit 1; }
 [ "$rf_hits" = "$TURNS" ] || { echo "rf hits=$rf_hits, want $TURNS"; exit 1; }
-echo "checksum ok: df=$df_hits rf=$rf_hits (want $TURNS each)"
+[ "$ds_hits" = "$TURNS" ] || { echo "ds hits=$ds_hits, want $TURNS"; exit 1; }
+echo "checksum ok: df=$df_hits rf=$rf_hits ds=$ds_hits (want $TURNS each)"
 
 echo "== zig baseline"
 zig run -OReleaseFast "$ROOT/baseline.zig"

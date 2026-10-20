@@ -38,6 +38,23 @@ pub fn main() !void {
     t1 = try std.time.Instant.now();
     std.debug.print("baseline durable: {d:.3}ms for {d} turns\n", .{ @as(f64, @floatFromInt(t1.since(t0))) / 1e6, TURNS });
 
+    // arm D: durable+sync — same write, fsync'd per turn (celld's ack level)
+    const spath = "/tmp/koru-bench-baseline/grain-s/state.kv";
+    std.fs.cwd().makePath("/tmp/koru-bench-baseline/grain-s") catch {};
+    t0 = try std.time.Instant.now();
+    var shits: i64 = 0;
+    for (0..TURNS) |_| {
+        shits += 1;
+        var buf: [256]u8 = undefined;
+        const body = try std.fmt.bufPrint(&buf, "#shape=counter\n#shape_def=hits:u32\nhits={d}\n", .{shits});
+        try std.fs.cwd().writeFile(.{ .sub_path = spath, .data = body });
+        const sf = try std.fs.cwd().openFile(spath, .{});
+        sf.sync() catch {};
+        sf.close();
+    }
+    t1 = try std.time.Instant.now();
+    std.debug.print("baseline durable+sync: {d:.3}ms for {d} turns\n", .{ @as(f64, @floatFromInt(t1.since(t0))) / 1e6, TURNS });
+
     // arm C: activation — delete + rewrite the file (the hibernate/wake pair's
     // raw cost: create dir, write file, read file back)
     t0 = try std.time.Instant.now();

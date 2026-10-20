@@ -18,6 +18,7 @@
 ~import std/io
 ~import std/node
 ~import std/cell
+~import std/fs
 ~import std/proto
 ~import std/runtime
 ~import std/time
@@ -34,6 +35,9 @@
 }
 
 const TURNS: usize = 60;
+
+~tor sink { } -> i64
+~sink -> 0
 
 ~std/node:new(rf, scope: "cell", world: "", capacity: 8)
 ~std/node:new(df, scope: "cell", world: "/tmp/koru-bench-cells", capacity: 8)
@@ -78,6 +82,30 @@ const TURNS: usize = 60;
   |> std/time:elapsed(start: t1): rb
   |> std/io:print.ln("durable: {{ rb.ms:f }}ms for {{ TURNS:d }} turns")
 
+// arm D's grain: same world, second cell — its commits are fsync'd per turn
+~std/node(df)
+| node f |> std/node:spawn(f, id: "grain-s", cell: counter)
+  | spawned _ |> sink()
+  | resident |> sink()
+  | held-by o |> std/io:print.ln("ds grain held by {{ o:s }}")
+  | refused |> std/io:print.ln("ds grain refused")
+
+// ─── arm D: durable+sync turns ─── commit + fsync, celld's ack level ───
+~std/time:now(): t3
+  |> std/node(df.grain-s)
+    | cell c |> for(0..TURNS)
+      ! each _ |> std/cell:run(c, source: "touch(k: 1)")
+        | result _ |> std/cell:capture(c, shape: counter)
+          ! as s |> std/cell:captured { hits: s.hits + 1 }
+          | captured _ |> std/fs:sync(path: "/tmp/koru-bench-cells/grain-s/state.kv")
+            | synced |> sink()
+            | failed e |> std/io:print.ln("sync failed: {{ e:s }}")
+        | error e |> std/io:print.ln("turn failed: {{ e.kind:s }}")
+    | held-by o |> std/io:print.ln("ds grain held by {{ o:s }}")
+    | not-found |> std/io:print.ln("ds grain missing")
+  |> std/time:elapsed(start: t3): rd
+  |> std/io:print.ln("durable+sync: {{ rd.ms:f }}ms for {{ TURNS:d }} turns")
+
 // ─── arm C: activation ─── evict (hibernate) + lookup (re-materialize) ───
 ~std/time:now(): t2
   |> std/node(df)
@@ -99,6 +127,14 @@ const TURNS: usize = 60;
   | unknown-field e |> std/io:print.ln("no field")
 | held-by o |> std/io:print.ln("df grain held by {{ o:s }}")
 | not-found |> std/io:print.ln("df grain gone")
+
+~std/node(df.grain-s)
+| cell c |> std/cell:get(c, field: "hits")
+  | value v |> std/io:print.ln("ds hits={{ v.int:d }}")
+  | unset u |> std/io:print.ln("ds hits unset")
+  | unknown-field e |> std/io:print.ln("no field")
+| held-by o |> std/io:print.ln("ds grain held by {{ o:s }}")
+| not-found |> std/io:print.ln("ds grain gone")
 
 ~std/node(rf.grain)
 | cell c |> std/cell:get(c, field: "hits")
