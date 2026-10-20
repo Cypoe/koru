@@ -125,6 +125,7 @@ koru_std/interpreter.interp.kz	83
 koru_std/interpreter.invargs.kz	113
 koru_std/interpreter.kz	554
 koru_std/interpreter.literal.kz	40
+koru_std/interpreter.mint.kz	37
 koru_std/interpreter.names.kz	18
 koru_std/interpreter.parse.kz	52
 koru_std/interpreter.pool.kz	236

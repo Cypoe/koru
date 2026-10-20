@@ -26,6 +26,9 @@ pub const HandlePool = struct {
     /// discharge — a spent token resolves nothing.
     resources: std.StringHashMapUnmanaged(*anyopaque) = .{},
     next_resource: u32 = 1,
+    /// Per-pool mint seed, lazy-mixed on the first mint — the suffix is
+    /// seeded hex, never a countable sequence (OPAQUE MINT ruling).
+    mint_seed: u64 = 0,
     /// The custody witness, when installed: `on_mint` fires from `acquire`
     /// (subject carries the creating verb's args — the why of the possess),
     /// `on_release` fires from every discharge path (explicit verb, sweep,
@@ -168,15 +171,12 @@ pub const HandlePool = struct {
         }
     }
 
-    /// Mint the token a `*T` return rides home on — opaque, pool-unique, and
-    /// carrying the resource's type name for legibility ("h:Connection:3").
-    /// Token bytes live on the page allocator — the same never-freed
-    /// tolerance __koru_own already documents — because a result field
-    /// aliasing the token may still be rendered after its handle discharges.
+    /// Mint the token a `*T` return rides home on — opaque and pool-unique,
+    /// `h:Type:` + seeded hex. A sequence made spelled guesses resolvable —
+    /// binding what the observation returned is the only legal access. The
+    /// mint itself lives in the `mint` part (line wall).
     pub fn mintResourceToken(self: *HandlePool, resource_type: []const u8) []const u8 {
-        const tok = std.fmt.allocPrint(std.heap.page_allocator, "h:{s}:{d}", .{ resource_type, self.next_resource }) catch @panic("pool: OOM minting handle token");
-        self.next_resource += 1;
-        return tok;
+        return poolMintResourceToken(self, resource_type);
     }
 
     /// Store a typed value under its token. Called by generated dispatchers at

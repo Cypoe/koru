@@ -374,10 +374,7 @@ pub const BudgetState = struct {
     }
 };
 
-// ============================================================================
-// ENVIRONMENT moved to the `env` part — the binding table and the
-// session/turn seeding helper.
-// ============================================================================
+// ENVIRONMENT moved to the `env` part — the binding table and seeding.
 
 // ============================================================================
 // DISPATCH RESULT - What dispatchers return to the interpreter
@@ -533,6 +530,7 @@ pub fn findHostTilde(source: []const u8) ?HostTilde {
 ~part names
 ~part parse
 ~part pool
+~part mint
 ~part run
 ~part refuse
 ~part runcached

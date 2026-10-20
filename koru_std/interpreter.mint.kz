@@ -1,0 +1,37 @@
+// Koru Standard Library: the `mint` part of interpreter.kz — the opaque
+// resource-token mint for HandlePool. Joined via `~part mint` in
+// interpreter.kz; merged into the interpreter module at load.
+//
+// Split from the pool part under the line wall. The ruling (OPAQUE MINT —
+// Lars 2026-09-07/08, the notes mint's rule carried to resource tokens
+// 2026-10-20): token text must not be predictable, because a countable
+// suffix lets a program spell custody it was never handed — `h:Res:1`
+// used to be a resolvable guess. `h:Type:` stays for legibility; the
+// suffix is seeded six-hex.
+
+/// Mint the token a `*T` return rides home on — opaque and pool-unique,
+/// carrying the resource's type name for legibility ("h:Connection:a3f9c2").
+/// Called only from `HandlePool.mintResourceToken`. Token bytes live on the
+/// page allocator — the same never-freed tolerance __koru_own already
+/// documents — because a result field aliasing the token may still be
+/// rendered after its handle discharges.
+pub fn poolMintResourceToken(pool: *HandlePool, resource_type: []const u8) []const u8 {
+    if (pool.mint_seed == 0) pool.mint_seed = std.crypto.random.int(u64);
+    // Splitmix-style avalanche over (seed, count): consecutive mints
+    // differ, and a fresh pool starts from a fresh seed.
+    var mix = pool.mint_seed;
+    mix ^= mix >> 33;
+    mix *%= 0xff51afd7ed558ccd;
+    mix ^= mix >> 33;
+    mix +%= @as(u64, pool.next_resource) *% 0x9e3779b97f4a7c15;
+    mix ^= mix >> 33;
+    pool.next_resource += 1;
+    // Uniqueness among LIVE tokens: re-mix on collision (24-bit space —
+    // a retry loop is the honest guard, not a panic).
+    while (true) {
+        const tok = std.fmt.allocPrint(std.heap.page_allocator, "h:{s}:{x:0>6}", .{ resource_type, @as(u24, @truncate(mix)) }) catch @panic("pool: OOM minting handle token");
+        if (pool.resources.get(tok) == null) return tok;
+        mix +%= 0x9e3779b97f4a7c15;
+        mix ^= mix >> 33;
+    }
+}
