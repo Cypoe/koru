@@ -89,6 +89,16 @@ floor — deterministic, no clocks, no sockets. Six tors, all leaves:
   compare-and-swap — the createNew→writeAll window is the concrete
   shape that difference took, and it is now a known, patched surface
   rather than a caveat.
+- **The verbs are priced, and the price is the floor (evolved
+  2026-10-20).** `tests/benchmarks/014_fleet_protocol` loops each verb
+  60× against a zig baseline replaying the identical syscall sequences.
+  Mins over 5 runs on a load-13 box — indicative, not claim-grade:
+  owner ~14µs, claim+release ~330µs, renew ~240µs, seize ~420µs per op.
+  The baseline lands within the same noise band — neither direction of
+  the delta is claimed; what is measurable is that the runtime stack's
+  overhead sits below the I/O noise floor on this box. The protocol is
+  syscall-bound: custody's cost is the filesystem, not the dispatch.
+  The numbers want a calm-machine re-run before they are cited anywhere.
 - **Ownership is enforced at the identity boundary and the write
   fence now gates the write path.** `std/node` consults the record on
   every identity-changing path (evolved 2026-10-20): `spawn` and member
