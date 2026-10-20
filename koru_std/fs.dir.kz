@@ -1,0 +1,173 @@
+// ============================================================================
+// DIRECTORY CAPABILITY - *Dir<open> confines every verb to its root
+// ============================================================================
+// fs:dir(path) mints a directory handle; the sandbox IS the handle, not a
+// path-check repeated at every call site. list/read/write/read-lines-in/
+// collect-lines borrow *Dir<open>; close discharges *Dir<!open>. Every
+// `path:` arg is root-relative — absolute paths and `..` components fire
+// `| failed` here, inside std/fs, so a caller (or a wire model) cannot
+// escape by spelling one.
+//
+// collect-lines materializes the `! line` effect stream as a []string
+// field — the shape a wire consumer sees, since wire arms cannot spell
+// `!`. Wire payloads render it as a JSON array (FieldValue.string_array).
+
+pub const Dir = struct { root: std.fs.Dir };
+
+fn __koru_fenced(path: []const u8) bool {
+    if (path.len == 0 or std.fs.path.isAbsolute(path)) return true;
+    var it = std.mem.splitScalar(u8, path, '/');
+    while (it.next()) |seg| {
+        if (std.mem.eql(u8, seg, "..")) return true;
+    }
+    return false;
+}
+
+fn __koru_lt(_: void, a: []const u8, b: []const u8) bool {
+    return std.mem.order(u8, a, b) == .lt;
+}
+
+~pub tor dir { path: string }
+| opened *Dir<open!>
+| failed string
+
+~proc dir|zig {
+    const __koru_d_root = std.fs.cwd().openDir(path, .{ .iterate = true }) catch |err| {
+        const __koru_d_msg = switch (err) {
+            error.FileNotFound => "Directory not found",
+            error.AccessDenied => "Access denied",
+            error.NotDir => "Not a directory",
+            else => "Failed to open directory",
+        };
+        return .{ .failed = __koru_d_msg };
+    };
+    const __koru_d_p = std.heap.page_allocator.create(Dir) catch @panic("koru: OOM minting Dir");
+    __koru_d_p.* = .{ .root = __koru_d_root };
+    return .{ .opened = __koru_d_p };
+}
+
+~pub tor close { d: *Dir<!open> }
+
+~proc close|zig {
+    d.root.close();
+    std.heap.page_allocator.destroy(d);
+}
+
+// Sorted — a deterministic listing is the honest contract for a dir verb:
+// iterate() order is filesystem-dependent and untestable.
+~pub tor list { d: *Dir<open> }
+| entries []string
+| failed string
+
+~proc list|zig {
+    var __koru_l_names = std.ArrayList([]const u8){};
+    var __koru_l_it = d.root.iterate();
+    while (__koru_l_it.next() catch return .{ .failed = "Failed to read directory" }) |__koru_l_e| {
+        const __koru_l_name = std.heap.page_allocator.dupe(u8, __koru_l_e.name) catch @panic("koru: OOM listing dir");
+        __koru_l_names.append(std.heap.page_allocator, __koru_l_name) catch @panic("koru: OOM listing dir");
+    }
+    std.mem.sort([]const u8, __koru_l_names.items, {}, __koru_lt);
+    return .{ .entries = __koru_l_names.items };
+}
+
+~pub tor read { d: *Dir<open>, path: string }
+| text string
+| failed string
+
+~proc read|zig {
+    if (__koru_fenced(path)) return .{ .failed = "path escapes the dir" };
+    const __koru_r_text = d.root.readFileAlloc(std.heap.page_allocator, path, std.math.maxInt(usize)) catch |err| {
+        const __koru_r_msg = switch (err) {
+            error.FileNotFound => "File not found",
+            error.AccessDenied => "Access denied",
+            error.IsDir => "Path is a directory",
+            else => "Failed to read file",
+        };
+        return .{ .failed = __koru_r_msg };
+    };
+    return .{ .text = __koru_r_text };
+}
+
+~pub tor write { d: *Dir<open>, path: string, content: string }
+| written
+| failed string
+
+~proc write|zig {
+    if (__koru_fenced(path)) return .{ .failed = "path escapes the dir" };
+    const __koru_w_file = d.root.createFile(path, .{}) catch |err| {
+        const __koru_w_msg = switch (err) {
+            error.AccessDenied => "Access denied",
+            error.IsDir => "Path is a directory",
+            else => "Failed to write file",
+        };
+        return .{ .failed = __koru_w_msg };
+    };
+    defer __koru_w_file.close();
+    __koru_w_file.writeAll(content) catch return .{ .failed = "Failed to write file" };
+    return .{ .written = .{} };
+}
+
+// The effect stream, dir-scoped. Same line semantics as read-lines
+// (\r stripped, no trailing-empty line); the buffer lives for the pulse.
+~pub tor read-lines-in { d: *Dir<open>, path: string }
+! line string
+| done usize
+| failed string
+
+~proc read-lines-in|zig {
+    if ($mod.__koru_fenced(path)) return .{ .failed = "path escapes the dir" };
+    const __koru_rl_file = d.root.openFile(path, .{}) catch |err| {
+        return .{ .failed = switch (err) {
+            error.FileNotFound => "File not found",
+            error.AccessDenied => "Access denied",
+            error.IsDir => "Path is a directory",
+            else => "Failed to open file",
+        } };
+    };
+    defer __koru_rl_file.close();
+    const __koru_rl_content = __koru_rl_file.readToEndAlloc(koru_allocator(), std.math.maxInt(usize)) catch {
+        return .{ .failed = "Failed to read file" };
+    };
+    defer koru_allocator().free(__koru_rl_content);
+    var __koru_rl_n: usize = 0;
+    var __koru_rl_it = std.mem.splitScalar(u8, __koru_rl_content, '\n');
+    while (__koru_rl_it.next()) |__koru_rl_raw| {
+        if (__koru_rl_raw.len == 0 and __koru_rl_it.peek() == null) break;
+        const __koru_rl_l = if (__koru_rl_raw.len > 0 and __koru_rl_raw[__koru_rl_raw.len - 1] == '\r') __koru_rl_raw[0 .. __koru_rl_raw.len - 1] else __koru_rl_raw;
+        line(__koru_rl_l);
+        __koru_rl_n += 1;
+    }
+    return .{ .done = __koru_rl_n };
+}
+
+// Materializes the same stream — each line is duped (the buffer frees),
+// the marshal owns a second copy for the wire, like every string payload.
+~pub tor collect-lines { d: *Dir<open>, path: string }
+| lines []string
+| failed string
+
+~proc collect-lines|zig {
+    if (__koru_fenced(path)) return .{ .failed = "path escapes the dir" };
+    const __koru_cl_file = d.root.openFile(path, .{}) catch |err| {
+        return .{ .failed = switch (err) {
+            error.FileNotFound => "File not found",
+            error.AccessDenied => "Access denied",
+            error.IsDir => "Path is a directory",
+            else => "Failed to open file",
+        } };
+    };
+    defer __koru_cl_file.close();
+    const __koru_cl_content = __koru_cl_file.readToEndAlloc(koru_allocator(), std.math.maxInt(usize)) catch {
+        return .{ .failed = "Failed to read file" };
+    };
+    defer koru_allocator().free(__koru_cl_content);
+    var __koru_cl_lines = std.ArrayList([]const u8){};
+    var __koru_cl_it = std.mem.splitScalar(u8, __koru_cl_content, '\n');
+    while (__koru_cl_it.next()) |__koru_cl_raw| {
+        if (__koru_cl_raw.len == 0 and __koru_cl_it.peek() == null) break;
+        const __koru_cl_l = if (__koru_cl_raw.len > 0 and __koru_cl_raw[__koru_cl_raw.len - 1] == '\r') __koru_cl_raw[0 .. __koru_cl_raw.len - 1] else __koru_cl_raw;
+        const __koru_cl_own = std.heap.page_allocator.dupe(u8, __koru_cl_l) catch @panic("koru: OOM collecting line");
+        __koru_cl_lines.append(std.heap.page_allocator, __koru_cl_own) catch @panic("koru: OOM collecting line");
+    }
+    return .{ .lines = __koru_cl_lines.items };
+}

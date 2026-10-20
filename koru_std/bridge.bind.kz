@@ -116,15 +116,15 @@ fn jsonObjectFields(alloc: std.mem.Allocator, src: []const u8) ?[]Interp.NamedFi
 }
 
 /// Deep-copy a run-arena Value into session memory and bind it under
-/// `name`. A scalar payload that holds a JSON object also gains the
-/// object's members as named fields — `__type_ref` stays first so a bare
-/// `r3` still renders the whole datum, and `r3.user_id` resolves by name.
+/// `name`. A scalar payload holding a JSON object also gains its members
+/// as named fields — `r3.user_id` resolves by name.
 fn bindSessionValue(se: *Environment, name: []const u8, v: Interp.Value) void {
     const alloc = se.allocator;
     var fields = std.ArrayList(Interp.NamedField){};
     for (v.fields) |f| {
         const fv: Interp.FieldValue = switch (f.value) {
             .string_val => |s| .{ .string_val = alloc.dupe(u8, s) catch return },
+            .string_array => |arr| .{ .string_array = Interp.dupeStrs(alloc, arr) },
             else => f.value,
         };
         fields.append(alloc, .{

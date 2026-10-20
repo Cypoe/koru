@@ -1,0 +1,16 @@
+entry hello.txt
+entry input.txt
+-- listed
+text: hello world
+
+wrote
+line one
+line two
+-- collected
+pulse one
+pulse two
+-- pulsed 2
+fenced-rel path escapes the dir
+fenced-abs path escapes the dir
+missing File not found
+closed

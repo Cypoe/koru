@@ -125,6 +125,7 @@ koru_std/interpreter.deftable.kz	174
 koru_std/interpreter.env.kz	77
 koru_std/interpreter.eval.kz	191
 koru_std/interpreter.expr.kz	277
+koru_std/interpreter.fieldvalue.kz	48
 koru_std/interpreter.flowchecks.kz	76
 koru_std/interpreter.flowsrc.kz	85
 koru_std/interpreter.guards.kz	63

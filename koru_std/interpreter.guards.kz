@@ -49,7 +49,7 @@ fn populateArmExprBindings(
 ) !void {
     const scalar = bound_value.fields.len == 1 and std.mem.eql(u8, bound_value.fields[0].name, "__type_ref");
     try bindings.set(name, if (scalar)
-        fieldValueToExprValue(bound_value.fields[0].value)
+        fieldValueToExprValue(bound_value.fields[0].value, allocator)
     else
         .{ .string_val = branch });
     var branch_key_buf: [256]u8 = undefined;
@@ -58,6 +58,6 @@ fn populateArmExprBindings(
     for (bound_value.fields) |fv| {
         var field_key_buf: [256]u8 = undefined;
         const field_key = std.fmt.bufPrint(&field_key_buf, "{s}.{s}", .{ name, fv.name }) catch continue;
-        try bindings.set(try allocator.dupe(u8, field_key), fieldValueToExprValue(fv.value));
+        try bindings.set(try allocator.dupe(u8, field_key), fieldValueToExprValue(fv.value, allocator));
     }
 }

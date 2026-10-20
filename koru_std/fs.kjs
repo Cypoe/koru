@@ -55,7 +55,7 @@
     return { tag: "done", done: __koru_rl_n };
 }
 
-~proc write|js {
+~proc write-file|js {
     try {
         require("fs").writeFileSync(path, content);
     } catch (__koru_wr_err) {

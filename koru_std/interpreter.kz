@@ -204,6 +204,7 @@ pub const FieldValue = union(enum) {
     int_val: i64,
     float_val: f64,
     bool_val: bool,
+    string_array: []const []const u8,
 };
 
 pub const NamedField = struct {
@@ -275,19 +276,14 @@ pub const Value = struct {
             .int_val => |v| try std.fmt.format(w, "{d}", .{v}),
             .float_val => |v| try std.fmt.format(w, "{d}", .{v}),
             .bool_val => |v| try w.writeAll(if (v) "true" else "false"),
-            .string_val => |v| {
-                try w.writeByte('"');
-                for (v) |c| {
-                    switch (c) {
-                        '"' => try w.writeAll("\\\""),
-                        '\\' => try w.writeAll("\\\\"),
-                        '\n' => try w.writeAll("\\n"),
-                        '\r' => try w.writeAll("\\r"),
-                        '\t' => try w.writeAll("\\t"),
-                        else => try w.writeByte(c),
-                    }
+            .string_val => |v| try writeJsonString(w, v),
+            .string_array => |arr| {
+                try w.writeByte('[');
+                for (arr, 0..) |v, i| {
+                    if (i > 0) try w.writeByte(',');
+                    try writeJsonString(w, v);
                 }
-                try w.writeByte('"');
+                try w.writeByte(']');
             },
         }
     }
@@ -314,6 +310,7 @@ pub const Value = struct {
             const name_copy = allocator.dupe(u8, f.name) catch @panic("koru: OOM cloning value");
             const value_copy = switch (f.value) {
                 .string_val => |s| FieldValue{ .string_val = allocator.dupe(u8, s) catch @panic("koru: OOM cloning value") },
+                .string_array => |arr| FieldValue{ .string_array = dupeStrs(allocator, arr) },
                 .bool_val => |b| FieldValue{ .bool_val = b },
                 .int_val => |n| FieldValue{ .int_val = n },
                 .float_val => |fl| FieldValue{ .float_val = fl },
@@ -525,6 +522,7 @@ pub fn findHostTilde(source: []const u8) ?HostTilde {
 ~part contracts
 ~part define
 ~part expr
+~part fieldvalue
 ~part guards
 ~part interp
 ~part names

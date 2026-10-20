@@ -243,6 +243,7 @@ fn ownDispatchResult(result: *DispatchResult, allocator: std.mem.Allocator) !voi
             .name = try allocator.dupe(u8, f.name),
             .value = switch (f.value) {
                 .string_val => |s| FieldValue{ .string_val = try allocator.dupe(u8, s) },
+                .string_array => |arr| FieldValue{ .string_array = dupeStrs(allocator, arr) },
                 else => f.value,
             },
         };
@@ -253,15 +254,17 @@ fn ownDispatchResult(result: *DispatchResult, allocator: std.mem.Allocator) !voi
 fn fieldValueToString(fv: FieldValue, allocator: std.mem.Allocator) ![]const u8 {
     return switch (fv) {
         .string_val => |s| allocator.dupe(u8, s),
+        .string_array => |arr| strArrayToJson(arr, allocator),
         .bool_val => |b| if (b) allocator.dupe(u8, "true") else allocator.dupe(u8, "false"),
         .int_val => |i| try std.fmt.allocPrint(allocator, "{d}", .{i}),
         .float_val => |f| try std.fmt.allocPrint(allocator, "{d}", .{f}),
     };
 }
 
-fn fieldValueToExprValue(fv: FieldValue) ExprValue {
+fn fieldValueToExprValue(fv: FieldValue, allocator: std.mem.Allocator) ExprValue {
     return switch (fv) {
         .string_val => |s| .{ .string_val = s },
+        .string_array => |arr| .{ .string_val = strArrayToJson(arr, allocator) catch @panic("koru: OOM rendering string array") },
         .bool_val => |b| .{ .bool_val = b },
         .int_val => |i| .{ .int_val = i },
         .float_val => |f| .{ .float_val = f },
@@ -549,13 +552,7 @@ fn executeFlow(
             // Bind current state to expr_bindings for condition evaluation
             var state_iter = state_fields.iterator();
             while (state_iter.next()) |entry| {
-                // Convert FieldValue to ExprValue
-                const expr_val: ExprValue = switch (entry.value_ptr.*) {
-                    .int_val => |i| .{ .int_val = i },
-                    .float_val => |f| .{ .float_val = f },
-                    .bool_val => |b| .{ .bool_val = b },
-                    .string_val => |s| .{ .string_val = s },
-                };
+                const expr_val = fieldValueToExprValue(entry.value_ptr.*, ctx.allocator);
                 try ctx.expr_bindings.set(entry.key_ptr.*, expr_val);
             }
 
@@ -601,7 +598,7 @@ fn executeFlow(
                         var field_key_buf: [256]u8 = undefined;
                         const field_key = std.fmt.bufPrint(&field_key_buf, "{s}.{s}", .{binding_name, entry.key_ptr.*}) catch continue;
                         const field_key_owned = try ctx.allocator.dupe(u8, field_key);
-                        const expr_val = fieldValueToExprValue(entry.value_ptr.*);
+                        const expr_val = fieldValueToExprValue(entry.value_ptr.*, ctx.allocator);
                         try ctx.expr_bindings.set(field_key_owned, expr_val);
                     }
                     const state_value = Value{
@@ -689,7 +686,7 @@ fn executeFlow(
                     var field_key_buf: [256]u8 = undefined;
                     const field_key = std.fmt.bufPrint(&field_key_buf, "{s}.{s}", .{binding_name, entry.key_ptr.*}) catch continue;
                     const field_key_owned = try ctx.allocator.dupe(u8, field_key);
-                    const expr_val = fieldValueToExprValue(entry.value_ptr.*);
+                    const expr_val = fieldValueToExprValue(entry.value_ptr.*, ctx.allocator);
                     try ctx.expr_bindings.set(field_key_owned, expr_val);
                 }
                 const state_value = Value{

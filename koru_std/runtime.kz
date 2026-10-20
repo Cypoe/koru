@@ -210,14 +210,11 @@ const ast_reg = @import("ast");
         code.appendSlice(allocator, I ++ "    return __koru_input;\n") catch unreachable;
         code.appendSlice(allocator, I ++ "}\n\n") catch unreachable;
 
-        // Helper - owns a result string. A |zig proc that formats into a
-        // local buffer returns a slice into its own dead stack frame; the
-        // interpreter binds these bytes past the dispatcher's return, so
-        // string payloads are copied to page memory at pack time (the same
-        // never-freed tolerance wireReject and parse.wire already carry).
-        code.appendSlice(allocator, I ++ "fn __koru_own(__koru_s: []const u8) []const u8 {\n") catch unreachable;
-        code.appendSlice(allocator, I ++ "    return __koru_dispatcher_std.heap.page_allocator.dupe(u8, __koru_s) catch @panic(\"dispatch: OOM owning result\");\n") catch unreachable;
-        code.appendSlice(allocator, I ++ "}\n\n") catch unreachable;
+        // Helper - owns a result payload. A |zig proc's returns are slices
+        // into its dead stack frame; payloads copy to page memory at pack
+        // time (the never-freed tolerance wireReject and parse.wire carry).
+        code.appendSlice(allocator, I ++ "fn __koru_own(comptime __koru_T: type, __koru_s: []const __koru_T) []const __koru_T {\n    const __koru_a = __koru_dispatcher_std.heap.page_allocator;\n    if (__koru_T == u8) return __koru_a.dupe(u8, __koru_s) catch @panic(\"dispatch: OOM owning result\");\n") catch unreachable;
+        code.appendSlice(allocator, I ++ "    const __koru_out = __koru_a.alloc(__koru_T, __koru_s.len) catch @panic(\"dispatch: OOM owning result\");\n    for (__koru_s, 0..) |__koru_e, __koru_i| __koru_out[__koru_i] = __koru_a.dupe(u8, __koru_e) catch @panic(\"dispatch: OOM owning result\");\n    return __koru_out;\n}\n\n") catch unreachable;
     }
 
     // Per-event dispatchers and descriptor table
@@ -270,8 +267,9 @@ const ast_reg = @import("ast");
             code.appendSlice(allocator, I ++ "        } else if (@typeInfo(__koru_V) == .pointer) {\n") catch unreachable;
             code.appendSlice(allocator, I ++ "            const __koru_ptr_info = @typeInfo(__koru_V).pointer;\n") catch unreachable;
             code.appendSlice(allocator, I ++ "            if (__koru_ptr_info.size == .slice and __koru_ptr_info.child == u8) {\n") catch unreachable;
-            code.appendSlice(allocator, I ++ "                __koru_SR.buf[0] = .{ .name = \"__type_ref\", .value = __koru_FieldValue{ .string_val = __koru_own(__koru_v) } };\n") catch unreachable;
+            code.appendSlice(allocator, I ++ "                __koru_SR.buf[0] = .{ .name = \"__type_ref\", .value = __koru_FieldValue{ .string_val = __koru_own(u8, __koru_v) } };\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                __koru_n = 1;\n") catch unreachable;
+            code.appendSlice(allocator, I ++ "            } else if (__koru_ptr_info.size == .slice and __koru_ptr_info.child == []const u8) {\n                __koru_SR.buf[0] = .{ .name = \"__type_ref\", .value = __koru_FieldValue{ .string_array = __koru_own([]const u8, __koru_v) } };\n                __koru_n = 1;\n") catch unreachable;
             code.appendSlice(allocator, I ++ "            } else {\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                __koru_SR.buf[0] = .{ .name = \"__type_ref\", .value = __koru_FieldValue{ .string_val = koru_std.koru_interpreter.registerDispatchResource(@typeName(__koru_ptr_info.child), __koru_v) } };\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                __koru_n = 1;\n") catch unreachable;
@@ -298,7 +296,8 @@ const ast_reg = @import("ast");
             code.appendSlice(allocator, I ++ "            } else if (@typeInfo(__koru_P) == .pointer) {\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                const __koru_ptr_info = @typeInfo(__koru_P).pointer;\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                if (__koru_ptr_info.size == .slice and __koru_ptr_info.child == u8) {\n") catch unreachable;
-            code.appendSlice(allocator, I ++ "                    __koru_S.buf[0] = .{ .name = \"__type_ref\", .value = __koru_FieldValue{ .string_val = __koru_own(__koru_p) } };\n") catch unreachable;
+            code.appendSlice(allocator, I ++ "                    __koru_S.buf[0] = .{ .name = \"__type_ref\", .value = __koru_FieldValue{ .string_val = __koru_own(u8, __koru_p) } };\n") catch unreachable;
+            code.appendSlice(allocator, I ++ "                } else if (__koru_ptr_info.size == .slice and __koru_ptr_info.child == []const u8) {\n                    __koru_S.buf[0] = .{ .name = \"__type_ref\", .value = __koru_FieldValue{ .string_array = __koru_own([]const u8, __koru_p) } };\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                } else {\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                    __koru_S.buf[0] = .{ .name = \"__type_ref\", .value = __koru_FieldValue{ .string_val = koru_std.koru_interpreter.registerDispatchResource(@typeName(__koru_ptr_info.child), __koru_p) } };\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                }\n") catch unreachable;
@@ -326,8 +325,9 @@ const ast_reg = @import("ast");
             code.appendSlice(allocator, I ++ "                },\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                .pointer => |__koru_ptr_info| {\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                    if (__koru_ptr_info.size == .slice and __koru_ptr_info.child == u8) {\n") catch unreachable;
-            code.appendSlice(allocator, I ++ "                        __koru_S.buf[__koru_count] = .{ .name = __koru_field.name, .value = __koru_FieldValue{ .string_val = __koru_own(@field(__koru_p, __koru_field.name)) } };\n") catch unreachable;
+            code.appendSlice(allocator, I ++ "                        __koru_S.buf[__koru_count] = .{ .name = __koru_field.name, .value = __koru_FieldValue{ .string_val = __koru_own(u8, @field(__koru_p, __koru_field.name)) } };\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                        __koru_count += 1;\n") catch unreachable;
+            code.appendSlice(allocator, I ++ "                    } else if (__koru_ptr_info.size == .slice and __koru_ptr_info.child == []const u8) {\n                        __koru_S.buf[__koru_count] = .{ .name = __koru_field.name, .value = __koru_FieldValue{ .string_array = __koru_own([]const u8, @field(__koru_p, __koru_field.name)) } };\n                        __koru_count += 1;\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                    } else if (__koru_ptr_info.size == .one) {\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                        __koru_S.buf[__koru_count] = .{ .name = __koru_field.name, .value = __koru_FieldValue{ .string_val = koru_std.koru_interpreter.registerDispatchResource(@typeName(__koru_ptr_info.child), @field(__koru_p, __koru_field.name)) } };\n") catch unreachable;
             code.appendSlice(allocator, I ++ "                        __koru_count += 1;\n") catch unreachable;
