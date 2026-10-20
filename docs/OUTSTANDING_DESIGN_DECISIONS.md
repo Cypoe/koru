@@ -536,7 +536,8 @@ same picture.
   `420_003`'s post.sh sees the trace. No spelling change, POSIX default kept.
 - **Windows CRLF harness fixes** — flag/marker readers (`COMPILER_FLAGS`,
   `ARGS`, `JS/CS/C_REFUSES`, EXPECT marker classification, `expected.json`
-  compare) now strip ``; ~70 latent pin files affected.
+  compare) now strip `
+`; ~70 latent pin files affected.
 
 ### C5 — two oracle postures: do the Lean legs join marker=contract?
 
@@ -556,3 +557,59 @@ unprovisioned host goes red `witness-oracle` the way a ccomp-less host
 goes red `c-oracle` today — or does "not armed" become a named verdict
 distinct from green? The current state prints a blue parenthetical and
 reports PASS, which reads as a verdict the oracle never produced.
+
+## C-line residuals (surfaced 2026-10-19, arm-accounting board on WSL)
+
+Surfaced while landing `2bc5e6f91` (the KORU183 runner floor) on
+`/home/cypoe/src/koru-ccomp`, host glibc 2.31, backend target
+`KORU_BACKEND_TARGET=x86_64-linux-musl`. Most are environment facts, not
+design calls; the design calls are marked.
+
+- **`690_370` numbering collision** — `690_370_rule_unclaimed_arm_refused`
+  (new pin) shares its number with the `690_370_c_lane_*` series in the
+  same cluster. Filters match both. Renumber the pin or rule that
+  numbers are cluster-scoped.
+- **`440_030`/`440_036` — real pre-existing bug, newly observable.** The
+  bridge dispatcher hands back a slice into a dead stack buffer; under
+  musl the emitted binary finally runs on this host and prints the
+  garbage. The tests' own comment says the seam "never once worked" —
+  under glibc-target binaries it could never run at all, so it read
+  green. This is a `std/bridge` runtime defect, not arm-accounting.
+- **musl system-lib lane** — tests linking `-lsqlite3`/`-lz` can't link
+  under musl (`310_021`, `901`, `350_*`, `643_*`). Either provision
+  static libs for the lane or declare a system-lib lane that keeps the
+  native target.
+- **glibc-2.34 post.sh builds** — tests whose `post.sh` runs a bare
+  `zig build-exe`/`zig build` ignore `KORU_BACKEND_TARGET` and produce
+  glibc-2.34 binaries that cannot run on this host (`310_120`,
+  `310_125`, `330_057`, `641_040` c-lane, `510_062`/`067`). Question:
+  should post.sh honor the target env, or is that out of contract?
+- **cs-runtime needs `DOTNET_ROOT`** — the emitted `a_cs_equiv` builds
+  but won't run without `DOTNET_ROOT=/home/cypoe/.nix-profile/share/dotnet`.
+  Host-provisioning fact; a documented env var fixes it.
+- **`320_148` tail-call refusal** — emitted `always_tail` is refused by
+  stage2_x86_64 under `-mcpu baseline` (the musl target's default cpu).
+  Target-lane artifact; was it green under a cpu-specific target?
+- **30s timeouts under musl Debug** — `390_113`/`390_114` produce
+  correct output in ~40s; the harness timeout is 30s. Raise the
+  timeout per-lane or accept the red on slow hosts.
+- **`330_002` pin drift** — the pinned stack frames expect
+  `in <fn> (koruc)`; zig 0.15.1 prints `in <fn> (module.zig)`. The pin
+  was refreshed 2026-09-11 for a resolver move, against an older
+  toolchain's frame dialect.
+
+### Carry-forwards from the session ledger (thin — need Lars's articulation)
+
+- **`requires` annotation surface + `part` reorg** — `contract:requires`
+  is ruled namespaced contract-claim (concordance `:48`, 2026-10-17);
+  the open item is whether `requires` gets a surface annotation beyond
+  the contract slot, plus the `part`-system reorganization. Ledger item
+  only — the shape is Lars's.
+- **FlowDialect terminality — port-back** — the isar-proofs work
+  models koru flows as a `FlowDialect` instance
+  (`concepts/frag-terminality-collapses-pairwise-congruence`,
+  `koru-verification-path.md:416`, `docs/frags/0030` on the ISAR side):
+  terminality collapses pairwise emitter congruence N²→N. The open call
+  is whether the Lean-side dialect modeling ports back into this repo's
+  verification architecture (K3's corpus-facing consumer) or stays
+  ISAR-local.
