@@ -28,9 +28,20 @@ and sits in the AST the whole way. The established fix is the
 AST and grows `retain` onto the callee's `event_decl` annotations
 (`src/dead_strip.zig` treats them as used). cell.kz did it first for
 `std/bridge`'s create/close/run; node.kz's `retainFleetEvents` repeats
-the shape for all six fleet tors. The idempotent helper is ~30 lines
+the shape for the fleet tors. The idempotent helper is ~30 lines
 and lives in the caller because only the caller knows which helpers
 its host code reaches.
+
+The splice must stay module-local — the clone is load-bearing, not
+deslop (evolved 2026-10-20). Folding it into a `pub fn` on the callee
+module (`Fl.fleetRetainEvents`) emits a `koru_std.koru_fleet` reference
+inside the caller's emitted transform handler — and the callee module
+is only in that emit's module set when the retain already ran.
+Referencing it creates a bootstrap cycle that fails the backend
+compile at `no member named 'koru_fleet'`, two indirections from the
+cause. Same shape twice is the price of the constraint; the
+alternative is a host-deps declaration the compiler can see, which is
+the open question below.
 
 ## Open questions
 

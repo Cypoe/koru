@@ -1,0 +1,9 @@
+name: feature-landed
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `capability-added` — declare that name. The commit
+      gave `std/node` a new opt-in contract (`lease-ms` + activity
+      renewal); nothing was broken, the surface was smaller. Minted as
+      an orphan by the node-side lease commit.
