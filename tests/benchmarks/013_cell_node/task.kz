@@ -42,12 +42,14 @@ const TURNS: usize = 60;
 | node f |> std/node:spawn(f, id: "grain", cell: counter)
   | spawned b |> std/io:print.ln("rf grain spawned")
   | resident |> std/io:print.ln("rf grain resident")
+  | held-by o |> std/io:print.ln("rf grain held by {{ o:s }}")
   | refused |> std/io:print.ln("rf grain refused")
 
 ~std/node(df)
 | node f |> std/node:spawn(f, id: "grain", cell: counter)
   | spawned b |> std/io:print.ln("df grain spawned")
   | resident |> std/io:print.ln("df grain resident")
+  | held-by o |> std/io:print.ln("df grain held by {{ o:s }}")
   | refused |> std/io:print.ln("df grain refused")
 
 // ─── arm A: resident turns ─── dispatch + capture, memory only ───
@@ -58,6 +60,7 @@ const TURNS: usize = 60;
         | result _ |> std/cell:capture(c, shape: counter)
           ! as s |> std/cell:captured { hits: s.hits + 1 }
         | error e |> std/io:print.ln("turn failed: {{ e.kind:s }}")
+    | held-by o |> std/io:print.ln("rf grain held by {{ o:s }}")
     | not-found |> std/io:print.ln("rf grain missing")
   |> std/time:elapsed(start: t0): ra
   |> std/io:print.ln("resident: {{ ra.ms:f }}ms for {{ TURNS:d }} turns")
@@ -70,6 +73,7 @@ const TURNS: usize = 60;
         | result _ |> std/cell:capture(c, shape: counter)
           ! as s |> std/cell:captured { hits: s.hits + 1 }
         | error e |> std/io:print.ln("turn failed: {{ e.kind:s }}")
+    | held-by o |> std/io:print.ln("df grain held by {{ o:s }}")
     | not-found |> std/io:print.ln("df grain missing")
   |> std/time:elapsed(start: t1): rb
   |> std/io:print.ln("durable: {{ rb.ms:f }}ms for {{ TURNS:d }} turns")
@@ -81,6 +85,7 @@ const TURNS: usize = 60;
       ! each _ |> std/node:evict(f, id: "grain")
         | evicted |> std/node(df.grain)
           | cell c |> std/cell:fields(c): _
+          | held-by o |> std/io:print.ln("held by {{ o:s }}")
           | not-found |> std/io:print.ln("activation failed")
         | absent |> std/io:print.ln("evict absent")
   |> std/time:elapsed(start: t2): rc
@@ -92,6 +97,7 @@ const TURNS: usize = 60;
   | value v |> std/io:print.ln("df hits={{ v.int:d }}")
   | unset u |> std/io:print.ln("df hits unset")
   | unknown-field e |> std/io:print.ln("no field")
+| held-by o |> std/io:print.ln("df grain held by {{ o:s }}")
 | not-found |> std/io:print.ln("df grain gone")
 
 ~std/node(rf.grain)
@@ -99,6 +105,7 @@ const TURNS: usize = 60;
   | value v |> std/io:print.ln("rf hits={{ v.int:d }}")
   | unset u |> std/io:print.ln("rf hits unset")
   | unknown-field e |> std/io:print.ln("no field")
+| held-by o |> std/io:print.ln("rf grain held by {{ o:s }}")
 | not-found |> std/io:print.ln("rf grain gone")
 
 ~std/node(rf)

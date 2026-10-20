@@ -11,4 +11,5 @@
 
 ~std/node(node.room-42)
 | cell b |> std/cell:hibernate(c: b)
+| held-by o |> std/io:print.ln("held by {{ o:s }}")
 | not-found |> std/io:print.ln("missing")

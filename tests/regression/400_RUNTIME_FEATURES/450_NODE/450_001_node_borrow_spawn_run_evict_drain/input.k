@@ -40,6 +40,7 @@ std/node(node)
 | node f |> std/node:spawn(f, id: "room-42", cell: room_state)
   | spawned b |> std/io:print.ln("spawned room-42")
   | resident |> std/io:print.ln("resident")
+  | held-by o |> std/io:print.ln("held by {{ o:s }}")
   | refused |> std/io:print.ln("refused")
 
 // member lookup → borrowed cell → cell:run dispatch
@@ -47,6 +48,7 @@ std/node(node.room-42)
 | cell b |> std/cell:run(c: b, source: "greet(name: \"room-42\")")
   | result r |> std/io:print.ln("cell said: {{ r.bound:s }}")
   | error e |> std/io:print.ln("turn failed: {{ e.kind:s }}")
+| held-by o |> std/io:print.ln("held by {{ o:s }}")
 | not-found |> std/io:print.ln("room-42 missing")
 
 // the borrow carries `*Cell<cell>` — the typed capture surface composes on it:
@@ -55,11 +57,13 @@ std/node(node.room-42)
 | cell b |> std/cell:capture(b, shape: room_state)
   ! as s |> std/cell:captured { visits: s.visits + 41 }
   | captured f |> std/io:print.ln("captured visits={{ f.visits:d }}")
+| held-by o |> std/io:print.ln("held by {{ o:s }}")
 | not-found |> std/io:print.ln("room-42 missing")
 
 // member lookup on a cell that was never spawned
 std/node(node.nope)
 | cell b |> std/io:print.ln("nope found")
+| held-by o |> std/io:print.ln("held by {{ o:s }}")
 | not-found |> std/io:print.ln("nope missing")
 
 // evict — the node hangs the owned bridge up
@@ -71,6 +75,7 @@ std/node(node)
 // subscript lookup after evict — runtime key spelling
 std/node(node["room-42"])
 | cell b |> std/io:print.ln("room-42 back")
+| held-by o |> std/io:print.ln("held by {{ o:s }}")
 | not-found |> std/io:print.ln("room-42 gone")
 
 // a second resident so drain has something to retire
@@ -78,6 +83,7 @@ std/node(node)
 | node f |> std/node:spawn(f, id: "room-7", cell: room_state)
   | spawned b |> std/io:print.ln("spawned room-7")
   | resident |> std/io:print.ln("resident")
+  | held-by o |> std/io:print.ln("held by {{ o:s }}")
   | refused |> std/io:print.ln("refused")
 
 // drain — close every resident cell, retire the node; the leak check counts

@@ -1,0 +1,9 @@
+slate cleared
+slate cleared
+nodea spawned room-42
+nodeb fenced: held by nodea
+still owned by nodea
+nodea retired room-42
+room-42 is free
+nodea drained 0
+nodeb drained 0

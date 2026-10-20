@@ -51,9 +51,17 @@ floor — deterministic, no clocks, no sockets. Six tors, all leaves:
   release/reclaim. celld gets exact CAS from the object store; the
   filesystem gives atomic create and atomic rename but no
   compare-and-swap, so the honest limit is stated, not hidden.
-- **No node integration.** `std/node:spawn` does not yet `claim`, and
-  `captured` does not yet `guard`. Wiring spawn→claim and capture→guard
-  turns the protocol from exercisable into enforced — the second chip.
+- **Ownership is enforced at the identity boundary; writes are not yet
+  fenced.** `std/node` consults the record on every identity-changing
+  path (evolved 2026-10-20): `spawn` and member lookups acquire before
+  residency, `retire` deletes only what the node owns, and a foreign
+  record answers `| held-by` — a mandatory compile-time arm, so
+  owned-elsewhere is a program decision, not silence. A never-existing
+  id stays `| not-found` and claims nothing (probe precedes claim),
+  and a dormant foreign cell is `| held-by`, never activated — the
+  split-brain refusal. Still open: `captured` does not `guard`, so a
+  stale owner can still write state after losing the record — the
+  epoch fence exists but does not yet gate the write path.
 
 ## What would correct this belief
 

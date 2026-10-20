@@ -1,0 +1,6 @@
+slate cleared
+slate cleared
+nodea spawned room-42
+nodeb refused: held by nodea
+nodea drained 1
+nodeb drained 0

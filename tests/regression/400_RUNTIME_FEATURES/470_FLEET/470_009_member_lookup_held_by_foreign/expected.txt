@@ -1,0 +1,11 @@
+slate cleared
+slate cleared
+slate cleared
+nodea spawned room-42
+committed visits=41
+nodea evicted — dormant, still owned
+nodeb refused: held by nodea
+room-99 not found
+room-99 is free — not-found claimed nothing
+nodea drained 0
+nodeb drained 0

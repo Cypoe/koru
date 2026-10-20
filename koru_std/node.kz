@@ -38,11 +38,14 @@
 
 ~import std/bridge
 ~import std/cell
+~import std/fleet
+
 
 const std = @import("std");
 const ast = @import("ast");
 const ast_functional = @import("ast_functional");
 const Cl = @import("root").koru_std.koru_cell;
+const Fl = @import("root").koru_std.koru_fleet;
 
 // ============================================================================
 // NODE — the resident-cell index. One per `std/node:new` name; members are
@@ -74,55 +77,6 @@ fn registry() *std.StringHashMap(*Node) {
 fn nodeByName(name: []const u8) *Node {
     return registry().get(name) orelse
         std.debug.panic("std/node: '{s}' has no node — `std/node:new({s}, ...)` must precede its lookups in source order", .{ name, name });
-}
-
-fn nodeMember(f: *Node, id: []const u8) ?*Cl.Cell {
-    if (f.members.get(id)) |c| return c;
-    return nodeActivate(f, id);
-}
-
-// Dormant-but-durable re-activation, Orleans-style: a member miss probes
-// `<world_root>/<id>/state.kv`; the file's `#shape`/`#shape_def` header is
-// enough to rebuild the cell with its state restored, so `| not-found` means
-// "never existed anywhere", not "not in memory". At capacity the node evicts
-// an arbitrary resident to make room — residency is a cache; the directory
-// is the truth. A worldless node has no durable floor and keeps the old
-// miss semantics.
-fn nodeActivate(f: *Node, id: []const u8) ?*Cl.Cell {
-    if (f.world_root.len == 0) return null;
-    var pb: [1024]u8 = undefined;
-    const path = std.fmt.bufPrint(&pb, "{s}/{s}/state.kv", .{ f.world_root, id }) catch return null;
-    const a = f.allocator;
-    const src = std.fs.cwd().readFileAlloc(a, path, 1024 * 1024) catch return null;
-    defer a.free(src);
-    var shape: ?[]const u8 = null;
-    var shape_def: ?[]const u8 = null;
-    var lines = std.mem.splitScalar(u8, src, '\n');
-    while (lines.next()) |line| {
-        if (line.len == 0 or line[0] != '#') break;
-        if (std.mem.startsWith(u8, line, "#shape=")) shape = line["#shape=".len..];
-        if (std.mem.startsWith(u8, line, "#shape_def=")) shape_def = line["#shape_def=".len..];
-    }
-    if (shape == null or shape_def == null) return null;
-    if (f.members.count() >= f.capacity) {
-        var it = f.members.iterator();
-        if (it.next()) |kv| {
-            const evicted = f.members.fetchRemove(kv.key_ptr.*).?;
-            Cl.cellDestroy(evicted.value);
-            a.free(evicted.key);
-        }
-    }
-    const c = Cl.cellCreate(shape.?, shape_def.?, id, f.scope, f.world_root) orelse return null;
-    const key = a.dupe(u8, id) catch {
-        Cl.cellDestroy(c);
-        return null;
-    };
-    f.members.put(key, c) catch {
-        a.free(key);
-        Cl.cellDestroy(c);
-        return null;
-    };
-    return c;
 }
 
 // ============================================================================
@@ -169,20 +123,28 @@ fn nodeActivate(f: *Node, id: []const u8) ?*Cl.Cell {
 
 ~pub tor member { f: *Node<node>, id: string }
 | cell *std/cell:Cell<cell>
+| held-by string
 | not-found
 
 ~proc member|zig {
-    if (nodeMember(f, id)) |b| return .{ .cell = b };
-    return .{ .not_found = .{} };
+    switch (nodeMember(f, id)) {
+        .cell => |b| return .{ .cell = b },
+        .foreign => |o| return .{ .held_by = o },
+        .absent => return .{ .not_found = .{} },
+    }
 }
 
 ~pub tor member-named { node: string, id: string }
 | cell *std/cell:Cell<cell>
+| held-by string
 | not-found
 
 ~proc member-named|zig {
-    if (nodeMember(nodeByName(node), id)) |b| return .{ .cell = b };
-    return .{ .not_found = .{} };
+    switch (nodeMember(nodeByName(node), id)) {
+        .cell => |b| return .{ .cell = b },
+        .foreign => |o| return .{ .held_by = o },
+        .absent => return .{ .not_found = .{} },
+    }
 }
 
 // ============================================================================
@@ -195,20 +157,34 @@ fn nodeActivate(f: *Node, id: []const u8) ?*Cl.Cell {
 ~pub tor cell-spawn { f: *Node<node>, id: string, shape: string, shape_def: string }
 | spawned *std/cell:Cell<cell>
 | resident
+| held-by string
 | refused
 
 ~proc cell-spawn|zig {
     if (f.members.get(id) != null) return .resident;
-    // The identity is durable, not just resident: a state file on the world
-    // floor means this id is a cell that exists, dormant or not — `resident`,
-    // not a silent resurrection.
+    // The fleet boundary precedes residency: an id another node owns is
+    // `| held-by` before it is anything else — spawn cannot mint a second
+    // custody over a foreign cell, and a dormant foreign cell is still
+    // foreign (the probe alone would misreport it `resident`). A new id at
+    // capacity is refused BEFORE the claim so refusal leaves no phantom
+    // ownership; the claim itself is what makes the new identity durable.
     if (f.world_root.len > 0) {
         var pb: [1024]u8 = undefined;
+        var dormant = false;
         if (std.fmt.bufPrint(&pb, "{s}/{s}/state.kv", .{ f.world_root, id })) |p| {
             if (std.fs.cwd().access(p, .{})) |_| {
-                return .resident;
+                dormant = true;
             } else |_| {}
         } else |_| {}
+        if (!dormant and f.members.count() >= f.capacity) return .refused;
+        var fnb: [256]u8 = undefined;
+        switch (Fl.fleetAcquire(f.world_root, id, f.name, &fnb)) {
+            .foreign => |o| return .{ .held_by = std.heap.page_allocator.dupe(u8, o) catch
+                return .refused },
+            .failed => return .refused,
+            .held => {},
+        }
+        if (dormant) return .resident;
     }
     if (f.members.count() >= f.capacity) return .refused;
     const a = f.allocator;
@@ -243,35 +219,6 @@ fn nodeActivate(f: *Node, id: []const u8) ?*Cl.Cell {
         return .evicted;
     }
     return .absent;
-}
-
-// ============================================================================
-// RETIRE — the durable counterpart of `evict`: evict releases residency and
-// the state file survives; retire deletes `<world_root>/<id>` outright —
-// the cell stops existing anywhere. `| absent` only when nothing was there.
-// ============================================================================
-
-~pub tor retire { f: *Node<node>, id: string }
-| retired
-| absent
-
-~proc retire|zig {
-    var found = false;
-    if (f.members.fetchRemove(id)) |kv| {
-        Cl.cellDestroy(kv.value);
-        f.allocator.free(kv.key);
-        found = true;
-    }
-    if (f.world_root.len > 0) {
-        var pb: [1024]u8 = undefined;
-        if (std.fmt.bufPrint(&pb, "{s}/{s}", .{ f.world_root, id })) |p| {
-            if (std.fs.cwd().access(p, .{})) |_| {
-                found = true;
-            } else |_| {}
-            std.fs.cwd().deleteTree(p) catch {};
-        } else |_| {}
-    }
-    return if (found) .{ .retired = .{} } else .{ .absent = .{} };
 }
 
 // ============================================================================
@@ -488,6 +435,7 @@ const FH = struct {
     // The node's procs reach create/close through host code only — retain
     // them or dead-strip strips them.
     FH.retainBridgeEvents(program, allocator);
+    retainFleetEvents(program, allocator);
 
     // Rewrite to the init call — `name`/`scope`/`world` as string literals,
     // capacity as the raw integer text.
@@ -679,6 +627,9 @@ const FH = struct {
         if (!FH.hasArm(flow, "not-found")) {
             return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node({s}): a member lookup can miss — `| not-found |>` is required; dormant is a decision, not silence", .{target}) };
         }
+        if (!FH.hasArm(flow, "held-by")) {
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node({s}): a member lookup can land on a foreign cell — `| held-by |>` is required; owned-elsewhere is a decision, not silence", .{target}) };
+        }
     }
 
     // Rewrite to the name-addressed tor. The subscript form passes its key
@@ -714,3 +665,5 @@ const FH = struct {
         .module = allocator.dupe(u8, flow.module) catch unreachable,
     } } } };
 }
+
+~part world

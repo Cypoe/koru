@@ -1,0 +1,151 @@
+// Koru Standard Library: the `world` part of node — the shared-floor
+// ownership boundary. Activation claims on the durable floor, retire is
+// fenced by the record, and the `new` transform retains fleet's surface
+// against dead-strip. Joined via `~part world` in node.kz; merged into
+// the node module at load.
+
+const MemberResult = union(enum) {
+    cell: *Cl.Cell,
+    foreign: []const u8,
+    absent,
+};
+
+fn nodeMember(f: *Node, id: []const u8) MemberResult {
+    if (f.members.get(id)) |c| return .{ .cell = c };
+    return nodeActivate(f, id);
+}
+
+// Dormant-but-durable re-activation, Orleans-style: a member miss probes
+// `<world_root>/<id>/state.kv`; the file's `#shape`/`#shape_def` header is
+// enough to rebuild the cell with its state restored, so `| not-found` means
+// "never existed anywhere", not "not in memory". At capacity the node evicts
+// an arbitrary resident to make room — residency is a cache; the directory
+// is the truth. A worldless node has no durable floor and keeps the old
+// miss semantics.
+//
+// The fleet gate sits between the probe and activation: a state file that
+// exists but is owned by another node is `| held-by`, never activated —
+// activating a foreign cell is the split-brain this protocol exists to
+// refuse. A free dormant id is claimed on activation, the same way a
+// spawned one is; a never-existing id is `| not-found` and claims nothing.
+fn nodeActivate(f: *Node, id: []const u8) MemberResult {
+    if (f.world_root.len == 0) return .absent;
+    var pb: [1024]u8 = undefined;
+    const path = std.fmt.bufPrint(&pb, "{s}/{s}/state.kv", .{ f.world_root, id }) catch return .absent;
+    std.fs.cwd().access(path, .{}) catch return .absent;
+    var fnb: [256]u8 = undefined;
+    switch (Fl.fleetAcquire(f.world_root, id, f.name, &fnb)) {
+        .foreign => |o| return .{ .foreign = std.heap.page_allocator.dupe(u8, o) catch return .absent },
+        .failed => return .absent,
+        .held => {},
+    }
+    const a = f.allocator;
+    const src = std.fs.cwd().readFileAlloc(a, path, 1024 * 1024) catch return .absent;
+    defer a.free(src);
+    var shape: ?[]const u8 = null;
+    var shape_def: ?[]const u8 = null;
+    var lines = std.mem.splitScalar(u8, src, '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0 or line[0] != '#') break;
+        if (std.mem.startsWith(u8, line, "#shape=")) shape = line["#shape=".len..];
+        if (std.mem.startsWith(u8, line, "#shape_def=")) shape_def = line["#shape_def=".len..];
+    }
+    if (shape == null or shape_def == null) return .absent;
+    if (f.members.count() >= f.capacity) {
+        var it = f.members.iterator();
+        if (it.next()) |kv| {
+            const evicted = f.members.fetchRemove(kv.key_ptr.*).?;
+            Cl.cellDestroy(evicted.value);
+            a.free(evicted.key);
+        }
+    }
+    const c = Cl.cellCreate(shape.?, shape_def.?, id, f.scope, f.world_root) orelse return .absent;
+    const key = a.dupe(u8, id) catch {
+        Cl.cellDestroy(c);
+        return .absent;
+    };
+    f.members.put(key, c) catch {
+        a.free(key);
+        Cl.cellDestroy(c);
+        return .absent;
+    };
+    return .{ .cell = c };
+}
+
+// ============================================================================
+// RETIRE — the durable counterpart of `evict`: evict releases residency and
+// the state file survives; retire deletes `<world_root>/<id>` outright —
+// the cell stops existing anywhere. `| absent` only when nothing was there.
+// ============================================================================
+
+~pub tor retire { f: *Node<node>, id: string }
+| retired
+| held-by string
+| absent
+
+~proc retire|zig {
+    // The durable identity is owned: a foreign record fences the delete —
+    // retire cannot destroy what this node does not hold.
+    if (f.world_root.len > 0) {
+        var fnb: [256]u8 = undefined;
+        if (Fl.fleetForeignOwner(f.world_root, id, f.name, &fnb)) |o|
+            return .{ .held_by = std.heap.page_allocator.dupe(u8, o) catch
+                return .absent };
+    }
+    var found = false;
+    if (f.members.fetchRemove(id)) |kv| {
+        Cl.cellDestroy(kv.value);
+        f.allocator.free(kv.key);
+        found = true;
+    }
+    if (f.world_root.len > 0) {
+        var pb: [1024]u8 = undefined;
+        if (std.fmt.bufPrint(&pb, "{s}/{s}", .{ f.world_root, id })) |p| {
+            if (std.fs.cwd().access(p, .{})) |_| {
+                found = true;
+            } else |_| {}
+            std.fs.cwd().deleteTree(p) catch {};
+        } else |_| {}
+        Fl.fleetReleaseIfOwner(f.world_root, id, f.name);
+    }
+    return if (found) .{ .retired = .{} } else .{ .absent = .{} };
+}
+
+// The fleet helpers (fleetAcquire/fleetForeignOwner/fleetReleaseIfOwner)
+// are called from HOST code — nothing in the program spells
+// `std/fleet:claim`, so dead-strip retires the tors and `koru_fleet`
+// would never emit. Retain all six: they share the helpers.
+fn retainFleetEvents(prog: *const ast.Program, alloc: std.mem.Allocator) void {
+    const W = struct {
+        fn retain(its: []const ast.Item, want: []const u8, al: std.mem.Allocator) void {
+            for (its) |*pi| {
+                switch (pi.*) {
+                    .module_decl => |*md| {
+                        if (std.mem.eql(u8, md.logical_name, "std.fleet")) {
+                            for (md.items) |*mi| {
+                                if (mi.* != .event_decl) continue;
+                                const ed = &mi.event_decl;
+                                if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], want)) {
+                                    for (ed.annotations) |a| if (std.mem.eql(u8, a, "retain")) return;
+                                    const grown = al.alloc([]const u8, ed.annotations.len + 1) catch unreachable;
+                                    @memcpy(grown[0..ed.annotations.len], ed.annotations);
+                                    grown[ed.annotations.len] = al.dupe(u8, "retain") catch unreachable;
+                                    @constCast(ed).annotations = grown;
+                                }
+                            }
+                            return;
+                        }
+                        retain(md.items, want, al);
+                    },
+                    else => {},
+                }
+            }
+        }
+    };
+    W.retain(prog.items, "claim", alloc);
+    W.retain(prog.items, "owner", alloc);
+    W.retain(prog.items, "seize", alloc);
+    W.retain(prog.items, "release", alloc);
+    W.retain(prog.items, "guard", alloc);
+    W.retain(prog.items, "reset", alloc);
+}
