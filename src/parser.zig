@@ -8941,6 +8941,36 @@ pub const Parser = struct {
         var allocated_content: ?[]u8 = null;
         defer if (allocated_content) |ac| self.allocator.free(ac);
 
+        // Multi-line invocation args on a line-start `|>` step: the branch path
+        // joins unbalanced parens (210_122 quote-aware); a join step after a
+        // nested arm never reaches that path, so it needs the same joiner here
+        // (210_324).
+        if (netParens(full_content) > 0) {
+            var content_buf = try std.ArrayList(u8).initCapacity(self.allocator, 256);
+            defer content_buf.deinit(self.allocator);
+            try content_buf.appendSlice(self.allocator, full_content);
+
+            var paren_depth: i32 = netParens(full_content);
+            while (self.current < self.lines.len and paren_depth > 0) {
+                const next_line = self.lines[self.current];
+                const next_trimmed = lexer.trim(next_line);
+
+                if (next_trimmed.len == 0) {
+                    self.current += 1;
+                    continue;
+                }
+
+                paren_depth += netParens(next_trimmed);
+                try content_buf.appendSlice(self.allocator, " ");
+                try content_buf.appendSlice(self.allocator, next_trimmed);
+                self.current += 1;
+            }
+
+            if (allocated_content) |ac| self.allocator.free(ac);
+            allocated_content = try content_buf.toOwnedSlice(self.allocator);
+            full_content = allocated_content.?;
+        }
+
         // Check if this might be starting a multi-line branch constructor
         if (std.mem.indexOf(u8, content, "{") != null and std.mem.indexOf(u8, content, "}") == null) {
             // We have an opening brace but no closing brace - look for it on subsequent lines
