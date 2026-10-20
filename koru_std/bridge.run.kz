@@ -26,7 +26,7 @@
 ~pub tor run { br: *Bridge<session>, source: string<*> }
 | result { value: @import("root").koru_std.koru_interpreter.Value, used: u64, handles: u32, bound: string, trace: string }
 | defined string
-| unhandled-branch { branch: string, payload: string, handles: string }
+| unhandled-branch { branch: string, payload: string, handles: string, bound: string }
 | exhausted { used: u64, last_event: string, handles: u32 }
 | parse-error { message: string, line: u32, column: u32 }
 | residue { report: string, observer: bool, bound: string, text: string }

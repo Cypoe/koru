@@ -1,0 +1,3 @@
+t1: unhandled stocked bound r1
+t2: result bound r2 (holds 0)
+t3: unhandled empty bound r3

@@ -33,7 +33,7 @@
                 .turn_env = turn_env,
             });
             switch (result) {
-                .unhandled_branch => |u| return .{ .unhandled_branch = .{ .branch = u.branch, .payload = u.payload, .handles = u.handles } },
+                .unhandled_branch => |u| return .{ .unhandled_branch = .{ .branch = u.branch, .payload = u.payload, .handles = u.handles, .bound = u.bound } },
                 .result => |r| return .{ .result = .{
                     .value = r.value,
                     .used = r.used,

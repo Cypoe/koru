@@ -43,7 +43,7 @@ fn mkErr(kind: []const u8, message: []const u8) RunError {
 | result { value: @import("root").koru_std.koru_interpreter.Value, used: u64, handles: u32, bound: string, trace: string }
 | error RunError
 | ?defined string
-| ?unhandled-branch { branch: string, payload: string, handles: string }
+| ?unhandled-branch { branch: string, payload: string, handles: string, bound: string }
 | ?residue { report: string, observer: bool, bound: string, text: string }
 | ?partial { ran: u32, total: u32, used: u64, handles: u32, report: string, wire_failures: u32 }
 
@@ -53,7 +53,7 @@ fn mkErr(kind: []const u8, message: []const u8) RunError {
     return switch (r) {
         .result => |v| .{ .result = .{ .value = v.value, .used = v.used, .handles = v.handles, .bound = v.bound, .trace = v.trace } },
         .defined => |v| .{ .defined = v },
-        .unhandled_branch => |v| .{ .unhandled_branch = .{ .branch = v.branch, .payload = v.payload, .handles = v.handles } },
+        .unhandled_branch => |v| .{ .unhandled_branch = .{ .branch = v.branch, .payload = v.payload, .handles = v.handles, .bound = v.bound } },
         .residue => |v| .{ .residue = .{ .report = v.report, .observer = v.observer, .bound = v.bound, .text = v.text } },
         .partial => |v| .{ .partial = .{ .ran = v.ran, .total = v.total, .used = v.used, .handles = v.handles, .report = v.report, .wire_failures = v.wire_failures } },
         .exhausted => |v| blk: {

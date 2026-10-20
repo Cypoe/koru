@@ -77,7 +77,7 @@
                 .bound = if (r.bound.len > 0) r.bound else bindResult(br, r.value),
                 .trace = r.trace,
             } },
-            .unhandled_branch => |u| .{ .unhandled_branch = .{ .branch = u.branch, .payload = u.payload, .handles = u.handles } },
+            .unhandled_branch => |u| .{ .unhandled_branch = .{ .branch = u.branch, .payload = u.payload, .handles = u.handles, .bound = u.bound } },
             .exhausted => |e| .{ .exhausted = .{ .used = e.used, .last_event = e.last_event, .handles = e.handles } },
             .parse_error => |e| .{ .parse_error = .{ .message = e.message, .line = e.line, .column = e.column } },
             .validation_error => |e| .{ .validation_error = e },

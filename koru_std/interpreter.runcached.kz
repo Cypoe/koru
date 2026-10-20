@@ -30,7 +30,7 @@
     turn_env: ?*Environment = null           // arm bindings for the rest of this turn
 }
 | result { value: Value, used: u64, handles: u32, bound: string, trace: string }
-| unhandled-branch { branch: string, payload: string, handles: string }
+| unhandled-branch { branch: string, payload: string, handles: string, bound: string }
 | exhausted { used: u64, last_event: string, handles: u32 }
 | parse-error { message: string, line: u32, column: u32 }
 | validation-error string
@@ -137,9 +137,9 @@
             .branch = u.branch,
             .payload = u.toJsonBuf(),
             .handles = renderHeldHandles(active_pool),
+            .bound = lastBound(&ctx.trace),
         } };
     }
-
     const stable_value = result_value.clonePersistent();
     return .{ .result = .{
         .value = stable_value,

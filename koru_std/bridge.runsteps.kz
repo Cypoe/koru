@@ -91,9 +91,9 @@ fn runSteps(br: *Bridge, source: []const u8, items: []const TurnItem) StepRun {
                 }
                 if (u.branch.len == 0) {
                     wire_failures += 1;
-                    writer.print("step {d}/{d} unhandled-branch: the call issued its ordinary result but no arm bound it — an ordinary result binds with `| ok name |>`; other arm words match nothing (held {s})\n", .{ step, total, u.handles }) catch {};
+                    writer.print("step {d}/{d} unhandled-branch: the call issued its ordinary result but no arm bound it — an ordinary result binds with `| ok name |>`; other arm words match nothing (held {s}, bound {s})\n", .{ step, total, u.handles, u.bound }) catch {};
                 } else {
-                    writer.print("step {d}/{d} unhandled-branch: {s} — {s} (held {s}); to keep going, arm it `| {s} name |>` — the arm word is the branch name, nothing else matches\n", .{ step, total, u.branch, u.payload, u.handles, u.branch }) catch {};
+                    writer.print("step {d}/{d} unhandled-branch: {s} — {s} (held {s}, bound {s}); to keep going, arm it `| {s} name |>` — the arm word is the branch name, nothing else matches\n", .{ step, total, u.branch, u.payload, u.handles, u.bound, u.branch }) catch {};
                 }
             },
             .exhausted => |e| {

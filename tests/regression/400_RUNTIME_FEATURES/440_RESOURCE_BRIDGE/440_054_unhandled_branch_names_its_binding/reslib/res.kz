@@ -1,0 +1,41 @@
+// A `*T` resource module: the wire never sees a pointer — mint/pick produce
+// a *Res that packs as "h:Res:<hex>", grab/release resolve the token back
+// to the live struct. `pick` fires `stocked` or `empty` at runtime — the
+// unhandled-branch case this test pins a binding name onto.
+
+pub const Res = struct { v: u32 };
+
+~pub tor mint {} -> *Res<opened!>
+
+~proc mint|zig {
+    const r = @import("std").heap.page_allocator.create(Res) catch unreachable;
+    r.* = .{ .v = 42 };
+    return r;
+}
+
+~pub tor pick { n: i64 }
+| stocked *Res<opened!>
+| empty
+
+~proc pick|zig {
+    if (n > 0) {
+        const r = @import("std").heap.page_allocator.create(Res) catch unreachable;
+        r.* = .{ .v = 7 };
+        return .{ .stocked = r };
+    }
+    return .empty;
+}
+
+~pub tor grab { r: *Res<opened> }
+
+~proc grab|zig {
+    var buf: [32]u8 = undefined;
+    const s = @import("std").fmt.bufPrint(&buf, "used v={d}\n", .{r.v}) catch unreachable;
+    _ = @import("std").posix.write(1, s) catch {};
+}
+
+~pub tor release { r: *Res<!opened> }
+
+~proc release|zig {
+    @import("std").heap.page_allocator.destroy(r);
+}
