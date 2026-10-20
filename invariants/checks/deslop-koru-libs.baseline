@@ -72,7 +72,13 @@
 # probe_ctx_* family. +3 spellings ride the component-probe vocabulary
 # (theme/accent/card props). Named top offenders are foreign, unchanged:
 # spec_click↔spec_sel_live, the bench/spec six-pack, ponkatris levels.
-clusters=1543
-members=491
-skipped=21
-spellings=699
+# Re-pinned 2026-10-20: roll fired on the gallery_comp oshun exercise.
+# Own contribution is the probe_oshun_* family — interp/bufsize probes and
+# their refusal controls kept side by side, same twin class as the
+# scripted/live pairs — plus the seed() arg vocabulary (which/bn/gn).
+# Named top offenders are foreign, unchanged: spec_click↔spec_sel_live,
+# the bench/spec six-pack, ponkatris levels.
+clusters=1559
+members=509
+skipped=20
+spellings=715
