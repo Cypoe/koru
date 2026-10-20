@@ -1,0 +1,2 @@
+EXPECT_TRAP
+CONTAINS std/fmt:ln output exceeds the 64-byte scratch buffer
