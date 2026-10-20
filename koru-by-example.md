@@ -32,7 +32,8 @@ Every example below is verbatim source from a passing POSITIVE regression test (
 
 ```koru
 // Hello World in pure Koru.
-// This is the frontpage example from korulang.org.
+// Was the korulang.org frontpage example until 2026-10-11 — the front page
+// now leads with the continuation example, which has no pin yet.
 //
 // Also pins consumed-transform exclusion: after print.blk runs, the
 // program unit must not ship `__printInterpolate` or `@import("ast")`.
@@ -632,14 +633,15 @@ Hello, World! The answer is 42.
 
 ```koru
 // TEST: fmt:ln basic — format a string and bind the result with `: l`.
+// `.text` is a scoped borrow (scratch@scoped) — consume it in place.
 import std/fmt
 import std/io
 
-tor greet { name: string } -> string
+tor greet { name: string }
 
-greet = std/fmt:ln("Hello, {{ name:s }}!"): l -> l.text
+greet = std/fmt:ln("Hello, {{ name:s }}!"): l |> std/io:print.ln(l.text)
 
-greet(name: "World"): g |> std/io:print.ln(g)
+greet(name: "World")
 ```
 
 **Output:**

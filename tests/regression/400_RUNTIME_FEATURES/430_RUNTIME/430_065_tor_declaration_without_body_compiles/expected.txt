@@ -1,4 +1,4 @@
-open(path: string) -> <open!>
-append(handle: string<!open>, text: string) -> <open!>
-close(handle: string<!open>)
-say(text: string)
+pub tor open { path: string } -> string<open!>
+pub tor append { handle: string<!open>, text: string } -> string<open!>
+pub tor close { handle: string<!open> }
+pub tor say { text: string }

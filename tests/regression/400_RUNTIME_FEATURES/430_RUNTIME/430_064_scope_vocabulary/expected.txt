@@ -1,6 +1,6 @@
-open(path: string) -> <open!>
-append(handle: string<!open>, text: string) -> <open!>
-close(handle: string<!open>)
-say(text: string)
-read(path: string) | ok string | missing string | too-large string | ?hint string
+pub tor open { path: string } -> string<open!>
+pub tor append { handle: string<!open>, text: string } -> string<open!>
+pub tor close { handle: string<!open> }
+pub tor say { text: string }
+pub tor read { path: string } | ok string | missing string | too-large string | ?hint string
 NOT FOUND
