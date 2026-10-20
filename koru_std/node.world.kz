@@ -24,20 +24,19 @@ fn nodeMember(f: *Node, id: []const u8) MemberResult {
 // miss semantics.
 //
 // The fleet gate sits between the probe and activation: a state file that
-// exists but is owned by another node is `| held-by`, never activated —
-// activating a foreign cell is the split-brain this protocol exists to
-// refuse. A free dormant id is claimed on activation, the same way a
-// spawned one is; a never-existing id is `| not-found` and claims nothing.
+// exists but is owned by another node is `| held-by`, never activated.
+// A free dormant id is claimed; a never-existing id claims nothing.
 fn nodeActivate(f: *Node, id: []const u8) MemberResult {
     if (f.world_root.len == 0) return .absent;
     var pb: [1024]u8 = undefined;
     const path = std.fmt.bufPrint(&pb, "{s}/{s}/state.kv", .{ f.world_root, id }) catch return .absent;
     std.fs.cwd().access(path, .{}) catch return .absent;
     var fnb: [256]u8 = undefined;
+    var epoch: u32 = 0;
     switch (Fl.fleetAcquire(f.world_root, id, f.name, &fnb)) {
         .foreign => |o| return .{ .foreign = std.heap.page_allocator.dupe(u8, o) catch return .absent },
         .failed => return .absent,
-        .held => {},
+        .held => |e| epoch = e,
     }
     const a = f.allocator;
     const src = std.fs.cwd().readFileAlloc(a, path, 1024 * 1024) catch return .absent;
@@ -60,6 +59,8 @@ fn nodeActivate(f: *Node, id: []const u8) MemberResult {
         }
     }
     const c = Cl.cellCreate(shape.?, shape_def.?, id, f.scope, f.world_root) orelse return .absent;
+    // The granted epoch rides with the cell — the write fence presents it.
+    Cl.cellStampFleet(c, f.world_root, id, f.name, epoch);
     const key = a.dupe(u8, id) catch {
         Cl.cellDestroy(c);
         return .absent;
@@ -111,10 +112,9 @@ fn nodeActivate(f: *Node, id: []const u8) MemberResult {
     return if (found) .{ .retired = .{} } else .{ .absent = .{} };
 }
 
-// The fleet helpers (fleetAcquire/fleetForeignOwner/fleetReleaseIfOwner)
-// are called from HOST code — nothing in the program spells
-// `std/fleet:claim`, so dead-strip retires the tors and `koru_fleet`
-// would never emit. Retain all six: they share the helpers.
+// The fleet helpers are called from HOST code — nothing in the program
+// spells `std/fleet:claim`, so dead-strip retires the tors and
+// `koru_fleet` would never emit. Retain all six: they share the helpers.
 fn retainFleetEvents(prog: *const ast.Program, alloc: std.mem.Allocator) void {
     const W = struct {
         fn retain(its: []const ast.Item, want: []const u8, al: std.mem.Allocator) void {

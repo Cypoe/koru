@@ -162,12 +162,11 @@ fn nodeByName(name: []const u8) *Node {
 
 ~proc cell-spawn|zig {
     if (f.members.get(id) != null) return .resident;
-    // The fleet boundary precedes residency: an id another node owns is
-    // `| held-by` before it is anything else — spawn cannot mint a second
-    // custody over a foreign cell, and a dormant foreign cell is still
-    // foreign (the probe alone would misreport it `resident`). A new id at
-    // capacity is refused BEFORE the claim so refusal leaves no phantom
-    // ownership; the claim itself is what makes the new identity durable.
+    // The fleet boundary precedes residency: a foreign-owned id is
+    // `| held-by` — spawn cannot mint a second custody, and a dormant
+    // foreign cell is still foreign. A new id at capacity is refused
+    // BEFORE the claim so refusal leaves no phantom ownership.
+    var epoch: u32 = 0;
     if (f.world_root.len > 0) {
         var pb: [1024]u8 = undefined;
         var dormant = false;
@@ -182,7 +181,7 @@ fn nodeByName(name: []const u8) *Node {
             .foreign => |o| return .{ .held_by = std.heap.page_allocator.dupe(u8, o) catch
                 return .refused },
             .failed => return .refused,
-            .held => {},
+            .held => |e| epoch = e,
         }
         if (dormant) return .resident;
     }
@@ -190,6 +189,7 @@ fn nodeByName(name: []const u8) *Node {
     const a = f.allocator;
     const b = Cl.cellCreate(shape, shape_def, id, f.scope, f.world_root) orelse
         return .refused;
+    if (f.world_root.len > 0) Cl.cellStampFleet(b, f.world_root, id, f.name, epoch);
     const key = a.dupe(u8, id) catch {
         Cl.cellDestroy(b);
         return .refused;

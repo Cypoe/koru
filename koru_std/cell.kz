@@ -20,11 +20,13 @@
 // consume the declared shape later; nothing here bakes a storage model in.
 
 ~import std/bridge
+~import std/fleet
 
 const std = @import("std");
 const ast = @import("ast");
 const ast_functional = @import("ast_functional");
 const Br = @import("root").koru_std.koru_bridge;
+const Fl = @import("root").koru_std.koru_fleet;
 
 // ============================================================================
 // CELL — the session's own record: the bridge it runs on, the shape it was
@@ -53,6 +55,7 @@ pub const Cell = struct {
     fields: []CellField,
     state: std.StringHashMap(CellValue),
     allocator: std.mem.Allocator,
+    fleet: FleetStamp = .{},
 };
 
 fn cellField(c: *Cell, name: []const u8) ?*const CellField {
@@ -133,38 +136,8 @@ pub fn stateSetFlag(c: *Cell, name: []const u8, v: bool) void {
 // skips all of it and stays memory-only.
 // ============================================================================
 
-fn statePath(c: *Cell, buf: []u8) ?[]u8 {
-    const w = c.br.world orelse return null;
-    return std.fmt.bufPrint(buf, "{s}/state.kv", .{w}) catch null;
-}
-
-pub fn cellFlush(c: *Cell) void {
-    var path_buf: [1024]u8 = undefined;
-    const path = statePath(c, &path_buf) orelse return;
-    const a = c.allocator;
-    var buf = std.ArrayList(u8).initCapacity(a, 256) catch return;
-    defer buf.deinit(a);
-    const w = buf.writer(a);
-    w.print("#shape={s}\n#shape_def={s}\n", .{ c.shape, c.manifest }) catch return;
-    for (c.fields) |f| {
-        const v = c.state.get(f.name) orelse continue;
-        switch (v) {
-            .int => |i| w.print("{s}={d}\n", .{ f.name, i }) catch return,
-            .float => |x| w.print("{s}={d}\n", .{ f.name, x }) catch return,
-            .flag => |b| w.print("{s}={s}\n", .{ f.name, if (b) "true" else "false" }) catch return,
-            .text => |t| {
-                w.print("{s}=", .{f.name}) catch return;
-                for (t) |ch| {
-                    if (ch == '\\') w.writeAll("\\\\") catch return
-                    else if (ch == '\n') w.writeAll("\\n") catch return
-                    else w.writeByte(ch) catch return;
-                }
-                w.writeByte('\n') catch return;
-            },
-        }
-    }
-    std.fs.cwd().writeFile(.{ .sub_path = path, .data = buf.items }) catch return;
-}
+// The write side — statePath, cellFlush, the epoch fence — lives in the
+// fleet part; cellLoad (the read side) is here.
 
 fn cellLoad(c: *Cell) void {
     var path_buf: [1024]u8 = undefined;
@@ -855,6 +828,9 @@ pub const CH = struct {
 
     // Host code calls bridge create/close/run — retain them against dead-strip.
     CH.retainBridgeEvents(program, allocator);
+    // cellFlush calls fleet's guard from host code — same retention need
+    // (the splice lives in the fleet part).
+    retainFleetEvents(program, allocator);
 
     const segs = allocator.alloc([]const u8, 1) catch unreachable;
     segs[0] = allocator.dupe(u8, "cell-open") catch unreachable;
@@ -887,3 +863,4 @@ pub const CH = struct {
 }
 
 ~part run
+~part fleet

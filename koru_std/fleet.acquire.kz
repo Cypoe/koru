@@ -1,14 +1,7 @@
-// Koru Standard Library: the `acquire` part of fleet — the shared
-// ownership-acquire helpers `std/node` calls from host code. Joined via
-// `~part acquire` in fleet.kz; merged into the fleet module at load.
-
-// ============================================================================
-// SHARED ACQUIRE — the single claim path, pub for `std/node`: caller either
-// ends up holding the id (fresh claim or already-owner, at the record's
-// epoch), learns the foreign owner, or fails on I/O. `nb` carries the
-// foreign owner's name back — the slice lives in the caller's buffer.
-// ============================================================================
-
+// Koru Standard Library: the `acquire` part of fleet — the shared helpers
+// `std/node` and `std/cell` call from host code. Joined via `~part acquire`.
+// The single claim path: caller ends up holding the id, learns the foreign
+// owner (`nb`), or fails on I/O.
 pub const Acquire = union(enum) {
     held: u32,
     foreign: []const u8,
@@ -46,15 +39,22 @@ pub fn fleetAcquire(world: []const u8, id: []const u8, node: []const u8, nb: []u
     return .{ .held = epoch };
 }
 
-// The record's owner is some other node — the slice lives in `nb`.
+// The record's owner if foreign — the slice lives in `nb`.
 pub fn fleetForeignOwner(world: []const u8, id: []const u8, node: []const u8, nb: []u8) ?[]const u8 {
     const rec = ownerRead(world, id, nb) orelse return null;
     if (std.mem.eql(u8, rec.node, node)) return null;
     return rec.node;
 }
 
-// Release only if the record names `node` — a node cannot clear what it
-// does not own, and a missing record is already released.
+// The write-time fence as a host call — `std/cell` gates `cellFlush` on
+// it: write only while the record names (node, epoch).
+pub fn fleetGuard(world: []const u8, id: []const u8, node: []const u8, epoch: u32) bool {
+    var nb: [256]u8 = undefined;
+    const rec = ownerRead(world, id, &nb) orelse return false;
+    return std.mem.eql(u8, rec.node, node) and rec.epoch == epoch;
+}
+
+// Release only if the record names `node`; a missing record is released.
 pub fn fleetReleaseIfOwner(world: []const u8, id: []const u8, node: []const u8) void {
     var nb: [256]u8 = undefined;
     const rec = ownerRead(world, id, &nb) orelse return;
