@@ -24,6 +24,7 @@ koru_std/bridge.bind.kz	183
 koru_std/bridge.custody.kz	65
 koru_std/bridge.define.kz	27
 koru_std/bridge.deflines.kz	27
+koru_std/bridge.error.kz	105
 koru_std/bridge.grammar.kz	25
 koru_std/bridge.grants.kz	62
 koru_std/bridge.hostverbs.kz	158

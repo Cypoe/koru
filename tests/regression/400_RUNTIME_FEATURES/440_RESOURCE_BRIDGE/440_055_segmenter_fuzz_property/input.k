@@ -31,13 +31,15 @@ round = reslib/fuzz:fuzz(seed) : src |> std/bridge:run(br, source: src)
     | residue _ |> reslib/fuzz:code(c: 2) : v -> v
     | partial _ |> reslib/fuzz:code(c: 3) : v -> v
     | unhandled-branch _ |> reslib/fuzz:code(c: 4) : v -> v
-    | exhausted _ |> reslib/fuzz:code(c: 5) : v -> v
-    | parse-error _ |> reslib/fuzz:code(c: 6) : v -> v
-    | validation-error _ |> reslib/fuzz:code(c: 7) : v -> v
-    | shape-error _ |> reslib/fuzz:code(c: 8) : v -> v
-    | event-denied _ |> reslib/fuzz:code(c: 9) : v -> v
-    | dispatch-error _ |> reslib/fuzz:code(c: 10) : v -> v
-    | scope-not-found _ |> reslib/fuzz:code(c: 11) : v -> v
+    | error runerr |> std/bridge:error-decode(e: runerr)
+        | exhausted _ |> reslib/fuzz:code(c: 5) : v -> v
+        | parse-error _ |> reslib/fuzz:code(c: 6) : v -> v
+        | validation-error _ |> reslib/fuzz:code(c: 7) : v -> v
+        | shape-error _ |> reslib/fuzz:code(c: 8) : v -> v
+        | event-denied _ |> reslib/fuzz:code(c: 9) : v -> v
+        | dispatch-error _ |> reslib/fuzz:code(c: 10) : v -> v
+        | scope-not-found _ |> reslib/fuzz:code(c: 11) : v -> v
+        | unknown-error _ |> reslib/fuzz:code(c: 12) : v -> v
 
 [with]std/bridge:create(id: "fz", scope: "res"): br
 |> capture { sum: @as(i64, 0), count: @as(i64, 0) }

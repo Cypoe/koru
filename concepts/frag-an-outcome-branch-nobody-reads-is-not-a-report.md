@@ -57,3 +57,12 @@ the turn-completed findings (`defined`, `unhandled-branch`, `residue`,
 back to per-class arms for callers that distinguish. One arm that means
 something beats nine that mean nothing — and `e.kind` read is the report
 the ritual arms never were. Pinned in 460_009.
+
+Evolved 2026-10-20 (bridge): the fold reached the seam it came from.
+`std/bridge:run` — the agent surface, twelve declared outcomes — now
+answers the same two required arms, and `RunError`/`error-decode` moved
+home to `std/bridge` as the canonical type cell re-exports. The 440
+cluster re-armed through decode: per-class refusal pins keep their typed
+payloads and their prints, so the coverage the ritual arms pretended to
+deliver is exercised where it is read. `std/runtime:run` stays flat for
+now — the non-session contract orisha pins — the mirror can follow.

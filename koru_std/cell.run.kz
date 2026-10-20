@@ -2,32 +2,10 @@
 // two-tier error surface. Joined via `~part run` in cell.kz; merged into
 // the cell module at load.
 
-/// One arm for every failure class a turn can end in. `kind` names the
-/// variant the fine-grained outcome list would have fired; the rest is the
-/// lossless union of every variant's payload — zero/empty when the kind
-/// doesn't carry it. `error-decode` routes `kind` back to the typed arms
-/// when a caller distinguishes between failure classes.
-pub const RunError = struct {
-    kind: []const u8,
-    message: []const u8,
-    branch: []const u8,
-    field: []const u8,
-    event_name: []const u8,
-    last_event: []const u8,
-    trace: []const u8,
-    used: u64,
-    handles: u32,
-    line: u32,
-    column: u32,
-};
-
-fn mkErr(kind: []const u8, message: []const u8) RunError {
-    return .{
-        .kind = kind, .message = message, .branch = "", .field = "",
-        .event_name = "", .last_event = "", .trace = "",
-        .used = 0, .handles = 0, .line = 0, .column = 0,
-    };
-}
+/// The canonical failure union — owned by `std/bridge`, which produces it;
+/// cell re-exports so `run`'s `| error` arm and `error-decode` share the
+/// type with the seam underneath.
+pub const RunError = Br.RunError;
 
 // ============================================================================
 // RUN — dispatch a source turn into the cell's session over `std/bridge:run`,
@@ -56,29 +34,7 @@ fn mkErr(kind: []const u8, message: []const u8) RunError {
         .unhandled_branch => |v| .{ .unhandled_branch = .{ .branch = v.branch, .payload = v.payload, .handles = v.handles, .bound = v.bound } },
         .residue => |v| .{ .residue = .{ .report = v.report, .observer = v.observer, .bound = v.bound, .text = v.text } },
         .partial => |v| .{ .partial = .{ .ran = v.ran, .total = v.total, .used = v.used, .handles = v.handles, .report = v.report, .wire_failures = v.wire_failures } },
-        .exhausted => |v| blk: {
-            var e = mkErr("exhausted", "the turn exhausted its cost budget");
-            e.used = v.used; e.last_event = v.last_event; e.handles = v.handles;
-            break :blk .{ .error = e };
-        },
-        .parse_error => |v| blk: {
-            var e = mkErr("parse-error", v.message);
-            e.line = v.line; e.column = v.column;
-            break :blk .{ .error = e };
-        },
-        .validation_error => |v| .{ .error = mkErr("validation-error", v) },
-        .shape_error => |v| blk: {
-            var e = mkErr("shape-error", v.message);
-            e.branch = v.branch; e.field = v.field orelse "";
-            break :blk .{ .error = e };
-        },
-        .event_denied => |v| .{ .error = mkErr("event-denied", v) },
-        .dispatch_error => |v| blk: {
-            var e = mkErr("dispatch-error", v.message);
-            e.event_name = v.event_name; e.trace = v.trace;
-            break :blk .{ .error = e };
-        },
-        .scope_not_found => |v| .{ .error = mkErr("scope-not-found", v) },
+        .error => |v| .{ .@"error" = v },
     };
 }
 

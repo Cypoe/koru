@@ -167,9 +167,8 @@ pub const Bridge = struct {
 // refuses any tor carrying a branch or a bare return, because the inserter
 // appends a bare call and cannot invent a binding for its output. A `close`
 // that returned the still-held count disqualified itself, which meant every
-// failure arm of every conversation had to spell the hang-up by hand.
-// Failing to release is not a value a caller may drop; it panics. `get-handles`
-// is there for anyone who wants the count on either side of the call.
+// failure arm of every conversation had to spell the hang-up by hand. Failing
+// to release panics; `get-handles` answers the count on either side.
 
 ~pub tor close { br: *Bridge<!session> }
 
@@ -179,6 +178,7 @@ pub const Bridge = struct {
 ~part world
 ~part custody
 ~part run
+~part error
 ~part run-exec
 ~part steps
 ~part hostverbs

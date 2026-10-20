@@ -40,15 +40,8 @@ turn = model(n): wire
 |> std/bridge:run(br, source: wire)
 | result r |> std/interpreter:value.stringify(r.value): j |> std/io:print.ln("  world< {{ j:s }}")
 | defined d |> std/io:print.ln("  world< defined {{ d:s }}")
-| parse-error e |> std/io:print.ln("  world< parse: {{ e.message:s }}")
-| event-denied ev |> std/io:print.ln("  world< denied: {{ ev:s }}")
-| shape-error s |> std/io:print.ln("  world< shape: {{ s.branch:s }}")
-| dispatch-error e |> std/io:print.ln("  world< dispatch: {{ e.message:s }}")
-| validation-error v |> std/io:print.ln("  world< validation {{ v:s }}")
-| residue _ |> std/io:print.ln("  world< residue")
-| exhausted _ |> std/io:print.ln("  world< exhausted")
-| scope-not-found _ |> std/io:print.ln("  world< no scope")
 | unhandled-branch u |> std/io:print.ln("  world< unhandled {{ u.branch:s }}")
+| error e |> std/io:print.ln("  world< error {{ e.kind:s }}: {{ e.message:s }}")
 
 [with]std/bridge:create(id: "a", scope: "sandbox", world: "tests/regression/400_RUNTIME_FEATURES/440_RESOURCE_BRIDGE/440_041_sandbox_agent/world"): br
 |> turn(br, n: 1)
