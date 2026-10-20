@@ -92,6 +92,7 @@ koru_std/fleet.acquire.kz	49
 koru_std/fleet.fence.kz	28
 koru_std/fleet.kz	248
 koru_std/fleet.lease.kz	79
+koru_std/fleet.mail.kz	138
 koru_std/fleet.renew.kz	66
 koru_std/node.kz	551
 koru_std/node.new.kz	188

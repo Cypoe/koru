@@ -36,10 +36,24 @@ floor — deterministic, no clocks, no sockets. Six tors, all leaves:
 
 ## What this does NOT claim
 
-- **No routing.** `held-by`/`owned-by` tell you who holds an id, but
-  there is no way to send it a turn — `std/net` is a refusal surface.
-  Routing waits on a wire, or on a mailbox-dir simulation that has not
-  been written.
+- **Routing is spelled — as a mailbox, not a wire (evolved
+  2026-10-20).** `.fleet/inbox/<id>/` belongs to the cell, not the
+  node: `send` posts a turn file (tmp+rename, multi-producer safe),
+  `drain` delivers it owner-side under the lock — guarded like the
+  write fence, ordered by send-time, at-least-once (file deletes only
+  after the arm returns). `held-by` is now a redirect, not a refusal.
+  Mail survives takeover and ownership gaps — proven in-process
+  (470_014: two turns delivered in order, one posted to an unowned id
+  arrives at the next owner) and cross-process
+  (`scripts/fleet_mail_two_process`: B refused, posts, exits; A wakes,
+  drains, executes both turns, visits 41→43). Building it surfaced a
+  defect now pinned: a spawned-but-unflushed cell had an owner record
+  but no `state.kv`, and the member-miss probe answered `not-found`
+  without consulting the record — owned-and-bodiless now answers
+  `held-by` via `fleetForeignLiveOwner` (live lease only; an expired
+  record stays claimable). Still open: no real wire (`std/net` stays a
+  refusal surface), drain is caller-driven — no background courier,
+  and a fenced write is still silent.
 - **Leases are spelled, and the node renews on activity — there is no
   heartbeat thread by design.** `claim`, `seize`, and `renew` take
   `ttl-ms` and write `until=<unix-ms>` on the record — a wall-clock

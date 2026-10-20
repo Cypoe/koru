@@ -29,13 +29,12 @@
 // `seize` is takeover-after-crash, `guard` is the epoch fence enforced where
 // celld enforces it — at the write. Leases are spelled: `ttl-ms` on claim,
 // seize and renew, and an expired record is claimable — the takeover runs
-// the same serialized bump+commit seize does. Renewal is the caller's
-// cadence (celld's ttl/3); there is no background heartbeat yet, and
-// `std/node` still acquires un-leased until that machinery exists. Peer
-// routing and durability tiering are not spelled: `std/net` is a refusal
-// surface, so routing waits on a wire. The epoch counter is advisory under
-// true races; the node-id half of guard is what carries correctness.
-
+// the same serialized bump+commit seize does. `std/node` renews on
+// activity (lease-ms): residency is the heartbeat, no thread. Routing is
+// spelled as a mailbox: `send` posts to `.fleet/inbox/<id>` and `drain`
+// delivers owner-side under the lock — `std/net` stays a refusal surface.
+// The epoch counter is advisory under true races; the node-id half of
+// guard is what carries correctness.
 const std = @import("std");
 
 // ============================================================================
@@ -245,4 +244,5 @@ fn ownerWrite(world: []const u8, id: []const u8, node: []const u8, epoch: u32, u
 ~part acquire
 ~part fence
 ~part lease
+~part mail
 ~part renew
