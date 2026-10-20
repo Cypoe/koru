@@ -9,25 +9,25 @@
 // control.capture/captured grammar aimed at a proto-typed cell, not a new
 // vocabulary; the flush is the single point a materializer will one day own.
 
-~import std/io
-~import std/cell
-~import std/proto
-~import std/runtime
+import std/io
+import std/cell
+import std/proto
+import std/runtime
 
-~std/proto(room_state) {
+std/proto(room_state) {
     visits: u32
     name: string
     awake: bool
 }
 
-~pub tor greet { name: string } -> string
-~greet -> "hello {{ name:s }}"
+pub tor greet { name: string } -> string
+greet -> "hello {{ name:s }}"
 
-~std/runtime:register(scope: "cell") {
+std/runtime:register(scope: "cell") {
     greet(5)
 }
 
-~std/cell:open(room_state, id: "room-7")
+std/cell:open(room_state, id: "room-7")
 | cell c |> std/cell:capture(c, shape: room_state)
     ! as s |> std/io:print.ln("seeded visits={{ s.visits:d }}")
       |> std/cell:captured { visits: s.visits + 1 }

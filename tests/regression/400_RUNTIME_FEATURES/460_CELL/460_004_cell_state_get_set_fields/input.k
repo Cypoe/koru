@@ -11,25 +11,25 @@
 // a materializer (SQLite/DuckDB per the [X] field annotations still being
 // designed) plugs in where `state` lives.
 
-~import std/io
-~import std/cell
-~import std/proto
-~import std/runtime
+import std/io
+import std/cell
+import std/proto
+import std/runtime
 
-~std/proto(room_state) {
+std/proto(room_state) {
     visits: u32
     name: string
     awake: bool
 }
 
-~pub tor greet { name: string } -> string
-~greet -> "hello {{ name:s }}"
+pub tor greet { name: string } -> string
+greet -> "hello {{ name:s }}"
 
-~std/runtime:register(scope: "cell") {
+std/runtime:register(scope: "cell") {
     greet(5)
 }
 
-~std/cell:open(room_state, id: "assistant")
+std/cell:open(room_state, id: "assistant")
 | cell c |> std/cell:fields(c): fl |> std/io:print.ln("shape: {{ fl:s }}")
   |> std/cell:get(c, field: "visits")
     | value v |> std/io:print.ln("visits = {{ v.int:d }}")
