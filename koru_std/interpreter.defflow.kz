@@ -4,16 +4,11 @@
 //
 // Runtime-defined-flow DISPATCH — the call half of the REPL define
 // (interpreter.define.kz is the install half). A defined flow's body is
-// stored source, re-parsed and executed inline per dispatch, and the
-// defined-flows table is a live namespace: a body that calls a defined
-// name — its own included — resolves to the CURRENT body.
-//
-// That makes a self-referencing redefine recursion, and `run` forwards no
-// budget (metering parked in bridge.run.kz), so depth is the only bound:
-// MAX_DEFINED_DEPTH answers before nested frames kill the host stack
-// mid-turn, as an ordinary refusal the session survives. Bounded
-// recursion — a drain re-calling itself only while a verb answers `more`
-// — stays legal under the cap. Pin: 440_042.
+// stored source, re-parsed and executed inline per dispatch; the table is
+// a live namespace, so a body naming a defined flow — itself included —
+// resolves to the CURRENT body. That makes self-referencing recursion;
+// `run` forwards no budget, so depth is the only bound: MAX_DEFINED_DEPTH
+// answers before nested frames kill the host stack. Pin: 440_042.
 pub const MAX_DEFINED_DEPTH: u32 = 64;
 
 pub fn findDefinedFlow(defined: *const DefinedFlows, name: []const u8) ?DefinedFlow {
@@ -53,6 +48,11 @@ pub fn dispatchDefinedFlow(ctx: *InterpreterContext, df: DefinedFlow, evaluated_
     const saved_turn_env = ctx.turn_env;
     ctx.turn_env = null;
     defer ctx.turn_env = saved_turn_env;
+    // A body's under-handled tail FORWARDS its outcome — the caller arms
+    // it; a leaked flag would cry unhandled even on a matched outer arm.
+    const saved_unhandled = ctx.unhandled_outcome;
+    ctx.unhandled_outcome = null;
+    defer ctx.unhandled_outcome = saved_unhandled;
     switch (flow_parser.parseFlow(ctx.allocator, df.body_source)) {
         .flow => |*body_flow| {
             const body_value = try executeFlow(body_flow, ctx);
