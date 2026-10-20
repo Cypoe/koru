@@ -113,7 +113,7 @@
     if (steps.all_residue) return .{ .residue = .{
         .report = steps.report, .observer = isNoteAttempt(br, source), .bound = "", .text = "" } };
     return .{ .partial = .{
-        .ran = steps.total,
+        .ran = steps.ran,
         .total = steps.total,
         .used = steps.used,
         .handles = br.getHandleCount(),

@@ -26,11 +26,13 @@ fn runSteps(br: *Bridge, source: []const u8, items: []const TurnItem) StepRun {
     // binds for redelivery, but a malformed step beside a working one is a
     // rejected wire reply and the caller's strike bound needs to see it.
     var wire_failures: u32 = 0;
+    var attempted: u32 = 0;
     const total: u32 = @intCast(items.len);
     // A turn whose EVERY item bound residue is the single `residue` outcome,
     // not `partial` — reached only when the all-prose fast path's bind failed.
     var all_residue = true;
     for (items, 0..) |it, idx| {
+        attempted += 1;
         const step: u32 = @intCast(idx + 1);
         const item = std.mem.trim(u8, source[it.start..it.end], " \t\r\n");
         if (isDefineItem(item)) {
@@ -133,6 +135,10 @@ fn runSteps(br: *Bridge, source: []const u8, items: []const TurnItem) StepRun {
         .all_residue = all_residue,
         .wire_failures = wire_failures,
         .used = used_total,
+        // `ran` is the honest count: items attempted minus wire refusals.
+        // An `abandoned` break truncates — items after it are in `total`
+        // but were never attempted, so they count in neither number.
+        .ran = attempted - wire_failures,
         .total = total,
     };
 }

@@ -2,13 +2,13 @@
 // turn's per-step loop. Joined via `~part steps` in bridge.kz; merged into
 // the bridge module at load.
 
-/// What a multi-item turn's step run produced: the rendered report plus the
-/// counters the outcome arms need. The report string is page-backed.
+/// What a multi-item turn's step run produced: the report + counters.
 const StepRun = struct {
     report: []const u8,
     all_residue: bool,
     wire_failures: u32,
     used: u64,
+    ran: u32,
     total: u32,
 };
 
