@@ -286,6 +286,15 @@ fn generateSequentialNested(
 const CODEGEN_CONTINUE_PREFIX = "__koru_continue_";
 const CODEGEN_INLINE_PREFIX = "__koru_inline_";
 
+/// Texts of the splice producers whose frames are still on the codegen stack —
+/// the string path's twin of emitter_helpers' `splice_frame_codes`. A binding
+/// introduced deeper inside a spliced body shares a Zig frame with every
+/// enclosing producer's raw-|zig locals, not only its immediate producer's
+/// (605_001). Depth-capped: nesting past the cap panics rather than
+/// silently checking fewer frames.
+var splice_frame_codes: [64][]const u8 = undefined;
+var splice_frame_depth: usize = 0;
+
 /// Identifier-boundary token scan — port of emitter_helpers.containsToken
 /// (private there): skips strings, chars, and line comments.
 fn containsTokenLocal(body: []const u8, token: []const u8) bool {
@@ -419,6 +428,13 @@ fn resolveInlineMarkers(
     program_items: ?[]const ast.Item,
     resolved_any: *bool,
 ) CodegenError![]const u8 {
+    // Everything spliced below shares this producer's Zig frame — record the
+    // text so nested bindings rename against its locals/captures too.
+    if (splice_frame_depth == splice_frame_codes.len)
+        @panic("continuation_codegen: inline splices nested deeper than 64 frames — raise splice_frame_codes' cap; splice hygiene cannot be checked past it");
+    splice_frame_codes[splice_frame_depth] = code;
+    splice_frame_depth += 1;
+    defer splice_frame_depth -= 1;
     var buf = std.ArrayList(u8).initCapacity(allocator, code.len + 128) catch unreachable;
     var pos: usize = 0;
     while (true) {
@@ -517,7 +533,16 @@ fn resolveInlineMarkers(
             var uniq_buf: [64]u8 = undefined;
             var bind_to: []const u8 = binding;
             const is_pun = arg.len != 0 and std.mem.eql(u8, arg, binding);
-            if (!std.mem.eql(u8, binding, "_") and cont.destructure.len == 0 and arg.len != 0 and !is_pun and containsTokenLocal(code, binding)) {
+            // The binding lands inside every enclosing splice frame still on
+            // the stack — a name that occurs as a token in ANY of them would
+            // be shadowed, not just one in the immediate producer's text.
+            const producer_shadow = containsTokenLocal(code, binding) or blk: {
+                for (splice_frame_codes[0..splice_frame_depth]) |frame| {
+                    if (containsTokenLocal(frame, binding)) break :blk true;
+                }
+                break :blk false;
+            };
+            if (!std.mem.eql(u8, binding, "_") and cont.destructure.len == 0 and arg.len != 0 and !is_pun and producer_shadow) {
                 bind_to = std.fmt.bufPrint(&uniq_buf, "__koru_bind_{d}_{d}", .{ cont.location.line, cont.location.column }) catch binding;
             }
             try buf.appendSlice(allocator, "{ ");

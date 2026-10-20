@@ -353,7 +353,16 @@ pub const EmissionContext = struct {
     // shared inline-splice frame (400_151), this carries {from: original,
     // to: unique} so the binding's uses in the spliced body rewrite too.
     // Set only around the affected continuation body; honored by emitExpression.
-    splice_binding_rename: ?BindingSubstitution = null,
+    // A stack, not a slot: a rename deeper in the nest must not mask an
+    // enclosing one — references to the outer renamed binding that fell
+    // through to the raw name read a producer's live local (silent miscompile).
+    splice_binding_renames: std.ArrayList(BindingSubstitution) = .empty,
+    // Texts of the splice producers whose frames are still on the emit stack.
+    // A binding introduced deeper inside a spliced body shares a Zig frame
+    // with every enclosing producer's raw-|zig locals, not only its immediate
+    // producer's — the 400_151 rename must consult all of them (605_001:
+    // climb's `for (0..w + n) |i|` vs an `! each i` inside the `! pass` body).
+    splice_frame_codes: std.ArrayList([]const u8) = .empty,
     // Inline-frame arg bindings currently in scope, pushed by
     // emitInlineEffectfulCall around its spliced body. A nested inlined event
     // that binds the same name to the SAME value expression reuses the
@@ -5525,6 +5534,11 @@ fn emitInlineCodeResolvingSplices(
     inline_code: []const u8,
     continuations: []const ast.Continuation,
 ) anyerror!void {
+    // Everything spliced below shares this producer's Zig frame — record the
+    // text so nested bindings rename against its locals/captures too, not
+    // only against their own immediate producer.
+    try ctx.splice_frame_codes.append(ctx.allocator, inline_code);
+    defer _ = ctx.splice_frame_codes.pop();
     var pos: usize = 0;
     while (true) {
         // Find the earliest remaining marker of either kind.
@@ -5667,7 +5681,17 @@ fn emitInlineCodeResolvingSplices(
             var uniq_buf: [64]u8 = undefined;
             var bind_rename: ?BindingSubstitution = null;
             const is_pun = arg.len != 0 and std.mem.eql(u8, std.mem.trim(u8, arg, " \t"), binding);
-            if (!std.mem.eql(u8, binding, "_") and cont.destructure.len == 0 and arg.len != 0 and !is_pun and containsToken(inline_code, binding)) {
+            // The binding lands inside every enclosing splice frame still on
+            // the stack — a name that occurs as a token in ANY of them would
+            // be shadowed by `const <binding>`, not just one in the immediate
+            // producer's text.
+            const producer_shadow = containsToken(inline_code, binding) or blk: {
+                for (ctx.splice_frame_codes.items) |frame| {
+                    if (containsToken(frame, binding)) break :blk true;
+                }
+                break :blk false;
+            };
+            if (!std.mem.eql(u8, binding, "_") and cont.destructure.len == 0 and arg.len != 0 and !is_pun and producer_shadow) {
                 const uniq = std.fmt.bufPrint(&uniq_buf, "__koru_bind_{d}_{d}", .{ cont.location.line, cont.location.column }) catch binding;
                 bind_rename = .{ .from = binding, .to = uniq };
             }
@@ -5753,9 +5777,9 @@ fn emitInlineCodeResolvingSplices(
             // (outer) vs `result_e0_e0_` (inner).
             ctx.result_prefix = std.fmt.bufPrint(&prefix_buf, "{s}e{d}_", .{ saved_prefix, idx }) catch saved_prefix;
             defer ctx.result_prefix = saved_prefix;
-            const saved_bind_rename = ctx.splice_binding_rename;
-            if (bind_rename) |br| ctx.splice_binding_rename = br;
-            defer ctx.splice_binding_rename = saved_bind_rename;
+            const rename_depth = ctx.splice_binding_renames.items.len;
+            defer ctx.splice_binding_renames.shrinkRetainingCapacity(rename_depth);
+            if (bind_rename) |br| try ctx.splice_binding_renames.append(ctx.allocator, br);
             // The spliced body lands inside the construct's braces — a
             // `.terminal` in it ends the nested chain, not the enclosing
             // label loop; only an arm-top-level terminal may lower to
@@ -5886,12 +5910,17 @@ pub fn emitInlineBodyNode(
     // (print.ln's `__kw(…, .{k})`) carries its references as TEXT, already
     // rendered before the rename existed. Rewrite them here, or the spliced
     // body silently reads the producer's live local instead of the payload.
-    if (ctx.splice_binding_rename) |br| {
-        if (std.mem.indexOf(u8, inline_code, br.from) != null) {
-            const rewritten_text = try codegen_utils.replaceIdentifier(ctx.allocator, inline_code, br.from, br.to);
-            if (inline_code_uniq) |owned| ctx.allocator.free(owned);
-            inline_code_uniq = @constCast(rewritten_text);
-            inline_code = inline_code_uniq.?;
+    {
+        var ri = ctx.splice_binding_renames.items.len;
+        while (ri > 0) {
+            ri -= 1;
+            const br = ctx.splice_binding_renames.items[ri];
+            if (std.mem.indexOf(u8, inline_code, br.from) != null) {
+                const rewritten_text = try codegen_utils.replaceIdentifier(ctx.allocator, inline_code, br.from, br.to);
+                if (inline_code_uniq) |owned| ctx.allocator.free(owned);
+                inline_code_uniq = @constCast(rewritten_text);
+                inline_code = inline_code_uniq.?;
+            }
         }
     }
 
@@ -10316,10 +10345,16 @@ fn emitExpression(
                 }
             }
             // Cross-boundary splice hygiene: a renamed consumer binding.
-            if (ctx.splice_binding_rename) |sub| {
-                if (std.mem.eql(u8, ident, sub.from)) {
-                    try emitter.write(sub.to);
-                    return;
+            // Innermost rename first — enclosing renames stay live alongside it.
+            {
+                var ri = ctx.splice_binding_renames.items.len;
+                while (ri > 0) {
+                    ri -= 1;
+                    const sub = ctx.splice_binding_renames.items[ri];
+                    if (std.mem.eql(u8, ident, sub.from)) {
+                        try emitter.write(sub.to);
+                        return;
+                    }
                 }
             }
             try writeBranchName(emitter, ident);
