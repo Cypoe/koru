@@ -1,0 +1,7 @@
+slate cleared
+room-42 is free
+node-a claimed epoch=1
+owned by node-a
+node-b refused: not the owner
+node-a released
+room-42 is free
