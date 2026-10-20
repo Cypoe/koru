@@ -31,8 +31,7 @@ std/cell:open(room_state, id: "room-7")
 | cell c |> std/cell:capture(c, shape: room_state)
     ! as s |> std/io:print.ln("seeded visits={{ s.visits:d }}")
       |> std/cell:captured { visits: s.visits + 1 }
-      |> std/cell:captured { name: "assistant-01" }
-      |> std/cell:captured { awake: true }
+      |> std/cell:captured { name: "assistant-01", awake: true }
     | captured f |> std/io:print.ln("c1 captured: visits={{ f.visits:d }} name={{ f.name:s }} awake={{ f.awake:any }}")
   |> std/cell:get(c, field: "visits")
     | value v |> std/io:print.ln("map sees visits = {{ v.int:d }}")
