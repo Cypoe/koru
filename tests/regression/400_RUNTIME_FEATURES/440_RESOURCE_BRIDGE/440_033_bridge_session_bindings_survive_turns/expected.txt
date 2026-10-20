@@ -12,6 +12,7 @@ pub tor echo { text: string }
 vocabulary()
 grammar()
 bind(name: string, value: string)
+note(text: string) — speaks to the observer, not the user: reasoning, plans, and "why I'm stuck" go here
 abandon(reason: string) — ends the session with your reason: what you tried, what blocked you
 r1 {text, count}
 r5

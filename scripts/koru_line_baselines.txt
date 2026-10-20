@@ -28,6 +28,7 @@ koru_std/bridge.grants.kz	62
 koru_std/bridge.hostverbs.kz	158
 koru_std/bridge.items.kz	9
 koru_std/bridge.kz	200
+koru_std/bridge.note.kz	110
 koru_std/bridge.residue.kz	14
 koru_std/bridge.run-exec.kz	124
 koru_std/bridge.run.kz	39

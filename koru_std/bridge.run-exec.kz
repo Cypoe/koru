@@ -19,7 +19,7 @@
         return .{ .parse_error = .{ .message = "OOM segmenting turn", .line = 0, .column = 0 } };
     };
     defer br.allocator.free(seg);
-    const items = seg;
+    const items = splitNoteTails(br, source, seg) orelse seg;
     if (items.len < 2) {
         // RUN DISCRIMINATION (the REPL rule): a declaration is not a dispatch.
         // If the source is a subflow definition (`tor name { args }` +
@@ -55,11 +55,11 @@
             // agent as `residue`, so the model can re-emit it through a real
             // verb. Nothing strands: the value, the handle, and the outcome
             // all survive.
-            if (e.not_invocation) {
+            if (e.not_invocation or isNoteAttempt(br, source)) {
                 const prose = std.mem.trim(u8, source, " \t\r\n");
                 const rn = bindResidue(br, prose);
                 if (rn.len > 0) return .{ .residue = .{ .report = residueNote(rn, prose),
-                    .observer = false, .bound = rn, .text = prose } };
+                    .observer = !e.not_invocation, .bound = rn, .text = prose } };
             }
             return .{ .parse_error = .{
                 .message = e.message, .line = e.line, .column = e.column,
@@ -104,14 +104,14 @@
         const trimmed = std.mem.trim(u8, source, " \t\r\n");
         const rn = bindResidue(br, trimmed);
         if (rn.len > 0) return .{ .residue = .{ .report = residueNote(rn, trimmed),
-            .observer = false, .bound = rn, .text = trimmed } };
+            .observer = isNoteAttempt(br, trimmed), .bound = rn, .text = trimmed } };
         // Bind failed — fall through to the per-item loop, which reports
         // per-step refusals instead of lying about a single binding.
     }
 
     const steps = runSteps(br, source, items);
     if (steps.all_residue) return .{ .residue = .{
-        .report = steps.report, .observer = false, .bound = "", .text = "" } };
+        .report = steps.report, .observer = isNoteAttempt(br, source), .bound = "", .text = "" } };
     return .{ .partial = .{
         .ran = steps.total,
         .total = steps.total,

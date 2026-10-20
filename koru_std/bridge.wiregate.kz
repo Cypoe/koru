@@ -21,13 +21,11 @@ const HostVerbSpec = struct { name: []const u8, fields: []const Runtime.InputFie
 const host_verbs = [_]HostVerbSpec{
     .{ .name = "vocabulary", .fields = &.{} },
     .{ .name = "grammar", .fields = &.{} },
-    .{ .name = "bind", .fields = &.{
-        .{ .name = "name", .type_name = "string" },
-        .{ .name = "value", .type_name = "string" },
-    } },
-    .{ .name = "abandon", .fields = &.{
-        .{ .name = "reason", .type_name = "string" },
-    }, .doc = " — ends the session with your reason: what you tried, what blocked you" },
+    .{ .name = "bind", .fields = &.{ .{ .name = "name", .type_name = "string" }, .{ .name = "value", .type_name = "string" } } },
+    .{ .name = "note", .fields = &.{ .{ .name = "text", .type_name = "string" } },
+        .doc = " — speaks to the observer, not the user: reasoning, plans, and \"why I'm stuck\" go here" },
+    .{ .name = "abandon", .fields = &.{ .{ .name = "reason", .type_name = "string" } },
+        .doc = " — ends the session with your reason: what you tried, what blocked you" },
 };
 
 fn hostInputLookup(verb: []const u8) ?[]const Runtime.InputFieldSpec {

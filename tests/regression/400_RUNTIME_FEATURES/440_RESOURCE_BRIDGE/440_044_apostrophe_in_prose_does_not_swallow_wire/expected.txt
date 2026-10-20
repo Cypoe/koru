@@ -1,7 +1,7 @@
 hi
-step 1/2 residue bound: r1 — 'I'll echo the greeting next.' is not wire; nothing reached the user. `say(text: ...)` reaches the user, `verb(field: ...)` calls — `vocabulary()` lists every verb
+step 1/2 residue bound: r1 — 'I'll echo the greeting next.' is not wire; nothing reached the user, but the observer kept it. `say(text: ...)` reaches the user, `note(text: ...)` thinks, `verb(field: ...)` calls — `vocabulary()` lists every verb
 step 2/2 result: {"branch":""} bound: r2
 
-RESIDUE residue bound: r3 — 'it's just prose' is not wire; nothing reached the user. `say(text: ...)` reaches the user, `verb(field: ...)` calls — `vocabulary()` lists every verb
+RESIDUE residue bound: r3 — 'it's just prose' is not wire; nothing reached the user, but the observer kept it. `say(text: ...)` reaches the user, `note(text: ...)` thinks, `verb(field: ...)` calls — `vocabulary()` lists every verb
 it's quoted fine
 RESULT bound=r4

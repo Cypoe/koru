@@ -1,14 +1,14 @@
-RESIDUE residue bound: r1 — 'I cannot delete files for you.' is not wire; nothing reached the user. `say(text: ...)` reaches the user, `verb(field: ...)` calls — `vocabulary()` lists every verb || bound=r1 text=I cannot delete files for you.
+RESIDUE residue bound: r1 — 'I cannot delete files for you.' is not wire; nothing reached the user, but the observer kept it. `say(text: ...)` reaches the user, `note(text: ...)` thinks, `verb(field: ...)` calls — `vocabulary()` lists every verb || bound=r1 text=I cannot delete files for you.
 I cannot delete files for you.
 RESULT bound=r2
 a
 step 1/2 result: {"branch":""} bound: r3
-step 2/2 residue bound: r4 — 'let me apologize properly' is not wire; nothing reached the user. `say(text: ...)` reaches the user, `verb(field: ...)` calls — `vocabulary()` lists every verb
+step 2/2 residue bound: r4 — 'let me apologize properly' is not wire; nothing reached the user, but the observer kept it. `say(text: ...)` reaches the user, `note(text: ...)` thinks, `verb(field: ...)` calls — `vocabulary()` lists every verb
 
 let me apologize properly
 RESULT bound=r5
 PARSE the value of 'text' is not a Koru expression — write a bound name, a field path, an operation (`n * 2`), or "quote it" for literal text
-RESIDUE residue bound: r6 — 'first apology' is not wire; nothing reached the user. `say(text: ...)` reaches the user, `verb(field: ...)` calls — `vocabulary()` lists every verb || bound=r6 text=first apology
+RESIDUE residue bound: r6 — 'first apology' is not wire; nothing reached the user, but the observer kept it. `say(text: ...)` reaches the user, `note(text: ...)` thinks, `verb(field: ...)` calls — `vocabulary()` lists every verb || bound=r6 text=first apology
 second apology
 first apology
 second apology

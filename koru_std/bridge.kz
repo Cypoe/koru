@@ -14,7 +14,6 @@
 // makes hanging up able to actually release rather than merely forget.
 
 ~[comptime|runtime]
-
 ~import std/interpreter
 ~import std/runtime
 // `const std` and the interpreter-type re-exports moved to the `types` part.
@@ -198,3 +197,4 @@ pub const Bridge = struct {
 ~part grammar
 ~part scopedispatch
 ~part runsteps
+~part note

@@ -46,17 +46,10 @@ fn runSteps(br: *Bridge, source: []const u8, items: []const TurnItem) StepRun {
         }
         // The wire gate holds per item; a refused slice is a step line.
         if (wireGate(br, item)) |e| {
-            if (e.not_invocation) {
-                const rn = bindResidue(br, item);
-                if (rn.len > 0) {
-                    const head = item[0..@min(std.mem.indexOfScalar(u8, item, '\n') orelse item.len, 48)];
-                    writer.print("step {d}/{d} residue bound: {s} — '{s}' is not wire; nothing reached the user. `say(text: ...)` reaches the user, `verb(field: ...)` calls — `vocabulary()` lists every verb\n", .{ step, total, rn, head }) catch {};
-                    continue;
-                }
+            if (!reportGateRefusal(br, item, e, step, total, writer)) {
+                all_residue = false;
+                wire_failures += 1;
             }
-            all_residue = false;
-            wire_failures += 1;
-            writer.print("step {d}/{d} parse-error: {s}\n", .{ step, total, e.message }) catch {};
             continue;
         }
         all_residue = false;

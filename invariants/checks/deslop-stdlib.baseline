@@ -32,8 +32,17 @@
 # census (clone-fix growth) and run.kz's session-env seed block twins
 # runcached's by protocol (fold candidate: one shared seed proc —
 # deferred, belongs to the deslop campaign not this commit).
-clusters=98
-members=161
+# Re-pinned 98/161 -> 113/189 (2026-10-20): the roll fired on the
+# observer-channel restore commit. This diff's own delta measured
+# NEGATIVE — HEAD-only koru_std censused at 115/192 against the working
+# tree's 113/189 (the restore folded the per-step gate-refusal block
+# into one helper in the new bridge.note.kz part). The named offenders
+# are committed drift landed under rolls that missed: channel.kz/
+# fleet.kz/pump.kz event_decl + import_decl part-file scaffolding from
+# the cells/fleets landing, same documented class as the scope-
+# vocabulary twins the 92/145 entry records.
+clusters=113
+members=189
 skipped=2
 spellings=45
 # 70/111: store.keyed.kz joined io.blk-style import preamble clone w/ interpreter.select.kz (3 shared compiler-module imports, boilerplate)

@@ -113,8 +113,16 @@
 # and emitter_test test_decl twins — all foreign drift from the recent
 # emitter refactor commits (needs_binding ref-sets, handler captures
 # from emitted text). Own contribution to src/ is zero files.
-clusters=836
-members=939
+# Re-pinned 836/939 -> 842/945 (2026-10-20): the roll fired on the
+# observer-channel restore commit — zero src/ files staged (koru_std part
+# files, expected.txt repins, one new concept). The named offenders are
+# the documented classes: the continuation_codegen:291-320 x
+# emitter_helpers:6806-6835 fn_decl twin (the intentional
+# containsTokenLocal port pair) and emitter_test test_decl scaffolding.
+# Growth landed between re-pins — committed src/ drift from the
+# cells/fleets and board commits — not in this diff.
+clusters=842
+members=945
 # Re-pinned to 820/911 on the call-site |variant commit: the sampled roll
 # named containsTokenLocal x containsToken (continuation_codegen /
 # emitter_helpers) and an emitter_test test_decl pair — none of those

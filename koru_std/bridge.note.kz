@@ -1,0 +1,110 @@
+// Koru Standard Library: the `note` part of bridge.kz — the observer
+// channel's whole machinery, kept in one file because it has been
+// removed once already by a diff that only touched some of its
+// surfaces (ac5d38b82). The lane is five things that move together:
+// the host verb itself, the dispatch entry, the tail-split rescue,
+// the residue classifier, and the per-step refusal reporter. Joined
+// via `~part note` in bridge.kz; merged into the bridge module at load.
+
+// `note(text: ...)` — the observer channel, granted by introspection like its
+// siblings. Reasoning the agent wants kept goes here instead of into prose
+// (which binds as residue and counts toward the rejection bound). The result
+// is a bare acknowledgment — the text itself is already durable in the turn's
+// wire source; echoing it back as the result would re-feed the model its own
+// prose on every report.
+fn hostNote(view: *const Interp.HostView, inv: *const Interp.Invocation, out: *Interp.DispatchResult) anyerror!void {
+    var has_text = false;
+    for (inv.args) |a| {
+        if (std.mem.eql(u8, a.name, "text")) has_text = true;
+    }
+    if (!has_text) {
+        view.error_detail.* = "'note' needs a `text:` field — note(text: \"what you're thinking\")";
+        return error.DispatchFailed;
+    }
+    const S = struct { threadlocal var field_buf: [1]Interp.NamedField = undefined; };
+    S.field_buf[0] = .{ .name = "__type_ref", .value = .{ .string_val = "ok" } };
+    out.* = .{ .branch = "", .fields = S.field_buf[0..1] };
+}
+
+/// A `note(` item's tail rescue, introspection sessions only. The natural
+/// misspelling is `note(text: <prose>)say(...)` on ONE line — the segmenter
+/// splits at newlines, so the whole line is one item and the malformed note
+/// swallows the wire call after it into the residue string, where it dies
+/// unseen. Find the first `)` whose trimmed suffix passes the wire gate and
+/// return the source index just past it: the prefix still takes the
+/// residue/dispatch path, the suffix becomes its own step.
+fn noteTailSplitAt(br: *Bridge, source: []const u8, it: TurnItem) ?usize {
+    const item = std.mem.trim(u8, source[it.start..it.end], " \t\r\n");
+    if (!std.mem.startsWith(u8, item, "note(")) return null;
+    const base = @intFromPtr(item.ptr) - @intFromPtr(source.ptr);
+    var i: usize = 5;
+    while (i < item.len) : (i += 1) {
+        if (item[i] != ')') continue;
+        const suffix = std.mem.trim(u8, item[i + 1 ..], " \t\r\n");
+        if (suffix.len == 0) continue;
+        if (wireGate(br, suffix) == null) return base + i + 1;
+    }
+    return null;
+}
+
+/// Post-segmentation pass: split every `note(` item carrying a wire tail
+/// into [note prefix, tail]. Returns null when nothing splits, so callers
+/// can keep the original slice. The item list rides the session arena —
+/// a split list is small and lives exactly as long as the bridge.
+fn splitNoteTails(br: *Bridge, source: []const u8, items: []TurnItem) ?[]TurnItem {
+    if (!br.introspection) return null;
+    const alloc = br.session_arena.allocator();
+    var out = std.ArrayList(TurnItem){};
+    var split_any = false;
+    for (items) |it| {
+        var start = it.start;
+        while (noteTailSplitAt(br, source, .{ .start = start, .end = it.end })) |at| {
+            out.append(alloc, .{ .start = start, .end = at }) catch {
+                out.deinit(alloc);
+                return null;
+            };
+            start = at;
+            split_any = true;
+        }
+        out.append(alloc, .{ .start = start, .end = it.end }) catch {
+            out.deinit(alloc);
+            return null;
+        };
+    }
+    if (!split_any) {
+        out.deinit(alloc);
+        return null;
+    }
+    return out.toOwnedSlice(alloc) catch null;
+}
+
+/// A `note(`/`note:`-headed item that failed the wire gate is prose
+/// wearing the observer channel's costume — with introspection it binds as
+/// residue, not a wire failure; without the grant it is malformed wire.
+fn isNoteAttempt(br: *Bridge, item: []const u8) bool {
+    if (!br.introspection) return false;
+    const t = std.mem.trim(u8, item, " \t\r\n");
+    return std.mem.startsWith(u8, t, "note(") or std.mem.startsWith(u8, t, "note:");
+}
+
+/// A gate-refused item binds as residue when the text is keepable — plain
+/// prose (`not_invocation`) or a malformed `note(`/`note:` that still
+/// deserves the observer. Returns true when the item bound, so the turn's
+/// all-residue flag survives; false when the refusal printed as a wire
+/// failure and the caller counts the strike.
+fn reportGateRefusal(br: *Bridge, item: []const u8, e: GateRejection, step: u32, total: u32, writer: anytype) bool {
+    if (e.not_invocation or isNoteAttempt(br, item)) {
+        const rn = bindResidue(br, item);
+        if (rn.len > 0) {
+            if (e.not_invocation) {
+                const head = item[0..@min(std.mem.indexOfScalar(u8, item, '\n') orelse item.len, 48)];
+                writer.print("step {d}/{d} residue bound: {s} — '{s}' is not wire; nothing reached the user, but the observer kept it. `say(text: ...)` reaches the user, `note(text: ...)` thinks, `verb(field: ...)` calls — `vocabulary()` lists every verb\n", .{ step, total, rn, head }) catch {};
+            } else {
+                writer.print("step {d}/{d} residue bound: {s} — your note did not parse as wire, but the observer kept it. Well-formed: note(text: \"...\"); to reach the user, say(text: \"...\")\n", .{ step, total, rn }) catch {};
+            }
+            return true;
+        }
+    }
+    writer.print("step {d}/{d} parse-error: {s}\n", .{ step, total, e.message }) catch {};
+    return false;
+}

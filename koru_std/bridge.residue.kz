@@ -1,6 +1,6 @@
 // Koru Standard Library: the `residue` part of bridge.kz — residue
-// teaching text. Joined via `~part residue` in bridge.kz; merged into
-// the bridge module at load.
+// teaching text (the observer-channel classifier lives in `note`).
+// Joined via `~part residue` in bridge.kz; merged at load.
 
 /// The report a bound residue hands back — and the offense, quoted: the
 /// first bytes of the refused text, so a `tool_call:`/`[Calling` wrapper or
@@ -8,7 +8,7 @@
 fn residueNote(rn: []const u8, item: []const u8) []const u8 {
     const head = item[0..@min(std.mem.indexOfScalar(u8, item, '\n') orelse item.len, 48)];
     return std.fmt.allocPrint(std.heap.page_allocator,
-        "residue bound: {s} — '{s}' is not wire; nothing reached the user. `say(text: ...)` reaches the user, `verb(field: ...)` calls — `vocabulary()` lists every verb", .{ rn, head })
+        "residue bound: {s} — '{s}' is not wire; nothing reached the user, but the observer kept it. `say(text: ...)` reaches the user, `note(text: ...)` thinks, `verb(field: ...)` calls — `vocabulary()` lists every verb", .{ rn, head })
         catch @panic("bridge: OOM building residue report");
 }
 

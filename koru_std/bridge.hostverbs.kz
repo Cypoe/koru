@@ -135,10 +135,9 @@ pub fn hostDispatch(
 ) anyerror!void {
     if (hostInputLookup(name) == null) return error.EventDenied;
     const is_vocab = std.mem.eql(u8, name, "vocabulary");
-    const is_bind = std.mem.eql(u8, name, "bind");
-    const is_abandon = std.mem.eql(u8, name, "abandon");
-    if (is_bind) return hostBind(view, inv, out);
-    if (is_abandon) return hostAbandon(view, inv, out);
+    if (std.mem.eql(u8, name, "bind")) return hostBind(view, inv, out);
+    if (std.mem.eql(u8, name, "note")) return hostNote(view, inv, out);
+    if (std.mem.eql(u8, name, "abandon")) return hostAbandon(view, inv, out);
     if (inv.args.len != 0) {
         view.error_detail.* = std.fmt.allocPrint(view.allocator,
             "'{s}' takes no fields — call it bare: {s}()", .{ name, name })

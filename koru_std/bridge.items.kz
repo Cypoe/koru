@@ -1,6 +1,6 @@
 // Koru Standard Library: the `items` part of bridge.kz — per-item
-// predicates. Joined via `~part items` in bridge.kz; merged into the
-// bridge module at load.
+// predicates (the note-tail rescue lives in the `note` part). Joined
+// via `~part items` in bridge.kz; merged into the bridge module at load.
 
 /// `tor ...` items route to define_event, everything else dispatches.
 fn isDefineItem(item: []const u8) bool {
