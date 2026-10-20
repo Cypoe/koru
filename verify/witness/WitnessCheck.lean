@@ -1023,6 +1023,285 @@ def passGraphCheck (sites : List SiteLine) : List String :=
   orderV ++ stageV ++ (if countsOk then [] else ["pass-graph census count drift"])
 
 
+/-! ## Mark-file corpus input — `@witness(...)` lines
+
+`[witness] site` lines are the *printed* rendering the witness pass emits
+into backend output; the marks channel itself serializes as
+`@witness("kind","site","arm<-mechanism","verdict","payload?")` — the
+artifact shape command-side solvers (koruos/realize's `*.marks` files)
+commit. Both decode to `SiteLine`; a mark's fifth field is ONE payload
+string, so `extra` carries the whole field, spaces included. Marks carry
+four or five quoted fields — the same shape `witnessMark`
+(koru_std/witness.kz) and `witnessCheckParseMark`
+(koru_std/compiler.witness.kz) accept. There are no escapes: a `"`
+inside a field ends the parse, and the channel refuses such fields at
+commit. -/
+
+/-- Split a mark body's char list on the `","` field separator. Fields
+cannot contain `"` (no escapes — the channel refuses them at commit), so
+the separator is unambiguous. -/
+def splitMarkFields : List Char → List (List Char)
+  | [] => [[]]
+  | '"' :: ',' :: '"' :: rest => [] :: splitMarkFields rest
+  | c :: rest =>
+    match splitMarkFields rest with
+    | f :: fs => (c :: f) :: fs
+    | [] => [[c]]
+
+def parseMarkLine (line : String) : Option SiteLine :=
+  match line.toList with
+  | '@' :: 'w' :: 'i' :: 't' :: 'n' :: 'e' :: 's' :: 's' :: '(' :: rest =>
+    match rest.getLast? with
+    | some ')' =>
+      let inner := rest.dropLast
+      match inner.head?, inner.getLast? with
+      | some '"', some '"' =>
+        let fields := (splitMarkFields ((inner.drop 1).dropLast)).map String.ofList
+        -- no field may carry a stray quote — the `","` separators are the
+        -- only quotes in a well-formed mark body
+        if fields.any (·.toList.contains '"') then none else
+        match fields with
+        | [k, s, a, v] =>
+          if k.isEmpty || s.isEmpty || a.isEmpty || v.isEmpty then none else some ⟨k, s, a, v, ""⟩
+        | [k, s, a, v, e] =>
+          if k.isEmpty || s.isEmpty || a.isEmpty || v.isEmpty then none else some ⟨k, s, a, v, e⟩
+        | _ => none
+      | _, _ => none
+    | _ => none
+  | _ => none
+
+/-! ## Kind `admission` — one demanded-iface bind verdict (koruos/realize)
+
+A solver run commits one mark per demanded interface:
+
+    @witness("admission","<iface>","<arm><-<mech>","<verdict>","<payload>")
+
+The checker cannot re-run the row match — the row catalog is solver-side
+data the mark does not carry — but the verdict is FORCED by the payload's
+evidence shape, and that is what is re-decided: a mark whose payload does
+not carry the evidence its verdict claims is rejected, not trusted.
+
+    bound    <arm><-<mech>, mech ∉ {none, std-codegen}
+             row=<site> declared_by=<prov> bind_by=<prov> grade=<V|M|C|D>
+             — the serving row names the demanded iface (row == site);
+             `declared_by` is the row's provenance, `bind_by` the bind's
+             (a provider-supplied bind on a builtin row reports
+             bind_by=koruos.native, not declared_by=builtin)
+    refused  <arm><-none
+             reason=missing-row                                — no row declared the iface
+             row=<site> declared_by=<prov> reason=missing-binding [serves=<csv>]
+                                                               — row exists, this arm doesn't bind it
+    waived   <arm><-std-codegen   reason=std-pure              — std-pure demand admits no provider
+
+Corpus-level (`admissionCheck`): one verdict per (site, arm) — the solver
+emits each demanded iface once per run — and one arm per corpus: a
+`*.marks` artifact is a single solver run. -/
+
+def parseAdmissionArrow (arrow : String) : Option (String × String) :=
+  match splitOnArrow arrow.toList with
+  | some (a, m) => if a.isEmpty || m.isEmpty then none else some (String.ofList a, String.ofList m)
+  | none => none
+
+def isGrade (g : String) : Bool := g == "V" || g == "M" || g == "C" || g == "D"
+
+def hasProv (tok : String) (pfx : String) : Bool :=
+  tok.startsWith pfx && !(tok.drop pfx.length).isEmpty
+
+/-- The serving row names the demanded site, allowing for tor scoping. A
+site `<mod>.<path>:<tor>` may be served by a row whose declared iface is
+the module path `<mod>/<path>` (a module-level row covers every tor) or
+`<mod>/<path>:<rtor>` where `<rtor>` is a prefix of the demanded tor (a
+tor-scoped row). Rows may also be declared in the site's own dotted
+form — the exact-match arm covers that. A tor-scoped row never serves a
+tor outside its prefix, and a tor demand is never served by a row
+naming a different module. -/
+def rowServesSite (row site : String) : Bool :=
+  row == site ||
+  match site.splitOn ":" with
+  | [smod, stor] =>
+    let spath := String.ofList (smod.toList.map fun c => if c == '.' then '/' else c)
+    row == spath ||
+    (match row.splitOn ":" with
+     | [rmod, rtor] => !rtor.isEmpty && rmod == spath && stor.startsWith rtor
+     | _ => false)
+  | _ => false
+
+def ruleAdmission (s : SiteLine) : Ruling :=
+  match parseAdmissionArrow s.arrow with
+  | none => .malformed
+  | some (_, mech) =>
+    let mechOk :=
+      (s.verdict == "bound" && mech != "none" && mech != "std-codegen") ||
+      (s.verdict == "refused" && mech == "none") ||
+      (s.verdict == "waived" && mech == "std-codegen")
+    if !mechOk then .malformed else
+    match s.extra.splitOn " " with
+    | [x, y, z, w] =>
+      -- bound: row=<serving-row> declared_by=<p> bind_by=<p> grade=<g>
+      if s.verdict == "bound" &&
+         x.startsWith "row=" && rowServesSite (x.drop 4).toString s.site &&
+         hasProv y "declared_by=" && hasProv z "bind_by=" &&
+         w.startsWith "grade=" && isGrade (String.ofList (w.toList.drop 6))
+      then .match_
+      -- refused (row exists, unbound): ... reason=missing-binding [serves=<csv>]
+      else if s.verdict == "refused" && z == "reason=missing-binding" &&
+              x.startsWith "row=" && rowServesSite (x.drop 4).toString s.site &&
+              hasProv y "declared_by=" && w.startsWith "serves="
+      then .match_
+      else .malformed
+    | [x, y, z] =>
+      if s.verdict == "refused" && z == "reason=missing-binding" &&
+         x.startsWith "row=" && rowServesSite (x.drop 4).toString s.site &&
+         hasProv y "declared_by="
+      then .match_ else .malformed
+    | [rsn] =>
+      if s.verdict == "refused" && rsn == "reason=missing-row" then .match_ else
+      if s.verdict == "waived" && rsn == "reason=std-pure" then .match_ else .malformed
+    | _ => .malformed
+
+/-- Role A: a `bound` admission the checker accepts carries a real
+mechanism — the verdict could not have been minted on the refusal
+(`none`) or waiver (`std-codegen`) channel. -/
+theorem admission_bound_mechanism (s : SiteLine) (a m : String)
+    (h : parseAdmissionArrow s.arrow = some (a, m))
+    (hv : s.verdict = "bound") (hr : ruleAdmission s = .match_) :
+    m ≠ "none" ∧ m ≠ "std-codegen" := by
+  unfold ruleAdmission at hr
+  rw [h, hv] at hr
+  by_cases hm : m = "none" ∨ m = "std-codegen"
+  · cases hm with
+    | inl hm => subst hm; simp at hr
+    | inr hm => subst hm; simp at hr
+  · exact not_or.mp hm
+
+/-! #### Admission/declaration pins — the relations' fixture classes,
+decided at compile time -/
+
+-- a bound mark's evidence: real mechanism, row naming the site, both
+-- provenances, a grade in the evidence vocabulary
+example : ruleAdmission ⟨"admission","koru.runtime","u<-kconfig","bound","row=koru.runtime declared_by=builtin bind_by=builtin grade=V"⟩ = .match_ := by native_decide
+-- a provider-supplied bind on a builtin row: bind_by names the binder
+example : ruleAdmission ⟨"admission","std.io:print","u<-native-runtime","bound","row=std.io:print declared_by=builtin bind_by=koruos.native grade=M"⟩ = .match_ := by native_decide
+-- a bound claim cannot ride a refusal mechanism
+example : ruleAdmission ⟨"admission","koru.runtime","u<-none","bound","row=koru.runtime declared_by=builtin bind_by=builtin grade=V"⟩ = .malformed := by native_decide
+-- a bound claim cannot omit its evidence
+example : ruleAdmission ⟨"admission","koru.runtime","u<-kconfig","bound","reason=missing-row"⟩ = .malformed := by native_decide
+-- the same evidence cannot mint two verdicts: what proves bound rejects waived
+example : ruleAdmission ⟨"admission","std.io:print","u<-kconfig","waived","row=std.io:print declared_by=builtin bind_by=builtin grade=V"⟩ = .malformed := by native_decide
+-- a bound row serving a different iface than demanded is inconsistent data
+example : ruleAdmission ⟨"admission","std.io:print","u<-kconfig","bound","row=other declared_by=p bind_by=q grade=M"⟩ = .malformed := by native_decide
+-- a row absent from the catalog: missing-row carries no row identity —
+-- a fabricated row= is rejected
+example : ruleAdmission ⟨"admission","rzfix.badrow:ping","u<-none","refused","reason=missing-row"⟩ = .match_ := by native_decide
+example : ruleAdmission ⟨"admission","rzfix.badrow:ping","u<-none","refused","reason=missing-row row=rzfix.badrow:ping"⟩ = .malformed := by native_decide
+-- declared-but-unbound: the row's provenance rides the refusal
+example : ruleAdmission ⟨"admission","std.io:print","u<-none","refused","row=std.io:print declared_by=builtin reason=missing-binding serves=hosted"⟩ = .match_ := by native_decide
+example : ruleAdmission ⟨"admission","std.io:print","u<-none","refused","row=std.io:print declared_by=builtin reason=missing-binding"⟩ = .match_ := by native_decide
+-- std-pure demand admits no provider mechanism
+example : ruleAdmission ⟨"admission","std.fmt:fmt","u<-std-codegen","waived","reason=std-pure"⟩ = .match_ := by native_decide
+example : ruleAdmission ⟨"admission","std.fmt:fmt","u<-kconfig","waived","reason=std-pure"⟩ = .malformed := by native_decide
+-- a grade outside V|M|C|D is not evidence
+example : ruleAdmission ⟨"admission","s","u<-kconfig","bound","row=s declared_by=p bind_by=q grade=X"⟩ = .malformed := by native_decide
+
+-- tor scoping: a module-level row serves every tor of its module; a
+-- tor-scoped row serves only its prefix; neither serves another module
+example : rowServesSite "koruos/silo" "koruos.silo:open" := by native_decide
+example : rowServesSite "koruos/silo:ca" "koruos.silo:call" := by native_decide
+example : rowServesSite "std.io:print" "std.io:print" := by native_decide
+example : !rowServesSite "koruos/silo:ca" "koruos.silo:open" := by native_decide
+example : !rowServesSite "std.io:print" "std.io:scan" := by native_decide
+example : !rowServesSite "koruos/other" "koruos.silo:open" := by native_decide
+example : !rowServesSite "koruos/silo" "koruos.silo" := by native_decide
+
+-- the real koruos marks: tor demands served by the module-level row
+example : ruleAdmission ⟨"admission","koruos.silo:open","u<-kconfig","bound","row=koruos/silo declared_by=koruos.silo bind_by=koruos.silo grade=V"⟩ = .match_ := by native_decide
+example : ruleAdmission ⟨"admission","koruos.spawn:grant","u<-none","refused","row=koruos/spawn declared_by=koruos.spawn reason=missing-binding serves=hosted"⟩ = .match_ := by native_decide
+-- a row naming another module cannot claim the tor site
+example : ruleAdmission ⟨"admission","koruos.silo:open","u<-kconfig","bound","row=koruos/spawn declared_by=p bind_by=q grade=V"⟩ = .malformed := by native_decide
+
+/-! ## Kind `declaration` — a malformed row-decl refusal (koruos/realize)
+
+A row declaration the parser refuses commits:
+
+    @witness("declaration","<declaring-site>","decl<-parsed","refused","<class ...>")
+
+The checker cannot re-parse the row — the declared source is not
+committed — but a refusal must name a CLASS in the declared vocabulary,
+with the fields that class commits:
+
+    no-source-block                          — row site carried no JSON block
+    lacks-iface-or-binds                     — row missing both identity fields
+    lacks-field <field>                      — row missing a required field
+    binds-<N>-lacks-arm-or-mechanism         — bind entry N missing its pair
+    contradiction <iface> vs <prov>          — field set differently than earlier decl
+    duplicate-arm <iface> <arm> [vs <prov>]  — same (iface, arm) declared twice
+    new-row-lacks-stack <iface>              — first decl for iface carries no stack
+    malformed-json <file>:<line>             — the JSON block itself refused
+
+A declaration mark is only ever a refusal of a parse — `bound` is not in
+its vocabulary. -/
+
+def ruleDeclaration (s : SiteLine) : Ruling :=
+  if s.arrow != "decl<-parsed" || s.verdict != "refused" || s.site.isEmpty then .malformed else
+  match s.extra.splitOn " " with
+  | ["no-source-block"] => .match_
+  | ["lacks-iface-or-binds"] => .match_
+  | ["lacks-field", f] => if f.isEmpty then .malformed else .match_
+  | ["contradiction", i, "vs", p] => if i.isEmpty || p.isEmpty then .malformed else .match_
+  | ["duplicate-arm", i, a] => if i.isEmpty || a.isEmpty then .malformed else .match_
+  | ["duplicate-arm", i, a, "vs", p] => if i.isEmpty || a.isEmpty || p.isEmpty then .malformed else .match_
+  | ["new-row-lacks-stack", i] => if i.isEmpty then .malformed else .match_
+  | ["malformed-json", fl] =>
+    match (fl.splitOn ":").getLast? with
+    | some l =>
+      -- file = everything before the last colon, non-empty (Windows
+      -- paths carry a drive colon — only the LAST segment is the line)
+      if l.toNat?.isSome && fl.length > l.length + 1 then .match_ else .malformed
+    | none => .malformed
+  | [t] =>
+    if t.startsWith "binds-" && t.endsWith "-lacks-arm-or-mechanism" then
+      let cs := t.toList.drop "binds-".length
+      let mid := String.ofList (cs.take (cs.length - "-lacks-arm-or-mechanism".length))
+      if mid.toNat?.isSome then .match_ else .malformed
+    else .malformed
+  | _ => .malformed
+
+-- declaration: every refusal class in the vocabulary
+example : ruleDeclaration ⟨"declaration","rzfix.badrow","decl<-parsed","refused","binds-0-lacks-arm-or-mechanism"⟩ = .match_ := by native_decide
+example : ruleDeclaration ⟨"declaration","m","decl<-parsed","refused","binds-3-lacks-arm-or-mechanism"⟩ = .match_ := by native_decide
+example : ruleDeclaration ⟨"declaration","m","decl<-parsed","refused","binds-x-lacks-arm-or-mechanism"⟩ = .malformed := by native_decide
+example : ruleDeclaration ⟨"declaration","m","decl<-parsed","refused","duplicate-arm koruos/silo hosted"⟩ = .match_ := by native_decide
+example : ruleDeclaration ⟨"declaration","m","decl<-parsed","refused","duplicate-arm koruos/silo hosted vs koruos/other"⟩ = .match_ := by native_decide
+example : ruleDeclaration ⟨"declaration","m","decl<-parsed","refused","contradiction koruos/silo vs koruos/other"⟩ = .match_ := by native_decide
+example : ruleDeclaration ⟨"declaration","m","decl<-parsed","refused","new-row-lacks-stack koruos/silo"⟩ = .match_ := by native_decide
+example : ruleDeclaration ⟨"declaration","m","decl<-parsed","refused","no-source-block"⟩ = .match_ := by native_decide
+example : ruleDeclaration ⟨"declaration","m","decl<-parsed","refused","lacks-iface-or-binds"⟩ = .match_ := by native_decide
+example : ruleDeclaration ⟨"declaration","m","decl<-parsed","refused","lacks-field iface"⟩ = .match_ := by native_decide
+example : ruleDeclaration ⟨"declaration","m","decl<-parsed","refused","malformed-json C:/a/b.k:12"⟩ = .match_ := by native_decide
+example : ruleDeclaration ⟨"declaration","m","decl<-parsed","refused","malformed-json b.k"⟩ = .malformed := by native_decide
+example : ruleDeclaration ⟨"declaration","m","decl<-parsed","refused","unknown-class"⟩ = .malformed := by native_decide
+-- a declaration mark is only ever a refusal of a parse — bound is not in
+-- its vocabulary, and a refusal through another arrow is not a declaration
+example : ruleDeclaration ⟨"declaration","m","decl<-parsed","bound","lacks-field iface"⟩ = .malformed := by native_decide
+example : ruleDeclaration ⟨"declaration","m","x<-y","refused","no-source-block"⟩ = .malformed := by native_decide
+
+/-- Corpus-level admission laws: one verdict per (site, arm) — the solver
+emits each demanded iface once per run, so a repeated pair (agreeing or
+not) is splice/double-count drift — and one arm per corpus: a `*.marks`
+artifact is a single solver run, so mixed arms mean two runs were spliced
+(or the arm was computed twice). Returns violation lines; empty = clean.
+Malformed arrows are skipped — the per-line pass already flags them. -/
+def admissionCheck (sites : List SiteLine) : List String :=
+  let adm := sites.filter (·.kind == "admission")
+  let keys := adm.filterMap fun s =>
+    (parseAdmissionArrow s.arrow).map fun (arm, _) => s!"{s.site} ← {arm}"
+  let arms := (adm.filterMap fun s =>
+    (parseAdmissionArrow s.arrow).map (·.1)).eraseDups
+  let dupes := (keys.filter fun k => keys.count k > 1).eraseDups
+  dupes.map (fun k => s!"{k} admitted twice") ++
+    (if arms.length > 1 then [s!"{arms.length} arms in one marks corpus: {", ".intercalate arms}"] else [])
+
+
 def rule (s : SiteLine) : Ruling :=
   if s.kind == "stored-write-numeric" then ruleNumeric s
   else if s.kind == "auto-discharge" then ruleDischarge s
@@ -1037,10 +1316,18 @@ def rule (s : SiteLine) : Ruling :=
   else if s.kind == "pass-graph-tedge" then rulePassGraphEdge s
   else if s.kind == "pass-graph-tstage" then rulePassGraphTstage s
   else if s.kind == "pass-graph-census" then rulePassGraphCensus s
+  else if s.kind == "admission" then ruleAdmission s
+  else if s.kind == "declaration" then ruleDeclaration s
   else .malformed
 
 def isSiteLine (line : String) : Bool :=
   line.startsWith "[witness] site "
+
+/-- A corpus line carrying a witness — the printed `[witness] site` shape
+passes emit into backend output, or the raw `@witness(...)` mark shape a
+marks artifact (`*.marks`) commits. -/
+def isWitnessLine (line : String) : Bool :=
+  isSiteLine line || line.startsWith "@witness("
 
 def parseArgs : List String → Option (Bool × String)
   | ["--forged", p] => some (true, p)
@@ -1050,14 +1337,14 @@ def parseArgs : List String → Option (Bool × String)
 def main (args : List String) : IO UInt32 := do
   let some (forged, path) := parseArgs args
     | do IO.eprintln "usage: WitnessCheck [--forged] <corpus>"; return 2
-  let lines := (← IO.FS.lines path).toList.filter isSiteLine
+  let lines := (← IO.FS.lines path).toList.filter isWitnessLine
   if lines.isEmpty then
-    IO.println s!"FAIL: no [witness] site lines in {path}"
+    IO.println s!"FAIL: no [witness] site/@witness lines in {path}"
     return 1
   let mut bad := 0
   let mut sites : List SiteLine := []
   for line in lines do
-    let sOpt := parseSiteLine line
+    let sOpt := if isSiteLine line then parseSiteLine line else parseMarkLine line
     if let some s := sOpt then sites := s :: sites
     let ruling := match sOpt with
       | none => Ruling.malformed
@@ -1102,6 +1389,11 @@ def main (args : List String) : IO UInt32 := do
   for v in passGraphCheck sites.reverse do
     if !forged then bad := bad + 1
     IO.println s!"{if forged then "ok  " else "BAD "} GRAPH-VIOLATION  {v}"
+  -- Corpus-level admission laws: one verdict per (site, arm) and one arm
+  -- per marks artifact — a repeated pair or a mixed arm is splice drift.
+  for v in admissionCheck sites.reverse do
+    if !forged then bad := bad + 1
+    IO.println s!"{if forged then "ok  " else "BAD "} ADMIT-DRIFT  {v}"
   let mode := if forged then "forged (all must reject)" else "conformance (all must match)"
   IO.println s!"{mode}: {lines.length} lines, {bad} bad"
   return (if bad == 0 then 0 else 1)

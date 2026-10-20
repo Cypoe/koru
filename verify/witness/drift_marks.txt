@@ -1,0 +1,5 @@
+# well-formed lines, corpus-illegal: a (site, arm) pair must carry one verdict
+# per solver run, and a marks artifact is one arm — both laws broken here.
+@witness("admission","koru.runtime","koru-native<-native-runtime","bound","row=koru.runtime declared_by=builtin bind_by=koruos.native grade=V")
+@witness("admission","koru.runtime","koru-native<-none","refused","row=koru.runtime declared_by=builtin reason=missing-binding")
+@witness("admission","std.io:print","hosted<-host-libc","bound","row=std.io:print declared_by=builtin bind_by=builtin grade=V")

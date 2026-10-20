@@ -1,0 +1,7 @@
+# realize-marks.txt: solver verdicts in @witness mark shape (koruos/realize)
+# kind = a decidable relation (admission, declaration), never a domain noun;
+# the domain rides site/payload as data. arm koru-native
+@witness("declaration","rzfix.badrow","decl<-parsed","refused","binds-0-lacks-arm-or-mechanism")
+@witness("admission","koru.runtime","koru-native<-none","refused","row=koru.runtime declared_by=builtin reason=missing-binding")
+@witness("admission","rzfix.badrow:ping","koru-native<-none","refused","reason=missing-row")
+@witness("admission","std.io:print","koru-native<-none","refused","row=std.io:print declared_by=builtin reason=missing-binding serves=unikraft/qemu-x86_64,unikraft/linuxu-x86_64,hosted")

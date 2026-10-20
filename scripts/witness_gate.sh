@@ -30,6 +30,11 @@ if [ -s "$DIR/.theorems.err" ]; then
 fi
 rm -f "$DIR/.theorems.err"
 "$LEAN" --run WitnessCheck.lean golden.txt | tail -1 || fail=1
+# Command-minted corpus: koru-os realize marks (@witness("admission",…)
+# and @witness("declaration",…) lines) — the same re-decision, goldens
+# captured verbatim from two real realize runs.
+"$LEAN" --run WitnessCheck.lean golden_marks.txt | tail -1 || fail=1
+"$LEAN" --run WitnessCheck.lean golden_marks_refused.txt | tail -1 || fail=1
 for corpus in "$@"; do
     if [ ! -f "$corpus" ]; then
         echo "FAIL: corpus missing: $corpus"
@@ -39,10 +44,15 @@ for corpus in "$@"; do
     "$LEAN" --run WitnessCheck.lean "$corpus" || fail=1
 done
 "$LEAN" --run WitnessCheck.lean --forged forged.txt | tail -1 || fail=1
+"$LEAN" --run WitnessCheck.lean --forged forged_marks.txt | tail -1 || fail=1
 # Corpus-drift control: a well-formed-but-unbalanced census must FAIL a
 # conformance batch — rejection is the expected verdict, never a skip.
 if "$LEAN" --run WitnessCheck.lean drift.txt >/dev/null 2>&1; then
     echo "FAIL: drift corpus accepted (census unbalanced but passed)"
+    fail=1
+fi
+if "$LEAN" --run WitnessCheck.lean drift_marks.txt >/dev/null 2>&1; then
+    echo "FAIL: drift marks corpus accepted (one (site,arm) admitted twice)"
     fail=1
 fi
 if [ $fail -eq 0 ]; then echo "witness gate: PASS"; else echo "witness gate: FAIL"; fi
