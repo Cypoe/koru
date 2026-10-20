@@ -17,6 +17,7 @@ koru_std/args.kjs	41
 koru_std/args.kz	52
 koru_std/array.kz	23
 koru_std/ast_dump.kz	29
+koru_std/benchmarking.climb.kz	100
 koru_std/benchmarking.kz	24
 koru_std/bridge.affordances.kz	86
 koru_std/bridge.bind.kz	183
