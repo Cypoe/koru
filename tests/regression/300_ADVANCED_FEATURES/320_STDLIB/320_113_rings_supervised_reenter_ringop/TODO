@@ -1,1 +1,7 @@
-OWED: supervise a std/rings verb directly — v1 supervises same-module children only; cross-module fold re-entry (and transform-tor re-entry inside generated steps) is the owed machinery.
+RULED 2026-10-21: the same-module boundary is design, not debt. v1
+supervises same-module children only (KORU161); composition onto a std
+verb happens through a named wrapper tor, which is also where the retry
+policy gets spelled. This pin documents the refusal as intended — it is
+not an OWED flip. (Previously framed as owed cross-module fold re-entry
+machinery; the ruling declined relaxing KORU161 — generated retry code
+would carry a cross-module contract nobody named locally.)

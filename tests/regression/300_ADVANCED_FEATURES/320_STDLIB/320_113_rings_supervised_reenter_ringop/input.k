@@ -1,11 +1,13 @@
-// std/rings x std/supervisor — OWED: the direct joint. Supervising the
-// `std/rings` verb itself — `| full |> supervised | retry t |>
-// std/rings:enqueue(feed, v: x)` — refuses today: v1 supervises
-// same-module children only (`KORU161`), and the generated retry step
-// would carry a transform-tor call into generated code either way. When
-// supervision can reach across module lines (or channel/rings ops expose
-// same-module generated children), this pin flips green. Until then the
-// wrapper shape is 320_110's.
+// std/rings x std/supervisor — RULED 2026-10-21: the direct joint is
+// refused by design. Supervising the `std/rings` verb itself —
+// `| full |> supervised | retry t |> std/rings:enqueue(feed, v: x)` —
+// refuses: v1 supervises same-module children only (`KORU161`), and the
+// generated retry step would carry a transform-tor call into generated
+// code either way. The ruling is that composition onto a std verb
+// happens through a named wrapper tor — where the retry policy gets
+// spelled — not by relaxing KORU161 for a cross-module contract nobody
+// named locally. The wrapper shape is 320_110's; this pin documents the
+// boundary as intended.
 import std/rings
 import std/supervisor
 import std/io

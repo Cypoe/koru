@@ -132,7 +132,9 @@ What is NOT settled:
 - `std/supervisor` on a `std/channel:` verb — same-module wrapper
   composition is measured (`699_019`: supervised bounded send, retry →
   `full` in kind); supervising the std verb directly refuses
-  (`699_020` OWED — the `320_113` boundary).
+  (`699_020` — the `320_113` boundary, RULED 2026-10-21: the wrapper is
+  the intended surface; the same-module re-entry boundary is design,
+  not debt).
 - Enclosing-arm fold — an unhandled `closed` claiming the nearest
   enclosing `| closed` arm (`699_021` OWED — the `320_120`/`320_170`
   fold family, needs the post-transform claim pass).
@@ -156,9 +158,9 @@ What is NOT settled:
   `| ok` alone. Pins `699_022`–`699_026`, `699_028` green. Open:
   `699_027` (a minted-but-undisposed consumer binding is silently
   settled by auto-discharge — transit mints have no
-  `not_auto_dischargeable` class yet) and `699_029` (the pin's own
-  `| ok` arm reads `v.id` after `v` was consumed — the input contradicts
-  the poison law it documents; needs a doctrine ruling).
+  `not_auto_dischargeable` class yet) and `699_029` (RESOLVED 2026-10-21:
+  the pin's `| ok` arm read `v.id` after `v` was consumed — input
+  re-spelled, byte-exact green, poison law stands).
   `frag-custody-transit-is-an-edge-contract` carries the ruling.
 - **Composite custody — a proto may declare owned leaves.**
   `r1: *app/lib/res:Resource<owned!>` inside a `std/proto` lifts the
