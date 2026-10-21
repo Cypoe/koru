@@ -666,7 +666,7 @@ fn cloneContinuationWithReplacedNested(
     return cloneContinuationWithNodeAndContinuations(allocator, cont, cloned_step, new_nested, false);
 }
 
-fn cloneContinuationSlice(
+pub fn cloneContinuationSlice(
     allocator: std.mem.Allocator,
     continuations: []const ast.Continuation,
 ) CloneError![]ast.Continuation {

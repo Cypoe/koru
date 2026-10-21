@@ -4,49 +4,6 @@
 // `node-init` turn so the registry is populated at the point the
 // declaration sat in source. Joined via `~part new` in node.kz.
 
-// The fleet tors are called from HOST code — nothing in the program
-// spells `std/fleet:claim`, so dead-strip retires the tors and
-// `koru_fleet` would never emit. This splice is duplicated in
-// `cell.retain.kz` ON PURPOSE: the transform's emitted handler runs
-// inside the backend compiler, so its body must not reference
-// `koru_fleet` — the module exists in that emit only because the
-// retain already ran. Sharing this helper creates a bootstrap cycle.
-fn retainFleetEvents(prog: *const ast.Program, alloc: std.mem.Allocator) void {
-    const W = struct {
-        fn retain(its: []const ast.Item, want: []const u8, al: std.mem.Allocator) void {
-            for (its) |*pi| {
-                switch (pi.*) {
-                    .module_decl => |*md| {
-                        if (std.mem.eql(u8, md.logical_name, "std.fleet")) {
-                            for (md.items) |*mi| {
-                                if (mi.* != .event_decl) continue;
-                                const ed = &mi.event_decl;
-                                if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], want)) {
-                                    for (ed.annotations) |a| if (std.mem.eql(u8, a, "retain")) return;
-                                    const grown = al.alloc([]const u8, ed.annotations.len + 1) catch unreachable;
-                                    @memcpy(grown[0..ed.annotations.len], ed.annotations);
-                                    grown[ed.annotations.len] = al.dupe(u8, "retain") catch unreachable;
-                                    @constCast(ed).annotations = grown;
-                                }
-                            }
-                            return;
-                        }
-                        retain(md.items, want, al);
-                    },
-                    else => {},
-                }
-            }
-        }
-    };
-    W.retain(prog.items, "claim", alloc);
-    W.retain(prog.items, "owner", alloc);
-    W.retain(prog.items, "seize", alloc);
-    W.retain(prog.items, "renew", alloc);
-    W.retain(prog.items, "release", alloc);
-    W.retain(prog.items, "guard", alloc);
-    W.retain(prog.items, "reset", alloc);
-}
-
 // ============================================================================
 // NODE-INIT — what `std/node:new` rewrites to. Void: the declaration is a
 // statement, not a turn.
@@ -173,8 +130,11 @@ fn retainFleetEvents(prog: *const ast.Program, alloc: std.mem.Allocator) void {
         .path = ast.DottedPath{ .module_qualifier = allocator.dupe(u8, "std.node") catch unreachable, .segments = segs },
         .args = init_args,
     };
+    // Carry the chain: `x = std/node:new(...) |> f |> g` keeps its tail —
+    // an empty slice here runs the init and silently loses the caller's
+    // steps (the empty-continuation hazard grid.stored.kz documents).
     return .{ .transformed = .{ .replacement = ast.Item{ .flow = ast.Flow{
-        .body = ast.rootSite(init_inv, &.{}, flow.location),
+        .body = ast.rootSite(init_inv, ast_functional.cloneContinuationSlice(allocator, flow.body.continuations) catch unreachable, flow.location),
         .pre_label = null,
         .impl_of = flow.impl_of,
         .super_shape = null,

@@ -1,0 +1,2 @@
+node up
+drained 0 cell(s)
