@@ -1774,10 +1774,44 @@ pub const Parser = struct {
                     const u = self.reporter.userLine(pm + 1);
                     break :blk if (u == 0) null else u;
                 } else null;
+                // A stray `|>` sitting under an armed construct is almost
+                // always a mis-indented continuation: chains resume at the
+                // ARM column (`| then`, `| else`, `| done`), not the
+                // `|> if` column — same column-scoping rule `| done`
+                // follows. Walk up for the nearest arm marker before the
+                // enclosing region ends and name the column + line, or the
+                // generic chain text sends the author guessing.
+                const arm_hint: ?struct { col: usize, line: usize } = blk: {
+                    if (!(trimmed.len >= 2 and trimmed[0] == '|' and trimmed[1] == '>')) break :blk null;
+                    if (saw_blank) break :blk null;
+                    const stray_indent = lexer.getIndent(line);
+                    var q = first_idx;
+                    while (q > 0) {
+                        q -= 1;
+                        const ql = self.lines[q];
+                        const qt = lexer.trim(ql);
+                        if (qt.len == 0 or lexer.isCommentLine(ql)) continue;
+                        const qi = lexer.getIndent(ql);
+                        if (qi < stray_indent) break;
+                        // The first `|`-arm marker above owns this region; if
+                        // the stray sits at a different column, that column is
+                        // where the continuation belongs.
+                        if (qt[0] == '|' and (qt.len == 1 or qt[1] != '>')) {
+                            if (qi != stray_indent) {
+                                const qu = self.reporter.userLine(q + 1);
+                                if (qu != 0) break :blk .{ .col = qi + 1, .line = qu };
+                            }
+                            break;
+                        }
+                    }
+                    break :blk null;
+                };
                 const hint = if (prev_user == null)
                     try std.fmt.allocPrint(self.allocator, "{s} — there is no construct above to continue", .{glyph_hint})
                 else if (saw_blank)
                     try std.fmt.allocPrint(self.allocator, "blank lines end a chain — the construct at line {d} cannot be continued across one. Remove the blank line, or start a new flow here. ({s})", .{ prev_user.?, glyph_hint })
+                else if (arm_hint) |ah|
+                    try std.fmt.allocPrint(self.allocator, "the construct at line {d} ended before this line — {s}. If this `|>` continues the armed construct above, re-indent it to the arm column ({d}, where `| then` / `| else` / `| done` sit — e.g. line {d}), not the `|>` column.", .{ prev_user.?, glyph_hint, ah.col, ah.line })
                 else
                     try std.fmt.allocPrint(self.allocator, "the construct at line {d} ended before this line — {s}. Only comments may sit between a step and its continuation.", .{ prev_user.?, glyph_hint });
                 if (strays > 1) {

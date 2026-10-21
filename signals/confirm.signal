@@ -1,0 +1,6 @@
+name: confirm
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `confirmation` — declare that name. (orphan drained 2026-10-20)

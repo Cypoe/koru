@@ -121,8 +121,8 @@
 # containsTokenLocal port pair) and emitter_test test_decl scaffolding.
 # Growth landed between re-pins — committed src/ drift from the
 # cells/nodes and board commits — not in this diff.
-clusters=842
-members=945
+clusters=844
+members=947
 # Re-pinned to 820/911 on the call-site |variant commit: the sampled roll
 # named containsTokenLocal x containsToken (continuation_codegen /
 # emitter_helpers) and an emitter_test test_decl pair — none of those
@@ -146,3 +146,8 @@ members=945
 # same sanctioned per-target twin class; the text each arm writes
 # differs, the shape is the mechanism. Remaining growth is the
 # consciously-retained test-scaffolding class.
+# Re-pinned 2026-10-20: roll fired on the KORU010 arm-column hint
+# commit (src/parser.zig error-text + two parser tests). Census names
+# zero parser.zig lines in its top-20 — the +2/+2 is committed src/
+# drift since ffc019f2d's same-day pin (continuation_codegen /
+# emitter_helpers / emitter_test idioms). Re-pinned to measured.
