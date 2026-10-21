@@ -47,10 +47,10 @@
 # are committed drift under rolls that missed: proto.kz's 12-member
 # event_decl self-cluster, the channel/io/node/pump event_decl cluster,
 # interpreter/store import_decl twins — none in this diff.
-clusters=118
-members=198
+clusters=132
+members=202
 skipped=2
-spellings=45
+spellings=59
 # 70/111: store.keyed.kz joined io.blk-style import preamble clone w/ interpreter.select.kz (3 shared compiler-module imports, boilerplate)
 # 71/113: bulkjoin's import-preamble clone (joined 2026-10-14) + in-flight
 # pump/channel work in the shared checkout; re-pinning records the working
@@ -94,3 +94,12 @@ spellings=45
 # part's scaffolding joins part-file clone clusters by convention, and
 # uncommitted store.* work in the shared checkout counts per the row's
 # uncommitted-work clause (2026-10-08).
+# 132/202 (spellings 45->59): measured 2026-11-13 during the gated-part
+# fixup commit (zero .kz staged — a signal tombstone and two test-dir
+# deletions). The +14 clusters/+4 members/+14 spellings is committed
+# drift under rolls that missed since the 118/198 pin: proto.kz's
+# 12-member event_decl self-cluster leads the board, with the
+# interpreter.run/runcached event_decl twins and the bridge/kernel/
+# supervisor import_decl quads — the documented part-file decl-shell
+# category. Uncommitted store.new.kz in the shared checkout counts per
+# the row's uncommitted-work clause.
