@@ -14,6 +14,7 @@
 ~part directives
 ~part stages
 ~part prelate
+~part materialize
 // Compiler system dependencies
 ~std/deps:requires.system {
     "name": "zig",
@@ -1481,9 +1482,16 @@ const emitFlowWithMocks = struct {
 }.call;
 
 // Emission segment: Final code generation (abstract, can be overridden)
+// The default impl routes on the compile target: target-of selects which
+// emit-* tor produces the artifact — per-target emission is a pipeline
+// decision, overridable like any other step, not an if-chain inside one proc.
 ~[comptime|abstract] pub tor emission { ctx: CompilerContext } -> { ctx: CompilerContext, code: string }
 
-~emission = inject-ccp(ctx): c1 |> pass-dead-strip(ctx: c1): c2 |> emit-zig(ctx: c2): c3 -> { c3.ctx, c3.code }
+~emission = inject-ccp(ctx): c1 |> pass-dead-strip(ctx: c1): c2 |> target-of(ctx: c2)
+| zig |> emit-zig-artifact(ctx: c2): e -> e
+| js |> emit-js-artifact(ctx: c2): e -> e
+| cs |> emit-cs-artifact(ctx: c2): e -> e
+| other |> emit-zig-artifact(ctx: c2): e -> e
 
 // Parser service - makes the Koru parser available at backend comptime
 // This enables dynamic module loading during compilation passes
@@ -1619,43 +1627,10 @@ const emitFlowWithMocks = struct {
     // Get the emitted code
     const visitor_code = code_emitter.getOutput();
 
-    // JS-target spike: when --lang=js, replace the visitor's Zig output with the
-    // real AST→JS emitter (src/js_emitter.zig). It walks ctx.ast and emits
-    // runnable JavaScript for the event-pump subset (tors, |js proc bodies,
-    // effect handlers, terminal branches, flows). Gated behind CompilerEnv.lang
-    // so the default Zig path is untouched. CompilerEnv is already in scope at
-    // file level in the generated backend_output_emitted.zig (re-exported pub
-    // const) — reference it directly rather than re-importing, which would
-    // shadow that declaration.
-    const final_code = if (@import("std").mem.eql(u8, CompilerEnv.lang, "js")) blk: {
-        const js_emitter = @import("js_emitter");
-        // Fail loud: a JS-emit failure must surface, not silently fall back to
-        // Zig. A refusal is a USER error — some tor has no JavaScript
-        // implementation on this target (a zig-only proc, an unmodelled
-        // construct) — so it becomes a clean, located diagnostic (the
-        // js_emitter already printed WHICH tor) and exit 1. The old
-        // std.debug.panic made every refusal read as a compiler bug: SIGABRT,
-        // a raw error name, and a backtrace that buried the reason. Pinned by
-        // 400_191_zig_only_proc_js_build_refuses.
-        break :blk js_emitter.emit(ctx.allocator, ctx.ast, CompilerEnv.library) catch |err| {
-            std.debug.print("error[KORU047]: JS emission failed: {s}\n", .{@errorName(err)});
-            std.process.exit(1);
-        };
-    } else if (@import("std").mem.eql(u8, CompilerEnv.lang, "cs")) blk: {
-        const cs_emitter = @import("cs_emitter");
-        // K# vertical spike: same fail-loud contract as the JS arm — an
-        // unmodelled construct or unlowered builtin refuses here, never
-        // falls back to the Zig visitor's output.
-        break :blk cs_emitter.emit(ctx.allocator, ctx.ast, CompilerEnv.library) catch |err| {
-            std.debug.print("error[KORU047]: CS emission failed: {s}\n", .{@errorName(err)});
-            std.process.exit(1);
-        };
-    } else visitor_code;
-
     var updated_ctx = ctx;
     updated_ctx.passes_completed += 1;
     updated_ctx.current_pass = "emission";
-    return .{ .ctx = updated_ctx, .code = final_code };
+    return .{ .ctx = updated_ctx, .code = visitor_code };
 }
 
 // Parser service implementation - wraps the Koru parser for comptime use

@@ -182,3 +182,5 @@
 2026-10-21T02:52:18.976Z	badd96ed0	fixed	460_004_cell_state_get_set_fields
 2026-10-21T02:52:18.976Z	badd96ed0	fixed	460_009_cell_run_error_decode
 2026-10-21T02:52:18.976Z	badd96ed0	fixed	470_014_fleet_mail
+2026-10-21T13:03:54.963Z	372804973	regressed	400_203_runtime_source_param_transports_text
+2026-10-21T13:32:12.332Z	372804973	fixed	400_203_runtime_source_param_transports_text

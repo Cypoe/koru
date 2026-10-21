@@ -15535,3 +15535,130 @@ pub fn bareBorrow(alloc: std.mem.Allocator, ph: []const u8) []const u8 {
     }
     return alloc.dupe(u8, ph) catch unreachable;
 }
+
+// ============================================================================
+// MATERIALIZATION HELPERS — used by the in-pipeline host-build steps
+// (std/compiler:host-build-*). They were born as generated text inside the
+// backend driver's main(); they live here so backend_output_emitted handlers
+// can reach them — the dependency edge is backend → backend_output, never the
+// reverse.
+// ============================================================================
+
+/// The output executable name as the backend sees it: argv[1] when it isn't a
+/// Koru source path (hand-run backend passes the input file there), else
+/// "a.out". Was the generated driver's inline `output_exe` detection.
+pub fn outputExeName(allocator: std.mem.Allocator) []const u8 {
+    const args = std.process.argsAlloc(allocator) catch return "a.out";
+    // Not freed — the name is read for the rest of the compile.
+    if (args.len > 1 and
+        !std.mem.endsWith(u8, args[1], ".kgpu") and
+        !std.mem.endsWith(u8, args[1], ".kjs") and
+        !std.mem.endsWith(u8, args[1], ".kz") and
+        !std.mem.endsWith(u8, args[1], ".kc") and
+        !std.mem.endsWith(u8, args[1], ".k")) return args[1];
+    return "a.out";
+}
+
+/// The --zig-lib-dir overlay: koru's optimized-but-byte-identical
+/// std/json/Stringify.zig for every @import("std") the emitted program makes.
+/// null → stock std; identical output, slower. Moved verbatim from the
+/// generated backend driver's __koruEnsureZigLibOverlay; `koru_home` arrives
+/// as a parameter so this module stays free of a compiler_env edge.
+pub fn ensureZigLibOverlay(allocator: std.mem.Allocator, koru_home: []const u8, out: []u8) ?[]const u8 {
+    const env_res = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{ "zig", "env" },
+        .max_output_bytes = 64 * 1024,
+    }) catch return null;
+    defer allocator.free(env_res.stdout);
+    defer allocator.free(env_res.stderr);
+    const lib_key = ".lib_dir = \"";
+    const lib_at = std.mem.indexOf(u8, env_res.stdout, lib_key) orelse return null;
+    const lib_rest = env_res.stdout[lib_at + lib_key.len ..];
+    const lib_end = std.mem.indexOfScalar(u8, lib_rest, '"') orelse return null;
+    const real_lib = lib_rest[0..lib_end];
+
+    // The patch is verified byte-identical against 0.15.2's
+    // std.json.Stringify only. On any other zig version the
+    // overlay could fail to compile — refuse it and keep stock
+    // std rather than break every emitted-program build.
+    const ver_key = ".version = \"";
+    const ver_at = std.mem.indexOf(u8, env_res.stdout, ver_key) orelse return null;
+    const ver_rest = env_res.stdout[ver_at + ver_key.len ..];
+    const ver_end = std.mem.indexOfScalar(u8, ver_rest, '"') orelse return null;
+    if (!std.mem.eql(u8, ver_rest[0..ver_end], "0.15.2")) return null;
+
+    const overlay_rel = ".zig-cache/koru_lib_overlay";
+    const overlay_tmp = ".zig-cache/koru_lib_overlay.tmp";
+    const marker_rel = ".zig-cache/koru_lib_overlay/.koru_src";
+
+    // A ready overlay built against this same lib dir is reused as-is.
+    if (std.fs.cwd().readFileAlloc(allocator, marker_rel, 4096) catch null) |marker| {
+        defer allocator.free(marker);
+        if (std.mem.eql(u8, marker, real_lib))
+            return std.fs.cwd().realpath(overlay_rel, out) catch null;
+    }
+
+    const patch_path = std.fmt.allocPrint(allocator, "{s}/src/zig_std_patch/Stringify.zig", .{koru_home}) catch return null;
+    defer allocator.free(patch_path);
+    const patch_src = std.fs.cwd().readFileAlloc(allocator, patch_path, 1 << 20) catch return null;
+    defer allocator.free(patch_src);
+
+    std.fs.cwd().deleteTree(overlay_tmp) catch {};
+    std.fs.cwd().makePath(overlay_tmp) catch return null;
+    defer std.fs.cwd().deleteTree(overlay_tmp) catch {};
+
+    // Mirror every top-level lib entry; std/ is expanded one level
+    // deeper so std/json can be swapped piecewise below.
+    var lib_dir = std.fs.cwd().openDir(real_lib, .{ .iterate = true }) catch return null;
+    defer lib_dir.close();
+    var lib_it = lib_dir.iterate();
+    while (lib_it.next() catch return null) |ent| {
+        if (std.mem.eql(u8, ent.name, "std")) continue;
+        const target = std.fmt.allocPrint(allocator, "{s}/{s}", .{ real_lib, ent.name }) catch return null;
+        defer allocator.free(target);
+        const link = std.fmt.allocPrint(allocator, "{s}/{s}", .{ overlay_tmp, ent.name }) catch return null;
+        defer allocator.free(link);
+        std.fs.cwd().symLink(target, link, .{}) catch return null;
+    }
+
+    const std_target = std.fmt.allocPrint(allocator, "{s}/std", .{real_lib}) catch return null;
+    defer allocator.free(std_target);
+    std.fs.cwd().makePath(overlay_tmp ++ "/std") catch return null;
+    var std_dir = std.fs.cwd().openDir(std_target, .{ .iterate = true }) catch return null;
+    defer std_dir.close();
+    var std_it = std_dir.iterate();
+    while (std_it.next() catch return null) |ent| {
+        if (std.mem.eql(u8, ent.name, "json")) continue;
+        const target = std.fmt.allocPrint(allocator, "{s}/std/{s}", .{ real_lib, ent.name }) catch return null;
+        defer allocator.free(target);
+        const link = std.fmt.allocPrint(allocator, "{s}/std/{s}", .{ overlay_tmp, ent.name }) catch return null;
+        defer allocator.free(link);
+        std.fs.cwd().symLink(target, link, .{}) catch return null;
+    }
+
+    const json_target = std.fmt.allocPrint(allocator, "{s}/json", .{std_target}) catch return null;
+    defer allocator.free(json_target);
+    std.fs.cwd().makePath(overlay_tmp ++ "/std/json") catch return null;
+    var json_dir = std.fs.cwd().openDir(json_target, .{ .iterate = true }) catch return null;
+    defer json_dir.close();
+    var json_it = json_dir.iterate();
+    while (json_it.next() catch return null) |ent| {
+        if (std.mem.eql(u8, ent.name, "Stringify.zig")) continue;
+        const target = std.fmt.allocPrint(allocator, "{s}/{s}", .{ json_target, ent.name }) catch return null;
+        defer allocator.free(target);
+        const link = std.fmt.allocPrint(allocator, "{s}/std/json/{s}", .{ overlay_tmp, ent.name }) catch return null;
+        defer allocator.free(link);
+        std.fs.cwd().symLink(target, link, .{}) catch return null;
+    }
+
+    std.fs.cwd().writeFile(.{ .sub_path = overlay_tmp ++ "/std/json/Stringify.zig", .data = patch_src }) catch return null;
+    std.fs.cwd().writeFile(.{ .sub_path = overlay_tmp ++ "/.koru_src", .data = real_lib }) catch return null;
+
+    // Publish atomically-ish: build under .tmp, then swap in. A
+    // stale overlay is deleted first (rename onto a non-empty
+    // dir fails on some platforms).
+    std.fs.cwd().deleteTree(overlay_rel) catch {};
+    std.fs.cwd().rename(overlay_tmp, overlay_rel) catch return null;
+    return std.fs.cwd().realpath(overlay_rel, out) catch null;
+}
