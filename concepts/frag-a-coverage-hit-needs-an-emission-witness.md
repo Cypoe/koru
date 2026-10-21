@@ -137,6 +137,6 @@ audit found it — but the machinery it audited no longer exists.
   of any text-level coverage claim over it.
 - ~~Whether `--deep-check` should `zig ast-check` its own emission~~ —
   resolved 2026-10-03: it does (in-process `Ast.parse` of
-  `output_emitted.zig`, refusal `KORU207`, pinned by the 510_126 pin).
+  `output_emitted.zig`, refusal `KORU207`, pinned by the 510_128 pin).
   The oracle now witnesses rung 3 itself; rungs above (semantic
   presence, liveness) remain the caller's job.
