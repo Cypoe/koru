@@ -1,1 +1,1 @@
-Incomplete branch coverage
+branch 'success' must be handled but no continuation found

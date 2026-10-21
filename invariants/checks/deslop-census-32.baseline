@@ -105,7 +105,7 @@
 # working-tree drift in parser.zig (uncommitted edits from a sibling
 # session — the census reads the working tree, so it counts). Census
 # re-measured: 1919/2451.
-clusters=1919
+clusters=1920
 members=2451
 # Re-pinned to 1878/2418 on the tightening-017 cherry-pick: the roll named
 # parser.zig similar-arm blocks (1277, 2962, 3479, 3804, 6727 +5) plus
@@ -190,3 +190,9 @@ members=2451
 # landed under rolls that missed). This commit carries zero src/ delta —
 # a regression pin and a concept evolve only. Census re-measured:
 # 1906/2442.
+# Re-pinned 2026-10-20: roll fired on the 210_012 expected-error
+# re-pin (one tests/ line staged; the parser.zig arm-column hint commit
+# immediately precedes). Census names only pre-existing parser.zig
+# idioms (1277/2996/3513/3838/6761...) — none in the hint's 1774-1815
+# block; the +1 cluster is tree drift under rolls that missed.
+# Re-pinned to measured.
