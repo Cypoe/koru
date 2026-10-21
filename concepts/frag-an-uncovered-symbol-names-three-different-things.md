@@ -2,7 +2,7 @@
 type: belief
 id: frag-an-uncovered-symbol-names-three-different-things
 provenance: 2026-08-06 — "variant coverage is a good find, we should try to encode it as tests" sent five agents at 15 uncovered emitter symbols; only 7 wanted a test, and 6 named defects
-ts: 2026-08-06
+ts: 2026-10-21
 ---
 
 # A coverage instrument's "uncovered" is a question with three answers, and only one of them is "write a test" (belief)
@@ -89,6 +89,32 @@ corpus's side); `frag-a-dead-attempt-standing-beside-a-live-system-multiplies-it
 audit found its sibling in the stdlib's build defaults);
 `frag-a-check-that-cannot-match-reports-clean` (the failure mode this instrument
 already defends against, by refusing to judge below a 50% artifact bar).
+
+## Second audit (2026-10-21)
+
+The split held on a second, larger run: 28 uncovered symbols broke down as
+2 corpus gaps, 26 unwitnessable-by-construction (8 CS-target, 5 JS-target,
+8 comment-carried or `_event`-suffixed markers, 1 data sentinel, 1
+substitution marker, 2 dead-union arms, 1 panic-gated) — and the corpus-gap
+witness itself caught a live
+defect. `642_004`, the test written to witness `__rst{}`, was the first
+execution of the raw-leaf emit path anywhere, and it failed: the emitted
+`__jskip(s, p, e)` call was one argument short of the 4-ary signature every
+sibling uses. The instrument's own docstring prophecy, verbatim — *"the
+first execution it ever gets is a user's"* — except the witness test took
+the bullet instead. So the three answers are not exclusive: a symbol can be
+a corpus gap AND a defect, and the honest witness test is the cheapest
+oracle for the second. Pinned: 642_004 (fix landed), 460_010 (clean gap),
+620_020 (aspirational red — the `__BlkResult`/`__LnResult` dead unions'
+unbound-bind path leaks a raw Zig type error where a refusal belongs; the
+exemption names the defect, the pin holds the ruling).
+
+Two readings of the same audit for the next auditor: exemptions for
+non-Zig-target symbols must name the target and why it lands outside this
+check's artifact scan (`|js` → output_emitted.js, `|cs` → output_emitted.cs),
+and "emitted only into a comment or an `_event`-suffixed name" is a real
+third species of unwitnessable — the marker names an AST object, not emitted
+text.
 
 Open: whether the other two checks in `invariants/checks/` carry the same
 ambiguity in their own null results. Not examined, and the question only occurred

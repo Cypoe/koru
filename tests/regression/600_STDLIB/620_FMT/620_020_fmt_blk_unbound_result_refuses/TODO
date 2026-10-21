@@ -1,0 +1,5 @@
+ASPIRATIONAL: unbound fmt.blk / fmt.ln consumption (no `: name` bind) should
+refuse at the frontend — the __BlkResult/__LnResult union arms emit Zig that
+cannot compile (dead union, nothing can consume it since `| formatted` was
+removed). Currently fails at Zig codegen as a raw type leak. Green when the
+transform refuses unbound sites with a diagnostic naming the bind.

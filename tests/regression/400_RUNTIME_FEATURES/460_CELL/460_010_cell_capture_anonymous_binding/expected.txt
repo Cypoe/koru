@@ -1,0 +1,2 @@
+captured: visits=7 awake=true
+room-9 hibernated
