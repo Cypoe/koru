@@ -569,12 +569,36 @@ design calls; the design calls are marked.
   (new pin) shares its number with the `690_370_c_lane_*` series in the
   same cluster. Filters match both. Renumber the pin or rule that
   numbers are cluster-scoped.
+  **RESOLVED 2026-10-21 (renumber):** the ccomp-side newcomers moved off
+  the forked range — witness/strict/singleton/literal/binding pins are
+  now `690_378`–`690_383`, `rule_unclaimed_arm_refused` is `690_384`, and
+  the `c_lane` series is `690_385`–`690_392` (order preserved). Same
+  session also renumbered `400_208_c_host_lines_refuse` → `400_217` and
+  `510_126_proc_zig_body_stray_koru_line` → `510_128` (within-cluster dups
+  against shared pins). Census scope note: `main`'s `690_365`–`690_374`
+  are different tests again — the range had forked across branches, and
+  the renumber keeps this branch collision-free at merge. Pre-existing
+  dups left alone: `690_350` (within-cluster, present on both branches),
+  `220_046` (cross-cluster, shared ancestor).
 - **`440_030`/`440_036` — real pre-existing bug, newly observable.** The
   bridge dispatcher hands back a slice into a dead stack buffer; under
   musl the emitted binary finally runs on this host and prints the
   garbage. The tests' own comment says the seam "never once worked" —
   under glibc-target binaries it could never run at all, so it read
   green. This is a `std/bridge` runtime defect, not arm-accounting.
+  **FIXED 2026-10-21 (macOS-verified, musl unmeasured):** root cause was
+  `__koru_own` being a *call* — `dupe`'s frames descend into the proc's
+  vacated stack region and can scribble the payload before the copy reads
+  it. Reproduced on macOS: a `bufPrint` slice at dead-frame offset 8000
+  printed garbage through the real emitted pipeline. Fix in
+  `koru_std/runtime.kz`: `__koru_snapshot`, an `inline fn` that byte-copies
+  the dead bytes into per-dispatcher `threadlocal` storage in the
+  dispatcher's own frame before any call descends; `ownDispatchResult`
+  owns from there unchanged. Verified: offset-8000 probe clean, both
+  fields of a two-string struct payload survive, 440 cluster 45/45.
+  Capped at 64KiB per dispatch (panic on overflow) — an intrinsic bound:
+  no unbounded same-frame destination exists in Zig. The musl run itself
+  is still unmeasured — same mechanism, different frame layout.
 - **musl system-lib lane** — tests linking `-lsqlite3`/`-lz` can't link
   under musl (`310_021`, `901`, `350_*`, `643_*`). Either provision
   static libs for the lane or declare a system-lib lane that keeps the

@@ -36,8 +36,8 @@
 # store.new.kz) and compression/part-file moves. Named offenders are the
 # sanctioned catch-append idiom and trellis/fmt/io twin var-decls.
 # Re-pinned to measured; fold targets unchanged.
-clusters=1135
-members=970
+clusters=1112
+members=1030
 # 1039/915: the roll fired on the |? coverage commit ("coverage: |? no
 # longer suppresses panic arms, and refuses where no union exists") —
 # that commit touches src/ checkers, in-repo tests, and a concept frag;
@@ -59,3 +59,9 @@ members=970
 # gate.* or staged files named by the census); the remainder is
 # committed drift since 85f18d450. Re-pinned to measured per the
 # uncommitted-work clause; re-settles when the store work commits.
+# 1112/1030: the roll fired on the 440_030 dead-stack fix commit — zero
+# delta attributable to it (stash-off measures identically); the +60
+# members over the last pin is upstream drift in the commits since that
+# roll (the roll cadence misses them; this is the "uncommitted-work"
+# clause applied to committed churn). runtime.scopetable.kz is a new
+# ~part file — moved host text, not new shapes. Re-pinned to measured.

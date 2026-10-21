@@ -1,0 +1,345 @@
+// Koru Standard Library: the `scopetable` part of runtime.kz — the comptime
+// scope table: name mangling, namespace collection, and the buildScopeTable /
+// lookupEventBranches lookups the interpreter's parts resolve against.
+// Joined via `~part scopetable` in runtime.kz; merged into the runtime module
+// at load.
+fn mangleScopeName(comptime name: []const u8) []const u8 {
+    if (name.len == 0) return "";
+    comptime var buf: [name.len]u8 = undefined;
+    inline for (name, 0..) |c, i| {
+        const is_alnum = (c >= 'a' and c <= 'z') or
+            (c >= 'A' and c <= 'Z') or
+            (c >= '0' and c <= '9') or
+            (c == '_');
+        buf[i] = if (is_alnum) c else '_';
+    }
+    return buf[0..];
+}
+
+/// Every namespace a generated scope registry can live in: the root itself,
+/// its struct declarations, and theirs — `main_module`, `koru_app`, and
+/// `koru_app.koru_lib`, two levels being exactly the depth the emitter nests
+/// a dotted module name to.
+///
+/// A `register` written inside a library emits its descriptor and dispatcher
+/// BESIDE the tors they name, which is the only place they can be: Zig gives
+/// a sibling struct no path to the entry struct, so the dispatcher has to sit
+/// where it can reach `koru_app.koru_lib.expensive_event`. A table built from
+/// `main_module` alone therefore found nothing — and found nothing SILENTLY.
+/// The program compiled, ran, and took its `| scope-not-found` arm: a
+/// well-formed answer built on an empty registry, which is the one failure
+/// shape on this boundary with no compile step left to fail in (115_036).
+fn scopeNamespaces() []const type {
+    // The walk is O(declarations in the whole program), and Zig's default
+    // budget is 1000 backwards branches. A program that links enough — vaxis
+    // plus curl plus yyjson plus sse was the case that found this — blows it
+    // and fails with "evaluation exceeded 1000 backwards branches" pointing at
+    // generated code, saying nothing about scopes or `register`. The quota is
+    // a compile-time-only cost and nothing here is recursive without bound:
+    // `collectNamespaces` is depth-limited to 2.
+    @setEvalBranchQuota(1_000_000);
+    return collectNamespaces(@import("root"), 2, &[_]type{});
+}
+
+fn collectNamespaces(comptime C: type, comptime depth: usize, comptime acc: []const type) []const type {
+    comptime var out: []const type = acc ++ &[_]type{C};
+    if (depth == 0) return out;
+    inline for (std.meta.declarations(C)) |d| {
+        const V = @field(C, d.name);
+        if (@TypeOf(V) != type) continue;
+        if (@typeInfo(V) != .@"struct") continue;
+        out = collectNamespaces(V, depth - 1, out);
+    }
+    return out;
+}
+
+fn buildScopeTable() []const ScopeRuntime {
+    @setEvalBranchQuota(1_000_000);
+    comptime var count: usize = 0;
+    inline for (comptime scopeNamespaces()) |NS| {
+        inline for (std.meta.declarations(NS)) |decl| {
+            if (!std.mem.endsWith(u8, decl.name, "_descriptor")) continue;
+            const decl_value = @field(NS, decl.name);
+            if (@TypeOf(decl_value) != ScopeDescriptor) continue;
+            const scope_ident = mangleScopeName(decl_value.name);
+            const dispatch_name = std.fmt.comptimePrint("dispatch_{s}", .{scope_ident});
+            if (!@hasDecl(NS, dispatch_name)) continue;
+            count += 1;
+        }
+    }
+
+    var table: [count]ScopeRuntime = undefined;
+    comptime var i: usize = 0;
+    inline for (comptime scopeNamespaces()) |NS| {
+        inline for (std.meta.declarations(NS)) |decl| {
+            if (!std.mem.endsWith(u8, decl.name, "_descriptor")) continue;
+            const decl_value = @field(NS, decl.name);
+            if (@TypeOf(decl_value) != ScopeDescriptor) continue;
+            const desc = decl_value;
+            const scope_ident = mangleScopeName(desc.name);
+            const dispatch_name = std.fmt.comptimePrint("dispatch_{s}", .{scope_ident});
+            if (!@hasDecl(NS, dispatch_name)) continue;
+
+            const cost_name = std.fmt.comptimePrint("get_event_cost_{s}", .{scope_ident});
+            const creates_name = std.fmt.comptimePrint("get_creates_obligations_{s}", .{scope_ident});
+            const discharges_name = std.fmt.comptimePrint("get_discharges_obligations_{s}", .{scope_ident});
+            const discharge_event_name = std.fmt.comptimePrint("get_discharge_event_{s}", .{scope_ident});
+            const creates_spec_name = std.fmt.comptimePrint("get_creates_spec_{s}", .{scope_ident});
+            const discharges_spec_name = std.fmt.comptimePrint("get_discharges_spec_{s}", .{scope_ident});
+            const branches_name = std.fmt.comptimePrint("get_event_branches_{s}", .{scope_ident});
+            const events_name = std.fmt.comptimePrint("get_events_{s}", .{scope_ident});
+            const input_name = std.fmt.comptimePrint("get_event_input_{s}", .{scope_ident});
+            const manifest_name = std.fmt.comptimePrint("{s}_manifest", .{scope_ident});
+
+            table[i] = .{
+                .name = desc.name,
+                .dispatcher = &@field(NS, dispatch_name),
+                .cost_fn = if (@hasDecl(NS, cost_name)) &@field(NS, cost_name) else null,
+                .creates_obligations_fn = if (@hasDecl(NS, creates_name)) &@field(NS, creates_name) else null,
+                .discharges_obligations_fn = if (@hasDecl(NS, discharges_name)) &@field(NS, discharges_name) else null,
+                .discharge_event_fn = if (@hasDecl(NS, discharge_event_name)) &@field(NS, discharge_event_name) else null,
+                .creates_spec_fn = if (@hasDecl(NS, creates_spec_name)) &@field(NS, creates_spec_name) else null,
+                .discharges_spec_fn = if (@hasDecl(NS, discharges_spec_name)) &@field(NS, discharges_spec_name) else null,
+                .branches_fn = if (@hasDecl(NS, branches_name)) &@field(NS, branches_name) else null,
+                .events_fn = if (@hasDecl(NS, events_name)) &@field(NS, events_name) else null,
+                .input_fn = if (@hasDecl(NS, input_name)) &@field(NS, input_name) else null,
+                .manifest = if (@hasDecl(NS, manifest_name)) &@field(NS, manifest_name) else null,
+            };
+            i += 1;
+        }
+    }
+
+    return table[0..];
+}
+
+~[retain]pub tor get-scope { name: string }
+| scope {
+    dispatcher: DispatchFn,
+    cost_fn: ?CostFn,
+    creates_obligations_fn: ?ObligationsArrayFn,
+    discharges_obligations_fn: ?ObligationsArrayFn,
+    discharge_event_fn: ?DischargeEventFn,
+    creates_spec_fn: ?CreatesSpecFn,
+    discharges_spec_fn: ?DischargesSpecFn,
+    events_fn: ?EventsLookupFn,
+    input_fn: ?InputLookupFn
+}
+| not-found
+
+// Look up scope dispatcher by name — generated beside the register as dispatch_<scope>
+~proc get-scope|zig {
+    inline for (comptime buildScopeTable()) |scope_info| {
+        if (std.mem.eql(u8, name, scope_info.name)) {
+            return .{ .scope = .{
+                .dispatcher = scope_info.dispatcher,
+                .cost_fn = scope_info.cost_fn,
+                .creates_obligations_fn = scope_info.creates_obligations_fn,
+                .discharges_obligations_fn = scope_info.discharges_obligations_fn,
+                .discharge_event_fn = scope_info.discharge_event_fn,
+                .creates_spec_fn = scope_info.creates_spec_fn,
+                .discharges_spec_fn = scope_info.discharges_spec_fn,
+                .events_fn = scope_info.events_fn,
+                .input_fn = scope_info.input_fn,
+            } };
+        }
+    }
+    return .{ .not_found = .{} };
+}
+
+// ============================================================================
+// SCOPE-VOCABULARY - Render a scope's vocabulary for an external reader
+//
+// The whole point of the enumeration surface: a model driving this interpreter
+// must be told, accurately, what it may call — and that description must come
+// from the register declaration, not a hand-typed script that can drift. This
+// renders exactly the surface the register block enforces, as one line per
+// tor with its named arguments and possession phantoms:
+//
+//   open(path: string)
+//   append(handle: string<!open>, text: string)
+//   close(handle: string<!open>)
+//   say(text: string)
+//
+// No JSON schema, no second source of truth: the prompt and the enforcement
+// are the same bytes.
+
+// @retain: scope_vocabulary_event is referenced from generated Zig code in user
+// pipelines (std/bridge:vocabulary compiles to scope_vocabulary_event.handler).
+~[retain]pub tor scope-vocabulary { name: string }
+| ok string
+| not-found
+
+~proc scope-vocabulary|zig {
+    // A local arena over page_allocator — the same substrate the interpreter's
+    // own arena and its message dupes use. ArrayList growth here allocates
+    // fresh chunks (arena realloc resolves to alloc+copy, which works in this
+    // binary; direct realloc-based growth OOMs). The arena is intentionally
+    // never freed: the returned string must outlive this call, and a few pages
+    // per vocabulary render are tolerated exactly like parse-error messages.
+    var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena_state.allocator();
+    var out = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
+
+    inline for (comptime buildScopeTable()) |scope_info| {
+        if (std.mem.eql(u8, name, scope_info.name)) {
+            const events = scope_info.events_fn.?();
+            for (events) |event_name| {
+                if (out.items.len > 0) out.append(allocator, '\n') catch unreachable;
+                const input = if (scope_info.input_fn) |f| f(event_name) orelse &.{} else &.{};
+                wireSignatureLine(&out, allocator, event_name, input);
+                // What the verb mints — the produce edge a `<state>` arg
+                // elsewhere consumes, from the spec table the pool enforces.
+                if (scope_info.creates_spec_fn) |cs| wireMintSuffix(&out, allocator, cs(event_name));
+                // The outcome contract — the branch names an arm must spell.
+                if (scope_info.branches_fn) |bf| wireBranchSuffix(&out, allocator, bf(event_name));
+            }
+            return .{ .ok = out.toOwnedSlice(allocator) catch unreachable };
+        }
+    }
+    return .{ .not_found = .{} };
+}
+
+// ============================================================================
+// SCOPE-MANIFEST - Serve a scope's vocabulary as a data contract (JSON)
+//
+// The manifest record is minted at scope creation (register) from the same
+// EventEntry data the dispatch tables are emitted from; this tor serializes
+// it to JSON so a running program can serve it as a contract endpoint
+// (Orisha) or hand it to a tool. The emitted JSON has no hand-authored bytes:
+// every field derives from the scope declaration, so the served contract and
+// the enforcement cannot drift. Defined flows (session growth) are NOT part
+// of this record — it is the compiled base, minted before any session exists.
+
+// @retain: scope_manifest_event is referenced from generated Zig code in user
+// pipelines (Orisha serves it as the .json endpoint; explain consumes it).
+~[retain]pub tor scope-manifest { name: string }
+| ok string
+| not-found
+
+~proc scope-manifest|zig {
+    inline for (comptime buildScopeTable()) |scope_info| {
+        if (std.mem.eql(u8, name, scope_info.name)) {
+            const m = scope_info.manifest orelse {
+                std.debug.print("[RUNTIME] scope '{s}' has no manifest record\n", .{name});
+                return .{ .not_found = .{} };
+            };
+            var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            const allocator = arena_state.allocator();
+            const json = scopeManifestToJson(allocator, m) catch return .{ .not_found = .{} };
+            return .{ .ok = json };
+        }
+    }
+    return .{ .not_found = .{} };
+}
+
+// ============================================================================
+// SCOPE-GRAMMAR - the wire grammar, rendered from the register block
+//
+// The third render from the scope table, and the one that closes the R2
+// loop: scope-vocabulary tells a model WHAT it may call, scope-manifest
+// serves it as data, and scope-grammar teaches HOW a call is written — the
+// wire's shape rules (the constant half, WIRE_GRAMMAR_TEXT, kept beside the
+// parser that enforces it) above this scope's own verb lines (rendered by
+// scope-vocabulary, so the signatures cannot drift from enforcement either).
+// A prompt built from this render and a turn judged by parse.wire are the
+// same declaration read twice: the lesson and the law.
+
+// @retain: scope_grammar_event is referenced from generated Zig code in user
+// pipelines (kopium's agent prompt is built from it).
+~[retain]pub tor scope-grammar { name: string }
+| ok string
+| not-found
+
+~proc scope-grammar|zig {
+    inline for (comptime buildScopeTable()) |scope_info| {
+        if (std.mem.eql(u8, name, scope_info.name)) {
+            var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            const allocator = arena_state.allocator();
+            var out = std.ArrayList(u8).initCapacity(allocator, 512) catch unreachable;
+            out.appendSlice(allocator, wireGrammarRules(allocator, scope_info.manifest)) catch unreachable;
+            out.appendSlice(allocator, "\n\nYour vocabulary:\n") catch unreachable;
+            switch (scope_vocabulary_event.handler(.{ .name = name })) {
+                .ok => |v| out.appendSlice(allocator, v) catch unreachable,
+                .not_found => unreachable, // the inline-for already matched this scope
+            }
+            return .{ .ok = out.toOwnedSlice(allocator) catch unreachable };
+        }
+    }
+    return .{ .not_found = .{} };
+}
+
+// ============================================================================
+// EXPLAIN-RUNTIME - the `[explainer]` for the scope registry
+//
+// koruc's `koru_explain_gather` calls every discovered `[explainer]` once with
+// the program AST; the `explain` command renders whatever this returns. This
+// explainer builds every registered scope's manifest through the SAME shared
+// producer (`scopeManifestForScope`) the register emission uses, then reports:
+// a note (the human vocabulary lines) plus a `manifest` property carrying the
+// EXACT JSON the `scope-manifest` tor serves — so `explain` shows the served
+// contract bytes, never a hand-written copy.
+
+// @retain: explain_runtime_event is referenced from generated code (koruc's
+// koru_explain_gather invokes every discovered [explainer]).
+~[comptime|explainer]pub tor explain-runtime {
+    program: *const ast.Program,
+    allocator: std.mem.Allocator
+} -> ExplainReport
+
+~proc explain-runtime|zig {
+    const ast_mod = @import("ast");
+    const CompilerEnvRt = @import("root").CompilerEnv;
+    const debug_enabled = CompilerEnvRt.hasFlag("debug");
+
+    const scope_defs = RegistryHelper.collectScopeDefs(allocator, program);
+    var names = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
+    for (scope_defs) |def| {
+        var dup = false;
+        for (names.items) |n| if (std.mem.eql(u8, n, def.name)) {
+            dup = true;
+            break;
+        };
+        if (!dup) names.append(allocator, def.name) catch continue;
+    }
+
+    if (names.items.len == 0) {
+        var entries = std.ArrayList(ast_mod.ExplainReport.Entry){ .items = &.{}, .capacity = 0 };
+        entries.append(allocator, .{ .note = "no scopes registered — declare one with std/runtime:register(scope: \"...\") { open(1) close(1) }" }) catch {};
+        var sections = std.ArrayList(ast_mod.ExplainReport.Section){ .items = &.{}, .capacity = 0 };
+        sections.append(allocator, .{ .heading = "scopes", .entries = entries.toOwnedSlice(allocator) catch &.{} }) catch {};
+        return .{ .title = "std/runtime", .sections = sections.toOwnedSlice(allocator) catch &.{} };
+    }
+
+    var sections = std.ArrayList(ast_mod.ExplainReport.Section){ .items = &.{}, .capacity = 0 };
+    for (names.items) |name| {
+        const manifest = scopeManifestForScope(allocator, program, name, debug_enabled);
+        const text = scopeManifestToText(allocator, &manifest);
+        const json = scopeManifestToJson(allocator, &manifest) catch "";
+
+        var entries = std.ArrayList(ast_mod.ExplainReport.Entry){ .items = &.{}, .capacity = 0 };
+        entries.append(allocator, .{ .note = text }) catch continue;
+        entries.append(allocator, .{ .property = .{ .key = "manifest", .value = .{ .string = json } } }) catch continue;
+
+        sections.append(allocator, .{
+            .heading = name,
+            .entries = entries.toOwnedSlice(allocator) catch &.{},
+        }) catch continue;
+    }
+
+    return .{
+        .title = "std/runtime",
+        .sections = sections.toOwnedSlice(allocator) catch &.{},
+    };
+}
+
+// Internal helper: Look up tor branches for shape validation
+fn lookupEventBranches(scope_name: []const u8, event_name: []const u8) []const BranchSpec {
+    inline for (comptime buildScopeTable()) |scope_info| {
+        if (std.mem.eql(u8, scope_name, scope_info.name)) {
+            if (scope_info.branches_fn) |branches_fn| {
+                return branches_fn(event_name);
+            }
+        }
+    }
+    return &[_]BranchSpec{};
+}
