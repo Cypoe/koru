@@ -114,6 +114,8 @@ koru_std/gate.diffstate.kz	28
 koru_std/gate.helpers.kz	222
 koru_std/gate.kz	525
 koru_std/gpu.kz	228
+koru_std/grid.cursor.kz	37
+koru_std/grid.for.kz	388
 koru_std/grid.kz	53
 koru_std/grid.new.kz	431
 koru_std/grid.read.kz	381

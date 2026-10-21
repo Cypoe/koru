@@ -79,13 +79,13 @@
             std.fmt.allocPrint(allocator, "{s}[{s}, {s}].{s}", .{ t.grid, xn, yn, t.field }) catch unreachable
         else
             std.fmt.allocPrint(allocator, "{s}[{s}].{s}", .{ t.grid, xn, t.field }) catch unreachable;
-        // A SWEEP CURSOR WRITES UNCHECKED. `__koru_gi_*` is minted only by
-        // `sweep`'s own `0..__koru_size` loop and arrives in target text only
-        // through the cell binding — so a write addressed by it is in range
-        // by construction, and the unit (keyed to this site, called nowhere
-        // else) can name its own parameter trusted on the target grid. The
-        // same proof covers cursor reads in the value (`c.sum / c.n`).
-        const cursor = t.y == null and std.mem.startsWith(u8, t.x, "__koru_gi_");
+        // A MINTED LOOP CURSOR writes unchecked — but only the grid its
+        // proof NAMES. `sweep`/`for` mint `__koru_gi_<grid>_L<line>` at a
+        // site that checked the range against THAT grid; on another grid
+        // the same text keeps the floor. The VALUE side is the mirror:
+        // reads of the proven grid ride trusted whatever the write lands on.
+        const proven = if (t.y == null) grid_cursor.gridOf(allocator, t.x) else null;
+        const cursor = proven != null and std.mem.eql(u8, proven.?, t.grid);
         const lvalue = if (cursor)
             grid_read.lowerTrusted(allocator, respelled, names.items, .{ .name = xn, .grid = t.grid })
         else
@@ -113,8 +113,8 @@
             args.append(allocator, ast.Arg{ .name = yn, .value = widen.at(allocator, (grid_read.find(names.items, t.grid) orelse unreachable).ns, t.grid, grid_read.lower(allocator, ytext, names.items)) }) catch unreachable;
         }
         inputs.append(allocator, ast.Field{ .name = vn, .type = allocator.dupe(u8, col_ty) catch unreachable }) catch unreachable;
-        args.append(allocator, ast.Arg{ .name = vn, .value = if (cursor)
-            grid_read.lowerTrusted(allocator, pr.value, names.items, .{ .name = t.x, .grid = t.grid })
+        args.append(allocator, ast.Arg{ .name = vn, .value = if (proven) |pg|
+            grid_read.lowerTrusted(allocator, pr.value, names.items, .{ .name = t.x, .grid = pg })
         else
             grid_read.lower(allocator, pr.value, names.items) }) catch unreachable;
     }

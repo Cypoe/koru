@@ -150,7 +150,7 @@
     // as `__koru_size` on the cell type — so the loop header names that rather
     // than re-deriving it, and a grid whose size changes cannot leave a stale
     // bound behind in a sweep.
-    const cur = std.fmt.allocPrint(allocator, "__koru_gi_L{d}", .{flow.location.line}) catch unreachable;
+    const cur = grid_cursor.mint(allocator, grid_name, flow.location.line);
     if (ast.refuseUncrossable(allocator, reporter, "grid:sweep", grid_name, "sweep", arm, flow.module)) |r| return .{ .transformed = r };
     const body = ast_functional.cloneContinuation(allocator, arm) catch unreachable;
     var mutable_body = body;

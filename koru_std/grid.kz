@@ -44,10 +44,10 @@
 // and costs nothing when nobody listens. But every reactive surface has to
 // answer what it FIRES, and a whole-grid clear firing four thousand times is a
 // question no workload has asked yet. It gets designed when one does.
-
-
 ~part read
 ~part readwalk
 ~part new
 ~part stored
 ~part sweep
+~part cursor
+~part for

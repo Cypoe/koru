@@ -61,8 +61,8 @@
 # io.blk.kz shared shapes) now fingerprint cross-file instead of
 # same-file. The +7/+9 is the file-boundary relabel; the new size-parse
 # code is under the token floor. Re-pinned to measured.
-clusters=1117
-members=1001
+clusters=1136
+members=1024
 # 1039/915: the roll fired on the |? coverage commit ("coverage: |? no
 # longer suppresses panic arms, and refuses where no union exists") —
 # that commit touches src/ checkers, in-repo tests, and a concept frag;
@@ -99,3 +99,9 @@ members=1001
 # dormant proc bodies per the row's own contract — with cell/fs.dir
 # alongside; their host text leaving the count relabels the fingerprint
 # set. Re-pinned to measured.
+# Re-pinned 2026-10-21: the roll fired on the std/grid:for commit.
+# Decomposed: +4 clusters / +9 members is committed drift since the last
+# pin (measured with this commit's files removed: 1121/1010); the rest
+# (+15 clusters / +14 members) is this commit's new host text —
+# grid.for.kz's transform body and grid.cursor.kz's mint helpers twin
+# the sweep/stored shapes they were split from. Re-pinned to measured.
