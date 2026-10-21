@@ -13,9 +13,9 @@ When the compiler's own diagnostic stream is a joinable Koru event —
 `std/compiler(diagnostic)` with `!` arms, collected by AST traversal and
 erased before coordinate — a plugin is a module file: the join IS the
 subscription, a `std/compiler:requires` block IS the dependency, and the
-import mechanism IS the whole plugin system. `import koru/diag/sqlite`, an
-ordinary koru-libs package path, wires a SQLite sink into the backend build
-with no manifest, no flag, no `dlopen`.
+import mechanism IS the whole plugin system. `import koru/compiler/sqlite`,
+an ordinary koru-libs package path, wires a SQLite sink into the backend
+build with no manifest, no flag, no `dlopen`.
 
 ## Why stderr stayed, and why that is not a compromise
 
@@ -36,12 +36,15 @@ table.
 
 ## The placement ruling
 
-Dep-carrying sinks live in koru-libs (`koru/diag/*`), not stdlib
-(`std/diag/*`) — the same namespace on two shelves. A stdlib that imports an
-external library is a hard dep wearing an opt-in costume; the filesystem
-placement makes the honesty mechanical. Eager submodule globbing is the
-always-included trap in both places: a sink file loose inside an imported
-directory subscribes every consumer of that directory.
+Compiler plugins live in koru-libs under `koru/compiler/*` — the external
+compiler toolkit — not in stdlib. `std/compiler` is the pipeline itself;
+`koru/compiler` is the shelf of things that plug into it, and the namespace
+narrates the mechanism: `import koru/compiler/sqlite` reads as "compiler
+plugin: sqlite". A stdlib that imports an external library is a hard dep
+wearing an opt-in costume; the filesystem placement makes the honesty
+mechanical. Eager submodule globbing is the always-included trap in both
+places: a plugin file loose inside an imported directory subscribes every
+consumer of that directory.
 
 ## What would correct or narrow this
 
