@@ -677,9 +677,18 @@ design calls; the design calls are marked.
 - **`320_148` tail-call refusal** — emitted `always_tail` is refused by
   stage2_x86_64 under `-mcpu baseline` (the musl target's default cpu).
   Target-lane artifact; was it green under a cpu-specific target?
-  **Not rulable yet — measure first:** whether it was ever green under a
-  cpu-specific target decides between a per-lane pin and an expected
-  baseline-cpu refusal.
+  **MEASURED + FIXED 2026-10-21:** never green under any cpu — the
+  refusal is `stage2_x86_64` (zig 0.15's default backend for x86_64
+  Debug), which has no tail-call support at all; baseline, v2/v3,
+  znver3, skylake all refuse identically on this host (zig 0.15.2).
+  `-fllvm` compiles the same source clean. Fix: the emitted driver adds
+  `-fllvm` to the output-binary `build-exe` when `generated_code`
+  carries `@call(.always_tail` — LLVM only where tail calls exist,
+  stage2 kept elsewhere. `320_148`/`320_149` green natively;
+  musl-target compile verified, musl run still unmeasured here. The
+  `build_output.zig` path (programs with user deps) has no `-fllvm`
+  CLI flag — a same-shaped program with deps would need the generated
+  build file to set `use_llvm`; unbuilt, noted for the fork.
 - **30s timeouts under musl Debug** — `390_113`/`390_114` produce
   correct output in ~40s; the harness timeout is 30s. Raise the
   timeout per-lane or accept the red on slow hosts.

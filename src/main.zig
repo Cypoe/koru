@@ -2543,6 +2543,17 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\            exe_argv[exe_argc] = "-target"; exe_argc += 1;
             \\            exe_argv[exe_argc] = t; exe_argc += 1;
             \\        }
+            \\        // stage2_x86_64 — zig's default backend for x86_64 Debug
+            \\        // targets — refuses @call(.always_tail) outright, and no
+            \\        // -mcpu selection changes that (measured 2026-10-21:
+            \\        // baseline, x86_64_v2/v3, znver3, skylake all refuse
+            \\        // identically). The flat-segment emitter's whole
+            \\        // mechanism is always_tail, so any program carrying one
+            \\        // must compile under LLVM. Programs without tail calls
+            \\        // keep the faster stage2 backend.
+            \\        if (__koru_std.mem.indexOf(u8, generated_code, "@call(.always_tail") != null) {
+            \\            exe_argv[exe_argc] = "-fllvm"; exe_argc += 1;
+            \\        }
             \\        exe_argv[exe_argc] = "-O"; exe_argc += 1;
             \\        // The OUTPUT binary defaults to Debug: safety checks (bounds,
             \\        // overflow, unreachable) stay on, which is the mode the test suite
