@@ -121,8 +121,15 @@
 # containsTokenLocal port pair) and emitter_test test_decl scaffolding.
 # Growth landed between re-pins — committed src/ drift from the
 # cells/nodes and board commits — not in this diff.
-clusters=842
-members=945
+# Re-pinned in "fmt: unbound fmt.blk / ln refuse KORU180 at the
+# transform": the roll fired on +2 clusters / +2 members of foreign
+# committed drift — the diag-bus merge window (main.zig +293,
+# errors.zig +40) and the same documented twins it names
+# (continuation_codegen x emitter_helpers port pair, emitter_test
+# scaffolding). This commit's own src/ delta is one predicate line plus
+# a comment edit — no foldable new surface.
+clusters=844
+members=947
 # Re-pinned to 820/911 on the call-site |variant commit: the sampled roll
 # named containsTokenLocal x containsToken (continuation_codegen /
 # emitter_helpers) and an emitter_test test_decl pair — none of those

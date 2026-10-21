@@ -29,8 +29,9 @@ rings.new.kz        | __rings_decl_{}                   | decl marker emitted by
 rings.new.kz        | __rings_anchor                    | dedup anchor: an event_decl spliced into the rings module_decl; materialises only as `__rings_anchor_event` (fullmatch fails) and inside string literals — the bare name never reaches code. Verified 2026-10-21 against 320_090's artifact: 4 textual hits, all comment-or-string
 rings.new.kz        | __ring_{}_enqueue                 | synthOp name, not emitted surface: the op body emits as the `__ring_<n>_enqueue_event` handler struct (fullmatch fails) and its name appears verbatim only inside `// >>> PROC` comments the scan strips. Verified 2026-10-21 against 320_103's artifact
 rings.new.kz        | __ring_{}_dequeue                 | same shape as __ring_{}_enqueue — the dequeue op materialises as `__ring_<n>_dequeue_event` plus `// >>> PROC` comments; the bare name never reaches code
-fmt.kz              | __BlkResult                       | dead union arm: emitted only when the fmt.blk site has NO return binding, and unbound consumption produces Zig the backend rejects — verified 2026-10-21 (`expected '[]const u8', found '__BlkResult'` + auto-discharge trying to free the union). No PASSING program can carry it. Latent defect: unbound blk should refuse like 620_006's ruling, not leak a raw Zig type error
-fmt.lnzig.kz        | __LnResult                        | dead union arm: emitted only for a `| line l` branch consume — a legacy router-inline spelling the bare-return grammar refuses — or for unbound use, which like __BlkResult emits Zig the backend rejects. No PASSING program can carry it
+# __BlkResult / __LnResult exemptions REMOVED 2026-10-21 — the unbound
+# fmt.blk / ln union arms were deleted: the site now refuses at the
+# transform with KORU180 (620_020, 620_021 pin both).
 
 # --- JS-target output: lands in output_emitted.js, which this check does not scan ---
 parser.kz           | __he{}                            | std/parser JS-target generator (`===` in the template); its output is output_emitted.js, outside the Zig artifact scan

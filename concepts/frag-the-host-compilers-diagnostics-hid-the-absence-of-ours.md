@@ -254,3 +254,24 @@ inside `{{ }}` → host), `690_367` (bound name inside a store write body →
 host). "A documented decision to borrow is load-bearing" — now the suite
 itself carries the documentation, and it self-invalidates when the
 borrowing ends.
+
+## The coverage wall surfaced another borrow (2026-10-21)
+
+The variant-coverage wall flagged `__BlkResult` / `__LnResult` — tagged
+unions `fmt.blk`/`ln` emitted for unbound call sites, whose only consumer
+(the `| formatted` / `| line` branch spelling) had already been removed
+from the grammar. The first execution the arm ever got produced a raw Zig
+`expected '[]const u8', found '__BlkResult'` — the borrowed diagnostic
+again, this time *inside dead surface*. The unbound arm now refuses with
+`KORU180` at the transform (620_020/620_021 pin both), and the unions are
+deleted — the exemptions came off the allow file, not onto it permanently.
+
+The fix exposed a second, quieter instance of the same family: declaring
+the injected `reporter` param flipped the tor out of `all_machinery`, and
+PARSE006 started refusing every bare `std/fmt:ln("...")` call — because
+`isTransformMachineryType`'s substring scan didn't know `ErrorReporter`.
+44 stdlib files already declared the param; no all-machinery tor had ever
+carried it, so the hole was invisible until a tor tried. The exemption
+predicate described an older version of the injection contract — a
+*checker* borrow, not a diagnostic one: the rule "what counts as injected
+machinery" lived in one place, the contract in another.

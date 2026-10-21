@@ -92,6 +92,15 @@
     else
         return .{};
 
+    // An unbound site has no consumer — the `| line l` branch spelling was
+    // removed from the grammar (bare returns bind with `: name` only), so the
+    // old `__LnResult` union arm emitted a dead tagged union that reached Zig
+    // codegen as a raw type leak (620_020). Refuse at the transform, naming
+    // the bind.
+    if (invocation.return_binding == null) {
+        return ast.refuse(allocator, reporter, .KORU180, flow.location, flow.module, "std/fmt:ln: unbound result — bind the line with `: name` (`std/fmt:ln(\"...\") : name`); the `| line` branch spelling was removed, so an unbound result has no consumer", .{});
+    }
+
     // Extract the expression string from the first invocation arg
     const expr = if (invocation.args.len > 0) invocation.args[0].value else "";
 
@@ -203,8 +212,8 @@
     //
     // Result SHAPE follows the consumption form: the `: l` bare-return BIND
     // needs the payload `struct { text }` directly, so `l.text` resolves
-    // (620_002); a `| line l` BRANCH (refused on bare returns — a legacy
-    // router-inline spelling) needs the `__LnResult` tagged union to switch on.
+    // (620_002). The unbound arm is refused upstream (KORU180), so this is the
+    // only emission shape.
     // Self-contained — no external module path references needed.
     const inline_code = if (size_err) |msg|
         std.fmt.allocPrint(
@@ -212,25 +221,13 @@
             "@compileError(\"{s}\")",
             .{msg},
         ) catch unreachable
-    else if (invocation.return_binding != null)
-        std.fmt.allocPrint(
-            allocator,
-            \\{{
-            \\    const __S = struct {{ threadlocal var __buf: [{d}]u8 = undefined; }};
-            \\    const __text = @import("std").fmt.bufPrint(&__S.__buf, "{s}", .{{{s}}}) catch @panic("std/fmt:ln output exceeds the {d}-byte scratch buffer — use fmt.blk (allocates, no cap) or [size(Nk)] for long lines");
-            \\    break :__KORU_INLINE__ .{{ .text = __text }};
-            \\}}
-            ,
-            .{ buf_size, format_buf.items, args_buf.items, buf_size }
-        ) catch unreachable
     else
         std.fmt.allocPrint(
             allocator,
             \\{{
             \\    const __S = struct {{ threadlocal var __buf: [{d}]u8 = undefined; }};
             \\    const __text = @import("std").fmt.bufPrint(&__S.__buf, "{s}", .{{{s}}}) catch @panic("std/fmt:ln output exceeds the {d}-byte scratch buffer — use fmt.blk (allocates, no cap) or [size(Nk)] for long lines");
-            \\    const __LnResult = union(enum) {{ line: struct {{ text: []const u8 }} }};
-            \\    break :__KORU_INLINE__ @as(__LnResult, .{{ .line = .{{ .text = __text }} }});
+            \\    break :__KORU_INLINE__ .{{ .text = __text }};
             \\}}
             ,
             .{ buf_size, format_buf.items, args_buf.items, buf_size }

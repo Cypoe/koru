@@ -53,14 +53,16 @@ pub const FormattedText = struct {
 // The transform tor returns SiteResult (the rewritten site) — the single-return
 // form every `[transform]` decl lands as (frag-single-return-form-is-universal;
 // `ln` is the twin). The RUNTIME value is the allocated string; a caller binds
-// it with `: name` (`f` above), and legacy `| branch` sites get the `.formatted`
-// union the inline_body breaks with. The `<allocated!>` obligation rides that
+// it with `: name` (`f` above). An unbound site refuses at the transform —
+// the `| formatted` branch spelling was removed, leaving the result no
+// consumer (KORU180, 620_020). The `<allocated!>` obligation rides that
 // runtime value, not the transform tor's own return.
 ~[comptime|transform]pub tor fmt.blk {
     source: Source,
     invocation: *const Invocation,
     item: *const std/compiler:Item,
     program: *const std/compiler:Program,
+    reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult
 
@@ -167,6 +169,15 @@ pub const FormattedText = struct {
     // the flow's own invocation at every depth. No position fork.
     _ = program;
 
+    // An unbound site has no consumer — the `| formatted f` branch spelling
+    // was removed from the grammar (the grammar binds bare returns with
+    // `: name` only), so the old `.formatted` union arm emitted a dead tagged
+    // union that reached Zig codegen as a raw type leak (620_020). Refuse at
+    // the transform, naming the bind.
+    if (flow.inv().return_binding == null) {
+        return ast.refuse(allocator, reporter, .KORU180, flow.location, flow.module, "std/fmt:fmt.blk: unbound result — bind the formatted string with `: name` (`std/fmt:fmt.blk {{ ... }} : name`); the `| formatted` branch spelling was removed, so an unbound result has no consumer", .{});
+    }
+
     // Parse the Source content for {{ ... }} placeholders
     var format_buf = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
     var args_buf = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
@@ -259,31 +270,18 @@ pub const FormattedText = struct {
     // A `: name` bind yields the allocated STRING itself (`string<allocated!>`):
     // the caller interpolates `{{ f:s }}` and auto-discharge inserts
     // `std/io:free` — the one disposer for the `allocated` label (335_042/043
-    // ruling). `| formatted f` bound the same string behind the `.formatted`
-    // union variant; the grammar now binds bare returns with `: name` only.
-    const inline_code = if (flow.inv().return_binding != null)
-        std.fmt.allocPrint(
-            allocator,
-            \\{{
-            \\    const __fmt_alloc = koru_allocator();
-            \\    const __fmt_text = @import("std").fmt.allocPrint(__fmt_alloc, "{s}", .{{{s}}}) catch unreachable;
-            \\    break :__KORU_INLINE__ __fmt_text;
-            \\}}
-            ,
-            .{ format_buf.items, args_buf.items }
-        ) catch unreachable
-    else
-        std.fmt.allocPrint(
-            allocator,
-            \\{{
-            \\    const __fmt_alloc = koru_allocator();
-            \\    const __fmt_text = @import("std").fmt.allocPrint(__fmt_alloc, "{s}", .{{{s}}}) catch unreachable;
-            \\    const __BlkResult = union(enum) {{ formatted: []const u8 }};
-            \\    break :__KORU_INLINE__ @as(__BlkResult, .{{ .formatted = __fmt_text }});
-            \\}}
-            ,
-            .{ format_buf.items, args_buf.items }
-        ) catch unreachable;
+    // ruling). The unbound arm is refused upstream (KORU180), so this is the
+    // only emission shape.
+    const inline_code = std.fmt.allocPrint(
+        allocator,
+        \\{{
+        \\    const __fmt_alloc = koru_allocator();
+        \\    const __fmt_text = @import("std").fmt.allocPrint(__fmt_alloc, "{s}", .{{{s}}}) catch unreachable;
+        \\    break :__KORU_INLINE__ __fmt_text;
+        \\}}
+        ,
+        .{ format_buf.items, args_buf.items }
+    ) catch unreachable;
 
     // Position-agnostic: one write-back path at every depth (the runner lifts
     // nested sites and grafts the result back).
@@ -370,6 +368,7 @@ pub const FormattedText = struct {
     invocation: *const Invocation,
     item: *const std/compiler:Item,
     program: *const std/compiler:Program,
+    reporter: *std/compiler:ErrorReporter,
     allocator: std.mem.Allocator
 } -> SiteResult
 

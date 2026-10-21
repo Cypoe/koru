@@ -95,6 +95,10 @@ KORU178
 # zig-only emit-scan cannot see it. Same situation as KORU178 above.
 KORU179
 
+# Emitted by koru_std/fmt.kz's `fmt.blk|zig` and koru_std/fmt.lnzig.kz's
+# `ln|zig` transforms — .kz graft passes, same situation as KORU178 above.
+KORU180
+
 # `unknownConstruct` was the only emitter and nothing called it — the DEAD check
 # could not see that until 2026-09-17, when the emit-scan stopped crediting a
 # `.KORUxxx` tag in src/errors.zig whose enclosing helper has no call site. The

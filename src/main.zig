@@ -7262,7 +7262,8 @@ fn isTransformMachineryType(type_str: []const u8) bool {
     return std.mem.indexOf(u8, type_str, "Invocation") != null or
         std.mem.indexOf(u8, type_str, "*const Item") != null or
         std.mem.indexOf(u8, type_str, "Program") != null or
-        std.mem.indexOf(u8, type_str, "Allocator") != null;
+        std.mem.indexOf(u8, type_str, "Allocator") != null or
+        std.mem.indexOf(u8, type_str, "ErrorReporter") != null;
 }
 
 /// PARSE006 — a bare argument must pun to an actual parameter of the callee.
@@ -7326,7 +7327,8 @@ fn checkBareArgPunning(
 
     // Handler-injection transform exemption. Some `[transform]` events declare
     // ONLY the transform walker's injected machinery as parameters — `*const
-    // Invocation`, `*const Item`, `*const Program`, `std.mem.Allocator` (e.g.
+    // Invocation`, `*const Item`, `*const Program`, `std.mem.Allocator`,
+    // `*std/compiler:ErrorReporter` (e.g.
     // `~for`'s cousins `new`, `ln`, `router`, `field:new`). The compiler passes
     // those in; the USER's call arguments are read positionally from
     // `invocation.args` inside the handler body and never bind to a declared
