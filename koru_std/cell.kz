@@ -612,7 +612,7 @@ pub fn cellDestroy(c: *Cell) void {
     return .{ .transformed = .{ .replacement_node = .{
         .node = .{ .inline_code = seed.toOwnedSlice(allocator) catch unreachable },
         .children = wrapper,
-    } } };
+    }, .consumed_arms = &.{ "as", "captured" } } };
 }
 
 // ============================================================================
