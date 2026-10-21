@@ -303,3 +303,46 @@ capture, because neither lexes bare. The 10-07 advice survives it:
 re-emitting prose under `say:` is still the taught redelivery — but the
 "unfulfillable" spelling now resolves, and the env is the judge instead
 of the scanner. Pinned by 440_047.
+
+2026-10-18 — the second spelling is deleted; there is one form:
+`verb(field: value)`. Lars's ruling: the colon form was a concession to
+an era's fear (quote-balance in prose), and a second spelling is itself
+the defect — either the wire calls `tor`s or it cannot. The 10-07
+block-segmenter, the item-head `verb:` admission in wirescan, the
+`in_colon` state, and every teaching string are gone; a colon-headed
+line binds as residue and the refusal names the paren form. The same
+ruling purged `Source` from wire scope: it was always the comptime
+source-fragment type (`ast.zig`), never a prose type — `say`/`note`/`bind`
+carry `string`, and `{{ }}` interpolation (interpreter.interp, landed the
+same day) covers the bound-value composition the colon form existed to
+spare. `Expression` fields keep bare-text admission (`calc(expr: 2 + 3)`);
+that survival is unruled — same comptime-only family, pending Lars.
+440_046 re-pinned as `colon_form_is_refused`; 440_047 renamed
+`bare_name_is_a_reference`. The chain-step half closed the same day:
+`|> say: x` was parsing as a branch constructor *named* `say:` in
+`flow_parser`'s plain-value path — a loose first-char check admitted the
+colon into the name — so the step became a label and never dispatched.
+The guard now requires `isPlainBranchName`; the step dies as a named
+`MalformedNode` parse-error, pinned by 440_048. The deletion shrank the
+wire:
+wirescan 266→202, turn 92→71, turnscan 70→47 — the grammar is smaller
+*and* stricter, which is what the 09-16 derivation lesson always aimed
+at.
+
+2026-10-18 (later) — Lars ruled the pending half: `Expression` is off the
+wire too. The last capture channel is deleted — a bare value position is
+a *real Koru expression*, parsed by the language's own
+`ExpressionParser` and evaluated against the session/arm bindings
+(`n * 2`, `r3.total > 50`, `q - 1`); what parses but cannot evaluate
+refuses, and validation names the first unbound ident inside expression
+text. Type-directed admission itself is gone — field *names* are still
+judged against the scope, but no declared type changes what a value may
+spell. `Source`/`Expression` keep their real jobs (comptime capture in
+the language — `register`'s own `source: Source` param) and no wire
+meaning; the wire never synthesized a true `Source` — an empty-scope
+capture struct was a string wearing a type. The arm grammar also fixed
+its commitment rule the same day: a `|` on the call's own line commits
+the program to single-line predict-and-chain — every inline `| label`
+arms the head and unhandled branches return the meta-response — while
+indented `|`-lines arm by indentation, including interior steps; an
+indented arm after an inline-`|` line refuses loudly (440_049).

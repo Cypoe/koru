@@ -1,0 +1,86 @@
+// Koru Standard Library: Reactive Stores — the `writepath` part.
+// Joined via `~part writepath` in store.kz; merged into the store module at load.
+// The stored-write transform's path helpers: preamble annotation plumbing,
+// the write-RHS binding-env scan, and the drain-store refusal probe.
+
+const WritePath = struct {
+    const ast = @import("ast");
+
+    const preambleAnn = struct {
+
+        fn call(alloc: std.mem.Allocator, inv: *const ast.Invocation, base: []const []const u8) []const []const u8 {
+
+            if (inv.preamble_code == null) return base;
+
+            const out = alloc.alloc([]const u8, base.len + 1) catch unreachable;
+
+            for (base, 0..) |b, i| out[i] = b;
+
+            out[base.len] = alloc.dupe(u8, "@preamble_then_call") catch unreachable;
+
+            return out;
+
+        }
+
+    }.call;
+
+    // scopeAtSite walks the site's continuation path and collects every
+    // bound name; at a flow root (site_of null) an impl flow's input fields
+    // are the scope. On any env error the check degrades to "unproven" —
+    // it defers, it never refuses because the env failed.
+    fn writeScopeAt(alloc: std.mem.Allocator, prog: *const ast.Program, flow: *const ast.Flow) []const ast.ScopeBinding {
+        const eh = @import("emitter_helpers");
+        if (flow.site_of) |site| return eh.scopeAtSite(alloc, prog.items, site) catch &.{};
+        if (flow.impl_of) |impl_path| {
+            var p = impl_path;
+            if (eh.findEventDeclByPath(prog.items, &p)) |decl| {
+                var out = std.ArrayList(ast.ScopeBinding){};
+                for (decl.input.fields) |f| {
+                    const ty = if (f.phantom) |ph|
+                        std.fmt.allocPrint(alloc, "{s}<{s}>", .{ f.type, ph }) catch f.type
+                    else
+                        f.type;
+                    out.append(alloc, .{ .name = f.name, .type = ty, .value_ref = f.name }) catch unreachable;
+                }
+                return out.items;
+            }
+        }
+        return &.{};
+    }
+
+    // Owned-column stores generate the write surface (the WRITE rung,
+    // 690_062: discharge-old + consume-new) — EXCEPT a DRAIN store (ambiguous
+    // discharger, 690_057/058), where unit-4 stays ungated-off: the write's
+    // eviction has no canonical discharger to fire. Detect that store FIRST
+    // (teardown unit exists, apply unit does not) and name the real rung —
+    // otherwise the field-order lookup leaks a raw "unknown store".
+    // Plural-shape probe: the generated `__store_inserth_<s>` handle branch
+    // exists exactly when create ran a container (capacity > 1).
+    fn storeIsPlural(alloc: std.mem.Allocator, prog: *const ast.Program, store: []const u8) bool {
+        const inserth_probe = std.fmt.allocPrint(alloc, "__store_inserth_{s}", .{store}) catch unreachable;
+        for (flatItems(alloc, prog.items)) |pi| {
+            if (pi.* != .event_decl) continue;
+            const ed = &pi.event_decl;
+            if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], inserth_probe)) return true;
+        }
+        return false;
+    }
+
+    fn drainStoreRefusal(alloc: std.mem.Allocator, prog: *const ast.Program, store: []const u8, reporter: anytype, flow: *const ast.Flow) ?ast.SiteResult {
+        const td_probe = std.fmt.allocPrint(alloc, "__store_teardown_{s}", .{store}) catch unreachable;
+        const apply_probe = std.fmt.allocPrint(alloc, "__store_apply_{s}", .{store}) catch unreachable;
+        var has_teardown = false;
+        var has_apply = false;
+        for (flatItems(alloc, prog.items)) |pi| {
+            if (pi.* != .event_decl) continue;
+            const ed = &pi.event_decl;
+            if (ed.path.segments.len != 1) continue;
+            if (std.mem.eql(u8, ed.path.segments[0], td_probe)) has_teardown = true;
+            if (std.mem.eql(u8, ed.path.segments[0], apply_probe)) has_apply = true;
+        }
+        if (has_teardown and !has_apply) {
+            return ast.refuse(alloc, reporter, .KORU161, flow.location, flow.module, "std/store:stored: store '{s}' is a DRAIN store (ambiguous discharger) - a stored write must evict the old value through the canonical discharger, which its owned column does not have; declare exactly one void discharger for the column type (690_062 pins the write; 690_057/058 pin the drain)", .{store});
+        }
+        return null;
+    }
+};

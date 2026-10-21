@@ -62,3 +62,14 @@ Whether a control belongs in the check or in the corpus. Embedding a known
 violation in the tree to keep a filter honest means carrying a deliberate defect
 forever and trusting everyone downstream to recognise it as bait — the same
 trade, and the same hazard, as a `MUST_ERROR` test.
+
+## Application — 2026-10-17, suite profiles
+
+The board outgrew single-shot invocation (2337 tests, ~2h05m), and selection
+moved into named data: `tests/regression/profiles/<name>.txt`, one glob per
+line, loaded by `--profile`. The design risk named here — a curated selection
+that can no longer match reporting a smaller board as clean — is exactly what
+`FILTER_REQUESTS` was built to refuse, so each profile *line* became its own
+filter request rather than the profile becoming one opaque request. A rotten
+line now fails upfront and loudly, which is what makes the file safe to garden:
+editing a profile can shrink coverage only by refusing, never by drifting.

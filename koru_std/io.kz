@@ -12,6 +12,7 @@
 ~part cprec
 ~part lowers
 ~part blkcs
+~part console
 
 const std = @import("std");
 const codegen_utils_io = @import("codegen_utils");
@@ -98,31 +99,6 @@ var readln_buf: [8192]u8 = undefined;
 //     std.debug.print("{any}\n", .{value});
 //     return .{ .printed = .{} };
 // }
-
-// Print error to stderr
-~pub tor eprintln { message: string }
-
-~proc eprintln|zig {
-    const stderr = std.fs.File.stderr().writer();
-    stderr.print("ERROR: {s}\n", .{message}) catch {
-        // Fall back to debug print if stderr fails
-        std.debug.print("ERROR: {s}\n", .{message});
-    };
-}
-
-// Success message with green color (if terminal supports it)
-~pub tor success { message: string }
-
-~proc success|zig {
-    std.debug.print("✅ {s}\n", .{message});
-}
-
-// Warning message
-~pub tor warn { message: string }
-
-~proc warn|zig {
-    std.debug.print("⚠️  {s}\n", .{message});
-}
 
 // ============================================================================
 // FILE/STDIN READING - For interpreter and scripting
@@ -271,7 +247,7 @@ var readln_buf: [8192]u8 = undefined;
 } -> SiteResult
 
 ~[norun]pub tor print.impl {
-    expr: string<*>,
+    expr: string<*@scoped>,
 }
 
 // eprint / eprint.ln — the stderr siblings of print / print.ln. Same engine

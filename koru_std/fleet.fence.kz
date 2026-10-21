@@ -1,0 +1,28 @@
+// Koru Standard Library: the `fence` part of fleet — read-back helpers:
+// foreign-owner probe, the write-time guard, owner-scoped release.
+// Joined via `~part fence` in fleet.kz.
+
+// The record's owner if foreign — the slice lives in `nb`.
+pub fn fleetForeignOwner(world: []const u8, id: []const u8, node: []const u8, nb: []u8) ?[]const u8 {
+    const rec = ownerRead(world, id, nb) orelse return null;
+    if (std.mem.eql(u8, rec.node, node)) return null;
+    return rec.node;
+}
+
+// The write-time fence as a host call — `std/cell` gates `cellFlush` on it:
+// write only while the record names (node, epoch) and the lease is live.
+pub fn fleetGuard(world: []const u8, id: []const u8, node: []const u8, epoch: u32) bool {
+    var nb: [256]u8 = undefined;
+    const rec = ownerRead(world, id, &nb) orelse return false;
+    return std.mem.eql(u8, rec.node, node) and rec.epoch == epoch and leaseLive(rec.until);
+}
+
+// Release only if the record names `node`; a missing record is released.
+pub fn fleetReleaseIfOwner(world: []const u8, id: []const u8, node: []const u8) void {
+    var nb: [256]u8 = undefined;
+    const rec = ownerRead(world, id, &nb) orelse return;
+    if (!std.mem.eql(u8, rec.node, node)) return;
+    var pb: [1024]u8 = undefined;
+    const p = ownerPath(&pb, world, id) orelse return;
+    std.fs.cwd().deleteFile(p) catch {};
+}

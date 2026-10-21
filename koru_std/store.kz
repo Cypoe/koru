@@ -306,7 +306,6 @@ fn storeFlowTargets(inv: ast_find.Invocation, store: []const u8) bool {
     }
     return false;
 }
-
 fn storeWriteColumnSets(alloc: std.mem.Allocator,
     prog: *const ast_find.Program,
     store: []const u8,
@@ -424,65 +423,6 @@ fn flowParamNamesStore(alloc: std.mem.Allocator, prog: *const ast_find.Program, 
     return names;
 }
 
-/// Every item in the program, flattened through `.module_decl`, in tree order,
-/// as POINTERS into the program's own arrays.
-///
-/// `program.items` is one level deep: an imported module arrives as a single
-/// `.module_decl` carrying its own items. Every scan in this file that reads
-/// `program.items` directly is therefore blind to a store declared, watched,
-/// queried or written inside a library — and the failure is not a miss, it is a
-/// diagnostic pointing at the author: "unknown store — no std/store:new(c)
-/// found", with the `new` sitting four lines above the `watch`.
-///
-/// The caveat `findSynthDecl` carries still applies and is the reason this
-/// returns items rather than flows: flattening is safe for a predicate that
-/// names something only the store machinery mints (a `__store_*` symbol, a
-/// `std/store:<verb>` invocation) and UNSAFE for a general `.flow` scan, which
-/// would start matching ordinary flows inside `std.compiler` and friends. Every
-/// caller here is predicate-guarded; a new one must be too.
-///
-/// Pointers, not copies, so a site may take `&pi.flow` and keep it, and so the
-/// two mutating walks can `@constCast` a real program node rather than a
-/// temporary.
-///
-/// The result is MEMOIZED per items-epoch. Flattening is O(program); the store
-/// machinery calls it per field, per leaf, per interceptor arm — thousands of
-/// times per compile — and every result lands on the compile arena, which frees
-/// nothing until exit. That product is what SIGKILLed monolithic programs
-/// (≈9.7 GB live for the 003_ecs benchmark). The memo keeps ONE flatten per
-/// items-epoch. The key is the items SLICE HEADER (buffer pointer + length):
-/// every structural write-back — appendItems, boxed replacements, site splices —
-/// allocates a fresh top-level array, so minted declarations are never hidden
-/// behind a stale list, and a write path that mutated the header in place would
-/// serve stale structure (none exists; this is the memo's contract). Content
-/// mutations (rewrites that @constCast nodes in place) are visible through the
-/// cached pointers and need no invalidation. Returned slices are never freed or
-/// mutated, only abandoned, so a nested call that evicts the cache cannot
-/// invalidate an outer caller's iteration.
-var flat_memo_buf_ptr: usize = 0;
-var flat_memo_buf_len: usize = std.math.maxInt(usize);
-var flat_memo_out: []const *const ast_find.Item = &.{};
-var flat_memo_lock: std.Thread.Mutex = .{};
-
-fn flatItems(alloc: std.mem.Allocator, items: []const ast_find.Item) []const *const ast_find.Item {
-    flat_memo_lock.lock();
-    defer flat_memo_lock.unlock();
-    if (flat_memo_buf_ptr == @intFromPtr(items.ptr) and flat_memo_buf_len == items.len) return flat_memo_out;
-    var out = std.ArrayList(*const ast_find.Item){};
-    collectFlat(alloc, items, &out);
-    flat_memo_buf_ptr = @intFromPtr(items.ptr);
-    flat_memo_buf_len = items.len;
-    flat_memo_out = out.items;
-    return out.items;
-}
-
-fn collectFlat(alloc: std.mem.Allocator, items: []const ast_find.Item, out: *std.ArrayList(*const ast_find.Item)) void {
-    for (items) |*it| {
-        out.append(alloc, it) catch return;
-        if (it.* == .module_decl) collectFlat(alloc, it.module_decl.items, out);
-    }
-}
-
 /// The module a store was DECLARED in, as the IMPORT-DERIVED logical name
 /// (`app.lib`) — the domain every resolvable path is spelled in.
 ///
@@ -552,7 +492,6 @@ fn storeNewHomeIn(its: []const ast_find.Item, want: []const u8, enclosing: ?[]co
     }
     return null;
 }
-
 fn isStoreNewFor(f: *const ast_find.Flow, want: []const u8) bool {
     const inv = f.inv();
     if (inv.path.segments.len != 1 or !std.mem.eql(u8, inv.path.segments[0], "new")) return false;
@@ -652,7 +591,6 @@ fn storeAllNames(alloc: std.mem.Allocator, prog: *const ast_find.Program) []cons
     }
     return names.toOwnedSlice(alloc) catch unreachable;
 }
-
 fn storeViewMembers(alloc: std.mem.Allocator, prog: *const ast_find.Program, view_name: []const u8) ?[]const []const u8 {
     for (flatItems(alloc, prog.items)) |pi| {
         if (pi.* == .inline_code) {
@@ -717,7 +655,7 @@ fn storeRefsText(alloc: std.mem.Allocator, text: []const u8, name: []const u8, p
     var i: usize = 0;
     while (i < text.len) {
         const at_boundary = ast_find.identBoundaryBefore(text, i);
-        const starts = at_boundary and (i == 0 or text[i - 1] != '.') and std.mem.startsWith(u8, text[i..], name);
+        const starts = at_boundary and !ast_find.precededByMemberDot(text, i) and std.mem.startsWith(u8, text[i..], name);
         const after = i + name.len;
         if (expr_ctx[i] and starts and after < text.len and text[after] == '.') {
             out.appendSlice(alloc, prefix) catch unreachable;
@@ -740,35 +678,8 @@ fn storeRefsText(alloc: std.mem.Allocator, text: []const u8, name: []const u8, p
     }
     return out.toOwnedSlice(alloc) catch unreachable;
 }
-/// A text slot, FULLY lowered: cell paths first, then indexed reads — the order
-/// `stored`'s value pass uses, so a cross-store index inside an indexed read is a cell path already.
-/// `bound` are names an enclosing binding shadows (a row binding makes
-/// `<store>.<field>` mean THE ROW); BOTH passes skip them — the indexed
-/// pass takes a filtered scope.
-/// The one function a walk calls per text slot. Every position an expression
-/// may stand in — guard, arg, captured expression, frozen template body,
-/// inline_code node, produce arm, branch payload — is the same lowering, and
-/// the store's reach gaps have all been a position that called some of it.
-fn storeLowerText(
-    alloc: std.mem.Allocator,
-    prog: *const ast_find.Program,
-    text: []const u8,
-    scope: StoreScope,
-    idents: []const []const u8,
-    bound: []const []const u8,
-) []const u8 {
-    var live_n = std.ArrayList([]const u8).initCapacity(alloc, scope.names.len) catch unreachable;
-    var live_p = std.ArrayList([]const u8).initCapacity(alloc, scope.names.len) catch unreachable;
-    var t = text;
-    for (scope.names, scope.prefixes) |nm, px| {
-        if (storeNameIn(bound, nm)) continue;
-        live_n.append(alloc, nm) catch unreachable;
-        live_p.append(alloc, px) catch unreachable;
-        t = storeRefsText(alloc, t, nm, px, storeNameIn(idents, nm));
-    }
-    return storeIndexedRefsIn(alloc, prog, t, .{ .names = live_n.items, .prefixes = live_p.items });
-}
 ~part new
+~part neworder
 ~part emitnames
 ~part hstruct
 ~part view
@@ -779,12 +690,14 @@ fn storeLowerText(
 ~part rule
 ~part query
 ~part preorder
+~part preordertail
 ~part take
 ~part clear
 ~part stripe
 ~part qrewrite
 ~part cursor
 ~part qcaps
+~part qbinds
 ~part retqual
 ~part pverbs
 ~part sitetag
@@ -812,9 +725,22 @@ fn storeLowerText(
 ~part wait
 ~part uncrossable
 ~part cols
+~part colread
+~part writecheck
+~part writepath
 ~part csemit
 ~part hostemit
 ~part bulkdetect
 ~part ixrefs
 ~part prewrite
 ~part srefscan
+~part iprov
+~part qtail
+~part qguard
+~part qsites
+~part qcols
+~part lowertext
+~part homescan
+~part cascade
+~part cellpath
+~part lifecycle

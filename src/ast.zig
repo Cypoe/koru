@@ -1061,6 +1061,21 @@ pub fn identBoundaryBefore(text: []const u8, i: usize) bool {
     return i < 2 or !isKebabIdentChar(text[i - 2]);
 }
 
+/// Does a `.` immediately before `text[i]` make `text[i..]` a MEMBER path?
+/// Callers rewriting `<name>`/`name.field` refuse `x.name` — but a single
+/// `i - 1 == '.'` test also refuses `0..name`, where `..` is the range
+/// operator and `name` is a fresh operand, not a member. Three dots
+/// (`x...name` = `x .. .name`) re-arm the refusal — the last dot leads a
+/// leading-dot literal. Odd counts are member dots; exactly-two is a range.
+/// Shared for the same reason identBoundaryBefore is: every text rewriter
+/// needs it and a dozen inline copies misread `..` in a dozen places.
+pub fn precededByMemberDot(text: []const u8, i: usize) bool {
+    var dots: usize = 0;
+    var j = i;
+    while (j > 0 and text[j - 1] == '.') : (j -= 1) dots += 1;
+    return dots % 2 == 1;
+}
+
 /// Which parameter INDEX does this call-site argument bind?
 ///
 /// A bare pun (`x` — name==value, no written label) binds the field it NAMES,

@@ -1,0 +1,57 @@
+// Deterministic wire mutator for the segmenter property test. An LCG
+// over `seed` either corrupts a known-good wire template or emits raw
+// garbage from a wire-hostile alphabet — no OS entropy, so every seed's
+// bytes are pinned and the outcome fingerprint is reproducible.
+
+const ALPHABET = "()|>\"':,.\n\t abcdefgrstx0123456789<!-{}";
+
+const TEMPLATES = [_][]const u8{
+    "mint() | ok h |>",
+    "release(r: r1)",
+    "note(text: \"thinking\")",
+    "say(text: \"hello\")\ngrab(r: r1)",
+    "this is prose, not wire",
+    "mint()\nrelease(r: r1)",
+    "grab(r: 'h:Res:1') | ok _ |>",
+};
+
+~pub tor code { c: i64 } -> i64
+
+~proc code|zig {
+    return c;
+}
+
+~pub tor fuzz { seed: usize } -> string
+
+~proc fuzz|zig {
+    const stdz = @import("std");
+    var state: u64 = @as(u64, @intCast(seed)) *% 6364136223846793005 +% 1442695040888963407;
+    const next = struct {
+        fn f(s: *u64) u64 {
+            s.* = s.* *% 6364136223846793005 +% 1442695040888963407;
+            return s.* >> 33;
+        }
+    }.f;
+    var buf: [512]u8 = undefined;
+    var n: usize = 0;
+
+    if (@mod(seed, @as(usize, 3)) == 0) {
+        // Template mutation: corrupt a few positions of real wire.
+        const tpl = TEMPLATES[@intCast(next(&state) % TEMPLATES.len)];
+        const copy_len = @min(tpl.len, buf.len);
+        @memcpy(buf[0..copy_len], tpl[0..copy_len]);
+        n = copy_len;
+        const hits: usize = @intCast(1 + next(&state) % 4);
+        var h: usize = 0;
+        while (h < hits) : (h += 1) {
+            buf[@intCast(next(&state) % n)] = ALPHABET[@intCast(next(&state) % ALPHABET.len)];
+        }
+    } else {
+        // Raw garbage, 3..43 chars.
+        const len: usize = @intCast(3 + @mod(seed, @as(usize, 41)));
+        while (n < len) : (n += 1) {
+            buf[n] = ALPHABET[@intCast(next(&state) % ALPHABET.len)];
+        }
+    }
+    return stdz.heap.page_allocator.dupe(u8, buf[0..n]) catch unreachable;
+}

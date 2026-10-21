@@ -1,0 +1,69 @@
+// Koru Standard Library: the `fleet` part of cell — the ownership stamp,
+// the fenced write seam, and the dead-strip retain splice. Joined via
+// `~part fleet` in cell.kz; merged into the cell module at load.
+
+// The node's ownership stamp: when a node claims an id on the shared
+// floor it marks the cell with (world, id, node, granted-epoch, lease
+// TTL + cached deadline) — what `cellFlush` presents to the fence and
+// the due-check the resident-hit renewal reads without touching the
+// floor. Zero/empty is "unstamped": standalone `cell:open` cells and
+// worldless nodes carry no claim and write unfenced.
+pub const FleetStamp = struct {
+    world: []const u8 = "",
+    id: []const u8 = "",
+    node: []const u8 = "",
+    epoch: u32 = 0,
+    lease_ms: u64 = 0,
+    until: i64 = 0,
+};
+
+pub fn cellStampFleet(c: *Cell, world: []const u8, id: []const u8, node: []const u8, epoch: u32, lease_ms: u64, until: i64) void {
+    c.fleet = .{ .world = world, .id = id, .node = node, .epoch = epoch, .lease_ms = lease_ms, .until = until };
+}
+
+fn statePath(c: *Cell, buf: []u8) ?[]u8 {
+    const w = c.br.world orelse return null;
+    return std.fmt.bufPrint(buf, "{s}/state.kv", .{w}) catch null;
+}
+
+pub fn cellFlush(c: *Cell) void {
+    // The epoch fence: a stamped cell may write only while the ownership
+    // record still names its node at the epoch it was granted. A stale
+    // owner's write — capture seam, set write-through, destroy — dies
+    // here, the way celld voids zombie writes; the fence is at the write,
+    // not at dispatch. `std/fleet:guard` is where a program can check.
+    if (c.fleet.node.len > 0 and !Fl.fleetGuard(c.fleet.world, c.fleet.id, c.fleet.node, c.fleet.epoch)) return;
+    // The write is liveness — renew the lease if its last third is near.
+    if (c.fleet.lease_ms > 0) c.fleet.until =
+        Fl.fleetRenewDue(c.fleet.world, c.fleet.id, c.fleet.node, c.fleet.lease_ms, c.fleet.until);
+    var path_buf: [1024]u8 = undefined;
+    const path = statePath(c, &path_buf) orelse return;
+    const a = c.allocator;
+    var buf = std.ArrayList(u8).initCapacity(a, 256) catch return;
+    defer buf.deinit(a);
+    const w = buf.writer(a);
+    w.print("#shape={s}\n#shape_def={s}\n", .{ c.shape, c.manifest }) catch return;
+    for (c.fields) |f| {
+        const v = c.state.get(f.name) orelse continue;
+        switch (v) {
+            .int => |i| w.print("{s}={d}\n", .{ f.name, i }) catch return,
+            .float => |x| w.print("{s}={d}\n", .{ f.name, x }) catch return,
+            .flag => |b| w.print("{s}={s}\n", .{ f.name, if (b) "true" else "false" }) catch return,
+            .text => |t| {
+                w.print("{s}=", .{f.name}) catch return;
+                for (t) |ch| {
+                    if (ch == '\\') w.writeAll("\\\\") catch return
+                    else if (ch == '\n') w.writeAll("\\n") catch return
+                    else w.writeByte(ch) catch return;
+                }
+                w.writeByte('\n') catch return;
+            },
+        }
+    }
+    std.fs.cwd().writeFile(.{ .sub_path = path, .data = buf.items }) catch return;
+}
+
+// `cellFlush` calls `Fl.fleetGuard`/`Fl.fleetRenewDue` from HOST code —
+// nothing in a cell-only program spells `std/fleet:*`, so dead-strip
+// would retire the tors and `koru_fleet` would never emit. The `open`
+// transform in cell.kz calls `Fl.fleetRetainEvents` for every open.

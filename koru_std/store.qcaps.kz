@@ -17,6 +17,12 @@ const Cap = struct {
         /// such local: its value is the loop cursor, so it rides the same
         /// threading with the expression carried here.
         value: ?[]const u8 = null,
+        /// An `! each` binding's `for` iterable text — set only when the
+        /// element type could not be named at collection (type stays "?").
+        /// resolveEachIters answers a bare `for(name)` from the collected
+        /// binds' own `[]T`/`[N]T`; what still cannot be named refuses if
+        /// a body captures it (store.query.kz / store.qnone.kz).
+        each_iter: ?[]const u8 = null,
         /// Needs the enclosing frame. False only for synthesized captures
         /// (`[ordinal]`, `[id]`), whose value is computed inside the loop.
         /// A rewritten call-site expression (fmt result rebuild, 690_294)
@@ -162,128 +168,6 @@ const Cap = struct {
     fn collectEventInputs(alloc: std.mem.Allocator, items: []const ast.Item, path: ast.DottedPath, out: *std.ArrayList(Bind)) void {
         if (path.segments.len == 0) return;
         eventInputsIn(alloc, items, path.segments[path.segments.len - 1], path.module_qualifier, out);
-    }
-    fn collectBindsOnPath(alloc: std.mem.Allocator, items: []const ast.Item, cont: *const ast.Continuation, target: *const ast.Invocation, out: *std.ArrayList(Bind)) bool {
-        // Returns true if `target` lives under `cont`. Pushes mid-pipe binds
-        // on the path TO the target (ancestors only — not sibling arms or
-        // the sweep body itself).
-        if (cont.node) |*n| {
-            if (n.* == .invocation and &n.invocation == target) return true;
-        }
-        for (cont.continuations) |*c| {
-            if (collectBindsOnPath(alloc, items, c, target, out)) {
-                // The CHILD's arm binding is in scope for everything under
-                // it, so a sweep body nested in `! draw w` or `! progress
-                // pr` reads those names — and until this was recorded, the
-                // transplanted body got `use of undeclared identifier 'w'`.
-                // Its type is the branch payload on THIS cont's invocation,
-                // which is the tor whose branches the child arm handles.
-                //
-                // gallery works around the gap by binding a sub-window
-                // mid-pipe first (`sub(parent: win, …): root`), which lands
-                // in the return_binding case below. That is a fine spelling
-                // and not the only one: an arm payload has no call to hang
-                // a mid-pipe bind on.
-                if (c.binding) |ab| {
-                    if (!std.mem.eql(u8, ab, "_") and !std.mem.startsWith(u8, ab, "_")) {
-                        if (cont.node) |*pn| {
-                            if (pn.* == .invocation) {
-                                if (RetQual.lookupBranch(items, pn.invocation.path, std.mem.trim(u8, c.branch, " "))) |bt| {
-                                    out.append(alloc, .{
-                                        .name = ab,
-                                        .type = alloc.dupe(u8, bt.type) catch unreachable,
-                                        .module_path = if (bt.module_path) |mp| alloc.dupe(u8, mp) catch unreachable else null,
-                                        // The payload's obligation rides along, QUALIFIED with the
-                                        // module that declared it. Without the phantom at all the
-                                        // synthesized sweep-body input declares a bare type and the
-                                        // checker sees an untracked name; without the qualifier the
-                                        // state resolves against the CONSUMER's module and the
-                                        // mismatch reads `expected 'std.list:list' but got
-                                        // 'myprog:list'` (690_252).
-                                        //
-                                        // Written in the prefixed `mod:!state` spelling that the
-                                        // rest of this file's phantom handling expects, from the
-                                        // author's bare trailing-bang `state!`.
-                                        .phantom = if (bt.phantom) |ph| blk_bph: {
-                                            if (std.mem.indexOfScalar(u8, ph, ':') != null) break :blk_bph alloc.dupe(u8, ph) catch unreachable;
-                                            const owed = ph.len > 1 and ph[ph.len - 1] == '!';
-                                            const base = if (owed) ph[0 .. ph.len - 1] else ph;
-                                            const mp = bt.module_path orelse break :blk_bph alloc.dupe(u8, ph) catch unreachable;
-                                            break :blk_bph std.fmt.allocPrint(alloc, "{s}:{s}{s}", .{ mp, if (owed) "!" else "", base }) catch unreachable;
-                                        } else null,
-                                    }) catch unreachable;
-                                }
-                            }
-                        }
-                    }
-                }
-                // A DESTRUCTURE arm (`! removed { id }`) binds its fields
-                // the same way — the interceptor-payload threading
-                // (690_093). The fields are the create's store columns, so
-                // the type resolves from the parent invocation's seed
-                // block, not lookupBranch (a record payload has no single
-                // type to return). Skipped when the parent is not a
-                // std.store:new — a generic destructure's field types are
-                // a record lookup this pass does not do, and an untyped
-                // capture is worse than none.
-                if (c.destructure.len > 0) {
-                    if (cont.node) |*pn| {
-                        if (pn.* == .invocation) {
-                            const is_create = blk: {
-                                if (pn.invocation.path.module_qualifier) |mq| {
-                                    if (std.mem.eql(u8, mq, "std.store") and pn.invocation.path.segments.len == 1 and std.mem.eql(u8, pn.invocation.path.segments[0], "new")) break :blk true;
-                                }
-                                break :blk false;
-                            };
-                            if (is_create) {
-                                for (c.destructure) |df| {
-                                    if (storeColumnType(alloc, &pn.invocation, df.name)) |ft| {
-                                        out.append(alloc, .{ .name = alloc.dupe(u8, df.name) catch unreachable, .type = ft }) catch unreachable;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                // Child path hit — this cont is an ancestor. Record its
-                // mid-pipe bind if any, then bubble up.
-                if (cont.node) |*n| {
-                    if (n.* == .invocation) {
-                        if (n.invocation.return_binding) |rb| {
-                            if (RetQual.lookupReturn(items, n.invocation.path)) |rt| {
-                                // Zig treats two identical anonymous structs
-                                // as distinct types. fmt:ln's `.{ .text = … }`
-                                // will not coerce into the captured field, so
-                                // the call site rebuilds through result
-                                // location (690_294).
-                                const rebuild = std.mem.eql(u8, rt.type, "struct { text: []const u8 }");
-                                out.append(alloc, .{
-                                    .name = rb,
-                                    .type = alloc.dupe(u8, rt.type) catch unreachable,
-                                    .module_path = if (rt.module_path) |mp| alloc.dupe(u8, mp) catch unreachable else null,
-                                    // Same rule as the arm-binding capture above:
-                                    // the RETURN's obligation rides along, in the
-                                    // prefixed `mod:!state` spelling lookupReturnIn
-                                    // builds off `return_phantom`. Without it the
-                                    // synthesized sweepbody input declares the bare
-                                    // type and the checker reads the capture as
-                                    // untracked (KORU030).
-                                    .phantom = if (rt.phantom) |ph| alloc.dupe(u8, ph) catch unreachable else null,
-                                    .value = if (rebuild) std.fmt.allocPrint(alloc, ".{{ .text = {s}.text }}", .{rb}) catch unreachable else null,
-                                }) catch unreachable;
-                            } else {
-                                out.append(alloc, .{
-                                    .name = rb,
-                                    .type = alloc.dupe(u8, "i64") catch unreachable,
-                                }) catch unreachable;
-                            }
-                        }
-                    }
-                }
-                return true;
-            }
-        }
-        return false;
     }
 };
 

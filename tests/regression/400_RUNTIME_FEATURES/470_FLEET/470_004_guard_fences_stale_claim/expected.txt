@@ -1,0 +1,5 @@
+slate cleared
+node-a claimed epoch=1
+node-b seized epoch=2
+node-a fenced: record now epoch=2
+node-b still owns

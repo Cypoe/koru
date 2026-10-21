@@ -14,7 +14,7 @@ const std = @import("std");
     return .{ .ok = 7 };
 }
 
-~pub tor write { conn: i32, data: string }
+~pub tor write { conn: i32, data: string<*@scoped> }
 | ok i32
 | err string
 

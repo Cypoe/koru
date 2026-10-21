@@ -1,0 +1,29 @@
+// Koru Standard Library: the `console` part of io.kz — joined via
+// `~part console` in io.kz; merged into the io module at load.
+// Console messaging tors: stderr error, success, warning.
+
+// Print error to stderr
+~pub tor eprintln { message: string<*@scoped> }
+
+~proc eprintln|zig {
+    const stderr = std.fs.File.stderr().writer();
+    stderr.print("ERROR: {s}\n", .{message}) catch {
+        // Fall back to debug print if stderr fails
+        std.debug.print("ERROR: {s}\n", .{message});
+    };
+}
+
+// Success message with green color (if terminal supports it)
+~pub tor success { message: string<*@scoped> }
+
+~proc success|zig {
+    std.debug.print("✅ {s}\n", .{message});
+}
+
+// Warning message
+~pub tor warn { message: string<*@scoped> }
+
+~proc warn|zig {
+    std.debug.print("⚠️  {s}\n", .{message});
+}
+

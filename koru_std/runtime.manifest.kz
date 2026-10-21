@@ -3,34 +3,7 @@
 // verb bodies). Joined via `~part manifest` in runtime.kz; merged into
 // the runtime module at load.
 
-fn jsonAppendString(out: *std.ArrayList(u8), alloc: std.mem.Allocator, s: []const u8) void {
-    // Identifiers, module paths and obligation names cannot carry quotes or
-    // control bytes in Koru; the escape keeps caller-supplied scope names
-    // honest anyway (the only string in the manifest not shaped by the
-    // language).
-    out.append(alloc, '"') catch return;
-    for (s) |c| {
-        switch (c) {
-            '"' => out.appendSlice(alloc, "\\\"") catch return,
-            '\\' => out.appendSlice(alloc, "\\\\") catch return,
-            // All control bytes escape as \u — including \t/\n/\r, which the
-            // (valid, but longer) named forms would overlap in switch terms.
-            0...0x1f => |cc| {
-                var buf: [7]u8 = undefined;
-                const code = std.fmt.bufPrint(&buf, "\\u{x:0>4}", .{cc}) catch continue;
-                out.appendSlice(alloc, code) catch return;
-            },
-            else => out.append(alloc, c) catch return,
-        }
-    }
-    out.append(alloc, '"') catch return;
-}
-
-fn jsonAppendNumber(out: *std.ArrayList(u8), alloc: std.mem.Allocator, n: anytype) void {
-    var buf: [32]u8 = undefined;
-    const s = std.fmt.bufPrint(&buf, "{d}", .{n}) catch return;
-    out.appendSlice(alloc, s) catch return;
-}
+// jsonAppendString/jsonAppendNumber moved to the `jsonemit` part.
 
 /// Serialize a scope manifest to JSON. The record is the contract; this is
 /// one projection of it (the `explain` host and the Orisha endpoint consume
@@ -103,6 +76,8 @@ fn scopeManifestToJson(alloc: std.mem.Allocator, m: *const ScopeManifest) ![]con
             try out.append(alloc, '}');
         }
         try out.append(alloc, ']');
+        try out.appendSlice(alloc, ",\"doc\":");
+        jsonAppendString(&out, alloc, ev.doc);
         try out.append(alloc, '}');
     }
     try out.appendSlice(alloc, "],\"includes\":[");
@@ -110,7 +85,9 @@ fn scopeManifestToJson(alloc: std.mem.Allocator, m: *const ScopeManifest) ![]con
         if (ii > 0) try out.append(alloc, ',');
         jsonAppendString(&out, alloc, inc);
     }
-    try out.appendSlice(alloc, "]}");
+    try out.appendSlice(alloc, "],\"doc\":");
+    jsonAppendString(&out, alloc, m.doc);
+    try out.appendSlice(alloc, "}");
     return out.toOwnedSlice(alloc);
 }
 
@@ -171,11 +148,13 @@ pub fn scopeManifestForScope(
             .creates = creates.toOwnedSlice(alloc) catch &.{},
             .discharges = discharges.toOwnedSlice(alloc) catch &.{},
             .branches = branch_records.toOwnedSlice(alloc) catch &.{},
+            .doc = alloc.dupe(u8, info.event_decl.prose) catch info.event_decl.prose,
         }) catch continue;
     }
 
     // Direct `scope(other)` includes named in THIS register block, in order, deduped.
     var includes = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
+    var scope_doc: []const u8 = "";
     if (RegistryHelper.findScopeDef(scope_defs, scope_name)) |def| {
         for (RegistryHelper.parseEntries(alloc, def.source_text, debug_enabled)) |entry| {
             if (entry.kind == .scope_ref) {
@@ -187,12 +166,20 @@ pub fn scopeManifestForScope(
                 if (!dup) includes.append(alloc, entry.name) catch {};
             }
         }
+        // A `contract` tor declared in the register's own home module is the
+        // scope's documentation — lifted from its annotation prose into the
+        // manifest, never resolved into the event list, so it stays
+        // documentation and can never be called.
+        if (RegistryHelper.findEventInfoHomed(alloc, event_infos, "contract", def.home_module)) |info| {
+            scope_doc = alloc.dupe(u8, info.event_decl.prose) catch info.event_decl.prose;
+        }
     }
 
     return .{
         .scope = scope_name,
         .events = events.toOwnedSlice(alloc) catch &.{},
         .includes = includes.toOwnedSlice(alloc) catch &.{},
+        .doc = scope_doc,
     };
 }
 

@@ -1,17 +1,45 @@
 defined shout
-Your reply IS wire — open it with an invocation, never narration: verb(field: value, field: value) with `|` arms chaining what each call issues.
-- An arm binds what a call issued to a name for the next call: `| ok u |>` for an ordinary result, `| chosen c |>` for a named branch — the arm word is the branch name the verb's line in the vocabulary declares; an outcome marked `?` in that line may go unarmed, every other named outcome must be armed or the turn stops with `unhandled-branch`.
-- The verb is a bare name from your vocabulary — letters, digits, '-', '_' — immediately followed by '('.
-- A value is a double-quoted string (escape \" and \\ inside) or a bare literal: a number, true/false, or a name a `|` arm already bound.
-- A verb whose only field is `Source` takes its prose after the verb and a colon — `say: I'd be happy to help, what's your user id?` writes prose, commas and newlines and all, until the next invocation line — quotes never needed (`say(text: "...")` spells the same for one line). A field typed `Expression` takes expression text bare: `calc(expr: 2 + 3)`.
-- A field typed `name<x>` takes only a bound name the session minted `<x!>` — an `rN` from an earlier verb or an arm binding, never literal text.
-- A bound name keeps its fields: `r3.user_id` reads that field out of the value r3 bound — the whole result stays readable in the session, not just its name.
-- A second invocation starts a second item: one invocation per line runs each in order — to think out loud, `note: the reasoning` on its own line, then the call that acts on the next.
-- Invent a verb: `tor name { field: type }` declares it, `name = a call or chain` defines it — `tor greet { msg: string }` + `greet = say(text: msg)` — callable in the same reply and in your vocabulary thereafter.
-- Prose is not wire — it binds as residue: "residue bound: rN — your reply was not wire; nothing reached the user" keeps YOUR reply at rN — and a reply that is only prose is a turn spent reaching nobody.
-- Chain fresh outcomes with arms — a `| branch name |>` arm binds `name` to what the call just issued. Never invent one, never predict one: bind it.
+This surface is a little alien — a reply is a program, not a message. Trust the vocabulary below and it will start to feel like water: every verb below is real, every rule is enforced, and the report always tells you what to try next.
+
+Your reply IS wire — invocations, never narration. One invocation per line, run in order. `say(text: "...")` is what reaches the user; prose binds as residue and reaches nobody.
+
+VOCABULARY — each line below is the verb's declaration. `pub tor name { arg: type }` declares it; you INVOKE it with parens: `name(arg: "v")`. The `type<!name>` on an argument marks a handle an earlier call minted for you to hand in.
+
+VALUES — a field takes a "quoted string" or a bare expression (`42`, `r3.total * 2`, `u.user_id`). `{{ name }}` inside a quoted string splices a bound value into prose; `{{ u.field }}` lifts one level of fields — a deeper path refuses, so read nested shapes out of the report instead.
+
+OUTCOMES — `-> type` at the tail of a declaration names the verb's one outcome; arm it `| ok name |>`. A `|` list — `| ok string | missing string` — names the outcomes; arm words are exactly those names, nothing else. An invented arm is refused before the call runs, and the refusal names the legal words. When an outcome fires unarmed the report says `unhandled-branch` and names it: arm it and resend. Verbs that declare `| error string` issue failures on that branch — `call(...) | ok r |>` arms success only, so an unarmed error stops the reply at that step; to act on a failure arm it `| error e |>` and read `e` for the reason. Never assume a call succeeded — check the declaration's outcome list.
+
+BINDINGS — `| ok n |>` binds the outcome to `n` for the rest of this reply; a call five items later still sees it, and the name dies with the reply. Every dispatched result also binds a durable `r1, r2, …` name that outlives the reply — `| ok n |>` for threading within a reply, `rN` across replies.
+
+EXAMPLES
+
+Arms on the call's own line:
+
+fetch-account(id: "ada_7") | ok a |> say(text: "Welcome back, {{ a.name }}.")
+
+Or each arm on its own indented line — never both; a `|` on the call's line commits to the single-line shape:
+
+cancel-booking(booking_id: "BK402")
+    | ok c |> say(text: "Cancelled {{ c.booking_id }}.")
+
+A verb with more than one outcome arms each by name:
+
+read-doc(path: "n.txt")
+    | ok d |> say(text: "got {{ d }}")
+    | missing m |> say(text: "no such file: {{ m }}")
+
+Steps thread bound names through the whole reply:
+
+load-profile(user_id: "u_1") | ok p |>
+check-tier(member: p.membership) | ok t |>
+say(text: "{{ p.user_id }} is {{ t }}")
+
+HOST VERBS — `bind(name: "k", value: "...")` persists a value under `k` across replies. `abandon(reason: "...")` ends the session with your reason — what you tried, what blocked you. `vocabulary()` and `grammar()` re-emit this surface.
+
+The tool contract — every verb's full documentation and argument shapes — follows the vocabulary below; read it before composing a call whose payload shape is unclear.
+
 
 Your vocabulary:
-echo(text: string)
+pub tor echo { text: string } -> string
 shout(text: string)
 --- done

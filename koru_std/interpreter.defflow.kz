@@ -1,0 +1,74 @@
+// Koru Standard Library: the `defflow` part of interpreter.kz — the
+// runtime-defined-flow dispatch machinery. Joined via `~part defflow` in
+// interpreter.kz; merged into the interpreter module at load.
+//
+// Runtime-defined-flow DISPATCH — the call half of the REPL define
+// (interpreter.define.kz is the install half). A defined flow's body is
+// stored source, re-parsed and executed inline per dispatch; the table is
+// a live namespace, so a body naming a defined flow — itself included —
+// resolves to the CURRENT body. That makes self-referencing recursion;
+// `run` forwards no budget, so depth is the only bound: MAX_DEFINED_DEPTH
+// answers before nested frames kill the host stack. Pin: 440_042.
+pub const MAX_DEFINED_DEPTH: u32 = 64;
+
+pub fn findDefinedFlow(defined: *const DefinedFlows, name: []const u8) ?DefinedFlow {
+    return defined.get(name);
+}
+
+/// Dispatch one defined flow: depth-guard, bind params, re-parse the stored
+/// body, execute, unbind. The depth counter lives on ctx so nested defined
+/// dispatches — self-reference and mutual recursion alike — all count
+/// against the same cap.
+pub fn dispatchDefinedFlow(ctx: *InterpreterContext, df: DefinedFlow, evaluated_inv: *const ast.Invocation) anyerror!DispatchResult {
+    // Runaway recursion is a refusal, not a stack overflow: the cap
+    // answers before the frame nesting kills the host process.
+    if (ctx.defined_depth >= MAX_DEFINED_DEPTH) {
+        ctx.failing_event_name = persistentEventName(evaluated_inv);
+        ctx.error_detail = std.fmt.allocPrint(std.heap.page_allocator, "defined flow '{s}' exceeded the dispatch depth cap ({d}) — its body calls itself with no outcome that stops it", .{ df.name, MAX_DEFINED_DEPTH }) catch "defined flow exceeded the dispatch depth cap";
+        return error.DefinedDepthExceeded;
+    }
+    ctx.defined_depth += 1;
+    defer ctx.defined_depth -= 1;
+    for (df.params) |pname| {
+        var pval: []const u8 = "";
+        for (evaluated_inv.args) |arg| {
+            if (std.mem.eql(u8, arg.name, pname)) {
+                pval = arg.value;
+                break;
+            }
+        }
+        try ctx.env.bind(pname, .{
+            .branch = try ctx.allocator.dupe(u8, pval),
+            .fields = &[_]NamedField{},
+        });
+    }
+    // The body's tree is not the reply's — an arm binding inside a defined
+    // flow scopes to the body. Null the turn env for the body's run so its
+    // bindings can't leak into the reply's later items; restore after.
+    const saved_turn_env = ctx.turn_env;
+    ctx.turn_env = null;
+    defer ctx.turn_env = saved_turn_env;
+    // A body's under-handled tail FORWARDS its outcome — the caller arms
+    // it; a leaked flag would cry unhandled even on a matched outer arm.
+    const saved_unhandled = ctx.unhandled_outcome;
+    ctx.unhandled_outcome = null;
+    defer ctx.unhandled_outcome = saved_unhandled;
+    switch (flow_parser.parseFlow(ctx.allocator, df.body_source)) {
+        .flow => |*body_flow| {
+            const body_value = try executeFlow(body_flow, ctx);
+            for (df.params) |pname| ctx.env.remove(pname);
+            return .{
+                .branch = body_value.branch,
+                .fields = body_value.fields,
+            };
+        },
+        .err => |e| {
+            // The body was validated at define time; a parse failure here
+            // is an internal inconsistency, not the model's. Name the flow,
+            // the rejection, and the stored body so the shape stays
+            // debuggable.
+            std.debug.print("[REDEFINE-DISPATCH] re-parse of '{s}' failed: {s}; body was: '{s}'\n", .{ df.name, e.message, df.body_source });
+            return error.ValidationFailed;
+        },
+    }
+}

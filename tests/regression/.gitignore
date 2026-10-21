@@ -32,6 +32,7 @@
 !**/expected_output.txt
 !**/expected_error.txt
 !**/expected_patterns.txt
+!**/expected.transcript
 !**/expected_comptime.txt
 !**/expected.json
 !**/EXPECT
@@ -60,6 +61,9 @@
 # compile time; the fixture is the test's content every bit as much as input.k)
 !**/banner.txt
 !**/hello.txt
+
+# Keep suite profiles — named test selections, one glob per line
+!profiles/*.txt
 
 # Nested .gitignore files are deliberate (nbody/, local fixture rules)
 !**/.gitignore

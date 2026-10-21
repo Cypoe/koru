@@ -1,0 +1,26 @@
+// ============================================================================
+// SYNC — fsync-grade durability for a path
+// ============================================================================
+// `sync(path)` opens the path and fsyncs it: after `| synced`, the file's
+// bytes are on the device, not in the page cache. A bare `write-file`
+// answers survive-process-death; this answers survive-power-loss — the
+// durability level celld's acknowledged writes carry (SQLite fsync per put).
+
+~pub tor sync { path: string }
+| synced
+| failed string
+
+~proc sync|zig {
+    const __koru_sy_file = std.fs.cwd().openFile(path, .{}) catch |err| {
+        return .{ .failed = switch (err) {
+            error.FileNotFound => "File not found",
+            error.AccessDenied => "Access denied",
+            else => "Failed to open file",
+        } };
+    };
+    defer __koru_sy_file.close();
+    __koru_sy_file.sync() catch {
+        return .{ .failed = "Failed to sync file" };
+    };
+    return .{ .synced = .{} };
+}

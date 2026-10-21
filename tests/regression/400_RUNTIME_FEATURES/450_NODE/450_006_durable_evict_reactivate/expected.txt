@@ -1,0 +1,9 @@
+slate cleared
+spawned room-42
+committed visits=41
+evicted
+reactivated visits=41
+resident — id taken
+retired
+retired stays gone
+drained 0 cell(s)

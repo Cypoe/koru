@@ -1,0 +1,143 @@
+// Koru Standard Library: the `world` part of node — the shared-floor
+// ownership boundary. Activation claims on the durable floor, retire is
+// fenced by the record, and the `new` transform retains fleet's surface
+// against dead-strip. Joined via `~part world` in node.kz; merged into
+// the node module at load.
+
+const MemberResult = union(enum) {
+    cell: *Cl.Cell,
+    foreign: []const u8,
+    absent,
+};
+
+fn nodeMember(f: *Node, id: []const u8) MemberResult {
+    if (f.members.get(id)) |c| {
+        // A leased resident re-proves ownership inside its deadline's last
+        // third: the cached `until` gates it, so a live cell never touches
+        // the floor on lookup. Renewal keeps it held; a lease that lapsed
+        // while it sat quiet answers the takeover it now is.
+        if (c.fleet.lease_ms > 0 and
+            c.fleet.until - std.time.milliTimestamp() < @as(i64, @intCast(c.fleet.lease_ms / 3))) {
+            var fnb: [256]u8 = undefined;
+            switch (Fl.fleetAcquire(f.world_root, id, f.name, f.lease_ms, &fnb)) {
+                .held => |e| {
+                    c.fleet.epoch = e;
+                    c.fleet.until = Fl.fleetUntil(f.world_root, id, f.name, &fnb);
+                },
+                .foreign => |o| {
+                    const kv = f.members.fetchRemove(id).?;
+                    f.allocator.free(kv.key);
+                    Cl.cellDestroy(c);
+                    return .{ .foreign = std.heap.page_allocator.dupe(u8, o) catch
+                        return .absent };
+                },
+                .failed => {},
+            }
+        }
+        return .{ .cell = c };
+    }
+    return nodeActivate(f, id);
+}
+
+// Dormant-but-durable re-activation: a member miss probes `state.kv` and
+// rebuilds the cell from its `#shape` header — `| not-found` means "never
+// existed anywhere". The fleet gate sits between probe and activation:
+// owned → held-by; owned-and-bodiless (spawned, never flushed) → held-by
+// too; never-existing → not-found; own dormant → claimed and rebuilt.
+// At capacity an arbitrary resident is evicted — residency is a cache.
+fn nodeActivate(f: *Node, id: []const u8) MemberResult {
+    if (f.world_root.len == 0) return .absent;
+    var pb: [1024]u8 = undefined;
+    const path = std.fmt.bufPrint(&pb, "{s}/{s}/state.kv", .{ f.world_root, id }) catch return .absent;
+    std.fs.cwd().access(path, .{}) catch {
+        var mnb: [256]u8 = undefined;
+        return if (Fl.fleetForeignLiveOwner(f.world_root, id, f.name, &mnb)) |o|
+            .{ .foreign = std.heap.page_allocator.dupe(u8, o) catch return .absent } else .absent;
+    };
+    var fnb: [256]u8 = undefined;
+    var epoch: u32 = 0;
+    var until: i64 = 0;
+    switch (Fl.fleetAcquire(f.world_root, id, f.name, f.lease_ms, &fnb)) {
+        .foreign => |o| return .{ .foreign = std.heap.page_allocator.dupe(u8, o) catch return .absent },
+        .failed => return .absent,
+        .held => |e| {
+            epoch = e;
+            until = Fl.fleetUntil(f.world_root, id, f.name, &fnb);
+        },
+    }
+    const a = f.allocator;
+    const src = std.fs.cwd().readFileAlloc(a, path, 1024 * 1024) catch return .absent;
+    defer a.free(src);
+    var shape: ?[]const u8 = null;
+    var shape_def: ?[]const u8 = null;
+    var lines = std.mem.splitScalar(u8, src, '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0 or line[0] != '#') break;
+        if (std.mem.startsWith(u8, line, "#shape=")) shape = line["#shape=".len..];
+        if (std.mem.startsWith(u8, line, "#shape_def=")) shape_def = line["#shape_def=".len..];
+    }
+    if (shape == null or shape_def == null) return .absent;
+    if (f.members.count() >= f.capacity) {
+        var it = f.members.iterator();
+        if (it.next()) |kv| {
+            const evicted = f.members.fetchRemove(kv.key_ptr.*).?;
+            Cl.cellDestroy(evicted.value);
+            a.free(evicted.key);
+        }
+    }
+    const c = Cl.cellCreate(shape.?, shape_def.?, id, f.scope, f.world_root) orelse return .absent;
+    // The granted epoch rides with the cell — the write fence presents it;
+    // the lease deadline rides too so resident hits can renew without
+    // touching the floor.
+    Cl.cellStampFleet(c, f.world_root, id, f.name, epoch, f.lease_ms, until);
+    const key = a.dupe(u8, id) catch {
+        Cl.cellDestroy(c);
+        return .absent;
+    };
+    f.members.put(key, c) catch {
+        a.free(key);
+        Cl.cellDestroy(c);
+        return .absent;
+    };
+    return .{ .cell = c };
+}
+
+// ============================================================================
+// RETIRE — the durable counterpart of `evict`: evict releases residency and
+// the state file survives; retire deletes `<world_root>/<id>` outright —
+// the cell stops existing anywhere. `| absent` only when nothing was there.
+// ============================================================================
+
+~pub tor retire { f: *Node<node>, id: string }
+| retired
+| held-by string
+| absent
+
+~proc retire|zig {
+    // The durable identity is owned: a foreign record fences the delete —
+    // retire cannot destroy what this node does not hold.
+    if (f.world_root.len > 0) {
+        var fnb: [256]u8 = undefined;
+        if (Fl.fleetForeignOwner(f.world_root, id, f.name, &fnb)) |o|
+            return .{ .held_by = std.heap.page_allocator.dupe(u8, o) catch
+                return .absent };
+    }
+    var found = false;
+    if (f.members.fetchRemove(id)) |kv| {
+        Cl.cellDestroy(kv.value);
+        f.allocator.free(kv.key);
+        found = true;
+    }
+    if (f.world_root.len > 0) {
+        var pb: [1024]u8 = undefined;
+        if (std.fmt.bufPrint(&pb, "{s}/{s}", .{ f.world_root, id })) |p| {
+            if (std.fs.cwd().access(p, .{})) |_| {
+                found = true;
+            } else |_| {}
+            std.fs.cwd().deleteTree(p) catch {};
+        } else |_| {}
+        Fl.fleetReleaseIfOwner(f.world_root, id, f.name);
+    }
+    return if (found) .{ .retired = .{} } else .{ .absent = .{} };
+}
+

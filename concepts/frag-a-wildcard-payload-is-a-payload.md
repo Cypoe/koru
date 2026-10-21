@@ -24,3 +24,12 @@ The fix is the shared predicate: `fields.len > 0 or is_wildcard`.
 The generalization worth keeping: "has a payload" is a two-condition
 answer — named fields, or the wildcard. Any future site that asks the
 question field-count-only reintroduces the same dangling binding.
+
+The wildcard also answers the TYPING question the wrong way around:
+capture collection types arm binds from the declared payload
+(`lookupBranch`'s `__type_ref`), which `*` cannot supply — the type lives
+in the producer's context, not the decl. For `for`'s `each` the context
+is the iterable expression: `a..b` iterates usize, `[_]T{…}` iterates T,
+and a bare `for(name)` resolves off the named bind's own `[]T`/`[N]T`.
+What cannot be named stays "?" and refuses with teaching if a body
+captures it — an untyped capture is worse than none (pinned 690_370).

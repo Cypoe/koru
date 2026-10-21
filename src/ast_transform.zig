@@ -721,47 +721,62 @@ fn reattachArmsToLastStep(
     // The chain's level is its steps' indentation. Steps that disagree are not
     // one flat chain and this rule does not govern them.
     var level: ?usize = null;
-    var last_step: ?usize = null;
-    for (kids, 0..) |*k, i| {
+    for (kids) |*k| {
         if (!isUnnamedStep(k)) continue;
         if (level) |l| {
             if (k.indent != l) return false;
         } else level = k.indent;
-        last_step = i;
     }
     const lvl = level orelse return false;
-    const tail = last_step orelse return false;
 
+    // An arm attaches to the last step BEFORE it at the chain's level — the
+    // step it visibly follows. "Last step at its level" is read in source
+    // order: an arm written before every step keeps its flat-parse home on
+    // the head. Moving it forward would invert the layout — `| row b`
+    // followed by a same-level `|>` landed the row arm UNDER the step, and
+    // the step's tor took the blame (`has no branch 'row'`, 690_367).
+    const targets = try allocator.alloc(?usize, kids.len);
+    defer allocator.free(targets);
+    var last_step: ?usize = null;
     var moving: usize = 0;
     for (kids, 0..) |*k, i| {
-        if (i == tail or isUnnamedStep(k)) continue;
-        if (k.branch.len > 0 and k.indent == lvl) moving += 1;
+        targets[i] = null;
+        if (isUnnamedStep(k)) {
+            last_step = i;
+            continue;
+        }
+        if (k.branch.len > 0 and k.indent == lvl and last_step != null) {
+            targets[i] = last_step;
+            moving += 1;
+        }
     }
     if (moving == 0) return false;
 
-    const isMoving = struct {
-        fn f(k: *const ast.Continuation, i: usize, tail_i: usize, l: usize) bool {
-            return i != tail_i and k.branch.len > 0 and !isUnnamedStep(k) and k.indent == l;
-        }
-    }.f;
-
-    const tail_kid = &@constCast(kids)[tail];
-
-    // The tail's own children first, so the arms land AFTER anything it already
-    // carried, then publish onto the tail BEFORE `kept` copies it — `kept`
-    // holds values, so a copy taken first would keep the stale child list.
-    var arms = try std.ArrayList(ast.Continuation).initCapacity(allocator, tail_kid.continuations.len + moving);
-    defer arms.deinit(allocator);
-    try arms.appendSlice(allocator, tail_kid.continuations);
-    for (kids, 0..) |*k, i| {
-        if (isMoving(k, i, tail, lvl)) try arms.append(allocator, k.*);
-    }
-    tail_kid.continuations = try arms.toOwnedSlice(allocator);
-
+    // Publish each step's resolved arms AFTER the children it already
+    // carried, then republish the site without the moved arms. `kept` holds
+    // values, so the arms must merge into each step's list while the kids
+    // array is still the source of truth.
     var kept = try std.ArrayList(ast.Continuation).initCapacity(allocator, kids.len - moving);
-    defer kept.deinit(allocator);
+    errdefer kept.deinit(allocator);
     for (kids, 0..) |*k, i| {
-        if (!isMoving(k, i, tail, lvl)) try kept.append(allocator, k.*);
+        if (targets[i] != null) continue;
+        const dest = try kept.addOne(allocator);
+        dest.* = k.*;
+        var extra: usize = 0;
+        for (targets) |t| {
+            if (t == i) extra += 1;
+        }
+        if (extra == 0) continue;
+        const merged = try allocator.alloc(ast.Continuation, dest.continuations.len + extra);
+        @memcpy(merged[0..dest.continuations.len], dest.continuations);
+        var at = dest.continuations.len;
+        for (kids, 0..) |*a, j| {
+            if (targets[j] == i) {
+                merged[at] = a.*;
+                at += 1;
+            }
+        }
+        dest.continuations = merged;
     }
     site.continuations = try kept.toOwnedSlice(allocator);
     return true;
@@ -984,6 +999,8 @@ fn tryDesugarChain(
     defer steps.deinit(allocator);
     var chokes = try std.ArrayList(ast.Continuation).initCapacity(allocator, 4);
     defer chokes.deinit(allocator);
+    var stage_local = try std.ArrayList(bool).initCapacity(allocator, 4);
+    defer stage_local.deinit(allocator);
 
     try stage_infos.append(allocator, head_info);
 
@@ -996,9 +1013,14 @@ fn tryDesugarChain(
                 unnamed = child;
             } else {
                 // Choke handler. Desugar its own subtree first (it may host a
-                // nested chain), then record it for replication.
+                // nested chain), then record it for replication. An arm under
+                // a stage that declares NO branches is that stage's own
+                // continuation — a transform verb's arm (insert's `| row`)
+                // owned by the stage's lowering, not a chain claim — so the
+                // dead-claim check below must not judge it.
                 try desugarSitePointfree(allocator, table, child, null, counter, reporter, false);
                 try chokes.append(allocator, child.*);
+                try stage_local.append(allocator, stage_infos.items[stage_infos.items.len - 1].branches.len == 0);
             }
         }
         const step = unnamed orelse break;
@@ -1064,9 +1086,13 @@ fn tryDesugarChain(
     // check therefore lives at the CHAIN, which is the scope a choke claims
     // over: every claim must land on at least one stage.
     var dead_claim = false;
-    for (chokes.items) |choke| {
+    for (chokes.items, 0..) |choke, i| {
         if (claims_owned) break; // an ancestor already judged this choke set
         if (choke.kind != .terminal or choke.is_catchall or choke.branch.len == 0) continue;
+        // An arm under a branchless stage is that stage's own continuation —
+        // the stage's transform lowering owns it (insert's `| row`), so a
+        // name no chain stage declares is not a dead claim.
+        if (stage_local.items[i]) continue;
         var lands = false;
         for (stage_infos.items) |info| {
             if (branchNamed(info, choke.branch) != null) {

@@ -1881,7 +1881,14 @@ pub const AutoDischargeInserter = struct {
                     if (bodyReferencesBinding(flow, field.name)) continue;
                     const canonical = try self.canonicalizePhantom(phantom_str, impl_info.decl.module, fieldTypeModule(field));
                     defer self.allocator.free(canonical);
-                    const held = try std.fmt.allocPrint(self.allocator, "{s}!", .{canonical});
+                    // The held debt spells `module:name!@class…` — `!` rides
+                    // the name atom ahead of the join; a class can't owe.
+                    const held = blk: {
+                        if (std.mem.indexOfScalar(u8, canonical, '@')) |at| {
+                            break :blk try std.fmt.allocPrint(self.allocator, "{s}!{s}", .{ canonical[0..at], canonical[at..] });
+                        }
+                        break :blk try std.fmt.allocPrint(self.allocator, "{s}!", .{canonical});
+                    };
                     defer self.allocator.free(held);
                     try context.addBinding(field.name, held, field.name, field.type, self.nextAcqSeq());
                     if (context.cleanup_obligations.getPtr(field.name)) |info| info.not_auto_dischargeable = true;
@@ -3251,12 +3258,17 @@ pub const AutoDischargeInserter = struct {
                 if (disposals.len == 0) {
                     // No auto-dischargeable events - check if there are multi-branch events that accept this state
                     if (!try self.reportUndischargedCandidates(info, site_loc, display_name, display_state)) {
-                        // Strip trailing `!` from the state literal for the consumer-form suggestion:
-                        // the obligation is on `<unsanitized!>`; the discharger accepts `<!unsanitized>`.
+                        // Strip the `!` off the NAME for the consumer-form
+                        // suggestion: the obligation is on `<unsanitized!>` /
+                        // `<unsanitized!@scoped>`; the discharger accepts
+                        // `<!unsanitized>` / `<!unsanitized@scoped>`.
                         const state_without_bang = if (std.mem.endsWith(u8, display_state, "!"))
                             display_state[0 .. display_state.len - 1]
+                        else if (std.mem.indexOf(u8, display_state, "!@")) |bang_at|
+                            try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ display_state[0..bang_at], display_state[bang_at + 1 ..] })
                         else
                             display_state;
+                        defer if (!std.mem.endsWith(u8, display_state, "!") and !std.mem.eql(u8, state_without_bang, display_state)) self.allocator.free(state_without_bang);
                         try self.reporter.addError(
                             .KORU030,
                             site_loc.line,
@@ -4449,7 +4461,17 @@ pub const AutoDischargeInserter = struct {
             .concrete => |concrete| {
                 const mod = concrete.module_path orelse (base_type_module orelse module);
                 const cleanup_suffix = if (concrete.requires_cleanup) "!" else "";
-                return try std.fmt.allocPrint(self.allocator, "{s}:{s}{s}", .{ mod, concrete.name, cleanup_suffix });
+                var canon: std.ArrayListUnmanaged(u8) = .{};
+                errdefer canon.deinit(self.allocator);
+                try canon.appendSlice(self.allocator, mod);
+                try canon.append(self.allocator, ':');
+                try canon.appendSlice(self.allocator, concrete.name);
+                try canon.appendSlice(self.allocator, cleanup_suffix);
+                for (concrete.classes) |cls| {
+                    try canon.append(self.allocator, '@');
+                    try canon.appendSlice(self.allocator, cls);
+                }
+                return canon.toOwnedSlice(self.allocator);
             },
             .variable => {
                 return try self.allocator.dupe(u8, phantom_str);
@@ -5182,8 +5204,20 @@ pub const AutoDischargeInserter = struct {
         // their arms is the JOIN continuation — "after the conditional" — not
         // an arm waiting for a branch name. Only real event calls resolve.
         if (annotation_parser.isKeyword(decl.annotations)) return null;
+        // The same join rule holds for every tor: an unnamed `|>` written at
+        // a step's own level AFTER that step's `|` arms rejoins after the
+        // dispatch, it is not an anonymous arm. Only an anonymous step ahead
+        // of the first named arm — `call |> next` — is "continue on the
+        // success branch" and resolves below.
+        var first_arm: usize = conts.len;
+        for (conts, 0..) |*c, idx| {
+            if (c.is_catchall or c.branch.len != 0) {
+                first_arm = idx;
+                break;
+            }
+        }
         var has_anon = false;
-        for (conts) |*c| {
+        for (conts[0..first_arm]) |*c| {
             if (!c.is_catchall and c.branch.len == 0) {
                 has_anon = true;
                 break;
@@ -5213,7 +5247,7 @@ pub const AutoDischargeInserter = struct {
         errdefer self.allocator.free(out);
         for (conts, 0..) |*c, i| {
             out[i] = c.*;
-            if (!c.is_catchall and c.branch.len == 0) {
+            if (i < first_arm and !c.is_catchall and c.branch.len == 0) {
                 out[i].branch = try self.allocator.dupe(u8, success);
             }
         }

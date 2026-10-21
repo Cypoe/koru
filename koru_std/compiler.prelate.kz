@@ -1,0 +1,35 @@
+// Koru Standard Library: the `prelate` part of compiler.kz.
+// Joined via `~part prelate` in compiler.kz; merged into the compiler module at load.
+//
+// The pre-template transform sprinkle: runs the `.pre` stage (producers —
+// component, store, channel) then `.pre_late` (consumers — std/ctx reads
+// synthesized decls) BEFORE the per-call template pass, so consumer output
+// is ordinary AST that expands normally. `.main`/`.post` still run at
+// Phase 2.4 (evaluate-comptime); `.pre*` transforms carry @pass_ran so the
+// later all-stages run re-visits them as no-ops.
+~pub tor run-pre-transforms { ctx: CompilerContext } -> CompilerContext
+
+~proc run-pre-transforms|zig {
+    const backend_output = @import("backend_output_emitted.zig");
+    var updated_ctx = ctx;
+    if (@hasDecl(backend_output, "run_pass")) {
+        const runStage = struct {
+            // evaluate/run-pre have no clean error channel (they return a
+            // ctx), so stop the pipeline cleanly rather than leaking the
+            // ICE-shaped @panic + host stack trace.
+            fn call(stage: []const u8, p: *const @import("ast").Program, a: std.mem.Allocator, c: anytype) *@import("ast").Program {
+                const bo = @import("backend_output_emitted.zig");
+                return bo.run_pass(stage, p, a, @ptrCast(c)) catch |err| {
+                    if (err == error.TransformContinuationPositionUnsupported) std.process.exit(1);
+                    log.err("FATAL: {s}-stage transform pass failed ({s}). The pipeline cannot continue with a partially-transformed AST.\n", .{ stage, @errorName(err) });
+                    @panic("transform pass failed — see error above");
+                };
+            }
+        }.call;
+        updated_ctx.ast = runStage("pre", ctx.ast, ctx.allocator, &updated_ctx);
+        updated_ctx.ast = runStage("pre_late", updated_ctx.ast, ctx.allocator, &updated_ctx);
+    }
+    updated_ctx.passes_completed += 1;
+    updated_ctx.current_pass = "run_pre_transforms";
+    return updated_ctx;
+}

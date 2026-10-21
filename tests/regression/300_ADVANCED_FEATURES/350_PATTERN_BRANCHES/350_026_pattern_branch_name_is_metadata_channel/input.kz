@@ -30,7 +30,7 @@ fn descOf(comptime name: []const u8) []const u8 {
     const fields = @typeInfo(@This().Output).@"union".fields;
     inline for (fields) |f| {
         const line = std.fmt.bufPrint(&buf, "{s}|{s}\n", .{ tagOf(f.name), descOf(f.name) }) catch unreachable;
-        _ = std.posix.write(1, line) catch 0;
+        _ = std.fs.File.stdout().writeAll(line) catch {};
     }
     return @unionInit(@This().Output, "bug: Bug reports", 0.93);
 }

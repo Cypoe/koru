@@ -74,11 +74,12 @@ const std = @import("std");
 // of the write; the file owns the bytes after `| written`. `| failed` is
 // the same loud strings `read-lines` uses on open, plus write-side I/O.
 // No cap: the host writes `content` as given. The file is the owner after `| written`.
-~pub tor write { path: string, content: string }
+// Unfenced (cwd-relative) — the fenced spelling is `fs:write` on a `*Dir`.
+~pub tor write-file { path: string, content: string }
 | written
 | failed string
 
-~proc write|zig {
+~proc write-file|zig {
     const __koru_wr_file = std.fs.cwd().createFile(path, .{}) catch |err| {
         const __koru_wr_msg = switch (err) {
             error.FileNotFound => "File not found",
@@ -97,17 +98,8 @@ const std = @import("std");
 }
 
 // ============================================================================
-// LOW-LEVEL API (phantom types, full control) - FUTURE
+// DIRECTORY CAPABILITY - *Dir<open> confines every verb to its root
 // ============================================================================
 
-// pub tor open { path: string }
-// | opened { handle: FileHandle }
-// | failed { error: []const u8 }
-
-// pub tor read { handle: FileHandle }
-// | data { content: []const u8 }
-// | failed { error: []const u8 }
-
-// pub tor close { handle: FileHandle }
-// | closed {}
-// | failed { error: []const u8 }
+~part dir
+~part sync

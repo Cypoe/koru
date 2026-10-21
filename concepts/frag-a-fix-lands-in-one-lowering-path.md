@@ -674,7 +674,263 @@ What this adds that the earlier instances did not have:
   over-suppresses nothing (correct by accident), the other under-scopes the
   label (the pin).
 
-## Fourth instance — same function, sixty lines apart, one host (2026-10-13)
+## Fourth instance — the shared predicate was the divergent copy (2026-10-18)
+
+Every text rewriter that maps `<store>.<field>` onto the cell path asks the
+same question before rewriting a name: is the character before it a dot?
+`x.world` must not become `x.__koru_store_world` — the member path is not
+the store. That question was inlined at seven sites (store.kz, srefscan,
+insert, ixrefs, gate, qrewrite, new's identRefs) as the literal expression
+`(i == 0 or text[i - 1] != '.')` — and every copy misread `0..world.dd`
+the same way: `..` is the range operator, `world` is a fresh operand, and
+a dot immediately before the name is not always a member dot.
+
+The misread was discovered through its symptom — `for(0..world.dd)` emits
+`world` undeclared while `if (world.dd > 0)` lowers fine — and presented
+as a missing walk position, the pattern this whole file documents ("every
+gap this walk has ever had was an arm that was not here"). It was not a
+missing arm. It was the guard itself, identically wrong in every copy.
+
+What this instance adds:
+
+- **The copies were a predicate, not a lowering.** The file's earlier
+  tells count divergent *behaviors* — cost, emission, semantics. This one
+  is smaller: a five-token boundary test pasted seven times, and the paste
+  carried the misread to every site that pasted it. The bug did not drift
+  BETWEEN copies — it was born in all of them at once, because "not
+  preceded by a dot" reads like it means "not a member" and doesn't.
+- **The fix IS the file's own prescription.** `precededByMemberDot` in
+  ast.zig, next to `identBoundaryBefore` — one predicate, every call site
+  changed to call it. Odd dot counts are member dots; exactly-two is the
+  range operand (`x...name` = `x .. .name` re-arms the refusal — a
+  leading-dot literal). A rule subtle enough to get wrong seven times is
+  subtle enough to write once.
+- **`identBoundaryBefore`'s comment predicted it.** "every text rewriter
+  in the compiler needs it and there are a dozen private helpers to get
+  it wrong in a dozen ways" — written about the boundary half, while the
+  member-dot half sat beside it in exactly the shape it described.
+
+Pinned at 690_371: `for(0..world.dd)` prints three times; the member-dot
+refusals (row-binding shadow, cross-store index, all covered positions)
+verified green on the 10-pin slice.
+
+## Fifth instance — the emitted form the parser cannot read back (2026-10-18)
+
+An indexed char-column read `rows[h].dir` lowered through `storeIndexedRefs`
+to `(&__koru_store_rows.dir)[__koru_store_rows.__koru_resolve(h)]` — a `[N]u8`
+array. Downstream, `rewriteZigExpr` is supposed to wrap `x == "lit"` in the
+`std.mem.eql` block; `ZigExprParser.parseUnary` accepts `!` and `-` but not
+`&`, so `(&arr)[resolve] == "lit"` is NoParse and the whole condition ships
+to the backend raw — `cannot compare strings with ==`. Meanwhile
+`store.prewrite.kz`'s `entityRefs` had already settled the correct shape for
+the same read in `stored` value position: `sliceTo(&(&col)[idx], 0)` — the
+slice, the same form the qrow projection binds. Two paths, one read, two
+emissions — and the wrong one was wrong twice: unparseable to the rewriter,
+uncomparable to the backend.
+
+The second half of the instance is the file's older tell verbatim: insert's
+seed fields lower through a LOCAL `storeRefsAll` inside `store.insert.kz` —
+a partial copy of `StoredScan`'s composition that never included the indexed
+pass — so `insert(out) { dir: rows[h].dir }` reached Zig as literal
+`rows[...]` source text, an undeclared identifier. The comment beside it even
+claimed "the same rewrite the stored RHS gets." It was the same name, one
+pass short.
+
+What this instance adds:
+
+- **The copy was a SUBSET of a named composition.** Earlier tells found
+  duplicated logic that drifted; this one was a deliberately re-built
+  `storeRefsAll` that silently selected fewer passes than the shared
+  `lowerStoreExprs` already offered. A private re-implementation inside a
+  transform is a lowering boundary nobody diffs.
+- **Emit-parse agreement is a contract, not a coincidence.** The text
+  rewriters and `ZigExprParser` are one pipeline in two halves: anything a
+  rewriter emits, the parser must read. `(&col)[idx]` was the first emitted
+  shape that broke it — an emission optimized for "looks like Zig" over
+  "readable by our own pass."
+- **The fix stayed in the emitter, not the parser.** Teaching `parseUnary`
+  about `&` would have made the array parse — and still produced
+  `mem.eql(u8, [N]u8, "lit")`, a type error one level deeper. The char
+  column's canonical read form is the slice; emitting it at the source
+  (ixrefs, matching prewrite and the qrow projection) fixed the compare,
+  the `stored` coercion, and the insert seed in one move.
+
+Pinned at 690_372: `rows[world.ph].dir == "ltr"` wraps eql at a `| row`
+continuation and inside a `! query` arm, a `stored` write takes the read as
+a value, and an `insert` seed stores it — `hits 1211` end to end.
+
+## The reach gap can be TEMPORAL: the name does not exist yet when the guard runs
+
+The same class once more, and this instance has no second lowering and no
+second scanner to count — the boundary is a *moment*. A `! query { [id]h }`
+request bind is minted at the generated sweep's handler call:
+`{ .h = __koru_handle_of(__koru_si) }`. The arm's `when` guard runs in the
+sweep loop *before* that call, so `when rows[h].v == 20` emitted a reference
+to a binding that had not been created yet — `use of undeclared identifier`
+at backend compile, the position naming nothing about the real gap.
+
+The reach question this belief asks — "what does this check quantify over" —
+here has a *time* axis: the name's availability is bounded by when the
+capture is minted, not just by where it is written. `when` is a real consumer
+position sitting between the row and the call, and every request binding
+needed its capture expression inlined into the guard text to live there
+(`store.qguard.kz` substitutes `__koru_handle_of(__koru_si)` for `[id]` and
+the cursor cast for `[ordinal]` — the same expressions the handler args mint,
+computed at the guard's own moment).
+
+- **A binding's true scope includes WHEN.** "The arm sees `[id]h`" was true
+  of the arm's body and false of its guard, and the two reads of "the arm"
+  were never distinguished until a program put the name in the earlier
+  position. Enumerate the moments a name is needed, not just the places.
+- **The substitute, not the pipe.** The fix could not thread another handler
+  input (the guard runs before there is a call to thread it through) — the
+  only sound move was recomputing the capture's value at the guard's
+  position. Where a name must be visible before the mechanism that mints it,
+  the minted expression itself travels to the earlier site.
+
+Pinned at 690_373: `[id]` and `[ordinal]` names read inside `when` on
+`! query` and `! first`, including a nested indexed read of the guard's own
+store — `n 1030` end to end.
+
+## And the reach gap is SPATIAL the same way: the scan quantifies over items, never continuations
+
+Found the same afternoon, in the sibling direction. The coordinator's site
+scan — the pass that mints each `rule`/`preorder` site's qrow/qbody/qsweep
+units — iterates `flatItems(program.items)`: top-level `.flow` items and
+module trees. A `std/store:preorder(t)` inside a `for ! each` arm is not an
+item; it is a continuation node. The site's transform fired on it fine —
+`siteView` already hands a nested site a synthetic flow keyed on the holding
+continuation's location — and then refused `unknown store`, because the
+coordinator had never minted the unit the view names.
+
+Same defect family, different axis: the earlier instances are a feature
+present in one lowering and absent in its sibling; this one is a *site*
+present to the transform dispatcher and absent to the registration scan —
+the two halves of one handshake disagreeing about what counts as a site.
+`store.qsites.kz` now mints the identical flow view on the coordinator side
+(`ast_functional.collectInvSites` walks continuation trees, skipping
+`is_transformed_subtree` grafts), so both halves quantify over the same set.
+
+- **A handshake has two scanners, and both are the unit of work.** The
+  dispatcher could see nested sites for as long as `siteView` has existed;
+  the registration scan could not, and the gap held because the corpus had
+  never nested a preorder — every authored `preorder`/`rule` sits at top
+  level by habit, so the two scanners were never compared on a program that
+  distinguishes them.
+- **The view contract is the fix shape.** Where a consumer and a producer
+  must name the same thing, mint the SAME synthetic — here siteView's flow
+  on both sides — rather than a parallel structure that can drift again.
+
+Pinned at 695_006: `preorder` inside a `for ! each` arm walks the tree in
+DFS order twice — `n 1234` then `n 12341234` end to end.
+
+## The column list was derived from the wrong SURFACE, and the codebase knew the difference
+
+`store.cols.kz` carries the lesson in its own header: `storeFieldOrder`
+answers "every SoA column" and `storeInsertOrder` answers "the insert
+surface" — and they differ by exactly the `[tree]`-synthesized `parent`.
+A comment there records that merging them once broke all five tree tests.
+`store.query.kz` read the INSERT event's fields for `col_names` anyway —
+the surface that excludes `parent` by ruling — so `s.parent` refused as an
+unknown field on a `! query` row while `tree[h].parent` indexed cleanly.
+
+That is this belief's scope tell wearing a new costume: the derivation was
+not wrong *code*, it was the wrong *question* — it asked the insert surface
+for the column set instead of asking the column set. The fix routes the
+non-view path through `queryStoreCols` (store.qcols.kz), which appends
+`parent` when the store is a tree. Pinned at 695_007: `when s.parent == -1`
+selects the root, `tree[s.parent].v` follows the edge.
+
+- **Name the surface the derivation answers.** "columns" is ambiguous —
+  insert surface, projection surface, SoA layout are three different sets
+  with overlapping names. A helper named for the surface it reads is the
+  only honest spelling; `cols.kz` already has the vocabulary.
+- **The same miss can recur in the next file over.** The correction existed
+  (the merge that broke the tests was reverted); the KNOWLEDGE existed
+  (the header comment). What did not exist was the derivation actually
+  consulting the answer — knowledge that lives in a comment one file away
+  from the call site guards nothing.
+
+## And a KIND test on the shadow check let one spelling through
+
+Same file family, same sitting: the rule-5 shadow check — "a nested arm that
+rebinds the row name stops the outer rewrite" — guarded on `node_is_sweep`
+plus a `c.binding` read. A destructure arm `! query { [row]s }` has no
+`binding`; its names live in `c.destructure`. So the one shadow spelling the
+check could not see is exactly the one the request-block dialect introduced —
+`[row]s` rebinds `s` identically to `! query s`, and the guard's kind test
+let it pass straight through to the outer row's projection.
+
+- **Read the guard against the rule, not the spelling.** "A nested arm
+  rebinds the name" quantifies over *bindings*, full stop — `binding`,
+  every destructure field, every arm kind. The check quantified over the
+  spelling the author happened to write, which is the discriminant tell
+  again: same function, same block, one arm walled and the sibling arm
+  fallen through.
+- Pinned at 690_374: an inner `! query { [row]s }` on the same store
+  shadows the outer `s`; its `when` reads the inner row, and the outer
+  row's own fields keep rewriting beside it.
+
+## And the reach fix ran past the boundary the UNREACHED half was holding (2026-10-18)
+
+The spatial reach fix — mint coordinator units for `preorder` sites nested
+inside arm bodies — quantified over `rule` too, and `rule` nested in a body
+is not a missed site, it is the REFUSAL. `std/store:rule` is a standing-rule
+installation, top-level-only by construction (frag-store-verb-placement), and
+the enforcement IS the coordinator's blindness: the site transform finds the
+store declared but no minted sweep unit and teaches "top-level-only". Mint
+the unit and the refusal never fires — 690_066 passed-compile on the board.
+
+Same family, inverted direction: the previous instances asked "why did the
+fix not reach this position"; this one asked, too late, "what was the
+unreached position HOLDING". Discovery reach and refusal semantics are one
+surface — a scan widened for the momentary verb silently legalized the
+installation verb beside it.
+
+- **Before widening a scan, enumerate what invisibility enforces.** The
+  predicate `isQSiteInv` matched two verbs because they share a unit shape;
+  they do not share a placement ruling. The corrected predicate names
+  `preorder` only, and the comment now says the invisibility is load-bearing
+  so the next widening has to argue against it, not stumble over it.
+- **The board caught what the focused slice missed.** 690_066 was never in
+  the iteration set — the pins for the fix (695_006, green) and the pin for
+  the boundary it broke (a MUST_ERROR two directories over) live in the same
+  scan's blast radius. A "focused slice" sized to the feature under test is
+  sized to miss exactly this failure class.
+
+## And the capture oracle read the AST the transform had already eaten (2026-10-18)
+
+The `Handlers_*` capture set — the names a lifted member fn aliases from its
+enclosing scope — was computed by walking the arm's continuation tree. But a
+store site inside the arm gets its body consumed by the site transform and
+replaced with an `is_transformed_subtree` graft; the ambient names that graft
+references live only in the GENERATED call args (`.{ .w = w, .h = h }`) the
+sweepbody invocation emits. `spec_sel.k`'s `| win w` binding was spelled
+nowhere else — `h` survived via a surface-level `layout(cl: h)`, `w` did
+not — so the Caps factory minted `T_h` and the emitted member fn died on
+`use of undeclared identifier w`. Same family, same tell: the pass computing
+a boundary's inputs asked a representation that had already lost them.
+
+- **When the oracle and the boundary disagree about WHAT is the subject,
+  the boundary wins.** The capture set is not "names the authored AST
+  references" — it is "names the emitted code references that are live at
+  the call site." collectEmittedCaptures now emits each arm block into a
+  throwaway buffer (deferred decls routed to a scratch emitter, dropped)
+  and scans the text; the AST keeps only the half it still owns — names
+  bound INSIDE the arm, so a rebind `const w = …` in the arm itself keeps
+  `w` out of its own prelude.
+- **A fix to the oracle moves the whole interface.** The scan pass must
+  see the same scope shape the real pass sees — same shared-param push,
+  same eligibility filter — or it collects captures under a different
+  contract and the two passes mint different sets (400_209's `r` tripling
+  was a `seen` key dangling into a freed scan buffer, not a logic error —
+  the arena was fine, the hash key was not).
+- Pinned at 230_010: `| done w` referenced only inside a `std/store:query`
+  arm body still reaches the member-fn handler; three `! tick` arms force
+  the lowered path; un-falsified by a stash revert (backend-exec red on
+  the old collector, green on the new).
+
+## Sixth instance — same function, sixty lines apart, one host (2026-10-13)
 
 The narrowest instance yet, and the one that shows the class needs no
 lowering *boundary* at all. The C lane mints the void `__store_insert_<s>`
@@ -708,84 +964,3 @@ store — the first cell to combine the two.
   `[id]` existed as a request before it existed as a cell; the first
   program to run it on the C lane named the gap. Demand-driven machinery
   tests itself only when the demand shows up.
-
-## Fourth instance — same function, sixty lines apart, one host (2026-10-13)
-
-The narrowest instance yet, and the one that shows the class needs no
-lowering *boundary* at all. The C lane mints the void 
-body in  and the tagged // bodies from a
-shared  block — two text builders for the same insert semantics,
-about sixty lines apart inside the same  block of the same
-transform.
-
- carries the hslot mint — freelist pop or , the
-indirection row write under  — because  and 
-count issued slots.  was built a tranche earlier, before the
-handle machinery existed, and was never revisited: **the void insert —
-the most common path in the corpus — minted handles nothing could
-resolve.** A store fed only  and read through  or
- produced a handle  rejected for ,
-whose value stayed zero. insertf/inserth/take programs were correct; the
-divergence surfaced only when 690_246s
-
-## Fourth instance — same function, sixty lines apart, one host (2026-10-13)
-
-The narrowest instance yet, and the one that shows the class needs no
-lowering *boundary* at all. The C lane mints the void `__store_insert_<s>`
-body in `cap_text` and the tagged `insertf`/`inserth`/`take` bodies from a
-shared `c_append` block — two text builders for the same insert semantics,
-about sixty lines apart inside the same `host_is_c` block of the same
-transform.
-
-`c_append` carries the hslot mint — freelist pop or `hslot_next++`, the
-indirection row write under `!ident` — because `handle_of` and `row_of`
-count issued slots. `cap_text` was built a tranche earlier, before the
-handle machinery existed, and was never revisited: **the void insert —
-the most common path in the corpus — minted handles nothing could
-resolve.** A store fed only `insert` and read through `[id]` or
-`store[h]` produced a handle `row_of` rejected for `slot >= hslot_next`,
-whose value stayed zero. insertf/inserth/take programs were correct; the
-divergence surfaced only when 690_246's `[id]` chain read a plain-insert
-store — the first cell to combine the two.
-
-- **The sibling paths were not even two hosts.** Prior instances split
-  across languages, or across two driver positions of one construct. This
-  one is two `ArrayList(u8)` builders in one `if` — the "lowering paths"
-  of this belief bottom out at *duplicated emit text for one surface*,
-  which is the smallest unit the class can take. The fix that followed is
-  the convergence this belief keeps recommending: one `c_hmint`, shared.
-- **Age is the tell.** `cap_text` predated the machinery it needed. When
-  a later tranche adds a mechanism to a shared block, every older builder
-  of the same semantics is a suspect — "sibling" includes *earlier* and
-  *simpler*, not just *parallel*.
-- **The probe that found it was a feature, not a test written for it.**
-  `[id]` existed as a request before it existed as a cell; the first
-  program to run it on the C lane named the gap. Demand-driven machinery
-  tests itself only when the demand shows up.
-
-## Fifth instance — a check with one type source, and a widened enum (2026-10-13)
-
-Found by counting, not by the suite: a corpus harvest of 357 store/grid
-programs with witnesses injected showed 225 of 473 stored-write verdicts as
-`non-numeric` with an `unresolved` column. Two drift shapes fell out:
-
-- **The narrowing wall read column types from one of three sources.** It
-  asked the plural store's synthesized insert decl; capacity-1 stores have
-  none, so every singleton column was "not numeric" and a provably-f64
-  write into an f32 singleton crossed the wall, caught only by Zig's
-  typecheck (the C host would have rounded). `storeFieldOrder` already
-  knew the three-source cascade (insert decl, apply decl, seed block);
-  the check had copied the first leg only. After unifying: 225 → 7
-  non-numeric, 72 → 309 lossless, zero new reds on the 174-test surface.
-- **An enum gained a member; two exhaustive switches downstream did not.**
-  The C lane added `.c` to `HostTarget`; the refine-facet path in
-  `std/store:new` switched exhaustively over the old three. Zig rejects a
-  non-exhaustive switch at comptime whether or not the value can occur, so
-  the *generated backend* failed to compile for every refine-checked insert
-  on every host — eight MUST_RUN tests, invisible to the C lane's own
-  controls because they ran the surface the tranche touched. The sixth
-  tell (enumerated member list) at the type level: widening an enum is a
-  fix landing in one place for every switch over it.
-
-The measurement that found both was not looking for either. A witness
-census is a coverage instrument for the checks behind it.

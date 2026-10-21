@@ -1,17 +1,14 @@
-// PINS: a `!` arm at an impl flow's head cannot see the implementing
-// tor's params — KORU207 refuses at check time, before any Zig exists.
+// PINS: a `!` arm at an impl flow's head sees the implementing tor's
+// params — they ride the `__HandlersCaps_*` capture record, instantiated
+// and assigned at the call site where the params are live.
 //
 // Sibling of 400_175/400_200/400_207 (the head-arm partition cluster). An
 // impl flow whose head invokes an effectful proc/tor lowers each `!` arm
 // into a synthesized `Handlers_sf` struct passed `comptime` to the call —
-// a context-free fn that sees module scope only. A reference to a tor
-// param used to survive shape checking and die in emitted Zig:
-//
-//     error: 'tag' not accessible from inner function
-//
-// Mid-chain `!` arms inline and keep the enclosing frame (not the wall);
-// `[template]` procs (for/if/capture) substitute at the head and are also
-// exempt. The wall is exactly: impl-flow head + real effectful decl.
+// a context-free fn. Enclosing-scope names the arm references but does
+// not bind become container vars of the `__HandlersCaps_*` factory's
+// instantiated struct; the member fn rebinds them in a prelude const, so
+// `tag` below is the tor's own param, not a stale name.
 import std/io
 import std/string
 

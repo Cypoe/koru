@@ -1,0 +1,150 @@
+// 013_cell_node — the Orleans counter-grain workload on koru cells.
+//
+// The shape Orleans' persistence microbench measures: per turn, a grain
+// method call + a durable state write (WriteStateAsync). Ours per turn:
+//   `std/cell:run`      — a turn dispatched through the cell's interpreter
+//   `std/cell:capture`  — the transaction; its `! as` leaf-end IS the commit
+//                         (WriteStateAsync's moment — one state.kv write)
+//
+// Three arms:
+//   resident   — worldless node: dispatch + capture, no materializer
+//   durable    — world-mounted node: same turns, every commit is a file write
+//   activation — evict + member-lookup cycles: hibernate, then re-materialize
+//                from state.kv on next touch (Orleans DeactivateOnIdle + wake)
+//
+// The checksum is the oracle: TURNS hits must land on each grain, or a stage
+// silently never ran.
+
+~import std/io
+~import std/node
+~import std/cell
+~import std/fs
+~import std/proto
+~import std/runtime
+~import std/time
+
+~std/proto(counter) {
+    hits: u32
+}
+
+~pub tor touch { k: u32 } -> u32
+~touch -> k + 1
+
+~std/runtime:register(scope: "cell") {
+    touch(5)
+}
+
+const TURNS: usize = 60;
+
+~tor sink { } -> i64
+~sink -> 0
+
+~std/node:new(rf, scope: "cell", world: "", capacity: 8)
+~std/node:new(df, scope: "cell", world: "/tmp/koru-bench-cells", capacity: 8)
+
+~std/node(rf)
+| node f |> std/node:spawn(f, id: "grain", cell: counter)
+  | spawned b |> std/io:print.ln("rf grain spawned")
+  | resident |> std/io:print.ln("rf grain resident")
+  | held-by o |> std/io:print.ln("rf grain held by {{ o:s }}")
+  | refused |> std/io:print.ln("rf grain refused")
+
+~std/node(df)
+| node f |> std/node:spawn(f, id: "grain", cell: counter)
+  | spawned b |> std/io:print.ln("df grain spawned")
+  | resident |> std/io:print.ln("df grain resident")
+  | held-by o |> std/io:print.ln("df grain held by {{ o:s }}")
+  | refused |> std/io:print.ln("df grain refused")
+
+// ─── arm A: resident turns ─── dispatch + capture, memory only ───
+~std/time:now(): t0
+  |> std/node(rf.grain)
+    | cell c |> for(0..TURNS)
+      ! each _ |> std/cell:run(c, source: "touch(k: 1)")
+        | result _ |> std/cell:capture(c, shape: counter)
+          ! as s |> std/cell:captured { hits: s.hits + 1 }
+        | error e |> std/io:print.ln("turn failed: {{ e.kind:s }}")
+    | held-by o |> std/io:print.ln("rf grain held by {{ o:s }}")
+    | not-found |> std/io:print.ln("rf grain missing")
+  |> std/time:elapsed(start: t0): ra
+  |> std/io:print.ln("resident: {{ ra.ms:f }}ms for {{ TURNS:d }} turns")
+
+// ─── arm B: durable turns ─── same turns, commits are file writes ───
+~std/time:now(): t1
+  |> std/node(df.grain)
+    | cell c |> for(0..TURNS)
+      ! each _ |> std/cell:run(c, source: "touch(k: 1)")
+        | result _ |> std/cell:capture(c, shape: counter)
+          ! as s |> std/cell:captured { hits: s.hits + 1 }
+        | error e |> std/io:print.ln("turn failed: {{ e.kind:s }}")
+    | held-by o |> std/io:print.ln("df grain held by {{ o:s }}")
+    | not-found |> std/io:print.ln("df grain missing")
+  |> std/time:elapsed(start: t1): rb
+  |> std/io:print.ln("durable: {{ rb.ms:f }}ms for {{ TURNS:d }} turns")
+
+// arm D's grain: same world, second cell — its commits are fsync'd per turn
+~std/node(df)
+| node f |> std/node:spawn(f, id: "grain-s", cell: counter)
+  | spawned _ |> sink()
+  | resident |> sink()
+  | held-by o |> std/io:print.ln("ds grain held by {{ o:s }}")
+  | refused |> std/io:print.ln("ds grain refused")
+
+// ─── arm D: durable+sync turns ─── commit + fsync, celld's ack level ───
+~std/time:now(): t3
+  |> std/node(df.grain-s)
+    | cell c |> for(0..TURNS)
+      ! each _ |> std/cell:run(c, source: "touch(k: 1)")
+        | result _ |> std/cell:capture(c, shape: counter)
+          ! as s |> std/cell:captured { hits: s.hits + 1 }
+          | captured _ |> std/fs:sync(path: "/tmp/koru-bench-cells/grain-s/state.kv")
+            | synced |> sink()
+            | failed e |> std/io:print.ln("sync failed: {{ e:s }}")
+        | error e |> std/io:print.ln("turn failed: {{ e.kind:s }}")
+    | held-by o |> std/io:print.ln("ds grain held by {{ o:s }}")
+    | not-found |> std/io:print.ln("ds grain missing")
+  |> std/time:elapsed(start: t3): rd
+  |> std/io:print.ln("durable+sync: {{ rd.ms:f }}ms for {{ TURNS:d }} turns")
+
+// ─── arm C: activation ─── evict (hibernate) + lookup (re-materialize) ───
+~std/time:now(): t2
+  |> std/node(df)
+    | node f |> for(0..TURNS)
+      ! each _ |> std/node:evict(f, id: "grain")
+        | evicted |> std/node(df.grain)
+          | cell c |> std/cell:fields(c): _
+          | held-by o |> std/io:print.ln("held by {{ o:s }}")
+          | not-found |> std/io:print.ln("activation failed")
+        | absent |> std/io:print.ln("evict absent")
+  |> std/time:elapsed(start: t2): rc
+  |> std/io:print.ln("activation: {{ rc.ms:f }}ms for {{ TURNS:d }} cycles")
+
+// ─── checksum: the oracle reads both floors through the node ───
+~std/node(df.grain)
+| cell c |> std/cell:get(c, field: "hits")
+  | value v |> std/io:print.ln("df hits={{ v.int:d }}")
+  | unset u |> std/io:print.ln("df hits unset")
+  | unknown-field e |> std/io:print.ln("no field")
+| held-by o |> std/io:print.ln("df grain held by {{ o:s }}")
+| not-found |> std/io:print.ln("df grain gone")
+
+~std/node(df.grain-s)
+| cell c |> std/cell:get(c, field: "hits")
+  | value v |> std/io:print.ln("ds hits={{ v.int:d }}")
+  | unset u |> std/io:print.ln("ds hits unset")
+  | unknown-field e |> std/io:print.ln("no field")
+| held-by o |> std/io:print.ln("ds grain held by {{ o:s }}")
+| not-found |> std/io:print.ln("ds grain gone")
+
+~std/node(rf.grain)
+| cell c |> std/cell:get(c, field: "hits")
+  | value v |> std/io:print.ln("rf hits={{ v.int:d }}")
+  | unset u |> std/io:print.ln("rf hits unset")
+  | unknown-field e |> std/io:print.ln("no field")
+| held-by o |> std/io:print.ln("rf grain held by {{ o:s }}")
+| not-found |> std/io:print.ln("rf grain gone")
+
+~std/node(rf)
+| node f |> std/node:drain(f): n1 |> std/io:print.ln("rf drained {{ n1:d }}")
+~std/node(df)
+| node f |> std/node:drain(f): n2 |> std/io:print.ln("df drained {{ n2:d }}")

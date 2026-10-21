@@ -1,0 +1,12 @@
+slate cleared
+slate cleared
+slate cleared
+alpha spawned room-lp
+alpha committed visits=41
+beta refused while lease live: alpha
+alpha touched room-lp (lease renews)
+beta refused past original deadline: alpha
+beta activated after lapse, reads visits=41
+alpha evicted its stale resident: held by beta
+alpha drained 0
+beta drained 1

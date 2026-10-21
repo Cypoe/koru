@@ -1,0 +1,79 @@
+// Koru Standard Library: the `lease` part of fleet — takeover and lease
+// renewal. seize is operator-decided takeover; an expired-lease claim runs
+// the same serialized bump+commit. Joined via `~part lease` in fleet.kz.
+
+const Takeover = union(enum) {
+    seized: u32,
+    free,
+    contended,
+    foreign: []const u8,
+    failed,
+};
+
+// The serialized takeover under the lock dir: re-read under the lock (the
+// record may have changed since the caller looked), bump the persistent
+// epoch, commit node+epoch+until via tmp+rename. `require_expired` is the
+// claim path — it only takes over a record that is still expired; seize
+// passes false and takes whatever is there.
+pub fn fleetTakeover(
+    world: []const u8,
+    id: []const u8,
+    node: []const u8,
+    ttl_ms: u64,
+    require_expired: bool,
+    nb: []u8,
+) Takeover {
+    ensureDirs(world) catch return .failed;
+    var lb: [1024]u8 = undefined;
+    const lock = std.fmt.bufPrint(&lb, "{s}/.fleet/locks/{s}", .{ world, id }) catch
+        return .failed;
+    std.fs.cwd().makeDir(lock) catch |err| {
+        if (err == error.PathAlreadyExists) return .contended;
+        return .failed;
+    };
+    defer std.fs.cwd().deleteDir(lock) catch {};
+    const rec = ownerRead(world, id, nb) orelse return .free;
+    if (require_expired and leaseLive(rec.until)) return .{ .foreign = rec.node };
+    const epoch = epochBump(world, id);
+    ownerWrite(world, id, node, epoch, leaseUntil(ttl_ms)) catch return .failed;
+    return .{ .seized = epoch };
+}
+
+// The expired-claim leg of fleetAcquire — a lapsed lease is claimable, and
+// the takeover is exactly seize's. foreign = someone else re-leased first.
+pub fn fleetClaimExpired(
+    world: []const u8,
+    id: []const u8,
+    node: []const u8,
+    ttl_ms: u64,
+    nb: []u8,
+) Acquire {
+    return switch (fleetTakeover(world, id, node, ttl_ms, true, nb)) {
+        .seized => |e| .{ .held = e },
+        .foreign => |o| .{ .foreign = o },
+        else => .failed,
+    };
+}
+
+// ============================================================================
+// SEIZE — takeover: a peer claims an owned id after its owner is judged
+// dead (leases make "dead" a clock fact; the operator path stays). The lock
+// dir serializes concurrent takeovers; `contended` is single-attempt — the
+// caller re-decides.
+// ============================================================================
+
+~pub tor seize { world: string, id: string, node: string, ttl-ms: u64 }
+| seized u32
+| free
+| contended
+| failed string
+
+~proc seize|zig {
+    var nb: [256]u8 = undefined;
+    switch (fleetTakeover(world, id, node, ttl_ms, false, &nb)) {
+        .seized => |e| return .{ .seized = e },
+        .free => return .free,
+        .contended => return .contended,
+        else => return .{ .failed = "takeover failed" },
+    }
+}

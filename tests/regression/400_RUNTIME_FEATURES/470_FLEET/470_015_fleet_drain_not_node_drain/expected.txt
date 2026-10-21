@@ -1,0 +1,6 @@
+world cleared
+slate cleared
+spawned
+done 0
+drain done
+drained 1

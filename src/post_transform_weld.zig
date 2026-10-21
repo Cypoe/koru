@@ -29,7 +29,7 @@ pub fn weldAfterTransform(program: *ast.Program, allocator: std.mem.Allocator) !
     // Welded modules parse with basename module names and unqualified tor paths.
     // Canonicalize stamps logical module qualifiers so dead_strip keys match
     // cross-module invocations (frag-0002 — same rule as synthesized tors).
-    try canonicalize_names.canonicalize(program, allocator);
+    try canonicalize_names.canonicalize(program, allocator, &resolver);
 
     log.debug("[post_transform_weld] merged transform-appended imports — refreshing build_output.zig\n", .{});
 

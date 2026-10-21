@@ -52,7 +52,7 @@
     return new Output { tag = "done", done = __koru_rl_n };
 }
 
-~proc write|cs {
+~proc write-file|cs {
     if (global::System.IO.Directory.Exists(path)) {
         return new Output { tag = "failed", failed = "Path is a directory" };
     }

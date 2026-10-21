@@ -20,17 +20,17 @@ Before you spend a session on a claimed gap — from a header, a review, or anot
 
 - **blocker** — you compiled it; it refused (quote the diagnostic).
 - **not a blocker** — you compiled it, or a passing test *is* that join.
-- **unmeasured** — you have not compiled it this session. Stop talking.
+- **unmeasured** — you have not compiled it this session. Pause here until measured.
 
-Do not weld pins + stale comments + “when it goes green” into a wall Lars cannot parse.
+Avoid combining pins, stale comments, and “when it goes green” into a single unclear summary.
 
 **Stores vs grids.** `std/store` has capacity, `insert`, and `take`. A grid cannot add or remove a row. Entities that come and go belong in a store. Do not invent a fixed pool of dead slots, dummy writes, or a “conditional store” hole to occupy cells. That is a grid limitation narrated as a language gap.
 
 **Watch is not query.** `std/store(name) ! field` is a standing watch: body transplanted to write sites; no ambient from the enclosing flow (`690_006`). `std/store:query(name)` / `stripe` is a chain step. A query body can take a **borrow**: bare `<state>` on a parameter (`f: *Frame<frame>`). Draw already takes that. Issue is `<state!>`, consume is `<!state>`. If the compiler drops the phantom on the qbody input, that is a defect to compile and fix in `src/` — not a reason to put the game on a grid.
 
-**Answer the question.** “Do you understand X?” is yes or no. Do not look X up and lecture the spelling. Lead with a sentence that parses. Archaeology after, or not at all.
+**Answer the question.** “Do you understand X?” starts with yes or no. Lead with a sentence that parses. Additional context can follow.
 
-**Signal over noise — no clickbait.** No narrative-hookup ledes (“We thought X. Then Y.”), no suspense arcs, no discovery theatre, no selling. State the finding, cite the evidence, let the numbers carry it. This holds in session replies, commit messages, and blog drafts — a sentence whose job is to make the reader feel something instead of know something is noise, and it gets cut.
+**Signal over noise — no clickbait.** No narrative-hookup ledes (“We thought X. Then Y.”), no suspense arcs, no discovery theatre, no selling. State the finding, cite the evidence, let the numbers carry it. This holds in session replies, commit messages, and blog drafts — a sentence whose job is to make the reader feel something instead of know something is noise, and it should be removed.
 
 ## Find It Before You Build It
 - Before building a check, a wall, a helper, or a shared surface, **find out whether it already exists.** This is a precondition on every task, not a step in one.
@@ -89,7 +89,7 @@ Do not weld pins + stale comments + “when it goes green” into a wall Lars ca
 - Show test evidence (`zig build test`, `./run_regression.sh …`), note skips, and call out doc updates tied to tests.
 - Follow `CONTRIBUTING.md` for the regression-first workflow and documentation truth hierarchy.
 
-### Two commit hooks will reject you — plan the message before you write it
+### Two commit hooks enforce message format — plan the message before you write it
 `.git/hooks/commit-msg` enforces a discipline that is not visible from the diff,
 so a first commit in a fresh session usually bounces. Both sections go in the
 commit message body:
@@ -113,4 +113,4 @@ when unsure it is `evolve`). Read `skill://membrane` for the full discipline,
 and write the belief — the ruling, the why, the open questions — never a prose
 restatement of code, line numbers, or probe results the repo already holds.
 
-`--no-verify` exists and is the wrong answer; the hook is the discipline.
+`--no-verify` bypasses the checks; prefer following the hook discipline.

@@ -1,0 +1,8 @@
+name: surfaced
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `gap-found` — declare that name. Its one use (e87fe5404)
+  meant "a concrete toolchain gap surfaced, pinned, unfixed" — exactly
+  gap-found's meaning.

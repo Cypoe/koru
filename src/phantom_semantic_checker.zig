@@ -846,6 +846,175 @@ pub const PhantomSemanticChecker = struct {
         };
     }
 
+    /// Whether a tracked binding's phantom carries the `scoped` class
+    /// (`<name@class>` — see koru_std/phantom_parser.zig). A scoped debt may
+    /// not occupy output position: `->` returns, branch payloads, and store
+    /// columns all refuse it. The class lives on the VALUE's phantom, so the
+    /// produce edge checks the resource, not the declared output.
+    fn bindingHasScopedClass(
+        self: *PhantomSemanticChecker,
+        context: *BindingContext,
+        name: []const u8,
+    ) !bool {
+        const phantom = context.get(name) orelse return false;
+        var parsed = phantom_parser.PhantomState.parse(self.allocator, phantom) catch return false;
+        defer parsed.deinit(self.allocator);
+        return switch (parsed) {
+            .concrete => |c| c.hasClass("scoped"),
+            else => false,
+        };
+    }
+
+    /// Does this value carry the `scoped` class — on its own binding or on any
+    /// carrier prefix? Classes describe lifetime, and a projection's lifetime
+    /// is its carrier's: `l.text` rides `l`'s frame exactly as `l` does.
+    /// Identities do NOT descend this way (`b.text` is not `b`'s identity), so
+    /// this walk is deliberately class-only.
+    fn argHasScopedClass(
+        self: *PhantomSemanticChecker,
+        context: *BindingContext,
+        arg_value: []const u8,
+    ) !bool {
+        const name = std.mem.trim(u8, arg_value, " \t");
+        if (name.len == 0) return false;
+        for (name) |c| {
+            if (!isIdentChar(c) and c != '.') return false;
+        }
+        var prefix_end: usize = 0;
+        while (prefix_end < name.len) {
+            var seg = prefix_end;
+            while (seg < name.len and name[seg] != '.') seg += 1;
+            if (try self.bindingHasScopedClass(context, name[0..seg])) return true;
+            prefix_end = seg + 1;
+        }
+        return false;
+    }
+
+    /// The classes a param position declares — `string<*@scoped>` accepts
+    /// classed args (any identity + scoped), `string<*>`/`string` do not.
+    /// `scoped` is the only confinement class today; `static` carries no rule
+    /// and deliberately does not participate.
+    fn expectedHasScopedClass(self: *PhantomSemanticChecker, expected_phantom: ?[]const u8) bool {
+        const ep = expected_phantom orelse return false;
+        var parsed = phantom_parser.PhantomState.parse(self.allocator, ep) catch return false;
+        defer parsed.deinit(self.allocator);
+        return switch (parsed) {
+            .concrete => |c| c.hasClass("scoped"),
+            .state_union => |u| blk: {
+                for (u.members) |m| {
+                    if (m.hasClass("scoped")) break :blk true;
+                }
+                break :blk false;
+            },
+            else => false,
+        };
+    }
+
+    /// A produced value may not carry the `scoped` class — output position is
+    /// where a frame-bound borrow escapes into a scope that outlives its
+    /// frame. Covers every produce shape a branch_constructor spells: bare
+    /// `-> expr`, `-> { f: expr }` record-literal produce, `=> { f: expr }`
+    /// payload fields. The produced expr's own binding AND every tracked
+    /// `expr.<field>` beneath it are checked — `-> r` rides `r.text` out
+    /// just as surely as `-> r.text` does.
+    fn refuseScopedProduce(
+        self: *PhantomSemanticChecker,
+        bc: *const ast.BranchConstructor,
+        context: *BindingContext,
+        location: errors.SourceLocation,
+        implementing_event: ?*const ast.EventDecl,
+    ) !bool {
+        var reported = false;
+        // A bare `-> expr` into a declared `*@scoped` output is a
+        // class-preserving reissue, not an escape: the caller binds the value
+        // still-scoped. Record-literal and `=>` field produce keep refusing —
+        // caller-side record-field class conferral is not enforced yet, so
+        // legalizing a declared `*@scoped` field would launder the class
+        // through a hole that does not confer it back.
+        const output_accepts_scoped = if (implementing_event) |impl_ev|
+            self.expectedHasScopedClass(impl_ev.return_phantom)
+        else
+            false;
+        if (bc.plain_value) |pv| {
+            const expr = std.mem.trim(u8, pv, " \t");
+            if (try ast_functional.recordFieldTexts(self.allocator, expr)) |fields| {
+                defer self.allocator.free(fields);
+                for (fields) |f| {
+                    if (try self.refuseIfScopedProduced(f.value, context, location)) reported = true;
+                }
+            } else if (!output_accepts_scoped) {
+                if (try self.refuseIfScopedProduced(expr, context, location)) reported = true;
+            }
+        }
+        for (bc.fields) |f| {
+            if (f.expression_str) |expr| {
+                if (try self.refuseIfScopedProduced(expr, context, location)) reported = true;
+            }
+        }
+        return reported;
+    }
+
+    /// Refuse one produced expression if its binding — or any tracked
+    /// `expr.<field>` beneath it — carries the `scoped` class. Only
+    /// identifier/path expressions can name bindings; anything else
+    /// (literals, compound exprs) simply does not resolve.
+    fn refuseIfScopedProduced(
+        self: *PhantomSemanticChecker,
+        expr: []const u8,
+        context: *BindingContext,
+        location: errors.SourceLocation,
+    ) !bool {
+        var reported = false;
+        const name = std.mem.trim(u8, expr, " \t");
+        if (name.len == 0) return false;
+        for (name) |c| {
+            if (!isIdentChar(c) and c != '.') return false;
+        }
+        // The full path and every prefix of it: a scoped RECORD's fields ride
+        // its class — `-> l.text` escapes `l`'s scoped value under a field
+        // name just as `-> l` does under the whole name.
+        var prefix_end: usize = 0;
+        while (prefix_end < name.len) {
+            var seg = prefix_end;
+            while (seg < name.len and name[seg] != '.') seg += 1;
+            const prefix = name[0..seg];
+            if (try self.bindingHasScopedClass(context, prefix)) {
+                try self.reportScopedProduce(name, location);
+                reported = true;
+                break;
+            }
+            prefix_end = seg + 1;
+        }
+        // `-> r` carries every tracked `r.<field>` with it — a scoped field
+        // on the produced record escapes under the record's clean name.
+        var it = context.bindings.keyIterator();
+        while (it.next()) |key| {
+            const binding = key.*;
+            if (binding.len <= name.len + 1) continue;
+            if (!std.mem.startsWith(u8, binding, name)) continue;
+            if (binding[name.len] != '.') continue;
+            if (try self.bindingHasScopedClass(context, binding)) {
+                try self.reportScopedProduce(binding, location);
+                reported = true;
+            }
+        }
+        return reported;
+    }
+
+    fn reportScopedProduce(
+        self: *PhantomSemanticChecker,
+        name: []const u8,
+        location: errors.SourceLocation,
+    ) !void {
+        try self.reporter.addError(
+            .KORU030,
+            location.line,
+            location.column,
+            "'{s}' is @scoped — it dies with this frame and may not be produced out. Consume it in place, or copy it out first (std/string:from-page + take / fmt.blk)",
+            .{name},
+        );
+    }
+
     fn validatePhantom(self: *PhantomSemanticChecker, phantom_str: []const u8, event_name: []const u8, location: errors.SourceLocation, is_input: bool) !bool {
         // `event_decl.location` is stored in USER coordinates
         // (parser.getUserDeclStartLocation — `--ast-json` reads it raw, pinned
@@ -1130,9 +1299,22 @@ pub const PhantomSemanticChecker = struct {
                     break :blk bare_module;
                 };
 
-                // Build canonical form: module:state or module:state!
+                // Build canonical form: module:state, module:state!@class…,
+                // module:state! — `!` rides the name atom ahead of the join;
+                // classes are sorted in parse, so the join is already
+                // canonical.
                 const cleanup_suffix = if (concrete.requires_cleanup) "!" else "";
-                return try std.fmt.allocPrint(self.allocator, "{s}:{s}{s}", .{ canonical_module, concrete.name, cleanup_suffix });
+                var canon: std.ArrayListUnmanaged(u8) = .{};
+                errdefer canon.deinit(self.allocator);
+                try canon.appendSlice(self.allocator, canonical_module);
+                try canon.append(self.allocator, ':');
+                try canon.appendSlice(self.allocator, concrete.name);
+                try canon.appendSlice(self.allocator, cleanup_suffix);
+                for (concrete.classes) |cls| {
+                    try canon.append(self.allocator, '@');
+                    try canon.appendSlice(self.allocator, cls);
+                }
+                return canon.toOwnedSlice(self.allocator);
             },
             .variable => {
                 // State variables don't get canonicalized - they're constraints
@@ -1165,10 +1347,14 @@ pub const PhantomSemanticChecker = struct {
                         break :blk bare_module;
                     };
 
-                    // Append module:state
+                    // Append module:state@class…
                     try result.appendSlice(self.allocator, canonical_module);
                     try result.append(self.allocator, ':');
                     try result.appendSlice(self.allocator, member.name);
+                    for (member.classes) |cls| {
+                        try result.append(self.allocator, '@');
+                        try result.appendSlice(self.allocator, cls);
+                    }
                 }
 
                 return result.toOwnedSlice(self.allocator);
@@ -1794,7 +1980,15 @@ pub const PhantomSemanticChecker = struct {
                     const canonical_base_type = try self.canonicalizeBaseType(field.type, field.module_path, impl_module orelse impl_ev.module);
                     defer self.allocator.free(canonical_base_type);
                     if (concrete.consumes_obligation) {
-                        const held = try std.fmt.allocPrint(self.allocator, "{s}!", .{canonical_phantom});
+                        // The held debt spells `module:name!@class…` — `!`
+                        // rides the name atom ahead of the join; a class
+                        // can't owe a debt.
+                        const held = blk: {
+                            if (std.mem.indexOfScalar(u8, canonical_phantom, '@')) |at| {
+                                break :blk try std.fmt.allocPrint(self.allocator, "{s}!{s}", .{ canonical_phantom[0..at], canonical_phantom[at..] });
+                            }
+                            break :blk try std.fmt.allocPrint(self.allocator, "{s}!", .{canonical_phantom});
+                        };
                         defer self.allocator.free(held);
                         // The debt arrived with the call; it was not minted
                         // here. Suppress the mint edge the set would emit and
@@ -1883,7 +2077,7 @@ pub const PhantomSemanticChecker = struct {
         // and module_name (where event is defined, for phantom qualification).
         // Pass root_context so the flow-head bare-return bind propagates.
         for (flow.body.continuations, 0..) |*cont_ptr, cont_idx| {
-            const cont_valid = try self.validateContinuation(cont_ptr, event_info.decl, module_name, current_module, event_map, flow.location, &root_context, implementing_event, cont_ptr.branch.len != 0 and joinFollows(flow.body.continuations, cont_idx));
+            const cont_valid = try self.validateContinuation(cont_ptr, event_info.decl, module_name, current_module, event_map, flow.location, &root_context, implementing_event, cont_ptr.branch.len != 0 and joinFollows(flow.body.continuations, cont_idx), flow.inv());
             if (!cont_valid) {
                 has_errors = true;
                 // Continue checking for more errors
@@ -2036,7 +2230,12 @@ pub const PhantomSemanticChecker = struct {
             }
             const gt = close orelse continue;
             const phantom_content = std.mem.trim(u8, f_value[lt + 1 .. gt], " \t");
-            if (!std.mem.endsWith(u8, phantom_content, "!")) continue;
+            // `<state>` fields without `!` carry no cleanup debt, but a
+            // CLASSED phantom (`name@scoped`) still needs tracking — the
+            // class rules (no produce, etc.) are enforced off the binding's
+            // phantom text, not the obligation set.
+            if (!std.mem.endsWith(u8, phantom_content, "!") and
+                std.mem.indexOfScalar(u8, phantom_content, '@') == null) continue;
             const base_type = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{
                 std.mem.trim(u8, f_value[0..lt], " \t"),
                 f_value[gt + 1 ..],
@@ -2435,10 +2634,15 @@ pub const PhantomSemanticChecker = struct {
         }
 
         if (disposal_events.items.len == 0) {
+            // The consume spelling takes `!` off the NAME — `scratch!` →
+            // `<!scratch>`, `scratch!@scoped` → `<!scratch@scoped>`.
             const state_without_bang = if (std.mem.endsWith(u8, display_state, "!"))
                 display_state[0 .. display_state.len - 1]
+            else if (std.mem.indexOf(u8, display_state, "!@")) |bang_at|
+                try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ display_state[0..bang_at], display_state[bang_at + 1 ..] })
             else
                 display_state;
+            defer if (!std.mem.endsWith(u8, display_state, "!") and !std.mem.eql(u8, state_without_bang, display_state)) self.allocator.free(state_without_bang);
             try self.reporter.addError(
                 .KORU030,
                 location.line,
@@ -2487,8 +2691,16 @@ pub const PhantomSemanticChecker = struct {
         context: ?*const BindingContext,
         implementing_event: ?*const ast.EventDecl,
     ) anyerror!bool {
+        // The arms nested under `cont` fire from cont's own step — when that
+        // step is an invocation it is the firing call a `!`-arm custody
+        // revive (validateContinuation's .effect block) may consider.
+        const nested_firing: ?*const ast.Invocation = if (cont.node) |*step| switch (step.*) {
+            .invocation => |*inv| inv,
+            .label_with_invocation => |*lwi| &lwi.invocation,
+            else => null,
+        } else null;
         for (cont.continuations, 0..) |*nested, nested_idx| {
-            const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
+            const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx), nested_firing);
             if (!nested_valid) {
                 return false;
             }
@@ -2507,21 +2719,58 @@ pub const PhantomSemanticChecker = struct {
         parent_context: ?*const BindingContext, // Optional parent context to inherit from
         implementing_event: ?*const ast.EventDecl, // Event this flow implements (for branch_constructor escape)
         is_join_arm: bool, // This continuation is a named arm followed by a join — obligations inherited at entry are live-through
+        firing_inv: ?*const ast.Invocation, // The invocation whose call fired this arm — null when unknown
     ) anyerror!bool {
         var has_errors = false;
-
-        // Transform-grafted subtrees are synthesized, not user-authored — and a
-        // fused/flattened loop body cannot be linearity-judged (one straight-line
-        // pass re-uses iteration bindings, reading as false use-after-discharge).
-        // Same short-circuit flow_checker and shape_checker apply; mistakes
-        // inside the graft are caught downstream by the Zig backend.
-        if (cont.is_transformed_subtree) return true;
 
         // The arm owns the error: every diagnostic raised for this continuation —
         // branch, step, argument, or exit-balance — names ITS line, not the flow
         // head the caller threaded down (fa026be34's convention: the arm's own
         // location, falling back to the caller's when the parser left line 0).
         const location = if (cont.location.line != 0) cont.location else caller_location;
+
+        // Transform-grafted subtrees are synthesized, not user-authored — and a
+        // fused/flattened loop body cannot be linearity-judged (one straight-line
+        // pass re-uses iteration bindings, reading as false use-after-discharge).
+        // Same short-circuit flow_checker and shape_checker apply; mistakes
+        // inside the graft are caught downstream by the Zig backend.
+        //
+        // But the mark lives on the synthesized NODE, and a transform that
+        // bottoms its chain out in the flow's authored continuations
+        // (std/store:stored's envwrite chain) leaves user code as a CHILD of
+        // a marked node — pruning here deadened every check on the tail: a
+        // `stored` write in a `!` arm hid `window.size(win: w)` from the
+        // discharge ledger entirely (330_145). Skip the synthesized node,
+        // still walk its children — each carries its own mark. Children
+        // dispatch against the synthesized node's invoked tor, exactly as
+        // the named-branch walk does below; an unresolvable one keeps the
+        // old blanket-skip rather than guessing.
+        if (cont.is_transformed_subtree) {
+            var graft_event: ?struct { decl: *const ast.EventDecl, module: ?[]const u8 } = null;
+            const graft_inv: ?*const ast.Invocation = if (cont.node) |*step| switch (step.*) {
+                .invocation => |*inv| inv,
+                .label_with_invocation => |*lwi| &lwi.invocation,
+                else => null,
+            } else null;
+            if (graft_inv) |inv| {
+                const graft_name = try self.pathToString(inv.path);
+                defer self.allocator.free(graft_name);
+                const graft_module = inv.path.module_qualifier orelse flow_module;
+                const graft_qualified = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graft_module, graft_name });
+                defer self.allocator.free(graft_qualified);
+                if (event_map.get(graft_qualified)) |ei| {
+                    graft_event = .{ .decl = ei.decl, .module = graft_module };
+                }
+            }
+            if (graft_event) |ge| {
+                for (cont.continuations, 0..) |*nested, nested_idx| {
+                    const nested_valid = try self.validateContinuation(nested, ge.decl, ge.module, flow_module, event_map, location, parent_context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx), graft_inv);
+                    if (!nested_valid) has_errors = true;
+                }
+            }
+            return !has_errors;
+        }
+
         log.debug("[PHANTOM-FLOW]   Continuation branch: '{s}'\n", .{cont.branch});
 
         // Debug: print event path and branches
@@ -2656,6 +2905,11 @@ pub const PhantomSemanticChecker = struct {
                 // frontier 1: `dispose(h) -> { h }` must refuse at the pack).
                 if (exit_node == .branch_constructor) {
                     const exit_bc = &exit_node.branch_constructor;
+                    if (self.check_mode == .full) {
+                        if (try self.refuseScopedProduce(exit_bc, &void_context, location, implementing_event)) {
+                            return false;
+                        }
+                    }
                     if (exit_bc.is_bare_return) {
                         if (implementing_event) |impl_ev| {
                             if (impl_ev.return_type) |rt| {
@@ -2853,6 +3107,77 @@ pub const PhantomSemanticChecker = struct {
         // (Checker-side twin of the inserter's join_watermark.)
         if (is_join_arm) try context.markInheritedJoinLive();
 
+        // A `!` arm runs INSIDE the callee's loop body. A binding the firing
+        // call consumed through `<!state>` params is the loop's live value
+        // for the arm's duration — `frames(win: w)` takes `<!opened|!active>`
+        // and during `! frame` the window really is opened|active, which is
+        // why borrows like `window.size` declare exactly those states. The
+        // disposed mark the call left is right for code AFTER the call and
+        // wrong inside its own `!` arms: revive the binding here as live
+        // with the consumed states minus the `!` — the obligations moved to
+        // the loop's custody and `| done`-style arms re-issue them when it
+        // returns. Without this, an ambient use inside a `!` arm was
+        // refused outright (or silently passed under a transform graft —
+        // the marked-node descent above is what used to hide it): 330_145.
+        if (cont.kind == .effect) {
+            // Custody is identified by the firing call's own argument nodes:
+            // the disposal site's `/<arg-ptr>` suffix is the arg's value-string
+            // pointer, so only a discharge THIS invocation performed revives —
+            // a binding a prior call discharged stays dead inside the arm.
+            if (firing_inv) |finv| {
+                for (finv.args, 0..) |arg, arg_idx| {
+                    const site = context.disposalSite(arg.value) orelse continue;
+                    const site_suffix = try std.fmt.allocPrint(self.allocator, "/{x}", .{@intFromPtr(arg.value.ptr)});
+                    defer self.allocator.free(site_suffix);
+                    if (!std.mem.endsWith(u8, site, site_suffix)) continue;
+
+                    // Only `<!state>`-consuming params hand custody to the loop;
+                    // a borrow or produce param discharges nothing inside it.
+                    // Positional args resolve to their field by position.
+                    var live_phantom: ?[]const u8 = null;
+                    for (event_decl.input.fields, 0..) |field, field_idx| {
+                        const matches = if (arg.name.len != 0)
+                            std.mem.eql(u8, field.name, arg.name)
+                        else
+                            field_idx == arg_idx;
+                        if (!matches) continue;
+                        const param_phantom = field.phantom orelse break;
+                        if (std.mem.indexOfScalar(u8, param_phantom, '!') == null) break;
+                        const live_text = try self.allocator.alloc(u8, param_phantom.len);
+                        defer self.allocator.free(live_text);
+                        var li: usize = 0;
+                        for (param_phantom) |pc| {
+                            if (pc != '!') {
+                                live_text[li] = pc;
+                                li += 1;
+                            }
+                        }
+                        const module_for_canon = event_module orelse event_decl.module;
+                        live_phantom = try self.canonicalizePhantomStateWithBase(
+                            live_text[0..li],
+                            module_for_canon,
+                            try self.baseTypeModule(field.module_path),
+                        );
+                        break;
+                    }
+
+                    if (live_phantom) |lp| {
+                        defer self.allocator.free(lp);
+                        // setWithType removes the old entry — and frees the old
+                        // base_type — before it dupes; a slice of that old entry
+                        // passed straight in aliases freed memory.
+                        const live_base = try self.allocator.dupe(u8, context.getBaseType(arg.value) orelse "");
+                        defer self.allocator.free(live_base);
+                        try context.setWithType(arg.value, lp, live_base);
+                        if (context.disposed_bindings.fetchRemove(arg.value)) |kv| {
+                            self.allocator.free(kv.key);
+                            self.allocator.free(kv.value);
+                        }
+                    }
+                }
+            }
+        }
+
         // Add binding with phantom states from branch payload
         // If there's no explicit binding, synthesize "_" to track the obligation
         const binding_name = cont.binding orelse "_";
@@ -2981,6 +3306,12 @@ pub const PhantomSemanticChecker = struct {
             if (cont.node) |node| {
                 if (node == .branch_constructor) {
                     const bc = &node.branch_constructor;
+                    // A `@scoped` value may occupy output position only where
+                    // the declared output itself carries `scoped` — bare
+                    // `->`, `=>` payload fields, record-literal produce.
+                    if (try self.refuseScopedProduce(bc, &context, location, implementing_event)) {
+                        has_errors = true;
+                    }
                     if (bc.is_bare_return) {
                         if (implementing_event) |impl_ev| {
                             if (impl_ev.return_type) |rt| {
@@ -3034,6 +3365,12 @@ pub const PhantomSemanticChecker = struct {
 
                 var lost_count: usize = 0;
                 var first_lost: ?[]const u8 = null;
+                var scoped_reported = std.StringHashMap(void).init(self.allocator);
+                defer {
+                    var it = scoped_reported.keyIterator();
+                    while (it.next()) |key| self.allocator.free(key.*);
+                    scoped_reported.deinit();
+                }
 
                 for (uncleaned) |resource| {
                     // Outer-scope obligations are the outer scope's responsibility -
@@ -3048,6 +3385,27 @@ pub const PhantomSemanticChecker = struct {
                     if (context.isJoinLive(resource)) {
                         continue;
                     }
+                    // `<name@scoped>` debts have NO legal end at a terminator:
+                    // the class means the value may not occupy output
+                    // position, so any scoped obligation still live here —
+                    // produced out or left to die — is the violation itself.
+                    if (try self.bindingHasScopedClass(&context, resource)) {
+                        const display_name = if (std.mem.indexOf(u8, resource, ".")) |dot_idx|
+                            resource[dot_idx + 1 ..]
+                        else
+                            resource;
+                        try self.reporter.addError(
+                            .KORU030,
+                            location.line,
+                            location.column,
+                            "obligation '{s}' is @scoped — it dies with this frame and may not be produced out. Consume it in place, or copy it out first (std/string:from-page + take / fmt.blk)",
+                            .{display_name},
+                        );
+                        has_errors = true;
+                        try scoped_reported.put(try self.allocator.dupe(u8, resource), {});
+                        continue;
+                    }
+
                     // For hard terminals (_), all uncleaned resources are errors
                     var documented_escape = false;
 
@@ -3244,6 +3602,9 @@ pub const PhantomSemanticChecker = struct {
                     const fields_for_error = return_branch_fields orelse (if (branch_payload) |bp| bp.fields else null);
 
                     for (uncleaned) |resource| {
+                        // A refused @scoped produce was reported already.
+                        if (scoped_reported.contains(resource)) continue;
+
                         // Skip if it escapes through signature
                         var escapes = false;
 
@@ -3402,7 +3763,7 @@ pub const PhantomSemanticChecker = struct {
                 // Validate nested continuations against the invoked event (not parent event)
                 // Pass the current context down so disposed bindings propagate
                 for (cont.continuations, 0..) |*nested, nested_idx| {
-                    const nested_valid = try self.validateContinuation(nested, nested_event_info.decl, module_name, flow_module, event_map, location, &context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
+                    const nested_valid = try self.validateContinuation(nested, nested_event_info.decl, module_name, flow_module, event_map, location, &context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx), inv);
                     if (!nested_valid) {
                         has_errors = true;
                         // Continue checking for more errors
@@ -3434,7 +3795,7 @@ pub const PhantomSemanticChecker = struct {
                     // No invocations in pipeline - nested continuations still belong to parent event
                     log.debug("[PHANTOM-FLOW]   No invocations in pipeline, nested continuations belong to parent event\n", .{});
                     for (cont.continuations, 0..) |*nested, nested_idx| {
-                        const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, &context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
+                        const nested_valid = try self.validateContinuation(nested, event_decl, event_module, flow_module, event_map, location, &context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx), firing_inv);
                         if (!nested_valid) {
                             has_errors = true;
                             // Continue checking for more errors
@@ -3498,7 +3859,7 @@ pub const PhantomSemanticChecker = struct {
                         if (event_map.get(qualified_name)) |event_info| {
                             // Validate nested continuations against this event
                             for (cont.continuations, 0..) |*nested, nested_idx| {
-                                const nested_valid = try self.validateContinuation(nested, event_info.decl, resolved_module, flow_module orelse "unknown", event_map, location, &context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx));
+                                const nested_valid = try self.validateContinuation(nested, event_info.decl, resolved_module, flow_module orelse "unknown", event_map, location, &context, implementing_event, nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx), inv);
                                 if (!nested_valid) {
                                     has_errors = true;
                                 }
@@ -3790,8 +4151,10 @@ pub const PhantomSemanticChecker = struct {
             // continuation's binding to the context with the correct phantom state.
             var nested_event_decl: ?*const ast.EventDecl = null;
             var nested_event_module: ?[]const u8 = null;
-            if (cont.node) |step_for_nested| switch (step_for_nested) {
-                .invocation => |inv_for_nested| {
+            var nested_firing_inv: ?*const ast.Invocation = null;
+            if (cont.node) |*step_for_nested| switch (step_for_nested.*) {
+                .invocation => |*inv_for_nested| {
+                    nested_firing_inv = inv_for_nested;
                     const ev_name = try self.pathToString(inv_for_nested.path);
                     defer self.allocator.free(ev_name);
                     nested_event_module = inv_for_nested.path.module_qualifier orelse current_module;
@@ -3830,6 +4193,7 @@ pub const PhantomSemanticChecker = struct {
                         &branch_context,
                         null,
                         nested.branch.len != 0 and joinFollows(cont.continuations, nested_idx),
+                        nested_firing_inv,
                     );
                     if (!valid) has_errors = true;
                     continue;
@@ -4136,9 +4500,33 @@ pub const PhantomSemanticChecker = struct {
         }
 
         // `<*>` — the any-qualification wildcard — takes the no-requirement
-        // path: marked or unmarked args accepted, nothing consumed.
-        const any_qualification = if (expected_phantom) |ep| std.mem.eql(u8, ep, "*") else false;
+        // path: marked or unmarked args accepted, nothing consumed. Classes
+        // ride a separate axis from identity: `*` accepts any STATE, while
+        // `*@scoped` additionally declares it may receive frame-bound values.
+        const any_qualification = if (expected_phantom) |ep| blk: {
+            const name_end = std.mem.indexOfScalar(u8, ep, '@') orelse ep.len;
+            break :blk std.mem.eql(u8, ep[0..name_end], "*");
+        } else false;
         if (expected_phantom == null or any_qualification) {
+            // Class confinement: a `scoped` value may enter only a param that
+            // declares the class. `l.text` into `string`/`<*>` laundered the
+            // borrow — the callee bound it unqualified and could produce it
+            // back out (620_013). `<*@scoped>` is the sink contract: any
+            // identity, frame-bound included — and it binds scoped inside, so
+            // the callee's own produce edges refuse the same escape.
+            if (!self.expectedHasScopedClass(expected_phantom) and
+                (try self.argHasScopedClass(context, arg.value) or
+                    (arg.phantom_type != null and self.expectedHasScopedClass(arg.phantom_type))))
+            {
+                try self.reporter.addError(
+                    .KORU030,
+                    location.line,
+                    location.column,
+                    "argument '{s}' is @scoped — it dies with its frame and parameter '{s}' declares no scoped acceptance. Declare it 'string<*@scoped>' (the borrow stays confined inside the callee), or copy it out first (std/string:from-page + take / fmt.blk)",
+                    .{ arg.value, arg.name },
+                );
+                return false;
+            }
             if (!any_qualification and expected_base_type_raw != null) {
                 // A qualifier is part of the type: an unqualified param names
                 // the PLAIN type — `string` is not `string<state>`. A
@@ -4218,6 +4606,23 @@ pub const PhantomSemanticChecker = struct {
             // marked only where a `<!state>` param consumes), so the
             // re-validation exemption the consuming path needs does not apply.
             return !try self.reportStaleReads(arg, context, location);
+        }
+
+        // Class confinement applies on the qualified path too: `scratch@scoped`
+        // into `string<scratch>` laundered the confinement class off the value —
+        // the param must declare it (`string<scratch@scoped>` / `<*@scoped>`).
+        if (!self.expectedHasScopedClass(expected_phantom) and
+            (try self.argHasScopedClass(context, arg.value) or
+                (arg.phantom_type != null and self.expectedHasScopedClass(arg.phantom_type))))
+        {
+            try self.reporter.addError(
+                .KORU030,
+                location.line,
+                location.column,
+                "argument '{s}' is @scoped — it dies with its frame and parameter '{s}' declares no scoped acceptance. Declare it with '@scoped' (the borrow stays confined inside the callee), or copy it out first (std/string:from-page + take / fmt.blk)",
+                .{ arg.value, arg.name },
+            );
+            return false;
         }
 
         // A null literal into an optional-typed param is absence, not a state

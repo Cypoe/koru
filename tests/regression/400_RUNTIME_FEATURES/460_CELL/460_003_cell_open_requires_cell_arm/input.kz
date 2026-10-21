@@ -1,0 +1,17 @@
+// Test: `std/cell:open` without a `| cell` arm is refused — the arm IS the
+// custody handoff; a silent open would mint an obligation nobody holds.
+
+~import std/io
+~import std/cell
+~import std/proto
+~import std/runtime
+
+~std/proto(room_state) {
+    visits: u32
+}
+
+~std/runtime:register(scope: "cell") {
+}
+
+~std/cell:open(room_state, id: "assistant")
+| refused |> std/io:print.ln("refused")

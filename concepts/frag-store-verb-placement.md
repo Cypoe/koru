@@ -295,10 +295,14 @@ fusion was not load-bearing for ordinary sites, and the 5 that refused said it
 was load-bearing for rules. Neither half was visible from the armchair, and the
 half that survived is the one the armchair had dismissed.
 
-**Still open:** the `sweep`-side gaps are now `query`-side gaps and no longer
-block anything, because the sites that needed them were rules all along. `query`
-still cannot lower a `when` guard on its arm, a write through the row binding,
-or a `char[N]` column — real limits on the READ, to close on their own merits.
+**The "still open" list is closed.** The three named gaps all lowered since:
+`when` guards on query arms (the koru-libs spec walk leans on nested guarded
+sweeps daily), `take(arena[e])` through the row binding (690_305), and the
+`char[N]` column — 690_239 on the `.input` side, 690_368 on the `.live` side,
+where a `stored` value's char read now projects to the NUL-trimmed slice like
+every other consumer. The `.live` wall was real when this section was written;
+it stood until the layout-spec grid spike hit `stored { …: e.label == "x" }`
+inside a sweep. What remains open below is the position-independence reading.
 
 Also unresolved, and the more principled end state: a rule is currently total
 *at its installation point*, so where it sits in the program matters. Total over

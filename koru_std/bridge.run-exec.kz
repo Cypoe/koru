@@ -16,11 +16,10 @@
     // one turn at a time. Mis-segmentation below can only fail LOUD —
     // every slice still passes the single paths' validators.
     const seg = segmentTurn(br.allocator, source) catch {
-        return .{ .parse_error = .{ .message = "OOM segmenting turn", .line = 0, .column = 0 } };
+        return .{ .@"error" = mkErr("parse-error", "OOM segmenting turn") };
     };
     defer br.allocator.free(seg);
     const items = splitNoteTails(br, source, seg) orelse seg;
-    defer if (items.ptr != seg.ptr) br.allocator.free(items);
     if (items.len < 2) {
         // RUN DISCRIMINATION (the REPL rule): a declaration is not a dispatch.
         // If the source is a subflow definition (`tor name { args }` +
@@ -34,11 +33,11 @@
             if (std.mem.startsWith(u8, trimmed, "tor ")) {
                 return switch (installDefine(br, source)) {
                     .defined => |d| .{ .defined = d },
-                    .parse_error => |e| .{ .parse_error = .{
-                        .message = e.message,
-                        .line = e.line,
-                        .column = e.column,
-                    } },
+                    .parse_error => |e| blk: {
+                        var err = mkErr("parse-error", e.message);
+                        err.line = e.line; err.column = e.column;
+                        break :blk .{ .@"error" = err };
+                    },
                 };
             }
         }
@@ -62,30 +61,13 @@
                 if (rn.len > 0) return .{ .residue = .{ .report = residueNote(rn, prose),
                     .observer = !e.not_invocation, .bound = rn, .text = prose } };
             }
-            return .{ .parse_error = .{
-                .message = e.message, .line = e.line, .column = e.column,
-            } };
+            var err = mkErr("parse-error", e.message);
+            err.line = e.line; err.column = e.column;
+            return .{ .@"error" = err };
         }
 
-        const result = dispatchThroughScope(br, source);
-
-        return switch (result) {
-            .result => |r| .{ .result = .{
-                .value = r.value, .used = r.used, .handles = r.handles,
-                // The terminal dispatch bound itself via the trace; a turn
-                // that dispatched nothing (pure flow) still needs a name.
-                .bound = if (r.bound.len > 0) r.bound else bindResult(br, r.value),
-                .trace = r.trace,
-            } },
-            .unhandled_branch => |u| .{ .unhandled_branch = .{ .branch = u.branch, .payload = u.payload, .handles = u.handles } },
-            .exhausted => |e| .{ .exhausted = .{ .used = e.used, .last_event = e.last_event, .handles = e.handles } },
-            .parse_error => |e| .{ .parse_error = .{ .message = e.message, .line = e.line, .column = e.column } },
-            .validation_error => |e| .{ .validation_error = e },
-            .shape_error => |e| .{ .shape_error = .{ .branch = e.branch, .field = e.field, .message = e.message } },
-            .event_denied => |e| .{ .event_denied = e },
-            .dispatch_error => |e| .{ .dispatch_error = .{ .event_name = e.event_name, .message = e.message, .trace = e.trace } },
-            .scope_not_found => |e| .{ .scope_not_found = e },
-        };
+        // A one-item turn has no later items — no turn env to seed.
+        return runOutcome(br, dispatchThroughScope(br, source, null), run_event.Output);
     }
 
     // ALL-PROSE FAST PATH: a turn of pure prose is ONE message, not N items —
@@ -113,7 +95,7 @@
     if (steps.all_residue) return .{ .residue = .{
         .report = steps.report, .observer = isNoteAttempt(br, source), .bound = "", .text = "" } };
     return .{ .partial = .{
-        .ran = steps.total,
+        .ran = steps.ran,
         .total = steps.total,
         .used = steps.used,
         .handles = br.getHandleCount(),

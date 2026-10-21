@@ -28,11 +28,25 @@ rename uniformly because Koru bindings can't spell it and `.`-access is
 boundary-excluded. `__koru_*` is excluded — that is the emitter's own
 namespace, and generated code must stay resolvable.
 
+The consumer side of the same frame: a consumer binding that would shadow a
+plain producer local gets a site-unique `__koru_bind_` spelling (400_151 /
+400_169). "The producer" means **every enclosing splice frame**, not just the
+immediate one. A binding nested deep inside a spliced body (`! each i` inside
+climb's `! pass`) still lands in the outer producer's Zig frame, next to that
+producer's `|i|` capture (605_001, 230_026). The renames form a stack, not a
+slot. An inner rename that masked an outer one used to send references to the
+outer binding back to its raw name, and that read a producer's live local of
+the same name: a silent miscompile, not a compile error.
+
 What this does NOT cover, deliberately:
 
 - **Non-`__` producer locals** (`var i` in a proc body) still collide with
-  each other. The consumer-binding rename (400_169's mechanism) covers
-  consumer-vs-producer; producer-vs-producer on plain names remains a
-  convention violation — `__` is the contract.
+  each other. The consumer-binding rename covers consumer-vs-producer at any
+  nesting depth; producer-vs-producer on plain names remains a convention
+  violation — `__` is the contract.
+- **Consumer bindings other than splice-arm bindings** (chain-return `: v`,
+  branch `| done d` of a nested call) are not checked against enclosing
+  producer frames by this rule; `zig_scope_bindings` covers part of that
+  surface for inline-frame params.
 - **The JS emitter** (`emitProcBodyWithSplicedEffectCalls`) has the same
   class of hole and no equivalent pass yet.

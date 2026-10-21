@@ -14,7 +14,7 @@ backup = read(path: src) | ok t |> write(path: dst, text: t)
   agent> shut(conn: "conn_1")
   world< {"branch":"","value":"closed"}
   agent> vocabulary()
-  world< {"branch":"","value":"read(path: string)\nwrite(path: string, text: string)\nopen(path: string) -> <opened!>\npoke(conn: string<opened>)\nshut(conn: string<!opened>)\nvocabulary()\ngrammar()\nbind(name: string, value: Source)\nnote(text: Source) — speaks to the observer, not the user: reasoning, plans, and \"why I'm stuck\" go here\ncustody() — reads the world's custody record: every session's span, what it still holds\nbackup(src: string, dst: string)"}
+  world< {"branch":"","value":"pub tor read { path: string } -> string\npub tor write { path: string, text: string } -> string\npub tor open { path: string } -> string<opened!>\npub tor poke { conn: string<opened> } -> string\npub tor shut { conn: string<!opened> } -> string\nvocabulary()\ngrammar()\nbind(name: string, value: string)\nnote(text: string) — speaks to the observer, not the user: reasoning, plans, and \"why I'm stuck\" go here\ncustody() — reads the world's custody record: every session's span, what it still holds\nabandon(reason: string) — ends the session with your reason: what you tried, what blocked you\nbackup(src: string, dst: string)"}
   agent> poke(conn: "conn_1")
   world< dispatch: 'conn' wants a live <opened> — 'conn_1' names nothing the session holds. Mint one through a verb whose signature ends '-> <opened!>'
   agent> custody()

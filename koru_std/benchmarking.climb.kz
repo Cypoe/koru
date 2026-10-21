@@ -1,0 +1,100 @@
+// Koru Standard Library: the `climb` part of benchmarking.kz.
+// Joined via `~part climb` in benchmarking.kz; merged into the module at load.
+
+// ============================================================================
+// CLIMB — the hill-climb protocol (nanoui's hillclimb/): `warmup` unmeasured
+// passes, then `frames` measured passes, the whole thing `reps` times. Each
+// rep reduces its per-pass durations to a median; the result is the LOWEST
+// median across reps. Never a mean: on a shared machine noise only ever adds
+// time, so the lowest median is the capacity estimate noise cannot fake.
+//
+// Inside a pass, `lap(k)` marks a phase boundary. Laps 1..n fire once each,
+// in order, every pass — the first measured pass fixes n, and any pass that
+// skips, repeats, or reorders a lap panics (a mis-placed mark is a broken
+// instrument, not a smaller number). `lap.ms(k)` reads phase k's lowest
+// median after `| done`: phase k runs from mark k-1 (mark 0 = pass start) to
+// mark k, and phase n+1 is the tail from the last lap to the pass end. Each
+// phase takes its own lowest median, so phases need not sum to `ms` exactly.
+// ============================================================================
+
+~pub tor climb { warmup: i64, frames: i64, reps: i64 }
+! pass
+| done { ms: f64, laps: i64, frames: i64, reps: i64 }
+
+~pub tor lap { k: i64 }
+
+~pub tor lap.ms { k: i64 } -> f64
+
+const __CLIMB_MAX_FRAMES = 4096;
+const __CLIMB_MAX_LAPS = 8;
+
+var __climb_epoch: ?std.time.Instant = null;
+var __climb_marks: [__CLIMB_MAX_LAPS + 1]u64 = undefined;
+var __climb_next: i64 = -1;
+var __climb_laps: i64 = -1;
+var __climb_samples: [__CLIMB_MAX_LAPS + 2][__CLIMB_MAX_FRAMES]f64 = undefined;
+var __climb_best: [__CLIMB_MAX_LAPS + 2]f64 = undefined;
+
+fn __climb_now() u64 {
+    const inst = std.time.Instant.now() catch
+        @panic("std/benchmarking: this platform has no monotonic clock — climb cannot time passes honestly here");
+    if (__climb_epoch == null) __climb_epoch = inst;
+    return inst.since(__climb_epoch.?);
+}
+
+fn __climb_median(v: []f64) f64 {
+    std.mem.sort(f64, v, {}, std.sort.asc(f64));
+    return v[v.len / 2];
+}
+
+~proc climb|zig {
+    if (frames < 1 or frames > $mod.__CLIMB_MAX_FRAMES)
+        @panic("std/benchmarking:climb: frames must be 1..4096 — the per-pass samples live in a fixed buffer");
+    if (warmup < 0 or reps < 1)
+        @panic("std/benchmarking:climb: warmup must be >= 0 and reps >= 1");
+    const n: usize = @intCast(frames);
+    $mod.__climb_laps = -1;
+    for (&$mod.__climb_best) |*b| b.* = $mod.std.math.inf(f64);
+    const w: usize = @intCast(warmup);
+    for (0..@intCast(reps)) |_| {
+        for (0..w + n) |i| {
+            $mod.__climb_next = 1;
+            $mod.__climb_marks[0] = $mod.__climb_now();
+            pass();
+            const end = $mod.__climb_now();
+            const fired = $mod.__climb_next - 1;
+            $mod.__climb_next = -1;
+            if ($mod.__climb_laps == -1) $mod.__climb_laps = fired;
+            if (fired != $mod.__climb_laps)
+                @panic("std/benchmarking:climb: a pass fired a different number of laps than the first — every pass must fire laps 1..n exactly once");
+            if (i < w) continue;
+            const slot = i - w;
+            const laps: usize = @intCast($mod.__climb_laps);
+            for (1..laps + 1) |k|
+                $mod.__climb_samples[k][slot] = @as(f64, @floatFromInt($mod.__climb_marks[k] - $mod.__climb_marks[k - 1])) / 1_000_000.0;
+            $mod.__climb_samples[laps + 1][slot] = @as(f64, @floatFromInt(end - $mod.__climb_marks[laps])) / 1_000_000.0;
+            $mod.__climb_samples[0][slot] = @as(f64, @floatFromInt(end - $mod.__climb_marks[0])) / 1_000_000.0;
+        }
+        const laps: usize = @intCast($mod.__climb_laps);
+        for (0..laps + 2) |k|
+            $mod.__climb_best[k] = @min($mod.__climb_best[k], $mod.__climb_median($mod.__climb_samples[k][0..n]));
+    }
+    return .{ .done = .{ .ms = $mod.__climb_best[0], .laps = $mod.__climb_laps, .frames = frames, .reps = reps } };
+}
+
+~proc lap|zig {
+    if (__climb_next < 1)
+        @panic("std/benchmarking:lap: called outside a climb pass");
+    if (k != __climb_next or k > __CLIMB_MAX_LAPS)
+        @panic("std/benchmarking:lap: laps must fire 1..n in order, once each per pass (max 8)");
+    __climb_marks[@intCast(k)] = __climb_now();
+    __climb_next += 1;
+}
+
+~proc lap.ms|zig {
+    if (__climb_laps < 0 or __climb_next != -1)
+        @panic("std/benchmarking:lap.ms: read after climb's | done, not during a pass");
+    if (k < 1 or k > __climb_laps + 1)
+        @panic("std/benchmarking:lap.ms: k must be 1..laps+1 (laps+1 is the tail after the last lap)");
+    return __climb_best[@intCast(k)];
+}

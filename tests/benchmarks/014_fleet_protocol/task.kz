@@ -1,0 +1,89 @@
+// 014_fleet_protocol — the ownership protocol's per-verb floor cost.
+//
+// 013_cell_node prices a *turn* through the cell machinery (dispatch +
+// commit). This bench prices the fleet layer's verbs themselves — the
+// shared-floor syscalls custody costs:
+//   owner         — the routing probe: one record read
+//   claim+release — the createNew CAS round trip + record delete
+//   renew         — locked lease refresh: lock + read + tmp+rename + unlock
+//   seize         — serialized takeover: lock + epoch bump + tmp+rename
+//
+// Correctness gate: the epochs/ counter only moves when a claim or seize
+// lands — run.sh reads the counters back and proves the verbs ran rather
+// than silently failing into a cheap arm.
+
+~import std/io
+~import std/fleet
+~import std/time
+
+~tor sink { } -> i64
+~sink -> 0
+
+const TURNS: usize = 60;
+const W: []const u8 = "/tmp/koru-bench-fleet";
+
+~std/fleet:reset(world: W)
+  | cleared |> sink()
+  | failed e |> std/io:print.ln("reset failed: {{ e:s }}")
+
+// ─── seeds: records the probe/renew/seize loops operate on ───
+~std/fleet:claim(world: W, id: "probe", node: "bench", ttl-ms: 0)
+  | claimed _ |> sink()
+  | held-by o |> std/io:print.ln("probe seed held by {{ o:s }}")
+  | failed e |> std/io:print.ln("probe seed failed {{ e:s }}")
+
+~std/fleet:claim(world: W, id: "renewable", node: "bench", ttl-ms: 600000)
+  | claimed _ |> sink()
+  | held-by o |> std/io:print.ln("renewable seed held by {{ o:s }}")
+  | failed e |> std/io:print.ln("renewable seed failed {{ e:s }}")
+
+~std/fleet:claim(world: W, id: "seizable", node: "bench", ttl-ms: 0)
+  | claimed _ |> sink()
+  | held-by o |> std/io:print.ln("seizable seed held by {{ o:s }}")
+  | failed e |> std/io:print.ln("seizable seed failed {{ e:s }}")
+
+// ─── arm 1: owner — the routing probe, one record read ───
+~std/time:now(): t0
+  |> for(0..TURNS)
+    ! each _ |> std/fleet:owner(world: W, id: "probe")
+      | owned-by _ |> sink()
+      | free |> std/io:print.ln("owner probe: free")
+      | failed e |> std/io:print.ln("owner probe failed {{ e:s }}")
+  |> std/time:elapsed(start: t0): r0
+  |> std/io:print.ln("owner: {{ r0.ms:f }}ms for {{ TURNS:d }} probes")
+
+// ─── arm 2: claim+release — the CAS round trip ───
+~std/time:now(): t1
+  |> for(0..TURNS)
+    ! each _ |> std/fleet:claim(world: W, id: "cycle", node: "bench", ttl-ms: 0)
+      | claimed _ |> std/fleet:release(world: W, id: "cycle", node: "bench")
+        | released |> sink()
+        | not-owner |> std/io:print.ln("release not-owner")
+        | free |> std/io:print.ln("release free")
+        | failed f |> std/io:print.ln("release failed {{ f:s }}")
+      | held-by o |> std/io:print.ln("claim held by {{ o:s }}")
+      | failed g |> std/io:print.ln("claim failed {{ g:s }}")
+  |> std/time:elapsed(start: t1): r1
+  |> std/io:print.ln("claim+release: {{ r1.ms:f }}ms for {{ TURNS:d }} cycles")
+
+// ─── arm 3: renew — locked lease refresh ───
+~std/time:now(): t2
+  |> for(0..TURNS)
+    ! each _ |> std/fleet:renew(world: W, id: "renewable", node: "bench", ttl-ms: 600000)
+      | renewed |> sink()
+      | held-by o |> std/io:print.ln("renew held by {{ o:s }}")
+      | free |> std/io:print.ln("renew free")
+      | failed e |> std/io:print.ln("renew failed {{ e:s }}")
+  |> std/time:elapsed(start: t2): r2
+  |> std/io:print.ln("renew: {{ r2.ms:f }}ms for {{ TURNS:d }} renews")
+
+// ─── arm 4: seize — serialized self-takeover, epoch bumps each pass ───
+~std/time:now(): t3
+  |> for(0..TURNS)
+    ! each _ |> std/fleet:seize(world: W, id: "seizable", node: "bench", ttl-ms: 0)
+      | seized _ |> sink()
+      | free |> std/io:print.ln("seize free")
+      | contended |> std/io:print.ln("seize contended")
+      | failed e |> std/io:print.ln("seize failed {{ e:s }}")
+  |> std/time:elapsed(start: t3): r3
+  |> std/io:print.ln("seize: {{ r3.ms:f }}ms for {{ TURNS:d }} takeovers")

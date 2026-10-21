@@ -1,0 +1,3 @@
+slate cleared
+node-a claimed epoch=1
+node-b refused: held by node-a

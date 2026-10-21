@@ -42,3 +42,30 @@ named leftovers are the *caller's* (`=> ok` re-raises, produce arms the tap
 transformer pushed down), and they still drain through the result-less
 terminal path. The named/unnamed rule applies only where a marker was
 resolved.
+
+## The recurrence that had no dispatcher (2026-10-16, pin 690_366)
+
+The ruling held again at a second kind of site, and the second instance is the
+one that closes the loop on what "owner" means when there is no template at
+all. `std/store:query` inside an arm body is a STEP in a chain, not the
+statement's site: the flow body's continuation list still arrives as the same
+mixed bag — the site's named arms (`! query`, `! first`, `| none`) interleaved
+with the caller's `|>` sequel — and the transform's re-rooting replacement
+swallowed the bag whole. `… | r |> print("after")` compiled, ran the sweep,
+and the tail never emitted; the AST showed the branchless continuation parsed
+beneath the site the whole time.
+
+Same belief, sharper clause: **the sequel survives only if the replacement
+carries it.** A drain-after-the-body assumes the replacement is a splice into
+the existing container; a `std/store:query` replacement RE-ROOTS the site —
+`NodeReplacement.children` replaces the continuation list wholesale, and
+omitting children is what preserves them (ast.zig's documented contract). So
+the site transform itself must split the list it was handed: named arms it
+claims, the branchless remainder it re-attaches as the replacement's children
+— or, at a head site that a tail keeps off the proc road, as the lifted
+sweep-root's own continuations, with the loop's surviving lexical captures
+re-threaded as that root's inputs.
+
+The complement also fell out: a NAMED arm the site does not claim is the same
+failure in the other direction — it can never run, so it is refused by name
+at the site rather than dropped silently (690_364).

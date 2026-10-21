@@ -33,15 +33,6 @@
     // the one this needs: the preamble declares caller-frame stack storage and
     // the routed call still happens. Same shape as the escape-driven stack
     // alloc it was built for.
-    const preambleAnn = struct {
-        fn call(alloc: std.mem.Allocator, inv: *const ast.Invocation, base: []const []const u8) []const []const u8 {
-            if (inv.preamble_code == null) return base;
-            const out = alloc.alloc([]const u8, base.len + 1) catch unreachable;
-            for (base, 0..) |b, i| out[i] = b;
-            out[base.len] = alloc.dupe(u8, "@preamble_then_call") catch unreachable;
-            return out;
-        }
-    }.call;
 
     const ast_functional = @import("ast_functional");
     const struct_literal = @import("struct_literal");
@@ -54,25 +45,7 @@
     // bound name; at a flow root (site_of null) an impl flow's input fields
     // are the scope. On any env error the check degrades to "unproven" -
     // it defers, it never refuses because the env failed.
-    const write_scope: []const ast.ScopeBinding = blk: {
-        const eh = @import("emitter_helpers");
-        if (flow.site_of) |site| break :blk eh.scopeAtSite(allocator, program.items, site) catch &.{};
-        if (flow.impl_of) |impl_path| {
-            var p = impl_path;
-            if (eh.findEventDeclByPath(program.items, &p)) |decl| {
-                var out = std.ArrayList(ast.ScopeBinding){};
-                for (decl.input.fields) |f| {
-                    const ty = if (f.phantom) |ph|
-                        std.fmt.allocPrint(allocator, "{s}<{s}>", .{ f.type, ph }) catch f.type
-                    else
-                        f.type;
-                    out.append(allocator, .{ .name = f.name, .type = ty, .value_ref = f.name }) catch unreachable;
-                }
-                break :blk out.items;
-            }
-        }
-        break :blk &.{};
-    };
+    const write_scope = WritePath.writeScopeAt(allocator, program, flow);
 
     const H = StoredScan;
 
@@ -164,15 +137,7 @@
         }
         // The head form must match the store's shape — the same two walls as
         // the single-write path.
-        const env_is_plural = blk: {
-            const inserth_probe = std.fmt.allocPrint(allocator, "__store_inserth_{s}", .{env_store}) catch unreachable;
-            for (flatItems(allocator, program.items)) |pi| {
-                if (pi.* != .event_decl) continue;
-                const ed = &pi.event_decl;
-                if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], inserth_probe)) break :blk true;
-            }
-            break :blk false;
-        };
+        const env_is_plural = WritePath.storeIsPlural(allocator, program, env_store);
         if (env_row == null and env_is_plural) {
             return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: '{s}' is a container store (capacity > 1) - address the row ({s}[handle].{s}, or write through a query branch)", .{ env_store, env_store, env_fields[0] }) };
         }
@@ -182,20 +147,7 @@
         // A DRAIN store's write surface is gated off entirely (690_057/058) —
         // name the real rung before fieldOrder can leak "unknown store".
         if (env_row != null) {
-            const td_probe = std.fmt.allocPrint(allocator, "__store_teardown_{s}", .{env_store}) catch unreachable;
-            const apply_probe = std.fmt.allocPrint(allocator, "__store_apply_{s}", .{env_store}) catch unreachable;
-            var has_teardown = false;
-            var has_apply = false;
-            for (flatItems(allocator, program.items)) |pi| {
-                if (pi.* != .event_decl) continue;
-                const ed = &pi.event_decl;
-                if (ed.path.segments.len != 1) continue;
-                if (std.mem.eql(u8, ed.path.segments[0], td_probe)) has_teardown = true;
-                if (std.mem.eql(u8, ed.path.segments[0], apply_probe)) has_apply = true;
-            }
-            if (has_teardown and !has_apply) {
-                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: store '{s}' is a DRAIN store (ambiguous discharger) - a stored write must evict the old value through the canonical discharger, which its owned column does not have; declare exactly one void discharger for the column type (690_062 pins the write; 690_057/058 pin the drain)", .{env_store}) };
-            }
+            if (WritePath.drainStoreRefusal(allocator, program, env_store, reporter, flow)) |r| return .{ .transformed = r };
         }
         const order_env = H.fieldOrder(allocator, program, env_store) orelse {
             // The store's OWN declaration was already refused; that diagnostic is the
@@ -261,6 +213,8 @@
                     else
                         std.fmt.allocPrint(allocator, "(&__koru_store_{s}.{s})[__koru_store_{s}.__koru_resolve({s})]", .{ env_store, ref_field, env_store, base }) catch unreachable;
                 } else {
+                    // `res[world.focus]` in an envelope head is the same provably-not-a-handle read (690_365).
+                    if (IndexProvenance.refusal(allocator, reporter, program, flow, re, env_store)) |r| return .{ .transformed = r };
                     env_row = H.storeRefsAll(allocator, program, re);
                 }
             } else {
@@ -347,7 +301,7 @@
                         .value = slot,
                     };
                 }
-                invs[0] = ast.Invocation{ .path = H.mkPathH2(allocator, env_home, spec_name), .args = a1, .marks = preambleAnn(allocator, invocation, env_wmarks) };
+                invs[0] = ast.Invocation{ .path = H.mkPathH2(allocator, env_home, spec_name), .args = a1, .marks = WritePath.preambleAnn(allocator, invocation, env_wmarks) };
             } else {
                 const a1 = allocator.alloc(ast.Arg, env_col_types.len + 2) catch unreachable;
                 a1[0] = ast.Arg{ .name = allocator.dupe(u8, "row") catch unreachable, .value = allocator.dupe(u8, env_row_arg) catch unreachable };
@@ -364,7 +318,7 @@
                         .value = slot,
                     };
                 }
-                invs[0] = ast.Invocation{ .path = H.mkPathH2(allocator, env_home, envw_name), .args = a1, .marks = preambleAnn(allocator, invocation, env_wmarks) };
+                invs[0] = ast.Invocation{ .path = H.mkPathH2(allocator, env_home, envw_name), .args = a1, .marks = WritePath.preambleAnn(allocator, invocation, env_wmarks) };
             }
             for (writes, 0..) |_, wi| {
                 const a2 = allocator.alloc(ast.Arg, 2) catch unreachable;
@@ -472,15 +426,7 @@
 
     // A plural store's write surface is row-addressed; the elided-singleton
     // head on it has no row to mean.
-    const is_plural_store = blk: {
-        const inserth_name = std.fmt.allocPrint(allocator, "__store_inserth_{s}", .{target_store}) catch unreachable;
-        for (flatItems(allocator, program.items)) |pi| {
-            if (pi.* != .event_decl) continue;
-            const ed = &pi.event_decl;
-            if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], inserth_name)) break :blk true;
-        }
-        break :blk false;
-    };
+    const is_plural_store = WritePath.storeIsPlural(allocator, program, target_store);
     if (row_expr == null and is_plural_store) {
         return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: '{s}' is a container store (capacity > 1) - address the row ({s}[handle].{s}, or write through a query branch)", .{ target_store, target_store, target_field }) };
     }
@@ -494,23 +440,7 @@
     // eviction has no canonical discharger to fire. Detect that store FIRST
     // (teardown unit exists, apply unit does not) and name the real rung —
     // otherwise H.fieldOrder below would leak a raw "unknown store".
-    {
-        const td_probe = std.fmt.allocPrint(allocator, "__store_teardown_{s}", .{target_store}) catch unreachable;
-        const apply_probe = std.fmt.allocPrint(allocator, "__store_apply_{s}", .{target_store}) catch unreachable;
-        var has_teardown = false;
-        var has_apply = false;
-        for (flatItems(allocator, program.items)) |pi| {
-            if (pi.* != .event_decl) continue;
-            const ed = &pi.event_decl;
-            if (ed.path.segments.len != 1) continue;
-            if (std.mem.eql(u8, ed.path.segments[0], td_probe)) has_teardown = true;
-            if (std.mem.eql(u8, ed.path.segments[0], apply_probe)) has_apply = true;
-        }
-        if (has_teardown and !has_apply) {
-            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:stored: store '{s}' is a DRAIN store (ambiguous discharger) - a stored write must evict the old value through the canonical discharger, which its owned column does not have; declare exactly one void discharger for the column type (690_062 pins the write; 690_057/058 pin the drain)", .{target_store}) };
-        }
-    }
-
+    if (WritePath.drainStoreRefusal(allocator, program, target_store, reporter, flow)) |r| return .{ .transformed = r };
     // Same koru-owned narrowing refusal as the envelope path (690_160) —
     // and the verdict becomes the @witness mark on the lowered write call.
     const write_check = storedWriteCheck(allocator, program, target_store, target_field, w.value, write_scope, flow);
@@ -547,10 +477,7 @@
             const ref_field = std.mem.trim(u8, re[dp + 1 ..], " ");
             var ref_ok = false;
             for (order) |fname| {
-                if (std.mem.eql(u8, fname, ref_field)) {
-                    ref_ok = true;
-                    break;
-                }
+                if (std.mem.eql(u8, fname, ref_field)) ref_ok = true;
             }
             if (ref_ok and !@import("emitter_helpers").takeItemBoundAtSite(program.items, flow, invocation, base)) {
                 // Pointer-named base (`&`) — see colRead: a by-value base
@@ -565,6 +492,8 @@
                 else
                     std.fmt.allocPrint(allocator, "(&__koru_store_{s}.{s})[__koru_store_{s}.__koru_resolve({s})]", .{ target_store, ref_field, target_store, base }) catch unreachable;
             } else {
+                // Dotted index outside this store's handle columns → cell read; `base` naming a store is decidable HERE, not in the panic (690_365).
+                if (IndexProvenance.refusal(allocator, reporter, program, flow, re, target_store)) |r| return .{ .transformed = r };
                 row_expr = H.storeRefsAll(allocator, program, re);
             }
         } else {
@@ -785,7 +714,7 @@
             .segments = segs,
         },
         .args = call_args,
-        .marks = preambleAnn(allocator, invocation, write_wmark),
+        .marks = WritePath.preambleAnn(allocator, invocation, write_wmark),
     };
 
     return .{ .transformed = .{ .replacement = ast.Item{ .flow = ast.Flow{

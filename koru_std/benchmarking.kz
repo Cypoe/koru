@@ -5,11 +5,11 @@
 // elapse; `| done` carries the pass count and elapsed time. The drag-race protocol
 // is `run(seconds: 5)` with the sieve in the `! pass` body, then emit the result.
 const std = @import("std");
+~part climb
 
 ~pub tor run { seconds: i64 }
 ! pass
 | done { passes: i64, seconds: f64 }
-
 ~proc run|zig {
     const start = std.time.nanoTimestamp();
     const deadline = start + @as(i128, seconds) * 1_000_000_000;

@@ -1,0 +1,9 @@
+slate cleared
+slate cleared
+nodea spawned room-42
+committed visits=41
+nodeb seized at epoch 2
+stale write ran: visits=42
+nodeb reads visits=41
+nodea drained 1
+nodeb drained 1

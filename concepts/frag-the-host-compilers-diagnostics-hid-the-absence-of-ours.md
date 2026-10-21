@@ -233,3 +233,24 @@ produce sites (no consumer to compare against at that site).
 The rule sharpens again: **the audit is not "does the feature behave" but
 "does its misuse refuse in our vocabulary."** Behavior can be completely
 correct while the gate is borrowed — correctness is exactly what hides it.
+
+## A borrowed refusal can be recorded AS borrowed (2026-10-18)
+
+The family's usual shape is a borrowed diagnostic nobody noticed. KORU108
+(400_213/400_214, refusing flow-bound names read off their path) is the
+opposite: a check written knowing its own edge. Its refusal is scoped to
+names bound *somewhere* in the flow — a name bound nowhere, or a reference
+inside library text the core may not open (`{{ }}` interpolation, `stored
+{}` bodies), still reaches the host's `use of undeclared identifier`.
+
+What keeps this from being the old failure is that the delegation is now
+*pinned as delegation*. The harness's bare `BACKEND_COMPILE_ERROR` marker
+passes only while `backend.err` carries no `error[KORU…]` — so a test
+marked `BACKEND_COMPILE_ERROR` is a tripwire: the day koruc refuses the
+name itself, the marker falls through to `no-error-pin` and the test goes
+red until the new diagnostic is pinned. Three pins hold the boundary:
+`220_046` (name bound nowhere → host), `400_212` (bound name at the join
+inside `{{ }}` → host), `690_367` (bound name inside a store write body →
+host). "A documented decision to borrow is load-bearing" — now the suite
+itself carries the documentation, and it self-invalidates when the
+borrowing ends.

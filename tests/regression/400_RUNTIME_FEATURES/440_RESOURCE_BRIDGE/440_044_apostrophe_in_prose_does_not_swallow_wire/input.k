@@ -12,8 +12,8 @@ import std/runtime
 
 tor echo { text: string }
 proc echo|zig {
-    _ = @import("std").posix.write(1, text) catch {};
-    _ = @import("std").posix.write(1, "\n") catch {};
+    _ = @import("std").fs.File.stdout().writeAll(text) catch {};
+    _ = @import("std").fs.File.stdout().writeAll("\n") catch {};
 }
 
 std/runtime:register(scope: "api") {
@@ -25,15 +25,16 @@ turn = std/bridge:run(br, source: src)
 | result r |> std/io:print.ln("RESULT bound={{ r.bound:s }}")
 | partial p |> std/io:print.ln("{{ p.report:s }}")
 | unhandled-branch ub |> std/io:print.ln("FAIL unhandled {{ ub.branch:s }}")
-| event-denied ev |> std/io:print.ln("FAIL denied {{ ev:s }}")
+| error runerr |> std/bridge:error-decode(e: runerr)
+    | event-denied ev |> std/io:print.ln("FAIL denied {{ ev:s }}")
+    | parse-error p |> std/io:print.ln("PARSE {{ p.message:s }}")
+    | validation-error v |> std/io:print.ln("FAIL invalid {{ v:s }}")
+    | shape-error sh |> std/io:print.ln("FAIL shape {{ sh.message:s }}")
+    | dispatch-error e |> std/io:print.ln("FAIL dispatch {{ e.message:s }}")
+    | exhausted _ |> std/io:print.ln("FAIL exhausted")
+    | scope-not-found s2 |> std/io:print.ln("FAIL noscope {{ s2:s }}")
 | residue r |> std/io:print.ln("RESIDUE {{ r.report:s }}")
-| parse-error p |> std/io:print.ln("PARSE {{ p.message:s }}")
-| validation-error v |> std/io:print.ln("FAIL invalid {{ v:s }}")
-| shape-error sh |> std/io:print.ln("FAIL shape {{ sh.message:s }}")
-| dispatch-error e |> std/io:print.ln("FAIL dispatch {{ e.message:s }}")
 | defined d |> std/io:print.ln("FAIL defined {{ d:s }}")
-| exhausted _ |> std/io:print.ln("FAIL exhausted")
-| scope-not-found s2 |> std/io:print.ln("FAIL noscope {{ s2:s }}")
 
 [with]std/bridge:create(id: "ap", scope: "api"): br
 |> turn(br, src: "I'll echo the greeting next.\necho(text: \"hi\")")

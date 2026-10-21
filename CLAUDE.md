@@ -24,9 +24,8 @@ cited test does not refresh the comment.
 
 Three first-sentence states: **blocker** (compiled, refused), **not a blocker**
 (compiled or a passing test *is* the join), **unmeasured** (not compiled this
-session — stop narrating). Inventing a grid-slot / “conditional store” workaround
-because a comment said a store query cannot take a frame borrow is the consumer
-reroute this file already bans — and it is worse when you never even compiled.
+session — pause further claims until measured). Avoid inventing a grid-slot / “conditional store” workaround
+because a comment said a store query cannot take a frame borrow; verify by compiling first.
 
 - **`koru-by-example.md`** — curated tour of real tests, verbatim source.
 - **`tests/regression/`** — the full suite.
@@ -52,10 +51,14 @@ While iterating, run the affected tests plus controls:
     ./run_regression.sh <full_test_name> <full_test_name> ...
 
 Filtered runs write no board snapshot, so they can't clobber `latest.json` —
-but the unit-test sub-run rewrites `test-results/unit-tests.json` even in
-filtered mode (`scripts/parse-unit-tests.js`), so a filtered run can dirty that
-file; restore it (`git checkout -- test-results/unit-tests.json`) before
-committing. The full board is for publishing.
+and they skip the unit suite by default (pass `--run-units` to include it; that
+sub-run rewrites `test-results/unit-tests.json`, so restore it before
+committing). Cross-target JS/C# checks are opt-in with `--cross-targets`; the
+default board is Zig-only. The full board is for publishing.
+
+Every run records per-test wall time in a TSV (path printed at startup) and
+prints the ten slowest tests; a full board also embeds `durationMs` and
+`startedAt` per test in the snapshot.
 
 **Never `zig build`, or edit `koru_std/` *or* `src/`, while a suite is live.**
 Each test's backend build compiles its emitted Zig against the **live** `src/`

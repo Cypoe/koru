@@ -85,3 +85,19 @@ runtime AST and failed branch coverage (KORU022), breaking every
 annotation — the same contract `flowInvokesComptimeEvent` has always
 routed by. 310_057, the pin for the exact shape, had not been run since
 the classifier landed.
+
+**2026-10-18/19 — the wire-admission corollary is repudiated; the kernel
+stands.** The belief had quietly grown a second claim: that declaring a
+wire field `Expression` or `Source` made the wire speak captured text —
+bare-prose admission, the `verb: prose` colon form, field-type-directed
+gating. Lars ruled that extension the defect (`a3c51f505`, `e78c0a082`):
+"declaring wire fields `Source` was the bastardization — `Source` is the
+language's comptime source-fragment type," and `Expression` was the same
+cosplay. The wire is now one flat grammar — `verb(field: value)` where a
+value is a quoted string or a bare Koru expression judged by the
+expression parser, never by the declared field type. What survives this
+belief intact: the types still transport captured text when an argument
+reaches them through ordinary channels (comptime/transform params,
+runtime procs — 400_202/203's pins stand), and representation still does
+not imply timing. What died is only the reading where a declared capture
+type changes what the *wire grammar* may admit — admission is uniform.

@@ -1,0 +1,19 @@
+// Test: a bare `captured { ... }` inside `std/cell:capture` is refused —
+// `captured` is std/control's ambient word; the cell's write verb is spelled
+// `std/cell:captured`. Unqualified writes must not silently target cell state.
+
+~import std/io
+~import std/cell
+~import std/proto
+~import std/runtime
+
+~std/proto(room_state) {
+    visits: u32
+}
+
+~std/runtime:register(scope: "cell") {
+}
+
+~std/cell:open(room_state, id: "room-7")
+| cell c |> std/cell:capture(c, shape: room_state)
+  ! as s |> captured { visits: 1 }

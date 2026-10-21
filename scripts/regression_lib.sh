@@ -30,6 +30,59 @@ _backend_sha256() {
     fi
 }
 
+# ── Per-test timing ─────────────────────────────────────────────────────────
+# Epoch milliseconds. perl is the fast path on macOS (node/python startup is
+# ~30ms, and this runs once per test); every fallback still returns integer
+# milliseconds so a mixed run sorts coherently.
+koru_now_ms() {
+    if command -v perl >/dev/null 2>&1; then
+        perl -MTime::HiRes=time -e 'printf "%.0f\n", time * 1000'
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 -c 'import time; print(int(time.time() * 1000))'
+    else
+        echo "$(( $(date +%s) * 1000 ))"
+    fi
+}
+
+# Append one row to the run's timing file:
+#   <test-dir under tests/regression>\t<start-ms>\t<end-ms>\t<duration-ms>\t<status>\t<cached>
+# One printf per row, O_APPEND, under PIPE_BUF — the eight parallel workers
+# cannot interleave a record. The status is read from the markers the harness
+# already writes, so cached/TODO/SKIP rows are labelled correctly without
+# threading a new return value through every exit path.
+# Args: test_dir start_ms end_ms cached(0|1)
+record_timing_line() {
+    local test_dir="$1" start_ms="$2" end_ms="$3" cached="${4:-0}"
+    [ -n "${KORU_TIMING_FILE:-}" ] || return 0
+    local rel="$test_dir"
+    local prefix="$PWD/"
+    rel="${rel#"$prefix"}"
+    rel="${rel#./}"
+    rel="${rel#tests/regression/}"
+    local status
+    if [ -f "$test_dir/FAILURE" ]; then
+        status=failure
+    elif [ -f "$test_dir/SUCCESS" ]; then
+        status=success
+    elif [ -f "$test_dir/PARITY_VIOLATION" ]; then
+        status=parity
+    elif [ -f "$test_dir/TODO" ]; then
+        status=todo
+    elif [ -f "$test_dir/SKIP" ] || [ -f "$(dirname "$test_dir")/SKIP" ]; then
+        status=skipped
+    elif [ -f "$test_dir/BENCHMARK" ] || [ -f "$(dirname "$test_dir")/BENCHMARK" ]; then
+        status=benchmark
+    else
+        status=unknown
+    fi
+    local duration=$((end_ms - start_ms))
+    [ "$duration" -ge 0 ] || duration=0
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$rel" "$start_ms" "$end_ms" "$duration" "$status" "$cached" \
+        >> "$KORU_TIMING_FILE"
+    return 0
+}
+
 # The backend-binary cache key is NOT defined here: it belongs to the cache
 # (scripts/regression_cache.sh, backend_cache_key) because it is computed from
 # the backend's linked closure. Both entry scripts source that module.
@@ -95,6 +148,12 @@ test_entry() {
 : "${VERBOSE:=false}"
 : "${ZIG_GLOBAL_CACHE:=${TMPDIR:-/tmp}/koru-regression-cache}"
 : "${KEEP_ARTIFACTS:=false}"
+# Cross-target equivalence (JS / C#) is opt-in. Zig is the board's primary
+# target; a test's LANGUAGES marker records what it CAN run, not that every
+# board must pay for a second compile + dotnet build. run_regression.sh
+# --cross-targets turns them on for a board; a standalone run honours
+# KORU_CROSS_TARGETS=on.
+: "${KORU_CROSS_TARGETS:=off}"
 
 mark_test_passed() {
     local test_dir="$1"
@@ -287,6 +346,9 @@ regression_check_js_equivalence() {
     local TEST_NAME
     TEST_NAME=$(basename "$test_dir")
 
+    # Cross-target checks are opt-in: the Zig baseline is the board's contract.
+    [ "${KORU_CROSS_TARGETS:-off}" = "on" ] || return 0
+
     [ -f "$test_dir/LANGUAGES" ] || return 0
     grep -qiw 'js' "$test_dir/LANGUAGES" || return 0
     [ -f "$test_dir/SUCCESS" ] && [ ! -f "$test_dir/FAILURE" ] || return 0
@@ -408,6 +470,9 @@ regression_check_cs_equivalence() {
     local test_dir="$1"
     local TEST_NAME
     TEST_NAME=$(basename "$test_dir")
+
+    # Cross-target checks are opt-in: the Zig baseline is the board's contract.
+    [ "${KORU_CROSS_TARGETS:-off}" = "on" ] || return 0
 
     [ -f "$test_dir/LANGUAGES" ] || return 0
     grep -qiw 'cs' "$test_dir/LANGUAGES" || return 0

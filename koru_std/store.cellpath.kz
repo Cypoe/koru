@@ -1,0 +1,288 @@
+// Koru Standard Library: Reactive Stores — the `cellpath` part.
+// Joined via `~part cellpath` in store.kz; merged into the store module at load.
+// Cross-module cell-path rewriting — store-name refs and home-prefix resolution for readers outside the declaring module (110_022).
+// Lifted out of `store.new.kz` at the 2026-10 merge — the wall pins module
+// files and these namespaces were always self-contained.
+
+
+const Rewrite = struct {
+    const ast = @import("ast");
+    fn isIdent(ch: u8) bool {
+        return (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_' or ch == '-';
+    }
+    // `prefix` names the Zig namespace the cell lives in, and is empty
+    // whenever the reader is in the declaring module (the common case).
+    // A reader in a DIFFERENT module has to reach across: the cell is a
+    // module-scope var in the declaring module's emitted struct, so a bare
+    // `__koru_store_s` there is an undeclared identifier (110_022).
+    fn storeRefs(alloc: std.mem.Allocator, text: []const u8, name: []const u8, prefix: []const u8, is_identity: bool) []const u8 {
+        const expr_ctx = ast.expressionMask(alloc, text);
+        var out = std.ArrayList(u8).initCapacity(alloc, text.len + 32) catch unreachable;
+        var i: usize = 0;
+        while (i < text.len) {
+            const at_boundary = ast.identBoundaryBefore(text, i);
+            const starts = at_boundary and std.mem.startsWith(u8, text[i..], name);
+            const after = i + name.len;
+            if (starts and after < text.len and text[after] == '.') {
+                out.appendSlice(alloc, prefix) catch unreachable;
+                out.appendSlice(alloc, "__koru_store_") catch unreachable;
+                out.appendSlice(alloc, name) catch unreachable;
+                i += name.len;
+            } else if (is_identity and expr_ctx[i] and starts and (after >= text.len or !isIdent(text[after]))) {
+                // A ONE-column store has no field to name, so the store name
+                // IS the reference. It still has to reach a column in the
+                // cell, so it resolves to the synthesized one.
+                out.appendSlice(alloc, prefix) catch unreachable;
+                out.appendSlice(alloc, "__koru_store_") catch unreachable;
+                out.appendSlice(alloc, name) catch unreachable;
+                out.append(alloc, '.') catch unreachable;
+                out.appendSlice(alloc, ast.STORE_IDENTITY_COLUMN) catch unreachable;
+                i += name.len;
+            } else {
+                out.append(alloc, text[i]) catch unreachable;
+                i += 1;
+            }
+        }
+        return out.toOwnedSlice(alloc) catch unreachable;
+    }
+    fn isIn(xs: []const []const u8, n: []const u8) bool {
+        for (xs) |x| if (std.mem.eql(u8, x, n)) return true;
+        return false;
+    }
+    // Whole-identifier rewrite (`new` → `__koru_upd.new`), boundary-aware
+    // and skipping `.field` accesses. Applied to every arg value in a
+    // transplanted body, INCLUDING nested store-block sources (an
+    // interceptor's `stored { ... }` value expr references these
+    // bindings; the nested transform preserves them verbatim).
+    fn identRefs(alloc: std.mem.Allocator, text: []const u8, name: []const u8, replacement: []const u8) []const u8 {
+        var out = std.ArrayList(u8).initCapacity(alloc, text.len + 32) catch unreachable;
+        var i: usize = 0;
+        while (i < text.len) {
+            const prev_ok = ast.identBoundaryBefore(text, i) and !ast.precededByMemberDot(text, i);
+            const next_i = i + name.len;
+            const next_ok = next_i >= text.len or !isIdent(text[next_i]);
+            if (prev_ok and next_ok and next_i <= text.len and std.mem.startsWith(u8, text[i..], name)) {
+                out.appendSlice(alloc, replacement) catch unreachable;
+                i += name.len;
+            } else {
+                out.append(alloc, text[i]) catch unreachable;
+                i += 1;
+            }
+        }
+        return out.toOwnedSlice(alloc) catch unreachable;
+    }
+    fn rewriteIdentInCont(alloc: std.mem.Allocator, cont: *ast.Continuation, name: []const u8, replacement: []const u8) void {
+        if (cont.node) |*n| {
+            switch (@constCast(n).*) {
+                .invocation => |*inv| {
+                    for (inv.args) |*a| {
+                        @constCast(a).value = identRefs(alloc, a.value, name, replacement);
+                        if (a.expression_value) |ev| {
+                            const fresh = alloc.create(ast.CapturedExpression) catch unreachable;
+                            fresh.* = ev.*;
+                            fresh.text = identRefs(alloc, ev.text, name, replacement);
+                            @constCast(a).expression_value = fresh;
+                        }
+                        if (a.source_value) |sv| {
+                            const fresh = alloc.create(ast.Source) catch unreachable;
+                            fresh.* = sv.*;
+                            fresh.text = identRefs(alloc, sv.text, name, replacement);
+                            @constCast(a).source_value = fresh;
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+        for (cont.continuations) |*c| rewriteIdentInCont(alloc, @constCast(c), name, replacement);
+    }
+    // Store-invocation args (stored/watch/create blocks) keep their raw
+    // source — those transforms own their own rewriting. But
+    // Invocation.inline_body is the FREEZE of an earlier template expand
+    // (`if`/`for`) and MUST be rewritten even on std.store sites skipped
+    // for args (690_074).
+    //
+    // Every arm below lowers ONE text slot through the same
+    // `storeLowerText`. The list of arms is the whole reach of the store's
+    // read surface, and every gap this walk has ever had was an arm that
+    // was not here (`.expression` at 110_022, `inline_body` at 690_074,
+    // `.branch_constructor` at 690_256) or a lowering this walk could not
+    // call (the indexed read, 690_250/690_254).
+    fn rewriteNode(alloc: std.mem.Allocator, prog: *const ast.Program, n: *ast.Node, scope: StoreScope, idents: []const []const u8, bound: []const []const u8) void {
+        // Same temporary-capture rule as storeRefsContH: never `|*inv|`
+        // on `switch (n.*)`; mutate `n.invocation` in place (690_074).
+        switch (n.*) {
+            .invocation => {
+                const inv = &n.invocation;
+                const skip_args = blk: {
+                    if (inv.path.module_qualifier) |mq| {
+                        if (std.mem.eql(u8, mq, "std.store")) break :blk true;
+                    }
+                    break :blk false;
+                };
+                if (!skip_args) {
+                    for (inv.args) |*a| {
+                        @constCast(a).value = storeLowerText(alloc, prog, a.value, scope, idents, bound);
+                        // Expression args carry their text separately — the
+                        // emitter reads THAT, not .value. cloneContinuation
+                        // shares these pointers with the ORIGINAL tree (the
+                        // documented clone footgun), so swap in a fresh copy
+                        // rather than mutating shared state.
+                        if (a.expression_value) |ev| {
+                            const fresh = alloc.create(ast.CapturedExpression) catch unreachable;
+                            fresh.* = ev.*;
+                            fresh.text = storeLowerText(alloc, prog, ev.text, scope, idents, bound);
+                            @constCast(a).expression_value = fresh;
+                        }
+                    }
+                }
+                if (inv.inline_body) |ib| {
+                    inv.inline_body = storeLowerText(alloc, prog, ib, scope, idents, bound);
+                }
+            },
+            .inline_code => {
+                n.* = .{ .inline_code = storeLowerText(alloc, prog, n.inline_code, scope, idents, bound) };
+            },
+            // A PRODUCE arm (`peek -> s.v`, `| c _ -> s.v`) is an expression
+            // node, and it reads cells exactly like an arg does. Left out,
+            // the reference reached the host verbatim as `s.v` — an
+            // undeclared identifier in Zig, from valid Koru (110_022).
+            .expression => {
+                n.* = .{ .expression = storeLowerText(alloc, prog, n.expression, scope, idents, bound) };
+            },
+            // A branch-RESOLUTION payload (`| then => got s.n`) is the same
+            // read one position over from the guard (690_256). The emitter
+            // reads `plain_value`, else `expression_str orelse type` per
+            // field, so the rewrite lands in exactly those slots.
+            .branch_constructor => {
+                const bc = &n.branch_constructor;
+                if (bc.plain_value) |pv| bc.plain_value = storeLowerText(alloc, prog, pv, scope, idents, bound);
+                for (bc.fields) |*fld| {
+                    const has_expr = fld.expression_str != null;
+                    const lowered = storeLowerText(alloc, prog, fld.expression_str orelse fld.type, scope, idents, bound);
+                    if (has_expr) @constCast(fld).expression_str = lowered else @constCast(fld).type = lowered;
+                }
+            },
+            else => {},
+        }
+    }
+    fn rewriteCont(alloc: std.mem.Allocator, prog: *const ast.Program, cont: *ast.Continuation, scope: StoreScope, idents: []const []const u8, bound: []const []const u8) void {
+        // A continuation's OWN bindings shadow store names (690_090) — the
+        // singleton twin of the plural walk's skip. A row binding or
+        // shape-destructure makes `<store>.<field>` mean the row, so the
+        // cell rewrite must not reach it.
+        var own_buf: [16][]const u8 = undefined;
+        var own_len: usize = 0;
+        if (cont.binding) |b| {
+            own_buf[own_len] = b;
+            own_len += 1;
+        }
+        for (cont.destructure) |df| {
+            own_buf[own_len] = df.name;
+            own_len += 1;
+        }
+        const own = own_buf[0..own_len];
+        const bound_all: []const []const u8 = if (own_len == 0)
+            bound
+        else blk: {
+            const all = alloc.alloc([]const u8, bound.len + own_len) catch unreachable;
+            @memcpy(all[0..bound.len], bound);
+            @memcpy(all[bound.len..], own);
+            break :blk all;
+        };
+        // Guards ride as arm conditions at the write site - their
+        // cross-store reads rewrite to the cells too (690_013).
+        if (cont.condition) |cond| {
+            @constCast(cont).condition = storeLowerText(alloc, prog, cond, scope, idents, bound_all);
+        }
+        if (cont.node) |*n| rewriteNode(alloc, prog, @constCast(n), scope, idents, bound_all);
+        for (cont.continuations) |*c| rewriteCont(alloc, prog, @constCast(c), scope, idents, bound_all);
+    }
+    fn rewriteFlow(alloc: std.mem.Allocator, prog: *const ast.Program, f: *ast.Flow, scope: StoreScope, idents: []const []const u8) void {
+        const bound_params = flowParamNamesStore(alloc, prog, f);
+        rewriteCont(alloc, prog, &f.body, scope, idents, bound_params);
+        if (f.inline_body) |ib| {
+            @constCast(f).inline_body = storeLowerText(alloc, prog, ib, scope, idents, bound_params);
+        }
+    }
+    // A bare-return subflow (`peek -> s.v`) is not a Flow at all — it lands
+    // as an `immediate_impl` whose BranchConstructor carries the produced
+    // expression. Reading a cell there is as ordinary as reading one in an
+    // arg, but the walk used to visit only `.flow`, so the reference went
+    // to the host verbatim and Zig reported an undeclared `s` (110_022).
+    fn rewriteImmediateImpl(alloc: std.mem.Allocator, prog: *const ast.Program, ii: *ast.ImmediateImpl, scope: StoreScope, idents: []const []const u8) void {
+        if (ii.value.plain_value) |pv| {
+            ii.value.plain_value = storeLowerText(alloc, prog, pv, scope, idents, &[_][]const u8{});
+        }
+        // `=> branch { f: <expr> }` keeps each field's value in
+        // `expression_str`; a cell read there is the same read.
+        for (ii.value.fields) |*fld| {
+            if (fld.expression_str) |es| {
+                @constCast(fld).expression_str = storeLowerText(alloc, prog, es, scope, idents, &[_][]const u8{});
+            }
+        }
+    }
+};
+
+const CellWalk = struct {
+    const ast = @import("ast");
+    const emitter_helpers = @import("emitter_helpers");
+    const Home = struct { file: ?[]const u8, logical: ?[]const u8 };
+    fn prefixesFor(alloc: std.mem.Allocator, prog: *const ast.Program, names: []const []const u8, homes: []const Home, reader: []const u8) []const []const u8 {
+        const px = alloc.alloc([]const u8, names.len) catch unreachable;
+        // C: the cell is a flat global — no module struct to qualify
+        // through, and store names are program-global, so the read is
+        // `__koru_store_<s>.<f>` from every module.
+        if (std.mem.eql(u8, CompilerEnv.lang, "c")) {
+            for (px) |*p| p.* = "";
+            return px;
+        }
+        for (names, 0..) |_, i| {
+            // FILE-derived: `reader` is a `Flow.module`, same domain.
+            const home = homes[i].file orelse "";
+            if (home.len == 0) {
+                px[i] = "";
+                continue;
+            }
+            // A store in the ENTRY module keeps the bare form: that is
+            // the status quo and `main_module` is the enclosing struct.
+            //
+            // A store in an imported module is ALWAYS fully qualified,
+            // even for a reader in its own module. A same-module read
+            // looks safe unqualified right up until the emitter INLINES
+            // that body into a caller elsewhere (`peek -> cache.v` read
+            // from the entry file), at which point the bare name is in a
+            // namespace that never declared it. The qualified form is
+            // valid from both sides, so it is the only one that survives
+            // inlining.
+            const home_logical_pre = homes[i].logical orelse "";
+            if (std.mem.eql(u8, home_logical_pre, prog.main_module_name) and std.mem.eql(u8, home, reader)) {
+                px[i] = "";
+                continue;
+            }
+            // Only the ENTRY module's emitted namespace has a name this
+            // layer can spell (`main_module`). A store declared in an
+            // imported module and read from another needs the emitter's
+            // module-path mangling. `storeEmitQualifier` applies the same
+            // rule as `emitter_helpers.writeModulePath`, so a cross-module
+            // cell read now lowers for ANY declaring module — it used to
+            // refuse, because this rewrite could only spell `main_module`.
+            px[i] = storeCellQualifier(alloc, home_logical_pre, prog.main_module_name);
+        }
+        return px;
+    }
+    // Each item carries the module it was declared in, so the reader is
+    // read off the item rather than threaded down the walk.
+    fn items(alloc: std.mem.Allocator, prog: *const ast.Program, its: []ast.Item, names: []const []const u8, homes: []const Home, idents: []const []const u8) void {
+        for (its) |*pi| {
+            switch (pi.*) {
+                // Must use `&pi.flow` — `|*f|` on a switched copy
+                // mutates a temporary and the live AST stays raw.
+                .flow => Rewrite.rewriteFlow(alloc, prog, &pi.flow, .{ .names = names, .prefixes = prefixesFor(alloc, prog, names, homes, pi.flow.module) }, idents),
+                .immediate_impl => Rewrite.rewriteImmediateImpl(alloc, prog, &pi.immediate_impl, .{ .names = names, .prefixes = prefixesFor(alloc, prog, names, homes, pi.immediate_impl.module) }, idents),
+                .module_decl => items(alloc, prog, @constCast(pi.module_decl.items), names, homes, idents),
+                else => {},
+            }
+        }
+    }
+};

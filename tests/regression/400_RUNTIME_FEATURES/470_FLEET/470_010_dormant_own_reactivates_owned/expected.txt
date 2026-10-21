@@ -1,0 +1,8 @@
+slate cleared
+slate cleared
+nodea spawned room-42
+committed visits=41
+evicted — dormant
+dormant and owned by nodea
+reactivated: visits=42
+nodea drained 1

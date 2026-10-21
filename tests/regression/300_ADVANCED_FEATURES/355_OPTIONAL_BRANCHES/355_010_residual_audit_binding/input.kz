@@ -27,8 +27,8 @@
 ~tor print-str { text: string }
 
 ~proc print-str|zig {
-    _ = @import("std").posix.write(1, text) catch {};
-    _ = @import("std").posix.write(1, "\n") catch {};
+    _ = @import("std").fs.File.stdout().writeAll(text) catch {};
+    _ = @import("std").fs.File.stdout().writeAll("\n") catch {};
 }
 
 // Call 1: value=10 → success (required, handled explicitly)

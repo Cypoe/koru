@@ -1,0 +1,6 @@
+start
+img 3
+join 1
+mid
+err -2
+join 2

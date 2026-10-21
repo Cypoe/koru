@@ -1,0 +1,10 @@
+# core — compiler-internals board. For intrusive changes to src/, koru_std/
+# plumbing, or the pipeline: language basics, module system, parser, taint,
+# obligations, subflows, fmt. ~590 tests, ~30 min at --parallel 8.
+010_*
+115_*
+210_*
+330_*
+335_*
+350_*
+620_*

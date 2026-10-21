@@ -1,0 +1,155 @@
+// Koru Standard Library: Reactive Stores — the `colread` part.
+// Joined via `~part colread` in store.kz; merged into the store module at load.
+// Cell-read surface: fixed-char capacity probe, bare-bind boundary scan, and the per-row read emitter (charCap / bareBindEnd / fireRow).
+/// Is `col` a fixed-char column, and how many bytes does it hold?
+/// (690_052 — the comptime-literal overflow check needs N at the insert
+/// site; the query road needs to know a char cell reads as a NUL-sliced
+/// view, not a [N]u8.) Sources, mirroring storeInsertOrder's
+/// transform-order tolerance: the generated SoA cell host_line when create
+/// already ran (`<col>: [CAP][N]u8` — store.kz owns both the writer and
+/// this reader), else the untransformed create's seed block (`char[N]`).
+fn charCap(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8, col: []const u8) ?usize {
+    const stripQuotes = @import("emitter_helpers").stripQuotes;
+    const struct_literal = @import("struct_literal");
+    const marker = std.fmt.allocPrint(alloc, "const __KoruStoreT_{s} = struct {{", .{store}) catch unreachable;
+    for (flatItems(alloc, prog.items)) |pi| {
+        if (pi.* != .host_line) continue;
+        const t = pi.host_line.content;
+        if (std.mem.indexOf(u8, t, marker) == null) continue;
+        const fkey = std.fmt.allocPrint(alloc, "\n    {s}: [", .{col}) catch unreachable;
+        const fpos = std.mem.indexOf(u8, t, fkey) orelse return null;
+        const rest = t[fpos + fkey.len ..];
+        // scalar: `8]i64 = undefined`; fixed-char: `8][16]u8 = undefined`
+        const close = std.mem.indexOfScalar(u8, rest, ']') orelse return null;
+        const after = rest[close + 1 ..];
+        if (after.len == 0 or after[0] != '[') return null;
+        const close2 = std.mem.indexOfScalar(u8, after, ']') orelse return null;
+        if (!std.mem.startsWith(u8, after[close2 + 1 ..], "u8")) return null;
+        return std.fmt.parseInt(usize, after[1..close2], 10) catch null;
+    }
+    // create not yet transformed: read the raw seed block.
+    for (flatItems(alloc, prog.items)) |pi| {
+        if (pi.* != .flow) continue;
+        const f = &pi.flow;
+        const inv = f.inv();
+        if (inv.path.segments.len != 1 or !std.mem.eql(u8, inv.path.segments[0], "new")) continue;
+        const mq = inv.path.module_qualifier orelse continue;
+        if (!std.mem.eql(u8, mq, "std.store")) continue;
+        var name_matches = false;
+        var seed: ?[]const u8 = null;
+        for (inv.args) |a| {
+            if (std.mem.eql(u8, a.name, "expr")) {
+                name_matches = std.mem.eql(u8, stripQuotes(a.value), store);
+            } else if (std.mem.eql(u8, a.name, "source")) {
+                seed = a.value;
+            }
+        }
+        if (!name_matches or seed == null) continue;
+        const braced = std.fmt.allocPrint(alloc, "{{{s}}}", .{seed.?}) catch unreachable;
+        const cf = struct_literal.parseFields(alloc, braced) catch return null;
+        for (cf) |c| {
+            if (!std.mem.eql(u8, c.name, col)) continue;
+            const v = std.mem.trim(u8, c.value, " ");
+            if (std.mem.startsWith(u8, v, "char[") and v.len > "char[".len and v[v.len - 1] == ']') {
+                return std.fmt.parseInt(usize, std.mem.trim(u8, v["char[".len .. v.len - 1], " "), 10) catch null;
+            }
+            return null;
+        }
+        return null;
+    }
+    return null;
+}
+
+
+/// The query rewriter's one adjacency rule: is `bind` at `i` a VALUE-position
+/// use — not a name? `.bind` is a field of some other expression (690_363),
+/// `#bind` a label, `@bind` a builtin, `?bind` an arm head; `bind`
+/// mid-identifier or opening a `bind.` field path isn't bare either. `bind:`
+/// names (690_362) only in expression context — inside `{{ n:d }}` the colon
+/// is the mask's spec delimiter and `n` IS the value (690_100/271/294).
+/// Returns the end index on a bare hit.
+fn bareBindEnd(text: []const u8, i: usize, bind: []const u8, expr_ctx: []const bool) ?usize {
+    const isIdentCh = @import("emitter_helpers").isKebabIdentChar;
+    if (i > 0) {
+        const p = text[i - 1];
+        if (p == '.' or p == '#' or p == '@' or p == '?') return null;
+    }
+    if (!std.mem.startsWith(u8, text[i..], bind)) return null;
+    const after = i + bind.len;
+    if (after < text.len) {
+        const n = text[after];
+        if (isIdentCh(n) or n == '.') return null;
+        if (n == ':' and expr_ctx[after]) return null;
+    }
+    return after;
+}
+
+/// The row-answer emit both query drivers share — the sweep's loop and the
+/// lookup's handle-resolve both land on "project the row's columns into the
+/// projection bindings, mark `__koru_found`, open the sweepbody call".
+/// `scan_guard` lowers a `continue`-guard for the sweep and is null on the
+/// index path, where the lookup IS the guard. Returns false with `bad_op`
+/// set when the guard names an unlowering `@` op — the caller writes the
+/// refusal.
+fn fireRow(
+    alloc: std.mem.Allocator,
+    loop: *std.ArrayList(u8),
+    host_target: codegen_utils_store.HostTarget,
+    prog: *const ast_find.Program,
+    proj_names: []const []const u8,
+    proj_cols: []const usize,
+    col_names: []const []const u8,
+    col_types: []const []const u8,
+    cellq: []const u8,
+    store_name: []const u8,
+    scan_guard: ?[]const u8,
+    removal_tolerant: bool,
+    mark_found: bool,
+    home_ns: []const u8,
+    sbody_name: []const u8,
+    main_module_name: []const u8,
+    argb: []const u8,
+    bad_op: *[]const u8,
+) bool {
+    for (proj_names, proj_cols) |pn, ci| {
+        const esc_cn = codegen_utils_store.escapeZigIdentifier(alloc, col_names[ci]) catch col_names[ci];
+        const read = cellRead(alloc, host_target, prog, cellq, store_name, col_names[ci], esc_cn, "__koru_si");
+        // C has no `auto` — the bind carries the column's C spelling (a
+        // declared proto terminal binds as its own typedef'd name).
+        const ctype = codegen_utils_store.cTypeOf(col_types[ci]) orelse col_types[ci];
+        loop.appendSlice(alloc, codegen_utils_store.HostShape.typedConstBind(alloc, host_target, ctype, pn, read)) catch unreachable;
+    }
+    if (scan_guard) |cond| {
+        const lowered_c = storeLowerExpr(alloc, cond, bad_op) orelse return false;
+        const gz = if (removal_tolerant)
+            std.fmt.allocPrint(alloc, "if (!({s})) {{ __koru_si += 1; continue; }}\n", .{lowered_c}) catch unreachable
+        else
+            std.fmt.allocPrint(alloc, "if (!({s})) continue;\n", .{lowered_c}) catch unreachable;
+        loop.appendSlice(alloc, gz) catch unreachable;
+    }
+    if (mark_found) loop.appendSlice(alloc, "__koru_found = true;\n") catch unreachable;
+    const callq = storeEventQualifier(alloc, home_ns, main_module_name);
+    loop.appendSlice(alloc, codegen_utils_store.HostShape.eventCallHead(alloc, host_target, callq, sbody_name)) catch unreachable;
+    loop.appendSlice(alloc, codegen_utils_store.HostShape.callArg(alloc, host_target, callq, sbody_name, argb)) catch unreachable;
+    return true;
+}
+
+/// One column's READ at `idx`. A `char[N]` cell binds the row text up
+/// to the first NUL (690_052 semantics) — the plain indexed read hands the
+/// handler a [N]u8 where its Input types a []const u8, a raw Zig coercion
+/// error at a site the author never wrote (threat_bench). A JS column IS the
+/// string and a C# `string` column stores exact text with no NUL padding —
+/// the plain indexed read stands on both.
+fn cellRead(alloc: std.mem.Allocator, host_target: codegen_utils_store.HostTarget, prog: *const ast_find.Program, cellq: []const u8, store: []const u8, col: []const u8, esc_col: []const u8, idx: []const u8) []const u8 {
+    // `col` is ONE field name — a union-folded column like `creature.alive`
+    // carries a dot Zig quotes away (`@"…"`) and cs folds (`creature_alive`).
+    const mem = if (host_target == .cs)
+        codegen_utils_store.HostShape.csMember(alloc, col)
+    else if (host_target == .c)
+        codegen_utils_store.cMemberName(alloc, col)
+    else
+        esc_col;
+    if (host_target == .zig and charCap(alloc, prog, store, col) != null)
+        return std.fmt.allocPrint(alloc, "@import(\"std\").mem.sliceTo(&{s}__koru_store_{s}.{s}[{s}], 0)", .{ cellq, store, mem, idx }) catch unreachable;
+    return std.fmt.allocPrint(alloc, "{s}__koru_store_{s}.{s}[{s}]", .{ cellq, store, mem, idx }) catch unreachable;
+}

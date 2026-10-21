@@ -1,0 +1,8 @@
+spawned room-42
+cell said: r1
+captured visits=41
+nope missing
+room-42 evicted
+room-42 gone
+spawned room-7
+drained 1 cell(s)

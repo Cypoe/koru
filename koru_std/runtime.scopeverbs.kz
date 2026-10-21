@@ -1,0 +1,195 @@
+// Koru Standard Library: the `scopeverbs` part of runtime — the scope
+// introspection tors: get-scope, scope-vocabulary, scope-manifest,
+// scope-grammar, and the scope-affordances tor decl. Joined via
+// `~part scopeverbs` in runtime.kz; merged into the runtime module at load.
+
+~[retain]pub tor get-scope { name: string }
+| scope {
+    dispatcher: DispatchFn,
+    cost_fn: ?CostFn,
+    creates_obligations_fn: ?ObligationsArrayFn,
+    discharges_obligations_fn: ?ObligationsArrayFn,
+    discharge_event_fn: ?DischargeEventFn,
+    creates_spec_fn: ?CreatesSpecFn,
+    discharges_spec_fn: ?DischargesSpecFn,
+    events_fn: ?EventsLookupFn,
+    input_fn: ?InputLookupFn,
+    branches_fn: ?BranchesLookupFn,
+    doc_fn: ?DocLookupFn
+}
+| not-found
+
+// Look up scope dispatcher by name — generated beside the register as dispatch_<scope>
+~proc get-scope|zig {
+    inline for (comptime buildScopeTable()) |scope_info| {
+        if (std.mem.eql(u8, name, scope_info.name)) {
+            return .{ .scope = .{
+                .dispatcher = scope_info.dispatcher,
+                .cost_fn = scope_info.cost_fn,
+                .creates_obligations_fn = scope_info.creates_obligations_fn,
+                .discharges_obligations_fn = scope_info.discharges_obligations_fn,
+                .discharge_event_fn = scope_info.discharge_event_fn,
+                .creates_spec_fn = scope_info.creates_spec_fn,
+                .discharges_spec_fn = scope_info.discharges_spec_fn,
+                .events_fn = scope_info.events_fn,
+                .input_fn = scope_info.input_fn,
+                .branches_fn = scope_info.branches_fn,
+                .doc_fn = scope_info.doc_fn,
+            } };
+        }
+    }
+    return .{ .not_found = .{} };
+}
+
+// ============================================================================
+// SCOPE-VOCABULARY - Render a scope's vocabulary for an external reader
+//
+// The whole point of the enumeration surface: a model driving this interpreter
+// must be told, accurately, what it may call — and that description must come
+// from the register declaration, not a hand-typed script that can drift. This
+// renders exactly the surface the register block enforces, as one line per
+// tor with its named arguments and possession phantoms:
+//
+//   open(path: string)
+//   append(handle: string<!open>, text: string)
+//   close(handle: string<!open>)
+//   say(text: string)
+//
+// No JSON schema, no second source of truth: the prompt and the enforcement
+// are the same bytes.
+
+// @retain: scope_vocabulary_event is referenced from generated Zig code in user
+// pipelines (std/bridge:vocabulary compiles to scope_vocabulary_event.handler).
+~[retain]pub tor scope-vocabulary { name: string }
+| ok string
+| not-found
+
+~proc scope-vocabulary|zig {
+    // A local arena over page_allocator — the same substrate the interpreter's
+    // own arena and its message dupes use. ArrayList growth here allocates
+    // fresh chunks (arena realloc resolves to alloc+copy, which works in this
+    // binary; direct realloc-based growth OOMs). The arena is intentionally
+    // never freed: the returned string must outlive this call, and a few pages
+    // per vocabulary render are tolerated exactly like parse-error messages.
+    var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena_state.allocator();
+    var out = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
+
+    inline for (comptime buildScopeTable()) |scope_info| {
+        if (std.mem.eql(u8, name, scope_info.name)) {
+            const events = scope_info.events_fn.?();
+            for (events) |event_name| {
+                if (out.items.len > 0) out.append(allocator, '\n') catch unreachable;
+                const input = if (scope_info.input_fn) |f| f(event_name) orelse &.{} else &.{};
+                wireSignatureLine(&out, allocator, event_name, input);
+                // The outcome clause — the decl's own tail: `-> T<obl!>`
+                // for a bare return, `| name T` for declared branches,
+                // nothing for a void tor. The create/mint edge folds into
+                // the type text or names its branch.
+                const branches = if (scope_info.branches_fn) |bf| bf(event_name) else &[_]BranchSpec{};
+                wireDeclOutcome(&out, allocator, branches);
+                // What the verb IS — declaration prose beside the outcome
+                // contract, first line only (prose joins multi-line).
+                if (scope_info.doc_fn) |df| {
+                    const doc = df(event_name);
+                    const first_line = if (std.mem.indexOfScalar(u8, doc, '\n')) |nl| doc[0..nl] else doc;
+                    if (first_line.len > 0) {
+                        out.appendSlice(allocator, " — ") catch unreachable;
+                        out.appendSlice(allocator, first_line) catch unreachable;
+                    }
+                }
+            }
+            return .{ .ok = out.toOwnedSlice(allocator) catch unreachable };
+        }
+    }
+    return .{ .not_found = .{} };
+}
+
+// ============================================================================
+// SCOPE-MANIFEST - Serve a scope's vocabulary as a data contract (JSON)
+//
+// The manifest record is minted at scope creation (register) from the same
+// EventEntry data the dispatch tables are emitted from; this tor serializes
+// it to JSON so a running program can serve it as a contract endpoint
+// (Orisha) or hand it to a tool. The emitted JSON has no hand-authored bytes:
+// every field derives from the scope declaration, so the served contract and
+// the enforcement cannot drift. Defined flows (session growth) are NOT part
+// of this record — it is the compiled base, minted before any session exists.
+
+// @retain: scope_manifest_event is referenced from generated Zig code in user
+// pipelines (Orisha serves it as the .json endpoint; explain consumes it).
+~[retain]pub tor scope-manifest { name: string }
+| ok string
+| not-found
+
+~proc scope-manifest|zig {
+    inline for (comptime buildScopeTable()) |scope_info| {
+        if (std.mem.eql(u8, name, scope_info.name)) {
+            const m = scope_info.manifest orelse {
+                std.debug.print("[RUNTIME] scope '{s}' has no manifest record\n", .{name});
+                return .{ .not_found = .{} };
+            };
+            var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            const allocator = arena_state.allocator();
+            const json = scopeManifestToJson(allocator, m) catch return .{ .not_found = .{} };
+            return .{ .ok = json };
+        }
+    }
+    return .{ .not_found = .{} };
+}
+
+// ============================================================================
+// SCOPE-GRAMMAR - the wire grammar, rendered from the register block
+//
+// The third render from the scope table, and the one that closes the R2
+// loop: scope-vocabulary tells a model WHAT it may call, scope-manifest
+// serves it as data, and scope-grammar teaches HOW a call is written — the
+// wire's shape rules (the constant half, WIRE_GRAMMAR_TEXT, kept beside the
+// parser that enforces it) above this scope's own verb lines (rendered by
+// scope-vocabulary, so the signatures cannot drift from enforcement either).
+// A prompt built from this render and a turn judged by parse.wire are the
+// same declaration read twice: the lesson and the law.
+
+// @retain: scope_grammar_event is referenced from generated Zig code in user
+// pipelines (kopium's agent prompt is built from it).
+~[retain]pub tor scope-grammar { name: string }
+| ok string
+| not-found
+
+~proc scope-grammar|zig {
+    inline for (comptime buildScopeTable()) |scope_info| {
+        if (std.mem.eql(u8, name, scope_info.name)) {
+            var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            const allocator = arena_state.allocator();
+            var out = std.ArrayList(u8).initCapacity(allocator, 512) catch unreachable;
+            out.appendSlice(allocator, wireGrammarRules(allocator, scope_info.manifest)) catch unreachable;
+            out.appendSlice(allocator, "\n\nYour vocabulary:\n") catch unreachable;
+            switch (scope_vocabulary_event.handler(.{ .name = name })) {
+                .ok => |v| out.appendSlice(allocator, v) catch unreachable,
+                .not_found => unreachable, // the inline-for already matched this scope
+            }
+            // A `contract` decl in the scope's home module is documentation,
+            // not a verb — register lifts its annotation prose into the
+            // manifest, and the grammar serves it here so the field shapes
+            // ship with the prompt instead of costing a model turn to fetch.
+            if (scope_info.manifest) |m| {
+                if (m.doc.len > 0) {
+                    out.appendSlice(allocator, "\n\n") catch unreachable;
+                    out.appendSlice(allocator, m.doc) catch unreachable;
+                }
+            }
+            return .{ .ok = out.toOwnedSlice(allocator) catch unreachable };
+        }
+    }
+    return .{ .not_found = .{} };
+}
+
+// ============================================================================
+// SCOPE-AFFORDANCES tor decl — its `~proc` lives in the `affordances` part.
+// ============================================================================
+
+// @retain: scope_affordances_event is referenced from generated Zig code in
+// user pipelines (std/bridge:affordances compiles to its handler).
+~[retain]pub tor scope-affordances { name: string, held: string }
+| ok string
+| not-found

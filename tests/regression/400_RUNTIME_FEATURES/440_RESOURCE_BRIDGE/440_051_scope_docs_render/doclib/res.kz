@@ -1,0 +1,32 @@
+// Doc'd tors for the vocabulary-render pin: prose in a vertical annotation
+// block becomes the decl's .prose, which scope-vocabulary renders after
+// ` — ` (first line) and scope-manifest ships whole in the JSON `doc` field.
+
+pub const Res = struct { v: u32 };
+
+~[
+Mint a Res — hands back a live handle token.
+The token is opaque: pass it to verbs that borrow or discharge it.
+]pub tor mint {} -> *Res<opened!>
+
+~proc mint|zig {
+    const r = @import("std").heap.page_allocator.create(Res) catch unreachable;
+    r.* = .{ .v = 7 };
+    return r;
+}
+
+~[
+Read the resource — borrows the token.
+]pub tor grab { r: *Res<opened> }
+
+~proc grab|zig {
+    _ = r;
+}
+
+~[
+Release the resource — spends the token for good.
+]pub tor release { r: *Res<!opened> }
+
+~proc release|zig {
+    @import("std").heap.page_allocator.destroy(r);
+}

@@ -1,0 +1,90 @@
+// 015_fleet_mail — the routed turn, priced. The koru spelling of celld's
+// remote call: a refused caller posts the turn to the cell's mailbox, and
+// the owner of record drains it as a real turn (interpreter dispatch +
+// durable commit). Two timed arms:
+//   send    — nodeb posts TURNS turn files (tmp+rename into .fleet/inbox)
+//   deliver — nodea drains them: per mail, read + execute + commit + delete
+// The end-to-end routed-turn price is send + deliver; celld's analog is the
+// ~4.6ms request path measured in 013's README (HTTP + V8 + SQLite + docker).
+//
+// The checksum is the oracle: TURNS mails must each execute once, or the
+// routing silently dropped them.
+
+~import std/io
+~import std/node
+~import std/cell
+~import std/fleet
+~import std/proto
+~import std/runtime
+~import std/time
+
+~std/proto(counter) {
+    hits: u32
+}
+
+~pub tor touch { k: u32 } -> u32
+~touch -> k + 1
+
+~tor sink { } -> i64
+~sink -> 0
+
+~std/runtime:register(scope: "cell") {
+    touch(5)
+}
+
+const TURNS: usize = 60;
+
+~std/node:new(nodea, scope: "cell", world: "/tmp/koru-bench-mail", capacity: 8)
+~std/node:new(nodeb, scope: "cell", world: "/tmp/koru-bench-mail", capacity: 8)
+
+~std/node(nodea)
+| node f |> std/node:spawn(f, id: "grain", cell: counter)
+  | spawned _ |> sink()
+  | resident |> sink()
+  | held-by o |> std/io:print.ln("ma grain held by {{ o:s }}")
+  | refused |> std/io:print.ln("ma grain refused")
+
+// ─── arm A: send ─── the refused caller's post: tmp+rename into the inbox ───
+~std/node(nodeb.grain)
+| cell c |> std/io:print.ln("nodeb activated grain (BUG)")
+| held-by o |> std/time:now(): t0
+  |> for(0..TURNS)
+    ! each _ |> std/fleet:send(world: "/tmp/koru-bench-mail", id: "grain", from: "nodeb", body: "touch(k: 1)")
+      | posted |> sink()
+      | failed e |> std/io:print.ln("send failed: {{ e:s }}")
+  |> std/time:elapsed(start: t0): ra
+  |> std/io:print.ln("send: {{ ra.ms:f }}ms for {{ TURNS:d }} posts")
+| not-found |> std/io:print.ln("nodeb: grain not-found")
+
+// ─── arm B: deliver ─── the owner's drain: per mail, execute + commit ───
+~std/time:now(): t1
+  |> std/fleet:drain(world: "/tmp/koru-bench-mail", id: "grain", node: "nodea")
+    ! mail m |> std/node(nodea.grain)
+      | cell c |> std/cell:run(c, source: m.body)
+        | result _ |> std/cell:capture(c, shape: counter)
+          ! as s |> std/cell:captured { hits: s.hits + 1 }
+          | captured _ |> sink()
+        | error e |> std/io:print.ln("turn failed: {{ e.kind:s }}")
+      | held-by o |> std/io:print.ln("nodea lost grain mid-drain: {{ o:s }}")
+      | not-found |> std/io:print.ln("grain vanished mid-drain")
+    | done n |> std/io:print.ln("delivered {{ n:d }} mails")
+    | held-by o |> std/io:print.ln("drain refused: {{ o:s }}")
+    | free |> std/io:print.ln("grain unowned")
+    | contended |> std/io:print.ln("drain contended")
+    | failed e |> std/io:print.ln("drain failed {{ e:s }}")
+  |> std/time:elapsed(start: t1): rb
+  |> std/io:print.ln("deliver: {{ rb.ms:f }}ms for {{ TURNS:d }} mails")
+
+// ─── checksum: every routed turn must have committed once ───
+~std/node(nodea.grain)
+| cell c |> std/cell:get(c, field: "hits")
+  | value v |> std/io:print.ln("mb hits={{ v.int:d }}")
+  | unset u |> std/io:print.ln("mb hits unset")
+  | unknown-field e |> std/io:print.ln("no field")
+| held-by o |> std/io:print.ln("mb grain held by {{ o:s }}")
+| not-found |> std/io:print.ln("mb grain gone")
+
+~std/node(nodea)
+| node f |> std/node:drain(f): n1 |> std/io:print.ln("nodea drained {{ n1:d }}")
+~std/node(nodeb)
+| node f |> std/node:drain(f): n2 |> std/io:print.ln("nodeb drained {{ n2:d }}")

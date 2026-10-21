@@ -1,0 +1,5 @@
+slate cleared
+node-a claimed epoch=1
+node-a released
+node-c claimed epoch=2
+node-a fenced: record now epoch=2

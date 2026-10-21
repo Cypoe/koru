@@ -1,0 +1,138 @@
+// Koru Standard Library: the `mail` part of fleet — routing over the floor.
+// Joined via `~part mail` in fleet.kz; merged into the fleet module at load.
+//
+// `.fleet/inbox/<id>/` is a mailbox that belongs to the CELL, not the node:
+// a caller refused `held-by` leaves a turn for the owner of record, and the
+// message survives takeover and ownership gaps — whoever holds the id next
+// drains what was posted to it. `send` is multi-producer: every message is
+// a uniquely-named file committed tmp+rename, so a reader never sees half
+// a message and no two senders collide. `drain` is owner-side delivery:
+// under the lock (serialized against seize and a second drainer), guarded
+// (a stale owner answers `held-by`), ordered by send-time filename, and
+// at-least-once — each file deletes only after the `! mail` arm returns,
+// so a crash inside the arm redelivers on the next drain.
+
+fn mailInboxPath(buf: []u8, world: []const u8, id: []const u8) ?[]const u8 {
+    return std.fmt.bufPrint(buf, "{s}/.fleet/inbox/{s}", .{ world, id }) catch null;
+}
+
+// Foreign owner while the record's lease is live — the member-miss probe
+// in node.world consults it on a state-file miss: an owned id with no
+// durable body (spawned, never flushed) is held-by, not not-found. An
+// expired record answers nothing here — claimable, and there is no body
+// to activate regardless. Lives here because routing owns the "who holds
+// this id right now" question.
+pub fn fleetForeignLiveOwner(world: []const u8, id: []const u8, node: []const u8, nb: []u8) ?[]const u8 {
+    const rec = ownerRead(world, id, nb) orelse return null;
+    if (!leaseLive(rec.until)) return null;
+    if (std.mem.eql(u8, rec.node, node)) return null;
+    return rec.node;
+}
+
+// ============================================================================
+// SEND — post a message to an id's mailbox. `posted` even when the id is
+// currently unowned: the mailbox is durable floor, the next owner drains it.
+// Filename: <nanoTimestamp>-<from>-<rand> — chronological under lexical
+// sort, collision-free across processes.
+// ============================================================================
+
+~pub tor send { world: string, id: string, from: string, body: string }
+| posted
+| failed string
+
+~proc send|zig {
+    var ib: [1024]u8 = undefined;
+    const inbox = mailInboxPath(&ib, world, id) orelse
+        return .{ .failed = "path too long" };
+    std.fs.cwd().makePath(inbox) catch return .{ .failed = "mailbox mkdir failed" };
+    const name = std.fmt.allocPrint(std.heap.page_allocator, "{d}-{s}-{x}", .{
+        std.time.nanoTimestamp(), from, std.crypto.random.int(u32),
+    }) catch return .{ .failed = "out of memory" };
+    defer std.heap.page_allocator.free(name);
+    var pb: [1024]u8 = undefined;
+    const p = std.fmt.bufPrint(&pb, "{s}/{s}", .{ inbox, name }) catch
+        return .{ .failed = "path too long" };
+    var tb: [1024]u8 = undefined;
+    const tmp = std.fmt.bufPrint(&tb, "{s}.tmp", .{p}) catch
+        return .{ .failed = "path too long" };
+    const rec = std.fmt.allocPrint(std.heap.page_allocator, "from={s}\n{s}", .{ from, body }) catch
+        return .{ .failed = "out of memory" };
+    defer std.heap.page_allocator.free(rec);
+    std.fs.cwd().writeFile(.{ .sub_path = tmp, .data = rec }) catch
+        return .{ .failed = "send write failed" };
+    std.fs.cwd().rename(tmp, p) catch return .{ .failed = "send commit failed" };
+    return .posted;
+}
+
+// ============================================================================
+// DRAIN — the owner of record takes delivery. Lock-serialized (`contended`
+// if a takeover or another drain holds it), ownership-gated like `guard`:
+// a lapsed or foreign node answers `held-by`/`free` and consumes nothing.
+// Each message file parses `from=<sender>\n<body>`; the file deletes after
+// the arm returns — at-least-once delivery.
+// ============================================================================
+
+~pub tor drain { world: string, id: string, node: string }
+! mail *
+| done i64
+| held-by string
+| free
+| contended
+| failed string
+
+~proc drain|zig {
+    var lb: [1024]u8 = undefined;
+    const lock = std.fmt.bufPrint(&lb, "{s}/.fleet/locks/{s}", .{ world, id }) catch
+        return .{ .failed = "path too long" };
+    std.fs.cwd().makeDir(lock) catch |err| {
+        if (err == error.PathAlreadyExists) return .contended;
+        return .{ .failed = "drain lock failed" };
+    };
+    defer std.fs.cwd().deleteDir(lock) catch {};
+    var nb: [256]u8 = undefined;
+    const rec = $mod.ownerRead(world, id, &nb) orelse return .free;
+    if (!std.mem.eql(u8, rec.node, node) or !$mod.leaseLive(rec.until)) return .{ .held_by =
+        std.heap.page_allocator.dupe(u8, rec.node) catch
+        return .{ .failed = "out of memory" } };
+    var ib: [1024]u8 = undefined;
+    const inbox = $mod.mailInboxPath(&ib, world, id) orelse
+        return .{ .failed = "path too long" };
+    var d = std.fs.cwd().openDir(inbox, .{ .iterate = true }) catch |err| {
+        if (err == error.FileNotFound) return .{ .done = 0 };
+        return .{ .failed = "mailbox open failed" };
+    };
+    defer d.close();
+    var names = std.ArrayList([]u8){};
+    defer {
+        for (names.items) |n| std.heap.page_allocator.free(n);
+        names.deinit(std.heap.page_allocator);
+    }
+    var it = d.iterate();
+    while (it.next() catch return .{ .failed = "mailbox read failed" }) |ent| {
+        if (ent.kind != .file) continue;
+        names.append(std.heap.page_allocator, std.heap.page_allocator.dupe(u8, ent.name) catch
+            return .{ .failed = "out of memory" }) catch
+            return .{ .failed = "out of memory" };
+    }
+    std.mem.sort([]u8, names.items, {}, struct {
+        fn lt(_: void, a: []u8, b: []u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    }.lt);
+    var delivered: i64 = 0;
+    for (names.items) |name| {
+        const content = d.readFileAlloc(std.heap.page_allocator, name, 1 << 20) catch
+            return .{ .failed = "message read failed" };
+        defer std.heap.page_allocator.free(content);
+        const nl = std.mem.indexOfScalar(u8, content, '\n') orelse continue;
+        if (!std.mem.startsWith(u8, content, "from=")) continue;
+        const sender = std.heap.page_allocator.dupe(u8, content[5..nl]) catch
+            return .{ .failed = "out of memory" };
+        const body = std.heap.page_allocator.dupe(u8, content[nl + 1 ..]) catch
+            return .{ .failed = "out of memory" };
+        mail(.{ .from = sender, .body = body });
+        d.deleteFile(name) catch {};
+        delivered += 1;
+    }
+    return .{ .done = delivered };
+}

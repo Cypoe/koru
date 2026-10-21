@@ -1,0 +1,551 @@
+// Koru Standard Library: node — a named, custody-owning index of cells.
+//
+//   std/node:new(main, scope: "cell", world: "cells", capacity: 256)
+//
+//   std/node(main)                         // borrow the node
+//   | node f |> std/node:spawn(f, id: "room-42", cell: room_state)
+//     | spawned b |> ...
+//     | resident |> ...
+//     | refused |> ...
+//
+//   std/node(main.room-42)                 // borrow a member, static name
+//   | cell c |> std/cell:run(c, src)
+//   | not-found |> ...
+//
+//   std/node(main[id])                     // borrow a member, runtime key
+//   | cell c |> ...
+//   | not-found |> ...
+//
+// A node is residency + custody: it owns every `*Cell<cell!>` it mints
+// (`spawn` wraps `std/cell`'s cell-create, `evict` its destroy), so the
+// cell obligation never leaves the index — a member cannot be dropped,
+// only evicted through the discharge path. `| node f |` and `| cell c |`
+// are BORROWS: enough to run, define, and inspect; never enough to mint or
+// hang up. That is the whole shape of the surface — one transform reading the
+// target's form, ordinary borrow-gated tors for everything else.
+//
+// `new` mints the NAME, not the contents — membership is runtime data, the
+// way a store's name is comptime while its rows are not. The registry maps
+// the declared name to a `*Node`; `default`'s rewrite bakes the name into a
+// `node-self`/`member-named` call, so a lookup with no `std/node:new` is a
+// comptime refusal, not a runtime miss.
+//
+// Naming, celld-aligned: a NODE is one process's residency index — residency,
+// custody, and a durable floor under `world`. `fleet` is RESERVED for the
+// cross-machine layer: the nodes that share one `world`, with ownership CAS,
+// epoch fencing, and peer routing. That layer does not exist yet; nothing in
+// this file claims it.
+
+~import std/bridge
+~import std/cell
+~import std/fleet
+
+
+const std = @import("std");
+const ast = @import("ast");
+const ast_functional = @import("ast_functional");
+const Cl = @import("root").koru_std.koru_cell;
+const Fl = @import("root").koru_std.koru_fleet;
+
+// ============================================================================
+// NODE — the resident-cell index. One per `std/node:new` name; members are
+// `*Cell` keyed by cell id. The map is the custody: `spawn` puts, `evict`
+// removes + discharges, `member`/`member-named` hand out borrows only.
+// ============================================================================
+
+pub const Node = struct {
+    name: []const u8,
+    scope: []const u8,
+    world_root: []const u8,
+    capacity: usize,
+    // The lease TTL every claim this node makes carries; 0 = un-leased.
+    // Renewal is activity-piggybacked: acquire and durable writes renew,
+    // a quiet node lets its leases lapse, a dead node gets reclaimed.
+    lease_ms: u64,
+    members: std.StringHashMap(*Cl.Cell),
+    allocator: std.mem.Allocator,
+};
+
+var node_registry: ?std.StringHashMap(*Node) = null;
+
+fn registry() *std.StringHashMap(*Node) {
+    if (node_registry == null) {
+        node_registry = std.StringHashMap(*Node).init(koru_allocator());
+    }
+    return &node_registry.?;
+}
+
+// Name-addressed lookup shared by `node-self`, `member-named`, and the
+// `new`-emitted init. `new` is checked at comptime, so a missing name here is
+// a source-order violation, not user error — panic with the teaching.
+fn nodeByName(name: []const u8) *Node {
+    return registry().get(name) orelse
+        std.debug.panic("std/node: '{s}' has no node — `std/node:new({s}, ...)` must precede its lookups in source order", .{ name, name });
+}
+
+// ============================================================================
+// NODE-SELF — `std/node(node)`: borrow the node itself.
+// ============================================================================
+
+~pub tor node-self { node: string }
+| node *Node<node>
+| ?not-found
+
+~proc node-self|zig {
+    const f = registry().get(node) orelse return .{ .not_found = .{} };
+    return .{ .node = f };
+}
+
+// ============================================================================
+// MEMBER / MEMBER-NAMED — `std/node(node.ID)`: borrow the member cell.
+// `member` is the borrow-typed verb (inside a `| node f |` arm);
+// `member-named` is the name-addressed surface `default` emits.
+// ============================================================================
+
+~pub tor member { f: *Node<node>, id: string }
+| cell *std/cell:Cell<cell>
+| held-by string
+| not-found
+
+~proc member|zig {
+    switch (nodeMember(f, id)) {
+        .cell => |b| return .{ .cell = b },
+        .foreign => |o| return .{ .held_by = o },
+        .absent => return .{ .not_found = .{} },
+    }
+}
+
+~pub tor member-named { node: string, id: string }
+| cell *std/cell:Cell<cell>
+| held-by string
+| not-found
+
+~proc member-named|zig {
+    switch (nodeMember(nodeByName(node), id)) {
+        .cell => |b| return .{ .cell = b },
+        .foreign => |o| return .{ .held_by = o },
+        .absent => return .{ .not_found = .{} },
+    }
+}
+
+// ============================================================================
+// CELL-SPAWN — activate a cell under node custody. The user-facing verb is
+// `spawn(f, id:, cell: <proto>)`, whose [pre] transform resolves the proto and
+// rewrites here with `shape`/`shape_def` baked. `| spawned` yields the borrow
+// so the caller can dispatch into it immediately.
+// ============================================================================
+
+~pub tor cell-spawn { f: *Node<node>, id: string, shape: string, shape_def: string }
+| spawned *std/cell:Cell<cell>
+| resident
+| held-by string
+| refused
+
+~proc cell-spawn|zig {
+    if (f.members.get(id) != null) return .resident;
+    // The fleet boundary precedes residency: a foreign-owned id is
+    // `| held-by` — spawn cannot mint a second custody, and a dormant
+    // foreign cell is still foreign. A new id at capacity is refused
+    // BEFORE the claim so refusal leaves no phantom ownership.
+    var epoch: u32 = 0;
+    var until: i64 = 0;
+    if (f.world_root.len > 0) {
+        var pb: [1024]u8 = undefined;
+        var dormant = false;
+        if (std.fmt.bufPrint(&pb, "{s}/{s}/state.kv", .{ f.world_root, id })) |p| {
+            if (std.fs.cwd().access(p, .{})) |_| {
+                dormant = true;
+            } else |_| {}
+        } else |_| {}
+        if (!dormant and f.members.count() >= f.capacity) return .refused;
+        var fnb: [256]u8 = undefined;
+        switch (Fl.fleetAcquire(f.world_root, id, f.name, f.lease_ms, &fnb)) {
+            .foreign => |o| return .{ .held_by = std.heap.page_allocator.dupe(u8, o) catch
+                return .refused },
+            .failed => return .refused,
+            .held => |e| {
+                epoch = e;
+                until = Fl.fleetUntil(f.world_root, id, f.name, &fnb);
+            },
+        }
+        if (dormant) return .resident;
+    }
+    if (f.members.count() >= f.capacity) return .refused;
+    const a = f.allocator;
+    const b = Cl.cellCreate(shape, shape_def, id, f.scope, f.world_root) orelse
+        return .refused;
+    if (f.world_root.len > 0) Cl.cellStampFleet(b, f.world_root, id, f.name, epoch, f.lease_ms, until);
+    const key = a.dupe(u8, id) catch {
+        Cl.cellDestroy(b);
+        return .refused;
+    };
+    f.members.put(key, b) catch {
+        a.free(key);
+        Cl.cellDestroy(b);
+        return .refused;
+    };
+    return .{ .spawned = b };
+}
+
+// ============================================================================
+// EVICT — hibernate a cell: remove + `std/cell`'s destroy. The destroy
+// discharges the cell obligation and releases whatever the cell still held —
+// that is the point of routing teardown through here.
+// ============================================================================
+
+~pub tor evict { f: *Node<node>, id: string }
+| evicted
+| absent
+
+~proc evict|zig {
+    if (f.members.fetchRemove(id)) |kv| {
+        Cl.cellDestroy(kv.value);
+        f.allocator.free(kv.key);
+        return .evicted;
+    }
+    return .absent;
+}
+
+// ============================================================================
+// COUNT — resident cells.
+// ============================================================================
+
+~pub tor count { f: *Node<node> } -> u32
+
+~proc count|zig {
+    return @intCast(f.members.count());
+}
+
+// ============================================================================
+// DRAIN — shutdown: close every resident cell, retire the node's registry
+// entry, and release everything the index allocated. A daemon runs nodes
+// forever; a program that created one must drain it before exit — the leak
+// check counts every byte the registry still holds.
+// ============================================================================
+
+~pub tor drain { f: *Node<node> } -> u32
+
+~proc drain|zig {
+    var n: u32 = 0;
+    var it = f.members.iterator();
+    while (it.next()) |e| {
+        Cl.cellDestroy(e.value_ptr.*);
+        f.allocator.free(e.key_ptr.*);
+        n += 1;
+    }
+    f.members.deinit();
+    const a = f.allocator;
+    const reg = registry();
+    _ = reg.remove(f.name);
+    a.free(f.name);
+    a.free(f.scope);
+    a.free(f.world_root);
+    a.destroy(f);
+    if (reg.count() == 0) {
+        reg.deinit();
+        node_registry = null;
+    }
+    return n;
+}
+
+// ============================================================================
+// Helpers for the transforms (local — the CH pattern in channel.kz).
+// ============================================================================
+
+const FH = struct {
+    fn trim(s: []const u8) []const u8 {
+        return std.mem.trim(u8, s, " \t\n\r");
+    }
+    fn stripQuotes(s: []const u8) []const u8 {
+        const t = trim(s);
+        if (t.len >= 2 and t[0] == '"' and t[t.len - 1] == '"') return t[1 .. t.len - 1];
+        return t;
+    }
+    fn identOk(s: []const u8) bool {
+        if (s.len == 0) return false;
+        for (s, 0..) |c, i| {
+            const ok = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_' or c == '-' or (i > 0 and c >= '0' and c <= '9');
+            if (!ok) return false;
+        }
+        return true;
+    }
+    // Recursive scan: every flow item whose invocation is `std/node:new`
+    // with `expr` == name. Runs in [pre] — decl sites are still raw.
+    fn findDecl(items: []const ast.Item, name: []const u8) bool {
+        for (items) |*it| {
+            switch (it.*) {
+                .flow => |*f| {
+                    const inv = f.inv();
+                    if (inv.path.module_qualifier) |mq| {
+                        if (std.mem.eql(u8, mq, "std.node") and inv.path.segments.len == 1 and std.mem.eql(u8, inv.path.segments[0], "new")) {
+                            for (inv.args) |a| {
+                                if (std.mem.eql(u8, a.name, "expr") and std.mem.eql(u8, stripQuotes(a.value), name)) return true;
+                            }
+                        }
+                    }
+                },
+                .module_decl => |*m| if (findDecl(m.items, name)) return true,
+                else => {},
+            }
+        }
+        return false;
+    }
+    // `spawn`/`evict` call bridge's create/close from HOST code — nothing in
+    // the program invokes them, so dead-strip would retire the tors and the
+    // emitted `koru_bridge` module would land without its handlers (channel's
+    // rings anchor: the import is not the fix, retention is). Splice `retain`
+    // onto those two event_decls; idempotent across multiple `new`s.
+    fn retainBridgeEvents(prog: *const ast.Program, alloc: std.mem.Allocator) void {
+        const W = struct {
+            fn retain(its: []const ast.Item, want: []const u8, al: std.mem.Allocator) void {
+                for (its) |*pi| {
+                    switch (pi.*) {
+                        .module_decl => |*md| {
+                            if (std.mem.eql(u8, md.logical_name, "std.bridge")) {
+                                for (md.items) |*mi| {
+                                    if (mi.* != .event_decl) continue;
+                                    const ed = &mi.event_decl;
+                                    if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], want)) {
+                                        for (ed.annotations) |a| if (std.mem.eql(u8, a, "retain")) return;
+                                        const grown = al.alloc([]const u8, ed.annotations.len + 1) catch unreachable;
+                                        @memcpy(grown[0..ed.annotations.len], ed.annotations);
+                                        grown[ed.annotations.len] = al.dupe(u8, "retain") catch unreachable;
+                                        @constCast(ed).annotations = grown;
+                                    }
+                                }
+                                return;
+                            }
+                            retain(md.items, want, al);
+                        },
+                        else => {},
+                    }
+                }
+            }
+        };
+        W.retain(prog.items, "create", alloc);
+        W.retain(prog.items, "close", alloc);
+        // `run` too — `std/cell:run` reaches `Br.run_event.handler` from host
+        // code, and a node program can run cells without ever spelling
+        // `std/cell:open`.
+        W.retain(prog.items, "run", alloc);
+    }
+    // The arm-name check Lars asked for: a continuation carrying `branch`.
+    fn hasArm(flow: *const ast.Flow, branch: []const u8) bool {
+        for (flow.body.continuations) |*c| {
+            if (c.kind == .terminal and std.mem.eql(u8, trim(c.branch), branch)) return true;
+        }
+        return false;
+    }
+    fn anyArm(flow: *const ast.Flow) ?[]const u8 {
+        for (flow.body.continuations) |*c| {
+            const b = trim(c.branch);
+            if (b.len > 0) return b;
+        }
+        return null;
+    }
+};
+
+// ============================================================================
+// NODE.SPAWN — `std/node:spawn(f, id: "room-42", cell: room_state)`: bind the
+// shape at spawn. The `cell:` name resolves against the program's `std/proto`
+// decls at transform time ([pre], like cell:open — decl sites still legible),
+// its field block bakes into the `shape_def` manifest, and the call rewrites
+// to `cell-spawn`. A spawn without `cell:` refuses — a node member IS a cell.
+// ============================================================================
+
+~[keyword|comptime|transform|pre]pub tor spawn {
+    expr: Expression,
+    cell: Expression,
+    invocation: *const Invocation,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
+    reporter: *std/compiler:ErrorReporter,
+    allocator: std.mem.Allocator
+}
+| spawned *
+| resident
+| refused
+
+~[transform]proc spawn|zig {
+    if (item.* != .flow) @panic("node:spawn transform: containing item is not a flow - walker dispatch contract broken");
+    const flow = &item.flow;
+
+    var f_text: ?[]const u8 = null;
+    var shape: []const u8 = "";
+    var id_text: ?[]const u8 = null;
+    for (invocation.args) |a| {
+        const an = FH.trim(a.name);
+        if (std.mem.eql(u8, an, "expr")) {
+            f_text = a.value;
+            continue;
+        }
+        if (std.mem.eql(u8, an, "cell")) {
+            shape = FH.stripQuotes(a.value);
+            continue;
+        }
+        if (std.mem.eql(u8, an, "id")) {
+            id_text = a.value;
+            continue;
+        }
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node:spawn: unknown argument '{s}' — the head is `std/node:spawn(f, id: \"room-42\", cell: room_state)`", .{an}) };
+    }
+    if (f_text == null) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node:spawn needs the node borrow — `| node f |> std/node:spawn(f, id: \"...\", cell: <shape>)`", .{}) };
+    }
+    if (id_text == null) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node:spawn: cells are named — pass `id: \"room-42\"`", .{}) };
+    }
+    if (shape.len == 0) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node:spawn: a node member is a cell — name the shape, `cell: room_state` (a declared std/proto)", .{}) };
+    }
+    // CH lives in this same emitted module (koru_std.koru_cell) — a direct
+    // ref, not `Cl`/`@import("root")`: transform procs are analyzed under the
+    // backend exe too, where `root` is backend.zig and has no `koru_std`.
+    const proto_source = koru_std.koru_cell.CH.findProtoSource(program.items, shape) orelse {
+        if (ast.declarationRefused(allocator, program, flow.module, "std/proto({s})", .{shape})) return .{ .transformed = .{} };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node:spawn: unknown shape '{s}' — no `std/proto({s}) {{ ... }}` declared", .{ shape, shape }) };
+    };
+    const manifest = koru_std.koru_cell.CH.shapeManifest(allocator, proto_source);
+
+    // The spawn sits mid-chain inside a `| node f` arm — rewrite the site's
+    // invocation in place; the spawned/resident/refused arms pass through.
+    const site = koru_std.koru_cell.CH.findSite(&flow.body, invocation) orelse
+        return .{ .transformed = .{} };
+
+    const segs = allocator.alloc([]const u8, 1) catch unreachable;
+    segs[0] = allocator.dupe(u8, "cell-spawn") catch unreachable;
+    const args = allocator.alloc(ast.Arg, 4) catch unreachable;
+    args[0] = ast.Arg{ .name = allocator.dupe(u8, "f") catch unreachable, .value = allocator.dupe(u8, f_text.?) catch unreachable };
+    args[1] = ast.Arg{ .name = allocator.dupe(u8, "id") catch unreachable, .value = allocator.dupe(u8, id_text.?) catch unreachable };
+    args[2] = ast.Arg{ .name = allocator.dupe(u8, "shape") catch unreachable, .value = std.fmt.allocPrint(allocator, "\"{s}\"", .{shape}) catch unreachable };
+    args[3] = ast.Arg{ .name = allocator.dupe(u8, "shape_def") catch unreachable, .value = std.fmt.allocPrint(allocator, "\"{s}\"", .{manifest}) catch unreachable };
+    const call_inv = ast.Invocation{
+        .path = ast.DottedPath{ .module_qualifier = allocator.dupe(u8, "std.node") catch unreachable, .segments = segs },
+        .args = args,
+    };
+    const conts = allocator.alloc(ast.Continuation, site.continuations.len) catch unreachable;
+    for (site.continuations, 0..) |*c, i| {
+        conts[i] = ast_functional.cloneContinuation(allocator, c) catch unreachable;
+    }
+    return .{ .transformed = .{ .replacement_node = .{
+        .node = .{ .invocation = call_inv },
+        .children = conts,
+    } } };
+}
+
+// ============================================================================
+// NODE.DEFAULT — `std/node(<target>)`: the borrow join. [pre] so the rewrite
+// lands before `new` transforms away — the scan reads raw declaration sites.
+//
+//   node        → node-self(node)          needs `| node f |`
+//   node.ID     → member-named(node, "ID")  needs `| cell c |` (+ `| not-found`)
+//   node[expr]  → member-named(node, expr)  needs `| cell c |` (+ `| not-found`)
+// ============================================================================
+
+~[keyword|comptime|transform|pre]pub tor default {
+    expr: Expression,
+    invocation: *const Invocation,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
+    reporter: *std/compiler:ErrorReporter,
+    allocator: std.mem.Allocator
+} -> SiteResult
+
+~[transform]proc default|zig {
+    if (item.* != .flow) @panic("node:default transform: containing item is not a flow - walker dispatch contract broken");
+    const flow = &item.flow;
+
+    if (invocation != flow.inv()) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node: the bare borrow is a top-level item — member lookups inside a chain go through `std/node:member(f, id)` on a `| node f |` borrow", .{}) };
+    }
+    if (invocation.args.len == 0) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node: the borrow needs a target — `std/node(node)` for the node, `std/node(node.ID)` for a member", .{}) };
+    }
+    const target = FH.trim(invocation.args[0].value);
+    if (invocation.args.len > 1) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node({s}): the borrow takes only the target", .{target}) };
+    }
+    if (target.len == 0) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node: the borrow needs a target — `std/node(node)` for the node, `std/node(node.ID)` for a member", .{}) };
+    }
+
+    // Target form: `name[key]` subscript (runtime id), `name.member` (static
+    // id), or bare `name` (the node itself).
+    var node_name: []const u8 = target;
+    var member_text: ?[]const u8 = null;
+    var member_is_expr = false;
+    if (std.mem.indexOfScalar(u8, target, '[')) |ob| {
+        node_name = FH.trim(target[0..ob]);
+        const close = std.mem.lastIndexOfScalar(u8, target, ']') orelse
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node({s}): unbalanced `[` — the member subscript is `std/node(node[id])`", .{target}) };
+        member_text = FH.trim(target[ob + 1 .. close]);
+        member_is_expr = true;
+    } else if (std.mem.indexOfScalar(u8, target, '.')) |dot| {
+        node_name = FH.trim(target[0..dot]);
+        member_text = FH.trim(target[dot + 1 ..]);
+    }
+
+    if (!FH.identOk(node_name)) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node({s}): '{s}' is not a usable node name", .{ target, node_name }) };
+    }
+    if (!FH.findDecl(program.items, node_name)) {
+        if (ast.declarationRefused(allocator, program, flow.module, "std/node:new({s}):", .{node_name})) return .{ .transformed = .{} };
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node({s}): unknown node — no std/node:new({s}, ...) declared", .{ target, node_name }) };
+    }
+
+    // The arm the call shape needs must be there — name the missing one.
+    if (member_text == null) {
+        if (!FH.hasArm(flow, "node")) {
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node({s}): the node borrow arrives on `| node f |` — `std/node({s}) | node f |> ...`", .{ target, target }) };
+        }
+    } else {
+        if (member_text.?.len == 0) {
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node({s}): the member name is empty — `std/node({s}.ID)` or `std/node({s}[key])`", .{ target, node_name, node_name }) };
+        }
+        if (!FH.hasArm(flow, "cell")) {
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node({s}): the member borrow arrives on `| cell c |` — `std/node({s}) | cell c |> ... | not-found |> ...`", .{ target, target }) };
+        }
+        if (!FH.hasArm(flow, "not-found")) {
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node({s}): a member lookup can miss — `| not-found |>` is required; dormant is a decision, not silence", .{target}) };
+        }
+        if (!FH.hasArm(flow, "held-by")) {
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/node({s}): a member lookup can land on a foreign cell — `| held-by |>` is required; owned-elsewhere is a decision, not silence", .{target}) };
+        }
+    }
+
+    // Rewrite to the name-addressed tor. The subscript form passes its key
+    // text through as a live expression; the member form quotes the name.
+    const segs = allocator.alloc([]const u8, 1) catch unreachable;
+    const args = allocator.alloc(ast.Arg, 2) catch unreachable;
+    if (member_text) |m| {
+        segs[0] = allocator.dupe(u8, "member-named") catch unreachable;
+        args[0] = ast.Arg{ .name = allocator.dupe(u8, "node") catch unreachable, .value = std.fmt.allocPrint(allocator, "\"{s}\"", .{node_name}) catch unreachable };
+        args[1] = ast.Arg{ .name = allocator.dupe(u8, "id") catch unreachable, .value = if (member_is_expr) allocator.dupe(u8, m) catch unreachable else std.fmt.allocPrint(allocator, "\"{s}\"", .{m}) catch unreachable };
+    } else {
+        segs[0] = allocator.dupe(u8, "node-self") catch unreachable;
+        args[0] = ast.Arg{ .name = allocator.dupe(u8, "node") catch unreachable, .value = std.fmt.allocPrint(allocator, "\"{s}\"", .{node_name}) catch unreachable };
+    }
+    const call_inv = ast.Invocation{
+        .path = ast.DottedPath{ .module_qualifier = allocator.dupe(u8, "std.node") catch unreachable, .segments = segs },
+        .args = args[0..(if (member_text == null) 1 else 2)],
+    };
+    const conts = allocator.alloc(ast.Continuation, flow.body.continuations.len) catch unreachable;
+    for (flow.body.continuations, 0..) |*c, i| {
+        conts[i] = ast_functional.cloneContinuation(allocator, c) catch unreachable;
+    }
+    return .{ .transformed = .{ .replacement = ast.Item{ .flow = ast.Flow{
+        .body = ast.rootSite(call_inv, conts, flow.location),
+        .pre_label = null,
+        .impl_of = flow.impl_of,
+        .super_shape = null,
+        .inline_body = null,
+        .preamble_code = invocation.preamble_code,
+        .is_pure = false,
+        .is_transitively_pure = false,
+        .location = flow.location,
+        .module = allocator.dupe(u8, flow.module) catch unreachable,
+    } } } };
+}
+
+~part new
+~part world

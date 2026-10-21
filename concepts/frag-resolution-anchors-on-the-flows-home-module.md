@@ -132,3 +132,21 @@ belief is the parameter-threaded shape this frag already flags — the walks
 now live once in `src/ast_functional.zig` (`moduleHome`, `containingFlow`,
 `findEventDecl`), and `.module` fields keep `flow.module` because that is
 the emitter's routing key, not a name anybody resolves.
+
+Measured again, 2026-10-21 — the anchor bug's mirror image, found by the
+fleet-mail benchmark (470_015). Every prior instance was a QUALIFIED name
+stamped with the wrong module; this one is an UNQUALIFIED path trusted
+with a global scan. Module-nested decls carry bare segments (`["drain"]`
+inside both `std.node` and `std.fleet`), and the inline-splice eligibility
+looked the impl up on `event_decl.path` across all items — first match by
+item order, which is import order. `std/fleet:drain` typed as
+`koru_fleet.drain_event.Output` got `std/node:drain`'s proc body spliced
+in — `f.members` in a frame with no `f` — and the mask that hid it is the
+interesting part: the correct proc is ineligible anyway (fleet's drain
+contains `fn`, which the splice refuses), so the bug only surfaced when a
+`std/node:drain` call anywhere in the program pulled the wrong body into
+the retained set — a defect that can only fire *through* a working
+fallback. Fixed by scoping every unqualified impl lookup (splice
+eligibility, flow fallback, handler emission) to the module_decl holding
+the resolved event — `itemsOfDecl` restores the anchor the bare path
+never carried.

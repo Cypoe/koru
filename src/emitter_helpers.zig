@@ -418,7 +418,16 @@ pub const EmissionContext = struct {
     // shared inline-splice frame (400_151), this carries {from: original,
     // to: unique} so the binding's uses in the spliced body rewrite too.
     // Set only around the affected continuation body; honored by emitExpression.
-    splice_binding_rename: ?BindingSubstitution = null,
+    // A stack, not a slot: a rename deeper in the nest must not mask an
+    // enclosing one — references to the outer renamed binding that fell
+    // through to the raw name read a producer's live local (silent miscompile).
+    splice_binding_renames: std.ArrayList(BindingSubstitution) = .empty,
+    // Texts of the splice producers whose frames are still on the emit stack.
+    // A binding introduced deeper inside a spliced body shares a Zig frame
+    // with every enclosing producer's raw-|zig locals, not only its immediate
+    // producer's — the 400_151 rename must consult all of them (605_001:
+    // climb's `for (0..w + n) |i|` vs an `! each i` inside the `! pass` body).
+    splice_frame_codes: std.ArrayList([]const u8) = .empty,
     // Inline-frame arg bindings currently in scope, pushed by
     // emitInlineEffectfulCall around its spliced body. A nested inlined event
     // that binds the same name to the SAME value expression reuses the
@@ -469,6 +478,17 @@ pub const CodeEmitter = struct {
     /// call sites should use initGrowable; fixed init remains for callers
     /// with genuinely bounded output (unit tests with stack buffers).
     allocator: ?std.mem.Allocator = null,
+
+    /// Module-level deferred-declaration channel: emission sites nested
+    /// inside a flow fn can route synthesized decls (the captured-binding
+    /// `__HandlersCaps_*` factories for effect-arm Handlers structs) here.
+    /// The owner flushes it inside `main_module` before the struct closes —
+    /// decl order in Zig is lazy, so position in the stream is irrelevant.
+    /// Member fns of a module-level struct see only module scope, which is
+    /// exactly why these decls must not emit in-function: their bodies'
+    /// `const x = __koru_cap_x` aliases would shadow the enclosing fn's
+    /// locals and Zig refuses.
+    deferred: ?*CodeEmitter = null,
 
     pub fn init(buffer: []u8) CodeEmitter {
         return .{
@@ -2010,12 +2030,23 @@ fn trimRightBlank(text: []const u8, start: usize, end: usize) usize {
     return e;
 }
 
-/// `indent` + `extra` written into `buf` — nested continuation emission hands
-/// each level a longer whitespace run without allocating.
-fn indentDeeper(buf: *[128]u8, indent: []const u8, extra: []const u8) []const u8 {
+/// `indent` + `extra` — nested continuation emission hands each level a
+/// longer whitespace run. Growable emitters allocate the run (nested
+/// continuation depth has no natural ceiling — a synthesized seed chain
+/// is one level per element); fixed-buffer emitters keep the stack path
+/// and fail loudly rather than overrunning.
+fn indentDeeper(emitter: *CodeEmitter, buf: *[128]u8, indent: []const u8, extra: []const u8) ![]const u8 {
+    const total = indent.len + extra.len;
+    if (emitter.allocator) |a| {
+        const out = try a.alloc(u8, total);
+        @memcpy(out[0..indent.len], indent);
+        @memcpy(out[indent.len..], extra);
+        return out;
+    }
+    if (total > buf.len) return error.IndentOverflow;
     @memcpy(buf[0..indent.len], indent);
-    @memcpy(buf[indent.len .. indent.len + extra.len], extra);
-    return buf[0 .. indent.len + extra.len];
+    @memcpy(buf[indent.len..], extra);
+    return buf[0..total];
 }
 
 /// Extract element type from a slice type string
@@ -2416,7 +2447,11 @@ pub fn emitSubflowContinuations(
     // lookups on this path (400_198).
     program_items: []const ast.Item,
 ) !void {
-    try emitSubflowContinuationsWithDepth(emitter, continuations, start_idx, indent, all_items, program_items, 0, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, null, self_loop_canonical, head_binding, null);
+    const refs_alloc = emitter.allocator orelse std.heap.page_allocator;
+    var subtree_refs: SubtreeRefSets = .empty;
+    defer freeSubtreeRefSets(refs_alloc, &subtree_refs);
+    try buildSubtreeRefSets(refs_alloc, continuations, &subtree_refs);
+    try emitSubflowContinuationsWithDepth(emitter, continuations, start_idx, indent, all_items, program_items, 0, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, null, self_loop_canonical, head_binding, null, &subtree_refs);
 }
 
 /// Same as emitSubflowContinuations, but names the ROOT result const the
@@ -2444,7 +2479,11 @@ pub fn emitSubflowContinuationsRooted(
 ) !void {
     // The root result name doubles as the head binding for scope collection
     // — both name the same caller-emitted const.
-    try emitSubflowContinuationsWithDepth(emitter, continuations, start_idx, indent, all_items, program_items, 0, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, root_result_name, self_loop_canonical, null, null);
+    const refs_alloc = emitter.allocator orelse std.heap.page_allocator;
+    var subtree_refs: SubtreeRefSets = .empty;
+    defer freeSubtreeRefSets(refs_alloc, &subtree_refs);
+    try buildSubtreeRefSets(refs_alloc, continuations, &subtree_refs);
+    try emitSubflowContinuationsWithDepth(emitter, continuations, start_idx, indent, all_items, program_items, 0, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, root_result_name, self_loop_canonical, null, null, &subtree_refs);
 }
 
 /// Helper to check if any continuation in a list has a label
@@ -2594,19 +2633,141 @@ fn stepReferencesBinding(step: ast.Node, binding_name: []const u8) bool {
     return false;
 }
 
-/// Helper to check if a binding variable is used in nested continuations
-/// This is CRITICAL for deeply nested subflows where outer bindings must stay in scope
-fn bindingIsUsedInContinuations(binding_name: []const u8, continuations: []const ast.Continuation) bool {
-    for (continuations) |cont| {
-        // Check the step
+/// For every continuation node, the set of names referenced anywhere in its
+/// subtree. This used to be answered by rescanning the whole subtree per
+/// (binding, continuation-group) pair — and emitSubflowContinuationsWithDepth
+/// asks it once per group at every nesting level, so each nested arm's
+/// values were re-tokenized once per ancestor group. On a preorder arm over
+/// a deep spec tree that compounds to minutes. Building the sets bottom-up
+/// once per emitSubflowContinuations entry makes every needs_binding check a
+/// lookup: O(subtree) once, not O(groups x subtree).
+const SubtreeRefSets = std.AutoHashMapUnmanaged(*const ast.Continuation, *std.StringHashMap(void));
+
+/// Enumerate whole identifiers in `value` outside string literals (the
+/// containsIdentifier gate), filter each through valueReferencesBinding so
+/// the accepted set is byte-identical to per-name probing, and union the
+/// survivors into `set`.
+fn collectValueNameRefs(
+    allocator: std.mem.Allocator,
+    value: []const u8,
+    set: *std.StringHashMap(void),
+) !void {
+    var seen: std.StringHashMap(void) = .init(allocator);
+    defer seen.deinit();
+    var idx: usize = 0;
+    while (idx < value.len) {
+        // Skip string literal contents, same as containsIdentifier.
+        if (value[idx] == '"') {
+            idx += 1;
+            while (idx < value.len) {
+                if (value[idx] == '\\') {
+                    idx += 2;
+                } else if (value[idx] == '"') {
+                    idx += 1;
+                    break;
+                } else {
+                    idx += 1;
+                }
+            }
+            continue;
+        }
+        if (isIdentifierChar(value[idx]) and (idx == 0 or !isIdentifierChar(value[idx - 1]))) {
+            const start = idx;
+            while (idx < value.len and isIdentifierChar(value[idx])) idx += 1;
+            const tok = value[start..idx];
+            if (!seen.contains(tok)) {
+                try seen.put(tok, {});
+                if (valueReferencesBinding(value, tok)) {
+                    try set.put(tok, {});
+                }
+            }
+        } else {
+            idx += 1;
+        }
+    }
+}
+
+/// The set-collecting twin of stepReferencesBinding: same node kinds, same
+/// value fields.
+fn collectStepNameRefs(
+    allocator: std.mem.Allocator,
+    step: ast.Node,
+    set: *std.StringHashMap(void),
+) !void {
+    switch (step) {
+        .invocation => |inv| {
+            for (inv.args) |arg| {
+                try collectValueNameRefs(allocator, arg.value, set);
+            }
+            if (inv.inline_body) |ib| {
+                try collectValueNameRefs(allocator, ib, set);
+            }
+        },
+        .label_with_invocation => |lwi| {
+            for (lwi.invocation.args) |arg| {
+                try collectValueNameRefs(allocator, arg.value, set);
+            }
+        },
+        .branch_constructor => |bc| {
+            if (bc.plain_value) |pv| {
+                try collectValueNameRefs(allocator, pv, set);
+            }
+            for (bc.fields) |field| {
+                try collectValueNameRefs(allocator, if (field.expression_str) |expr| expr else field.type, set);
+            }
+        },
+        .assignment => |asgn| {
+            for (asgn.fields) |field| {
+                if (field.expression_str) |expr| {
+                    try collectValueNameRefs(allocator, expr, set);
+                }
+            }
+        },
+        else => {},
+    }
+}
+
+/// Post-order pass: set(cont) = step's own refs + union of children's sets.
+/// Every descendant of `conts` ends up mapped, so queries inside nested
+/// emitSubflowContinuationsWithDepth recursion stay O(#siblings).
+fn buildSubtreeRefSets(
+    allocator: std.mem.Allocator,
+    conts: []const ast.Continuation,
+    map: *SubtreeRefSets,
+) !void {
+    for (conts) |*cont| {
+        if (map.contains(cont)) continue;
+        try buildSubtreeRefSets(allocator, cont.continuations, map);
+        const set = try allocator.create(std.StringHashMap(void));
+        set.* = std.StringHashMap(void).init(allocator);
         if (cont.node) |step| {
-            if (stepReferencesBinding(step, binding_name)) {
-                return true;
+            try collectStepNameRefs(allocator, step, set);
+        }
+        for (cont.continuations) |*child| {
+            if (map.get(child)) |child_set| {
+                var kit = child_set.keyIterator();
+                while (kit.next()) |k| try set.put(k.*, {});
             }
         }
-        // Recursively check nested continuations
-        if (bindingIsUsedInContinuations(binding_name, cont.continuations)) {
-            return true;
+        try map.put(allocator, cont, set);
+    }
+}
+
+fn freeSubtreeRefSets(allocator: std.mem.Allocator, map: *SubtreeRefSets) void {
+    var vit = map.valueIterator();
+    while (vit.next()) |set_ptr| {
+        set_ptr.*.deinit();
+        allocator.destroy(set_ptr.*);
+    }
+    map.deinit(allocator);
+}
+
+/// bindingIsUsedInContinuations against the precomputed sets — same answer,
+/// no rescan.
+fn subtreeReferencesName(ref_sets: *const SubtreeRefSets, conts: []const ast.Continuation, name: []const u8) bool {
+    for (conts) |*cont| {
+        if (ref_sets.get(cont)) |set| {
+            if (set.contains(name)) return true;
         }
     }
     return false;
@@ -3115,6 +3276,10 @@ fn emitSubflowContinuationsWithDepth(
     // path keeps no EmissionContext, so the in-scope set escapeBoundNames
     // needs is collected from the AST instead of read off ctx.
     ancestor_bindings: ?*const std.ArrayList([]const u8),
+    // Per-node referenced-name sets covering this chain's whole subtree —
+    // built once at the emitSubflowContinuations entry, so needs_binding
+    // checks are lookups instead of subtree rescans.
+    subtree_refs: *const SubtreeRefSets,
 ) !void {
     if (start_idx >= continuations.len) return;
 
@@ -3442,6 +3607,7 @@ fn emitSubflowContinuationsWithDepth(
                 self_loop_canonical,
                 null,
                 &local_bindings,
+                subtree_refs,
             );
         }
         return;
@@ -3597,7 +3763,7 @@ fn emitSubflowContinuationsWithDepth(
                 }
                 // Also check nested continuations for binding usage
                 if (!needs_binding) {
-                    needs_binding = bindingIsUsedInContinuations(binding_name, cont.continuations);
+                    needs_binding = subtreeReferencesName(subtree_refs, cont.continuations, binding_name);
                 }
 
                 // Check if branch has payload fields - empty payloads shouldn't be captured
@@ -3649,7 +3815,7 @@ fn emitSubflowContinuationsWithDepth(
                     }
                     // Also check nested continuations
                     if (!needs_binding) {
-                        needs_binding = bindingIsUsedInContinuations(binding_name, cont.continuations);
+                        needs_binding = subtreeReferencesName(subtree_refs, cont.continuations, binding_name);
                     }
                     if (needs_binding) break;
                 }
@@ -3821,7 +3987,7 @@ fn emitSubflowContinuationsWithDepth(
             // Example: | created s |> ... nested ... |> assemble(sun: s.sun, ...)
             //          The binding 's' is used deep in nested continuations!
             if (!needs_binding and cont.continuations.len > 0) {
-                needs_binding = bindingIsUsedInContinuations(actual_binding, cont.continuations);
+                needs_binding = subtreeReferencesName(subtree_refs, cont.continuations, actual_binding);
             }
 
             // Check if branch has payload fields - empty payloads shouldn't be captured
@@ -4126,8 +4292,8 @@ fn emitSubflowContinuationsWithDepth(
                             // Emit continuations inside the scope block
                             if (cont.continuations.len > 0) {
                                 var deeper_indent_buf: [128]u8 = undefined;
-                                const deeper_indent = indentDeeper(&deeper_indent_buf, indent, "            ");
-                                try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, program_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical, null, &local_bindings);
+                                const deeper_indent = try indentDeeper(emitter, &deeper_indent_buf, indent, "            ");
+                                try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, program_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical, null, &local_bindings, subtree_refs);
                             }
 
                             try emitter.write(indent);
@@ -4174,8 +4340,8 @@ fn emitSubflowContinuationsWithDepth(
                 const is_metatype_binding = if (cont.node) |step| step == .metatype_binding else false;
                 if (cont.continuations.len > 0 and !is_metatype_binding) {
                     var deeper_indent_buf: [128]u8 = undefined;
-                    const deeper_indent = indentDeeper(&deeper_indent_buf, indent, "        ");
-                    try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, program_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical, null, &local_bindings);
+                    const deeper_indent = try indentDeeper(emitter, &deeper_indent_buf, indent, "        ");
+                    try emitSubflowContinuationsWithDepth(emitter, cont.continuations, 0, deeper_indent, all_items, program_items, last_result_idx + 1, tap_registry, type_registry, main_module_name, source_event_name, module_prefix, enclosing_bare_return, enclosing_event, if (cont.node) |st| (if (st == .invocation) st.invocation.return_binding else null) else null, self_loop_canonical, null, &local_bindings, subtree_refs);
                 }
                 } // if (!self_reentry_emitted)
 
@@ -4220,7 +4386,7 @@ fn emitSubflowContinuationsWithDepth(
                     needs_binding = stepReferencesBinding(step, actual_binding);
                 }
                 if (!needs_binding and cont.continuations.len > 0) {
-                    needs_binding = bindingIsUsedInContinuations(actual_binding, cont.continuations);
+                    needs_binding = subtreeReferencesName(subtree_refs, cont.continuations, actual_binding);
                 }
                 if (needs_binding) break;
             }
@@ -5715,6 +5881,11 @@ fn emitInlineCodeResolvingSplices(
     inline_code: []const u8,
     continuations: []const ast.Continuation,
 ) anyerror!void {
+    // Everything spliced below shares this producer's Zig frame — record the
+    // text so nested bindings rename against its locals/captures too, not
+    // only against their own immediate producer.
+    try ctx.splice_frame_codes.append(ctx.allocator, inline_code);
+    defer _ = ctx.splice_frame_codes.pop();
     var pos: usize = 0;
     while (true) {
         // Find the earliest remaining marker of either kind.
@@ -5857,7 +6028,17 @@ fn emitInlineCodeResolvingSplices(
             var uniq_buf: [64]u8 = undefined;
             var bind_rename: ?BindingSubstitution = null;
             const is_pun = arg.len != 0 and std.mem.eql(u8, std.mem.trim(u8, arg, " \t"), binding);
-            if (!std.mem.eql(u8, binding, "_") and cont.destructure.len == 0 and arg.len != 0 and !is_pun and containsToken(inline_code, binding)) {
+            // The binding lands inside every enclosing splice frame still on
+            // the stack — a name that occurs as a token in ANY of them would
+            // be shadowed by `const <binding>`, not just one in the immediate
+            // producer's text.
+            const producer_shadow = containsToken(inline_code, binding) or blk: {
+                for (ctx.splice_frame_codes.items) |frame| {
+                    if (containsToken(frame, binding)) break :blk true;
+                }
+                break :blk false;
+            };
+            if (!std.mem.eql(u8, binding, "_") and cont.destructure.len == 0 and arg.len != 0 and !is_pun and producer_shadow) {
                 const uniq = std.fmt.bufPrint(&uniq_buf, "__koru_bind_{d}_{d}", .{ cont.location.line, cont.location.column }) catch binding;
                 bind_rename = .{ .from = binding, .to = uniq };
             }
@@ -5943,9 +6124,9 @@ fn emitInlineCodeResolvingSplices(
             // (outer) vs `result_e0_e0_` (inner).
             ctx.result_prefix = std.fmt.bufPrint(&prefix_buf, "{s}e{d}_", .{ saved_prefix, idx }) catch saved_prefix;
             defer ctx.result_prefix = saved_prefix;
-            const saved_bind_rename = ctx.splice_binding_rename;
-            if (bind_rename) |br| ctx.splice_binding_rename = br;
-            defer ctx.splice_binding_rename = saved_bind_rename;
+            const rename_depth = ctx.splice_binding_renames.items.len;
+            defer ctx.splice_binding_renames.shrinkRetainingCapacity(rename_depth);
+            if (bind_rename) |br| try ctx.splice_binding_renames.append(ctx.allocator, br);
             // The spliced body lands inside the construct's braces — a
             // `.terminal` in it ends the nested chain, not the enclosing
             // label loop; only an arm-top-level terminal may lower to
@@ -6076,12 +6257,17 @@ pub fn emitInlineBodyNode(
     // (print.ln's `__kw(…, .{k})`) carries its references as TEXT, already
     // rendered before the rename existed. Rewrite them here, or the spliced
     // body silently reads the producer's live local instead of the payload.
-    if (ctx.splice_binding_rename) |br| {
-        if (std.mem.indexOf(u8, inline_code, br.from) != null) {
-            const rewritten_text = try codegen_utils.replaceIdentifier(ctx.allocator, inline_code, br.from, br.to);
-            if (inline_code_uniq) |owned| ctx.allocator.free(owned);
-            inline_code_uniq = @constCast(rewritten_text);
-            inline_code = inline_code_uniq.?;
+    {
+        var ri = ctx.splice_binding_renames.items.len;
+        while (ri > 0) {
+            ri -= 1;
+            const br = ctx.splice_binding_renames.items[ri];
+            if (std.mem.indexOf(u8, inline_code, br.from) != null) {
+                const rewritten_text = try codegen_utils.replaceIdentifier(ctx.allocator, inline_code, br.from, br.to);
+                if (inline_code_uniq) |owned| ctx.allocator.free(owned);
+                inline_code_uniq = @constCast(rewritten_text);
+                inline_code = inline_code_uniq.?;
+            }
         }
     }
 
@@ -6767,6 +6953,31 @@ fn lowerIdent(buf: []u8, name: []const u8) []const u8 {
     return buf[0..name.len];
 }
 
+/// The items list that directly contains `decl` — a module_decl's items when
+/// the event is module-nested, else `items` itself. Module-nested decls carry
+/// unqualified paths (`["drain"]` inside both `std.node` and `std.fleet`), so
+/// a bare-segment scan across all items first-matches by ITEM ORDER, not by
+/// the module the resolved event actually lives in — `std/node:drain`'s proc
+/// spliced into a `std/fleet:drain` call once a `std/node:drain` call pulled
+/// it into the retained set (470_015). Scoping to the decl's own module
+/// restores the qualifier its path never carried.
+fn itemsOfDecl(items: []const ast.Item, decl: *const ast.EventDecl) []const ast.Item {
+    for (items) |*item| {
+        switch (item.*) {
+            .module_decl => |*m| {
+                for (m.items) |*mi| {
+                    if (mi.* == .event_decl and &mi.event_decl == decl) return m.items;
+                }
+            },
+            .event_decl => |*ed| {
+                if (ed == decl) return items;
+            },
+            else => {},
+        }
+    }
+    return items;
+}
+
 fn findDefaultZigProc(items: []const ast.Item, path: *const ast.DottedPath) ?*const ast.ProcDecl {
     for (items) |*item| {
         switch (item.*) {
@@ -6904,22 +7115,30 @@ fn inlineEffectfulEligibility(ctx: *EmissionContext, inv: *const ast.Invocation,
     // right or wrong, is preserved rather than traded for a missing symbol.
     if (registeredVariantProcExists(items, event_decl, &inv.path)) return null;
 
-    if (findDefaultZigProc(items, &event_decl.path)) |proc| {
+    // The impl lives beside its event — module-nested decls carry unqualified
+    // paths, so the scan must be scoped to the event's own module_decl or a
+    // same-named proc from ANY module wins by item order (470_015).
+    const event_items = itemsOfDecl(items, event_decl);
+
+    if (findDefaultZigProc(event_items, &event_decl.path)) |proc| {
         // A nested fn makes token rewriting unsound; a terminal-bearing event
         // whose proc never `return`s relies on the legacy glue's synthesized
         // tail. Both keep the call path.
         if (containsToken(proc.body.text, "fn")) return null;
         if (has_terminal_branch and !containsToken(proc.body.text, "return")) return null;
 
-        // Inline splicing lowers an optional effect arm only in DIRECT-CALL form
+        // Inline splicing lowers an effect arm only in DIRECT-CALL form
         // (`ready(...)` → splice, or evaluate-and-discard when unhandled). A body
-        // that references an optional arm as a VALUE — `if (ready) |f| f()`, the
-        // nullable-fn-ptr contract the handler-call path provides via
-        // `emitOptionalArmNullableAlias` — has no such local in the spliced
-        // frame, so the reference leaks a raw Zig `undeclared identifier`. Those
-        // bodies keep the handler-call path, which emits the alias prelude.
+        // that references an arm as a VALUE — `if (ready) |f| f()`, or a
+        // required arm stored for later fire (`frame_cb = frame` — metal's
+        // `frames` registers the `! frame` handler for the live-resize redraw
+        // path) — has no such local in the spliced frame, so the reference
+        // leaks a raw Zig `undeclared identifier`. Those bodies keep the
+        // handler-call path, which emits the alias prelude
+        // (`emitOptionalArmNullableAlias` for `! ?`; `const NAME = __H.NAME`
+        // for required arms — a real fn value either way).
         // (400_168; the koru-libs vaxis `run` wrapper, guarded-only consumer.)
-        if (procRefsOptionalArmAsValue(proc.body.text, event_decl)) return null;
+        if (procRefsAnyArmAsValue(proc.body.text, event_decl)) return null;
 
         return .{ .event_decl = event_decl, .proc = proc, .flow = null };
     }
@@ -6935,7 +7154,7 @@ fn inlineEffectfulEligibility(ctx: *EmissionContext, inv: *const ast.Invocation,
     // same way, and unhandled optional fires no-op at the impl-fire site.
     // Pins: 833 (fold × optional arm), 400_145/154 (omitted optional).
 
-    const found = findImplByPath(items, &event_decl.path) orelse return null;
+    const found = findImplByPath(event_items, &event_decl.path) orelse return null;
     switch (found) {
         .flow => |flow| return .{ .event_decl = event_decl, .proc = null, .flow = flow },
         else => return null,
@@ -6948,10 +7167,9 @@ fn inlineEffectfulEligibility(ctx: *EmissionContext, inv: *const ast.Invocation,
 /// calls, so a value reference has no local in the spliced frame and leaks a
 /// raw `undeclared identifier`. Names are matched in their emitted (Zig-
 /// sanitized: `-` → `_`) form, since that is how the body spells them. (400_168)
-fn procRefsOptionalArmAsValue(body: []const u8, event_decl: *const ast.EventDecl) bool {
+fn procRefsAnyArmAsValue(body: []const u8, event_decl: *const ast.EventDecl) bool {
     for (event_decl.branches) |b| {
         if (b.kind != .effect) continue;
-        if (!b.is_optional) continue;
         if (std.mem.eql(u8, b.name, "*")) continue;
         var name_buf: [128]u8 = undefined;
         if (b.name.len > name_buf.len) continue;
@@ -8097,7 +8315,7 @@ pub fn emitOptionalArmNullableAlias(emitter: *CodeEmitter, branch: *const ast.Br
         try emitter.write(") ");
         try writeEffectResumeType(emitter, branch);
         try emitter.write(" = if (@hasDecl(__H, \"");
-        try emitter.write(branch.name);
+        try writeMangledSeg(emitter, branch.name);
         try emitter.write("\")) &__H.");
         try writeBranchName(emitter, branch.name);
         try emitter.write(" else null;\n");
@@ -8106,7 +8324,7 @@ pub fn emitOptionalArmNullableAlias(emitter: *CodeEmitter, branch: *const ast.Br
         try emitter.write("const ");
         try writeBranchName(emitter, branch.name);
         try emitter.write(" = if (@hasDecl(__H, \"");
-        try emitter.write(branch.name);
+        try writeMangledSeg(emitter, branch.name);
         try emitter.write("\")) __H.");
         try writeBranchName(emitter, branch.name);
         try emitter.write(" else struct { fn __koru_noop(");
@@ -8160,6 +8378,593 @@ pub fn emitYieldingBranchAliases(
 ///       fn BRANCH(BINDING: PAYLOAD) RESUME { <cont body> }
 ///       ...
 ///   };
+// Arm-scope collection — the ref/bind walk for effect-arm capture
+// analysis. Extracted from flow_checker.zig (where it served KORU207's
+// impl-head refusal) so emitHandlersStruct can compute which enclosing
+// bindings an arm subtree references but does not itself bind — the
+// capture list for the `__HandlersCaps_*` container vars.
+
+const ArmScope = struct {
+    binds: std.StringHashMap(void),
+    refs: std.StringHashMap(void),
+
+    fn init(allocator: std.mem.Allocator) ArmScope {
+        return .{
+            .binds = std.StringHashMap(void).init(allocator),
+            .refs = std.StringHashMap(void).init(allocator),
+        };
+    }
+
+    fn deinit(self: *ArmScope) void {
+        self.binds.deinit();
+        self.refs.deinit();
+    }
+};
+
+fn collectArmScope(cont: *const ast.Continuation, scope: *ArmScope, allocator: std.mem.Allocator) anyerror!void {
+    if (cont.is_transformed_subtree) return;
+    if (cont.binding) |b| try scope.binds.put(b, {});
+    for (cont.destructure) |f| try collectArmDestructureBinds(f, scope, allocator);
+    if (cont.condition) |c| try scanArmRefs(c, &scope.refs);
+    if (cont.condition_expr) |e| try collectExprRefs(e, &scope.refs, allocator);
+    if (cont.node) |*n| try collectArmNodeScope(n, scope, allocator);
+    for (cont.continuations) |*child| try collectArmScope(child, scope, allocator);
+}
+
+fn collectArmDestructureBinds(f: ast.DestructureField, scope: *ArmScope, allocator: std.mem.Allocator) anyerror!void {
+    if (f.sub.len > 0) {
+        for (f.sub) |sub| try collectArmDestructureBinds(sub, scope, allocator);
+        return;
+    }
+    try scope.binds.put(f.name, {});
+}
+
+fn collectArmNamedBranch(nb: *const ast.NamedBranch, scope: *ArmScope, allocator: std.mem.Allocator) anyerror!void {
+    if (nb.binding) |b| try scope.binds.put(b, {});
+    for (nb.body) |*cont| try collectArmScope(cont, scope, allocator);
+}
+
+fn collectArmNodeScope(n: *const ast.Node, scope: *ArmScope, allocator: std.mem.Allocator) anyerror!void {
+    switch (n.*) {
+        .invocation => |*inv| {
+            for (inv.args) |*arg| try scanArmRefs(arg.value, &scope.refs);
+            if (inv.return_binding) |rb| try scope.binds.put(rb, {});
+            for (inv.return_destructure) |f| try collectArmDestructureBinds(f, scope, allocator);
+        },
+        .label_with_invocation => |*lwi| {
+            for (lwi.invocation.args) |*arg| try scanArmRefs(arg.value, &scope.refs);
+        },
+        .label_jump => |*lj| {
+            for (lj.args) |*arg| try scanArmRefs(arg.value, &scope.refs);
+        },
+        .branch_constructor => |*bc| {
+            if (bc.plain_value) |pv| try scanArmRefs(pv, &scope.refs);
+            for (bc.fields) |f| try collectArmFieldRefs(f, scope, allocator);
+        },
+        .conditional_block => |*cb| {
+            if (cb.condition) |c| try scanArmRefs(c, &scope.refs);
+            if (cb.condition_expr) |e| try collectExprRefs(e, &scope.refs, allocator);
+            for (cb.nodes) |*nn| try collectArmNodeScope(nn, scope, allocator);
+        },
+        .conditional => |*cd| {
+            try scanArmRefs(cd.condition, &scope.refs);
+            if (cd.condition_expr) |e| try collectExprRefs(e, &scope.refs, allocator);
+            for (cd.branches) |*nb| try collectArmNamedBranch(nb, scope, allocator);
+        },
+        .foreach => |*fe| {
+            try scanArmRefs(fe.iterable, &scope.refs);
+            for (fe.branches) |*nb| try collectArmNamedBranch(nb, scope, allocator);
+        },
+        .switch_result => |*sr| {
+            try scanArmRefs(sr.expression, &scope.refs);
+            for (sr.branches) |*nb| try collectArmNamedBranch(nb, scope, allocator);
+        },
+        .assignment => |*asgn| {
+            try scope.binds.put(asgn.target, {});
+            for (asgn.fields) |f| try collectArmFieldRefs(f, scope, allocator);
+        },
+        .metatype_binding => |*mb| try scope.binds.put(mb.binding, {}),
+        .expression => |code| try scanArmRefs(code, &scope.refs),
+        else => {},
+    }
+}
+
+fn collectArmFieldRefs(f: ast.Field, scope: *ArmScope, allocator: std.mem.Allocator) anyerror!void {
+    if (f.expression_str) |s| try scanArmRefs(s, &scope.refs);
+    if (f.expression) |e| try collectExprRefs(e, &scope.refs, allocator);
+    if (f.default) |d| try scanArmRefs(d, &scope.refs);
+}
+
+/// Expression-tree walk: `.identifier` leaves are references. A
+/// field_access's `field` is a name, not an Expression, so `v.tag`
+/// counts only `v`.
+fn collectExprRefs(e: *const ast.Expression, refs: *std.StringHashMap(void), allocator: std.mem.Allocator) anyerror!void {
+    switch (e.node) {
+        .identifier => |id| try refs.put(id, {}),
+        .binary => |*b| {
+            try collectExprRefs(b.left, refs, allocator);
+            try collectExprRefs(b.right, refs, allocator);
+        },
+        .unary => |*u| try collectExprRefs(u.operand, refs, allocator),
+        .field_access => |*fa| try collectExprRefs(fa.object, refs, allocator),
+        .grouped => |g| try collectExprRefs(g, refs, allocator),
+        .builtin_call => |*bc| for (bc.args) |a| try collectExprRefs(a, refs, allocator),
+        .array_index => |*ai| {
+            try collectExprRefs(ai.object, refs, allocator);
+            try collectExprRefs(ai.index, refs, allocator);
+        },
+        .conditional => |*c| {
+            try collectExprRefs(c.condition, refs, allocator);
+            try collectExprRefs(c.then_expr, refs, allocator);
+            try collectExprRefs(c.else_expr, refs, allocator);
+        },
+        .function_call => |*fc| for (fc.args) |a| try collectExprRefs(a, refs, allocator),
+        .literal => {},
+    }
+}
+
+/// Raw-text identifier scan for the places the AST keeps unparsed
+/// text (arg values, when-strings, `->` produce tails). Skips string
+/// literals except `{{ }}` interpolation holes, field names after
+/// `.`, label keys before `:`, and `@`/`~`-prefixed builtin names.
+fn scanArmRefs(text: []const u8, refs: *std.StringHashMap(void)) anyerror!void {
+    var i: usize = 0;
+    var in_string = false;
+    var in_hole = false;
+    while (i < text.len) {
+        const ch = text[i];
+        if (in_string) {
+            if (ch == '\\') {
+                i += 2;
+                continue;
+            }
+            if (ch == '{') {
+                if (i + 1 < text.len and text[i + 1] == '{') {
+                    in_hole = true;
+                    in_string = false;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+            if (ch == '"') in_string = false;
+            i += 1;
+            continue;
+        }
+        if (in_hole) {
+            if (ch == '}') {
+                if (i + 1 < text.len and text[i + 1] == '}') {
+                    in_hole = false;
+                    in_string = true;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+            // `:` inside a hole ends the expression part — the rest
+            // is a format spec, not a reference.
+            if (ch == ':') {
+                while (i < text.len and !(text[i] == '}' and i + 1 < text.len and text[i + 1] == '}')) i += 1;
+                continue;
+            }
+        } else if (ch == '"') {
+            in_string = true;
+            i += 1;
+            continue;
+        } else if (ch == '\'') {
+            // Char/symbol literal — skip to the closing quote.
+            i += 1;
+            while (i < text.len and text[i] != '\'') {
+                if (text[i] == '\\') i += 1;
+                i += 1;
+            }
+            i += 1;
+            continue;
+        }
+        if (!isArmIdentStart(ch)) {
+            i += 1;
+            continue;
+        }
+        const start = i;
+        while (i < text.len and ast.isKebabIdentChar(text[i])) i += 1;
+        const tok = text[start..i];
+        // `@`/`~`-prefixed builtin names are not user bindings.
+        if (start > 0 and (text[start - 1] == '@' or text[start - 1] == '~')) continue;
+        // Field position — `v.tag` references `v`, not `tag`. `..`
+        // is a range, not field access: the dot is preceded by a dot.
+        if (start > 0 and text[start - 1] == '.' and (start < 2 or text[start - 2] != '.')) continue;
+        // Outside a hole an ident immediately followed by `:` is a
+        // key/label (`{ name: value }`), not a reference.
+        if (!in_hole and i < text.len and text[i] == ':') continue;
+        // `{{ flag:name }}` is an interpolation directive, not a read.
+        if (in_hole and std.mem.eql(u8, tok, "flag")) continue;
+        try refs.put(tok, {});
+    }
+}
+
+fn isArmIdentStart(ch: u8) bool {
+    return (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or ch == '_';
+}
+
+
+/// Capture sets for a `Handlers_*` struct's member fns. Zig's no-shadow
+/// rule reaches through fn boundaries into enclosing decls AND enclosing
+/// fn bodies alike, so a context-free arm fn cannot alias an enclosing
+/// binding under its own name at ANY nesting depth inside a flow fn — the
+/// only scope where `const h` collides with nothing is module level.
+/// Captures therefore ride a module-level generic factory:
+///
+///   pub const __HandlersCaps_3 = struct {
+///       pub fn Caps(comptime T_h: type, comptime T_w: type) type {
+///           return struct {
+///               var __koru_cap_h: T_h = undefined;
+///               var __koru_cap_w: T_w = undefined;
+///               fn frame(f: *Frame) void { const h = __koru_cap_h; ... }
+///           };
+///       }
+///   };
+///   const Handlers_3 = main_module.__HandlersCaps_3.Caps(@TypeOf(h), @TypeOf(w));
+///   Handlers_3.__koru_cap_h = h;
+///   Handlers_3.__koru_cap_w = w;
+///
+/// `@TypeOf` evaluates at the CALL SITE where the bindings are live, so no
+/// Koru-side type resolution is needed. Member `var` decls are visible to
+/// member fns unqualified — `const h = __koru_cap_h` inside `fn frame`
+/// rebinds the source spelling, so arm bodies emit unchanged.
+const HandlerCaptures = struct {
+    /// Ordered union of every name any arm captures — drives the factory's
+    /// comptime params, container `var` decls, and call-site assignments.
+    names: std.ArrayList([]const u8) = .empty,
+    /// Per-cont capture list — drives each cont block's `const` prelude.
+    per_cont: std.AutoHashMap(*const ast.Continuation, []const []const u8),
+
+    fn deinit(self: *HandlerCaptures, allocator: std.mem.Allocator) void {
+        var it = self.per_cont.valueIterator();
+        while (it.next()) |v| allocator.free(v.*);
+        self.per_cont.deinit();
+        self.names.deinit(allocator);
+    }
+};
+
+/// A name is capture-eligible when it resolves to a binding live at the
+/// call site — `zig_scope_bindings` carries exactly that set — or to an
+/// implemented tor's input field (the `Handlers_sf` impl-head case, where
+/// the params are consts in the enclosing handler fn). `_`, `__`-internal
+/// names, and names matching an event branch (which would shadow the
+/// member fn of the same name) are never captured.
+fn isCaptureEligible(ctx: *EmissionContext, name: []const u8, event_decl: *const ast.EventDecl) bool {
+    if (name.len == 0 or std.mem.eql(u8, name, "_")) return false;
+    if (std.mem.startsWith(u8, name, "__")) return false;
+    for (event_decl.branches) |*b| {
+        if (std.mem.eql(u8, b.name, name)) return false;
+    }
+    for (ctx.zig_scope_bindings.items) |n| {
+        if (std.mem.eql(u8, n, name)) return true;
+    }
+    if (ctx.impl_event_decl) |d| {
+        for (d.input.fields) |f| {
+            if (std.mem.eql(u8, f.name, name)) return true;
+        }
+    }
+    return false;
+}
+
+/// The shared payload parameter spelling for a multi-cont branch group:
+/// the common binding when every cont agrees (and isn't `_`), else a
+/// stable internal name conts alias to. `branch.name` itself is never
+/// picked — it would shadow the synthesized `fn <branch>` member.
+fn pickSharedParam(group: []const *const ast.Continuation, branch: *const ast.Branch) []const u8 {
+    const first_binding = if (group[0].binding) |b| b else branch.name;
+    var all_same = !std.mem.eql(u8, first_binding, "_");
+    if (all_same) {
+        for (group[1..]) |cont| {
+            const b = if (cont.binding) |bb| bb else branch.name;
+            if (!std.mem.eql(u8, b, first_binding)) {
+                all_same = false;
+                break;
+            }
+        }
+    }
+    const candidate = if (all_same) first_binding else "__koru_h_arg";
+    return if (std.mem.eql(u8, candidate, branch.name)) "__koru_h_arg" else candidate;
+}
+
+/// The capture set is what an arm EMITS that names a binding live at the
+/// call site — computed by emitting each cont's block into a throwaway
+/// buffer and scanning the resulting text. An AST walk cannot see these
+/// refs: transform grafts (`is_transformed_subtree`) consume the user
+/// bodies into generated units, and only the emitted call args still
+/// spell the ambient names (`__store_sweepbody_*(.{ .w = w, .h = h, … })`
+/// inside a `frames` arm — invisible to collectArmScope; spec_sel caught
+/// `h` through a surface-level `layout(cl: h)` but dropped `w` entirely).
+///
+/// Deferred decls route to a scratch emitter and are dropped — the real
+/// emission below re-runs emitArmContBlock with the final captures, so
+/// every decl lands through `emitter.deferred` exactly once.
+fn collectEmittedCaptures(
+    ctx: *EmissionContext,
+    emitter: *CodeEmitter,
+    groups: *std.StringArrayHashMap(std.ArrayList(*const ast.Continuation)),
+    group_order: []const []const u8,
+    event_decl: *const ast.EventDecl,
+    handlers_name: []const u8,
+) !HandlerCaptures {
+    var caps: HandlerCaptures = .{
+        .per_cont = std.AutoHashMap(*const ast.Continuation, []const []const u8).init(ctx.allocator),
+    };
+    errdefer caps.deinit(ctx.allocator);
+    var seen = std.StringHashMap(void).init(ctx.allocator);
+    defer seen.deinit();
+    var scan_deferred = try CodeEmitter.initGrowable(ctx.allocator, 16 * 1024);
+    defer ctx.allocator.free(scan_deferred.buffer);
+
+    for (group_order) |branch_name| {
+        const group = groups.get(branch_name).?;
+        const branch: *const ast.Branch = for (event_decl.branches) |*b| {
+            if (std.mem.eql(u8, b.name, branch_name)) break b;
+        } else continue;
+
+        // Mirror the real pass exactly — same param spelling, same scope
+        // push — so a nested Handlers site inside a body scans under the
+        // eligibility it will see when emitted for real.
+        const shared_param_name = pickSharedParam(group.items, branch);
+        const is_void_payload = branch.payload.fields.len == 0 and !branch.payload.is_wildcard;
+        const prev_scope_len = ctx.zig_scope_bindings.items.len;
+        defer while (ctx.zig_scope_bindings.items.len > prev_scope_len) {
+            const popped = ctx.zig_scope_bindings.pop() orelse break;
+            ctx.allocator.free(popped);
+        };
+        if (!is_void_payload) {
+            try ctx.zig_scope_bindings.append(ctx.allocator, try ctx.allocator.dupe(u8, shared_param_name));
+        }
+
+        var any_guarded = false;
+        for (group.items) |gc| {
+            if (gc.condition != null) {
+                any_guarded = true;
+                break;
+            }
+        }
+        const multicast = !any_guarded and branch.resume_type == null and branch.resume_arms == null;
+
+        for (group.items) |cont| {
+            const guarded = cont.condition != null;
+            var body_buf = try CodeEmitter.initGrowable(ctx.allocator, 8 * 1024);
+            defer ctx.allocator.free(body_buf.buffer);
+            if (emitter.deferred != null) body_buf.deferred = &scan_deferred;
+            try emitArmContBlock(&body_buf, ctx, cont, branch, shared_param_name, handlers_name);
+
+            var refs = std.StringHashMap(void).init(ctx.allocator);
+            defer refs.deinit();
+            try scanArmRefs(body_buf.buffer[0..body_buf.pos], &refs);
+
+            // The cont's own bound names come from the AST: an arm that
+            // rebinds an outer name emits `const w = …` itself, and a
+            // `const w = __koru_cap_w` prelude would collide with it.
+            var scope = ArmScope.init(ctx.allocator);
+            defer scope.deinit();
+            try collectArmScope(cont, &scope, ctx.allocator);
+
+            var list: std.ArrayList([]const u8) = .empty;
+            var it = refs.keyIterator();
+            while (it.next()) |name| {
+                const n = name.*;
+                if (scope.binds.contains(n)) continue;
+                if (std.mem.eql(u8, n, shared_param_name)) continue;
+                if (!isCaptureEligible(ctx, n, event_decl)) continue;
+                // `n` slices into body_buf — dupe before the buffer frees.
+                const owned = try ctx.allocator.dupe(u8, n);
+                try list.append(ctx.allocator, owned);
+                if (!seen.contains(n)) {
+                    try seen.put(owned, {});
+                    try caps.names.append(ctx.allocator, owned);
+                }
+            }
+            if (list.items.len > 0) {
+                try caps.per_cont.put(cont, try list.toOwnedSlice(ctx.allocator));
+            } else {
+                list.deinit(ctx.allocator);
+            }
+            if (!guarded and !multicast) break;
+        }
+    }
+    return caps;
+}
+
+/// Everything inside one cont's `{ }` block after the capture prelude:
+/// payload aliases, the `if (guard)` wrapper, the resume dispatch, and
+/// the arm body itself. Emitted twice per cont — once into a throwaway
+/// buffer by collectEmittedCaptures (the text is the capture oracle:
+/// transform grafts reference ambient names the AST no longer spells),
+/// once into the real output — so one definition keeps the scan and the
+/// shipped code identical by construction.
+fn emitArmContBlock(
+    out: *CodeEmitter,
+    ctx: *EmissionContext,
+    cont: *const ast.Continuation,
+    branch: *const ast.Branch,
+    shared_param_name: []const u8,
+    handlers_name: []const u8,
+) anyerror!void {
+    const guarded = cont.condition != null;
+
+    // Alias the cont's binding to the shared param ONLY when the
+    // user wrote an actual binding name (not `_`, not omitted).
+    // Omitting the binding means "no name to reference"; aliasing
+    // to `branch.name` would shadow the synthesized fn declaration.
+    const has_named_binding = if (cont.binding) |b|
+        !std.mem.eql(u8, b, "_") and !std.mem.eql(u8, b, shared_param_name)
+    else
+        false;
+    const cont_binding: []const u8 = if (cont.binding) |b| b else branch.name;
+    if (cont.destructure.len > 0) {
+        // Shape-destructure: per-field consts off the shared param.
+        try out.writeIndent();
+        try emitDestructureConsts(out, cont.destructure, shared_param_name);
+        try out.write("\n");
+    } else if (has_named_binding) {
+        try out.writeIndent();
+        try out.write("const ");
+        try writeBranchName(out, cont_binding);
+        try out.write(" = ");
+        try writeBranchName(out, shared_param_name);
+        try out.write(";\n");
+        try out.writeIndent();
+        try out.write("_ = &");
+        try writeBranchName(out, cont_binding);
+        try out.write(";\n");
+    }
+
+    if (guarded) {
+        try out.writeIndent();
+        try out.write("if (");
+        try out.write(lowerExprZig(out, ctx, cont.condition.?));
+        try out.write(") {\n");
+        out.indent();
+    }
+
+    // Body emission: prefer the bare-expression resume-value form
+    // when the branch declares a resume type and the body is a
+    // single expression (see `project_effect_resume_value_syntax`).
+    var resume_expr_owned: ?[]const u8 = null;
+    defer if (resume_expr_owned) |s| ctx.allocator.free(s);
+
+    const resume_expr: ?[]const u8 = blk: {
+        // Multi-arm resume sum: `=> halved n / 2` constructs the chosen
+        // arm as a variant of the synthesized resume union; a payload-less
+        // arm (`=> timeout`) is its bare tag.
+        if (branch.resume_arms != null) {
+            if (cont.continuations.len != 0) break :blk null;
+            const node = cont.node orelse break :blk null;
+            if (node != .branch_constructor) break :blk null;
+            const bc = node.branch_constructor;
+            var arm_buf: [128]u8 = undefined;
+            const lowered_arm = lowerIdent(&arm_buf, bc.branch_name);
+            if (bc.fields.len != 0) {
+                // Record arm: `=> result { halved: X, quadrupled: Y }`
+                // constructs the variant's struct payload.
+                var built = try std.ArrayList(u8).initCapacity(ctx.allocator, 64);
+                errdefer built.deinit(ctx.allocator);
+                const w = built.writer(ctx.allocator);
+                try w.print(".{{ .{s} = .{{", .{lowered_arm});
+                for (bc.fields, 0..) |field, fi| {
+                    if (fi > 0) try w.writeAll(",");
+                    var fld_buf: [128]u8 = undefined;
+                    try w.print(" .{s} = ({s})", .{
+                        lowerIdent(&fld_buf, field.name),
+                        lowerExprZig(out, ctx, field.expression_str orelse field.type),
+                    });
+                }
+                try w.writeAll(" } }");
+                resume_expr_owned = try built.toOwnedSlice(ctx.allocator);
+            } else if (bc.plain_value) |pv| {
+                resume_expr_owned = try std.fmt.allocPrint(
+                    ctx.allocator,
+                    ".{{ .{s} = ({s}) }}",
+                    .{ lowered_arm, lowerExprZig(out, ctx, pv) },
+                );
+            } else {
+                resume_expr_owned = try std.fmt.allocPrint(
+                    ctx.allocator,
+                    ".{s}",
+                    .{lowered_arm},
+                );
+            }
+            break :blk resume_expr_owned.?;
+        }
+        if (branch.resume_type == null) break :blk null;
+        if (cont.continuations.len != 0) break :blk null;
+        const node = cont.node orelse break :blk null;
+        switch (node) {
+            .expression => |code| break :blk lowerExprZig(out, ctx, code),
+            .branch_constructor => |bc| {
+                if (bc.fields.len != 0) break :blk null;
+                if (bc.plain_value) |pv| {
+                    // A record resume value (`! ask -> { a: 10, b: 20 }`)
+                    // is a Koru struct literal; lower it to Zig
+                    // `.{ .a = 10, .b = 20 }`. A scalar value (`-> 50`)
+                    // passes through with its (empty, for bare-return)
+                    // branch_name prefix.
+                    const trimmed_pv = std.mem.trim(u8, pv, " \t");
+                    if (isKoruStructLiteral(trimmed_pv)) {
+                        var scratch = try CodeEmitter.initGrowable(ctx.allocator, 128);
+                        defer ctx.allocator.free(scratch.buffer);
+                        try emitStructLiteral(&scratch, ctx, trimmed_pv);
+                        resume_expr_owned = try ctx.allocator.dupe(u8, scratch.buffer[0..scratch.pos]);
+                    } else {
+                        resume_expr_owned = try std.fmt.allocPrint(
+                            ctx.allocator,
+                            "{s} {s}",
+                            .{ bc.branch_name, lowerExprZig(out, ctx, pv) },
+                        );
+                    }
+                    break :blk resume_expr_owned.?;
+                }
+                break :blk bc.branch_name;
+            },
+            else => break :blk null,
+        }
+    };
+
+    // `->` produce-is-the-call sugar: the resume value is an event
+    // call (`! step p -> mix(x: p)`). Emit the invocation bound to a
+    // temp, then return it as the resume value.
+    const resume_inv: ?*const ast.Invocation = blk: {
+        if (branch.resume_type == null) break :blk null;
+        if (cont.continuations.len != 0) break :blk null;
+        if (cont.node == null) break :blk null;
+        if (cont.node.? != .invocation) break :blk null;
+        break :blk &cont.node.?.invocation;
+    };
+
+    if (resume_inv) |inv| {
+        try emitInvocation(out, ctx, inv, "__koru_resume");
+        try out.writeIndent();
+        try out.write("return __koru_resume;\n");
+    } else if (resume_expr) |expr| {
+        try out.writeIndent();
+        try out.write("return ");
+        if (!try writeRepackedRecordProduce(out, expr, branch.resume_type)) {
+            try out.write(expr);
+        }
+        try out.write(";\n");
+    } else {
+        // Arm bodies land as `fn`s inside this Handlers_N container —
+        // itself nested in the enclosing flow fn's body — and Zig's
+        // no-shadow rule reaches across that boundary: a fresh
+        // `result_0` here collides with the head call's `result_0`
+        // (230_007, drift.k's `stored` in a `frames` arm). NEST the
+        // namespace under the enclosing prefix like the `c`/`e` tags
+        // above instead of seeding the counter — emitContinuationBody
+        // reads `counter == 0`/`counter-1` as sentinels, so a nonzero
+        // seed would name a stale enclosing-scope variable.
+        const saved_prefix = ctx.result_prefix;
+        var prefix_buf: [128]u8 = undefined;
+        ctx.result_prefix = std.fmt.bufPrint(&prefix_buf, "{s}{s}_", .{ saved_prefix, handlers_name }) catch saved_prefix;
+        defer ctx.result_prefix = saved_prefix;
+        var result_counter: usize = 0;
+        try emitContinuationBody(out, ctx, cont, &result_counter);
+
+        // For guarded void-return conts, emit an explicit `return;`
+        // so subsequent guards in the chain don't fire after a match.
+        // (Resume-typed conts already returned via the `return EXPR`
+        // path above.)
+        if (guarded and branch.resume_type == null) {
+            try out.writeIndent();
+            try out.write("return;\n");
+        }
+    }
+
+    if (guarded) {
+        // Close the `if (cond) {` block.
+        out.dedent();
+        try out.writeIndent();
+        try out.write("}\n");
+    }
+}
+
 pub fn emitHandlersStruct(
     emitter: *CodeEmitter,
     ctx: *EmissionContext,
@@ -8167,12 +8972,6 @@ pub fn emitHandlersStruct(
     effect_conts: []const ast.Continuation,
     event_decl: *const ast.EventDecl,
 ) anyerror!void {
-    try emitter.writeIndent();
-    try emitter.write("const ");
-    try emitter.write(handlers_name);
-    try emitter.write(" = struct {\n");
-    emitter.indent();
-
     // Group continuations by branch name. Two sibling handlers for the same
     // `!` branch name collapse into ONE synthesized fn:
     //   - when-guards present → exclusive chain
@@ -8218,6 +9017,67 @@ pub fn emitHandlersStruct(
         try gop.value_ptr.append(ctx.allocator, cont);
     }
 
+    // Captured bindings: names an arm's emitted code references but does
+    // not itself bind, intersected with bindings live at this call site —
+    // collected by emit-scanning, since transform grafts leave no AST to
+    // walk. When any exist, the member fns must emit at MODULE level (an
+    // in-function `const h = ...` prelude collides with the flow fn's own
+    // `h` under Zig's no-shadow rule), so the struct becomes the return
+    // type of a generic `__HandlersCaps_*` factory routed to
+    // `emitter.deferred`; the call site below instantiates it and assigns
+    // each container var.
+    var captures = try collectEmittedCaptures(ctx, emitter, &groups, group_order.items, event_decl, handlers_name);
+    defer captures.deinit(ctx.allocator);
+    const use_caps = captures.names.items.len > 0 and emitter.deferred != null;
+    var fac_buf: CodeEmitter = undefined;
+    const out: *CodeEmitter = if (use_caps) blk: {
+        fac_buf = try CodeEmitter.initGrowable(ctx.allocator, 64 * 1024);
+        fac_buf.deferred = emitter.deferred;
+        fac_buf.indent_level = 1; // flushes inside main_module's body
+        break :blk &fac_buf;
+    } else emitter;
+    defer if (use_caps) ctx.allocator.free(fac_buf.buffer);
+
+    const caps_suffix = if (std.mem.startsWith(u8, handlers_name, "Handlers_"))
+        handlers_name["Handlers_".len..]
+    else
+        handlers_name;
+
+    if (use_caps) {
+        try out.writeIndent();
+        try out.write("pub const __HandlersCaps_");
+        try out.write(caps_suffix);
+        try out.write(" = struct {\n");
+        out.indent();
+        try out.writeIndent();
+        try out.write("pub fn Caps(");
+        for (captures.names.items, 0..) |name, i| {
+            if (i > 0) try out.write(", ");
+            try out.write("comptime T_");
+            try writeMangledSeg(out, name);
+            try out.write(": type");
+        }
+        try out.write(") type {\n");
+        out.indent();
+        try out.writeIndent();
+        try out.write("return struct {\n");
+        out.indent();
+        for (captures.names.items) |name| {
+            try out.writeIndent();
+            try out.write("var __koru_cap_");
+            try writeMangledSeg(out, name);
+            try out.write(": T_");
+            try writeMangledSeg(out, name);
+            try out.write(" = undefined;\n");
+        }
+    } else {
+        try out.writeIndent();
+        try out.write("const ");
+        try out.write(handlers_name);
+        try out.write(" = struct {\n");
+        out.indent();
+    }
+
     // Emit one fn per branch-name group.
     for (group_order.items) |branch_name| {
         const group = groups.get(branch_name).?;
@@ -8233,36 +9093,11 @@ pub fn emitHandlersStruct(
 
         // Pick a parameter name. If all conts in the group share a binding
         // (common case) and that binding isn't `_`, use it directly so the
-        // body code can reference it unchanged. Otherwise fall back to the
-        // branch name as a stable shared parameter, and conts whose binding
-        // differs will alias it.
-        const shared_param_name: []const u8 = blk: {
-            const first = group.items[0];
-            const first_binding = if (first.binding) |b| b else branch.name;
-
-            // Check if all conts share the same binding (and it's not `_`).
-            var all_same = !std.mem.eql(u8, first_binding, "_");
-            if (all_same) {
-                for (group.items[1..]) |cont| {
-                    const b = if (cont.binding) |bb| bb else branch.name;
-                    if (!std.mem.eql(u8, b, first_binding)) {
-                        all_same = false;
-                        break;
-                    }
-                }
-            }
-
-            // When bindings differ (or any cont uses `_`), or when the
-            // shared binding equals the branch name (which would shadow the
-            // synthesized `fn <branch_name>` declaration in Zig), fall back
-            // to a stable internal name. Conts whose binding differs from
-            // this will alias it inside the body.
-            const candidate = if (all_same) first_binding else "__koru_h_arg";
-            break :blk if (std.mem.eql(u8, candidate, branch.name))
-                "__koru_h_arg"
-            else
-                candidate;
-        };
+        // body code can reference it unchanged. Otherwise fall back to a
+        // stable internal name, and conts whose binding differs alias it.
+        // The scan pass above computed captures under the SAME spelling —
+        // both passes must agree or the prelude binds a different name.
+        const shared_param_name = pickSharedParam(group.items, branch);
 
         // Void-payload effects (zero-field branch) emit a no-arg handler so the
         // producer-side `name()` call matches. A `void` param would require the
@@ -8271,19 +9106,19 @@ pub fn emitHandlersStruct(
         // takes an `anytype` param so Zig infers the element type at the call.
         const is_void_payload = branch.payload.fields.len == 0 and !branch.payload.is_wildcard;
 
-        try emitter.writeIndent();
-        try emitter.write("fn ");
-        try writeBranchName(emitter, branch.name);
-        try emitter.write("(");
+        try out.writeIndent();
+        try out.write("fn ");
+        try writeBranchName(out, branch.name);
+        try out.write("(");
 
         if (!is_void_payload) {
-            try writeBranchName(emitter, shared_param_name);
-            try emitter.write(": ");
+            try writeBranchName(out, shared_param_name);
+            try out.write(": ");
 
             // Wildcard payload `! each *` — defer the element type to Zig's
             // type inference: emit `anytype` (valid in parameter position).
             if (branch.payload.is_wildcard) {
-                try emitter.write("anytype");
+                try out.write("anytype");
             }
             // Identity payload (single field named "__type_ref") — emit type directly.
             // Multi-field struct payload — emit anon struct literal type.
@@ -8313,30 +9148,43 @@ pub fn emitHandlersStruct(
                         }
                     }
                 }
-                try writeFieldType(emitter, payload_field, ctx.main_module_name);
+                try writeFieldType(out, payload_field, ctx.main_module_name);
             } else {
-                try emitter.write("struct { ");
+                try out.write("struct { ");
                 for (branch.payload.fields, 0..) |field, fi| {
-                    if (fi > 0) try emitter.write(", ");
-                    try writeBranchName(emitter, field.name);
-                    try emitter.write(": ");
-                    try writeFieldType(emitter, field, ctx.main_module_name);
+                    if (fi > 0) try out.write(", ");
+                    try writeBranchName(out, field.name);
+                    try out.write(": ");
+                    try writeFieldType(out, field, ctx.main_module_name);
                 }
-                try emitter.write(" }");
+                try out.write(" }");
             }
         }
 
-        try emitter.write(") ");
-        try writeEffectResumeType(emitter, branch);
-        try emitter.write(" {\n");
-        emitter.indent();
+        try out.write(") ");
+        try writeEffectResumeType(out, branch);
+        try out.write(" {\n");
+        out.indent();
+
+        // The shared param is a live name inside this member fn — register
+        // it so nested `Handlers_*` sites can carry it as a capture (their
+        // factories assign at the call site where the param is in scope).
+        // Only real params register — a void payload emits no param.
+        const prev_fn_scope_len = ctx.zig_scope_bindings.items.len;
+        defer while (ctx.zig_scope_bindings.items.len > prev_fn_scope_len) {
+            const popped = ctx.zig_scope_bindings.pop() orelse break;
+            ctx.allocator.free(popped);
+        };
+        if (!is_void_payload) {
+            try ctx.zig_scope_bindings.append(ctx.allocator, try ctx.allocator.dupe(u8, shared_param_name));
+        }
 
         // Suppress unused-param warning unconditionally on the shared param.
         if (!is_void_payload) {
-            try emitter.writeIndent();
-            try emitter.write("_ = &");
-            try writeBranchName(emitter, shared_param_name);
-            try emitter.write(";\n");
+            try out.writeIndent();
+            try out.write("_ = &");
+            try writeBranchName(out, shared_param_name);
+            try out.write(";\n");
         }
 
         // Emit each cont in source order. Each cont gets its own block scope
@@ -8357,184 +9205,49 @@ pub fn emitHandlersStruct(
         for (group.items) |cont| {
             const guarded = cont.condition != null;
 
-            try emitter.writeIndent();
-            try emitter.write("{\n");
-            emitter.indent();
+            try out.writeIndent();
+            try out.write("{\n");
+            out.indent();
 
-            // Alias the cont's binding to the shared param ONLY when the
-            // user wrote an actual binding name (not `_`, not omitted).
-            // Omitting the binding means "no name to reference"; aliasing
-            // to `branch.name` would shadow the synthesized fn declaration.
-            const has_named_binding = if (cont.binding) |b|
-                !std.mem.eql(u8, b, "_") and !std.mem.eql(u8, b, shared_param_name)
-            else
-                false;
-            const cont_binding: []const u8 = if (cont.binding) |b| b else branch.name;
-            if (cont.destructure.len > 0) {
-                // Shape-destructure: per-field consts off the shared param.
-                try emitter.writeIndent();
-                try emitDestructureConsts(emitter, cont.destructure, shared_param_name);
-                try emitter.write("\n");
-            } else if (has_named_binding) {
-                try emitter.writeIndent();
-                try emitter.write("const ");
-                try writeBranchName(emitter, cont_binding);
-                try emitter.write(" = ");
-                try writeBranchName(emitter, shared_param_name);
-                try emitter.write(";\n");
-                try emitter.writeIndent();
-                try emitter.write("_ = &");
-                try writeBranchName(emitter, cont_binding);
-                try emitter.write(";\n");
-            }
-
-            if (guarded) {
-                try emitter.writeIndent();
-                try emitter.write("if (");
-                try emitter.write(lowerExprZig(emitter, ctx, cont.condition.?));
-                try emitter.write(") {\n");
-                emitter.indent();
-            }
-
-            // Body emission: prefer the bare-expression resume-value form
-            // when the branch declares a resume type and the body is a
-            // single expression (see `project_effect_resume_value_syntax`).
-            var resume_expr_owned: ?[]const u8 = null;
-            defer if (resume_expr_owned) |s| ctx.allocator.free(s);
-
-            const resume_expr: ?[]const u8 = blk: {
-                // Multi-arm resume sum: `=> halved n / 2` constructs the chosen
-                // arm as a variant of the synthesized resume union; a payload-less
-                // arm (`=> timeout`) is its bare tag.
-                if (branch.resume_arms != null) {
-                    if (cont.continuations.len != 0) break :blk null;
-                    const node = cont.node orelse break :blk null;
-                    if (node != .branch_constructor) break :blk null;
-                    const bc = node.branch_constructor;
-                    var arm_buf: [128]u8 = undefined;
-                    const lowered_arm = lowerIdent(&arm_buf, bc.branch_name);
-                    if (bc.fields.len != 0) {
-                        // Record arm: `=> result { halved: X, quadrupled: Y }`
-                        // constructs the variant's struct payload.
-                        var built = try std.ArrayList(u8).initCapacity(ctx.allocator, 64);
-                        errdefer built.deinit(ctx.allocator);
-                        const w = built.writer(ctx.allocator);
-                        try w.print(".{{ .{s} = .{{", .{lowered_arm});
-                        for (bc.fields, 0..) |field, fi| {
-                            if (fi > 0) try w.writeAll(",");
-                            var fld_buf: [128]u8 = undefined;
-                            try w.print(" .{s} = ({s})", .{
-                                lowerIdent(&fld_buf, field.name),
-                                lowerExprZig(emitter, ctx, field.expression_str orelse field.type),
-                            });
-                        }
-                        try w.writeAll(" } }");
-                        resume_expr_owned = try built.toOwnedSlice(ctx.allocator);
-                    } else if (bc.plain_value) |pv| {
-                        resume_expr_owned = try std.fmt.allocPrint(
-                            ctx.allocator,
-                            ".{{ .{s} = ({s}) }}",
-                            .{ lowered_arm, lowerExprZig(emitter, ctx, pv) },
-                        );
-                    } else {
-                        resume_expr_owned = try std.fmt.allocPrint(
-                            ctx.allocator,
-                            ".{s}",
-                            .{lowered_arm},
-                        );
+            // Captured-binding prelude: rebind each enclosing name this cont
+            // references to its container `var` under the source spelling,
+            // so the body below emits unchanged. Per-cont rather than per-fn:
+            // a sibling cont in the same group may bind the same name itself.
+            // A name equal to the shared param stays the param (today's
+            // semantics — the param wins the name inside the fn).
+            if (use_caps) {
+                if (captures.per_cont.get(cont)) |cap_names| {
+                    for (cap_names) |name| {
+                        if (std.mem.eql(u8, name, shared_param_name)) continue;
+                        try out.writeIndent();
+                        try out.write("const ");
+                        try writeBranchName(out, name);
+                        try out.write(" = __koru_cap_");
+                        try writeMangledSeg(out, name);
+                        try out.write(";\n");
+                        try out.writeIndent();
+                        try out.write("_ = &");
+                        try writeBranchName(out, name);
+                        try out.write(";\n");
                     }
-                    break :blk resume_expr_owned.?;
-                }
-                if (branch.resume_type == null) break :blk null;
-                if (cont.continuations.len != 0) break :blk null;
-                const node = cont.node orelse break :blk null;
-                switch (node) {
-                    .expression => |code| break :blk lowerExprZig(emitter, ctx, code),
-                    .branch_constructor => |bc| {
-                        if (bc.fields.len != 0) break :blk null;
-                        if (bc.plain_value) |pv| {
-                            // A record resume value (`! ask -> { a: 10, b: 20 }`)
-                            // is a Koru struct literal; lower it to Zig
-                            // `.{ .a = 10, .b = 20 }`. A scalar value (`-> 50`)
-                            // passes through with its (empty, for bare-return)
-                            // branch_name prefix.
-                            const trimmed_pv = std.mem.trim(u8, pv, " \t");
-                            if (isKoruStructLiteral(trimmed_pv)) {
-                                var scratch = try CodeEmitter.initGrowable(ctx.allocator, 128);
-                                defer ctx.allocator.free(scratch.buffer);
-                                try emitStructLiteral(&scratch, ctx, trimmed_pv);
-                                resume_expr_owned = try ctx.allocator.dupe(u8, scratch.buffer[0..scratch.pos]);
-                            } else {
-                                resume_expr_owned = try std.fmt.allocPrint(
-                                    ctx.allocator,
-                                    "{s} {s}",
-                                    .{ bc.branch_name, lowerExprZig(emitter, ctx, pv) },
-                                );
-                            }
-                            break :blk resume_expr_owned.?;
-                        }
-                        break :blk bc.branch_name;
-                    },
-                    else => break :blk null,
-                }
-            };
-
-            // `->` produce-is-the-call sugar: the resume value is an event
-            // call (`! step p -> mix(x: p)`). Emit the invocation bound to a
-            // temp, then return it as the resume value.
-            const resume_inv: ?*const ast.Invocation = blk: {
-                if (branch.resume_type == null) break :blk null;
-                if (cont.continuations.len != 0) break :blk null;
-                if (cont.node == null) break :blk null;
-                if (cont.node.? != .invocation) break :blk null;
-                break :blk &cont.node.?.invocation;
-            };
-
-            if (resume_inv) |inv| {
-                try emitInvocation(emitter, ctx, inv, "__koru_resume");
-                try emitter.writeIndent();
-                try emitter.write("return __koru_resume;\n");
-            } else if (resume_expr) |expr| {
-                try emitter.writeIndent();
-                try emitter.write("return ");
-                if (!try writeRepackedRecordProduce(emitter, expr, branch.resume_type)) {
-                    try emitter.write(expr);
-                }
-                try emitter.write(";\n");
-            } else {
-                var result_counter: usize = 0;
-                try emitContinuationBody(emitter, ctx, cont, &result_counter);
-
-                // For guarded void-return conts, emit an explicit `return;`
-                // so subsequent guards in the chain don't fire after a match.
-                // (Resume-typed conts already returned via the `return EXPR`
-                // path above.)
-                if (guarded and branch.resume_type == null) {
-                    try emitter.writeIndent();
-                    try emitter.write("return;\n");
                 }
             }
 
-            if (guarded) {
-                // Close the `if (cond) {` block.
-                emitter.dedent();
-                try emitter.writeIndent();
-                try emitter.write("}\n");
-            }
+            try emitArmContBlock(out, ctx, cont, branch, shared_param_name, handlers_name);
 
             // Close the per-cont scope block.
-            emitter.dedent();
-            try emitter.writeIndent();
-            try emitter.write("}\n");
+            out.dedent();
+            try out.writeIndent();
+            try out.write("}\n");
 
             // Exclusive fallback: stop after first unguarded. Multicast keeps
             // going so every unguarded void-effect body runs.
             if (!guarded and !multicast) break;
         }
 
-        emitter.dedent();
-        try emitter.writeIndent();
-        try emitter.write("}\n");
+        out.dedent();
+        try out.writeIndent();
+        try out.write("}\n");
     }
 
     // NO synthesized no-ops for unhandled OPTIONAL effect branches — the
@@ -8549,9 +9262,47 @@ pub fn emitHandlersStruct(
     // only reachable under a presence guard (unguarded = the KORU130 wall),
     // whose false case is comptime-pruned.
 
-    emitter.dedent();
-    try emitter.writeIndent();
-    try emitter.write("};\n");
+    out.dedent();
+    try out.writeIndent();
+    try out.write("};\n"); // closes `const X = struct` or `return struct {`
+
+    if (use_caps) {
+        // Close `pub fn Caps` and `pub const __HandlersCaps_N`, hand the
+        // complete factory text to the module-level decl collector, then
+        // emit the call-site instantiation where the captured names are
+        // live: `const Handlers_N = main_module.__HandlersCaps_N.Caps(
+        // @TypeOf(x), …)` + one container-var assignment per capture.
+        out.dedent();
+        try out.writeIndent();
+        try out.write("}\n");
+        out.dedent();
+        try out.writeIndent();
+        try out.write("};\n");
+        try emitter.deferred.?.write(fac_buf.buffer[0..fac_buf.pos]);
+
+        try emitter.writeIndent();
+        try emitter.write("const ");
+        try emitter.write(handlers_name);
+        try emitter.write(" = main_module.__HandlersCaps_");
+        try emitter.write(caps_suffix);
+        try emitter.write(".Caps(");
+        for (captures.names.items, 0..) |name, i| {
+            if (i > 0) try emitter.write(", ");
+            try emitter.write("@TypeOf(");
+            try writeBranchName(emitter, name);
+            try emitter.write(")");
+        }
+        try emitter.write(");\n");
+        for (captures.names.items) |name| {
+            try emitter.writeIndent();
+            try emitter.write(handlers_name);
+            try emitter.write(".__koru_cap_");
+            try writeMangledSeg(emitter, name);
+            try emitter.write(" = ");
+            try writeBranchName(emitter, name);
+            try emitter.write(";\n");
+        }
+    }
 }
 
 /// Subflow-implemented effects: if `path` names an effect arm of `event`
@@ -8608,7 +9359,12 @@ fn presenceConditionRewrite(
             // `if (opt)` is NOT a bool in Zig (it needs a capture), so the
             // condition becomes a real comptime bool → Zig analyzes only the
             // taken branch. (Nullable-ptr alias serves the proc side.)
-            return try std.fmt.allocPrint(allocator, "@hasDecl(__H, \"{s}\")", .{b.name});
+            const mname = try allocator.dupe(u8, b.name);
+            defer allocator.free(mname);
+            for (mname) |*c| {
+                if (c.* == '-') c.* = '_';
+            }
+            return try std.fmt.allocPrint(allocator, "@hasDecl(__H, \"{s}\")", .{mname});
         }
         return try std.fmt.allocPrint(
             allocator,
@@ -8806,7 +9562,7 @@ fn emitInvocation(
                 // truth, 400_154). The 210_076 no-op contract lives HERE — a
                 // comptime guard that folds the call away when absent.
                 try emitter.write("if (@hasDecl(__H, \"");
-                try emitter.write(arm.name);
+                try writeMangledSeg(emitter, arm.name);
                 try emitter.write("\")) ");
             }
             try writeArmFireCallExpr(emitter, ctx, invocation, arm);
@@ -9968,10 +10724,16 @@ fn emitExpression(
                 }
             }
             // Cross-boundary splice hygiene: a renamed consumer binding.
-            if (ctx.splice_binding_rename) |sub| {
-                if (std.mem.eql(u8, ident, sub.from)) {
-                    try emitter.write(sub.to);
-                    return;
+            // Innermost rename first — enclosing renames stay live alongside it.
+            {
+                var ri = ctx.splice_binding_renames.items.len;
+                while (ri > 0) {
+                    ri -= 1;
+                    const sub = ctx.splice_binding_renames.items[ri];
+                    if (std.mem.eql(u8, ident, sub.from)) {
+                        try emitter.write(sub.to);
+                        return;
+                    }
                 }
             }
             try writeBranchName(emitter, ident);
@@ -10379,6 +11141,11 @@ fn emitContinuationList(
     for (continuation_branch_groups) |group| {
         // Skip residual (it has branch = "*" and will be handled separately)
         if (std.mem.eql(u8, group.branch_name, "*")) continue;
+        // Anonymous continuations are the step's JOIN — they ride no union tag
+        // and emit once after the switch, same as the inline path's
+        // emitAnonymousContinuations (400_193/400_205 for keyword tors; the
+        // rule is general).
+        if (group.branch_name.len == 0) continue;
 
         if (group.continuations.len == 1) {
             // Single continuation - emit as normal
@@ -10551,6 +11318,13 @@ fn emitContinuationList(
     emitter.dedent();
     try emitter.writeIndent();
     try emitter.write("}\n");
+
+    // The join tail: anonymous continuations run once after the dispatch,
+    // in source order, after whichever arm fired.
+    for (continuations) |*cont| {
+        if (cont.is_catchall or cont.branch.len != 0) continue;
+        try emitContinuationBody(emitter, ctx, cont, result_counter);
+    }
 }
 
 /// Emit a single continuation case (.branch => |binding| { ... })
@@ -11062,12 +11836,43 @@ fn emitFoldFallthroughGuard(emitter: *CodeEmitter, ctx: *EmissionContext) !void 
     try emitter.write(msg);
 }
 
+/// Append a shape-destructure pattern's leaf names to zig_scope_bindings —
+/// `emitDestructureConsts` mints them as `const`s at the same site.
+fn registerDestructureScopeNames(ctx: *EmissionContext, fields: []const ast.DestructureField) !void {
+    for (fields) |f| {
+        if (f.sub.len > 0) {
+            try registerDestructureScopeNames(ctx, f.sub);
+            continue;
+        }
+        if (std.mem.eql(u8, f.name, "_") or std.mem.startsWith(u8, f.name, "__")) continue;
+        try ctx.zig_scope_bindings.append(ctx.allocator, try ctx.allocator.dupe(u8, f.name));
+    }
+}
+
 pub fn emitContinuationBody(
     emitter: *CodeEmitter,
     ctx: *EmissionContext,
     cont: *const ast.Continuation,
     result_counter: *usize,
 ) !void {
+    // Register this continuation's bound names for the duration of its body
+    // emission: the `| branch name` payload a switch prong emits below
+    // (`.cl => |h|`), plus shape-destructure leaves. Effect-arm capture
+    // analysis (isCaptureEligible) reads the set back to decide which refs
+    // an enclosing fn can carry; the names are live for the whole subtree
+    // and dead on return.
+    const prev_scope_bindings_len = ctx.zig_scope_bindings.items.len;
+    defer while (ctx.zig_scope_bindings.items.len > prev_scope_bindings_len) {
+        const popped = ctx.zig_scope_bindings.pop() orelse break;
+        ctx.allocator.free(popped);
+    };
+    if (cont.binding) |b| {
+        if (!std.mem.eql(u8, b, "_") and !std.mem.startsWith(u8, b, "__")) {
+            try ctx.zig_scope_bindings.append(ctx.allocator, try ctx.allocator.dupe(u8, b));
+        }
+    }
+    try registerDestructureScopeNames(ctx, cont.destructure);
+
     // Zero-overhead control flow at depth: if a template transform set
     // inline_body on this continuation's invocation node (e.g. a nested `~for`
     // in a pipeline — `| result r |> for(0..r) ! each … | done …`), emit it via
@@ -14800,11 +15605,14 @@ fn emitEventDeclForModule(
     try code_emitter.write("_ = &__koru_event_input;\n");
 
     // Find and emit implementation (ImmediateImpl, Flow with impl_of, or proc_decl)
-    // Use findImplByPath which correctly handles module_qualifier differences
+    // Scope to the event's own module_decl — module-nested decls carry
+    // unqualified paths, so an all_items scan first-matches a same-named impl
+    // from any module by item order (470_015).
     var found_impl = false;
+    const event_items = itemsOfDecl(all_items, event);
 
     // First check for impl items (immediate mock or flow body)
-    if (findImplByPath(all_items, &event.path)) |found| {
+    if (findImplByPath(event_items, &event.path)) |found| {
         switch (found) {
             .immediate_impl => |ii| {
                 const bc = &ii.value;
@@ -14866,7 +15674,7 @@ fn emitEventDeclForModule(
 
     // Then check for proc_decl (Zig inline implementation)
     if (!found_impl) {
-        if (findProcDeclByPath(all_items, &event.path)) |proc| {
+        if (findProcDeclByPath(event_items, &event.path)) |proc| {
             if (proc.body.text.len > 0) {
                 const body = try rewriteModToBare(ctx.allocator, proc.body.text);
                 defer ctx.allocator.free(body);

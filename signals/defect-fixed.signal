@@ -1,0 +1,10 @@
+name: defect-fixed
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `bug-fix` — declare that name. A defect removed from
+      running code is bug-fix; a belief revised is the belief-class family.
+      Minted as an orphan by the fleet claim-race commit; the race found a
+      real bug (loser answered `failed` on a held id) but the vocabulary
+      already had the name for it.

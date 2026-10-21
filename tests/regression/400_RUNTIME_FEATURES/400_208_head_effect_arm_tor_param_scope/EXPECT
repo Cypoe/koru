@@ -1,4 +1,0 @@
-FRONTEND_COMPILE_ERROR
-CONTAINS error[KORU207]
-CONTAINS context-free
-NOT_CONTAINS output_emitted.zig

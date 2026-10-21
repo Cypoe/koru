@@ -39,3 +39,16 @@ directory must join `<module>.<part>.<facet>` files on the primary's
 `~part` lines — the declaration is the only authority, and the join is
 declaration-gated (an undeclared dotted file stays its own unimportable
 name rather than being silently attached).
+
+**2026-10 — the seam has a naming law too: a lifted name must be unique
+across the whole merged module.** Zig does not let an inner decl shadow
+a module-scope one — a `const H` at module scope and a `const H` inside
+any sibling namespace (`PSweep`, a proc body) makes every `H.` reference
+ambiguous, an error, not a resolution. So a proc-local helper lifted to
+a part under its short name detonates every sibling that ever declared
+the same short name. The wall-driven store splits surfaced it:
+`store.new`'s proc-local `H` became module `HomeScan`, its second `Walk`
+became `CellWalk`, and every sibling part's own `const H` had to be left
+in place rather than unified. Extraction is not "cut decls, paste
+elsewhere" — it is "cut decls, rename until the name exists nowhere else
+in the module."

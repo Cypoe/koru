@@ -187,18 +187,8 @@
         arg_name: []const u8,
     };
 
-    // Local branch specs for codegen (mirrors runtime BranchSpec/BranchField)
-    const LocalBranchField = struct {
-        name: []const u8,
-        type_name: []const u8,
-        is_optional: bool,
-    };
-
-    const LocalBranchSpec = struct {
-        name: []const u8,
-        fields: []const LocalBranchField,
-        is_optional: bool,
-    };
+    // LocalBranchField/LocalBranchSpec and extractBranches moved to the
+    // `branchex` part — the outcome types beside their extraction.
 
     // Local input-field specs for codegen (mirrors runtime InputFieldSpec).
     // The input shape is the ARGUMENT vocabulary of an tor — what the
@@ -220,6 +210,7 @@
         discharges_specs: []const LocalDischargeSpec,
         branches: []const LocalBranchSpec,          // Branch specs for shape validation
         input_fields: []const LocalInputField,      // Input/argument vocabulary
+        doc: []const u8,                            // Declaration prose — vertical annotation block text
         symbol: []const u8,
         dispatch_name: []const u8,
         module_name: ?[]const u8,                   // Module this tor belongs to
@@ -761,37 +752,6 @@
                 .creates_specs = creates_specs.toOwnedSlice(alloc) catch &.{},
                 .discharges_specs = discharges_specs.toOwnedSlice(alloc) catch &.{},
             };
-        }
-    }.extract;
-
-    // Helper: Extract branch specs from EventDecl for shape validation
-    const extractBranches = struct {
-        fn extract(alloc: std.mem.Allocator, ed: *const ast_reg.EventDecl) []const LocalBranchSpec {
-            var branch_specs = std.ArrayList(LocalBranchSpec){ .items = &.{}, .capacity = 0 };
-
-            for (ed.branches) |branch| {
-                var field_specs = std.ArrayList(LocalBranchField){ .items = &.{}, .capacity = 0 };
-
-                for (branch.payload.fields) |field| {
-                    // Check if field type starts with ? (optional)
-                    const is_optional = field.type.len > 0 and field.type[0] == '?';
-                    const type_name = if (is_optional) field.type[1..] else field.type;
-
-                    field_specs.append(alloc, .{
-                        .name = alloc.dupe(u8, field.name) catch field.name,
-                        .type_name = alloc.dupe(u8, type_name) catch type_name,
-                        .is_optional = is_optional,
-                    }) catch continue;
-                }
-
-                branch_specs.append(alloc, .{
-                    .name = alloc.dupe(u8, branch.name) catch branch.name,
-                    .fields = field_specs.toOwnedSlice(alloc) catch &.{},
-                    .is_optional = branch.is_optional,
-                }) catch continue;
-            }
-
-            return branch_specs.toOwnedSlice(alloc) catch &.{};
         }
     }.extract;
 

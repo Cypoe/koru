@@ -82,7 +82,13 @@ the mechanism that eliminates it.
 
 - How activation attaches the obligation. Lexical scope is not enough — it breaks
   at a call boundary, which is precisely what an obligation survives. The
-  spelling is Lars's.
+  spelling is Lars's. **Partial answer landed (scoped-obligations worktree):**
+  `<name@class>` — `scratch@scoped` — attaches the rule to the VALUE's phantom,
+  so it crosses the call boundary the same way `!` does. `scoped` is a
+  confinement law (may not occupy output position), not an interval — there is
+  no discharge site, only a boundary the value may not pass. Whether the
+  interval side (mint→discharge pairs driving allocation) can ride the same
+  `@` axis is still open; the mechanism it would sit on now exists.
 - Whether the structural rule (every operation downstream of a switcher) is a
   declarative shape law or custom analysis. Shape laws cannot see arguments, so
   identity must ride on the obligation regardless; the split is forced by the

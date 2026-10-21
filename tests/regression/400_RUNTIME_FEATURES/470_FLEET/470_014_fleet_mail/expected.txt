@@ -1,0 +1,18 @@
+slate cleared
+slate cleared
+slate cleared
+alpha spawned room-mb
+beta posted mail 1 to alpha
+beta posted mail 2
+mail from beta: touch(k: 5)
+mail from beta: touch(k: 2)
+alpha delivered 2 mails
+alpha reads hits=2
+beta drain refused: alpha
+gap mail posted while unowned
+alpha claimed gap-mb epoch=1
+gap mail from beta: ping
+gap delivered 1
+never-mb: free
+alpha drained 1
+beta drained 0

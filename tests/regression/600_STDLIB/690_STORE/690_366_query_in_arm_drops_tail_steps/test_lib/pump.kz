@@ -1,0 +1,12 @@
+// Cross-module arm-firer: `! bang` is a required effect arm; the |zig
+// proc fires it so the arm body lowers through the Handlers path — the
+// seam where the query's trailing chain steps are silently dropped.
+
+~pub tor fire {}
+! bang
+| done
+
+~proc fire|zig {
+    bang();
+    return .{ .done = .{} };
+}

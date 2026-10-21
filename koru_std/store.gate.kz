@@ -141,7 +141,7 @@ const Gate = struct {
         const mask = ast.expressionMask(alloc, t);
         var i: usize = 0;
         while (i + store.len < t.len) : (i += 1) {
-            if (mask[i] and ast.identBoundaryBefore(t, i) and (i == 0 or t[i - 1] != '.') and
+            if (mask[i] and ast.identBoundaryBefore(t, i) and !ast.precededByMemberDot(t, i) and
                 std.mem.startsWith(u8, t[i..], store) and t[i + store.len] == '[') return true;
         }
         return false;

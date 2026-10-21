@@ -1,9 +1,0 @@
-  agent> ls()
-  world< {"branch":"","value":"hello.txt\n"}
-  agent> tor sweep { path: string, text: string }
-sweep = write(path, text)
-  world< defined sweep
-  agent> sweep(path: "invented.txt", text: "the agent wrote a verb")
-  world< {"branch":"","value":"wrote"}
-  agent> write(path: "../etc/evil", text: "pwn")
-  world< {"branch":"","value":"<fenced>"}

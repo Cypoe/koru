@@ -1,0 +1,7 @@
+{
+  "paths": {
+    "std": "../../../../../koru_std",
+    "app": "{{ ENTRY }}",
+    "doclib": "{{ ENTRY }}/doclib"
+  }
+}

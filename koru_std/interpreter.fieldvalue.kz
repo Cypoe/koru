@@ -1,0 +1,48 @@
+// Koru Standard Library: the `fieldvalue` part of interpreter.kz — the
+// composite FieldValue helpers. Joined via `~part fieldvalue` in
+// interpreter.kz; merged into the interpreter module at load.
+//
+// FieldValue's first composite is `string_array`: these are its three
+// verbs — JSON render (Value serialization + interpolation), JSON render
+// for expr bindings, and the deep copy that carries a []const []const u8
+// out of a dispatcher frame into interpreter/session memory. Scalars need
+// none of this; the array pays the composite tax here, once.
+
+/// JSON-escape one string into a writer — shared by string_val and the
+/// per-element render of string_array.
+fn writeJsonString(w: anytype, v: []const u8) !void {
+    try w.writeByte('"');
+    for (v) |c| {
+        switch (c) {
+            '"' => try w.writeAll("\\\""),
+            '\\' => try w.writeAll("\\\\"),
+            '\n' => try w.writeAll("\\n"),
+            '\r' => try w.writeAll("\\r"),
+            '\t' => try w.writeAll("\\t"),
+            else => try w.writeByte(c),
+        }
+    }
+    try w.writeByte('"');
+}
+
+/// Render a string array as a JSON array — used by interpolation and
+/// expr bindings where the value must arrive as text.
+fn strArrayToJson(arr: []const []const u8, allocator: std.mem.Allocator) ![]const u8 {
+    var out = std.ArrayList(u8){};
+    try out.append(allocator, '[');
+    for (arr, 0..) |s, i| {
+        if (i > 0) try out.append(allocator, ',');
+        try writeJsonString(out.writer(allocator), s);
+    }
+    try out.append(allocator, ']');
+    return out.items;
+}
+
+/// Deep-copy a string array — the array and every string. Dispatch
+/// results borrow from proc frames; anything the interpreter or session
+/// keeps past that frame owes this copy (ownDispatchResult's ruling).
+pub fn dupeStrs(allocator: std.mem.Allocator, arr: []const []const u8) []const []const u8 {
+    const out = allocator.alloc([]const u8, arr.len) catch @panic("koru: OOM cloning string array");
+    for (arr, 0..) |s, i| out[i] = allocator.dupe(u8, s) catch @panic("koru: OOM cloning string array");
+    return out;
+}

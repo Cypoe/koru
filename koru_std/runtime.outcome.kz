@@ -14,7 +14,7 @@ fn relayRunOutcome(
     shape: ?[]const u8,
 ) run_event.Output {
     switch (result) {
-        .unhandled_branch => |u| return .{ .unhandled_branch = .{ .branch = u.branch, .payload = u.payload, .handles = u.handles } },
+        .unhandled_branch => |u| return .{ .unhandled_branch = .{ .branch = u.branch, .payload = u.payload, .handles = u.handles, .bound = u.bound } },
         .result => |r| {
             // Shape validation: if shape is specified, validate the result
             if (shape) |shape_event_name| {

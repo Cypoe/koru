@@ -99,6 +99,7 @@ pub const ErrorCode = enum(u16) {
     KORU105, // Nested branches under a bodiless `|` branch — nothing picks a branch there; branches continue from an invocation
     KORU106, // A bind shadows one already in scope on the same path — Koru has no shadowing, and the pun machinery depends on it (210_173)
     KORU107, // `&name` borrows an immutable binding into a mutable `*T` parameter — the binding emits `const`, so `&` produces `*const` and never reaches the slot; annotate the bind `[mutable]` to lend it
+    KORU108, // A name bound somewhere in the flow is referenced on a path that doesn't bind it — arm bindings end with their arm, `: name` binds scope downstream (400_213, 400_214)
 
     // Variant errors
     KORU110, // Event call site has only bare ~proc declarations (no variant tag)

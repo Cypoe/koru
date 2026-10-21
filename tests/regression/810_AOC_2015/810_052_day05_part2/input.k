@@ -29,7 +29,7 @@ import std/string-map
 import std/fmt
 
 // Map lookup defaulting to 0.
-pub tor get0 { m: *std/string-map:Map_string_i64<map>, k: string } -> i64
+pub tor get0 { m: *std/string-map:Map_string_i64<map>, k: string<*@scoped> } -> i64
 
 get0 = std/string-map:get(m, k)
 | value v -> v

@@ -37,6 +37,7 @@ pub const ScopeEvent = struct {
     discharges_specs: []const DischargeSpec,    // Full specs with arg names
     branches: []const BranchSpec = &.{},        // Branch specs for shape validation
     input_fields: []const InputFieldSpec = &.{}, // Input/argument vocabulary
+    doc: []const u8 = "",                        // Declaration prose — what the verb IS, rendered beside its signature
     dispatcher: DispatchFn,
 };
 pub const ScopeDescriptor = struct {
@@ -44,10 +45,5 @@ pub const ScopeDescriptor = struct {
     events: []const ScopeEvent,
 };
 
-// Branches lookup function type for shape validation
-pub const BranchesLookupFn = *const fn([]const u8) []const BranchSpec;
-// Event-name enumeration type — the scope's whole vocabulary, order-preserving
-pub const EventsLookupFn = *const fn() []const []const u8;
-// Input-field lookup type — an tor's argument vocabulary; null = the name
-// is not this scope's verb (vocabulary membership answers first).
-pub const InputLookupFn = *const fn([]const u8) ?[]const InputFieldSpec;
+// The lookup-fn vocabulary — BranchesLookupFn, EventsLookupFn,
+// InputLookupFn, DocLookupFn — moved to the `lookups` part.

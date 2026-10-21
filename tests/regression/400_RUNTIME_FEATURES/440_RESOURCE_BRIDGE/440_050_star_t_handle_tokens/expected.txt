@@ -1,0 +1,7 @@
+mint: ok (holds 1)
+used v=42
+bound-grab: ok (holds 1)
+seq-guess refused: 'r' wants a live <opened> — 'h:Res:1' names nothing the session holds. Mint one through a verb whose signature ends '-> <opened!>'
+hex-guess refused: 'r' wants a live <opened> — 'h:Res:ffffff' names nothing the session holds. Mint one through a verb whose signature ends '-> <opened!>'
+release: ok (holds 0)
+spent-grab refused — grab did not run

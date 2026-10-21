@@ -60,3 +60,18 @@ Related: [[frag-a-dedup-key-must-be-an-identity-not-a-spelling]] — the sibling
 defect found in the same hour; that one made a module arrive twice, this one made
 two genuinely different modules collide. Both surfaced as `duplicate struct
 member name 'std'`, which is why they read as one bug for a night.
+
+2026-10-17 — same law, function-local surface, pinned 230_007: `const
+Handlers_N = struct { fn arm(...) { ... } }` nests *function bodies* inside the
+flow fn, and Zig refuses local shadowing there too — `const result_0` inside
+the arm method collided with the head call's `result_0` in the enclosing fn.
+The defect is a fresh `var result_counter: usize = 0` per nested emission
+context (`emitContinuationBody` paths, visitor_emitter.zig) — each arm body
+restarts the outer flow's numbering inside a scope where the outer numbers are
+live bindings. The container no-shadow rule (`error: ambiguous reference`) and
+the local no-shadow rule are one law: **any lowering that nests a scope must
+treat the enclosing emission's minted names as taken.** Sibling paths already
+carry the answer — depth-indexed `nested_result_{d}` — but the arm-body path
+never adopted it. Surfaced by koru-libs/metal/tests/drift.k (`stored` inside a
+`frames` arm); the suite's hole was the cross product again — result-binding
+heads existed, arm-bodied stored writes existed, never the two at once.

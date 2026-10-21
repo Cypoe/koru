@@ -1,0 +1,6 @@
+--- session w1 open
+mint: ok (holds 1)
+release: ok (holds 0)
+--- session w1 closed
+w2-mint: ok (holds 1)
+w2-release: ok (holds 0)

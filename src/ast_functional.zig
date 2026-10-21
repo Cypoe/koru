@@ -3098,6 +3098,29 @@ pub fn collectContinuedInvocations(
     for (cont.continuations) |*k| try collectContinuedInvocations(allocator, k, out);
 }
 
+/// Collect every continuation whose NODE is an invocation satisfying `match`,
+/// descending the whole continuation tree (children of a match included — a
+/// site inside a site's arm is still a site). The CONTINUATION is the site,
+/// not the node: its `.continuations` are the invocation's arms and its
+/// `.location` is the site's own source position — the same view
+/// transform_pass_runner's siteView hands the nested site's transform.
+/// `is_transformed_subtree` grafts are skipped: a transform-synthesized
+/// invocation is generated output, not an authored site.
+pub fn collectInvSites(
+    allocator: std.mem.Allocator,
+    cont: *const ast.Continuation,
+    context: anytype,
+    match: *const fn (context: @TypeOf(context), inv: *const ast.Invocation) bool,
+    out: *std.ArrayList(*const ast.Continuation),
+) !void {
+    for (cont.continuations) |*c| {
+        if (c.node) |*n| {
+            if (n.* == .invocation and match(context, &n.invocation)) try out.append(allocator, c);
+        }
+        if (!c.is_transformed_subtree) try collectInvSites(allocator, c, context, match, out);
+    }
+}
+
 /// True when `arm` reaches an invocation satisfying `match` — spelled in
 /// its own continuation tree, or inside a subflow impl it invokes. Impl
 /// reachability follows program-level flows whose `impl_of`'s last path

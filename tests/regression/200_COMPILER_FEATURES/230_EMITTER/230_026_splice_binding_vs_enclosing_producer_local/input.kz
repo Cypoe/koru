@@ -1,0 +1,21 @@
+// Splice hygiene across nesting: a binding nested inside a spliced body must
+// not collide with an *enclosing* producer's raw-|zig locals, and nested
+// renames must not mask each other. Outer `k` collides with the producer
+// local `k`; inner `i` collides with the producer's `|i|` capture — a name
+// that only exists in the enclosing producer's frame, not the immediate
+// `for` producer's.
+~import std/io
+
+~tor spin {}
+! tick i64
+
+~proc spin|zig {
+    for (0..2) |i| {
+        const k: i64 = @intCast(i);
+        tick(k * 10);
+    }
+}
+
+~spin()
+! tick k |> for(0..2)
+    ! each i |> std/io:print.ln("{{ k:d }} {{ i:d }}")

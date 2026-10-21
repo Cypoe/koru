@@ -98,8 +98,37 @@
 # scaffolding, the consciously-retained class; the +1/+2 is committed
 # drift landed between re-pins (the panic commit's parser.zig), not
 # this diff.
-clusters=823
-members=929
+# Re-pinned 823/929 -> 830/933 (2026-10-18): the roll fired on the
+# 690_367 regression-pin commit — zero src/ files staged. The named
+# offenders are the documented classes: containsTokenLocal x
+# containsToken (intentional port pair), package_requires/compiler_requires
+# fixture ASTs (consciously retained), phantom_semantic_checker test
+# items, and emitter_test/visitor_emitter_test test_decl +
+# simple_var_decl scaffolding. Growth landed between re-pins — the store
+# transform and emitter sessions' committed drift — not in this diff.
+# Re-pinned 830/933 -> 831/935 (2026-10-18): the roll fired on the
+# 690_370 regression-pin commit — zero src/ files staged. The named
+# offenders are the documented classes (containsTokenLocal x
+# containsToken port pair, emitter_test/visitor_emitter_test test_decl +
+# simple_var_decl scaffolding, package_requires/compiler_requires
+# fixtures). The +1/+2 is committed drift landed between re-pins — the
+# desugar and emitter-capture commits (abf67e120, ec769041b, c5b6d45bf)
+# — not this diff.
+# Re-pinned to 836/939 on a tests-only ctx commit: the roll named a
+# continuation_codegen:291-320 ↔ emitter_helpers:6806-6835 fn_decl twin
+# and emitter_test test_decl twins — all foreign drift from the recent
+# emitter refactor commits (needs_binding ref-sets, handler captures
+# from emitted text). Own contribution to src/ is zero files.
+# Re-pinned 836/939 -> 842/945 (2026-10-20): the roll fired on the
+# observer-channel restore commit — zero src/ files staged (koru_std part
+# files, expected.txt repins, one new concept). The named offenders are
+# the documented classes: the continuation_codegen:291-320 x
+# emitter_helpers:6806-6835 fn_decl twin (the intentional
+# containsTokenLocal port pair) and emitter_test test_decl scaffolding.
+# Growth landed between re-pins — committed src/ drift from the
+# cells/nodes and board commits — not in this diff.
+clusters=842
+members=945
 # Re-pinned to 820/911 on the call-site |variant commit: the sampled roll
 # named containsTokenLocal x containsToken (continuation_codegen /
 # emitter_helpers) and an emitter_test test_decl pair — none of those

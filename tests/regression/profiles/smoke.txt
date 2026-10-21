@@ -1,0 +1,10 @@
+# smoke — the curated sanity slice. One glob per line; every line must match
+# at least one test dir or the run refuses upfront (same FILTER_REQUESTS guard
+# as ad-hoc filters). Invoked by the positional `smoke` keyword.
+205_*
+302_*
+401_*
+501_*
+701_*
+831_*
+916_*

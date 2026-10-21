@@ -1,0 +1,147 @@
+// Koru Standard Library: Reactive Stores — the `cascade` part.
+// Joined via `~part cascade` in store.kz; merged into the store module at load.
+// Interceptor cascade-cycle detection: edge collection over create bodies + bounded DFS (T2 / 690_012).
+// Lifted out of `store.new.kz` at the 2026-10 merge — the wall pins module
+// files and these namespaces were always self-contained.
+
+
+const CycleEdge = struct {
+    from: []const u8,
+    from_field: []const u8,
+    to: []const u8,
+    to_field: []const u8,
+};
+
+const EdgeScan = struct {
+    const ast = @import("ast");
+    fn seedFields(alloc: std.mem.Allocator, seed2: []const u8) []const []const u8 {
+        const struct_literal2 = @import("struct_literal");
+        const braced2 = std.fmt.allocPrint(alloc, "{{{s}}}", .{seed2}) catch unreachable;
+        const cf2 = struct_literal2.parseFields(alloc, braced2) catch return &[_][]const u8{};
+        const names2 = alloc.alloc([]const u8, cf2.len) catch unreachable;
+        for (cf2, 0..) |c2, ci2| names2[ci2] = c2.name;
+        return names2;
+    }
+    // Field-name lookup for a store still visible as an
+    // untransformed create (seed order) or already coordinated
+    // (apply-event branch order).
+    fn fieldNameByIndex(alloc: std.mem.Allocator, prog: *const ast.Program, store: []const u8, idx: usize) []const u8 {
+        const struct_literal2 = @import("struct_literal");
+        const apply_name2 = std.fmt.allocPrint(alloc, "__store_apply_{s}", .{store}) catch unreachable;
+        for (flatItems(alloc, prog.items)) |pi2| {
+            switch (pi2.*) {
+                .event_decl => |*ed2| {
+                    if (ed2.path.segments.len == 1 and std.mem.eql(u8, ed2.path.segments[0], apply_name2)) {
+                        if (idx < ed2.branches.len) return ed2.branches[idx].name;
+                    }
+                },
+                .flow => |*f2| {
+                    const inv2 = f2.inv();
+                    if (inv2.path.segments.len != 1 or !std.mem.eql(u8, inv2.path.segments[0], "new")) continue;
+                    const mq2 = inv2.path.module_qualifier orelse continue;
+                    if (!std.mem.eql(u8, mq2, "std.store")) continue;
+                    var matches2 = false;
+                    var seed3: ?[]const u8 = null;
+                    for (inv2.args) |a2| {
+                        if (std.mem.eql(u8, a2.name, "expr")) {
+                            var v2 = a2.value;
+                            if (v2.len >= 2 and v2[0] == '"') v2 = v2[1 .. v2.len - 1];
+                            matches2 = std.mem.eql(u8, v2, store);
+                        } else if (std.mem.eql(u8, a2.name, "source")) {
+                            seed3 = a2.value;
+                        }
+                    }
+                    if (!matches2 or seed3 == null) continue;
+                    const braced3 = std.fmt.allocPrint(alloc, "{{{s}}}", .{seed3.?}) catch unreachable;
+                    const cf3 = struct_literal2.parseFields(alloc, braced3) catch continue;
+                    if (idx < cf3.len) return cf3[idx].name;
+                },
+                else => {},
+            }
+        }
+        return "?";
+    }
+    fn scanCont(alloc: std.mem.Allocator, prog: *const ast.Program, cont: *const ast.Continuation, from: []const u8, from_field: []const u8, list: *std.ArrayList(CycleEdge)) void {
+        if (cont.node) |n| {
+            switch (n) {
+                .invocation => |inv| {
+                    // Raw spelling: std/store:stored { to.field: ... }
+                    if (inv.path.module_qualifier) |mq| {
+                        if (std.mem.eql(u8, mq, "std.store") and inv.path.segments.len == 1 and std.mem.eql(u8, inv.path.segments[0], "stored")) {
+                            for (inv.args) |a| {
+                                if (!std.mem.eql(u8, a.name, "source")) continue;
+                                const struct_literal2 = @import("struct_literal");
+                                const braced2 = std.fmt.allocPrint(alloc, "{{{s}}}", .{a.value}) catch unreachable;
+                                const writes2 = struct_literal2.parseFields(alloc, braced2) catch continue;
+                                for (writes2) |w2| {
+                                    const dot2 = std.mem.indexOfScalar(u8, w2.name, '.') orelse continue;
+                                    list.append(alloc, .{
+                                        .from = from,
+                                        .from_field = from_field,
+                                        .to = alloc.dupe(u8, w2.name[0..dot2]) catch unreachable,
+                                        .to_field = alloc.dupe(u8, w2.name[dot2 + 1 ..]) catch unreachable,
+                                    }) catch unreachable;
+                                }
+                            }
+                        }
+                    }
+                    // Rewritten spelling: __store_write_<to>(field: <idx>, ...)
+                    // (the walker transforms nested stored sites BEFORE
+                    // their enclosing create's head - both spellings are
+                    // live during coordination).
+                    if (inv.path.segments.len == 1 and std.mem.startsWith(u8, inv.path.segments[0], "__store_write_")) {
+                        const to_store = inv.path.segments[0]["__store_write_".len..];
+                        var fidx2: usize = 0;
+                        for (inv.args) |a| {
+                            if (std.mem.eql(u8, a.name, "field")) {
+                                fidx2 = std.fmt.parseInt(usize, std.mem.trim(u8, a.value, " "), 10) catch 0;
+                            }
+                        }
+                        list.append(alloc, .{
+                            .from = from,
+                            .from_field = from_field,
+                            .to = alloc.dupe(u8, to_store) catch unreachable,
+                            .to_field = alloc.dupe(u8, fieldNameByIndex(alloc, prog, to_store, fidx2)) catch unreachable,
+                        }) catch unreachable;
+                    }
+                    // Per-field spelling (owned-containing stores,
+                    // unit 4c): __store_fwrite_<to>_<idx>(row, value)
+                    // — the field index rides the NAME's suffix after
+                    // the last '_', not a `field` arg.
+                    if (inv.path.segments.len == 1 and std.mem.startsWith(u8, inv.path.segments[0], "__store_fwrite_")) {
+                        const rest = inv.path.segments[0]["__store_fwrite_".len..];
+                        if (std.mem.lastIndexOfScalar(u8, rest, '_')) |up| {
+                            const to_store = rest[0..up];
+                            const fidx2 = std.fmt.parseInt(usize, rest[up + 1 ..], 10) catch 0;
+                            list.append(alloc, .{
+                                .from = from,
+                                .from_field = from_field,
+                                .to = alloc.dupe(u8, to_store) catch unreachable,
+                                .to_field = alloc.dupe(u8, fieldNameByIndex(alloc, prog, to_store, fidx2)) catch unreachable,
+                            }) catch unreachable;
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+        for (cont.continuations) |*c| scanCont(alloc, prog, c, from, from_field, list);
+    }
+};
+
+const Dfs = struct {
+    fn nodeEql(a_s: []const u8, a_f: []const u8, b_s: []const u8, b_f: []const u8) bool {
+        return std.mem.eql(u8, a_s, b_s) and std.mem.eql(u8, a_f, b_f);
+    }
+    fn walk(list: []const CycleEdge, at_s: []const u8, at_f: []const u8, t_s: []const u8, t_f: []const u8, depth: usize, pth: *std.ArrayList(CycleEdge), alloc: std.mem.Allocator) bool {
+        if (depth > 16) return false;
+        for (list) |e| {
+            if (!nodeEql(e.from, e.from_field, at_s, at_f)) continue;
+            pth.append(alloc, e) catch unreachable;
+            if (nodeEql(e.to, e.to_field, t_s, t_f)) return true;
+            if (walk(list, e.to, e.to_field, t_s, t_f, depth + 1, pth, alloc)) return true;
+            _ = pth.pop();
+        }
+        return false;
+    }
+};

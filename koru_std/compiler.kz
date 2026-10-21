@@ -13,6 +13,7 @@
 ~part dump
 ~part directives
 ~part stages
+~part prelate
 // Compiler system dependencies
 ~std/deps:requires.system {
     "name": "zig",
@@ -589,6 +590,7 @@ const Allocator = std.mem.Allocator;
     });
     canonicalize_names_module.addImport("ast", ast_module);
     canonicalize_names_module.addImport("log", log_module);
+    canonicalize_names_module.addImport("module_resolver", module_resolver_module);
     post_transform_weld_module.addImport("canonicalize_names", canonicalize_names_module);
 
     // AST serializer (for --ast-json and debugging)

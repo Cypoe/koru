@@ -48,7 +48,7 @@
     @compileError("std/net:tcp.read is not implemented. For an HTTP client use koru/curl (`koru/curl:get`, `koru/curl:post`). There is no socket surface in koru_std.");
 }
 
-~pub tor tcp.write { id: u32, data: string }
+~pub tor tcp.write { id: u32, data: string<*@scoped> }
 | sent usize
 | error string
 

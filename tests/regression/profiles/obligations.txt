@@ -1,0 +1,6 @@
+# obligations — the phantom/custody surface. Taint, obligation tracking,
+# subflow produce edges, fmt borrows. ~215 tests, ~12 min at --parallel 8.
+330_*
+335_*
+350_*
+620_*

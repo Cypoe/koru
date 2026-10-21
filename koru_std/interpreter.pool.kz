@@ -9,46 +9,26 @@
 // default: a bare interpreter run records nothing, and nothing here
 // knows a world exists.
 
-pub const Handle = struct {
-    /// Unique ID within this pool (persistent, incrementing)
-    id: u32,
-    /// Stable handle ID (string) passed through flows - from tor output field
-    handle_id: []const u8,
-    /// Module that defines this obligation (e.g., "sqlite3", "fs", "mem")
-    obligation_module: []const u8,
-    /// Obligation name within that module (e.g., "opened", "allocated")
-    obligation_name: []const u8,
-    /// Tor that discharges this obligation (e.g., "sqlite3:close")
-    discharge_event: []const u8,
-    /// Whether this handle has been discharged
-    discharged: bool,
-    /// Which tor created this resource (e.g., "sqlite3:open")
-    created_by_event: []const u8,
-    /// Resource type name for inspection (e.g., "Connection")
-    resource_type: []const u8,
-    /// Scope that owns this handle (for isolation enforcement)
-    scope_name: []const u8,
-    /// Pool ids this handle depends on (borrowed providers that must outlive
-    /// it). Derived at acquire time from the creating tor's input args that
-    /// name currently-held handles this tor does not itself discharge.
-    /// Guarded withdrawal: a handle is released only after every undischarged
-    /// handle depending on it is gone (Cordis Theorem 63 ordering, mirrored).
-    depends_on: [4]u32,
-    depends_on_len: u8,
-
-    /// Helper to get fully-qualified obligation string (e.g., "sqlite3:opened")
-    pub fn fqObligation(self: *const Handle, buf: []u8) []const u8 {
-        return std.fmt.bufPrint(buf, "{s}:{s}", .{ self.obligation_module, self.obligation_name }) catch self.obligation_name;
-    }
-};
-
-/// What the custody record saw happen to a handle.
-pub const CustodyKind = enum { mint, use, release };
+// Handle, CustodyKind, custodySubject and renderHeldHandles moved to the
+// `custody` part — the record types and witnesses beside the pool that
+// mints them.
 
 pub const HandlePool = struct {
     handles: std.ArrayList(Handle),
     next_id: u32,
     allocator: std.mem.Allocator,
+    /// The bridge this pool belongs to — stamped onto every handle it mints.
+    /// "" when the pool is a run-local custody record, not a bridge's organ.
+    bridge_id: []const u8 = "",
+    /// Token → resource. The wire speaks strings; a `*T`-typed field on a tor
+    /// cannot be fabricated from text, so a minted handle's token is the key
+    /// under which its typed value lives. Entry dies with the handle's
+    /// discharge — a spent token resolves nothing.
+    resources: std.StringHashMapUnmanaged(*anyopaque) = .{},
+    next_resource: u32 = 1,
+    /// Per-pool mint seed, lazy-mixed on the first mint — the suffix is
+    /// seeded hex, never a countable sequence (OPAQUE MINT ruling).
+    mint_seed: u64 = 0,
     /// The custody witness, when installed: `on_mint` fires from `acquire`
     /// (subject carries the creating verb's args — the why of the possess),
     /// `on_release` fires from every discharge path (explicit verb, sweep,
@@ -80,8 +60,10 @@ pub const HandlePool = struct {
             self.allocator.free(h.created_by_event);
             self.allocator.free(h.resource_type);
             self.allocator.free(h.scope_name);
+            self.allocator.free(h.bridge_id);
         }
         self.handles.deinit(self.allocator);
+        self.resources.deinit(self.allocator);
     }
 
     fn noteCustody(self: *HandlePool, kind: CustodyKind, h: *const Handle, subject: []const u8) void {
@@ -132,6 +114,7 @@ pub const HandlePool = struct {
             .created_by_event = try self.allocator.dupe(u8, created_by_event),
             .resource_type = try self.allocator.dupe(u8, resource_type),
             .scope_name = try self.allocator.dupe(u8, scope_name),
+            .bridge_id = try self.allocator.dupe(u8, self.bridge_id),
             .depends_on = dep_slice,
             .depends_on_len = dep_len,
         });
@@ -157,6 +140,7 @@ pub const HandlePool = struct {
         for (self.handles.items) |*h| {
             if (h.id == id and !h.discharged) {
                 h.discharged = true;
+                self.releaseResource(h.handle_id);
                 self.noteCustody(.release, h, "");
                 return;
             }
@@ -190,29 +174,43 @@ pub const HandlePool = struct {
     pub fn discharge(self: *HandlePool, handle_id: []const u8) void {
         if (self.findByHandleIdAnyScope(handle_id)) |h| {
             h.discharged = true;
+            self.releaseResource(handle_id);
             self.noteCustody(.release, h, "");
         }
     }
 
-    /// Get all undischarged handles
-    pub fn getUndischarged(self: *const HandlePool) []const Handle {
-        // Count undischarged
-        var count: usize = 0;
-        for (self.handles.items) |h| {
-            if (!h.discharged) count += 1;
-        }
-        if (count == 0) return &[_]Handle{};
+    /// Mint the token a `*T` return rides home on — opaque and pool-unique,
+    /// `h:Type:` + seeded hex. A sequence made spelled guesses resolvable —
+    /// binding what the observation returned is the only legal access. The
+    /// mint itself lives in the `mint` part (line wall).
+    pub fn mintResourceToken(self: *HandlePool, resource_type: []const u8) []const u8 {
+        return poolMintResourceToken(self, resource_type);
+    }
 
-        // Collect them
-        var result = self.allocator.alloc(Handle, count) catch return &[_]Handle{};
-        var i: usize = 0;
-        for (self.handles.items) |h| {
-            if (!h.discharged) {
-                result[i] = h;
-                i += 1;
-            }
-        }
-        return result;
+    /// Store a typed value under its token. Called by generated dispatchers at
+    /// pack time — the handle is acquired afterwards, keyed on the same string.
+    /// `token` must come from mintResourceToken: the map does not copy keys.
+    /// The body lives in the `poolops` part (line wall).
+    pub fn registerResource(self: *HandlePool, token: []const u8, resource: *anyopaque) void {
+        poolRegisterResource(self, token, resource);
+    }
+
+    /// The typed value a token names, if the pool holds it. Resolution is a
+    /// lookup, never a fabrication — a token nobody minted resolves nothing.
+    pub fn resolveResource(self: *HandlePool, token: []const u8) ?*anyopaque {
+        return poolResolveResource(self, token);
+    }
+
+    /// A discharged handle's token stops resolving. The entry is dropped;
+    /// the token's bytes are eternal page memory, so nothing is freed here.
+    fn releaseResource(self: *HandlePool, handle_id: []const u8) void {
+        poolReleaseResource(self, handle_id);
+    }
+
+    /// Get all undischarged handles
+    /// The body lives in the `poolops` part (line wall).
+    pub fn getUndischarged(self: *const HandlePool) []const Handle {
+        return poolGetUndischarged(self);
     }
 
     /// Get ALL handles (for bridge inspection - includes discharged)
@@ -221,24 +219,8 @@ pub const HandlePool = struct {
     }
 
     pub fn countUndischarged(self: *const HandlePool) usize {
-        var count: usize = 0;
-        for (self.handles.items) |h| {
-            if (!h.discharged) count += 1;
-        }
-        return count;
+        return poolCountUndischarged(self);
     }
 };
 
-/// `name=value, name=value` into `buf` — the custody subject: WHAT the
-/// minting verb took, in the wire's own spellings. Runs at the dispatch
-/// site where the evaluated args still exist; the pool stores no copy —
-/// the witness is synchronous, the slice dies with the call.
-pub fn custodySubject(buf: []u8, args: []const ast.Arg) []const u8 {
-    var fbs = std.io.fixedBufferStream(buf);
-    const w = fbs.writer();
-    for (args, 0..) |a, i| {
-        if (i > 0) w.writeAll(", ") catch break;
-        w.print("{s}={s}", .{ a.name, a.value }) catch break;
-    }
-    return fbs.getWritten();
-}
+

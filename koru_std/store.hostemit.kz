@@ -227,22 +227,3 @@ fn storeRefHomeGuard(alloc: std.mem.Allocator, host: codegen_utils_store.HostTar
     return sb.items;
 }
 
-/// One column's READ at `__koru_si`. A `char[N]` cell binds the row text up
-/// to the first NUL (690_052 semantics) — the plain indexed read hands the
-/// handler a [N]u8 where its Input types a []const u8, a raw Zig coercion
-/// error at a site the author never wrote (threat_bench). A JS column IS the
-/// string and a C# `string` column stores exact text with no NUL padding —
-/// the plain indexed read stands on both.
-fn cellRead(alloc: std.mem.Allocator, host_target: codegen_utils_store.HostTarget, prog: *const ast_find.Program, cellq: []const u8, store: []const u8, col: []const u8, esc_col: []const u8) []const u8 {
-    // `col` is ONE field name — a union-folded column like `creature.alive`
-    // carries a dot Zig quotes away (`@"…"`) and cs folds (`creature_alive`).
-    const mem = if (host_target == .cs)
-        codegen_utils_store.HostShape.csMember(alloc, col)
-    else if (host_target == .c)
-        codegen_utils_store.cMemberName(alloc, col)
-    else
-        esc_col;
-    if (host_target == .zig and charCap(alloc, prog, store, col) != null)
-        return std.fmt.allocPrint(alloc, "@import(\"std\").mem.sliceTo(&{s}__koru_store_{s}.{s}[__koru_si], 0)", .{ cellq, store, mem }) catch unreachable;
-    return std.fmt.allocPrint(alloc, "{s}__koru_store_{s}.{s}[__koru_si]", .{ cellq, store, mem }) catch unreachable;
-}

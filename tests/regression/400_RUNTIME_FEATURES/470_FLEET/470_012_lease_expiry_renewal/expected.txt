@@ -1,0 +1,11 @@
+slate cleared
+node-a claimed epoch=1
+node-b refused while lease live: node-a
+node-b took expired lease epoch=2
+record now says node-b
+node-a fenced at epoch=2
+node-a claimed room-99 epoch=1
+node-b renew refused: node-a
+node-a renewed its lease
+room-99 still held: node-a
+node-b took room-99 after lapse epoch=2

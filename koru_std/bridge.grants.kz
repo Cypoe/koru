@@ -42,22 +42,21 @@ fn hostBind(view: *const Interp.HostView, inv: *const Interp.Invocation, out: *I
     out.* = .{ .branch = "", .fields = S.field_buf[0..1] };
 }
 
-// `note(text: ...)` — the observer channel, granted by introspection like its
-// siblings. Reasoning the agent wants kept goes here instead of into prose
-// (which binds as residue and counts toward the rejection bound). The result
-// is a bare acknowledgment — the text itself is already durable in the turn's
-// wire source; echoing it back as the result would re-feed the model its own
-// prose on every report.
-fn hostNote(view: *const Interp.HostView, inv: *const Interp.Invocation, out: *Interp.DispatchResult) anyerror!void {
-    var has_text = false;
+// `abandon(reason: ...)` — the declared bail-out: the agent ends the session
+// itself, saying why. The marker rides the dispatch result's branch — the
+// turn loop reads it off the `.result` arm, prints the reason, and stops the
+// reply there. A bail that binds no name and fakes no failure: the reason is
+// the payload, durable in the wire source like a note's text.
+fn hostAbandon(view: *const Interp.HostView, inv: *const Interp.Invocation, out: *Interp.DispatchResult) anyerror!void {
+    var reason: ?[]const u8 = null;
     for (inv.args) |a| {
-        if (std.mem.eql(u8, a.name, "text")) has_text = true;
+        if (std.mem.eql(u8, a.name, "reason")) reason = a.value;
     }
-    if (!has_text) {
-        view.error_detail.* = "'note' needs a `text:` field — note(text: \"what you're thinking\")";
+    const r = reason orelse {
+        view.error_detail.* = "'abandon' needs a `reason:` field — abandon(reason: \"why you're stopping\")";
         return error.DispatchFailed;
-    }
+    };
     const S = struct { threadlocal var field_buf: [1]Interp.NamedField = undefined; };
-    S.field_buf[0] = .{ .name = "__type_ref", .value = .{ .string_val = "ok" } };
-    out.* = .{ .branch = "", .fields = S.field_buf[0..1] };
+    S.field_buf[0] = .{ .name = "__type_ref", .value = .{ .string_val = r } };
+    out.* = .{ .branch = "abandoned", .fields = S.field_buf[0..1] };
 }

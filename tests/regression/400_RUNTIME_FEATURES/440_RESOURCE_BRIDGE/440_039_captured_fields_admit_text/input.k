@@ -1,35 +1,29 @@
-// Pins: the wire gate is type-directed — a value position's declared field
-// type decides what it admits.
+// Pins: a bare wire value is a Koru expression, judged by the language's
+// own expression parser — not by a field's declared type.
 //
-// `expr: Expression` takes balanced expression text (`calc(expr: 2 + 3)`);
-// `src: Source` takes raw text (`render(src: hello world)`); the colon
-// form `verb: <rest>` fills a verb's lone Source field (`render: prose`,
-// `note: prose`). The host verb `note` declares `text` Source, so
-// `note(text: unquoted prose)` is wire. All of it normalizes to canonical
-// quoted wire before the interpreter parser sees it — the proc receives
-// identical text either spelling.
-//
-// An ordinary `string` field still refuses bare prose — `say(text: hello
-// world)` is a parse-error, the control that keeps captured-text types a
-// declaration, not a convention (440_038 pins the marshal beneath).
+// `calc(expr: 2 + 3)` evaluates a bare expression to i64 5; `string`
+// fields take quoted literals — `render(src: "hello world")`,
+// `note(text: "thinking out loud")` — and refuse bare prose,
+// `say(text: hello world)` being a parse-error: bare text is not a Koru
+// expression.
 
 import std/io
 import std/bridge
 import std/runtime
 
-tor calc { expr: Expression }
+tor calc { expr: i64 }
 proc calc|zig {
     const stdout = @import("std").fs.File.stdout();
-    stdout.writeAll("calc:") catch {};
-    stdout.writeAll(expr) catch {};
+    const buf = @import("std").fmt.allocPrint(@import("std").heap.page_allocator, "calc:{d}", .{expr}) catch unreachable;
+    stdout.writeAll(buf) catch {};
     stdout.writeAll("\n") catch {};
 }
 
-tor render { src: Source }
+tor render { src: string }
 proc render|zig {
     const stdout = @import("std").fs.File.stdout();
     stdout.writeAll("render:") catch {};
-    stdout.writeAll(src.text) catch {};
+    stdout.writeAll(src) catch {};
     stdout.writeAll("\n") catch {};
 }
 
@@ -49,16 +43,17 @@ gated = std/bridge:run(br, source)
 | partial p |> std/io:print.ln("{{ p.report:s }}")
 | result r |> std/io:print.ln("  single result")
 | unhandled-branch ub |> std/io:print.ln("FAIL unhandled {{ ub.branch:s }}")
-| event-denied ev |> std/io:print.ln("FAIL denied {{ ev:s }}")
+| error runerr |> std/bridge:error-decode(e: runerr)
+    | event-denied ev |> std/io:print.ln("FAIL denied {{ ev:s }}")
+    | parse-error p |> std/io:print.ln("  refused: {{ p.message:s }}")
+    | validation-error v |> std/io:print.ln("FAIL invalid {{ v:s }}")
+    | shape-error sh |> std/io:print.ln("FAIL shape {{ sh.message:s }}")
+    | dispatch-error e |> std/io:print.ln("FAIL dispatch {{ e.message:s }}")
+    | exhausted _ |> std/io:print.ln("FAIL exhausted")
+    | scope-not-found s2 |> std/io:print.ln("FAIL noscope {{ s2:s }}")
 | residue _ |> std/io:print.ln("FAIL: residue outcome")
-| parse-error p |> std/io:print.ln("  refused: {{ p.message:s }}")
-| validation-error v |> std/io:print.ln("FAIL invalid {{ v:s }}")
-| shape-error sh |> std/io:print.ln("FAIL shape {{ sh.message:s }}")
-| dispatch-error e |> std/io:print.ln("FAIL dispatch {{ e.message:s }}")
 | defined d |> std/io:print.ln("FAIL defined {{ d:s }}")
-| exhausted _ |> std/io:print.ln("FAIL exhausted")
-| scope-not-found s2 |> std/io:print.ln("FAIL noscope {{ s2:s }}")
 
 [with]std/bridge:create(id: "cap", scope: "api", introspection: true): br
-|> gated(br, source: "calc(expr: 2 + 3)\nrender(src: hello world)\nrender: raw prose here\nnote(text: thinking out loud)\nnote: colon form too")
+|> gated(br, source: "calc(expr: 2 + 3)\nrender(src: \"hello world\")\nnote(text: \"thinking out loud\")")
 |> gated(br, source: "say(text: hello world)")

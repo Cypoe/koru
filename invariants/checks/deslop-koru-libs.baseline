@@ -13,7 +13,89 @@
 # the diff adds no surface. Spellings drift 605→619 is foreign — in-flight
 # session work in the consumer tree (yyjson edits, flat/) that the census
 # counts because it reads the working tree. Clusters/members unchanged.
-clusters=634
-members=331
-skipped=21
-spellings=619
+# Re-pinned 2026-10-18: sampled roll fired on the libs/ui commit. Own
+# contribution is the spec.k ↔ spec_snap.k twin (+359-leaf cluster —
+# the autonomous-capture variant shares the spec seed cascade, same
+# structural twin class as folder.k/folder_snap.k already counted).
+# The rest is foreign drift landed between rolls — games/ponkatris
+# level/test pairs and unikraft blk boot-test repetitions dominate the
+# top offenders; spellings 619→661 include libs/ui's new tors plus
+# foreign surface.
+# Re-pinned 2026-10-18: sampled roll fired on the tree-twin commit. Own
+# contribution is the [tree]-backing experiment — spec_tree.k ↔ spec_snap.k
+# and bench_scale_tree.k ↔ bench_scale.k are deliberate dialect twins kept
+# side by side to compare the two store shapes (byte-identical render is
+# the check), same structural twin class as the *_snap pairs already
+# counted; the bench_* family (phases/scan/bracket/scale) are measurement
+# harnesses sharing the spec seed cascade by design. The remainder is
+# foreign drift — ponkatris level pairs and the asteroids main twin.
+# Re-pinned 2026-10-18: sampled roll fired on the live-twin commit. Own
+# contribution is spec_sel.k ↔ spec_sel_live.k — the scripted/live pair
+# kept side by side (one pins pixel snaps, one is the manual surface),
+# same structural twin class as the *_snap pairs. spec_sel ↔ spec_tree
+# join at #2 the same way the dialect twins did. Remaining growth is
+# foreign drift — ponkatris level pairs still dominate the tail.
+# Re-pinned 2026-10-18: sampled roll fired on the instanced-primitive
+# commit. Own contribution is metal/tests/vocab.k — a structural twin
+# of snap.k exercising the new draw.roundrect/panel/shadow/clip tors,
+# same twin class as the *_snap pairs — plus spellings growth from the
+# five new draw.* tors themselves (intentional API surface, same class
+# as winnow's tors above). Remaining growth is foreign drift —
+# repro_else_orphan ↔ spec_sel_live joined at #2, ponkatris level pairs
+# and the clay bench/spec twin family still dominate.
+# Re-pinned 2026-10-19: sampled roll fired on the component-twin commit.
+# Own contribution is gallery.k ↔ gallery_live.k ↔ gallery_comp.k —
+# the scripted/live/component twins kept side by side (one pins the
+# deterministic event-replay snap, one is the manual surface, one is
+# the spec-store expansion prototype), same structural twin class as
+# the spec_sel pair above. The spec_click ↔ spec_sel_live pair at #1
+# rides the same scripted/live contract. Spellings 674→690: new
+# intentional API surface already ruled — input.up/move/drag/scroll,
+# el.clip, window.snap, text.descent. Remaining growth is foreign
+# drift — ponkatris level pairs and the asteroids main twin.
+# Re-pinned 2026-10-19: roll fired on a membrane evolve commit (zero
+# code). The +6 members sit in today's gallery_comp growth — the
+# args:get arm pair and the named-preset driver gates twin the
+# scripted/live driver family already named above. +2 spellings ride
+# the same args:get/preset surface (the call sites are unique to
+# gallery_comp). Clusters at pin.
+# Re-pinned 2026-10-19: roll fired on the ctx-package extraction.
+# Own contribution is spellings 692→696 — the new libs/ctx package
+# surface (`default` tor + `ctxprobe` probe tor), the vocabulary the
+# commit exists to add. Clusters/members improved 1539→1535/489→487.
+# Named top offenders are foreign: ponkatris cross↔pacman level twin
+# and spec_sel↔spec_tree (the deliberate selection-adaptive twin).
+# Re-pinned 2026-10-19: roll fired on the ctx decl-order probe commit.
+# Own contribution is the probe_ctx_order ↔ probe_ctx_order2 twin pair —
+# the probe and its no-ctx control kept side by side, same twin class as
+# the scripted/live pairs above — plus probe_ctx_store_order joining the
+# probe_ctx_* family. +3 spellings ride the component-probe vocabulary
+# (theme/accent/card props). Named top offenders are foreign, unchanged:
+# spec_click↔spec_sel_live, the bench/spec six-pack, ponkatris levels.
+# Re-pinned 2026-10-20: roll fired on the gallery_comp oshun exercise.
+# Own contribution is the probe_oshun_* family — interp/bufsize probes and
+# their refusal controls kept side by side, same twin class as the
+# scripted/live pairs — plus the seed() arg vocabulary (which/bn/gn).
+# Named top offenders are foreign, unchanged: spec_click↔spec_sel_live,
+# the bench/spec six-pack, ponkatris levels.
+clusters=1684
+members=555
+skipped=20
+spellings=742
+# Re-pinned 2026-10-20: roll fired on the signal-vocab commit after the
+# bench_boxes pair landed. Own contribution: bench_boxes.k +
+# bench_boxes_gate.k — nanoui hillclimb ports, same spec dialect shape
+# as the bench/spec six-pack, members 509→511 on existing clusters.
+# Clusters fell 1559→1533 (census re-run, foreign drift resolved).
+# Re-pinned 2026-10-20: roll fired on the raw-el.* gate commit in
+# koru-libs. Own contribution is the per-side-padding capability cycle —
+# the declaration surface widened one pad arg to four (padl/r/t/b) across
+# el.cfg/el.clip signatures, view-store columns, and call sites
+# (mechanical quadruplication on an intentional surface change), plus
+# fuzz_gate's REF/MUT walks now structurally twinning on raw el.* (the
+# mutation target MUST shadow the reference — twinning is the design),
+# plus the image-float args and el.text tor. Spellings 715→742 ride the
+# same surface (padl/padr/padt/padb, eid, el.text). Foreign drift since
+# the last pin: theme_preview.k ↔ theme_preview_live.k pair at #8,
+# commander/ and offscreen_split.k in the untracked set — the census
+# reads the working tree. Ponkatris levels persist at #7, unchanged.

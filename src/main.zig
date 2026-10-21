@@ -3694,7 +3694,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                 const has_compile_error = transform_flags.has_compile_error;
 
                 const claims_descendants = annotation_parser.hasPart(event_decl.annotations, "claims_descendants");
-                const stage_name: []const u8 = if (annotation_parser.hasPart(event_decl.annotations, "pre")) "pre" else if (annotation_parser.hasPart(event_decl.annotations, "post")) "post" else "main";
+                const stage_name: []const u8 = if (annotation_parser.hasPart(event_decl.annotations, "pre_late")) "pre_late" else if (annotation_parser.hasPart(event_decl.annotations, "pre")) "pre" else if (annotation_parser.hasPart(event_decl.annotations, "post")) "post" else "main";
                 const requires_list = try annotationCallArgs(allocator, event_decl.annotations, "contract:requires");
                 const preserves_list = try annotationCallArgs(allocator, event_decl.annotations, "contract:preserves");
                 const obliges_list = try annotationCallArgs(allocator, event_decl.annotations, "contract:obliges");
@@ -3840,7 +3840,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
                         }
 
                         const claims_descendants = annotation_parser.hasPart(event_decl.annotations, "claims_descendants");
-                        const stage_name: []const u8 = if (annotation_parser.hasPart(event_decl.annotations, "pre")) "pre" else if (annotation_parser.hasPart(event_decl.annotations, "post")) "post" else "main";
+                        const stage_name: []const u8 = if (annotation_parser.hasPart(event_decl.annotations, "pre_late")) "pre_late" else if (annotation_parser.hasPart(event_decl.annotations, "pre")) "pre" else if (annotation_parser.hasPart(event_decl.annotations, "post")) "post" else "main";
                         const requires_list = try annotationCallArgs(allocator, event_decl.annotations, "contract:requires");
                         const preserves_list = try annotationCallArgs(allocator, event_decl.annotations, "contract:preserves");
                         const obliges_list = try annotationCallArgs(allocator, event_decl.annotations, "contract:obliges");
@@ -4443,6 +4443,7 @@ fn generateTransformHandlersToEmitter(code_emitter: anytype, allocator: std.mem.
     try code_emitter.write("    // that stage; anything else (e.g. \"transform\") runs all stages in order.\n");
     try code_emitter.write("    const __only_stage: ?@import(\"transform_pass_runner\").Stage =\n");
     try code_emitter.write("        if (transform_std.mem.eql(u8, annotation, \"pre\")) .pre\n");
+    try code_emitter.write("        else if (transform_std.mem.eql(u8, annotation, \"pre_late\")) .pre_late\n");
     try code_emitter.write("        else if (transform_std.mem.eql(u8, annotation, \"main\")) .main\n");
     try code_emitter.write("        else if (transform_std.mem.eql(u8, annotation, \"post\")) .post\n");
     try code_emitter.write("        else null;\n");
@@ -8790,7 +8791,7 @@ pub fn main() !void {
     // Canonicalize all DottedPaths - set module_qualifier on everything
     // This enables reliable name resolution for all downstream passes
     const canonicalize_names = @import("canonicalize_names");
-    try canonicalize_names.canonicalize(&source_file, parse_allocator);
+    try canonicalize_names.canonicalize(&source_file, parse_allocator, &resolver);
 
     // Host-type scope: a bare host (Zig) type is legal only inside the module
     // that declares it; across a module boundary the signature spells it fully

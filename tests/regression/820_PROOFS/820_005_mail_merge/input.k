@@ -29,7 +29,7 @@ std/store:new(docs, capacity: 2) { doc: *std/string:String<std/string:instance!>
 std/store:new(curi) { ri: 0[i64] }
 
 // Append `text` to the document buffer — the docs store's single live cell.
-tor out.append { text: string }
+tor out.append { text: string<*@scoped> }
 out.append = std/store:query(docs)
 ! query d |> std/string:append(s: d.doc, text)
     | ok |> _

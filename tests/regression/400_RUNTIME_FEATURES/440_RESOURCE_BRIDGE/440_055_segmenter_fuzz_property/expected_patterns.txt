@@ -1,0 +1,2 @@
+^200 rounds: fingerprint 564 over 200$
+\[BRIDGE\] Invoked 'release' for handle 'h:Res:[0-9a-f]{6}' \[reslib\.res:opened\]

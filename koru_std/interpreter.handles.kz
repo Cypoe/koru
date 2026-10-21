@@ -3,27 +3,8 @@
 // and the held-handles report. Joined via `~part handles` in interpreter.kz;
 // merged into the interpreter module at load.
 
-/// The NAMED handles an under-handled turn leaves on the bridge, as a JSON
-/// list — "not the count `run` returns today" (430_056 ruling): a host or
-/// shell line addresses them by name. Page-backed like the other durable
-/// strings; the reporter for the hand-back may never die beneath the host.
-fn renderHeldHandles(pool: *HandlePool) []const u8 {
-    var buf = std.ArrayList(u8){};
-    defer buf.deinit(std.heap.page_allocator);
-    const w = buf.writer(std.heap.page_allocator);
-    w.writeByte('[') catch return "[]";
-    var first = true;
-    for (pool.handles.items) |h| {
-        if (h.discharged) continue;
-        if (!first) w.writeByte(',') catch return "[]";
-        first = false;
-        w.writeByte('"') catch return "[]";
-        w.writeAll(h.handle_id) catch return "[]";
-        w.writeByte('"') catch return "[]";
-    }
-    w.writeByte(']') catch return "[]";
-    return std.heap.page_allocator.dupe(u8, buf.items) catch "[]";
-}
+// renderHeldHandles moved to the `custody` part — the record's witnesses
+// live beside Handle/CustodyKind now.
 
 /// Refuse a discharge tor that names a handle the pool does not hold.
 ///
@@ -220,6 +201,10 @@ pub fn dischargeAllHandles(
             );
 
             var discharge_result: DispatchResult = undefined;
+            // The dispatcher resolves *T handle args against this pool —
+            // the sweep is no exception; the channel is per-call.
+            setDispatchPool(pool, handle.scope_name);
+            defer clearDispatchPool();
             dispatcher(&discharge_inv, &discharge_result) catch |err| {
                 std.debug.print("[{s}] Failed '{s}': {s}\n",
                     .{label, handle.discharge_event, @errorName(err)});

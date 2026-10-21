@@ -1,0 +1,5 @@
+slate cleared
+node-a claimed epoch=1
+node-a owns: write may proceed
+node-a released
+no owner record — nothing to fence

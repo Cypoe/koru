@@ -1,0 +1,21 @@
+  agent> dir(path: "tests/regression/400_RUNTIME_FEATURES/440_RESOURCE_BRIDGE/440_041_sandbox_agent/sandbox")
+| opened d |>
+  world< {"branch":"opened","value":"h:Dir:HEX"}
+  agent> list(d: r1)
+| entries e |>
+  world< {"branch":"entries","value":["hello.txt"]}
+  agent> tor sweep { d: string, path: string, text: string } | written | failed string
+sweep = write(d, path, content: text)
+  world< defined sweep
+  agent> sweep(d: r1, path: "invented.txt", text: "the agent wrote a verb")
+| written _ |>
+  world< {"branch":"written"}
+  agent> collect-lines(d: r1, path: "invented.txt")
+| lines ls |>
+  world< {"branch":"lines","value":["the agent wrote a verb"]}
+  agent> write(d: r1, path: "../etc/evil", content: "pwn")
+| written _ |>
+| failed e |>
+  world< {"branch":"failed","value":"path escapes the dir"}
+  agent> close(d: r1)
+  world< {"branch":""}

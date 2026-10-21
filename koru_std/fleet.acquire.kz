@@ -1,0 +1,49 @@
+// Koru Standard Library: the `acquire` part of fleet — the claim path
+// `std/node` and `std/cell` call from host code. Joined via `~part acquire`.
+// Caller ends up holding the id, learns the foreign owner (`nb`), or fails.
+pub const Acquire = union(enum) {
+    held: u32,
+    foreign: []const u8,
+    failed,
+};
+
+pub fn fleetAcquire(world: []const u8, id: []const u8, node: []const u8, ttl_ms: u64, nb: []u8) Acquire {
+    ensureDirs(world) catch return .failed;
+    var pb: [1024]u8 = undefined;
+    const p = ownerPath(&pb, world, id) orelse return .failed;
+    if (ownerRead(world, id, nb)) |rec| {
+        if (!leaseLive(rec.until)) return fleetClaimExpired(world, id, node, ttl_ms, nb);
+        if (std.mem.eql(u8, rec.node, node)) {
+            _ = fleetRenewDue(world, id, node, ttl_ms, rec.until);
+            return .{ .held = rec.epoch };
+        }
+        return .{ .foreign = rec.node };
+    }
+    const epoch = epochRead(world, id) + 1;
+    var cb: [1024]u8 = undefined;
+    const body = std.fmt.bufPrint(&cb, "node={s}\nepoch={d}\nuntil={d}\n", .{ node, epoch, leaseUntil(ttl_ms) }) catch
+        return .failed;
+    const f = std.fs.cwd().createFile(p, .{ .exclusive = true }) catch |err| {
+        if (err != error.PathAlreadyExists) return .failed;
+        // createNew publishes the path before writeAll lands the bytes — a
+        // loser racing that gap reads a zero-byte record. Re-read with a
+        // bound: 20ms past it means real I/O failure, not the window.
+        var tries: u32 = 0;
+        while (tries < 200) : (tries += 1) {
+            if (ownerRead(world, id, nb)) |rec| {
+                if (std.mem.eql(u8, rec.node, node)) return .{ .held = rec.epoch };
+                return .{ .foreign = rec.node };
+            }
+            std.Thread.sleep(100 * std.time.ns_per_us);
+        }
+        return .failed;
+    };
+    f.writeAll(body) catch {
+        f.close();
+        return .failed;
+    };
+    f.close();
+    _ = epochBump(world, id);
+    return .{ .held = epoch };
+}
+

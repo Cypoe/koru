@@ -9,11 +9,11 @@ import std/io
 import std/bridge
 import std/runtime
 
-tor render { src: Source }
+tor render { src: string }
 proc render|zig {
-    _ = @import("std").posix.write(1, "render:") catch {};
-    _ = @import("std").posix.write(1, src.text) catch {};
-    _ = @import("std").posix.write(1, "\n") catch {};
+    _ = @import("std").fs.File.stdout().writeAll("render:") catch {};
+    _ = @import("std").fs.File.stdout().writeAll(src) catch {};
+    _ = @import("std").fs.File.stdout().writeAll("\n") catch {};
 }
 
 std/runtime:register(scope: "api") {
@@ -25,15 +25,16 @@ gated = std/bridge:run(br, source)
 | result r |> std/io:print.ln("ran")
 | partial p |> std/io:print.ln("{{ p.report:s }}")
 | unhandled-branch ub |> std/io:print.ln("FAIL unhandled {{ ub.branch:s }}")
-| event-denied ev |> std/io:print.ln("FAIL denied {{ ev:s }}")
+| error runerr |> std/bridge:error-decode(e: runerr)
+    | event-denied ev |> std/io:print.ln("FAIL denied {{ ev:s }}")
+    | parse-error p |> std/io:print.ln("FAIL parse {{ p.message:s }}")
+    | validation-error v |> std/io:print.ln("FAIL invalid {{ v:s }}")
+    | shape-error sh |> std/io:print.ln("FAIL shape {{ sh.message:s }}")
+    | dispatch-error e |> std/io:print.ln("FAIL dispatch {{ e.message:s }}")
+    | exhausted _ |> std/io:print.ln("FAIL exhausted")
+    | scope-not-found s2 |> std/io:print.ln("FAIL noscope {{ s2:s }}")
 | residue _ |> std/io:print.ln("FAIL: residue outcome")
-| parse-error p |> std/io:print.ln("FAIL parse {{ p.message:s }}")
-| validation-error v |> std/io:print.ln("FAIL invalid {{ v:s }}")
-| shape-error sh |> std/io:print.ln("FAIL shape {{ sh.message:s }}")
-| dispatch-error e |> std/io:print.ln("FAIL dispatch {{ e.message:s }}")
 | defined d |> std/io:print.ln("FAIL defined {{ d:s }}")
-| exhausted _ |> std/io:print.ln("FAIL exhausted")
-| scope-not-found s2 |> std/io:print.ln("FAIL noscope {{ s2:s }}")
 
 // Raw newline inside the quoted value — the shape that lost its text.
 [with]std/bridge:create(id: "cap", scope: "api"): br

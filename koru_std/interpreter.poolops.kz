@@ -1,0 +1,48 @@
+// Koru Standard Library: the `poolops` part of interpreter.kz — HandlePool
+// member bodies the line wall lifts out of `pool`. Joined via `~part poolops`
+// in interpreter.kz; merged into the interpreter module at load.
+// `poolMintResourceToken` set the precedent in the `mint` part; these follow it.
+
+/// registerResource's body — see the member's doc on `HandlePool`.
+pub fn poolRegisterResource(pool: *HandlePool, token: []const u8, resource: *anyopaque) void {
+    pool.resources.put(pool.allocator, token, resource) catch @panic("pool: OOM registering resource");
+}
+
+/// resolveResource's body — a lookup, never a fabrication.
+pub fn poolResolveResource(pool: *HandlePool, token: []const u8) ?*anyopaque {
+    return pool.resources.get(token);
+}
+
+/// releaseResource's body — the token's bytes are eternal page memory, so
+/// nothing is freed here.
+fn poolReleaseResource(pool: *HandlePool, handle_id: []const u8) void {
+    _ = pool.resources.fetchRemove(handle_id);
+}
+
+/// getUndischarged's body.
+pub fn poolGetUndischarged(pool: *const HandlePool) []const Handle {
+    var count: usize = 0;
+    for (pool.handles.items) |h| {
+        if (!h.discharged) count += 1;
+    }
+    if (count == 0) return &[_]Handle{};
+
+    var result = pool.allocator.alloc(Handle, count) catch return &[_]Handle{};
+    var i: usize = 0;
+    for (pool.handles.items) |h| {
+        if (!h.discharged) {
+            result[i] = h;
+            i += 1;
+        }
+    }
+    return result;
+}
+
+/// countUndischarged's body.
+pub fn poolCountUndischarged(pool: *const HandlePool) usize {
+    var count: usize = 0;
+    for (pool.handles.items) |h| {
+        if (!h.discharged) count += 1;
+    }
+    return count;
+}

@@ -1,0 +1,427 @@
+
+// Koru Standard Library: the `iprov` part of store.kz.
+// Joined via `~part iprov` in store.kz; merged into the store module at load.
+//
+// ============================================================================
+// STORE.IPROV — `store[base.field]` index provenance (690_365)
+// ============================================================================
+//
+// A subscript's index used to reach `__koru_resolve` unchecked: the runtime
+// brand test panicked on whatever it found (a scalar `0` carries brand 0,
+// which is deliberately not a store brand). One spelling the compiler CAN
+// see through: `base.field` where `base` names a declared store lowers to a
+// read of the cell itself — `storeRefsAll` rewrites it to
+// `__koru_store_<base>.<field>` unconditionally — so its provenance is
+// decidable here rather than inside a panic.
+//
+// Three verdicts. A PLURAL `base` makes `base.field` the whole column — an
+// array, never a handle. A capacity-1 `base` puts it on the cell's write
+// history: if every write the scan can see is provably scalar the cell
+// never holds a handle and the subscript is refused; one write that could
+// carry a handle — a `| row` binding, another cell read, any name the scan
+// cannot classify — keeps it legal (the sanctioned handle-carrying column,
+// `ui.sel` of 690_075). Anything else is OPAQUE and the runtime check
+// stands: a bound name shadowing the store, a base that is no store, a
+// member that is no column, a seed or write the scan cannot read.
+//
+// The documented handle sources stay legal because they never land here:
+// `| row` bindings and cursors are site-bound names (opaque), and a
+// handle-carrying column of the TARGET store is claimed by the field-of-
+// store self-FK arm before this scan runs (690_048).
+const IndexProvenance = struct {
+    const ast = @import("ast");
+    const Verdict = enum { opaque_index, whole_column, scalar_cell, may_carry_handle };
+
+fn indexIdentChar(ch: u8) bool {
+    return (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_';
+}
+
+fn indexPlainIdent(s: []const u8) bool {
+    if (s.len == 0 or (s[0] >= '0' and s[0] <= '9')) return false;
+    for (s) |ch| {
+        if (!indexIdentChar(ch)) return false;
+    }
+    return true;
+}
+
+/// Words that name a scalar by construction — scalar type names and the
+/// literal keywords. Any OTHER identifier at expression position could be
+/// a bound handle, so its presence alone keeps a cell "may carry".
+fn indexScalarWord(w: []const u8) bool {
+    const words = [_][]const u8{
+        "i8",           "i16",         "i32",       "i64", "i128", "u8",
+        "u16",          "u32",         "u64",       "u128", "usize", "isize",
+        "f16",          "f32",         "f64",       "f128", "bool", "char",
+        "string",       "void",        "type",      "true", "false",
+        "null",         "undefined",   "comptime_int", "comptime_float",
+    };
+    for (words) |k| {
+        if (std.mem.eql(u8, w, k)) return true;
+    }
+    return false;
+}
+
+/// Could `v` evaluate to a handle? Any identifier it names that is not a
+/// member access (`.x`), a builtin (`@x`), or a scalar word answers MAY —
+/// conservative by construction: a missed scalar keeps the index legal,
+//  never the reverse.
+fn indexValueMayHoldHandle(alloc: std.mem.Allocator, v: []const u8) bool {
+    const mask = ast_find.expressionMask(alloc, v);
+    var i: usize = 0;
+    while (i < v.len) {
+        if (!mask[i] or !indexIdentChar(v[i]) or (v[i] >= '0' and v[i] <= '9')) {
+            i += 1;
+            continue;
+        }
+        const start = i;
+        while (i < v.len and indexIdentChar(v[i])) i += 1;
+        var j = start;
+        while (j > 0 and v[j - 1] == ' ') j -= 1;
+        if (j > 0 and (v[j - 1] == '.' or v[j - 1] == '@')) continue;
+        if (indexScalarWord(v[start..i])) continue;
+        return true;
+    }
+    return false;
+}
+
+/// Is `name` bound at the site's scope — a `| row`, a return binding, a
+/// destructure? A bound name shadowing a store's name makes `base.field`
+/// read the binding's field, not the cell, and the index stays opaque.
+fn indexBaseBound(alloc: std.mem.Allocator, prog: *const ast_find.Program, flow: *const ast_find.Flow, name: []const u8) bool {
+    const site = flow.site_of orelse &flow.body;
+    const scope = @import("emitter_helpers").scopeAtSite(alloc, prog.items, site) catch return true;
+    for (scope) |b| {
+        if (std.mem.eql(u8, b.name, name)) return true;
+    }
+    return false;
+}
+
+/// Row store or capacity-1 value? The lowered `__store_inserth_` event is
+/// the answer once `new` has run; before it runs the raw `capacity:` arg
+/// says the same thing (absent or `1` is the value tier, new.kz:650).
+fn storeIsPlural(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8) bool {
+    const inserth = std.fmt.allocPrint(alloc, "__store_inserth_{s}", .{store}) catch unreachable;
+    if (findSynthDecl(prog.items, inserth) != null) return true;
+    for (flatItems(alloc, prog.items)) |pi| {
+        if (pi.* != .flow) continue;
+        if (!isStoreNewFor(&pi.flow, store)) continue;
+        for (pi.flow.inv().args) |a| {
+            if (std.mem.eql(u8, a.name, "capacity")) {
+                const cap = std.fmt.parseInt(u64, std.mem.trim(u8, a.value, " \t"), 10) catch return true;
+                return cap > 1;
+            }
+        }
+        return false;
+    }
+    return false;
+}
+
+/// The seed `new(S)` wrote for `<field>` — the raw source block while the
+/// `new` is still a flow, or the lowered `__koru_store_<S>` cell init
+/// after it ran (transform-order-tolerant, like fieldOrder's three sources).
+fn singletonCellSeed(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8, field: []const u8) ?[]const u8 {
+    const struct_literal = @import("struct_literal");
+    var saw_new = false;
+    for (flatItems(alloc, prog.items)) |pi| {
+        if (pi.* != .flow) continue;
+        if (!isStoreNewFor(&pi.flow, store)) continue;
+        saw_new = true;
+        var seed: ?[]const u8 = null;
+        for (pi.flow.inv().args) |a| {
+            if (std.mem.eql(u8, a.name, "source")) seed = if (a.source_value) |sv| sv.text else a.value;
+        }
+        const src = seed orelse return null;
+        const braced = std.fmt.allocPrint(alloc, "{{{s}}}", .{src}) catch unreachable;
+        const cfs = struct_literal.parseFields(alloc, braced) catch return null;
+        for (cfs) |cf| {
+            if (std.mem.eql(u8, cf.name, field)) return cf.value;
+        }
+        // A column declared without a default zero-fills (new.kz:5460).
+        return "0";
+    }
+    if (saw_new) return null;
+    // Lowered: `var __koru_store_<S> = .{ .<f> = @as(T, <v>), … }` (zig),
+    // `{ <f>: <v> }` (js) or `static class … { … <f> = <v>; }` (cs) — all
+    // three carry `<f>` followed by `=`/`:` inside the cell's first block.
+    for (flatItems(alloc, prog.items)) |pi| {
+        const text: ?[]const u8 = switch (pi.*) {
+            .host_line => |*h| h.content,
+            .inline_code => |*ic| ic.code,
+            else => null,
+        };
+        const t = text orelse continue;
+        const marker = std.fmt.allocPrint(alloc, "__koru_store_{s}", .{store}) catch unreachable;
+        const at = std.mem.indexOf(u8, t, marker) orelse continue;
+        const name_end = at + marker.len;
+        if (name_end < t.len and indexIdentChar(t[name_end])) continue;
+        const brace = std.mem.indexOfScalarPos(u8, t, name_end, '{') orelse continue;
+        var depth: usize = 0;
+        var close: usize = t.len;
+        var k = brace;
+        while (k < t.len) : (k += 1) {
+            if (t[k] == '{') depth += 1;
+            if (t[k] == '}') {
+                depth -= 1;
+                if (depth == 0) {
+                    close = k;
+                    break;
+                }
+            }
+        }
+        const region = t[brace + 1 .. close];
+        var p: usize = 0;
+        while (p + field.len <= region.len) : (p += 1) {
+            if (p > 0 and indexIdentChar(region[p - 1])) continue;
+            if (!std.mem.startsWith(u8, region[p..], field)) continue;
+            var q = p + field.len;
+            if (q < region.len and indexIdentChar(region[q])) continue;
+            while (q < region.len and (region[q] == ' ' or region[q] == '\n' or region[q] == '\t')) q += 1;
+            if (q >= region.len or (region[q] != '=' and region[q] != ':')) continue;
+            if (q + 1 < region.len and region[q] == '=' and region[q + 1] == '=') continue;
+            q += 1;
+            // The value runs to the first `,`/`}`/`;` outside any bracket.
+            var d2: usize = 0;
+            var vstart = q;
+            while (vstart < region.len and (region[vstart] == ' ' or region[vstart] == '\n' or region[vstart] == '\t')) vstart += 1;
+            var vend = region.len;
+            var m = vstart;
+            while (m < region.len) : (m += 1) {
+                const ch = region[m];
+                if (ch == '(' or ch == '[' or ch == '{') d2 += 1;
+                if (ch == ')' or ch == ']' or ch == '}') d2 -|= 1;
+                if (d2 == 0 and (ch == ',' or ch == ';')) {
+                    vend = m;
+                    break;
+                }
+            }
+            return region[vstart..vend];
+        }
+        // Found the cell but not this field's init — the write history is
+        // unreadable, so the caller must not treat it as provably scalar.
+        return null;
+    }
+    return null;
+}
+
+/// Could anything the compiler can see put a handle into cell `<store>.<field>`?
+/// Conservative in the allowing direction only: a write the scan cannot read
+/// answers MAY, never NO.
+fn singletonCellMayCarryHandle(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8, field: []const u8) bool {
+    const seed = singletonCellSeed(alloc, prog, store, field) orelse return true;
+    if (indexValueMayHoldHandle(alloc, seed)) return true;
+
+    var field_idx: ?usize = null;
+    if (storeFieldOrder(alloc, prog, store)) |order| {
+        for (order, 0..) |f, i| {
+            if (std.mem.eql(u8, f, field)) {
+                field_idx = i;
+                break;
+            }
+        }
+    }
+
+    const dotted = std.fmt.allocPrint(alloc, "{s}.{s}", .{ store, field }) catch unreachable;
+    const write_name = std.fmt.allocPrint(alloc, "__store_write_{s}", .{store}) catch unreachable;
+    const envw_name = std.fmt.allocPrint(alloc, "__store_envwrite_{s}", .{store}) catch unreachable;
+    const fwr_name = std.fmt.allocPrint(alloc, "__store_fwrite_{s}_", .{store}) catch unreachable;
+    const cell_assign = std.fmt.allocPrint(alloc, "__koru_store_{s}.{s}", .{ store, field }) catch unreachable;
+
+    const Ctx = struct {
+        field: []const u8,
+        field_idx: ?usize,
+        dotted: []const u8,
+        write_name: []const u8,
+        envw_name: []const u8,
+        fwr_name: []const u8,
+        cell_assign: []const u8,
+        hit: bool = false,
+
+        fn visitValue(self: *@This(), alloc2: std.mem.Allocator, v: []const u8) void {
+            if (indexValueMayHoldHandle(alloc2, v)) self.hit = true;
+        }
+
+        /// A lowered or raw write SITE: does it write this cell, and could
+        /// the value it writes be a handle?
+        fn visitInv(self: *@This(), alloc2: std.mem.Allocator, inv: *const ast_find.Invocation) void {
+            if (self.hit) return;
+            const segs = inv.path.segments;
+            if (segs.len == 1 and inv.path.module_qualifier != null and std.mem.eql(u8, inv.path.module_qualifier.?, "std.store")) {
+                if (std.mem.eql(u8, segs[0], "stored")) {
+                    for (inv.args) |a| {
+                        if (!std.mem.eql(u8, a.name, "source")) continue;
+                        const src = if (a.source_value) |sv| sv.text else a.value;
+                        const struct_literal = @import("struct_literal");
+                        const braced = std.fmt.allocPrint(alloc2, "{{{s}}}", .{src}) catch unreachable;
+                        const cfs = struct_literal.parseFields(alloc2, braced) catch {
+                            // A source this scan cannot read could write
+                            // anything into the cell — answer MAY.
+                            self.hit = true;
+                            return;
+                        };
+                        for (cfs) |cf| {
+                            // `world.focus` names the cell outright; a bare
+                            // `focus` is ambiguous — count it toward every
+                            // store that declares the column, conservative.
+                            if (std.mem.eql(u8, cf.name, self.field) or std.mem.eql(u8, cf.name, self.dotted)) {
+                                self.visitValue(alloc2, cf.value);
+                            }
+                        }
+                    }
+                    return;
+                }
+            }
+            if (segs.len == 1) {
+                const seg = segs[0];
+                // `__store_write_<S>` — single field, `field` carries the
+                // index; `__store_envwrite_<S>*` — masked or specialised,
+                // the `value*` args carry the values; `__store_fwrite_<S>_i`
+                // — the plural per-field unit (a capacity-1 store never has
+                // one, but the name check costs nothing).
+                if (std.mem.eql(u8, seg, self.write_name)) {
+                    var idx_arg: ?usize = null;
+                    var val_arg: ?[]const u8 = null;
+                    for (inv.args) |a| {
+                        if (std.mem.eql(u8, a.name, "field")) {
+                            idx_arg = std.fmt.parseInt(usize, std.mem.trim(u8, a.value, " \t"), 10) catch null;
+                        } else if (std.mem.eql(u8, a.name, "value")) {
+                            val_arg = a.value;
+                        }
+                    }
+                    // An unparseable field index names any column — check it.
+                    if (val_arg) |v| {
+                        if (idx_arg == null or self.field_idx == null or idx_arg.? == self.field_idx.?) self.visitValue(alloc2, v);
+                    }
+                } else if (std.mem.startsWith(u8, seg, self.envw_name) or std.mem.startsWith(u8, seg, self.fwr_name)) {
+                    for (inv.args) |a| {
+                        if (std.mem.startsWith(u8, a.name, "value")) self.visitValue(alloc2, a.value);
+                    }
+                }
+            }
+        }
+
+        fn visitConts(self: *@This(), alloc2: std.mem.Allocator, conts: []const ast_find.Continuation) void {
+            for (conts) |*c| {
+                if (self.hit) return;
+                if (c.node) |*n| self.visitNode(alloc2, n);
+                self.visitConts(alloc2, c.continuations);
+            }
+        }
+
+        fn visitNode(self: *@This(), alloc2: std.mem.Allocator, node: *const ast_find.Node) void {
+            switch (node.*) {
+                .invocation => |*iv| self.visitInv(alloc2, iv),
+                .label_with_invocation => |*l| self.visitInv(alloc2, &l.invocation),
+                .conditional => |*cn| {
+                    for (cn.branches) |*b| self.visitConts(alloc2, b.body);
+                },
+                .foreach => |*fe| {
+                    for (fe.branches) |*b| self.visitConts(alloc2, b.body);
+                },
+                .switch_result => |*sr| {
+                    for (sr.branches) |*b| self.visitConts(alloc2, b.body);
+                },
+                .conditional_block => |*cb| {
+                    for (cb.nodes) |*n| self.visitNode(alloc2, n);
+                },
+                else => {},
+            }
+        }
+
+        /// The cell's generated plumbing is NOT a write source — the apply /
+        /// write / announce units dispatch on `value`, which the AST-level
+        /// write-site scan already accounts for. Scanning their bodies would
+        /// read the mechanism as a write, so `__store_*`/`__koru_*` units are
+        /// skipped by name.
+        fn generatedStoreUnit(segs: []const []const u8) bool {
+            if (segs.len == 0) return false;
+            const last = segs[segs.len - 1];
+            return std.mem.startsWith(u8, last, "__store_") or std.mem.startsWith(u8, last, "__koru_");
+        }
+
+        fn visitHostText(self: *@This(), text: []const u8) void {
+            // A host-text write to the cell — `__koru_store_S.f = …` — that
+            // the AST scan cannot see. Any such assignment answers MAY: the
+            // value text is host code, and host code can always name a
+            // handle.
+            var at: usize = 0;
+            while (std.mem.indexOfPos(u8, text, at, self.cell_assign)) |hit_at| {
+                var q = hit_at + self.cell_assign.len;
+                while (q < text.len and text[q] == ' ') q += 1;
+                if (q < text.len and text[q] == '=' and (q + 1 >= text.len or text[q + 1] != '=')) {
+                    self.hit = true;
+                    return;
+                }
+                at = hit_at + 1;
+            }
+        }
+    };
+
+    var ctx = Ctx{
+        .field = field,
+        .field_idx = field_idx,
+        .dotted = dotted,
+        .write_name = write_name,
+        .envw_name = envw_name,
+        .fwr_name = fwr_name,
+        .cell_assign = cell_assign,
+    };
+
+    for (flatItems(alloc, prog.items)) |pi| {
+        if (ctx.hit) break;
+        switch (pi.*) {
+            .flow => |*f| {
+                if (f.body.node) |*n| ctx.visitNode(alloc, n);
+                ctx.visitConts(alloc, f.body.continuations);
+                const is_gen_impl = if (f.impl_of) |iof| Ctx.generatedStoreUnit(iof.segments) else false;
+                if (!is_gen_impl) {
+                    if (f.preamble_code) |pc| ctx.visitHostText(pc);
+                    if (f.inline_body) |ib| ctx.visitHostText(ib);
+                }
+            },
+            .proc_decl => |*pd| {
+                if (!Ctx.generatedStoreUnit(pd.path.segments)) ctx.visitHostText(pd.body.text);
+            },
+            .host_line => |*h| ctx.visitHostText(h.content),
+            .inline_code => |*ic| ctx.visitHostText(ic.code),
+            else => {},
+        }
+    }
+    return ctx.hit;
+}
+
+/// `store[base.field]` where `base` names a declared store is the ONE index
+/// spelling whose provenance the compiler can decide — everything else stays
+/// `.opaque_index` and rides the runtime brand check as before.
+    fn classify(alloc: std.mem.Allocator, prog: *const ast_find.Program, flow: *const ast_find.Flow, index: []const u8) Verdict {
+    const dot = std.mem.indexOfScalar(u8, index, '.') orelse return .opaque_index;
+    const base = std.mem.trim(u8, index[0..dot], " \t");
+    const field = std.mem.trim(u8, index[dot + 1 ..], " \t");
+    if (!indexPlainIdent(base) or !indexPlainIdent(field)) return .opaque_index;
+    if (indexBaseBound(alloc, prog, flow, base)) return .opaque_index;
+    // A store-view name folds member stores — `view.f` is no one's cell.
+    if (storeViewMembers(alloc, prog, base) != null) return .opaque_index;
+    const order = storeFieldOrder(alloc, prog, base) orelse return .opaque_index;
+    var is_column = false;
+    for (order) |f| {
+        if (std.mem.eql(u8, f, field)) {
+            is_column = true;
+            break;
+        }
+    }
+    if (!is_column) return .opaque_index;
+    if (storeIsPlural(alloc, prog, base)) return .whole_column;
+    return if (singletonCellMayCarryHandle(alloc, prog, base, field)) .may_carry_handle else .scalar_cell;
+}
+
+    /// The seam the three `store[…]` lowering paths share: refuse when the
+    /// index provably cannot be a handle this store issued. `store`/`index`
+    /// format the diagnostic's `'{s}[{s}]'` spelling.
+    fn refusal(alloc: std.mem.Allocator, reporter: anytype, prog: *const ast_find.Program, flow: *const ast_find.Flow, index: []const u8, store: []const u8) ?ast.SiteResult {
+        const msg = std.fmt.allocPrint(alloc, "{s}[{s}]", .{ store, index }) catch unreachable;
+        return switch (classify(alloc, prog, flow, index)) {
+            .scalar_cell => ast.refuse(alloc, reporter, .KORU161, flow.location, flow.module, "std/store: '{s}' does not address a row — the index is a scalar-store column read, not a handle this store issued (handles come from `| row`, row cursors, or a handle-carrying column of the same store)", .{msg}),
+            .whole_column => ast.refuse(alloc, reporter, .KORU161, flow.location, flow.module, "std/store: '{s}' does not address a row — the index names a store's whole column, not a handle this store issued (handles come from `| row`, row cursors, or a handle-carrying column of the same store)", .{msg}),
+            else => null,
+        };
+    }
+};

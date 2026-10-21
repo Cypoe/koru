@@ -49,6 +49,27 @@ fragment may be partial, the program receiving partiality may not be. The
 bridge is the long-running owner: auto-discharge is skipped on the hand-back
 so retention across turns is the host's call, never a silent release.
 
+COMPLETED 2026-10-20 (440_054): "retention across the hand-back is the
+host's call" was written before the host could actually make the call —
+the outcome rendered `held h:Type:<hex>` but named no binding, and under
+seeded-hex mints the token cannot be echoed back into a field. The rN
+existed all along (the trace's per-dispatch session bind fires arm-match
+or not); the outcome now carries `bound` so the report can say it, and
+`release(r: rN)` discharges what nobody armed. A hand-back without a
+name is retention without a choice.
+
+EVOLVED 2026-10-20 (440_041): the same question one layer up — where is the
+fragment's boundary when the fragment is a DEFINED flow? `sweep = write(...)`
+ends its body on a bare call; the body's inner `write` set `unhandled_outcome`
+on its way up, and `run` reported under-handling even when the caller armed
+the forwarded branch — the forwarding path was counting as a leak. Ruled:
+**the boundary is the call the caller authored, not the dispatches inside a
+defined body.** An unarmed tail call inside a defined flow is
+outcome-forwarding — the defined contract names the branch, the caller's
+arms are the handling — not an unhandled event. `dispatchDefinedFlow` now
+saves and clears the flag around the body's run; the caller's own no-match
+path re-flags with the same branch and payload when nothing arms it.
+
 Related: [[frag-a-handle-count-is-not-a-capability-check]] — the same subsystem,
 the same lesson one layer down: the resource story is decided at the seams, not
 by the bookkeeping that describes them afterwards.

@@ -121,7 +121,7 @@
             var i: usize = 0;
             while (i < text.len) {
                 const at_boundary = ast.identBoundaryBefore(text, i);
-                const starts = at_boundary and (i == 0 or text[i - 1] != '.') and std.mem.startsWith(u8, text[i..], name);
+                const starts = at_boundary and !ast.precededByMemberDot(text, i) and std.mem.startsWith(u8, text[i..], name);
                 const after = i + name.len;
                 if (starts and after < text.len and text[after] == '.') {
                     out.appendSlice(alloc, "__koru_store_") catch unreachable;
@@ -294,10 +294,10 @@
             return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:insert({s}): row block is missing column '{s}'", .{ store_name, col }) };
         };
         // Cell reads in the seed lower to the SoA cell (690_192) — the same
-        // rewrite the stored RHS gets. The insert site is a std.store
-        // invocation, so create's whole-program walk skips its args; this is
-        // the only position the seed's cell paths ever lower.
-        const seed_val: []const u8 = H.storeRefsAll(allocator, program, val);
+        // rewrite the stored RHS gets, indexed pass included (a local
+        // storeRefsAll skipped it; a `s[h].f` seed reached the backend raw).
+        // The walk skips this invocation's args — the seed's only lowering.
+        const seed_val: []const u8 = StoredScan.lowerStoreExprs(allocator, program, val);
         // Fixed-char overflow (690_052): a COMPTIME-KNOWN string literal that
         // exceeds the column's byte length is a compile error naming column +
         // limit. Runtime values truncate in the insert proc (the `| toolong`

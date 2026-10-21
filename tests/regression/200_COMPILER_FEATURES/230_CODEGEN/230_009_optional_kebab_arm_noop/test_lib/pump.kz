@@ -1,0 +1,18 @@
+// Cross-module arm-firer: a resume-valued `! tick` arm (forces the
+// Handlers_N lowering) plus a kebab-named optional `! ?key-down` arm.
+// The |zig proc fires both through the emitted aliases — `key_down`
+// arrives at the caller's arm only if the presence key matches the
+// mangled decl name.
+
+~pub tor pump { n: i64 }
+! tick i64 -> i64
+! ?key-down i64
+| done
+
+~proc pump|zig {
+    var acc: i64 = 0;
+    var i: i64 = 0;
+    while (i < n) : (i += 1) acc += tick(i);
+    key_down(9);
+    return .{ .done = .{} };
+}

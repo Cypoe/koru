@@ -56,235 +56,13 @@
     if (item.* != .flow) @panic("store:new transform: containing item is not a flow - walker dispatch contract broken");
     const flow = &item.flow;
 
-    const H = struct {
-        fn stripQuotes(n: []const u8) []const u8 {
-            if (n.len >= 2 and n[0] == '"') return n[1 .. n.len - 1];
-            return n;
-        }
-        // The module a store was DECLARED in — where its cell and accessors are
-        // emitted. Twin of the `stored` transform's helper of the same name;
-        // each transform carries its own H, as the rest of this file does.
-        //
-        // The store's home in the FILE-derived domain (`lib`) — the same domain
-        // as `Flow.module`. Use this for any comparison against a flow; use
-        // `storeHomeModule` (import-derived, `app.lib`) for anything that mints
-        // a resolvable path. Mixing the two makes a same-module read look
-        // cross-module, which is what the two names exist to prevent.
-        fn storeHomeFile(prog: *const ast.Program, store: []const u8) ?[]const u8 {
-            const Find = struct {
-                fn newIn(its: []const ast.Item, want: []const u8) ?[]const u8 {
-                    for (its) |*pi| {
-                        if (pi.* == .flow) {
-                            const f = &pi.flow;
-                            if (isStoreInv(f, "new", want)) return f.module;
-                        } else if (pi.* == .module_decl) {
-                            if (newIn(pi.module_decl.items, want)) |m| return m;
-                        }
-                    }
-                    return null;
-                }
-            };
-            return Find.newIn(prog.items, store);
-        }
-        fn storeHomeModule(alloc: std.mem.Allocator, prog: *const ast.Program, store: []const u8) ?[]const u8 {
-            const apply_name = std.fmt.allocPrint(alloc, "__store_apply_{s}", .{store}) catch unreachable;
-            // Both searches descend into `module_decl`: a store is declared
-            // wherever its `new` was written, and a library declaring its own
-            // store puts that `new` inside the module rather than at program
-            // top level. A top-level-only search reports "no home" for exactly
-            // the case where the home is most obvious.
-            const Find = struct {
-                // `??` distinguishes "no such declaration anywhere" (null) from
-                // "found it, and its qualifier is null" (some null).
-                fn applyIn(its: []const ast.Item, want: []const u8) ??[]const u8 {
-                    for (its) |*pi| {
-                        if (pi.* == .event_decl) {
-                            const ed = &pi.event_decl;
-                            if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], want)) {
-                                return ed.path.module_qualifier;
-                            }
-                        } else if (pi.* == .module_decl) {
-                            if (applyIn(pi.module_decl.items, want)) |hit| return hit;
-                        }
-                    }
-                    return null;
-                }
-                // `enclosing` is the containing module's LOGICAL name — the
-                // import-derived one (`app.lib`), not the flow's file-derived
-                // `module` (`lib`). Those are different namespaces: everything
-                // that resolves a cross-module path uses the logical name, so a
-                // unit synthesized under the file name is addressed into a
-                // namespace that does not exist. Top-level flows keep
-                // `f.module`, which is what the entry file is registered under.
-                fn newIn(its: []const ast.Item, want: []const u8, enclosing: ?[]const u8) ?[]const u8 {
-                    for (its) |*pi| {
-                        if (pi.* == .flow) {
-                            const f = &pi.flow;
-                            if (isStoreInv(f, "new", want)) return enclosing orelse f.module;
-                        } else if (pi.* == .module_decl) {
-                            if (newIn(pi.module_decl.items, want, pi.module_decl.logical_name)) |m| return m;
-                        }
-                    }
-                    return null;
-                }
-            };
-            if (Find.applyIn(prog.items, apply_name)) |hit| return hit;
-            return Find.newIn(prog.items, store, null);
-        }
-        fn isStoreInv(f: *const ast.Flow, verb: []const u8, want_name: ?[]const u8) bool {
-            const inv = f.inv();
-            if (inv.path.segments.len != 1) return false;
-            if (!std.mem.eql(u8, inv.path.segments[0], verb)) return false;
-            const mq = inv.path.module_qualifier orelse return false;
-            if (!std.mem.eql(u8, mq, "std.store")) return false;
-            if (want_name) |n| {
-                for (inv.args) |a| {
-                    if (std.mem.eql(u8, a.name, "expr")) {
-                        return std.mem.eql(u8, stripQuotes(a.value), n);
-                    }
-                }
-                return false;
-            }
-            return true;
-        }
-        fn isIdentChar(ch: u8) bool {
-            return (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_' or ch == '-';
-        }
-        // Items that can textually NAME the store — non-koru_std modules plus
-        // its home; stdlib's same-named locals only false-positive (690_335).
-        fn visibleStoreItems(alloc: std.mem.Allocator, items: []const ast.Item, home: []const u8, out: *std.ArrayList(*const ast.Item)) void {
-            for (items) |*it| {
-                if (it.* != .module_decl) { out.append(alloc, it) catch return; continue; }
-                if (std.mem.indexOf(u8, it.module_decl.canonical_path, "koru_std") == null or
-                    std.mem.eql(u8, it.module_decl.logical_name, home)) visibleStoreItems(alloc, it.module_decl.items, home, out);
-            }
-        }
-        fn mkPathH(alloc: std.mem.Allocator, module: []const u8, name: []const u8) ast.DottedPath {
-            const segs = alloc.alloc([]const u8, 1) catch unreachable;
-            segs[0] = alloc.dupe(u8, name) catch unreachable;
-            return ast.DottedPath{ .module_qualifier = alloc.dupe(u8, module) catch unreachable, .segments = segs };
-        }
-        // Boundary-aware `<store>.` → `__koru_store_<store>.` over a
-        // continuation tree (transplanted bodies read other stores' cells).
-        // Delegates to the file-scope rewriter; a plural-walk reader is in the
-        // declaring module's own namespace, so no prefix.
-        fn storeRefsH(alloc: std.mem.Allocator, text: []const u8, name: []const u8, is_identity: bool) []const u8 {
-            return storeRefsText(alloc, text, name, "", is_identity);
-        }
-        fn isIn(names: []const []const u8, n: []const u8) bool {
-            for (names) |x| if (std.mem.eql(u8, x, n)) return true;
-            return false;
-        }
-        // A whole-program walk over one flow, lowering every text slot an
-        // expression may stand in. `scope` carries the program's store names
-        // with the prefix each needs (empty here — the plural walk reads from
-        // the declaring module's own namespace).
-        fn storeRefsContH(alloc: std.mem.Allocator, prog: *const ast.Program, cont: *ast.Continuation, scope: StoreScope, ident: []const []const u8, bound: []const []const u8) void {
-            const ast2 = @import("ast");
-            // A continuation's OWN bindings shadow store names (690_090): a
-            // row binding (`! query items`) or shape-destructure makes
-            // `<store>.<field>` mean THE ROW for everything under the arm. The
-            // Walk runs before the site transform, so without the skip the
-            // binding loses its name to the cell rewrite and the body reads the
-            // whole column array where the row's value belongs.
-            var own_buf: [16][]const u8 = undefined;
-            var own_len: usize = 0;
-            if (cont.binding) |b| {
-                own_buf[own_len] = b;
-                own_len += 1;
-            }
-            for (cont.destructure) |df| {
-                own_buf[own_len] = df.name;
-                own_len += 1;
-            }
-            const own = own_buf[0..own_len];
-            const bound_all: []const []const u8 = if (own_len == 0)
-                bound
-            else blk: {
-                const all = alloc.alloc([]const u8, bound.len + own_len) catch unreachable;
-                @memcpy(all[0..bound.len], bound);
-                @memcpy(all[bound.len..], own);
-                break :blk all;
-            };
-            if (cont.condition) |cond| {
-                @constCast(cont).condition = storeLowerText(alloc, prog, cond, scope, ident, bound_all);
-            }
-            if (cont.node) |*n| {
-                // No `|*inv|` on `switch (n.*)` — that captures a TEMPORARY
-                // Invocation; assigning `inline_body` there is a no-op on the
-                // live AST. Arg slices still alias heap, so they "worked" and
-                // hid this. Mutate via `n.invocation` (690_074).
-                switch (n.*) {
-                    .invocation => {
-                        const inv = &n.invocation;
-                        const skip = blk: {
-                            if (inv.path.module_qualifier) |mq| {
-                                if (std.mem.eql(u8, mq, "std.store")) break :blk true;
-                            }
-                            break :blk false;
-                        };
-                        if (!skip) {
-                            for (inv.args) |*a| {
-                                @constCast(a).value = storeLowerText(alloc, prog, a.value, scope, ident, bound_all);
-                                if (a.expression_value) |ev| {
-                                    const fresh = alloc.create(ast2.CapturedExpression) catch unreachable;
-                                    fresh.* = ev.*;
-                                    fresh.text = storeLowerText(alloc, prog, ev.text, scope, ident, bound_all);
-                                    @constCast(a).expression_value = fresh;
-                                }
-                            }
-                        }
-                        // Template expand (`if`/`for`) bakes Expression args into
-                        // Invocation.inline_body BEFORE store:create runs — rewriting
-                        // args alone is too late; the freeze lives here (690_074).
-                        if (inv.inline_body) |ib| {
-                            inv.inline_body = storeLowerText(alloc, prog, ib, scope, ident, bound_all);
-                        }
-                    },
-                    .inline_code => {
-                        n.* = .{ .inline_code = storeLowerText(alloc, prog, n.inline_code, scope, ident, bound_all) };
-                    },
-                    // A branch-resolution payload (`| then => got s.n`) is a
-                    // THIRD text position, alongside the guard and the args, and
-                    // it was the only one the walk did not carry: the guard
-                    // lowered to `__koru_store_s.n` while the payload one line
-                    // below reached Zig as a bare `s` (690_256). The emitter
-                    // reads `plain_value` for the single-value form and
-                    // `expression_str orelse type` per field for the record
-                    // form, so the rewrite must land in exactly those slots.
-                    .branch_constructor => {
-                        const bc = &n.branch_constructor;
-                        if (bc.plain_value) |pv| bc.plain_value = storeLowerText(alloc, prog, pv, scope, ident, bound_all);
-                        for (bc.fields) |*fld| {
-                            const has_expr = fld.expression_str != null;
-                            const lowered = storeLowerText(alloc, prog, fld.expression_str orelse fld.type, scope, ident, bound_all);
-                            if (has_expr) {
-                                @constCast(fld).expression_str = lowered;
-                            } else {
-                                @constCast(fld).type = lowered;
-                            }
-                        }
-                    },
-                    else => {},
-                }
-            }
-            for (cont.continuations) |*c| storeRefsContH(alloc, prog, @constCast(c), scope, ident, bound_all);
-        }
-        fn storeRefsFlowH(alloc: std.mem.Allocator, prog: *const ast.Program, f: *ast.Flow, scope: StoreScope, ident: []const []const u8) void {
-            const bound_params = flowParamNamesStore(alloc, prog, f);
-            storeRefsContH(alloc, prog, &f.body, scope, ident, bound_params);
-            if (f.inline_body) |ib| {
-                @constCast(f).inline_body = storeLowerText(alloc, prog, ib, scope, ident, bound_params);
-            }
-        }
-    };
 
     // Store name + seed block from the invocation args.
     var store_name: []const u8 = "";
     var seed_text: ?[]const u8 = null;
     for (invocation.args) |arg| {
         if (std.mem.eql(u8, arg.name, "expr")) {
-            store_name = H.stripQuotes(arg.value);
+            store_name = HomeScan.stripQuotes(arg.value);
         } else if (std.mem.eql(u8, arg.name, "source")) {
             seed_text = arg.value;
         }
@@ -431,136 +209,15 @@
     // untransformed, so detection cannot be skewed by transform order.
     // ------------------------------------------------------------------
     {
-        const CycleEdge = struct {
-            from: []const u8,
-            from_field: []const u8,
-            to: []const u8,
-            to_field: []const u8,
-        };
         var edges = std.ArrayList(CycleEdge).initCapacity(allocator, 8) catch unreachable;
-        const EdgeScan = struct {
-            fn seedFields(alloc: std.mem.Allocator, seed2: []const u8) []const []const u8 {
-                const struct_literal2 = @import("struct_literal");
-                const braced2 = std.fmt.allocPrint(alloc, "{{{s}}}", .{seed2}) catch unreachable;
-                const cf2 = struct_literal2.parseFields(alloc, braced2) catch return &[_][]const u8{};
-                const names2 = alloc.alloc([]const u8, cf2.len) catch unreachable;
-                for (cf2, 0..) |c2, ci2| names2[ci2] = c2.name;
-                return names2;
-            }
-            // Field-name lookup for a store still visible as an
-            // untransformed create (seed order) or already coordinated
-            // (apply-event branch order).
-            fn fieldNameByIndex(alloc: std.mem.Allocator, prog: *const ast.Program, store: []const u8, idx: usize) []const u8 {
-                const struct_literal2 = @import("struct_literal");
-                const apply_name2 = std.fmt.allocPrint(alloc, "__store_apply_{s}", .{store}) catch unreachable;
-                for (flatItems(alloc, prog.items)) |pi2| {
-                    switch (pi2.*) {
-                        .event_decl => |*ed2| {
-                            if (ed2.path.segments.len == 1 and std.mem.eql(u8, ed2.path.segments[0], apply_name2)) {
-                                if (idx < ed2.branches.len) return ed2.branches[idx].name;
-                            }
-                        },
-                        .flow => |*f2| {
-                            const inv2 = f2.inv();
-                            if (inv2.path.segments.len != 1 or !std.mem.eql(u8, inv2.path.segments[0], "new")) continue;
-                            const mq2 = inv2.path.module_qualifier orelse continue;
-                            if (!std.mem.eql(u8, mq2, "std.store")) continue;
-                            var matches2 = false;
-                            var seed3: ?[]const u8 = null;
-                            for (inv2.args) |a2| {
-                                if (std.mem.eql(u8, a2.name, "expr")) {
-                                    var v2 = a2.value;
-                                    if (v2.len >= 2 and v2[0] == '"') v2 = v2[1 .. v2.len - 1];
-                                    matches2 = std.mem.eql(u8, v2, store);
-                                } else if (std.mem.eql(u8, a2.name, "source")) {
-                                    seed3 = a2.value;
-                                }
-                            }
-                            if (!matches2 or seed3 == null) continue;
-                            const braced3 = std.fmt.allocPrint(alloc, "{{{s}}}", .{seed3.?}) catch unreachable;
-                            const cf3 = struct_literal2.parseFields(alloc, braced3) catch continue;
-                            if (idx < cf3.len) return cf3[idx].name;
-                        },
-                        else => {},
-                    }
-                }
-                return "?";
-            }
-            fn scanCont(alloc: std.mem.Allocator, prog: *const ast.Program, cont: *const ast.Continuation, from: []const u8, from_field: []const u8, list: *std.ArrayList(CycleEdge)) void {
-                if (cont.node) |n| {
-                    switch (n) {
-                        .invocation => |inv| {
-                            // Raw spelling: std/store:stored { to.field: ... }
-                            if (inv.path.module_qualifier) |mq| {
-                                if (std.mem.eql(u8, mq, "std.store") and inv.path.segments.len == 1 and std.mem.eql(u8, inv.path.segments[0], "stored")) {
-                                    for (inv.args) |a| {
-                                        if (!std.mem.eql(u8, a.name, "source")) continue;
-                                        const struct_literal2 = @import("struct_literal");
-                                        const braced2 = std.fmt.allocPrint(alloc, "{{{s}}}", .{a.value}) catch unreachable;
-                                        const writes2 = struct_literal2.parseFields(alloc, braced2) catch continue;
-                                        for (writes2) |w2| {
-                                            const dot2 = std.mem.indexOfScalar(u8, w2.name, '.') orelse continue;
-                                            list.append(alloc, .{
-                                                .from = from,
-                                                .from_field = from_field,
-                                                .to = alloc.dupe(u8, w2.name[0..dot2]) catch unreachable,
-                                                .to_field = alloc.dupe(u8, w2.name[dot2 + 1 ..]) catch unreachable,
-                                            }) catch unreachable;
-                                        }
-                                    }
-                                }
-                            }
-                            // Rewritten spelling: __store_write_<to>(field: <idx>, ...)
-                            // (the walker transforms nested stored sites BEFORE
-                            // their enclosing create's head - both spellings are
-                            // live during coordination).
-                            if (inv.path.segments.len == 1 and std.mem.startsWith(u8, inv.path.segments[0], "__store_write_")) {
-                                const to_store = inv.path.segments[0]["__store_write_".len..];
-                                var fidx2: usize = 0;
-                                for (inv.args) |a| {
-                                    if (std.mem.eql(u8, a.name, "field")) {
-                                        fidx2 = std.fmt.parseInt(usize, std.mem.trim(u8, a.value, " "), 10) catch 0;
-                                    }
-                                }
-                                list.append(alloc, .{
-                                    .from = from,
-                                    .from_field = from_field,
-                                    .to = alloc.dupe(u8, to_store) catch unreachable,
-                                    .to_field = alloc.dupe(u8, fieldNameByIndex(alloc, prog, to_store, fidx2)) catch unreachable,
-                                }) catch unreachable;
-                            }
-                            // Per-field spelling (owned-containing stores,
-                            // unit 4c): __store_fwrite_<to>_<idx>(row, value)
-                            // — the field index rides the NAME's suffix after
-                            // the last '_', not a `field` arg.
-                            if (inv.path.segments.len == 1 and std.mem.startsWith(u8, inv.path.segments[0], "__store_fwrite_")) {
-                                const rest = inv.path.segments[0]["__store_fwrite_".len..];
-                                if (std.mem.lastIndexOfScalar(u8, rest, '_')) |up| {
-                                    const to_store = rest[0..up];
-                                    const fidx2 = std.fmt.parseInt(usize, rest[up + 1 ..], 10) catch 0;
-                                    list.append(alloc, .{
-                                        .from = from,
-                                        .from_field = from_field,
-                                        .to = alloc.dupe(u8, to_store) catch unreachable,
-                                        .to_field = alloc.dupe(u8, fieldNameByIndex(alloc, prog, to_store, fidx2)) catch unreachable,
-                                    }) catch unreachable;
-                                }
-                            }
-                        },
-                        else => {},
-                    }
-                }
-                for (cont.continuations) |*c| scanCont(alloc, prog, c, from, from_field, list);
-            }
-        };
         for (flatItems(allocator, program.items)) |pi| {
             if (pi.* != .flow) continue;
             const cfp = &pi.flow;
-            if (!H.isStoreInv(cfp, "new", null)) continue;
+            if (!HomeScan.isStoreInv(cfp, "new", null)) continue;
             var cname: []const u8 = "";
             var cseed: []const u8 = "";
             for (cfp.inv().args) |a| {
-                if (std.mem.eql(u8, a.name, "expr")) cname = H.stripQuotes(a.value);
+                if (std.mem.eql(u8, a.name, "expr")) cname = HomeScan.stripQuotes(a.value);
                 if (std.mem.eql(u8, a.name, "source")) cseed = a.value;
             }
             if (cname.len == 0) continue;
@@ -582,22 +239,6 @@
         }
         // DFS from this store looking for a path back to itself.
         var path = std.ArrayList(CycleEdge).initCapacity(allocator, 8) catch unreachable;
-        const Dfs = struct {
-            fn nodeEql(a_s: []const u8, a_f: []const u8, b_s: []const u8, b_f: []const u8) bool {
-                return std.mem.eql(u8, a_s, b_s) and std.mem.eql(u8, a_f, b_f);
-            }
-            fn walk(list: []const CycleEdge, at_s: []const u8, at_f: []const u8, t_s: []const u8, t_f: []const u8, depth: usize, pth: *std.ArrayList(CycleEdge), alloc: std.mem.Allocator) bool {
-                if (depth > 16) return false;
-                for (list) |e| {
-                    if (!nodeEql(e.from, e.from_field, at_s, at_f)) continue;
-                    pth.append(alloc, e) catch unreachable;
-                    if (nodeEql(e.to, e.to_field, t_s, t_f)) return true;
-                    if (walk(list, e.to, e.to_field, t_s, t_f, depth + 1, pth, alloc)) return true;
-                    _ = pth.pop();
-                }
-                return false;
-            }
-        };
         var cycle_found = false;
         for (edges.items) |se| {
             if (!std.mem.eql(u8, se.from, store_name)) continue;
@@ -698,20 +339,6 @@
     // is just the first instance; `*Player<allocated!>`, `*File<open!>` are the
     // same citizen. Non-null exactly when field_owned[i] is true; disch_* are
     // filled by the canonical-discharger search below.
-    const OwnedCol = struct {
-        type_name: []const u8, // "String" / "Resource" (base type, no `*`)
-        module_slash: []const u8, // "std/string" (the type's module, slash form)
-        module_dot: []const u8, // "std.string" (dot form, for phantom canon)
-        host_type: []const u8, // "koru_std.koru_string.String" (Zig storage cell)
-        state: []const u8, // "instance" / "owned"
-        disch_event: []const u8, // canonical discharger event name ("free")
-        disch_emitted: []const u8, // the name the host spells — cs folds the
-        // module qualifier into the class name (`std_io_free`) when the
-        // discharger lives outside the main module; other hosts use
-        // disch_event verbatim.
-        disch_param: []const u8, // its consuming param field name ("s")
-        disch_host: []const u8, // "koru_std.koru_string" (discharger module host)
-    };
     const field_owned_info = allocator.alloc(?OwnedCol, cell_fields.len + synth_count) catch unreachable;
     for (field_owned_info) |*oi| oi.* = null;
     // module logical name (slash or dot) -> Zig host namespace: each '.'/'/'
@@ -1434,7 +1061,7 @@
         for (flatItems(allocator, program.items)) |pi| {
             if (pi.* != .flow) continue;
             const wf = &pi.flow;
-            if (!H.isStoreInv(wf, "watch", store_name)) continue;
+            if (!HomeScan.isStoreInv(wf, "watch", store_name)) continue;
             for (wf.body.continuations) |*wc| {
                 const fidx: usize = blk: {
                     for (field_names, 0..) |fname, i| {
@@ -1518,15 +1145,18 @@
             /// handle is exactly as meaningful here as on a sweep while
             /// `[ordinal]` is meaningless and refused by name.
             req_id: ?[]const u8 = null,
+            /// `order: "col"` — a preorder site's sift column (the `neworder`
+            /// part validates + emits it). Null = insertion-order walk.
+            order: ?[]const u8 = null,
         };
         const program_items = flatItems(allocator, program.items);
         var qsites = std.ArrayList(QuerySite).initCapacity(allocator, 4) catch unreachable;
-        for (flatItems(allocator, program.items)) |pi| {
-            if (pi.* != .flow) continue;
-            const qf = &pi.flow;
-            const q_verb: []const u8 = if (H.isStoreInv(qf, "rule", store_name))
+        // Nested sites are continuation nodes, not `.flow` items — qSiteFlows
+        // mints each as the flow view siteView hands its transform (qsites).
+        for (qSiteFlows(allocator, program.items, store_name)) |qf| {
+            const q_verb: []const u8 = if (HomeScan.isStoreInv(qf, "rule", store_name))
                 "rule"
-            else if (H.isStoreInv(qf, "preorder", store_name))
+            else if (HomeScan.isStoreInv(qf, "preorder", store_name))
                 "preorder"
             else
                 continue;
@@ -1539,6 +1169,11 @@
             if (q_is_preorder and !is_tree) {
                 return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, qf.location, qf.module, "std/store:preorder({s}): preorder needs a [tree] store - '{s}' has no synthesized parent column (declare it as [tree]std/store:new({s}) {{ ... }})", .{ store_name, store_name, store_name }) } };
             }
+            // `order: "col"` — per-site sibling ordering (the `neworder` part
+            // validates the clause and emits the ordered sweep).
+            const ocl = PSweep.clause(allocator, reporter, qf, store_name, q_verb, q_is_preorder, field_names, field_types);
+            if (ocl.refusal) |r| return .{ .transformed = r };
+            const q_order = ocl.order;
             const qc = TapPeel.findArm(qf.body.continuations, q_arm) orelse {
                 return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, qf.location, qf.module, "std/store:{s}({s}): exactly one `! {s} {{ ... }}` branch per site this rung", .{ q_verb, store_name, q_arm }) } };
             };
@@ -1654,6 +1289,7 @@
                 .may_remove = q_may_remove,
                 .drain = q_drain,
                 .req_id = if (q_req_id) |idn| allocator.dupe(u8, std.mem.trim(u8, idn, " ")) catch unreachable else null,
+                .order = if (q_order) |o| allocator.dupe(u8, o) catch unreachable else null,
             }) catch unreachable;
         }
         // The proc-local lists reduce to two bools here; the decision itself
@@ -1670,7 +1306,7 @@
             if (qs.req_id != null or qs.may_remove) rule_needs = true;
         }
         var gate_items = std.ArrayList(*const ast.Item){};
-        H.visibleStoreItems(allocator, program.items, store_scope_home, &gate_items);
+        HomeScan.visibleStoreItems(allocator, program.items, store_scope_home, &gate_items);
         const needs_handles = Gate.needsHandles(allocator, program, gate_items.items, store_name, field_names, is_tree, step_arm != null, lifecycle_id, rule_needs);
         // Bulk append — a counted `for` whose body is a single insert
         // into this store lowers to a hoisted capacity check, indexed
@@ -1892,11 +1528,11 @@
         for (flatItems(allocator, program.items)) |pi| {
             switch (pi.*) {
                 .flow => |*f| {
-                    if (H.isStoreInv(f, "new", null)) {
+                    if (HomeScan.isStoreInv(f, "new", null)) {
                         var nm: ?[]const u8 = null;
                         var seed: ?[]const u8 = null;
                         for (f.inv().args) |a| {
-                            if (std.mem.eql(u8, a.name, "expr")) nm = H.stripQuotes(a.value);
+                            if (std.mem.eql(u8, a.name, "expr")) nm = HomeScan.stripQuotes(a.value);
                             if (std.mem.eql(u8, a.name, "source")) seed = a.value;
                         }
                         if (nm) |n| {
@@ -1935,7 +1571,7 @@
                     break :blk_wpx px;
                 },
             };
-            for (pwatch_arms.items) |*wa| H.storeRefsContH(allocator, program, &wa.cont, wscope, pstore_identity.items, &[_][]const u8{});
+            for (pwatch_arms.items) |*wa| HomeScan.storeRefsContH(allocator, program, &wa.cont, wscope, pstore_identity.items, &[_][]const u8{});
         }
 
         // Owned-column stores build insert/take/teardown (690_053), the READ
@@ -2727,7 +2363,7 @@
         {
             const insert_name = std.fmt.allocPrint(allocator, "__store_insert_{s}", .{store_name}) catch unreachable;
             appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                .path = H.mkPathH(allocator, home_ns, insert_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, insert_name),
                 .input = ast.Shape{ .fields = mkInsertInput(allocator, ins_names, ins_types, ins_owned) },
                 .branches = insert_void_branches,
                 .is_public = false,
@@ -2744,7 +2380,7 @@
                 "return;";
             const body = std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ facet_prelude.items, append_text, ok_tail }) catch unreachable;
             appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                .path = H.mkPathH(allocator, home_ns, insert_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, insert_name),
                 .body = ast.Source{ .text = body, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                 .annotations = &[_][]const u8{},
                 .target = allocator.dupe(u8, proc_target) catch unreachable,
@@ -2772,7 +2408,7 @@
             };
             @memcpy(row_branches[1..], violated_branches);
             appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                .path = H.mkPathH(allocator, home_ns, inserth_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, inserth_name),
                 .input = ast.Shape{ .fields = mkInsertInput(allocator, ins_names, ins_types, ins_owned) },
                 .branches = row_branches,
                 .is_public = false,
@@ -2792,7 +2428,7 @@
                 "@as(i64, @intCast(__koru_new_row))";
             const hbody = std.fmt.allocPrint(allocator, "{s}{s}return {s};", .{ facet_prelude.items, append_text, HS.branchOne(allocator, host_target, "row", handle_expr) }) catch unreachable;
             appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                .path = H.mkPathH(allocator, home_ns, inserth_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, inserth_name),
                 .body = ast.Source{ .text = hbody, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                 .annotations = &[_][]const u8{},
                 .target = allocator.dupe(u8, proc_target) catch unreachable,
@@ -2859,7 +2495,7 @@
             };
             @memcpy(f_branches[2..], violated_branches);
             appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                .path = H.mkPathH(allocator, home_ns, insertf_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, insertf_name),
                 .input = ast.Shape{ .fields = mkInsertInput(allocator, ins_names, ins_types, ins_owned) },
                 .branches = f_branches,
                 .is_public = false,
@@ -2896,7 +2532,7 @@
             // store.
             const fbody = std.fmt.allocPrint(allocator, "{s}{s}{s}return {s};", .{ facet_prelude.items, fcheck, append_text, HS.branchOne(allocator, host_target, "row", fhandle) }) catch unreachable;
             appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                .path = H.mkPathH(allocator, home_ns, insertf_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, insertf_name),
                 .body = ast.Source{ .text = fbody, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                 .annotations = &[_][]const u8{},
                 .target = allocator.dupe(u8, proc_target) catch unreachable,
@@ -2970,7 +2606,7 @@
                 };
             }
             appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                .path = H.mkPathH(allocator, home_ns, papply_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, papply_name),
                 .input = ast.Shape{ .fields = in_fields },
                 .branches = papply_branches,
                 .is_public = false,
@@ -3104,7 +2740,7 @@
             }
             pbody.appendSlice(allocator, HS.switchTail(allocator, host_target, papply_name, store_name)) catch unreachable;
             appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                .path = H.mkPathH(allocator, home_ns, papply_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, papply_name),
                 .body = ast.Source{ .text = pbody.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                 .annotations = &[_][]const u8{},
                 .target = allocator.dupe(u8, proc_target) catch unreachable,
@@ -3114,7 +2750,7 @@
 
             const win_fields = mkWriteInput(allocator, field_types, field_owned_info, true);
             appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                .path = H.mkPathH(allocator, home_ns, pwrite_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, pwrite_name),
                 .input = ast.Shape{ .fields = win_fields },
                 .branches = &[_]ast.Branch{},
                 .is_public = false,
@@ -3132,7 +2768,7 @@
                 wapply_args[2 + i] = ast.Arg{ .name = vn, .value = allocator.dupe(u8, vn) catch unreachable };
             }
             const wapply_inv = ast.Invocation{
-                .path = H.mkPathH(allocator, home_ns, papply_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, papply_name),
                 .args = wapply_args,
             };
 
@@ -3173,7 +2809,7 @@
             appended_items.append(allocator, ast.Item{ .flow = ast.Flow{
                 .body = ast.rootSite(wapply_inv, warms.toOwnedSlice(allocator) catch unreachable, flow.location),
                 .pre_label = null,
-                .impl_of = H.mkPathH(allocator, home_ns, pwrite_name),
+                .impl_of = HomeScan.mkPathH(allocator, home_ns, pwrite_name),
                 .super_shape = null,
                 .inline_body = null,
                 .preamble_code = null,
@@ -3235,7 +2871,7 @@
                         .annotations = &[_][]const u8{},
                     };
                     appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                        .path = H.mkPathH(allocator, home_ns, fapply_name),
+                        .path = HomeScan.mkPathH(allocator, home_ns, fapply_name),
                         .input = ast.Shape{ .fields = fa_in },
                         .branches = fa_branches,
                         .is_public = false,
@@ -3313,7 +2949,7 @@
                         std.fmt.allocPrint(allocator, "return {s};", .{HS.branchOne(allocator, host_target, fname, "value")}) catch unreachable;
                     fatext.appendSlice(allocator, ftail) catch unreachable;
                     appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                        .path = H.mkPathH(allocator, home_ns, fapply_name),
+                        .path = HomeScan.mkPathH(allocator, home_ns, fapply_name),
                         .body = ast.Source{ .text = fatext.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                         .annotations = &[_][]const u8{},
                         .target = allocator.dupe(u8, proc_target) catch unreachable,
@@ -3329,7 +2965,7 @@
                         .module_path = if (field_owned_info[i]) |oi| allocator.dupe(u8, oi.module_slash) catch unreachable else null,
                         .phantom = if (field_owned_info[i]) |oi| std.fmt.allocPrint(allocator, "{s}:!{s}", .{ oi.module_dot, oi.state }) catch unreachable else allocator.dupe(u8, "*") catch unreachable };
                     appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                        .path = H.mkPathH(allocator, home_ns, fwrite_name),
+                        .path = HomeScan.mkPathH(allocator, home_ns, fwrite_name),
                         .input = ast.Shape{ .fields = fw_in },
                         .branches = &[_]ast.Branch{},
                         .is_public = false,
@@ -3346,7 +2982,7 @@
                     fap_args[0] = ast.Arg{ .name = allocator.dupe(u8, "row") catch unreachable, .value = allocator.dupe(u8, "row") catch unreachable };
                     fap_args[1] = ast.Arg{ .name = allocator.dupe(u8, "value") catch unreachable, .value = allocator.dupe(u8, "value") catch unreachable };
                     const fap_inv = ast.Invocation{
-                        .path = H.mkPathH(allocator, home_ns, fapply_name),
+                        .path = HomeScan.mkPathH(allocator, home_ns, fapply_name),
                         .args = fap_args,
                     };
                     var fwarms = std.ArrayList(ast.Continuation).initCapacity(allocator, 2) catch unreachable;
@@ -3379,7 +3015,7 @@
                     appended_items.append(allocator, ast.Item{ .flow = ast.Flow{
                         .body = ast.rootSite(fap_inv, fwarms.toOwnedSlice(allocator) catch unreachable, flow.location),
                         .pre_label = null,
-                        .impl_of = H.mkPathH(allocator, home_ns, fwrite_name),
+                        .impl_of = HomeScan.mkPathH(allocator, home_ns, fwrite_name),
                         .super_shape = null,
                         .inline_body = null,
                         .preamble_code = null,
@@ -3410,7 +3046,7 @@
 
                 // envwrite: row + field selector + per-column typed slots.
                 appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                    .path = H.mkPathH(allocator, home_ns, penvw_name),
+                    .path = HomeScan.mkPathH(allocator, home_ns, penvw_name),
                     .input = ast.Shape{ .fields = mkWriteInput(allocator, field_types, field_owned_info, false) },
                     .branches = &[_]ast.Branch{},
                     .is_public = false,
@@ -3516,7 +3152,7 @@
                 }
                 ewb.appendSlice(allocator, if (host_is_cs) "" else "return;") catch unreachable;
                 appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                    .path = H.mkPathH(allocator, home_ns, penvw_name),
+                    .path = HomeScan.mkPathH(allocator, home_ns, penvw_name),
                     .body = ast.Source{ .text = ewb.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                     .annotations = &[_][]const u8{},
                     .target = allocator.dupe(u8, proc_target) catch unreachable,
@@ -3544,7 +3180,7 @@
                             .phantom = allocator.dupe(u8, "*") catch unreachable };
                     }
                     appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                        .path = H.mkPathH(allocator, home_ns, spec_name),
+                        .path = HomeScan.mkPathH(allocator, home_ns, spec_name),
                         .input = ast.Shape{ .fields = sp_in },
                         .branches = &[_]ast.Branch{},
                         .is_public = false,
@@ -3558,7 +3194,7 @@
                     for (set) |ci| sb.appendSlice(allocator, col_arm[ci]) catch unreachable;
                     sb.appendSlice(allocator, if (host_is_cs) "" else "\nreturn;") catch unreachable;
                     appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                        .path = H.mkPathH(allocator, home_ns, spec_name),
+                        .path = HomeScan.mkPathH(allocator, home_ns, spec_name),
                         .body = ast.Source{ .text = sb.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                         .annotations = &[_][]const u8{},
                         .target = allocator.dupe(u8, proc_target) catch unreachable,
@@ -3584,7 +3220,7 @@
                     };
                 }
                 appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                    .path = H.mkPathH(allocator, home_ns, ppeek_name),
+                    .path = HomeScan.mkPathH(allocator, home_ns, ppeek_name),
                     .input = ast.Shape{ .fields = ppk_in },
                     .branches = ppk_branches,
                     .is_public = false,
@@ -3613,7 +3249,7 @@
                 }
                 pkb.appendSlice(allocator, HS.switchTail(allocator, host_target, ppeek_name, store_name)) catch unreachable;
                 appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                    .path = H.mkPathH(allocator, home_ns, ppeek_name),
+                    .path = HomeScan.mkPathH(allocator, home_ns, ppeek_name),
                     .body = ast.Source{ .text = pkb.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                     .annotations = &[_][]const u8{},
                     .target = allocator.dupe(u8, proc_target) catch unreachable,
@@ -3628,7 +3264,7 @@
                 pann_in[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "usize") catch unreachable };
                 pann_in[1] = ast.Field{ .name = allocator.dupe(u8, "field") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
                 appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                    .path = H.mkPathH(allocator, home_ns, pann_name),
+                    .path = HomeScan.mkPathH(allocator, home_ns, pann_name),
                     .input = ast.Shape{ .fields = pann_in },
                     .branches = &[_]ast.Branch{},
                     .is_public = false,
@@ -3641,7 +3277,7 @@
                 pann_args[0] = ast.Arg{ .name = allocator.dupe(u8, "row") catch unreachable, .value = allocator.dupe(u8, "row") catch unreachable };
                 pann_args[1] = ast.Arg{ .name = allocator.dupe(u8, "field") catch unreachable, .value = allocator.dupe(u8, "field") catch unreachable };
                 const pann_inv = ast.Invocation{
-                    .path = H.mkPathH(allocator, home_ns, ppeek_name),
+                    .path = HomeScan.mkPathH(allocator, home_ns, ppeek_name),
                     .args = pann_args,
                 };
                 var aarms = std.ArrayList(ast.Continuation).initCapacity(allocator, field_names.len) catch unreachable;
@@ -3700,7 +3336,7 @@
                     // cheap fix and the invasive one are worth the same, so this
                     // is the cheap one.
                     appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                        .path = H.mkPathH(allocator, home_ns, pann_name),
+                        .path = HomeScan.mkPathH(allocator, home_ns, pann_name),
                         .body = ast.Source{ .text = allocator.dupe(u8, if (host_is_cs) "" else "return;") catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                         .annotations = &[_][]const u8{},
                         .target = allocator.dupe(u8, proc_target) catch unreachable,
@@ -3711,7 +3347,7 @@
                     appended_items.append(allocator, ast.Item{ .flow = ast.Flow{
                         .body = ast.rootSite(pann_inv, aarms.toOwnedSlice(allocator) catch unreachable, flow.location),
                         .pre_label = null,
-                        .impl_of = H.mkPathH(allocator, home_ns, pann_name),
+                        .impl_of = HomeScan.mkPathH(allocator, home_ns, pann_name),
                         .super_shape = null,
                         .inline_body = null,
                         .preamble_code = null,
@@ -3750,7 +3386,7 @@
                 .annotations = &[_][]const u8{},
             };
             appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                .path = H.mkPathH(allocator, home_ns, pwritec_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, pwritec_name),
                 .input = ast.Shape{ .fields = cin_fields },
                 .branches = c_branches,
                 .is_public = false,
@@ -3802,7 +3438,7 @@
                 HS.branchEmpty(allocator, host_target, "ok"),
             }) catch unreachable;
             appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                .path = H.mkPathH(allocator, home_ns, pwritec_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, pwritec_name),
                 .body = ast.Source{ .text = cbody, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                 .annotations = &[_][]const u8{},
                 .target = allocator.dupe(u8, proc_target) catch unreachable,
@@ -3825,7 +3461,7 @@
                 break :blk anns;
             };
             appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                .path = H.mkPathH(allocator, home_ns, qrow_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, qrow_name),
                 .input = ast.Shape{ .fields = qrow_in },
                 .branches = &[_]ast.Branch{},
                 .is_public = false,
@@ -3939,7 +3575,7 @@
             // CS0126; the body's end lets the emitter tail carry it.
             qr.appendSlice(allocator, if (host_is_cs) "});\n" else "});\nreturn;") catch unreachable;
             appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                .path = H.mkPathH(allocator, home_ns, qrow_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, qrow_name),
                 .body = ast.Source{ .text = qr.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                 .annotations = &[_][]const u8{},
                 .target = allocator.dupe(u8, proc_target) catch unreachable,
@@ -3972,7 +3608,7 @@
                 qbody_in[qs.proj_names.len + 1] = ast.Field{ .name = allocator.dupe(u8, idn) catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
             }
             appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                .path = H.mkPathH(allocator, home_ns, qbody_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, qbody_name),
                 .input = ast.Shape{ .fields = qbody_in },
                 .branches = &[_]ast.Branch{},
                 .is_public = false,
@@ -3996,7 +3632,7 @@
             appended_items.append(allocator, ast.Item{ .flow = ast.Flow{
                 .body = ast.rootSite(rule_inv, qs.body.continuations, flow.location),
                 .pre_label = null,
-                .impl_of = H.mkPathH(allocator, home_ns, qbody_name),
+                .impl_of = HomeScan.mkPathH(allocator, home_ns, qbody_name),
                 .super_shape = null,
                 // A template root (`! row e |> if(...)`) carries its rendered
                 // body on the INVOCATION (frozen by the per-call pass while it
@@ -4015,7 +3651,7 @@
             // qsweep: the imperative sweep over the rows that exist when
             // the query's program position executes.
             appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                .path = H.mkPathH(allocator, home_ns, qsweep_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, qsweep_name),
                 .input = ast.Shape{ .fields = &[_]ast.Field{} },
                 .branches = &[_]ast.Branch{},
                 .is_public = false,
@@ -4032,37 +3668,9 @@
             // normally, so non-mutating queries are byte-identical (690_031).
             //
             // A PREORDER site sweeps the forest in DFS pre-order instead
-            // (695_STORE_TREE TT5): roots (parent == -1) in ascending
-            // insertion order, each node emitted before its children,
-            // children in ascending insertion order. Explicit stack, pushed
-            // in reverse so the lowest index pops first; every row is pushed
-            // at most once (as a root, or by its unique parent), so CAP
-            // bounds the stack. The naive O(n^2) child scan is the
-            // correctness rung.
-            const sweep_body = if (host_is_js) (if (qs.is_preorder) std.fmt.allocPrint(allocator,
-                \\const __koru_stack = new Array({d}).fill(0);
-                \\let __koru_sp = 0;
-                \\for (let __koru_ri = 0; __koru_ri < __koru_store_{s}.len; __koru_ri++) {{
-                \\  const __koru_i = __koru_store_{s}.len - 1 - __koru_ri;
-                \\  if (__koru_store_{s}.parent[__koru_i] === -1) {{
-                \\    __koru_stack[__koru_sp] = __koru_i;
-                \\    __koru_sp += 1;
-                \\  }}
-                \\}}
-                \\while (__koru_sp > 0) {{
-                \\  __koru_sp -= 1;
-                \\  const __koru_cur = __koru_stack[__koru_sp];
-                \\  {s}{s}_event.handler({{ row: __koru_cur }});
-                \\  for (let __koru_rj = 0; __koru_rj < __koru_store_{s}.len; __koru_rj++) {{
-                \\    const __koru_j = __koru_store_{s}.len - 1 - __koru_rj;
-                \\    if (__koru_store_{s}.parent[__koru_j] === __koru_store_{s}.__koru_handle_of(__koru_cur)) {{
-                \\      __koru_stack[__koru_sp] = __koru_j;
-                \\      __koru_sp += 1;
-                \\    }}
-                \\  }}
-                \\}}
-                \\return;
-            , .{ CAP, store_name, store_name, store_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable else if (qs.drain) drainScanSweepBody(allocator, host_target, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
+            // (695_STORE_TREE TT5) — the stack walk, plain and `order:`-
+            // sifted, is the `neworder` part's emission (PSweep.sweepBody).
+            const sweep_body = if (host_is_js) (if (qs.is_preorder) PSweep.sweepBody(allocator, host_target, store_name, emit_ns, qrow_name, CAP, qs.order) else if (qs.drain) drainScanSweepBody(allocator, host_target, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
                 \\let __koru_i = 0;
                 \\while (__koru_i < __koru_store_{s}.len) {{
                 \\  const __koru_len_before = __koru_store_{s}.len;
@@ -4075,29 +3683,7 @@
                 \\  {s}{s}_event.handler({{ row: __koru_i }});
                 \\}}
                 \\return;
-            , .{ store_name, emit_ns, qrow_name }) catch unreachable) else if (host_is_cs) (if (qs.is_preorder) std.fmt.allocPrint(allocator,
-                \\long[] __koru_stack = new long[{d}];
-                \\long __koru_sp = 0;
-                \\for (long __koru_ri = 0; __koru_ri < __koru_store_{s}.len; __koru_ri++) {{
-                \\  long __koru_i = __koru_store_{s}.len - 1 - __koru_ri;
-                \\  if (__koru_store_{s}.parent[__koru_i] == -1) {{
-                \\    __koru_stack[__koru_sp] = __koru_i;
-                \\    __koru_sp += 1;
-                \\  }}
-                \\}}
-                \\while (__koru_sp > 0) {{
-                \\  __koru_sp -= 1;
-                \\  long __koru_cur = __koru_stack[__koru_sp];
-                \\  {s}{s}_event.handler(new {s}{s}_event.Input {{ row = __koru_cur }});
-                \\  for (long __koru_rj = 0; __koru_rj < __koru_store_{s}.len; __koru_rj++) {{
-                \\    long __koru_j = __koru_store_{s}.len - 1 - __koru_rj;
-                \\    if (__koru_store_{s}.parent[__koru_j] == __koru_store_{s}.__koru_handle_of(__koru_cur)) {{
-                \\      __koru_stack[__koru_sp] = __koru_j;
-                \\      __koru_sp += 1;
-                \\    }}
-                \\  }}
-                \\}}
-            , .{ CAP, store_name, store_name, store_name, emit_ns, qrow_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable else if (qs.drain) drainScanSweepBody(allocator, host_target, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
+            , .{ store_name, emit_ns, qrow_name }) catch unreachable) else if (host_is_cs) (if (qs.is_preorder) PSweep.sweepBody(allocator, host_target, store_name, emit_ns, qrow_name, CAP, qs.order) else if (qs.drain) drainScanSweepBody(allocator, host_target, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
                 \\long __koru_i = 0;
                 \\while (__koru_i < __koru_store_{s}.len) {{
                 \\  long __koru_len_before = __koru_store_{s}.len;
@@ -4112,30 +3698,7 @@
                 \\for (long __koru_i = 0; __koru_i < __koru_store_{s}.len; __koru_i++) {{
                 \\  {s}{s}_event.handler(new {s}{s}_event.Input {{ row = __koru_i }});
                 \\}}
-            , .{ store_name, emit_ns, qrow_name, emit_ns, qrow_name }) catch unreachable) else if (qs.is_preorder) std.fmt.allocPrint(allocator,
-                \\var __koru_stack: [{d}]usize = undefined;
-                \\var __koru_sp: usize = 0;
-                \\for (0..__koru_store_{s}.len) |__koru_ri| {{
-                \\    const __koru_i = __koru_store_{s}.len - 1 - __koru_ri;
-                \\    if (__koru_store_{s}.parent[__koru_i] == -1) {{
-                \\        __koru_stack[__koru_sp] = __koru_i;
-                \\        __koru_sp += 1;
-                \\    }}
-                \\}}
-                \\while (__koru_sp > 0) {{
-                \\    __koru_sp -= 1;
-                \\    const __koru_cur = __koru_stack[__koru_sp];
-                \\    {s}{s}_event.handler(.{{ .row = __koru_cur }});
-                \\    for (0..__koru_store_{s}.len) |__koru_rj| {{
-                \\        const __koru_j = __koru_store_{s}.len - 1 - __koru_rj;
-                \\        if (__koru_store_{s}.parent[__koru_j] == __koru_store_{s}.__koru_handle_of(__koru_cur)) {{
-                \\            __koru_stack[__koru_sp] = __koru_j;
-                \\            __koru_sp += 1;
-                \\        }}
-                \\    }}
-                \\}}
-                \\return;
-            , .{ CAP, store_name, store_name, store_name, emit_ns, qrow_name, store_name, store_name, store_name, store_name }) catch unreachable else if (qs.drain) drainScanSweepBody(allocator, host_target, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
+            , .{ store_name, emit_ns, qrow_name, emit_ns, qrow_name }) catch unreachable) else if (qs.is_preorder) PSweep.sweepBody(allocator, host_target, store_name, emit_ns, qrow_name, CAP, qs.order) else if (qs.drain) drainScanSweepBody(allocator, host_target, store_name) else if (qs.may_remove) std.fmt.allocPrint(allocator,
                 \\var __koru_i: usize = 0;
                 \\while (__koru_i < __koru_store_{s}.len) {{
                 \\    const __koru_len_before = __koru_store_{s}.len;
@@ -4154,7 +3717,7 @@
                 \\return;
             , .{ store_name, emit_ns, qrow_name }) catch unreachable;
             appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                .path = H.mkPathH(allocator, home_ns, qsweep_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, qsweep_name),
                 .body = ast.Source{ .text = sweep_body, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                 .annotations = &[_][]const u8{},
                 .target = allocator.dupe(u8, proc_target) catch unreachable,
@@ -4254,7 +3817,7 @@
                 .annotations = &[_][]const u8{},
             };
             appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                .path = H.mkPathH(allocator, home_ns, take_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, take_name),
                 .input = ast.Shape{ .fields = take_in },
                 .branches = take_branches,
                 .is_public = false,
@@ -4405,7 +3968,7 @@
                 tb.appendSlice(allocator, o) catch unreachable;
             }
             appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                .path = H.mkPathH(allocator, home_ns, take_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, take_name),
                 .body = ast.Source{ .text = tb.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                 .annotations = &[_][]const u8{},
                 .target = allocator.dupe(u8, proc_target) catch unreachable,
@@ -4422,118 +3985,6 @@
         // own target) but keeps non-store body references (e.g. an interpolated
         // sibling-store read) coherent, matching watch-body treatment.
         {
-            const LC = struct {
-                fn emit(
-                    alloc: std.mem.Allocator,
-                    items: *std.ArrayList(ast.Item),
-                    module: []const u8,
-                    loc: anytype,
-                    ev_name: []const u8,
-                    arm_fields: []const []const u8,
-                    arm_types: []const []const u8,
-                    arm_owned: []const ?OwnedCol,
-                    arm_body: *const ast.Continuation,
-                    prog: *const ast.Program,
-                    pnames: []const []const u8,
-                    pident: []const []const u8,
-                ) void {
-                    const ev_in = alloc.alloc(ast.Field, arm_fields.len) catch unreachable;
-                    for (arm_fields, arm_types, arm_owned, 0..) |fnm, ftp, aoi, fi| {
-                        // An owned column binds into the reactive arm as a BARE
-                        // borrow `*mod:Type<mod:state>` (no `!`): the interceptor
-                        // reads it (read accepts the bare state, consumes nothing)
-                        // while the store keeps the live <state!> it frees at
-                        // teardown — 690_060's query projection, now in the
-                        // `inserted` arm (690_061). Scalars/char bind their value.
-                        ev_in[fi] = if (aoi) |oi| ast.Field{
-                            .name = alloc.dupe(u8, fnm) catch unreachable,
-                            .type = alloc.dupe(u8, ftp) catch unreachable,
-                            .module_path = alloc.dupe(u8, oi.module_slash) catch unreachable,
-                            .phantom = std.fmt.allocPrint(alloc, "{s}:{s}", .{ oi.module_dot, oi.state }) catch unreachable,
-                        } else ast.Field{ .name = alloc.dupe(u8, fnm) catch unreachable, .type = alloc.dupe(u8, ftp) catch unreachable };
-                    }
-                    const retain = blk: {
-                        const anns = alloc.alloc([]const u8, 1) catch unreachable;
-                        anns[0] = alloc.dupe(u8, "retain") catch unreachable;
-                        break :blk anns;
-                    };
-                    items.append(alloc, ast.Item{ .event_decl = ast.EventDecl{
-                        .path = H.mkPathH(alloc, module, ev_name),
-                        .input = ast.Shape{ .fields = ev_in },
-                        .branches = &[_]ast.Branch{},
-                        .is_public = false,
-                        .is_implicit_flow = false,
-                        .annotations = retain,
-                        .location = loc,
-                        .module = alloc.dupe(u8, module) catch unreachable,
-                    } }) catch unreachable;
-                    var body_clone = ast_functional.cloneContinuation(alloc, arm_body) catch unreachable;
-                    const pscope = StoreScope{ .names = pnames, .prefixes = blk_lcpx: {
-                        const px = alloc.alloc([]const u8, pnames.len) catch unreachable;
-                        for (px) |*p| p.* = "";
-                        break :blk_lcpx px;
-                    } };
-                    H.storeRefsContH(alloc, prog, &body_clone, pscope, pident, &[_][]const u8{});
-                    const lbody_node = body_clone.node.?;
-                    if (lbody_node == .inline_code) {
-                        // A nested store-read site (query/rule/sweep) spliced
-                        // its loop here BEFORE create ran (depth-first runner) —
-                        // 690_093. The emitter's flow path assumes an
-                        // invocation head, so this impl is a PROC: a proc impl
-                        // binds every event input as a const, which is exactly
-                        // how the loop's captures (the interceptor payload
-                        // fields) resolve.
-                        items.append(alloc, ast.Item{ .proc_decl = ast.ProcDecl{
-                            .path = H.mkPathH(alloc, module, ev_name),
-                            .body = ast.Source{ .text = lbody_node.inline_code, .location = loc, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
-                            .annotations = &[_][]const u8{},
-                            // Reads the target directly: this is a nested
-                            // helper struct, which cannot capture `new|zig`'s
-                            // local. The body is a nested store read's spliced
-                            // loop, which `query` now renders for whichever
-                            // host is being built, so the tag must follow it.
-                            .target = alloc.dupe(u8, switch (storeHostTarget()) {
-                                .js => "js",
-                                .cs => "cs",
-                                .c => "c",
-                                .zig => "zig",
-                            }) catch unreachable,
-                            .location = loc,
-                            .module = alloc.dupe(u8, module) catch unreachable,
-                        } }) catch unreachable;
-                        return;
-                    }
-                    // The arm body is walked DEPTH-FIRST, so a transform at its
-                    // root has already fired by the time the store declaration
-                    // transforms — and it left its expansion on the INVOCATION
-                    // (`Invocation.inline_body`, the canonical slot). A flow
-                    // root is emitted from `Flow.inline_body` instead
-                    // (emitter_helpers.zig:4946); only a NESTED continuation is
-                    // emitted from the invocation's slot (:9189). Rebuilding the
-                    // arm as a flow root without carrying the expansion up drops
-                    // it between the two, and the emitter falls through to a
-                    // plain handler call — for `std/io:print` that is the
-                    // shape-check reroute, a real handler that prints nothing.
-                    // Silent, and indistinguishable from an arm that ran.
-                    //
-                    // This is the mirror of the migration the runner already
-                    // does in the other direction when it grafts a flow into a
-                    // nested site (transform_pass_runner.zig itemToNode).
-                    const body_cont: ast.Continuation = ast.rootSite(lbody_node.invocation, body_clone.continuations, loc);
-                    items.append(alloc, ast.Item{ .flow = ast.Flow{
-                        .body = body_cont,
-                        .pre_label = null,
-                        .impl_of = H.mkPathH(alloc, module, ev_name),
-                        .super_shape = null,
-                        .inline_body = lbody_node.invocation.inline_body,
-                        .preamble_code = lbody_node.invocation.preamble_code,
-                        .is_pure = false,
-                        .is_transitively_pure = false,
-                        .location = loc,
-                        .module = alloc.dupe(u8, module) catch unreachable,
-                    } }) catch unreachable;
-                }
-            };
             // Interceptor payload types: inserted/removed bind ROW FIELDS by
             // name — each gets its column's type. updated binds {old, new} —
             // the written field's images; its bind form is walled to
@@ -4620,7 +4071,7 @@
             }
         }
 
-        PVerbs.emit(allocator, program, flow, store_name, home_ns, field_names, field_types, field_owned_info, pstore_names.items, pstore_identity.items, discharge_arm, removed_arms.items, step_arm, step_terminal_branches.items, wait_arm, wait_src, &appended_items, H, HS, host_is_js, host_target, proc_target);
+        PVerbs.emit(allocator, program, flow, store_name, home_ns, field_names, field_types, field_owned_info, pstore_names.items, pstore_identity.items, discharge_arm, removed_arms.items, step_arm, step_terminal_branches.items, wait_arm, wait_src, &appended_items, HomeScan, HS, host_is_js, host_target, proc_target);
 
         // Rung 0 (per-store disposal contract): the store provides NO disposal
         // verb. A BARE store's `take` carries no obligation (frictionless). When
@@ -4659,7 +4110,7 @@
             if (clear_legal) {
                 const clr_name = std.fmt.allocPrint(allocator, "__store_clear_{s}", .{store_name}) catch unreachable;
                 appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                    .path = H.mkPathH(allocator, home_ns, clr_name),
+                    .path = HomeScan.mkPathH(allocator, home_ns, clr_name),
                     .input = ast.Shape{ .fields = &[_]ast.Field{} },
                     .branches = &[_]ast.Branch{},
                     .is_public = false,
@@ -4740,7 +4191,7 @@
                     cb.appendSlice(allocator, call) catch unreachable;
                 }
                 appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                    .path = H.mkPathH(allocator, home_ns, clr_name),
+                    .path = HomeScan.mkPathH(allocator, home_ns, clr_name),
                     .body = ast.Source{ .text = cb.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                     .annotations = &[_][]const u8{},
                     .target = allocator.dupe(u8, proc_target) catch unreachable,
@@ -4759,7 +4210,7 @@
         {
             const pstripe_name = std.fmt.allocPrint(allocator, "__store_stripe_{s}", .{store_name}) catch unreachable;
             appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                .path = H.mkPathH(allocator, home_ns, pstripe_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, pstripe_name),
                 .input = ast.Shape{ .fields = &[_]ast.Field{} },
                 .branches = &[_]ast.Branch{},
                 .is_public = false,
@@ -4779,7 +4230,7 @@
             }
             if (stripe_order.items.len == 0) {
                 appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                    .path = H.mkPathH(allocator, home_ns, pstripe_name),
+                    .path = HomeScan.mkPathH(allocator, home_ns, pstripe_name),
                     .body = ast.Source{ .text = allocator.dupe(u8, if (host_is_cs) "" else "return;") catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                     .annotations = &[_][]const u8{},
                     .target = allocator.dupe(u8, proc_target) catch unreachable,
@@ -4800,7 +4251,7 @@
                         .kind = .terminal,
                         .condition = null,
                         .node = .{ .invocation = ast.Invocation{
-                            .path = H.mkPathH(allocator, home_ns, qn),
+                            .path = HomeScan.mkPathH(allocator, home_ns, qn),
                             .args = &[_]ast.Arg{},
                         } },
                         .indent = 1,
@@ -4817,7 +4268,7 @@
                 }
                 const head_name = std.fmt.allocPrint(allocator, "__store_qsweep_{s}_L{d}_{s}", .{ store_name, qsites.items[stripe_order.items[0]].line, storeSiteTag(allocator, qsites.items[stripe_order.items[0]].file) }) catch unreachable;
                 const head_inv = ast.Invocation{
-                    .path = H.mkPathH(allocator, home_ns, head_name),
+                    .path = HomeScan.mkPathH(allocator, home_ns, head_name),
                     .args = &[_]ast.Arg{},
                 };
                 var head_conts: []ast.Continuation = &[_]ast.Continuation{};
@@ -4829,7 +4280,7 @@
                 appended_items.append(allocator, ast.Item{ .flow = ast.Flow{
                     .body = ast.rootSite(head_inv, head_conts, flow.location),
                     .pre_label = null,
-                    .impl_of = H.mkPathH(allocator, home_ns, pstripe_name),
+                    .impl_of = HomeScan.mkPathH(allocator, home_ns, pstripe_name),
                     .super_shape = null,
                     .inline_body = null,
                     .preamble_code = null,
@@ -4904,7 +4355,7 @@
                 td_branches = tdb;
             }
             appended_items.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                .path = H.mkPathH(allocator, home_ns, td_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, td_name),
                 .input = ast.Shape{ .fields = &[_]ast.Field{} },
                 .branches = td_branches,
                 .is_public = false,
@@ -4966,14 +4417,14 @@
                 std.fmt.allocPrint(allocator, "{s}__koru_store_{s}.len = 0;\n{s}", .{ td_close, store_name, if (host_is_cs) "" else "return;" }) catch unreachable;
             td.appendSlice(allocator, td_tail) catch unreachable;
             appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                .path = H.mkPathH(allocator, home_ns, td_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, td_name),
                 .body = ast.Source{ .text = td.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                 .annotations = &[_][]const u8{},
                 .target = allocator.dupe(u8, proc_target) catch unreachable,
                 .location = flow.location,
                 .module = allocator.dupe(u8, flow.module) catch unreachable,
             } }) catch unreachable;
-            const td_inv = ast.Invocation{ .path = H.mkPathH(allocator, home_ns, td_name), .args = &[_]ast.Arg{} };
+            const td_inv = ast.Invocation{ .path = HomeScan.mkPathH(allocator, home_ns, td_name), .args = &[_]ast.Arg{} };
             // The user's `! discharge item |> ...` continuation rides the
             // teardown flow as its handler — the consumer half of 400_105
             // (`! make r |> destroy(r)`), verbatim from the store declaration.
@@ -5021,7 +4472,7 @@
                         switch (pi.*) {
                             // Must use `&pi.flow` — `|*f|` on a switched copy
                             // mutates a temporary and the live AST stays raw.
-                            .flow => H.storeRefsFlowH(alloc, prog, &pi.flow, scope, ident),
+                            .flow => HomeScan.storeRefsFlowH(alloc, prog, &pi.flow, scope, ident),
                             .module_decl => items(alloc, prog, @constCast(pi.module_decl.items), scope, ident),
                             else => {},
                         }
@@ -5156,7 +4607,7 @@
             }
             c_ins_fields[user_field_count] = ast.Field{ .name = allocator.dupe(u8, "__site_line") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
             c_appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                .path = H.mkPathH(allocator, home_ns, c_insert_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, c_insert_name),
                 .input = ast.Shape{ .fields = c_ins_fields },
                 .branches = &[_]ast.Branch{},
                 .is_public = false,
@@ -5195,7 +4646,7 @@
             }
             cap_text.appendSlice(allocator, std.fmt.allocPrint(allocator, "__koru_store_{s}.len += 1;\nreturn;\n", .{store_name}) catch unreachable) catch unreachable;
             c_appended.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                .path = H.mkPathH(allocator, home_ns, c_insert_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, c_insert_name),
                 .body = ast.Source{ .text = cap_text.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                 .annotations = &[_][]const u8{},
                 .target = allocator.dupe(u8, "c") catch unreachable,
@@ -5230,7 +4681,7 @@
                 };
             }
             c_appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                .path = H.mkPathH(allocator, home_ns, c_apply_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, c_apply_name),
                 .input = ast.Shape{ .fields = capp_in },
                 .branches = capp_branches,
                 .is_public = false,
@@ -5274,7 +4725,7 @@
                 .annotations = &[_][]const u8{},
             };
             c_appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                .path = H.mkPathH(allocator, home_ns, c_insertf_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, c_insertf_name),
                 .input = ast.Shape{ .fields = c_ins_fields },
                 .branches = c_f_branches,
                 .is_public = false,
@@ -5288,7 +4739,7 @@
                 "if (__koru_store_{s}.len >= {d}) return {s};\n{s}{s}.len;\n{s}return {s};\n",
                 .{ store_name, CAP, codegen_utils_store.cResCtorEmpty(allocator, c_insertf_cname, "full"), c_new_row, store_name, c_append.items, codegen_utils_store.cResCtorOne(allocator, c_insertf_cname, "row", if (needs_handles) std.fmt.allocPrint(allocator, "__koru_handle_of_{s}(__koru_new_row)", .{store_name}) catch unreachable else "__koru_new_row") }) catch unreachable) catch unreachable;
             c_appended.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                .path = H.mkPathH(allocator, home_ns, c_insertf_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, c_insertf_name),
                 .body = ast.Source{ .text = cf.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                 .annotations = &[_][]const u8{},
                 .target = allocator.dupe(u8, "c") catch unreachable,
@@ -5311,7 +4762,7 @@
                 .annotations = &[_][]const u8{},
             };
             c_appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                .path = H.mkPathH(allocator, home_ns, c_inserth_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, c_inserth_name),
                 .input = ast.Shape{ .fields = c_ins_fields },
                 .branches = c_h_branches,
                 .is_public = false,
@@ -5325,7 +4776,7 @@
                 "if (__koru_store_{s}.len >= {d}) __koru_unreachable(\"std/store: store '{s}' is full (capacity {d}) - declared capacity and the `| full` branch are pinned at 690_011\");\n{s}{s}.len;\n{s}return {s};\n",
                 .{ store_name, CAP, store_name, CAP, c_new_row, store_name, c_append.items, codegen_utils_store.cResCtorOne(allocator, c_inserth_cname, "row", if (needs_handles) std.fmt.allocPrint(allocator, "__koru_handle_of_{s}(__koru_new_row)", .{store_name}) catch unreachable else "__koru_new_row") }) catch unreachable) catch unreachable;
             c_appended.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                .path = H.mkPathH(allocator, home_ns, c_inserth_name),
+                .path = HomeScan.mkPathH(allocator, home_ns, c_inserth_name),
                 .body = ast.Source{ .text = ch.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                 .annotations = &[_][]const u8{},
                 .target = allocator.dupe(u8, "c") catch unreachable,
@@ -5361,7 +4812,7 @@
                     .annotations = &[_][]const u8{},
                 };
                 c_appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                    .path = H.mkPathH(allocator, home_ns, c_take_name),
+                    .path = HomeScan.mkPathH(allocator, home_ns, c_take_name),
                     .input = ast.Shape{ .fields = c_t_in },
                     .branches = c_t_branches,
                     .is_public = false,
@@ -5402,7 +4853,7 @@
                 }
                 ct.appendSlice(allocator, std.fmt.allocPrint(allocator, "return {s};\n", .{codegen_utils_store.cResCtorRec(allocator, c_take_cname, "item", ctrec.items)}) catch unreachable) catch unreachable;
                 c_appended.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                    .path = H.mkPathH(allocator, home_ns, c_take_name),
+                    .path = HomeScan.mkPathH(allocator, home_ns, c_take_name),
                     .body = ast.Source{ .text = ct.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                     .annotations = &[_][]const u8{},
                     .target = allocator.dupe(u8, "c") catch unreachable,
@@ -5431,7 +4882,7 @@
                 }
 capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unreachable(\"__store_apply_{s}: field index is not a column of store '{s}'\");\n}}\nreturn (struct {s}_res){{0}};\n", .{ store_name, store_name, c_apply_cname }) catch unreachable) catch unreachable;
                 c_appended.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                    .path = H.mkPathH(allocator, home_ns, c_apply_name),
+                    .path = HomeScan.mkPathH(allocator, home_ns, c_apply_name),
                     .body = ast.Source{ .text = capply.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                     .annotations = &[_][]const u8{},
                     .target = allocator.dupe(u8, "c") catch unreachable,
@@ -5441,7 +4892,7 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
 
                 const c_write_name = std.fmt.allocPrint(allocator, "__store_write_{s}", .{store_name}) catch unreachable;
                 c_appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                    .path = H.mkPathH(allocator, home_ns, c_write_name),
+                    .path = HomeScan.mkPathH(allocator, home_ns, c_write_name),
                     .input = ast.Shape{ .fields = capp_in },
                     .branches = &[_]ast.Branch{},
                     .is_public = false,
@@ -5477,11 +4928,11 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
                 }
                 c_appended.append(allocator, ast.Item{ .flow = ast.Flow{
                     .body = ast.rootSite(ast.Invocation{
-                        .path = H.mkPathH(allocator, home_ns, c_apply_name),
+                        .path = HomeScan.mkPathH(allocator, home_ns, c_apply_name),
                         .args = cw_args,
                     }, cw_arms, flow.location),
                     .pre_label = null,
-                    .impl_of = H.mkPathH(allocator, home_ns, c_write_name),
+                    .impl_of = HomeScan.mkPathH(allocator, home_ns, c_write_name),
                     .super_shape = null,
                     .inline_body = null,
                     .preamble_code = null,
@@ -5502,7 +4953,7 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
                 const c_envw_name = std.fmt.allocPrint(allocator, "__store_envwrite_{s}", .{store_name}) catch unreachable;
                 const c_ann_name = std.fmt.allocPrint(allocator, "__store_announce_{s}", .{store_name}) catch unreachable;
                 c_appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                    .path = H.mkPathH(allocator, home_ns, c_envw_name),
+                    .path = HomeScan.mkPathH(allocator, home_ns, c_envw_name),
                     .input = ast.Shape{ .fields = capp_in },
                     .branches = &[_]ast.Branch{},
                     .is_public = false,
@@ -5519,7 +4970,7 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
                         .{ fci, store_name, codegen_utils_store.cMemberName(allocator, fnm), fci }) catch unreachable) catch unreachable;
                 }
                 c_appended.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                    .path = H.mkPathH(allocator, home_ns, c_envw_name),
+                    .path = HomeScan.mkPathH(allocator, home_ns, c_envw_name),
                     .body = ast.Source{ .text = cew.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                     .annotations = &[_][]const u8{},
                     .target = allocator.dupe(u8, "c") catch unreachable,
@@ -5530,7 +4981,7 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
                 cann_in[0] = ast.Field{ .name = allocator.dupe(u8, "row") catch unreachable, .type = allocator.dupe(u8, "usize") catch unreachable };
                 cann_in[1] = ast.Field{ .name = allocator.dupe(u8, "field") catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
                 c_appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-                    .path = H.mkPathH(allocator, home_ns, c_ann_name),
+                    .path = HomeScan.mkPathH(allocator, home_ns, c_ann_name),
                     .input = ast.Shape{ .fields = cann_in },
                     .branches = &[_]ast.Branch{},
                     .is_public = false,
@@ -5540,7 +4991,7 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
                     .module = allocator.dupe(u8, flow.module) catch unreachable,
                 } }) catch unreachable;
                 c_appended.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-                    .path = H.mkPathH(allocator, home_ns, c_ann_name),
+                    .path = HomeScan.mkPathH(allocator, home_ns, c_ann_name),
                     .body = ast.Source{ .text = allocator.dupe(u8, "(void)row; (void)field;") catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                     .annotations = &[_][]const u8{},
                     .target = allocator.dupe(u8, "c") catch unreachable,
@@ -5647,7 +5098,7 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
     for (flatItems(allocator, program.items)) |pi| {
         if (pi.* != .flow) continue;
         const wf = &pi.flow;
-        if (!H.isStoreInv(wf, "watch", store_name)) continue;
+        if (!HomeScan.isStoreInv(wf, "watch", store_name)) continue;
         for (wf.body.continuations) |*wc| {
             const fidx: usize = blk: {
                 for (field_names, 0..) |fname, i| {
@@ -5725,10 +5176,10 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
         for (flatItems(allocator, program.items)) |pi| {
             if (pi.* != .flow) continue;
             const wfg = &pi.flow;
-            if (!H.isStoreInv(wfg, "watch", null)) continue;
+            if (!HomeScan.isStoreInv(wfg, "watch", null)) continue;
             var target_store: []const u8 = "";
             for (wfg.inv().args) |a| {
-                if (std.mem.eql(u8, a.name, "expr")) target_store = H.stripQuotes(a.value);
+                if (std.mem.eql(u8, a.name, "expr")) target_store = HomeScan.stripQuotes(a.value);
             }
             if (target_store.len == 0 or std.mem.eql(u8, target_store, store_name)) continue;
             const t_order = FG.fieldOrderOf(allocator, program, target_store) orelse continue;
@@ -5784,11 +5235,11 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
                 for (its) |*pi| {
                     switch (pi.*) {
                         .flow => |*f| {
-                            if (H.isStoreInv(f, "new", null)) {
+                            if (HomeScan.isStoreInv(f, "new", null)) {
                                 var nm: ?[]const u8 = null;
                                 var seed: ?[]const u8 = null;
                                 for (f.inv().args) |a| {
-                                    if (std.mem.eql(u8, a.name, "expr")) nm = H.stripQuotes(a.value);
+                                    if (std.mem.eql(u8, a.name, "expr")) nm = HomeScan.stripQuotes(a.value);
                                     if (std.mem.eql(u8, a.name, "source")) seed = a.value;
                                 }
                                 if (nm) |n| {
@@ -5821,223 +5272,6 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
         Collect.go(allocator, program.items, &store_names, &store_idents);
     }
 
-    const Rewrite = struct {
-        fn isIdent(ch: u8) bool {
-            return (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_' or ch == '-';
-        }
-        // `prefix` names the Zig namespace the cell lives in, and is empty
-        // whenever the reader is in the declaring module (the common case).
-        // A reader in a DIFFERENT module has to reach across: the cell is a
-        // module-scope var in the declaring module's emitted struct, so a bare
-        // `__koru_store_s` there is an undeclared identifier (110_022).
-        fn storeRefs(alloc: std.mem.Allocator, text: []const u8, name: []const u8, prefix: []const u8, is_identity: bool) []const u8 {
-            const expr_ctx = ast.expressionMask(alloc, text);
-            var out = std.ArrayList(u8).initCapacity(alloc, text.len + 32) catch unreachable;
-            var i: usize = 0;
-            while (i < text.len) {
-                const at_boundary = ast.identBoundaryBefore(text, i);
-                const starts = at_boundary and std.mem.startsWith(u8, text[i..], name);
-                const after = i + name.len;
-                if (starts and after < text.len and text[after] == '.') {
-                    out.appendSlice(alloc, prefix) catch unreachable;
-                    out.appendSlice(alloc, "__koru_store_") catch unreachable;
-                    out.appendSlice(alloc, name) catch unreachable;
-                    i += name.len;
-                } else if (is_identity and expr_ctx[i] and starts and (after >= text.len or !isIdent(text[after]))) {
-                    // A ONE-column store has no field to name, so the store name
-                    // IS the reference. It still has to reach a column in the
-                    // cell, so it resolves to the synthesized one.
-                    out.appendSlice(alloc, prefix) catch unreachable;
-                    out.appendSlice(alloc, "__koru_store_") catch unreachable;
-                    out.appendSlice(alloc, name) catch unreachable;
-                    out.append(alloc, '.') catch unreachable;
-                    out.appendSlice(alloc, ast.STORE_IDENTITY_COLUMN) catch unreachable;
-                    i += name.len;
-                } else {
-                    out.append(alloc, text[i]) catch unreachable;
-                    i += 1;
-                }
-            }
-            return out.toOwnedSlice(alloc) catch unreachable;
-        }
-        fn isIn(xs: []const []const u8, n: []const u8) bool {
-            for (xs) |x| if (std.mem.eql(u8, x, n)) return true;
-            return false;
-        }
-        // Whole-identifier rewrite (`new` → `__koru_upd.new`), boundary-aware
-        // and skipping `.field` accesses. Applied to every arg value in a
-        // transplanted body, INCLUDING nested store-block sources (an
-        // interceptor's `stored { ... }` value expr references these
-        // bindings; the nested transform preserves them verbatim).
-        fn identRefs(alloc: std.mem.Allocator, text: []const u8, name: []const u8, replacement: []const u8) []const u8 {
-            var out = std.ArrayList(u8).initCapacity(alloc, text.len + 32) catch unreachable;
-            var i: usize = 0;
-            while (i < text.len) {
-                const prev_ok = ast.identBoundaryBefore(text, i) and (i == 0 or text[i - 1] != '.');
-                const next_i = i + name.len;
-                const next_ok = next_i >= text.len or !isIdent(text[next_i]);
-                if (prev_ok and next_ok and next_i <= text.len and std.mem.startsWith(u8, text[i..], name)) {
-                    out.appendSlice(alloc, replacement) catch unreachable;
-                    i += name.len;
-                } else {
-                    out.append(alloc, text[i]) catch unreachable;
-                    i += 1;
-                }
-            }
-            return out.toOwnedSlice(alloc) catch unreachable;
-        }
-        fn rewriteIdentInCont(alloc: std.mem.Allocator, cont: *ast.Continuation, name: []const u8, replacement: []const u8) void {
-            if (cont.node) |*n| {
-                switch (@constCast(n).*) {
-                    .invocation => |*inv| {
-                        for (inv.args) |*a| {
-                            @constCast(a).value = identRefs(alloc, a.value, name, replacement);
-                            if (a.expression_value) |ev| {
-                                const fresh = alloc.create(ast.CapturedExpression) catch unreachable;
-                                fresh.* = ev.*;
-                                fresh.text = identRefs(alloc, ev.text, name, replacement);
-                                @constCast(a).expression_value = fresh;
-                            }
-                            if (a.source_value) |sv| {
-                                const fresh = alloc.create(ast.Source) catch unreachable;
-                                fresh.* = sv.*;
-                                fresh.text = identRefs(alloc, sv.text, name, replacement);
-                                @constCast(a).source_value = fresh;
-                            }
-                        }
-                    },
-                    else => {},
-                }
-            }
-            for (cont.continuations) |*c| rewriteIdentInCont(alloc, @constCast(c), name, replacement);
-        }
-        // Store-invocation args (stored/watch/create blocks) keep their raw
-        // source — those transforms own their own rewriting. But
-        // Invocation.inline_body is the FREEZE of an earlier template expand
-        // (`if`/`for`) and MUST be rewritten even on std.store sites skipped
-        // for args (690_074).
-        //
-        // Every arm below lowers ONE text slot through the same
-        // `storeLowerText`. The list of arms is the whole reach of the store's
-        // read surface, and every gap this walk has ever had was an arm that
-        // was not here (`.expression` at 110_022, `inline_body` at 690_074,
-        // `.branch_constructor` at 690_256) or a lowering this walk could not
-        // call (the indexed read, 690_250/690_254).
-        fn rewriteNode(alloc: std.mem.Allocator, prog: *const ast.Program, n: *ast.Node, scope: StoreScope, idents: []const []const u8, bound: []const []const u8) void {
-            // Same temporary-capture rule as storeRefsContH: never `|*inv|`
-            // on `switch (n.*)`; mutate `n.invocation` in place (690_074).
-            switch (n.*) {
-                .invocation => {
-                    const inv = &n.invocation;
-                    const skip_args = blk: {
-                        if (inv.path.module_qualifier) |mq| {
-                            if (std.mem.eql(u8, mq, "std.store")) break :blk true;
-                        }
-                        break :blk false;
-                    };
-                    if (!skip_args) {
-                        for (inv.args) |*a| {
-                            @constCast(a).value = storeLowerText(alloc, prog, a.value, scope, idents, bound);
-                            // Expression args carry their text separately — the
-                            // emitter reads THAT, not .value. cloneContinuation
-                            // shares these pointers with the ORIGINAL tree (the
-                            // documented clone footgun), so swap in a fresh copy
-                            // rather than mutating shared state.
-                            if (a.expression_value) |ev| {
-                                const fresh = alloc.create(ast.CapturedExpression) catch unreachable;
-                                fresh.* = ev.*;
-                                fresh.text = storeLowerText(alloc, prog, ev.text, scope, idents, bound);
-                                @constCast(a).expression_value = fresh;
-                            }
-                        }
-                    }
-                    if (inv.inline_body) |ib| {
-                        inv.inline_body = storeLowerText(alloc, prog, ib, scope, idents, bound);
-                    }
-                },
-                .inline_code => {
-                    n.* = .{ .inline_code = storeLowerText(alloc, prog, n.inline_code, scope, idents, bound) };
-                },
-                // A PRODUCE arm (`peek -> s.v`, `| c _ -> s.v`) is an expression
-                // node, and it reads cells exactly like an arg does. Left out,
-                // the reference reached the host verbatim as `s.v` — an
-                // undeclared identifier in Zig, from valid Koru (110_022).
-                .expression => {
-                    n.* = .{ .expression = storeLowerText(alloc, prog, n.expression, scope, idents, bound) };
-                },
-                // A branch-RESOLUTION payload (`| then => got s.n`) is the same
-                // read one position over from the guard (690_256). The emitter
-                // reads `plain_value`, else `expression_str orelse type` per
-                // field, so the rewrite lands in exactly those slots.
-                .branch_constructor => {
-                    const bc = &n.branch_constructor;
-                    if (bc.plain_value) |pv| bc.plain_value = storeLowerText(alloc, prog, pv, scope, idents, bound);
-                    for (bc.fields) |*fld| {
-                        const has_expr = fld.expression_str != null;
-                        const lowered = storeLowerText(alloc, prog, fld.expression_str orelse fld.type, scope, idents, bound);
-                        if (has_expr) @constCast(fld).expression_str = lowered else @constCast(fld).type = lowered;
-                    }
-                },
-                else => {},
-            }
-        }
-        fn rewriteCont(alloc: std.mem.Allocator, prog: *const ast.Program, cont: *ast.Continuation, scope: StoreScope, idents: []const []const u8, bound: []const []const u8) void {
-            // A continuation's OWN bindings shadow store names (690_090) — the
-            // singleton twin of the plural walk's skip. A row binding or
-            // shape-destructure makes `<store>.<field>` mean the row, so the
-            // cell rewrite must not reach it.
-            var own_buf: [16][]const u8 = undefined;
-            var own_len: usize = 0;
-            if (cont.binding) |b| {
-                own_buf[own_len] = b;
-                own_len += 1;
-            }
-            for (cont.destructure) |df| {
-                own_buf[own_len] = df.name;
-                own_len += 1;
-            }
-            const own = own_buf[0..own_len];
-            const bound_all: []const []const u8 = if (own_len == 0)
-                bound
-            else blk: {
-                const all = alloc.alloc([]const u8, bound.len + own_len) catch unreachable;
-                @memcpy(all[0..bound.len], bound);
-                @memcpy(all[bound.len..], own);
-                break :blk all;
-            };
-            // Guards ride as arm conditions at the write site - their
-            // cross-store reads rewrite to the cells too (690_013).
-            if (cont.condition) |cond| {
-                @constCast(cont).condition = storeLowerText(alloc, prog, cond, scope, idents, bound_all);
-            }
-            if (cont.node) |*n| rewriteNode(alloc, prog, @constCast(n), scope, idents, bound_all);
-            for (cont.continuations) |*c| rewriteCont(alloc, prog, @constCast(c), scope, idents, bound_all);
-        }
-        fn rewriteFlow(alloc: std.mem.Allocator, prog: *const ast.Program, f: *ast.Flow, scope: StoreScope, idents: []const []const u8) void {
-            const bound_params = flowParamNamesStore(alloc, prog, f);
-            rewriteCont(alloc, prog, &f.body, scope, idents, bound_params);
-            if (f.inline_body) |ib| {
-                @constCast(f).inline_body = storeLowerText(alloc, prog, ib, scope, idents, bound_params);
-            }
-        }
-        // A bare-return subflow (`peek -> s.v`) is not a Flow at all — it lands
-        // as an `immediate_impl` whose BranchConstructor carries the produced
-        // expression. Reading a cell there is as ordinary as reading one in an
-        // arg, but the walk used to visit only `.flow`, so the reference went
-        // to the host verbatim and Zig reported an undeclared `s` (110_022).
-        fn rewriteImmediateImpl(alloc: std.mem.Allocator, prog: *const ast.Program, ii: *ast.ImmediateImpl, scope: StoreScope, idents: []const []const u8) void {
-            if (ii.value.plain_value) |pv| {
-                ii.value.plain_value = storeLowerText(alloc, prog, pv, scope, idents, &[_][]const u8{});
-            }
-            // `=> branch { f: <expr> }` keeps each field's value in
-            // `expression_str`; a cell read there is the same read.
-            for (ii.value.fields) |*fld| {
-                if (fld.expression_str) |es| {
-                    @constCast(fld).expression_str = storeLowerText(alloc, prog, es, scope, idents, &[_][]const u8{});
-                }
-            }
-        }
-    };
     // Transplanted arms are spliced INTO the declaring module's generated
     // units, so they read the cell from the same namespace: no prefix.
     const local_prefixes = blk_lp: {
@@ -6792,71 +6026,11 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
         // The cell is a module-scope var in the DECLARING module's emitted
         // struct. A reader in that same module names it bare; a reader
         // anywhere else has to reach across namespaces (110_022).
-        const Walk = struct {
-            const Home = struct { file: ?[]const u8, logical: ?[]const u8 };
-            fn prefixesFor(alloc: std.mem.Allocator, prog: *const ast.Program, names: []const []const u8, homes: []const Home, reader: []const u8) []const []const u8 {
-                const px = alloc.alloc([]const u8, names.len) catch unreachable;
-                // C: the cell is a flat global — no module struct to qualify
-                // through, and store names are program-global, so the read is
-                // `__koru_store_<s>.<f>` from every module.
-                if (std.mem.eql(u8, CompilerEnv.lang, "c")) {
-                    for (px) |*p| p.* = "";
-                    return px;
-                }
-                for (names, 0..) |_, i| {
-                    // FILE-derived: `reader` is a `Flow.module`, same domain.
-                    const home = homes[i].file orelse "";
-                    if (home.len == 0) {
-                        px[i] = "";
-                        continue;
-                    }
-                    // A store in the ENTRY module keeps the bare form: that is
-                    // the status quo and `main_module` is the enclosing struct.
-                    //
-                    // A store in an imported module is ALWAYS fully qualified,
-                    // even for a reader in its own module. A same-module read
-                    // looks safe unqualified right up until the emitter INLINES
-                    // that body into a caller elsewhere (`peek -> cache.v` read
-                    // from the entry file), at which point the bare name is in a
-                    // namespace that never declared it. The qualified form is
-                    // valid from both sides, so it is the only one that survives
-                    // inlining.
-                    const home_logical_pre = homes[i].logical orelse "";
-                    if (std.mem.eql(u8, home_logical_pre, prog.main_module_name) and std.mem.eql(u8, home, reader)) {
-                        px[i] = "";
-                        continue;
-                    }
-                    // Only the ENTRY module's emitted namespace has a name this
-                    // layer can spell (`main_module`). A store declared in an
-                    // imported module and read from another needs the emitter's
-                    // module-path mangling. `storeEmitQualifier` applies the same
-                    // rule as `emitter_helpers.writeModulePath`, so a cross-module
-                    // cell read now lowers for ANY declaring module — it used to
-                    // refuse, because this rewrite could only spell `main_module`.
-                    px[i] = storeCellQualifier(alloc, home_logical_pre, prog.main_module_name);
-                }
-                return px;
-            }
-            // Each item carries the module it was declared in, so the reader is
-            // read off the item rather than threaded down the walk.
-            fn items(alloc: std.mem.Allocator, prog: *const ast.Program, its: []ast.Item, names: []const []const u8, homes: []const Home, idents: []const []const u8) void {
-                for (its) |*pi| {
-                    switch (pi.*) {
-                        // Must use `&pi.flow` — `|*f|` on a switched copy
-                        // mutates a temporary and the live AST stays raw.
-                        .flow => Rewrite.rewriteFlow(alloc, prog, &pi.flow, .{ .names = names, .prefixes = prefixesFor(alloc, prog, names, homes, pi.flow.module) }, idents),
-                        .immediate_impl => Rewrite.rewriteImmediateImpl(alloc, prog, &pi.immediate_impl, .{ .names = names, .prefixes = prefixesFor(alloc, prog, names, homes, pi.immediate_impl.module) }, idents),
-                        .module_decl => items(alloc, prog, @constCast(pi.module_decl.items), names, homes, idents),
-                        else => {},
-                    }
-                }
-            }
-        };
         // A store's home is program-invariant — resolve once per name, not per
         // item (per-item lookups made this walk O(items × names × program)).
-        const homes = allocator.alloc(Walk.Home, store_names.items.len) catch unreachable;
-        for (store_names.items, 0..) |nm, hi| homes[hi] = .{ .file = H.storeHomeFile(program, nm), .logical = H.storeHomeModule(allocator, program, nm) };
-        Walk.items(allocator, program, @constCast(program.items), store_names.items, homes, store_idents.items);
+        const homes = allocator.alloc(CellWalk.Home, store_names.items.len) catch unreachable;
+        for (store_names.items, 0..) |nm, hi| homes[hi] = .{ .file = HomeScan.storeHomeFile(program, nm), .logical = HomeScan.storeHomeModule(allocator, program, nm) };
+        CellWalk.items(allocator, program, @constCast(program.items), store_names.items, homes, store_idents.items);
     }
     // ------------------------------------------------------------------
     // Assemble: the create site dissolves into a comment; the five

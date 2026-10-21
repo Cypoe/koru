@@ -1,0 +1,25 @@
+// 330_146 companion module — the window/frames analog as minimal tors.
+const std = @import("std");
+
+pub const Win = struct { n: i32 };
+
+~pub tor open {} | win *Win<opened!> | err string
+~proc open|zig {
+    const w = std.heap.page_allocator.create(Win) catch unreachable;
+    w.* = .{ .n = 1 };
+    return .{ .win = w };
+}
+
+~pub tor read { w: *Win<opened|active> }
+~proc read|zig { _ = w.n; }
+
+~pub tor close { w: *Win<!active> }
+~proc close|zig { std.heap.page_allocator.destroy(w); }
+
+~pub tor pump { w: *Win<!opened|!active> }
+! tick i64
+| done *Win<active!>
+~proc pump|zig {
+    tick(0);
+    return .{ .done = w };
+}

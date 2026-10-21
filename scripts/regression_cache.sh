@@ -187,6 +187,14 @@ cache_emit_fingerprint() {
 
     {
         echo "compiler:$compiler_mtime"
+        # Schema 2: the run's *policy* is part of the fingerprint. A pass cached
+        # with --ignore-leaks or with cross-target checks on is not a pass under
+        # the defaults, and a LANGUAGES edit changes whether the check runs at
+        # all. Without these, flipping either flag would serve the old verdict.
+        echo "cache_schema:2"
+        echo "check_leaks:${CHECK_LEAKS:-true}"
+        echo "cross_targets:${KORU_CROSS_TARGETS:-off}"
+        echo "languages:$(cache_mtime "$test_dir/LANGUAGES")"
         echo "input:$(cache_mtime "$(test_entry "$test_dir")")"
         # Fixed-name markers: emit unconditionally with mtime=0 when absent so
         # additions of these files invalidate the cache (stored=0 vs current!=0).
@@ -250,6 +258,10 @@ cache_check() {
     local cache_file="$test_dir/.cache-fingerprint"
     [ ! -f "$cache_file" ] && return 1
 
+    # A pre-schema-2 fingerprint predates the cross-target and leak flags; it
+    # cannot describe this run, so it must miss rather than silently hit.
+    grep -qx 'cache_schema:2' "$cache_file" || return 1
+
     local line kind a b
     while IFS= read -r line; do
         # Split on first two colons: kind:rest_or_value, then path:value for 3-field forms.
@@ -257,6 +269,22 @@ cache_check() {
         case "$kind" in
             ERROR)
                 return 1
+                ;;
+            cache_schema)
+                a="${line#cache_schema:}"
+                [ "$a" = "2" ] || return 1
+                ;;
+            check_leaks)
+                a="${line#check_leaks:}"
+                [ "$a" = "${CHECK_LEAKS:-true}" ] || return 1
+                ;;
+            cross_targets)
+                a="${line#cross_targets:}"
+                [ "$a" = "${KORU_CROSS_TARGETS:-off}" ] || return 1
+                ;;
+            languages)
+                a="${line#languages:}"
+                [ "$a" = "$(cache_mtime "$test_dir/LANGUAGES")" ] || return 1
                 ;;
             compiler)
                 a="${line#compiler:}"

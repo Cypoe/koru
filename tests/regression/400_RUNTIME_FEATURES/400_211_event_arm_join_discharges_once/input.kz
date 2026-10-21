@@ -1,0 +1,54 @@
+// PINS: the join after a non-keyword tor's arms discharges an obligation
+// live across the call exactly once — 400_193 pins this for `if`, here the
+// armed step is a plain proc tor `pick`. `r` is live-through both arms and
+// drops once at the join; the arm-local `q` discharges at the hit arm's leaf.
+
+~import std/io
+const std = @import("std");
+
+const Res = struct { v: i32 };
+
+~tor grab { v: i64 } -> *Res<held!>
+~proc grab|zig {
+    const r = std.heap.page_allocator.create(Res) catch unreachable;
+    r.* = .{ .v = @intCast(v) };
+    return r;
+}
+
+~tor drop { r: *Res<!held> }
+~proc drop|zig {
+    std.debug.print("drop {d}\n", .{r.v});
+    std.heap.page_allocator.destroy(r);
+}
+
+~tor readv { r: *Res<held> } -> i64
+~proc readv|zig {
+    return r.v;
+}
+
+~tor pick {}
+| hit
+| miss
+~proc pick|zig {
+    return .{ .hit = .{} };
+}
+
+~tor doit {}
+| ok
+| fail
+~proc doit|zig {
+    return .{ .ok = .{} };
+}
+
+~grab(v: 7): r |> doit()
+| ok |> std/io:print.ln("mid")
+    |> pick()
+        | hit |> grab(v: 9): q
+            |> readv(r: q): qv
+            |> std/io:print.ln("q {{ qv:d }}")
+        | miss |> std/io:print.ln("miss")
+    |> readv(r): v
+    |> std/io:print.ln("v {{ v:d }}")
+    |> drop(r)
+    |> std/io:print.ln("dropped")
+| fail |> _

@@ -7331,6 +7331,36 @@ pub const Parser = struct {
             self.current += 1; // Move past current line before parsing
             const cont = try self.parseContinuationWithNested(indent, location);
 
+            // An unnamed `|>` step at this level, written after the previous
+            // sibling step's `|`/`!` arms, is that step's JOIN — it nests
+            // under the armed step (an anonymous sibling of the arms), the
+            // same shape attachToDeepestChainTail produces inside arm bodies.
+            // Without this the step and the join land as two anonymous
+            // siblings and SHAPE002 fires for every tor, keyword or not.
+            if (isChainStep(&cont) and continuations.items.len > 0 and
+                isChainStep(&continuations.items[continuations.items.len - 1]))
+            {
+                var tail = &continuations.items[continuations.items.len - 1];
+                while (tail.continuations.len > 0 and isChainStep(&tail.continuations[0])) {
+                    tail = @constCast(&tail.continuations[0]);
+                }
+                var tail_has_arms = false;
+                for (tail.continuations) |*tc| {
+                    if (tc.is_catchall or tc.branch.len != 0) {
+                        tail_has_arms = true;
+                        break;
+                    }
+                }
+                if (tail_has_arms) {
+                    const kids = try self.allocator.alloc(ast.Continuation, tail.continuations.len + 1);
+                    @memcpy(kids[0..tail.continuations.len], tail.continuations);
+                    kids[tail.continuations.len] = cont;
+                    if (tail.continuations.len > 0) self.allocator.free(tail.continuations);
+                    tail.continuations = kids;
+                    continue;
+                }
+            }
+
             // Ordering rule check. Residual (`!*` / `|*`) handlers are exempt
             // — they're symmetric ends for both sides.
             //
@@ -8910,6 +8940,36 @@ pub const Parser = struct {
         var full_content = content;
         var allocated_content: ?[]u8 = null;
         defer if (allocated_content) |ac| self.allocator.free(ac);
+
+        // Multi-line invocation args on a line-start `|>` step: the branch path
+        // joins unbalanced parens (210_122 quote-aware); a join step after a
+        // nested arm never reaches that path, so it needs the same joiner here
+        // (210_324).
+        if (netParens(full_content) > 0) {
+            var content_buf = try std.ArrayList(u8).initCapacity(self.allocator, 256);
+            defer content_buf.deinit(self.allocator);
+            try content_buf.appendSlice(self.allocator, full_content);
+
+            var paren_depth: i32 = netParens(full_content);
+            while (self.current < self.lines.len and paren_depth > 0) {
+                const next_line = self.lines[self.current];
+                const next_trimmed = lexer.trim(next_line);
+
+                if (next_trimmed.len == 0) {
+                    self.current += 1;
+                    continue;
+                }
+
+                paren_depth += netParens(next_trimmed);
+                try content_buf.appendSlice(self.allocator, " ");
+                try content_buf.appendSlice(self.allocator, next_trimmed);
+                self.current += 1;
+            }
+
+            if (allocated_content) |ac| self.allocator.free(ac);
+            allocated_content = try content_buf.toOwnedSlice(self.allocator);
+            full_content = allocated_content.?;
+        }
 
         // Check if this might be starting a multi-line branch constructor
         if (std.mem.indexOf(u8, content, "{") != null and std.mem.indexOf(u8, content, "}") == null) {

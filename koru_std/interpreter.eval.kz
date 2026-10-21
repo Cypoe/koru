@@ -1,0 +1,191 @@
+// Koru Standard Library: the `eval` part of interpreter.kz — the
+// fast-path tor: a pre-parsed flow, no parse step. Joined via
+// `~part eval` in interpreter.kz; merged into the interpreter module
+// at load.
+
+// This is the fast path: no parsing overhead, just execution!
+~[retain]pub tor eval {
+    flow: *const ast.Flow,
+    dispatcher: DispatchFn,
+    cost_fn: ?CostFn,  // Optional cost lookup (null = default cost 1)
+    creates_obligations_fn: ?ObligationsArrayFn,
+    discharges_obligations_fn: ?ObligationsArrayFn,
+    discharge_event_fn: ?DischargeEventFn,
+    creates_spec_fn: ?CreatesSpecFn = null,        // tor -> []CreateSpec with field names
+    discharges_spec_fn: ?DischargesSpecFn = null,  // tor -> []DischargeSpec with arg names
+    budget: ?u64,  // Optional budget limit (null = unlimited)
+    handle_pool: ?*HandlePool,  // Optional external pool (for bridges)
+    scope_name: string = "default",  // Scope name for handle isolation
+    auto_discharge: bool = true,  // Auto-discharge undischarged handles at end
+    defined: ?*DefinedFlows = null, input_fn: ?InputLookupFn = null,  // REPL define; tor -> declared input fields
+    branches_fn: ?BranchesLookupFn = null,  // tor -> declared outcomes; arm-word check rides it
+    lenient: bool = false,  // 430_056: under-handling hands back `unhandled-branch`
+    host_dispatch: ?HostDispatchFn = null,
+    session_env: ?*Environment = null,
+    session_bind_fn: ?SessionBindFn = null,
+    session_bind_env: ?*Environment = null,
+    session_bind_counter: ?*u64 = null,
+    turn_env: ?*Environment = null           // arm bindings for the rest of this turn
+}
+| result { value: Value, used: u64, handles: u32, bound: string, trace: string }
+| unhandled-branch { branch: string, payload: string, handles: string, bound: string }
+| exhausted { used: u64, last_event: string, handles: u32 }
+| validation-error string
+| dispatch-error { event_name: string, message: string, trace: string }
+
+// ============================================================================
+// EVAL PROC - Execute pre-parsed AST (fast path, no parsing!)
+// ============================================================================
+
+~proc eval|zig {
+    const allocator = InterpreterThreadState.prepare();
+
+
+    // Same refusal as `run` — a pre-parsed AST can carry a residual arm too.
+    if (containsResidualArm(flow.body.continuations)) {
+        return .{ .validation_error = "`|*` residual arm is not spellable on the interpreted surface" };
+    }
+    // Validation pass - check for errors BEFORE execution
+    if (validateFlow(flow, allocator, input_fn, branches_fn, defined, session_env, turn_env)) |validation_err| {
+        return .{ .validation_error = validation_err.message };
+    }
+
+    const env = &InterpreterThreadState.env;
+    const expr_bindings = &InterpreterThreadState.expr_bindings;
+
+    // Seed the session's durable bindings into this run's env — the wire's
+    // `r3.user_id` on turn 9 names a value a turn 4 call bound — and mirror
+    // them into expr_bindings so expressions see the same scope.
+    if (session_env) |se| {
+        var sit = se.bindings.iterator();
+        while (sit.next()) |e| {
+            env.bind(e.key_ptr.*, e.value_ptr.*) catch {};
+            populateArmExprBindings(expr_bindings, e.key_ptr.*, e.value_ptr.*, e.value_ptr.branch, allocator) catch {};
+        }
+    }
+
+    // Seed this turn's earlier arm bindings — `| ok b |>` on an earlier
+    // item of this reply is bound for the rest of the turn's program.
+    if (turn_env) |te| {
+        var tit = te.bindings.iterator();
+        while (tit.next()) |e| {
+            env.bind(e.key_ptr.*, e.value_ptr.*) catch {};
+            populateArmExprBindings(expr_bindings, e.key_ptr.*, e.value_ptr.*, e.value_ptr.branch, allocator) catch {};
+        }
+    }
+
+    var budget_state = BudgetState.init(budget);
+
+    const using_external_pool = handle_pool != null;
+    var local_pool = if (handle_pool == null) HandlePool.init(allocator) else undefined;
+    defer if (!using_external_pool) local_pool.deinit();
+    const active_pool: *HandlePool = if (handle_pool) |ext| ext else &local_pool;
+
+    var ctx = InterpreterContext{
+        .env = env,
+        .expr_bindings = expr_bindings,
+        .allocator = allocator,
+        .dispatcher = dispatcher,
+        .cost_fn = cost_fn,
+        .creates_obligations_fn = creates_obligations_fn,
+        .discharges_obligations_fn = discharges_obligations_fn,
+        .discharge_event_fn = discharge_event_fn,
+        .creates_spec_fn = creates_spec_fn,
+        .discharges_spec_fn = discharges_spec_fn,
+        .budget = &budget_state,
+        .handle_pool = active_pool,
+        .scope_name = scope_name,
+        .defined = defined,
+        .input_fn = input_fn,
+        .host_dispatch = host_dispatch,
+        .session_env = session_env,
+        .session_bind_fn = session_bind_fn,
+        .session_bind_env = session_bind_env,
+        .session_bind_counter = session_bind_counter,
+        .turn_env = turn_env,
+        .unhandled_outcome = null,
+    };
+
+    // Execute the flow!
+    const result_value = executeFlow(flow, &ctx) catch |err| {
+        // Check if this was a budget exhaustion
+        if (err == error.BudgetExhausted) {
+            autoDischargeHandles(
+                auto_discharge,
+                using_external_pool,
+                active_pool,
+                discharges_spec_fn,
+                dispatcher,
+                allocator,
+            );
+            const stable_last_event = std.heap.page_allocator.dupe(u8, budget_state.last_event) catch budget_state.last_event;
+            return .{ .exhausted = .{
+                .used = budget_state.used,
+                .last_event = stable_last_event,
+                .handles = @intCast(active_pool.countUndischarged()),
+            }};
+        }
+        // Build tor name for error reporting
+        const stable_event_name = persistentEventName(flow.inv());
+
+        autoDischargeHandles(
+            auto_discharge,
+            using_external_pool,
+            active_pool,
+            discharges_spec_fn,
+            dispatcher,
+            allocator,
+        );
+
+        return .{ .dispatch_error = .{
+            .event_name = ctx.failing_event_name orelse stable_event_name,
+            .message = ctx.error_detail orelse @errorName(err),
+            .trace = renderTrace(&ctx.trace, allocator),
+        }};
+    };
+
+// An under-handled fragment hands its outcome back (430_056): the host
+    // becomes the handler. Termination is different from completion —
+    // `result` is "finished with this value", `unhandled-branch` is
+    // "stopped, nobody handled this" — so it is a separate branch, forced
+    // on every caller by KORU022, exactly as the ruling demands. Skip
+    // auto-discharge here: retention across the hand-back is the point;
+    // the host that receives the named handles decides discharge.
+    if (ctx.unhandled_outcome) |u| {
+        if (!lenient) {
+            // The mode is the caller's policy call (430_056 ruling): strict
+            // callers keep today's refusal, named honestly.
+            return .{ .dispatch_error = .{
+                .event_name = ctx.failing_event_name orelse persistentEventName(flow.inv()),
+                .message = "NoBranchMatch",
+                .trace = renderTrace(&ctx.trace, allocator),
+            } };
+        }
+        return .{ .unhandled_branch = .{
+            .branch = u.branch,
+            .payload = u.toJsonBuf(),
+            .handles = renderHeldHandles(active_pool),
+            .bound = lastBound(&ctx.trace),
+        } };
+    }
+    const stable_value = result_value.clonePersistent();
+
+    autoDischargeHandles(
+        auto_discharge,
+        using_external_pool,
+        active_pool,
+        discharges_spec_fn,
+        dispatcher,
+        allocator,
+    );
+
+    return .{ .result = .{
+        .value = stable_value,
+        .used = budget_state.used,
+        .handles = @intCast(active_pool.countUndischarged()),
+        // The terminal's durable name came from the trace's bind, not a
+        // second mint — the last dispatch and the result are the same value.
+        .bound = lastBound(&ctx.trace),
+        .trace = renderTrace(&ctx.trace, allocator),
+    }};
+}

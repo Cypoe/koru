@@ -1,0 +1,118 @@
+// Koru Standard Library: the `wiretail` part of runtime — what follows the
+// closing `)`, and how a bare value is captured. Joined via
+// `~part wiretail` in runtime.kz; merged into the runtime module at load.
+//
+// Two arm shapes, self-announcing: a `|` on the call's own line is a
+// predicted-branch chain and the program IS that one line — a `|` arm on
+// a later line has nothing to hang on and refuses. A bare call line takes
+// indented `|` arms, one per line, deeper indent arming a mid-chain step.
+// Bare values are Koru expressions — the expression parser must accept
+// the text whole, or it is prose wearing arg clothes and refuses here.
+
+const koru_parser = @import("koru_parser");
+
+// Does the bare value text parse whole as one Koru expression? `r9`,
+// `r3.user_id`, `5`, `n * 2` pass; `hello world`, `[{...}]`, and other
+// prose or data shapes do not — those spellings need double quotes.
+fn wireExprParses(allocator: std.mem.Allocator, text: []const u8) bool {
+    var p = koru_parser.ExpressionParser.init(allocator, text);
+    defer p.deinit();
+    _ = p.parseAll() catch return false;
+    return true;
+}
+
+// Capture a bare value's expression text: balanced to a depth-0 ',' or
+// ')' — strings and bracket pairs inside the text are data, not
+// delimiters.
+fn wireScanCaptured(s: []const u8, i: *usize) []const u8 {
+    const start = i.*;
+    var depth: i32 = 0;
+    var quote: ?u8 = null;
+    while (i.* < s.len) {
+        const c = s[i.*];
+        if (quote) |q| {
+            if (c == '\\' and i.* + 1 < s.len) {
+                i.* += 2;
+                continue;
+            }
+            if (c == q) quote = null;
+            i.* += 1;
+            continue;
+        }
+        // Only '"' quotes — bare expression text may carry an apostrophe
+        // inside prose-like content, which is a character, not a delimiter.
+        if (c == '"') {
+            quote = c;
+        } else if (c == '(' or c == '{' or c == '[') {
+            depth += 1;
+        } else if (c == ']' or c == '}') {
+            if (depth > 0) depth -= 1;
+        } else if (c == ')') {
+            if (depth == 0) break;
+            depth -= 1;
+        } else if (c == ',' and depth == 0) {
+            break;
+        }
+        i.* += 1;
+    }
+    return s[start..i.*];
+}
+
+// The arm-region check after the closing ')'. Returns a rejection for the
+// refused shapes; null means the tail is admissible and the caller emits
+// it verbatim — the arms' own grammar stays the interpreter's parser, so
+// the wire can never accept a chain eval would execute differently.
+fn wireArmTail(s: []const u8, start: usize) ?WireRejection {
+    var i = start;
+    while (i < s.len and (s[i] == ' ' or s[i] == '\t')) i += 1;
+    if (i >= s.len) return null;
+
+    if (s[i] == '|') {
+        // Single-line commitment: this program is exactly this line.
+        var k = i;
+        var in_str = false;
+        var q: u8 = 0;
+        while (k < s.len) : (k += 1) {
+            const c = s[k];
+            if (in_str) {
+                if (c == '\\') {
+                    k += 1;
+                    continue;
+                }
+                if (c == q) in_str = false;
+                continue;
+            }
+            if (c == '"') {
+                in_str = true;
+                q = c;
+                continue;
+            }
+            if (c != '\n') continue;
+            var m = k + 1;
+            while (m < s.len and (s[m] == ' ' or s[m] == '\t' or s[m] == '\r')) m += 1;
+            if (m < s.len and s[m] == '|') return wireReject("a `|` on the call's own line commits the program to that line — a later `|` arm has nothing to hang on. For several branches give each `|` its own indented line under the bare call: `call(...)\\n    | ok r |> ...\\n    | error e |> ...`", .{}, m);
+        }
+        return null;
+    }
+
+    var j = i;
+    while (j < s.len and (s[j] == ' ' or s[j] == '\t' or s[j] == '\r' or s[j] == '\n')) j += 1;
+    if (j < s.len and s[j] == '|') {
+        // Multi-line program: every continuation line is an indented `|`
+        // arm or blank — anything else is a second program inside the item.
+        var k = i;
+        while (k < s.len) {
+            while (k < s.len and (s[k] == ' ' or s[k] == '\t' or s[k] == '\r')) k += 1;
+            if (k >= s.len) break;
+            if (s[k] == '\n') {
+                k += 1;
+                continue;
+            }
+            if (s[k] != '|') return wireReject("a program's continuation lines are `|` arms, each on its own indented line — a second call is a new line of the reply", .{}, k);
+            while (k < s.len and s[k] != '\n') k += 1;
+        }
+        return null;
+    }
+    if (s[i] == '\r' or s[i] == '\n') return wireReject("one invocation per line: a second invocation goes on its own line", .{}, i);
+    return wireReject("one invocation per line: nothing follows the closing ')' except arms", .{}, i);
+}

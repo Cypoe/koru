@@ -1,0 +1,11 @@
+// Koru Standard Library: the `types` part of bridge.kz — the module's
+// imports and the interpreter-type re-exports. Joined via `~part types`
+// in bridge.kz; merged into the bridge module at load.
+
+const std = @import("std");
+
+// Re-export interpreter types
+pub const HandlePool = @import("root").koru_std.koru_interpreter.HandlePool;
+pub const Handle = @import("root").koru_std.koru_interpreter.Handle;
+pub const DefinedFlows = @import("root").koru_std.koru_interpreter.DefinedFlows;
+pub const Environment = @import("root").koru_std.koru_interpreter.Environment;

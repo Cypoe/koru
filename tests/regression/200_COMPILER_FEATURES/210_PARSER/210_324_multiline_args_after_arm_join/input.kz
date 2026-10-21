@@ -1,0 +1,16 @@
+// A line-start `|>` join step after a nested arm (here, the step following
+// an `if` / `| then` block) may spread its invocation args across lines —
+// the same multi-line paren list a step stitched onto a branch head gets.
+~import std/io
+
+const std = @import("std");
+
+~tor show { a: i64, b: i64 }
+~proc show|zig { std.debug.print("{d} {d}\n", .{ a, b }); }
+
+~for(0..3)
+! each i
+    |> if (i == 0)
+        | then |> std/io:print.ln("zero")
+    |> show(a: 1,
+        b: 2)

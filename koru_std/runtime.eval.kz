@@ -1,8 +1,6 @@
 // Koru Standard Library: the eval part. Joined via `~part eval` in runtime.kz.
 
-// ============================================================================
 // EVAL - Run a parsed AST against a named scope
-// ============================================================================
 
 ~pub tor eval {
     flow: *const ast.Flow,
@@ -13,7 +11,7 @@
     defined: ?*@import("root").koru_std.koru_interpreter.DefinedFlows = null
 }
 | result { value: @import("root").koru_std.koru_interpreter.Value, used: u64, handles: u32 }
-| unhandled-branch { branch: string, payload: string, handles: string }
+| unhandled-branch { branch: string, payload: string, handles: string, bound: string }
 | exhausted { used: u64, last_event: string, handles: u32 }
 | validation-error string
 | event-denied string
@@ -51,6 +49,7 @@
                     .branch = u.branch,
                     .payload = u.payload,
                     .handles = u.handles,
+                    .bound = u.bound,
                 } },
                 .exhausted => |e| return .{ .exhausted = .{
                     .used = e.used,

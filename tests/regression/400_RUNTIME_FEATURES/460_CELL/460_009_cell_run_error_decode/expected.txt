@@ -1,0 +1,4 @@
+kind=parse-error
+decoded parse-error 1:12 msg=the field 'name' needs a value — a "double-quoted string", a literal, a bound name, or an expression like `n * 2`
+kind2=event-denied
+decoded denied: nosuch
