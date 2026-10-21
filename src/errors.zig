@@ -219,6 +219,41 @@ pub const ParseError = struct {
 /// a plain global is the whole mechanism.
 pub var diagnostics_were_printed = false;
 
+/// Process-global diagnostic sinks — the diagnostics bus. The generated
+/// backend collects `std/compiler(diagnostic)` joins from the seed AST and
+/// registers each `!` arm's consumer here; every `addError*` variant then
+/// dispatches the stored ParseError to all of them, synchronously, at append
+/// time. Reporters are per-file but a compile is one process, so a plain
+/// global is the whole mechanism — same shape as `diagnostics_were_printed`
+/// above. Empty by default: a binary that never registers pays one slice
+/// bounds-check per error and nothing else.
+pub const DiagSink = struct {
+    ctx: *anyopaque,
+    /// Called once per stored diagnostic inside `addError*`. A sink must not
+    /// report back through the reporter — re-entrant dispatch is dropped by
+    /// `in_diag_dispatch`, not relayed.
+    emit: *const fn (ctx: *anyopaque, err: *const ParseError) void,
+};
+
+var diag_sinks: std.ArrayList(DiagSink) = .empty;
+var in_diag_dispatch = false;
+
+/// Register a diagnostic consumer for the rest of the process. The backend
+/// calls this once per collected join arm, before the pipeline runs.
+/// Single-threaded by the same argument as `diagnostics_were_printed`.
+pub fn registerDiagSink(allocator: std.mem.Allocator, sink: DiagSink) !void {
+    try diag_sinks.append(allocator, sink);
+}
+
+fn dispatchDiag(err: *const ParseError) void {
+    if (in_diag_dispatch) return;
+    in_diag_dispatch = true;
+    defer in_diag_dispatch = false;
+    for (diag_sinks.items) |sink| {
+        sink.emit(sink.ctx, err);
+    }
+}
+
 pub const ErrorReporter = struct {
     allocator: std.mem.Allocator,
     errors: std.ArrayList(ParseError),
@@ -366,6 +401,7 @@ pub const ErrorReporter = struct {
             .is_bootstrap = cls.is_bootstrap,
             .bootstrap_line = cls.bootstrap_line,
         });
+        dispatchDiag(&self.errors.items[self.errors.items.len - 1]);
     }
 
     /// Like addError, but uses the full SourceLocation (including file) from the caller
@@ -392,6 +428,7 @@ pub const ErrorReporter = struct {
             .is_bootstrap = is_bootstrap,
             .bootstrap_line = bootstrap_line,
         });
+        dispatchDiag(&self.errors.items[self.errors.items.len - 1]);
     }
 
     /// Like addErrorAtLocation, but with a teaching hint. Use when errors can
@@ -416,6 +453,7 @@ pub const ErrorReporter = struct {
             .is_bootstrap = is_bootstrap,
             .bootstrap_line = bootstrap_line,
         });
+        dispatchDiag(&self.errors.items[self.errors.items.len - 1]);
     }
 
     pub fn addErrorWithHint(self: *ErrorReporter, code: ErrorCode, line: usize, column: usize, comptime fmt: []const u8, args: anytype, comptime hint_fmt: []const u8, hint_args: anytype) !void {
@@ -434,6 +472,7 @@ pub const ErrorReporter = struct {
             .is_bootstrap = cls.is_bootstrap,
             .bootstrap_line = cls.bootstrap_line,
         });
+        dispatchDiag(&self.errors.items[self.errors.items.len - 1]);
     }
 
     /// Like addErrorWithHint, but lets the caller declare how many characters
@@ -467,6 +506,7 @@ pub const ErrorReporter = struct {
             .is_bootstrap = cls.is_bootstrap,
             .bootstrap_line = cls.bootstrap_line,
         });
+        dispatchDiag(&self.errors.items[self.errors.items.len - 1]);
     }
 
     /// Renders only the errors not already emitted by an earlier call — see

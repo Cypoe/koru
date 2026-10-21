@@ -1276,6 +1276,53 @@ fn emitThunkStep(writer: anytype, step: anytype, module_alias_map: *const std.St
 
 /// Generate the backend code that will perform code generation at compile-time
 /// This is Pass 2 of the Koru compiler - the Zig backend
+// Frontend mirror of the backend's diagnostic-join matcher (the emitted
+// backend re-derives it on the deserialized AST — ast.zig is shared, so the
+// two walks can't drift on field names, only on intent). Decides whether a
+// builtin sink's code + link dep get emitted at all: a `sqlite` arm pulls
+// extern sqlite3_* decls and linkSystemLibrary("sqlite3"), and neither may be
+// unconditional — a backend that always links sqlite3 is a hard dep.
+fn isDiagJoinInvocationFrontend(inv: *const ast.Invocation) bool {
+    const p = &inv.path;
+    const on_door = if (p.module_qualifier) |mq|
+        (std.mem.eql(u8, mq, "std/compiler") or std.mem.eql(u8, mq, "std.compiler")) and
+            p.segments.len == 1 and std.mem.eql(u8, p.segments[0], "default")
+    else
+        p.segments.len == 1 and (std.mem.eql(u8, p.segments[0], "std/compiler") or
+            std.mem.eql(u8, p.segments[0], "std.compiler"));
+    if (!on_door) return false;
+    return inv.args.len > 0 and std.mem.eql(u8, inv.args[0].value, "diagnostic");
+}
+
+fn itemsWantDiagSink(items: []const ast.Item, want: []const u8) bool {
+    for (items) |*item| {
+        switch (item.*) {
+            .flow => |*f| {
+                var is_join = false;
+                if (f.body.node) |*n| {
+                    if (n.* == .invocation and isDiagJoinInvocationFrontend(&n.invocation)) is_join = true;
+                }
+                if (!is_join) continue;
+                for (f.body.continuations) |*cont| {
+                    const step = cont.node orelse continue;
+                    if (step != .invocation) continue;
+                    const segs = step.invocation.path.segments;
+                    if (segs.len > 0 and std.mem.eql(u8, segs[segs.len - 1], want)) return true;
+                }
+            },
+            .module_decl => |*md| {
+                if (itemsWantDiagSink(md.items, want)) return true;
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+fn programWantsDiagSink(prog: *const ast.Program, want: []const u8) bool {
+    return itemsWantDiagSink(prog.items, want);
+}
+
 fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, source_file: *ast.Program, use_visitor: bool, config: *const CompilerConfig, has_transforms: bool) ![]const u8 {
     _ = input_file; // The per-user filename used to land in the header comment.
     // Dropping it keeps backend.zig byte-identical across user programs so
@@ -2029,6 +2076,233 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\
         );
 
+        // Diagnostics bus: `std/compiler(diagnostic)` joins are compile-time
+        // consumers of the compiler's own diagnostic stream — not program code.
+        // collectDiagJoins walks the seed AST, resolves each `!` arm against the
+        // builtin sink registry, registers the sinks with the reporter's
+        // process-global dispatch, and strips the join flows so coordinate never
+        // sees them (same "compiled away" lifecycle as a tap decl). No arms, no
+        // bus: the sink list stays empty and stderr remains the only output.
+        const wants_sqlite = programWantsDiagSink(source_file, "sqlite");
+        try writer.writeAll(
+            \\const errors_mod = @import("errors");
+            \\
+            \\const DiagJsonlSink = struct {
+            \\    file: __koru_std.fs.File,
+            \\    allocator: __koru_std.mem.Allocator,
+            \\
+            \\    fn emit(ctx: *anyopaque, err: *const errors_mod.ParseError) void {
+            \\        const self: *DiagJsonlSink = @ptrCast(@alignCast(ctx));
+            \\        var line = __koru_std.ArrayList(u8){};
+            \\        line.appendSlice(self.allocator, "{\"code\":\"") catch return;
+            \\        line.appendSlice(self.allocator, @tagName(err.code)) catch return;
+            \\        line.appendSlice(self.allocator, "\",\"file\":\"") catch return;
+            \\        diagJsonEscape(&line, self.allocator, err.location.file);
+            \\        const loc_num = __koru_std.fmt.allocPrint(self.allocator, "\",\"line\":{d},\"column\":{d},\"message\":\"", .{ err.location.line, err.location.column }) catch return;
+            \\        line.appendSlice(self.allocator, loc_num) catch return;
+            \\        diagJsonEscape(&line, self.allocator, err.message);
+            \\        line.append(self.allocator, '"') catch return;
+            \\        if (err.hint) |h| {
+            \\            line.appendSlice(self.allocator, ",\"hint\":\"") catch return;
+            \\            diagJsonEscape(&line, self.allocator, h);
+            \\            line.append(self.allocator, '"') catch return;
+            \\        }
+            \\        line.append(self.allocator, '}') catch return;
+            \\        line.append(self.allocator, '\n') catch return;
+            \\        self.file.writeAll(line.items) catch {};
+            \\    }
+            \\};
+            \\
+            \\fn diagJsonEscape(out: *__koru_std.ArrayList(u8), alloc: __koru_std.mem.Allocator, s: []const u8) void {
+            \\    for (s) |c| {
+            \\        switch (c) {
+            \\            '"' => out.appendSlice(alloc, "\\\"") catch return,
+            \\            '\\' => out.appendSlice(alloc, "\\\\") catch return,
+            \\            '\n' => out.appendSlice(alloc, "\\n") catch return,
+            \\            '\r' => out.appendSlice(alloc, "\\r") catch return,
+            \\            '\t' => out.appendSlice(alloc, "\\t") catch return,
+            \\            else => {
+            \\                if (c < 0x20) {
+            \\                    const esc = __koru_std.fmt.allocPrint(alloc, "\\u{x:0>4}", .{c}) catch return;
+            \\                    out.appendSlice(alloc, esc) catch return;
+            \\                } else {
+            \\                    out.append(alloc, c) catch return;
+            \\                }
+            \\            },
+            \\        }
+            \\    }
+            \\}
+            \\
+            \\// `std/compiler(diagnostic)` parses as a bare invocation on the
+            \\// std/compiler default door — segments ["std/compiler"] (or the
+            \\// qualified "std/compiler"/"std.compiler" + ["default"] spelling),
+            \\// first arg the literal word `diagnostic`.
+            \\fn isDiagJoinInvocation(inv: *const __koru_ast.Invocation) bool {
+            \\    const p = &inv.path;
+            \\    const on_door = if (p.module_qualifier) |mq|
+            \\        (__koru_std.mem.eql(u8, mq, "std/compiler") or __koru_std.mem.eql(u8, mq, "std.compiler")) and
+            \\            p.segments.len == 1 and __koru_std.mem.eql(u8, p.segments[0], "default")
+            \\    else
+            \\        p.segments.len == 1 and (__koru_std.mem.eql(u8, p.segments[0], "std/compiler") or
+            \\            __koru_std.mem.eql(u8, p.segments[0], "std.compiler"));
+            \\    if (!on_door) return false;
+            \\    return inv.args.len > 0 and __koru_std.mem.eql(u8, inv.args[0].value, "diagnostic");
+            \\}
+            \\
+            \\fn diagArmSinkName(inv: *const __koru_ast.Invocation) []const u8 {
+            \\    if (inv.path.segments.len == 0) return "";
+            \\    return inv.path.segments[inv.path.segments.len - 1];
+            \\}
+            \\
+            \\fn diagArgText(args: []const __koru_ast.Arg, want: []const u8) ?[]const u8 {
+            \\    for (args) |a| {
+            \\        if (__koru_std.mem.eql(u8, a.name, want)) {
+            \\            var v = a.value;
+            \\            if (v.len >= 2 and v[0] == '"' and v[v.len - 1] == '"') v = v[1 .. v.len - 1];
+            \\            return v;
+            \\        }
+            \\    }
+            \\    return null;
+            \\}
+            \\
+            \\// One `!` arm = one consumer. Stage-0 semantics: the arm's tor name
+            \\// resolves against builtin sinks — the Koru spelling is the contract,
+            \\// the builtin is the implementation (arbitrary user-authored sink
+            \\// bodies need the interpreter; that is a later conversation).
+            \\fn registerDiagArms(allocator: __koru_std.mem.Allocator, join_flow: *const __koru_ast.Flow) void {
+            \\    for (join_flow.body.continuations) |*cont| {
+            \\        const step = cont.node orelse continue;
+            \\        if (step != .invocation) continue;
+            \\        const name = diagArmSinkName(&step.invocation);
+            \\        if (__koru_std.mem.eql(u8, name, "jsonl")) {
+            \\            const path = diagArgText(step.invocation.args, "path") orelse "koru-diagnostics.jsonl";
+            \\            const file = __koru_std.fs.cwd().createFile(path, .{}) catch |err| {
+            \\                __koru_std.debug.print("⚠️  diagnostic sink: cannot open '{s}': {s}\n", .{ path, @errorName(err) });
+            \\                continue;
+            \\            };
+            \\            const sink = allocator.create(DiagJsonlSink) catch continue;
+            \\            sink.* = .{ .file = file, .allocator = allocator };
+            \\            errors_mod.registerDiagSink(allocator, .{ .ctx = sink, .emit = DiagJsonlSink.emit }) catch {};
+        );
+
+        if (wants_sqlite) try writer.writeAll(
+            \\        } else if (__koru_std.mem.eql(u8, name, "sqlite")) {
+            \\            registerDiagSqliteSink(allocator, &step.invocation);
+        );
+
+        try writer.writeAll(
+            \\        } else {
+            \\            __koru_std.debug.print("⚠️  diagnostic sink '{s}' is not a builtin — arm ignored\n", .{name});
+            \\        }
+            \\    }
+            \\}
+            \\
+            \\fn filterDiagJoinItems(allocator: __koru_std.mem.Allocator, items: []const __koru_ast.Item) []const __koru_ast.Item {
+            \\    var kept = __koru_std.ArrayList(__koru_ast.Item){};
+            \\    for (items) |*item| {
+            \\        switch (item.*) {
+            \\            .flow => |*f| {
+            \\                var is_join = false;
+            \\                if (f.body.node) |*n| {
+            \\                    if (n.* == .invocation and isDiagJoinInvocation(&n.invocation)) is_join = true;
+            \\                }
+            \\                if (is_join) {
+            \\                    registerDiagArms(allocator, f);
+            \\                    continue;
+            \\                }
+            \\                kept.append(allocator, item.*) catch {};
+            \\            },
+            \\            .module_decl => |*md| {
+            \\                const mutable = @constCast(md);
+            \\                mutable.items = filterDiagJoinItems(allocator, md.items);
+            \\                kept.append(allocator, item.*) catch {};
+            \\            },
+            \\            else => kept.append(allocator, item.*) catch {},
+            \\        }
+            \\    }
+            \\    return kept.items;
+            \\}
+            \\
+            \\fn collectDiagJoins(allocator: __koru_std.mem.Allocator, prog: *Program) *const Program {
+            \\    prog.items = filterDiagJoinItems(allocator, prog.items);
+            \\    return prog;
+            \\}
+            \\
+        );
+
+        // SQLite sink — emitted only because an arm named `sqlite`; the extern
+        // decls and the `std/compiler:requires` link dep travel together, so
+        // unconditional emission here would make libsqlite3 a hard dep of
+        // every backend build.
+        if (wants_sqlite) try writer.writeAll(
+            \\const DiagSqliteC = struct {
+            \\    const Db = opaque {};
+            \\    const Stmt = opaque {};
+            \\    extern fn sqlite3_open(filename: [*:0]const u8, pp_db: *?*Db) c_int;
+            \\    extern fn sqlite3_close_v2(db: ?*Db) c_int;
+            \\    extern fn sqlite3_exec(db: ?*Db, sql: [*:0]const u8, cb: ?*const anyopaque, arg: ?*anyopaque, errmsg: ?*?[*:0]u8) c_int;
+            \\    extern fn sqlite3_prepare_v2(db: ?*Db, sql: [*]const u8, nbyte: c_int, stmt: *?*Stmt, tail: ?*?[*]const u8) c_int;
+            \\    extern fn sqlite3_bind_text(stmt: ?*Stmt, idx: c_int, val: [*]const u8, n: c_int, dtor: ?*const anyopaque) c_int;
+            \\    extern fn sqlite3_bind_int64(stmt: ?*Stmt, idx: c_int, val: i64) c_int;
+            \\    extern fn sqlite3_bind_null(stmt: ?*Stmt, idx: c_int) c_int;
+            \\    extern fn sqlite3_step(stmt: ?*Stmt) c_int;
+            \\    extern fn sqlite3_reset(stmt: ?*Stmt) c_int;
+            \\    extern fn sqlite3_finalize(stmt: ?*Stmt) c_int;
+            \\    extern fn sqlite3_errmsg(db: ?*Db) [*:0]const u8;
+            \\};
+            \\
+            \\const DiagSqliteSink = struct {
+            \\    stmt: ?*DiagSqliteC.Stmt,
+            \\
+            \\    // SQLITE_STATIC (null dtor): the rows bind slices out of the
+            \\    // compile arena, which outlives every sqlite3_step before
+            \\    // process exit — no copy needed.
+            \\    fn bindText(stmt: ?*DiagSqliteC.Stmt, idx: c_int, s: []const u8) void {
+            \\        const ptr: [*]const u8 = if (s.len == 0) "".ptr else s.ptr;
+            \\        _ = DiagSqliteC.sqlite3_bind_text(stmt, idx, ptr, @intCast(s.len), null);
+            \\    }
+            \\
+            \\    fn emit(ctx: *anyopaque, err: *const errors_mod.ParseError) void {
+            \\        const self: *DiagSqliteSink = @ptrCast(@alignCast(ctx));
+            \\        const stmt = self.stmt orelse return;
+            \\        bindText(stmt, 1, @tagName(err.code));
+            \\        bindText(stmt, 2, err.location.file);
+            \\        _ = DiagSqliteC.sqlite3_bind_int64(stmt, 3, @intCast(err.location.line));
+            \\        _ = DiagSqliteC.sqlite3_bind_int64(stmt, 4, @intCast(err.location.column));
+            \\        bindText(stmt, 5, err.message);
+            \\        if (err.hint) |h| bindText(stmt, 6, h) else _ = DiagSqliteC.sqlite3_bind_null(stmt, 6);
+            \\        const rc = DiagSqliteC.sqlite3_step(stmt);
+            \\        if (rc != 101) __koru_std.debug.print("⚠️  diagnostic sink: sqlite insert failed (rc={d})\n", .{rc});
+            \\        _ = DiagSqliteC.sqlite3_reset(stmt);
+            \\    }
+            \\};
+            \\
+            \\fn registerDiagSqliteSink(allocator: __koru_std.mem.Allocator, inv: *const __koru_ast.Invocation) void {
+            \\    const path = diagArgText(inv.args, "path") orelse "koru-diagnostics.db";
+            \\    const zpath = allocator.dupeZ(u8, path) catch return;
+            \\    var db: ?*DiagSqliteC.Db = null;
+            \\    if (DiagSqliteC.sqlite3_open(zpath.ptr, &db) != 0 or db == null) {
+            \\        __koru_std.debug.print("⚠️  diagnostic sink: sqlite3_open('{s}') failed\n", .{path});
+            \\        return;
+            \\    }
+            \\    const schema = "CREATE TABLE IF NOT EXISTS diagnostics (code TEXT NOT NULL, file TEXT NOT NULL, line INTEGER NOT NULL, col INTEGER NOT NULL, message TEXT NOT NULL, hint TEXT);";
+            \\    if (DiagSqliteC.sqlite3_exec(db, schema.ptr, null, null, null) != 0) {
+            \\        __koru_std.debug.print("⚠️  diagnostic sink: sqlite schema exec failed: {s}\n", .{DiagSqliteC.sqlite3_errmsg(db)});
+            \\        return;
+            \\    }
+            \\    const insert_sql = "INSERT INTO diagnostics (code, file, line, col, message, hint) VALUES (?1, ?2, ?3, ?4, ?5, ?6);";
+            \\    var stmt: ?*DiagSqliteC.Stmt = null;
+            \\    if (DiagSqliteC.sqlite3_prepare_v2(db, insert_sql.ptr, @intCast(insert_sql.len), &stmt, null) != 0 or stmt == null) {
+            \\        __koru_std.debug.print("⚠️  diagnostic sink: sqlite prepare failed: {s}\n", .{DiagSqliteC.sqlite3_errmsg(db)});
+            \\        return;
+            \\    }
+            \\    const sink = allocator.create(DiagSqliteSink) catch return;
+            \\    sink.* = .{ .stmt = stmt };
+            \\    errors_mod.registerDiagSink(allocator, .{ .ctx = sink, .emit = DiagSqliteSink.emit }) catch {};
+            \\}
+            \\
+        );
+
         // Backend entry point - compiles the generated code
         try writer.writeAll(
             \\pub fn main() !void {
@@ -2177,7 +2451,7 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\    // Apply compiler passes
             \\    // Each pass takes PROGRAM_AST pointer and current AST pointer
             \\    // Returns same pointer if no changes, or new heap-allocated AST if optimized
-            \\    const current_ast: *const Program = seed_ast;
+            \\    const current_ast: *const Program = collectDiagJoins(compile_allocator, seed_ast);
             \\
             \\    // DUMP POINT 1: Original AST at backend entry
             \\    dumpAST(seed_ast, "1-backend-start", compile_allocator);
@@ -8869,6 +9143,23 @@ pub fn main() !void {
                 .module_name = "compiler",
                 .source_code = req,
             });
+        }
+
+        // A `sqlite` arm on the diagnostic bus implies the backend's link dep:
+        // the arm is the intent, so synthesize the requirement when the module
+        // that spelled the arm didn't already declare it (e.g. a hand-written
+        // join with no `import std/diag/sqlite`).
+        if (programWantsDiagSink(&source_file, "sqlite")) {
+            var declares_sqlite = false;
+            for (compiler_requirements_raw) |req| {
+                if (std.mem.indexOf(u8, req, "sqlite3") != null) declares_sqlite = true;
+            }
+            if (!declares_sqlite) {
+                try backend_build_reqs.append(allocator, .{
+                    .module_name = "std/diag/sqlite",
+                    .source_code = "            exe.linkLibC();\n            exe.linkSystemLibrary(\"sqlite3\");\n",
+                });
+            }
         }
 
         const build_backend_path = try std.fs.path.join(allocator, &[_][]const u8{ output_dir, "build_backend.zig" });
