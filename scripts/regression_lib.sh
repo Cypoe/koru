@@ -376,7 +376,7 @@ regression_check_js_equivalence() {
             RUN_ARGS+=("${_arg%$'\r'}")
         done < "$test_dir/ARGS"
     fi
-    timeout "${REGRESSION_TEST_TIMEOUT:-30}" node "$js_out" "${RUN_ARGS[@]}" >"$js_actual" 2>&1
+    timeout "$(regression_scaled_timeout "${REGRESSION_TEST_TIMEOUT:-30}")" node "$js_out" "${RUN_ARGS[@]}" >"$js_actual" 2>&1
     local node_exit=$?
     if [ "$node_exit" -ne 0 ]; then
         _js_equiv_fail "js-runtime" "node exited $node_exit (see actual.js.txt)"
@@ -479,7 +479,7 @@ regression_check_cs_equivalence() {
             RUN_ARGS+=("${_arg%$'\r'}")
         done < "$test_dir/ARGS"
     fi
-    timeout "${REGRESSION_TEST_TIMEOUT:-30}" "$cs_app" "${RUN_ARGS[@]}" >"$cs_actual" 2>&1
+    timeout "$(regression_scaled_timeout "${REGRESSION_TEST_TIMEOUT:-30}")" "$cs_app" "${RUN_ARGS[@]}" >"$cs_actual" 2>&1
     local cs_exit=$?
     if [ "$cs_exit" -ne 0 ]; then
         _cs_equiv_fail "cs-runtime" "apphost exited $cs_exit (see actual.cs.txt)"
@@ -623,9 +623,9 @@ regression_check_c_equivalence() {
         done < "$test_dir/ARGS"
     fi
     if [ -f "$test_dir/STDIN" ]; then
-        timeout "${REGRESSION_TEST_TIMEOUT:-30}" "$c_app" "${RUN_ARGS[@]}" < "$test_dir/STDIN" >"$c_actual" 2>&1
+        timeout "$(regression_scaled_timeout "${REGRESSION_TEST_TIMEOUT:-30}")" "$c_app" "${RUN_ARGS[@]}" < "$test_dir/STDIN" >"$c_actual" 2>&1
     else
-        timeout "${REGRESSION_TEST_TIMEOUT:-30}" "$c_app" "${RUN_ARGS[@]}" >"$c_actual" 2>&1
+        timeout "$(regression_scaled_timeout "${REGRESSION_TEST_TIMEOUT:-30}")" "$c_app" "${RUN_ARGS[@]}" >"$c_actual" 2>&1
     fi
     local c_exit=$?
     if [ "$c_exit" -ne 0 ]; then
@@ -642,6 +642,16 @@ regression_check_c_equivalence() {
     fi
     _write_c_target "success" ""
     echo -e "${GREEN}  ✓ C equivalence (ccomp binary output matches expected.txt)${NC}"
+}
+
+# Per-lane timeout multiplier (a C-line residual ruling, 2026-10-21): slow
+# lanes — musl Debug binaries are the measured case — stretch every per-test
+# budget by one factor rather than each lane raising pins locally. Applied to
+# the binary-run timeout, the equivalence-lane timeouts, and the per-test
+# wall-clock watchdog; NEVER to SELFTEST_TIMEOUT, whose job is to catch a hang
+# fast. Integer or decimal; floors at 1s. Default 1 = no scaling.
+regression_scaled_timeout() {
+    awk -v t="$1" -v s="${KORU_TEST_TIMEOUT_SCALE:-1}" 'BEGIN{ r=int(t*s); print (r < 1 ? 1 : r) }'
 }
 
 # NOT-ARMED — the named verdict for a marked oracle leg whose arming env is
@@ -2070,7 +2080,7 @@ EOF
     if [ -f "$test_dir/output" ] && [ -f "$test_dir/MUST_RUN" ]; then
         # Run the program under a timeout so a runaway binary can't wedge the harness.
         # Override the default with REGRESSION_TEST_TIMEOUT (seconds).
-        TEST_TIMEOUT="${REGRESSION_TEST_TIMEOUT:-30}"
+        TEST_TIMEOUT="$(regression_scaled_timeout "${REGRESSION_TEST_TIMEOUT:-30}")"
         # Watchdog self-test: an EXPECT_TIMEOUT test is SUPPOSED to hang at runtime
         # (it pins the timeout safety net). Cap the binary timeout low so the
         # self-test resolves in seconds rather than the default 30.
@@ -2536,7 +2546,7 @@ EOF
 # stall — but only after a SECOND attempt agrees (see run_one_test_watched).
 # Default 300s ≫ the slowest legit test (no false positives); tune via
 # KORU_TEST_TIMEOUT.
-: "${KORU_TEST_TIMEOUT:=300}"
+: "${KORU_TEST_TIMEOUT:=$(regression_scaled_timeout 300)}"
 
 # One attempt under the watchdog. Returns 137 iff the watchdog fired.
 _run_one_test_attempt() {

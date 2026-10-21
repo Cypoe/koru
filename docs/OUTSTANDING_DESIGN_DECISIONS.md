@@ -686,7 +686,10 @@ design calls; the design calls are marked.
   **Ruled 2026-10-21 (Lars, ccomp-line proposal): per-lane scale env**
   (`KORU_TEST_TIMEOUT_SCALE`, default 1). A blanket raise makes hangs
   take longer to catch on fast lanes; accepting the red on slow hosts
-  trains ignoring red — the worst outcome.
+  trains ignoring red — the worst outcome. **Landed same day:** the
+  scale multiplies the binary-run timeout, the equivalence-lane
+  timeouts, and the per-test wall-clock watchdog — never
+  `SELFTEST_TIMEOUT`, whose job is to catch a hang fast.
 - **`330_002` pin drift** — the pinned stack frames expect
   `in <fn> (koruc)`; zig 0.15.1 prints `in <fn> (module.zig)`. The pin
   was refreshed 2026-09-11 for a resolver move, against an older
