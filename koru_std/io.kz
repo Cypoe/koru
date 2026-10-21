@@ -238,12 +238,12 @@ var readln_buf: [8192]u8 = undefined;
 ~pub tor args {} -> []string
 
 ~proc args|zig {
-    var arg_list = std.ArrayList([]const u8).init(koru_allocator());
+    var arg_list: std.ArrayList([]const u8) = .empty;
     var iter = std.process.args();
     while (iter.next()) |arg| {
-        arg_list.append(arg) catch continue;
+        arg_list.append(koru_allocator(), arg) catch continue;
     }
-    return arg_list.toOwnedSlice() catch &.{};
+    return arg_list.toOwnedSlice(koru_allocator()) catch &.{};
 }
 
 // ============================================================================
