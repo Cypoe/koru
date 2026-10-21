@@ -43,9 +43,8 @@
         // knows whether it produced an lvalue or an rvalue, which is the point.
         //
         // The bounds check this reintroduces is the one `__koru_at` performs
-        // against a comptime-known size, on an index the loop constructed from
-        // `0..size`. That is the case the declaration's header calls a floor
-        // rather than a tax — provable in range, and the optimizer deletes it.
+        // against a comptime-known size on an index the loop built from
+        // `0..size` — provable in range, so `lower` now sees it TRUSTED.
         fn cells(alloc: std.mem.Allocator, text: []const u8, bind: []const u8, ns: []const u8, grid: []const u8, cur: []const u8) []const u8 {
             _ = ns;
             const prefix = std.fmt.allocPrint(alloc, "{s}.", .{bind}) catch unreachable;
@@ -163,7 +162,8 @@
     // visited, and without this its cell addresses reach the host verbatim.
     // std/grid sites inside it are skipped by the walker, which is what leaves
     // a nested `stored`'s target in source form for `stored` to parse.
-    grid_read.lowerCont(allocator, &mutable_body, swept.items);
+    // The cursor rides TRUSTED — this transform owns its 0..size proof.
+    grid_read.lowerContTrusted(allocator, &mutable_body, swept.items, .{ .name = cur, .grid = grid_name });
 
     // The body becomes an EVENT with the loop index as its only input, and an
     // impl flow carrying the (already-rewritten) continuation. The loop is a

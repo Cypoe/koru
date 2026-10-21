@@ -79,7 +79,17 @@
             std.fmt.allocPrint(allocator, "{s}[{s}, {s}].{s}", .{ t.grid, xn, yn, t.field }) catch unreachable
         else
             std.fmt.allocPrint(allocator, "{s}[{s}].{s}", .{ t.grid, xn, t.field }) catch unreachable;
-        const lvalue = grid_read.lower(allocator, respelled, names.items);
+        // A SWEEP CURSOR WRITES UNCHECKED. `__koru_gi_*` is minted only by
+        // `sweep`'s own `0..__koru_size` loop and arrives in target text only
+        // through the cell binding — so a write addressed by it is in range
+        // by construction, and the unit (keyed to this site, called nowhere
+        // else) can name its own parameter trusted on the target grid. The
+        // same proof covers cursor reads in the value (`c.sum / c.n`).
+        const cursor = t.y == null and std.mem.startsWith(u8, t.x, "__koru_gi_");
+        const lvalue = if (cursor)
+            grid_read.lowerTrusted(allocator, respelled, names.items, .{ .name = xn, .grid = t.grid })
+        else
+            grid_read.lower(allocator, respelled, names.items);
         const line = std.fmt.allocPrint(allocator, "{s} = {s};\n", .{ lvalue, vn }) catch unreachable;
         body.appendSlice(allocator, line) catch unreachable;
 
@@ -103,7 +113,10 @@
             args.append(allocator, ast.Arg{ .name = yn, .value = widen.at(allocator, (grid_read.find(names.items, t.grid) orelse unreachable).ns, t.grid, grid_read.lower(allocator, ytext, names.items)) }) catch unreachable;
         }
         inputs.append(allocator, ast.Field{ .name = vn, .type = allocator.dupe(u8, col_ty) catch unreachable }) catch unreachable;
-        args.append(allocator, ast.Arg{ .name = vn, .value = grid_read.lower(allocator, pr.value, names.items) }) catch unreachable;
+        args.append(allocator, ast.Arg{ .name = vn, .value = if (cursor)
+            grid_read.lowerTrusted(allocator, pr.value, names.items, .{ .name = t.x, .grid = t.grid })
+        else
+            grid_read.lower(allocator, pr.value, names.items) }) catch unreachable;
     }
 
     // A top-level write is a STATEMENT in the program's flow, so the replacement
@@ -222,19 +235,3 @@
         .appended = appended,
     } };
 }
-
-// ============================================================================
-// GRID.SWEEP — visit every cell
-// ============================================================================
-//
-//   std/grid:sweep(cells)
-//   ! sweep c when c.count > 0 |> std/store:stored { acc.n: acc.n + 1 }
-//
-// NO BOUNDS CHECK. The loop constructs the index from `0..size`, so validating
-// it would be re-establishing a fact from one line above — the same
-// floor-then-prove-away arc the store's handle check follows, and the reason the
-// grid's trap is a floor rather than a tax.
-//
-// This lowers to an ordinary `for(0..size) ! each <i>`, with every `c.<field>`
-// in the body rewritten to a direct cell read. It mints no tor and transplants
-// no body: `for` already knows how to inline effect handlers, so reusing it

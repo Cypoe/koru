@@ -1,0 +1,6 @@
+name: emission
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `codegen` — declare that name.
