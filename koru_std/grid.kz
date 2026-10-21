@@ -14,8 +14,7 @@
 //               grid pays nothing: no handles, no generation word, no sparse
 //               indirection, no freelist, no `len`.
 //
-// A grid is therefore the degenerate, fastest table in the language, and it
-// gets there by forbidding something rather than by optimising.
+// A grid is the degenerate, fastest table — it gets there by forbidding, not optimising.
 //
 // USAGE:
 //   import std/grid
@@ -51,3 +50,4 @@
 ~part sweep
 ~part cursor
 ~part for
+~part pool

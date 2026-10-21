@@ -118,6 +118,7 @@ koru_std/grid.cursor.kz	37
 koru_std/grid.for.kz	388
 koru_std/grid.kz	53
 koru_std/grid.new.kz	431
+koru_std/grid.pool.kz	606
 koru_std/grid.read.kz	381
 koru_std/grid.stored.kz	237
 koru_std/grid.sweep.kz	305

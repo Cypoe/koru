@@ -26,12 +26,8 @@ const grid_read = struct {
     // The namespace is not decoration. A grid declaration emits its cell type
     // and its storage into the module that declared it — `main_module` for an
     // entry file, `koru_app.koru_lib` for `app/lib` — and a read compiled into
-    // any OTHER module must say so. Lowering to a bare `__koru_grid_cells`
-    // works in exactly the place the declaration is, which is why a single-file
-    // test cannot see the difference and why this is the fourth time this file
-    // family has shipped an unqualified generated reference (115_018 for the
-    // store's paths, 115_044 for `[id]`'s cell, 115_045 for the grid's own
-    // units, and now the cells themselves).
+    // any OTHER module must say so (115_018, 115_044, 115_045 are the history
+    // of shipping the unqualified spelling).
     const GridRef = struct {
         name: []const u8,
         ns: []const u8,
@@ -40,6 +36,9 @@ const grid_read = struct {
         // the ADDRESS FORMATTER is the only place that needs to know, and it
         // is reached from every read and every write — see `lower`.
         row: bool = false,
+        // RUNTIME EXTENT (`std/grid:pool`): columns are slices, so the
+        // pointer base `(&x)[i]` does not typecheck — `lower` drops the `&`.
+        pool: bool = false,
     };
     fn find(refs: []const GridRef, n: []const u8) ?GridRef {
         for (refs) |r| {
@@ -82,7 +81,8 @@ const grid_read = struct {
             while (e < text.len and ast_grid.isKebabIdentChar(text[e])) e += 1;
             const stop = std.mem.indexOfPos(u8, text, e, needle) orelse text.len;
             const is_row = std.mem.indexOfPos(u8, text[0..stop], e, "__koru_row: [") != null;
-            out.append(alloc, GridRef{ .name = text[s..e], .ns = nsFor(alloc, prog, home), .row = is_row }) catch unreachable;
+            const is_pool = std.mem.indexOfPos(u8, text[0..stop], e, "__koru_pool") != null;
+            out.append(alloc, GridRef{ .name = text[s..e], .ns = nsFor(alloc, prog, home), .row = is_row, .pool = is_pool }) catch unreachable;
             i = e;
         }
     }
@@ -92,7 +92,7 @@ const grid_read = struct {
                 .flow => |f| {
                     const inv = f.inv();
                     if (inv.path.module_qualifier) |mq| {
-                        if (std.mem.eql(u8, mq, "std.grid") and inv.path.segments.len == 1 and std.mem.eql(u8, inv.path.segments[0], "new")) {
+                        if (std.mem.eql(u8, mq, "std.grid") and inv.path.segments.len == 1 and (std.mem.eql(u8, inv.path.segments[0], "new") or std.mem.eql(u8, inv.path.segments[0], "pool"))) {
                             // The declaration has not lowered yet, so the
                             // layout is still on the annotation. `new` parses
                             // this properly and REFUSES a bad facet; here we
@@ -108,7 +108,7 @@ const grid_read = struct {
                                 if (std.mem.eql(u8, a.name, "expr")) {
                                     var n = a.value;
                                     if (n.len >= 2 and n[0] == '"') n = n[1 .. n.len - 1];
-                                    out.append(alloc, GridRef{ .name = n, .ns = nsFor(alloc, prog, home), .row = is_row }) catch unreachable;
+                                    out.append(alloc, GridRef{ .name = n, .ns = nsFor(alloc, prog, home), .row = is_row, .pool = std.mem.eql(u8, inv.path.segments[0], "pool") }) catch unreachable;
                                 }
                             }
                         }
@@ -326,7 +326,7 @@ const grid_read = struct {
                         // where the expression rewriter runs (writeJsExpr) —
                         // a proc-body splice (the write unit) never gets that
                         // pass, so the `&` is dropped at the source instead.
-                        const amp: []const u8 = if (std.mem.eql(u8, CompilerEnv.lang, "js")) "" else "&";
+                        const amp: []const u8 = if (std.mem.eql(u8, CompilerEnv.lang, "js") or gref.pool) "" else "&";
                         const piece = if (comma) |cm| blk_two: {
                             const xs = lowerTrusted(alloc, std.mem.trim(u8, idx_raw[0..cm], " "), refs, trusted);
                             const ys = lowerTrusted(alloc, std.mem.trim(u8, idx_raw[cm + 1 ..], " "), refs, trusted);
