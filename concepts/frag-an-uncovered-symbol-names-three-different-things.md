@@ -119,3 +119,18 @@ text.
 Open: whether the other two checks in `invariants/checks/` carry the same
 ambiguity in their own null results. Not examined, and the question only occurred
 to me after the split came back 7/2/6.
+
+## A dead-union exemption is a debt entry, not a resting place (2026-10-21)
+
+The `__BlkResult`/`__LnResult` rows were ruled "dead/uncompilable — no
+PASSING program can carry it" and exempted. Same-day correction: the
+exemption was a *ruling waiting for its fix*. Once `KORU180` refused the
+unbound sites, the symbols stopped existing — the allow rows came off
+entirely (stale-by-deletion), and 401 derived symbols became 399.
+
+So the classification has a fourth reading: **"unwitnessable because
+uncompilable" is not an exemption class, it's a defect the wall has
+already localized.** The dead union was invisible surface the instrument
+correctly named — the exemption bought the ruling time, the refusal made
+the exemption itself obsolete. The remaining "dead path" rows should be
+read as prioritized defect debt, not as settled.
