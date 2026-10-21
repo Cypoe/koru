@@ -39,7 +39,7 @@
 // A destructure-less `| ok v` is recognizer mode: the input must be exactly
 // one JSON value, and the binding carries the consumed span.
 
-~[comptime|transform]pub tor parse { input: string, reporter: *std/compiler:ErrorReporter }
+~[comptime|transform]pub tor parse { input: string<*>, reporter: *std/compiler:ErrorReporter }
 | ok *
 | ?malformed { message: string, offset: usize }
 
