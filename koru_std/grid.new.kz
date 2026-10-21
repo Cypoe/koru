@@ -387,7 +387,7 @@
     {
         var seen = std.ArrayList(grid_read.GridRef).initCapacity(allocator, 4) catch unreachable;
         grid_read.collect(allocator, program, &seen);
-        grid_read.lowerItems(allocator, @constCast(program.items), seen.items);
+        grid_readwalk.lowerItems(allocator, @constCast(program.items), seen.items);
     }
 
     // Same routing problem as the store cell (store.new.kz:1374): a synthesized

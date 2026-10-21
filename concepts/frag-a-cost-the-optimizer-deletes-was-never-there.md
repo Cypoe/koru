@@ -208,6 +208,28 @@ claim about two binaries' layouts, not two compilers, until the placement is
 swept.** On x86 the sweep is the falsifier; the A/A arm only calibrates noise.
 
 
+## The law applied to its own author: emit nothing the transform already disproves (2026-10)
+
+`std/grid:sweep` emitted `__koru_at(<cursor>)` on an index its own
+`for (0..__koru_size)` had constructed one line above — a check the header
+called "a floor rather than a tax" because *the optimizer deletes it*. Every
+clause of this fragment's correction applies: LLVM deletes it on the Zig arm
+(verified — ReleaseFast binaries carry no panic edge for cursor, product, or
+2-D indices), which means it was a real emitted cost on the JS target, in
+Debug builds, and in every case where the proof is real but invisible to LLVM.
+The fix is the artifact-patch this file prescribes, moved upstream into the
+transform: `lowerTrusted` carries a `{name, grid}` pair through the shared
+read/write lowering, and a site whose index text *is* the proven name emits
+the `[unsafe(bounds)]` spelling — widen, `__koru_intcast`, no edge — at that
+one site. The trust is per-site and provenance-scoped: `cells[i]` under an
+ordinary `for` in the same program keeps the floor (697_017 pins both
+directions, the same way 230_022 pins the intcast spelling). Two follow-ons:
+the trusted cast must itself route through `__koru_intcast` — the first cut
+emitted a bare `@intCast` inside the sweep loop and would have re-poisoned
+the vectorization the check's removal exists to enable; and `stored` accepts
+the `__koru_gi_*` mint as its own unit's proof, because a write unit keyed to
+one site inherits that site's guarantee about the index.
+
 ## Open
 
 Whether anything else on that board rests on a mock. The decomposition is now

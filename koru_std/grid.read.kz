@@ -1,6 +1,7 @@
 // Koru Standard Library: the read path of grid.kz — the grid_read
-// namespace (refs, parseTarget, lower/lowerCont/lowerItems). Joined via
-// `~part read` in grid.kz; merged into the grid module at load.
+// namespace (refs, parseTarget, lower/lowerCont/lowerItems, trusted
+// index). Joined via `~part read` in grid.kz; merged into the grid
+// module at load.
 
 const std = @import("std");
 const codegen_utils_grid = @import("codegen_utils");
@@ -245,6 +246,14 @@ const grid_read = struct {
         }
         return null;
     }
+    // A name the emitter may index WITHOUT the floor: the index arrived at
+    // this text already proven in range by whoever minted it — today, only
+    // the sweep loop's own cursor (`for (0..__koru_size)` constructed the
+    // value, and it is bound to exactly `grid`). The trusted emission is the
+    // same spelling `[unsafe(bounds)]` gives `__koru_at` — the widening
+    // stays, the failure edge goes — applied per site rather than per
+    // declaration.
+    const TrustedIndex = struct { name: []const u8, grid: []const u8 };
     // Rewrite every `<grid>[<expr>].<field>` in `text` to its lowered form.
     //
     // The column is named through a POINTER before the index: a by-value base
@@ -257,6 +266,9 @@ const grid_read = struct {
     // expression, so prose that happens to read like a subscript is left alone
     // and an interpolated cell read is not.
     fn lower(alloc: std.mem.Allocator, text: []const u8, refs: []const GridRef) []const u8 {
+        return lowerTrusted(alloc, text, refs, null);
+    }
+    fn lowerTrusted(alloc: std.mem.Allocator, text: []const u8, refs: []const GridRef, trusted: ?TrustedIndex) []const u8 {
         const expr_ctx = ast_grid.expressionMask(alloc, text);
         var out = std.ArrayList(u8).initCapacity(alloc, text.len + 64) catch unreachable;
         var i: usize = 0;
@@ -316,18 +328,39 @@ const grid_read = struct {
                         // pass, so the `&` is dropped at the source instead.
                         const amp: []const u8 = if (std.mem.eql(u8, CompilerEnv.lang, "js")) "" else "&";
                         const piece = if (comma) |cm| blk_two: {
-                            const xs = lower(alloc, std.mem.trim(u8, idx_raw[0..cm], " "), refs);
-                            const ys = lower(alloc, std.mem.trim(u8, idx_raw[cm + 1 ..], " "), refs);
+                            const xs = lowerTrusted(alloc, std.mem.trim(u8, idx_raw[0..cm], " "), refs, trusted);
+                            const ys = lowerTrusted(alloc, std.mem.trim(u8, idx_raw[cm + 1 ..], " "), refs, trusted);
                             break :blk_two if (gref.row)
                                 std.fmt.allocPrint(alloc, "({s}{s}__koru_grid_{s}.__koru_row)[{s}__KoruGridT_{s}.__koru_at2({s}, {s})].{s}", .{ amp, ns, gname, ns, gname, xs, ys, fname }) catch unreachable
                             else
                                 std.fmt.allocPrint(alloc, "({s}{s}__koru_grid_{s}.{s})[{s}__KoruGridT_{s}.__koru_at2({s}, {s})]", .{ amp, ns, gname, fname, ns, gname, xs, ys }) catch unreachable;
                         } else blk_one: {
-                            const idx = lower(alloc, idx_raw, refs);
-                            break :blk_one if (gref.row)
-                                std.fmt.allocPrint(alloc, "({s}{s}__koru_grid_{s}.__koru_row)[{s}__KoruGridT_{s}.__koru_at({s})].{s}", .{ amp, ns, gname, ns, gname, idx, fname }) catch unreachable
+                            const idx = lowerTrusted(alloc, idx_raw, refs, trusted);
+                            // A trusted index skips the floor exactly as an
+                            // `[unsafe(bounds)]` declaration would: widen, cast,
+                            // no edge. The proof belongs to the transform that
+                            // minted the name, so the match is on the RAW index
+                            // text before its own recursion rewrote anything.
+                            const proven = if (trusted) |t|
+                                std.mem.eql(u8, gname, t.grid) and std.mem.eql(u8, std.mem.trim(u8, idx_raw, " "), t.name)
                             else
-                                std.fmt.allocPrint(alloc, "({s}{s}__koru_grid_{s}.{s})[{s}__KoruGridT_{s}.__koru_at({s})]", .{ amp, ns, gname, fname, ns, gname, idx }) catch unreachable;
+                                false;
+                            const at = if (proven)
+                                if (std.mem.eql(u8, CompilerEnv.lang, "js"))
+                                    idx
+                                else
+                                    // `__koru_intcast`, never a bare
+                                    // `@intCast`: inside a loop its
+                                    // `llvm.assume` declines vectorization,
+                                    // which is the loop's whole point
+                                    // (230_022's pin, the boids measurement).
+                                    std.fmt.allocPrint(alloc, "__koru_intcast(usize, {s}__KoruGridT_{s}.__koru_wide({s}))", .{ ns, gname, idx }) catch unreachable
+                            else
+                                std.fmt.allocPrint(alloc, "{s}__KoruGridT_{s}.__koru_at({s})", .{ ns, gname, idx }) catch unreachable;
+                            break :blk_one if (gref.row)
+                                std.fmt.allocPrint(alloc, "({s}{s}__koru_grid_{s}.__koru_row)[{s}].{s}", .{ amp, ns, gname, at, fname }) catch unreachable
+                            else
+                                std.fmt.allocPrint(alloc, "({s}{s}__koru_grid_{s}.{s})[{s}]", .{ amp, ns, gname, fname, at }) catch unreachable;
                         };
                         out.appendSlice(alloc, piece) catch unreachable;
                         i = fe;
@@ -342,90 +375,7 @@ const grid_read = struct {
         }
         return out.toOwnedSlice(alloc) catch unreachable;
     }
-    // LOWER EVERY READ IN A CONTINUATION TREE.
-    //
-    // Two callers, deliberately: the declaration's whole-program pass, and
-    // `sweep` over the body it has just rewritten. They need identical
-    // coverage — the same skip rule, the same inline_body trap, the same
-    // recursion — and the second caller exists because a sweep body is created
-    // AFTER the declaration's pass has run, so it is a subtree the program walk
-    // can never have seen.
-    //
-    // Sites belonging to std/grid are SKIPPED: `stored` lowers its own block,
-    // and skipping is what leaves a nested write's target in source form long
-    // enough for `stored` to parse it. That is not an optimisation — it is the
-    // mechanism that makes `stored { c.on: … }` addressable at all.
-    fn lowerCont(alloc: std.mem.Allocator, c: *ast_grid.Continuation, refs: []const GridRef) void {
-        if (c.condition) |cd| {
-            @constCast(c).condition = lower(alloc, cd, refs);
-        }
-        if (c.node) |*n| {
-            // Never `|*inv|` on `switch (n.*)` — that captures a TEMPORARY and
-            // the live AST stays raw (store's 690_074).
-            switch (@constCast(n).*) {
-                .invocation => {
-                    const inv = &@constCast(n).invocation;
-                    const ours = blk: {
-                        if (inv.path.module_qualifier) |mq| break :blk std.mem.eql(u8, mq, "std.grid");
-                        break :blk false;
-                    };
-                    if (!ours) {
-                        for (inv.args) |*a| {
-                            @constCast(a).value = lower(alloc, a.value, refs);
-                            if (a.expression_value) |ev| {
-                                const fresh = alloc.create(ast_grid.CapturedExpression) catch unreachable;
-                                fresh.* = ev.*;
-                                fresh.text = lower(alloc, ev.text, refs);
-                                @constCast(a).expression_value = fresh;
-                            }
-                            if (a.source_value) |sv| {
-                                const fresh = alloc.create(ast_grid.Source) catch unreachable;
-                                fresh.* = sv.*;
-                                fresh.text = lower(alloc, sv.text, refs);
-                                @constCast(a).source_value = fresh;
-                            }
-                        }
-                    }
-                    // TEMPLATE EXPANSION FREEZES ARGS EARLY. `if` and `for`
-                    // bake their Expression argument into
-                    // `Invocation.inline_body` before a declaration's pass ever
-                    // runs, so rewriting `inv.args` alone reaches a copy nobody
-                    // emits — the guard under a loop still says `cells[3].on`
-                    // and the host calls it undeclared. store.kz records the
-                    // same trap at 690_074.
-                    if (inv.inline_body) |ib| {
-                        inv.inline_body = lower(alloc, ib, refs);
-                    }
-                },
-                .inline_code => {
-                    @constCast(n).* = .{ .inline_code = lower(alloc, n.inline_code, refs) };
-                },
-                // A produce arm (`| then -> g[i].v`) is an expression
-                // node, not an invocation or inline code — the read
-                // inside reaches the host verbatim without this arm
-                // (697_017). Store's plural walk took the same arm for
-                // 690_376.
-                .expression => {
-                    @constCast(n).* = .{ .expression = lower(alloc, n.expression, refs) };
-                },
-                else => {},
-            }
-        }
-        for (c.continuations) |*k| lowerCont(alloc, @constCast(k), refs);
-    }
-    fn lowerItems(alloc: std.mem.Allocator, its: []ast_grid.Item, refs: []const GridRef) void {
-        for (its) |*pi| {
-            switch (pi.*) {
-                // `&pi.flow`, not `|*f|` on a switched copy — the same
-                // temporary-capture rule as above.
-                .flow => {
-                    lowerCont(alloc, &pi.flow.body, refs);
-                    if (pi.flow.inline_body) |ib| pi.flow.inline_body = lower(alloc, ib, refs);
-                },
-                .module_decl => lowerItems(alloc, @constCast(pi.module_decl.items), refs),
-                else => {},
-            }
-        }
-    }
+    // The continuation-tree walkers (lowerCont/lowerContTrusted/lowerItems)
+    // live in grid.readwalk.kz — split at the read-arm-expr x
+    // sweep-trusted-cursor mergeback; the line wall does not widen.
 };
-

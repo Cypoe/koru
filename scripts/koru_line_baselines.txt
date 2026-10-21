@@ -98,6 +98,7 @@ koru_std/fleet.kz	248
 koru_std/fleet.lease.kz	79
 koru_std/fleet.mail.kz	138
 koru_std/fleet.renew.kz	66
+koru_std/grid.readwalk.kz	101
 koru_std/node.kz	551
 koru_std/node.new.kz	188
 koru_std/node.world.kz	144
@@ -115,8 +116,8 @@ koru_std/gate.kz	525
 koru_std/gpu.kz	228
 koru_std/grid.kz	53
 koru_std/grid.new.kz	431
-koru_std/grid.read.kz	431
-koru_std/grid.stored.kz	240
+koru_std/grid.read.kz	381
+koru_std/grid.stored.kz	237
 koru_std/grid.sweep.kz	305
 koru_std/http.kz	215
 koru_std/index.kz	7

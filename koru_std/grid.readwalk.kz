@@ -1,0 +1,101 @@
+// Koru Standard Library: the continuation-tree walk of grid.kz's read
+// path — lowerCont/lowerContTrusted/lowerItems. Joined via `~part
+// readwalk` in grid.kz; merged into the grid module at load. Split out
+// of grid.read.kz at the read-arm-expr x sweep-trusted-cursor mergeback:
+// the union of both sides' work pushed the file over its line baseline,
+// and the wall does not widen.
+
+const grid_readwalk = struct {
+    // No imports: parts merge into the one `koru_grid` namespace, so bare
+    // `std`/`ast_grid` here resolve to grid.read.kz's file-scope imports.
+    // A re-declaration at either level collides or shadows ambiguous.
+    // LOWER EVERY READ IN A CONTINUATION TREE.
+    //
+    // Two callers, deliberately: the declaration's whole-program pass, and
+    // `sweep` over the body it has just rewritten. They need identical
+    // coverage — the same skip rule, the same inline_body trap, the same
+    // recursion — and the second caller exists because a sweep body is created
+    // AFTER the declaration's pass has run, so it is a subtree the program walk
+    // can never have seen.
+    //
+    // Sites belonging to std/grid are SKIPPED: `stored` lowers its own block,
+    // and skipping is what leaves a nested write's target in source form long
+    // enough for `stored` to parse it. That is not an optimisation — it is the
+    // mechanism that makes `stored { c.on: … }` addressable at all.
+    fn lowerCont(alloc: std.mem.Allocator, c: *ast_grid.Continuation, refs: []const grid_read.GridRef) void {
+        lowerContTrusted(alloc, c, refs, null);
+    }
+    fn lowerContTrusted(alloc: std.mem.Allocator, c: *ast_grid.Continuation, refs: []const grid_read.GridRef, trusted: ?grid_read.TrustedIndex) void {
+        if (c.condition) |cd| {
+            @constCast(c).condition = grid_read.lowerTrusted(alloc, cd, refs, trusted);
+        }
+        if (c.node) |*n| {
+            // Never `|*inv|` on `switch (n.*)` — that captures a TEMPORARY and
+            // the live AST stays raw (store's 690_074).
+            switch (@constCast(n).*) {
+                .invocation => {
+                    const inv = &@constCast(n).invocation;
+                    const ours = blk: {
+                        if (inv.path.module_qualifier) |mq| break :blk std.mem.eql(u8, mq, "std.grid");
+                        break :blk false;
+                    };
+                    if (!ours) {
+                        for (inv.args) |*a| {
+                            @constCast(a).value = grid_read.lowerTrusted(alloc, a.value, refs, trusted);
+                            if (a.expression_value) |ev| {
+                                const fresh = alloc.create(ast_grid.CapturedExpression) catch unreachable;
+                                fresh.* = ev.*;
+                                fresh.text = grid_read.lowerTrusted(alloc, ev.text, refs, trusted);
+                                @constCast(a).expression_value = fresh;
+                            }
+                            if (a.source_value) |sv| {
+                                const fresh = alloc.create(ast_grid.Source) catch unreachable;
+                                fresh.* = sv.*;
+                                fresh.text = grid_read.lowerTrusted(alloc, sv.text, refs, trusted);
+                                @constCast(a).source_value = fresh;
+                            }
+                        }
+                    }
+                    // TEMPLATE EXPANSION FREEZES ARGS EARLY. `if` and `for`
+                    // bake their Expression argument into
+                    // `Invocation.inline_body` before a declaration's pass ever
+                    // runs, so rewriting `inv.args` alone reaches a copy nobody
+                    // emits — the guard under a loop still says `cells[3].on`
+                    // and the host calls it undeclared. store.kz records the
+                    // same trap at 690_074.
+                    if (inv.inline_body) |ib| {
+                        inv.inline_body = grid_read.lowerTrusted(alloc, ib, refs, trusted);
+                    }
+                },
+                .inline_code => {
+                    @constCast(n).* = .{ .inline_code = grid_read.lowerTrusted(alloc, n.inline_code, refs, trusted) };
+                },
+                // A produce arm (`| then -> g[i].v`) is an expression
+                // node, not an invocation or inline code — the read
+                // inside reaches the host verbatim without this arm
+                // (697_017). Store's plural walk took the same arm for
+                // 690_376. Routed through lowerTrusted so a sweep
+                // cursor's proof still reaches a produce-arm read.
+                .expression => {
+                    @constCast(n).* = .{ .expression = grid_read.lowerTrusted(alloc, n.expression, refs, trusted) };
+                },
+                else => {},
+            }
+        }
+        for (c.continuations) |*k| lowerContTrusted(alloc, @constCast(k), refs, trusted);
+    }
+    fn lowerItems(alloc: std.mem.Allocator, its: []ast_grid.Item, refs: []const grid_read.GridRef) void {
+        for (its) |*pi| {
+            switch (pi.*) {
+                // `&pi.flow`, not `|*f|` on a switched copy — the same
+                // temporary-capture rule as above.
+                .flow => {
+                    lowerCont(alloc, &pi.flow.body, refs);
+                    if (pi.flow.inline_body) |ib| pi.flow.inline_body = grid_read.lower(alloc, ib, refs);
+                },
+                .module_decl => lowerItems(alloc, @constCast(pi.module_decl.items), refs),
+                else => {},
+            }
+        }
+    }
+};
