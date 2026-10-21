@@ -79,7 +79,10 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     // handler-scope hoist in emitEventDecl.
     try collectCsCells(&em, program.items);
 
-    try em.write("static class main_module {\n");
+    // A library build is consumed cross-assembly — `internal` (the C#
+    // default) would make every `public` event class unreachable through
+    // the .dll. Program mode stays internal: nothing outside references it.
+    try em.write(if (library) "public static class main_module {\n" else "static class main_module {\n");
     // The stdout/stderr surface lives INSIDE main_module so the unqualified
     // `__koru_stdout_write(…)` a |cs transform emits resolves from every flow
     // and proc body. Write (not WriteLine): the transform appends its own

@@ -15,6 +15,7 @@
 ~part prelate
 ~part materialize
 ~part materialize-build
+~part materialize-csbuild
 // Compiler system dependencies
 ~std/deps:requires.system {
     "name": "zig",
@@ -32,7 +33,6 @@ const Program = ast.Program;
 const Item = ast.Item;
 const Source = ast.Source;
 const Allocator = std.mem.Allocator;
-
 // Compiler backend build requirements are defined below via requires
 
 // Simplified Koru Compiler Library

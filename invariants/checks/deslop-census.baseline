@@ -128,8 +128,15 @@
 # (continuation_codegen x emitter_helpers port pair, emitter_test
 # scaffolding). This commit's own src/ delta is one predicate line plus
 # a comment edit — no foldable new surface.
-clusters=844
-members=947
+# Re-pinned 844/947 -> 846/950 on the cs-library commit: the roll named
+# the documented classes — containsTokenLocal x containsToken (the
+# intentional continuation_codegen port pair), emitter_test test_decl +
+# simple_var_decl scaffolding, package_requires/compiler_requires fixture
+# ASTs, phantom_semantic_checker test items. This diff's only src/ delta
+# is cs_emitter.zig's library-visibility line; no census offender is in
+# it — the +2/+3 is drift landed between re-pins.
+clusters=846
+members=950
 # Re-pinned to 820/911 on the call-site |variant commit: the sampled roll
 # named containsTokenLocal x containsToken (continuation_codegen /
 # emitter_helpers) and an emitter_test test_decl pair — none of those

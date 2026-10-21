@@ -76,3 +76,12 @@ back from there (post.sh asserts the relocation both directions). What remains a
 the ~15 `[comptime|transform]` sites reading `CompilerEnv.lang` — their
 `{expr, reporter}` signature takes no ctx, so threading target as data
 through them is a transform-contract change, not this one.
+
+Artifact *shape* joined the same contract: `CompilerEnv.library` now
+reaches the csbuild tor and the emitter's `library` flag, and mode —
+not the emitter — decides OutputType (Exe apphost vs Library .dll), the
+AssemblyName/`koru.csproj`, and `main_module`'s public visibility. A
+`koruc lib --lang=cs` artifact is callable cross-assembly by construction
+(220_053: a consumer project references the .dll and invokes
+`main_module.answer_event.handler`) — "callable from .NET" is a pipeline
+outcome, not a packaging afterthought.
