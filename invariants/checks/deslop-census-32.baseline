@@ -114,8 +114,8 @@
 # 48-token rule calls duplicated by design) plus residual test-file
 # literal idiom already documented above. This commit carries zero
 # src/ delta — a signal tombstone and a board pointer only.
-clusters=1922
-members=2453
+clusters=1925
+members=2463
 # Re-pinned to 1878/2418 on the tightening-017 cherry-pick: the roll named
 # parser.zig similar-arm blocks (1277, 2962, 3479, 3804, 6727 +5) plus
 # shape_analyzer/emitter_test scaffolding — the documented consciously-
@@ -199,3 +199,15 @@ members=2453
 # landed under rolls that missed). This commit carries zero src/ delta —
 # a regression pin and a concept evolve only. Census re-measured:
 # 1906/2442.
+# Re-pinned in "gate ~part declarations on the annotation-entry
+# vocabulary": the roll fired on clusters 1927 > 1922 / members 2465 >
+# 2453 — decomposed against a HEAD worktree to +2/+4 of committed foreign
+# drift (landed under rolls that missed) plus +3 clusters / +10 members of
+# uncommitted parser.zig delta. The own-delta fold landed in-commit: the
+# four-sites-then-six `for (result.annotations) free` idiom became
+# freeParsedAnnotations and the textual gate-entry split became
+# gateTextEntries — folding that cluster dropped the tree 1927/2465 ->
+# 1925/2463. Residual own delta after fold: +1 cluster / +6 members (the
+# part-gate branches' keep/skip twins of the import-gate shape — the
+# foldable interior is already extracted; what remains is two
+# legitimately different keep-actions). Census re-measured: 1925/2463.
